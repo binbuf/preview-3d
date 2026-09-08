@@ -1,5 +1,6 @@
 #include "ContainmentProbes.h"
 #include "GenerationWorker.h"
+#include "GltfImportWorker.h"
 
 #include <windows.h>
 
@@ -52,6 +53,10 @@ int main(int argc, char* argv[])
 
     if (ArgEquals(argv[1], "--generate")) {
         return import_worker::RunGeneration();
+    }
+
+    if (ArgEquals(argv[1], "--parse-gltf")) {
+        return import_worker::RunGltfImport();
     }
 
     if (ArgEquals(argv[1], "--probes")) {

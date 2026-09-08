@@ -86,5 +86,45 @@ int wmain()
         AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
         WriteGlb(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\tri_interleaved.glb", json, bin);
     }
+
+    // GLB 3: same triangle as GLB 1, but on a mesh node that is a child of a
+    // root node carrying a non-identity transform (translate [2,0,0],
+    // rotate 90 deg about +Z) -> exercises node-transform baking in the
+    // Gate 3 fastgltf adapter (import-worker/src/GltfAdapter.cpp).
+    {
+        const char* json =
+            "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],"
+            "\"nodes\":[{\"translation\":[2.0,0.0,0.0],\"rotation\":[0.0,0.0,0.7071068,0.7071068],\"children\":[1]},"
+            "{\"mesh\":0}],"
+            "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+            "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+            "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+            "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+            "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],\"buffers\":[{\"byteLength\":48}]}";
+        std::vector<std::uint8_t> bin;
+        for (const auto& p : kTriangle) { AppendF32(bin, p[0]); AppendF32(bin, p[1]); AppendF32(bin, p[2]); }
+        AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
+        WriteGlb(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\tri_transformed_node.glb", json, bin);
+    }
+
+    // GLB 4: same triangle as GLB 1, but declares a required extension the
+    // Gate 3 fastgltf adapter's Parser(Extensions::None) does not
+    // recognize -> exercises the "unsupported required feature" rejection
+    // path.
+    {
+        const char* json =
+            "{\"asset\":{\"version\":\"2.0\"},"
+            "\"extensionsRequired\":[\"KHR_materials_unlit\"],\"extensionsUsed\":[\"KHR_materials_unlit\"],"
+            "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+            "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+            "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+            "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+            "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+            "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],\"buffers\":[{\"byteLength\":48}]}";
+        std::vector<std::uint8_t> bin;
+        for (const auto& p : kTriangle) { AppendF32(bin, p[0]); AppendF32(bin, p[1]); AppendF32(bin, p[2]); }
+        AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
+        WriteGlb(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\unsupported_extension.glb", json, bin);
+    }
     return 0;
 }

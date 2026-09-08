@@ -10,7 +10,7 @@ $objDir = "$repoRoot\obj_test"
 New-Item -ItemType Directory -Force -Path $objDir | Out-Null
 
 & "$msvc\bin\Hostx64\x64\cl.exe" /nologo /EHsc /std:c++20 /W4 /utf-8 /D_UNICODE /DUNICODE `
-    "/I$msvc\include" "/I$sdk\um" "/I$sdk\shared" "/I$sdk\ucrt" `
+    "/I$msvc\include" "/I$sdk\um" "/I$sdk\shared" "/I$sdk\ucrt" "/I$repoRoot\src\app" `
     "$toolsDir\gen-test-glbs.cpp" `
     "/Fe:$toolsDir\gen-test-glbs.exe" /Fo:"$objDir\" `
     /link /SUBSYSTEM:CONSOLE `

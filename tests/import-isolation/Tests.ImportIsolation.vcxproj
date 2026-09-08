@@ -48,7 +48,7 @@
            directory, $(SolutionDir)$(Platform)\$(Configuration)\ (confirmed
            by inspecting an actual solution build, not assumed). There is no
            per-project "import-worker\x64\Debug\" subdirectory. -->
-      <PreprocessorDefinitions>PREVIEW3D_IMPORT_WORKER_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DImportWorker.exe)";PREVIEW3D_HOSTILE_WORKER_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DHostileWorker.exe)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PREVIEW3D_IMPORT_WORKER_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DImportWorker.exe)";PREVIEW3D_HOSTILE_WORKER_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DHostileWorker.exe)";PREVIEW3D_TEST_ASSETS_DIR=LR"($(SolutionDir)interactive-viewer\test-assets\\)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -73,6 +73,7 @@
     <ClCompile Include="SandboxLaunchTests.cpp" />
     <ClCompile Include="ImportPipelineTests.cpp" />
     <ClCompile Include="HostileWorkerTests.cpp" />
+    <ClCompile Include="GltfImportTests.cpp" />
     <ClCompile Include="..\..\shared\platform\src\AppContainerSid.cpp" />
     <ClCompile Include="..\..\shared\platform\src\ProcThreadAttributeList.cpp" />
     <ClCompile Include="..\..\shared\platform\src\MappedView.cpp" />

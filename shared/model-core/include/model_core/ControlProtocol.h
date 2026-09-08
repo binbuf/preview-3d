@@ -10,6 +10,7 @@ enum class ControlOpcode : uint32_t {
     StartGeneration = 1, // host -> worker
     ChunksReady = 2,     // worker -> host
     GenerationError = 3, // worker -> host
+    StartGltfImport = 4, // host -> worker
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -52,6 +53,25 @@ struct ChunksReadyNotice {
                                     // separate claim
 };
 static_assert(sizeof(ChunksReadyNotice) == 24, "ChunksReadyNotice layout changed");
+
+// Real-parser request: an input GLB source section plus the same output
+// section fields StartGenerationRequest carries. Kept as a distinct
+// request/opcode rather than a modification of StartGenerationRequest, so
+// the synthetic generator's already-tested request/reply path stays
+// byte-for-byte untouched. Replies reuse ChunksReadyNotice/
+// GenerationErrorNotice unmodified -- the worker's reply shape doesn't need
+// to differ by request type.
+struct ParseGltfRequest {
+    uint64_t generationId;
+    uint64_t sourceHandleValue;   // inherited INPUT-section HANDLE, numeric value (same convention
+                                    // as StartGenerationRequest::sectionHandleValue)
+    uint64_t sourceByteLength;    // exact GLB byte length within that section
+    uint64_t sectionHandleValue;  // inherited OUTPUT-section HANDLE, numeric value
+    uint64_t sectionByteCapacity; // output section capacity
+    uint32_t maxChunkCount;       // sanity cap on chunk count the worker may emit
+    uint32_t reserved0;
+};
+static_assert(sizeof(ParseGltfRequest) == 48, "ParseGltfRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

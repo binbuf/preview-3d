@@ -43,11 +43,12 @@
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\shared\model-core\include;..\..\shared\platform\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\shared\model-core\include;..\..\shared\platform\include;..\..\interactive-viewer\src\graphics;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -65,12 +66,18 @@
   <ItemGroup>
     <ClCompile Include="HarnessSmokeTests.cpp" />
     <ClCompile Include="WireFormatTests.cpp" />
+    <ClCompile Include="GraphicsDeviceTests.cpp" />
+    <ClCompile Include="CommandQueueTests.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12Device.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12CommandQueue.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\model-core\include\model_core\WireFormat.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\CheckedMath.h" />
+    <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12Device.h" />
+    <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12CommandQueue.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
