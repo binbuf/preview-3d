@@ -69,18 +69,26 @@
     <ClCompile Include="GraphicsDeviceTests.cpp" />
     <ClCompile Include="CommandQueueTests.cpp" />
     <ClCompile Include="SwapChainTests.cpp" />
+    <ClCompile Include="GenerationTests.cpp" />
+    <ClCompile Include="UploadRingTests.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12Device.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12CommandQueue.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12SwapChain.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12UploadRing.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\graphics\SyntheticStreamingSource.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\model-core\include\model_core\WireFormat.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\CheckedMath.h" />
+    <ClInclude Include="..\..\shared\platform\include\platform\Generation.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12Device.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12CommandQueue.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12SwapChain.h" />
+    <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12UploadRing.h" />
+    <ClInclude Include="..\..\interactive-viewer\src\graphics\SceneSnapshot.h" />
+    <ClInclude Include="..\..\interactive-viewer\src\graphics\SyntheticStreamingSource.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
