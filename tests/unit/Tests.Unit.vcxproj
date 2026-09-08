@@ -68,8 +68,10 @@
     <ClCompile Include="WireFormatTests.cpp" />
     <ClCompile Include="GraphicsDeviceTests.cpp" />
     <ClCompile Include="CommandQueueTests.cpp" />
+    <ClCompile Include="SwapChainTests.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12Device.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12CommandQueue.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12SwapChain.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\model-core\include\model_core\WireFormat.h" />
@@ -78,6 +80,7 @@
     <ClInclude Include="..\..\shared\platform\include\platform\CheckedMath.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12Device.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12CommandQueue.h" />
+    <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12SwapChain.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
