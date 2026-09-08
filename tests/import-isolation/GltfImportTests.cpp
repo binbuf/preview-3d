@@ -11,6 +11,7 @@
 #include "import_broker/SandboxLauncher.h"
 #include "import_broker/SharedSection.h"
 #include "import_broker/SharedSectionValidator.h"
+#include "import_broker/SourceFileAccess.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
 #include "model_core/VertexLayouts.h"
@@ -198,6 +199,65 @@ GltfImportRun RunGltfImport(const platform::AppContainerSid& sid,
     return run;
 }
 
+// The real pipeline, no PushBytesIntoNewSection shortcut and no in-memory
+// byte vector standing in for the source at all: the trusted process opens
+// and canonicalizes a real on-disk file (OpenAndCanonicalizeSourceFile),
+// the broker duplicates its raw FILE handle inheritable
+// (DuplicateInheritableHandle), and the worker builds its own
+// model_core::MappedFile from that handle
+// (StartGltfImportFromFile/ParseGltfFileRequest). Reuses
+// LaunchGltfImportWorker unchanged -- it already accepts an opaque source
+// HANDLE -- only the control message and the handle's origin differ from
+// RunGltfImport above.
+GltfImportRun RunGltfImportFromRealFile(const platform::AppContainerSid& sid, const std::wstring& path,
+                                         uint64_t generationId, uint32_t maxChunkCount)
+{
+    GltfImportRun run;
+
+    auto opened = import_broker::OpenAndCanonicalizeSourceFile(path);
+    REQUIRE(opened.file);
+
+    auto duplicated = import_broker::DuplicateInheritableHandle(opened.file.get());
+    REQUIRE(duplicated.has_value());
+
+    auto outputSection = import_broker::CreateSharedSection(import_broker::kSyntheticSectionBytes);
+    REQUIRE(outputSection);
+
+    auto launch = LaunchGltfImportWorker(sid, duplicated->get(), outputSection.get());
+    REQUIRE(launch.has_value());
+    REQUIRE(import_broker::ResumeSandboxProcess(launch->proc));
+
+    model_core::ParseGltfFileRequest request{};
+    request.generationId = generationId;
+    request.sourceFileHandleValue = reinterpret_cast<uint64_t>(duplicated->get());
+    request.sectionHandleValue = reinterpret_cast<uint64_t>(outputSection.get());
+    request.sectionByteCapacity = import_broker::kSyntheticSectionBytes;
+    request.maxChunkCount = maxChunkCount;
+    REQUIRE(model_core::WriteControlMessage(launch->controlInWrite.get(),
+                                             model_core::ControlOpcode::StartGltfImportFromFile, &request,
+                                             sizeof(request)));
+
+    auto received = model_core::ReadControlMessage(launch->controlOutRead.get());
+    REQUIRE(received.has_value());
+
+    WaitForSingleObject(launch->proc.process.get(), 5000);
+
+    if (received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::GenerationError)) {
+        REQUIRE(received->payload.size() == sizeof(run.errorNotice));
+        std::memcpy(&run.errorNotice, received->payload.data(), sizeof(run.errorNotice));
+        return run;
+    }
+
+    REQUIRE(received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::ChunksReady));
+    run.ready = true;
+
+    auto view = platform::MappedView::Map(outputSection.get(), FILE_MAP_READ,
+                                           import_broker::kSyntheticSectionBytes);
+    REQUIRE(view);
+    run.validation = import_broker::ValidateAndCopySection(view.bytes(), generationId, maxChunkCount);
+    return run;
+}
+
 } // namespace
 
 TEST_CASE("tri_tight.glb round-trips through the real fastgltf adapter", "[gltf-import]")
@@ -329,4 +389,24 @@ TEST_CASE("maxChunkCount of 0 against a 1-primitive fixture is rejected as Resou
     auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/15, /*maxChunkCount=*/0);
     CHECK_FALSE(run.ready);
     CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::ResourceLimit));
+}
+
+TEST_CASE("A real on-disk GLB file reaches the sandboxed worker via a duplicated handle and parses "
+          "successfully, with no in-memory shortcut anywhere on the input path",
+          "[gltf-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, TestAssetPath(L"tri_tight.glb"), /*generationId=*/16,
+                                          /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 1);
+
+    const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.descriptor.topology == model_core::ChunkTopology::TriangleList);
+    CHECK(chunk.descriptor.vertexCount == 3);
+    CHECK(chunk.descriptor.indexCount == 3);
+    CHECK(chunk.descriptor.vertexLayoutId
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
 }

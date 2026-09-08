@@ -7,10 +7,11 @@
 namespace model_core {
 
 enum class ControlOpcode : uint32_t {
-    StartGeneration = 1, // host -> worker
-    ChunksReady = 2,     // worker -> host
-    GenerationError = 3, // worker -> host
-    StartGltfImport = 4, // host -> worker
+    StartGeneration = 1,       // host -> worker
+    ChunksReady = 2,           // worker -> host
+    GenerationError = 3,       // worker -> host
+    StartGltfImport = 4,       // host -> worker
+    StartGltfImportFromFile = 5, // host -> worker
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -72,6 +73,29 @@ struct ParseGltfRequest {
     uint32_t reserved0;
 };
 static_assert(sizeof(ParseGltfRequest) == 48, "ParseGltfRequest layout changed");
+
+// Real-file request: the trusted process opened and canonicalized a real
+// on-disk source (import_broker::OpenAndCanonicalizeSourceFile) and the
+// broker duplicated its raw FILE handle -- not a pre-made file-mapping/
+// pagefile-section handle -- into the worker's inherited handle set. The
+// worker builds its own model_core::MappedFile from that handle
+// (MappedFile::FromHandle) per .docs/design/03-file-formats-and-ingestion.md's
+// "Mapped-file abstraction" step 1. Kept as a distinct request/opcode
+// rather than a modification of ParseGltfRequest/StartGltfImport, same
+// additive precedent that request already set relative to
+// StartGenerationRequest -- the shared-section synthetic/real-glTF paths
+// stay byte-for-byte untouched. Replies reuse ChunksReadyNotice/
+// GenerationErrorNotice unmodified.
+struct ParseGltfFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue; // inherited raw FILE handle (not a mapping/section handle),
+                                      // numeric value -- the worker maps it itself
+    uint64_t sectionHandleValue;    // inherited OUTPUT-section HANDLE, numeric value
+    uint64_t sectionByteCapacity;   // output section capacity
+    uint32_t maxChunkCount;         // sanity cap on chunk count the worker may emit
+    uint32_t reserved0;
+};
+static_assert(sizeof(ParseGltfFileRequest) == 40, "ParseGltfFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

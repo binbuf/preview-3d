@@ -34,9 +34,11 @@ void MappedView::Reset() noexcept
     size_ = 0;
 }
 
-MappedView MappedView::Map(HANDLE section, DWORD desiredAccess, SIZE_T sizeBytes)
+MappedView MappedView::Map(HANDLE section, DWORD desiredAccess, SIZE_T sizeBytes, uint64_t offset)
 {
-    void* view = MapViewOfFile(section, desiredAccess, 0, 0, sizeBytes);
+    DWORD offsetHigh = static_cast<DWORD>(offset >> 32);
+    DWORD offsetLow = static_cast<DWORD>(offset & 0xFFFFFFFFu);
+    void* view = MapViewOfFile(section, desiredAccess, offsetHigh, offsetLow, sizeBytes);
     if (view == nullptr) {
         return MappedView();
     }

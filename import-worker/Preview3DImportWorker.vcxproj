@@ -78,6 +78,7 @@
     <ClCompile Include="src\GltfAdapter.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
+    <ClCompile Include="..\shared\model-core\src\MappedFile.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\ContainmentProbes.h" />
@@ -86,12 +87,15 @@
     <ClInclude Include="src\GltfImportWorker.h" />
     <ClInclude Include="src\GltfAdapter.h" />
     <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />
+    <ClInclude Include="..\shared\platform\include\platform\Win32Handle.h" />
+    <ClInclude Include="..\shared\platform\include\platform\CheckedMath.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ImportError.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ControlProtocol.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ControlChannelIo.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\MappedFile.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

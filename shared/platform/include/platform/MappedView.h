@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 
 namespace platform {
@@ -26,10 +27,17 @@ public:
 
     ~MappedView();
 
-    // Maps MapViewOfFile(section, desiredAccess, 0, 0, sizeBytes). sizeBytes
-    // == 0 maps the whole section. Returns an empty (operator bool false)
-    // view on failure.
-    static MappedView Map(HANDLE section, DWORD desiredAccess, SIZE_T sizeBytes);
+    // Maps MapViewOfFile(section, desiredAccess, HIDWORD(offset), LODWORD(offset),
+    // sizeBytes). sizeBytes == 0 maps from `offset` to the end of the
+    // section/file. `offset` defaults to 0 so every pre-existing pagefile-
+    // section caller (which always maps a whole section from its start)
+    // keeps compiling unchanged. A non-zero `offset` is a file-backed-mapping
+    // concern (model_core::MappedFile's windowed reads) -- callers passing
+    // one are responsible for `offset` already being a multiple of
+    // SYSTEM_INFO::dwAllocationGranularity, since MapViewOfFile itself
+    // requires that and returns a failure (empty view) otherwise. Returns an
+    // empty (operator bool false) view on failure.
+    static MappedView Map(HANDLE section, DWORD desiredAccess, SIZE_T sizeBytes, uint64_t offset = 0);
 
     std::span<std::byte> bytes() noexcept;
     std::span<const std::byte> bytes() const noexcept;
