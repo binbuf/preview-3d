@@ -24,6 +24,17 @@ struct ReadyResourceInfo {
     uint64_t generationValue = 0;
     uint32_t clusterId = 0;
     uint32_t lodLevel = 0;
+    // Both added for Gate 2's DXGI budget monitor / eviction planner
+    // (interactive-viewer/src/graphics/DxgiBudgetMonitor.h) -- appended at
+    // the end, both defaulted, so every existing positional-aggregate-init
+    // call site (D3D12UploadRing.cpp, UploadRingTests.cpp) keeps compiling
+    // unchanged. approximateBytes is the resource's approximate GPU-visible
+    // size, used by the eviction planner's budget-fit math; lastVisibleFrame
+    // is a caller-supplied recency signal (no real frame loop exists yet to
+    // populate it from, so it defaults to 0 -- see DxgiBudgetMonitor.h's own
+    // scoping note on why this isn't camera/frustum-aware).
+    uint64_t approximateBytes = 0;
+    uint32_t lastVisibleFrame = 0;
 };
 
 class SceneSnapshot {

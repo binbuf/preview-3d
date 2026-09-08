@@ -7,11 +7,12 @@
 namespace model_core {
 
 enum class ControlOpcode : uint32_t {
-    StartGeneration = 1,       // host -> worker
-    ChunksReady = 2,           // worker -> host
-    GenerationError = 3,       // worker -> host
-    StartGltfImport = 4,       // host -> worker
-    StartGltfImportFromFile = 5, // host -> worker
+    StartGeneration = 1,          // host -> worker
+    ChunksReady = 2,              // worker -> host
+    GenerationError = 3,          // worker -> host
+    StartGltfImport = 4,          // host -> worker
+    StartGltfImportFromFile = 5,  // host -> worker
+    Shutdown = 6,                 // host -> worker, --pool mode only: exit cleanly, no reply
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an

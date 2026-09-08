@@ -75,6 +75,7 @@
     <ClCompile Include="HostileWorkerTests.cpp" />
     <ClCompile Include="GltfImportTests.cpp" />
     <ClCompile Include="SourceFileAccessTests.cpp" />
+    <ClCompile Include="WorkerPoolTests.cpp" />
     <ClCompile Include="..\..\shared\platform\src\AppContainerSid.cpp" />
     <ClCompile Include="..\..\shared\platform\src\ProcThreadAttributeList.cpp" />
     <ClCompile Include="..\..\shared\platform\src\MappedView.cpp" />
@@ -82,6 +83,7 @@
     <ClCompile Include="..\..\shared\import-broker\src\SharedSection.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\SharedSectionValidator.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\SourceFileAccess.cpp" />
+    <ClCompile Include="..\..\shared\import-broker\src\WorkerPool.cpp" />
     <ClCompile Include="..\..\shared\model-core\src\ControlChannelIo.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -92,10 +94,12 @@
     <ClInclude Include="..\..\shared\platform\include\platform\ProcThreadAttributeList.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\MappedView.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\CheckedMath.h" />
+    <ClInclude Include="..\..\shared\platform\include\platform\Generation.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\SandboxLauncher.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\SharedSection.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\SharedSectionValidator.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\SourceFileAccess.h" />
+    <ClInclude Include="..\..\shared\import-broker\include\import_broker\WorkerPool.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\WireFormat.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\Checksum.h" />

@@ -76,6 +76,7 @@
     <ClCompile Include="src\SyntheticSceneGenerator.cpp" />
     <ClCompile Include="src\GltfImportWorker.cpp" />
     <ClCompile Include="src\GltfAdapter.cpp" />
+    <ClCompile Include="src\WorkerRequestDispatch.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
     <ClCompile Include="..\shared\model-core\src\MappedFile.cpp" />
@@ -86,6 +87,7 @@
     <ClInclude Include="src\SyntheticSceneGenerator.h" />
     <ClInclude Include="src\GltfImportWorker.h" />
     <ClInclude Include="src\GltfAdapter.h" />
+    <ClInclude Include="src\WorkerRequestDispatch.h" />
     <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />
     <ClInclude Include="..\shared\platform\include\platform\Win32Handle.h" />
     <ClInclude Include="..\shared\platform\include\platform\CheckedMath.h" />

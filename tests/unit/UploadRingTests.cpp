@@ -311,3 +311,79 @@ TEST_CASE("Synthetic clusters publish into a growing SceneSnapshot only as their
     // epoch/handle swap, not in-place mutation of a shared snapshot.
     CHECK(before->ReadyResources().empty());
 }
+
+// Gate 2 fault injection: "delayed copy fences" -- filling a gap the
+// existing tests above only covered incidentally (via the empty-before-
+// any-upload check), not as a deliberate held-open scenario.
+TEST_CASE("A delayed copy fence leaves CurrentSnapshot unchanged until it actually completes", "[graphics]")
+{
+    D3D12UploadRing ring;
+    REQUIRE(ring.Initialize(SharedDevice()));
+
+    platform::GenerationSource generation;
+    SceneSnapshotPtr before = ring.CurrentSnapshot();
+    REQUIRE(before->ReadyResources().empty());
+
+    std::vector<std::byte> source(256, std::byte{ 0xCD });
+    auto destination = MakeDefaultBuffer(*SharedDevice().Device(), source.size());
+
+    D3D12UploadRing::UploadRequest request;
+    request.sourceBytes = source;
+    request.destination = destination.Get();
+    request.generation = generation.Snapshot();
+    request.clusterId = 42;
+    request.lodLevel = 0;
+
+    REQUIRE(ring.Upload(request) == D3D12UploadRing::UploadResult::Uploaded);
+    // Deliberately not flushed/drained yet -- the batch (and therefore its
+    // fence) hasn't even been submitted, simulating a delayed-copy-fence
+    // fault: nothing has completed, so nothing should be visible yet.
+    SceneSnapshotPtr stillPending = ring.CurrentSnapshot();
+    CHECK(stillPending == before); // the exact same snapshot object -- no premature swap
+    CHECK(stillPending->ReadyResources().empty());
+
+    // Now let it actually complete, proving the delay was real (this
+    // wasn't an API that simply never updates) and the snapshot changes
+    // once the fence genuinely retires.
+    ring.FlushBatch();
+    SceneSnapshotPtr after = DrainUntil(ring, generation, 1);
+    REQUIRE(after->ReadyResources().size() == 1);
+    CHECK(after != before);
+}
+
+// Gate 2 fault injection: "OOM" -- a request too large for the ring to
+// ever satisfy, even after growing to its configured cap, must fail
+// cleanly rather than crash or corrupt ring state.
+TEST_CASE("A single allocation larger than the ring's configured cap is rejected cleanly, not attempted",
+          "[graphics]")
+{
+    D3D12UploadRing::CreateOptions options;
+    options.initialCapacityBytes = 1024;
+    options.growthIncrementBytes = 1024;
+    options.maxCapacityBytes = 4096; // hard ceiling this ring can ever grow to
+
+    D3D12UploadRing ring;
+    REQUIRE(ring.Initialize(SharedDevice(), options));
+
+    platform::GenerationSource generation;
+    std::vector<std::byte> tooLarge(options.maxCapacityBytes + 1, std::byte{ 0x01 });
+    auto destination = MakeDefaultBuffer(*SharedDevice().Device(), tooLarge.size());
+
+    D3D12UploadRing::UploadRequest request;
+    request.sourceBytes = tooLarge;
+    request.destination = destination.Get();
+    request.generation = generation.Snapshot();
+
+    CHECK(ring.Upload(request) == D3D12UploadRing::UploadResult::Failed);
+
+    // The ring itself is unaffected -- still usable for a properly-sized
+    // request afterward, proving this was a clean rejection, not a
+    // corrupted/wedged ring.
+    std::vector<std::byte> smallPayload(64, std::byte{ 0x02 });
+    auto smallDestination = MakeDefaultBuffer(*SharedDevice().Device(), smallPayload.size());
+    D3D12UploadRing::UploadRequest smallRequest;
+    smallRequest.sourceBytes = smallPayload;
+    smallRequest.destination = smallDestination.Get();
+    smallRequest.generation = generation.Snapshot();
+    CHECK(ring.Upload(smallRequest) == D3D12UploadRing::UploadResult::Uploaded);
+}

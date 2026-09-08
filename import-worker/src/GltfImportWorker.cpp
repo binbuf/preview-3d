@@ -3,7 +3,6 @@
 #include "GltfAdapter.h"
 
 #include "model_core/ControlChannelIo.h"
-#include "model_core/ControlProtocol.h"
 #include "model_core/MappedFile.h"
 #include "platform/MappedView.h"
 #include "platform/Win32Handle.h"
@@ -17,8 +16,8 @@ namespace import_worker {
 
 namespace {
 
-int ReportResult(HANDLE stdOut, uint64_t generationId,
-                  const std::variant<GltfImportResult, model_core::ImportErrorCode>& result)
+bool ReportResult(HANDLE stdOut, uint64_t generationId,
+                   const std::variant<GltfImportResult, model_core::ImportErrorCode>& result)
 {
     if (const auto* errorCode = std::get_if<model_core::ImportErrorCode>(&result)) {
         model_core::GenerationErrorNotice notice{};
@@ -26,7 +25,7 @@ int ReportResult(HANDLE stdOut, uint64_t generationId,
         notice.errorCode = static_cast<uint32_t>(*errorCode);
         model_core::WriteControlMessage(stdOut, model_core::ControlOpcode::GenerationError, &notice,
                                          sizeof(notice));
-        return 1;
+        return false;
     }
 
     const auto& info = std::get<GltfImportResult>(result);
@@ -35,18 +34,20 @@ int ReportResult(HANDLE stdOut, uint64_t generationId,
     notice.chunkCount = info.chunkCount;
     notice.sectionBytesWritten = info.sectionBytesWritten;
     model_core::WriteControlMessage(stdOut, model_core::ControlOpcode::ChunksReady, &notice, sizeof(notice));
-    return 0;
+    return true;
 }
 
-int ReportError(HANDLE stdOut, uint64_t generationId, model_core::ImportErrorCode code)
+bool ReportError(HANDLE stdOut, uint64_t generationId, model_core::ImportErrorCode code)
 {
     std::variant<GltfImportResult, model_core::ImportErrorCode> result = code;
     return ReportResult(stdOut, generationId, result);
 }
 
+} // namespace
+
 // The existing path: a pre-made, whole-source shared/pagefile section the
 // host copied the GLB bytes into (StartGltfImport/ParseGltfRequest).
-int RunFromSection(HANDLE stdOut, const model_core::ParseGltfRequest& request)
+bool HandleGltfImportRequest(HANDLE stdOut, const model_core::ParseGltfRequest& request)
 {
     HANDLE sourceSection = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sourceHandleValue));
     auto sourceView = platform::MappedView::Map(sourceSection, FILE_MAP_READ,
@@ -73,7 +74,7 @@ int RunFromSection(HANDLE stdOut, const model_core::ParseGltfRequest& request)
 // .docs/design/03-file-formats-and-ingestion.md's "Mapped-file abstraction"
 // step 1 ("...or, for a duplicated handle received from the broker, reopen
 // a mapping directly from that handle without a fresh CreateFileW call").
-int RunFromFile(HANDLE stdOut, const model_core::ParseGltfFileRequest& request)
+bool HandleGltfImportFileRequest(HANDLE stdOut, const model_core::ParseGltfFileRequest& request)
 {
     HANDLE rawFile = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sourceFileHandleValue));
     auto openResult = model_core::MappedFile::FromHandle(platform::Win32Handle(rawFile));
@@ -98,8 +99,6 @@ int RunFromFile(HANDLE stdOut, const model_core::ParseGltfFileRequest& request)
     return ReportResult(stdOut, request.generationId, result);
 }
 
-} // namespace
-
 int RunGltfImport()
 {
     HANDLE stdIn = GetStdHandle(STD_INPUT_HANDLE);
@@ -119,14 +118,14 @@ int RunGltfImport()
         && received->payload.size() == sizeof(model_core::ParseGltfRequest)) {
         model_core::ParseGltfRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
-        return RunFromSection(stdOut, request);
+        return HandleGltfImportRequest(stdOut, request) ? 0 : 1;
     }
 
     if (received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartGltfImportFromFile)
         && received->payload.size() == sizeof(model_core::ParseGltfFileRequest)) {
         model_core::ParseGltfFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
-        return RunFromFile(stdOut, request);
+        return HandleGltfImportFileRequest(stdOut, request) ? 0 : 1;
     }
 
     return 1;
