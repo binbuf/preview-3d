@@ -1,6 +1,7 @@
 #include "framework.h"
 #include "Preview3D.h"
 #include "Chrome.h"
+#include "D3D12ViewerPath.h"
 #include "InfoPanel.h"
 #include "Model.h"
 #include "Renderer.h"
@@ -110,6 +111,10 @@ struct ViewerApp
     WINDOWPLACEMENT savedWindowPlacement{ sizeof(WINDOWPLACEMENT) };
     bool rendererReady = false;
     bool closing = false;
+    // Opt-in via --d3d12 (see wWinMain's argument scan) -- mutually
+    // exclusive with `renderer` below; see D3D12ViewerPath.h for scope.
+    bool useD3D12 = false;
+    D3D12ViewerPath d3d12Path;
     Renderer renderer;
     Camera camera;
     NavGizmo gizmo;
@@ -1653,6 +1658,12 @@ void TickCamera(ViewerApp& app)
 void RenderFrame(ViewerApp& app)
 {
     if (!app.rendererReady) return;
+    if (app.useD3D12)
+    {
+        app.d3d12Path.RenderClearFrame();
+        ValidateRect(app.window, nullptr);
+        return;
+    }
     TickCamera(app);
     RenderScene(app);
     ValidateRect(app.window, nullptr);
@@ -1704,7 +1715,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         UpdateGizmoLayout(*app);
         UpdateChromeLayout(*app);
         std::wstring renderError;
-        app->rendererReady = app->renderer.Initialize(window, renderError);
+        app->rendererReady = app->useD3D12 ? app->d3d12Path.Initialize(window, renderError)
+                                            : app->renderer.Initialize(window, renderError);
         if (!app->rendererReady)
         {
             app->errorSummary = L"Graphics could not be started.";
@@ -1879,7 +1891,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         HDC dc = BeginPaint(window, &paint);
         if (app->rendererReady)
         {
-            RenderScene(*app);
+            if (app->useD3D12) app->d3d12Path.RenderClearFrame();
+            else RenderScene(*app);
         }
         else RenderFallback(*app, dc);
         EndPaint(window, &paint);
@@ -1892,7 +1905,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (app->rendererReady && wParam != SIZE_MINIMIZED)
         {
             std::wstring resizeError;
-            if (!app->renderer.Resize(LOWORD(lParam), HIWORD(lParam), resizeError))
+            bool resized = app->useD3D12
+                ? app->d3d12Path.Resize(LOWORD(lParam), HIWORD(lParam), resizeError)
+                : app->renderer.Resize(LOWORD(lParam), HIWORD(lParam), resizeError);
+            if (!resized)
             {
                 app->rendererReady = false;
                 app->errorSummary = L"The viewport could not be resized.";
@@ -2586,6 +2602,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         app->alive->store(false, std::memory_order_relaxed);
         if (app->cancellation) app->cancellation->store(true, std::memory_order_relaxed);
         if (app->buttonFont) { DeleteObject(app->buttonFont); app->buttonFont = nullptr; }
+        // GPU work must be known-idle before ViewerApp's destructor releases
+        // the D3D12 objects -- RAII alone doesn't order that.
+        if (app->useD3D12) app->d3d12Path.WaitForIdle();
         PostQuitMessage(0);
         return 0;
     }
@@ -2640,8 +2659,19 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.showNativeOrientation = settings.showNativeOrientation;
     int argumentCount = 0;
     PWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
-    if (arguments && argumentCount > 1) app.initialPath = arguments[1];
-    if (arguments) LocalFree(arguments);
+    if (arguments)
+    {
+        // --d3d12 is scanned out first; the first remaining non-flag
+        // argument (if any) is still treated as the initial file path,
+        // preserving today's single-positional-arg behavior exactly when
+        // the flag is absent.
+        for (int i = 1; i < argumentCount; ++i)
+        {
+            if (_wcsicmp(arguments[i], L"--d3d12") == 0) app.useD3D12 = true;
+            else if (app.initialPath.empty()) app.initialPath = arguments[i];
+        }
+        LocalFree(arguments);
+    }
 
     if (!RegisterViewerClass(instance) || !CreateMainWindow(app, showCommand))
     {

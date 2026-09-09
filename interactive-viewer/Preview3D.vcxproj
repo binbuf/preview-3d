@@ -40,13 +40,13 @@
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>src\app;src\render;src\ui;src\platform;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>src\app;src\render;src\ui;src\platform;src\graphics;..\shared\platform\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ResourceCompile>
       <AdditionalIncludeDirectories>src\app;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Link>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;d2d1.lib;dwrite.lib;dwmapi.lib;comctl32.lib;shell32.lib;ole32.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;d2d1.lib;dwrite.lib;dwmapi.lib;comctl32.lib;shell32.lib;ole32.lib;runtimeobject.lib;d3d12.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -81,6 +81,10 @@
     <ClInclude Include="src\app\Settings.h" />
     <ClInclude Include="src\platform\ShellIntegration.h" />
     <ClInclude Include="src\app\targetver.h" />
+    <ClInclude Include="src\app\D3D12ViewerPath.h" />
+    <ClInclude Include="src\graphics\D3D12Device.h" />
+    <ClInclude Include="src\graphics\D3D12CommandQueue.h" />
+    <ClInclude Include="src\graphics\D3D12SwapChain.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\ui\Chrome.cpp" />
@@ -91,6 +95,10 @@
     <ClCompile Include="src\app\Settings.cpp" />
     <ClCompile Include="src\render\Renderer.cpp" />
     <ClCompile Include="src\platform\ShellIntegration.cpp" />
+    <ClCompile Include="src\app\D3D12ViewerPath.cpp" />
+    <ClCompile Include="src\graphics\D3D12Device.cpp" />
+    <ClCompile Include="src\graphics\D3D12CommandQueue.cpp" />
+    <ClCompile Include="src\graphics\D3D12SwapChain.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources\Preview3D.rc" />
