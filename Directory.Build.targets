@@ -2,10 +2,82 @@
 <Project>
   <!--
     Companion to Directory.Build.props, imported at the end of every
-    project's evaluation via Microsoft.Cpp.targets. Empty for now — this is
-    the deliberate hook point for build-policy targets (e.g. a shared
-    post-build SBOM/notice step) called for in
-    .docs/design/10-delivery-plan.md, added when a later gate needs one,
-    rather than growing ad hoc per-project post-build steps.
+    project's evaluation via Microsoft.Cpp.targets. This is the deliberate
+    hook point for build-policy targets called for in
+    .docs/design/10-delivery-plan.md, rather than growing ad hoc per-project
+    post-build steps.
   -->
+
+  <!--
+    Re-sync the vcpkg app-local DLLs in $(OutDir) with the ones for the
+    configuration actually being built.
+
+    Why this exists: every project in Preview3D.slnx shares one output
+    directory ($(SolutionDir)x64\$(Configuration)), and vcpkg deploys its
+    dependencies there by copying them next to the .exe. vcpkg's applocal.ps1
+    only overwrites a DLL when the source is *newer* than what is already in
+    $(OutDir):
+
+        if ($sourceModTime -gt $destModTime) { Copy-Item ... }
+
+    So a single release-configuration DLL that lands in x64\Debug (a manual
+    copy while debugging, a tool script pulling from <triplet>\bin instead of
+    <triplet>\debug\bin, an interrupted build) is never corrected. It just
+    sits there, and every subsequent build silently keeps it.
+
+    That is not a cosmetic problem. x64-windows is a dynamic triplet, so a
+    release DLL is /MD (_ITERATOR_DEBUG_LEVEL=0) while a Debug .exe is /MDd
+    (_ITERATOR_DEBUG_LEVEL=2). MSVC's std::vector carries an extra
+    _Container_proxy pointer under IDL!=0, so it is 32 bytes in the .exe's
+    view and 24 in the DLL's. Any object passed across that boundary is read
+    at the wrong offsets: fastgltf::Asset came back from a "successful"
+    loadGltfBinary with scenes/nodes/meshes all zero and a garbage vector
+    size, then corrupted the heap on teardown. The same mismatch produced
+    heap-corruption crashes through draco.dll.
+
+    The failure gives no diagnostic and survives source reverts, which makes
+    it extremely expensive to bisect — it presents as a broken third-party
+    parser. Copy with SkipUnchangedFiles so this is a no-op (a timestamp and
+    size comparison, no I/O) on a healthy tree and self-heals a poisoned one.
+
+    Scoped to DLL names vcpkg actually deployed here: we only refresh a file
+    if a file of that name is already present in $(OutDir), so this never
+    drags the whole vcpkg bin directory into the output.
+
+    Gated on the same conditions as vcpkg's own AppLocalFromInstalled. That
+    matters: when a project leaves VcpkgEnableManifest unset, vcpkg still
+    computes _ZVcpkgCurrentInstalledDir, but points it at the *classic*
+    install root inside the Visual Studio installation. Without this gate we
+    would glob DLLs out of an unrelated tree.
+  -->
+  <Target Name="Preview3DResyncVcpkgAppLocalDlls"
+          AfterTargets="AppLocalFromInstalled;AppLocalFromInstalledPreserve"
+          Condition="'$(_ZVcpkgClassicOrManifest)' == 'true'
+                     and '$(VcpkgApplocalDeps)' == 'true'
+                     and '$(_ZVcpkgCurrentInstalledDir)' != ''
+                     and '$(OutDir)' != ''">
+    <ItemGroup>
+      <!-- $(_ZVcpkgConfigSubdir) is "debug\" for Debug and empty for Release,
+           so this always names the bin directory matching this build. -->
+      <_Preview3DVcpkgBinDll Include="$(_ZVcpkgCurrentInstalledDir)$(_ZVcpkgConfigSubdir)bin\*.dll" />
+      <_Preview3DVcpkgDllToResync Include="@(_Preview3DVcpkgBinDll)"
+                                  Condition="Exists('$(OutDir)%(Filename)%(Extension)')" />
+    </ItemGroup>
+
+    <!-- Deliberately silent. The Copy task reports skipped files in
+         CopiedFiles alongside real ones, so there is no cheap, accurate way
+         to log "this one was actually wrong" without an inline task; a
+         message driven off CopiedFiles fires on every build and trains you
+         to ignore it. The copy is the fix, and on a healthy tree
+         SkipUnchangedFiles reduces it to a size and timestamp comparison. -->
+    <Copy SourceFiles="@(_Preview3DVcpkgDllToResync)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Retries="2" />
+
+    <!-- Keep IncrementalClean from treating these as orphaned outputs. -->
+    <ItemGroup>
+      <FileWrites Include="@(_Preview3DVcpkgDllToResync->'$(OutDir)%(Filename)%(Extension)')" />
+    </ItemGroup>
+  </Target>
 </Project>

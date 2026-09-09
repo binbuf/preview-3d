@@ -16,6 +16,44 @@
     <PlatformToolset Condition="'$(PlatformToolset)'==''">v145</PlatformToolset>
     <CharacterSet Condition="'$(CharacterSet)'==''">Unicode</CharacterSet>
   </PropertyGroup>
+
+  <!--
+    vcpkg opt-in. A project that consumes a vcpkg dependency declares
+
+      <PropertyGroup Label="Vcpkg">
+        <VcpkgEnableManifest>true</VcpkgEnableManifest>
+      </PropertyGroup>
+
+    above its Microsoft.Cpp.Default.props import (Preview3DImportWorker,
+    Tests.Unit and Tests.ImportIsolation do). Everything else is turned off
+    explicitly here rather than left unset.
+
+    Unset is not the same as off: vcpkg defaults VcpkgEnabled to true, finds
+    vcpkg.json at the repo root, and prints "The vcpkg manifest was disabled,
+    but we found a manifest file in ..." once per project per build. That is
+    pure noise for a project that has no vcpkg dependency, and noise in a
+    build log is what let a real defect hide in plain sight (see
+    .docs/PROGRESS.md, "Release vcpkg DLLs in x64\Debug").
+
+    This changes no build inputs. Those projects already resolved
+    _ZVcpkgClassicOrManifest to false, so they were already getting no vcpkg
+    include directories, no autolink and no app-local deployment; this only
+    stops vcpkg from asking about it. Turning manifests *on* for them would
+    not be equivalent: vcpkg autolink appends the whole triplet's lib\*.lib
+    to the link line, including the 52 MB basisu_encoder.lib.
+
+    Ordering note: this file is imported (via Microsoft.Common.props, from
+    Microsoft.Cpp.Default.props) after a project's own Label="Vcpkg" property
+    group is evaluated but before vcpkg.props applies its defaults, so the
+    per-project opt-in above still wins.
+
+    Adding a project that needs a vcpkg library? Set VcpkgEnableManifest as
+    shown. Forgetting to shows up immediately as an unresolved #include, not
+    as a subtle misconfiguration.
+  -->
+  <PropertyGroup>
+    <VcpkgEnabled Condition="'$(VcpkgEnabled)'=='' and '$(VcpkgEnableManifest)'!='true'">false</VcpkgEnabled>
+  </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
