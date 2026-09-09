@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -204,6 +205,76 @@ TEST_CASE("Presenting five frames in a row does not deadlock or leak", "[graphic
 
     CHECK(directQueue.WaitForValue(previousFenceValue, 5000)
           == D3D12CommandQueue::WaitResult::Signaled);
+}
+
+TEST_CASE("A per-frame allocator ring waits on its own slot, not the previous frame", "[graphics]")
+{
+    // The pacing shape D3D12ViewerPath::frames now uses. The case above
+    // waits on the immediately previous frame with one allocator, so the CPU
+    // can never be more than one frame ahead; here each slot waits only on
+    // its own last submission, which is what lets the CPU run ahead at all.
+    TestWindow window;
+    D3D12CommandQueue directQueue;
+    REQUIRE(directQueue.Initialize(*SharedDevice().Device(), D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                    L"Direct"));
+
+    D3D12SwapChain swapChain;
+    D3D12SwapChain::CreateOptions options;
+    options.width = 640;
+    options.height = 480;
+    REQUIRE(swapChain.Initialize(SharedDevice(), directQueue, window.hwnd, options).success);
+
+    HANDLE waitable = swapChain.FrameLatencyWaitableHandle();
+    REQUIRE(waitable != nullptr);
+
+    std::vector<FrameRecorder> ring;
+    ring.reserve(D3D12SwapChain::kBufferCount);
+    for (UINT i = 0; i < D3D12SwapChain::kBufferCount; ++i) {
+        ring.emplace_back(*SharedDevice().Device());
+    }
+    std::vector<uint64_t> slotFence(D3D12SwapChain::kBufferCount, 0);
+
+    uint64_t lastSignaled = 0;
+    uint64_t deepestLag = 0;
+    int submittedAheadOfGpu = 0;
+
+    constexpr int kFrames = 12; // comfortably more than kBufferCount
+    for (int frame = 0; frame < kFrames; ++frame) {
+        // The frame-latency object is what bounds how far ahead the CPU may
+        // run. Nothing in the product waited on it before this chunk.
+        CHECK(WaitForSingleObject(waitable, 5000) == WAIT_OBJECT_0);
+
+        const UINT index = swapChain.CurrentBackBufferIndex();
+        if (slotFence[index] != 0) {
+            REQUIRE(directQueue.WaitForValue(slotFence[index], 5000)
+                    == D3D12CommandQueue::WaitResult::Signaled);
+            const uint64_t lag = lastSignaled - slotFence[index];
+            if (lag > deepestLag) deepestLag = lag;
+        }
+
+        ring[index].RecordAndExecute(swapChain, directQueue);
+        CHECK(SUCCEEDED(swapChain.Present()));
+
+        lastSignaled = directQueue.SignalNext();
+        REQUIRE(lastSignaled != 0);
+        slotFence[index] = lastSignaled;
+
+        if (directQueue.CompletedValue() < lastSignaled) ++submittedAheadOfGpu;
+    }
+
+    // Deterministic regardless of how fast this GPU happens to be: fence
+    // values increment by one per frame, and a slot is revisited every
+    // kBufferCount frames, so the value it waits on is exactly
+    // kBufferCount - 1 submissions behind the newest. The single-allocator
+    // loop above has a lag of exactly 1 by construction.
+    CHECK(deepestLag == D3D12SwapChain::kBufferCount - 1);
+
+    // How much the CPU actually got ahead is hardware-dependent -- a 640x480
+    // clear can retire faster than the CPU reaches the next check -- so this
+    // is reported, never asserted.
+    INFO("frames submitted before the GPU had caught up: " << submittedAheadOfGpu << " of " << kFrames);
+
+    CHECK(directQueue.WaitForValue(lastSignaled, 5000) == D3D12CommandQueue::WaitResult::Signaled);
 }
 
 TEST_CASE("Resize succeeds and rebuilds back buffers at the new dimensions", "[graphics]")

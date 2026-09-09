@@ -23,10 +23,12 @@
 #include "D3D12Device.h"
 #include "D3D12ImportBridge.h"
 #include "D3D12SwapChain.h"
+#include "FrameStats.h"
 #include "Renderer.h" // for Camera -- pure DirectXMath, no D3D11 coupling
 
 #include <wrl/client.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -36,9 +38,37 @@ struct D3D12ViewerPath
     D3D12Device device;
     D3D12CommandQueue directQueue;
     D3D12SwapChain swapChain;
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocator;
+
+    // One allocator per swap-chain buffer so the CPU can run ahead of the
+    // GPU instead of stalling to idle every frame. Per
+    // .docs/design/04-rendering-and-streaming.md:32, "An
+    // ID3D12CommandAllocator is reset only after the fence value of its last
+    // submitted command list has completed" -- which is what fenceValue
+    // records for each slot.
+    static constexpr UINT kFrameCount = D3D12SwapChain::kBufferCount;
+    struct FrameSlot
+    {
+        Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
+        uint64_t fenceValue = 0; // 0 = nothing submitted from this slot yet
+    };
+    FrameSlot frames[kFrameCount];
+
+    // Single list: a command list may be Reset onto any allocator, so unlike
+    // the allocators it does not need slotting -- the same shape
+    // SwapChainTests.cpp's FrameRecorder already uses.
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
-    uint64_t lastFrameFence = 0;
+
+    // Uploads keep their synchronous semantics -- their staging buffers are
+    // locals released at return, which is only safe because they block -- but
+    // must not touch a render slot's allocator, since resetting one whose
+    // frame is still in flight is exactly what the slots above exist to
+    // prevent. This mirrors D3D12UploadRing, which already owns its own
+    // queue, allocator and fence value (D3D12UploadRing.h:150-154).
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> uploadAllocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> uploadList;
+    uint64_t uploadFence = 0;
+
+    FrameStats frameStats;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
     Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
@@ -51,11 +81,15 @@ struct D3D12ViewerPath
     // rootSignature/pipelineState above unchanged.
     Microsoft::WRL::ComPtr<ID3D12RootSignature> texturedRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPipelineState;
-    // One persistently-mapped upload-heap CB reused every frame -- plain
-    // per-frame Map/memcpy, no ring, matching this slice's "fully
-    // synchronous" scope.
+    // kFrameCount slots of 256 bytes (D3D12's CBV alignment), bound at
+    // GetGPUVirtualAddress() + frameIndex * kConstantBufferSlotBytes. One
+    // shared slot was correct only while every frame stalled to idle first;
+    // without that stall it is a CPU/GPU race -- the CPU would overwrite
+    // frame N-1's matrix while the GPU was still reading it, which shows up
+    // as an intermittently wrong camera rather than as a crash.
+    static constexpr UINT kConstantBufferSlotBytes = 256;
     Microsoft::WRL::ComPtr<ID3D12Resource> frameConstantBuffer;
-    void* frameConstantBufferMapped = nullptr;
+    std::byte* frameConstantBufferMapped = nullptr;
 
     struct GpuMesh
     {
@@ -82,9 +116,9 @@ struct D3D12ViewerPath
     UINT srvDescriptorSize = 0;
 
     // Creates the device, direct queue, swap chain (sized to `window`'s
-    // current client rect), the single command allocator/list this path
-    // reuses every frame, the depth buffer, the root signature/PSO, and the
-    // per-frame constant buffer.
+    // current client rect), the per-frame command allocators and the shared
+    // command list, the upload allocator/list, the depth buffer, the root
+    // signature/PSO, and the slotted per-frame constant buffer.
     bool Initialize(HWND window, std::wstring& error);
 
     // Precondition enforced internally via WaitForIdle() first -- matches
@@ -124,13 +158,27 @@ struct D3D12ViewerPath
     // to be idle first -- callers must not still be mid-frame.
     void ClearModel();
 
-    // Bounded wait on lastFrameFence. Called before Resize, before releasing
-    // GPU resources, and on WM_DESTROY -- GPU work must be known-idle before
-    // this struct's destructor releases the D3D12 objects; RAII alone
-    // doesn't order that.
+    // Bounded wait until every outstanding frame slot and any upload has
+    // completed. Called before Resize, before releasing GPU resources, and on
+    // WM_DESTROY -- GPU work must be known-idle before this struct's
+    // destructor releases the D3D12 objects; RAII alone doesn't order that.
+    //
+    // Deliberately NOT called per frame any more: that is what serialized the
+    // whole path. Per-frame waiting is now the frame-latency waitable object
+    // plus the current slot's own fence value.
     void WaitForIdle();
 
 private:
+    // The per-frame wait that replaced WaitForIdle(): blocks on the swap
+    // chain's frame-latency waitable object, then on this slot's own fence so
+    // its allocator is only reset once its last submission has completed.
+    // Returns the back-buffer index to render into.
+    UINT BeginFrame();
+    // Present, then signal and record the fence value into the slot.
+    void EndFrame(UINT frameIndex);
+    // Bounded wait on the upload lane's own fence only. Rendering is
+    // unaffected -- that is the point of the separate allocator.
+    void WaitForUpload();
     bool CreateDepthBuffer(UINT width, UINT height, std::wstring& error);
     bool CreatePipeline(std::wstring& error);
     bool CreateTexturedPipeline(std::wstring& error);

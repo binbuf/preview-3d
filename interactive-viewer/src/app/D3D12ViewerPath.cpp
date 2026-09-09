@@ -3,9 +3,12 @@
 #include <d3dcompiler.h>
 #include <windows.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iterator>
 #include <utility>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -219,12 +222,14 @@ bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
         return false;
     }
 
-    if (FAILED(device.Device()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                          IID_PPV_ARGS(&commandAllocator)))) {
-        error = L"The D3D12 command allocator could not be created.";
-        return false;
+    for (UINT i = 0; i < kFrameCount; ++i) {
+        if (FAILED(device.Device()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                              IID_PPV_ARGS(&frames[i].allocator)))) {
+            error = L"The D3D12 command allocator could not be created.";
+            return false;
+        }
     }
-    if (FAILED(device.Device()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(),
+    if (FAILED(device.Device()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, frames[0].allocator.Get(),
                                                     nullptr, IID_PPV_ARGS(&commandList)))) {
         error = L"The D3D12 command list could not be created.";
         return false;
@@ -232,6 +237,20 @@ bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
     // CreateCommandList returns it open; close before the first Reset(),
     // matching the FrameRecorder convention SwapChainTests.cpp established.
     commandList->Close();
+
+    // Uploads get their own allocator and list so they never reset one whose
+    // frame may still be in flight.
+    if (FAILED(device.Device()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                          IID_PPV_ARGS(&uploadAllocator)))) {
+        error = L"The D3D12 upload command allocator could not be created.";
+        return false;
+    }
+    if (FAILED(device.Device()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAllocator.Get(), nullptr,
+                                                    IID_PPV_ARGS(&uploadList)))) {
+        error = L"The D3D12 upload command list could not be created.";
+        return false;
+    }
+    uploadList->Close();
 
     if (!CreateDepthBuffer(swapChainOptions.width, swapChainOptions.height, error)) return false;
     if (!CreatePipeline(error)) return false;
@@ -472,26 +491,78 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
 
 bool D3D12ViewerPath::CreateFrameConstantBuffer(std::wstring& error)
 {
-    // 256-byte aligned, per D3D12's CBV alignment requirement -- comfortably
-    // covers one 4x4 matrix (64 bytes).
-    frameConstantBuffer = CreateBuffer(device.Device(), 256, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+    // One 256-byte slot per frame in flight. 256 is D3D12's CBV alignment
+    // requirement and comfortably covers one 4x4 matrix (64 bytes).
+    frameConstantBuffer = CreateBuffer(device.Device(), kConstantBufferSlotBytes * kFrameCount,
+                                        D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
     if (!frameConstantBuffer) {
         error = L"The per-frame constant buffer could not be created.";
         return false;
     }
     D3D12_RANGE noRead{ 0, 0 };
-    if (FAILED(frameConstantBuffer->Map(0, &noRead, &frameConstantBufferMapped))) {
+    void* mapped = nullptr;
+    if (FAILED(frameConstantBuffer->Map(0, &noRead, &mapped))) {
         error = L"The per-frame constant buffer could not be mapped.";
         return false;
     }
+    frameConstantBufferMapped = static_cast<std::byte*>(mapped);
     return true;
 }
 
 void D3D12ViewerPath::WaitForIdle()
 {
-    if (lastFrameFence != 0) {
-        directQueue.WaitForValue(lastFrameFence, kIdleWaitTimeoutMs);
+    // Every outstanding slot, not one scalar: with the CPU running ahead,
+    // more than one frame's work can be in flight, and an upload's fence is
+    // tracked separately from any of them.
+    uint64_t highest = uploadFence;
+    for (const auto& frame : frames) {
+        if (frame.fenceValue > highest) highest = frame.fenceValue;
     }
+    if (highest != 0) {
+        directQueue.WaitForValue(highest, kIdleWaitTimeoutMs);
+    }
+}
+
+void D3D12ViewerPath::WaitForUpload()
+{
+    if (uploadFence != 0) {
+        directQueue.WaitForValue(uploadFence, kIdleWaitTimeoutMs);
+    }
+}
+
+UINT D3D12ViewerPath::BeginFrame()
+{
+    // The frame-latency waitable object is what bounds how far ahead the CPU
+    // may run (SetMaximumFrameLatency(2) in D3D12SwapChain::Initialize). This
+    // is its first and only consumer -- it has been created and exposed since
+    // Gate 2 with nothing ever waiting on it.
+    if (HANDLE waitable = swapChain.FrameLatencyWaitableHandle()) {
+        WaitForSingleObject(waitable, kIdleWaitTimeoutMs);
+    }
+
+    const UINT index = swapChain.CurrentBackBufferIndex();
+    // This slot's own last submission must have completed before its
+    // allocator may be reset. Normally already signaled -- WaitForValue
+    // short-circuits on the fast path when the fence has passed.
+    if (frames[index].fenceValue != 0) {
+        directQueue.WaitForValue(frames[index].fenceValue, kIdleWaitTimeoutMs);
+    }
+    return index;
+}
+
+void D3D12ViewerPath::EndFrame(UINT frameIndex)
+{
+    const HRESULT presentResult = swapChain.Present();
+    frameStats.RecordPresent(presentResult);
+
+    const uint64_t signaled = directQueue.SignalNext();
+    if (signaled != 0) {
+        frames[frameIndex].fenceValue = signaled;
+    }
+    // SignalNext returns 0 without incrementing on failure. Leaving the slot's
+    // previous value in place is the safe reading: it keeps the allocator
+    // gated on the newest value we know actually reached the queue, rather
+    // than silently degrading the wait to a no-op.
 }
 
 bool D3D12ViewerPath::Resize(int width, int height, std::wstring& error)
@@ -503,16 +574,15 @@ bool D3D12ViewerPath::Resize(int width, int height, std::wstring& error)
 
 void D3D12ViewerPath::RenderClearFrame()
 {
-    WaitForIdle();
+    const UINT index = BeginFrame();
 
-    if (FAILED(commandAllocator->Reset())) {
+    if (FAILED(frames[index].allocator->Reset())) {
         return;
     }
-    if (FAILED(commandList->Reset(commandAllocator.Get(), nullptr))) {
+    if (FAILED(commandList->Reset(frames[index].allocator.Get(), nullptr))) {
         return;
     }
 
-    UINT index = swapChain.CurrentBackBufferIndex();
     ID3D12Resource* backBuffer = swapChain.BackBuffer(index);
 
     D3D12_RESOURCE_BARRIER toRenderTarget{};
@@ -537,18 +607,16 @@ void D3D12ViewerPath::RenderClearFrame()
     ID3D12CommandList* lists[] = { commandList.Get() };
     directQueue.Queue()->ExecuteCommandLists(1, lists);
 
-    swapChain.Present();
-    lastFrameFence = directQueue.SignalNext();
+    EndFrame(index);
 }
 
 void D3D12ViewerPath::RenderFrame(const Camera& camera, float aspect)
 {
-    WaitForIdle();
+    const UINT index = BeginFrame();
 
-    if (FAILED(commandAllocator->Reset())) return;
-    if (FAILED(commandList->Reset(commandAllocator.Get(), pipelineState.Get()))) return;
+    if (FAILED(frames[index].allocator->Reset())) return;
+    if (FAILED(commandList->Reset(frames[index].allocator.Get(), pipelineState.Get()))) return;
 
-    UINT index = swapChain.CurrentBackBufferIndex();
     ID3D12Resource* backBuffer = swapChain.BackBuffer(index);
 
     D3D12_RESOURCE_BARRIER toRenderTarget{};
@@ -579,7 +647,12 @@ void D3D12ViewerPath::RenderFrame(const Camera& camera, float aspect)
     // XMStoreFloat4x4(view * projection) with no transpose).
     DirectX::XMFLOAT4X4 viewProjection{};
     DirectX::XMStoreFloat4x4(&viewProjection, camera.ViewMatrix() * camera.ProjectionMatrix(aspect));
-    std::memcpy(frameConstantBufferMapped, &viewProjection, sizeof(viewProjection));
+    // This frame's own slot -- writing the single shared slot would race the
+    // GPU still reading the previous frame's matrix.
+    const UINT64 constantBufferOffset = static_cast<UINT64>(index) * kConstantBufferSlotBytes;
+    std::memcpy(frameConstantBufferMapped + constantBufferOffset, &viewProjection, sizeof(viewProjection));
+    const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
+        = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
 
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     if (srvHeap) {
@@ -594,14 +667,14 @@ void D3D12ViewerPath::RenderFrame(const Camera& camera, float aspect)
         if (mesh.textureIndex >= 0 && srvHeap) {
             commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
             commandList->SetPipelineState(texturedPipelineState.Get());
-            commandList->SetGraphicsRootConstantBufferView(0, frameConstantBuffer->GetGPUVirtualAddress());
+            commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
             D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = srvHeap->GetGPUDescriptorHandleForHeapStart();
             gpuHandle.ptr += static_cast<UINT64>(mesh.textureIndex) * srvDescriptorSize;
             commandList->SetGraphicsRootDescriptorTable(1, gpuHandle);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
             commandList->SetPipelineState(pipelineState.Get());
-            commandList->SetGraphicsRootConstantBufferView(0, frameConstantBuffer->GetGPUVirtualAddress());
+            commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
         }
         commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         commandList->IASetIndexBuffer(&mesh.ibv);
@@ -616,14 +689,16 @@ void D3D12ViewerPath::RenderFrame(const Camera& camera, float aspect)
     ID3D12CommandList* lists[] = { commandList.Get() };
     directQueue.Queue()->ExecuteCommandLists(1, lists);
 
-    swapChain.Present();
-    lastFrameFence = directQueue.SignalNext();
+    EndFrame(index);
 }
 
 bool D3D12ViewerPath::UploadOneBuffer(const void* data, uint64_t sizeBytes, D3D12_RESOURCE_STATES finalState,
                                        ComPtr<ID3D12Resource>& outBuffer, std::wstring& error)
 {
-    WaitForIdle();
+    // Only this lane's own previous upload has to be complete before its
+    // allocator can be reset -- rendering uses its own per-frame allocators
+    // and is unaffected.
+    WaitForUpload();
 
     auto staging = CreateBuffer(device.Device(), sizeBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
     if (!staging) {
@@ -645,11 +720,11 @@ bool D3D12ViewerPath::UploadOneBuffer(const void* data, uint64_t sizeBytes, D3D1
         return false;
     }
 
-    if (FAILED(commandAllocator->Reset()) || FAILED(commandList->Reset(commandAllocator.Get(), nullptr))) {
+    if (FAILED(uploadAllocator->Reset()) || FAILED(uploadList->Reset(uploadAllocator.Get(), nullptr))) {
         error = L"The upload command list could not be reset.";
         return false;
     }
-    commandList->CopyBufferRegion(destination.Get(), 0, staging.Get(), 0, sizeBytes);
+    uploadList->CopyBufferRegion(destination.Get(), 0, staging.Get(), 0, sizeBytes);
 
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -657,16 +732,19 @@ bool D3D12ViewerPath::UploadOneBuffer(const void* data, uint64_t sizeBytes, D3D1
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
     barrier.Transition.StateAfter = finalState;
-    commandList->ResourceBarrier(1, &barrier);
+    uploadList->ResourceBarrier(1, &barrier);
 
-    if (FAILED(commandList->Close())) {
+    if (FAILED(uploadList->Close())) {
         error = L"The upload command list could not be closed.";
         return false;
     }
-    ID3D12CommandList* lists[] = { commandList.Get() };
+    ID3D12CommandList* lists[] = { uploadList.Get() };
     directQueue.Queue()->ExecuteCommandLists(1, lists);
-    lastFrameFence = directQueue.SignalNext();
-    WaitForIdle(); // synchronous: this buffer must be fully uploaded before returning
+    uploadFence = directQueue.SignalNext();
+    // Synchronous: `staging` is a local released on return, so the copy must
+    // have completed before then. This is also what makes resetting
+    // uploadAllocator safe at the top of the next upload.
+    WaitForUpload();
 
     outBuffer = destination;
     return true;
@@ -675,7 +753,7 @@ bool D3D12ViewerPath::UploadOneBuffer(const void* data, uint64_t sizeBytes, D3D1
 bool D3D12ViewerPath::UploadOneTexture(const d3d12_import_bridge::ImportedImage& image, UINT heapIndex,
                                         ComPtr<ID3D12Resource>& outTexture, std::wstring& error)
 {
-    WaitForIdle();
+    WaitForUpload();
 
     auto dxgiFormat = DxgiFormatFor(image.pixelFormat, image.colorSpace);
     if (!dxgiFormat || image.width == 0 || image.height == 0 || image.mipLevels != 1) {
@@ -738,7 +816,7 @@ bool D3D12ViewerPath::UploadOneTexture(const d3d12_import_bridge::ImportedImage&
     }
     staging->Unmap(0, nullptr);
 
-    if (FAILED(commandAllocator->Reset()) || FAILED(commandList->Reset(commandAllocator.Get(), nullptr))) {
+    if (FAILED(uploadAllocator->Reset()) || FAILED(uploadList->Reset(uploadAllocator.Get(), nullptr))) {
         error = L"The texture upload command list could not be reset.";
         return false;
     }
@@ -751,7 +829,7 @@ bool D3D12ViewerPath::UploadOneTexture(const d3d12_import_bridge::ImportedImage&
     srcLoc.pResource = staging.Get();
     srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
     srcLoc.PlacedFootprint = footprint;
-    commandList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
+    uploadList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
 
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -759,16 +837,18 @@ bool D3D12ViewerPath::UploadOneTexture(const d3d12_import_bridge::ImportedImage&
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    commandList->ResourceBarrier(1, &barrier);
+    uploadList->ResourceBarrier(1, &barrier);
 
-    if (FAILED(commandList->Close())) {
+    if (FAILED(uploadList->Close())) {
         error = L"The texture upload command list could not be closed.";
         return false;
     }
-    ID3D12CommandList* lists[] = { commandList.Get() };
+    ID3D12CommandList* lists[] = { uploadList.Get() };
     directQueue.Queue()->ExecuteCommandLists(1, lists);
-    lastFrameFence = directQueue.SignalNext();
-    WaitForIdle(); // synchronous: this texture must be fully uploaded before returning
+    uploadFence = directQueue.SignalNext();
+    // Synchronous: `staging` is a local released on return, and the SRV below
+    // is written only after the copy has landed.
+    WaitForUpload();
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Format = *dxgiFormat;

@@ -85,6 +85,7 @@
     <ClInclude Include="src\graphics\D3D12Device.h" />
     <ClInclude Include="src\graphics\D3D12CommandQueue.h" />
     <ClInclude Include="src\graphics\D3D12SwapChain.h" />
+    <ClInclude Include="src\graphics\FrameStats.h" />
     <ClInclude Include="src\app\D3D12ImportBridge.h" />
     <ClInclude Include="..\shared\platform\include\platform\Win32Handle.h" />
     <ClInclude Include="..\shared\platform\include\platform\AppContainerSid.h" />
@@ -119,6 +120,7 @@
     <ClCompile Include="src\graphics\D3D12Device.cpp" />
     <ClCompile Include="src\graphics\D3D12CommandQueue.cpp" />
     <ClCompile Include="src\graphics\D3D12SwapChain.cpp" />
+    <ClCompile Include="src\graphics\FrameStats.cpp" />
     <ClCompile Include="src\app\D3D12ImportBridge.cpp" />
     <ClCompile Include="..\shared\platform\src\AppContainerSid.cpp" />
     <ClCompile Include="..\shared\platform\src\ProcThreadAttributeList.cpp" />

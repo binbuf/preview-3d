@@ -128,6 +128,7 @@ struct ViewerApp
     // Opt-in via --d3d12 (see wWinMain's argument scan) -- mutually
     // exclusive with `renderer` below; see D3D12ViewerPath.h for scope.
     bool useD3D12 = false;
+    bool showFrameStats = false; // --frame-stats: see UpdateTitle
     D3D12ViewerPath d3d12Path;
     Renderer renderer;
     Camera camera;
@@ -405,6 +406,19 @@ void UpdateTitle(const ViewerApp& app)
 {
     std::wstring title = kApplicationName;
     if (!app.filename.empty()) title = app.filename + L" — " + kApplicationName;
+    if (app.showFrameStats && app.useD3D12)
+    {
+        // Developer instrumentation behind --frame-stats: the title bar is
+        // the one surface already readable from outside the process (the
+        // screenshot harness reads MainWindowTitle), and this path has no
+        // D2D overlay to draw into yet. Goes away once the overlay lands.
+        const FrameStats& stats = app.d3d12Path.frameStats;
+        wchar_t buffer[128]{};
+        swprintf_s(buffer, L"  ·  %.2f ms mean  %.2f ms p95  %llu frames  %llu occluded", stats.MeanMs(),
+                    stats.P95Ms(), static_cast<unsigned long long>(stats.PresentedFrames()),
+                    static_cast<unsigned long long>(stats.OccludedPresents()));
+        title += buffer;
+    }
     SetWindowTextW(app.window, title.c_str());
 }
 
@@ -1741,6 +1755,10 @@ void RenderFrame(ViewerApp& app)
         TickCamera(app);
         if (app.d3d12Path.hasModel) app.d3d12Path.RenderFrame(app.camera, ViewportAspect(app));
         else app.d3d12Path.RenderClearFrame();
+        // Refresh the --frame-stats readout occasionally rather than every
+        // frame: SetWindowTextW is not free, and a number that changes 120
+        // times a second is unreadable anyway.
+        if (app.showFrameStats && app.d3d12Path.frameStats.PresentedFrames() % 30 == 0) UpdateTitle(app);
         ValidateRect(app.window, nullptr);
         return;
     }
@@ -2814,6 +2832,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         for (int i = 1; i < argumentCount; ++i)
         {
             if (_wcsicmp(arguments[i], L"--d3d12") == 0) app.useD3D12 = true;
+            else if (_wcsicmp(arguments[i], L"--frame-stats") == 0) app.showFrameStats = true;
             else if (app.initialPath.empty()) app.initialPath = arguments[i];
         }
         LocalFree(arguments);
