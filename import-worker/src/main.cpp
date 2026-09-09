@@ -1,6 +1,7 @@
 #include "ContainmentProbes.h"
 #include "GenerationWorker.h"
 #include "GltfImportWorker.h"
+#include "PlyImportWorker.h"
 #include "StlImportWorker.h"
 #include "WorkerRequestDispatch.h"
 
@@ -63,6 +64,10 @@ int main(int argc, char* argv[])
 
     if (ArgEquals(argv[1], "--parse-stl")) {
         return import_worker::RunStlImport();
+    }
+
+    if (ArgEquals(argv[1], "--parse-ply")) {
+        return import_worker::RunPlyImport();
     }
 
     if (ArgEquals(argv[1], "--pool")) {

@@ -14,6 +14,7 @@ enum class ControlOpcode : uint32_t {
     StartGltfImportFromFile = 5,  // host -> worker
     Shutdown = 6,                 // host -> worker, --pool mode only: exit cleanly, no reply
     StartStlImportFromFile = 7,   // host -> worker
+    StartPlyImportFromFile = 8,   // host -> worker
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -117,6 +118,23 @@ struct ParseStlFileRequest {
     uint32_t reserved0;
 };
 static_assert(sizeof(ParseStlFileRequest) == 40, "ParseStlFileRequest layout changed");
+
+// Real-file request for the binary-PLY adapter (PlyAdapter.cpp) -- same
+// shape as ParseStlFileRequest/ParseGltfFileRequest (a raw duplicated FILE
+// handle plus output-section fields), but its own named struct rather than
+// reusing either for a different format, matching this repo's established
+// "small deliberate duplication over cross-format coupling" precedent.
+// Replies reuse ChunksReadyNotice/GenerationErrorNotice unmodified.
+struct ParsePlyFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue; // inherited raw FILE handle (not a mapping/section handle),
+                                      // numeric value -- the worker maps it itself
+    uint64_t sectionHandleValue;    // inherited OUTPUT-section HANDLE, numeric value
+    uint64_t sectionByteCapacity;   // output section capacity
+    uint32_t maxChunkCount;         // sanity cap on chunk count the worker may emit
+    uint32_t reserved0;
+};
+static_assert(sizeof(ParsePlyFileRequest) == 40, "ParsePlyFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

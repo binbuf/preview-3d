@@ -2,6 +2,7 @@
 
 #include "GenerationWorker.h"
 #include "GltfImportWorker.h"
+#include "PlyImportWorker.h"
 #include "StlImportWorker.h"
 
 #include "model_core/ControlChannelIo.h"
@@ -50,6 +51,14 @@ DispatchOutcome DispatchOneRequest(HANDLE stdIn, HANDLE stdOut)
         model_core::ParseStlFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
         HandleStlImportFileRequest(stdOut, request);
+        return DispatchOutcome::Continue;
+    }
+
+    if (received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartPlyImportFromFile)
+        && received->payload.size() == sizeof(model_core::ParsePlyFileRequest)) {
+        model_core::ParsePlyFileRequest request{};
+        std::memcpy(&request, received->payload.data(), sizeof(request));
+        HandlePlyImportFileRequest(stdOut, request);
         return DispatchOutcome::Continue;
     }
 
