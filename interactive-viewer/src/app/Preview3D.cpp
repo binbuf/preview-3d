@@ -129,6 +129,15 @@ struct ViewerApp
     // exclusive with `renderer` below; see D3D12ViewerPath.h for scope.
     bool useD3D12 = false;
     bool showFrameStats = false; // --frame-stats: see UpdateTitle
+    // ADR-010 spike scaffolding: --overlay-spike turns the D3D11On12/D2D
+    // bridge on, --frame-bench N renders N frames back to back instead of
+    // waiting for something to move. The viewer deliberately blocks when the
+    // scene is still, so without a bench mode there is no way to measure a
+    // sustained frame rate at all.
+    bool overlaySpike = false;
+    int overlaySpikePrimitives = 250;
+    int benchFrames = 0;
+    int benchRemaining = 0;
     D3D12ViewerPath d3d12Path;
     Renderer renderer;
     Camera camera;
@@ -413,10 +422,13 @@ void UpdateTitle(const ViewerApp& app)
         // screenshot harness reads MainWindowTitle), and this path has no
         // D2D overlay to draw into yet. Goes away once the overlay lands.
         const FrameStats& stats = app.d3d12Path.frameStats;
-        wchar_t buffer[128]{};
-        swprintf_s(buffer, L"  ·  %.2f ms mean  %.2f ms p95  %llu frames  %llu occluded", stats.MeanMs(),
-                    stats.P95Ms(), static_cast<unsigned long long>(stats.PresentedFrames()),
-                    static_cast<unsigned long long>(stats.OccludedPresents()));
+        wchar_t buffer[192]{};
+        const double overlayMean = app.d3d12Path.overlayPasses > 0
+            ? app.d3d12Path.overlayTotalMs / static_cast<double>(app.d3d12Path.overlayPasses)
+            : 0.0;
+        swprintf_s(buffer, L"  ·  %.3f ms mean  %.3f ms p95  %llu frames  %llu occluded  overlay %.3f ms",
+                    stats.MeanMs(), stats.P95Ms(), static_cast<unsigned long long>(stats.PresentedFrames()),
+                    static_cast<unsigned long long>(stats.OccludedPresents()), overlayMean);
         title += buffer;
     }
     SetWindowTextW(app.window, title.c_str());
@@ -1813,6 +1825,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         UpdateGizmoLayout(*app);
         UpdateChromeLayout(*app);
         std::wstring renderError;
+        app->d3d12Path.overlayEnabled = app->overlaySpike; // must be set before Initialize
+        app->d3d12Path.overlayPrimitives = app->overlaySpikePrimitives;
+        // 0 primitives means "interop only" -- drop the text runs too, or
+        // the isolation is not isolation.
+        if (app->overlaySpikePrimitives == 0) app->d3d12Path.overlayTextRuns = 0;
         app->rendererReady = app->useD3D12 ? app->d3d12Path.Initialize(window, renderError)
                                             : app->renderer.Initialize(window, renderError);
         if (!app->rendererReady)
@@ -2833,6 +2850,20 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         {
             if (_wcsicmp(arguments[i], L"--d3d12") == 0) app.useD3D12 = true;
             else if (_wcsicmp(arguments[i], L"--frame-stats") == 0) app.showFrameStats = true;
+            else if (_wcsicmp(arguments[i], L"--overlay-spike") == 0) app.overlaySpike = true;
+            else if (_wcsnicmp(arguments[i], L"--overlay-spike=", 16) == 0)
+            {
+                // Primitive count, so the interop overhead itself can be
+                // measured separately from the D2D drawing on top of it.
+                app.overlaySpike = true;
+                app.overlaySpikePrimitives = _wtoi(arguments[i] + 16);
+            }
+            else if (_wcsnicmp(arguments[i], L"--frame-bench=", 14) == 0)
+            {
+                app.benchFrames = _wtoi(arguments[i] + 14);
+                app.benchRemaining = app.benchFrames;
+                app.showFrameStats = true;
+            }
             else if (app.initialPath.empty()) app.initialPath = arguments[i];
         }
         LocalFree(arguments);
@@ -2898,6 +2929,24 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             wasAnimating = isAnimatingNow;
         }
         if (quitting) break;
+
+        // --frame-bench: render back to back regardless of whether anything
+        // moved, so a sustained frame rate can be measured at all. The first
+        // 120 frames are discarded as warm-up (shader/PSO/first-touch costs
+        // that say nothing about steady state).
+        if (app.benchRemaining > 0 && gMainWindow && app.rendererReady && !IsIconic(gMainWindow))
+        {
+            RenderFrame(app);
+            --app.benchRemaining;
+            if (app.benchRemaining == app.benchFrames - 120)
+            {
+                app.d3d12Path.frameStats.Reset();
+                app.d3d12Path.overlayTotalMs = 0.0;
+                app.d3d12Path.overlayPasses = 0;
+            }
+            if (app.benchRemaining == 0) UpdateTitle(app);
+            continue;
+        }
 
         // Continuous, vsync-paced rendering while anything is in motion:
         // flight keys, easing, inertia, fit/reset glides, transient HUDs,

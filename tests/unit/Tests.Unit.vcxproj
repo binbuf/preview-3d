@@ -69,6 +69,7 @@
     <ClCompile Include="WireFormatTests.cpp" />
     <ClCompile Include="GraphicsDeviceTests.cpp" />
     <ClCompile Include="CommandQueueTests.cpp" />
+    <ClCompile Include="D3D11On12OverlayTests.cpp" />
     <ClCompile Include="FrameStatsTests.cpp" />
     <ClCompile Include="SwapChainTests.cpp" />
     <ClCompile Include="GenerationTests.cpp" />
@@ -79,6 +80,7 @@
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12Device.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12CommandQueue.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12SwapChain.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D11On12Overlay.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\FrameStats.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12UploadRing.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\SyntheticStreamingSource.cpp" />
@@ -101,6 +103,7 @@
     <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12Device.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12CommandQueue.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12SwapChain.h" />
+    <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D11On12Overlay.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\FrameStats.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\D3D12UploadRing.h" />
     <ClInclude Include="..\..\interactive-viewer\src\graphics\SceneSnapshot.h" />

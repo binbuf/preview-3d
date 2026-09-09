@@ -19,6 +19,7 @@
 // later slice). Point-cloud (PositionOnly_F32) chunks are silently skipped
 // by UploadModel, not rendered.
 
+#include "D3D11On12Overlay.h"
 #include "D3D12CommandQueue.h"
 #include "D3D12Device.h"
 #include "D3D12ImportBridge.h"
@@ -69,6 +70,43 @@ struct D3D12ViewerPath
     uint64_t uploadFence = 0;
 
     FrameStats frameStats;
+
+    // ADR-010 spike scaffolding. `overlayEnabled` is set from
+    // --overlay-spike; when on, the scene pass leaves the back buffer in
+    // RENDER_TARGET and the bridge's Release transitions it to PRESENT
+    // (04-rendering-and-streaming.md:46). The synthetic content drawn is a
+    // stand-in sized to the real chrome's primitive count -- porting the
+    // actual ~750 lines of Renderer.cpp drawing is a later chunk, and doing
+    // it before the spike answers would be building on an unmeasured
+    // assumption.
+    D3D11On12Overlay overlay;
+    bool overlayEnabled = false;   // set before Initialize()
+    // How much synthetic content to draw. 0 isolates the interop overhead
+    // itself (Acquire/Release/Flush plus an empty BeginDraw/EndDraw) from
+    // the cost of the D2D drawing on top of it -- two very different
+    // questions, and only the first is really "what does D3D11On12 cost".
+    int overlayPrimitives = 250;
+    int overlayTextRuns = 40;
+    double lastOverlayMs = 0.0;    // CPU ms in the last overlay pass
+    double overlayTotalMs = 0.0;   // cumulative, for a mean over a run
+    uint64_t overlayPasses = 0;
+    // Cached rather than rebuilt per frame, matching how Renderer.cpp keeps
+    // one brush and rebuilds text formats only on DPI change -- creating
+    // either per frame is expensive enough to turn this measurement into a
+    // strawman.
+    //
+    // The brush is per target, not shared: CreateDxgiSurfaceRenderTarget
+    // gives one independent ID2D1RenderTarget per back buffer, and a brush
+    // belongs to the target that created it. (Renderer.cpp has exactly one
+    // target, so a single brush is correct there.) That per-buffer
+    // duplication is an argument for moving to ID2D1Device/ID2D1DeviceContext
+    // plus a bitmap per buffer when the real chrome is ported -- device-level
+    // resources are then shared, and ID2D1DeviceContext is itself an
+    // ID2D1RenderTarget so the drawing code is unaffected.
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> overlayBrushes[D3D12SwapChain::kBufferCount];
+    // IDWriteTextFormat is a DirectWrite resource, device-independent, so
+    // this one really is shareable across targets.
+    Microsoft::WRL::ComPtr<IDWriteTextFormat> overlayTextFormat;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
     Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
@@ -176,6 +214,10 @@ private:
     UINT BeginFrame();
     // Present, then signal and record the fence value into the slot.
     void EndFrame(UINT frameIndex);
+    // Spike-only: draws a synthetic overlay of roughly the real chrome's
+    // primitive count, so the measured cost means something. Returns the
+    // CPU milliseconds spent between Acquire and Flush.
+    double DrawSpikeOverlay(UINT frameIndex);
     // Bounded wait on the upload lane's own fence only. Rendering is
     // unaffected -- that is the point of the separate allocator.
     void WaitForUpload();

@@ -257,6 +257,10 @@ bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
     if (!CreateTexturedPipeline(error)) return false;
     if (!CreateFrameConstantBuffer(error)) return false;
 
+    if (overlayEnabled && !overlay.Initialize(device, directQueue, swapChain, error)) {
+        return false;
+    }
+
     return true;
 }
 
@@ -550,6 +554,79 @@ UINT D3D12ViewerPath::BeginFrame()
     return index;
 }
 
+double D3D12ViewerPath::DrawSpikeOverlay(UINT frameIndex)
+{
+    const auto started = std::chrono::steady_clock::now();
+
+    ID2D1RenderTarget* target = overlay.BeginDraw(frameIndex);
+    if (target == nullptr) return 0.0;
+
+    // Brush and text format are created once and reused, exactly as
+    // Renderer.cpp does (one brush recolored per primitive; text formats
+    // rebuilt only on DPI change). Creating either per frame would measure
+    // this code's own inefficiency rather than the bridge's cost.
+    if (!overlayBrushes[frameIndex]) {
+        if (FAILED(target->CreateSolidColorBrush(D2D1::ColorF(0xF5F5F7), &overlayBrushes[frameIndex]))) {
+            overlay.EndDraw(frameIndex);
+            return 0.0;
+        }
+    }
+    if (!overlayTextFormat && overlay.WriteFactory() != nullptr) {
+        overlay.WriteFactory()->CreateTextFormat(L"Segoe UI Variable Text", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                                                  DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0f,
+                                                  L"en-us", &overlayTextFormat);
+    }
+    ID2D1SolidColorBrush* brush = overlayBrushes[frameIndex].Get();
+
+    const float width = static_cast<float>(swapChain.Width());
+    const float height = static_cast<float>(swapChain.Height());
+
+    if (overlayPrimitives > 0) {
+        // Bars and panel.
+        brush->SetColor(D2D1::ColorF(0x2C2C2E));
+        target->FillRectangle(D2D1::RectF(0.0f, 0.0f, width, 52.0f), brush);
+        target->FillRectangle(D2D1::RectF(0.0f, height - 44.0f, width, height), brush);
+        target->FillRectangle(D2D1::RectF(width - 300.0f, 52.0f, width, height - 44.0f), brush);
+    }
+
+    // Sized to the real chrome rather than to something convenient: the
+    // title bar, bottom bar, info panel and gizmo in Renderer.cpp add up to
+    // roughly 250 filled/stroked primitives plus about 40 short text runs
+    // once the hand-drawn vector icon atlas is counted.
+    for (int i = 0; i < overlayPrimitives; ++i) {
+        const float x = 8.0f + static_cast<float>((i * 37) % 1200);
+        const float y = 8.0f + static_cast<float>((i * 53) % 600);
+        brush->SetColor(D2D1::ColorF(0x3A3A3C + static_cast<UINT32>(i)));
+        if ((i % 3) == 0) {
+            const D2D1_ROUNDED_RECT rounded{ D2D1::RectF(x, y, x + 32.0f, y + 32.0f), 6.0f, 6.0f };
+            target->FillRoundedRectangle(rounded, brush);
+        } else if ((i % 3) == 1) {
+            target->DrawLine(D2D1::Point2F(x, y), D2D1::Point2F(x + 24.0f, y + 18.0f), brush, 1.5f);
+        } else {
+            target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(x, y), 9.0f, 9.0f), brush, 1.5f);
+        }
+    }
+
+    if (overlayTextFormat) {
+        brush->SetColor(D2D1::ColorF(0xF5F5F7));
+        for (int i = 0; i < overlayTextRuns; ++i) {
+            const wchar_t* text = L"Stats & Shading";
+            const float y = 60.0f + static_cast<float>(i) * 18.0f;
+            target->DrawTextW(text, 15, overlayTextFormat.Get(),
+                               D2D1::RectF(width - 292.0f, y, width - 8.0f, y + 18.0f), brush,
+                               D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        }
+    }
+
+    overlay.EndDraw(frameIndex);
+
+    const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - started;
+    lastOverlayMs = elapsed.count();
+    overlayTotalMs += lastOverlayMs;
+    ++overlayPasses;
+    return lastOverlayMs;
+}
+
 void D3D12ViewerPath::EndFrame(UINT frameIndex)
 {
     const HRESULT presentResult = swapChain.Present();
@@ -568,7 +645,15 @@ void D3D12ViewerPath::EndFrame(UINT frameIndex)
 bool D3D12ViewerPath::Resize(int width, int height, std::wstring& error)
 {
     WaitForIdle();
+    // The wrapped resources hold references to the back buffers, so
+    // ResizeBuffers cannot succeed until they are dropped and flushed.
+    if (overlayEnabled) {
+        // The brushes belong to the targets about to be destroyed.
+        for (auto& brush : overlayBrushes) brush.Reset();
+        overlay.ReleaseBackBufferReferences();
+    }
     if (!swapChain.Resize(static_cast<UINT>(width), static_cast<UINT>(height), error)) return false;
+    if (overlayEnabled && !overlay.RecreateBackBufferReferences(swapChain, error)) return false;
     return CreateDepthBuffer(static_cast<UINT>(width), static_cast<UINT>(height), error);
 }
 
@@ -597,9 +682,14 @@ void D3D12ViewerPath::RenderClearFrame()
     const float clearColor[4] = { 0x1C / 255.0f, 0x1C / 255.0f, 0x1E / 255.0f, 1.0f };
     commandList->ClearRenderTargetView(swapChain.BackBufferRtv(index), clearColor, 0, nullptr);
 
-    D3D12_RESOURCE_BARRIER toPresent = toRenderTarget;
-    std::swap(toPresent.Transition.StateBefore, toPresent.Transition.StateAfter);
-    commandList->ResourceBarrier(1, &toPresent);
+    // With an overlay pass following, the back buffer is left in
+    // RENDER_TARGET and the bridge's ReleaseWrappedResources moves it to
+    // PRESENT instead (04-rendering-and-streaming.md:46).
+    if (!overlayEnabled) {
+        D3D12_RESOURCE_BARRIER toPresent = toRenderTarget;
+        std::swap(toPresent.Transition.StateBefore, toPresent.Transition.StateAfter);
+        commandList->ResourceBarrier(1, &toPresent);
+    }
 
     if (FAILED(commandList->Close())) {
         return;
@@ -607,6 +697,7 @@ void D3D12ViewerPath::RenderClearFrame()
     ID3D12CommandList* lists[] = { commandList.Get() };
     directQueue.Queue()->ExecuteCommandLists(1, lists);
 
+    if (overlayEnabled) DrawSpikeOverlay(index);
     EndFrame(index);
 }
 
@@ -681,14 +772,17 @@ void D3D12ViewerPath::RenderFrame(const Camera& camera, float aspect)
         commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
     }
 
-    D3D12_RESOURCE_BARRIER toPresent = toRenderTarget;
-    std::swap(toPresent.Transition.StateBefore, toPresent.Transition.StateAfter);
-    commandList->ResourceBarrier(1, &toPresent);
+    if (!overlayEnabled) {
+        D3D12_RESOURCE_BARRIER toPresent = toRenderTarget;
+        std::swap(toPresent.Transition.StateBefore, toPresent.Transition.StateAfter);
+        commandList->ResourceBarrier(1, &toPresent);
+    }
 
     if (FAILED(commandList->Close())) return;
     ID3D12CommandList* lists[] = { commandList.Get() };
     directQueue.Queue()->ExecuteCommandLists(1, lists);
 
+    if (overlayEnabled) DrawSpikeOverlay(index);
     EndFrame(index);
 }
 
