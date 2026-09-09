@@ -19,6 +19,16 @@ x86/
 # vcpkg manifest-mode local package restore (see vcpkg.json)
 vcpkg_installed/
 
+# Test-fixture generator artifacts. interactive-viewer/tools/*.ps1 build these
+# standalone with cl.exe next to their own sources, outside MSBuild, so the
+# rules above (which key off x64/ and obj/) do not catch them. The .dll entry
+# covers the draco/ktx/zstd copies build-gen-glbs-{draco,ktx2}.ps1 place beside
+# the generator so it can actually run. Sources are tracked; outputs are not --
+# the checked-in fixtures under test-assets/ are the durable artifact.
+interactive-viewer/tools/*.exe
+interactive-viewer/tools/*.dll
+interactive-viewer/obj_test/
+
 # C/C++ intermediate and diagnostic files
 *.obj
 *.iobj

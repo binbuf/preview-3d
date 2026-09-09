@@ -11,6 +11,7 @@
 #include "import_broker/SandboxLauncher.h"
 #include "import_broker/SharedSection.h"
 #include "import_broker/SharedSectionValidator.h"
+#include "import_broker/SidecarRequestServicer.h"
 #include "import_broker/SourceFileAccess.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
@@ -26,8 +27,11 @@
 
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <optional>
+#include <span>
 #include <string>
+#include <variant>
 #include <vector>
 
 #ifndef PREVIEW3D_TEST_ASSETS_DIR
@@ -149,7 +153,13 @@ struct GltfImportRun {
     bool ready = false;
     import_broker::ValidationResult validation;
     model_core::GenerationErrorNotice errorNotice{};
+    uint32_t sidecarRequestCount = 0; // mid-generation RequestSidecarFile messages serviced
 };
+
+// Mirrors D3D12ImportBridge.cpp's own caps so the test host applies the
+// same ceilings the real one does.
+constexpr uint32_t kMaxSidecarRequestsPerGeneration = 64;
+constexpr uint64_t kMaxSidecarFileBytes = 256ull * 1024ull * 1024ull;
 
 // End-to-end: launch, push sourceBytes into a fresh input section, send
 // ParseGltfRequest, read the reply, and (if ChunksReady) validate the
@@ -239,7 +249,45 @@ GltfImportRun RunGltfImportFromRealFile(const platform::AppContainerSid& sid, co
                                              model_core::ControlOpcode::StartGltfImportFromFile, &request,
                                              sizeof(request)));
 
+    // Services zero or more mid-generation RequestSidecarFile messages
+    // before the terminal reply, through the same
+    // import_broker::ServiceSidecarRequest the real host calls -- that
+    // function exists precisely so tests exercise the production path
+    // rather than a lookalike. Degrades to exactly one read for a
+    // self-contained .glb, which never sends RequestSidecarFile, so every
+    // pre-existing caller is unaffected.
     auto received = model_core::ReadControlMessage(launch->controlOutRead.get());
+    while (received
+           && received->header.opcode
+               == static_cast<uint32_t>(model_core::ControlOpcode::RequestSidecarFile)
+           && received->payload.size() == sizeof(model_core::RequestSidecarFileNotice)) {
+        if (++run.sidecarRequestCount > kMaxSidecarRequestsPerGeneration) {
+            break;
+        }
+
+        model_core::RequestSidecarFileNotice sidecarRequest{};
+        std::memcpy(&sidecarRequest, received->payload.data(), sizeof(sidecarRequest));
+        auto serviced = import_broker::ServiceSidecarRequest(
+            launch->proc.process.get(), opened.canonicalPath, sidecarRequest, kMaxSidecarFileBytes);
+
+        bool sentReply = false;
+        if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {
+            sentReply = model_core::WriteControlMessage(
+                launch->controlInWrite.get(), model_core::ControlOpcode::SidecarFileReady, ready,
+                sizeof(*ready));
+        } else if (const auto* unavailable
+                   = std::get_if<model_core::SidecarFileUnavailableNotice>(&serviced)) {
+            sentReply = model_core::WriteControlMessage(
+                launch->controlInWrite.get(), model_core::ControlOpcode::SidecarFileUnavailable,
+                unavailable, sizeof(*unavailable));
+        }
+        if (!sentReply) {
+            received = std::nullopt;
+            break;
+        }
+
+        received = model_core::ReadControlMessage(launch->controlOutRead.get());
+    }
     REQUIRE(received.has_value());
 
     WaitForSingleObject(launch->proc.process.get(), 5000);
@@ -260,7 +308,218 @@ GltfImportRun RunGltfImportFromRealFile(const platform::AppContainerSid& sid, co
     return run;
 }
 
+// 3 VEC3 float positions (36 B) followed by 3 SCALAR uint32 indices (12 B):
+// byte-for-byte what tri_tight.glb carries in its own BIN chunk, so an
+// external-buffer .gltf built on it must produce an identical mesh.
+std::vector<std::byte> TriangleBufferBytes()
+{
+    const float positions[9] = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+    const uint32_t indices[3] = {0, 1, 2};
+    std::vector<std::byte> bytes(48);
+    std::memcpy(bytes.data(), positions, sizeof(positions));
+    std::memcpy(bytes.data() + 36, indices, sizeof(indices));
+    return bytes;
+}
+
+// A self-cleaning temp directory holding a plain-JSON .gltf whose geometry
+// lives in an external sibling. Lets each case vary exactly one thing --
+// the buffer URI, whether the sibling exists, how long it is -- without
+// shipping a checked-in fixture per case, the same approach
+// SidecarPathResolverTests.cpp already takes.
+struct ScratchExternalGltf {
+    std::wstring directory;
+    std::wstring gltfPath;
+    std::vector<std::wstring> writtenFiles;
+
+    ScratchExternalGltf()
+    {
+        wchar_t tempDir[MAX_PATH]{};
+        REQUIRE(GetTempPathW(MAX_PATH, tempDir) != 0);
+        directory = std::wstring(tempDir) + L"p3d_extbuf_" + std::to_wstring(GetCurrentProcessId())
+            + L"_" + std::to_wstring(reinterpret_cast<uintptr_t>(this));
+        REQUIRE(CreateDirectoryW(directory.c_str(), nullptr));
+        gltfPath = directory + L"\\scene.gltf";
+    }
+
+    void WriteGltf(const std::string& bufferUri)
+    {
+        std::string json
+            = "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+              "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+              "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+              "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+              "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+              "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+              "\"buffers\":[{\"uri\":\""
+            + bufferUri + "\",\"byteLength\":48}]}";
+        WriteRaw(L"scene.gltf", std::span<const std::byte>(
+                                    reinterpret_cast<const std::byte*>(json.data()), json.size()));
+    }
+
+    void WriteBin(const std::wstring& name, size_t byteCount)
+    {
+        auto bytes = TriangleBufferBytes();
+        bytes.resize(byteCount);
+        WriteRaw(name, bytes);
+    }
+
+    void WriteRaw(const std::wstring& name, std::span<const std::byte> bytes)
+    {
+        std::wstring path = directory + L"\\" + name;
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        REQUIRE(out.is_open());
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+        out.close();
+        writtenFiles.push_back(path);
+    }
+
+    ~ScratchExternalGltf()
+    {
+        for (const auto& path : writtenFiles) {
+            DeleteFileW(path.c_str());
+        }
+        RemoveDirectoryW(directory.c_str());
+    }
+};
+
 } // namespace
+
+TEST_CASE("tri_external.gltf sources uncompressed geometry from an external .bin over the sidecar "
+          "protocol and produces the same mesh as the embedded tri_tight.glb",
+          "[gltf-import][sidecar]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, TestAssetPath(L"tri_external.gltf"),
+                                          /*generationId=*/40, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 1);
+
+    // The bytes genuinely crossed the sidecar protocol rather than being
+    // found embedded -- without this the test would still pass if the
+    // adapter silently fell back to some in-file copy.
+    CHECK(run.sidecarRequestCount >= 1);
+
+    const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.descriptor.topology == model_core::ChunkTopology::TriangleList);
+    CHECK(chunk.descriptor.vertexCount == 3);
+    CHECK(chunk.descriptor.indexCount == 3);
+    CHECK(chunk.descriptor.vertexLayoutId
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+
+    REQUIRE(chunk.payload.size() >= 3 * sizeof(model_core::VertexPositionNormalUv0F32));
+    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
+    const float expected[3][3] = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
+    for (size_t i = 0; i < 3; ++i) {
+        CHECK(vertices[i].px == Catch::Approx(expected[i][0]).margin(1e-5));
+        CHECK(vertices[i].py == Catch::Approx(expected[i][1]).margin(1e-5));
+        CHECK(vertices[i].pz == Catch::Approx(expected[i][2]).margin(1e-5));
+        CHECK(vertices[i].nz == Catch::Approx(1.0f).margin(1e-5));
+    }
+}
+
+TEST_CASE("A .gltf whose external buffer is missing fails as FileUnavailable, not MalformedData",
+          "[gltf-import][sidecar]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    ScratchExternalGltf scratch;
+    scratch.WriteGltf("mesh.bin"); // deliberately never written
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, scratch.gltfPath, /*generationId=*/41,
+                                          /*maxChunkCount=*/8);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::FileUnavailable));
+}
+
+TEST_CASE("A .gltf whose external buffer is shorter than its declared bufferViews is rejected as "
+          "MalformedData",
+          "[gltf-import][sidecar]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    ScratchExternalGltf scratch;
+    scratch.WriteGltf("mesh.bin");
+    scratch.WriteBin(L"mesh.bin", 20); // declares 48, delivers 20
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, scratch.gltfPath, /*generationId=*/42,
+                                          /*maxChunkCount=*/8);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+TEST_CASE("A .gltf whose buffer URI escapes the model's own directory is rejected as "
+          "UnsafeReference by the host, and the worker never sees the bytes",
+          "[gltf-import][sidecar]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    ScratchExternalGltf scratch;
+    scratch.WriteGltf("../escape.bin");
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, scratch.gltfPath, /*generationId=*/43,
+                                          /*maxChunkCount=*/8);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::UnsafeReference));
+}
+
+TEST_CASE("A sparse accessor over an external buffer applies its overrides -- the custom "
+          "BufferDataAdapter does not bypass fastgltf's sparse handling",
+          "[gltf-import][sidecar]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // Base positions are tri_tight's, then a single sparse override
+    // replaces vertex 1 with (5,5,5). fastgltf reads the base, sparse index
+    // and sparse value bufferViews all through the adapter, so this is the
+    // case that proves swapping the adapter kept sparse support intact.
+    ScratchExternalGltf scratch;
+    std::string json
+        = "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+          "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+          "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+          "\"sparse\":{\"count\":1,\"indices\":{\"bufferView\":2,\"componentType\":5123},"
+          "\"values\":{\"bufferView\":3}}},"
+          "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+          "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+          "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12},"
+          "{\"buffer\":0,\"byteOffset\":48,\"byteLength\":2},"
+          "{\"buffer\":0,\"byteOffset\":52,\"byteLength\":12}],"
+          "\"buffers\":[{\"uri\":\"mesh.bin\",\"byteLength\":64}]}";
+    scratch.WriteRaw(L"scene.gltf",
+                     std::span<const std::byte>(reinterpret_cast<const std::byte*>(json.data()),
+                                                 json.size()));
+
+    std::vector<std::byte> bin = TriangleBufferBytes();
+    bin.resize(64);
+    const uint16_t sparseIndex = 1;
+    const float sparseValue[3] = {5.0f, 5.0f, 5.0f};
+    std::memcpy(bin.data() + 48, &sparseIndex, sizeof(sparseIndex));
+    std::memcpy(bin.data() + 52, sparseValue, sizeof(sparseValue));
+    scratch.WriteRaw(L"mesh.bin", bin);
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, scratch.gltfPath, /*generationId=*/44,
+                                          /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 1);
+
+    const auto& chunk = run.validation.chunks[0];
+    REQUIRE(chunk.payload.size() >= 3 * sizeof(model_core::VertexPositionNormalUv0F32));
+    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
+    CHECK(vertices[0].px == Catch::Approx(0.0f).margin(1e-5));
+    CHECK(vertices[1].px == Catch::Approx(5.0f).margin(1e-5));
+    CHECK(vertices[1].py == Catch::Approx(5.0f).margin(1e-5));
+    CHECK(vertices[1].pz == Catch::Approx(5.0f).margin(1e-5));
+    CHECK(vertices[2].py == Catch::Approx(1.0f).margin(1e-5));
+}
 
 TEST_CASE("tri_tight.glb round-trips through the real fastgltf adapter", "[gltf-import]")
 {

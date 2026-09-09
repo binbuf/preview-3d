@@ -132,40 +132,6 @@ bool ValidateIndexAccessor(const fastgltf::Accessor& accessor)
             || accessor.componentType == fastgltf::ComponentType::UnsignedInt);
 }
 
-// Guards against ever calling fastgltf's own iterateAccessorWithIndex on an
-// accessor whose bytes fastgltf cannot itself resolve without doing its
-// own file I/O. An external (sources::URI) buffer is resolved by THIS
-// worker via ResolveBufferViewBytes for the code paths under this file's
-// own control (Draco-compressed primitives, image bufferViews) -- but
-// fastgltf's own accessor-reading machinery has no way to consult that
-// separately-resolved cache, since it reads directly from
-// asset.buffers[i].data, which stays sources::URI regardless. Ordinary
-// (non-Draco-compressed) geometry referencing an external buffer is
-// therefore not supported this chunk -- a real, architecture-driven
-// limitation flagged here, not a lazy cut: bypassing fastgltf's own
-// accessor reader (sparse-accessor overrides, component-type up-
-// conversion, interleaved-stride handling it already gets right) to
-// support this would be a substantial reimplementation, out of scope here.
-// Returns true for a sparse-only accessor (nothing to resolve) or one
-// backed by an embedded buffer; false only for an unresolvable external
-// reference, which the caller must treat as a hard MalformedData failure
-// -- calling iterateAccessorWithIndex on a false result is unverified and
-// must never happen.
-bool AccessorBufferIsEmbedded(const fastgltf::Asset& asset, const fastgltf::Accessor& accessor)
-{
-    if (!accessor.bufferViewIndex.has_value()) {
-        return true;
-    }
-    if (*accessor.bufferViewIndex >= asset.bufferViews.size()) {
-        return false;
-    }
-    size_t bufferIndex = asset.bufferViews[*accessor.bufferViewIndex].bufferIndex;
-    if (bufferIndex >= asset.buffers.size()) {
-        return false;
-    }
-    return std::holds_alternative<fastgltf::sources::Array>(asset.buffers[bufferIndex].data);
-}
-
 // Generates flat per-triangle normals: accumulates each triangle's face
 // normal (cross product of two edges) into its three vertices, normalizes
 // once at the end. Same algorithm interactive-viewer's Model.cpp uses
@@ -198,6 +164,17 @@ void GenerateFlatNormals(PendingChunk& chunk)
     }
 }
 
+// One external (sources::URI) buffer's resolution outcome. The error code
+// is memoized alongside the bytes so a failure can be reported with the
+// reason the host actually gave -- UnsafeReference when its path policy
+// rejected the reference, FileUnavailable when the file was missing, empty
+// or oversized -- instead of collapsing every sidecar failure into
+// MalformedData.
+struct ResolvedExternalBuffer {
+    std::optional<std::vector<std::byte>> bytes;
+    model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
+};
+
 struct WalkState {
     const fastgltf::Asset& asset;
     std::vector<uint8_t> visitState;
@@ -219,7 +196,7 @@ struct WalkState {
     // contained .glb. nullptr sidecarClient (the always-self-contained
     // shared-section ParseGltfRequest path) means an external buffer is
     // simply never resolvable.
-    std::unordered_map<size_t, std::optional<std::vector<std::byte>>> resolvedExternalBuffers;
+    std::unordered_map<size_t, ResolvedExternalBuffer> resolvedExternalBuffers;
     SidecarFileClient* sidecarClient = nullptr;
 };
 
@@ -246,17 +223,24 @@ std::optional<std::span<const std::byte>> ResolveBufferViewBytes(WalkState& stat
     } else if (const auto* uriSource = std::get_if<fastgltf::sources::URI>(&buffer.data)) {
         auto cached = state.resolvedExternalBuffers.find(view.bufferIndex);
         if (cached == state.resolvedExternalBuffers.end()) {
-            std::optional<std::vector<std::byte>> resolved;
+            ResolvedExternalBuffer resolved;
             if (state.sidecarClient != nullptr) {
                 auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()));
-                resolved = std::move(result.bytes);
+                resolved.bytes = std::move(result.bytes);
+                resolved.errorCode = result.errorCode;
+            } else {
+                // No sidecar channel at all (the always-self-contained
+                // shared-section ParseGltfRequest path): an external
+                // reference is unresolvable by construction, not by policy.
+                resolved.errorCode = ImportErrorCode::FileUnavailable;
             }
             cached = state.resolvedExternalBuffers.emplace(view.bufferIndex, std::move(resolved)).first;
         }
-        if (!cached->second.has_value()) {
+        if (!cached->second.bytes.has_value()) {
             return std::nullopt;
         }
-        bufferBytes = std::span<const std::byte>(cached->second->data(), cached->second->size());
+        bufferBytes
+            = std::span<const std::byte>(cached->second.bytes->data(), cached->second.bytes->size());
     } else {
         return std::nullopt;
     }
@@ -266,6 +250,121 @@ std::optional<std::span<const std::byte>> ResolveBufferViewBytes(WalkState& stat
         return std::nullopt;
     }
     return bufferBytes.subspan(view.byteOffset, view.byteLength);
+}
+
+// Maps a failed ResolveBufferViewBytes back to the most specific code
+// available: the host's own answer when it gave one (UnsafeReference for a
+// path-policy rejection, FileUnavailable for missing/empty/oversized),
+// otherwise MalformedData for a structural fault in the asset itself --
+// out-of-range index, unsupported data source, or a byteOffset/byteLength
+// that overruns the resolved buffer.
+ImportErrorCode ExternalBufferFailureCode(const WalkState& state, size_t bufferViewIndex)
+{
+    if (bufferViewIndex >= state.asset.bufferViews.size()) {
+        return ImportErrorCode::MalformedData;
+    }
+    auto cached
+        = state.resolvedExternalBuffers.find(state.asset.bufferViews[bufferViewIndex].bufferIndex);
+    if (cached != state.resolvedExternalBuffers.end()
+        && cached->second.errorCode != ImportErrorCode::None) {
+        return cached->second.errorCode;
+    }
+    return ImportErrorCode::MalformedData;
+}
+
+// Supplies accessor bytes to fastgltf from this worker's own sidecar cache.
+//
+// fastgltf's accessor readers take a BufferDataAdapter as a defaulted
+// template parameter (fastgltf/tools.hpp, DefaultBufferDataAdapter), and
+// IterableAccessor routes EVERY read through it -- the primary bufferView
+// plus, for a sparse accessor, sparse->indicesBufferView and
+// sparse->valuesBufferView. Supplying our own therefore keeps fastgltf's
+// sparse-override, component-type up-conversion and interleaved-stride
+// handling exactly as written, while sourcing the bytes from
+// ResolveBufferViewBytes. That is the only way a sandboxed worker can read
+// an external .bin at all: Options::LoadExternalBuffers would make fastgltf
+// perform its own file I/O, which this process has no path authority for
+// (it is precisely why SidecarFileClient exists).
+//
+// Callers MUST have run EnsureAccessorBytesResolvable over the accessor
+// first -- see that function for why an unresolvable view cannot be
+// signalled from inside here.
+class SidecarBufferDataAdapter {
+public:
+    explicit SidecarBufferDataAdapter(WalkState& state) noexcept
+        : state_(&state)
+    {
+    }
+
+    std::span<const std::byte> operator()(const fastgltf::Asset&, size_t bufferViewIndex) const
+    {
+        auto bytes = ResolveBufferViewBytes(*state_, bufferViewIndex);
+        if (!bytes) {
+            // Unreachable after a successful pre-flight; kept so a future
+            // caller that forgets it fails closed with a recorded error
+            // rather than silently importing a truncated mesh.
+            if (state_->error == ImportErrorCode::None) {
+                state_->error = ExternalBufferFailureCode(*state_, bufferViewIndex);
+            }
+            return {};
+        }
+        return *bytes;
+    }
+
+private:
+    WalkState* state_;
+};
+
+// Pre-flights every bufferView an accessor will read through
+// SidecarBufferDataAdapter, resolving each one (memoized, so the adapter's
+// later call is free) and bounds-checking the byteOffset the library will
+// apply to it.
+//
+// This has to happen before the iterate call rather than inside the
+// adapter. fastgltf's IterableAccessor does
+// `adapter(...).subspan(accessor.byteOffset)` unconditionally, and
+// fastgltf::span::subspan is not bounds-checked -- it evaluates
+// `&data()[offset]` and `size() - offset`, so handing back an empty span
+// for an accessor with a nonzero byteOffset would form an out-of-range
+// pointer and an underflowed length, then read through it. Failing here
+// keeps the "never hand the library an unverified read" discipline the rest
+// of this file already follows.
+bool EnsureAccessorBytesResolvable(WalkState& state, const fastgltf::Accessor& accessor)
+{
+    auto viewIsReadable = [&](size_t bufferViewIndex, size_t byteOffset) {
+        auto bytes = ResolveBufferViewBytes(state, bufferViewIndex);
+        if (!bytes) {
+            state.error = ExternalBufferFailureCode(state, bufferViewIndex);
+            return false;
+        }
+        if (byteOffset > bytes->size()) {
+            state.error = ImportErrorCode::MalformedData;
+            return false;
+        }
+        return true;
+    };
+
+    // A sparse accessor may legally omit bufferView entirely (its base
+    // values are then all zeros), but fastgltf's IterableAccessor
+    // constructor indexes asset.bufferViews[*accessor.bufferViewIndex]
+    // unconditionally, with no has_value() guard -- so handing it such an
+    // accessor dereferences an empty optional. Reject rather than crash;
+    // this is a rare authoring shape, and the previous code reached it too.
+    if (!accessor.bufferViewIndex.has_value()) {
+        state.error = ImportErrorCode::MalformedData;
+        return false;
+    }
+    if (!viewIsReadable(*accessor.bufferViewIndex, accessor.byteOffset)) {
+        return false;
+    }
+    if (accessor.sparse.has_value()) {
+        if (!viewIsReadable(accessor.sparse->indicesBufferView, accessor.sparse->indicesByteOffset)
+            || !viewIsReadable(accessor.sparse->valuesBufferView,
+                               accessor.sparse->valuesByteOffset)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Returns owned encoded bytes for asset.images[imageIndex]'s data source.
@@ -656,35 +755,45 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             GenerateFlatNormals(chunk);
         }
     } else {
-        // See AccessorBufferIsEmbedded's own comment: this worker cannot
-        // safely hand an external-buffer-backed accessor to fastgltf's own
-        // reader. A hard failure here (not a soft skip) since this is core
-        // geometry.
-        if (!AccessorBufferIsEmbedded(state.asset, positionAccessor)
-            || !AccessorBufferIsEmbedded(state.asset, indexAccessor)
-            || (hasUv && !AccessorBufferIsEmbedded(state.asset, state.asset.accessors[uvIt->accessorIndex]))
+        // Every accessor below is read through SidecarBufferDataAdapter, so
+        // an external .bin resolves via this worker's sidecar cache exactly
+        // like an embedded buffer. Resolvability is pre-flighted for all of
+        // them up front -- see EnsureAccessorBytesResolvable for why this
+        // cannot be deferred into the adapter -- and a failure is hard, not
+        // a soft skip, since this is core geometry.
+        if (!EnsureAccessorBytesResolvable(state, positionAccessor)
+            || !EnsureAccessorBytesResolvable(state, indexAccessor)
+            || (hasUv
+                && !EnsureAccessorBytesResolvable(state,
+                                                  state.asset.accessors[uvIt->accessorIndex]))
             || (hasNormal
-                && !AccessorBufferIsEmbedded(state.asset, state.asset.accessors[normalIt->accessorIndex]))) {
-            state.error = ImportErrorCode::MalformedData;
+                && !EnsureAccessorBytesResolvable(
+                    state, state.asset.accessors[normalIt->accessorIndex]))) {
             return false;
         }
 
+        const SidecarBufferDataAdapter bufferAdapter(state);
+
         fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-            state.asset, positionAccessor, [&](fastgltf::math::fvec3 pos, size_t idx) {
+            state.asset, positionAccessor,
+            [&](fastgltf::math::fvec3 pos, size_t idx) {
                 fastgltf::math::fvec4 worldPos
                     = world * fastgltf::math::fvec4(pos.x(), pos.y(), pos.z(), 1.0f);
                 chunk.vertices[idx].px = worldPos.x();
                 chunk.vertices[idx].py = worldPos.y();
                 chunk.vertices[idx].pz = worldPos.z();
-            });
+            },
+            bufferAdapter);
 
         if (hasUv) {
             const fastgltf::Accessor& uvAccessor = state.asset.accessors[uvIt->accessorIndex];
             fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec2>(
-                state.asset, uvAccessor, [&](fastgltf::math::fvec2 uv, size_t idx) {
+                state.asset, uvAccessor,
+                [&](fastgltf::math::fvec2 uv, size_t idx) {
                     chunk.vertices[idx].u = uv.x();
                     chunk.vertices[idx].v = uv.y();
-                });
+                },
+                bufferAdapter);
         } else {
             for (auto& v : chunk.vertices) {
                 v.u = 0.0f;
@@ -695,7 +804,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         chunk.indices.resize(indexAccessor.count);
         fastgltf::iterateAccessorWithIndex<uint32_t>(
             state.asset, indexAccessor,
-            [&](uint32_t index, size_t idx) { chunk.indices[idx] = index; });
+            [&](uint32_t index, size_t idx) { chunk.indices[idx] = index; }, bufferAdapter);
 
         for (uint32_t index : chunk.indices) {
             if (index >= chunk.vertices.size()) {
@@ -707,14 +816,23 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         if (hasNormal) {
             const fastgltf::Accessor& normalAccessor = state.asset.accessors[normalIt->accessorIndex];
             fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
-                state.asset, normalAccessor, [&](fastgltf::math::fvec3 n, size_t idx) {
+                state.asset, normalAccessor,
+                [&](fastgltf::math::fvec3 n, size_t idx) {
                     fastgltf::math::fvec3 worldNormal = fastgltf::math::normalize(normalMatrix * n);
                     chunk.vertices[idx].nx = worldNormal.x();
                     chunk.vertices[idx].ny = worldNormal.y();
                     chunk.vertices[idx].nz = worldNormal.z();
-                });
+                },
+                bufferAdapter);
         } else {
             GenerateFlatNormals(chunk);
+        }
+
+        // Defensive: the pre-flight above should make this unreachable, but
+        // the adapter records rather than throws, so never fall through to
+        // publishing a chunk built from a failed read.
+        if (state.error != ImportErrorCode::None) {
+            return false;
         }
     }
 

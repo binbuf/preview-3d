@@ -8,6 +8,9 @@
     "fastgltf",
     "draco",
     "basisu",
-    "ktx"
+    "ktx",
+    "meshoptimizer",
+    "directxtex",
+    "libwebp"
   ]
 }

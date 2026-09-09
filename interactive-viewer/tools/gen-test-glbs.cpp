@@ -46,6 +46,15 @@ void WriteGlb(const wchar_t* path, const std::string& json, const std::vector<st
     fclose(file);
     wprintf(L"wrote %s (%zu bytes)\n", path, out.size());
 }
+
+void WriteRawFile(const wchar_t* path, const void* bytes, std::size_t byteCount)
+{
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path, L"wb") != 0 || !file) { wprintf(L"cannot write %s\n", path); return; }
+    fwrite(bytes, 1, byteCount, file);
+    fclose(file);
+    wprintf(L"wrote %s (%zu bytes)\n", path, byteCount);
+}
 }
 
 int wmain()
@@ -125,6 +134,33 @@ int wmain()
         for (const auto& p : kTriangle) { AppendF32(bin, p[0]); AppendF32(bin, p[1]); AppendF32(bin, p[2]); }
         AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
         WriteGlb(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\unsupported_extension.glb", json, bin);
+    }
+
+    // Pair 5: the same triangle as GLB 1, but as a plain-JSON .gltf whose
+    // geometry lives in an external .bin sibling -- the conventional
+    // non-embedded glTF shape, and the one that requires the worker to
+    // fetch buffer bytes over the sidecar protocol
+    // (import-worker/src/GltfAdapter.cpp's SidecarBufferDataAdapter) rather
+    // than reading them out of a GLB's own BIN chunk. Uncompressed
+    // geometry: the Draco path already resolved external buffers, ordinary
+    // accessors did not.
+    {
+        const char* json =
+            "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+            "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+            "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+            "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+            "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+            "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+            "\"buffers\":[{\"uri\":\"tri_external.bin\",\"byteLength\":48}]}";
+        std::vector<std::uint8_t> bin;
+        for (const auto& p : kTriangle) { AppendF32(bin, p[0]); AppendF32(bin, p[1]); AppendF32(bin, p[2]); }
+        AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
+        std::string jsonText(json);
+        WriteRawFile(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\tri_external.gltf",
+                     jsonText.data(), jsonText.size());
+        WriteRawFile(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\tri_external.bin",
+                     bin.data(), bin.size());
     }
     return 0;
 }
