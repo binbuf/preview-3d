@@ -17,6 +17,7 @@
 
 #include <windows.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -41,5 +42,17 @@ OpenSourceFileResult OpenAndCanonicalizeSourceFile(const std::wstring& path);
 // broadly inheritable at its point of creation. `source` itself is
 // untouched (not closed, not made inheritable).
 std::optional<platform::Win32Handle> DuplicateInheritableHandle(HANDLE source);
+
+// Duplicates `source` directly into an already-running target process
+// (DuplicateHandle with an explicit hTargetProcessHandle, bInheritHandle=
+// FALSE -- inheritance is irrelevant once a process already exists).
+// Distinct from DuplicateInheritableHandle, which duplicates for a *future*
+// CreateProcessW's inheritance list; this one is for a worker the broker
+// already launched, mirroring WorkerPool.cpp's existing
+// DuplicateSectionIntoWorker for output sections, generalized to any
+// handle. Returns the duplicate's numeric value as it exists in
+// `targetProcess`'s own handle table -- meaningless in the caller's own
+// process.
+std::optional<uint64_t> DuplicateHandleIntoProcess(HANDLE source, HANDLE targetProcess);
 
 } // namespace import_broker

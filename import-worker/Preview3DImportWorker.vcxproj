@@ -66,7 +66,7 @@
       <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;windowscodecs.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -78,6 +78,9 @@
     <ClCompile Include="src\GltfAdapter.cpp" />
     <ClCompile Include="src\DracoDecodeAdapter.cpp" />
     <ClCompile Include="src\TextureTranscodeAdapter.cpp" />
+    <ClCompile Include="src\ImageFormatSniff.cpp" />
+    <ClCompile Include="src\WicImageDecodeAdapter.cpp" />
+    <ClCompile Include="src\SidecarFileClient.cpp" />
     <ClCompile Include="src\StlImportWorker.cpp" />
     <ClCompile Include="src\StlAdapter.cpp" />
     <ClCompile Include="src\PlyImportWorker.cpp" />
@@ -96,6 +99,9 @@
     <ClInclude Include="src\GltfAdapter.h" />
     <ClInclude Include="src\DracoDecodeAdapter.h" />
     <ClInclude Include="src\TextureTranscodeAdapter.h" />
+    <ClInclude Include="src\ImageFormatSniff.h" />
+    <ClInclude Include="src\WicImageDecodeAdapter.h" />
+    <ClInclude Include="src\SidecarFileClient.h" />
     <ClInclude Include="src\StlImportWorker.h" />
     <ClInclude Include="src\StlAdapter.h" />
     <ClInclude Include="src\PlyImportWorker.h" />

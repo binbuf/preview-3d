@@ -6,6 +6,7 @@
 #include <draco/mesh/mesh.h>
 
 #include <array>
+#include <cstring>
 
 namespace import_worker {
 
@@ -29,6 +30,20 @@ std::variant<DracoDecodedMesh, ImportErrorCode> DecodeDracoMesh(
 {
     if (!attributeIds.position.has_value()) {
         return ImportErrorCode::MalformedData; // POSITION is required geometry
+    }
+
+    // Cheap pre-check, before ever calling into draco: reject anything not
+    // even starting with the format's own 5-byte "DRACO" magic. draco's own
+    // DecodeHeader performs the identical bounds-checked comparison
+    // internally (confirmed by reading point_cloud_decoder.cc directly),
+    // so this doesn't change what's accepted -- it only guarantees a
+    // non-Draco buffer is rejected without invoking the third-party
+    // decoder at all, matching this repo's "never trust a library's own
+    // checks alone" discipline one step further upstream.
+    constexpr char kDracoMagic[] = "DRACO";
+    if (compressedBufferViewBytes.size() < 5
+        || std::memcmp(compressedBufferViewBytes.data(), kDracoMagic, 5) != 0) {
+        return ImportErrorCode::MalformedData;
     }
 
     draco::DecoderBuffer buffer;

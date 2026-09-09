@@ -95,6 +95,8 @@
     <ClInclude Include="..\shared\import-broker\include\import_broker\SharedSection.h" />
     <ClInclude Include="..\shared\import-broker\include\import_broker\SharedSectionValidator.h" />
     <ClInclude Include="..\shared\import-broker\include\import_broker\SourceFileAccess.h" />
+    <ClInclude Include="..\shared\import-broker\include\import_broker\SidecarPathResolver.h" />
+    <ClInclude Include="..\shared\import-broker\include\import_broker\SidecarRequestServicer.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\Checksum.h" />
@@ -123,6 +125,8 @@
     <ClCompile Include="..\shared\import-broker\src\SharedSection.cpp" />
     <ClCompile Include="..\shared\import-broker\src\SharedSectionValidator.cpp" />
     <ClCompile Include="..\shared\import-broker\src\SourceFileAccess.cpp" />
+    <ClCompile Include="..\shared\import-broker\src\SidecarPathResolver.cpp" />
+    <ClCompile Include="..\shared\import-broker\src\SidecarRequestServicer.cpp" />
     <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
   </ItemGroup>
   <ItemGroup>

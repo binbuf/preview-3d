@@ -3,6 +3,7 @@
 #include "import_broker/SandboxLauncher.h"
 #include "import_broker/SharedSection.h"
 #include "import_broker/SharedSectionValidator.h"
+#include "import_broker/SidecarRequestServicer.h"
 #include "import_broker/SourceFileAccess.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
@@ -17,6 +18,7 @@
 #include <cstring>
 #include <cwctype>
 #include <mutex>
+#include <variant>
 
 namespace d3d12_import_bridge {
 
@@ -67,6 +69,14 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
         summary = L"This model is too large to preview.";
         details = L"The file exceeds a resource limit the sandboxed importer enforces.";
         return;
+    case model_core::ImportErrorCode::UnsafeReference:
+        summary = L"This model could not be previewed.";
+        details = L"The file references another file in a way that isn't allowed.";
+        return;
+    case model_core::ImportErrorCode::FileUnavailable:
+        summary = L"This model could not be previewed.";
+        details = L"A file this model depends on could not be opened.";
+        return;
     case model_core::ImportErrorCode::ImportProtocolViolation:
     case model_core::ImportErrorCode::InternalImporterFailure:
     case model_core::ImportErrorCode::None:
@@ -78,6 +88,13 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
 }
 
 constexpr uint32_t kMaxChunkCount = 64;
+
+// Bounds the worker's own RequestSidecarFile loop -- "never trust worker
+// self-restraint," extended to this new surface. Exceeding it kills the
+// worker (via the same Job Object kill-on-close every other sandboxed
+// worker in this codebase already relies on) rather than servicing forever.
+constexpr uint32_t kMaxSidecarRequestsPerGeneration = 64;
+constexpr uint64_t kMaxSidecarFileBytes = 256ull * 1024ull * 1024ull;
 
 // Every real-file request struct (ParseGltfFileRequest/ParseStlFileRequest/
 // ParsePlyFileRequest) is field-for-field identical -- generationId,
@@ -236,9 +253,49 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         return result;
     }
 
+    // Services zero or more mid-generation RequestSidecarFile messages
+    // before the terminal ChunksReady/GenerationError reply -- degrades to
+    // exactly one iteration (today's original behavior) for STL/PLY and any
+    // self-contained GLB, since neither ever sends RequestSidecarFile.
+    uint32_t sidecarRequestCount = 0;
     auto received = model_core::ReadControlMessage(controlOutRead.get());
+    while (received
+           && received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::RequestSidecarFile)
+           && received->payload.size() == sizeof(model_core::RequestSidecarFileNotice)) {
+        if (++sidecarRequestCount > kMaxSidecarRequestsPerGeneration) {
+            break; // never trust worker self-restraint -- treated as a protocol violation below
+        }
+
+        model_core::RequestSidecarFileNotice request{};
+        std::memcpy(&request, received->payload.data(), sizeof(request));
+        auto serviced = import_broker::ServiceSidecarRequest(proc->process.get(), opened.canonicalPath, request,
+                                                               kMaxSidecarFileBytes);
+
+        bool sentReply = false;
+        if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {
+            sentReply = model_core::WriteControlMessage(
+                controlInWrite.get(), model_core::ControlOpcode::SidecarFileReady, ready, sizeof(*ready));
+        } else if (const auto* unavailable = std::get_if<model_core::SidecarFileUnavailableNotice>(&serviced)) {
+            sentReply = model_core::WriteControlMessage(
+                controlInWrite.get(), model_core::ControlOpcode::SidecarFileUnavailable, unavailable,
+                sizeof(*unavailable));
+        }
+        if (!sentReply) {
+            received = std::nullopt;
+            break;
+        }
+
+        received = model_core::ReadControlMessage(controlOutRead.get());
+    }
+
     WaitForSingleObject(proc->process.get(), 5000);
     platform::AppContainerSid::Delete(containerName);
+
+    if (sidecarRequestCount > kMaxSidecarRequestsPerGeneration) {
+        result.errorSummary = L"This model could not be previewed.";
+        result.errorDetails = L"The sandboxed importer made too many file requests.";
+        return result;
+    }
 
     if (!received) {
         result.errorSummary = L"This model could not be previewed.";

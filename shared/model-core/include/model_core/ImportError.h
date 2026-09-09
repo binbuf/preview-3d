@@ -15,6 +15,13 @@ enum class ImportErrorCode : uint32_t {
     ResourceLimit = 2,
     ImportProtocolViolation = 3,
     InternalImporterFailure = 4,
+    // Both names taken verbatim from the design doc's own "Error taxonomy"
+    // list ("FileUnavailable, FileChanged, UnsafeReference; ..."), added
+    // for the sidecar resolver: UnsafeReference is a containment-policy
+    // rejection (absolute/UNC/traversal/wrong-extension/escapes-directory);
+    // FileUnavailable covers not-found, zero-length, and over-size.
+    UnsafeReference = 5,
+    FileUnavailable = 6,
 };
 
 } // namespace model_core

@@ -1,6 +1,7 @@
 #include "GltfImportWorker.h"
 
 #include "GltfAdapter.h"
+#include "SidecarFileClient.h"
 
 #include "model_core/ControlChannelIo.h"
 #include "model_core/MappedFile.h"
@@ -74,7 +75,7 @@ bool HandleGltfImportRequest(HANDLE stdOut, const model_core::ParseGltfRequest& 
 // .docs/design/03-file-formats-and-ingestion.md's "Mapped-file abstraction"
 // step 1 ("...or, for a duplicated handle received from the broker, reopen
 // a mapping directly from that handle without a fresh CreateFileW call").
-bool HandleGltfImportFileRequest(HANDLE stdOut, const model_core::ParseGltfFileRequest& request)
+bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::ParseGltfFileRequest& request)
 {
     HANDLE rawFile = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sourceFileHandleValue));
     auto openResult = model_core::MappedFile::FromHandle(platform::Win32Handle(rawFile));
@@ -95,7 +96,9 @@ bool HandleGltfImportFileRequest(HANDLE stdOut, const model_core::ParseGltfFileR
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
 
-    auto result = ImportGltf(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount);
+    SidecarFileClient sidecarClient(stdIn, stdOut, request.generationId);
+    auto result = ImportGltf(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
+                              &sidecarClient);
     return ReportResult(stdOut, request.generationId, result);
 }
 
@@ -125,7 +128,7 @@ int RunGltfImport()
         && received->payload.size() == sizeof(model_core::ParseGltfFileRequest)) {
         model_core::ParseGltfFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
-        return HandleGltfImportFileRequest(stdOut, request) ? 0 : 1;
+        return HandleGltfImportFileRequest(stdIn, stdOut, request) ? 0 : 1;
     }
 
     return 1;

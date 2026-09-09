@@ -7,6 +7,8 @@
 
 #include <windows.h>
 
+#include <objbase.h>
+
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -36,6 +38,13 @@ bool ArgEquals(const char* arg, const char* value)
 
 int main(int argc, char* argv[])
 {
+    // First COM usage anywhere in this process (confirmed zero prior usage
+    // this session) -- WicImageDecodeAdapter.cpp needs IWICImagingFactory.
+    // COINIT_MULTITHREADED rather than the COINIT_APARTMENTTHREADED
+    // precedent Preview3D.cpp uses: this is a headless console process with
+    // no message pump, so there's no OLE/message-loop semantics to match.
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
     if (argc < 2) {
         return 1;
     }

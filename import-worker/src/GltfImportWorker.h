@@ -19,7 +19,7 @@ bool HandleGltfImportRequest(HANDLE stdOut, const model_core::ParseGltfRequest& 
 // from the received raw file handle, maps the output section, calls
 // GltfAdapter::ImportGltf, writes ChunksReady/GenerationError to stdOut.
 // Returns true iff ChunksReady was sent. Shared the same way as above.
-bool HandleGltfImportFileRequest(HANDLE stdOut, const model_core::ParseGltfFileRequest& request);
+bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::ParseGltfFileRequest& request);
 
 // Owns the --parse-gltf mode's control-channel read/dispatch/write
 // sequence: reads one control message from the inherited stdin pipe (either

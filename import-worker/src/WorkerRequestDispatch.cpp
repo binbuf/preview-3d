@@ -42,7 +42,7 @@ DispatchOutcome DispatchOneRequest(HANDLE stdIn, HANDLE stdOut)
         && received->payload.size() == sizeof(model_core::ParseGltfFileRequest)) {
         model_core::ParseGltfFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
-        HandleGltfImportFileRequest(stdOut, request);
+        HandleGltfImportFileRequest(stdIn, stdOut, request);
         return DispatchOutcome::Continue;
     }
 

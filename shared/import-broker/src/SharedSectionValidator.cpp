@@ -287,17 +287,32 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             if (descriptor.dependencyCount > model_core::kMaxDependencyIds) {
                 return Reject(ImportErrorCode::MalformedData, "material dependencyCount exceeds cap");
             }
-            for (uint32_t d = 0; d < descriptor.dependencyCount; ++d) {
-                auto dep = topologyById.find(descriptor.dependencyIds[d]);
-                if (descriptor.dependencyIds[d] == 0 || dep == topologyById.end()
-                    || dep->second != ChunkTopology::Image) {
-                    return Reject(ImportErrorCode::MalformedData, "material dependency is not an image chunk");
+            // Unlike a mesh's single optional dependency, a material's 4
+            // slots carry per-position semantic meaning
+            // (baseColor/metallicRoughness/normal/emissive per WireFormat.h)
+            // and may be sparsely populated -- e.g. a normal-map-only
+            // material has only slot 2 nonzero. Every slot is therefore
+            // checked independently (0 = no texture in that slot, always
+            // valid) rather than treating dependencyCount as a contiguous
+            // prefix length; dependencyCount itself is cross-checked
+            // against the actual count of nonzero slots so a lying worker
+            // can't understate it.
+            {
+                uint32_t populatedCount = 0;
+                for (uint32_t d = 0; d < model_core::kMaxDependencyIds; ++d) {
+                    if (descriptor.dependencyIds[d] == 0) {
+                        continue;
+                    }
+                    auto dep = topologyById.find(descriptor.dependencyIds[d]);
+                    if (dep == topologyById.end() || dep->second != ChunkTopology::Image) {
+                        return Reject(ImportErrorCode::MalformedData,
+                                      "material dependency is not an image chunk");
+                    }
+                    ++populatedCount;
                 }
-            }
-            for (uint32_t d = descriptor.dependencyCount; d < model_core::kMaxDependencyIds; ++d) {
-                if (descriptor.dependencyIds[d] != 0) {
+                if (descriptor.dependencyCount != populatedCount) {
                     return Reject(ImportErrorCode::MalformedData,
-                                  "material declares an id in an unpopulated dependency slot");
+                                  "material dependencyCount does not match its populated slot count");
                 }
             }
             break;

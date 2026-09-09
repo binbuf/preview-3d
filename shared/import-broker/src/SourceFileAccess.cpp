@@ -49,4 +49,17 @@ std::optional<platform::Win32Handle> DuplicateInheritableHandle(HANDLE source)
     return platform::Win32Handle(duplicate);
 }
 
+std::optional<uint64_t> DuplicateHandleIntoProcess(HANDLE source, HANDLE targetProcess)
+{
+    HANDLE duplicate = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), source, targetProcess, &duplicate, 0,
+                          /*bInheritHandle=*/FALSE, DUPLICATE_SAME_ACCESS)) {
+        return std::nullopt;
+    }
+    // `duplicate`'s value is meaningful only in targetProcess's own handle
+    // table (DuplicateHandle's documented cross-process behavior) -- same
+    // convention as WorkerPool::DuplicateSectionIntoWorker.
+    return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(duplicate));
+}
+
 } // namespace import_broker

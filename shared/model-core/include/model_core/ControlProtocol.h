@@ -15,6 +15,17 @@ enum class ControlOpcode : uint32_t {
     Shutdown = 6,                 // host -> worker, --pool mode only: exit cleanly, no reply
     StartStlImportFromFile = 7,   // host -> worker
     StartPlyImportFromFile = 8,   // host -> worker
+    // Mid-generation, worker -> host, zero or more times before the
+    // terminal ChunksReady/GenerationError reply -- a genuine deviation
+    // from every opcode above's strict one-shot-per-generation shape. The
+    // worker's own (already-sandboxed) glTF parse is what discovers a
+    // .gltf's external sidecar references; only the trusted host may ever
+    // open a path, so the worker must ask for one by relative reference.
+    // See import_broker/SidecarRequestServicer.h (host) and
+    // import-worker/src/SidecarFileClient.h (worker).
+    RequestSidecarFile = 9,       // worker -> host
+    SidecarFileReady = 10,        // host -> worker
+    SidecarFileUnavailable = 11,  // host -> worker
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -142,6 +153,41 @@ struct GenerationErrorNotice {
     uint32_t reserved0;
 };
 static_assert(sizeof(GenerationErrorNotice) == 16, "GenerationErrorNotice layout changed");
+
+// UTF-8, glTF-URI-decoded, NOT NUL-terminated -- relativePathLength is the
+// exact meaningful prefix of relativePathUtf8. No sequence number: the
+// control channel stays strictly synchronous (the worker blocks for one
+// reply before sending its next request), so a seq field would be dead
+// weight for a pipelining case that doesn't exist.
+constexpr uint32_t kMaxSidecarRelativePathBytes = 200;
+
+struct RequestSidecarFileNotice {
+    uint64_t generationId;
+    uint32_t relativePathLength; // <= kMaxSidecarRelativePathBytes
+    uint32_t reserved0;
+    uint8_t relativePathUtf8[kMaxSidecarRelativePathBytes];
+};
+static_assert(sizeof(RequestSidecarFileNotice) == 216, "RequestSidecarFileNotice layout changed");
+
+struct SidecarFileReadyNotice {
+    uint64_t generationId;
+    uint64_t sidecarFileHandleValue; // valid only in the WORKER's own handle table -- the host
+                                       // DuplicateHandle'd it there directly (target-process
+                                       // duplication, not launch-time PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+                                       // inheritance, since the worker is already running)
+    uint64_t sidecarByteLength;       // host-measured via GetFileSizeEx; the worker must not trust
+                                       // any other size claim for this file
+    uint32_t reserved0;
+    uint32_t reserved1;
+};
+static_assert(sizeof(SidecarFileReadyNotice) == 32, "SidecarFileReadyNotice layout changed");
+
+struct SidecarFileUnavailableNotice {
+    uint64_t generationId;
+    uint32_t errorCode; // ImportErrorCode: UnsafeReference or FileUnavailable
+    uint32_t reserved0;
+};
+static_assert(sizeof(SidecarFileUnavailableNotice) == 16, "SidecarFileUnavailableNotice layout changed");
 
 #pragma pack(pop)
 

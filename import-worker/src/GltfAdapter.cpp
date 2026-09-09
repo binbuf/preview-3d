@@ -1,7 +1,10 @@
 #include "GltfAdapter.h"
 
 #include "DracoDecodeAdapter.h"
+#include "ImageFormatSniff.h"
+#include "SidecarFileClient.h"
 #include "TextureTranscodeAdapter.h"
+#include "WicImageDecodeAdapter.h"
 
 #include "model_core/Checksum.h"
 #include "model_core/MaterialPayload.h"
@@ -60,7 +63,13 @@ struct PendingImage {
 
 struct PendingMaterial {
     MaterialPayload data{};
-    std::optional<size_t> pendingBaseColorImageIndex; // index into WalkState::pendingImages
+    // Indices into WalkState::pendingImages, fixed slot order per
+    // WireFormat.h's documented ChunkDescriptor::dependencyIds contract:
+    // {baseColor, metallicRoughness, normal, emissive}.
+    std::optional<size_t> pendingBaseColorImageIndex;
+    std::optional<size_t> pendingMetallicRoughnessImageIndex;
+    std::optional<size_t> pendingNormalImageIndex;
+    std::optional<size_t> pendingEmissiveImageIndex;
 };
 
 // This codebase's ImportErrorCode enum is a deliberately small subset of
@@ -123,6 +132,40 @@ bool ValidateIndexAccessor(const fastgltf::Accessor& accessor)
             || accessor.componentType == fastgltf::ComponentType::UnsignedInt);
 }
 
+// Guards against ever calling fastgltf's own iterateAccessorWithIndex on an
+// accessor whose bytes fastgltf cannot itself resolve without doing its
+// own file I/O. An external (sources::URI) buffer is resolved by THIS
+// worker via ResolveBufferViewBytes for the code paths under this file's
+// own control (Draco-compressed primitives, image bufferViews) -- but
+// fastgltf's own accessor-reading machinery has no way to consult that
+// separately-resolved cache, since it reads directly from
+// asset.buffers[i].data, which stays sources::URI regardless. Ordinary
+// (non-Draco-compressed) geometry referencing an external buffer is
+// therefore not supported this chunk -- a real, architecture-driven
+// limitation flagged here, not a lazy cut: bypassing fastgltf's own
+// accessor reader (sparse-accessor overrides, component-type up-
+// conversion, interleaved-stride handling it already gets right) to
+// support this would be a substantial reimplementation, out of scope here.
+// Returns true for a sparse-only accessor (nothing to resolve) or one
+// backed by an embedded buffer; false only for an unresolvable external
+// reference, which the caller must treat as a hard MalformedData failure
+// -- calling iterateAccessorWithIndex on a false result is unverified and
+// must never happen.
+bool AccessorBufferIsEmbedded(const fastgltf::Asset& asset, const fastgltf::Accessor& accessor)
+{
+    if (!accessor.bufferViewIndex.has_value()) {
+        return true;
+    }
+    if (*accessor.bufferViewIndex >= asset.bufferViews.size()) {
+        return false;
+    }
+    size_t bufferIndex = asset.bufferViews[*accessor.bufferViewIndex].bufferIndex;
+    if (bufferIndex >= asset.buffers.size()) {
+        return false;
+    }
+    return std::holds_alternative<fastgltf::sources::Array>(asset.buffers[bufferIndex].data);
+}
+
 // Generates flat per-triangle normals: accumulates each triangle's face
 // normal (cross product of two edges) into its three vertices, normalizes
 // once at the end. Same algorithm interactive-viewer's Model.cpp uses
@@ -168,68 +211,165 @@ struct WalkState {
     uint64_t totalDecodedImagePixels = 0;
     uint32_t maxChunkCount = 0;
     ImportErrorCode error = ImportErrorCode::None;
+    // Lazily populated by ResolveBufferViewBytes on first access to an
+    // external (sources::URI) buffer index -- resolves only what's
+    // actually needed (e.g. a Draco-compressed primitive's bufferView),
+    // memoizing so a buffer referenced by multiple bufferViews is only
+    // requested from the sidecar once. Empty/unused entirely for a self-
+    // contained .glb. nullptr sidecarClient (the always-self-contained
+    // shared-section ParseGltfRequest path) means an external buffer is
+    // simply never resolvable.
+    std::unordered_map<size_t, std::optional<std::vector<std::byte>>> resolvedExternalBuffers;
+    SidecarFileClient* sidecarClient = nullptr;
 };
 
-// GLB-embedded buffers only -- the worker has no path authority to load an
-// external URI. Returns nullopt for any out-of-range index, non-embedded
-// data source, or out-of-bounds byteOffset/byteLength.
-std::optional<std::span<const std::byte>> ResolveBufferViewBytes(const fastgltf::Asset& asset,
-                                                                    size_t bufferViewIndex)
+// GLB-embedded (sources::Array) buffers, or an external (sources::URI)
+// buffer lazily resolved via state.sidecarClient on first access and
+// memoized in WalkState::resolvedExternalBuffers (nullptr sidecarClient --
+// the always-self-contained shared-section path -- means a URI buffer is
+// simply unresolvable). Returns nullopt for any out-of-range index,
+// unresolvable data source, or out-of-bounds byteOffset/byteLength.
+std::optional<std::span<const std::byte>> ResolveBufferViewBytes(WalkState& state, size_t bufferViewIndex)
 {
-    if (bufferViewIndex >= asset.bufferViews.size()) {
+    if (bufferViewIndex >= state.asset.bufferViews.size()) {
         return std::nullopt;
     }
-    const fastgltf::BufferView& view = asset.bufferViews[bufferViewIndex];
-    if (view.bufferIndex >= asset.buffers.size()) {
+    const fastgltf::BufferView& view = state.asset.bufferViews[bufferViewIndex];
+    if (view.bufferIndex >= state.asset.buffers.size()) {
         return std::nullopt;
     }
-    const fastgltf::Buffer& buffer = asset.buffers[view.bufferIndex];
-    const auto* array = std::get_if<fastgltf::sources::Array>(&buffer.data);
-    if (array == nullptr) {
+    const fastgltf::Buffer& buffer = state.asset.buffers[view.bufferIndex];
+
+    std::span<const std::byte> bufferBytes;
+    if (const auto* array = std::get_if<fastgltf::sources::Array>(&buffer.data)) {
+        bufferBytes = std::span<const std::byte>(array->bytes.data(), array->bytes.size());
+    } else if (const auto* uriSource = std::get_if<fastgltf::sources::URI>(&buffer.data)) {
+        auto cached = state.resolvedExternalBuffers.find(view.bufferIndex);
+        if (cached == state.resolvedExternalBuffers.end()) {
+            std::optional<std::vector<std::byte>> resolved;
+            if (state.sidecarClient != nullptr) {
+                auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()));
+                resolved = std::move(result.bytes);
+            }
+            cached = state.resolvedExternalBuffers.emplace(view.bufferIndex, std::move(resolved)).first;
+        }
+        if (!cached->second.has_value()) {
+            return std::nullopt;
+        }
+        bufferBytes = std::span<const std::byte>(cached->second->data(), cached->second->size());
+    } else {
         return std::nullopt;
     }
+
     auto end = CheckedAdd(static_cast<uint64_t>(view.byteOffset), static_cast<uint64_t>(view.byteLength));
-    if (!end || *end > array->bytes.size()) {
+    if (!end || *end > bufferBytes.size()) {
         return std::nullopt;
     }
-    return std::span<const std::byte>(array->bytes.data() + view.byteOffset, view.byteLength);
+    return bufferBytes.subspan(view.byteOffset, view.byteLength);
 }
 
-// Resolves (with dedup by glTF image index) the pending-image index for a
-// KHR_texture_basisu image, transcoding its embedded KTX2 bytes. Transcode
-// failure is soft -- returns nullopt without setting state.error, which the
-// caller treats as "no base color texture," never a hard import failure
-// (Draco geometry decode is the asymmetric opposite: required geometry
-// fails hard). A fatal condition (resource-limit overflow) sets state.error
-// and also returns nullopt; callers must check state.error to distinguish
-// the two.
-std::optional<size_t> ResolveBasisuImage(WalkState& state, size_t imageIndex)
+// Returns owned encoded bytes for asset.images[imageIndex]'s data source.
+// A GLB-embedded bufferView is copied out; an external sources::URI is
+// resolved via state.sidecarClient (nullptr for the always-self-contained
+// shared-section path, in which case a URI source is simply unavailable).
+// A data URI never reaches this function as sources::URI -- fastgltf
+// decodes it into sources::Array unconditionally, confirmed by reading
+// fastgltf.cpp directly (the LoadExternalImages option gate only applies
+// to sources::URI's *local-path* branch, not the isDataUri() branch, since
+// decoding a data URI needs no filesystem I/O) -- so sources::URI here
+// always means a real external file reference.
+std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state, size_t imageIndex)
+{
+    if (imageIndex >= state.asset.images.size()) {
+        return std::nullopt;
+    }
+    const fastgltf::Image& image = state.asset.images[imageIndex];
+
+    if (const auto* bufferViewSource = std::get_if<fastgltf::sources::BufferView>(&image.data)) {
+        auto bytes = ResolveBufferViewBytes(state, bufferViewSource->bufferViewIndex);
+        if (!bytes) {
+            return std::nullopt;
+        }
+        return std::vector<std::byte>(bytes->begin(), bytes->end());
+    }
+
+    if (const auto* uriSource = std::get_if<fastgltf::sources::URI>(&image.data)) {
+        if (state.sidecarClient == nullptr) {
+            return std::nullopt;
+        }
+        auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()));
+        return result.bytes; // nullopt on any failure -- images are never geometry-required
+    }
+
+    return std::nullopt;
+}
+
+// Resolves (with dedup by glTF image index) the pending-image index for
+// asset.images[imageIndex], regardless of source (GLB-embedded bufferView
+// or, when state.sidecarClient is set, an external sidecar file) or
+// container (KTX2/Basis via TranscodeKtx2BasisImage, or a plain raster via
+// DecodeRasterImageWic) -- the actual container is sniffed from the bytes
+// themselves (ImageFormatSniff.h), never trusted from a declared MIME type
+// alone, per the texture policy's "verified from bytes... rather than
+// extension alone." WebP and anything unrecognized soft-fail (no adapter
+// this chunk). Decode/transcode failure is soft -- returns nullopt without
+// setting state.error, which the caller treats as "no texture in this
+// slot," never a hard import failure (Draco geometry decode is the
+// asymmetric opposite: required geometry fails hard). A fatal condition
+// (resource-limit overflow) sets state.error and also returns nullopt;
+// callers must check state.error to distinguish the two.
+std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpaceId colorSpace)
 {
     auto existing = state.imageIndexToPendingIndex.find(imageIndex);
     if (existing != state.imageIndexToPendingIndex.end()) {
         return existing->second;
     }
 
-    if (imageIndex >= state.asset.images.size()) {
-        return std::nullopt; // soft-fail: malformed texture reference, not a required-geometry problem
-    }
-    const fastgltf::Image& image = state.asset.images[imageIndex];
-    const auto* bufferViewSource = std::get_if<fastgltf::sources::BufferView>(&image.data);
-    if (bufferViewSource == nullptr || bufferViewSource->mimeType != fastgltf::MimeType::KTX2) {
-        return std::nullopt; // only a GLB-embedded KTX2 bufferView is supported this slice
-    }
-    auto ktx2Bytes = ResolveBufferViewBytes(state.asset, bufferViewSource->bufferViewIndex);
-    if (!ktx2Bytes) {
+    auto encodedBytes = ResolveImageEncodedBytes(state, imageIndex);
+    if (!encodedBytes) {
         return std::nullopt;
     }
 
-    auto transcoded = TranscodeKtx2BasisImage(*ktx2Bytes);
-    if (!transcoded) {
+    std::optional<PendingImage> decoded;
+    switch (SniffImageFormat(*encodedBytes)) {
+    case SniffedImageFormat::Ktx2: {
+        if (auto transcoded = TranscodeKtx2BasisImage(*encodedBytes)) {
+            PendingImage pending;
+            pending.pixelFormat = transcoded->pixelFormat;
+            pending.width = transcoded->width;
+            pending.height = transcoded->height;
+            pending.colorSpace = colorSpace;
+            pending.pixelBytes = std::move(transcoded->pixelBytes);
+            decoded = std::move(pending);
+        }
+        break;
+    }
+    case SniffedImageFormat::Png:
+    case SniffedImageFormat::Jpeg:
+    case SniffedImageFormat::Bmp:
+    case SniffedImageFormat::Tiff: {
+        if (auto raster = DecodeRasterImageWic(*encodedBytes, colorSpace)) {
+            PendingImage pending;
+            pending.pixelFormat = raster->pixelFormat;
+            pending.width = raster->width;
+            pending.height = raster->height;
+            pending.colorSpace = raster->colorSpace;
+            pending.pixelBytes = std::move(raster->pixelBytes);
+            decoded = std::move(pending);
+        }
+        break;
+    }
+    case SniffedImageFormat::WebP: // no libwebp adapter this chunk (ADR-006-assigned, deferred)
+    case SniffedImageFormat::Unknown:
+    default:
+        break;
+    }
+
+    if (!decoded) {
         return std::nullopt;
     }
 
-    auto pixelCount = CheckedMultiply(static_cast<uint64_t>(transcoded->width),
-                                       static_cast<uint64_t>(transcoded->height));
+    auto pixelCount = CheckedMultiply(static_cast<uint64_t>(decoded->width), static_cast<uint64_t>(decoded->height));
     auto newTotal = pixelCount ? CheckedAdd(state.totalDecodedImagePixels, *pixelCount) : std::nullopt;
     if (!pixelCount || !newTotal || *newTotal > kMaxAggregateDecodedTexturePixels) {
         state.error = ImportErrorCode::ResourceLimit;
@@ -243,26 +383,40 @@ std::optional<size_t> ResolveBasisuImage(WalkState& state, size_t imageIndex)
         return std::nullopt;
     }
 
-    PendingImage pending;
-    pending.pixelFormat = transcoded->pixelFormat;
-    pending.width = transcoded->width;
-    pending.height = transcoded->height;
-    pending.colorSpace = ColorSpaceId::Srgb; // base color is the only semantic handled this slice
-    pending.pixelBytes = std::move(transcoded->pixelBytes);
-
     size_t pendingIndex = state.pendingImages.size();
-    state.pendingImages.push_back(std::move(pending));
+    state.pendingImages.push_back(std::move(*decoded));
     state.imageIndexToPendingIndex.emplace(imageIndex, pendingIndex);
     return pendingIndex;
 }
 
+// Resolves the pending-image index for a texture slot's KHR_texture_basisu
+// or plain image, or nullopt if the slot itself is absent, out of range, or
+// carries no supported image source at all -- soft-fail throughout, never
+// sets state.error for these "no texture" outcomes (only ResolveImage's own
+// resource-limit path does).
+std::optional<size_t> ResolveTextureSlotImage(WalkState& state, const fastgltf::TextureInfo* textureInfo,
+                                                ColorSpaceId colorSpace)
+{
+    if (textureInfo == nullptr || textureInfo->textureIndex >= state.asset.textures.size()) {
+        return std::nullopt;
+    }
+    const fastgltf::Texture& texture = state.asset.textures[textureInfo->textureIndex];
+    std::optional<size_t> gltfImageIndex
+        = texture.basisuImageIndex.has_value() ? texture.basisuImageIndex : texture.imageIndex;
+    if (!gltfImageIndex.has_value()) {
+        return std::nullopt;
+    }
+    return ResolveImage(state, *gltfImageIndex, colorSpace);
+}
+
 // Resolves (with dedup by glTF material index) the pending-material index
-// for asset.materials[materialIndex]. Only material.pbrData.baseColorTexture
-// is inspected, and only when it carries a KHR_texture_basisu image -- a
-// plain PNG/JPEG/WebP base-color texture is deliberately skipped (the
-// material keeps its factors, no image dependency), matching the design
-// doc's "missing/unsupported optional texture falls back without hiding the
-// mesh" policy. Returns nullopt only on a fatal error (state.error is set).
+// for asset.materials[materialIndex]. All four PBR texture slots
+// (baseColor/metallicRoughness/normal/emissive) are inspected, each
+// resolved through ResolveTextureSlotImage/ResolveImage -- a texture this
+// chunk can't decode/transcode (or that's simply absent) leaves that slot
+// unpopulated, matching the design doc's "missing/unsupported optional
+// texture falls back without hiding the mesh" policy. Returns nullopt only
+// on a fatal error (state.error is set).
 std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
 {
     auto existing = state.materialIndexToPendingIndex.find(materialIndex);
@@ -312,17 +466,33 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
             pending.data.uvScale[1] = textureInfo.transform->uvScale.y();
             pending.data.uvRotation = textureInfo.transform->rotation;
         }
-
-        if (textureInfo.textureIndex < state.asset.textures.size()) {
-            const fastgltf::Texture& texture = state.asset.textures[textureInfo.textureIndex];
-            if (texture.basisuImageIndex.has_value()) {
-                pending.pendingBaseColorImageIndex = ResolveBasisuImage(state, *texture.basisuImageIndex);
-                if (state.error != ImportErrorCode::None) {
-                    return std::nullopt;
-                }
-            }
-            // A plain (non-basisu) image index is deliberately skipped this
-            // slice -- material keeps its factors, no image dependency.
+        pending.pendingBaseColorImageIndex = ResolveTextureSlotImage(state, &textureInfo, ColorSpaceId::Srgb);
+        if (state.error != ImportErrorCode::None) {
+            return std::nullopt;
+        }
+    }
+    if (material.pbrData.metallicRoughnessTexture.has_value()) {
+        pending.pendingMetallicRoughnessImageIndex
+            = ResolveTextureSlotImage(state, &*material.pbrData.metallicRoughnessTexture, ColorSpaceId::Linear);
+        if (state.error != ImportErrorCode::None) {
+            return std::nullopt;
+        }
+    }
+    if (material.normalTexture.has_value()) {
+        // NormalTextureInfo derives from TextureInfo -- ResolveTextureSlotImage
+        // only needs the base; its extra .scale field is dropped (no
+        // MaterialPayload field exists for it this chunk, a deliberate
+        // scope call, not an oversight).
+        pending.pendingNormalImageIndex = ResolveTextureSlotImage(state, &*material.normalTexture, ColorSpaceId::Linear);
+        if (state.error != ImportErrorCode::None) {
+            return std::nullopt;
+        }
+    }
+    if (material.emissiveTexture.has_value()) {
+        pending.pendingEmissiveImageIndex
+            = ResolveTextureSlotImage(state, &*material.emissiveTexture, ColorSpaceId::Srgb);
+        if (state.error != ImportErrorCode::None) {
+            return std::nullopt;
         }
     }
 
@@ -406,7 +576,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
 
     if (primitive.dracoCompression != nullptr) {
         const fastgltf::DracoCompressedPrimitive& dracoPrimitive = *primitive.dracoCompression;
-        auto compressedBytes = ResolveBufferViewBytes(state.asset, dracoPrimitive.bufferView);
+        auto compressedBytes = ResolveBufferViewBytes(state, dracoPrimitive.bufferView);
         if (!compressedBytes) {
             state.error = ImportErrorCode::MalformedData;
             return false;
@@ -486,6 +656,19 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             GenerateFlatNormals(chunk);
         }
     } else {
+        // See AccessorBufferIsEmbedded's own comment: this worker cannot
+        // safely hand an external-buffer-backed accessor to fastgltf's own
+        // reader. A hard failure here (not a soft skip) since this is core
+        // geometry.
+        if (!AccessorBufferIsEmbedded(state.asset, positionAccessor)
+            || !AccessorBufferIsEmbedded(state.asset, indexAccessor)
+            || (hasUv && !AccessorBufferIsEmbedded(state.asset, state.asset.accessors[uvIt->accessorIndex]))
+            || (hasNormal
+                && !AccessorBufferIsEmbedded(state.asset, state.asset.accessors[normalIt->accessorIndex]))) {
+            state.error = ImportErrorCode::MalformedData;
+            return false;
+        }
+
         fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
             state.asset, positionAccessor, [&](fastgltf::math::fvec3 pos, size_t idx) {
                 fastgltf::math::fvec4 worldPos
@@ -607,7 +790,8 @@ bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::fmat4x4
 std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::byte> sourceGlbBytes,
                                                              std::span<std::byte> destination,
                                                              uint64_t generationId,
-                                                             uint32_t maxChunkCount)
+                                                             uint32_t maxChunkCount,
+                                                             SidecarFileClient* sidecarClient)
 {
     auto dataBufferResult
         = fastgltf::GltfDataBuffer::FromBytes(sourceGlbBytes.data(), sourceGlbBytes.size());
@@ -627,8 +811,12 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     fastgltf::Parser parser(fastgltf::Extensions::KHR_draco_mesh_compression
                              | fastgltf::Extensions::KHR_texture_basisu
                              | fastgltf::Extensions::KHR_texture_transform);
-    auto assetResult = parser.loadGltfBinary(dataBufferResult.get(), std::filesystem::path{},
-                                              fastgltf::Options::GenerateMeshIndices);
+    // loadGltf (rather than loadGltfBinary) auto-detects GLB vs. plain-JSON
+    // .gltf via fastgltf::determineGltfFileType internally -- needed so a
+    // real multi-file .gltf (this chunk's whole point) parses at all; a
+    // self-contained .glb continues to work identically either way.
+    auto assetResult = parser.loadGltf(dataBufferResult.get(), std::filesystem::path{},
+                                        fastgltf::Options::GenerateMeshIndices);
     if (!assetResult) {
         return MapFastgltfError(assetResult.error());
     }
@@ -645,6 +833,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     WalkState state{ asset };
     state.visitState.assign(asset.nodes.size(), 0);
     state.maxChunkCount = maxChunkCount;
+    state.sidecarClient = sidecarClient;
 
     fastgltf::math::fmat4x4 identity(1.0f);
     for (size_t nodeIndex : asset.scenes[sceneIndex].nodeIndices) {
@@ -780,11 +969,27 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         descriptor.lodLevel = 0;
         descriptor.chunkId = materialChunkId(j);
         descriptor.byteSize = payloadSizes[combined];
+        // Fixed slot order {baseColor, metallicRoughness, normal, emissive}
+        // per WireFormat.h; sparsely populated is valid (e.g. a normal-map-
+        // only material leaves slots 0/1/3 at their zero-initialized
+        // default) -- SharedSectionValidator checks each slot
+        // independently, not as a contiguous prefix.
+        descriptor.dependencyCount = 0;
         if (material.pendingBaseColorImageIndex.has_value()) {
             descriptor.dependencyIds[0] = imageChunkId(*material.pendingBaseColorImageIndex);
-            descriptor.dependencyCount = 1;
-        } else {
-            descriptor.dependencyCount = 0;
+            ++descriptor.dependencyCount;
+        }
+        if (material.pendingMetallicRoughnessImageIndex.has_value()) {
+            descriptor.dependencyIds[1] = imageChunkId(*material.pendingMetallicRoughnessImageIndex);
+            ++descriptor.dependencyCount;
+        }
+        if (material.pendingNormalImageIndex.has_value()) {
+            descriptor.dependencyIds[2] = imageChunkId(*material.pendingNormalImageIndex);
+            ++descriptor.dependencyCount;
+        }
+        if (material.pendingEmissiveImageIndex.has_value()) {
+            descriptor.dependencyIds[3] = imageChunkId(*material.pendingEmissiveImageIndex);
+            ++descriptor.dependencyCount;
         }
         descriptor.chunkChecksum
             = Fnv1a64(destination.subspan(payloadOffsets[combined], payloadSizes[combined]));
