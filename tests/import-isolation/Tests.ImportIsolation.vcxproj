@@ -43,7 +43,7 @@
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\shared\platform\include;..\..\shared\import-broker\include;..\..\shared\model-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\shared\platform\include;..\..\shared\import-broker\include;..\..\shared\model-core\include;..\..\import-worker\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- Every project in this solution shares one centralized output
            directory, $(SolutionDir)$(Platform)\$(Configuration)\ (confirmed
            by inspecting an actual solution build, not assumed). There is no
@@ -78,6 +78,11 @@
     <ClCompile Include="PlyImportTests.cpp" />
     <ClCompile Include="SourceFileAccessTests.cpp" />
     <ClCompile Include="WorkerPoolTests.cpp" />
+    <ClCompile Include="SharedSectionValidatorTextureTests.cpp" />
+    <ClCompile Include="DracoDecodeAdapterTests.cpp" />
+    <ClCompile Include="TextureTranscodeAdapterTests.cpp" />
+    <ClCompile Include="..\..\import-worker\src\DracoDecodeAdapter.cpp" />
+    <ClCompile Include="..\..\import-worker\src\TextureTranscodeAdapter.cpp" />
     <ClCompile Include="..\..\shared\platform\src\AppContainerSid.cpp" />
     <ClCompile Include="..\..\shared\platform\src\ProcThreadAttributeList.cpp" />
     <ClCompile Include="..\..\shared\platform\src\MappedView.cpp" />
@@ -108,6 +113,10 @@
     <ClInclude Include="..\..\shared\model-core\include\model_core\ImportError.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\ControlProtocol.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\ControlChannelIo.h" />
+    <ClInclude Include="..\..\shared\model-core\include\model_core\MaterialPayload.h" />
+    <ClInclude Include="..\..\shared\model-core\include\model_core\PixelFormats.h" />
+    <ClInclude Include="..\..\import-worker\src\DracoDecodeAdapter.h" />
+    <ClInclude Include="..\..\import-worker\src\TextureTranscodeAdapter.h" />
   </ItemGroup>
   <ItemGroup>
     <!-- Build-order only (exe to exe, nothing to link): the test needs

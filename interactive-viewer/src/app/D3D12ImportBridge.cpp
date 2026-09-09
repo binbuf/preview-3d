@@ -275,15 +275,66 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         return result;
     }
 
-    result.meshes.reserve(validation.chunks.size());
     for (auto& chunk : validation.chunks) {
-        ImportedMesh mesh;
-        mesh.topology = chunk.descriptor.topology;
-        mesh.vertexLayoutId = static_cast<model_core::VertexLayoutId>(chunk.descriptor.vertexLayoutId);
-        mesh.vertexCount = chunk.descriptor.vertexCount;
-        mesh.indexCount = chunk.descriptor.indexCount;
-        mesh.payload = std::move(chunk.payload);
-        result.meshes.push_back(std::move(mesh));
+        switch (chunk.descriptor.topology) {
+        case model_core::ChunkTopology::TriangleList:
+        case model_core::ChunkTopology::PointList: {
+            ImportedMesh mesh;
+            mesh.topology = chunk.descriptor.topology;
+            mesh.vertexLayoutId = static_cast<model_core::VertexLayoutId>(chunk.descriptor.vertexLayoutId);
+            mesh.vertexCount = chunk.descriptor.vertexCount;
+            mesh.indexCount = chunk.descriptor.indexCount;
+            mesh.payload = std::move(chunk.payload);
+            // Per WireFormat.h: a mesh's dependencyIds[0] is only a
+            // material reference when the target chunk's own topology is
+            // Material -- the same slot predates this and is also used for
+            // an unrelated LOD/derivation relationship elsewhere, so the
+            // target's topology (not the slot position) determines meaning.
+            if (chunk.descriptor.dependencyCount >= 1) {
+                uint32_t targetId = chunk.descriptor.dependencyIds[0];
+                for (const auto& other : validation.chunks) {
+                    if (other.descriptor.chunkId == targetId
+                        && other.descriptor.topology == model_core::ChunkTopology::Material) {
+                        mesh.materialChunkId = targetId;
+                        break;
+                    }
+                }
+            }
+            result.meshes.push_back(std::move(mesh));
+            break;
+        }
+        case model_core::ChunkTopology::Material: {
+            ImportedMaterial material;
+            material.chunkId = chunk.descriptor.chunkId;
+            if (chunk.payload.size() == sizeof(model_core::MaterialPayload)) {
+                std::memcpy(&material.data, chunk.payload.data(), sizeof(material.data));
+            }
+            if (chunk.descriptor.dependencyCount >= 1) material.baseColorImageChunkId = chunk.descriptor.dependencyIds[0];
+            if (chunk.descriptor.dependencyCount >= 2) material.metallicRoughnessImageChunkId = chunk.descriptor.dependencyIds[1];
+            if (chunk.descriptor.dependencyCount >= 3) material.normalImageChunkId = chunk.descriptor.dependencyIds[2];
+            if (chunk.descriptor.dependencyCount >= 4) material.emissiveImageChunkId = chunk.descriptor.dependencyIds[3];
+            result.materials.push_back(std::move(material));
+            break;
+        }
+        case model_core::ChunkTopology::Image: {
+            ImportedImage image;
+            image.chunkId = chunk.descriptor.chunkId;
+            if (chunk.payload.size() >= sizeof(model_core::ImagePayloadHeader)) {
+                model_core::ImagePayloadHeader header{};
+                std::memcpy(&header, chunk.payload.data(), sizeof(header));
+                image.pixelFormat = static_cast<model_core::PixelFormatId>(header.pixelFormat);
+                image.width = header.width;
+                image.height = header.height;
+                image.mipLevels = header.mipLevels;
+                image.colorSpace = static_cast<model_core::ColorSpaceId>(header.colorSpace);
+                image.pixelBytes.assign(chunk.payload.begin() + sizeof(header), chunk.payload.end());
+            }
+            result.images.push_back(std::move(image));
+            break;
+        }
+        default:
+            break; // unrecognized topology already rejected by the validator; never reached
+        }
     }
     result.ok = true;
     return result;

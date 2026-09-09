@@ -44,6 +44,13 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
+    // Additive textured variant: base-color-texture-or-flat-color only (no
+    // metallic/roughness/normal/emissive maps this slice -- see
+    // MaterialPayload's numeric fields, carried through to ImportedMaterial
+    // but not consumed by either shader yet). Untextured meshes keep using
+    // rootSignature/pipelineState above unchanged.
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> texturedRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPipelineState;
     // One persistently-mapped upload-heap CB reused every frame -- plain
     // per-frame Map/memcpy, no ring, matching this slice's "fully
     // synchronous" scope.
@@ -57,9 +64,22 @@ struct D3D12ViewerPath
         D3D12_VERTEX_BUFFER_VIEW vbv{};
         D3D12_INDEX_BUFFER_VIEW ibv{};
         UINT indexCount = 0;
+        int textureIndex = -1; // index into textures[]; -1 = untextured PSO
     };
     std::vector<GpuMesh> meshes;
     bool hasModel = false;
+
+    struct GpuTexture
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+        UINT srvHeapIndex = 0;
+    };
+    std::vector<GpuTexture> textures;
+    // One small shader-visible CBV_SRV_UAV heap, sized to textures.size()
+    // and (re)created once per UploadModel call -- not per-frame. Absent
+    // (nullptr) when the current model has no textures.
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
+    UINT srvDescriptorSize = 0;
 
     // Creates the device, direct queue, swap chain (sized to `window`'s
     // current client rect), the single command allocator/list this path
@@ -84,10 +104,21 @@ struct D3D12ViewerPath
     // Uploads every TriangleList/PositionNormalUv0_F32 mesh in `importedMeshes`
     // as a DEFAULT-heap vertex+index buffer pair (synchronous staging-buffer
     // copy). Meshes with any other topology/layout (e.g. a PLY point cloud)
-    // are silently skipped -- point-cloud rendering is a later slice. Returns
-    // false (with `error` set) if no renderable mesh resulted. Replaces any
-    // previously uploaded model first.
-    bool UploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes, std::wstring& error);
+    // are silently skipped -- point-cloud rendering is a later slice. `images`
+    // are uploaded as DEFAULT-heap Texture2D resources (one SRV each, in a
+    // fresh shader-visible heap sized to images.size()); a mesh whose
+    // material resolves to a base-color image gets `textureIndex` set and
+    // renders through the textured PSO, sampling that texture and
+    // multiplying it into the existing hemisphere/Lambertian shade -- other
+    // MaterialPayload fields (metallic/roughness/emissive factors, other
+    // texture slots) are carried through `materials` but not consumed by
+    // either shader yet, a deliberate scope narrowing for this slice.
+    // Returns false (with `error` set) if no renderable mesh resulted.
+    // Replaces any previously uploaded model first.
+    bool UploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
+                      const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
+                      const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
+                      std::wstring& error);
 
     // Releases the currently uploaded GPU buffers, if any. Waits for the GPU
     // to be idle first -- callers must not still be mid-frame.
@@ -102,7 +133,17 @@ struct D3D12ViewerPath
 private:
     bool CreateDepthBuffer(UINT width, UINT height, std::wstring& error);
     bool CreatePipeline(std::wstring& error);
+    bool CreateTexturedPipeline(std::wstring& error);
     bool CreateFrameConstantBuffer(std::wstring& error);
     bool UploadOneBuffer(const void* data, uint64_t sizeBytes, D3D12_RESOURCE_STATES finalState,
                           Microsoft::WRL::ComPtr<ID3D12Resource>& outBuffer, std::wstring& error);
+    // Uploads one image's pixel bytes (mip 0 only, per PixelFormats.h's
+    // tightly-packed layout) as a DEFAULT-heap Texture2D and writes its SRV
+    // into srvHeap at heapIndex. Uses ID3D12Device::GetCopyableFootprints to
+    // build a correctly row-pitch-aligned (256-byte) UPLOAD-heap staging
+    // buffer per row -- the wire format's tightly-packed rows do not
+    // satisfy D3D12's upload-heap pitch requirement, so a straight memcpy
+    // of the source bytes would be wrong here.
+    bool UploadOneTexture(const d3d12_import_bridge::ImportedImage& image, UINT heapIndex,
+                          Microsoft::WRL::ComPtr<ID3D12Resource>& outTexture, std::wstring& error);
 };

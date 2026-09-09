@@ -1,10 +1,15 @@
 #pragma once
 
-// Real glTF/GLB parsing, using fastgltf, translated into the existing
-// (unmodified) model_core wire format. Scope: core untextured geometry only
-// -- POSITION/NORMAL/TEXCOORD_0, triangle-list primitives, node-transform
-// baking. No materials, textures, Draco/meshopt/quantization extensions,
-// skins, or animation. See .docs/design/04-rendering-and-streaming.md
+// Real glTF/GLB parsing, using fastgltf, translated into the model_core wire
+// format. Core geometry: POSITION/NORMAL/TEXCOORD_0, triangle-list
+// primitives, node-transform baking -- either from ordinary accessors or,
+// when KHR_draco_mesh_compression is present on a primitive, via a real
+// bounded draco::Decoder call (DracoDecodeAdapter.h). Materials: flat
+// PBR factors always; a KHR_texture_basisu base-color texture is
+// transcoded (TextureTranscodeAdapter.h) into an Image chunk the material
+// depends on -- a plain PNG/JPEG/WebP base-color texture is skipped
+// (material keeps its factors, no image dependency), not a failure. No
+// skins or animation. See .docs/design/04-rendering-and-streaming.md
 // (vertex-layout set) and .docs/PROGRESS.md for the fastgltf-API findings
 // this implementation relies on.
 

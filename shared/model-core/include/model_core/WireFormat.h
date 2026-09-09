@@ -24,6 +24,8 @@ enum class ChunkTopology : uint32_t {
     Unknown = 0,
     TriangleList = 1,
     PointList = 2,
+    Material = 3, // payload is a model_core::MaterialPayload (MaterialPayload.h)
+    Image = 4,    // payload is a model_core::ImagePayloadHeader + pixel bytes (PixelFormats.h)
 };
 
 #pragma pack(push, 1)
@@ -61,7 +63,22 @@ struct ChunkDescriptor {
     uint32_t lodLevel;
     uint32_t chunkId;                // this chunk's own identity, referenced by other chunks' dependencyIds
     uint64_t byteSize;               // declared payload byte size
-    uint32_t dependencyIds[kMaxDependencyIds]; // 0 = unused slot; fixed-width, no variable list
+    // 0 = unused slot; fixed-width, no variable list.
+    // TriangleList/PointList -- a generic "derived from/associated with"
+    // reference to other chunks (e.g. a proxy/LOD point cloud's relationship
+    // to the mesh it was derived from, or a mesh's relationship to its
+    // Material chunk); the validator checks only that each populated id
+    // resolves to an existing chunk, not one fixed target topology -- a
+    // consumer determines a given slot's meaning by inspecting the target
+    // chunk's own topology.
+    // Material -- dependencyIds[0..3] are up to 4 Image chunk ids in fixed
+    // slot order {baseColor, metallicRoughness, normal, emissive}; each must
+    // resolve to a chunk with Image topology specifically (a new invariant,
+    // since nothing wrote Material chunks before this).
+    // Image -- must have dependencyCount==0 (images reference nothing),
+    // which makes the mesh -> material -> image graph acyclic by
+    // construction.
+    uint32_t dependencyIds[kMaxDependencyIds];
     uint32_t dependencyCount;        // how many of dependencyIds[] are populated, <= kMaxDependencyIds
     uint64_t chunkChecksum;          // FNV-1a64 over payload bytes [normalizedRangeOffset, +byteSize)
 };

@@ -76,6 +76,8 @@
     <ClCompile Include="src\SyntheticSceneGenerator.cpp" />
     <ClCompile Include="src\GltfImportWorker.cpp" />
     <ClCompile Include="src\GltfAdapter.cpp" />
+    <ClCompile Include="src\DracoDecodeAdapter.cpp" />
+    <ClCompile Include="src\TextureTranscodeAdapter.cpp" />
     <ClCompile Include="src\StlImportWorker.cpp" />
     <ClCompile Include="src\StlAdapter.cpp" />
     <ClCompile Include="src\PlyImportWorker.cpp" />
@@ -92,6 +94,8 @@
     <ClInclude Include="src\SyntheticSceneGenerator.h" />
     <ClInclude Include="src\GltfImportWorker.h" />
     <ClInclude Include="src\GltfAdapter.h" />
+    <ClInclude Include="src\DracoDecodeAdapter.h" />
+    <ClInclude Include="src\TextureTranscodeAdapter.h" />
     <ClInclude Include="src\StlImportWorker.h" />
     <ClInclude Include="src\StlAdapter.h" />
     <ClInclude Include="src\PlyImportWorker.h" />
@@ -103,6 +107,8 @@
     <ClInclude Include="..\shared\platform\include\platform\CheckedMath.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\PixelFormats.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\MaterialPayload.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ImportError.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ControlProtocol.h" />

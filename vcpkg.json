@@ -5,6 +5,9 @@
   "description": "Preview3D dependency manifest. See .docs/design/10-delivery-plan.md (Gate 0/Gate 2): dependency versions are exact-pinned and restored from this manifest, never fetched unpinned at release time. The pinned baseline lives in vcpkg-configuration.json's default-registry, not here, to avoid the two disagreeing.",
   "dependencies": [
     "catch2",
-    "fastgltf"
+    "fastgltf",
+    "draco",
+    "basisu",
+    "ktx"
   ]
 }

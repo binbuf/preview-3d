@@ -2652,7 +2652,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return 0;
         }
         std::wstring uploadError;
-        if (!app->d3d12Path.UploadModel(complete->result.meshes, uploadError))
+        if (!app->d3d12Path.UploadModel(complete->result.meshes, complete->result.materials,
+                                         complete->result.images, uploadError))
         {
             SetFailure(*app, L"The model was read but could not be displayed.", uploadError, complete->path);
             return 0;

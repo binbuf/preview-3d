@@ -14,6 +14,8 @@
 #include "import_broker/SourceFileAccess.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
+#include "model_core/MaterialPayload.h"
+#include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
 #include "platform/MappedView.h"
@@ -389,6 +391,219 @@ TEST_CASE("maxChunkCount of 0 against a 1-primitive fixture is rejected as Resou
     auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/15, /*maxChunkCount=*/0);
     CHECK_FALSE(run.ready);
     CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::ResourceLimit));
+}
+
+TEST_CASE("draco_triangle.glb (KHR_draco_mesh_compression, position+normal+uv0) decodes to the same "
+          "chunk shape as an equivalent uncompressed fixture",
+          "[gltf-import][draco]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto bytes = ReadFileBytes(TestAssetPath(L"draco_triangle.glb"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/17, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 1);
+
+    const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.descriptor.topology == model_core::ChunkTopology::TriangleList);
+    CHECK(chunk.descriptor.vertexCount == 12); // 4 triangles * 3 corners, generator uses no dedup-friendly sharing
+    CHECK(chunk.descriptor.indexCount == 12);
+    CHECK(chunk.descriptor.vertexLayoutId
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+
+    REQUIRE(chunk.payload.size() >= 12 * sizeof(model_core::VertexPositionNormalUv0F32));
+    model_core::VertexPositionNormalUv0F32 vertices[12]{};
+    std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
+    // Draco quantization (26 bits position / 16 bits normal+uv, see
+    // gen-test-glbs-draco.cpp) is lossy but should stay well within a loose
+    // tolerance for these small, hand-picked coordinates.
+    for (const auto& v : vertices) {
+        CHECK(v.pz == Catch::Approx(0.0f).margin(1e-3));
+        CHECK(v.nx == Catch::Approx(0.0f).margin(1e-2));
+        CHECK(v.ny == Catch::Approx(0.0f).margin(1e-2));
+        CHECK(v.nz == Catch::Approx(1.0f).margin(1e-2));
+    }
+}
+
+TEST_CASE("draco_position_only.glb (no NORMAL/TEXCOORD_0) falls back to generated flat normals and "
+          "zeroed uv, same as the uncompressed no-normal path",
+          "[gltf-import][draco]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto bytes = ReadFileBytes(TestAssetPath(L"draco_position_only.glb"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/18, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 1);
+
+    const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.descriptor.vertexCount == 6); // 2 triangles * 3 corners
+    CHECK(chunk.descriptor.indexCount == 6);
+
+    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
+    for (const auto& v : vertices) {
+        CHECK(v.nz == Catch::Approx(1.0f).margin(1e-3)); // generator's triangles all face +Z
+        CHECK(v.u == 0.0f);
+        CHECK(v.v == 0.0f);
+    }
+}
+
+TEST_CASE("A material with flat PBR factors and no texture emits one Material chunk the mesh "
+          "depends on, with dependencyCount == 0 on the material itself",
+          "[gltf-import][material]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // No Draco/KTX2 needed -- a plain glTF material JSON exercises Stage 4's
+    // factor-only path (Stage 5's basisu transcode is separately covered).
+    const char* json =
+        "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],"
+        "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.25,0.5,0.75,1.0],"
+        "\"metallicFactor\":0.1,\"roughnessFactor\":0.9},\"emissiveFactor\":[0.0,0.2,0.0],"
+        "\"alphaMode\":\"MASK\",\"alphaCutoff\":0.3,\"doubleSided\":true}],"
+        "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+        "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],\"buffers\":[{\"byteLength\":48}]}";
+    std::vector<std::byte> bin;
+    auto appendF32 = [&bin](float f) {
+        uint32_t bits;
+        std::memcpy(&bits, &f, sizeof(bits));
+        for (int i = 0; i < 4; ++i) bin.push_back(static_cast<std::byte>((bits >> (i * 8)) & 0xFF));
+    };
+    auto appendU32 = [&bin](uint32_t v) {
+        for (int i = 0; i < 4; ++i) bin.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));
+    };
+    const float tri[3][3] = { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 } };
+    for (const auto& p : tri) {
+        appendF32(p[0]);
+        appendF32(p[1]);
+        appendF32(p[2]);
+    }
+    appendU32(0);
+    appendU32(1);
+    appendU32(2);
+
+    std::string jsonStr(json);
+    while (jsonStr.size() % 4 != 0) jsonStr.push_back(' ');
+    while (bin.size() % 4 != 0) bin.push_back(std::byte{ 0 });
+
+    std::vector<std::byte> glb;
+    auto push32 = [&glb](uint32_t v) {
+        for (int i = 0; i < 4; ++i) glb.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));
+    };
+    push32(0x46546C67);
+    push32(2);
+    push32(static_cast<uint32_t>(12 + 8 + jsonStr.size() + 8 + bin.size()));
+    push32(static_cast<uint32_t>(jsonStr.size()));
+    push32(0x4E4F534A);
+    for (char c : jsonStr) glb.push_back(static_cast<std::byte>(c));
+    push32(static_cast<uint32_t>(bin.size()));
+    push32(0x004E4942);
+    glb.insert(glb.end(), bin.begin(), bin.end());
+
+    auto run = RunGltfImport(fixture.sid, glb, /*generationId=*/19, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 2);
+
+    const import_broker::ValidatedChunk* meshChunk = nullptr;
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& c : run.validation.chunks) {
+        if (c.descriptor.topology == model_core::ChunkTopology::TriangleList) meshChunk = &c;
+        if (c.descriptor.topology == model_core::ChunkTopology::Material) materialChunk = &c;
+    }
+    REQUIRE(meshChunk != nullptr);
+    REQUIRE(materialChunk != nullptr);
+
+    CHECK(meshChunk->descriptor.dependencyCount == 1);
+    CHECK(meshChunk->descriptor.dependencyIds[0] == materialChunk->descriptor.chunkId);
+    CHECK(materialChunk->descriptor.dependencyCount == 0);
+
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    CHECK(payload.baseColorFactor[0] == Catch::Approx(0.25f));
+    CHECK(payload.baseColorFactor[1] == Catch::Approx(0.5f));
+    CHECK(payload.baseColorFactor[2] == Catch::Approx(0.75f));
+    CHECK(payload.metallicFactor == Catch::Approx(0.1f));
+    CHECK(payload.roughnessFactor == Catch::Approx(0.9f));
+    CHECK(payload.emissiveFactor[1] == Catch::Approx(0.2f));
+    CHECK(payload.alphaMode == static_cast<uint32_t>(model_core::AlphaModeId::Mask));
+    CHECK(payload.alphaCutoff == Catch::Approx(0.3f));
+    CHECK((payload.flags & model_core::kMaterialFlagDoubleSided) != 0);
+}
+
+TEST_CASE("basisu_textured_triangle.glb (KHR_texture_basisu base color) produces a full "
+          "mesh -> material -> image chain",
+          "[gltf-import][texture]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto bytes = ReadFileBytes(TestAssetPath(L"basisu_textured_triangle.glb"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/20, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 3);
+
+    const import_broker::ValidatedChunk* meshChunk = nullptr;
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    const import_broker::ValidatedChunk* imageChunk = nullptr;
+    for (const auto& c : run.validation.chunks) {
+        if (c.descriptor.topology == model_core::ChunkTopology::TriangleList) meshChunk = &c;
+        if (c.descriptor.topology == model_core::ChunkTopology::Material) materialChunk = &c;
+        if (c.descriptor.topology == model_core::ChunkTopology::Image) imageChunk = &c;
+    }
+    REQUIRE(meshChunk != nullptr);
+    REQUIRE(materialChunk != nullptr);
+    REQUIRE(imageChunk != nullptr);
+
+    CHECK(meshChunk->descriptor.dependencyIds[0] == materialChunk->descriptor.chunkId);
+    REQUIRE(materialChunk->descriptor.dependencyCount == 1);
+    CHECK(materialChunk->descriptor.dependencyIds[0] == imageChunk->descriptor.chunkId);
+    CHECK(imageChunk->descriptor.dependencyCount == 0);
+
+    REQUIRE(imageChunk->payload.size() >= sizeof(model_core::ImagePayloadHeader));
+    model_core::ImagePayloadHeader header{};
+    std::memcpy(&header, imageChunk->payload.data(), sizeof(header));
+    CHECK(header.width == 8);
+    CHECK(header.height == 8);
+    CHECK(header.mipLevels == 1);
+    auto pixelFormat = static_cast<model_core::PixelFormatId>(header.pixelFormat);
+    CHECK((pixelFormat == model_core::PixelFormatId::BC7_UNORM
+           || pixelFormat == model_core::PixelFormatId::RGBA8_UNORM));
+}
+
+TEST_CASE("basisu_corrupt_ktx2.glb (valid KHR_texture_basisu reference, garbage KTX2 bytes) soft-fails "
+          "to a material with no image dependency, not a hard import failure",
+          "[gltf-import][texture]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto bytes = ReadFileBytes(TestAssetPath(L"basisu_corrupt_ktx2.glb"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/21, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 2); // mesh + material only, no image chunk
+
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& c : run.validation.chunks) {
+        if (c.descriptor.topology == model_core::ChunkTopology::Material) materialChunk = &c;
+    }
+    REQUIRE(materialChunk != nullptr);
+    CHECK(materialChunk->descriptor.dependencyCount == 0);
 }
 
 TEST_CASE("A real on-disk GLB file reaches the sandboxed worker via a duplicated handle and parses "
