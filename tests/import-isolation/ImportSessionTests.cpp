@@ -15,6 +15,7 @@
 
 #include "import_broker/ControlChannelWait.h"
 #include "import_broker/ImportSession.h"
+#include "import_broker/SharedSection.h"
 #include "model_core/ControlProtocol.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
@@ -48,8 +49,11 @@ import_broker::ImportSessionRequest MakeRequest(const wchar_t* asset, import_bro
     request.sourcePath = TestAssetPath(asset);
     request.format = format;
     request.generationId = generationId;
-    request.sectionByteCapacity = 1ull * 1024 * 1024;
-    request.maxChunkCount = 64;
+    // The product's own constants, not a convenient small pair: this file
+    // exists to exercise the shipping configuration, and the section window
+    // is part of it.
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = import_broker::kImportMaxChunkCount;
     request.maxSidecarRequestsPerGeneration = 64;
     request.maxSidecarFileBytes = 256ull * 1024 * 1024;
     return request;
@@ -178,6 +182,90 @@ TEST_CASE("The product's default commit ceiling is a real limit, not left unboun
     CHECK(import_broker::kImportWorkerCommitLimitBytes > 0);
     CHECK(import_broker::ImportSessionRequest{}.commitLimitBytes
           == import_broker::kImportWorkerCommitLimitBytes);
+}
+
+TEST_CASE("The output section window can hold a maximum-size detail chunk", "[import-session]")
+{
+    // .docs/design/03-file-formats-and-ingestion.md:140 caps one normalized
+    // detail chunk at 16 MiB of GPU payload. A window smaller than one such
+    // chunk plus its header and descriptor can never make forward progress
+    // at all, which is the property that actually matters -- not the
+    // specific multiple.
+    constexpr uint64_t kOneChunkFloor = import_broker::kMaxDetailChunkPayloadBytes
+        + model_core::kSectionHeaderSize + model_core::kChunkDescriptorSize;
+    STATIC_REQUIRE(import_broker::kImportSectionBytes >= kOneChunkFloor);
+
+    // And it must stay under the budgets on both sides of the boundary, or
+    // the transfer window becomes the binding constraint instead of the
+    // parser: 1 GiB Tier A parser/normalizer live scratch (03-...:171) and
+    // the worker's own Job Object commit ceiling.
+    STATIC_REQUIRE(import_broker::kImportSectionBytes < 1024ull * 1024 * 1024);
+    STATIC_REQUIRE(import_broker::kImportSectionBytes
+                   < import_broker::kImportWorkerCommitLimitBytes);
+
+    // The descriptor table has to be a rounding error against the window, so
+    // the byte budget binds before the count does. That was not true at the
+    // previous 64-chunk cap.
+    constexpr uint64_t kDescriptorTableBytes
+        = static_cast<uint64_t>(import_broker::kImportMaxChunkCount) * model_core::kChunkDescriptorSize;
+    STATIC_REQUIRE(kDescriptorTableBytes * 100 < import_broker::kImportSectionBytes);
+
+    // The regression this replaces: 1 MiB could not hold A-small's ~4.4 MiB
+    // of normalized geometry, so every perf fixture would have measured the
+    // section rather than the parser.
+    STATIC_REQUIRE(import_broker::kImportSectionBytes > import_broker::kSyntheticSectionBytes);
+}
+
+TEST_CASE("A section window too small for the model fails cleanly and leaves the path usable",
+          "[import-session]")
+{
+    // Differential, in the same shape as the commit-limit pair above: the
+    // same file imports at the product's real window and is rejected under a
+    // deliberately tiny one. Without the negative half this would pass even
+    // if sectionByteCapacity were ignored.
+    auto generous = MakeRequest(L"tri_tight.glb", import_broker::ImportFormat::Gltf, /*generationId=*/20);
+    REQUIRE(import_broker::RunImportSession(generous).ok);
+
+    auto starved = MakeRequest(L"tri_tight.glb", import_broker::ImportFormat::Gltf, /*generationId=*/21);
+    // Large enough to map and to hold a header plus one descriptor, so the
+    // worker gets far enough to write and reject -- a window too small to
+    // map at all would fail for an uninteresting reason.
+    starved.sectionByteCapacity = model_core::kSectionHeaderSize + model_core::kChunkDescriptorSize + 8;
+
+    auto result = import_broker::RunImportSession(starved);
+
+    CHECK_FALSE(result.ok);
+    CHECK(result.chunks.empty());
+    // The adapters' own `sectionLength > destination.size()` guard is what
+    // must fire, so this is the worker's typed error, not a host plumbing
+    // fault and not a crash.
+    CHECK(result.stage == import_broker::ImportStage::WorkerReportedError);
+    CHECK(result.errorCode == model_core::ImportErrorCode::ResourceLimit);
+
+    // "The process remains usable" (03-...:176): a rejected oversize import
+    // must not wedge the path for the next one.
+    auto after = MakeRequest(L"tri_tight.glb", import_broker::ImportFormat::Gltf, /*generationId=*/22);
+    CHECK(import_broker::RunImportSession(after).ok);
+}
+
+TEST_CASE("The chunk-count cap is still enforced after the 64 -> 1024 raise", "[import-session]")
+{
+    // Re-prove the knob rather than assuming the raise left the check intact.
+    // This is the *worker-side* budget (GltfAdapter.cpp:617, StlAdapter.cpp
+    // :340, PlyAdapter.cpp:437), which fires first because an honest adapter
+    // stops before it writes. The host-side validator's independent cap
+    // (SharedSectionValidator.cpp:102), which is what actually matters
+    // against a lying worker, stays proven by HostileWorkerTests.cpp -- a
+    // cooperating adapter can never exercise it.
+    auto request = MakeRequest(L"tri_tight.glb", import_broker::ImportFormat::Gltf, /*generationId=*/23);
+    request.maxChunkCount = 0; // no chunk may be emitted at all
+
+    auto result = import_broker::RunImportSession(request);
+
+    CHECK_FALSE(result.ok);
+    CHECK(result.chunks.empty());
+    CHECK(result.stage == import_broker::ImportStage::WorkerReportedError);
+    CHECK(result.errorCode == model_core::ImportErrorCode::ResourceLimit);
 }
 
 TEST_CASE("A bounded control-channel read times out instead of blocking forever", "[import-session]")

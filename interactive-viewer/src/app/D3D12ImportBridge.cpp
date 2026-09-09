@@ -159,7 +159,6 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
     }
 }
 
-constexpr uint32_t kMaxChunkCount = 64;
 constexpr uint32_t kMaxSidecarRequestsPerGeneration = 64;
 constexpr uint64_t kMaxSidecarFileBytes = 256ull * 1024ull * 1024ull;
 
@@ -190,8 +189,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
     sessionRequest.generationId = generationId;
-    sessionRequest.sectionByteCapacity = import_broker::kSyntheticSectionBytes;
-    sessionRequest.maxChunkCount = kMaxChunkCount;
+    sessionRequest.sectionByteCapacity = import_broker::kImportSectionBytes;
+    sessionRequest.maxChunkCount = import_broker::kImportMaxChunkCount;
     sessionRequest.maxSidecarRequestsPerGeneration = kMaxSidecarRequestsPerGeneration;
     sessionRequest.maxSidecarFileBytes = kMaxSidecarFileBytes;
 
