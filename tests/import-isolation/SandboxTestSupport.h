@@ -11,8 +11,8 @@
 #include <windows.h>
 
 #include <chrono>
-#include <cstdlib>
 #include <string>
+#include <vector>
 
 #ifndef PREVIEW3D_IMPORT_WORKER_EXE
 #error "PREVIEW3D_IMPORT_WORKER_EXE must be defined by Tests.ImportIsolation.vcxproj"
@@ -34,22 +34,11 @@ inline const wchar_t* HostileWorkerExePath()
     return PREVIEW3D_HOSTILE_WORKER_EXE;
 }
 
-// Grants ALL APPLICATION PACKAGES / ALL RESTRICTED APPLICATION PACKAGES
-// read+execute on the worker's build output directory. AppContainer
-// processes are checked against these SIDs to load even their own .exe, and
-// a normal dev/CI build output folder has no such ACE by default -- without
-// this, every launch in this file fails at the loader level with
-// ERROR_ACCESS_DENIED before any of our own logic runs. Idempotent, so it
-// is safe to call once per test run.
-inline void GrantAppContainerAccessToWorkerDirectory()
+inline std::wstring WorkerDirectory()
 {
     std::wstring exePath(WorkerExePath());
     auto lastSlash = exePath.find_last_of(L"\\/");
-    std::wstring directory = (lastSlash == std::wstring::npos) ? L"." : exePath.substr(0, lastSlash);
-
-    std::wstring command = L"icacls \"" + directory
-        + L"\" /grant *S-1-15-2-1:(OI)(CI)RX /grant *S-1-15-2-2:(OI)(CI)RX /Q";
-    _wsystem(command.c_str());
+    return (lastSlash == std::wstring::npos) ? std::wstring(L".") : exePath.substr(0, lastSlash);
 }
 
 inline std::wstring MakeUniqueContainerName()
@@ -61,9 +50,25 @@ inline std::wstring MakeUniqueContainerName()
 
 // Owns a throwaway AppContainer profile for the lifetime of one test case,
 // so repeated runs don't accumulate entries under %LOCALAPPDATA%\Packages.
+//
+// An AppContainer process is access-checked even to load its own .exe, so
+// the profile's SID needs read+execute on the worker's build output
+// directory or every launch here fails at loader level with
+// ERROR_ACCESS_DENIED before any product logic runs. The grant names this
+// fixture's own throwaway SID -- not the machine-wide "ALL APPLICATION
+// PACKAGES" groups an earlier icacls shell-out used -- so the ACE is
+// revoked alongside the profile rather than widening the directory to every
+// AppContainer on the machine for good.
 struct SandboxFixture {
     std::wstring containerName;
     platform::AppContainerSid sid;
+    // Our own copy of the SID bytes. `sid` itself may be moved out by a test
+    // that hands ownership to a launcher (WorkerPoolTests.cpp passes
+    // std::move(fixture.sid) to WorkerPool::Initialize), which would leave
+    // sid.get() null at revoke time and strand the ACE on the shared build
+    // output directory -- measured as exactly 4 leaked SIDs across a full
+    // suite run before this copy existed.
+    std::vector<BYTE> sidBytes;
 
     SandboxFixture()
         : containerName(MakeUniqueContainerName())
@@ -71,11 +76,18 @@ struct SandboxFixture {
               containerName, L"Preview3D Sandbox Spike",
               L"Test-only AppContainer profile for Gate 2 workstream A"))
     {
-        GrantAppContainerAccessToWorkerDirectory();
+        if (sid) {
+            sidBytes.resize(GetLengthSid(sid.get()));
+            CopySid(static_cast<DWORD>(sidBytes.size()), sidBytes.data(), sid.get());
+        }
+        platform::GrantDirectoryReadExecute(WorkerDirectory(), sid.get());
     }
 
     ~SandboxFixture()
     {
+        if (!sidBytes.empty()) {
+            platform::RevokeDirectoryAccess(WorkerDirectory(), sidBytes.data());
+        }
         platform::AppContainerSid::Delete(containerName);
     }
 };

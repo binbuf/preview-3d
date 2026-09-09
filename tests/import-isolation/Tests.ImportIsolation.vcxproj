@@ -88,6 +88,9 @@
     <ClCompile Include="..\..\shared\platform\src\AppContainerSid.cpp" />
     <ClCompile Include="..\..\shared\platform\src\ProcThreadAttributeList.cpp" />
     <ClCompile Include="..\..\shared\platform\src\MappedView.cpp" />
+    <ClCompile Include="ImportSessionTests.cpp" />
+    <ClCompile Include="..\..\shared\import-broker\src\ControlChannelWait.cpp" />
+    <ClCompile Include="..\..\shared\import-broker\src\ImportSession.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\SandboxLauncher.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\SharedSection.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\SharedSectionValidator.cpp" />
@@ -106,6 +109,8 @@
     <ClInclude Include="..\..\shared\platform\include\platform\MappedView.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\CheckedMath.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\Generation.h" />
+    <ClInclude Include="..\..\shared\import-broker\include\import_broker\ControlChannelWait.h" />
+    <ClInclude Include="..\..\shared\import-broker\include\import_broker\ImportSession.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\SandboxLauncher.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\SharedSection.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\SharedSectionValidator.h" />

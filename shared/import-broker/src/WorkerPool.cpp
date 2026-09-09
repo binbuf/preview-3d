@@ -1,5 +1,8 @@
 #include "import_broker/WorkerPool.h"
 
+#include "import_broker/ControlChannelWait.h"
+
+#include <chrono>
 #include <utility>
 
 namespace import_broker {
@@ -137,31 +140,21 @@ bool WorkerPool::SendRequest(size_t index, model_core::ControlOpcode opcode, con
 WaitReplyOutcome WorkerPool::WaitForReply(size_t index, DWORD timeoutMs,
                                            model_core::ReceivedControlMessage& outMessage)
 {
-    HANDLE pipe = workers_[index].controlOutRead.get();
-    constexpr DWORD kPollIntervalMs = 1;
-    DWORD elapsed = 0;
-
-    for (;;) {
-        DWORD bytesAvailable = 0;
-        if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytesAvailable, nullptr)) {
-            return WaitReplyOutcome::Eof; // broken pipe -- the worker process is gone
-        }
-        if (bytesAvailable > 0) {
-            break;
-        }
-        if (elapsed >= timeoutMs) {
-            return WaitReplyOutcome::TimedOut;
-        }
-        Sleep(kPollIntervalMs);
-        elapsed += kPollIntervalMs;
-    }
-
-    auto received = model_core::ReadControlMessage(pipe);
-    if (!received) {
+    // The poll loop this used to open-code now lives in ControlChannelWait.h,
+    // shared with the product's one-shot import path. Behaviour is the same
+    // except that the deadline is now honest (steady_clock, not accumulated
+    // Sleep intervals) and covers the whole message rather than just its
+    // first byte.
+    switch (ReadControlMessageBounded(workers_[index].controlOutRead.get(),
+                                       std::chrono::milliseconds(timeoutMs), outMessage)) {
+    case ControlWaitOutcome::Ready:
+        return WaitReplyOutcome::Ready;
+    case ControlWaitOutcome::TimedOut:
+        return WaitReplyOutcome::TimedOut;
+    case ControlWaitOutcome::Eof:
+    default:
         return WaitReplyOutcome::Eof;
     }
-    outMessage = std::move(*received);
-    return WaitReplyOutcome::Ready;
 }
 
 bool WorkerPool::TerminateAndReplace(size_t index, std::wstring& error)

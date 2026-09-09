@@ -1259,11 +1259,42 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
     {
         // No cancellation token for this path yet -- RunImport runs to
         // completion (or the sandboxed worker's own bounded timeouts), see
-        // the plan's "Explicitly deferred" list.
+        // the plan's "Explicitly deferred" list. The try/catch is not
+        // optional defensiveness: platform::AppContainerSid::CreateOrOpen
+        // throws on failure, and an exception escaping a std::thread entry
+        // function calls std::terminate -- so without this, a profile-
+        // creation failure killed the whole app instead of showing an error.
+        // Supersede any still-running import before starting this one, then
+        // hand the fresh token to the worker thread. WM_DESTROY trips
+        // whichever token is current, so closing the window abandons an
+        // in-flight import instead of leaving it (and its sandboxed worker)
+        // running until process exit.
+        if (app.cancellation) app.cancellation->store(true, std::memory_order_relaxed);
+        app.cancellation = std::make_shared<std::atomic_bool>(false);
+        const auto cancellation = app.cancellation;
+
         d3d12_import_bridge::SourceFormat format = *d3d12Format;
-        std::thread([window, generation, path, format]()
+        std::thread([window, generation, path, format, alive, cancellation]()
         {
-            d3d12_import_bridge::ImportResult result = d3d12_import_bridge::RunImport(format, path, generation);
+            d3d12_import_bridge::ImportResult result;
+            try
+            {
+                result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
+                {
+                    return cancellation->load(std::memory_order_relaxed);
+                });
+            }
+            catch (const std::bad_alloc&)
+            {
+                result.errorSummary = L"There is not enough memory to open this model.";
+                result.errorDetails = L"Importing this model exceeded the available memory budget.";
+            }
+            catch (...)
+            {
+                result.errorSummary = L"This model could not be previewed.";
+                result.errorDetails = L"The importer stopped unexpectedly while reading the model.";
+            }
+            if (!alive->load(std::memory_order_relaxed)) return;
             auto* message = new (std::nothrow) D3D12CompleteMessage{ generation, path, std::move(result) };
             if (message && !PostMessageW(window, kD3D12ImportCompleteMessage, 0, reinterpret_cast<LPARAM>(message)))
                 delete message;
@@ -1774,7 +1805,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         else if (app->useD3D12)
         {
-            d3d12_import_bridge::EnsureAppContainerDirectoryAccessGranted();
+            d3d12_import_bridge::EnsureImportSandboxPrepared();
         }
         UpdateButtonAvailability(*app);
         if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath);

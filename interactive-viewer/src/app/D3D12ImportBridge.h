@@ -1,17 +1,20 @@
 #pragma once
 
-// Host-side (trusted-process) bridge from a real on-disk file to the
+// App-facing (trusted-process) bridge from a real on-disk file to the
 // sandboxed Preview3DImportWorker.exe pipeline, for the opt-in --d3d12 path
 // only -- the default D3D11 path keeps using Model.cpp's in-process parser
-// unchanged. RunImport() reproduces, generalized over format, the exact
-// real-file sequence tests/import-isolation/{Gltf,Stl,Ply}ImportTests.cpp
-// already prove end-to-end: open+canonicalize, duplicate an inheritable
-// handle, create an output shared section, launch one fresh one-shot
-// sandboxed worker, send the file-based ControlOpcode, and validate+copy the
-// resulting chunks. No WorkerPool (no way yet to duplicate a *new* source
-// file handle into an already-running pooled worker) and no persistent
-// AppContainer profile -- both explicitly deferred to a later, streaming-
-// focused slice.
+// unchanged.
+//
+// The launch/converse/validate sequence itself now lives in
+// import_broker::RunImportSession (shared/import-broker/ImportSession.h), so
+// it is reachable from tests/import-isolation/; this file keeps only what is
+// genuinely app-layer: extension -> format classification, mapping a typed
+// session failure to user-facing text, and unpacking validated chunks into
+// the renderer-facing structs below.
+//
+// Still deferred to a later, streaming-focused slice: WorkerPool-based reuse
+// (there is no way yet to duplicate a *new* source file handle into an
+// already-running pooled worker) and a persistent AppContainer profile.
 
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
@@ -19,6 +22,7 @@
 #include "model_core/WireFormat.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -55,10 +59,14 @@ struct ImportedMesh {
 struct ImportedMaterial {
     uint32_t chunkId = 0;
     model_core::MaterialPayload data{};
-    uint32_t baseColorImageChunkId = 0;        // 0 = none
-    uint32_t metallicRoughnessImageChunkId = 0; // always 0 this slice, carried for forward-compat
-    uint32_t normalImageChunkId = 0;            // always 0 this slice
-    uint32_t emissiveImageChunkId = 0;          // always 0 this slice
+    // All four slots are populated: GltfAdapter.cpp resolves
+    // metallicRoughness/normal/emissive alongside base color. 0 = none.
+    // (The renderer still samples only base color -- that gap is in the
+    // shaders, not here.)
+    uint32_t baseColorImageChunkId = 0;
+    uint32_t metallicRoughnessImageChunkId = 0;
+    uint32_t normalImageChunkId = 0;
+    uint32_t emissiveImageChunkId = 0;
 };
 
 struct ImportedImage {
@@ -82,15 +90,19 @@ struct ImportResult {
 
 // Synchronous -- call from a detached background thread, mirroring
 // BeginOpen's existing std::thread(...).detach() pattern for LoadGlb.
-ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId);
+//
+// isCancelled is polled while waiting on the worker; returning true abandons
+// the import (the worker is killed by its Job Object) and yields a result
+// whose text the caller is expected to drop rather than display.
+ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
+                        std::function<bool()> isCancelled = {});
 
-// Grants the AppContainer capability SIDs read+execute on
-// Preview3DImportWorker.exe's directory -- without this, the sandboxed
-// worker fails to even load its own .exe. Idempotent (runs at most once per
-// process); safe to call before every import. This is a dev-loop
-// placeholder (a runtime icacls shell-out): a real installed/MSIX build
-// needs this provisioned at install time instead, not at first --d3d12
-// launch -- revisit before shipping.
-void EnsureAppContainerDirectoryAccessGranted();
+// Creates the import worker's AppContainer profile and grants it
+// read+execute on the worker's own directory -- without this the sandboxed
+// worker cannot load its own .exe. Idempotent and cheap after the first
+// call. RunImport does this itself; calling it at startup only keeps the
+// one-time cost off the first open. A real installed build provisions the
+// profile and its ACL at install time instead (Gate 7).
+void EnsureImportSandboxPrepared();
 
 } // namespace d3d12_import_bridge

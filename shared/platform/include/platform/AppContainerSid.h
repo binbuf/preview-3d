@@ -45,4 +45,22 @@ private:
     PSID sid_ = nullptr;
 };
 
+// Adds (or removes) a read+execute ACE for `sid` on `directory`, with object
+// and container inheritance so files inside it are covered too. Additive:
+// every other ACE on the directory is preserved.
+//
+// This is a launch prerequisite, not a refinement: a zero-capability
+// AppContainer process cannot load its own .exe unless its SID has
+// read+execute on the directory holding it, so without the grant
+// CreateProcessW fails at loader level with ERROR_ACCESS_DENIED before any
+// product code runs.
+//
+// Grants exactly the one SID passed in -- never the machine-wide
+// S-1-15-2-1 / S-1-15-2-2 ("ALL APPLICATION PACKAGES") groups, which would
+// widen access to every AppContainer on the machine. An installed build
+// provisions this per profile at install time instead; see
+// .docs/design/08-installation-and-registration.md.
+bool GrantDirectoryReadExecute(const std::wstring& directory, PSID sid);
+bool RevokeDirectoryAccess(const std::wstring& directory, PSID sid);
+
 } // namespace platform

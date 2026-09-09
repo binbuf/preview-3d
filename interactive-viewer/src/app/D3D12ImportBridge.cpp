@@ -1,24 +1,13 @@
 #include "D3D12ImportBridge.h"
 
-#include "import_broker/SandboxLauncher.h"
+#include "import_broker/ImportSession.h"
 #include "import_broker/SharedSection.h"
-#include "import_broker/SharedSectionValidator.h"
-#include "import_broker/SidecarRequestServicer.h"
-#include "import_broker/SourceFileAccess.h"
-#include "model_core/ControlChannelIo.h"
-#include "model_core/ControlProtocol.h"
-#include "platform/AppContainerSid.h"
-#include "platform/MappedView.h"
-#include "platform/Win32Handle.h"
+#include "model_core/PixelFormats.h"
 
 #include <windows.h>
 
-#include <chrono>
-#include <cstdlib>
 #include <cstring>
 #include <cwctype>
-#include <mutex>
-#include <variant>
 
 namespace d3d12_import_bridge {
 
@@ -52,12 +41,6 @@ std::wstring ResolveWorkerExePath()
     return directory + L"\\Preview3DImportWorker.exe";
 }
 
-std::wstring MakeUniqueContainerName()
-{
-    auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-    return L"Preview3DD3D12Import-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(ticks);
-}
-
 void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary, std::wstring& details)
 {
     switch (code) {
@@ -87,34 +70,98 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     }
 }
 
-constexpr uint32_t kMaxChunkCount = 64;
-
-// Bounds the worker's own RequestSidecarFile loop -- "never trust worker
-// self-restraint," extended to this new surface. Exceeding it kills the
-// worker (via the same Job Object kill-on-close every other sandboxed
-// worker in this codebase already relies on) rather than servicing forever.
-constexpr uint32_t kMaxSidecarRequestsPerGeneration = 64;
-constexpr uint64_t kMaxSidecarFileBytes = 256ull * 1024ull * 1024ull;
-
-// Every real-file request struct (ParseGltfFileRequest/ParseStlFileRequest/
-// ParsePlyFileRequest) is field-for-field identical -- generationId,
-// sourceFileHandleValue, sectionHandleValue, sectionByteCapacity,
-// maxChunkCount, reserved0 -- but each is its own named type per this
-// codebase's "small deliberate duplication over cross-format coupling"
-// precedent, so this helper is a template rather than one shared struct.
-template <typename Request>
-Request MakeFileRequest(uint64_t generationId, HANDLE sourceFileHandle, HANDLE sectionHandle)
+// Turns a typed session failure into the user-facing pair. Every host-side
+// plumbing stage keeps the distinct wording it had when this sequence lived
+// inline here; only the two stages that carry a worker/validator error code
+// defer to DescribeImportError.
+void DescribeSessionFailure(const import_broker::ImportSessionResult& session, std::wstring& summary,
+                             std::wstring& details)
 {
-    Request request{};
-    request.generationId = generationId;
-    request.sourceFileHandleValue = reinterpret_cast<uint64_t>(sourceFileHandle);
-    request.sectionHandleValue = reinterpret_cast<uint64_t>(sectionHandle);
-    request.sectionByteCapacity = import_broker::kSyntheticSectionBytes;
-    request.maxChunkCount = kMaxChunkCount;
-    return request;
+    using import_broker::ImportStage;
+    switch (session.stage) {
+    case ImportStage::OpenSource:
+        summary = L"This file could not be opened.";
+        details = session.openError;
+        return;
+    case ImportStage::DuplicateSourceHandle:
+        summary = L"This file could not be prepared for preview.";
+        details = L"The file handle could not be shared with the sandboxed importer.";
+        return;
+    case ImportStage::CreateOutputSection:
+        summary = L"This model could not be previewed.";
+        details = L"A shared memory section for the importer's output could not be created.";
+        return;
+    case ImportStage::CreateSandboxProfile:
+        summary = L"This model could not be previewed.";
+        details = L"The sandbox container for the importer could not be created.";
+        return;
+    case ImportStage::CreateControlChannel:
+        summary = L"This model could not be previewed.";
+        details = L"The control channel to the sandboxed importer could not be created.";
+        return;
+    case ImportStage::LaunchWorker:
+        summary = L"This model could not be previewed.";
+        details = L"The sandboxed importer process could not be started.";
+        return;
+    case ImportStage::ResumeWorker:
+        summary = L"This model could not be previewed.";
+        details = L"The sandboxed importer process could not be resumed.";
+        return;
+    case ImportStage::SendRequest:
+        summary = L"This model could not be previewed.";
+        details = L"The import request could not be sent to the sandboxed importer.";
+        return;
+    case ImportStage::SidecarRequestLimit:
+        summary = L"This model could not be previewed.";
+        details = L"The sandboxed importer made too many file requests.";
+        return;
+    case ImportStage::AwaitReply:
+        summary = L"This model could not be previewed.";
+        details = L"The sandboxed importer did not respond.";
+        return;
+    case ImportStage::ReplyTimedOut:
+        summary = L"This model could not be previewed.";
+        details = L"The sandboxed importer stopped responding and was shut down.";
+        return;
+    case ImportStage::Cancelled:
+        // Superseded or closing: the caller drops the result rather than
+        // showing it, so this text exists only so no path returns empty.
+        summary = L"This preview was cancelled.";
+        details = L"A newer file was opened, or the window was closed.";
+        return;
+    case ImportStage::UnexpectedReply:
+        summary = L"This model could not be previewed.";
+        details = L"The sandboxed importer returned an unexpected response.";
+        return;
+    case ImportStage::MapOutputSection:
+        summary = L"This model could not be previewed.";
+        details = L"The importer's output could not be read.";
+        return;
+    case ImportStage::WorkerReportedError:
+    case ImportStage::ValidateSection:
+    case ImportStage::Completed:
+    default:
+        DescribeImportError(session.errorCode, summary, details);
+        return;
+    }
 }
 
-std::once_flag g_directoryAccessGrantOnce;
+import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
+{
+    switch (format) {
+    case SourceFormat::Stl:
+        return import_broker::ImportFormat::Stl;
+    case SourceFormat::Ply:
+        return import_broker::ImportFormat::Ply;
+    case SourceFormat::Glb:
+    default:
+        return import_broker::ImportFormat::Gltf;
+    }
+}
+
+constexpr uint32_t kMaxChunkCount = 64;
+constexpr uint32_t kMaxSidecarRequestsPerGeneration = 64;
+constexpr uint64_t kMaxSidecarFileBytes = 256ull * 1024ull * 1024ull;
 
 } // namespace
 
@@ -127,212 +174,34 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     return std::nullopt;
 }
 
-void EnsureAppContainerDirectoryAccessGranted()
+void EnsureImportSandboxPrepared()
 {
-    std::call_once(g_directoryAccessGrantOnce, [] {
-        std::wstring workerExePath = ResolveWorkerExePath();
-        auto lastSlash = workerExePath.find_last_of(L"\\/");
-        std::wstring directory = (lastSlash == std::wstring::npos) ? L"." : workerExePath.substr(0, lastSlash);
-
-        std::wstring command = L"icacls \"" + directory
-            + L"\" /grant *S-1-15-2-1:(OI)(CI)RX /grant *S-1-15-2-2:(OI)(CI)RX /Q";
-        _wsystem(command.c_str());
-    });
+    import_broker::PrepareImportSandbox(ResolveWorkerExePath());
 }
 
-ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId)
+ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
+                        std::function<bool()> isCancelled)
 {
     ImportResult result;
 
-    auto opened = import_broker::OpenAndCanonicalizeSourceFile(path);
-    if (!opened.file) {
-        result.errorSummary = L"This file could not be opened.";
-        result.errorDetails = opened.error;
+    import_broker::ImportSessionRequest sessionRequest;
+    sessionRequest.isCancelled = std::move(isCancelled);
+    sessionRequest.workerExePath = ResolveWorkerExePath();
+    sessionRequest.sourcePath = path;
+    sessionRequest.format = ToBrokerFormat(format);
+    sessionRequest.generationId = generationId;
+    sessionRequest.sectionByteCapacity = import_broker::kSyntheticSectionBytes;
+    sessionRequest.maxChunkCount = kMaxChunkCount;
+    sessionRequest.maxSidecarRequestsPerGeneration = kMaxSidecarRequestsPerGeneration;
+    sessionRequest.maxSidecarFileBytes = kMaxSidecarFileBytes;
+
+    import_broker::ImportSessionResult session = import_broker::RunImportSession(sessionRequest);
+    if (!session.ok) {
+        DescribeSessionFailure(session, result.errorSummary, result.errorDetails);
         return result;
     }
 
-    auto duplicatedFile = import_broker::DuplicateInheritableHandle(opened.file.get());
-    if (!duplicatedFile) {
-        result.errorSummary = L"This file could not be prepared for preview.";
-        result.errorDetails = L"The file handle could not be shared with the sandboxed importer.";
-        return result;
-    }
-
-    platform::Win32Handle outputSection = import_broker::CreateSharedSection(import_broker::kSyntheticSectionBytes);
-    if (!outputSection) {
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"A shared memory section for the importer's output could not be created.";
-        return result;
-    }
-
-    std::wstring containerName = MakeUniqueContainerName();
-    platform::AppContainerSid sid = platform::AppContainerSid::CreateOrOpen(
-        containerName, L"Preview3D D3D12 Import", L"Sandboxed import for the --d3d12 preview path");
-    if (!sid) {
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"The sandbox container for the importer could not be created.";
-        return result;
-    }
-
-    SECURITY_ATTRIBUTES sa{};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-    sa.lpSecurityDescriptor = nullptr;
-
-    HANDLE inReadRaw = nullptr;
-    HANDLE inWriteRaw = nullptr;
-    HANDLE outReadRaw = nullptr;
-    HANDLE outWriteRaw = nullptr;
-    if (!CreatePipe(&inReadRaw, &inWriteRaw, &sa, 0) || !CreatePipe(&outReadRaw, &outWriteRaw, &sa, 0)) {
-        platform::AppContainerSid::Delete(containerName);
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"The control channel to the sandboxed importer could not be created.";
-        return result;
-    }
-    platform::Win32Handle controlInRead(inReadRaw);
-    platform::Win32Handle controlInWrite(inWriteRaw);
-    platform::Win32Handle controlOutRead(outReadRaw);
-    platform::Win32Handle controlOutWrite(outWriteRaw);
-    SetHandleInformation(controlInWrite.get(), HANDLE_FLAG_INHERIT, 0);
-    SetHandleInformation(controlOutRead.get(), HANDLE_FLAG_INHERIT, 0);
-
-    std::wstring workerExePath = ResolveWorkerExePath();
-    const wchar_t* parseFlag = format == SourceFormat::Glb  ? L"--parse-gltf"
-        : format == SourceFormat::Stl                       ? L"--parse-stl"
-                                                              : L"--parse-ply";
-    std::wstring cmdLine = L"\"" + workerExePath + L"\" " + parseFlag;
-
-    HANDLE inherited[] = { controlInRead.get(), controlOutWrite.get(), duplicatedFile->get(), outputSection.get() };
-    import_broker::SandboxLimits limits{};
-    auto proc = import_broker::LaunchSuspendedSandboxed(workerExePath, cmdLine, inherited, controlOutWrite.get(),
-                                                          limits, sid, controlInRead.get());
-    controlInRead.reset();
-    controlOutWrite.reset();
-    if (!proc) {
-        platform::AppContainerSid::Delete(containerName);
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"The sandboxed importer process could not be started.";
-        return result;
-    }
-    if (!import_broker::ResumeSandboxProcess(*proc)) {
-        platform::AppContainerSid::Delete(containerName);
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"The sandboxed importer process could not be resumed.";
-        return result;
-    }
-
-    bool sent = false;
-    switch (format) {
-    case SourceFormat::Glb: {
-        auto request = MakeFileRequest<model_core::ParseGltfFileRequest>(generationId, duplicatedFile->get(),
-                                                                          outputSection.get());
-        sent = model_core::WriteControlMessage(controlInWrite.get(), model_core::ControlOpcode::StartGltfImportFromFile,
-                                                &request, sizeof(request));
-        break;
-    }
-    case SourceFormat::Stl: {
-        auto request = MakeFileRequest<model_core::ParseStlFileRequest>(generationId, duplicatedFile->get(),
-                                                                         outputSection.get());
-        sent = model_core::WriteControlMessage(controlInWrite.get(), model_core::ControlOpcode::StartStlImportFromFile,
-                                                &request, sizeof(request));
-        break;
-    }
-    case SourceFormat::Ply: {
-        auto request = MakeFileRequest<model_core::ParsePlyFileRequest>(generationId, duplicatedFile->get(),
-                                                                         outputSection.get());
-        sent = model_core::WriteControlMessage(controlInWrite.get(), model_core::ControlOpcode::StartPlyImportFromFile,
-                                                &request, sizeof(request));
-        break;
-    }
-    }
-
-    if (!sent) {
-        platform::AppContainerSid::Delete(containerName);
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"The import request could not be sent to the sandboxed importer.";
-        return result;
-    }
-
-    // Services zero or more mid-generation RequestSidecarFile messages
-    // before the terminal ChunksReady/GenerationError reply -- degrades to
-    // exactly one iteration (today's original behavior) for STL/PLY and any
-    // self-contained GLB, since neither ever sends RequestSidecarFile.
-    uint32_t sidecarRequestCount = 0;
-    auto received = model_core::ReadControlMessage(controlOutRead.get());
-    while (received
-           && received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::RequestSidecarFile)
-           && received->payload.size() == sizeof(model_core::RequestSidecarFileNotice)) {
-        if (++sidecarRequestCount > kMaxSidecarRequestsPerGeneration) {
-            break; // never trust worker self-restraint -- treated as a protocol violation below
-        }
-
-        model_core::RequestSidecarFileNotice request{};
-        std::memcpy(&request, received->payload.data(), sizeof(request));
-        auto serviced = import_broker::ServiceSidecarRequest(proc->process.get(), opened.canonicalPath, request,
-                                                               kMaxSidecarFileBytes);
-
-        bool sentReply = false;
-        if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {
-            sentReply = model_core::WriteControlMessage(
-                controlInWrite.get(), model_core::ControlOpcode::SidecarFileReady, ready, sizeof(*ready));
-        } else if (const auto* unavailable = std::get_if<model_core::SidecarFileUnavailableNotice>(&serviced)) {
-            sentReply = model_core::WriteControlMessage(
-                controlInWrite.get(), model_core::ControlOpcode::SidecarFileUnavailable, unavailable,
-                sizeof(*unavailable));
-        }
-        if (!sentReply) {
-            received = std::nullopt;
-            break;
-        }
-
-        received = model_core::ReadControlMessage(controlOutRead.get());
-    }
-
-    WaitForSingleObject(proc->process.get(), 5000);
-    platform::AppContainerSid::Delete(containerName);
-
-    if (sidecarRequestCount > kMaxSidecarRequestsPerGeneration) {
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"The sandboxed importer made too many file requests.";
-        return result;
-    }
-
-    if (!received) {
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"The sandboxed importer did not respond.";
-        return result;
-    }
-
-    if (received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::GenerationError)) {
-        model_core::GenerationErrorNotice notice{};
-        if (received->payload.size() == sizeof(notice)) {
-            std::memcpy(&notice, received->payload.data(), sizeof(notice));
-        }
-        DescribeImportError(static_cast<model_core::ImportErrorCode>(notice.errorCode), result.errorSummary,
-                             result.errorDetails);
-        return result;
-    }
-
-    if (received->header.opcode != static_cast<uint32_t>(model_core::ControlOpcode::ChunksReady)) {
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"The sandboxed importer returned an unexpected response.";
-        return result;
-    }
-
-    auto view = platform::MappedView::Map(outputSection.get(), FILE_MAP_READ, import_broker::kSyntheticSectionBytes);
-    if (!view) {
-        result.errorSummary = L"This model could not be previewed.";
-        result.errorDetails = L"The importer's output could not be read.";
-        return result;
-    }
-    import_broker::ValidationResult validation
-        = import_broker::ValidateAndCopySection(view.bytes(), generationId, kMaxChunkCount);
-    if (!validation.ok) {
-        DescribeImportError(validation.errorCode, result.errorSummary, result.errorDetails);
-        return result;
-    }
-
-    for (auto& chunk : validation.chunks) {
+    for (auto& chunk : session.chunks) {
         switch (chunk.descriptor.topology) {
         case model_core::ChunkTopology::TriangleList:
         case model_core::ChunkTopology::PointList: {
@@ -349,7 +218,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
             // target's topology (not the slot position) determines meaning.
             if (chunk.descriptor.dependencyCount >= 1) {
                 uint32_t targetId = chunk.descriptor.dependencyIds[0];
-                for (const auto& other : validation.chunks) {
+                for (const auto& other : session.chunks) {
                     if (other.descriptor.chunkId == targetId
                         && other.descriptor.topology == model_core::ChunkTopology::Material) {
                         mesh.materialChunkId = targetId;
