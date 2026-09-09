@@ -89,6 +89,7 @@ struct OverlayHarness {
     D3D11On12Overlay overlay;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> sharedBrush;
     std::wstring error;
 
     OverlayHarness()
@@ -138,12 +139,16 @@ struct OverlayHarness {
         const UINT index = swapChain.CurrentBackBufferIndex();
         RecordSceneLeavingRenderTarget(index);
 
-        ID2D1RenderTarget* target = overlay.BeginDraw(index);
+        ID2D1DeviceContext* target = overlay.BeginDraw(index);
         REQUIRE(target != nullptr);
 
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-        REQUIRE(SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &brush)));
-        target->FillRectangle(D2D1::RectF(8.0f, 8.0f, 240.0f, 48.0f), brush.Get());
+        // Created once and reused across every back buffer -- the whole point
+        // of the shared device context. Under the D2D 1.0 shape this would
+        // have to be one brush per buffer.
+        if (!sharedBrush) {
+            REQUIRE(SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &sharedBrush)));
+        }
+        target->FillRectangle(D2D1::RectF(8.0f, 8.0f, 240.0f, 48.0f), sharedBrush.Get());
 
         const HRESULT endHr = overlay.EndDraw(index);
 
@@ -224,6 +229,27 @@ TEST_CASE("Overlay frames repeat across the whole back-buffer ring", "[graphics]
     for (int frame = 0; frame < 3 * static_cast<int>(D3D12SwapChain::kBufferCount); ++frame) {
         CHECK(SUCCEEDED(harness.DrawOneOverlayFrame()));
     }
+}
+
+TEST_CASE("One D2D brush is reused across every back buffer", "[graphics]")
+{
+    // The reason for moving off CreateDxgiSurfaceRenderTarget. That shape
+    // gives one independent ID2D1RenderTarget per back buffer, and a brush
+    // belongs to whichever target created it -- so every cached resource had
+    // to be duplicated per buffer. One device context retargeted at a bitmap
+    // per buffer makes device resources shared, which is what the ported
+    // chrome (one brush recoloured per primitive) depends on.
+    OverlayHarness harness;
+    REQUIRE(harness.overlay.Initialize(SharedDevice(), harness.directQueue, harness.swapChain, harness.error));
+
+    for (int frame = 0; frame < 2 * static_cast<int>(D3D12SwapChain::kBufferCount); ++frame) {
+        REQUIRE(SUCCEEDED(harness.DrawOneOverlayFrame()));
+    }
+
+    // Same brush object throughout: DrawOneOverlayFrame only creates it when
+    // it is null, so surviving every buffer proves it was never invalidated.
+    CHECK(harness.sharedBrush != nullptr);
+    CHECK(harness.overlay.Context() != nullptr);
 }
 
 TEST_CASE("The overlay survives a swap-chain resize", "[graphics]")

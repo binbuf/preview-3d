@@ -92,20 +92,17 @@ struct D3D12ViewerPath
     uint64_t overlayPasses = 0;
     // Cached rather than rebuilt per frame, matching how Renderer.cpp keeps
     // one brush and rebuilds text formats only on DPI change -- creating
-    // either per frame is expensive enough to turn this measurement into a
+    // either per frame is expensive enough to turn a cost measurement into a
     // strawman.
     //
-    // The brush is per target, not shared: CreateDxgiSurfaceRenderTarget
-    // gives one independent ID2D1RenderTarget per back buffer, and a brush
-    // belongs to the target that created it. (Renderer.cpp has exactly one
-    // target, so a single brush is correct there.) That per-buffer
-    // duplication is an argument for moving to ID2D1Device/ID2D1DeviceContext
-    // plus a bitmap per buffer when the real chrome is ported -- device-level
-    // resources are then shared, and ID2D1DeviceContext is itself an
-    // ID2D1RenderTarget so the drawing code is unaffected.
-    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> overlayBrushes[D3D12SwapChain::kBufferCount];
-    // IDWriteTextFormat is a DirectWrite resource, device-independent, so
-    // this one really is shareable across targets.
+    // One brush, not one per back buffer: the bridge now hands out a single
+    // ID2D1DeviceContext retargeted at a bitmap per buffer, so device
+    // resources are shared. Under the D2D 1.0 shape the spike used, each back
+    // buffer had its own independent render target and a brush belonged to
+    // whichever one created it, forcing a copy per buffer.
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> overlayBrush;
+    // IDWriteTextFormat is a DirectWrite resource and device-independent, so
+    // it survives even a target loss.
     Microsoft::WRL::ComPtr<IDWriteTextFormat> overlayTextFormat;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;

@@ -558,15 +558,18 @@ double D3D12ViewerPath::DrawSpikeOverlay(UINT frameIndex)
 {
     const auto started = std::chrono::steady_clock::now();
 
-    ID2D1RenderTarget* target = overlay.BeginDraw(frameIndex);
+    ID2D1DeviceContext* target = overlay.BeginDraw(frameIndex);
     if (target == nullptr) return 0.0;
+
+    // A lost target takes every device resource created from it with it.
+    if (overlay.ConsumeTargetsWereRecreated()) overlayBrush.Reset();
 
     // Brush and text format are created once and reused, exactly as
     // Renderer.cpp does (one brush recolored per primitive; text formats
     // rebuilt only on DPI change). Creating either per frame would measure
     // this code's own inefficiency rather than the bridge's cost.
-    if (!overlayBrushes[frameIndex]) {
-        if (FAILED(target->CreateSolidColorBrush(D2D1::ColorF(0xF5F5F7), &overlayBrushes[frameIndex]))) {
+    if (!overlayBrush) {
+        if (FAILED(target->CreateSolidColorBrush(D2D1::ColorF(0xF5F5F7), &overlayBrush))) {
             overlay.EndDraw(frameIndex);
             return 0.0;
         }
@@ -576,7 +579,7 @@ double D3D12ViewerPath::DrawSpikeOverlay(UINT frameIndex)
                                                   DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0f,
                                                   L"en-us", &overlayTextFormat);
     }
-    ID2D1SolidColorBrush* brush = overlayBrushes[frameIndex].Get();
+    ID2D1SolidColorBrush* brush = overlayBrush.Get();
 
     const float width = static_cast<float>(swapChain.Width());
     const float height = static_cast<float>(swapChain.Height());
@@ -648,8 +651,9 @@ bool D3D12ViewerPath::Resize(int width, int height, std::wstring& error)
     // The wrapped resources hold references to the back buffers, so
     // ResizeBuffers cannot succeed until they are dropped and flushed.
     if (overlayEnabled) {
-        // The brushes belong to the targets about to be destroyed.
-        for (auto& brush : overlayBrushes) brush.Reset();
+        // The brush belongs to the D2D context's targets, which are about
+        // to be destroyed and rebuilt against the resized back buffers.
+        overlayBrush.Reset();
         overlay.ReleaseBackBufferReferences();
     }
     if (!swapChain.Resize(static_cast<UINT>(width), static_cast<UINT>(height), error)) return false;

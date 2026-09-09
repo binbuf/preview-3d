@@ -42,11 +42,36 @@ bool D3D11On12Overlay::Initialize(D3D12Device& device, D3D12CommandQueue& direct
         return false;
     }
 
-    const HRESULT factoryHr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory_.GetAddressOf());
+    D2D1_FACTORY_OPTIONS factoryOptions{};
+#ifdef _DEBUG
+    factoryOptions.debugLevel = D2D1_DEBUG_LEVEL_INFORMATION;
+#endif
+    const HRESULT factoryHr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory1),
+                                                 &factoryOptions, &d2dFactory_);
     if (FAILED(factoryHr)) {
         error = WithHr(L"The Direct2D factory could not be created", factoryHr);
         return false;
     }
+
+    // The D2D device rides on the same underlying DXGI device as the 11on12
+    // device, which is what lets one context target every back buffer.
+    ComPtr<IDXGIDevice> dxgiDevice;
+    const HRESULT dxgiHr = d3d11Device_.As(&dxgiDevice);
+    if (FAILED(dxgiHr)) {
+        error = WithHr(L"The D3D11On12 device is not a DXGI device", dxgiHr);
+        return false;
+    }
+    const HRESULT d2dDeviceHr = d2dFactory_->CreateDevice(dxgiDevice.Get(), &d2dDevice_);
+    if (FAILED(d2dDeviceHr)) {
+        error = WithHr(L"The Direct2D device could not be created", d2dDeviceHr);
+        return false;
+    }
+    const HRESULT contextHr = d2dDevice_->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &d2dContext_);
+    if (FAILED(contextHr)) {
+        error = WithHr(L"The Direct2D device context could not be created", contextHr);
+        return false;
+    }
+
     const HRESULT writeHr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                                                  reinterpret_cast<IUnknown**>(writeFactory_.GetAddressOf()));
     if (FAILED(writeHr)) {
@@ -54,11 +79,14 @@ bool D3D11On12Overlay::Initialize(D3D12Device& device, D3D12CommandQueue& direct
         return false;
     }
 
+    swapChain_ = &swapChain;
     return CreateTargetsForBackBuffers(swapChain, error);
 }
 
 bool D3D11On12Overlay::CreateTargetsForBackBuffers(D3D12SwapChain& swapChain, std::wstring& error)
 {
+    swapChain_ = &swapChain;
+
     for (UINT i = 0; i < D3D12SwapChain::kBufferCount; ++i) {
         ID3D12Resource* backBuffer = swapChain.BackBuffer(i);
         if (backBuffer == nullptr) {
@@ -86,17 +114,18 @@ bool D3D11On12Overlay::CreateTargetsForBackBuffers(D3D12SwapChain& swapChain, st
             return false;
         }
 
-        // DXGI_FORMAT_UNKNOWN means "use the surface's own format", the same
-        // shape Renderer.cpp:1024-1026 uses against its BGRA D3D11 back
-        // buffer. This call is the format question: if Direct2D refuses an
-        // R8G8B8A8_UNORM surface, it fails right here with a legible HRESULT
-        // rather than misbehaving later.
-        const D2D1_RENDER_TARGET_PROPERTIES properties = D2D1::RenderTargetProperties(
-            D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1::PixelFormat(DXGI_FORMAT_UNKNOWN, D2D1_ALPHA_MODE_PREMULTIPLIED),
-            96.0f, 96.0f);
-        const HRESULT targetHr = d2dFactory_->CreateDxgiSurfaceRenderTarget(surface.Get(), &properties, &targets_[i]);
-        if (FAILED(targetHr)) {
-            error = WithHr(L"Direct2D could not create a render target over the wrapped back buffer", targetHr);
+        // The format must match the swap chain's. The spike confirmed D2D
+        // accepts R8G8B8A8_UNORM here -- the design's format (04-...:17) --
+        // so no BGRA swap chain is needed.
+        DXGI_SURFACE_DESC surfaceDesc{};
+        surface->GetDesc(&surfaceDesc);
+        const D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1(
+            D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            D2D1::PixelFormat(surfaceDesc.Format, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
+        const HRESULT bitmapHr
+            = d2dContext_->CreateBitmapFromDxgiSurface(surface.Get(), &bitmapProperties, &targetBitmaps_[i]);
+        if (FAILED(bitmapHr)) {
+            error = WithHr(L"Direct2D could not create a target bitmap over the wrapped back buffer", bitmapHr);
             return false;
         }
     }
@@ -105,8 +134,9 @@ bool D3D11On12Overlay::CreateTargetsForBackBuffers(D3D12SwapChain& swapChain, st
 
 void D3D11On12Overlay::ReleaseBackBufferReferences()
 {
+    if (d2dContext_) d2dContext_->SetTarget(nullptr);
     for (UINT i = 0; i < D3D12SwapChain::kBufferCount; ++i) {
-        targets_[i].Reset();
+        targetBitmaps_[i].Reset();
         wrappedBackBuffers_[i].Reset();
     }
     // The wrapped resources hold D3D11-side references; without a flush they
@@ -126,25 +156,39 @@ bool D3D11On12Overlay::RecreateBackBufferReferences(D3D12SwapChain& swapChain, s
     return CreateTargetsForBackBuffers(swapChain, error);
 }
 
-ID2D1RenderTarget* D3D11On12Overlay::BeginDraw(UINT backBufferIndex)
+bool D3D11On12Overlay::ConsumeTargetsWereRecreated() noexcept
+{
+    const bool was = targetsRecreated_;
+    targetsRecreated_ = false;
+    return was;
+}
+
+ID2D1DeviceContext* D3D11On12Overlay::BeginDraw(UINT backBufferIndex)
 {
     if (!IsReady() || backBufferIndex >= D3D12SwapChain::kBufferCount) return nullptr;
-    ID2D1RenderTarget* target = targets_[backBufferIndex].Get();
-    if (target == nullptr) return nullptr;
+
+    // Rebuild after a lost target, rather than going dark until the next
+    // resize the way the D3D11 renderer does.
+    if (!targetBitmaps_[backBufferIndex] && swapChain_ != nullptr) {
+        std::wstring ignored;
+        if (!CreateTargetsForBackBuffers(*swapChain_, ignored)) return nullptr;
+        targetsRecreated_ = true;
+    }
+    if (!targetBitmaps_[backBufferIndex]) return nullptr;
 
     ID3D11Resource* resources[] = { wrappedBackBuffers_[backBufferIndex].Get() };
     d3d11On12Device_->AcquireWrappedResources(resources, 1);
-    target->BeginDraw();
-    return target;
+    d2dContext_->SetTarget(targetBitmaps_[backBufferIndex].Get());
+    d2dContext_->BeginDraw();
+    return d2dContext_.Get();
 }
 
 HRESULT D3D11On12Overlay::EndDraw(UINT backBufferIndex)
 {
     if (!IsReady() || backBufferIndex >= D3D12SwapChain::kBufferCount) return E_FAIL;
-    ID2D1RenderTarget* target = targets_[backBufferIndex].Get();
-    if (target == nullptr) return E_FAIL;
 
-    const HRESULT hr = target->EndDraw();
+    const HRESULT hr = d2dContext_->EndDraw();
+    d2dContext_->SetTarget(nullptr);
 
     ID3D11Resource* resources[] = { wrappedBackBuffers_[backBufferIndex].Get() };
     d3d11On12Device_->ReleaseWrappedResources(resources, 1);
@@ -152,6 +196,13 @@ HRESULT D3D11On12Overlay::EndDraw(UINT backBufferIndex)
     // the D2D commands are not on the queue when the caller signals its frame
     // fence and presents.
     d3d11Context_->Flush();
+
+    if (hr == D2DERR_RECREATE_TARGET) {
+        // Drop everything so the next BeginDraw rebuilds. The caller learns
+        // through ConsumeTargetsWereRecreated that its own cached device
+        // resources are gone too.
+        ReleaseBackBufferReferences();
+    }
     return hr;
 }
 
@@ -159,8 +210,11 @@ void D3D11On12Overlay::Shutdown()
 {
     ReleaseBackBufferReferences();
     writeFactory_.Reset();
+    d2dContext_.Reset();
+    d2dDevice_.Reset();
     d2dFactory_.Reset();
     d3d11On12Device_.Reset();
     d3d11Context_.Reset();
     d3d11Device_.Reset();
+    swapChain_ = nullptr;
 }
