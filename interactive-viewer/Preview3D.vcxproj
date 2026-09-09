@@ -40,13 +40,13 @@
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>src\app;src\render;src\ui;src\platform;src\graphics;..\shared\platform\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>src\app;src\render;src\ui;src\platform;src\graphics;..\shared\platform\include;..\shared\import-broker\include;..\shared\model-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ResourceCompile>
       <AdditionalIncludeDirectories>src\app;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Link>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;d2d1.lib;dwrite.lib;dwmapi.lib;comctl32.lib;shell32.lib;ole32.lib;runtimeobject.lib;d3d12.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;d2d1.lib;dwrite.lib;dwmapi.lib;comctl32.lib;shell32.lib;ole32.lib;runtimeobject.lib;d3d12.lib;dxguid.lib;userenv.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -85,6 +85,22 @@
     <ClInclude Include="src\graphics\D3D12Device.h" />
     <ClInclude Include="src\graphics\D3D12CommandQueue.h" />
     <ClInclude Include="src\graphics\D3D12SwapChain.h" />
+    <ClInclude Include="src\app\D3D12ImportBridge.h" />
+    <ClInclude Include="..\shared\platform\include\platform\Win32Handle.h" />
+    <ClInclude Include="..\shared\platform\include\platform\AppContainerSid.h" />
+    <ClInclude Include="..\shared\platform\include\platform\ProcThreadAttributeList.h" />
+    <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />
+    <ClInclude Include="..\shared\platform\include\platform\CheckedMath.h" />
+    <ClInclude Include="..\shared\import-broker\include\import_broker\SandboxLauncher.h" />
+    <ClInclude Include="..\shared\import-broker\include\import_broker\SharedSection.h" />
+    <ClInclude Include="..\shared\import-broker\include\import_broker\SharedSectionValidator.h" />
+    <ClInclude Include="..\shared\import-broker\include\import_broker\SourceFileAccess.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\Checksum.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\ImportError.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\ControlProtocol.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\ControlChannelIo.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\ui\Chrome.cpp" />
@@ -99,6 +115,15 @@
     <ClCompile Include="src\graphics\D3D12Device.cpp" />
     <ClCompile Include="src\graphics\D3D12CommandQueue.cpp" />
     <ClCompile Include="src\graphics\D3D12SwapChain.cpp" />
+    <ClCompile Include="src\app\D3D12ImportBridge.cpp" />
+    <ClCompile Include="..\shared\platform\src\AppContainerSid.cpp" />
+    <ClCompile Include="..\shared\platform\src\ProcThreadAttributeList.cpp" />
+    <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
+    <ClCompile Include="..\shared\import-broker\src\SandboxLauncher.cpp" />
+    <ClCompile Include="..\shared\import-broker\src\SharedSection.cpp" />
+    <ClCompile Include="..\shared\import-broker\src\SharedSectionValidator.cpp" />
+    <ClCompile Include="..\shared\import-broker\src\SourceFileAccess.cpp" />
+    <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources\Preview3D.rc" />
@@ -106,6 +131,14 @@
   <ItemGroup>
     <Image Include="resources\Preview3D.ico" />
     <Image Include="resources\small.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Build-order only (exe to exe, nothing to link): the opt-in D3D12
+         preview mode needs Preview3DImportWorker.exe built and current. -->
+    <ProjectReference Include="..\import-worker\Preview3DImportWorker.vcxproj">
+      <Project>{499d3a16-e218-49e5-accd-caf92709f242}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

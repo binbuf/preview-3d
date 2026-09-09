@@ -1,6 +1,7 @@
 #include "framework.h"
 #include "Preview3D.h"
 #include "Chrome.h"
+#include "D3D12ImportBridge.h"
 #include "D3D12ViewerPath.h"
 #include "InfoPanel.h"
 #include "Model.h"
@@ -26,6 +27,12 @@ namespace
 constexpr wchar_t kWindowClass[] = L"Preview3DWindow";
 constexpr wchar_t kApplicationName[] = L"3D Preview";
 constexpr UINT kLoadCompleteMessage = WM_APP + 2;
+// The --d3d12 opt-in path's own load-complete message -- kept distinct from
+// kLoadCompleteMessage rather than reusing it, since the payload shape
+// (d3d12_import_bridge::ImportResult vs. Model.cpp's LoadResult) differs and
+// the two loaders never run for the same open (BeginOpen branches on
+// useD3D12 before spawning either background thread).
+constexpr UINT kD3D12ImportCompleteMessage = WM_APP + 3;
 constexpr float kArrowPixelsPerSecond = 340.0f;
 constexpr double kHudVisibleSeconds = 1.3;
 constexpr double kHudFadeSeconds = 0.30;
@@ -74,6 +81,13 @@ struct CompleteMessage
     std::uint64_t generation = 0;
     std::wstring path;
     LoadResult result;
+};
+
+struct D3D12CompleteMessage
+{
+    std::uint64_t generation = 0;
+    std::wstring path;
+    d3d12_import_bridge::ImportResult result;
 };
 
 struct ViewerApp
@@ -426,7 +440,10 @@ void ResetTouchBaseline(ViewerApp& app)
 
 bool CanNavigate(const ViewerApp& app)
 {
-    return app.state == ViewerState::Ready && app.renderer.HasModel();
+    if (app.state != ViewerState::Ready) return false;
+    // The --d3d12 path uploads into d3d12Path, never into app.renderer (it's
+    // never even Initialize()'d in that mode) -- see D3D12ViewerPath.h.
+    return app.useD3D12 ? app.d3d12Path.hasModel : app.renderer.HasModel();
 }
 
 bool HasNavigationInput(const ViewerApp& app)
@@ -1199,7 +1216,20 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
             L"Choose a GLB stored on a local drive for this preview slice.", path);
         return;
     }
-    if (!HasGlbExtension(path))
+    std::optional<d3d12_import_bridge::SourceFormat> d3d12Format;
+    if (app.useD3D12)
+    {
+        d3d12Format = d3d12_import_bridge::ClassifyByExtension(path);
+        if (!d3d12Format)
+        {
+            app.filename = FileNameFromPath(path);
+            UpdateTitle(app);
+            SetFailure(app, L"This format is not included in the current slice.",
+                L"Open a .glb, .stl, or .ply file. Other model formats are deliberately deferred.", path);
+            return;
+        }
+    }
+    else if (!HasGlbExtension(path))
     {
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
@@ -1208,8 +1238,6 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
         return;
     }
 
-    app.cancellation = std::make_shared<std::atomic_bool>(false);
-    const auto cancellation = app.cancellation;
     const auto alive = app.alive;
     const std::uint64_t generation = ++app.generation;
     const HWND window = app.window;
@@ -1226,6 +1254,25 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
     UpdateButtonAvailability(app);
     LayoutControls(app);
     InvalidateRect(app.window, nullptr, FALSE);
+
+    if (app.useD3D12)
+    {
+        // No cancellation token for this path yet -- RunImport runs to
+        // completion (or the sandboxed worker's own bounded timeouts), see
+        // the plan's "Explicitly deferred" list.
+        d3d12_import_bridge::SourceFormat format = *d3d12Format;
+        std::thread([window, generation, path, format]()
+        {
+            d3d12_import_bridge::ImportResult result = d3d12_import_bridge::RunImport(format, path, generation);
+            auto* message = new (std::nothrow) D3D12CompleteMessage{ generation, path, std::move(result) };
+            if (message && !PostMessageW(window, kD3D12ImportCompleteMessage, 0, reinterpret_cast<LPARAM>(message)))
+                delete message;
+        }).detach();
+        return;
+    }
+
+    app.cancellation = std::make_shared<std::atomic_bool>(false);
+    const auto cancellation = app.cancellation;
 
     std::thread([window, generation, path, cancellation, alive]()
     {
@@ -1660,7 +1707,9 @@ void RenderFrame(ViewerApp& app)
     if (!app.rendererReady) return;
     if (app.useD3D12)
     {
-        app.d3d12Path.RenderClearFrame();
+        TickCamera(app);
+        if (app.d3d12Path.hasModel) app.d3d12Path.RenderFrame(app.camera, ViewportAspect(app));
+        else app.d3d12Path.RenderClearFrame();
         ValidateRect(app.window, nullptr);
         return;
     }
@@ -1722,6 +1771,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             app->errorSummary = L"Graphics could not be started.";
             app->errorDetails = renderError;
             app->state = ViewerState::Failed;
+        }
+        else if (app->useD3D12)
+        {
+            d3d12_import_bridge::EnsureAppContainerDirectoryAccessGranted();
         }
         UpdateButtonAvailability(*app);
         if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath);
@@ -1891,7 +1944,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         HDC dc = BeginPaint(window, &paint);
         if (app->rendererReady)
         {
-            if (app->useD3D12) app->d3d12Path.RenderClearFrame();
+            if (app->useD3D12)
+            {
+                if (app->d3d12Path.hasModel) app->d3d12Path.RenderFrame(app->camera, ViewportAspect(*app));
+                else app->d3d12Path.RenderClearFrame();
+            }
             else RenderScene(*app);
         }
         else RenderFallback(*app, dc);
@@ -2585,6 +2642,59 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         InvalidateRect(window, nullptr, FALSE);
         return 0;
     }
+    case kD3D12ImportCompleteMessage:
+    {
+        std::unique_ptr<D3D12CompleteMessage> complete(reinterpret_cast<D3D12CompleteMessage*>(lParam));
+        if (!complete || complete->generation != app->generation) return 0;
+        if (!complete->result.ok)
+        {
+            SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path);
+            return 0;
+        }
+        std::wstring uploadError;
+        if (!app->d3d12Path.UploadModel(complete->result.meshes, uploadError))
+        {
+            SetFailure(*app, L"The model was read but could not be displayed.", uploadError, complete->path);
+            return 0;
+        }
+        app->currentPath = complete->path;
+        app->filename = FileNameFromPath(complete->path);
+
+        // Host-side bounds scan (no ChunkDescriptor bounds field exists yet)
+        // mirroring Model.cpp's own min/max accumulation, feeding the same
+        // Camera::SetBounds call the D3D11 completion handler uses above.
+        DirectX::XMFLOAT3 effectiveMin{};
+        DirectX::XMFLOAT3 effectiveMax{};
+        bool haveBounds = false;
+        for (const auto& mesh : complete->result.meshes)
+        {
+            if (mesh.vertexLayoutId != model_core::VertexLayoutId::PositionNormalUv0_F32) continue;
+            const auto* vertices = reinterpret_cast<const model_core::VertexPositionNormalUv0F32*>(mesh.payload.data());
+            for (uint32_t i = 0; i < mesh.vertexCount; ++i)
+            {
+                DirectX::XMFLOAT3 p{ vertices[i].px, vertices[i].py, vertices[i].pz };
+                if (!haveBounds) { effectiveMin = effectiveMax = p; haveBounds = true; continue; }
+                effectiveMin.x = std::min(effectiveMin.x, p.x);
+                effectiveMin.y = std::min(effectiveMin.y, p.y);
+                effectiveMin.z = std::min(effectiveMin.z, p.z);
+                effectiveMax.x = std::max(effectiveMax.x, p.x);
+                effectiveMax.y = std::max(effectiveMax.y, p.y);
+                effectiveMax.z = std::max(effectiveMax.z, p.z);
+            }
+        }
+        if (haveBounds) app->camera.SetBounds(effectiveMin, effectiveMax, ViewportAspect(*app));
+
+        app->state = ViewerState::Ready;
+        app->failedPath.clear();
+        app->errorSummary.clear();
+        app->errorDetails.clear();
+        UpdateTitle(*app);
+        SetFocus(window);
+        UpdateButtonAvailability(*app);
+        LayoutControls(*app);
+        InvalidateRect(window, nullptr, FALSE);
+        return 0;
+    }
     case WM_TIMER:
         if (wParam == kTooltipTimerId)
         {
@@ -2604,7 +2714,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (app->buttonFont) { DeleteObject(app->buttonFont); app->buttonFont = nullptr; }
         // GPU work must be known-idle before ViewerApp's destructor releases
         // the D3D12 objects -- RAII alone doesn't order that.
-        if (app->useD3D12) app->d3d12Path.WaitForIdle();
+        if (app->useD3D12)
+        {
+            app->d3d12Path.WaitForIdle();
+            app->d3d12Path.ClearModel();
+        }
         PostQuitMessage(0);
         return 0;
     }
