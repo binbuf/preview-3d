@@ -80,6 +80,7 @@
     <ClCompile Include="src\StlAdapter.cpp" />
     <ClCompile Include="src\PlyImportWorker.cpp" />
     <ClCompile Include="src\PlyAdapter.cpp" />
+    <ClCompile Include="src\AsciiTokenizer.cpp" />
     <ClCompile Include="src\WorkerRequestDispatch.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
@@ -95,6 +96,7 @@
     <ClInclude Include="src\StlAdapter.h" />
     <ClInclude Include="src\PlyImportWorker.h" />
     <ClInclude Include="src\PlyAdapter.h" />
+    <ClInclude Include="src\AsciiTokenizer.h" />
     <ClInclude Include="src\WorkerRequestDispatch.h" />
     <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />
     <ClInclude Include="..\shared\platform\include\platform\Win32Handle.h" />

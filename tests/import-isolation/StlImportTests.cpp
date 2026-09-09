@@ -4,7 +4,11 @@
 // format/SharedSectionValidator unmodified, and goes straight to the real-
 // file (MappedFile/SourceFileAccess/duplicated-handle) input path from the
 // start rather than reprising glTF's synthetic-shortcut-then-upgrade
-// two-step. ASCII STL is explicitly out of scope (Tier B, a later slice).
+// two-step.
+//
+// Gate 3 slice 4 added ASCII STL on top of this (see the "[stl-import]"
+// cases below the binary ones) -- same worker/opcode/request, StlAdapter.cpp
+// just detects the dialect and dispatches.
 
 #include "SandboxTestSupport.h"
 #include "import_broker/SandboxLauncher.h"
@@ -25,6 +29,8 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #ifndef PREVIEW3D_TEST_ASSETS_DIR
@@ -63,6 +69,35 @@ std::vector<std::byte> BuildBinaryStl(const std::vector<StlFacet>& facets)
         offset += sizeof(attributeByteCount);
     }
     return bytes;
+}
+
+std::vector<std::byte> StringToBytes(const std::string& text)
+{
+    std::vector<std::byte> bytes(text.size());
+    std::memcpy(bytes.data(), text.data(), text.size());
+    return bytes;
+}
+
+// Renders an ASCII STL text body from the same StlFacet fixtures the binary
+// tests already use, so both dialects can be exercised against equivalent
+// geometry. solidName deliberately appears after both "solid" and
+// "endsolid" per the real grammar.
+std::vector<std::byte> BuildAsciiStl(const std::vector<StlFacet>& facets,
+                                      const std::string& solidName = "test")
+{
+    std::ostringstream out;
+    out << "solid " << solidName << "\n";
+    for (const StlFacet& f : facets) {
+        out << "facet normal " << f.nx << " " << f.ny << " " << f.nz << "\n";
+        out << "outer loop\n";
+        out << "vertex " << f.v0x << " " << f.v0y << " " << f.v0z << "\n";
+        out << "vertex " << f.v1x << " " << f.v1y << " " << f.v1z << "\n";
+        out << "vertex " << f.v2x << " " << f.v2y << " " << f.v2z << "\n";
+        out << "endloop\n";
+        out << "endfacet\n";
+    }
+    out << "endsolid " << solidName << "\n";
+    return StringToBytes(out.str());
 }
 
 // A scratch on-disk file holding pre-built bytes -- mirrors
@@ -395,4 +430,139 @@ TEST_CASE("A header shorter than 84 bytes is rejected as MalformedData", "[stl-i
     auto run = RunStlImportFromRealFile(fixture.sid, file.path, /*generationId=*/9, /*maxChunkCount=*/4);
     CHECK_FALSE(run.ready);
     CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+// --- Gate 3 slice 4: ASCII STL -----------------------------------------
+
+TEST_CASE("A valid ASCII STL with several facets round-trips through the real sandboxed pipeline",
+          "[stl-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    std::vector<StlFacet> facets{
+        MakeTriangle(0.0f, 0.0f, 0.0f, 1.0f),
+        MakeTriangle(2.0f, 0.0f, 0.0f, 1.0f),
+        MakeTriangle(4.0f, 0.0f, 0.0f, 1.0f),
+    };
+    ScratchStlFile file(BuildAsciiStl(facets));
+
+    auto run = RunStlImportFromRealFile(fixture.sid, file.path, /*generationId=*/10, /*maxChunkCount=*/4);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 1);
+
+    const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.descriptor.topology == model_core::ChunkTopology::TriangleList);
+    CHECK(chunk.descriptor.vertexCount == 9);
+    CHECK(chunk.descriptor.indexCount == 9);
+
+    REQUIRE(chunk.payload.size() >= 9 * sizeof(model_core::VertexPositionNormalUv0F32));
+    model_core::VertexPositionNormalUv0F32 vertices[9]{};
+    std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
+    for (const auto& v : vertices) {
+        CHECK(v.nx == Catch::Approx(0.0f).margin(1e-5));
+        CHECK(v.ny == Catch::Approx(0.0f).margin(1e-5));
+        CHECK(v.nz == Catch::Approx(1.0f).margin(1e-5));
+    }
+}
+
+TEST_CASE("A binary-shaped file whose free-form header starts with 'solid' is still parsed as binary",
+          "[stl-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // The 80-byte header is arbitrary free-form text in the real binary-STL
+    // format; some binary STL writers put a "solid <name>"-style comment
+    // there. Detection must prefer the binary interpretation whenever the
+    // declared triangle count and file length are structurally consistent
+    // with it, regardless of what the header text says.
+    std::vector<std::byte> bytes = BuildBinaryStl({ MakeTriangle(0.0f, 0.0f, 0.0f, 1.0f) });
+    std::memcpy(bytes.data(), "solid", 5);
+    ScratchStlFile file(bytes);
+
+    auto run = RunStlImportFromRealFile(fixture.sid, file.path, /*generationId=*/11, /*maxChunkCount=*/4);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    CHECK(run.validation.chunks[0].descriptor.vertexCount == 3);
+
+    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    std::memcpy(vertices, run.validation.chunks[0].payload.data(), sizeof(vertices));
+    for (const auto& v : vertices) {
+        // Binary interpretation of MakeTriangle's raw floats -- an attempt
+        // to parse this buffer as ASCII text would fail outright (the bytes
+        // right after "solid" are not "facet"/"normal" keywords), so a
+        // successful, geometrically-correct result here confirms the
+        // binary path actually ran.
+        CHECK(v.nz == Catch::Approx(1.0f).margin(1e-5));
+    }
+}
+
+TEST_CASE("An ASCII STL with a non-numeric token where a number is expected is rejected as MalformedData",
+          "[stl-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    std::string text = "solid t\n"
+                        "facet normal 0 0 1\n"
+                        "outer loop\n"
+                        "vertex notanumber 0 0\n"
+                        "vertex 1 0 0\n"
+                        "vertex 0 1 0\n"
+                        "endloop\n"
+                        "endfacet\n"
+                        "endsolid t\n";
+    ScratchStlFile file(StringToBytes(text));
+
+    auto run = RunStlImportFromRealFile(fixture.sid, file.path, /*generationId=*/12, /*maxChunkCount=*/4);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+TEST_CASE("An ASCII STL with an over-length token is rejected as MalformedData", "[stl-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // A single non-whitespace run past AsciiTokenizer.cpp's token-length
+    // cap (512), appearing as the solid name -- must be rejected rather
+    // than scanned to its true end.
+    std::string text = "solid " + std::string(600, 'x') + "\n";
+    ScratchStlFile file(StringToBytes(text));
+
+    auto run = RunStlImportFromRealFile(fixture.sid, file.path, /*generationId=*/13, /*maxChunkCount=*/4);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+TEST_CASE("An ASCII STL missing 'endsolid' is rejected as MalformedData", "[stl-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    std::string text = "solid t\n"
+                        "facet normal 0 0 1\n"
+                        "outer loop\n"
+                        "vertex 0 0 0\n"
+                        "vertex 1 0 0\n"
+                        "vertex 0 1 0\n"
+                        "endloop\n"
+                        "endfacet\n"; // no endsolid
+    ScratchStlFile file(StringToBytes(text));
+
+    auto run = RunStlImportFromRealFile(fixture.sid, file.path, /*generationId=*/14, /*maxChunkCount=*/4);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+TEST_CASE("An ASCII STL degenerate facet is dropped without corrupting the rest", "[stl-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    StlFacet degenerate{}; // all vertices default to (0,0,0) -- zero area
+    std::vector<StlFacet> facets{ degenerate, MakeTriangle(0.0f, 0.0f, 0.0f, 1.0f) };
+    ScratchStlFile file(BuildAsciiStl(facets));
+
+    auto run = RunStlImportFromRealFile(fixture.sid, file.path, /*generationId=*/15, /*maxChunkCount=*/4);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    CHECK(run.validation.chunks[0].descriptor.vertexCount == 3);
+    CHECK(run.validation.chunks[0].descriptor.indexCount == 3);
 }

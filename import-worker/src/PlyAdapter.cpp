@@ -1,5 +1,6 @@
 #include "PlyAdapter.h"
 
+#include "AsciiTokenizer.h"
 #include "model_core/Checksum.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -187,10 +189,16 @@ struct PlyElement {
     std::vector<PlyProperty> properties;
 };
 
+enum class PlyFormat {
+    BinaryLittleEndian,
+    BinaryBigEndian,
+    Ascii,
+};
+
 struct PlyHeader {
-    bool bigEndian = false;
+    PlyFormat format = PlyFormat::BinaryLittleEndian;
     std::vector<PlyElement> elements;
-    uint64_t bodyOffset = 0; // byte offset in the source where binary data begins
+    uint64_t bodyOffset = 0; // byte offset in the source where body data begins (binary or ASCII)
 };
 
 struct HeaderLine {
@@ -264,8 +272,9 @@ std::optional<uint64_t> ParseDecimalUInt64(std::string_view text)
 }
 
 // Text-header phase only -- everything from offset 0 up to (and including)
-// "end_header"'s terminating newline. Binary element data is read
-// separately by ImportPly, using PlyHeader::bodyOffset as the start cursor.
+// "end_header"'s terminating newline. Element data (binary or ASCII) is
+// read separately by ImportPly, using PlyHeader::bodyOffset as the start
+// cursor.
 std::variant<PlyHeader, ImportErrorCode> ParseHeader(std::span<const std::byte> source)
 {
     size_t scanLimit = source.size() < kMaxHeaderBytes ? source.size() : kMaxHeaderBytes;
@@ -306,12 +315,13 @@ std::variant<PlyHeader, ImportErrorCode> ParseHeader(std::span<const std::byte> 
                 return ImportErrorCode::MalformedData;
             }
             if (tokens[1] == "binary_little_endian") {
-                header.bigEndian = false;
+                header.format = PlyFormat::BinaryLittleEndian;
             } else if (tokens[1] == "binary_big_endian") {
-                header.bigEndian = true;
+                header.format = PlyFormat::BinaryBigEndian;
+            } else if (tokens[1] == "ascii") {
+                header.format = PlyFormat::Ascii;
             } else {
-                // "ascii" (Tier B, out of scope) or an unrecognized keyword.
-                return ImportErrorCode::MalformedData;
+                return ImportErrorCode::MalformedData; // unrecognized format keyword
             }
             formatSeen = true;
             continue;
@@ -523,18 +533,47 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         }
     }
 
-    uint64_t cursor = header.bodyOffset;
-    if (cursor > sourcePlyBytes.size()) {
+    bool ascii = (header.format == PlyFormat::Ascii);
+    bool bigEndian = (header.format == PlyFormat::BinaryBigEndian);
+
+    uint64_t cursor = header.bodyOffset; // binary path only
+    if (!ascii && cursor > sourcePlyBytes.size()) {
         return ImportErrorCode::MalformedData;
     }
+    AsciiTokenizer tokenizer(sourcePlyBytes, static_cast<size_t>(header.bodyOffset)); // ASCII path only
 
-    auto readScalar = [&](PlyScalarType type) -> std::optional<double> {
-        auto bytes = ReadBytes(sourcePlyBytes, cursor, ScalarByteSize(type));
-        if (!bytes) {
-            return std::nullopt;
-        }
-        return ReadScalarAsDouble(type, header.bigEndian, *bytes);
-    };
+    // readScalar/skipRawValue are the only format-dependent primitives --
+    // every element/property-walking loop below calls through them and is
+    // otherwise identical for binary and ASCII PLY. This is the "reader
+    // abstraction" the ASCII slice added: sharing validation/triangulation
+    // logic between dialects, rather than duplicating this whole function
+    // the way STL/PLY/glTF each get their own request struct (that
+    // precedent is about avoiding *cross-format* coupling; duplicating
+    // *within* one format's two dialects is exactly what this avoids).
+    std::function<std::optional<double>(PlyScalarType)> readScalar;
+    std::function<bool(PlyScalarType)> skipRawValue;
+    if (ascii) {
+        // The declared PlyScalarType is deliberately ignored here -- ASCII
+        // PLY values are plain decimal text with no fixed width, so there's
+        // no per-type byte size to honor the way the binary path has. The
+        // same downstream checks that already apply to binary values
+        // (list-length caps, the vertex-count bound, isfinite checks on
+        // positions/normals, index range checks) still validate every
+        // value read this way.
+        readScalar = [&](PlyScalarType) -> std::optional<double> { return tokenizer.NextNumber(); };
+        skipRawValue = [&](PlyScalarType) -> bool { return tokenizer.NextToken().has_value(); };
+    } else {
+        readScalar = [&, bigEndian](PlyScalarType type) -> std::optional<double> {
+            auto bytes = ReadBytes(sourcePlyBytes, cursor, ScalarByteSize(type));
+            if (!bytes) {
+                return std::nullopt;
+            }
+            return ReadScalarAsDouble(type, bigEndian, *bytes);
+        };
+        skipRawValue = [&](PlyScalarType type) -> bool {
+            return ReadBytes(sourcePlyBytes, cursor, ScalarByteSize(type)).has_value();
+        };
+    }
 
     auto skipList = [&](const PlyProperty& prop) -> std::optional<ImportErrorCode> {
         auto countOpt = readScalar(prop.countType);
@@ -545,9 +584,8 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             return ImportErrorCode::ResourceLimit;
         }
         uint64_t count = static_cast<uint64_t>(*countOpt);
-        size_t valueSize = ScalarByteSize(prop.valueType);
         for (uint64_t i = 0; i < count; ++i) {
-            if (!ReadBytes(sourcePlyBytes, cursor, valueSize)) {
+            if (!skipRawValue(prop.valueType)) {
                 return ImportErrorCode::MalformedData;
             }
         }
@@ -692,9 +730,8 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                             continue;
                         }
                         uint64_t count = static_cast<uint64_t>(*countOpt);
-                        size_t valueSize = ScalarByteSize(prop.valueType);
                         for (uint64_t k = 0; k < count; ++k) {
-                            if (!ReadBytes(sourcePlyBytes, cursor, valueSize)) {
+                            if (!skipRawValue(prop.valueType)) {
                                 hardError = ImportErrorCode::MalformedData;
                                 break;
                             }

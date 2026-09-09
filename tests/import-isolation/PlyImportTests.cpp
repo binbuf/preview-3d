@@ -1,8 +1,12 @@
 // Gate 3 slice 3: real binary-PLY (Stanford Polygon) parsing behind the
 // sandbox. The third complete format wired through the same AppContainer-
 // sandboxed pipeline GltfImportTests.cpp/StlImportTests.cpp already proved.
-// Binary little- and big-endian only (mesh or point cloud); ASCII PLY is
-// Tier B, explicitly out of scope -- see PlyAdapter.cpp's header comment.
+// Binary little- and big-endian only (mesh or point cloud).
+//
+// Gate 3 slice 5 added ASCII PLY on top of this (see the "[ply-import]"
+// cases below the binary ones) -- same worker/opcode/request, PlyAdapter.cpp
+// shares its element/property/triangulation logic between dialects and only
+// switches how a scalar/list value is read off the wire.
 
 #include "SandboxTestSupport.h"
 #include "import_broker/SandboxLauncher.h"
@@ -24,6 +28,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -150,6 +155,49 @@ std::vector<std::byte> BuildPointCloudPly(bool bigEndian, const std::vector<std:
         AppendF32(body, p[2], false);
     }
     return BuildBinaryPly(header, body);
+}
+
+std::vector<std::byte> PlyStringToBytes(const std::string& text)
+{
+    std::vector<std::byte> bytes(text.size());
+    std::memcpy(bytes.data(), text.data(), text.size());
+    return bytes;
+}
+
+// ASCII-body equivalents of BuildMeshPly/BuildPointCloudPly -- same header
+// shape, but element records are whitespace-separated decimal text rather
+// than a packed binary blob.
+std::vector<std::byte> BuildAsciiMeshPly(bool includeNormals,
+                                          const std::vector<std::array<float, 3>>& positions,
+                                          const std::vector<std::array<float, 3>>& normals,
+                                          const std::vector<std::vector<uint32_t>>& faces)
+{
+    std::ostringstream out;
+    out << "ply\nformat ascii 1.0\n";
+    out << "element vertex " << positions.size() << "\n";
+    out << "property float x\nproperty float y\nproperty float z\n";
+    if (includeNormals) {
+        out << "property float nx\nproperty float ny\nproperty float nz\n";
+    }
+    out << "element face " << faces.size() << "\n";
+    out << "property list uchar int vertex_indices\n";
+    out << "end_header\n";
+
+    for (size_t i = 0; i < positions.size(); ++i) {
+        out << positions[i][0] << " " << positions[i][1] << " " << positions[i][2];
+        if (includeNormals) {
+            out << " " << normals[i][0] << " " << normals[i][1] << " " << normals[i][2];
+        }
+        out << "\n";
+    }
+    for (const auto& face : faces) {
+        out << face.size();
+        for (uint32_t idx : face) {
+            out << " " << idx;
+        }
+        out << "\n";
+    }
+    return PlyStringToBytes(out.str());
 }
 
 // A scratch on-disk file holding pre-built bytes -- mirrors
@@ -623,7 +671,8 @@ TEST_CASE("A file missing the ply magic first line is rejected as MalformedData"
     CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
 }
 
-TEST_CASE("A format ascii PLY is rejected as MalformedData (ASCII is out of scope)", "[ply-import]")
+TEST_CASE("A minimal format-ascii PLY point cloud round-trips through the real sandboxed pipeline",
+          "[ply-import]")
 {
     sandbox_test_support::SandboxFixture fixture;
 
@@ -634,13 +683,19 @@ TEST_CASE("A format ascii PLY is rejected as MalformedData (ASCII is out of scop
                           "property float z\n"
                           "end_header\n"
                           "1.0 2.0 3.0\n";
-    std::vector<std::byte> bytes(header.size());
-    std::memcpy(bytes.data(), header.data(), header.size());
-    ScratchPlyFile file(bytes);
+    ScratchPlyFile file(PlyStringToBytes(header));
 
     auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/14, /*maxChunkCount=*/4);
-    CHECK_FALSE(run.ready);
-    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.descriptor.topology == model_core::ChunkTopology::PointList);
+    CHECK(chunk.descriptor.vertexCount == 1);
+    model_core::VertexPositionOnlyF32 point{};
+    std::memcpy(&point, chunk.payload.data(), sizeof(point));
+    CHECK(point.x == Catch::Approx(1.0f));
+    CHECK(point.y == Catch::Approx(2.0f));
+    CHECK(point.z == Catch::Approx(3.0f));
 }
 
 TEST_CASE("A face referencing an out-of-range vertex index is dropped; a following good face survives",
@@ -734,6 +789,201 @@ TEST_CASE("A file supplying no normal properties gets generated smooth per-verte
                                       TwoTriangleFaces()));
 
     auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/20, /*maxChunkCount=*/4);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    CHECK(run.validation.chunks[0].descriptor.vertexLayoutId
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+
+    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    std::memcpy(vertices, run.validation.chunks[0].payload.data(), sizeof(vertices));
+    for (const auto& v : vertices) {
+        CHECK(v.nx == Catch::Approx(0.0f).margin(1e-5));
+        CHECK(v.ny == Catch::Approx(0.0f).margin(1e-5));
+        CHECK(v.nz == Catch::Approx(1.0f).margin(1e-5));
+    }
+}
+
+// --- Gate 3 slice 5: ASCII PLY ------------------------------------------
+
+TEST_CASE("An ASCII PLY mesh with normals round-trips through the real sandboxed pipeline",
+          "[ply-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    std::vector<std::array<float, 3>> normals(6, std::array<float, 3>{ 0.0f, 0.0f, 1.0f });
+    ScratchPlyFile file(BuildAsciiMeshPly(true, TwoTrianglePositions(), normals, TwoTriangleFaces()));
+
+    auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/21, /*maxChunkCount=*/4);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 1);
+
+    const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.descriptor.topology == model_core::ChunkTopology::TriangleList);
+    CHECK(chunk.descriptor.vertexCount == 6);
+    CHECK(chunk.descriptor.indexCount == 6);
+
+    REQUIRE(chunk.payload.size() >= 6 * sizeof(model_core::VertexPositionNormalUv0F32));
+    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
+    for (const auto& v : vertices) {
+        CHECK(v.nz == Catch::Approx(1.0f).margin(1e-5));
+    }
+}
+
+TEST_CASE("An ASCII PLY quad face is fan-triangulated into 2 triangles with the expected index pattern",
+          "[ply-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    std::vector<std::array<float, 3>> positions{
+        { 0.0f, 0.0f, 0.0f }, { 1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }
+    };
+    std::vector<std::array<float, 3>> normals(4, std::array<float, 3>{ 0.0f, 0.0f, 1.0f });
+    std::vector<std::vector<uint32_t>> faces{ { 0, 1, 2, 3 } };
+    ScratchPlyFile file(BuildAsciiMeshPly(true, positions, normals, faces));
+
+    auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/22, /*maxChunkCount=*/4);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.descriptor.vertexCount == 4);
+    CHECK(chunk.descriptor.indexCount == 6);
+    REQUIRE(chunk.payload.size()
+            >= 4 * sizeof(model_core::VertexPositionNormalUv0F32) + 6 * sizeof(uint32_t));
+    uint32_t indices[6]{};
+    std::memcpy(indices, chunk.payload.data() + 4 * sizeof(model_core::VertexPositionNormalUv0F32),
+                sizeof(indices));
+    CHECK(std::vector<uint32_t>(indices, indices + 6) == std::vector<uint32_t>{ 0, 1, 2, 0, 2, 3 });
+}
+
+TEST_CASE("An ASCII PLY with a non-numeric token where a scalar is expected is rejected as MalformedData",
+          "[ply-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    std::string text = "ply\nformat ascii 1.0\n"
+                        "element vertex 1\n"
+                        "property float x\n"
+                        "property float y\n"
+                        "property float z\n"
+                        "end_header\n"
+                        "notanumber 2.0 3.0\n";
+    ScratchPlyFile file(PlyStringToBytes(text));
+
+    auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/23, /*maxChunkCount=*/4);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+TEST_CASE("An ASCII PLY with an over-length token is rejected as MalformedData", "[ply-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // A single non-whitespace run past AsciiTokenizer.cpp's token-length
+    // cap (512), appearing where the first vertex's x value is expected.
+    std::string text = "ply\nformat ascii 1.0\n"
+                        "element vertex 1\n"
+                        "property float x\n"
+                        "property float y\n"
+                        "property float z\n"
+                        "end_header\n"
+        + std::string(600, '1') + " 2.0 3.0\n";
+    ScratchPlyFile file(PlyStringToBytes(text));
+
+    auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/24, /*maxChunkCount=*/4);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+TEST_CASE("An ASCII PLY face declaring more indices than remain in the file is rejected as MalformedData",
+          "[ply-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    std::string text = "ply\nformat ascii 1.0\n"
+                        "element vertex 3\n"
+                        "property float x\n"
+                        "property float y\n"
+                        "property float z\n"
+                        "element face 1\n"
+                        "property list uchar int vertex_indices\n"
+                        "end_header\n"
+                        "0 0 0\n"
+                        "1 0 0\n"
+                        "0 1 0\n"
+                        "5 0 1 2\n"; // declares 5 indices, only 3 present before EOF
+    ScratchPlyFile file(PlyStringToBytes(text));
+
+    auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/25, /*maxChunkCount=*/4);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+TEST_CASE("An ASCII PLY non-finite vertex position rejects the whole file as MalformedData",
+          "[ply-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    std::string text = "ply\nformat ascii 1.0\n"
+                        "element vertex 2\n"
+                        "property float x\n"
+                        "property float y\n"
+                        "property float z\n"
+                        "end_header\n"
+                        "nan 0 0\n"
+                        "1 1 1\n";
+    ScratchPlyFile file(PlyStringToBytes(text));
+
+    auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/26, /*maxChunkCount=*/4);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+TEST_CASE("An ASCII PLY non-finite supplied normal falls back per-vertex to (0,0,1) without failing "
+          "the file",
+          "[ply-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    std::string text = "ply\nformat ascii 1.0\n"
+                        "element vertex 3\n"
+                        "property float x\n"
+                        "property float y\n"
+                        "property float z\n"
+                        "property float nx\n"
+                        "property float ny\n"
+                        "property float nz\n"
+                        "element face 1\n"
+                        "property list uchar int vertex_indices\n"
+                        "end_header\n"
+                        "0 0 0 nan nan nan\n"
+                        "1 0 0 0 0 1\n"
+                        "0 1 0 0 0 1\n"
+                        "3 0 1 2\n";
+    ScratchPlyFile file(PlyStringToBytes(text));
+
+    auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/27, /*maxChunkCount=*/4);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    std::memcpy(vertices, run.validation.chunks[0].payload.data(), sizeof(vertices));
+    CHECK(vertices[0].nx == Catch::Approx(0.0f).margin(1e-5));
+    CHECK(vertices[0].ny == Catch::Approx(0.0f).margin(1e-5));
+    CHECK(vertices[0].nz == Catch::Approx(1.0f).margin(1e-5));
+}
+
+TEST_CASE("An ASCII PLY file supplying no normal properties gets generated smooth per-vertex normals",
+          "[ply-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    ScratchPlyFile file(
+        BuildAsciiMeshPly(/*includeNormals=*/false, TwoTrianglePositions(), {}, TwoTriangleFaces()));
+
+    auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/28, /*maxChunkCount=*/4);
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
     CHECK(run.validation.chunks[0].descriptor.vertexLayoutId
