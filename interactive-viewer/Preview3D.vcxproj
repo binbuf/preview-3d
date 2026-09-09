@@ -88,8 +88,11 @@
     <ClInclude Include="src\graphics\D3D11On12Overlay.h" />
     <ClInclude Include="src\graphics\D3D12SwapChain.h" />
     <ClInclude Include="src\graphics\FrameStats.h" />
+    <ClInclude Include="src\graphics\D3D12UploadRing.h" />
+    <ClInclude Include="src\graphics\SceneSnapshot.h" />
     <ClInclude Include="src\app\D3D12ImportBridge.h" />
     <ClInclude Include="..\shared\platform\include\platform\Win32Handle.h" />
+    <ClInclude Include="..\shared\platform\include\platform\Generation.h" />
     <ClInclude Include="..\shared\platform\include\platform\AppContainerSid.h" />
     <ClInclude Include="..\shared\platform\include\platform\ProcThreadAttributeList.h" />
     <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />
@@ -125,6 +128,7 @@
     <ClCompile Include="src\graphics\D3D11On12Overlay.cpp" />
     <ClCompile Include="src\graphics\D3D12SwapChain.cpp" />
     <ClCompile Include="src\graphics\FrameStats.cpp" />
+    <ClCompile Include="src\graphics\D3D12UploadRing.cpp" />
     <ClCompile Include="src\app\D3D12ImportBridge.cpp" />
     <ClCompile Include="..\shared\platform\src\AppContainerSid.cpp" />
     <ClCompile Include="..\shared\platform\src\ProcThreadAttributeList.cpp" />

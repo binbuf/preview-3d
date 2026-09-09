@@ -178,6 +178,11 @@ private:
     void ThreadMain(HWND window);
     bool InitializeOnThread(HWND window, std::wstring& error);
     void DrainCommands(HWND window);
+    // Retires finished copies and, on the tick an in-flight model becomes
+    // fully fence-complete, swaps it in and posts the held completion
+    // message. Called every loop iteration; cheap when nothing is
+    // outstanding.
+    void PumpUploads(HWND window);
     void RenderOneFrame();
     // Snapshots frame statistics for the UI thread. Deliberately not called
     // every frame -- FrameStats::P95Ms sorts its whole window, and doing that
@@ -215,6 +220,12 @@ private:
         std::wstring path;
     };
     std::optional<PendingUpload> uploadPending_;
+
+    // Built when an upload is queued, posted only once its copies are
+    // fence-complete. Render-thread-only, so it needs no lock: DrainCommands
+    // and PumpUploads both run there. Dropped rather than posted if the
+    // model is cleared or superseded before it lands.
+    std::unique_ptr<RenderUploadResult> pendingUploadMessage_;
 
     mutable std::mutex statsMutex_;
     StatsSnapshot stats_;

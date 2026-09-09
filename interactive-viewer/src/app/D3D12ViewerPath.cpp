@@ -15,6 +15,11 @@ using Microsoft::WRL::ComPtr;
 namespace {
 constexpr DWORD kIdleWaitTimeoutMs = 5000;
 
+// SceneSnapshotPublisher keys a published resource by (clusterId, lodLevel)
+// and replaces an entry that repeats the pair, so mesh buffers and textures
+// must not share an id space. Meshes count up from 0; textures start here.
+constexpr uint32_t kTextureClusterIdBase = 1u << 20;
+
 // Embedded HLSL, compiled at runtime via D3DCompile -- same convention
 // Renderer.cpp's D3D11 shader strings already use; no .hlsl files on disk.
 // Deliberately minimal: no materials/textures (the wire format doesn't
@@ -238,19 +243,13 @@ bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
     // matching the FrameRecorder convention SwapChainTests.cpp established.
     commandList->Close();
 
-    // Uploads get their own allocator and list so they never reset one whose
-    // frame may still be in flight.
-    if (FAILED(device.Device()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                          IID_PPV_ARGS(&uploadAllocator)))) {
-        error = L"The D3D12 upload command allocator could not be created.";
+    // The upload lane: its own copy-typed queue, allocator, list and fence,
+    // all owned by the ring. Nothing about a load is submitted to the direct
+    // queue any more.
+    if (!uploadRing.Initialize(device)) {
+        error = L"The D3D12 upload ring could not be created.";
         return false;
     }
-    if (FAILED(device.Device()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, uploadAllocator.Get(), nullptr,
-                                                    IID_PPV_ARGS(&uploadList)))) {
-        error = L"The D3D12 upload command list could not be created.";
-        return false;
-    }
-    uploadList->Close();
 
     if (!CreateDepthBuffer(swapChainOptions.width, swapChainOptions.height, error)) return false;
     if (!CreatePipeline(error)) return false;
@@ -516,21 +515,26 @@ bool D3D12ViewerPath::CreateFrameConstantBuffer(std::wstring& error)
 void D3D12ViewerPath::WaitForIdle()
 {
     // Every outstanding slot, not one scalar: with the CPU running ahead,
-    // more than one frame's work can be in flight, and an upload's fence is
-    // tracked separately from any of them.
-    uint64_t highest = uploadFence;
+    // more than one frame's work can be in flight.
+    uint64_t highest = 0;
     for (const auto& frame : frames) {
         if (frame.fenceValue > highest) highest = frame.fenceValue;
     }
     if (highest != 0) {
         directQueue.WaitForValue(highest, kIdleWaitTimeoutMs);
     }
-}
 
-void D3D12ViewerPath::WaitForUpload()
-{
-    if (uploadFence != 0) {
-        directQueue.WaitForValue(uploadFence, kIdleWaitTimeoutMs);
+    // The copy queue is a separate timeline and has to be drained
+    // separately. Signalling a fresh value and waiting on it covers
+    // everything already submitted, without the ring having to expose its
+    // own bookkeeping. This is a shutdown/resize drain -- the whole point of
+    // the rest of this class is that no *ordinary* path waits here.
+    if (uploadInFlight || !retiredModels.empty() || hasModel) {
+        uploadRing.FlushBatch();
+        uint64_t copyValue = uploadRing.CopyQueue().SignalNext();
+        if (copyValue != 0) {
+            uploadRing.CopyQueue().WaitForValue(copyValue, kIdleWaitTimeoutMs);
+        }
     }
 }
 
@@ -750,21 +754,21 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection)
         = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
 
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    if (srvHeap) {
-        ID3D12DescriptorHeap* heaps[] = { srvHeap.Get() };
+    if (model.srvHeap) {
+        ID3D12DescriptorHeap* heaps[] = { model.srvHeap.Get() };
         commandList->SetDescriptorHeaps(1, heaps);
     }
 
     // Untextured and textured meshes each need their own root
     // signature/PSO bound before their draw calls; state changes are
     // per-draw at this scale, no batching/sorting needed.
-    for (const auto& mesh : meshes) {
-        if (mesh.textureIndex >= 0 && srvHeap) {
+    for (const auto& mesh : model.meshes) {
+        if (mesh.textureIndex >= 0 && model.srvHeap) {
             commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
             commandList->SetPipelineState(texturedPipelineState.Get());
             commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
-            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = srvHeap->GetGPUDescriptorHandleForHeapStart();
-            gpuHandle.ptr += static_cast<UINT64>(mesh.textureIndex) * srvDescriptorSize;
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = model.srvHeap->GetGPUDescriptorHandleForHeapStart();
+            gpuHandle.ptr += static_cast<UINT64>(mesh.textureIndex) * model.srvDescriptorSize;
             commandList->SetGraphicsRootDescriptorTable(1, gpuHandle);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
@@ -790,69 +794,43 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection)
     EndFrame(index);
 }
 
-bool D3D12ViewerPath::UploadOneBuffer(const void* data, uint64_t sizeBytes, D3D12_RESOURCE_STATES finalState,
-                                       ComPtr<ID3D12Resource>& outBuffer, std::wstring& error)
+bool D3D12ViewerPath::CreateAndQueueBuffer(const void* data, uint64_t sizeBytes, uint32_t clusterId,
+                                            ComPtr<ID3D12Resource>& outBuffer, std::wstring& error)
 {
-    // Only this lane's own previous upload has to be complete before its
-    // allocator can be reset -- rendering uses its own per-frame allocators
-    // and is unaffected.
-    WaitForUpload();
-
-    auto staging = CreateBuffer(device.Device(), sizeBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
-    if (!staging) {
-        error = L"A staging buffer could not be created.";
-        return false;
-    }
-    void* mapped = nullptr;
-    D3D12_RANGE noRead{ 0, 0 };
-    if (FAILED(staging->Map(0, &noRead, &mapped))) {
-        error = L"A staging buffer could not be mapped.";
-        return false;
-    }
-    std::memcpy(mapped, data, static_cast<size_t>(sizeBytes));
-    staging->Unmap(0, nullptr);
-
     auto destination = CreateBuffer(device.Device(), sizeBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON);
     if (!destination) {
         error = L"A GPU buffer could not be created.";
         return false;
     }
 
-    if (FAILED(uploadAllocator->Reset()) || FAILED(uploadList->Reset(uploadAllocator.Get(), nullptr))) {
-        error = L"The upload command list could not be reset.";
+    D3D12UploadRing::UploadRequest request;
+    request.sourceBytes = std::span<const std::byte>(static_cast<const std::byte*>(data),
+                                                      static_cast<size_t>(sizeBytes));
+    request.destination = destination.Get();
+    request.generation = pendingToken;
+    request.clusterId = clusterId;
+
+    switch (uploadRing.Upload(request)) {
+    case D3D12UploadRing::UploadResult::Uploaded:
+        break;
+    case D3D12UploadRing::UploadResult::Backpressured:
+        error = L"The upload staging ring could not make room for this model.";
+        return false;
+    case D3D12UploadRing::UploadResult::Failed:
+    default:
+        error = L"A mesh buffer could not be queued for upload.";
         return false;
     }
-    uploadList->CopyBufferRegion(destination.Get(), 0, staging.Get(), 0, sizeBytes);
-
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = destination.Get();
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-    barrier.Transition.StateAfter = finalState;
-    uploadList->ResourceBarrier(1, &barrier);
-
-    if (FAILED(uploadList->Close())) {
-        error = L"The upload command list could not be closed.";
-        return false;
-    }
-    ID3D12CommandList* lists[] = { uploadList.Get() };
-    directQueue.Queue()->ExecuteCommandLists(1, lists);
-    uploadFence = directQueue.SignalNext();
-    // Synchronous: `staging` is a local released on return, so the copy must
-    // have completed before then. This is also what makes resetting
-    // uploadAllocator safe at the top of the next upload.
-    WaitForUpload();
 
     outBuffer = destination;
     return true;
 }
 
-bool D3D12ViewerPath::UploadOneTexture(const d3d12_import_bridge::ImportedImage& image, UINT heapIndex,
-                                        ComPtr<ID3D12Resource>& outTexture, std::wstring& error)
+bool D3D12ViewerPath::CreateAndQueueTexture(const d3d12_import_bridge::ImportedImage& image, UINT heapIndex,
+                                             ID3D12DescriptorHeap& heap, UINT descriptorSize,
+                                             uint32_t clusterId, ComPtr<ID3D12Resource>& outTexture,
+                                             std::wstring& error)
 {
-    WaitForUpload();
-
     auto dxgiFormat = DxgiFormatFor(image.pixelFormat, image.colorSpace);
     if (!dxgiFormat || image.width == 0 || image.height == 0 || image.mipLevels != 1) {
         error = L"An imported texture had an unsupported format or mip count.";
@@ -872,81 +850,42 @@ bool D3D12ViewerPath::UploadOneTexture(const d3d12_import_bridge::ImportedImage&
     D3D12_HEAP_PROPERTIES defaultHeap{};
     defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
     ComPtr<ID3D12Resource> texture;
+    // COMMON, not COPY_DEST: the copy now happens on a copy queue, which
+    // cannot record the COPY_DEST -> PIXEL_SHADER_RESOURCE barrier the old
+    // direct-queue path used. COMMON lets the resource promote implicitly
+    // in both directions instead. Proven, including a debug-layer message
+    // count, in UploadRingTests.cpp.
     if (FAILED(device.Device()->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
-                                                          D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                          D3D12_RESOURCE_STATE_COMMON, nullptr,
                                                           IID_PPV_ARGS(&texture)))) {
         error = L"A GPU texture could not be created.";
         return false;
     }
 
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
-    UINT numRows = 0;
-    UINT64 rowSizeInBytes = 0;
-    UINT64 totalBytes = 0;
-    device.Device()->GetCopyableFootprints(&texDesc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
+    D3D12UploadRing::UploadTextureRequest request;
+    request.sourceBytes = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(image.pixelBytes.data()), image.pixelBytes.size());
+    request.destination = texture.Get();
+    request.width = image.width;
+    request.height = image.height;
+    request.format = *dxgiFormat;
+    request.generation = pendingToken;
+    request.clusterId = clusterId;
 
-    auto staging = CreateBuffer(device.Device(), totalBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
-    if (!staging) {
-        error = L"A texture staging buffer could not be created.";
+    switch (uploadRing.UploadTexture(request)) {
+    case D3D12UploadRing::UploadResult::Uploaded:
+        break;
+    case D3D12UploadRing::UploadResult::Backpressured:
+        error = L"The upload staging ring could not make room for this model's textures.";
+        return false;
+    case D3D12UploadRing::UploadResult::Failed:
+    default:
+        // UploadTexture also rejects a source smaller than the footprint it
+        // computed, which is the "declared size" check this used to make
+        // itself.
+        error = L"An imported texture could not be queued for upload.";
         return false;
     }
-    void* mapped = nullptr;
-    D3D12_RANGE noRead{ 0, 0 };
-    if (FAILED(staging->Map(0, &noRead, &mapped))) {
-        error = L"A texture staging buffer could not be mapped.";
-        return false;
-    }
-    // The wire format packs rows tightly (no padding); the UPLOAD-heap
-    // staging buffer requires each row start 256-byte aligned
-    // (footprint.Footprint.RowPitch) -- copy row by row rather than a
-    // single bulk memcpy.
-    const auto* src = reinterpret_cast<const uint8_t*>(image.pixelBytes.data());
-    auto* dst = static_cast<uint8_t*>(mapped) + footprint.Offset;
-    size_t srcRowBytes = static_cast<size_t>(rowSizeInBytes);
-    if (image.pixelBytes.size() < static_cast<size_t>(numRows) * srcRowBytes) {
-        staging->Unmap(0, nullptr);
-        error = L"An imported texture's pixel data was smaller than its declared size.";
-        return false;
-    }
-    for (UINT row = 0; row < numRows; ++row) {
-        std::memcpy(dst + static_cast<size_t>(row) * footprint.Footprint.RowPitch, src + row * srcRowBytes,
-                    srcRowBytes);
-    }
-    staging->Unmap(0, nullptr);
-
-    if (FAILED(uploadAllocator->Reset()) || FAILED(uploadList->Reset(uploadAllocator.Get(), nullptr))) {
-        error = L"The texture upload command list could not be reset.";
-        return false;
-    }
-
-    D3D12_TEXTURE_COPY_LOCATION dstLoc{};
-    dstLoc.pResource = texture.Get();
-    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    dstLoc.SubresourceIndex = 0;
-    D3D12_TEXTURE_COPY_LOCATION srcLoc{};
-    srcLoc.pResource = staging.Get();
-    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    srcLoc.PlacedFootprint = footprint;
-    uploadList->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
-
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = texture.Get();
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    uploadList->ResourceBarrier(1, &barrier);
-
-    if (FAILED(uploadList->Close())) {
-        error = L"The texture upload command list could not be closed.";
-        return false;
-    }
-    ID3D12CommandList* lists[] = { uploadList.Get() };
-    directQueue.Queue()->ExecuteCommandLists(1, lists);
-    uploadFence = directQueue.SignalNext();
-    // Synchronous: `staging` is a local released on return, and the SRV below
-    // is written only after the copy has landed.
-    WaitForUpload();
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Format = *dxgiFormat;
@@ -954,44 +893,60 @@ bool D3D12ViewerPath::UploadOneTexture(const d3d12_import_bridge::ImportedImage&
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Texture2D.MipLevels = 1;
 
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = srvHeap->GetCPUDescriptorHandleForHeapStart();
-    cpuHandle.ptr += static_cast<SIZE_T>(heapIndex) * srvDescriptorSize;
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = heap.GetCPUDescriptorHandleForHeapStart();
+    cpuHandle.ptr += static_cast<SIZE_T>(heapIndex) * descriptorSize;
     device.Device()->CreateShaderResourceView(texture.Get(), &srvDesc, cpuHandle);
 
     outTexture = texture;
     return true;
 }
 
-bool D3D12ViewerPath::UploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
-                                   const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
-                                   const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
-                                   std::wstring& error)
+bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
+                                        const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
+                                        const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
+                                        std::wstring& error)
 {
-    ClearModel();
+    // Supersede anything already in flight. Advancing IS the cancellation
+    // signal: the abandoned batch's copies still complete, but
+    // DrainCompletedPublications drops their publications as stale instead
+    // of promoting them. Deliberately does NOT touch `model` -- the
+    // currently drawn one keeps drawing until this batch is fully ready.
+    pendingToken = platform::GenerationToken(uploadGeneration.Advance());
+    RetireInFlightUpload();
+    pendingResourceCount = 0;
+    uploadInFlight = false;
 
-    // Upload each unique image at most once, in a fresh shader-visible heap
-    // sized to importedImages.size() -- created up front so UploadOneTexture
-    // can write each SRV directly to its slot as it uploads.
-    std::vector<GpuTexture> newTextures;
+    ModelResources staged;
+
+    // Queue each unique image at most once, into a fresh shader-visible
+    // heap sized to importedImages.size() -- created up front so each SRV
+    // can be written straight to its slot.
     if (!importedImages.empty()) {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
         heapDesc.NumDescriptors = static_cast<UINT>(importedImages.size());
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        if (FAILED(device.Device()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&srvHeap)))) {
+        if (FAILED(device.Device()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&staged.srvHeap)))) {
             error = L"The texture descriptor heap could not be created.";
             return false;
         }
-        srvDescriptorSize = device.Device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        staged.srvDescriptorSize
+            = device.Device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-        newTextures.resize(importedImages.size());
+        staged.textures.resize(importedImages.size());
         for (size_t i = 0; i < importedImages.size(); ++i) {
             GpuTexture texture;
             texture.srvHeapIndex = static_cast<UINT>(i);
-            if (!UploadOneTexture(importedImages[i], texture.srvHeapIndex, texture.resource, error)) {
+            if (!CreateAndQueueTexture(importedImages[i], texture.srvHeapIndex, *staged.srvHeap.Get(),
+                                        staged.srvDescriptorSize, static_cast<uint32_t>(kTextureClusterIdBase + i),
+                                        texture.resource, error)) {
+                staged.textures[i] = std::move(texture);
+                RetireStagedResources(std::move(staged));
+                pendingResourceCount = 0;
                 return false;
             }
-            newTextures[i] = std::move(texture);
+            staged.textures[i] = std::move(texture);
+            ++pendingResourceCount;
         }
     }
 
@@ -1010,7 +965,7 @@ bool D3D12ViewerPath::UploadModel(const std::vector<d3d12_import_bridge::Importe
         return nullptr;
     };
 
-    std::vector<GpuMesh> newMeshes;
+    uint32_t clusterId = 0;
     for (const auto& mesh : importedMeshes) {
         if (mesh.topology != model_core::ChunkTopology::TriangleList
             || mesh.vertexLayoutId != model_core::VertexLayoutId::PositionNormalUv0_F32) {
@@ -1023,16 +978,27 @@ bool D3D12ViewerPath::UploadModel(const std::vector<d3d12_import_bridge::Importe
         const uint64_t indexBytes = static_cast<uint64_t>(mesh.indexCount) * sizeof(uint32_t);
         if (mesh.payload.size() < vertexBytes + indexBytes) {
             error = L"An imported mesh's data was smaller than its declared size.";
+            RetireStagedResources(std::move(staged));
+            pendingResourceCount = 0;
             return false;
         }
 
+        // Both buffers go onto `staged` before any early return, so a
+        // failure retires every resource the ring has already recorded a
+        // copy into rather than destructing it under an unexecuted copy.
         GpuMesh gpuMesh;
-        if (!UploadOneBuffer(mesh.payload.data(), vertexBytes, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-                              gpuMesh.vertexBuffer, error))
+        const bool vertexOk
+            = CreateAndQueueBuffer(mesh.payload.data(), vertexBytes, clusterId++, gpuMesh.vertexBuffer, error);
+        const bool indexOk = vertexOk
+            && CreateAndQueueBuffer(mesh.payload.data() + vertexBytes, indexBytes, clusterId++,
+                                     gpuMesh.indexBuffer, error);
+        if (!vertexOk || !indexOk) {
+            staged.meshes.push_back(std::move(gpuMesh));
+            RetireStagedResources(std::move(staged));
+            pendingResourceCount = 0;
             return false;
-        if (!UploadOneBuffer(mesh.payload.data() + vertexBytes, indexBytes, D3D12_RESOURCE_STATE_INDEX_BUFFER,
-                              gpuMesh.indexBuffer, error))
-            return false;
+        }
+        pendingResourceCount += 2;
 
         gpuMesh.vbv.BufferLocation = gpuMesh.vertexBuffer->GetGPUVirtualAddress();
         gpuMesh.vbv.SizeInBytes = static_cast<UINT>(vertexBytes);
@@ -1046,25 +1012,123 @@ bool D3D12ViewerPath::UploadModel(const std::vector<d3d12_import_bridge::Importe
             gpuMesh.textureIndex = findImageIndex(material->baseColorImageChunkId);
         }
 
-        newMeshes.push_back(std::move(gpuMesh));
+        staged.meshes.push_back(std::move(gpuMesh));
     }
 
-    if (newMeshes.empty()) {
+    if (staged.meshes.empty()) {
         error = L"This file did not contain a mesh this preview slice can display yet.";
+        // Textures may already have been queued even though no mesh was.
+        RetireStagedResources(std::move(staged));
+        pendingResourceCount = 0;
         return false;
     }
 
-    meshes = std::move(newMeshes);
-    textures = std::move(newTextures);
+    // Submit whatever is still under the batch threshold, so the copies
+    // actually start rather than waiting for a later caller to flush.
+    uploadRing.FlushBatch();
+
+    pendingModel = std::move(staged);
+    uploadInFlight = true;
+    return true;
+}
+
+void D3D12ViewerPath::RetireStagedResources(ModelResources&& resources)
+{
+    if (resources.meshes.empty() && resources.textures.empty()) {
+        return;
+    }
+    // Close any still-open batch first, so LastSubmittedFenceValue()
+    // genuinely covers the copies recorded into these resources. This is
+    // the same hazard D3D12UploadRing::Grow() already handles for the ring
+    // resource itself: a fence value captured before the batch is submitted
+    // does not cover work in it.
+    uploadRing.FlushBatch();
+    retiredModels.push_back(
+        RetiredModel{ std::move(resources), /*directFenceValue=*/0, uploadRing.LastSubmittedFenceValue() });
+}
+
+void D3D12ViewerPath::RetireInFlightUpload()
+{
+    if (uploadInFlight) {
+        RetireStagedResources(std::move(pendingModel));
+    }
+    pendingModel = ModelResources{};
+    uploadInFlight = false;
+}
+
+bool D3D12ViewerPath::PollUploads()
+{
+    SceneSnapshotPtr snapshot = uploadRing.DrainCompletedPublications(uploadGeneration);
+    if (!uploadInFlight) {
+        return false;
+    }
+
+    // Every resource of this generation must be fence-complete before any
+    // of it is drawn -- a partially-copied vertex buffer renders garbage,
+    // and this slice publishes a whole model rather than progressive
+    // proxies (that is the separate non-terminal-delivery chunk).
+    size_t readyForThisGeneration = 0;
+    for (const ReadyResourceInfo& info : snapshot->ReadyResources()) {
+        if (info.generationValue == pendingToken.Value()) {
+            ++readyForThisGeneration;
+        }
+    }
+    if (readyForThisGeneration < pendingResourceCount) {
+        return false;
+    }
+
+    // Retire the displaced model behind the newest direct fence that could
+    // still reference it, rather than releasing it here.
+    if (hasModel || !model.meshes.empty()) {
+        uint64_t highest = 0;
+        for (const auto& frame : frames) {
+            if (frame.fenceValue > highest) highest = frame.fenceValue;
+        }
+        // Copies into this set are long finished -- it has been drawing --
+        // so only the direct timeline constrains it.
+        retiredModels.push_back(RetiredModel{ std::move(model), highest, /*copyFenceValue=*/0 });
+    }
+
+    model = std::move(pendingModel);
+    pendingModel = ModelResources{};
+    uploadInFlight = false;
+    pendingResourceCount = 0;
     hasModel = true;
     return true;
 }
 
+void D3D12ViewerPath::ReclaimRetired()
+{
+    uploadRing.ReclaimCompleted();
+
+    const uint64_t directCompleted = directQueue.CompletedValue();
+    const uint64_t copyCompleted = uploadRing.CopyQueue().CompletedValue();
+    for (auto it = retiredModels.begin(); it != retiredModels.end();) {
+        // Both timelines, not either: a superseded upload is constrained by
+        // the copy fence and a displaced model by the direct one, and a set
+        // can in principle be waiting on both.
+        if (it->directFenceValue <= directCompleted && it->copyFenceValue <= copyCompleted) {
+            it = retiredModels.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void D3D12ViewerPath::ClearModel()
 {
-    if (hasModel) WaitForIdle();
-    meshes.clear();
-    textures.clear();
-    srvHeap.Reset();
+    // Unconditional, unlike the retire path: callers are shutdown and
+    // explicit close, where waiting is correct and there is no later frame
+    // to reclaim behind.
+    if (hasModel || uploadInFlight || !retiredModels.empty()) WaitForIdle();
+    uploadGeneration.Advance(); // strand any still-in-flight publications
+    // WaitForIdle above drained both timelines, so everything here is
+    // provably unreferenced and can be released outright rather than
+    // retired.
+    model = ModelResources{};
+    pendingModel = ModelResources{};
+    retiredModels.clear();
+    uploadInFlight = false;
+    pendingResourceCount = 0;
     hasModel = false;
 }

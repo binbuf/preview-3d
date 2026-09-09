@@ -69,6 +69,35 @@ public:
         uint32_t lodLevel = 0;
     };
 
+    // One mip-0 Texture2D upload. Separate from UploadRequest because a
+    // texture copy is not a byte range: D3D12 requires the staging rows be
+    // padded to D3D12_TEXTURE_DATA_PLACEMENT_PITCH_ALIGNMENT (256) and the
+    // source offset within the staging resource be aligned to
+    // D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT (512), so the ring has to lay
+    // the bytes out itself rather than copy a caller-supplied blob.
+    // `sourceBytes` is the tightly-packed source (the wire format's own
+    // layout, which does NOT satisfy either requirement -- a straight
+    // memcpy would be silently wrong).
+    //
+    // `destination` must have been created in D3D12_RESOURCE_STATE_COMMON:
+    // the copy queue implicitly promotes COMMON -> COPY_DEST, and the state
+    // decays back to COMMON when ExecuteCommandLists completes, so the
+    // direct queue can then implicitly promote it again to
+    // PIXEL_SHADER_RESOURCE on first use. A texture created explicitly in
+    // COPY_DEST would stay there and need a barrier a copy queue cannot
+    // record.
+    struct UploadTextureRequest
+    {
+        std::span<const std::byte> sourceBytes;
+        ID3D12Resource* destination = nullptr; // non-owning; a DEFAULT-heap Texture2D created in COMMON
+        uint32_t width = 0;
+        uint32_t height = 0;
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+        platform::GenerationToken generation;
+        uint32_t clusterId = 0;
+        uint32_t lodLevel = 0;
+    };
+
     enum class UploadResult { Uploaded, Backpressured, Failed };
 
     // Neither copyable nor movable -- it owns a SceneSnapshotPublisher,
@@ -90,6 +119,11 @@ public:
     // ordinary streaming should never see this if callers periodically
     // call ReclaimCompleted()/DrainCompletedPublications().
     UploadResult Upload(const UploadRequest& request);
+
+    // Same lane, same fence, same publication path as Upload() -- so a
+    // model's geometry and its textures retire together and become
+    // drawable in one snapshot rather than in two races.
+    UploadResult UploadTexture(const UploadTextureRequest& request);
 
     // Closes and submits whatever's currently recorded, even if under
     // the batch threshold. The ring never auto-flushes off a timer by
@@ -116,6 +150,14 @@ public:
     SceneSnapshotPtr CurrentSnapshot() const { return publisher_.Current(); }
 
     D3D12CommandQueue& CopyQueue() noexcept { return copyQueue_; }
+
+    // The copy fence value covering every batch submitted so far. A caller
+    // that wants to release a destination resource the ring has recorded a
+    // copy into must wait for this first: D3D12 command lists do not keep
+    // referenced resources alive on the application's behalf, so dropping
+    // the last reference while a copy is still queued is a use-after-free.
+    // Pair it with FlushBatch() to make sure a still-open batch is covered.
+    uint64_t LastSubmittedFenceValue() const noexcept { return lastSubmittedFenceValue_; }
     uint64_t CapacityBytes() const noexcept { return capacity_; }
     uint64_t UsedBytes() const noexcept { return usedBytes_; }
     size_t PendingRingAllocationCount() const noexcept { return pendingRingAllocations_.size(); }
@@ -143,8 +185,18 @@ private:
                                std::byte*& outMapped);
     bool BeginBatch();
     bool Grow();
-    bool TryAllocateInternal(uint64_t size, uint64_t& outOffset, uint64_t& outOccupiedBytes);
-    bool EnsureSpace(uint64_t size, uint64_t& outOffset, uint64_t& outOccupiedBytes);
+    // `alignment` is 1 for buffer copies and
+    // D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT for texture copies. Bytes
+    // skipped to reach an aligned offset are charged to the allocation's
+    // occupiedBytes so reclamation stays balanced.
+    bool TryAllocateInternal(uint64_t size, uint64_t alignment, uint64_t& outOffset,
+                              uint64_t& outOccupiedBytes);
+    bool EnsureSpace(uint64_t size, uint64_t alignment, uint64_t& outOffset, uint64_t& outOccupiedBytes);
+    // Shared tail of Upload/UploadTexture: records the ring allocation and
+    // the pending publication, then flushes if the batch threshold is hit.
+    void RecordAllocationAndPublication(uint64_t size, uint64_t occupiedBytes, ID3D12Resource* destination,
+                                         const platform::GenerationToken& generation, uint32_t clusterId,
+                                         uint32_t lodLevel, uint64_t approximateBytes);
 
     ID3D12Device* device_ = nullptr; // non-owning
     D3D12CommandQueue copyQueue_;

@@ -211,14 +211,24 @@ void RenderThread::ThreadMain(HWND window)
         DrainCommands(window);
         if (stopRequested_.load(std::memory_order_acquire)) break;
 
+        // Before deciding whether to render: retire finished copies and, if
+        // this is the tick the in-flight model became complete, swap it in
+        // and notify. Cheap when nothing is outstanding.
+        PumpUploads(window);
+
         bool cameraMoving = false;
         {
             std::lock_guard<std::mutex> lock(cameraMutex_);
             cameraMoving = camera_.HasMotion();
         }
         const bool benching = benchRemaining_ > 0;
+        // An upload in flight keeps the loop awake: the copy fence is
+        // polled, not waited on, so something has to come back and look.
+        // This is what replaces the old blocking wait -- the viewport stays
+        // live, still presenting the previous model, while bytes land.
+        const bool uploading = path_.UploadInFlight();
         const bool wanted = invalidated_.exchange(false, std::memory_order_acq_rel)
-            || uiAnimating_.load(std::memory_order_acquire) || cameraMoving || benching;
+            || uiAnimating_.load(std::memory_order_acquire) || cameraMoving || benching || uploading;
 
         if (!wanted) {
             WaitForSingleObject(wakeEvent_.get(), kIdleWaitMs);
@@ -286,6 +296,10 @@ void RenderThread::DrainCommands(HWND window)
     if (doClear) {
         path_.ClearModel();
         hasModel_.store(false, std::memory_order_release);
+        // An upload abandoned mid-flight has no completion to report; its
+        // message would otherwise be posted by a later PollUploads that can
+        // never succeed.
+        pendingUploadMessage_.reset();
     }
 
     if (upload) {
@@ -294,10 +308,9 @@ void RenderThread::DrainCommands(HWND window)
         message->path = std::move(upload->path);
 
         std::wstring uploadError;
-        if (path_.UploadModel(upload->result.meshes, upload->result.materials, upload->result.images,
-                               uploadError)) {
+        if (path_.BeginUploadModel(upload->result.meshes, upload->result.materials, upload->result.images,
+                                    uploadError)) {
             message->ok = true;
-            hasModel_.store(true, std::memory_order_release);
 
             // Bounds now that the payloads are here. Unlike the old UI-thread
             // scan this also counts PositionOnly_F32 chunks, so a point cloud
@@ -337,11 +350,21 @@ void RenderThread::DrainCommands(HWND window)
                 std::lock_guard<std::mutex> lock(cameraMutex_);
                 camera_.SetBounds(boundsMin, boundsMax, viewportAspect_);
             }
-        } else {
-            message->ok = false;
-            message->errorSummary = L"The model was read but could not be displayed.";
-            message->errorDetails = uploadError;
+
+            // The copies are queued on the copy queue, not finished. Hold
+            // the notification until PollUploads() sees the whole batch
+            // retire -- posting now would tell the UI a model is displayed
+            // while its vertex buffers were still being written. A
+            // superseded upload's message is dropped here rather than
+            // posted late.
+            pendingUploadMessage_ = std::move(message);
+            invalidated_.store(true, std::memory_order_release);
+            return;
         }
+
+        message->ok = false;
+        message->errorSummary = L"The model was read but could not be displayed.";
+        message->errorDetails = uploadError;
 
         // PostMessageW is non-blocking and thread-safe. Nothing here may call
         // a blocking window API: SetWindowTextW and friends marshal to the UI
@@ -353,6 +376,28 @@ void RenderThread::DrainCommands(HWND window)
         (void)message.release(); // the handler takes ownership
         invalidated_.store(true, std::memory_order_release);
     }
+}
+
+void RenderThread::PumpUploads(HWND window)
+{
+    AssertOnRenderThread();
+
+    path_.ReclaimRetired();
+    if (!path_.PollUploads()) {
+        return;
+    }
+
+    hasModel_.store(true, std::memory_order_release);
+    invalidated_.store(true, std::memory_order_release);
+
+    if (!pendingUploadMessage_) {
+        return;
+    }
+    auto message = std::move(pendingUploadMessage_);
+    if (!PostMessageW(window, kRenderUploadCompleteMessage, 0, reinterpret_cast<LPARAM>(message.get()))) {
+        return; // unique_ptr frees it
+    }
+    (void)message.release(); // the handler takes ownership
 }
 
 void RenderThread::RenderOneFrame()

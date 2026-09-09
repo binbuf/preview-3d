@@ -12,21 +12,29 @@
 // one fixed root signature/PSO/shader pair targeting
 // model_core::VertexPositionNormalUv0F32's {position,normal,uv} layout (no
 // materials/textures yet -- a single hardcoded albedo, hemisphere-lit by
-// vertex normal only), a plain synchronous per-buffer upload (no
-// D3D12UploadRing -- that primitive is for progressive/streaming multi-chunk
-// upload, unnecessary complexity for one static mesh), and no chrome/D2D
-// overlay (needs D3D11-on-12 interop or a parallel D2D path -- a separate,
-// later slice). Point-cloud (PositionOnly_F32) chunks are silently skipped
-// by UploadModel, not rendered.
+// vertex normal only) and no chrome/D2D overlay (needs the ~750 lines of
+// Renderer.cpp drawing ported onto the D3D11On12 bridge -- a separate,
+// later chunk). Point-cloud (PositionOnly_F32) chunks are silently skipped
+// by BeginUploadModel, not rendered.
+//
+// Uploads run on their own copy queue through D3D12UploadRing and publish
+// through SceneSnapshot, so no load-time GPU work is submitted to or waited
+// on by the direct queue. This is the shape .docs/design/
+// 04-rendering-and-streaming.md:16 specifies (one direct and one copy
+// queue) and what Gate 2's "direct queue records no ordinary load-time wait
+// on the copy fence" exit criterion requires; the previous synchronous
+// direct-queue staging path contradicted it.
 
 #include "D3D11On12Overlay.h"
 #include "D3D12CommandQueue.h"
 #include "D3D12Device.h"
 #include "D3D12ImportBridge.h"
 #include "D3D12SwapChain.h"
+#include "D3D12UploadRing.h"
 #include "FrameStats.h"
 
 #include <DirectXMath.h>
+#include <platform/Generation.h>
 #include <wrl/client.h>
 
 #include <cstddef>
@@ -58,16 +66,6 @@ struct D3D12ViewerPath
     // the allocators it does not need slotting -- the same shape
     // SwapChainTests.cpp's FrameRecorder already uses.
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
-
-    // Uploads keep their synchronous semantics -- their staging buffers are
-    // locals released at return, which is only safe because they block -- but
-    // must not touch a render slot's allocator, since resetting one whose
-    // frame is still in flight is exactly what the slots above exist to
-    // prevent. This mirrors D3D12UploadRing, which already owns its own
-    // queue, allocator and fence value (D3D12UploadRing.h:150-154).
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> uploadAllocator;
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> uploadList;
-    uint64_t uploadFence = 0;
 
     FrameStats frameStats;
 
@@ -135,20 +133,72 @@ struct D3D12ViewerPath
         UINT indexCount = 0;
         int textureIndex = -1; // index into textures[]; -1 = untextured PSO
     };
-    std::vector<GpuMesh> meshes;
-    bool hasModel = false;
-
     struct GpuTexture
     {
         Microsoft::WRL::ComPtr<ID3D12Resource> resource;
         UINT srvHeapIndex = 0;
     };
-    std::vector<GpuTexture> textures;
-    // One small shader-visible CBV_SRV_UAV heap, sized to textures.size()
-    // and (re)created once per UploadModel call -- not per-frame. Absent
-    // (nullptr) when the current model has no textures.
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
-    UINT srvDescriptorSize = 0;
+
+    // One model's GPU-side resources as a unit, so a completed upload can
+    // replace the drawable set with a single swap and the displaced set can
+    // be retired behind one fence value rather than tracked piecemeal.
+    struct ModelResources
+    {
+        std::vector<GpuMesh> meshes;
+        std::vector<GpuTexture> textures;
+        // One small shader-visible CBV_SRV_UAV heap, sized to
+        // textures.size() and created once per model -- not per frame.
+        // Absent (nullptr) when the model has no textures.
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
+        UINT srvDescriptorSize = 0;
+    };
+
+    // What RenderFrame draws. Deliberately untouched while a new model is
+    // uploading, so a slow copy keeps presenting the previous model instead
+    // of blanking the viewport -- 04-rendering-and-streaming.md's "the
+    // direct queue ... keeps drawing the previous proxy/LOD", and the
+    // behaviour Gate 2's forced-copy-delay exit criterion is written
+    // against.
+    ModelResources model;
+    bool hasModel = false;
+
+    // Being uploaded. These resources exist but their bytes are still in
+    // flight on the copy queue, so nothing here may be drawn until
+    // PollUploads() sees every one of them retire.
+    ModelResources pendingModel;
+    bool uploadInFlight = false;
+    size_t pendingResourceCount = 0;
+    platform::GenerationToken pendingToken;
+
+    // The upload lane: a copy-typed queue plus the persistently-mapped
+    // staging ring and the fence-complete publication path. This is what
+    // keeps load-time GPU work off the direct queue -- Gate 2's "direct
+    // queue records no ordinary load-time wait on the copy fence".
+    D3D12UploadRing uploadRing;
+    // Advancing this IS the cancellation signal: a superseded model's
+    // publications are dropped by DrainCompletedPublications rather than
+    // promoted.
+    platform::GenerationSource uploadGeneration;
+
+    // Models awaiting the fences that could still reference them. D3D12
+    // command lists do not keep referenced resources alive on the
+    // application's behalf, so releasing on swap would free memory the GPU
+    // is still reading -- or, for a superseded upload, still *writing*.
+    //
+    // Both fences matter, and for different reasons:
+    //   directFenceValue -- a displaced drawable model may still be
+    //     referenced by frames already submitted to the direct queue;
+    //   copyFenceValue   -- a superseded in-flight model has copies
+    //     recorded into its destinations that have not executed yet.
+    // A model released early on either timeline is a use-after-free, so
+    // both must have completed.
+    struct RetiredModel
+    {
+        ModelResources resources;
+        uint64_t directFenceValue = 0;
+        uint64_t copyFenceValue = 0;
+    };
+    std::vector<RetiredModel> retiredModels;
 
     // Creates the device, direct queue, swap chain (sized to `window`'s
     // current client rect), the per-frame command allocators and the shared
@@ -189,11 +239,30 @@ struct D3D12ViewerPath
     // texture slots) are carried through `materials` but not consumed by
     // either shader yet, a deliberate scope narrowing for this slice.
     // Returns false (with `error` set) if no renderable mesh resulted.
-    // Replaces any previously uploaded model first.
-    bool UploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
-                      const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
-                      const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
-                      std::wstring& error);
+    //
+    // Asynchronous: this creates the destination resources and queues every
+    // copy onto the upload ring's copy queue, then returns without waiting.
+    // The previously uploaded model keeps drawing until PollUploads()
+    // observes the whole batch retire. Supersedes any upload already in
+    // flight by advancing uploadGeneration, which makes the abandoned one's
+    // publications stale rather than merely unwanted.
+    bool BeginUploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
+                           const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
+                           const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
+                           std::wstring& error);
+
+    // Drains the ring's fence-complete publications and, once every
+    // resource of the in-flight model is ready, swaps it in as the drawable
+    // one and retires the displaced set behind the current direct fence.
+    // Returns true exactly on that transition, so a caller can post its
+    // "upload complete" notification once. Cheap; call every frame.
+    bool PollUploads();
+
+    bool UploadInFlight() const noexcept { return uploadInFlight; }
+
+    // Releases retired models whose direct fence has completed, and lets
+    // the ring reclaim staging space. Cheap; call every frame.
+    void ReclaimRetired();
 
     // Releases the currently uploaded GPU buffers, if any. Waits for the GPU
     // to be idle first -- callers must not still be mid-frame.
@@ -221,22 +290,39 @@ private:
     // primitive count, so the measured cost means something. Returns the
     // CPU milliseconds spent between Acquire and Flush.
     double DrawSpikeOverlay(UINT frameIndex);
-    // Bounded wait on the upload lane's own fence only. Rendering is
-    // unaffected -- that is the point of the separate allocator.
-    void WaitForUpload();
+    // Moves resources the copy queue may still be writing into onto the
+    // retire list behind the ring's current submitted fence, instead of
+    // letting them destruct here. Flushes first, so that fence value
+    // genuinely covers copies recorded into them.
+    void RetireStagedResources(ModelResources&& resources);
+    // Retires whatever upload is still in flight, for when a new one
+    // supersedes it or the model is being torn down.
+    void RetireInFlightUpload();
     bool CreateDepthBuffer(UINT width, UINT height, std::wstring& error);
     bool CreatePipeline(std::wstring& error);
     bool CreateTexturedPipeline(std::wstring& error);
     bool CreateFrameConstantBuffer(std::wstring& error);
-    bool UploadOneBuffer(const void* data, uint64_t sizeBytes, D3D12_RESOURCE_STATES finalState,
-                          Microsoft::WRL::ComPtr<ID3D12Resource>& outBuffer, std::wstring& error);
-    // Uploads one image's pixel bytes (mip 0 only, per PixelFormats.h's
-    // tightly-packed layout) as a DEFAULT-heap Texture2D and writes its SRV
-    // into srvHeap at heapIndex. Uses ID3D12Device::GetCopyableFootprints to
-    // build a correctly row-pitch-aligned (256-byte) UPLOAD-heap staging
-    // buffer per row -- the wire format's tightly-packed rows do not
-    // satisfy D3D12's upload-heap pitch requirement, so a straight memcpy
-    // of the source bytes would be wrong here.
-    bool UploadOneTexture(const d3d12_import_bridge::ImportedImage& image, UINT heapIndex,
-                          Microsoft::WRL::ComPtr<ID3D12Resource>& outTexture, std::wstring& error);
+    // Creates a DEFAULT-heap buffer in COMMON and queues its copy onto the
+    // upload ring. No explicit barrier to VERTEX_AND_CONSTANT_BUFFER /
+    // INDEX_BUFFER: a copy queue cannot record one, and none is needed --
+    // the buffer promotes implicitly to COPY_DEST for the copy, decays back
+    // to COMMON when the copy queue's ExecuteCommandLists completes, then
+    // promotes again on the direct queue at first use. Confirmed
+    // empirically for buffers on this exact path in Gate 2 workstream B
+    // slice 3 (see .docs/PROGRESS.md's upload-ring risk table).
+    bool CreateAndQueueBuffer(const void* data, uint64_t sizeBytes, uint32_t clusterId,
+                               Microsoft::WRL::ComPtr<ID3D12Resource>& outBuffer, std::wstring& error);
+    // Creates one image's DEFAULT-heap Texture2D (mip 0 only, in COMMON for
+    // the same implicit-promotion reason as buffers), writes its SRV into
+    // `heap` at heapIndex, and queues its copy onto the upload ring. The
+    // row repitching the wire format needs -- its rows are tightly packed
+    // and do not satisfy D3D12's 256-byte staging pitch -- now lives in
+    // D3D12UploadRing::UploadTexture rather than here.
+    //
+    // The SRV is written at queue time deliberately: creating a descriptor
+    // only describes the resource, so it does not require the copy to have
+    // landed.
+    bool CreateAndQueueTexture(const d3d12_import_bridge::ImportedImage& image, UINT heapIndex,
+                                ID3D12DescriptorHeap& heap, UINT descriptorSize, uint32_t clusterId,
+                                Microsoft::WRL::ComPtr<ID3D12Resource>& outTexture, std::wstring& error);
 };

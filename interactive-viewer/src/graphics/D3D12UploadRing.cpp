@@ -152,41 +152,64 @@ bool D3D12UploadRing::Grow()
     return true;
 }
 
-bool D3D12UploadRing::TryAllocateInternal(uint64_t size, uint64_t& outOffset, uint64_t& outOccupiedBytes)
+bool D3D12UploadRing::TryAllocateInternal(uint64_t size, uint64_t alignment, uint64_t& outOffset,
+                                           uint64_t& outOccupiedBytes)
 {
+    if (alignment == 0) {
+        alignment = 1;
+    }
     if (size > capacity_) {
         return false; // cannot ever fit at the current capacity, regardless of wrap -- caller must grow
     }
 
-    uint64_t tailRoom = capacity_ - writeOffset_;
-    uint64_t padding = (size <= tailRoom) ? 0 : tailRoom;
+    // Align the cursor up first, then decide whether what remains of the
+    // tail can still hold the allocation. With alignment == 1 this reduces
+    // exactly to the original tail-room test, so buffer uploads are
+    // unaffected.
+    auto alignedOpt = platform::CheckedAdd(writeOffset_, alignment - 1);
+    if (!alignedOpt) {
+        return false;
+    }
+    uint64_t alignedOffset = (*alignedOpt / alignment) * alignment;
+
+    uint64_t start = 0;
+    uint64_t padding = 0;
+    if (alignedOffset <= capacity_ && size <= capacity_ - alignedOffset) {
+        start = alignedOffset;
+        padding = alignedOffset - writeOffset_;
+    } else {
+        // Not enough contiguous tail room: wrap, wasting the tail. Offset 0
+        // satisfies any alignment used here -- a committed buffer resource's
+        // base is at least D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT (64
+        // KiB), far above the 512-byte texture placement requirement.
+        start = 0;
+        padding = capacity_ - writeOffset_;
+    }
 
     auto requiredOpt = platform::CheckedAdd(size, padding);
     if (!requiredOpt || *requiredOpt > (capacity_ - usedBytes_)) {
         return false; // not enough free space right now -- caller reclaims/grows/backpressures
     }
 
-    if (padding > 0) {
-        usedBytes_ += padding; // wrap only into proven-free space, past the wasted tail bytes
-        writeOffset_ = 0;
-    }
-    outOffset = writeOffset_;
+    usedBytes_ += padding; // wrap/align only into proven-free space, past the wasted bytes
+    outOffset = start;
     outOccupiedBytes = size + padding;
-    writeOffset_ = (writeOffset_ + size) % capacity_;
+    writeOffset_ = (start + size) % capacity_;
     usedBytes_ += size;
     return true;
 }
 
-bool D3D12UploadRing::EnsureSpace(uint64_t size, uint64_t& outOffset, uint64_t& outOccupiedBytes)
+bool D3D12UploadRing::EnsureSpace(uint64_t size, uint64_t alignment, uint64_t& outOffset,
+                                   uint64_t& outOccupiedBytes)
 {
-    if (TryAllocateInternal(size, outOffset, outOccupiedBytes)) {
+    if (TryAllocateInternal(size, alignment, outOffset, outOccupiedBytes)) {
         return true;
     }
 
     // Reclaim whatever's already fence-complete -- free real work, not a
     // stall.
     ReclaimCompleted();
-    if (TryAllocateInternal(size, outOffset, outOccupiedBytes)) {
+    if (TryAllocateInternal(size, alignment, outOffset, outOccupiedBytes)) {
         return true;
     }
 
@@ -198,7 +221,7 @@ bool D3D12UploadRing::EnsureSpace(uint64_t size, uint64_t& outOffset, uint64_t& 
         if (!Grow()) {
             break;
         }
-        if (TryAllocateInternal(size, outOffset, outOccupiedBytes)) {
+        if (TryAllocateInternal(size, alignment, outOffset, outOccupiedBytes)) {
             return true;
         }
     }
@@ -216,7 +239,7 @@ bool D3D12UploadRing::EnsureSpace(uint64_t size, uint64_t& outOffset, uint64_t& 
             return false;
         }
         ReclaimCompleted();
-        if (TryAllocateInternal(size, outOffset, outOccupiedBytes)) {
+        if (TryAllocateInternal(size, alignment, outOffset, outOccupiedBytes)) {
             return true;
         }
     }
@@ -235,7 +258,7 @@ D3D12UploadRing::UploadResult D3D12UploadRing::Upload(const UploadRequest& reque
 
     uint64_t offset = 0;
     uint64_t occupiedBytes = 0;
-    if (!EnsureSpace(size, offset, occupiedBytes)) {
+    if (!EnsureSpace(size, /*alignment=*/1, offset, occupiedBytes)) {
         return UploadResult::Backpressured;
     }
 
@@ -248,17 +271,109 @@ D3D12UploadRing::UploadResult D3D12UploadRing::Upload(const UploadRequest& reque
     commandList_->CopyBufferRegion(request.destination, request.destinationOffset, ringResource_.Get(), offset,
                                     size);
 
+    RecordAllocationAndPublication(size, occupiedBytes, request.destination, request.generation,
+                                    request.clusterId, request.lodLevel, /*approximateBytes=*/size);
+    return UploadResult::Uploaded;
+}
+
+D3D12UploadRing::UploadResult D3D12UploadRing::UploadTexture(const UploadTextureRequest& request)
+{
+    if (request.sourceBytes.empty() || request.destination == nullptr || request.width == 0
+        || request.height == 0 || request.format == DXGI_FORMAT_UNKNOWN) {
+        return UploadResult::Failed;
+    }
+
+    // Ask the device for the real staging layout rather than deriving a
+    // pitch by hand -- "never guess" applies to row pitch exactly as it
+    // does to the wire format's own byte math.
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = request.width;
+    desc.Height = request.height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = request.format;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    UINT numRows = 0;
+    UINT64 rowSizeInBytes = 0;
+    UINT64 totalBytes = 0;
+    device_->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
+    if (numRows == 0 || rowSizeInBytes == 0 || totalBytes == 0) {
+        return UploadResult::Failed;
+    }
+    if (totalBytes > options_.maxCapacityBytes) {
+        return UploadResult::Failed; // caller must split; a single mip cannot exceed the ring
+    }
+
+    // The source is tightly packed, so it only has to carry numRows *
+    // rowSizeInBytes -- markedly less than the padded staging total.
+    auto requiredSourceOpt
+        = platform::CheckedMultiply(static_cast<uint64_t>(numRows), static_cast<uint64_t>(rowSizeInBytes));
+    if (!requiredSourceOpt || request.sourceBytes.size() < *requiredSourceOpt) {
+        return UploadResult::Failed;
+    }
+
+    uint64_t offset = 0;
+    uint64_t occupiedBytes = 0;
+    if (!EnsureSpace(totalBytes, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, offset, occupiedBytes)) {
+        return UploadResult::Backpressured;
+    }
+
+    if (!commandListOpen_ && !BeginBatch()) {
+        return UploadResult::Failed;
+    }
+
+    const auto* src = reinterpret_cast<const std::byte*>(request.sourceBytes.data());
+    std::byte* dst = mapped_ + offset;
+    for (UINT row = 0; row < numRows; ++row) {
+        std::memcpy(dst + static_cast<size_t>(row) * footprint.Footprint.RowPitch,
+                     src + static_cast<size_t>(row) * rowSizeInBytes, static_cast<size_t>(rowSizeInBytes));
+    }
+
+    // GetCopyableFootprints was called with a zero base offset, so its
+    // Offset is 0; rebase it onto where the ring actually placed the rows.
+    footprint.Offset = offset;
+
+    D3D12_TEXTURE_COPY_LOCATION destinationLocation{};
+    destinationLocation.pResource = request.destination;
+    destinationLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    destinationLocation.SubresourceIndex = 0;
+
+    D3D12_TEXTURE_COPY_LOCATION sourceLocation{};
+    sourceLocation.pResource = ringResource_.Get();
+    sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    sourceLocation.PlacedFootprint = footprint;
+
+    commandList_->CopyTextureRegion(&destinationLocation, 0, 0, 0, &sourceLocation, nullptr);
+
+    RecordAllocationAndPublication(totalBytes, occupiedBytes, request.destination, request.generation,
+                                    request.clusterId, request.lodLevel, /*approximateBytes=*/totalBytes);
+    return UploadResult::Uploaded;
+}
+
+void D3D12UploadRing::RecordAllocationAndPublication(uint64_t size, uint64_t occupiedBytes,
+                                                      ID3D12Resource* destination,
+                                                      const platform::GenerationToken& generation,
+                                                      uint32_t clusterId, uint32_t lodLevel,
+                                                      uint64_t approximateBytes)
+{
     batchRingAllocations_.push_back(RingAllocation{ occupiedBytes, /*fenceValue=*/0 });
-    batchPublications_.push_back(PendingPublication{
-        ReadyResourceInfo{ request.destination, request.generation.Value(), request.clusterId, request.lodLevel },
-        request.generation, /*fenceValue=*/0 });
+
+    ReadyResourceInfo info{};
+    info.resource = destination;
+    info.generationValue = generation.Value();
+    info.clusterId = clusterId;
+    info.lodLevel = lodLevel;
+    info.approximateBytes = approximateBytes;
+    batchPublications_.push_back(PendingPublication{ info, generation, /*fenceValue=*/0 });
 
     batchBytes_ += size;
     if (batchBytes_ >= options_.maxBatchBytes) {
         FlushBatch();
     }
-
-    return UploadResult::Uploaded;
 }
 
 void D3D12UploadRing::FlushBatch()
