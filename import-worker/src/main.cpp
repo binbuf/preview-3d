@@ -1,6 +1,7 @@
 #include "ContainmentProbes.h"
 #include "GenerationWorker.h"
 #include "GltfImportWorker.h"
+#include "StlImportWorker.h"
 #include "WorkerRequestDispatch.h"
 
 #include <windows.h>
@@ -58,6 +59,10 @@ int main(int argc, char* argv[])
 
     if (ArgEquals(argv[1], "--parse-gltf")) {
         return import_worker::RunGltfImport();
+    }
+
+    if (ArgEquals(argv[1], "--parse-stl")) {
+        return import_worker::RunStlImport();
     }
 
     if (ArgEquals(argv[1], "--pool")) {

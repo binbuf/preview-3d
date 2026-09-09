@@ -2,6 +2,7 @@
 
 #include "GenerationWorker.h"
 #include "GltfImportWorker.h"
+#include "StlImportWorker.h"
 
 #include "model_core/ControlChannelIo.h"
 
@@ -41,6 +42,14 @@ DispatchOutcome DispatchOneRequest(HANDLE stdIn, HANDLE stdOut)
         model_core::ParseGltfFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
         HandleGltfImportFileRequest(stdOut, request);
+        return DispatchOutcome::Continue;
+    }
+
+    if (received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartStlImportFromFile)
+        && received->payload.size() == sizeof(model_core::ParseStlFileRequest)) {
+        model_core::ParseStlFileRequest request{};
+        std::memcpy(&request, received->payload.data(), sizeof(request));
+        HandleStlImportFileRequest(stdOut, request);
         return DispatchOutcome::Continue;
     }
 

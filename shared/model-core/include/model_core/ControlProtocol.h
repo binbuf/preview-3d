@@ -13,6 +13,7 @@ enum class ControlOpcode : uint32_t {
     StartGltfImport = 4,          // host -> worker
     StartGltfImportFromFile = 5,  // host -> worker
     Shutdown = 6,                 // host -> worker, --pool mode only: exit cleanly, no reply
+    StartStlImportFromFile = 7,   // host -> worker
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -97,6 +98,25 @@ struct ParseGltfFileRequest {
     uint32_t reserved0;
 };
 static_assert(sizeof(ParseGltfFileRequest) == 40, "ParseGltfFileRequest layout changed");
+
+// Real-file request for the binary-STL adapter (StlAdapter.cpp) -- same
+// shape as ParseGltfFileRequest (a raw duplicated FILE handle plus output-
+// section fields), but its own named struct rather than reusing
+// ParseGltfFileRequest for a different format, matching this repo's
+// established "small deliberate duplication over cross-format coupling"
+// precedent (ParseGltfRequest itself didn't reuse StartGenerationRequest's
+// similar shape either). Replies reuse ChunksReadyNotice/
+// GenerationErrorNotice unmodified.
+struct ParseStlFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue; // inherited raw FILE handle (not a mapping/section handle),
+                                      // numeric value -- the worker maps it itself
+    uint64_t sectionHandleValue;    // inherited OUTPUT-section HANDLE, numeric value
+    uint64_t sectionByteCapacity;   // output section capacity
+    uint32_t maxChunkCount;         // sanity cap on chunk count the worker may emit
+    uint32_t reserved0;
+};
+static_assert(sizeof(ParseStlFileRequest) == 40, "ParseStlFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

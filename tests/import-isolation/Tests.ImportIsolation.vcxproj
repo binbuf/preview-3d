@@ -74,6 +74,7 @@
     <ClCompile Include="ImportPipelineTests.cpp" />
     <ClCompile Include="HostileWorkerTests.cpp" />
     <ClCompile Include="GltfImportTests.cpp" />
+    <ClCompile Include="StlImportTests.cpp" />
     <ClCompile Include="SourceFileAccessTests.cpp" />
     <ClCompile Include="WorkerPoolTests.cpp" />
     <ClCompile Include="..\..\shared\platform\src\AppContainerSid.cpp" />
