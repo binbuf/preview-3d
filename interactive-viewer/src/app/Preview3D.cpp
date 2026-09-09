@@ -2,7 +2,7 @@
 #include "Preview3D.h"
 #include "Chrome.h"
 #include "D3D12ImportBridge.h"
-#include "D3D12ViewerPath.h"
+#include "RenderThread.h"
 #include "InfoPanel.h"
 #include "Model.h"
 #include "Renderer.h"
@@ -43,6 +43,16 @@ constexpr float kClickDragThresholdPixels = 6.0f;
 // re-check animation state and render, so any burst or self-sustaining
 // message flood can never fully starve rendering.
 constexpr int kMaxDrainedMessagesPerIteration = 32;
+// On the D3D12 path the UI thread no longer renders, so it can block on
+// messages -- but it still republishes flight input and the animating flag,
+// which are what keep held keys and HUD timers alive. A bounded poll keeps
+// that honest without a busy loop.
+constexpr DWORD kUiPollIntervalMs = 8;
+// A running --frame-bench only needs the UI thread to notice it finished, so
+// this is deliberately coarse: polling at input rate makes the UI thread
+// contend with the render thread for the camera lock roughly once per frame,
+// which shows up directly in the frame-interval p95 the bench is measuring.
+constexpr DWORD kBenchPollIntervalMs = 100;
 // How long the pointer has to sit still over a toolbar button before its
 // tooltip appears (see ComputeTooltipInfo/UpdateTooltipTracking) — longer
 // than a system tooltip's default so it stays out of the way during normal
@@ -138,9 +148,17 @@ struct ViewerApp
     int overlaySpikePrimitives = 250;
     int benchFrames = 0;
     int benchRemaining = 0;
-    D3D12ViewerPath d3d12Path;
     Renderer renderer;
-    Camera camera;
+    // Deliberately NOT named `camera`: once the render thread exists, every
+    // access has to go through renderThread.LockCamera(). Renaming turned
+    // each of the ~30 existing uses into a compile error rather than a race
+    // to be found by inspection. Declared before renderThread because the
+    // thread borrows it by reference and member init follows declaration
+    // order.
+    Camera sharedCamera;
+    // Owns D3D12ViewerPath privately. On the D3D11 default path it is never
+    // started, and LockCamera degrades to an uncontended lock.
+    RenderThread renderThread{ sharedCamera };
     NavGizmo gizmo;
     Chrome chrome;
     ViewerState state = ViewerState::Empty;
@@ -421,14 +439,15 @@ void UpdateTitle(const ViewerApp& app)
         // the one surface already readable from outside the process (the
         // screenshot harness reads MainWindowTitle), and this path has no
         // D2D overlay to draw into yet. Goes away once the overlay lands.
-        const FrameStats& stats = app.d3d12Path.frameStats;
+        // Snapshot rather than reaching into the render thread's own state.
+        // Note this runs only on the UI thread -- the render thread must
+        // never call SetWindowTextW, which marshals and would block on the
+        // very thread that may be waiting for it.
+        const RenderThread::StatsSnapshot stats = app.renderThread.Stats();
         wchar_t buffer[192]{};
-        const double overlayMean = app.d3d12Path.overlayPasses > 0
-            ? app.d3d12Path.overlayTotalMs / static_cast<double>(app.d3d12Path.overlayPasses)
-            : 0.0;
         swprintf_s(buffer, L"  ·  %.3f ms mean  %.3f ms p95  %llu frames  %llu occluded  overlay %.3f ms",
-                    stats.MeanMs(), stats.P95Ms(), static_cast<unsigned long long>(stats.PresentedFrames()),
-                    static_cast<unsigned long long>(stats.OccludedPresents()), overlayMean);
+                    stats.meanMs, stats.p95Ms, static_cast<unsigned long long>(stats.frames),
+                    static_cast<unsigned long long>(stats.occluded), stats.overlayMeanMs);
         title += buffer;
     }
     SetWindowTextW(app.window, title.c_str());
@@ -469,7 +488,7 @@ bool CanNavigate(const ViewerApp& app)
     if (app.state != ViewerState::Ready) return false;
     // The --d3d12 path uploads into d3d12Path, never into app.renderer (it's
     // never even Initialize()'d in that mode) -- see D3D12ViewerPath.h.
-    return app.useD3D12 ? app.d3d12Path.hasModel : app.renderer.HasModel();
+    return app.useD3D12 ? app.renderThread.HasModel() : app.renderer.HasModel();
 }
 
 bool HasNavigationInput(const ViewerApp& app)
@@ -494,7 +513,7 @@ void StopNavigation(ViewerApp& app)
     app.arrowRight = false;
     app.arrowUp = false;
     app.arrowDown = false;
-    app.camera.StopMotion();
+    app.renderThread.LockCamera()->StopMotion();
 }
 
 bool SetNavigationKey(ViewerApp& app, WPARAM key, bool pressed)
@@ -720,7 +739,7 @@ void ClickSelect(ViewerApp& app, const POINT& point)
     const RECT viewport = ViewportRect(app);
     DirectX::XMVECTOR origin{};
     DirectX::XMVECTOR direction{};
-    BuildPickRay(app.camera, static_cast<float>(point.x), static_cast<float>(point.y),
+    BuildPickRay(*app.renderThread.LockCamera(), static_cast<float>(point.x), static_cast<float>(point.y),
         static_cast<float>(viewport.right - viewport.left),
         static_cast<float>(viewport.bottom - viewport.top), origin, direction);
     // PickMesh scans vertices in the model's native/source space, which
@@ -755,18 +774,18 @@ void FrameSelectedOrAll(ViewerApp& app)
         DirectX::XMFLOAT3 effectiveMin{};
         DirectX::XMFLOAT3 effectiveMax{};
         EffectiveBounds(app, effectiveMin, effectiveMax);
-        app.camera.FrameBox(effectiveMin, effectiveMax, aspect);
+        app.renderThread.LockCamera()->FrameBox(effectiveMin, effectiveMax, aspect);
     }
     else
     {
-        app.camera.Fit(aspect);
+        app.renderThread.LockCamera()->Fit(aspect);
     }
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
 // Speed flyout slider range (logical 0..kSpeedSliderMax "pixels" along its
 // D2D-drawn track — see the Speed flyout drawing/drag code below). Not a
-// native trackbar: the flyout always reads app.camera.FlySpeedScale() live
+// native trackbar: the flyout always reads app.renderThread.LockCamera()->FlySpeedScale() live
 // each frame, so unlike the old always-visible toolbar slider there is no
 // separate position to keep synced.
 constexpr int kSpeedSliderMax = 100;
@@ -788,8 +807,16 @@ double SpeedForSliderPosition(int position)
 
 void AdjustFlySpeed(ViewerApp& app, float wheelSteps)
 {
-    app.camera.SetFlySpeedScale(app.camera.FlySpeedScale() * std::pow(1.18, static_cast<double>(wheelSteps)));
-    ShowSpeedHud(app, L"Travel speed ×" + FormatMultiplier(app.camera.FlySpeedScale()));
+    // One lock for the read-modify-write. Two LockCamera() calls in a single
+    // expression would both be alive at once and self-deadlock -- std::mutex
+    // is not recursive.
+    double scaled = 0.0;
+    {
+        auto cam = app.renderThread.LockCamera();
+        cam->SetFlySpeedScale(cam->FlySpeedScale() * std::pow(1.18, static_cast<double>(wheelSteps)));
+        scaled = cam->FlySpeedScale();
+    }
+    ShowSpeedHud(app, L"Travel speed ×" + FormatMultiplier(scaled));
 }
 
 // Direct manipulation: sets speed immediately from a drag position within
@@ -799,7 +826,7 @@ void SetFlySpeedFromFlyoutX(ViewerApp& app, int clientX)
 {
     const RECT track = SpeedFlyoutTrackRect(app);
     const float t = std::clamp(static_cast<float>(clientX - track.left) / static_cast<float>(std::max(1L, track.right - track.left)), 0.0f, 1.0f);
-    app.camera.SetFlySpeedScale(SpeedForSliderPosition(static_cast<int>(std::lround(t * kSpeedSliderMax))));
+    app.renderThread.LockCamera()->SetFlySpeedScale(SpeedForSliderPosition(static_cast<int>(std::lround(t * kSpeedSliderMax))));
 }
 
 constexpr int kZoomSliderMax = 1000;
@@ -975,9 +1002,9 @@ void SetZoomFromTrackX(ViewerApp& app, int clientX)
 {
     const RECT track = ZoomTrackRect(app);
     const float t = std::clamp(static_cast<float>(clientX - track.left) / static_cast<float>(std::max(1L, track.right - track.left)), 0.0f, 1.0f);
-    const double distance = ZoomDistanceForSliderPosition(app.camera, static_cast<int>(std::lround(t * kZoomSliderMax)));
-    app.camera.distance = distance;
-    app.camera.targetDistance = distance;
+    const double distance = ZoomDistanceForSliderPosition(*app.renderThread.LockCamera(), static_cast<int>(std::lround(t * kZoomSliderMax)));
+    app.renderThread.LockCamera()->distance = distance;
+    app.renderThread.LockCamera()->targetDistance = distance;
 }
 
 // Guards toggle commands against keyboard auto-repeat: holding a key must not
@@ -1002,8 +1029,8 @@ void ToggleGrid(ViewerApp& app)
 void ToggleProjection(ViewerApp& app)
 {
     if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_PROJECTION)) return;
-    const bool toOrthographic = app.camera.Projection() == ProjectionMode::Perspective;
-    app.camera.SetProjection(toOrthographic ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
+    const bool toOrthographic = app.renderThread.LockCamera()->Projection() == ProjectionMode::Perspective;
+    app.renderThread.LockCamera()->SetProjection(toOrthographic ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
     ShowModeHud(app, toOrthographic ? L"Orthographic" : L"Perspective");
     InvalidateRect(app.window, nullptr, FALSE);
 }
@@ -1032,7 +1059,7 @@ void ToggleShowNativeOrientation(ViewerApp& app)
         // An instant re-home (not Fit/Reset, which animate): the model just
         // jumped ~90 degrees, so the old camera pose has no useful
         // relationship to the new one — treat this exactly like a fresh open.
-        app.camera.SetBounds(effectiveMin, effectiveMax, ViewportAspect(app));
+        app.renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(app));
         ShowModeHud(app, app.showNativeOrientation ? L"Native orientation" : L"Normalized orientation");
     }
     InvalidateRect(app.window, nullptr, FALSE);
@@ -1051,7 +1078,7 @@ void SnapViewCommand(ViewerApp& app, ViewDir view)
         else if (view == ViewDir::Right) view = ViewDir::Left;
         else if (view == ViewDir::Top) view = ViewDir::Bottom;
     }
-    app.camera.SnapToView(CanonicalViewOrientation(view));
+    app.renderThread.LockCamera()->SnapToView(CanonicalViewOrientation(view));
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
@@ -1531,7 +1558,7 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_RESET:
         if (app.renderer.HasModel())
         {
-            app.camera.Reset(ViewportAspect(app));
+            app.renderThread.LockCamera()->Reset(ViewportAspect(app));
             InvalidateRect(app.window, nullptr, FALSE);
         }
         break;
@@ -1653,11 +1680,20 @@ FlightInput BuildFlightInput(const ViewerApp& app)
     return input;
 }
 
-bool IsAnimating(const ViewerApp& app)
+// Everything in IsAnimating that is UI-owned state. The render thread ORs
+// this with the camera's own motion, which it can see directly under the
+// camera lock -- so the UI thread does not have to take that lock just to
+// answer "should a frame happen".
+bool IsAnimatingWithoutCamera(const ViewerApp& app)
 {
     const double now = NowSeconds();
-    return app.state == ViewerState::Loading || HasNavigationInput(app) || app.camera.HasMotion() ||
-        now < app.speedHudUntil || now < app.modeHudUntil;
+    return app.state == ViewerState::Loading || HasNavigationInput(app) || now < app.speedHudUntil
+        || now < app.modeHudUntil;
+}
+
+bool IsAnimating(ViewerApp& app)
+{
+    return IsAnimatingWithoutCamera(app) || app.renderThread.LockCamera()->HasMotion();
 }
 
 void RenderScene(ViewerApp& app)
@@ -1688,11 +1724,11 @@ void RenderScene(ViewerApp& app)
             effectiveMin, effectiveMax);
         overlay.infoPanelScrollOffset = app.infoPanelScrollOffset;
     }
-    overlay.zoomPercent = ZoomPercentFor(app.camera);
+    overlay.zoomPercent = ZoomPercentFor(*app.renderThread.LockCamera());
     if (overlay.barBottomBarHeight > 0)
     {
         overlay.zoomTrackRect = ZoomTrackRect(app);
-        overlay.zoomSliderT = static_cast<float>(ZoomSliderPositionFor(app.camera)) / kZoomSliderMax;
+        overlay.zoomSliderT = static_cast<float>(ZoomSliderPositionFor(*app.renderThread.LockCamera())) / kZoomSliderMax;
         overlay.infoButtonRect = InfoButtonRect(app);
         overlay.infoButtonHover = app.infoButtonHover;
         overlay.infoButtonPressed = app.infoButtonPressed;
@@ -1711,8 +1747,8 @@ void RenderScene(ViewerApp& app)
     {
         overlay.speedFlyoutRect = SpeedFlyoutRect(app);
         overlay.speedFlyoutTrackRect = SpeedFlyoutTrackRect(app);
-        overlay.speedSliderT = static_cast<float>(SpeedSliderPositionFor(app.camera.FlySpeedScale())) / kSpeedSliderMax;
-        overlay.speedValueText = L"×" + FormatMultiplier(app.camera.FlySpeedScale());
+        overlay.speedSliderT = static_cast<float>(SpeedSliderPositionFor(app.renderThread.LockCamera()->FlySpeedScale())) / kSpeedSliderMax;
+        overlay.speedValueText = L"×" + FormatMultiplier(app.renderThread.LockCamera()->FlySpeedScale());
     }
     overlay.settingsPanelOpen = app.settingsPanelOpen;
     overlay.showNativeOrientation = app.showNativeOrientation;
@@ -1733,7 +1769,7 @@ void RenderScene(ViewerApp& app)
     overlay.tooltipText = app.tooltipText;
     overlay.tooltipBelow = app.tooltipAnchorBelow;
     UpdateChromeLayout(app);
-    app.renderer.Render(app.camera, overlay, app.gizmo, app.chrome);
+    app.renderer.Render(*app.renderThread.LockCamera(), overlay, app.gizmo, app.chrome);
 }
 
 // Advances the camera by the wall-clock time since the last tick, from
@@ -1755,8 +1791,8 @@ void TickCamera(ViewerApp& app)
         if (gap < 0.25) elapsed = std::min(0.1, gap);
     }
     app.lastFrameSeconds = now;
-    app.camera.SetInput(BuildFlightInput(app));
-    app.camera.Update(elapsed);
+    app.renderThread.LockCamera()->SetInput(BuildFlightInput(app));
+    app.renderThread.LockCamera()->Update(elapsed);
 }
 
 void RenderFrame(ViewerApp& app)
@@ -1764,13 +1800,14 @@ void RenderFrame(ViewerApp& app)
     if (!app.rendererReady) return;
     if (app.useD3D12)
     {
-        TickCamera(app);
-        if (app.d3d12Path.hasModel) app.d3d12Path.RenderFrame(app.camera, ViewportAspect(app));
-        else app.d3d12Path.RenderClearFrame();
-        // Refresh the --frame-stats readout occasionally rather than every
-        // frame: SetWindowTextW is not free, and a number that changes 120
-        // times a second is unreadable anyway.
-        if (app.showFrameStats && app.d3d12Path.frameStats.PresentedFrames() % 30 == 0) UpdateTitle(app);
+        // Nothing is rendered here any more -- the render thread owns the
+        // frame loop. The UI thread only publishes what the render thread
+        // cannot compute for itself (flight input needs GetKeyState, which is
+        // thread-affine; the aspect depends on chrome layout) and says a
+        // frame is wanted.
+        app.renderThread.PublishFlightInput(BuildFlightInput(app));
+        app.renderThread.PublishViewportAspect(ViewportAspect(app));
+        app.renderThread.Invalidate();
         ValidateRect(app.window, nullptr);
         return;
     }
@@ -1825,13 +1862,17 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         UpdateGizmoLayout(*app);
         UpdateChromeLayout(*app);
         std::wstring renderError;
-        app->d3d12Path.overlayEnabled = app->overlaySpike; // must be set before Initialize
-        app->d3d12Path.overlayPrimitives = app->overlaySpikePrimitives;
-        // 0 primitives means "interop only" -- drop the text runs too, or
-        // the isolation is not isolation.
-        if (app->overlaySpikePrimitives == 0) app->d3d12Path.overlayTextRuns = 0;
-        app->rendererReady = app->useD3D12 ? app->d3d12Path.Initialize(window, renderError)
-                                            : app->renderer.Initialize(window, renderError);
+        if (app->useD3D12)
+        {
+            // 0 primitives means "interop only" -- drop the text runs too, or
+            // the isolation is not isolation.
+            app->renderThread.SetOverlayOptions(app->overlaySpike, app->overlaySpikePrimitives,
+                                                 app->overlaySpikePrimitives == 0 ? 0 : 40);
+            app->renderThread.SetBenchFrames(app->benchFrames);
+            app->renderThread.PublishViewportAspect(ViewportAspect(*app));
+            app->rendererReady = app->renderThread.Start(window, renderError);
+        }
+        else app->rendererReady = app->renderer.Initialize(window, renderError);
         if (!app->rendererReady)
         {
             app->errorSummary = L"Graphics could not be started.";
@@ -2012,8 +2053,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             if (app->useD3D12)
             {
-                if (app->d3d12Path.hasModel) app->d3d12Path.RenderFrame(app->camera, ViewportAspect(*app));
-                else app->d3d12Path.RenderClearFrame();
+                // Deliberately does NOT render. WM_PAINT is reachable from
+                // any nested modal loop -- TrackPopupMenu, MessageBoxW,
+                // IFileOpenDialog::Show, the DWM move/size loop -- so
+                // rendering here would present from the UI thread while the
+                // render thread is also presenting. Just ask for a frame.
+                app->renderThread.Invalidate();
             }
             else RenderScene(*app);
         }
@@ -2027,16 +2072,24 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         UpdateChromeLayout(*app);
         if (app->rendererReady && wParam != SIZE_MINIMIZED)
         {
-            std::wstring resizeError;
-            bool resized = app->useD3D12
-                ? app->d3d12Path.Resize(LOWORD(lParam), HIWORD(lParam), resizeError)
-                : app->renderer.Resize(LOWORD(lParam), HIWORD(lParam), resizeError);
-            if (!resized)
+            if (app->useD3D12)
             {
-                app->rendererReady = false;
-                app->errorSummary = L"The viewport could not be resized.";
-                app->errorDetails = resizeError;
-                app->state = ViewerState::Failed;
+                // Posted and coalesced; the resize happens between frames on
+                // the render thread. Previously this blocked the UI thread in
+                // a full GPU drain once per drag tick.
+                app->renderThread.PublishViewportAspect(ViewportAspect(*app));
+                app->renderThread.RequestResize(LOWORD(lParam), HIWORD(lParam));
+            }
+            else
+            {
+                std::wstring resizeError;
+                if (!app->renderer.Resize(LOWORD(lParam), HIWORD(lParam), resizeError))
+                {
+                    app->rendererReady = false;
+                    app->errorSummary = L"The viewport could not be resized.";
+                    app->errorDetails = resizeError;
+                    app->state = ViewerState::Failed;
+                }
             }
         }
         InvalidateRect(window, nullptr, FALSE);
@@ -2105,7 +2158,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             {
                 if (app->touchPoints.size() == 1)
                 {
-                    app->camera.Orbit(static_cast<float>(point.x - found->second.x), static_cast<float>(point.y - found->second.y));
+                    app->renderThread.LockCamera()->Orbit(static_cast<float>(point.x - found->second.x), static_cast<float>(point.y - found->second.y));
                     found->second = point;
                     ResetTouchBaseline(*app);
                 }
@@ -2119,11 +2172,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     const double spanY = static_cast<double>(first->second.y - second->second.y);
                     const double span = std::sqrt(spanX * spanX + spanY * spanY);
                     RECT client{}; GetClientRect(window, &client);
-                    app->camera.Pan(static_cast<float>(center.x - app->touchCenter.x), static_cast<float>(center.y - app->touchCenter.y),
+                    app->renderThread.LockCamera()->Pan(static_cast<float>(center.x - app->touchCenter.x), static_cast<float>(center.y - app->touchCenter.y),
                         static_cast<float>(client.bottom - EffectiveToolbarHeight(*app)));
                     if (app->touchSpan > 1.0 && span > 1.0)
                     {
-                        app->camera.Dolly(static_cast<float>(std::log(span / app->touchSpan) / 0.16));
+                        app->renderThread.LockCamera()->Dolly(static_cast<float>(std::log(span / app->touchSpan) / 0.16));
                     }
                     app->touchCenter = center;
                     app->touchSpan = span;
@@ -2280,14 +2333,14 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             SetFocus(window);
             const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            const NavGizmo::Part part = app->gizmo.HitTest(app->camera.Orientation(),
+            const NavGizmo::Part part = app->gizmo.HitTest(app->renderThread.LockCamera()->Orientation(),
                 static_cast<float>(point.x), static_cast<float>(point.y));
             if (part == NavGizmo::Part::Ball)
             {
                 SetCapture(window);
                 app->pointerMode = PointerMode::GizmoOrbit;
                 BeginWrappedDrag(*app, point);
-                app->camera.CancelInertia();
+                app->renderThread.LockCamera()->CancelInertia();
                 app->orbitVelocityX = 0.0;
                 app->orbitVelocityY = 0.0;
                 app->lastOrbitMoveSeconds = NowSeconds();
@@ -2295,7 +2348,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             else if (part != NavGizmo::Part::None)
             {
                 // Axis node/stem: snap immediately on press.
-                app->camera.SnapToView(CanonicalViewOrientation(app->gizmo.ViewFor(part)));
+                app->renderThread.LockCamera()->SnapToView(CanonicalViewOrientation(app->gizmo.ViewFor(part)));
                 InvalidateRect(window, nullptr, FALSE);
             }
             else
@@ -2305,7 +2358,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 SetCapture(window);
                 app->pointerMode = PointerMode::Orbit;
                 BeginWrappedDrag(*app, point);
-                app->camera.CancelInertia();
+                app->renderThread.LockCamera()->CancelInertia();
                 app->orbitVelocityX = 0.0;
                 app->orbitVelocityY = 0.0;
                 app->lastOrbitMoveSeconds = NowSeconds();
@@ -2328,7 +2381,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             BeginWrappedDrag(*app, point);
             if (app->pointerMode == PointerMode::Truck)
             {
-                app->camera.CancelInertia();
+                app->renderThread.LockCamera()->CancelInertia();
                 app->panVelocityX = 0.0;
                 app->panVelocityY = 0.0;
                 app->lastPanMoveSeconds = NowSeconds();
@@ -2433,7 +2486,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             }
             if (CanNavigate(*app) && PointInViewport(*app, movePoint))
             {
-                const NavGizmo::Part part = app->gizmo.HitTest(app->camera.Orientation(),
+                const NavGizmo::Part part = app->gizmo.HitTest(app->renderThread.LockCamera()->Orientation(),
                     static_cast<float>(movePoint.x), static_cast<float>(movePoint.y));
                 if (part != app->gizmo.hover)
                 {
@@ -2470,17 +2523,17 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             case PointerMode::Orbit:
             case PointerMode::GizmoOrbit:
                 TrackOrbitVelocity(*app, deltaX, deltaY);
-                app->camera.Orbit(deltaX, deltaY);
+                app->renderThread.LockCamera()->Orbit(deltaX, deltaY);
                 WrapCursorIfNeeded(*app);
                 break;
             case PointerMode::Truck:
                 TrackPanVelocity(*app, deltaX, deltaY);
-                app->camera.Truck(deltaX, deltaY,
+                app->renderThread.LockCamera()->Truck(deltaX, deltaY,
                     static_cast<float>(ViewportRect(*app).bottom - ViewportRect(*app).top), app->axisSnapEnabled);
                 WrapCursorIfNeeded(*app);
                 break;
             case PointerMode::DollyDrag:
-                app->camera.DollyDrag(deltaY);
+                app->renderThread.LockCamera()->DollyDrag(deltaY);
                 WrapCursorIfNeeded(*app);
                 break;
             default: break;
@@ -2557,7 +2610,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if ((app->pointerMode == PointerMode::Orbit || app->pointerMode == PointerMode::GizmoOrbit) &&
             CanNavigate(*app) && NowSeconds() - app->lastOrbitMoveSeconds < 0.07)
         {
-            app->camera.SeedOrbitInertia(static_cast<float>(app->orbitVelocityX),
+            app->renderThread.LockCamera()->SeedOrbitInertia(static_cast<float>(app->orbitVelocityX),
                 static_cast<float>(app->orbitVelocityY));
         }
         EndPointer(*app);
@@ -2567,7 +2620,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (app->pointerMode == PointerMode::Truck && CanNavigate(*app) &&
             NowSeconds() - app->lastPanMoveSeconds < 0.07)
         {
-            app->camera.SeedPanInertia(static_cast<float>(app->panVelocityX),
+            app->renderThread.LockCamera()->SeedPanInertia(static_cast<float>(app->panVelocityX),
                 static_cast<float>(app->panVelocityY));
         }
         EndPointer(*app);
@@ -2600,7 +2653,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (app->flyLook) AdjustFlySpeed(*app, steps);
             else
             {
-                app->camera.Dolly(steps);
+                app->renderThread.LockCamera()->Dolly(steps);
                 InvalidateRect(window, nullptr, FALSE);
             }
         }
@@ -2627,8 +2680,17 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     // turn. Ticking per sample advances rotation and
                     // translation together at the same fine granularity, so
                     // flight curves smoothly like Unreal's.
-                    app->camera.AccumulateLook(static_cast<float>(raw.data.mouse.lLastX), static_cast<float>(raw.data.mouse.lLastY));
-                    TickCamera(*app);
+                    app->renderThread.LockCamera()->AccumulateLook(static_cast<float>(raw.data.mouse.lLastX), static_cast<float>(raw.data.mouse.lLastY));
+                    // On the D3D12 path the render thread owns Camera::Update
+                    // -- the accumulated look is consumed by its next frame.
+                    // Ticking here as well would advance the camera twice per
+                    // sample against two different clocks.
+                    if (app->useD3D12)
+                    {
+                        app->renderThread.PublishFlightInput(BuildFlightInput(*app));
+                        app->renderThread.Invalidate();
+                    }
+                    else TickCamera(*app);
                     InvalidateRect(window, nullptr, FALSE);
                 }
             }
@@ -2644,8 +2706,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (!CanNavigate(*app)) break;
         if (SetNavigationKey(*app, wParam, true)) return 0;
-        if (wParam == VK_OEM_PLUS || wParam == VK_ADD) app->camera.Dolly(1.0f);
-        else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) app->camera.Dolly(-1.0f);
+        if (wParam == VK_OEM_PLUS || wParam == VK_ADD) app->renderThread.LockCamera()->Dolly(1.0f);
+        else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) app->renderThread.LockCamera()->Dolly(-1.0f);
         else break;
         InvalidateRect(window, nullptr, FALSE);
         return 0;
@@ -2695,7 +2757,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             EffectiveBounds(*app, effectiveMin, effectiveMax);
             std::wstring gridError;
             app->renderer.RebuildGrid(effectiveMin, effectiveMax, gridError);
-            app->camera.SetBounds(effectiveMin, effectiveMax, ViewportAspect(*app));
+            app->renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(*app));
             app->state = ViewerState::Ready;
             app->failedPath.clear();
             app->errorSummary.clear();
@@ -2717,40 +2779,24 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path);
             return 0;
         }
-        std::wstring uploadError;
-        if (!app->d3d12Path.UploadModel(complete->result.meshes, complete->result.materials,
-                                         complete->result.images, uploadError))
+        // The upload and the bounds scan are GPU work and an O(vertices) walk
+        // -- both belong on the render thread, which owns the payloads from
+        // here. It posts kRenderUploadCompleteMessage back when it is done.
+        app->renderThread.PublishViewportAspect(ViewportAspect(*app));
+        app->renderThread.RequestUpload(std::move(complete->result), complete->generation, complete->path);
+        return 0;
+    }
+    case kRenderUploadCompleteMessage:
+    {
+        std::unique_ptr<RenderUploadResult> uploaded(reinterpret_cast<RenderUploadResult*>(lParam));
+        if (!uploaded || uploaded->generation != app->generation) return 0;
+        if (!uploaded->ok)
         {
-            SetFailure(*app, L"The model was read but could not be displayed.", uploadError, complete->path);
+            SetFailure(*app, uploaded->errorSummary, uploaded->errorDetails, uploaded->path);
             return 0;
         }
-        app->currentPath = complete->path;
-        app->filename = FileNameFromPath(complete->path);
-
-        // Host-side bounds scan (no ChunkDescriptor bounds field exists yet)
-        // mirroring Model.cpp's own min/max accumulation, feeding the same
-        // Camera::SetBounds call the D3D11 completion handler uses above.
-        DirectX::XMFLOAT3 effectiveMin{};
-        DirectX::XMFLOAT3 effectiveMax{};
-        bool haveBounds = false;
-        for (const auto& mesh : complete->result.meshes)
-        {
-            if (mesh.vertexLayoutId != model_core::VertexLayoutId::PositionNormalUv0_F32) continue;
-            const auto* vertices = reinterpret_cast<const model_core::VertexPositionNormalUv0F32*>(mesh.payload.data());
-            for (uint32_t i = 0; i < mesh.vertexCount; ++i)
-            {
-                DirectX::XMFLOAT3 p{ vertices[i].px, vertices[i].py, vertices[i].pz };
-                if (!haveBounds) { effectiveMin = effectiveMax = p; haveBounds = true; continue; }
-                effectiveMin.x = std::min(effectiveMin.x, p.x);
-                effectiveMin.y = std::min(effectiveMin.y, p.y);
-                effectiveMin.z = std::min(effectiveMin.z, p.z);
-                effectiveMax.x = std::max(effectiveMax.x, p.x);
-                effectiveMax.y = std::max(effectiveMax.y, p.y);
-                effectiveMax.z = std::max(effectiveMax.z, p.z);
-            }
-        }
-        if (haveBounds) app->camera.SetBounds(effectiveMin, effectiveMax, ViewportAspect(*app));
-
+        app->currentPath = uploaded->path;
+        app->filename = FileNameFromPath(uploaded->path);
         app->state = ViewerState::Ready;
         app->failedPath.clear();
         app->errorSummary.clear();
@@ -2779,13 +2825,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         app->alive->store(false, std::memory_order_relaxed);
         if (app->cancellation) app->cancellation->store(true, std::memory_order_relaxed);
         if (app->buttonFont) { DeleteObject(app->buttonFont); app->buttonFont = nullptr; }
-        // GPU work must be known-idle before ViewerApp's destructor releases
-        // the D3D12 objects -- RAII alone doesn't order that.
-        if (app->useD3D12)
-        {
-            app->d3d12Path.WaitForIdle();
-            app->d3d12Path.ClearModel();
-        }
+        // Stop() signals, then joins with a bounded wait and drains the GPU
+        // on the render thread itself. `04-rendering-and-streaming.md:190`:
+        // shutdown waits "with finite diagnostics timeouts" and "a driver
+        // hang must not leave the UI thread waiting forever".
+        if (app->useD3D12) app->renderThread.Stop();
         PostQuitMessage(0);
         return 0;
     }
@@ -2880,6 +2924,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     MSG message{};
     int exitCode = 0;
     bool quitting = false;
+    bool benchReported = false;
     while (!quitting)
     {
         // Tracks whether animation was already active before each dispatched
@@ -2930,21 +2975,43 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         }
         if (quitting) break;
 
-        // --frame-bench: render back to back regardless of whether anything
-        // moved, so a sustained frame rate can be measured at all. The first
-        // 120 frames are discarded as warm-up (shader/PSO/first-touch costs
-        // that say nothing about steady state).
-        if (app.benchRemaining > 0 && gMainWindow && app.rendererReady && !IsIconic(gMainWindow))
+        // On the D3D12 path the render thread owns the frame loop entirely:
+        // this loop only publishes UI-owned inputs and says whether anything
+        // is animating, then goes back to waiting for messages. It no longer
+        // renders, and no longer blocks in Present.
+        if (app.useD3D12)
         {
-            RenderFrame(app);
-            --app.benchRemaining;
-            if (app.benchRemaining == app.benchFrames - 120)
+            bool uiAnimating = false;
+            if (gMainWindow && app.rendererReady)
             {
-                app.d3d12Path.frameStats.Reset();
-                app.d3d12Path.overlayTotalMs = 0.0;
-                app.d3d12Path.overlayPasses = 0;
+                uiAnimating = !IsIconic(gMainWindow) && IsAnimatingWithoutCamera(app);
+                app.renderThread.PublishFrameInputs(BuildFlightInput(app), ViewportAspect(app));
+                app.renderThread.SetUiAnimating(uiAnimating);
+                if (GetUpdateRect(gMainWindow, nullptr, FALSE))
+                {
+                    ValidateRect(gMainWindow, nullptr);
+                    app.renderThread.Invalidate();
+                }
+                // The bench writes its final numbers into the title from
+                // here, on the UI thread -- the render thread must never
+                // touch the window.
+                if (app.benchFrames > 0 && app.renderThread.BenchComplete() && !benchReported)
+                {
+                    benchReported = true;
+                    UpdateTitle(app);
+                }
             }
-            if (app.benchRemaining == 0) UpdateTitle(app);
+            // Only poll while something UI-owned is animating (held keys,
+            // HUD timers, the loading spinner) -- those are the states whose
+            // input has to be republished. Otherwise block as before, so an
+            // idle UI thread neither burns CPU nor competes with the render
+            // thread for the camera lock. A running bench also has to poll,
+            // or nothing is left to notice it finished.
+            const bool benchWaiting = app.benchFrames > 0 && !benchReported;
+            const DWORD wait = uiAnimating ? kUiPollIntervalMs
+                : benchWaiting             ? kBenchPollIntervalMs
+                                            : INFINITE;
+            MsgWaitForMultipleObjectsEx(0, nullptr, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             continue;
         }
 

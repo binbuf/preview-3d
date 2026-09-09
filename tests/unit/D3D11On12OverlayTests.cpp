@@ -1,7 +1,7 @@
-// Required validation spike 3 (.docs/design/11-decisions-and-risks.md:233):
+// Required validation spike 1 (.docs/design/11-decisions-and-risks.md:243):
 // "Before Gate 1 completion, measure D3D11On12 overlay ordering and cost at
-// 144 Hz, including resize and GPU validation." ADR-010 is still "Accepted
-// provisionally through Gate 1" because this had never been run.
+// 144 Hz, including resize and GPU validation." It has now been run and
+// passed, so ADR-010 is Accepted rather than provisional.
 //
 // These cases cover the correctness half -- does the bridge attach at all,
 // does a frame draw through it, does it survive resize. The cost half is
@@ -228,7 +228,7 @@ TEST_CASE("Overlay frames repeat across the whole back-buffer ring", "[graphics]
 
 TEST_CASE("The overlay survives a swap-chain resize", "[graphics]")
 {
-    // The part of spike 3 most likely to break: the wrapped resources hold
+    // The part of spike 1 most likely to break: the wrapped resources hold
     // references to the back buffers, so ResizeBuffers fails unless they are
     // dropped and flushed first, then rebuilt against the new buffers.
     OverlayHarness harness;
@@ -251,7 +251,7 @@ TEST_CASE("The overlay survives a swap-chain resize", "[graphics]")
 
 TEST_CASE("Overlay frames and a resize leave the debug layer silent", "[graphics]")
 {
-    // The "GPU validation" leg of spike 3. Passing tests are not evidence on
+    // The "GPU validation" leg of spike 1. Passing tests are not evidence on
     // their own: debug-layer messages go to OutputDebugString and do not fail
     // anything unless the info queue is inspected, which is what this does.
     // A wrong resource state at Present -- the most likely way to get the

@@ -124,13 +124,23 @@ Rejected for MVP: automatic WARP user fallback; Agility SDK solely for novelty; 
 
 ## ADR-010 — D3D11On12/Direct2D for compact overlays
 
-**Status:** Accepted provisionally through Gate 1.
+**Status:** Accepted. Required validation spike 1 has now been run and passed; see the evidence note below.
 
 The render thread uses D3D11On12 plus Direct2D/DirectWrite over the same direct queue for title/status/error text and controls, after D3D12 scene commands and before final frame-fence signal/present.
 
 Reason: native text layout, scaling, high contrast, and typography are costly to recreate correctly as a custom glyph engine. The overlay surface is small and changes infrequently.
 
 Consequence: one render thread must own all interop contexts and follow Acquire/Release/Flush ordering. Gate 1 profiling may replace this with a product glyph atlas only if interop demonstrably violates frame/lifetime gates; accessibility remains UI Automation either way.
+
+Evidence (spike 1, measured on the 143 Hz performance reference with a dedicated render thread, 2000 frames per configuration, first run after each build discarded and four runs averaged):
+
+| Configuration | mean frame interval | p95 | overlay CPU/frame |
+| --- | ---: | ---: | ---: |
+| overlay off | 6.96 ms | 7.08 ms | — |
+| D3D11On12 interop only | 6.95 ms | 7.06 ms | 0.09 ms |
+| interop plus a full chrome's worth of Direct2D/DirectWrite | 6.94 ms | 7.24 ms | 0.93 ms |
+
+The Acquire/Release/Flush handshake itself is ~0.09 ms; the Direct2D drawing accounts for the rest. p95 with the overlay is 7.24 ms against NFR-04's ≤8.3 ms gate, so the glyph-atlas escape hatch is not triggered. Direct2D was also confirmed to attach to the `DXGI_FORMAT_R8G8B8A8_UNORM` swap chain specified in [04-rendering-and-streaming.md](./04-rendering-and-streaming.md) — no BGRA swap-chain format change is required. Resize and D3D12-debug-layer validation are covered by the automated overlay suite.
 
 Rejected: rendering the 3D scene through D3D11; overlay calls from the UI thread; runtime HTML UI.
 

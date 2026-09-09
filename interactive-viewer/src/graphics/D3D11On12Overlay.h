@@ -5,10 +5,10 @@
 // the frame fence signal and present
 // (.docs/design/11-decisions-and-risks.md:129).
 //
-// Built for required validation spike 3 (`11-...:233`, "Before Gate 1
+// Built for required validation spike 1 (`11-...:243`, "Before Gate 1
 // completion, measure D3D11On12 overlay ordering and cost at 144 Hz,
-// including resize and GPU validation"), which had never been run -- ADR-010
-// is still "Accepted provisionally through Gate 1".
+// including resize and GPU validation"). It has now been run and passed;
+// ADR-010 is Accepted, with the measurements recorded there.
 //
 // Two things this deliberately settles empirically rather than by assumption:
 //

@@ -701,7 +701,7 @@ void D3D12ViewerPath::RenderClearFrame()
     EndFrame(index);
 }
 
-void D3D12ViewerPath::RenderFrame(const Camera& camera, float aspect)
+void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection)
 {
     const UINT index = BeginFrame();
 
@@ -735,9 +735,9 @@ void D3D12ViewerPath::RenderFrame(const Camera& camera, float aspect)
     // row_major in the HLSL cbuffer declaration above + no transpose here --
     // matches Renderer.cpp's D3D11 shader convention exactly (its cbuffer
     // field is also declared row_major, fed directly from
-    // XMStoreFloat4x4(view * projection) with no transpose).
-    DirectX::XMFLOAT4X4 viewProjection{};
-    DirectX::XMStoreFloat4x4(&viewProjection, camera.ViewMatrix() * camera.ProjectionMatrix(aspect));
+    // XMStoreFloat4x4(view * projection) with no transpose). The caller
+    // composed it that way under the camera lock.
+    //
     // This frame's own slot -- writing the single shared slot would race the
     // GPU still reading the previous frame's matrix.
     const UINT64 constantBufferOffset = static_cast<UINT64>(index) * kConstantBufferSlotBytes;

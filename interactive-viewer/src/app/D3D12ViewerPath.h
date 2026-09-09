@@ -25,8 +25,8 @@
 #include "D3D12ImportBridge.h"
 #include "D3D12SwapChain.h"
 #include "FrameStats.h"
-#include "Renderer.h" // for Camera -- pure DirectXMath, no D3D11 coupling
 
+#include <DirectXMath.h>
 #include <wrl/client.h>
 
 #include <cstddef>
@@ -169,9 +169,15 @@ struct D3D12ViewerPath
     // import failure (there is no D2D error card on this path yet).
     void RenderClearFrame();
 
-    // Draws every uploaded mesh with the camera's current view/projection.
+    // Draws every uploaded mesh with the supplied view-projection matrix.
     // One DrawIndexedInstanced per mesh -- never assumes exactly one chunk.
-    void RenderFrame(const Camera& camera, float aspect);
+    //
+    // Takes the matrix rather than the Camera deliberately: the camera is
+    // shared with the UI thread under a lock, and holding that lock across a
+    // whole frame -- including BeginFrame's fence and frame-latency waits --
+    // would block input for the length of a GPU frame. The caller ticks the
+    // camera and computes this under the lock, then releases it and renders.
+    void RenderFrame(const DirectX::XMFLOAT4X4& viewProjection);
 
     // Uploads every TriangleList/PositionNormalUv0_F32 mesh in `importedMeshes`
     // as a DEFAULT-heap vertex+index buffer pair (synchronous staging-buffer

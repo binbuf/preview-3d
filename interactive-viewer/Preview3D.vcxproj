@@ -84,6 +84,7 @@
     <ClInclude Include="src\app\D3D12ViewerPath.h" />
     <ClInclude Include="src\graphics\D3D12Device.h" />
     <ClInclude Include="src\graphics\D3D12CommandQueue.h" />
+    <ClInclude Include="src\app\RenderThread.h" />
     <ClInclude Include="src\graphics\D3D11On12Overlay.h" />
     <ClInclude Include="src\graphics\D3D12SwapChain.h" />
     <ClInclude Include="src\graphics\FrameStats.h" />
@@ -120,6 +121,7 @@
     <ClCompile Include="src\app\D3D12ViewerPath.cpp" />
     <ClCompile Include="src\graphics\D3D12Device.cpp" />
     <ClCompile Include="src\graphics\D3D12CommandQueue.cpp" />
+    <ClCompile Include="src\app\RenderThread.cpp" />
     <ClCompile Include="src\graphics\D3D11On12Overlay.cpp" />
     <ClCompile Include="src\graphics\D3D12SwapChain.cpp" />
     <ClCompile Include="src\graphics\FrameStats.cpp" />
