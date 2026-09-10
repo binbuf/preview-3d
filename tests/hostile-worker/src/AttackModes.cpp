@@ -246,4 +246,284 @@ int RunLieLayout()
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Progressive-delivery attacks. See AttackModes.h for what each one proves.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The output-section fields are at the same offsets in every
+// ParseXxxFileRequest -- they are field-for-field identical structs by this
+// repo's "duplication over cross-format coupling" rule -- so one struct reads
+// whichever of them RunImportSession chose to send. The source file handle is
+// deliberately ignored: these modes fabricate output, and output is the only
+// thing a host ever trusts a worker for.
+struct BatchSessionRequest {
+    uint64_t generationId = 0;
+    uint64_t sectionHandleValue = 0;
+    uint64_t sectionByteCapacity = 0;
+    uint32_t maxChunkCount = 0;
+};
+
+bool IsFileImportOpcode(uint32_t opcode)
+{
+    return opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartGltfImportFromFile)
+        || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartStlImportFromFile)
+        || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartPlyImportFromFile);
+}
+
+struct BatchSession {
+    BatchSessionRequest request;
+    platform::MappedView view;
+};
+
+std::optional<BatchSession> ReadFileImportRequestAndMapSection()
+{
+    HANDLE stdIn = GetStdHandle(STD_INPUT_HANDLE);
+    if (stdIn == nullptr || stdIn == INVALID_HANDLE_VALUE) {
+        return std::nullopt;
+    }
+
+    auto received = model_core::ReadControlMessage(stdIn);
+    if (!received || !IsFileImportOpcode(received->header.opcode)
+        || received->payload.size() != sizeof(model_core::ParseGltfFileRequest)) {
+        return std::nullopt;
+    }
+
+    model_core::ParseGltfFileRequest raw{};
+    std::memcpy(&raw, received->payload.data(), sizeof(raw));
+
+    BatchSession session;
+    session.request.generationId = raw.generationId;
+    session.request.sectionHandleValue = raw.sectionHandleValue;
+    session.request.sectionByteCapacity = raw.sectionByteCapacity;
+    session.request.maxChunkCount = raw.maxChunkCount;
+
+    HANDLE section = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(raw.sectionHandleValue));
+    session.view = platform::MappedView::Map(section, FILE_MAP_WRITE | FILE_MAP_READ,
+                                              static_cast<SIZE_T>(raw.sectionByteCapacity));
+    if (!session.view) {
+        return std::nullopt;
+    }
+    return session;
+}
+
+// Writes one honest single-PointList-chunk section carrying `chunkId` and a
+// vertex whose x is `marker`, so a test can tell which batch a chunk came
+// from by looking at the geometry it accepted.
+uint64_t BuildOneChunkSection(std::span<std::byte> destination, uint64_t generationId,
+                               uint32_t chunkId, float marker)
+{
+    using namespace model_core;
+
+    VertexPositionOnlyF32 vertex{ marker, 0.0f, 0.0f };
+
+    uint64_t payloadOffset = kSectionHeaderSize + kChunkDescriptorSize;
+    uint64_t sectionLength = payloadOffset + sizeof(vertex);
+
+    std::memcpy(destination.data() + payloadOffset, &vertex, sizeof(vertex));
+
+    ChunkDescriptor descriptor{};
+    descriptor.normalizedRangeOffset = payloadOffset;
+    descriptor.normalizedRangeLength = sizeof(vertex);
+    descriptor.topology = ChunkTopology::PointList;
+    descriptor.indexCount = 0;
+    descriptor.vertexCount = 1;
+    descriptor.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionOnly_F32);
+    descriptor.lodLevel = 0;
+    descriptor.chunkId = chunkId;
+    descriptor.byteSize = sizeof(vertex);
+    descriptor.dependencyCount = 0;
+    descriptor.chunkChecksum = Fnv1a64(destination.subspan(payloadOffset, sizeof(vertex)));
+
+    std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
+
+    SectionHeader header{};
+    header.magic = kSectionMagic;
+    header.protocolVersion = kCurrentProtocolVersion;
+    header.generationId = generationId;
+    header.sectionLength = sectionLength;
+    header.chunkCount = 1;
+    header.reserved = 0;
+    header.sectionChecksum
+        = Fnv1a64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
+
+    std::memcpy(destination.data(), &header, sizeof(header));
+    return sectionLength;
+}
+
+bool SendBatchReady(uint64_t generationId, uint32_t batchIndex, uint32_t chunkCount,
+                     uint64_t sectionBytesWritten)
+{
+    HANDLE stdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (stdOut == nullptr || stdOut == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    model_core::ChunkBatchReadyNotice notice{};
+    notice.generationId = generationId;
+    notice.batchIndex = batchIndex;
+    notice.chunkCount = chunkCount;
+    notice.sectionBytesWritten = sectionBytesWritten;
+    return model_core::WriteControlMessage(stdOut, model_core::ControlOpcode::ChunkBatchReady, &notice,
+                                            sizeof(notice));
+}
+
+// Blocks for the host's ack, as an honest worker must before touching the
+// window again. Returns false if the host said anything else, or nothing.
+bool AwaitBatchConsumed()
+{
+    HANDLE stdIn = GetStdHandle(STD_INPUT_HANDLE);
+    if (stdIn == nullptr || stdIn == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    auto received = model_core::ReadControlMessage(stdIn);
+    return received
+        && received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::ChunkBatchConsumed)
+        && received->payload.size() == sizeof(model_core::ChunkBatchConsumedNotice);
+}
+
+// One honest batch: write it, announce it, wait to be told the window is free.
+bool SendOneHonestBatch(std::span<std::byte> destination, uint64_t generationId, uint32_t batchIndex,
+                         uint32_t chunkId, float marker)
+{
+    uint64_t length = BuildOneChunkSection(destination, generationId, chunkId, marker);
+    return SendBatchReady(generationId, batchIndex, 1, length) && AwaitBatchConsumed();
+}
+
+} // namespace
+
+int RunHonestBatches()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) {
+        return 1;
+    }
+    auto& [request, view] = *session;
+
+    if (!SendOneHonestBatch(view.bytes(), request.generationId, 0, 1, 10.0f)) {
+        return 1;
+    }
+    if (!SendOneHonestBatch(view.bytes(), request.generationId, 1, 2, 20.0f)) {
+        return 1;
+    }
+
+    uint64_t length = BuildOneChunkSection(view.bytes(), request.generationId, 3, 30.0f);
+    return SendChunksReady(request.generationId, 1, length) ? 0 : 1;
+}
+
+int RunReplayBatchIndex()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) {
+        return 1;
+    }
+    auto& [request, view] = *session;
+
+    if (!SendOneHonestBatch(view.bytes(), request.generationId, 0, 1, 10.0f)) {
+        return 1;
+    }
+    // Batch 0 again -- a fresh chunkId, so only the replayed index is wrong
+    // and the rejection cannot be attributed to id reuse instead.
+    uint64_t length = BuildOneChunkSection(view.bytes(), request.generationId, 2, 20.0f);
+    SendBatchReady(request.generationId, 0, 1, length);
+    return 0;
+}
+
+int RunSkipBatchIndex()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) {
+        return 1;
+    }
+    auto& [request, view] = *session;
+
+    if (!SendOneHonestBatch(view.bytes(), request.generationId, 0, 1, 10.0f)) {
+        return 1;
+    }
+    uint64_t length = BuildOneChunkSection(view.bytes(), request.generationId, 2, 20.0f);
+    SendBatchReady(request.generationId, 2, 1, length); // 1 is missing
+    return 0;
+}
+
+int RunReuseChunkIdAcrossBatches()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) {
+        return 1;
+    }
+    auto& [request, view] = *session;
+
+    if (!SendOneHonestBatch(view.bytes(), request.generationId, 0, 1, 10.0f)) {
+        return 1;
+    }
+    // Correct index, different payload, but chunkId 1 all over again.
+    uint64_t length = BuildOneChunkSection(view.bytes(), request.generationId, 1, 99.0f);
+    SendBatchReady(request.generationId, 1, 1, length);
+    return 0;
+}
+
+int RunUnboundedBatches()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) {
+        return 1;
+    }
+    auto& [request, view] = *session;
+
+    // Every batch individually honest; only the absence of an end is the
+    // attack. The host is expected to stop this at its cap -- and then the
+    // Job Object kill-on-close to stop the process itself, which is why this
+    // loop never needs its own exit.
+    for (uint32_t batchIndex = 0;; ++batchIndex) {
+        if (!SendOneHonestBatch(view.bytes(), request.generationId, batchIndex, batchIndex + 1,
+                                 static_cast<float>(batchIndex))) {
+            return 1;
+        }
+    }
+}
+
+int RunWriteBeforeAck()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) {
+        return 1;
+    }
+    auto& [request, view] = *session;
+
+    // Announce batch 0, then immediately scribble over the window without
+    // waiting to be told the host is done with it. Whatever the host accepted
+    // for batch 0 must be what it copied, not what is there now.
+    uint64_t length = BuildOneChunkSection(view.bytes(), request.generationId, 1, 10.0f);
+    if (!SendBatchReady(request.generationId, 0, 1, length)) {
+        return 1;
+    }
+    for (int i = 0; i < 200; ++i) {
+        BuildOneChunkSection(view.bytes(), request.generationId, 1, -999.0f);
+    }
+    if (!AwaitBatchConsumed()) {
+        return 1;
+    }
+
+    uint64_t finalLength = BuildOneChunkSection(view.bytes(), request.generationId, 2, 20.0f);
+    return SendChunksReady(request.generationId, 1, finalLength) ? 0 : 1;
+}
+
+int RunBatchAfterTerminal()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) {
+        return 1;
+    }
+    auto& [request, view] = *session;
+
+    uint64_t length = BuildOneChunkSection(view.bytes(), request.generationId, 1, 10.0f);
+    if (!SendChunksReady(request.generationId, 1, length)) {
+        return 1;
+    }
+    // Past the end of the generation: the host must already be done reading.
+    uint64_t extra = BuildOneChunkSection(view.bytes(), request.generationId, 2, 20.0f);
+    SendBatchReady(request.generationId, 1, 1, extra);
+    return 0;
+}
+
 } // namespace hostile_worker

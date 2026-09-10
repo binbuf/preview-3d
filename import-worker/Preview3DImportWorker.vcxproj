@@ -81,6 +81,7 @@
     <ClCompile Include="src\ImageFormatSniff.cpp" />
     <ClCompile Include="src\WicImageDecodeAdapter.cpp" />
     <ClCompile Include="src\SidecarFileClient.cpp" />
+    <ClCompile Include="src\ChunkBatchSink.cpp" />
     <ClCompile Include="src\StlImportWorker.cpp" />
     <ClCompile Include="src\StlAdapter.cpp" />
     <ClCompile Include="src\PlyImportWorker.cpp" />

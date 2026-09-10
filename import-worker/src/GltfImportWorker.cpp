@@ -1,5 +1,6 @@
 #include "GltfImportWorker.h"
 
+#include "ChunkBatchSink.h"
 #include "GltfAdapter.h"
 #include "SidecarFileClient.h"
 
@@ -97,8 +98,14 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
     }
 
     SidecarFileClient sidecarClient(stdIn, stdOut, request.generationId);
+    // Progressive delivery is offered on the real-file path only, which is
+    // the product's own path and the one that meets models too big for a
+    // single window. The pre-made-section path above keeps its one-shot shape
+    // -- its source is a section the host already sized to hold the whole
+    // file, so it has no large-model case to serve.
+    ChunkBatchSink batchSink(stdIn, stdOut, request.generationId);
     auto result = ImportGltf(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
-                              &sidecarClient);
+                              &sidecarClient, &batchSink);
     return ReportResult(stdOut, request.generationId, result);
 }
 

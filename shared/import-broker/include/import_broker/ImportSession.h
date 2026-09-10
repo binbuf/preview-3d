@@ -62,6 +62,12 @@ enum class ImportStage : uint32_t {
     MapOutputSection,
     ValidateSection,
     WorkerReportedError,
+    // Progressive delivery. Each is a distinct worker misbehavior the caller
+    // reports differently, and none is reachable on a single-batch import.
+    ChunkBatchLimit,      // more batches in one generation than the cap allows
+    ChunkBatchOutOfOrder, // a replayed, skipped, or wrong-generation batchIndex
+    ChunkCountLimit,      // more chunks across the generation than the cap allows
+    ChunkBatchAckFailed,  // the ack could not be written (worker gone mid-batch)
 };
 
 // Job Object private-commit ceiling every import worker runs under.
@@ -126,6 +132,53 @@ struct ImportSessionRequest {
     // after the finite grace period"); that half needs stop-token checkpoints
     // threaded through the adapter loops and is not implemented yet.
     std::function<bool()> isCancelled;
+    // Bounds how many times one generation may fill and hand over the output
+    // window, the same "never trust worker self-restraint" rule
+    // maxSidecarRequestsPerGeneration already applies to sidecars. Without it
+    // a worker could emit batches forever and hold its import thread for the
+    // life of the process. Exceeding it abandons the worker (Job Object
+    // kill-on-close) rather than servicing another batch.
+    //
+    // Counts the terminal ChunksReady batch too, so 1 means "single-window
+    // imports only" -- exactly the behavior before progressive delivery
+    // existed.
+    uint32_t maxChunkBatchesPerGeneration = 1;
+    // Caps chunks across the WHOLE generation, where maxChunkCount caps one
+    // section. Two separate limits because they bound two different things:
+    // maxChunkCount bounds the descriptor table the host allocates from a
+    // single worker-declared count, while this bounds the cross-batch
+    // catalog, which would otherwise grow by up to maxChunkCount per batch
+    // for as many batches as the batch cap allows.
+    //
+    // 0 means "derive it": maxChunkCount * maxChunkBatchesPerGeneration,
+    // which is the loosest value that constrains nothing a caller did not
+    // already allow.
+    uint32_t maxChunksPerGeneration = 0;
+    // Called once per validated batch, in delivery order, before the import
+    // completes. Chunks passed here are already copied into host-owned
+    // memory, so the callee may keep them.
+    //
+    // Optional: when empty, every batch accumulates into
+    // ImportSessionResult::chunks instead and the caller sees exactly the
+    // single-result shape it saw before, whatever the batch count. When
+    // supplied, batches are handed over as they arrive and are NOT also
+    // accumulated -- a progressive caller would otherwise hold the whole
+    // model in host memory as well as on the GPU, which is the thing
+    // progressive delivery exists to avoid.
+    //
+    // Runs on the import thread inside the worker's reply loop, between a
+    // batch's validation and its ack. Keep it short: the worker is blocked
+    // waiting for that ack.
+    std::function<void(std::vector<ValidatedChunk>&&)> onBatch;
+    // Replaces the format's own worker CLI flag when non-empty.
+    //
+    // A test seam, and the same kind commitLimitBytes already is: the reply
+    // loop below is the thing progressive delivery's rules live in, it is
+    // only reachable through RunImportSession, and proving it rejects a
+    // misbehaving worker means launching a deliberately misbehaving worker
+    // *through this function* -- which needs to select that worker's attack
+    // mode. Production callers leave it empty and get ParseFlagFor's mapping.
+    std::wstring workerArgumentsOverride;
 };
 
 struct ImportSessionResult {
@@ -137,7 +190,14 @@ struct ImportSessionResult {
     // Meaningful for stage == OpenSource only: OpenAndCanonicalizeSourceFile's
     // own message, which is more specific than anything this layer could say.
     std::wstring openError;
+    // Every batch's chunks concatenated in delivery order. Empty when the
+    // caller supplied ImportSessionRequest::onBatch, which takes ownership of
+    // each batch as it arrives instead.
     std::vector<ValidatedChunk> chunks;
+    // How many batches the generation actually took, terminal one included.
+    // 1 for every import that fits in a single window. Meaningful on failure
+    // too: it says how far a rejected generation got.
+    uint32_t batchCount = 0;
 };
 
 // Creates (or opens) the single AppContainer profile every import runs

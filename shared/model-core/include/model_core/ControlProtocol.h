@@ -26,6 +26,24 @@ enum class ControlOpcode : uint32_t {
     RequestSidecarFile = 9,       // worker -> host
     SidecarFileReady = 10,        // host -> worker
     SidecarFileUnavailable = 11,  // host -> worker
+    // Non-terminal progressive delivery. A model larger than the output
+    // window cannot cross it in one write, so a generation may now fill and
+    // hand over the section repeatedly: zero or more
+    // ChunkBatchReady/ChunkBatchConsumed round trips, then the terminal
+    // ChunksReady carrying the final batch.
+    //
+    // ChunksReady keeps its exact existing meaning ("the section holds a
+    // batch; validate it") and layout, so a model that fits in one window
+    // sends no ChunkBatchReady at all and its byte traffic is identical to
+    // before this opcode existed -- the same "leave the already-tested path
+    // untouched" rule every opcode above followed.
+    //
+    // ChunkBatchConsumed is flow control, not an acknowledgement of content:
+    // the section is a *reused* window, so without it a worker would race
+    // ahead and overwrite bytes the host is still copying out. The worker
+    // must block for it before touching the section again.
+    ChunkBatchReady = 12,         // worker -> host, non-terminal
+    ChunkBatchConsumed = 13,      // host -> worker
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -188,6 +206,33 @@ struct SidecarFileUnavailableNotice {
     uint32_t reserved0;
 };
 static_assert(sizeof(SidecarFileUnavailableNotice) == 16, "SidecarFileUnavailableNotice layout changed");
+
+// One non-terminal batch is ready in the output section. Deliberately
+// field-for-field ChunksReadyNotice plus a batchIndex rather than a reuse of
+// it: the host must be able to tell a replayed or skipped batch from an
+// in-order one, and ChunksReadyNotice has no field free to carry that.
+//
+// batchIndex is 0-based and must increase by exactly one per batch within a
+// generation. Like sectionBytesWritten it is a *claim*, not a fact -- the
+// host tracks its own expected index and compares, exactly as the validator
+// re-derives sectionLength rather than trusting this struct's byte count.
+struct ChunkBatchReadyNotice {
+    uint64_t generationId;
+    uint32_t batchIndex;
+    uint32_t chunkCount;
+    uint64_t sectionBytesWritten; // diagnostic only -- see ChunksReadyNotice
+};
+static_assert(sizeof(ChunkBatchReadyNotice) == 24, "ChunkBatchReadyNotice layout changed");
+
+// The host has finished copying that batch out of the section; the window is
+// free for reuse. Echoes batchIndex so a worker cannot mistake an ack for an
+// earlier batch as permission to overwrite a later one.
+struct ChunkBatchConsumedNotice {
+    uint64_t generationId;
+    uint32_t batchIndex;
+    uint32_t reserved0;
+};
+static_assert(sizeof(ChunkBatchConsumedNotice) == 16, "ChunkBatchConsumedNotice layout changed");
 
 #pragma pack(pop)
 

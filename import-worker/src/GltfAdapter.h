@@ -25,6 +25,7 @@
 
 namespace import_worker {
 
+class ChunkBatchSink;
 class SidecarFileClient;
 
 struct GltfImportResult {
@@ -43,8 +44,20 @@ struct GltfImportResult {
 // .bin/.png/.jpg/.jpeg/.webp/.ktx2 siblings. Returns an ImportErrorCode
 // instead of a GltfImportResult on any parse failure, resource-limit
 // violation, or malformed/unsupported content.
+//
+// batchSink is nullptr for a caller that can only take one section: the whole
+// model must then fit the window or the result is ResourceLimit, which is
+// what this function always did. Non-null allows progressive delivery -- the
+// model is split across as many windows as it needs, each handed over through
+// the sink -- and only then can a model larger than the window be imported at
+// all.
+//
+// Either way the FINAL batch is left sitting in `destination` and described
+// by the returned GltfImportResult; the caller sends the terminal ChunksReady
+// for it. So the single-window case emits exactly the traffic it always did.
 std::variant<GltfImportResult, model_core::ImportErrorCode> ImportGltf(
     std::span<const std::byte> sourceGlbBytes, std::span<std::byte> destination,
-    uint64_t generationId, uint32_t maxChunkCount, SidecarFileClient* sidecarClient = nullptr);
+    uint64_t generationId, uint32_t maxChunkCount, SidecarFileClient* sidecarClient = nullptr,
+    ChunkBatchSink* batchSink = nullptr);
 
 } // namespace import_worker

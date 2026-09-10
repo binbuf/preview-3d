@@ -64,7 +64,8 @@ bool AllFinite(std::initializer_list<float> values)
 } // namespace
 
 ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
-                                         uint64_t expectedGenerationId, uint32_t maxChunkCount)
+                                         uint64_t expectedGenerationId, uint32_t maxChunkCount,
+                                         const KnownChunkCatalog* priorBatches)
 {
     // 1. The section must be at least large enough to hold a header before
     // any field of it is read.
@@ -160,12 +161,40 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         if (descriptors[i].chunkId == 0) {
             return Reject(ImportErrorCode::MalformedData, "chunk declares reserved chunkId 0");
         }
+        // 12a-bis. Uniqueness spans the whole generation, not just this
+        // section. Without this a later batch could reuse an earlier batch's
+        // id and silently take over what every already-accepted dependency
+        // reference to that id resolves to.
+        if (priorBatches && priorBatches->find(descriptors[i].chunkId) != priorBatches->end()) {
+            return Reject(ImportErrorCode::MalformedData, "chunkId already accepted in an earlier batch");
+        }
         auto [it, inserted] = topologyById.emplace(descriptors[i].chunkId, descriptors[i].topology);
         if (!inserted) {
             return Reject(ImportErrorCode::MalformedData, "duplicate chunkId");
         }
         (void)it;
     }
+
+    // Resolves a dependency id against this section's own table first, then
+    // the chunks accepted in earlier batches of this generation.
+    //
+    // Cycles stay impossible for the same structural reason as before: a
+    // chunk can only name an id that already exists, and an earlier batch was
+    // validated before this one existed, so every cross-batch reference
+    // points strictly backwards in batch order.
+    auto resolveTopology = [&](uint32_t id) -> const ChunkTopology* {
+        auto it = topologyById.find(id);
+        if (it != topologyById.end()) {
+            return &it->second;
+        }
+        if (priorBatches) {
+            auto prior = priorBatches->find(id);
+            if (prior != priorBatches->end()) {
+                return &prior->second;
+            }
+        }
+        return nullptr;
+    };
 
     ValidationResult result;
     result.chunks.reserve(header.chunkCount);
@@ -244,7 +273,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             }
             for (uint32_t d = 0; d < descriptor.dependencyCount; ++d) {
                 if (descriptor.dependencyIds[d] == 0
-                    || topologyById.find(descriptor.dependencyIds[d]) == topologyById.end()) {
+                    || resolveTopology(descriptor.dependencyIds[d]) == nullptr) {
                     return Reject(ImportErrorCode::MalformedData, "mesh dependency id not found");
                 }
             }
@@ -303,8 +332,8 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                     if (descriptor.dependencyIds[d] == 0) {
                         continue;
                     }
-                    auto dep = topologyById.find(descriptor.dependencyIds[d]);
-                    if (dep == topologyById.end() || dep->second != ChunkTopology::Image) {
+                    const ChunkTopology* dep = resolveTopology(descriptor.dependencyIds[d]);
+                    if (dep == nullptr || *dep != ChunkTopology::Image) {
                         return Reject(ImportErrorCode::MalformedData,
                                       "material dependency is not an image chunk");
                     }

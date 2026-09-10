@@ -162,6 +162,21 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
 constexpr uint32_t kMaxSidecarRequestsPerGeneration = 64;
 constexpr uint64_t kMaxSidecarFileBytes = 256ull * 1024ull * 1024ull;
 
+// How many times one generation may fill and hand over the 64 MiB output
+// window (import_broker::kImportSectionBytes).
+//
+// Derived from the Tier A source budget rather than picked: 03-file-formats-
+// and-ingestion.md:162 caps a primary Tier A source at 8 GiB, and normalized
+// output is smaller than its source for every format this worker handles, so
+// 8 GiB / 64 MiB = 128 windows already covers the largest admissible file.
+// Doubled to 256 for headroom, which still bounds a runaway worker to a
+// finite number of round trips -- the point of having a cap at all.
+//
+// This is what a model larger than one window costs in round trips, not a
+// promise that one that size performs: A-large streaming is the LOD/proxy
+// builder's job, not this cap's.
+constexpr uint32_t kMaxChunkBatchesPerGeneration = 256;
+
 } // namespace
 
 std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
@@ -193,6 +208,13 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.maxChunkCount = import_broker::kImportMaxChunkCount;
     sessionRequest.maxSidecarRequestsPerGeneration = kMaxSidecarRequestsPerGeneration;
     sessionRequest.maxSidecarFileBytes = kMaxSidecarFileBytes;
+    sessionRequest.maxChunkBatchesPerGeneration = kMaxChunkBatchesPerGeneration;
+    // No onBatch sink yet: this function still returns one finished model and
+    // its caller still uploads it in one go, so a batched import accumulates
+    // host-side exactly as a single-window one always did. Handing batches to
+    // the renderer as they land -- so the first geometry is on screen before
+    // the last batch crosses -- is the next chunk; the protocol and the
+    // acceptance rules it needs are what this one built.
 
     import_broker::ImportSessionResult session = import_broker::RunImportSession(sessionRequest);
     if (!session.ok) {

@@ -45,4 +45,56 @@ int RunLieOffset();
 // guessing a stride.
 int RunLieLayout();
 
+// ---------------------------------------------------------------------------
+// Progressive delivery (ChunkBatchReady/ChunkBatchConsumed).
+//
+// Every mode below is an attack that simply does not exist until a
+// generation may write the output window more than once, which is why the
+// four above could not already cover them. They are driven through
+// import_broker::RunImportSession rather than a hand-rolled control channel,
+// because the rules they attack -- batch ordering, the batch and chunk caps,
+// and the ack handshake -- live in that function's own reply loop.
+//
+// These modes answer a StartXxxImportFromFile request (whatever
+// RunImportSession sends) rather than StartGeneration, and ignore the source
+// file handle entirely: what they fabricate is the *output*, which is the
+// only thing the host trusts a worker for.
+// ---------------------------------------------------------------------------
+
+// Sends two well-formed batches and a terminal ChunksReady, all honest.
+// The control case: proves the suite's own multi-batch machinery works, so a
+// rejection in the modes below is the host's doing and not a broken fixture.
+int RunHonestBatches();
+
+// Sends batch 0, waits for its ack, then sends batch 0 again instead of
+// batch 1. Proves a replayed index cannot re-present bytes the host already
+// accepted and moved past.
+int RunReplayBatchIndex();
+
+// Sends batch 0, then batch 2 -- skipping 1. Proves the host tracks its own
+// expected index rather than trusting the worker's claim.
+int RunSkipBatchIndex();
+
+// Sends a batch whose chunk reuses a chunkId the host already accepted in an
+// earlier batch. Proves id uniqueness spans the generation, not just one
+// section -- without which a later batch could take over what every
+// already-accepted reference to that id resolves to.
+int RunReuseChunkIdAcrossBatches();
+
+// Keeps sending well-formed batches forever, never terminating. Proves the
+// per-generation batch cap stops it rather than the host servicing batches
+// until the worker chooses to stop.
+int RunUnboundedBatches();
+
+// Sends a batch and then, without waiting for its ack, immediately rewrites
+// the section underneath the host and sends the next one. Proves the host's
+// copy-then-validate snapshot of an accepted batch is unaffected -- the
+// cross-batch form of the mutate-after-ready attack above, on a window that
+// is now deliberately reused.
+int RunWriteBeforeAck();
+
+// Sends a terminal ChunksReady and then one more ChunkBatchReady after it.
+// Proves the terminal reply really does end the generation.
+int RunBatchAfterTerminal();
+
 } // namespace hostile_worker

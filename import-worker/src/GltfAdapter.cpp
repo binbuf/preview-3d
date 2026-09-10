@@ -1,5 +1,6 @@
 #include "GltfAdapter.h"
 
+#include "ChunkBatchSink.h"
 #include "DracoDecodeAdapter.h"
 #include "ImageFormatSniff.h"
 #include "SidecarFileClient.h"
@@ -18,7 +19,9 @@
 
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -903,13 +906,142 @@ bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::fmat4x4
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Section writing, one or many batches.
+// ---------------------------------------------------------------------------
+
+// One chunk ready to be written. What is deliberately NOT here is where in
+// the section it lands and what its checksum is: both depend on which batch
+// takes it, which is only decided once the window's remaining room is known.
+//
+// The payload is held as spans into the parse's own buffers rather than
+// copied, so planning a 350 MiB model's batches costs a few descriptors and
+// not a second copy of its geometry.
+struct PlannedChunk {
+    ChunkDescriptor descriptor{};
+    std::span<const std::byte> pieceA;
+    std::span<const std::byte> pieceB; // empty unless the payload is two runs
+    uint64_t payloadBytes = 0;
+};
+
+template <typename T>
+std::span<const std::byte> BytesOf(const T& value)
+{
+    return std::span<const std::byte>(reinterpret_cast<const std::byte*>(&value), sizeof(T));
+}
+
+template <typename T>
+std::span<const std::byte> BytesOf(const std::vector<T>& values)
+{
+    return std::span<const std::byte>(reinterpret_cast<const std::byte*>(values.data()),
+                                       values.size() * sizeof(T));
+}
+
+// Writes one complete, self-consistent section holding exactly `batch` into
+// `destination`, header last, exactly as this adapter always did for the
+// whole model. Returns the section length, or nullopt if the batch does not
+// fit -- which the caller must have already prevented.
+std::optional<uint64_t> WriteBatchSection(std::span<std::byte> destination,
+                                           std::span<PlannedChunk> batch, uint64_t generationId)
+{
+    auto descriptorTableBytes
+        = CheckedMultiply(static_cast<uint64_t>(batch.size()), kChunkDescriptorSize);
+    if (!descriptorTableBytes) {
+        return std::nullopt;
+    }
+    auto headerAndTable = CheckedAdd(kSectionHeaderSize, *descriptorTableBytes);
+    if (!headerAndTable) {
+        return std::nullopt;
+    }
+
+    uint64_t offset = *headerAndTable;
+    for (auto& chunk : batch) {
+        auto next = CheckedAdd(offset, chunk.payloadBytes);
+        if (!next) {
+            return std::nullopt;
+        }
+        chunk.descriptor.normalizedRangeOffset = offset;
+        chunk.descriptor.normalizedRangeLength = chunk.payloadBytes;
+        chunk.descriptor.byteSize = chunk.payloadBytes;
+        offset = *next;
+    }
+    uint64_t sectionLength = offset;
+    if (sectionLength > destination.size()) {
+        return std::nullopt;
+    }
+
+    for (size_t i = 0; i < batch.size(); ++i) {
+        PlannedChunk& chunk = batch[i];
+        std::byte* payload = destination.data() + chunk.descriptor.normalizedRangeOffset;
+        if (!chunk.pieceA.empty()) {
+            std::memcpy(payload, chunk.pieceA.data(), chunk.pieceA.size());
+        }
+        if (!chunk.pieceB.empty()) {
+            std::memcpy(payload + chunk.pieceA.size(), chunk.pieceB.data(), chunk.pieceB.size());
+        }
+        chunk.descriptor.chunkChecksum = Fnv1a64(
+            destination.subspan(chunk.descriptor.normalizedRangeOffset, chunk.payloadBytes));
+
+        std::memcpy(destination.data() + kSectionHeaderSize + i * kChunkDescriptorSize,
+                    &chunk.descriptor, sizeof(ChunkDescriptor));
+    }
+
+    SectionHeader header{};
+    header.magic = kSectionMagic;
+    header.protocolVersion = kCurrentProtocolVersion;
+    header.generationId = generationId;
+    header.sectionLength = sectionLength;
+    header.chunkCount = static_cast<uint32_t>(batch.size());
+    header.reserved = 0;
+    header.sectionChecksum
+        = Fnv1a64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
+
+    std::memcpy(destination.data(), &header, sizeof(header));
+    return sectionLength;
+}
+
+// How many of `remaining` fit in one window, always at least one unless the
+// first alone cannot fit. The descriptor table grows with the count, so room
+// is re-derived per candidate rather than compared against a fixed budget.
+size_t CountChunksThatFit(std::span<const PlannedChunk> remaining, uint64_t windowBytes,
+                          uint32_t maxChunkCount)
+{
+    uint64_t payloadSoFar = 0;
+    size_t taken = 0;
+    for (const auto& chunk : remaining) {
+        if (taken + 1 > maxChunkCount) {
+            break;
+        }
+        auto tableBytes = CheckedMultiply(static_cast<uint64_t>(taken + 1), kChunkDescriptorSize);
+        if (!tableBytes) {
+            break;
+        }
+        auto headerAndTable = CheckedAdd(kSectionHeaderSize, *tableBytes);
+        if (!headerAndTable) {
+            break;
+        }
+        auto payload = CheckedAdd(payloadSoFar, chunk.payloadBytes);
+        if (!payload) {
+            break;
+        }
+        auto total = CheckedAdd(*headerAndTable, *payload);
+        if (!total || *total > windowBytes) {
+            break;
+        }
+        payloadSoFar = *payload;
+        ++taken;
+    }
+    return taken;
+}
+
 } // namespace
 
 std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::byte> sourceGlbBytes,
                                                              std::span<std::byte> destination,
                                                              uint64_t generationId,
                                                              uint32_t maxChunkCount,
-                                                             SidecarFileClient* sidecarClient)
+                                                             SidecarFileClient* sidecarClient,
+                                                             ChunkBatchSink* batchSink)
 {
     auto dataBufferResult
         = fastgltf::GltfDataBuffer::FromBytes(sourceGlbBytes.data(), sourceGlbBytes.size());
@@ -964,13 +1096,16 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         return ImportErrorCode::MalformedData; // no supported geometry found
     }
 
-    // Fixed chunk order/numbering across the whole section: meshes
-    // [1, meshChunkCount], then materials, then images -- backpatched into
-    // dependencyIds below once every chunk's id is known.
+    // Chunk ids are fixed for the whole generation, whatever batch each
+    // chunk later lands in: meshes [1, meshChunkCount], then materials, then
+    // images. That is what lets a mesh in a later batch keep pointing at a
+    // material and texture that already crossed in an earlier one -- the host
+    // resolves the reference through its per-generation catalog
+    // (import_broker::KnownChunkCatalog) -- so a shared 16 MiB texture is
+    // sent once for the model rather than once per batch that uses it.
     const size_t meshChunkCount = state.chunks.size();
     const size_t materialChunkCount = state.pendingMaterials.size();
     const size_t imageChunkCount = state.pendingImages.size();
-    const size_t totalChunkCount = meshChunkCount + materialChunkCount + imageChunkCount;
 
     auto meshChunkId = [&](size_t i) { return static_cast<uint32_t>(i + 1); };
     auto materialChunkId
@@ -979,148 +1114,92 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         return static_cast<uint32_t>(meshChunkCount + materialChunkCount + k + 1);
     };
 
-    // Compute layout and total size before writing anything -- mirrors
-    // SyntheticSceneGenerator's "compute everything, check once, then write
-    // sequentially, header last" structure.
-    auto descriptorTableBytes
-        = CheckedMultiply(static_cast<uint64_t>(totalChunkCount), kChunkDescriptorSize);
-    if (!descriptorTableBytes) {
-        return ImportErrorCode::ResourceLimit;
-    }
-    auto headerAndTable = CheckedAdd(kSectionHeaderSize, *descriptorTableBytes);
-    if (!headerAndTable) {
-        return ImportErrorCode::ResourceLimit;
-    }
+    // Stable storage the image PlannedChunks span, so an image's header and
+    // its pixels stay two runs of existing memory instead of being copied
+    // into one joined buffer.
+    std::vector<ImagePayloadHeader> imageHeaders(imageChunkCount);
 
-    std::vector<uint64_t> payloadOffsets(totalChunkCount);
-    std::vector<uint64_t> payloadSizes(totalChunkCount);
-    uint64_t offset = *headerAndTable;
-    for (size_t i = 0; i < meshChunkCount; ++i) {
-        uint64_t vertexBytes = static_cast<uint64_t>(state.chunks[i].vertices.size())
-            * sizeof(VertexPositionNormalUv0F32);
-        uint64_t indexBytes = static_cast<uint64_t>(state.chunks[i].indices.size()) * sizeof(uint32_t);
-        auto payloadSize = CheckedAdd(vertexBytes, indexBytes);
-        auto nextOffset = payloadSize ? CheckedAdd(offset, *payloadSize) : std::nullopt;
-        if (!payloadSize || !nextOffset) {
-            return ImportErrorCode::ResourceLimit;
-        }
-        payloadOffsets[i] = offset;
-        payloadSizes[i] = *payloadSize;
-        offset = *nextOffset;
-    }
-    for (size_t j = 0; j < materialChunkCount; ++j) {
-        size_t combined = meshChunkCount + j;
-        uint64_t payloadSize = sizeof(MaterialPayload);
-        auto nextOffset = CheckedAdd(offset, payloadSize);
-        if (!nextOffset) {
-            return ImportErrorCode::ResourceLimit;
-        }
-        payloadOffsets[combined] = offset;
-        payloadSizes[combined] = payloadSize;
-        offset = *nextOffset;
-    }
-    for (size_t k = 0; k < imageChunkCount; ++k) {
-        size_t combined = meshChunkCount + materialChunkCount + k;
-        auto payloadSize = CheckedAdd(static_cast<uint64_t>(sizeof(ImagePayloadHeader)),
-                                       static_cast<uint64_t>(state.pendingImages[k].pixelBytes.size()));
-        auto nextOffset = payloadSize ? CheckedAdd(offset, *payloadSize) : std::nullopt;
-        if (!payloadSize || !nextOffset) {
-            return ImportErrorCode::ResourceLimit;
-        }
-        payloadOffsets[combined] = offset;
-        payloadSizes[combined] = *payloadSize;
-        offset = *nextOffset;
-    }
-    uint64_t sectionLength = offset;
-
-    if (sectionLength > destination.size()) {
-        return ImportErrorCode::ResourceLimit;
-    }
+    std::vector<PlannedChunk> meshPlans(meshChunkCount);
+    std::vector<PlannedChunk> materialPlans(materialChunkCount);
+    std::vector<PlannedChunk> imagePlans(imageChunkCount);
 
     for (size_t i = 0; i < meshChunkCount; ++i) {
         const PendingChunk& chunk = state.chunks[i];
-        uint64_t vertexBytes = chunk.vertices.size() * sizeof(VertexPositionNormalUv0F32);
-
-        std::memcpy(destination.data() + payloadOffsets[i], chunk.vertices.data(), vertexBytes);
-        std::memcpy(destination.data() + payloadOffsets[i] + vertexBytes, chunk.indices.data(),
-                    chunk.indices.size() * sizeof(uint32_t));
-
-        ChunkDescriptor descriptor{};
-        descriptor.sourceRangeOffset = 0;
-        descriptor.sourceRangeLength = 0;
-        descriptor.normalizedRangeOffset = payloadOffsets[i];
-        descriptor.normalizedRangeLength = payloadSizes[i];
-        descriptor.topology = ChunkTopology::TriangleList;
-        descriptor.indexCount = static_cast<uint32_t>(chunk.indices.size());
-        descriptor.vertexCount = static_cast<uint32_t>(chunk.vertices.size());
-        descriptor.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0_F32);
-        descriptor.lodLevel = 0;
-        descriptor.chunkId = meshChunkId(i);
-        descriptor.byteSize = payloadSizes[i];
-        if (chunk.pendingMaterialIndex.has_value()) {
-            descriptor.dependencyIds[0] = materialChunkId(*chunk.pendingMaterialIndex);
-            descriptor.dependencyCount = 1;
-        } else {
-            descriptor.dependencyCount = 0;
+        auto vertexBytes = CheckedMultiply(static_cast<uint64_t>(chunk.vertices.size()),
+                                            sizeof(VertexPositionNormalUv0F32));
+        auto indexBytes
+            = CheckedMultiply(static_cast<uint64_t>(chunk.indices.size()), sizeof(uint32_t));
+        if (!vertexBytes || !indexBytes) {
+            return ImportErrorCode::ResourceLimit;
         }
-        descriptor.chunkChecksum = Fnv1a64(destination.subspan(payloadOffsets[i], payloadSizes[i]));
+        auto payloadSize = CheckedAdd(*vertexBytes, *indexBytes);
+        if (!payloadSize) {
+            return ImportErrorCode::ResourceLimit;
+        }
 
-        std::memcpy(destination.data() + kSectionHeaderSize + i * kChunkDescriptorSize, &descriptor,
-                    sizeof(descriptor));
+        PlannedChunk& plan = meshPlans[i];
+        plan.descriptor.sourceRangeOffset = 0;
+        plan.descriptor.sourceRangeLength = 0;
+        plan.descriptor.topology = ChunkTopology::TriangleList;
+        plan.descriptor.indexCount = static_cast<uint32_t>(chunk.indices.size());
+        plan.descriptor.vertexCount = static_cast<uint32_t>(chunk.vertices.size());
+        plan.descriptor.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0_F32);
+        plan.descriptor.lodLevel = 0;
+        plan.descriptor.chunkId = meshChunkId(i);
+        if (chunk.pendingMaterialIndex.has_value()) {
+            plan.descriptor.dependencyIds[0] = materialChunkId(*chunk.pendingMaterialIndex);
+            plan.descriptor.dependencyCount = 1;
+        } else {
+            plan.descriptor.dependencyCount = 0;
+        }
+        plan.pieceA = BytesOf(chunk.vertices);
+        plan.pieceB = BytesOf(chunk.indices);
+        plan.payloadBytes = *payloadSize;
     }
 
     for (size_t j = 0; j < materialChunkCount; ++j) {
-        size_t combined = meshChunkCount + j;
         const PendingMaterial& material = state.pendingMaterials[j];
 
-        std::memcpy(destination.data() + payloadOffsets[combined], &material.data, sizeof(MaterialPayload));
-
-        ChunkDescriptor descriptor{};
-        descriptor.sourceRangeOffset = 0;
-        descriptor.sourceRangeLength = 0;
-        descriptor.normalizedRangeOffset = payloadOffsets[combined];
-        descriptor.normalizedRangeLength = payloadSizes[combined];
-        descriptor.topology = ChunkTopology::Material;
-        descriptor.indexCount = 0;
-        descriptor.vertexCount = 0;
-        descriptor.vertexLayoutId = 0;
-        descriptor.lodLevel = 0;
-        descriptor.chunkId = materialChunkId(j);
-        descriptor.byteSize = payloadSizes[combined];
+        PlannedChunk& plan = materialPlans[j];
+        plan.descriptor.sourceRangeOffset = 0;
+        plan.descriptor.sourceRangeLength = 0;
+        plan.descriptor.topology = ChunkTopology::Material;
+        plan.descriptor.indexCount = 0;
+        plan.descriptor.vertexCount = 0;
+        plan.descriptor.vertexLayoutId = 0;
+        plan.descriptor.lodLevel = 0;
+        plan.descriptor.chunkId = materialChunkId(j);
         // Fixed slot order {baseColor, metallicRoughness, normal, emissive}
         // per WireFormat.h; sparsely populated is valid (e.g. a normal-map-
         // only material leaves slots 0/1/3 at their zero-initialized
-        // default) -- SharedSectionValidator checks each slot
-        // independently, not as a contiguous prefix.
-        descriptor.dependencyCount = 0;
+        // default) -- SharedSectionValidator checks each slot independently,
+        // not as a contiguous prefix.
+        plan.descriptor.dependencyCount = 0;
         if (material.pendingBaseColorImageIndex.has_value()) {
-            descriptor.dependencyIds[0] = imageChunkId(*material.pendingBaseColorImageIndex);
-            ++descriptor.dependencyCount;
+            plan.descriptor.dependencyIds[0] = imageChunkId(*material.pendingBaseColorImageIndex);
+            ++plan.descriptor.dependencyCount;
         }
         if (material.pendingMetallicRoughnessImageIndex.has_value()) {
-            descriptor.dependencyIds[1] = imageChunkId(*material.pendingMetallicRoughnessImageIndex);
-            ++descriptor.dependencyCount;
+            plan.descriptor.dependencyIds[1]
+                = imageChunkId(*material.pendingMetallicRoughnessImageIndex);
+            ++plan.descriptor.dependencyCount;
         }
         if (material.pendingNormalImageIndex.has_value()) {
-            descriptor.dependencyIds[2] = imageChunkId(*material.pendingNormalImageIndex);
-            ++descriptor.dependencyCount;
+            plan.descriptor.dependencyIds[2] = imageChunkId(*material.pendingNormalImageIndex);
+            ++plan.descriptor.dependencyCount;
         }
         if (material.pendingEmissiveImageIndex.has_value()) {
-            descriptor.dependencyIds[3] = imageChunkId(*material.pendingEmissiveImageIndex);
-            ++descriptor.dependencyCount;
+            plan.descriptor.dependencyIds[3] = imageChunkId(*material.pendingEmissiveImageIndex);
+            ++plan.descriptor.dependencyCount;
         }
-        descriptor.chunkChecksum
-            = Fnv1a64(destination.subspan(payloadOffsets[combined], payloadSizes[combined]));
-
-        std::memcpy(destination.data() + kSectionHeaderSize + combined * kChunkDescriptorSize, &descriptor,
-                    sizeof(descriptor));
+        plan.pieceA = BytesOf(material.data);
+        plan.payloadBytes = sizeof(MaterialPayload);
     }
 
     for (size_t k = 0; k < imageChunkCount; ++k) {
-        size_t combined = meshChunkCount + materialChunkCount + k;
         const PendingImage& image = state.pendingImages[k];
 
-        ImagePayloadHeader imageHeader{};
+        ImagePayloadHeader& imageHeader = imageHeaders[k];
         imageHeader.pixelFormat = static_cast<uint32_t>(image.pixelFormat);
         imageHeader.width = image.width;
         imageHeader.height = image.height;
@@ -1129,45 +1208,107 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         imageHeader.reserved0 = 0;
         imageHeader.pixelDataByteSize = image.pixelBytes.size();
 
-        std::memcpy(destination.data() + payloadOffsets[combined], &imageHeader, sizeof(imageHeader));
-        std::memcpy(destination.data() + payloadOffsets[combined] + sizeof(imageHeader),
-                    image.pixelBytes.data(), image.pixelBytes.size());
+        auto payloadSize = CheckedAdd(static_cast<uint64_t>(sizeof(ImagePayloadHeader)),
+                                       static_cast<uint64_t>(image.pixelBytes.size()));
+        if (!payloadSize) {
+            return ImportErrorCode::ResourceLimit;
+        }
 
-        ChunkDescriptor descriptor{};
-        descriptor.sourceRangeOffset = 0;
-        descriptor.sourceRangeLength = 0;
-        descriptor.normalizedRangeOffset = payloadOffsets[combined];
-        descriptor.normalizedRangeLength = payloadSizes[combined];
-        descriptor.topology = ChunkTopology::Image;
-        descriptor.indexCount = 0;
-        descriptor.vertexCount = 0;
-        descriptor.vertexLayoutId = 0;
-        descriptor.lodLevel = 0;
-        descriptor.chunkId = imageChunkId(k);
-        descriptor.byteSize = payloadSizes[combined];
-        descriptor.dependencyCount = 0; // images reference nothing
-        descriptor.chunkChecksum
-            = Fnv1a64(destination.subspan(payloadOffsets[combined], payloadSizes[combined]));
-
-        std::memcpy(destination.data() + kSectionHeaderSize + combined * kChunkDescriptorSize, &descriptor,
-                    sizeof(descriptor));
+        PlannedChunk& plan = imagePlans[k];
+        plan.descriptor.sourceRangeOffset = 0;
+        plan.descriptor.sourceRangeLength = 0;
+        plan.descriptor.topology = ChunkTopology::Image;
+        plan.descriptor.indexCount = 0;
+        plan.descriptor.vertexCount = 0;
+        plan.descriptor.vertexLayoutId = 0;
+        plan.descriptor.lodLevel = 0;
+        plan.descriptor.chunkId = imageChunkId(k);
+        plan.descriptor.dependencyCount = 0; // images reference nothing
+        plan.pieceA = BytesOf(imageHeader);
+        plan.pieceB = std::span<const std::byte>(image.pixelBytes.data(), image.pixelBytes.size());
+        plan.payloadBytes = *payloadSize;
     }
 
-    SectionHeader header{};
-    header.magic = kSectionMagic;
-    header.protocolVersion = kCurrentProtocolVersion;
-    header.generationId = generationId;
-    header.sectionLength = sectionLength;
-    header.chunkCount = static_cast<uint32_t>(totalChunkCount);
-    header.reserved = 0;
-    header.sectionChecksum
-        = Fnv1a64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
+    // Emission order, decided by whether this model actually needs more than
+    // one window -- never merely by whether the caller offered a sink.
+    //
+    // One section: the order stays what it has always been (meshes, then
+    // materials, then images). Nothing can reference across a boundary that
+    // does not exist, so dependency order buys nothing, and keeping it means
+    // every model that fit before still produces a byte-identical section --
+    // including on the product path, which offers a sink for every import and
+    // would otherwise have its output silently reordered by this change.
+    //
+    // Several sections: a reference may only point at a chunk that has
+    // ALREADY crossed, never one still to come, because the host's catalog
+    // holds exactly what it has accepted so far. Emitting images, then
+    // materials, then meshes puts every dependency ahead of its dependents,
+    // which is what makes cross-batch references resolvable at all. It is
+    // also the order the design wants for display -- textures before the
+    // geometry that uses them.
+    // PlannedChunk is a descriptor plus two spans, so concatenating the
+    // groups twice costs a memcpy of a few hundred bytes per chunk and never
+    // touches the geometry the spans point at.
+    auto concatenate = [](const std::vector<PlannedChunk>& a, const std::vector<PlannedChunk>& b,
+                           const std::vector<PlannedChunk>& c) {
+        std::vector<PlannedChunk> joined;
+        joined.reserve(a.size() + b.size() + c.size());
+        joined.insert(joined.end(), a.begin(), a.end());
+        joined.insert(joined.end(), b.begin(), b.end());
+        joined.insert(joined.end(), c.begin(), c.end());
+        return joined;
+    };
 
-    std::memcpy(destination.data(), &header, sizeof(header));
+    std::vector<PlannedChunk> plans = concatenate(meshPlans, materialPlans, imagePlans);
+    if (CountChunksThatFit(plans, destination.size(), maxChunkCount) != plans.size()) {
+        if (batchSink == nullptr) {
+            // A caller that cannot take a second batch, and a model that
+            // needs one: exactly the outcome this path always gave.
+            return ImportErrorCode::ResourceLimit;
+        }
+        plans = concatenate(imagePlans, materialPlans, meshPlans);
+    }
+
+    // Fill the window, hand it over, repeat. The last batch is deliberately
+    // NOT published here: it stays in the window and this function's caller
+    // sends the terminal ChunksReady for it, which is exactly what the
+    // single-batch path has always done.
+    std::span<PlannedChunk> remaining(plans);
+    uint32_t lastBatchChunkCount = 0;
+    uint64_t lastBatchLength = 0;
+    for (;;) {
+        size_t taken = CountChunksThatFit(remaining, destination.size(), maxChunkCount);
+        if (taken == 0) {
+            // Not even one chunk fits, so no sequence of batches can ever
+            // finish. Same outcome the single-window path always gave for a
+            // model too big for its window.
+            return ImportErrorCode::ResourceLimit;
+        }
+
+        auto sectionLength = WriteBatchSection(destination, remaining.subspan(0, taken), generationId);
+        if (!sectionLength) {
+            return ImportErrorCode::ResourceLimit;
+        }
+
+        remaining = remaining.subspan(taken);
+        lastBatchChunkCount = static_cast<uint32_t>(taken);
+        lastBatchLength = *sectionLength;
+
+        if (remaining.empty()) {
+            break;
+        }
+        // More to come, so this batch is non-terminal: hand the window over
+        // and block until the host is finished copying it. batchSink is
+        // non-null here by construction -- a null one already returned
+        // ResourceLimit above rather than reaching a second batch.
+        if (!batchSink->PublishBatch(lastBatchChunkCount, lastBatchLength)) {
+            return ImportErrorCode::ImportProtocolViolation;
+        }
+    }
 
     GltfImportResult result;
-    result.chunkCount = static_cast<uint32_t>(totalChunkCount);
-    result.sectionBytesWritten = sectionLength;
+    result.chunkCount = lastBatchChunkCount;
+    result.sectionBytesWritten = lastBatchLength;
     return result;
 }
 

@@ -81,6 +81,7 @@
     <ClCompile Include="SharedSectionValidatorTextureTests.cpp" />
     <ClCompile Include="SidecarPathResolverTests.cpp" />
     <ClCompile Include="SidecarProtocolTests.cpp" />
+    <ClCompile Include="ChunkBatchTests.cpp" />
     <ClCompile Include="DracoDecodeAdapterTests.cpp" />
     <ClCompile Include="TextureTranscodeAdapterTests.cpp" />
     <ClCompile Include="..\..\import-worker\src\DracoDecodeAdapter.cpp" />

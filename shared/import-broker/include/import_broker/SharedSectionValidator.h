@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace import_broker {
@@ -38,9 +39,32 @@ struct ValidationResult {
     std::string diagnosticMessage; // developer-facing only, never parsed
 };
 
+// chunkId -> topology for every chunk already accepted in EARLIER batches of
+// the same generation, when a model is delivered progressively across several
+// writes of the output window (model_core::ControlOpcode::ChunkBatchReady).
+//
+// It exists so a later batch may reference an earlier one's chunk -- a mesh
+// pointing at a material whose textures already crossed -- instead of every
+// batch having to re-send the chunks it depends on. Self-contained batches
+// were the alternative and are cheap for materials but not for images: at
+// 03-file-formats-and-ingestion.md:140's 16 MiB chunk cap, one shared texture
+// re-sent per batch is 16 MiB and one more GPU copy every time.
+//
+// This widens what a dependency id may resolve to; it does not weaken any
+// check. Every entry here is a chunk that already passed this same validator
+// in full and was copied into host-owned memory, and ids stay unique across
+// the whole generation (a chunk whose id is already in the catalog is
+// rejected, exactly as a duplicate inside one section is). Its size is
+// bounded by the caller's per-generation chunk cap, not by this file.
+using KnownChunkCatalog = std::unordered_map<uint32_t, model_core::ChunkTopology>;
+
 // sectionView must be exactly the caller's actual MapViewOfFile size (never
 // the section's own self-declared length).
+//
+// priorBatches is null for a single-window import, which makes this function
+// behave exactly as it did before progressive delivery existed.
 ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
-                                         uint64_t expectedGenerationId, uint32_t maxChunkCount);
+                                         uint64_t expectedGenerationId, uint32_t maxChunkCount,
+                                         const KnownChunkCatalog* priorBatches = nullptr);
 
 } // namespace import_broker
