@@ -6,7 +6,15 @@ This is the forward-looking companion to [PROGRESS.md](./PROGRESS.md): that file
 happened and what surprised us, this one records what is left. Neither replaces the design docs —
 when they disagree, `.docs/design/` wins and this file is what needs fixing.
 
-**Accurate as of `f0d2f86`** ("Let one generation hand over the output window more than once").
+**Scope-limited MVP:** [NEW_SCOPE_LIMITED_MVP_TASKS.md](./NEW_SCOPE_LIMITED_MVP_TASKS.md)
+is the active implementation sequence and overrides the broader gate scope below.
+TSK-101 is implemented: D3D12 is exclusive and the legacy renderer instance/import path is
+removed. TSK-102's real chrome port remains next. Required model-state checks were changed
+as part of removing that instance; TSK-103 still needs verification with visible chrome and
+model information. Native-orientation re-homing still requires CPU model metadata from the
+D3D12 pipeline.
+
+**Broader gate baseline: `f0d2f86`**, amended for TSK-101 below.
 
 Two rules this list is written to, both from the delivery plan itself:
 
@@ -101,11 +109,11 @@ five each have an unbuilt half.
 
 ### Also blocking Gate 1 and Gate 3 evidence
 
-- [ ] **Six dead `renderer.HasModel()` branches under `--d3d12`.** `HasNavigableModel`,
-      `FrameSelectedOrAll`, `ToggleShowNativeOrientation`, `CancelOpen`, `ID_VIEW_RESET` and the
-      bottom bar all ask a renderer that is never touched in that mode, so the bottom bar and info
-      panel never appear — which is where counts and bounds would be read for Gate 3 exit
-      criterion 2.
+- [x] **Remove the dead `renderer.HasModel()` branches (TSK-101).** Model presence
+      now comes from `RenderThread::HasModel()`, the atomic publication of D3D12 state.
+- [ ] **Verify restored UI state binds (TSK-103).** Visible bars/panels await TSK-102;
+      picking, stats/bounds, and native-orientation re-homing also need CPU model metadata
+      published from the D3D12 pipeline.
 
 ---
 

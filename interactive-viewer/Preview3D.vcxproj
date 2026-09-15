@@ -151,8 +151,8 @@
     <Image Include="resources\small.ico" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Build-order only (exe to exe, nothing to link): the opt-in D3D12
-         preview mode needs Preview3DImportWorker.exe built and current. -->
+    <!-- Build-order only (exe to exe, nothing to link): every model import
+         needs Preview3DImportWorker.exe built and current. -->
     <ProjectReference Include="..\import-worker\Preview3DImportWorker.vcxproj">
       <Project>{499d3a16-e218-49e5-accd-caf92709f242}</Project>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>

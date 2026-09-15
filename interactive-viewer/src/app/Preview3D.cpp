@@ -16,7 +16,6 @@
 #include <shobjidl.h>
 #include <wrl/client.h>
 
-#include <cwctype>
 #include <iomanip>
 #include <sstream>
 
@@ -26,12 +25,7 @@ namespace
 {
 constexpr wchar_t kWindowClass[] = L"Preview3DWindow";
 constexpr wchar_t kApplicationName[] = L"3D Preview";
-constexpr UINT kLoadCompleteMessage = WM_APP + 2;
-// The --d3d12 opt-in path's own load-complete message -- kept distinct from
-// kLoadCompleteMessage rather than reusing it, since the payload shape
-// (d3d12_import_bridge::ImportResult vs. Model.cpp's LoadResult) differs and
-// the two loaders never run for the same open (BeginOpen branches on
-// useD3D12 before spawning either background thread).
+// Sandboxed import completion is separate from render-thread upload completion.
 constexpr UINT kD3D12ImportCompleteMessage = WM_APP + 3;
 constexpr float kArrowPixelsPerSecond = 340.0f;
 constexpr double kHudVisibleSeconds = 1.3;
@@ -86,13 +80,6 @@ enum class PointerMode
     DollyDrag
 };
 
-struct CompleteMessage
-{
-    std::uint64_t generation = 0;
-    std::wstring path;
-    LoadResult result;
-};
-
 struct D3D12CompleteMessage
 {
     std::uint64_t generation = 0;
@@ -114,7 +101,7 @@ struct ViewerApp
     int toolbarHeight = 52;
     int bottomBarHeight = 44;
     bool infoPanelVisible = false;
-    float infoPanelScrollOffset = 0.0f;   // logical px, clamped against content each RenderScene/wheel tick
+    float infoPanelScrollOffset = 0.0f;   // logical px, clamped against content on wheel input
     bool speedFlyoutOpen = false;
     bool speedSliderDragging = false;
     bool zoomSliderDragging = false;
@@ -135,9 +122,6 @@ struct ViewerApp
     WINDOWPLACEMENT savedWindowPlacement{ sizeof(WINDOWPLACEMENT) };
     bool rendererReady = false;
     bool closing = false;
-    // Opt-in via --d3d12 (see wWinMain's argument scan) -- mutually
-    // exclusive with `renderer` below; see D3D12ViewerPath.h for scope.
-    bool useD3D12 = false;
     bool showFrameStats = false; // --frame-stats: see UpdateTitle
     // ADR-010 spike scaffolding: --overlay-spike turns the D3D11On12/D2D
     // bridge on, --frame-bench N renders N frames back to back instead of
@@ -147,8 +131,6 @@ struct ViewerApp
     bool overlaySpike = false;
     int overlaySpikePrimitives = 250;
     int benchFrames = 0;
-    int benchRemaining = 0;
-    Renderer renderer;
     // Deliberately NOT named `camera`: once the render thread exists, every
     // access has to go through renderThread.LockCamera(). Renaming turned
     // each of the ~30 existing uses into a compile error rather than a race
@@ -156,8 +138,7 @@ struct ViewerApp
     // thread borrows it by reference and member init follows declaration
     // order.
     Camera sharedCamera;
-    // Owns D3D12ViewerPath privately. On the D3D11 default path it is never
-    // started, and LockCamera degrades to an uncontended lock.
+    // Owns the application's exclusive D3D12ViewerPath privately.
     RenderThread renderThread{ sharedCamera };
     NavGizmo gizmo;
     Chrome chrome;
@@ -188,7 +169,6 @@ struct ViewerApp
     bool arrowRight = false;
     bool arrowUp = false;
     bool arrowDown = false;
-    double lastFrameSeconds = 0.0;
     std::unordered_map<UINT32, POINT> touchPoints;
     POINT touchCenter{};
     double touchSpan = 0.0;
@@ -246,11 +226,11 @@ double NowSeconds()
 // inlined here since CanNavigate is defined later in this file).
 bool HasNavigableModel(const ViewerApp& app)
 {
-    return app.state == ViewerState::Ready && app.renderer.HasModel();
+    return app.state == ViewerState::Ready && app.renderThread.HasModel();
 }
 
 // Reserved bottom-bar VIEWPORT inset (not the bar's own drawn height, see
-// OverlayInfo::barBottomBarHeight/RenderScene below): space is only reserved
+// OverlayInfo::barBottomBarHeight/BuildOverlayInfo below): space is only reserved
 // while a model is loaded, matching HasNavigableModel, and collapsed to 0 in
 // Fullscreen so the viewport reclaims that space and fills the whole monitor
 // — the bar itself keeps drawing there as a floating toolbar overlaying that
@@ -391,16 +371,6 @@ std::wstring FileNameFromPath(const std::wstring& path)
     return slash == std::wstring::npos ? path : path.substr(slash + 1);
 }
 
-bool HasGlbExtension(const std::wstring& path)
-{
-    const std::size_t dot = path.find_last_of(L'.');
-    if (dot == std::wstring::npos) return false;
-    std::wstring extension = path.substr(dot);
-    std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t value)
-        { return static_cast<wchar_t>(std::towlower(value)); });
-    return extension == L".glb";
-}
-
 std::wstring FormatMultiplier(double value)
 {
     std::wostringstream text;
@@ -433,7 +403,7 @@ void UpdateTitle(const ViewerApp& app)
 {
     std::wstring title = kApplicationName;
     if (!app.filename.empty()) title = app.filename + L" — " + kApplicationName;
-    if (app.showFrameStats && app.useD3D12)
+    if (app.showFrameStats)
     {
         // Developer instrumentation behind --frame-stats: the title bar is
         // the one surface already readable from outside the process (the
@@ -485,10 +455,7 @@ void ResetTouchBaseline(ViewerApp& app)
 
 bool CanNavigate(const ViewerApp& app)
 {
-    if (app.state != ViewerState::Ready) return false;
-    // The --d3d12 path uploads into d3d12Path, never into app.renderer (it's
-    // never even Initialize()'d in that mode) -- see D3D12ViewerPath.h.
-    return app.useD3D12 ? app.renderThread.HasModel() : app.renderer.HasModel();
+    return HasNavigableModel(app);
 }
 
 bool HasNavigationInput(const ViewerApp& app)
@@ -555,7 +522,7 @@ void UpdateChromeLayout(ViewerApp& app)
         HasNavigableModel(app), IsZoomed(app.window) != FALSE, app.isFullscreen);
 }
 
-// Speed flyout panel/track geometry, shared by drawing (RenderScene) and
+// Speed flyout panel/track geometry, shared by drawing (BuildOverlayInfo) and
 // input handling (WM_LBUTTONDOWN/MOUSEMOVE) so they can never disagree.
 RECT SpeedFlyoutRect(const ViewerApp& app)
 {
@@ -580,7 +547,7 @@ RECT SpeedFlyoutTrackRect(const ViewerApp& app)
     return RECT{ panel.left + marginX, trackCenterY - halfHeight, panel.right - marginX, trackCenterY + halfHeight };
 }
 
-// Settings popup panel/row/switch geometry, shared by drawing (RenderScene)
+// Settings popup panel/row/switch geometry, shared by drawing (BuildOverlayInfo)
 // and input handling (WM_LBUTTONDOWN) so they can never disagree. Mirrors
 // SpeedFlyoutRect/SpeedFlyoutTrackRect just above, anchored under the
 // Overflow ("...") button instead of the Speed button.
@@ -767,7 +734,7 @@ void ClickSelect(ViewerApp& app, const POINT& point)
 
 void FrameSelectedOrAll(ViewerApp& app)
 {
-    if (!app.renderer.HasModel()) return;
+    if (!app.renderThread.HasModel()) return;
     const float aspect = ViewportAspect(app);
     if (app.meshSelected && app.loadedModel)
     {
@@ -895,7 +862,7 @@ RECT FullscreenButtonRect(const ViewerApp& app)
 // left of the D2D-drawn percent readout (DrawBottomBar's labelWidth,
 // Renderer.cpp — mirrored here so the two rects never drift apart), which
 // in turn sits left of the Fullscreen button. Shared by drawing
-// (RenderScene) and input handling (WM_LBUTTONDOWN/MOUSEMOVE), the same
+// (BuildOverlayInfo) and input handling (WM_LBUTTONDOWN/MOUSEMOVE), the same
 // split as the Speed flyout track above.
 RECT ZoomTrackRect(const ViewerApp& app)
 {
@@ -1049,13 +1016,13 @@ void ToggleAxisSnap(ViewerApp& app)
 void ToggleShowNativeOrientation(ViewerApp& app)
 {
     app.showNativeOrientation = !app.showNativeOrientation;
-    if (HasNavigableModel(app))
+    // The D3D12 import path does not publish CPU model metadata yet. Keep
+    // the current camera bounds until a source transform is available.
+    if (HasNavigableModel(app) && app.loadedModel)
     {
         DirectX::XMFLOAT3 effectiveMin{};
         DirectX::XMFLOAT3 effectiveMax{};
         EffectiveBounds(app, effectiveMin, effectiveMax);
-        std::wstring gridError;
-        app.renderer.RebuildGrid(effectiveMin, effectiveMax, gridError);
         // An instant re-home (not Fit/Reset, which animate): the model just
         // jumped ~90 degrees, so the old camera pose has no useful
         // relationship to the new one — treat this exactly like a fresh open.
@@ -1243,8 +1210,8 @@ void CancelOpen(ViewerApp& app)
     if (app.cancellation) app.cancellation->store(true, std::memory_order_relaxed);
     ++app.generation;
     app.cancellation.reset();
-    app.state = app.renderer.HasModel() ? ViewerState::Ready : ViewerState::Empty;
-    if (app.renderer.HasModel()) app.filename = FileNameFromPath(app.currentPath);
+    app.state = app.renderThread.HasModel() ? ViewerState::Ready : ViewerState::Empty;
+    if (app.renderThread.HasModel()) app.filename = FileNameFromPath(app.currentPath);
     else app.filename.clear();
     UpdateTitle(app);
     UpdateButtonAvailability(app);
@@ -1266,28 +1233,16 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
         SetFailure(app, L"Remote model paths are not opened.",
-            L"Choose a GLB stored on a local drive for this preview slice.", path);
+            L"Choose a supported model stored on a local drive for this preview slice.", path);
         return;
     }
-    std::optional<d3d12_import_bridge::SourceFormat> d3d12Format;
-    if (app.useD3D12)
-    {
-        d3d12Format = d3d12_import_bridge::ClassifyByExtension(path);
-        if (!d3d12Format)
-        {
-            app.filename = FileNameFromPath(path);
-            UpdateTitle(app);
-            SetFailure(app, L"This format is not included in the current slice.",
-                L"Open a .glb, .stl, or .ply file. Other model formats are deliberately deferred.", path);
-            return;
-        }
-    }
-    else if (!HasGlbExtension(path))
+    const auto d3d12Format = d3d12_import_bridge::ClassifyByExtension(path);
+    if (!d3d12Format)
     {
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
         SetFailure(app, L"This format is not included in the current slice.",
-            L"Open a self-contained .glb file. Other model formats are deliberately deferred.", path);
+            L"Open a .glb, .gltf, .stl, or .ply file. Other model formats are deliberately deferred.", path);
         return;
     }
 
@@ -1308,76 +1263,36 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
     LayoutControls(app);
     InvalidateRect(app.window, nullptr, FALSE);
 
-    if (app.useD3D12)
-    {
-        // No cancellation token for this path yet -- RunImport runs to
-        // completion (or the sandboxed worker's own bounded timeouts), see
-        // the plan's "Explicitly deferred" list. The try/catch is not
-        // optional defensiveness: platform::AppContainerSid::CreateOrOpen
-        // throws on failure, and an exception escaping a std::thread entry
-        // function calls std::terminate -- so without this, a profile-
-        // creation failure killed the whole app instead of showing an error.
-        // Supersede any still-running import before starting this one, then
-        // hand the fresh token to the worker thread. WM_DESTROY trips
-        // whichever token is current, so closing the window abandons an
-        // in-flight import instead of leaving it (and its sandboxed worker)
-        // running until process exit.
-        if (app.cancellation) app.cancellation->store(true, std::memory_order_relaxed);
-        app.cancellation = std::make_shared<std::atomic_bool>(false);
-        const auto cancellation = app.cancellation;
-
-        d3d12_import_bridge::SourceFormat format = *d3d12Format;
-        std::thread([window, generation, path, format, alive, cancellation]()
-        {
-            d3d12_import_bridge::ImportResult result;
-            try
-            {
-                result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
-                {
-                    return cancellation->load(std::memory_order_relaxed);
-                });
-            }
-            catch (const std::bad_alloc&)
-            {
-                result.errorSummary = L"There is not enough memory to open this model.";
-                result.errorDetails = L"Importing this model exceeded the available memory budget.";
-            }
-            catch (...)
-            {
-                result.errorSummary = L"This model could not be previewed.";
-                result.errorDetails = L"The importer stopped unexpectedly while reading the model.";
-            }
-            if (!alive->load(std::memory_order_relaxed)) return;
-            auto* message = new (std::nothrow) D3D12CompleteMessage{ generation, path, std::move(result) };
-            if (message && !PostMessageW(window, kD3D12ImportCompleteMessage, 0, reinterpret_cast<LPARAM>(message)))
-                delete message;
-        }).detach();
-        return;
-    }
-
+    // The token abandons superseded imports and imports still running at close.
+    // Catch exceptions here: escaping a std::thread entry would terminate the app.
     app.cancellation = std::make_shared<std::atomic_bool>(false);
     const auto cancellation = app.cancellation;
 
-    std::thread([window, generation, path, cancellation, alive]()
+    d3d12_import_bridge::SourceFormat format = *d3d12Format;
+    std::thread([window, generation, path, format, alive, cancellation]()
     {
-        LoadResult result;
+        d3d12_import_bridge::ImportResult result;
         try
         {
-            result = LoadGlb(path, cancellation, [](const wchar_t*) {});
+            result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
+            {
+                return cancellation->load(std::memory_order_relaxed);
+            });
         }
         catch (const std::bad_alloc&)
         {
-            result.summary = L"There is not enough memory to open this model.";
-            result.details = L"GLB parsing exceeded the available memory budget.";
+            result.errorSummary = L"There is not enough memory to open this model.";
+            result.errorDetails = L"Importing this model exceeded the available memory budget.";
         }
         catch (...)
         {
-            result.summary = L"This GLB could not be previewed.";
-            result.details = L"The importer stopped unexpectedly while reading the model.";
+            result.errorSummary = L"This model could not be previewed.";
+            result.errorDetails = L"The importer stopped unexpectedly while reading the model.";
         }
         if (!alive->load(std::memory_order_relaxed)) return;
-        auto* message = new (std::nothrow) CompleteMessage{ generation, path, std::move(result) };
-        if (message && !PostMessageW(window, kLoadCompleteMessage, 0, reinterpret_cast<LPARAM>(message))) delete message;
+        auto* message = new (std::nothrow) D3D12CompleteMessage{ generation, path, std::move(result) };
+        if (message && !PostMessageW(window, kD3D12ImportCompleteMessage, 0, reinterpret_cast<LPARAM>(message)))
+            delete message;
     }).detach();
 }
 
@@ -1556,7 +1471,7 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_OPEN_ANOTHER: OpenDialog(app); break;
     case ID_VIEW_FIT: FrameSelectedOrAll(app); break;
     case ID_VIEW_RESET:
-        if (app.renderer.HasModel())
+        if (app.renderThread.HasModel())
         {
             app.renderThread.LockCamera()->Reset(ViewportAspect(app));
             InvalidateRect(app.window, nullptr, FALSE);
@@ -1691,12 +1606,9 @@ bool IsAnimatingWithoutCamera(const ViewerApp& app)
         || now < app.modeHudUntil;
 }
 
-bool IsAnimating(ViewerApp& app)
-{
-    return IsAnimatingWithoutCamera(app) || app.renderThread.LockCamera()->HasMotion();
-}
-
-void RenderScene(ViewerApp& app)
+// Retained for the D3D11On12 chrome port (TSK-102). GPU submission belongs
+// exclusively to RenderThread; this helper only builds the UI snapshot.
+[[maybe_unused]] OverlayInfo BuildOverlayInfo(ViewerApp& app)
 {
     OverlayInfo overlay;
     overlay.state = app.state;
@@ -1737,7 +1649,7 @@ void RenderScene(ViewerApp& app)
         overlay.fullscreenButtonPressed = app.fullscreenButtonPressed;
     }
     overlay.isFullscreen = app.isFullscreen;
-    overlay.hasModel = app.renderer.HasModel();
+    overlay.hasModel = app.renderThread.HasModel();
     overlay.gridVisible = app.gridVisible;
     overlay.axisSnapEnabled = app.axisSnapEnabled;
     DirectX::XMStoreFloat4x4(&overlay.modelTransform, ActiveModelTransform(app));
@@ -1769,51 +1681,7 @@ void RenderScene(ViewerApp& app)
     overlay.tooltipText = app.tooltipText;
     overlay.tooltipBelow = app.tooltipAnchorBelow;
     UpdateChromeLayout(app);
-    app.renderer.Render(*app.renderThread.LockCamera(), overlay, app.gizmo, app.chrome);
-}
-
-// Advances the camera by the wall-clock time since the last tick, from
-// whichever source last ticked it (a rendered frame, or a raw mouse sample
-// during fly-look — see WM_INPUT). Called once per raw mouse sample rather
-// than only once per rendered frame, so WASD translation is integrated in
-// step with every look update instead of catching up in one coarse jump per
-// paint, which is what made turning while flying look faceted/blocky: mice
-// report well above the display's refresh rate, so several look updates
-// could land between two paints, all summed into a single end-of-frame
-// rotation that translation then followed as one straight chord.
-void TickCamera(ViewerApp& app)
-{
-    const double now = NowSeconds();
-    double elapsed = 0.0;
-    if (app.lastFrameSeconds > 0.0)
-    {
-        const double gap = now - app.lastFrameSeconds;
-        if (gap < 0.25) elapsed = std::min(0.1, gap);
-    }
-    app.lastFrameSeconds = now;
-    app.renderThread.LockCamera()->SetInput(BuildFlightInput(app));
-    app.renderThread.LockCamera()->Update(elapsed);
-}
-
-void RenderFrame(ViewerApp& app)
-{
-    if (!app.rendererReady) return;
-    if (app.useD3D12)
-    {
-        // Nothing is rendered here any more -- the render thread owns the
-        // frame loop. The UI thread only publishes what the render thread
-        // cannot compute for itself (flight input needs GetKeyState, which is
-        // thread-affine; the aspect depends on chrome layout) and says a
-        // frame is wanted.
-        app.renderThread.PublishFlightInput(BuildFlightInput(app));
-        app.renderThread.PublishViewportAspect(ViewportAspect(app));
-        app.renderThread.Invalidate();
-        ValidateRect(app.window, nullptr);
-        return;
-    }
-    TickCamera(app);
-    RenderScene(app);
-    ValidateRect(app.window, nullptr);
+    return overlay;
 }
 
 LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
@@ -1862,24 +1730,20 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         UpdateGizmoLayout(*app);
         UpdateChromeLayout(*app);
         std::wstring renderError;
-        if (app->useD3D12)
-        {
-            // 0 primitives means "interop only" -- drop the text runs too, or
-            // the isolation is not isolation.
-            app->renderThread.SetOverlayOptions(app->overlaySpike, app->overlaySpikePrimitives,
-                                                 app->overlaySpikePrimitives == 0 ? 0 : 40);
-            app->renderThread.SetBenchFrames(app->benchFrames);
-            app->renderThread.PublishViewportAspect(ViewportAspect(*app));
-            app->rendererReady = app->renderThread.Start(window, renderError);
-        }
-        else app->rendererReady = app->renderer.Initialize(window, renderError);
+        // 0 primitives means "interop only" -- drop the text runs too, or
+        // the isolation is not isolation.
+        app->renderThread.SetOverlayOptions(app->overlaySpike, app->overlaySpikePrimitives,
+                                             app->overlaySpikePrimitives == 0 ? 0 : 40);
+        app->renderThread.SetBenchFrames(app->benchFrames);
+        app->renderThread.PublishViewportAspect(ViewportAspect(*app));
+        app->rendererReady = app->renderThread.Start(window, renderError);
         if (!app->rendererReady)
         {
             app->errorSummary = L"Graphics could not be started.";
             app->errorDetails = renderError;
             app->state = ViewerState::Failed;
         }
-        else if (app->useD3D12)
+        else
         {
             d3d12_import_bridge::EnsureImportSandboxPrepared();
         }
@@ -2051,16 +1915,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         HDC dc = BeginPaint(window, &paint);
         if (app->rendererReady)
         {
-            if (app->useD3D12)
-            {
-                // Deliberately does NOT render. WM_PAINT is reachable from
-                // any nested modal loop -- TrackPopupMenu, MessageBoxW,
-                // IFileOpenDialog::Show, the DWM move/size loop -- so
-                // rendering here would present from the UI thread while the
-                // render thread is also presenting. Just ask for a frame.
-                app->renderThread.Invalidate();
-            }
-            else RenderScene(*app);
+            // Deliberately does NOT render. WM_PAINT is reachable from
+            // any nested modal loop -- TrackPopupMenu, MessageBoxW,
+            // IFileOpenDialog::Show, the DWM move/size loop -- so
+            // rendering here would present from the UI thread while the
+            // render thread is also presenting. Just ask for a frame.
+            app->renderThread.Invalidate();
         }
         else RenderFallback(*app, dc);
         EndPaint(window, &paint);
@@ -2072,25 +1932,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         UpdateChromeLayout(*app);
         if (app->rendererReady && wParam != SIZE_MINIMIZED)
         {
-            if (app->useD3D12)
-            {
-                // Posted and coalesced; the resize happens between frames on
-                // the render thread. Previously this blocked the UI thread in
-                // a full GPU drain once per drag tick.
-                app->renderThread.PublishViewportAspect(ViewportAspect(*app));
-                app->renderThread.RequestResize(LOWORD(lParam), HIWORD(lParam));
-            }
-            else
-            {
-                std::wstring resizeError;
-                if (!app->renderer.Resize(LOWORD(lParam), HIWORD(lParam), resizeError))
-                {
-                    app->rendererReady = false;
-                    app->errorSummary = L"The viewport could not be resized.";
-                    app->errorDetails = resizeError;
-                    app->state = ViewerState::Failed;
-                }
-            }
+            // Posted and coalesced; the resize happens between frames on
+            // the render thread. Previously this blocked the UI thread in
+            // a full GPU drain once per drag tick.
+            app->renderThread.PublishViewportAspect(ViewportAspect(*app));
+            app->renderThread.RequestResize(LOWORD(lParam), HIWORD(lParam));
         }
         InvalidateRect(window, nullptr, FALSE);
         return 0;
@@ -2671,26 +2517,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     raw.header.dwType == RIM_TYPEMOUSE && (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 &&
                     (raw.data.mouse.lLastX != 0 || raw.data.mouse.lLastY != 0))
                 {
-                    // Tick the camera right here, once per raw mouse sample,
-                    // instead of only once per rendered frame: mice report at
-                    // 125-1000Hz, well above the display refresh rate, so a
-                    // render-paced tick would sum up several look updates and
-                    // then move WASD translation through only their *final*
-                    // orientation — a coarse, faceted approximation of the
-                    // turn. Ticking per sample advances rotation and
-                    // translation together at the same fine granularity, so
-                    // flight curves smoothly like Unreal's.
+                    // Look is accumulated under the camera lock and consumed by
+                    // the render thread when it updates the next frame.
                     app->renderThread.LockCamera()->AccumulateLook(static_cast<float>(raw.data.mouse.lLastX), static_cast<float>(raw.data.mouse.lLastY));
-                    // On the D3D12 path the render thread owns Camera::Update
-                    // -- the accumulated look is consumed by its next frame.
-                    // Ticking here as well would advance the camera twice per
-                    // sample against two different clocks.
-                    if (app->useD3D12)
-                    {
-                        app->renderThread.PublishFlightInput(BuildFlightInput(*app));
-                        app->renderThread.Invalidate();
-                    }
-                    else TickCamera(*app);
+                    app->renderThread.PublishFlightInput(BuildFlightInput(*app));
+                    app->renderThread.Invalidate();
                     InvalidateRect(window, nullptr, FALSE);
                 }
             }
@@ -2725,51 +2556,6 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_SYSKEYDOWN:
         if (wParam == 'M' && (lParam & (1u << 29))) { ShowMoreMenu(*app); return 0; }
         break;
-    case kLoadCompleteMessage:
-    {
-        std::unique_ptr<CompleteMessage> complete(reinterpret_cast<CompleteMessage*>(lParam));
-        if (!complete || complete->generation != app->generation) return 0;
-        app->cancellation.reset();
-        if (complete->result.cancelled)
-        {
-            app->state = app->renderer.HasModel() ? ViewerState::Ready : ViewerState::Empty;
-        }
-        else if (!complete->result.succeeded)
-        {
-            SetFailure(*app, complete->result.summary, complete->result.details, complete->path);
-            return 0;
-        }
-        else
-        {
-            std::wstring uploadError;
-            if (!app->renderer.UploadModel(*complete->result.model, uploadError))
-            {
-                SetFailure(*app, L"The model was read but could not be displayed.", uploadError, complete->path);
-                return 0;
-            }
-            app->currentPath = complete->path;
-            app->filename = FileNameFromPath(complete->path);
-            app->warning = complete->result.model->warning;
-            app->loadedModel = complete->result.model;
-            app->meshSelected = false;
-            DirectX::XMFLOAT3 effectiveMin{};
-            DirectX::XMFLOAT3 effectiveMax{};
-            EffectiveBounds(*app, effectiveMin, effectiveMax);
-            std::wstring gridError;
-            app->renderer.RebuildGrid(effectiveMin, effectiveMax, gridError);
-            app->renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(*app));
-            app->state = ViewerState::Ready;
-            app->failedPath.clear();
-            app->errorSummary.clear();
-            app->errorDetails.clear();
-            UpdateTitle(*app);
-            SetFocus(window);
-        }
-        UpdateButtonAvailability(*app);
-        LayoutControls(*app);
-        InvalidateRect(window, nullptr, FALSE);
-        return 0;
-    }
     case kD3D12ImportCompleteMessage:
     {
         std::unique_ptr<D3D12CompleteMessage> complete(reinterpret_cast<D3D12CompleteMessage*>(lParam));
@@ -2829,7 +2615,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // on the render thread itself. `04-rendering-and-streaming.md:190`:
         // shutdown waits "with finite diagnostics timeouts" and "a driver
         // hang must not leave the UI thread waiting forever".
-        if (app->useD3D12) app->renderThread.Stop();
+        app->renderThread.Stop();
         PostQuitMessage(0);
         return 0;
     }
@@ -2886,13 +2672,11 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     PWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
     if (arguments)
     {
-        // --d3d12 is scanned out first; the first remaining non-flag
-        // argument (if any) is still treated as the initial file path,
-        // preserving today's single-positional-arg behavior exactly when
-        // the flag is absent.
+        // Accept --d3d12 as a deprecated no-op for existing launch scripts.
+        // The first remaining argument is the initial file path.
         for (int i = 1; i < argumentCount; ++i)
         {
-            if (_wcsicmp(arguments[i], L"--d3d12") == 0) app.useD3D12 = true;
+            if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--frame-stats") == 0) app.showFrameStats = true;
             else if (_wcsicmp(arguments[i], L"--overlay-spike") == 0) app.overlaySpike = true;
             else if (_wcsnicmp(arguments[i], L"--overlay-spike=", 16) == 0)
@@ -2905,7 +2689,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             else if (_wcsnicmp(arguments[i], L"--frame-bench=", 14) == 0)
             {
                 app.benchFrames = _wtoi(arguments[i] + 14);
-                app.benchRemaining = app.benchFrames;
                 app.showFrameStats = true;
             }
             else if (app.initialPath.empty()) app.initialPath = arguments[i];
@@ -2927,16 +2710,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     bool benchReported = false;
     while (!quitting)
     {
-        // Tracks whether animation was already active before each dispatched
-        // message, so a message that newly turns it on gets rendered right
-        // away — otherwise a key press+release landing in the same drain pass
-        // (a quick tap, or the app falling briefly behind) would be fully
-        // drained before the loop ever renders a frame with the key down,
-        // leaving flight keys with no visible effect. Only rendering on that
-        // on-transition (rather than after every message) avoids re-rendering
-        // once per queued WM_MOUSEMOVE during a mouse-look drag, which would
-        // otherwise serialize a burst of moves behind repeated vsync waits.
-        bool wasAnimating = gMainWindow && app.rendererReady && !IsIconic(gMainWindow) && IsAnimating(app);
         // Bounded to a single burst: a self-recentering FlyLook mouse-move can
         // otherwise repost itself indefinitely (some input stacks emit a fresh
         // WM_MOUSEMOVE for every SetCursorPos, even a no-op one) and never let
@@ -2969,68 +2742,42 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
-            const bool isAnimatingNow = gMainWindow && app.rendererReady && !IsIconic(gMainWindow) && IsAnimating(app);
-            if (isAnimatingNow && !wasAnimating) RenderFrame(app);
-            wasAnimating = isAnimatingNow;
         }
         if (quitting) break;
 
-        // On the D3D12 path the render thread owns the frame loop entirely:
-        // this loop only publishes UI-owned inputs and says whether anything
-        // is animating, then goes back to waiting for messages. It no longer
-        // renders, and no longer blocks in Present.
-        if (app.useD3D12)
+        // The render thread owns the frame loop; publish UI inputs and animation
+        // state, then wait for messages without blocking in Present.
+        bool uiAnimating = false;
+        if (gMainWindow && app.rendererReady)
         {
-            bool uiAnimating = false;
-            if (gMainWindow && app.rendererReady)
+            uiAnimating = !IsIconic(gMainWindow) && IsAnimatingWithoutCamera(app);
+            app.renderThread.PublishFrameInputs(BuildFlightInput(app), ViewportAspect(app));
+            app.renderThread.SetUiAnimating(uiAnimating);
+            if (GetUpdateRect(gMainWindow, nullptr, FALSE))
             {
-                uiAnimating = !IsIconic(gMainWindow) && IsAnimatingWithoutCamera(app);
-                app.renderThread.PublishFrameInputs(BuildFlightInput(app), ViewportAspect(app));
-                app.renderThread.SetUiAnimating(uiAnimating);
-                if (GetUpdateRect(gMainWindow, nullptr, FALSE))
-                {
-                    ValidateRect(gMainWindow, nullptr);
-                    app.renderThread.Invalidate();
-                }
-                // The bench writes its final numbers into the title from
-                // here, on the UI thread -- the render thread must never
-                // touch the window.
-                if (app.benchFrames > 0 && app.renderThread.BenchComplete() && !benchReported)
-                {
-                    benchReported = true;
-                    UpdateTitle(app);
-                }
+                ValidateRect(gMainWindow, nullptr);
+                app.renderThread.Invalidate();
             }
-            // Only poll while something UI-owned is animating (held keys,
-            // HUD timers, the loading spinner) -- those are the states whose
-            // input has to be republished. Otherwise block as before, so an
-            // idle UI thread neither burns CPU nor competes with the render
-            // thread for the camera lock. A running bench also has to poll,
-            // or nothing is left to notice it finished.
-            const bool benchWaiting = app.benchFrames > 0 && !benchReported;
-            const DWORD wait = uiAnimating ? kUiPollIntervalMs
-                : benchWaiting             ? kBenchPollIntervalMs
-                                            : INFINITE;
-            MsgWaitForMultipleObjectsEx(0, nullptr, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-            continue;
+            // The bench writes its final numbers into the title from
+            // here, on the UI thread -- the render thread must never
+            // touch the window.
+            if (app.benchFrames > 0 && app.renderThread.BenchComplete() && !benchReported)
+            {
+                benchReported = true;
+                UpdateTitle(app);
+            }
         }
-
-        // Continuous, vsync-paced rendering while anything is in motion:
-        // flight keys, easing, inertia, fit/reset glides, transient HUDs,
-        // or the load spinner. The loop blocks in MsgWaitForMultipleObjectsEx
-        // otherwise, so a still viewport costs no CPU or GPU.
-        if (gMainWindow && app.rendererReady && !IsIconic(gMainWindow) && IsAnimating(app))
-        {
-            RenderFrame(app);
-            continue;
-        }
-        if (gMainWindow && GetUpdateRect(gMainWindow, nullptr, FALSE))
-        {
-            if (app.rendererReady && !IsIconic(gMainWindow)) RenderFrame(app);
-            else RedrawWindow(gMainWindow, nullptr, nullptr, RDW_INTERNALPAINT);
-            continue;
-        }
-        MsgWaitForMultipleObjectsEx(0, nullptr, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        // Only poll while something UI-owned is animating (held keys,
+        // HUD timers, the loading spinner) -- those are the states whose
+        // input has to be republished. Otherwise block as before, so an
+        // idle UI thread neither burns CPU nor competes with the render
+        // thread for the camera lock. A running bench also has to poll,
+        // or nothing is left to notice it finished.
+        const bool benchWaiting = app.benchFrames > 0 && !benchReported;
+        const DWORD wait = uiAnimating ? kUiPollIntervalMs
+            : benchWaiting             ? kBenchPollIntervalMs
+                                        : INFINITE;
+        MsgWaitForMultipleObjectsEx(0, nullptr, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 
     if (gBackgroundBrush) DeleteObject(gBackgroundBrush);

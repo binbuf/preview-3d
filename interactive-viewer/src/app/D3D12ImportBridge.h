@@ -1,9 +1,8 @@
 #pragma once
 
 // App-facing (trusted-process) bridge from a real on-disk file to the
-// sandboxed Preview3DImportWorker.exe pipeline, for the opt-in --d3d12 path
-// only -- the default D3D11 path keeps using Model.cpp's in-process parser
-// unchanged.
+// sandboxed Preview3DImportWorker.exe pipeline. All application imports use
+// this bridge and reach the exclusive D3D12 rendering path.
 //
 // The launch/converse/validate sequence itself now lives in
 // import_broker::RunImportSession (shared/import-broker/ImportSession.h), so
@@ -89,7 +88,7 @@ struct ImportResult {
 };
 
 // Synchronous -- call from a detached background thread, mirroring
-// BeginOpen's existing std::thread(...).detach() pattern for LoadGlb.
+// BeginOpen's std::thread(...).detach() pattern.
 //
 // isCancelled is polled while waiting on the worker; returning true abandons
 // the import (the worker is killed by its Job Object) and yields a result

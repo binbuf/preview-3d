@@ -21,8 +21,7 @@
 // stop UI-thread access, and "don't touch this from the UI thread" is not a
 // rule that survives a 2900-line file.
 //
-// Scope: D3D12 only. The D3D11 default path keeps rendering on the UI thread
-// untouched -- it is deleted later in this batch anyway.
+// All application rendering runs here through D3D12ViewerPath.
 
 #include "D3D12ViewerPath.h"
 #include "platform/Win32Handle.h"
@@ -90,10 +89,8 @@ private:
 class RenderThread
 {
 public:
-    // The camera is borrowed, not owned: there is exactly one, and the D3D11
-    // path still uses it directly on the UI thread. When the render thread is
-    // not running (the D3D11 default), LockCamera is simply an uncontended
-    // lock and everything behaves as before.
+    // The camera is borrowed, not owned: UI input and the render loop share
+    // exactly one camera, and both access it through LockCamera.
     explicit RenderThread(Camera& camera)
         : camera_(camera)
     {

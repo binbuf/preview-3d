@@ -32,35 +32,32 @@ file registration, caching, streaming/LOD infrastructure, and broader format sup
 - Open With (real system-recommended handlers via `SHAssocEnumHandlers`, plus "Choose another app...")
   and Windows Share (`DataTransferManager`/C++WinRT) for the currently open file
 
-## Two import paths
+## Rendering and imports
 
-The **default** path is `Model.cpp`'s in-process GLB parser on the D3D11 renderer described
-above. It accepts `.glb` only, and it is the path the Open dialog and drag-drop still filter for.
+D3D12 is the application's exclusive rendering path. A dedicated render thread owns device
+creation, presentation, resize, and shutdown. All files are parsed inside
+`Preview3DImportWorker.exe` under AppContainer and reach the viewer as validated wire-format
+chunks. The old `--d3d12` argument is accepted as a deprecated no-op.
 
-Passing **`--d3d12`** selects the sandboxed path instead: the file is parsed inside
-`Preview3DImportWorker.exe` under AppContainer and reaches the viewer as validated wire-format
-chunks. It accepts `.glb`, `.gltf` (including external `.bin`/image siblings, fetched over the
-brokered sidecar protocol), `.stl` and `.ply`, and it renders base-color textures from
-KTX2/Basis or WIC-decoded PNG/JPEG/BMP/TIFF. Because the open dialog is still GLB-only, the
-other formats are reachable only by passing a path on the command line.
+The sandboxed importer accepts `.glb`, `.gltf` (including external `.bin`/image siblings fetched
+through the brokered sidecar protocol), `.stl`, and `.ply`. It renders base-color textures from
+KTX2/Basis or WIC-decoded PNG/JPEG/BMP/TIFF. The Open dialog still filters for GLB; pass other
+formats on the command line or drop them onto the window.
 
-Retiring the D3D11 path and making `--d3d12` the default is Gate 3 work that has not happened
-yet — see `.docs/PROGRESS.md`'s Gate 3 scorecard.
+## Current limitations and deferred work
 
-## Deliberately deferred
+The real Direct2D chrome has not yet been ported onto the D3D11On12 bridge (TSK-102).
+The controls above describe the existing UI being restored in Phase 1; title/bottom bars,
+Information panel, navigation gizmo, and error cards are currently not drawn. `--overlay-spike`
+retains the bridge's developer stand-in primitives. `Renderer.cpp` remains as the camera
+implementation and reference for the chrome port, but its D3D11 renderer is never instantiated.
+CPU model data for picking, statistics, and native-orientation transforms is also not yet
+published by the D3D12 import path.
 
-On the `--d3d12` path: point-cloud rendering (`.ply` point clouds import but are not drawn),
-mip levels beyond 0, the metallic-roughness/normal/emissive texture slots, PBR factors
-(carried through but unshaded), `EXT_meshopt_compression`/`KHR_mesh_quantization`, WebP,
-TGA/DDS/HDR, LOD/proxy generation, derived cache, and mid-import cancellation. The `--d3d12`
-window also has no Direct2D chrome overlay yet, so import failures update the window state
-without drawing an error card.
-
-On the default D3D11 path: everything above plus textures, Draco, `.gltf` sidecars, and every
-non-GLB format. Deferred geometry features there report an actionable in-window error instead
-of rendering an ambiguous partial result.
-
-Shell registration and installer work are outside both.
+Also deferred: point-cloud rendering (`.ply` point clouds import but are not drawn), mip levels
+beyond 0, metallic-roughness/normal/emissive texture slots, PBR shading,
+`EXT_meshopt_compression`/`KHR_mesh_quantization`, WebP, TGA/DDS/HDR, LOD/proxy generation,
+and derived cache. Shell registration and installer work are outside this MVP pass.
 
 ## Controls
 

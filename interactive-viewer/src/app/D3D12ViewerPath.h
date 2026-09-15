@@ -1,18 +1,16 @@
 #pragma once
 
-// D3D12 render path for the real Preview3D.exe, gated entirely behind the
-// opt-in --d3d12 command-line flag (see Preview3D.cpp's wWinMain argument
-// scan and the WM_CREATE/WM_SIZE/WM_PAINT/WM_DESTROY branches). The existing
-// D3D11 Renderer stays the untouched default -- these two paths are mutually
-// exclusive per window (only one swap chain can own presentation for a given
-// HWND).
+// Exclusive render path for Preview3D.exe, owned by RenderThread. Device
+// creation, presentation, resize, and shutdown all happen on that thread.
+// Renderer.cpp is retained for its camera implementation and as the source
+// for the upcoming D3D11On12 chrome port.
 //
 // Geometry comes from D3D12ImportBridge.h's sandboxed import pipeline, not
 // Model.cpp's in-process parser. Rendering here is deliberately minimal:
 // one fixed root signature/PSO/shader pair targeting
-// model_core::VertexPositionNormalUv0F32's {position,normal,uv} layout (no
-// materials/textures yet -- a single hardcoded albedo, hemisphere-lit by
-// vertex normal only) and no chrome/D2D overlay (needs the ~750 lines of
+// model_core::VertexPositionNormalUv0F32's {position,normal,uv} layout with
+// base-color materials/textures and hemisphere lighting. There is no real
+// chrome/D2D overlay yet (needs the ~750 lines of
 // Renderer.cpp drawing ported onto the D3D11On12 bridge -- a separate,
 // later chunk). Point-cloud (PositionOnly_F32) chunks are silently skipped
 // by BeginUploadModel, not rendered.

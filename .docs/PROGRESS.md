@@ -4,6 +4,28 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 1 / TSK-101 (2026-09-15): complete.**
+  [NEW_SCOPE_LIMITED_MVP_TASKS.md](./NEW_SCOPE_LIMITED_MVP_TASKS.md) is the active scope and
+  sequence; the broader gate history below remains a record of the original plan.
+  `Preview3D.cpp` no longer has a `useD3D12` switch or a legacy `Renderer` instance.
+  Startup, paint/invalidation, coalesced resize, input publication, and shutdown always use
+  `RenderThread`, which privately owns the exclusive `D3D12ViewerPath`. Every open uses the
+  sandboxed import bridge; the in-process GLB loader and its completion handler are removed
+  from application routing. `--d3d12` is accepted as a deprecated no-op for existing scripts.
+  `Renderer.cpp` is retained unchanged for its camera implementation and D2D drawing reference.
+  The former `RenderScene` snapshot builder is retained as `BuildOverlayInfo`, without GPU
+  submission, for TSK-102. Model checks now use the render thread's atomic D3D12 model state
+  because the legacy renderer instance is gone. Native-orientation re-homing remains gated on
+  CPU model data so missing metadata cannot reset the camera to zero bounds.
+  Verification: `msbuild Preview3D.slnx /t:Preview3D /p:Configuration=Debug` passes; hidden-window
+  smoke checks for empty launch, GLB launch, GLB with the deprecated flag, and `.gltf` with an
+  external `.bin` all complete 40 D3D12 frames, remain responsive after resize, and close with
+  exit code 0 within the 8-second smoke deadline. No viewer or worker process remained.
+  These are lifecycle checks; the hidden-window capture did not establish visual correctness.
+  TSK-102 remains next: real chrome/error cards are not drawn yet. TSK-103 still needs visible
+  UI verification, and the import path does not yet publish CPU model data for picking,
+  Information panel stats, or native-orientation transforms. No dependency/license changes.
+
 - **Gate 0** ("Phase 0"): done, committed (`6f52bac phase 0`). Build policy, x64-only, vcpkg+Catch2 harness scaffolding.
 - **Gate 2 workstream A, part 1** — AppContainer + Job Object launch spike: done, committed (`6355698 next step`). Proves the sandbox container itself (zero-capability token, suspended launch, job assignment before resume, restricted handle inheritance, Job Object enforcement) against the real `Preview3DImportWorker.exe`.
 - **Gate 2 workstream A, part 2** — wire format, synthetic in-sandbox generator, broker control protocol, copy-then-validate: done, committed (`01c51cd next phase done`). Proves the honest-worker data path end to end: a synthetic cube+point-cluster fixture is fabricated inside the real AppContainer worker, crosses a shared memory section per the versioned wire format, and is validated/copied by the host's fail-closed acceptance path.
