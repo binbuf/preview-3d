@@ -4,6 +4,33 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 1 / TSK-103 (2026-09-15): complete.**
+  All six UI binding locations already use the D3D12 model state following
+  TSK-101's removal of the legacy renderer instance: `HasNavigableModel`,
+  `FrameSelectedOrAll`, `ToggleShowNativeOrientation` (through `HasNavigableModel`),
+  `CancelOpen`, `ID_VIEW_RESET`, and the bottom-bar snapshot in `BuildOverlayInfo`.
+  `RenderThread.HasModel()` is the UI-safe atomic publication of the privately owned
+  D3D12 path's model presence; the UI must not access that render-thread-owned path
+  directly. No additional product-code changes were needed. Camera math and viewport
+  aspect-ratio logic are unchanged.
+  Verification: Debug `msbuild Preview3D.slnx /t:Preview3D,Tests_Unit` passes;
+  `Tests.Unit.exe "[chrome]"` passes both cases / 175 assertions. Visible app runs
+  for Empty, `tri_tight.glb`, and `tri_external.gltf` plus its external `.bin` each
+  complete 40 frames with zero occluded presents at 150% DPI, remain responsive
+  through Info/resize/Reset, and close with exit code 0. Client-area PrintWindow
+  captures show the bottom bar only for loaded models, and the Information panel
+  reserves 450 physical pixels on the right when open, shifting the scene and gizmo
+  into the remaining viewport. Both remain reserved after resizing from 1522x1136
+  to 878x639 client pixels. Zoom followed by Fit visibly restores the triangle's
+  framing for both formats; Reset after resize keeps the model inside the viewport.
+  Empty-state Info/Reset commands leave the bottom bar and panel collapsed. Local captures
+  and the verification harness are under ignored `TestResults/tsk-103/`.
+  No viewer/worker processes remained after the successful runs. No dependency/license
+  changes. Phase 1 is complete; Phase 2 / TSK-201 is next. Information rows, picking,
+  and native-orientation transforms still require CPU metadata that the D3D12 import
+  path does not publish; this task verifies state bindings and reserved layout space,
+  without expanding that pipeline scope.
+
 - **Scope-limited MVP, Phase 1 / TSK-102 (2026-09-15): complete.**
   The real Direct2D chrome and vector glyph helpers have moved from `Renderer.cpp`
   into `D3D11On12Overlay.cpp`: title/caption buttons, bottom bar, scrolling Information

@@ -11,12 +11,14 @@ is the active implementation sequence and overrides the broader gate scope below
 TSK-101 is implemented: D3D12 is exclusive and the legacy renderer instance/import path is
 removed. TSK-102 is implemented: real chrome/state cards now draw through the D3D11On12
 bridge on every frame, with GPU pixel-readback coverage for all back buffers, resize, and DPI.
-Required model-state checks were changed as part of removing that instance; TSK-103 remains
-next and still needs verification with visible chrome and
-model information. Native-orientation re-homing still requires CPU model metadata from the
-D3D12 pipeline.
+TSK-103 is complete: the required model-state checks already use the render thread's atomic
+D3D12 state, and visible Empty/GLB/glTF runs verify the bottom bar and Information panel
+reserve space only with a loaded model, including after resize. Zoom/Fit/Reset respond;
+the existing chrome regression tests pass. Phase 1 is complete; **Phase 2 / TSK-201 is next**.
+Information rows, picking, and native-orientation re-homing still require CPU model metadata
+from the D3D12 pipeline.
 
-**Broader gate baseline: `f0d2f86`**, amended for TSK-101/TSK-102 below.
+**Broader gate baseline: `f0d2f86`**, amended for TSK-101/TSK-102/TSK-103 below.
 
 Two rules this list is written to, both from the delivery plan itself:
 
