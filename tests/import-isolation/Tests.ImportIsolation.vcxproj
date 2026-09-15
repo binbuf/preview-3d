@@ -53,7 +53,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>userenv.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>userenv.lib;ws2_32.lib;windowscodecs.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -85,6 +85,9 @@
     <ClCompile Include="ChunkBatchTests.cpp" />
     <ClCompile Include="DracoDecodeAdapterTests.cpp" />
     <ClCompile Include="TextureTranscodeAdapterTests.cpp" />
+    <ClCompile Include="TexturePathTests.cpp" />
+    <ClCompile Include="..\..\import-worker\src\WicImageDecodeAdapter.cpp" />
+    <ClCompile Include="..\..\import-worker\src\ImageFormatSniff.cpp" />
     <ClCompile Include="..\..\import-worker\src\DracoDecodeAdapter.cpp" />
     <ClCompile Include="..\..\import-worker\src\TextureTranscodeAdapter.cpp" />
     <ClCompile Include="..\..\shared\platform\src\AppContainerSid.cpp" />

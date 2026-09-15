@@ -67,6 +67,7 @@ struct ImportedMaterial {
 
 struct ImportedImage {
     uint32_t chunkId = 0;
+    uint32_t logicalChunkId = 0;
     model_core::PixelFormatId pixelFormat = model_core::PixelFormatId::Unknown;
     uint32_t width = 0;
     uint32_t height = 0;
@@ -78,6 +79,7 @@ struct ImportedImage {
 struct ImportResult {
     bool ok = false;
     model_core::SceneMetadata scene{};
+    uint32_t textureWarningCount = 0;
     std::vector<ImportedMesh> meshes;
     std::vector<ImportedMaterial> materials;
     std::vector<ImportedImage> images;

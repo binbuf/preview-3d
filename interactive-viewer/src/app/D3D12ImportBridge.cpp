@@ -1,4 +1,5 @@
 #include "D3D12ImportBridge.h"
+#include <cstdio>
 
 #include "import_broker/ImportSession.h"
 #include "import_broker/SharedSection.h"
@@ -252,6 +253,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 if (chunk.payload.size() >= sizeof(model_core::ImagePayloadHeader)) {
                     model_core::ImagePayloadHeader header{};
                     std::memcpy(&header, chunk.payload.data(), sizeof(header));
+                    image.logicalChunkId=header.reserved0;
                     image.pixelFormat = static_cast<model_core::PixelFormatId>(header.pixelFormat);
                     image.width = header.width;
                     image.height = header.height;
@@ -262,6 +264,9 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.images.push_back(std::move(image));
                 break;
             }
+            case model_core::ChunkTopology::TextureWarning:
+                std::memcpy(&result.textureWarningCount,chunk.payload.data(),sizeof(uint32_t));
+                break;
             default:
                 break; // unrecognized topology already rejected by the validator; never reached
             }
@@ -272,6 +277,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     if (onBatch) sessionRequest.onBatch = [&](auto chunks) { onBatch(unpack(std::move(chunks))); };
     auto session = import_broker::RunImportSession(sessionRequest);
     if (!session.ok) {
+        if (delayBatchesForTesting && session.stage!=import_broker::ImportStage::Cancelled) std::fprintf(stderr,"Import smoke failure: stage %u code %u\n",unsigned(session.stage),unsigned(session.errorCode));
         DescribeSessionFailure(session, result.errorSummary, result.errorDetails);
         return result;
     }

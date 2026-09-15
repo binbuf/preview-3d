@@ -1,0 +1,29 @@
+{
+  "recipe": "Pillow 10.2.0: Image.new RGBA/RGB 8x8 gray 128; PNG compress_level=9; JPEG quality=95, subsampling=0, optimize=False, progressive=False. KTX2 uses existing pinned generator.",
+  "fixtures": [
+    {
+      "path": "interactive-viewer/test-assets/textures/gray.png",
+      "sha256": "52a3910db5af63aaa73083768b7c0949568c88900818080f085718cbe6e57a3e",
+      "byteSize": 79,
+      "width": 8,
+      "height": 8,
+      "expectedPixels": "RGBA 128,128,128,255, exact"
+    },
+    {
+      "path": "interactive-viewer/test-assets/textures/gray.jpg",
+      "sha256": "e8feecbf5e2bb99d2ef7b0f4be28b486456140ea82e8a205e0ff7dba2fe9b168",
+      "byteSize": 627,
+      "width": 8,
+      "height": 8,
+      "expectedPixels": "RGBA 128,128,128,255; RGB tolerance 2"
+    },
+    {
+      "path": "interactive-viewer/test-assets/basisu_sample.ktx2",
+      "sha256": "fa87151224822c1464dc503ef1afe49868fc6a1363a13089f622951b2f54646c",
+      "byteSize": 352,
+      "width": 8,
+      "height": 8,
+      "expectedPixels": "Basis quadrant RGB (220 or 40,220 or 40,128), alpha 255; RGB tolerance 8"
+    }
+  ]
+}

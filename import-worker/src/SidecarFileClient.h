@@ -40,7 +40,7 @@ public:
     // Sends RequestSidecarFile and blocks for exactly one reply
     // (SidecarFileReady or SidecarFileUnavailable) before returning --
     // matches the channel's existing strictly-synchronous shape.
-    Result RequestSidecarBytes(const std::string& relativePathUtf8);
+    Result RequestSidecarBytes(const std::string& relativePathUtf8, uint64_t maxBytes=256ull*1024*1024);
 
 private:
     HANDLE stdIn_;

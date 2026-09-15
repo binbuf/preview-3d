@@ -69,7 +69,7 @@ public:
         uint32_t lodLevel = 0;
     };
 
-    // One mip-0 Texture2D upload. Separate from UploadRequest because a
+    // One validated Texture2D subresource upload. Separate from UploadRequest because a
     // texture copy is not a byte range: D3D12 requires the staging rows be
     // padded to D3D12_TEXTURE_DATA_PLACEMENT_PITCH_ALIGNMENT (256) and the
     // source offset within the staging resource be aligned to
@@ -93,6 +93,8 @@ public:
         uint32_t width = 0;
         uint32_t height = 0;
         DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+        uint32_t destinationSubresource = 0;
+        bool publishResource = true; // multi-mip callers enable only on their last recorded copy
         platform::GenerationToken generation;
         uint32_t clusterId = 0;
         uint32_t lodLevel = 0;
@@ -196,7 +198,7 @@ private:
     // the pending publication, then flushes if the batch threshold is hit.
     void RecordAllocationAndPublication(uint64_t size, uint64_t occupiedBytes, ID3D12Resource* destination,
                                          const platform::GenerationToken& generation, uint32_t clusterId,
-                                         uint32_t lodLevel, uint64_t approximateBytes);
+                                         uint32_t lodLevel, uint64_t approximateBytes, bool publishResource = true);
 
     ID3D12Device* device_ = nullptr; // non-owning
     D3D12CommandQueue copyQueue_;

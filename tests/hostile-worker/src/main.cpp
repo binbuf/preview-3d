@@ -33,6 +33,11 @@ int main(int argc, char* argv[])
         return hostile_worker::RunLieLayout();
     }
 
+    if (ArgEquals(argv[1], "--texture-missing-root")) return hostile_worker::RunTextureAttack(0);
+    if (ArgEquals(argv[1], "--texture-semantic-change")) return hostile_worker::RunTextureAttack(1);
+    if (ArgEquals(argv[1], "--texture-repeat-refinement")) return hostile_worker::RunTextureAttack(2);
+    if (ArgEquals(argv[1], "--texture-warning-limit")) return hostile_worker::RunTextureAttack(3);
+    if (ArgEquals(argv[1], "--texture-aggregate-expansion")) return hostile_worker::RunTextureAttack(4);
     if (ArgEquals(argv[1], "--catalog-forward")) return hostile_worker::RunCatalogBatches(0);
     if (ArgEquals(argv[1], "--catalog-wrong-image")) return hostile_worker::RunCatalogBatches(1);
     if (ArgEquals(argv[1], "--catalog-missing-image")) return hostile_worker::RunCatalogBatches(2);

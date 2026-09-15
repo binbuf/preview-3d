@@ -7,17 +7,18 @@
 // via a real bounded draco::Decoder call (DracoDecodeAdapter.h). Materials:
 // flat PBR factors always; all four PBR texture slots (baseColor/
 // metallicRoughness/normal/emissive) are resolved through
-// KHR_texture_basisu (TextureTranscodeAdapter.h) or a plain PNG/JPEG/BMP/
-// TIFF raster (WicImageDecodeAdapter.h) -- GLB-embedded or, when
+// KHR_texture_basisu (TextureTranscodeAdapter.h) or a plain PNG/JPEG
+// raster (WicImageDecodeAdapter.h) -- GLB-embedded or, when
 // sidecarClient is non-null, an external sidecar file (SidecarFileClient.h)
 // -- into an Image chunk the material depends on; a texture this chunk
-// can't decode is simply skipped (material keeps its factors, no image
-// dependency), not a failure. No skins or animation. See
+// cannot decode uses deterministic checker/neutral fallbacks and a bounded
+// warning, preserving valid geometry. No skins or animation. See
 // .docs/design/04-rendering-and-streaming.md (vertex-layout set) and
 // .docs/PROGRESS.md for the fastgltf-API findings this implementation
 // relies on.
 
 #include "model_core/ImportError.h"
+#include "TextureDecodePolicy.h"
 
 #include <cstdint>
 #include <span>
@@ -58,6 +59,6 @@ struct GltfImportResult {
 std::variant<GltfImportResult, model_core::ImportErrorCode> ImportGltf(
     std::span<const std::byte> sourceGlbBytes, std::span<std::byte> destination,
     uint64_t generationId, uint32_t maxChunkCount, SidecarFileClient* sidecarClient = nullptr,
-    ChunkBatchSink* batchSink = nullptr);
+    ChunkBatchSink* batchSink = nullptr, const TextureDecodeOptions& textureOptions = {});
 
 } // namespace import_worker

@@ -88,7 +88,7 @@ std::vector<std::byte> BuildMinimalValidSection(uint64_t generationId)
 
 TEST_CASE("Private geometry validation rejects bounds lies malformed origins metadata and unknown protocols", "[import-pipeline][bounds][metadata]")
 {
-    for (unsigned attack=0; attack<10; ++attack) {
+    for (unsigned attack=0; attack<11; ++attack) {
         CAPTURE(attack);
         auto section = BuildMinimalValidSection(202);
         model_core::SectionHeader header; std::memcpy(&header,section.data(),sizeof(header));
@@ -105,6 +105,7 @@ TEST_CASE("Private geometry validation rejects bounds lies malformed origins met
         case 7: header.scene.metersPerUnit = std::numeric_limits<double>::infinity(); break;
         case 8: header.scene.nodeCount = 1'000'001; break;
         case 9: descriptor.geometryFlags = 0xFFFFFFFF; break;
+        case 10: header.protocolVersion = 2; break;
         }
         std::memcpy(section.data()+model_core::kSectionHeaderSize,&descriptor,sizeof(descriptor));
         header.sectionChecksum = model_core::Fnv1a64(std::span<const std::byte>(section).subspan(model_core::kSectionHeaderSize));
@@ -114,7 +115,7 @@ TEST_CASE("Private geometry validation rejects bounds lies malformed origins met
     }
 }
 
-TEST_CASE("Protocol v2 copied geometry survives a bounded deterministic mutation corpus", "[fuzz][wire-format][bounds]")
+TEST_CASE("Protocol v3 copied geometry survives a bounded deterministic mutation corpus", "[fuzz][wire-format][bounds]")
 {
     uint32_t seed = 0x202B0A7D;
     unsigned accepted = 0, rejected = 0;

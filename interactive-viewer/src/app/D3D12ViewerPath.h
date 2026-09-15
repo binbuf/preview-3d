@@ -161,6 +161,7 @@ struct D3D12ViewerPath
     bool uploadInFlight = false;
     size_t pendingResourceCount = 0;
     platform::GenerationToken pendingToken;
+    std::function<bool()> uploadIsCancelled; // coordinator-owned, polled at allocation/mip boundaries
 
     // The upload lane: a copy-typed queue plus the persistently-mapped
     // staging ring and the fence-complete publication path. This is what
@@ -304,7 +305,7 @@ private:
     // slice 3 (see .docs/PROGRESS.md's upload-ring risk table).
     bool CreateAndQueueBuffer(const void* data, uint64_t sizeBytes, uint32_t clusterId,
                                Microsoft::WRL::ComPtr<ID3D12Resource>& outBuffer, std::wstring& error);
-    // Creates one image's DEFAULT-heap Texture2D (mip 0 only, in COMMON for
+    // Creates one image's immutable DEFAULT-heap mip chain (in COMMON for
     // the same implicit-promotion reason as buffers), writes its SRV into
     // `heap` at heapIndex, and queues its copy onto the upload ring. The
     // row repitching the wire format needs -- its rows are tightly packed

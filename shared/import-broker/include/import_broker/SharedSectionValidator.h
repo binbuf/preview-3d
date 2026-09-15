@@ -18,6 +18,7 @@
 
 #include "model_core/ImportError.h"
 #include "model_core/WireFormat.h"
+#include "model_core/PixelFormats.h"
 
 #include <cstdint>
 #include <span>
@@ -58,6 +59,7 @@ struct ValidationResult {
 // rejected, exactly as a duplicate inside one section is). Its size is
 // bounded by the caller's per-generation chunk cap, not by this file.
 using KnownChunkCatalog = std::unordered_map<uint32_t, model_core::ChunkTopology>;
+using KnownImageCatalog = std::unordered_map<uint32_t, model_core::ImagePayloadHeader>;
 
 // sectionView must be exactly the caller's actual MapViewOfFile size (never
 // the section's own self-declared length).
@@ -70,6 +72,8 @@ using KnownChunkCatalog = std::unordered_map<uint32_t, model_core::ChunkTopology
 ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                                          uint64_t expectedGenerationId, uint32_t maxChunkCount,
                                          const KnownChunkCatalog* priorBatches = nullptr,
-                                         bool allowForwardReferences = false);
+                                         bool allowForwardReferences = false,
+                                         const KnownImageCatalog* priorImages = nullptr,
+                                         uint64_t priorTextureBytes = 0, uint64_t priorTexturePixels = 0);
 
 } // namespace import_broker

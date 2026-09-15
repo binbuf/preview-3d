@@ -4,6 +4,32 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 2 / TSK-203 (2026-09-15): complete.**
+  Preserved worker WIC PNG/JPEG and BMP/TIFF adapters with explicit inbox codec
+  selection; direct glTF remains PNG/JPEG/KTX2. Added encoded/decoded/pixel budgets,
+  source preflight, verified native JPEG scaling, cancellable tiled raster mips,
+  semantic sRGB/linear filtering and validated KTX2/Basis mip/transcode targets.
+  Optional texture failures preserve geometry with deterministic semantic fallback
+  and a bounded host-owned warning. Protocol v3 keeps existing header layouts,
+  identifies immutable image refinements and carries a fixed-width warning count.
+  The broker enforces cumulative generation budgets and compatible monotonic roots.
+  Small mip chains publish before full replacements; complete GPU subresources
+  become visible together after their copy fence, and displaced textures/descriptors
+  retire safely. Materials retain logical IDs across replacement.
+  Debug/Release solution builds pass. Unit: 79 cases each / 7,210 Debug and 7,122
+  Release assertions; ImportIsolation: 170 cases / 48,222 assertions each.
+  Frozen PNG/JPEG/Basis pixel goldens pass through worker decode and the product
+  uploader to real GPU readback, alongside hostile dimensions/pitches/mips,
+  aggregate expansion, refinement catalogs and cancellation coverage.
+  Texture, four progressive modes and point-required lifecycle checks pass in each
+  configuration: twelve viewer processes, zero survivors. Texture smoke observes
+  64-wide initial chains followed by 256-wide or capped 2,048-wide replacements,
+  one logical texture, fallback warning and valid reopen. Debug has zero D3D12
+  errors; peak texture queue is about 2.8 MB. Startup responsiveness and full shader
+  semantics remain later tasks. Commands, committed reports and qualification
+  limits are in [TSK-203_VERIFICATION.md](./TSK-203_VERIFICATION.md).
+  No dependency/license changes. **TSK-204 is next**.
+
 - **Scope-limited MVP, Phase 2 / TSK-202 (2026-09-15): complete.**
   Protocol v2 carries fixed-width double cluster origins, exact local bounds,
   source mesh/node identities and generation-tagged format/unit/axis/scene facts.

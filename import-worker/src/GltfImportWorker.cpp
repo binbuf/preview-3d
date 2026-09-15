@@ -104,8 +104,10 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
     // -- its source is a section the host already sized to hold the whole
     // file, so it has no large-model case to serve.
     ChunkBatchSink batchSink(stdIn, stdOut, request.generationId);
+    TextureDecodeOptions textureOptions;
+    textureOptions.isCancelled=[stdIn] { DWORD available=0; return !PeekNamedPipe(stdIn,nullptr,0,nullptr,&available,nullptr); };
     auto result = ImportGltf(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
-                              &sidecarClient, &batchSink);
+                              &sidecarClient, &batchSink,textureOptions);
     return ReportResult(stdOut, request.generationId, result);
 }
 

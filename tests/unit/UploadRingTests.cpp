@@ -8,6 +8,11 @@
 
 #include "D3D12Device.h"
 #include "D3D12UploadRing.h"
+#include "D3D12ViewerPath.h"
+#include "WicImageDecodeAdapter.h"
+#include "TextureTranscodeAdapter.h"
+#include <filesystem>
+#include <fstream>
 #include "SceneSnapshot.h"
 #include "SyntheticStreamingSource.h"
 
@@ -117,7 +122,7 @@ SceneSnapshotPtr DrainUntil(D3D12UploadRing& ring, const platform::GenerationSou
 // the direct queue can promote it again without a barrier the copy queue
 // could not have recorded.
 Microsoft::WRL::ComPtr<ID3D12Resource> MakeDefaultTexture(ID3D12Device& device, uint32_t width,
-                                                            uint32_t height, DXGI_FORMAT format)
+                                                            uint32_t height, DXGI_FORMAT format, uint16_t levels=1)
 {
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -127,7 +132,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> MakeDefaultTexture(ID3D12Device& device, 
     desc.Width = width;
     desc.Height = height;
     desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
+    desc.MipLevels = levels;
     desc.Format = format;
     desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -145,23 +150,15 @@ Microsoft::WRL::ComPtr<ID3D12Resource> MakeDefaultTexture(ID3D12Device& device, 
 // site.
 std::vector<std::byte> ReadBackTexture(D3D12Device& device, D3D12UploadRing& ring,
                                         ID3D12Resource& texture, uint32_t width, uint32_t height,
-                                        DXGI_FORMAT format)
+                                        DXGI_FORMAT format, uint32_t subresource=0)
 {
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = width;
-    desc.Height = height;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = format;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-
+    const auto desc=texture.GetDesc();
+    (void)width;(void)height;(void)format;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
     UINT numRows = 0;
     UINT64 rowSizeInBytes = 0;
     UINT64 totalBytes = 0;
-    device.Device()->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
+    device.Device()->GetCopyableFootprints(&desc, subresource, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
 
     auto readback
         = MakeBuffer(*device.Device(), totalBytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -176,7 +173,7 @@ std::vector<std::byte> ReadBackTexture(D3D12Device& device, D3D12UploadRing& rin
     D3D12_TEXTURE_COPY_LOCATION source{};
     source.pResource = &texture;
     source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    source.SubresourceIndex = 0;
+    source.SubresourceIndex = subresource;
 
     D3D12_TEXTURE_COPY_LOCATION destination{};
     destination.pResource = readback.Get();
@@ -764,4 +761,115 @@ TEST_CASE("A single allocation larger than the ring's configured cap is rejected
     smallRequest.destination = smallDestination.Get();
     smallRequest.generation = generation.Snapshot();
     CHECK(ring.Upload(smallRequest) == D3D12UploadRing::UploadResult::Uploaded);
+}
+
+TEST_CASE("Texture chains copy each padded subresource and publish only after the last immutable mip", "[graphics][texture-upload]")
+{
+    bool debug=false;const int before=DebugLayerErrorCount(debug);
+    for (DXGI_FORMAT format:{DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,DXGI_FORMAT_R8G8B8A8_UNORM,DXGI_FORMAT_BC7_UNORM_SRGB}) {
+        D3D12UploadRing ring;D3D12UploadRing::CreateOptions options;
+        options.initialCapacityBytes=8192;options.maxCapacityBytes=8192;options.growthIncrementBytes=0;options.maxBatchBytes=1;
+        REQUIRE(ring.Initialize(SharedDevice(),options));
+        auto texture=MakeDefaultTexture(*SharedDevice().Device(),7,5,format,3);
+        platform::GenerationSource generation;
+        std::vector<std::vector<std::byte>> levels(3);
+        for (uint32_t mip=3;mip-->0;) {
+            const uint32_t w=7u>>mip,h=5u>>mip;
+            const uint32_t row=format==DXGI_FORMAT_BC7_UNORM_SRGB ? ((w+3)/4)*16 : w*4;
+            const uint32_t rows=format==DXGI_FORMAT_BC7_UNORM_SRGB ? (h+3)/4 : h;
+            levels[mip].resize(size_t(row)*rows,std::byte(uint8_t(40+mip)));
+            D3D12UploadRing::UploadTextureRequest request;
+            request.sourceBytes=levels[mip];request.destination=texture.Get();request.width=w;request.height=h;
+            request.destinationSubresource=mip;request.format=format;request.generation=generation.Snapshot();
+            request.publishResource=mip==0;
+            REQUIRE(ring.UploadTexture(request)==D3D12UploadRing::UploadResult::Uploaded);
+            REQUIRE(ring.CopyQueue().WaitForValue(ring.LastSubmittedFenceValue(),5000)==D3D12CommandQueue::WaitResult::Signaled);
+            auto snapshot=ring.DrainCompletedPublications(generation);
+            CHECK(snapshot->ReadyResources().size()==(mip==0 ? 1u : 0u));
+        }
+        for (uint32_t mip=0;mip<3;++mip) CHECK(ReadBackTexture(SharedDevice(),ring,*texture.Get(),7u>>mip,5u>>mip,format,mip)==levels[mip]);
+        D3D12UploadRing::UploadTextureRequest bad;
+        bad.sourceBytes=levels[0];bad.destination=texture.Get();bad.width=7;bad.height=5;bad.format=format;
+        bad.destinationSubresource=3;CHECK(ring.UploadTexture(bad)==D3D12UploadRing::UploadResult::Failed);
+        bad.destinationSubresource=1;CHECK(ring.UploadTexture(bad)==D3D12UploadRing::UploadResult::Failed);
+        bad.destinationSubresource=0;levels[0].push_back(std::byte{0});bad.sourceBytes=levels[0];
+        CHECK(ring.UploadTexture(bad)==D3D12UploadRing::UploadResult::Failed);
+    }
+    if (debug) { bool available=false;CHECK(DebugLayerErrorCount(available)==before); }
+}
+
+TEST_CASE("Product texture uploader validates complete payloads and preserves immutable color-space mip chains", "[graphics][texture-upload]")
+{
+    D3D12ViewerPath uploader;uploader.device.AttachForUpload(SharedDevice().Device());
+    D3D12UploadRing::CreateOptions options;options.initialCapacityBytes=8192;options.maxCapacityBytes=8192;options.growthIncrementBytes=0;
+    REQUIRE(uploader.uploadRing.Initialize(uploader.device,options));
+    d3d12_import_bridge::ImportedImage image;image.chunkId=3;image.logicalChunkId=1;
+    image.pixelFormat=model_core::PixelFormatId::RGBA8_UNORM;image.colorSpace=model_core::ColorSpaceId::Srgb;
+    image.width=7;image.height=5;image.mipLevels=3;
+    std::vector<std::vector<std::byte>> levels;
+    for (uint32_t level=0;level<3;++level) {
+        levels.push_back(MakeTightRgba8(7u>>level,5u>>level));
+        image.pixelBytes.insert(image.pixelBytes.end(),levels.back().begin(),levels.back().end());
+    }
+    std::wstring error;
+    REQUIRE(uploader.BeginUploadModel({}, {}, {image},error));
+    for (unsigned i=0;i<2000 && !uploader.PollUploads();++i)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    REQUIRE(uploader.model.textures.size()==1);
+    auto& texture=uploader.model.textures.front();CHECK(texture.chunkId==1);
+    CHECK(texture.resource->GetDesc().Format==DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+    CHECK(texture.resource->GetDesc().MipLevels==3);
+    for (uint32_t level=0;level<3;++level)
+        CHECK(ReadBackTexture(SharedDevice(),uploader.uploadRing,*texture.resource.Get(),7u>>level,5u>>level,DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,level)==levels[level]);
+    image.pixelBytes.push_back(std::byte{0});CHECK_FALSE(uploader.BeginUploadModel({}, {}, {image},error));
+    image.pixelBytes.pop_back();image.colorSpace=model_core::ColorSpaceId::Linear;
+    REQUIRE(uploader.BeginUploadModel({}, {}, {image},error));
+    for (unsigned i=0;i<2000 && !uploader.PollUploads();++i)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    REQUIRE(uploader.model.textures.size()==1);CHECK(uploader.model.textures[0].resource->GetDesc().Format==DXGI_FORMAT_R8G8B8A8_UNORM);
+    uploader.uploadIsCancelled=[] {return true;};CHECK_FALSE(uploader.BeginUploadModel({}, {}, {image},error));
+    uploader.WaitForIdle();
+}
+
+TEST_CASE("PNG JPEG and Basis decode-to-product-upload pixels match frozen goldens at every mip", "[graphics][texture-upload]")
+{
+    const HRESULT com=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
+    struct ComGuard { HRESULT h;~ComGuard(){if (SUCCEEDED(h))CoUninitialize();} } comGuard{com};
+    for (const wchar_t* name:{L"textures/gray.png",L"textures/gray.jpg",L"basisu_sample.ktx2"}) {
+        std::ifstream file(std::filesystem::path(PREVIEW3D_TEST_ASSETS_DIR)/name,std::ios::binary|std::ios::ate);
+        REQUIRE(file.good());const auto size=file.tellg();REQUIRE(size>0);file.seekg(0);
+        std::vector<std::byte> encoded(static_cast<size_t>(size));file.read(reinterpret_cast<char*>(encoded.data()),size);REQUIRE(file.good());
+        d3d12_import_bridge::ImportedImage image;image.chunkId=1;
+        const bool basis=std::wstring(name)==L"basisu_sample.ktx2";
+        image.colorSpace=basis ? model_core::ColorSpaceId::Linear : model_core::ColorSpaceId::Srgb;
+        if (basis) {
+            import_worker::TextureDecodeOptions options;options.semantic=import_worker::TextureSemantic::Data;
+            auto decoded=import_worker::TranscodeKtx2BasisImage(encoded,options);REQUIRE(decoded);
+            image.pixelFormat=decoded->pixelFormat;image.width=decoded->width;image.height=decoded->height;
+            image.mipLevels=decoded->mipLevels;image.pixelBytes=std::move(decoded->pixelBytes);
+        } else {
+            auto decoded=import_worker::DecodeRasterImageWic(encoded,image.colorSpace);REQUIRE(decoded);
+            image.pixelFormat=decoded->pixelFormat;image.width=decoded->width;image.height=decoded->height;
+            image.mipLevels=decoded->mipLevels;image.pixelBytes=std::move(decoded->pixelBytes);
+        }
+        REQUIRE(image.pixelFormat==model_core::PixelFormatId::RGBA8_UNORM);
+        D3D12ViewerPath uploader;uploader.device.AttachForUpload(SharedDevice().Device());
+        D3D12UploadRing::CreateOptions options;options.initialCapacityBytes=8192;options.maxCapacityBytes=8192;options.growthIncrementBytes=0;
+        REQUIRE(uploader.uploadRing.Initialize(uploader.device,options));std::wstring error;
+        REQUIRE(uploader.BeginUploadModel({}, {}, {image},error));
+        for (unsigned i=0;i<2000 && !uploader.PollUploads();++i)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        REQUIRE(uploader.model.textures.size()==1);
+        auto& texture=*uploader.model.textures[0].resource.Get();
+        for (uint32_t mip=0;mip<image.mipLevels;++mip) {
+            const uint32_t w=image.width>>mip,h=image.height>>mip;
+            const auto pixels=ReadBackTexture(SharedDevice(),uploader.uploadRing,texture,w,h,texture.GetDesc().Format,mip);
+            for (uint32_t y=0;y<h;++y)for (uint32_t x=0;x<w;++x) {
+                const size_t at=(size_t(y)*w+x)*4;
+                for (unsigned c=0;c<3;++c) {
+                    const int expected=basis && c<2 ? ((c==0 ? x : y)<4 ? 220 : 40) : 128;
+                    CHECK(std::abs(int(std::to_integer<uint8_t>(pixels[at+c]))-expected)<=(basis ? 8 : 2));
+                }
+                CHECK(pixels[at+3]==std::byte{255});
+            }
+        }
+        uploader.WaitForIdle();
+    }
 }

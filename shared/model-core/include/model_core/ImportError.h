@@ -22,6 +22,7 @@ enum class ImportErrorCode : uint32_t {
     // FileUnavailable covers not-found, zero-length, and over-size.
     UnsafeReference = 5,
     FileUnavailable = 6,
+    Cancelled = 7,
 };
 
 } // namespace model_core

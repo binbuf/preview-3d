@@ -68,7 +68,9 @@ struct PendingImage {
     uint32_t width = 0;
     uint32_t height = 0;
     ColorSpaceId colorSpace = ColorSpaceId::Srgb;
-    std::vector<std::byte> pixelBytes; // level 0 only this slice
+    uint32_t mipLevels = 1;
+    std::optional<size_t> refines;
+    std::vector<std::byte> pixelBytes;
 };
 
 struct PendingMaterial {
@@ -242,6 +244,10 @@ struct WalkState {
     size_t totalVertices = 0;
     size_t totalIndices = 0;
     uint64_t totalDecodedImagePixels = 0;
+    uint64_t totalEncodedImageBytes = 0;
+    uint64_t totalDecodedImageBytes = 0;
+    uint32_t textureWarningCount = 0;
+    TextureDecodeOptions textureOptions;
     uint32_t maxChunkCount = 0;
     ImportErrorCode error = ImportErrorCode::None;
     // Lazily populated by ResolveBufferViewBytes on first access to an
@@ -281,7 +287,8 @@ std::optional<std::span<const std::byte>> ResolveBufferViewBytes(WalkState& stat
         if (cached == state.resolvedExternalBuffers.end()) {
             ResolvedExternalBuffer resolved;
             if (state.sidecarClient != nullptr) {
-                auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()));
+                auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()),
+            state.textureOptions.maxEncodedBytes-state.totalEncodedImageBytes);
                 resolved.bytes = std::move(result.bytes);
                 resolved.errorCode = result.errorCode;
             } else {
@@ -445,14 +452,20 @@ std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state,
         if (!bytes) {
             return std::nullopt;
         }
+        if (bytes->size()>state.textureOptions.maxEncodedBytes-state.totalEncodedImageBytes) return std::nullopt;
         return std::vector<std::byte>(bytes->begin(), bytes->end());
     }
 
+    if (const auto* array=std::get_if<fastgltf::sources::Array>(&image.data)) {
+        if (array->bytes.size()>state.textureOptions.maxEncodedBytes-state.totalEncodedImageBytes) return std::nullopt;
+        return std::vector<std::byte>(array->bytes.begin(),array->bytes.end());
+    }
     if (const auto* uriSource = std::get_if<fastgltf::sources::URI>(&image.data)) {
         if (state.sidecarClient == nullptr) {
             return std::nullopt;
         }
-        auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()));
+        auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()),
+            state.textureOptions.maxEncodedBytes-state.totalEncodedImageBytes);
         return result.bytes; // nullopt on any failure -- images are never geometry-required
     }
 
@@ -473,24 +486,48 @@ std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state,
 // asymmetric opposite: required geometry fails hard). A fatal condition
 // (resource-limit overflow) sets state.error and also returns nullopt;
 // callers must check state.error to distinguish the two.
-std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpaceId colorSpace)
+std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpaceId colorSpace, TextureSemantic semantic)
 {
-    auto existing = state.imageIndexToPendingIndex.find(imageIndex);
+    if (state.textureOptions.Cancelled()) { state.error=ImportErrorCode::Cancelled;return std::nullopt; }
+    if (imageIndex>=state.asset.images.size()) {
+        state.textureWarningCount=std::min(64u,state.textureWarningCount+1);return std::nullopt;
+    }
+    const size_t semanticKey = imageIndex*4 + static_cast<size_t>(semantic);
+    auto existing = state.imageIndexToPendingIndex.find(semanticKey);
     if (existing != state.imageIndexToPendingIndex.end()) {
         return existing->second;
     }
 
     auto encodedBytes = ResolveImageEncodedBytes(state, imageIndex);
-    if (!encodedBytes) {
-        return std::nullopt;
+    if (state.textureOptions.Cancelled()) { state.error=ImportErrorCode::Cancelled; return std::nullopt; }
+    auto options=state.textureOptions;
+    options.semantic=semantic;
+    options.maxDecodedBytes=std::min(options.maxDecodedBytes, kMaxAggregateTextureBytes-state.totalDecodedImageBytes);
+    options.maxPixels=kMaxAggregateTexturePixels-state.totalDecodedImagePixels;
+    while (options.maxDimension>1) {
+        const auto bytes=ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,options.maxDimension,options.maxDimension,
+                                               FullImageMipCount(options.maxDimension,options.maxDimension));
+        if (bytes && *bytes+*bytes/64<=options.maxDecodedBytes) break;
+        options.maxDimension/=2;
     }
-
+    if (encodedBytes && encodedBytes->size() > options.maxEncodedBytes-state.totalEncodedImageBytes) encodedBytes.reset();
+    if (encodedBytes) state.totalEncodedImageBytes += encodedBytes->size();
+    // Declared MIME must agree with the encoded bytes when supplied.
+    fastgltf::MimeType mime=fastgltf::MimeType::None;
+    std::visit([&](const auto& source) { if constexpr (requires { source.mimeType; }) mime=source.mimeType; },state.asset.images[imageIndex].data);
+    if (encodedBytes && mime!=fastgltf::MimeType::None) {
+        const auto sniff=SniffImageFormat(*encodedBytes);
+        if (!((mime==fastgltf::MimeType::PNG && sniff==SniffedImageFormat::Png)
+            || (mime==fastgltf::MimeType::JPEG && sniff==SniffedImageFormat::Jpeg)
+            || (mime==fastgltf::MimeType::KTX2 && sniff==SniffedImageFormat::Ktx2))) encodedBytes.reset();
+    }
     std::optional<PendingImage> decoded;
-    switch (SniffImageFormat(*encodedBytes)) {
+    switch (encodedBytes ? SniffImageFormat(*encodedBytes) : SniffedImageFormat::Unknown) {
     case SniffedImageFormat::Ktx2: {
-        if (auto transcoded = TranscodeKtx2BasisImage(*encodedBytes)) {
+        if (auto transcoded = TranscodeKtx2BasisImage(*encodedBytes,options)) {
             PendingImage pending;
             pending.pixelFormat = transcoded->pixelFormat;
+            pending.mipLevels = transcoded->mipLevels;
             pending.width = transcoded->width;
             pending.height = transcoded->height;
             pending.colorSpace = colorSpace;
@@ -501,11 +538,11 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     }
     case SniffedImageFormat::Png:
     case SniffedImageFormat::Jpeg:
-    case SniffedImageFormat::Bmp:
-    case SniffedImageFormat::Tiff: {
-        if (auto raster = DecodeRasterImageWic(*encodedBytes, colorSpace)) {
+    {
+        if (auto raster = DecodeRasterImageWic(*encodedBytes, colorSpace,options)) {
             PendingImage pending;
             pending.pixelFormat = raster->pixelFormat;
+            pending.mipLevels = raster->mipLevels;
             pending.width = raster->width;
             pending.height = raster->height;
             pending.colorSpace = raster->colorSpace;
@@ -514,17 +551,37 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
         }
         break;
     }
-    case SniffedImageFormat::WebP: // no libwebp adapter this chunk (ADR-006-assigned, deferred)
+    case SniffedImageFormat::WebP: // bounded WebP decode is TSK-209
     case SniffedImageFormat::Unknown:
     default:
         break;
     }
 
+    if (options.Cancelled()) { state.error=ImportErrorCode::Cancelled; return std::nullopt; }
     if (!decoded) {
+        state.textureWarningCount=std::min(64u,state.textureWarningCount+1);
+        PendingImage fallback;
+        fallback.pixelFormat=PixelFormatId::RGBA8_UNORM; fallback.colorSpace=colorSpace;
+        fallback.width=fallback.height=semantic==TextureSemantic::Color ? 2u : 1u;
+        fallback.pixelBytes.resize(size_t(fallback.width)*fallback.height*4,std::byte{255});
+        if (semantic==TextureSemantic::Color) {
+            for (unsigned i=0;i<4;++i) for (unsigned c=0;c<3;++c)
+                fallback.pixelBytes[i*4+c]=std::byte((i==0 || i==3) ? 64 : 192);
+        } else if (semantic==TextureSemantic::Normal) {
+            fallback.pixelBytes[0]=fallback.pixelBytes[1]=std::byte{128};
+        } else if (semantic==TextureSemantic::Emissive) {
+            fallback.pixelBytes[0]=fallback.pixelBytes[1]=fallback.pixelBytes[2]=std::byte{0};
+        }
+        decoded=std::move(fallback);
+    }
+    if (decoded->pixelBytes.size()>kMaxAggregateTextureBytes-state.totalDecodedImageBytes) {
+        // Budget exhausted: retain the material's deterministic neutral factors.
+        state.textureWarningCount=std::min(64u,state.textureWarningCount+1);
         return std::nullopt;
     }
-
-    auto pixelCount = CheckedMultiply(static_cast<uint64_t>(decoded->width), static_cast<uint64_t>(decoded->height));
+    state.totalDecodedImageBytes+=decoded->pixelBytes.size();
+    auto pixelBytes = ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,decoded->width,decoded->height,decoded->mipLevels);
+    auto pixelCount = pixelBytes ? std::optional<uint64_t>(*pixelBytes/4) : std::nullopt;
     auto newTotal = pixelCount ? CheckedAdd(state.totalDecodedImagePixels, *pixelCount) : std::nullopt;
     if (!pixelCount || !newTotal || *newTotal > kMaxAggregateDecodedTexturePixels) {
         state.error = ImportErrorCode::ResourceLimit;
@@ -540,7 +597,7 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
 
     size_t pendingIndex = state.pendingImages.size();
     state.pendingImages.push_back(std::move(*decoded));
-    state.imageIndexToPendingIndex.emplace(imageIndex, pendingIndex);
+    state.imageIndexToPendingIndex.emplace(semanticKey, pendingIndex);
     return pendingIndex;
 }
 
@@ -550,7 +607,7 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
 // sets state.error for these "no texture" outcomes (only ResolveImage's own
 // resource-limit path does).
 std::optional<size_t> ResolveTextureSlotImage(WalkState& state, const fastgltf::TextureInfo* textureInfo,
-                                                ColorSpaceId colorSpace)
+                                                ColorSpaceId colorSpace, TextureSemantic semantic)
 {
     if (textureInfo == nullptr || textureInfo->textureIndex >= state.asset.textures.size()) {
         return std::nullopt;
@@ -561,7 +618,7 @@ std::optional<size_t> ResolveTextureSlotImage(WalkState& state, const fastgltf::
     if (!gltfImageIndex.has_value()) {
         return std::nullopt;
     }
-    return ResolveImage(state, *gltfImageIndex, colorSpace);
+    return ResolveImage(state, *gltfImageIndex, colorSpace, semantic);
 }
 
 // Resolves (with dedup by glTF material index) the pending-material index
@@ -621,14 +678,14 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
             pending.data.uvScale[1] = textureInfo.transform->uvScale.y();
             pending.data.uvRotation = textureInfo.transform->rotation;
         }
-        pending.pendingBaseColorImageIndex = ResolveTextureSlotImage(state, &textureInfo, ColorSpaceId::Srgb);
+        pending.pendingBaseColorImageIndex = ResolveTextureSlotImage(state, &textureInfo, ColorSpaceId::Srgb,TextureSemantic::Color);
         if (state.error != ImportErrorCode::None) {
             return std::nullopt;
         }
     }
     if (material.pbrData.metallicRoughnessTexture.has_value()) {
         pending.pendingMetallicRoughnessImageIndex
-            = ResolveTextureSlotImage(state, &*material.pbrData.metallicRoughnessTexture, ColorSpaceId::Linear);
+            = ResolveTextureSlotImage(state, &*material.pbrData.metallicRoughnessTexture, ColorSpaceId::Linear,TextureSemantic::Data);
         if (state.error != ImportErrorCode::None) {
             return std::nullopt;
         }
@@ -638,14 +695,14 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         // only needs the base; its extra .scale field is dropped (no
         // MaterialPayload field exists for it this chunk, a deliberate
         // scope call, not an oversight).
-        pending.pendingNormalImageIndex = ResolveTextureSlotImage(state, &*material.normalTexture, ColorSpaceId::Linear);
+        pending.pendingNormalImageIndex = ResolveTextureSlotImage(state, &*material.normalTexture, ColorSpaceId::Linear,TextureSemantic::Normal);
         if (state.error != ImportErrorCode::None) {
             return std::nullopt;
         }
     }
     if (material.emissiveTexture.has_value()) {
         pending.pendingEmissiveImageIndex
-            = ResolveTextureSlotImage(state, &*material.emissiveTexture, ColorSpaceId::Srgb);
+            = ResolveTextureSlotImage(state, &*material.emissiveTexture, ColorSpaceId::Srgb,TextureSemantic::Emissive);
         if (state.error != ImportErrorCode::None) {
             return std::nullopt;
         }
@@ -1112,7 +1169,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                                                              uint64_t generationId,
                                                              uint32_t maxChunkCount,
                                                              SidecarFileClient* sidecarClient,
-                                                             ChunkBatchSink* batchSink)
+                                                             ChunkBatchSink* batchSink, const TextureDecodeOptions& textureOptions)
 {
     // Bound metadata before either JSON parser allocates its document storage.
     size_t metadataBytes = sourceGlbBytes.size();
@@ -1163,6 +1220,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     }
 
     WalkState state{ asset };
+    state.textureOptions=textureOptions;
     auto preciseTransforms = ReadPreciseTransforms(sourceGlbBytes,asset.nodes.size());
     if (auto error = std::get_if<ImportErrorCode>(&preciseTransforms)) return *error;
     state.localTransforms = std::move(std::get<std::vector<fastgltf::math::dmat4x4>>(preciseTransforms));
@@ -1181,6 +1239,33 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         return ImportErrorCode::MalformedData; // no supported geometry found
     }
 
+    // Initial low-resolution images retain their logical identity; full chains
+    // are distinct immutable chunks refining that identity, emitted after geometry.
+    const size_t initialImageCount=state.pendingImages.size();
+    if (batchSink) for (size_t k=0;k<initialImageCount;++k) {
+        auto& image=state.pendingImages[k];
+        uint32_t first=0,w=image.width,h=image.height;
+        size_t offset=0;
+        while ((w>64 || h>64) && first+1<image.mipLevels) {
+            offset+=static_cast<size_t>(*ComputeImagePixelBytes(image.pixelFormat,w,h,1));
+            w=std::max(1u,w/2); h=std::max(1u,h/2); ++first;
+        }
+        if (!first) continue;
+        PendingImage full=std::move(image);
+        PendingImage low;
+        low.pixelFormat=full.pixelFormat; low.colorSpace=full.colorSpace;
+        low.width=w; low.height=h; low.mipLevels=full.mipLevels-first;
+        low.pixelBytes.assign(full.pixelBytes.begin()+offset,full.pixelBytes.end());
+        if (low.pixelBytes.size()>kMaxAggregateTextureBytes-state.totalDecodedImageBytes
+            || state.pendingImages.size()+state.chunks.size()+state.pendingMaterials.size()+1>=maxChunkCount)
+            return ImportErrorCode::ResourceLimit;
+        state.totalDecodedImageBytes+=low.pixelBytes.size();
+        const auto lowPixels=*ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,w,h,low.mipLevels)/4;
+        if (lowPixels>kMaxAggregateTexturePixels-state.totalDecodedImagePixels) return ImportErrorCode::ResourceLimit;
+        state.totalDecodedImagePixels+=lowPixels;
+        image=std::move(low); full.refines=k;
+        state.pendingImages.push_back(std::move(full));
+    }
     // Chunk ids are fixed for the whole generation, whatever batch each
     // chunk later lands in: meshes [1, meshChunkCount], then materials, then
     // images. That is what lets a mesh in a later batch keep pointing at a
@@ -1302,9 +1387,9 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         imageHeader.pixelFormat = static_cast<uint32_t>(image.pixelFormat);
         imageHeader.width = image.width;
         imageHeader.height = image.height;
-        imageHeader.mipLevels = 1; // level 0 only this slice
+        imageHeader.mipLevels = image.mipLevels;
         imageHeader.colorSpace = static_cast<uint32_t>(image.colorSpace);
-        imageHeader.reserved0 = 0;
+        imageHeader.reserved0 = image.refines ? imageChunkId(*image.refines) : 0;
         imageHeader.pixelDataByteSize = image.pixelBytes.size();
 
         auto payloadSize = CheckedAdd(static_cast<uint64_t>(sizeof(ImagePayloadHeader)),
@@ -1322,32 +1407,18 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         plan.descriptor.vertexLayoutId = 0;
         plan.descriptor.lodLevel = 0;
         plan.descriptor.chunkId = imageChunkId(k);
-        plan.descriptor.dependencyCount = 0; // images reference nothing
+        plan.descriptor.dependencyCount = 0; // refinement roots live in the image header
         plan.pieceA = BytesOf(imageHeader);
         plan.pieceB = std::span<const std::byte>(image.pixelBytes.data(), image.pixelBytes.size());
         plan.payloadBytes = *payloadSize;
     }
 
-    // Emission order, decided by whether this model actually needs more than
-    // one window -- never merely by whether the caller offered a sink.
-    //
-    // One section: the order stays what it has always been (meshes, then
-    // materials, then images). Nothing can reference across a boundary that
-    // does not exist, so dependency order buys nothing, and keeping it means
-    // every model that fit before still produces a byte-identical section --
-    // including on the product path, which offers a sink for every import and
-    // would otherwise have its output silently reordered by this change.
-    //
-    // Several sections: a reference may only point at a chunk that has
-    // ALREADY crossed, never one still to come, because the host's catalog
-    // holds exactly what it has accepted so far. Emitting images, then
-    // materials, then meshes puts every dependency ahead of its dependents,
-    // which is what makes cross-batch references resolvable at all. It is
-    // also the order the design wants for display -- textures before the
-    // geometry that uses them.
-    // PlannedChunk is a descriptor plus two spans, so concatenating the
-    // groups twice costs a memcpy of a few hundred bytes per chunk and never
-    // touches the geometry the spans point at.
+    // Single-section imports without refinements retain mesh/material/image
+    // ordering. Progressive imports put initial images and materials before
+    // their geometry, so earlier batches establish the dependency catalog.
+    // Refinements follow an enforced boundary after all initial plans, even
+    // when the full import would fit in one section. Concatenation copies
+    // descriptors and spans without copying their payloads.
     auto concatenate = [](const std::vector<PlannedChunk>& a, const std::vector<PlannedChunk>& b,
                            const std::vector<PlannedChunk>& c) {
         std::vector<PlannedChunk> joined;
@@ -1358,7 +1429,10 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         return joined;
     };
 
+    std::vector<PlannedChunk> refinements(imagePlans.begin()+initialImageCount,imagePlans.end());
+    imagePlans.resize(initialImageCount);
     std::vector<PlannedChunk> plans = concatenate(meshPlans, materialPlans, imagePlans);
+    if (!refinements.empty()) plans=concatenate(imagePlans,materialPlans,meshPlans);
     if (CountChunksThatFit(plans, destination.size(), maxChunkCount) != plans.size()) {
         if (batchSink == nullptr) {
             // A caller that cannot take a second batch, and a model that
@@ -1368,6 +1442,18 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         plans = concatenate(imagePlans, materialPlans, meshPlans);
     }
 
+    const size_t initialPlanCount=plans.size();
+    plans.insert(plans.end(),refinements.begin(),refinements.end());
+    uint32_t warningCount=state.textureWarningCount;
+    if (warningCount) {
+        if (plans.size()>=maxChunkCount) return ImportErrorCode::ResourceLimit;
+        PlannedChunk warning;
+        warning.descriptor.topology=ChunkTopology::TextureWarning;
+        warning.descriptor.chunkId=static_cast<uint32_t>(meshChunkCount+materialChunkCount+imageChunkCount+1);
+        warning.pieceA=BytesOf(warningCount); warning.payloadBytes=sizeof(warningCount);
+        plans.push_back(warning);
+    }
+    size_t emitted=0;
     // Fill the window, hand it over, repeat. The last batch is deliberately
     // NOT published here: it stays in the window and this function's caller
     // sends the terminal ChunksReady for it, which is exactly what the
@@ -1376,7 +1462,10 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     uint32_t lastBatchChunkCount = 0;
     uint64_t lastBatchLength = 0;
     for (;;) {
+        if (textureOptions.Cancelled()) return ImportErrorCode::Cancelled;
         size_t taken = CountChunksThatFit(remaining, destination.size(), maxChunkCount);
+        if (!refinements.empty() && emitted<initialPlanCount) taken=std::min(taken,initialPlanCount-emitted);
+        emitted+=taken;
         if (taken == 0) {
             // Not even one chunk fits, so no sequence of batches can ever
             // finish. Same outcome the single-window path always gave for a

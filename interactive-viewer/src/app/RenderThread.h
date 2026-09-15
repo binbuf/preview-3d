@@ -239,6 +239,7 @@ private:
     std::atomic<std::uint64_t> displayedChunks_{0}, texturedChunks_{0};
     Microsoft::WRL::ComPtr<ID3D12InfoQueue> debugInfo_;
     std::atomic<uint64_t> debugErrors_{0}, debugAvailable_{0};
+    std::atomic<uint64_t> textureExtent_{0},textureCount_{0},textureMips_{0};
     std::atomic<uint64_t> pickCompletions_{0}, pickHits_{0};
     std::uint64_t modelGeneration_ = 0; // render-thread-owned
 

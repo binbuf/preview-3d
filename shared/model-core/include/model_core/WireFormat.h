@@ -18,7 +18,7 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-constexpr uint32_t kCurrentProtocolVersion = 2;
+constexpr uint32_t kCurrentProtocolVersion = 3;
 constexpr uint32_t kMaxDependencyIds = 4;
 
 enum class ChunkTopology : uint32_t {
@@ -27,6 +27,7 @@ enum class ChunkTopology : uint32_t {
     PointList = 2,
     Material = 3, // payload is a model_core::MaterialPayload (MaterialPayload.h)
     Image = 4,    // payload is a model_core::ImagePayloadHeader + pixel bytes (PixelFormats.h)
+    TextureWarning = 5, // one uint32 fallback count, [1,64]; no paths or arbitrary worker text
 };
 
 #pragma pack(push, 1)
@@ -103,9 +104,9 @@ struct ChunkDescriptor {
     // slot order {baseColor, metallicRoughness, normal, emissive}; each must
     // resolve to a chunk with Image topology specifically (a new invariant,
     // since nothing wrote Material chunks before this).
-    // Image -- must have dependencyCount==0 (images reference nothing),
-    // which makes the mesh -> material -> image graph acyclic by
-    // construction.
+    // Image -- must have dependencyCount==0. Refinement roots are encoded
+    // separately in ImagePayloadHeader and must identify an earlier initial
+    // image. The mesh -> material -> image dependency graph stays acyclic.
     uint32_t dependencyIds[kMaxDependencyIds];
     uint32_t dependencyCount;        // how many of dependencyIds[] are populated, <= kMaxDependencyIds
     uint64_t chunkChecksum;          // FNV-1a64 over payload bytes [normalizedRangeOffset, +byteSize)

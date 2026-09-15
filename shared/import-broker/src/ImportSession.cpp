@@ -165,6 +165,9 @@ struct BatchAcceptance {
     uint32_t totalChunks = 0;
     KnownChunkCatalog catalog;
     KnownChunkCatalog unresolved;
+    KnownImageCatalog images;
+    uint64_t textureBytes=0,texturePixels=0;
+    bool haveTextureWarning=false;
     std::optional<model_core::SceneMetadata> scene;
     std::optional<std::array<double, 3>> origin;
 
@@ -174,6 +177,13 @@ struct BatchAcceptance {
             // The validator already proved each id is new -- both within its
             // own section and against this catalog.
             catalog.emplace(chunk.descriptor.chunkId, chunk.descriptor.topology);
+            if (chunk.descriptor.topology==model_core::ChunkTopology::Image) {
+                model_core::ImagePayloadHeader header; std::memcpy(&header,chunk.payload.data(),sizeof(header));
+                textureBytes+=header.pixelDataByteSize; texturePixels+=*model_core::ComputeImagePixelBytes(model_core::PixelFormatId::RGBA8_UNORM,header.width,header.height,header.mipLevels)/4;
+                images.emplace(chunk.descriptor.chunkId,header);
+                if (header.reserved0) { auto latest=header;latest.reserved0=0; images[header.reserved0]=latest; }
+            }
+            if (chunk.descriptor.topology==model_core::ChunkTopology::TextureWarning) haveTextureWarning=true;
         }
         totalChunks += static_cast<uint32_t>(chunks.size());
         ++nextBatchIndex;
@@ -303,12 +313,20 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         // was called before progressive delivery existed.
         const KnownChunkCatalog* prior = acceptance.nextBatchIndex > 0 ? &acceptance.catalog : nullptr;
         ValidationResult validation
-            = ValidateAndCopySection(view.bytes(), request.generationId, request.maxChunkCount, prior, true);
+            = ValidateAndCopySection(view.bytes(), request.generationId, request.maxChunkCount, prior, true,
+                &acceptance.images,acceptance.textureBytes,acceptance.texturePixels);
         if (!validation.ok) {
             failure = Fail(ImportStage::ValidateSection, validation.errorCode);
             return false;
         }
+        bool batchHasWarning=false;
         for (const auto& chunk : validation.chunks) {
+            if (chunk.descriptor.topology==model_core::ChunkTopology::TextureWarning) {
+                if (acceptance.haveTextureWarning || batchHasWarning) {
+                    failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);return false;
+                }
+                batchHasWarning=true;
+            }
             if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList
                 || chunk.descriptor.topology == model_core::ChunkTopology::PointList) {
                 const auto& geometry = chunk.descriptor;

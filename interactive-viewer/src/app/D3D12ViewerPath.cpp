@@ -884,18 +884,22 @@ bool D3D12ViewerPath::CreateAndQueueTexture(const d3d12_import_bridge::ImportedI
                                              uint32_t clusterId, ComPtr<ID3D12Resource>& outTexture,
                                              std::wstring& error)
 {
+    if (uploadIsCancelled && uploadIsCancelled()) return false;
     auto dxgiFormat = DxgiFormatFor(image.pixelFormat, image.colorSpace);
-    if (!dxgiFormat || image.width == 0 || image.height == 0 || image.mipLevels != 1) {
+    if (!dxgiFormat || image.width == 0 || image.height == 0 || image.mipLevels == 0 || image.mipLevels > model_core::FullImageMipCount(image.width,image.height)) {
         error = L"An imported texture had an unsupported format or mip count.";
         return false;
     }
 
+    const auto expected=model_core::ComputeImagePixelBytes(image.pixelFormat,image.width,image.height,image.mipLevels);
+    if (!expected || *expected!=image.pixelBytes.size() || image.width>model_core::kMaxTextureDimension
+        || image.height>model_core::kMaxTextureDimension) { error=L"An imported image has an invalid byte size or dimension.";return false; }
     D3D12_RESOURCE_DESC texDesc{};
     texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     texDesc.Width = image.width;
     texDesc.Height = image.height;
     texDesc.DepthOrArraySize = 1;
-    texDesc.MipLevels = 1;
+    texDesc.MipLevels = static_cast<UINT16>(image.mipLevels);
     texDesc.Format = *dxgiFormat;
     texDesc.SampleDesc.Count = 1;
     texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
@@ -925,26 +929,41 @@ bool D3D12ViewerPath::CreateAndQueueTexture(const d3d12_import_bridge::ImportedI
     request.generation = pendingToken;
     request.clusterId = clusterId;
 
-    switch (uploadRing.UploadTexture(request)) {
+    // Record smallest levels first. Publish only once the complete immutable
+    // resource has crossed the copy fence; a low-chain import was published earlier.
+    for (uint32_t level=image.mipLevels;level-->0;) {
+        if (uploadIsCancelled && uploadIsCancelled()) { outTexture=texture;return false; }
+        const uint32_t w=std::max(1u,image.width>>level),h=std::max(1u,image.height>>level);
+        const auto offset=level ? model_core::ComputeImagePixelBytes(image.pixelFormat,image.width,image.height,level)
+                                : std::optional<uint64_t>(0);
+        const auto size=model_core::ComputeImagePixelBytes(image.pixelFormat,w,h,1);
+        if (!offset || !size || *offset>image.pixelBytes.size() || *size>image.pixelBytes.size()-*offset) {
+            outTexture=texture; error=L"An imported mip has an invalid size."; return false;
+        }
+        request.sourceBytes=std::span(image.pixelBytes).subspan(static_cast<size_t>(*offset),static_cast<size_t>(*size));
+        request.width=w;request.height=h;request.destinationSubresource=level;
+        request.publishResource=level==0;
+        switch (uploadRing.UploadTexture(request)) {
     case D3D12UploadRing::UploadResult::Uploaded:
         break;
     case D3D12UploadRing::UploadResult::Backpressured:
         error = L"The upload staging ring could not make room for this model's textures.";
-        return false;
+        outTexture=texture; return false;
     case D3D12UploadRing::UploadResult::Failed:
     default:
         // UploadTexture also rejects a source smaller than the footprint it
         // computed, which is the "declared size" check this used to make
         // itself.
         error = L"An imported texture could not be queued for upload.";
-        return false;
+        outTexture=texture; return false;
     }
 
+    }
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
     srvDesc.Format = *dxgiFormat;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Texture2D.MipLevels = image.mipLevels;
 
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = heap.GetCPUDescriptorHandleForHeapStart();
     cpuHandle.ptr += static_cast<SIZE_T>(heapIndex) * descriptorSize;
@@ -991,7 +1010,7 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         staged.textures.resize(importedImages.size());
         for (size_t i = 0; i < importedImages.size(); ++i) {
             GpuTexture texture;
-            texture.chunkId = importedImages[i].chunkId;
+            texture.chunkId = importedImages[i].logicalChunkId ? importedImages[i].logicalChunkId : importedImages[i].chunkId;
             texture.heap = staged.srvHeap;
             texture.descriptorSize = staged.srvDescriptorSize;
             texture.srvHeapIndex = static_cast<UINT>(i);

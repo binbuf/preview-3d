@@ -1651,7 +1651,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message)
     {
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 36) return 0;
+        if (!app->appSmoke || wParam > 40) return 0;
         if (wParam == 0) return static_cast<LRESULT>(app->state) + 1;
         if (wParam == 1) return static_cast<LRESULT>(app->generation);
         if (wParam == 21) return app->showNativeOrientation;
@@ -1692,6 +1692,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             }
             }
         }
+        if (wParam==40) return static_cast<LRESULT>(app->warning.size());
         if (wParam == 30) { ToggleShowNativeOrientation(*app); return app->showNativeOrientation; }
         return static_cast<LRESULT>(app->renderThread.SmokeValue(static_cast<unsigned>(wParam)));
     case WM_COPYDATA:
@@ -2598,6 +2599,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (uploaded->metadata) {
             if (!app->loadedModel || app->loadedModel->source.generationId != uploaded->generation) app->meshSelected = false;
             app->loadedModel = uploaded->metadata;
+            app->warning=uploaded->metadata->warning;
         }
         app->currentPath = uploaded->path;
         app->filename = FileNameFromPath(uploaded->path);
@@ -2696,6 +2698,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         {
             if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
+            else if (_wcsicmp(arguments[i], L"--texture-mip-smoke") == 0) {
+                app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 4ull*1024*1024, true);
+            }
             else if (_wcsicmp(arguments[i], L"--texture-batch-smoke") == 0) {
                 app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 420, false);
             }

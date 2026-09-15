@@ -57,6 +57,9 @@ std::uint64_t RenderThread::SmokeValue(unsigned field) const noexcept
     }
     case 31: { std::lock_guard<std::mutex> lock(cameraMutex_); uint64_t bits; std::memcpy(&bits,&camera_.targetDistance,sizeof(bits)); return bits; }
     case 11: return texturedChunks_.load(std::memory_order_acquire);
+    case 37: return textureExtent_.load();
+    case 38: return textureCount_.load();
+    case 39: return textureMips_.load();
     case 35: return debugErrors_.load();
     case 36: return debugAvailable_.load();
     case 32: return pickCompletions_.load();
@@ -213,6 +216,10 @@ void RenderThread::UploadMain()
         options.maxCapacityBytes = 8192;
         options.maxBatchBytes = 4096;
     }
+    if (copyDelayMs_ && smokeSectionBytes_>=4ull*1024*1024) {
+        options.initialCapacityBytes=4ull*1024*1024;options.growthIncrementBytes=4ull*1024*1024;
+        options.maxCapacityBytes=8ull*1024*1024;options.maxBatchBytes=512ull*1024;
+    }
     const bool initialized = uploader.uploadRing.Initialize(uploader.device, options);
     auto inbox = uploads_;
     for (;;) {
@@ -246,10 +253,12 @@ void RenderThread::UploadMain()
                     });
                 }
                 std::wstring error = initialized ? L"" : L"The upload coordinator could not be initialized.";
+                uploader.uploadIsCancelled=[current] {return !current();};
                 const bool ok = current() && initialized && uploader.BeginUploadModel(pub.task.result.meshes,
                     pub.task.result.materials, pub.task.result.images, error);
                 pub.task.result.ok = ok;
                 pub.task.result.errorDetails = error;
+                if (!ok && copyDelayMs_) std::fwprintf(stderr,L"Upload smoke failure: %ls\n",error.c_str());
                 if (ok) {
                     bool completed = false;
                     const auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -505,6 +514,7 @@ void RenderThread::DrainCommands()
         hasModel_.store(false, std::memory_order_release);
         displayedChunks_.store(0, std::memory_order_release);
         texturedChunks_.store(0, std::memory_order_release);
+        textureExtent_.store(0);textureCount_.store(0);textureMips_.store(0);
         stagedScene_ = {}; stagedGeneration_ = 0; materials_.clear();
 
     }
@@ -602,8 +612,24 @@ void RenderThread::PumpUploads(HWND window)
         auto& destination = modelGeneration_ == pub.task.generation ? path_.model : stagedScene_;
         destination.meshes.insert(destination.meshes.end(), std::make_move_iterator(pub.resources.meshes.begin()),
             std::make_move_iterator(pub.resources.meshes.end()));
-        destination.textures.insert(destination.textures.end(), std::make_move_iterator(pub.resources.textures.begin()),
-            std::make_move_iterator(pub.resources.textures.end()));
+        if (pub.task.result.textureWarningCount)
+            metadata.warning=L"Some textures could not be loaded. Fallback textures are shown.";
+        D3D12ViewerPath::ModelResources displaced;
+        for (auto& texture : pub.resources.textures) {
+            auto old=std::find_if(destination.textures.begin(),destination.textures.end(),
+                [&](const auto& candidate) { return candidate.chunkId==texture.chunkId; });
+            if (old==destination.textures.end()) destination.textures.push_back(std::move(texture));
+            else { displaced.textures.push_back(std::move(*old));*old=std::move(texture); }
+        }
+        if (!displaced.textures.empty()) {
+            uint64_t fence=0;for (const auto& frame:path_.frames) fence=std::max(fence,frame.fenceValue);
+            path_.retiredModels.push_back({std::move(displaced),fence,0});
+        }
+        uint64_t extent=0,mips=0;
+        for (const auto& texture:destination.textures) {
+            const auto desc=texture.resource->GetDesc();extent=std::max(extent,desc.Width);mips=std::max(mips,uint64_t(desc.MipLevels));
+        }
+        textureExtent_.store(extent);textureCount_.store(destination.textures.size());textureMips_.store(mips);
         for (auto& mesh : destination.meshes) {
             auto mat = materials_.find(mesh.materialChunkId);
             if (mat == materials_.end()) continue; // Neutral, immutable until a dependency arrives.

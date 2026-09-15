@@ -68,7 +68,8 @@ TEST_CASE("Manifest Tier A fixtures preserve counts and geometric bounds through
                 CHECK(header.height == 2);
                 REQUIRE(header.pixelFormat == static_cast<unsigned>(model_core::PixelFormatId::RGBA8_UNORM));
                 const std::array<unsigned char,16> rgba{255,0,0,255,0,255,0,255,0,0,255,255,255,255,255,255};
-                REQUIRE(header.pixelDataByteSize == rgba.size());
+                CHECK(header.mipLevels == 2);
+                REQUIRE(header.pixelDataByteSize == rgba.size()+4);
                 CHECK(std::memcmp(chunk.payload.data()+sizeof(header),rgba.data(),rgba.size()) == 0);
                 continue;
             }

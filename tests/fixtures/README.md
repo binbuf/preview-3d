@@ -158,3 +158,17 @@ position-only point path. Round splats and color rendering remain TSK-208.
 Commands, limits and final Debug/Release evidence are in
 [TSK-202 verification](../../.docs/TSK-202_VERIFICATION.md), with raw reports in
 [baselines/tsk-202](baselines/tsk-202/).
+
+## TSK-203 texture verification
+
+Frozen PNG/JPEG/Basis fixtures and pixel expectations are pinned in
+[manifests/textures.json](manifests/textures.json). Catch2 verifies their hashes
+and reads back every mip through worker decode and the product GPU uploader.
+`tests/app-smoke/textures.py` generates deterministic PNG GLBs and drives low-mip
+publication, immutable replacement, resolution capping, corrupt fallback,
+warning clearing and cancellation in the real app. Decoder/transcoder composition
+is test-only; shipping decode remains in the sandbox worker.
+
+Commands, budgets and final Debug/Release results are in
+[TSK-203 verification](../../.docs/TSK-203_VERIFICATION.md), with raw app reports in
+[baselines/tsk-203](baselines/tsk-203/).

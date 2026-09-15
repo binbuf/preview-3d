@@ -8,6 +8,7 @@
 #include "platform/CheckedMath.h"
 
 #include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <initializer_list>
 #include <unordered_map>
@@ -66,7 +67,9 @@ bool AllFinite(std::initializer_list<float> values)
 
 ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                                          uint64_t expectedGenerationId, uint32_t maxChunkCount,
-                                         const KnownChunkCatalog* priorBatches, bool allowForwardReferences)
+                                         const KnownChunkCatalog* priorBatches, bool allowForwardReferences,
+                                         const KnownImageCatalog* priorImages,
+                                         uint64_t priorTextureBytes, uint64_t priorTexturePixels)
 {
     // 1. The section must be at least large enough to hold a header before
     // any field of it is read.
@@ -218,7 +221,9 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
 
     ValidationResult result;
     result.chunks.reserve(header.chunkCount);
-    uint64_t aggregateImagePixels = 0;
+    uint64_t aggregateImagePixels = priorTexturePixels;
+    uint64_t aggregateImageBytes = priorTextureBytes;
+    KnownImageCatalog images = priorImages ? *priorImages : KnownImageCatalog{};
 
     for (uint32_t i = 0; i < header.chunkCount; ++i) {
         const ChunkDescriptor& descriptor = descriptors[i];
@@ -408,6 +413,14 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             }
             break;
         }
+        case ChunkTopology::TextureWarning: {
+            if (descriptor.vertexCount || descriptor.indexCount || descriptor.vertexLayoutId || descriptor.dependencyCount
+                || descriptor.byteSize!=sizeof(uint32_t)) return Reject(ImportErrorCode::MalformedData,"malformed texture warning");
+            for (auto id : descriptor.dependencyIds) if (id) return Reject(ImportErrorCode::MalformedData,"warning dependency");
+            uint32_t count=0; std::memcpy(&count,section.data()+descriptor.normalizedRangeOffset,sizeof(count));
+            if (!count || count>64) return Reject(ImportErrorCode::MalformedData,"texture warning count out of range");
+            break;
+        }
         case ChunkTopology::Image: {
             if (descriptor.vertexCount != 0 || descriptor.indexCount != 0
                 || descriptor.vertexLayoutId != 0) {
@@ -430,9 +443,6 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             ImagePayloadHeader imageHeader{};
             std::memcpy(&imageHeader, section.data() + descriptor.normalizedRangeOffset, sizeof(imageHeader));
 
-            if (imageHeader.reserved0 != 0) {
-                return Reject(ImportErrorCode::MalformedData, "image payload reserved0 must be 0");
-            }
             auto pixelFormat = static_cast<PixelFormatId>(imageHeader.pixelFormat);
             if (!PixelFormatBlockInfo(pixelFormat)) {
                 return Reject(ImportErrorCode::MalformedData, "unrecognized image pixel format");
@@ -447,6 +457,8 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                 && imageHeader.colorSpace == static_cast<uint32_t>(ColorSpaceId::Srgb)) {
                 return Reject(ImportErrorCode::MalformedData, "BC5_UNORM has no sRGB representation");
             }
+            if (imageHeader.width>model_core::kMaxTextureDimension || imageHeader.height>model_core::kMaxTextureDimension)
+                return Reject(ImportErrorCode::ResourceLimit,"image dimension cap exceeded");
             if (imageHeader.width == 0 || imageHeader.height == 0) {
                 return Reject(ImportErrorCode::MalformedData, "image declares zero width or height");
             }
@@ -467,15 +479,34 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                               "image byteSize does not match header + pixel data");
             }
 
-            // Aggregate decoded-pixel budget (mip 0 only), re-enforced here
+            // Aggregate decoded-pixel budget (all mips), re-enforced here
             // independent of the worker's own accounting.
-            auto pixelCount = CheckedMultiply(static_cast<uint64_t>(imageHeader.width),
-                                               static_cast<uint64_t>(imageHeader.height));
+            auto rgbaBytes=ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,imageHeader.width,imageHeader.height,imageHeader.mipLevels);
+            auto pixelCount=rgbaBytes ? std::optional<uint64_t>(*rgbaBytes/4) : std::nullopt;
             auto newAggregate = pixelCount ? CheckedAdd(aggregateImagePixels, *pixelCount) : std::nullopt;
             if (!pixelCount || !newAggregate) {
                 return Reject(ImportErrorCode::ResourceLimit, "aggregate decoded texture pixel count overflows");
             }
             aggregateImagePixels = *newAggregate;
+            auto newBytes=CheckedAdd(aggregateImageBytes,imageHeader.pixelDataByteSize);
+            if (!newBytes || *newBytes>model_core::kMaxAggregateTextureBytes
+                || aggregateImagePixels>model_core::kMaxAggregateTexturePixels)
+                return Reject(ImportErrorCode::ResourceLimit,"generation texture expansion cap exceeded");
+            aggregateImageBytes=*newBytes;
+            if (imageHeader.reserved0) {
+                auto parent=images.find(imageHeader.reserved0);
+                if (parent==images.end() || parent->second.reserved0 || imageHeader.reserved0==descriptor.chunkId)
+                    return Reject(ImportErrorCode::MalformedData,"image refinement root is not an earlier initial image");
+                const auto& old=parent->second;
+                uint32_t w=imageHeader.width,h=imageHeader.height,levels=imageHeader.mipLevels;
+                while ((w>old.width || h>old.height) && levels>1) { w=std::max(1u,w/2);h=std::max(1u,h/2);--levels; }
+                if (imageHeader.pixelFormat!=old.pixelFormat || imageHeader.colorSpace!=old.colorSpace
+                    || (imageHeader.width==old.width && imageHeader.height==old.height)
+                    || w!=old.width || h!=old.height || levels!=old.mipLevels)
+                    return Reject(ImportErrorCode::MalformedData,"non-monotonic or incompatible image refinement");
+                auto latest=imageHeader; latest.reserved0=0; parent->second=latest;
+            }
+            images.emplace(descriptor.chunkId,imageHeader);
             break;
         }
         default:

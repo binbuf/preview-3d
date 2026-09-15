@@ -12,6 +12,18 @@
 
 namespace model_core {
 
+constexpr uint32_t kMaxTextureDimension = 16384;
+constexpr uint64_t kMaxAggregateTextureBytes = 128ull * 1024 * 1024;
+constexpr uint64_t kMaxAggregateTexturePixels = 1'000'000'000;
+
+constexpr uint32_t FullImageMipCount(uint32_t width, uint32_t height) noexcept
+{
+    if (!width || !height) return 0;
+    uint32_t levels = 1;
+    while (width > 1 || height > 1) { width = width > 1 ? width/2 : 1; height = height > 1 ? height/2 : 1; ++levels; }
+    return levels;
+}
+
 // Closed enumeration. The validator must never guess a block size for an
 // unrecognized value -- see PixelFormatBlockInfo below.
 enum class PixelFormatId : uint32_t {
@@ -41,7 +53,7 @@ struct ImagePayloadHeader {
     uint32_t height;            // mip 0 texel height
     uint32_t mipLevels;         // >= 1
     uint32_t colorSpace;        // ColorSpaceId
-    uint32_t reserved0;         // must be 0
+    uint32_t reserved0;         // v3: 0 for initial image, otherwise initial Image chunk id refined
     uint64_t pixelDataByteSize; // bytes following this header; redundant
                                   // cross-check against ChunkDescriptor::byteSize
 };
@@ -72,12 +84,12 @@ constexpr std::optional<std::pair<uint32_t, uint32_t>> PixelFormatBlockInfo(Pixe
 // Sums tightly-packed pixel bytes across mip levels [0, mipLevels), each
 // level halving (floor, minimum 1 texel) from the previous. All arithmetic
 // is overflow-checked; returns nullopt on any overflow, an unrecognized
-// format, or a zero width/height/mipLevels.
+// format, zero dimensions, or more levels than the full mip chain.
 constexpr std::optional<uint64_t> ComputeImagePixelBytes(PixelFormatId format, uint32_t width, uint32_t height,
                                                             uint32_t mipLevels) noexcept
 {
     const auto block = PixelFormatBlockInfo(format);
-    if (!block || width == 0 || height == 0 || mipLevels == 0) {
+    if (!block || width == 0 || height == 0 || mipLevels == 0 || mipLevels > FullImageMipCount(width,height)) {
         return std::nullopt;
     }
 

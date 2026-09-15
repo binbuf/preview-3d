@@ -866,7 +866,7 @@ TEST_CASE("basisu_textured_triangle.glb (KHR_texture_basisu base color) produces
 }
 
 TEST_CASE("basisu_corrupt_ktx2.glb (valid KHR_texture_basisu reference, garbage KTX2 bytes) soft-fails "
-          "to a material with no image dependency, not a hard import failure",
+          "to a deterministic fallback and bounded warning, not a hard import failure",
           "[gltf-import][texture]")
 {
     sandbox_test_support::SandboxFixture fixture;
@@ -877,14 +877,14 @@ TEST_CASE("basisu_corrupt_ktx2.glb (valid KHR_texture_basisu reference, garbage 
     auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/21, /*maxChunkCount=*/8);
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
-    REQUIRE(run.validation.chunks.size() == 2); // mesh + material only, no image chunk
+    REQUIRE(run.validation.chunks.size() == 4); // geometry, material, checker, warning
 
     const import_broker::ValidatedChunk* materialChunk = nullptr;
     for (const auto& c : run.validation.chunks) {
         if (c.descriptor.topology == model_core::ChunkTopology::Material) materialChunk = &c;
     }
     REQUIRE(materialChunk != nullptr);
-    CHECK(materialChunk->descriptor.dependencyCount == 0);
+    CHECK(materialChunk->descriptor.dependencyCount == 1);
 }
 
 TEST_CASE("A real on-disk GLB file reaches the sandboxed worker via a duplicated handle and parses "

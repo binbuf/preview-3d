@@ -286,21 +286,17 @@ D3D12UploadRing::UploadResult D3D12UploadRing::UploadTexture(const UploadTexture
     // Ask the device for the real staging layout rather than deriving a
     // pitch by hand -- "never guess" applies to row pitch exactly as it
     // does to the wire format's own byte math.
-    D3D12_RESOURCE_DESC desc{};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = request.width;
-    desc.Height = request.height;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = request.format;
-    desc.SampleDesc.Count = 1;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    const D3D12_RESOURCE_DESC desc=request.destination->GetDesc();
+    if (desc.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.DepthOrArraySize!=1 || desc.SampleDesc.Count!=1
+        || desc.Format!=request.format || request.destinationSubresource>=desc.MipLevels
+        || request.width!=(std::max)(1ull,desc.Width>>request.destinationSubresource)
+        || request.height!=(std::max)(1u,desc.Height>>request.destinationSubresource)) return UploadResult::Failed;
 
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
     UINT numRows = 0;
     UINT64 rowSizeInBytes = 0;
     UINT64 totalBytes = 0;
-    device_->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
+    device_->GetCopyableFootprints(&desc, request.destinationSubresource, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
     if (numRows == 0 || rowSizeInBytes == 0 || totalBytes == 0) {
         return UploadResult::Failed;
     }
@@ -312,7 +308,7 @@ D3D12UploadRing::UploadResult D3D12UploadRing::UploadTexture(const UploadTexture
     // rowSizeInBytes -- markedly less than the padded staging total.
     auto requiredSourceOpt
         = platform::CheckedMultiply(static_cast<uint64_t>(numRows), static_cast<uint64_t>(rowSizeInBytes));
-    if (!requiredSourceOpt || request.sourceBytes.size() < *requiredSourceOpt) {
+    if (!requiredSourceOpt || request.sourceBytes.size() != *requiredSourceOpt) {
         return UploadResult::Failed;
     }
 
@@ -340,7 +336,7 @@ D3D12UploadRing::UploadResult D3D12UploadRing::UploadTexture(const UploadTexture
     D3D12_TEXTURE_COPY_LOCATION destinationLocation{};
     destinationLocation.pResource = request.destination;
     destinationLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    destinationLocation.SubresourceIndex = 0;
+    destinationLocation.SubresourceIndex = request.destinationSubresource;
 
     D3D12_TEXTURE_COPY_LOCATION sourceLocation{};
     sourceLocation.pResource = ringResource_.Get();
@@ -350,7 +346,7 @@ D3D12UploadRing::UploadResult D3D12UploadRing::UploadTexture(const UploadTexture
     commandList_->CopyTextureRegion(&destinationLocation, 0, 0, 0, &sourceLocation, nullptr);
 
     RecordAllocationAndPublication(totalBytes, occupiedBytes, request.destination, request.generation,
-                                    request.clusterId, request.lodLevel, /*approximateBytes=*/totalBytes);
+                                    request.clusterId, request.lodLevel, /*approximateBytes=*/totalBytes,request.publishResource);
     return UploadResult::Uploaded;
 }
 
@@ -358,7 +354,7 @@ void D3D12UploadRing::RecordAllocationAndPublication(uint64_t size, uint64_t occ
                                                       ID3D12Resource* destination,
                                                       const platform::GenerationToken& generation,
                                                       uint32_t clusterId, uint32_t lodLevel,
-                                                      uint64_t approximateBytes)
+                                                      uint64_t approximateBytes, bool publishResource)
 {
     batchRingAllocations_.push_back(RingAllocation{ occupiedBytes, /*fenceValue=*/0 });
 
@@ -368,7 +364,7 @@ void D3D12UploadRing::RecordAllocationAndPublication(uint64_t size, uint64_t occ
     info.clusterId = clusterId;
     info.lodLevel = lodLevel;
     info.approximateBytes = approximateBytes;
-    batchPublications_.push_back(PendingPublication{ info, generation, /*fenceValue=*/0 });
+    if (publishResource) batchPublications_.push_back(PendingPublication{ info, generation, /*fenceValue=*/0 });
 
     batchBytes_ += size;
     if (batchBytes_ >= options_.maxBatchBytes) {

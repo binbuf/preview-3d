@@ -22,7 +22,13 @@ struct HashHandles {
 
 TEST_CASE("Every immutable routine fixture matches its manifest SHA-256", "[fixtures]")
 {
-    for (const auto& fixture : fixture_manifest::files) {
+    struct File { const wchar_t* path; const char* sha256; };
+    std::vector<File> files;
+    for (const auto& fixture:fixture_manifest::files) files.push_back({fixture.path,fixture.sha256});
+    files.push_back({L"basisu_sample.ktx2","fa87151224822c1464dc503ef1afe49868fc6a1363a13089f622951b2f54646c"});
+    files.push_back({L"textures/gray.jpg","e8feecbf5e2bb99d2ef7b0f4be28b486456140ea82e8a205e0ff7dba2fe9b168"});
+    files.push_back({L"textures/gray.png","52a3910db5af63aaa73083768b7c0949568c88900818080f085718cbe6e57a3e"});
+    for (const auto& fixture:files) {
         CAPTURE(fixture.sha256);
         HashHandles handles;
         REQUIRE(BCryptOpenAlgorithmProvider(&handles.algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0) == 0);

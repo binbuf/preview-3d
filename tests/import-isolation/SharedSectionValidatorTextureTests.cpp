@@ -149,6 +149,54 @@ std::vector<ChunkSpec> ValidTriple()
 
 } // namespace
 
+TEST_CASE("Image refinements reject missing roots, semantic changes and stale resolution", "[shared-section-validator][texture]")
+{
+    ImagePayloadHeader low=ValidImageHeader(2,2);low.mipLevels=2;low.pixelDataByteSize=20;
+    import_broker::KnownImageCatalog priorImages{{1,low}};
+    import_broker::KnownChunkCatalog prior{{1,ChunkTopology::Image}};
+    auto full=ValidImageHeader(4,4);full.mipLevels=3;full.pixelDataByteSize=84;full.reserved0=1;
+    ChunkSpec chunk;chunk.descriptor.topology=ChunkTopology::Image;chunk.descriptor.chunkId=2;
+    auto validate=[&](ImagePayloadHeader header,uint64_t bytes=20,uint64_t pixels=5) {
+        chunk.payload=ToBytes(header,std::vector<std::byte>(static_cast<size_t>(header.pixelDataByteSize)));
+        return import_broker::ValidateAndCopySection(BuildSection({chunk},1),1,8,&prior,false,&priorImages,bytes,pixels);
+    };
+    CHECK(validate(full).ok);
+    auto bad=full;bad.reserved0=3;CHECK_FALSE(validate(bad).ok);
+    bad=full;bad.colorSpace=uint32_t(ColorSpaceId::Linear);CHECK_FALSE(validate(bad).ok);
+    bad=low;bad.reserved0=1;CHECK_FALSE(validate(bad).ok);
+    CHECK_FALSE(validate(full,kMaxAggregateTextureBytes-83).ok);
+    CHECK_FALSE(validate(full,20,kMaxAggregateTexturePixels-20).ok);
+    bad=full;bad.mipLevels=4;CHECK_FALSE(validate(bad).ok);
+    // A refinement cannot resolve through a forward root even if material
+    // forward references are enabled by the streaming session.
+    chunk.payload=ToBytes(full,std::vector<std::byte>(84));
+    CHECK_FALSE(import_broker::ValidateAndCopySection(BuildSection({chunk},1),1,8,nullptr,true).ok);
+}
+
+TEST_CASE("Texture warning payload is a closed bounded count", "[shared-section-validator][texture]")
+{
+    ChunkSpec warning;warning.descriptor.topology=ChunkTopology::TextureWarning;warning.descriptor.chunkId=1;
+    for (uint32_t count:{0u,1u,64u,65u,UINT32_MAX}) {
+        warning.payload.resize(4);std::memcpy(warning.payload.data(),&count,4);
+        CHECK(import_broker::ValidateAndCopySection(BuildSection({warning},1),1,8).ok==(count>0 && count<=64));
+    }
+}
+
+TEST_CASE("Texture headers survive a bounded rechecksummed mutation corpus", "[texture][fuzz]")
+{
+    uint32_t seed=0x203A17E5;
+    unsigned rejected=0;
+    for (unsigned i=0;i<512;++i) {
+        auto chunks=ValidTriple();
+        seed^=seed<<13;seed^=seed>>17;seed^=seed<<5;
+        if (i%32) chunks[2].payload[seed%sizeof(ImagePayloadHeader)]^=std::byte(uint8_t((seed>>16)|1));
+        auto result=import_broker::ValidateAndCopySection(BuildSection(chunks,203),203,8);
+        if (!result.ok) {++rejected;CHECK(result.chunks.empty());}
+        else {REQUIRE(result.chunks.size()==3);CHECK(result.chunks[2].payload.size()==chunks[2].payload.size());}
+    }
+    CHECK(rejected>400);
+}
+
 TEST_CASE("A valid mesh -> material -> image triple validates and round-trips dependency ids",
           "[shared-section-validator][texture]")
 {
@@ -308,31 +356,12 @@ TEST_CASE("A chunk declaring the reserved chunkId 0 is rejected", "[shared-secti
     CHECK(result.errorCode == ImportErrorCode::MalformedData);
 }
 
-TEST_CASE("Aggregate decoded image pixels across the batch exceeding 1 gigapixel is rejected as "
-          "ResourceLimit",
-          "[shared-section-validator][texture]")
+TEST_CASE("Hostile dimensions fail before accepting fabricated image expansion", "[shared-section-validator][texture]")
 {
-    auto chunks = ValidTriple();
-    // A single 32000x32000 image mip-0 exceeds 1e9 pixels (1.024e9). Using
-    // BC1_UNORM (0.5 bytes/pixel, block-compressed) instead of RGBA8 keeps
-    // this test's own allocation to ~488 MiB rather than ~3.8 GiB while
-    // still genuinely crossing the real budget via ComputeImagePixelBytes'
-    // real math -- this is the one deliberately large-memory test in this
-    // file, matching the actual budget it's proving.
-    ImagePayloadHeader h{};
-    h.pixelFormat = static_cast<uint32_t>(PixelFormatId::BC1_UNORM);
-    h.width = 32000;
-    h.height = 32000;
-    h.mipLevels = 1;
-    h.colorSpace = static_cast<uint32_t>(ColorSpaceId::Srgb);
-    auto expected = ComputeImagePixelBytes(PixelFormatId::BC1_UNORM, h.width, h.height, 1);
-    REQUIRE(expected.has_value());
-    h.pixelDataByteSize = *expected;
-
-    std::vector<std::byte> pixels(*expected, std::byte{ 0 });
-    chunks[2].payload = ToBytes(h, pixels);
-    auto section = BuildSection(chunks, 1);
-    auto result = import_broker::ValidateAndCopySection(section, 1, 8);
-    CHECK_FALSE(result.ok);
-    CHECK(result.errorCode == ImportErrorCode::ResourceLimit);
+    ChunkSpec image;image.descriptor.chunkId=1;image.descriptor.topology=ChunkTopology::Image;
+    auto header=ValidImageHeader();header.width=32000;header.height=32000;
+    header.pixelDataByteSize=512'000'000;
+    image.payload=ToBytes(header,{});
+    auto result=import_broker::ValidateAndCopySection(BuildSection({image},1),1,8);
+    CHECK_FALSE(result.ok);CHECK(result.errorCode==ImportErrorCode::ResourceLimit);
 }

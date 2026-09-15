@@ -565,3 +565,14 @@ TEST_CASE("Cancellation during downstream acceptance prevents the next batch ack
     CHECK(result.batchCount == 1);
     CHECK(result.chunks.empty());
 }
+
+TEST_CASE("Sandboxed hostile texture catalogs cannot refine stale roots or exceed generation caps", "[hostile-worker][texture]")
+{
+    for (const wchar_t* mode:{L"--texture-missing-root",L"--texture-semantic-change",L"--texture-repeat-refinement",L"--texture-warning-limit",L"--texture-aggregate-expansion"}) {
+        CAPTURE(mode);auto request=MakeBatchRequest(mode,8);request.onBatch=[](auto){};
+        auto result=import_broker::RunImportSession(request);REQUIRE_FALSE(result.ok);
+        CHECK(result.stage==import_broker::ImportStage::ValidateSection);
+        CHECK(result.errorCode==(std::wstring(mode)==L"--texture-aggregate-expansion" ? ImportErrorCode::ResourceLimit : ImportErrorCode::MalformedData));
+        CHECK(result.chunks.empty());
+    }
+}

@@ -9,7 +9,7 @@
 
 namespace import_worker {
 
-SidecarFileClient::Result SidecarFileClient::RequestSidecarBytes(const std::string& relativePathUtf8)
+SidecarFileClient::Result SidecarFileClient::RequestSidecarBytes(const std::string& relativePathUtf8, uint64_t maxBytes)
 {
     Result result;
 
@@ -59,6 +59,9 @@ SidecarFileClient::Result SidecarFileClient::RequestSidecarBytes(const std::stri
         return result;
     }
 
+    if (openResult.file->SizeBytes()>maxBytes) {
+        result.errorCode=model_core::ImportErrorCode::ResourceLimit;return result;
+    }
     std::wstring mapError;
     auto lease = openResult.file->MapWhole(mapError);
     if (!lease) {
