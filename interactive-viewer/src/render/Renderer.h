@@ -20,7 +20,8 @@ enum class ViewerState
     Empty,
     Loading,
     Ready,
-    Failed
+    Failed,
+    Partial // cancelled usable geometry; no verified complete catalog yet
 };
 
 enum class ProjectionMode
@@ -36,6 +37,8 @@ struct OverlayInfo
     std::wstring errorSummary;
     std::wstring errorDetails;
     std::wstring warning;
+    std::wstring failureContext;
+    std::wstring loadingStatus;
     float animationPhase = 0.0f;
     float dpiScale = 1.0f;
     // Reserved viewport inset: how much of the client area the title/bottom

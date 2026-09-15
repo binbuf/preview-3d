@@ -493,6 +493,15 @@ int RunTextureAttack(int mode)
         auto payload=view.bytes().subspan(descriptor.normalizedRangeOffset,size);
         std::fill(payload.begin(),payload.end(),std::byte{0});std::memcpy(payload.data(),&image,sizeof(image));
         if (mode==3) {descriptor.topology=ChunkTopology::TextureWarning;descriptor.byteSize=descriptor.normalizedRangeLength=4;uint32_t count=65;std::memcpy(payload.data(),&count,4);payload=payload.first(4);}
+        if (mode >= 5) {
+            descriptor.topology=ChunkTopology::ImportStatus;
+            descriptor.byteSize=descriptor.normalizedRangeLength=sizeof(ImportStatusPayload);
+            ImportStatusPayload status{};
+            status.flags=mode==5 ? 8 : kStatusRefining;
+            status.optionalFeatureWarnings=mode==6 ? 65 : 64;
+            status.reserved=mode==7 ? 1 : 0;
+            payload=payload.first(sizeof(status));std::memcpy(payload.data(),&status,sizeof(status));
+        }
         descriptor.chunkChecksum=Fnv1a64(payload);
         std::memcpy(view.bytes().data()+kSectionHeaderSize,&descriptor,sizeof(descriptor));
         SectionHeader header{};header.magic=kSectionMagic;header.protocolVersion=kCurrentProtocolVersion;
@@ -511,7 +520,7 @@ int RunTextureAttack(int mode)
         }
         return 1;
     }
-    if (mode==0 || mode==3) {image.reserved0=9;return SendChunksReady(request.generationId,1,write(1,image)) ? 0 : 1;}
+    if (mode==0 || mode==3 || (mode>=5 && mode<=7)) {image.reserved0=9;return SendChunksReady(request.generationId,1,write(1,image)) ? 0 : 1;}
     if (!SendBatchReady(request.generationId,0,1,write(1,image)) || !AwaitBatchConsumed())return 1;
     image.width=image.height=4;image.mipLevels=3;image.pixelDataByteSize=84;image.reserved0=1;
     if (mode==1) {image.colorSpace=uint32_t(ColorSpaceId::Srgb);return SendChunksReady(request.generationId,1,write(2,image)) ? 0 : 1;}

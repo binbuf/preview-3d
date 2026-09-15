@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include <cstring>
+#include <new>
 #include <variant>
 
 namespace import_worker {
@@ -25,6 +26,8 @@ bool ReportResult(HANDLE stdOut, uint64_t generationId,
         model_core::GenerationErrorNotice notice{};
         notice.generationId = generationId;
         notice.errorCode = static_cast<uint32_t>(*errorCode);
+        notice.reserved0 = uint32_t(*errorCode == model_core::ImportErrorCode::UnsafeReference || *errorCode == model_core::ImportErrorCode::FileUnavailable
+            ? model_core::ImportFailurePhase::Sidecars : model_core::ImportFailurePhase::Geometry);
         model_core::WriteControlMessage(stdOut, model_core::ControlOpcode::GenerationError, &notice,
                                          sizeof(notice));
         return false;
@@ -106,9 +109,15 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
     ChunkBatchSink batchSink(stdIn, stdOut, request.generationId);
     TextureDecodeOptions textureOptions;
     textureOptions.isCancelled=[stdIn] { DWORD available=0; return !PeekNamedPipe(stdIn,nullptr,0,nullptr,&available,nullptr); };
+    try {
     auto result = ImportGltf(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
                               &sidecarClient, &batchSink,textureOptions);
     return ReportResult(stdOut, request.generationId, result);
+    } catch (const std::bad_alloc&) {
+        return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::OutOfMemory);
+    } catch (...) {
+        return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
+    }
 }
 
 int RunGltfImport()

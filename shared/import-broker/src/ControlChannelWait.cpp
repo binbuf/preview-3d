@@ -63,7 +63,7 @@ ControlWaitOutcome ReadControlMessageBounded(HANDLE pipe, std::chrono::milliseco
         // Refuse before waiting on a length the protocol forbids -- the same
         // bound ReadControlMessage enforces, applied early so a bogus size
         // cannot spend the whole timeout.
-        return ControlWaitOutcome::Eof;
+        return ControlWaitOutcome::ProtocolViolation;
     }
 
     outcome = WaitForBufferedBytes(pipe, sizeof(header) + header.payloadSize, deadline, isCancelled);

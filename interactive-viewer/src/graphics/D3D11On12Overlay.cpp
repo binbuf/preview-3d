@@ -945,13 +945,13 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     // above) keeps its real value so the bar still draws and its buttons
     // still hit-test as ordinary client-area ones.
     DrawTitleBar(overlay, chrome, clientWidth, scale);
-    if (overlay.state == ViewerState::Loading)
+    if (overlay.state == ViewerState::Loading || overlay.state == ViewerState::Partial)
     {
         const float centerX = clientWidth * 0.5f;
         const float centerY = clientHeight * 0.5f;
         constexpr int spokeCount = 12;
         const int leadingSpoke = static_cast<int>(overlay.animationPhase * spokeCount) % spokeCount;
-        for (int spoke = 0; spoke < spokeCount; ++spoke)
+        for (int spoke = 0; overlay.state == ViewerState::Loading && spoke < spokeCount; ++spoke)
         {
             const float angle = static_cast<float>(spoke) / spokeCount * XM_2PI - XM_PIDIV2;
             const int age = (spoke - leadingSpoke + spokeCount) % spokeCount;
@@ -964,7 +964,9 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
                 D2D1::Point2F(centerX + std::cos(angle) * outerRadius, centerY + std::sin(angle) * outerRadius),
                 overlayBrush.Get(), Scale(2.4f, scale), spinnerStroke.Get());
         }
-        return;
+        DrawText(overlay.loadingStatus, smallFormat.Get(), D2D1::RectF(centerX - Scale(240, scale),
+            centerY + Scale(25, scale), centerX + Scale(240, scale), centerY + Scale(55, scale)),
+            D2D1::ColorF(0xA1A1A6), DWRITE_TEXT_ALIGNMENT_CENTER);
     }
 
     const D2D1_COLOR_F primaryText = D2D1::ColorF(0xF5F5F7);
@@ -994,13 +996,13 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
         d2dContext_->DrawLine(D2D1::Point2F(centerX + Scale(7, scale), centerY - Scale(49, scale)),
             D2D1::Point2F(centerX, centerY - Scale(42, scale)), overlayBrush.Get(), Scale(2, scale));
 
-        DrawText(L"Drop a GLB model here", headingFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
+        DrawText(L"Drop a 3D model here", headingFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
             centerY - Scale(12, scale), centerX + cardWidth * 0.45f, centerY + Scale(34, scale)), primaryText,
             DWRITE_TEXT_ALIGNMENT_CENTER);
         DrawText(L"or choose Open to browse", bodyFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
             centerY + Scale(40, scale), centerX + cardWidth * 0.45f, centerY + Scale(68, scale)), secondaryText,
             DWRITE_TEXT_ALIGNMENT_CENTER);
-        DrawText(L"GLB 2.0  •  embedded geometry", smallFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
+        DrawText(L"GLB / glTF  •  binary STL / PLY", smallFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
             centerY + Scale(74, scale), centerX + cardWidth * 0.45f, centerY + Scale(100, scale)),
             D2D1::ColorF(0x747B86), DWRITE_TEXT_ALIGNMENT_CENTER);
     }
@@ -1030,11 +1032,11 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
             right, top + Scale(34, scale)), primaryText);
         DrawText(overlay.errorDetails, bodyFormat.Get(), D2D1::RectF(left, top + Scale(52, scale), right,
             static_cast<float>(cardPixels.bottom) - Scale(70, scale)), secondaryText);
-        DrawText(L"GLB  •  opening", smallFormat.Get(), D2D1::RectF(left, static_cast<float>(cardPixels.bottom) - Scale(101, scale),
+        DrawText(overlay.failureContext, smallFormat.Get(), D2D1::RectF(left, static_cast<float>(cardPixels.bottom) - Scale(101, scale),
             right, static_cast<float>(cardPixels.bottom) - Scale(76, scale)), D2D1::ColorF(0x777F8B));
     }
 
-    if (!overlay.warning.empty() && overlay.state == ViewerState::Ready)
+    if (!overlay.warning.empty() && overlay.hasModel)
     {
         const float size = Scale(30, scale);
         const float right = contentRight - Scale(14, scale);
@@ -1070,7 +1072,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
 
     // Navigation gizmo on top of everything else, except a floating
     // flyout (Speed, Settings), which floats above even that.
-    if (overlay.state == ViewerState::Ready && overlay.hasModel)
+    if ((overlay.state == ViewerState::Ready || overlay.state == ViewerState::Partial) && overlay.hasModel)
     {
         DrawGizmo(orientation, gizmo, scale);
     }

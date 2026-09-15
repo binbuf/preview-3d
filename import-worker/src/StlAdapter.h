@@ -39,6 +39,6 @@ struct StlImportResult {
 // version of this function already produced for a non-binary-shaped input.
 std::variant<StlImportResult, model_core::ImportErrorCode> ImportStl(
     std::span<const std::byte> sourceStlBytes, std::span<std::byte> destination,
-    uint64_t generationId, uint32_t maxChunkCount);
+    uint64_t generationId, uint32_t maxChunkCount, bool allowAscii = true);
 
 } // namespace import_worker

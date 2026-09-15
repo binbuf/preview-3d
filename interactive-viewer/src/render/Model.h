@@ -88,6 +88,7 @@ struct ModelData
     double relativeMax[3]{};
     bool boundsVerified = false;
     std::wstring warning;
+    model_core::ImportStatusPayload importStatus{};
     ModelStats stats;
 
     // Root transform mapping this model's native/source axes into the app's

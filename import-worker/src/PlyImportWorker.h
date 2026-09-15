@@ -12,12 +12,12 @@ namespace import_worker {
 // GenerationError to stdOut. Returns true iff ChunksReady was sent.
 // Shared by both the one-shot --parse-ply entry point (RunPlyImport) and
 // the --pool mode's request loop (WorkerRequestDispatch.cpp).
-bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileRequest& request);
+bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileRequest& request, bool allowAsciiForTesting = false);
 
 // Owns the --parse-ply mode's control-channel read/dispatch/write
 // sequence: reads one ParsePlyFileRequest from the inherited stdin pipe
 // and dispatches to HandlePlyImportFileRequest. Returns the process exit
 // code (0 on success). Mirrors StlImportWorker::RunStlImport's shape.
-int RunPlyImport();
+int RunPlyImport(bool allowAsciiForTesting = false);
 
 } // namespace import_worker

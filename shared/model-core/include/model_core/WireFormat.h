@@ -18,7 +18,7 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-constexpr uint32_t kCurrentProtocolVersion = 3;
+constexpr uint32_t kCurrentProtocolVersion = 4;
 constexpr uint32_t kMaxDependencyIds = 4;
 
 enum class ChunkTopology : uint32_t {
@@ -28,9 +28,23 @@ enum class ChunkTopology : uint32_t {
     Material = 3, // payload is a model_core::MaterialPayload (MaterialPayload.h)
     Image = 4,    // payload is a model_core::ImagePayloadHeader + pixel bytes (PixelFormats.h)
     TextureWarning = 5, // one uint32 fallback count, [1,64]; no paths or arbitrary worker text
+    ImportStatus = 6,
 };
 
 #pragma pack(push, 1)
+
+constexpr uint32_t kStatusProvisional = 1;
+constexpr uint32_t kStatusRefining = 2;
+constexpr uint32_t kStatusPressure = 4;
+constexpr uint32_t kStatusKnownMask = 7;
+// Closed, bounded facts. UI strings are owned by the host, never the worker.
+struct ImportStatusPayload {
+    uint32_t flags;
+    uint32_t optionalFeatureWarnings; // saturated [0,64]
+    uint32_t textureWarnings; // saturated [0,64]
+    uint32_t reserved; // zero
+};
+static_assert(sizeof(ImportStatusPayload) == 16);
 
 enum class SourceFormatId : uint32_t { Unknown = 0, Gltf = 1, Stl = 2, Ply = 3, Glb = 4 };
 enum class UpAxisId : uint32_t { Unknown = 0, Y = 1, Z = 2 };

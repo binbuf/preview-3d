@@ -175,12 +175,14 @@ std::function<void(d3d12_import_bridge::ImportResult)> RenderThread::BeginImport
         for (const auto& mesh : result.meshes) bytes += mesh.payload.capacity();
         for (const auto& image : result.images) bytes += image.pixelBytes.capacity();
 
-        if (bytes > inbox->byteLimit) throw std::runtime_error("batch exceeds upload queue cap");
+        if (bytes > inbox->byteLimit) throw std::length_error("batch exceeds upload queue cap");
         std::unique_lock<std::mutex> lock(inbox->mutex);
         while (!inbox->stopped && inbox->generation == generation && !cancellation->load()
             && (inbox->count == UploadInbox::countCap || bytes > inbox->byteLimit - inbox->bytes))
             inbox->changed.wait_for(lock, std::chrono::milliseconds(20));
         if (inbox->stopped || inbox->generation != generation || cancellation->load()) return;
+        if (inbox->count + 1 == UploadInbox::countCap || bytes > (inbox->byteLimit - inbox->bytes)/2)
+            result.status.flags |= model_core::kStatusPressure;
         inbox->tasks.push_back({std::move(result), generation, path, cancellation, bytes, false});
         inbox->bytes += bytes;
         ++inbox->count;
@@ -254,9 +256,11 @@ void RenderThread::UploadMain()
                 }
                 std::wstring error = initialized ? L"" : L"The upload coordinator could not be initialized.";
                 uploader.uploadIsCancelled=[current] {return !current();};
-                const bool ok = current() && initialized && uploader.BeginUploadModel(pub.task.result.meshes,
+                const bool ok = current() && initialized && !pub.task.result.forceUploadFailureForTesting && uploader.BeginUploadModel(pub.task.result.meshes,
                     pub.task.result.materials, pub.task.result.images, error);
                 pub.task.result.ok = ok;
+                if (!ok) pub.task.result.errorCode = pub.task.result.forceUploadFailureForTesting
+                    ? model_core::ImportErrorCode::UploadFailure : uploader.uploadErrorCode;
                 pub.task.result.errorDetails = error;
                 if (!ok && copyDelayMs_) std::fwprintf(stderr,L"Upload smoke failure: %ls\n",error.c_str());
                 if (ok) {
@@ -272,6 +276,7 @@ void RenderThread::UploadMain()
                     } else {
                         uploader.ClearModel(); // Coordinator only; drain before discarding destinations.
                         pub.task.result.ok = false;
+                        pub.task.result.errorCode = model_core::ImportErrorCode::UploadFailure;
                         pub.task.result.errorDetails = L"The geometry copy did not complete within its timeout.";
                     }
                 }
@@ -283,11 +288,13 @@ void RenderThread::UploadMain()
         } catch (const std::bad_alloc&) {
             uploader.WaitForIdle();
             pub.task.result.ok = false;
+            pub.task.result.errorCode = model_core::ImportErrorCode::OutOfMemory;
             pub.task.result.errorDetails = L"There is not enough memory to display this batch.";
             pub.task.result.meshes.clear(); pub.task.result.images.clear();
         } catch (...) {
             uploader.WaitForIdle();
             pub.task.result.ok = false;
+            pub.task.result.errorCode = model_core::ImportErrorCode::UploadFailure;
             pub.task.result.errorDetails = L"The upload coordinator stopped while processing this batch.";
             pub.task.result.meshes.clear(); pub.task.result.images.clear();
         }
@@ -512,6 +519,7 @@ void RenderThread::DrainCommands()
         path_.ClearModel();
         modelGeneration_ = 0;
         hasModel_.store(false, std::memory_order_release);
+        displaySnapshot_.store({});
         displayedChunks_.store(0, std::memory_order_release);
         texturedChunks_.store(0, std::memory_order_release);
         textureExtent_.store(0);textureCount_.store(0);textureMips_.store(0);
@@ -547,17 +555,22 @@ void RenderThread::PumpUploads(HWND window)
     message->generation = pub.task.generation; message->path = pub.task.path;
     message->terminal = pub.task.terminal;
     if (pub.task.terminal) {
-        message->ok = !stagedFailed_ && modelGeneration_ == pub.task.generation && path_.hasModel;
-        if (!message->ok) message->errorDetails = L"The import completed without displayable geometry.";
+        message->ok = !stagedFailed_ && modelGeneration_ == pub.task.generation && path_.hasModel && stagedHaveBounds_ && stagedMetadata_;
+        if (!message->ok) { message->errorCode = model_core::ImportErrorCode::EmptyGeometry; message->errorDetails = L"The import completed without displayable geometry."; }
         if (message->ok && stagedMetadata_) {
             stagedMetadata_->boundsVerified = true;
+            stagedMetadata_->importStatus.flags = 0;
             message->metadata = std::make_shared<const ModelData>(*stagedMetadata_);
         }
     } else if (!pub.task.result.ok) {
         stagedFailed_ = true;
+        message->errorCode = pub.task.result.errorCode;
         message->errorDetails = pub.task.result.errorDetails;
     } else {
         auto& metadata = *stagedMetadata_;
+        metadata.importStatus.flags = (metadata.importStatus.flags & model_core::kStatusRefining)
+            | pub.task.result.status.flags | model_core::kStatusProvisional;
+        metadata.importStatus.optionalFeatureWarnings = std::max(metadata.importStatus.optionalFeatureWarnings, pub.task.result.status.optionalFeatureWarnings);
         metadata.source = pub.task.result.scene;
         metadata.stats.nodeCount = int(metadata.source.nodeCount);
         metadata.stats.meshCount = int(metadata.source.meshCount);
@@ -612,8 +625,15 @@ void RenderThread::PumpUploads(HWND window)
         auto& destination = modelGeneration_ == pub.task.generation ? path_.model : stagedScene_;
         destination.meshes.insert(destination.meshes.end(), std::make_move_iterator(pub.resources.meshes.begin()),
             std::make_move_iterator(pub.resources.meshes.end()));
-        if (pub.task.result.textureWarningCount)
-            metadata.warning=L"Some textures could not be loaded. Fallback textures are shown.";
+        metadata.importStatus.textureWarnings = std::max(metadata.importStatus.textureWarnings,
+            std::max(pub.task.result.textureWarningCount, pub.task.result.status.textureWarnings));
+        metadata.warning.clear();
+        if (metadata.importStatus.optionalFeatureWarnings)
+            metadata.warning = L"Some optional glTF features are not supported. Their fallback representation is shown.";
+        if (metadata.importStatus.textureWarnings) {
+            metadata.warning += (metadata.warning.empty() ? L"" : L"\n");
+            metadata.warning += L"Some textures could not be loaded. Fallback textures are shown.";
+        }
         D3D12ViewerPath::ModelResources displaced;
         for (auto& texture : pub.resources.textures) {
             auto old=std::find_if(destination.textures.begin(),destination.textures.end(),
@@ -679,7 +699,14 @@ void RenderThread::PumpUploads(HWND window)
         message->ok = true;
         if (destination.meshes.empty() && modelGeneration_ != pub.task.generation) return;
     }
-    if (!message->ok) message->errorSummary = L"The model was read but could not be displayed.";
+    // Align cancel/recovery UI with the representation already accepted by the
+    // render thread, even when its posted UI notification is still queued.
+    if (message->ok && message->metadata)
+        displaySnapshot_.store(std::make_shared<const RenderDisplaySnapshot>(RenderDisplaySnapshot{message->path,message->metadata}));
+    if (!message->ok) message->errorSummary = message->errorCode == model_core::ImportErrorCode::OutOfMemory
+        ? L"There is not enough memory to display this model."
+        : message->errorCode == model_core::ImportErrorCode::EmptyGeometry ? L"This model has no displayable geometry."
+        : L"The model was read but could not be displayed.";
     if (PostMessageW(window, kRenderUploadCompleteMessage, 0, reinterpret_cast<LPARAM>(message.get())))
         (void)message.release();
     invalidated_.store(true, std::memory_order_release);

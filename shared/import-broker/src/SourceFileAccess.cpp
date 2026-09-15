@@ -7,6 +7,20 @@ namespace import_broker {
 OpenSourceFileResult OpenAndCanonicalizeSourceFile(const std::wstring& path)
 {
     OpenSourceFileResult result;
+    const bool extended = path.rfind(L"\\\\?\\",0) == 0;
+    const size_t driveOffset = extended ? 4 : 0;
+    if ((extended && (path.size() < 7 || path[5] != L':' || path[6] != L'\\'))
+        || (path.size() >= driveOffset+3 && path[driveOffset+1] == L':'
+            && GetDriveTypeW((path.substr(driveOffset,2)+L"\\").c_str()) == DRIVE_REMOTE)) {
+        result.errorCode = model_core::ImportErrorCode::UnsafeReference;
+        result.error = L"Remote and device paths are not supported. Save a local copy and retry.";
+        return result;
+    }
+    if (path.rfind(L"\\\\", 0) == 0 && path.rfind(L"\\\\?\\", 0) != 0) {
+        result.errorCode = model_core::ImportErrorCode::UnsafeReference;
+        result.error = L"Choose a model and its sidecars stored on a local drive.";
+        return result;
+    }
 
     HANDLE rawFile =
         CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
@@ -33,6 +47,22 @@ OpenSourceFileResult OpenAndCanonicalizeSourceFile(const std::wstring& path)
         return result;
     }
     canonicalPath.resize(writtenLength);
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (GetFileType(file.get()) != FILE_TYPE_DISK || !GetFileInformationByHandle(file.get(), &information)
+        || (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        result.error = L"Choose a local regular model file.";
+        return result;
+    }
+    if (canonicalPath.rfind(L"\\\\?\\UNC\\", 0) == 0) {
+        result.errorCode = model_core::ImportErrorCode::UnsafeReference;
+        result.error = L"Remote files are not supported. Save a local copy and retry.";
+        return result;
+    }
+    if (!information.nFileSizeHigh && !information.nFileSizeLow) {
+        result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
+        result.error = L"The file is empty. Export a model with triangles or points and retry.";
+        return result;
+    }
 
     result.file = std::move(file);
     result.canonicalPath = std::move(canonicalPath);

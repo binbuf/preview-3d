@@ -25,6 +25,6 @@ struct PlyImportResult {
 // last" contract.
 std::variant<PlyImportResult, model_core::ImportErrorCode> ImportPly(
     std::span<const std::byte> sourcePlyBytes, std::span<std::byte> destination,
-    uint64_t generationId, uint32_t maxChunkCount);
+    uint64_t generationId, uint32_t maxChunkCount, bool allowAscii = true);
 
 } // namespace import_worker

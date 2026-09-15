@@ -45,6 +45,27 @@ std::wstring ResolveWorkerExePath()
 void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary, std::wstring& details)
 {
     switch (code) {
+    case model_core::ImportErrorCode::UnsupportedEncoding:
+        summary = L"This encoding is not supported.";
+        details = L"Use glTF 2.0, binary STL, or binary little/big-endian PLY. ASCII STL and PLY are deferred."; return;
+    case model_core::ImportErrorCode::WorkerCrashed:
+        summary = L"The sandboxed importer stopped unexpectedly.";
+        details = L"The worker exited before completing this model. Retry or open another model."; return;
+    case model_core::ImportErrorCode::UnsupportedRequiredFeature:
+        summary = L"This model requires an unsupported feature.";
+        details = L"Export a static glTF model using the supported extensions."; return;
+    case model_core::ImportErrorCode::EmptyGeometry:
+        summary = L"This model has no displayable geometry.";
+        details = L"No valid triangles or points remain in the selected scene."; return;
+    case model_core::ImportErrorCode::OutOfMemory:
+        summary = L"There is not enough memory to preview this model.";
+        details = L"Close other applications or export a smaller model, then retry."; return;
+    case model_core::ImportErrorCode::FileChanged:
+        summary = L"The source changed during import.";
+        details = L"Save a stable local copy of the model and its sidecars, then retry."; return;
+    case model_core::ImportErrorCode::ImportProtocolViolation:
+        summary = L"The importer returned invalid data.";
+        details = L"The sandbox response failed validation and was discarded."; return;
     case model_core::ImportErrorCode::MalformedData:
         summary = L"This file could not be read.";
         details = L"The importer found data that doesn't match the expected file format.";
@@ -61,7 +82,6 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
         summary = L"This model could not be previewed.";
         details = L"A file this model depends on could not be opened.";
         return;
-    case model_core::ImportErrorCode::ImportProtocolViolation:
     case model_core::ImportErrorCode::InternalImporterFailure:
     case model_core::ImportErrorCode::None:
     default:
@@ -75,7 +95,7 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
 // plumbing stage keeps the distinct wording it had when this sequence lived
 // inline here; only the two stages that carry a worker/validator error code
 // defer to DescribeImportError.
-void DescribeSessionFailure(const import_broker::ImportSessionResult& session, std::wstring& summary,
+void DescribeSessionFailureInternal(const import_broker::ImportSessionResult& session, std::wstring& summary,
                              std::wstring& details)
 {
     using import_broker::ImportStage;
@@ -170,6 +190,76 @@ constexpr uint32_t kMaxChunkBatchesPerGeneration = 256;
 
 } // namespace
 
+void DescribeSessionFailure(const import_broker::ImportSessionResult& session, std::wstring& summary, std::wstring& details)
+{
+    DescribeSessionFailureInternal(session, summary, details);
+    if (session.stage == import_broker::ImportStage::ValidateSection
+        && session.errorCode == model_core::ImportErrorCode::MalformedData)
+        DescribeImportError(model_core::ImportErrorCode::ImportProtocolViolation, summary, details);
+    // Codes with a specific document explanation override generic stage text.
+    if (session.errorCode == model_core::ImportErrorCode::FileChanged
+        || session.errorCode == model_core::ImportErrorCode::OutOfMemory
+        || session.errorCode == model_core::ImportErrorCode::WorkerCrashed
+        || session.errorCode == model_core::ImportErrorCode::ResourceLimit)
+        DescribeImportError(session.errorCode, summary, details);
+}
+
+std::wstring SourceFormatLabel(const std::wstring& path)
+{
+    const auto ext = ExtensionOf(path);
+    if (ext == L"gltf") return L"glTF";
+    if (ext == L"glb") return L"GLB";
+    if (ext == L"stl") return L"STL";
+    if (ext == L"ply") return L"PLY";
+    // Extension only, capped and restricted to printable alphanumerics.
+    if (ext.empty() || ext.size() > 16) return L"Unknown";
+    std::wstring label;
+    for (auto c : ext) {
+        if (!((c >= L'a' && c <= L'z') || (c >= L'0' && c <= L'9'))) return L"Unknown";
+        label += wchar_t(towupper(c));
+    }
+    return label;
+}
+
+std::wstring StageLabel(import_broker::ImportStage stage)
+{
+    using import_broker::ImportStage;
+    switch (stage) {
+    case ImportStage::Completed: return L"complete";
+    case ImportStage::OpenSource: return L"opening source";
+    case ImportStage::WorkerReportedError: return L"parsing / decoding";
+    case ImportStage::ValidateSection: case ImportStage::UnexpectedReply:
+    case ImportStage::ChunkBatchOutOfOrder: return L"validating import";
+    case ImportStage::ReplyTimedOut: case ImportStage::AwaitReply: return L"waiting for importer";
+    case ImportStage::SidecarRequestLimit: return L"resolving sidecars";
+    case ImportStage::ChunkBatchLimit: case ImportStage::ChunkCountLimit: return L"accepting batches";
+    case ImportStage::ChunkBatchAckFailed: return L"acknowledging batch";
+    case ImportStage::Upload: return L"uploading geometry / textures";
+    case ImportStage::Cancelled: return L"cancelled";
+    default: return L"preparing sandbox";
+    }
+}
+
+std::wstring DiagnosticDetails(const std::wstring& path, const ImportResult& result)
+{
+    return result.errorSummary + L"\r\n\r\n" + result.errorDetails + L"\r\n\r\nFormat: "
+        + SourceFormatLabel(path) + L"\r\nPhase: " + FailurePhaseLabel(result)
+        + L"\r\nCode: " + std::to_wstring(uint32_t(result.errorCode));
+}
+
+std::wstring FailurePhaseLabel(const ImportResult& result)
+{
+    if (result.errorStage == import_broker::ImportStage::WorkerReportedError) {
+        switch (result.errorPhase) {
+        case model_core::ImportFailurePhase::Geometry: return L"parsing geometry";
+        case model_core::ImportFailurePhase::Sidecars: return L"resolving sidecars";
+        case model_core::ImportFailurePhase::Textures: return L"decoding textures";
+        default: break;
+        }
+    }
+    return StageLabel(result.errorStage);
+}
+
 std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
 {
     std::wstring ext = ExtensionOf(path);
@@ -185,7 +275,7 @@ void EnsureImportSandboxPrepared()
 }
 
 ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
-                        std::function<bool()> isCancelled, std::function<void(ImportResult)> onBatch, uint64_t sectionBytes, bool delayBatchesForTesting)
+                        std::function<bool()> isCancelled, std::function<void(ImportResult)> onBatch, uint64_t sectionBytes, bool delayBatchesForTesting, uint32_t faultForTesting)
 {
     ImportResult result;
 
@@ -203,9 +293,17 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.maxSidecarRequestsPerGeneration = kMaxSidecarRequestsPerGeneration;
     sessionRequest.maxSidecarFileBytes = kMaxSidecarFileBytes;
     sessionRequest.maxChunkBatchesPerGeneration = kMaxChunkBatchesPerGeneration;
+    if (faultForTesting == 1) sessionRequest.workerArgumentsOverride = L"--child-noop";
+    if (faultForTesting == 2) {
+        sessionRequest.workerArgumentsOverride = L"--test-hang-import";
+        sessionRequest.replyTimeoutMs = 500;
+    }
+    if (faultForTesting == 3) sessionRequest.maxChunkCount = 0;
+    if (faultForTesting == 5) sessionRequest.workerArgumentsOverride = L"--test-invalid-import-reply";
     import_broker::KnownChunkCatalog catalog;
     auto unpack = [&](std::vector<import_broker::ValidatedChunk> chunks) {
         ImportResult result;
+        result.forceUploadFailureForTesting = faultForTesting == 4;
         if (!chunks.empty()) result.scene = chunks.front().scene;
         for (const auto& chunk : chunks) catalog.emplace(chunk.descriptor.chunkId, chunk.descriptor.topology);
         for (auto& chunk : chunks) {
@@ -264,6 +362,9 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.images.push_back(std::move(image));
                 break;
             }
+            case model_core::ChunkTopology::ImportStatus:
+                std::memcpy(&result.status,chunk.payload.data(),sizeof(result.status));
+                break;
             case model_core::ChunkTopology::TextureWarning:
                 std::memcpy(&result.textureWarningCount,chunk.payload.data(),sizeof(uint32_t));
                 break;
@@ -278,6 +379,11 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     auto session = import_broker::RunImportSession(sessionRequest);
     if (!session.ok) {
         if (delayBatchesForTesting && session.stage!=import_broker::ImportStage::Cancelled) std::fprintf(stderr,"Import smoke failure: stage %u code %u\n",unsigned(session.stage),unsigned(session.errorCode));
+        result.errorCode = session.errorCode;
+        if (session.stage == import_broker::ImportStage::ValidateSection && result.errorCode == model_core::ImportErrorCode::MalformedData)
+            result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
+        result.errorStage = session.stage;
+        result.errorPhase = session.errorPhase;
         DescribeSessionFailure(session, result.errorSummary, result.errorDetails);
         return result;
     }

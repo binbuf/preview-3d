@@ -15,6 +15,7 @@
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
+#include "import_broker/ImportSession.h"
 
 #include <cstdint>
 #include <functional>
@@ -80,12 +81,24 @@ struct ImportResult {
     bool ok = false;
     model_core::SceneMetadata scene{};
     uint32_t textureWarningCount = 0;
+    model_core::ImportStatusPayload status{};
+    bool forceUploadFailureForTesting = false;
+    model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
+    import_broker::ImportStage errorStage = import_broker::ImportStage::Completed;
+    model_core::ImportFailurePhase errorPhase = model_core::ImportFailurePhase::Unspecified;
     std::vector<ImportedMesh> meshes;
     std::vector<ImportedMaterial> materials;
     std::vector<ImportedImage> images;
     std::wstring errorSummary;
     std::wstring errorDetails;
 };
+
+std::wstring SourceFormatLabel(const std::wstring& path);
+std::wstring StageLabel(import_broker::ImportStage stage);
+std::wstring FailurePhaseLabel(const ImportResult& result);
+std::wstring DiagnosticDetails(const std::wstring& path, const ImportResult& result);
+void DescribeSessionFailure(const import_broker::ImportSessionResult& session,
+    std::wstring& summary, std::wstring& details);
 
 // With onBatch, transfers each host-owned batch without retaining payloads;
 // the terminal result contains only status. Without it, returns accumulated data.
@@ -99,7 +112,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<bool()> isCancelled = {},
                         std::function<void(ImportResult)> onBatch = {},
                         uint64_t sectionBytes = 64ull * 1024 * 1024,
-                        bool delayBatchesForTesting = false);
+                        bool delayBatchesForTesting = false, uint32_t faultForTesting = 0);
 
 // Creates the import worker's AppContainer profile and grants it
 // read+execute on the worker's own directory -- without this the sandboxed

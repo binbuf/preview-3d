@@ -4,6 +4,37 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 2 / TSK-204 (2026-09-15): complete.**
+  Added closed failure codes and validated worker phases, generation/length/enum
+  checks on error notices, distinct empty/malformed/deferred-encoding handling,
+  source write-time verification and typed worker timeout/crash/limit/upload paths.
+  Retry now owns its failed-path copy before clearing UI state; Open another and
+  Copy details use the existing card. Diagnostics report actual format/phase/code
+  with no source path or basename. Picker, drop-target, About and UX documentation
+  reflect local GLB/glTF sidecars, binary STL and both-endian PLY meshes/points.
+  Protocol v4 adds a fixed 16-byte status payload with closed flags, saturated
+  64-count warning categories and one-per-generation broker acceptance. Fixed
+  host-owned warning/status strings reuse the spinner, badge and warnings menu.
+  Failed and stale publications cannot dismiss the card. Cancelled partial content
+  stays interactive with an incomplete label. Cancel/failure pull the renderer
+  display snapshot so queued UI updates preserve correct counts/source/selection.
+  Ready requires terminal catalog
+  acceptance, usable geometry, verified bounds and completed copies.
+  Debug/Release solution builds pass. Unit: 79 cases / 7,210 Debug and 7,122
+  Release assertions. ImportIsolation: 178 cases / 48,344 assertions each.
+  Recovery covers 25 failure/recovery events per configuration, actual clipboard
+  privacy, Retry/Open another, corrected same-path retry and valid reopen.
+  Progressive, textures and point-required lifecycle checks pass in each config:
+  fourteen final viewer processes, zero survivors. Progressive first geometry is
+  15/64 chunks, cancelled partial state is not Ready, and valid reopen reaches 64.
+  Queue count reaches four; the 16 KiB cap holds at 12,788 bytes Debug / 12,404
+  Release. Texture checks report zero D3D12 errors and about 2.8 MB peak queue.
+  Commands, committed final-binary reports and qualification limits are in
+  [TSK-204_VERIFICATION.md](./TSK-204_VERIFICATION.md). No dependency/license changes.
+  Bounded large-source scans and representative coarse/fine catalogs remain their
+  later tasks; **TSK-205 is next**.
+
+
 - **Scope-limited MVP, Phase 2 / TSK-203 (2026-09-15): complete.**
   Preserved worker WIC PNG/JPEG and BMP/TIFF adapters with explicit inbox codec
   selection; direct glTF remains PNG/JPEG/KTX2. Added encoded/decoded/pixel budgets,

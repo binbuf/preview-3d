@@ -168,7 +168,7 @@ std::optional<StlImportLaunch> LaunchStlImportWorker(const platform::AppContaine
 
     std::vector<HANDLE> inherited{ controlInRead.get(), controlOutWrite.get(), sourceFileHandle,
                                     outputSectionHandle };
-    std::wstring cmdLine = L"\"" + std::wstring(sandbox_test_support::WorkerExePath()) + L"\" --parse-stl";
+    std::wstring cmdLine = L"\"" + std::wstring(sandbox_test_support::WorkerExePath()) + L"\" --test-parse-stl-ascii";
 
     import_broker::SandboxLimits limits{};
     auto proc = import_broker::LaunchSuspendedSandboxed(
@@ -376,7 +376,7 @@ TEST_CASE("A non-finite facet is dropped without corrupting the rest", "[stl-imp
     CHECK(run.validation.chunks[0].descriptor.vertexCount == 3);
 }
 
-TEST_CASE("A file with only degenerate/non-finite facets is rejected as MalformedData (empty geometry)",
+TEST_CASE("A file with only degenerate/non-finite facets is rejected as EmptyGeometry",
           "[stl-import]")
 {
     sandbox_test_support::SandboxFixture fixture;
@@ -387,7 +387,7 @@ TEST_CASE("A file with only degenerate/non-finite facets is rejected as Malforme
 
     auto run = RunStlImportFromRealFile(fixture.sid, file.path, /*generationId=*/6, /*maxChunkCount=*/4);
     CHECK_FALSE(run.ready);
-    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::EmptyGeometry));
 }
 
 TEST_CASE("A file truncated relative to its declared triangle count is rejected as MalformedData",

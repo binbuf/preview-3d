@@ -413,6 +413,18 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             }
             break;
         }
+        case ChunkTopology::ImportStatus: {
+            if (descriptor.vertexCount || descriptor.indexCount || descriptor.vertexLayoutId || descriptor.dependencyCount
+                || descriptor.byteSize != sizeof(model_core::ImportStatusPayload))
+                return Reject(ImportErrorCode::ImportProtocolViolation,"malformed import status");
+            for (auto id : descriptor.dependencyIds) if (id) return Reject(ImportErrorCode::ImportProtocolViolation,"status dependency");
+            model_core::ImportStatusPayload status{};
+            std::memcpy(&status,section.data()+descriptor.normalizedRangeOffset,sizeof(status));
+            if ((status.flags & ~model_core::kStatusKnownMask) || status.optionalFeatureWarnings > 64
+                || status.textureWarnings > 64 || status.reserved)
+                return Reject(ImportErrorCode::ImportProtocolViolation,"unknown or over-limit import status");
+            break;
+        }
         case ChunkTopology::TextureWarning: {
             if (descriptor.vertexCount || descriptor.indexCount || descriptor.vertexLayoutId || descriptor.dependencyCount
                 || descriptor.byteSize!=sizeof(uint32_t)) return Reject(ImportErrorCode::MalformedData,"malformed texture warning");

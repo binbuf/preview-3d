@@ -268,7 +268,7 @@ std::optional<PlyImportLaunch> LaunchPlyImportWorker(const platform::AppContaine
 
     std::vector<HANDLE> inherited{ controlInRead.get(), controlOutWrite.get(), sourceFileHandle,
                                     outputSectionHandle };
-    std::wstring cmdLine = L"\"" + std::wstring(sandbox_test_support::WorkerExePath()) + L"\" --parse-ply";
+    std::wstring cmdLine = L"\"" + std::wstring(sandbox_test_support::WorkerExePath()) + L"\" --test-parse-ply-ascii";
 
     import_broker::SandboxLimits limits{};
     auto proc = import_broker::LaunchSuspendedSandboxed(

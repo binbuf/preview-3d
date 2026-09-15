@@ -168,7 +168,7 @@ static_assert(sizeof(ParsePlyFileRequest) == 40, "ParsePlyFileRequest layout cha
 struct GenerationErrorNotice {
     uint64_t generationId;
     uint32_t errorCode; // ImportErrorCode value
-    uint32_t reserved0;
+    uint32_t reserved0; // protocol v4: closed ImportFailurePhase (0..3)
 };
 static_assert(sizeof(GenerationErrorNotice) == 16, "GenerationErrorNotice layout changed");
 

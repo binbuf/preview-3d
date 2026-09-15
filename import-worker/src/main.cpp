@@ -5,6 +5,7 @@
 #include "PlyImportWorker.h"
 #include "StlImportWorker.h"
 #include "WorkerRequestDispatch.h"
+#include "model_core/ControlChannelIo.h"
 
 #include <windows.h>
 
@@ -54,6 +55,18 @@ int main(int argc, char* argv[])
         import_worker::RunHangProbe();
         return 0;
     }
+    if (ArgEquals(argv[1], "--test-hang-import")) {
+        model_core::ReadControlMessage(GetStdHandle(STD_INPUT_HANDLE));
+        Sleep(INFINITE); return 1;
+    }
+    if (ArgEquals(argv[1], "--test-invalid-import-reply")) {
+        auto request = model_core::ReadControlMessage(GetStdHandle(STD_INPUT_HANDLE));
+        if (!request || request->payload.size() < 8) return 1;
+        model_core::GenerationErrorNotice notice{};
+        std::memcpy(&notice.generationId,request->payload.data(),8); notice.errorCode=UINT32_MAX;
+        model_core::WriteControlMessage(GetStdHandle(STD_OUTPUT_HANDLE),model_core::ControlOpcode::GenerationError,&notice,sizeof(notice));
+        return 1;
+    }
 
     if (ArgEquals(argv[1], "--overallocate")) {
         import_worker::RunOverallocateProbe();
@@ -85,6 +98,9 @@ int main(int argc, char* argv[])
         return import_worker::RunPlyImport();
     }
 
+    // Retain regression coverage for deferred adapters; the broker never selects these.
+    if (ArgEquals(argv[1], "--test-parse-stl-ascii")) return import_worker::RunStlImport(true);
+    if (ArgEquals(argv[1], "--test-parse-ply-ascii")) return import_worker::RunPlyImport(true);
     if (ArgEquals(argv[1], "--pool")) {
         return import_worker::RunPoolMode();
     }

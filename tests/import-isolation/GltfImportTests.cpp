@@ -658,7 +658,7 @@ TEST_CASE("A file requiring an unrecognized extension is rejected as a clean Gen
 
     auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/14, /*maxChunkCount=*/8);
     CHECK_FALSE(run.ready);
-    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::UnsupportedRequiredFeature));
 }
 
 TEST_CASE("maxChunkCount of 0 against a 1-primitive fixture is rejected as ResourceLimit",

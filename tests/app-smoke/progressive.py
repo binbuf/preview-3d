@@ -82,11 +82,26 @@ def run(exe, flag, asset, count, cap):
             assert query(8)==1 and query(11)==1, 'material lost its earlier-batch texture binding'
             report['texturedChunkCount'] = query(11)
         elif flag=='--progressive-smoke':
+            # Suppress UI upload notifications while the render thread accepts
+            # first geometry. Cancellation must pull the actual display snapshot.
+            send(hwnd,0x8000+104,46,1)
             wait(lambda:query(4)==generation,'first progressive geometry')
             assert query(0)==2, 'early geometry was labeled Ready'
             first = query(8)
             assert 0<first<count, 'first publication was not partial'
             report['firstChunkCount'] = first
+            send(hwnd,0x100,0x1b)
+            assert query(0)==5 and not query(16) and not query(45), 'cancelled partial geometry was labeled Ready'
+            assert query(14)==first, 'cancel retained metadata for the superseded scene'
+            assert query(47)==generation, 'cancel retained stale selection/metadata identity'
+            report['cancelledPartialState'] = query(0)
+            failed_replacement = open_file(asset)
+            wait(lambda:query(4)==failed_replacement,'replacement geometry before delayed UI metadata')
+            open_file(asset.parent/'unsupported.FBX')
+            assert query(0)==4 and query(47)==failed_replacement, 'failure retained stale display metadata'
+            report['failureWithDelayedUiMetadata'] = True
+            send(hwnd,0x8000+104,46,0)
+            generation = open_file(asset)
             wait(lambda:query(0)==3,'terminal catalog and copies')
             assert query(8)==count, 'a later batch overwrote or dropped earlier chunks'
             report['terminalChunkCount'] = query(8)
@@ -101,7 +116,8 @@ def run(exe, flag, asset, count, cap):
             # Cancel while downstream capacity is exhausted; then rapidly
             # replace/cancel again. Older publications must never reappear.
             send(hwnd,0x100,0x1b)
-            assert query(0)==3, 'cancel did not recover prior/usable content'
+            assert query(0) in (3,5), 'cancel did not recover prior/usable content'
+            assert query(0)!=3 or query(16), 'cancelled incomplete geometry was labeled Ready'
             for _ in range(3):
                 open_file(asset)
                 send(hwnd,0x100,0x1b)

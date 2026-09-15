@@ -94,6 +94,8 @@
     <ClCompile Include="..\..\shared\platform\src\ProcThreadAttributeList.cpp" />
     <ClCompile Include="..\..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="ImportSessionTests.cpp" />
+    <ClCompile Include="RecoveryTests.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\app\D3D12ImportBridge.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\ControlChannelWait.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\ImportSession.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\SandboxLauncher.cpp" />

@@ -208,7 +208,7 @@ std::optional<DXGI_FORMAT> DxgiFormatFor(model_core::PixelFormatId pixelFormat, 
 }
 
 ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, uint64_t sizeBytes, D3D12_HEAP_TYPE heapType,
-                                     D3D12_RESOURCE_STATES initialState)
+                                     D3D12_RESOURCE_STATES initialState, HRESULT* result = nullptr)
 {
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = heapType;
@@ -224,8 +224,9 @@ ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, uint64_t sizeBytes, D3
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
     ComPtr<ID3D12Resource> resource;
-    device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &desc, initialState, nullptr,
+    const HRESULT hr = device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &desc, initialState, nullptr,
                                      IID_PPV_ARGS(&resource));
+    if (result) *result = hr;
     return resource;
 }
 
@@ -850,8 +851,10 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
 bool D3D12ViewerPath::CreateAndQueueBuffer(const void* data, uint64_t sizeBytes, uint32_t clusterId,
                                             ComPtr<ID3D12Resource>& outBuffer, std::wstring& error)
 {
-    auto destination = CreateBuffer(device.Device(), sizeBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON);
+    HRESULT allocationResult = S_OK;
+    auto destination = CreateBuffer(device.Device(), sizeBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, &allocationResult);
     if (!destination) {
+        if (allocationResult == E_OUTOFMEMORY) uploadErrorCode = model_core::ImportErrorCode::OutOfMemory;
         error = L"A GPU buffer could not be created.";
         return false;
     }
@@ -912,9 +915,11 @@ bool D3D12ViewerPath::CreateAndQueueTexture(const d3d12_import_bridge::ImportedI
     // direct-queue path used. COMMON lets the resource promote implicitly
     // in both directions instead. Proven, including a debug-layer message
     // count, in UploadRingTests.cpp.
-    if (FAILED(device.Device()->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
+    const HRESULT allocationResult = device.Device()->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
                                                           D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                                          IID_PPV_ARGS(&texture)))) {
+                                                          IID_PPV_ARGS(&texture));
+    if (FAILED(allocationResult)) {
+        if (allocationResult == E_OUTOFMEMORY) uploadErrorCode = model_core::ImportErrorCode::OutOfMemory;
         error = L"A GPU texture could not be created.";
         return false;
     }
@@ -978,6 +983,7 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
                                         const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
                                         std::wstring& error)
 {
+    uploadErrorCode = model_core::ImportErrorCode::UploadFailure;
     // Supersede anything already in flight. Advancing IS the cancellation
     // signal: the abandoned batch's copies still complete, but
     // DrainCompletedPublications drops their publications as stale instead
@@ -1000,7 +1006,9 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         heapDesc.NumDescriptors = static_cast<UINT>(importedImages.size());
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        if (FAILED(device.Device()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&staged.srvHeap)))) {
+        const HRESULT heapResult = device.Device()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&staged.srvHeap));
+        if (FAILED(heapResult)) {
+            if (heapResult == E_OUTOFMEMORY) uploadErrorCode = model_core::ImportErrorCode::OutOfMemory;
             error = L"The texture descriptor heap could not be created.";
             return false;
         }

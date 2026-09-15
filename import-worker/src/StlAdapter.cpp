@@ -134,7 +134,7 @@ std::variant<StlImportResult, ImportErrorCode> WriteStlChunk(
     std::span<std::byte> destination, uint64_t generationId)
 {
     if (vertices.empty()) {
-        return ImportErrorCode::MalformedData; // every facet was dropped
+        return ImportErrorCode::EmptyGeometry; // every facet was dropped
     }
 
     uint64_t vertexBytes = static_cast<uint64_t>(vertices.size()) * sizeof(VertexPositionNormalUv0F32);
@@ -343,7 +343,7 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlAscii(std::span<const st
 std::variant<StlImportResult, ImportErrorCode> ImportStl(std::span<const std::byte> sourceStlBytes,
                                                             std::span<std::byte> destination,
                                                             uint64_t generationId,
-                                                            uint32_t maxChunkCount)
+                                                            uint32_t maxChunkCount, bool allowAscii)
 {
     if (maxChunkCount < 1) {
         return ImportErrorCode::ResourceLimit;
@@ -377,6 +377,7 @@ std::variant<StlImportResult, ImportErrorCode> ImportStl(std::span<const std::by
             == kAsciiKeyword;
 
     if (looksAscii) {
+        if (!allowAscii) return ImportErrorCode::UnsupportedEncoding;
         return ImportStlAscii(sourceStlBytes, destination, generationId);
     }
     return ImportStlBinary(sourceStlBytes, destination, generationId);

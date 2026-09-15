@@ -162,6 +162,7 @@ struct D3D12ViewerPath
     size_t pendingResourceCount = 0;
     platform::GenerationToken pendingToken;
     std::function<bool()> uploadIsCancelled; // coordinator-owned, polled at allocation/mip boundaries
+    model_core::ImportErrorCode uploadErrorCode = model_core::ImportErrorCode::UploadFailure;
 
     // The upload lane: a copy-typed queue plus the persistently-mapped
     // staging ring and the fence-complete publication path. This is what

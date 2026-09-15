@@ -1,0 +1,37 @@
+{
+  "configuration": "Release",
+  "fixtureSha256": {
+    "raster-256.glb": "873ba959f2a02accfe3f77a8ca19017872dfb858eeea4f6fbce6eae483ac591a",
+    "raster-capped.glb": "6d56da4bd1a8fa4cf73f31e9dd34d2f202ee430da6d57d97dbe98cdafadd3305",
+    "raster-corrupt.glb": "bb28ec60eda8dd37e648122bab17384dc72c8ba2158a2cb26951118098b7d352"
+  },
+  "exeSha256": "31d75748117922e4b2c9fa2d8ba55c042feea79cf811982d70f1a77536a676f1",
+  "run": {
+    "failure": null,
+    "scenes": [
+      {
+        "name": "raster-256.glb",
+        "lowExtent": 64,
+        "lowMips": 7,
+        "fullExtent": 256,
+        "fullMips": 9,
+        "textureCount": 1
+      },
+      {
+        "name": "raster-capped.glb",
+        "lowExtent": 64,
+        "lowMips": 7,
+        "fullExtent": 2048,
+        "fullMips": 12,
+        "textureCount": 1
+      }
+    ],
+    "maxUiMs": 2.4495999969076365,
+    "startupMaxUiMs": 334.056599996984,
+    "fallbackWarningLength": 63,
+    "debugAvailable": false,
+    "debugErrors": 0,
+    "peakQueueBytes": 2796734,
+    "diagnostics": ""
+  }
+}

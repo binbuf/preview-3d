@@ -137,6 +137,19 @@ ImportSessionResult Fail(ImportStage stage, model_core::ImportErrorCode code = m
     ImportSessionResult result;
     result.ok = false;
     result.stage = stage;
+    if (code == model_core::ImportErrorCode::None) {
+        using E = model_core::ImportErrorCode;
+        switch (stage) {
+        case ImportStage::Cancelled: code = E::Cancelled; break;
+        case ImportStage::OpenSource: code = E::FileUnavailable; break;
+        case ImportStage::ReplyTimedOut: code = E::WorkerTimedOut; break;
+        case ImportStage::SendRequest: case ImportStage::AwaitReply: case ImportStage::ChunkBatchAckFailed: code = E::WorkerCrashed; break;
+        case ImportStage::SidecarRequestLimit: case ImportStage::ChunkBatchLimit: case ImportStage::ChunkCountLimit: code = E::ResourceLimit; break;
+        case ImportStage::UnexpectedReply: case ImportStage::ChunkBatchOutOfOrder: code = E::ImportProtocolViolation; break;
+        case ImportStage::CreateOutputSection: case ImportStage::MapOutputSection: code = E::OutOfMemory; break;
+        default: code = E::InternalImporterFailure; break;
+        }
+    }
     result.errorCode = code;
     return result;
 }
@@ -167,7 +180,7 @@ struct BatchAcceptance {
     KnownChunkCatalog unresolved;
     KnownImageCatalog images;
     uint64_t textureBytes=0,texturePixels=0;
-    bool haveTextureWarning=false;
+    bool haveTextureWarning=false, haveStatus=false;
     std::optional<model_core::SceneMetadata> scene;
     std::optional<std::array<double, 3>> origin;
 
@@ -184,6 +197,7 @@ struct BatchAcceptance {
                 if (header.reserved0) { auto latest=header;latest.reserved0=0; images[header.reserved0]=latest; }
             }
             if (chunk.descriptor.topology==model_core::ChunkTopology::TextureWarning) haveTextureWarning=true;
+            if (chunk.descriptor.topology==model_core::ChunkTopology::ImportStatus) haveStatus=true;
         }
         totalChunks += static_cast<uint32_t>(chunks.size());
         ++nextBatchIndex;
@@ -207,11 +221,14 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
 
     auto opened = OpenAndCanonicalizeSourceFile(request.sourcePath);
     if (!opened.file) {
-        ImportSessionResult result = Fail(ImportStage::OpenSource);
+        ImportSessionResult result = Fail(ImportStage::OpenSource, opened.errorCode);
         result.openError = opened.error;
         return result;
     }
 
+    BY_HANDLE_FILE_INFORMATION sourceBefore{};
+    if (!GetFileInformationByHandle(opened.file.get(), &sourceBefore))
+        return Fail(ImportStage::OpenSource, model_core::ImportErrorCode::FileUnavailable);
     auto duplicatedFile = DuplicateInheritableHandle(opened.file.get());
     if (!duplicatedFile) {
         return Fail(ImportStage::DuplicateSourceHandle);
@@ -284,7 +301,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     // ChunkBatchReady, in whatever order the worker needs them -- before the
     // terminal ChunksReady/GenerationError reply. Degrades to exactly one
     // iteration for STL/PLY and any single-window GLB, which send neither.
-    const auto replyTimeout = std::chrono::milliseconds(kWorkerReplyTimeoutMs);
+    const auto replyTimeout = std::chrono::milliseconds(request.replyTimeoutMs);
     uint32_t sidecarRequestCount = 0;
     BatchAcceptance acceptance;
     std::vector<ValidatedChunk> accumulated;
@@ -319,8 +336,14 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             failure = Fail(ImportStage::ValidateSection, validation.errorCode);
             return false;
         }
-        bool batchHasWarning=false;
+        bool batchHasWarning=false, batchHasStatus=false;
         for (const auto& chunk : validation.chunks) {
+            if (chunk.descriptor.topology==model_core::ChunkTopology::ImportStatus) {
+                if (acceptance.haveStatus || batchHasStatus) {
+                    failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ImportProtocolViolation);return false;
+                }
+                batchHasStatus=true;
+            }
             if (chunk.descriptor.topology==model_core::ChunkTopology::TextureWarning) {
                 if (acceptance.haveTextureWarning || batchHasWarning) {
                     failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);return false;
@@ -522,16 +545,28 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     if (outcome == ControlWaitOutcome::TimedOut) {
         return fail(ImportStage::ReplyTimedOut);
     }
+    if (outcome == ControlWaitOutcome::ProtocolViolation) return fail(ImportStage::UnexpectedReply);
     if (outcome != ControlWaitOutcome::Ready) {
+        JOBOBJECT_LIMIT_VIOLATION_INFORMATION violation{};
+        if (QueryInformationJobObject(proc->job.get(), JobObjectLimitViolationInformation, &violation, sizeof(violation), nullptr)
+            && (violation.ViolationLimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY))
+            return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::ResourceLimit);
         return fail(ImportStage::AwaitReply);
     }
 
     if (received.header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::GenerationError)) {
         model_core::GenerationErrorNotice notice{};
-        if (received.payload.size() == sizeof(notice)) {
-            std::memcpy(&notice, received.payload.data(), sizeof(notice));
-        }
-        return fail(ImportStage::WorkerReportedError, static_cast<model_core::ImportErrorCode>(notice.errorCode));
+        if (received.payload.size() != sizeof(notice))
+            return fail(ImportStage::UnexpectedReply);
+        std::memcpy(&notice, received.payload.data(), sizeof(notice));
+        if (notice.generationId != request.generationId || notice.reserved0 > uint32_t(model_core::ImportFailurePhase::Textures)
+            || !model_core::IsKnownImportErrorCode(notice.errorCode))
+            return fail(ImportStage::UnexpectedReply);
+        if (notice.errorCode == uint32_t(model_core::ImportErrorCode::Cancelled))
+            return fail(ImportStage::Cancelled);
+        auto result = fail(ImportStage::WorkerReportedError, static_cast<model_core::ImportErrorCode>(notice.errorCode));
+        result.errorPhase = static_cast<model_core::ImportFailurePhase>(notice.reserved0);
+        return result;
     }
 
     if (received.header.opcode != static_cast<uint32_t>(model_core::ControlOpcode::ChunksReady)
@@ -545,6 +580,8 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     // permits it and nothing more.
     model_core::ChunksReadyNotice finalNotice{};
     std::memcpy(&finalNotice, received.payload.data(), sizeof(finalNotice));
+    if (finalNotice.generationId != request.generationId || finalNotice.reserved0)
+        return fail(ImportStage::UnexpectedReply);
     if (!acceptBatch(finalNotice.chunkCount)) {
         failure->batchCount = acceptance.nextBatchIndex;
         return *failure;
@@ -554,6 +591,15 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     // No ack for the terminal batch: there is no next write to gate, and the
     // worker is already on its way out.
 
+    BY_HANDLE_FILE_INFORMATION sourceAfter{};
+    if (!GetFileInformationByHandle(opened.file.get(), &sourceAfter)
+        || sourceBefore.nFileSizeHigh != sourceAfter.nFileSizeHigh || sourceBefore.nFileSizeLow != sourceAfter.nFileSizeLow
+        || CompareFileTime(&sourceBefore.ftLastWriteTime, &sourceAfter.ftLastWriteTime))
+        return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::FileChanged);
+    bool haveGeometry = false;
+    for (const auto& [id, topology] : acceptance.catalog)
+        haveGeometry |= topology == model_core::ChunkTopology::TriangleList || topology == model_core::ChunkTopology::PointList;
+    if (!haveGeometry) return fail(ImportStage::WorkerReportedError, model_core::ImportErrorCode::EmptyGeometry);
     ImportSessionResult result;
     result.ok = true;
     result.stage = ImportStage::Completed;

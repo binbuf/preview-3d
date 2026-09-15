@@ -36,7 +36,8 @@ enum class ControlWaitOutcome {
     Ready,     // outMessage holds a complete, size-checked message
     TimedOut,  // deadline passed with the message still incomplete
     Cancelled, // isCancelled asked us to stop waiting
-    Eof,       // write end gone, or a declared payload size the protocol forbids
+    Eof,       // write end gone
+    ProtocolViolation, // declared control payload exceeds the closed protocol cap
 };
 
 // isCancelled, when supplied, is polled between waits so a superseded or

@@ -441,7 +441,7 @@ float Dot(const Vec3& a, const Vec3& b)
 std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::byte> sourcePlyBytes,
                                                             std::span<std::byte> destination,
                                                             uint64_t generationId,
-                                                            uint32_t maxChunkCount)
+                                                            uint32_t maxChunkCount, bool allowAscii)
 {
     if (maxChunkCount < 1) {
         return ImportErrorCode::ResourceLimit;
@@ -465,6 +465,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     if (vertexElement == nullptr) {
         return ImportErrorCode::MalformedData;
     }
+    if (vertexElement->count == 0) return ImportErrorCode::EmptyGeometry;
     if (vertexElement->count > kMaxVertices) {
         return ImportErrorCode::ResourceLimit;
     }
@@ -548,6 +549,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     }
 
     bool ascii = (header.format == PlyFormat::Ascii);
+    if (ascii && !allowAscii) return ImportErrorCode::UnsupportedEncoding;
     bool bigEndian = (header.format == PlyFormat::BinaryBigEndian);
 
     uint64_t cursor = header.bodyOffset; // binary path only
@@ -817,7 +819,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
 
     if (hasFace) {
         if (meshIndices.empty()) {
-            return ImportErrorCode::MalformedData; // every face dropped
+            return ImportErrorCode::EmptyGeometry; // every face dropped
         }
         if (!hasNormal) {
             std::vector<Vec3> accum(meshVertices.size(), Vec3{});
@@ -857,7 +859,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         indexData = meshIndices.data();
     } else {
         if (pointVertices.empty()) {
-            return ImportErrorCode::MalformedData;
+            return ImportErrorCode::EmptyGeometry;
         }
         topology = ChunkTopology::PointList;
         vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionOnly_F32);

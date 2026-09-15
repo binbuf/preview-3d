@@ -173,6 +173,13 @@ struct ViewerApp
     std::wstring failedPath;
     std::wstring filename;
     std::wstring warning;
+    model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
+    import_broker::ImportStage errorStage = import_broker::ImportStage::OpenSource;
+    model_core::ImportFailurePhase errorPhase = model_core::ImportFailurePhase::Unspecified;
+    uint32_t faultForTesting = 0;
+    std::wstring diagnosticPath;
+    std::wstring smokePickerPath;
+    bool holdUploadMessagesForTesting = false;
     std::wstring errorSummary;
     std::wstring errorDetails;
     std::shared_ptr<const ModelData> loadedModel; // immutable compact metadata; picking stays on the GPU
@@ -1135,22 +1142,40 @@ void CreateControls(ViewerApp& app)
     SetWindowPos(app.tooltip, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     SendMessageW(app.tooltip, TTM_SETMAXTIPWIDTH, 0, Scale(app, 360));
     AddTooltip(app, app.retryButton, L"Try opening this file again");
-    AddTooltip(app, app.openAnotherButton, L"Choose a different GLB model");
+    AddTooltip(app, app.openAnotherButton, L"Choose a different supported 3D model");
     AddTooltip(app, app.copyButton, L"Copy technical error details without the file path");
     RecreateButtonFont(app);
     UpdateButtonAvailability(app);
     LayoutControls(app);
 }
 
+void SyncDisplayedModel(ViewerApp& app)
+{
+    if (const auto displayed = app.renderThread.DisplaySnapshot()) {
+        if (!app.loadedModel || app.loadedModel->source.generationId != displayed->metadata->source.generationId) app.meshSelected = false;
+        app.loadedModel = displayed->metadata;
+        app.currentPath = displayed->path;
+        app.warning = displayed->metadata->warning;
+    }
+}
+
 void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring& details,
-    const std::wstring& failedPath = {})
+    const std::wstring& failedPath = {},
+    model_core::ImportErrorCode code = model_core::ImportErrorCode::InternalImporterFailure,
+    import_broker::ImportStage stage = import_broker::ImportStage::OpenSource,
+    model_core::ImportFailurePhase phase = model_core::ImportFailurePhase::Unspecified)
 {
     if (app.cancellation) app.cancellation->store(true, std::memory_order_relaxed);
     app.renderThread.CancelUploads();
+    SyncDisplayedModel(app);
     app.state = ViewerState::Failed;
     app.errorSummary = summary;
     app.errorDetails = details;
     app.failedPath = failedPath;
+    app.diagnosticPath = failedPath;
+    app.errorCode = code;
+    app.errorStage = stage;
+    app.errorPhase = phase;
     StopNavigation(app);
     EndPointer(app);
     UpdateButtonAvailability(app);
@@ -1165,7 +1190,10 @@ void CancelOpen(ViewerApp& app)
     ++app.generation;
     app.renderThread.CancelUploads();
     app.cancellation.reset();
-    app.state = app.renderThread.HasModel() ? ViewerState::Ready : ViewerState::Empty;
+    SyncDisplayedModel(app);
+    app.state = app.renderThread.HasModel()
+        ? (app.renderThread.HasCompleteModel() && app.loadedModel && app.loadedModel->boundsVerified ? ViewerState::Ready : ViewerState::Partial)
+        : ViewerState::Empty;
     if (app.renderThread.HasModel()) app.filename = FileNameFromPath(app.currentPath);
     else app.filename.clear();
     UpdateTitle(app);
@@ -1174,21 +1202,21 @@ void CancelOpen(ViewerApp& app)
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
-void BeginOpen(ViewerApp& app, const std::wstring& path)
+void BeginOpen(ViewerApp& app, std::wstring path)
 {
     if (path.empty()) return;
+    ++app.generation;
     if (app.cancellation)
     {
         app.cancellation->store(true, std::memory_order_relaxed);
         app.cancellation.reset();
-        ++app.generation;
     }
-    if (path.rfind(L"\\\\", 0) == 0)
+    if (path.rfind(L"\\\\", 0) == 0 && path.rfind(L"\\\\?\\", 0) != 0)
     {
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
         SetFailure(app, L"Remote model paths are not opened.",
-            L"Choose a supported model stored on a local drive for this preview slice.", path);
+            L"Choose a supported model stored on a local drive for this viewer.", path, model_core::ImportErrorCode::UnsafeReference);
         return;
     }
     const auto d3d12Format = d3d12_import_bridge::ClassifyByExtension(path);
@@ -1196,15 +1224,16 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
     {
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
-        SetFailure(app, L"This format is not included in the current slice.",
-            L"Open a .glb, .gltf, .stl, or .ply file. Other model formats are deliberately deferred.", path);
+        SetFailure(app, L"This model format is not supported.",
+            L"Open a .glb, .gltf, .stl, or .ply file. STL and PLY must use binary encoding; other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
         return;
     }
 
     const auto alive = app.alive;
-    const std::uint64_t generation = ++app.generation;
+    const std::uint64_t generation = app.generation;
     const HWND window = app.window;
 
+    app.diagnosticPath = path;
     app.state = ViewerState::Loading;
     StopNavigation(app);
     EndPointer(app);
@@ -1227,7 +1256,8 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
     auto sink = app.renderThread.BeginImport(generation, path, cancellation);
     const uint64_t sectionBytes = app.renderThread.SmokeSectionBytes();
     const bool delayBatches = app.renderThread.DelayBatches();
-    std::thread([window, generation, path, format, alive, cancellation, sink, delayBatches, sectionBytes]()
+    const uint32_t faultForTesting = app.appSmoke ? app.faultForTesting : 0;
+    std::thread([window, generation, path, format, alive, cancellation, sink, delayBatches, sectionBytes, faultForTesting]()
     {
         d3d12_import_bridge::ImportResult result;
         try
@@ -1235,15 +1265,26 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
             result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
             {
                 return cancellation->load(std::memory_order_relaxed);
-            }, sink, sectionBytes, delayBatches);
+            }, sink, sectionBytes, delayBatches, faultForTesting);
+        }
+        catch (const std::length_error&)
+        {
+            result.errorCode = model_core::ImportErrorCode::ResourceLimit;
+            result.errorStage = import_broker::ImportStage::Upload;
+            result.errorSummary = L"This model exceeds the upload capacity.";
+            result.errorDetails = L"An accepted batch exceeded the bounded upload queue. Export a smaller model and retry.";
         }
         catch (const std::bad_alloc&)
         {
+            result.errorCode = model_core::ImportErrorCode::OutOfMemory;
+            result.errorStage = import_broker::ImportStage::WorkerReportedError;
             result.errorSummary = L"There is not enough memory to open this model.";
             result.errorDetails = L"Importing this model exceeded the available memory budget.";
         }
         catch (...)
         {
+            result.errorCode = model_core::ImportErrorCode::InternalImporterFailure;
+            result.errorStage = import_broker::ImportStage::WorkerReportedError;
             result.errorSummary = L"This model could not be previewed.";
             result.errorDetails = L"The importer stopped unexpectedly while reading the model.";
         }
@@ -1256,6 +1297,10 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
 
 void OpenDialog(ViewerApp& app)
 {
+    if (app.appSmoke && !app.smokePickerPath.empty()) {
+        const auto path = std::move(app.smokePickerPath);
+        app.smokePickerPath.clear(); BeginOpen(app,path); return;
+    }
     ComPtr<IFileOpenDialog> dialog;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
     {
@@ -1263,7 +1308,10 @@ void OpenDialog(ViewerApp& app)
         return;
     }
     const COMDLG_FILTERSPEC filters[] = {
-        { L"GLB 3D models (*.glb)", L"*.glb" },
+        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply" },
+        { L"glTF models (*.glb; *.gltf)", L"*.glb;*.gltf" },
+        { L"Binary STL (*.stl)", L"*.stl" },
+        { L"Binary PLY meshes and points (*.ply)", L"*.ply" },
         { L"All files (*.*)", L"*.*" }
     };
     dialog->SetFileTypes(ARRAYSIZE(filters), filters);
@@ -1273,7 +1321,7 @@ void OpenDialog(ViewerApp& app)
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
     if (FAILED(shown))
     {
-        SetFailure(app, L"The Open dialog stopped unexpectedly.", L"Try dropping a local .glb file into the window.");
+        SetFailure(app, L"The Open dialog stopped unexpectedly.", L"Try dropping a local .glb, .gltf, binary .stl, or binary .ply file into the window.");
         return;
     }
     ComPtr<IShellItem> item;
@@ -1288,7 +1336,10 @@ void OpenDialog(ViewerApp& app)
 
 void CopyErrorDetails(const ViewerApp& app)
 {
-    std::wstring text = app.errorSummary + L"\r\n\r\n" + app.errorDetails + L"\r\n\r\nFormat: GLB\r\nPhase: opening";
+    d3d12_import_bridge::ImportResult result;
+    result.errorSummary = app.errorSummary; result.errorDetails = app.errorDetails;
+    result.errorCode = app.errorCode; result.errorStage = app.errorStage; result.errorPhase = app.errorPhase;
+    std::wstring text = d3d12_import_bridge::DiagnosticDetails(app.diagnosticPath, result);
     const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
     HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
     if (!memory) return;
@@ -1453,7 +1504,7 @@ void HandleCommand(ViewerApp& app, int id)
         MessageBoxW(app.window, app.warning.c_str(), L"Model warnings", MB_OK | MB_ICONWARNING);
         break;
     case IDM_ABOUT:
-        MessageBoxW(app.window, L"A focused, native GLB inspection slice.\n\nNo cloud, no editing, no file modification.",
+        MessageBoxW(app.window, L"A native viewer for GLB, glTF with local sidecars, binary STL, and binary PLY meshes and points.\n\nNo cloud, no editing, no file modification.",
             L"About 3D Preview", MB_OK | MB_ICONINFORMATION);
         break;
     case IDM_EXIT: DestroyWindow(app.window); break;
@@ -1570,6 +1621,15 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     OverlayInfo overlay;
     overlay.state = app.state;
     overlay.filename = app.filename;
+    d3d12_import_bridge::ImportResult failure; failure.errorStage = app.errorStage; failure.errorPhase = app.errorPhase;
+    overlay.failureContext = d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath) + L"  •  " + d3d12_import_bridge::FailurePhaseLabel(failure);
+    overlay.loadingStatus = L"Loading " + d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath);
+    if (app.state == ViewerState::Partial) overlay.loadingStatus = L"Preview cancelled • incomplete geometry";
+    if (app.loadedModel && app.loadedModel->source.generationId == app.generation) {
+        const auto flags = app.loadedModel->importStatus.flags;
+        overlay.loadingStatus += (flags & model_core::kStatusPressure) ? L" • waiting for upload capacity"
+            : (flags & model_core::kStatusRefining) ? L" • refining textures" : L" • verifying complete geometry";
+    }
     overlay.errorSummary = app.errorSummary;
     overlay.errorDetails = app.errorDetails;
     overlay.warning = app.warning;
@@ -1651,7 +1711,14 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message)
     {
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 40) return 0;
+        if (!app->appSmoke || wParam > 47) return 0;
+        if (wParam == 47) return app->loadedModel ? static_cast<LRESULT>(app->loadedModel->source.generationId) : 0;
+        if (wParam == 46) { app->holdUploadMessagesForTesting = lParam != 0; return 1; }
+        if (wParam == 45) return app->renderThread.HasCompleteModel();
+        if (wParam == 44) { app->faultForTesting = lParam >= 0 && lParam <= 5 ? uint32_t(lParam) : 0; return 1; }
+        if (wParam == 41) return static_cast<LRESULT>(app->errorCode);
+        if (wParam == 42) return static_cast<LRESULT>(app->errorStage);
+        if (wParam == 43) { CopyErrorDetails(*app); return 1; }
         if (wParam == 0) return static_cast<LRESULT>(app->state) + 1;
         if (wParam == 1) return static_cast<LRESULT>(app->generation);
         if (wParam == 21) return app->showNativeOrientation;
@@ -1699,11 +1766,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     {
         if (!app->appSmoke || !lParam) return 0;
         const auto& data = *reinterpret_cast<const COPYDATASTRUCT*>(lParam);
-        if ((data.dwData != 104 && data.dwData != 105) || !data.lpData ||
+        if ((data.dwData != 104 && data.dwData != 105 && data.dwData != 106) || !data.lpData ||
             data.cbData < sizeof(wchar_t) || data.cbData > 32768 || data.cbData % sizeof(wchar_t)) return 0;
         const auto* text = static_cast<const wchar_t*>(data.lpData);
         const size_t length = data.cbData / sizeof(wchar_t);
         if (text[length - 1] != L'\0' || wcsnlen(text, length) != length - 1) return 0;
+        if (data.dwData == 106) { app->smokePickerPath.assign(text,length-1); return 1; }
         BeginOpen(*app, std::wstring(text, length - 1));
         // Cancel before dispatching completion notices: deterministic pending-
         // generation cancellation, independent of machine/fixture speed.
@@ -1981,7 +2049,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (count != 1)
         {
             DragFinish(drop);
-            SetFailure(*app, L"Open one model at a time.", L"Drop exactly one local .glb file into the viewer.");
+            SetFailure(*app, L"Open one model at a time.", L"Drop exactly one local .glb, .gltf, binary .stl, or binary .ply file into the viewer.");
             return 0;
         }
         const UINT length = DragQueryFileW(drop, 0, nullptr, 0);
@@ -2571,10 +2639,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case kD3D12ImportCompleteMessage:
     {
         std::unique_ptr<D3D12CompleteMessage> complete(reinterpret_cast<D3D12CompleteMessage*>(lParam));
-        if (!complete || complete->generation != app->generation) return 0;
+        if (!complete || complete->generation != app->generation || app->state == ViewerState::Failed) return 0;
+        if (complete->result.errorCode == model_core::ImportErrorCode::Cancelled) {
+            CancelOpen(*app); return 0;
+        }
         if (!complete->result.ok)
         {
-            SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path);
+            SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path, complete->result.errorCode, complete->result.errorStage, complete->result.errorPhase);
             return 0;
         }
         app->renderThread.FinishImport(complete->generation);
@@ -2590,10 +2661,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case kRenderUploadCompleteMessage:
     {
         std::unique_ptr<RenderUploadResult> uploaded(reinterpret_cast<RenderUploadResult*>(lParam));
-        if (!uploaded || uploaded->generation != app->generation) return 0;
+        if (!uploaded || uploaded->generation != app->generation || app->state == ViewerState::Failed) return 0;
+        if (app->appSmoke && app->holdUploadMessagesForTesting) return 0;
         if (!uploaded->ok)
         {
-            SetFailure(*app, uploaded->errorSummary, uploaded->errorDetails, uploaded->path);
+            SetFailure(*app, uploaded->errorSummary, uploaded->errorDetails, uploaded->path, uploaded->errorCode, import_broker::ImportStage::Upload);
             return 0;
         }
         if (uploaded->metadata) {

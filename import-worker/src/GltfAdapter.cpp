@@ -90,8 +90,12 @@ struct PendingMaterial {
 // extension, bad GLB container, etc.) maps to MalformedData until that enum
 // is expanded with finer-grained codes, a known simplification for this
 // slice.
-ImportErrorCode MapFastgltfError(fastgltf::Error)
+ImportErrorCode MapFastgltfError(fastgltf::Error error)
 {
+    if (error == fastgltf::Error::MissingExtensions || error == fastgltf::Error::UnknownRequiredExtension)
+        return ImportErrorCode::UnsupportedRequiredFeature;
+    if (error == fastgltf::Error::UnsupportedVersion) return ImportErrorCode::UnsupportedEncoding;
+    if (error == fastgltf::Error::FileBufferAllocationFailed) return ImportErrorCode::OutOfMemory;
     return ImportErrorCode::MalformedData;
 }
 
@@ -109,6 +113,7 @@ std::variant<std::vector<fastgltf::math::dmat4x4>, ImportErrorCode> ReadPreciseT
     std::span<const std::byte> source, size_t nodeCount)
 {
     using namespace fastgltf::math;
+    if (nodeCount == 0) return std::vector<dmat4x4>{};
     if (source.size() >= 4 && std::memcmp(source.data(), "glTF", 4) == 0) {
         if (source.size() < 20) return ImportErrorCode::MalformedData;
         uint32_t length; std::memcpy(&length,source.data()+12,sizeof(length));
@@ -1212,7 +1217,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         return ImportErrorCode::ResourceLimit;
 
     if (asset.scenes.empty()) {
-        return ImportErrorCode::MalformedData;
+        return ImportErrorCode::EmptyGeometry;
     }
     size_t sceneIndex = asset.defaultScene.value_or(0);
     if (sceneIndex >= asset.scenes.size()) {
@@ -1236,7 +1241,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     }
 
     if (state.chunks.empty()) {
-        return ImportErrorCode::MalformedData; // no supported geometry found
+        return ImportErrorCode::EmptyGeometry; // no supported geometry found
     }
 
     // Initial low-resolution images retain their logical identity; full chains
@@ -1442,8 +1447,23 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         plans = concatenate(imagePlans, materialPlans, meshPlans);
     }
 
-    const size_t initialPlanCount=plans.size();
+    size_t initialPlanCount=plans.size();
     plans.insert(plans.end(),refinements.begin(),refinements.end());
+    model_core::ImportStatusPayload status{};
+    for (const auto& extension : asset.extensionsUsed) {
+        if (extension != "KHR_draco_mesh_compression" && extension != "KHR_texture_basisu" && extension != "KHR_texture_transform")
+            status.optionalFeatureWarnings = std::min(64u, status.optionalFeatureWarnings + 1);
+    }
+    if (!refinements.empty()) status.flags |= model_core::kStatusRefining;
+    if (status.flags || status.optionalFeatureWarnings) {
+        if (plans.size()>=maxChunkCount) return ImportErrorCode::ResourceLimit;
+        PlannedChunk statusChunk;
+        statusChunk.descriptor.topology=ChunkTopology::ImportStatus;
+        statusChunk.descriptor.chunkId=static_cast<uint32_t>(meshChunkCount+materialChunkCount+imageChunkCount+2);
+        statusChunk.pieceA=BytesOf(status); statusChunk.payloadBytes=sizeof(status);
+        plans.insert(plans.begin(),statusChunk);
+        ++initialPlanCount;
+    }
     uint32_t warningCount=state.textureWarningCount;
     if (warningCount) {
         if (plans.size()>=maxChunkCount) return ImportErrorCode::ResourceLimit;

@@ -68,6 +68,7 @@ enum class ImportStage : uint32_t {
     ChunkBatchOutOfOrder, // a replayed, skipped, or wrong-generation batchIndex
     ChunkCountLimit,      // more chunks across the generation than the cap allows
     ChunkBatchAckFailed,  // the ack could not be written (worker gone mid-batch)
+    Upload,
 };
 
 // Job Object private-commit ceiling every import worker runs under.
@@ -121,6 +122,7 @@ struct ImportSessionRequest {
     // small, fast cap -- the same seam DxgiBudgetMonitor's QueryFn already
     // established for budget policy.
     uint64_t commitLimitBytes = kImportWorkerCommitLimitBytes;
+    uint32_t replyTimeoutMs = kWorkerReplyTimeoutMs;
     // Polled while waiting on the worker. Return true to abandon this
     // generation: the wait stops, the worker is killed by its Job Object,
     // and the result comes back with stage == Cancelled. Must be cheap and
@@ -184,9 +186,9 @@ struct ImportSessionRequest {
 struct ImportSessionResult {
     bool ok = false;
     ImportStage stage = ImportStage::Completed;
-    // Meaningful for stage == WorkerReportedError (the worker's own typed
-    // error) and stage == ValidateSection (the validator's rejection).
+    // Closed failure code for every unsuccessful stage, including host faults.
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
+    model_core::ImportFailurePhase errorPhase = model_core::ImportFailurePhase::Unspecified;
     // Meaningful for stage == OpenSource only: OpenAndCanonicalizeSourceFile's
     // own message, which is more specific than anything this layer could say.
     std::wstring openError;

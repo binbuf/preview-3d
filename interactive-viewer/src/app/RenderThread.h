@@ -54,8 +54,14 @@ struct RenderUploadResult
     bool ok = false;
     bool terminal = false;
     std::wstring path;
+    model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
     std::wstring errorSummary;
     std::wstring errorDetails;
+    std::shared_ptr<const ModelData> metadata;
+};
+
+struct RenderDisplaySnapshot {
+    std::wstring path;
     std::shared_ptr<const ModelData> metadata;
 };
 
@@ -185,6 +191,11 @@ public:
     // --- published state, safe from the UI thread ---
 
     bool HasModel() const noexcept { return hasModel_.load(std::memory_order_acquire); }
+    std::shared_ptr<const RenderDisplaySnapshot> DisplaySnapshot() const noexcept { return displaySnapshot_.load(); }
+    bool HasCompleteModel() const noexcept {
+        const auto snapshot = DisplaySnapshot();
+        return snapshot && snapshot->metadata->boundsVerified;
+    }
     bool BenchComplete() const noexcept { return benchComplete_.load(std::memory_order_acquire); }
 
     // Monotonic-clock microseconds, recorded only after a successful visible
@@ -231,6 +242,7 @@ private:
     std::atomic<bool> invalidated_{ true };
     std::atomic<bool> uiAnimating_{ false };
     std::atomic<bool> hasModel_{ false };
+    std::atomic<std::shared_ptr<const RenderDisplaySnapshot>> displaySnapshot_;
     std::atomic<bool> benchComplete_{ false };
     std::atomic<std::uint64_t> firstBackgroundUs_{ 0 };
     std::atomic<std::uint64_t> geometryUs_{ 0 };

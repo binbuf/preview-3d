@@ -10,6 +10,7 @@
 #include <windows.h>
 
 #include <cstring>
+#include <new>
 #include <variant>
 
 namespace import_worker {
@@ -23,6 +24,8 @@ bool ReportResult(HANDLE stdOut, uint64_t generationId,
         model_core::GenerationErrorNotice notice{};
         notice.generationId = generationId;
         notice.errorCode = static_cast<uint32_t>(*errorCode);
+        notice.reserved0 = uint32_t(*errorCode == model_core::ImportErrorCode::UnsafeReference || *errorCode == model_core::ImportErrorCode::FileUnavailable
+            ? model_core::ImportFailurePhase::Sidecars : model_core::ImportFailurePhase::Geometry);
         model_core::WriteControlMessage(stdOut, model_core::ControlOpcode::GenerationError, &notice,
                                          sizeof(notice));
         return false;
@@ -45,7 +48,7 @@ bool ReportError(HANDLE stdOut, uint64_t generationId, model_core::ImportErrorCo
 
 } // namespace
 
-bool HandleStlImportFileRequest(HANDLE stdOut, const model_core::ParseStlFileRequest& request)
+bool HandleStlImportFileRequest(HANDLE stdOut, const model_core::ParseStlFileRequest& request, bool allowAsciiForTesting)
 {
     HANDLE rawFile = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sourceFileHandleValue));
     auto openResult = model_core::MappedFile::FromHandle(platform::Win32Handle(rawFile));
@@ -66,11 +69,17 @@ bool HandleStlImportFileRequest(HANDLE stdOut, const model_core::ParseStlFileReq
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
 
-    auto result = ImportStl(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount);
+    try {
+    auto result = ImportStl(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount, allowAsciiForTesting);
     return ReportResult(stdOut, request.generationId, result);
+    } catch (const std::bad_alloc&) {
+        return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::OutOfMemory);
+    } catch (...) {
+        return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
+    }
 }
 
-int RunStlImport()
+int RunStlImport(bool allowAsciiForTesting)
 {
     HANDLE stdIn = GetStdHandle(STD_INPUT_HANDLE);
     HANDLE stdOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -90,7 +99,7 @@ int RunStlImport()
     model_core::ParseStlFileRequest request{};
     std::memcpy(&request, received->payload.data(), sizeof(request));
 
-    return HandleStlImportFileRequest(stdOut, request) ? 0 : 1;
+    return HandleStlImportFileRequest(stdOut, request, allowAsciiForTesting) ? 0 : 1;
 }
 
 } // namespace import_worker

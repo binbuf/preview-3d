@@ -4,11 +4,8 @@
 
 namespace model_core {
 
-// A deliberately small subset of the full error taxonomy in
-// .docs/design/03-file-formats-and-ingestion.md ("Error taxonomy") -- just
-// enough for the honest-worker-reports-a-real-problem and
-// validator-rejects-malformed-input cases this chunk covers. The full
-// enumeration belongs to later work integrating with interactive-viewer.
+// Closed error taxonomy shared by sandbox reports and host/UI diagnostics.
+enum class ImportFailurePhase : uint32_t { Unspecified = 0, Geometry = 1, Sidecars = 2, Textures = 3 };
 enum class ImportErrorCode : uint32_t {
     None = 0,
     MalformedData = 1,
@@ -23,6 +20,21 @@ enum class ImportErrorCode : uint32_t {
     UnsafeReference = 5,
     FileUnavailable = 6,
     Cancelled = 7,
+    UnsupportedFormat = 8,
+    UnsupportedEncoding = 9,
+    UnsupportedRequiredFeature = 10,
+    EmptyGeometry = 11,
+    OutOfMemory = 12,
+    FileChanged = 13,
+    WorkerCrashed = 14,
+    WorkerTimedOut = 15,
+    UploadFailure = 16,
 };
+
+constexpr bool IsKnownImportErrorCode(uint32_t code)
+{
+    return code >= uint32_t(ImportErrorCode::MalformedData)
+        && code <= uint32_t(ImportErrorCode::UploadFailure);
+}
 
 } // namespace model_core
