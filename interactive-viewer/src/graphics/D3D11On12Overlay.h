@@ -31,12 +31,13 @@
 // resource belongs to the target that created it, so every cached brush would
 // have to be duplicated per back buffer. Device-level resources are shared
 // here instead. Drawing code is unaffected either way: ID2D1DeviceContext
-// *is* an ID2D1RenderTarget, which is what the ~750 lines being ported out of
-// Renderer.cpp are written against.
+// *is* an ID2D1RenderTarget, which is what the chrome ported from Renderer.cpp
+// was written against.
 //
 // Ownership: one thread owns every interop context (ADR-010) -- the render
 // thread, which owns D3D12ViewerPath and therefore this.
 
+#include "../render/Renderer.h" // OverlayInfo and the pure layout types
 #include "D3D12CommandQueue.h"
 #include "D3D12Device.h"
 #include "D3D12SwapChain.h"
@@ -47,6 +48,17 @@
 #include <wrl/client.h>
 
 #include <string>
+
+// Immutable UI snapshot, published to the render thread. No HWND calls or
+// UI-owned objects are consulted while painting.
+struct OverlayFrame
+{
+    OverlayInfo info;
+    NavGizmo gizmo;
+    Chrome chrome;
+};
+
+enum class OverlayIconKind;
 
 class D3D11On12Overlay
 {
@@ -78,19 +90,19 @@ public:
     ID2D1DeviceContext* BeginDraw(UINT backBufferIndex);
     // EndDraw + ReleaseWrappedResources (which transitions the back buffer to
     // PRESENT) + Flush. On D2DERR_RECREATE_TARGET the bitmaps are dropped so
-    // the next frame rebuilds them -- Renderer.cpp resets its target on that
-    // HRESULT but never recreates it except via a later Resize, so the whole
-    // overlay silently disappears until the user resizes the window. That bug
-    // is deliberately not reproduced here.
+    // the next frame rebuilds them. The device context and its brush survive
+    // bitmap recreation; a full device loss requires owner-level recovery.
     HRESULT EndDraw(UINT backBufferIndex);
+
+    // Draws the actual application chrome between Acquire and Release.
+    HRESULT DrawChrome(UINT backBufferIndex, const DirectX::XMFLOAT4& orientation, const OverlayFrame& frame);
 
     IDWriteFactory* WriteFactory() const noexcept { return writeFactory_.Get(); }
     // The one context every caller draws into. Valid for the bridge's whole
     // lifetime, so cached device resources need no per-frame revalidation.
     ID2D1DeviceContext* Context() const noexcept { return d2dContext_.Get(); }
     bool IsReady() const noexcept { return d3d11On12Device_ != nullptr; }
-    // True when EndDraw saw D2DERR_RECREATE_TARGET and the caller's cached
-    // device resources must be dropped and rebuilt.
+    // True when BeginDraw rebuilt back-buffer bitmaps after target loss.
     bool ConsumeTargetsWereRecreated() noexcept;
 
     // Releases D2D and D3D11On12 before the owner releases its D3D12
@@ -98,7 +110,32 @@ public:
     void Shutdown();
 
 private:
+    bool CreateTextFormats(float scale);
+    void SetBrush(D2D1_COLOR_F color);
+    void DrawText(const std::wstring& text, IDWriteTextFormat* format, D2D1_RECT_F rectangle,
+        D2D1_COLOR_F color, DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING);
+    void DrawGizmo(const DirectX::XMFLOAT4& orientation, const NavGizmo& gizmo, float scale);
+    void DrawBottomBar(const OverlayInfo& overlay, float clientWidth, float clientHeight, float scale);
+    void DrawIconButton(const RECT& rectI, OverlayIconKind icon, bool visible, bool enabled, bool active,
+        bool hovered, bool pressedNow, float scale);
+    void DrawInfoPanel(const OverlayInfo& overlay, float clientWidth, float clientHeight, float scale);
+    static D2D1_RECT_F ToRectF(RECT rect);
+    void DrawTitleBar(const OverlayInfo& overlay, const Chrome& chrome, float clientWidth, float scale);
+    void DrawSpeedFlyout(const OverlayInfo& overlay, float scale);
+    void DrawToggleRow(const D2D1_RECT_F& rowRect, const D2D1_RECT_F& switchRect,
+        const std::wstring& label, bool on, float scale);
+    void DrawSettingsPanel(const OverlayInfo& overlay, float scale);
+    void DrawTooltip(const OverlayInfo& overlay, float clientWidth, float scale);
+    void DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome);
+
     bool CreateTargetsForBackBuffers(D3D12SwapChain& swapChain, std::wstring& error);
+
+    // A single device brush is recolored for every primitive, shared by all
+    // back-buffer bitmaps and retained across ResizeBuffers.
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> overlayBrush;
+    Microsoft::WRL::ComPtr<ID2D1StrokeStyle> dashedStroke, spinnerStroke;
+    Microsoft::WRL::ComPtr<IDWriteTextFormat> headingFormat, bodyFormat, smallFormat, filenameFormat, gizmoFormat;
+    float textScale = 0.0f;
 
     Microsoft::WRL::ComPtr<ID3D11Device> d3d11Device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d11Context_;

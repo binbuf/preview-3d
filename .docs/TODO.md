@@ -9,12 +9,14 @@ when they disagree, `.docs/design/` wins and this file is what needs fixing.
 **Scope-limited MVP:** [NEW_SCOPE_LIMITED_MVP_TASKS.md](./NEW_SCOPE_LIMITED_MVP_TASKS.md)
 is the active implementation sequence and overrides the broader gate scope below.
 TSK-101 is implemented: D3D12 is exclusive and the legacy renderer instance/import path is
-removed. TSK-102's real chrome port remains next. Required model-state checks were changed
-as part of removing that instance; TSK-103 still needs verification with visible chrome and
+removed. TSK-102 is implemented: real chrome/state cards now draw through the D3D11On12
+bridge on every frame, with GPU pixel-readback coverage for all back buffers, resize, and DPI.
+Required model-state checks were changed as part of removing that instance; TSK-103 remains
+next and still needs verification with visible chrome and
 model information. Native-orientation re-homing still requires CPU model metadata from the
 D3D12 pipeline.
 
-**Broader gate baseline: `f0d2f86`**, amended for TSK-101 below.
+**Broader gate baseline: `f0d2f86`**, amended for TSK-101/TSK-102 below.
 
 Two rules this list is written to, both from the delivery plan itself:
 
@@ -81,12 +83,11 @@ five each have an unbuilt half.
 
 - [ ] **Compact input event queue.** Not built — `RenderThread.h:68-72` says so in the source: the
       shared-camera mutex "is the interim."
-- [ ] **Port the real chrome onto the D2D overlay bridge.** The bridge is built and correct
-      (`D3D11On12Overlay.{h,cpp}`, `ID2D1Device` + a bitmap per back buffer, rebuilds on
-      `D2DERR_RECREATE_TARGET`), but it only ever draws `--overlay-spike` stand-in primitives sized
-      to approximate the real thing (`D3D12ViewerPath.h:76-79`). The ~750 lines of real drawing in
-      `Renderer.cpp` are unported. **Consequence today: an import failure under `--d3d12` draws no
-      error card at all** — which is also Gate 3 exit criterion 3 and FR-10.
+- [x] **Port the real chrome onto the D2D overlay bridge (TSK-102).** The drawing and
+      vector glyphs now live in `D3D11On12Overlay.cpp`, using one device context/brush and
+      a bitmap per back buffer. Every frame paints real chrome, including state/error cards.
+      UI snapshots preserve layout/hover state; GPU readback tests verify pixels across all
+      buffers, resize, and DPI changes. Import error-code/stage mapping remains TSK-204.
 - [ ] **Neutral point-cloud draw.** `D3D12ViewerPath.cpp:972` — `continue; // point clouds /
       unrecognized layouts: a later slice`.
 - [ ] **Device-start failure surface and one-shot device recovery.** `RenderThread.cpp:291` —

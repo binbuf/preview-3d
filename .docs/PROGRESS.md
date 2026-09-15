@@ -4,6 +4,38 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 1 / TSK-102 (2026-09-15): complete.**
+  The real Direct2D chrome and vector glyph helpers have moved from `Renderer.cpp`
+  into `D3D11On12Overlay.cpp`: title/caption buttons, bottom bar, scrolling Information
+  panel, navigation gizmo, loading/empty/error cards, HUDs, Speed/Settings flyouts,
+  and tooltips. `Renderer.cpp` remains for the camera and deprecated D3D11 scene code.
+  The bridge owns one `overlayBrush`, cached DPI-dependent DirectWrite formats, and
+  shared strokes; its single `ID2D1DeviceContext` targets the existing bitmap for each
+  back buffer. Resize drops only the wrapped buffers/bitmaps, retaining the device
+  brush. Target-loss bitmap recreation likewise retains device resources.
+  Every D3D12 frame now paints chrome after scene submission and before Present/the
+  frame fence. Spike primitives/options are removed; old `--overlay-spike[=N]` flags
+  are accepted as no-ops. Overlay timings now measure the real chrome.
+  The UI publishes immutable `OverlayFrame` snapshots with the existing chrome/gizmo
+  layout and hover state, alongside frame inputs, and wakes the renderer after publication.
+  The render thread snapshots the camera orientation under its existing mutex and draws
+  without holding that mutex across GPU waits. Scene viewport/scissor insets now match
+  the UI's existing reserved title/bottom/panel space, including fullscreen/loading rules;
+  camera math and UI aspect calculations are unchanged.
+  Verification: Debug `msbuild Preview3D.slnx /t:Preview3D,Tests_Unit` passes;
+  `Tests.Unit.exe` passes all 73 cases / 5,733 assertions. Two new `[chrome]` tests
+  read back actual D3D12 swap-chain pixels for the bars, panel, gizmo, caption-button
+  hover and error card. They explicitly exercise all three target bitmaps (hidden-window
+  Present can remain occluded), resize, 150% DPI, and Empty/Loading/Failed/Ready passes.
+  The real-chrome test reports no new D3D12 debug-layer errors. Five hidden-window app
+  smoke checks (empty, GLB, glTF plus external `.bin`, deprecated spike flag, and failed
+  import) each complete 40 frames, respond after resize and Info/Settings commands, and
+  close with exit code 0. These app checks establish lifecycle behavior; GPU readback tests
+  establish drawing output. No viewer/worker process remained. No dependency/license changes.
+  TSK-103 remains next for visible UI verification. The D3D12 import path still does not
+  publish CPU model metadata for Information rows, picking, or native orientation.
+  Error-card drawing is restored; import error-code/stage mapping remains TSK-204.
+
 - **Scope-limited MVP, Phase 1 / TSK-101 (2026-09-15): complete.**
   [NEW_SCOPE_LIMITED_MVP_TASKS.md](./NEW_SCOPE_LIMITED_MVP_TASKS.md) is the active scope and
   sequence; the broader gate history below remains a record of the original plan.

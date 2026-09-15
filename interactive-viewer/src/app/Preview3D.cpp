@@ -123,13 +123,7 @@ struct ViewerApp
     bool rendererReady = false;
     bool closing = false;
     bool showFrameStats = false; // --frame-stats: see UpdateTitle
-    // ADR-010 spike scaffolding: --overlay-spike turns the D3D11On12/D2D
-    // bridge on, --frame-bench N renders N frames back to back instead of
-    // waiting for something to move. The viewer deliberately blocks when the
-    // scene is still, so without a bench mode there is no way to measure a
-    // sustained frame rate at all.
-    bool overlaySpike = false;
-    int overlaySpikePrimitives = 250;
+    // --frame-bench N sustains rendering for timing the actual scene and chrome.
     int benchFrames = 0;
     // Deliberately NOT named `camera`: once the render thread exists, every
     // access has to go through renderThread.LockCamera(). Renaming turned
@@ -316,7 +310,7 @@ void EffectiveBounds(const ViewerApp& app, DirectX::XMFLOAT3& outMin, DirectX::X
 
 // How far app.infoPanelScrollOffset may go before the section list's last row
 // reaches the panel's bottom edge — WM_MOUSEWHEEL clamps against this on
-// every tick (Renderer::DrawInfoPanel clamps again from the same
+// every tick (D3D11On12Overlay::DrawInfoPanel clamps again from the same
 // ComputeInfoPanelScrollMetrics when it draws, so the two can't disagree).
 float InfoPanelMaxScroll(const ViewerApp& app)
 {
@@ -407,8 +401,7 @@ void UpdateTitle(const ViewerApp& app)
     {
         // Developer instrumentation behind --frame-stats: the title bar is
         // the one surface already readable from outside the process (the
-        // screenshot harness reads MainWindowTitle), and this path has no
-        // D2D overlay to draw into yet. Goes away once the overlay lands.
+        // screenshot harness reads MainWindowTitle).
         // Snapshot rather than reaching into the render thread's own state.
         // Note this runs only on the UI thread -- the render thread must
         // never call SetWindowTextW, which marshals and would block on the
@@ -1100,7 +1093,7 @@ void ToggleInfoPanel(ViewerApp& app)
 // (HWND_TOPMOST — matching monitor bounds alone doesn't make Explorer hide a
 // plain top-level window behind it), and hides our own D2D title bar and
 // bottom bar (EffectiveToolbarHeight/EffectiveBottomBarHeight, Preview3D.cpp;
-// DrawOverlay, Renderer.cpp) so the viewport fills the whole screen — Maximize
+// DrawOverlay, D3D11On12Overlay.cpp) so the viewport fills the whole screen — Maximize
 // instead snaps to the work area, keeps the taskbar and our chrome visible,
 // and never goes topmost, so the two stay distinct. Independent of whether a
 // model is loaded, same as the caption buttons (while windowed).
@@ -1170,7 +1163,7 @@ void CreateControls(ViewerApp& app)
 {
     // Fit/Reset/Grid/Snap/Speed/Info/Share/Overflow/Open-With and the system
     // min/max/close now live in the D2D-drawn title bar (Chrome +
-    // Renderer::DrawTitleBar) instead of as owner-drawn child buttons — see
+    // D3D11On12Overlay::DrawTitleBar) instead of as owner-drawn child buttons — see
     // the WM_NCHITTEST/WM_LBUTTONDOWN handling in WindowProcedure. The zoom
     // slider is D2D-drawn too (ZoomTrackRect/DrawBottomBar) with its own
     // pointer handling, same split as the Speed flyout. Only the
@@ -1412,7 +1405,7 @@ void DrawOwnerButton(ViewerApp& app, const DRAWITEMSTRUCT& item)
     const bool focused = (item.itemState & ODS_FOCUS) != 0;
     const bool hot = (item.itemState & ODS_HOTLIGHT) != 0;
     // Grid/Snap/Info/Fit/Reset/Open moved to the D2D title bar (Chrome +
-    // Renderer::DrawTitleBar); this now only draws the error-state buttons.
+    // D3D11On12Overlay::DrawTitleBar); this now only draws the error-state buttons.
     const bool primary = item.CtlID == ID_VIEW_RETRY;
     const bool active = false;
     COLORREF fill = primary ? RGB(10, 132, 255) : RGB(58, 58, 60);
@@ -1545,7 +1538,7 @@ void ToggleSpeedFlyout(ViewerApp& app)
 }
 
 // Dispatches a click on one of the D2D-drawn title-bar buttons (Chrome +
-// Renderer::DrawTitleBar). Reuses HandleCommand for the actions that already
+// D3D11On12Overlay::DrawTitleBar). Reuses HandleCommand for the actions that already
 // have a command ID (kept working via Ctrl+O/accelerators too); the rest
 // (Speed flyout, Share, Open With) are new to the title bar.
 void HandleChromeAction(ViewerApp& app, Chrome::Part part)
@@ -1606,9 +1599,8 @@ bool IsAnimatingWithoutCamera(const ViewerApp& app)
         || now < app.modeHudUntil;
 }
 
-// Retained for the D3D11On12 chrome port (TSK-102). GPU submission belongs
-// exclusively to RenderThread; this helper only builds the UI snapshot.
-[[maybe_unused]] OverlayInfo BuildOverlayInfo(ViewerApp& app)
+// Builds the UI snapshot for the render thread's Direct2D chrome pass.
+OverlayInfo BuildOverlayInfo(ViewerApp& app)
 {
     OverlayInfo overlay;
     overlay.state = app.state;
@@ -1730,12 +1722,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         UpdateGizmoLayout(*app);
         UpdateChromeLayout(*app);
         std::wstring renderError;
-        // 0 primitives means "interop only" -- drop the text runs too, or
-        // the isolation is not isolation.
-        app->renderThread.SetOverlayOptions(app->overlaySpike, app->overlaySpikePrimitives,
-                                             app->overlaySpikePrimitives == 0 ? 0 : 40);
         app->renderThread.SetBenchFrames(app->benchFrames);
-        app->renderThread.PublishViewportAspect(ViewportAspect(*app));
+        auto overlay = std::make_shared<OverlayFrame>();
+        overlay->info = BuildOverlayInfo(*app);
+        overlay->gizmo = app->gizmo;
+        overlay->chrome = app->chrome;
+        app->renderThread.PublishFrameInputs(BuildFlightInput(*app), ViewportAspect(*app), std::move(overlay));
         app->rendererReady = app->renderThread.Start(window, renderError);
         if (!app->rendererReady)
         {
@@ -1753,7 +1745,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     }
     // --- Custom title bar: removes the native caption (WM_NCCALCSIZE) while
     // keeping the resizable frame, then takes over hit-testing so our own
-    // D2D-drawn min/max/close (Chrome + Renderer::DrawTitleBar) behave like
+    // D2D-drawn min/max/close (Chrome + D3D11On12Overlay::DrawTitleBar) behave like
     // real caption buttons — including DWM's Snap Layout hover flyout on
     // Maximize, via DwmDefWindowProc passthrough on every NC message below.
     // Standard recipe for "client-area title bar with a real resizable
@@ -2678,14 +2670,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         {
             if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--frame-stats") == 0) app.showFrameStats = true;
-            else if (_wcsicmp(arguments[i], L"--overlay-spike") == 0) app.overlaySpike = true;
-            else if (_wcsnicmp(arguments[i], L"--overlay-spike=", 16) == 0)
-            {
-                // Primitive count, so the interop overhead itself can be
-                // measured separately from the D2D drawing on top of it.
-                app.overlaySpike = true;
-                app.overlaySpikePrimitives = _wtoi(arguments[i] + 16);
-            }
+            // Deprecated spike flags are no-ops; every frame paints real chrome.
+            else if (_wcsicmp(arguments[i], L"--overlay-spike") == 0 ||
+                     _wcsnicmp(arguments[i], L"--overlay-spike=", 16) == 0) continue;
             else if (_wcsnicmp(arguments[i], L"--frame-bench=", 14) == 0)
             {
                 app.benchFrames = _wtoi(arguments[i] + 14);
@@ -2751,7 +2738,11 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         if (gMainWindow && app.rendererReady)
         {
             uiAnimating = !IsIconic(gMainWindow) && IsAnimatingWithoutCamera(app);
-            app.renderThread.PublishFrameInputs(BuildFlightInput(app), ViewportAspect(app));
+            auto overlay = std::make_shared<OverlayFrame>();
+            overlay->info = BuildOverlayInfo(app);
+            overlay->gizmo = app.gizmo;
+            overlay->chrome = app.chrome;
+            app.renderThread.PublishFrameInputs(BuildFlightInput(app), ViewportAspect(app), std::move(overlay));
             app.renderThread.SetUiAnimating(uiAnimating);
             if (GetUpdateRect(gMainWindow, nullptr, FALSE))
             {

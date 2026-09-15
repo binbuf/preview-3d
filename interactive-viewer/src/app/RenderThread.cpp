@@ -37,13 +37,6 @@ RenderThread::~RenderThread()
     Stop();
 }
 
-void RenderThread::SetOverlayOptions(bool enabled, int primitives, int textRuns)
-{
-    overlayEnabled_ = enabled;
-    overlayPrimitives_ = primitives;
-    overlayTextRuns_ = textRuns;
-}
-
 void RenderThread::SetBenchFrames(int frames)
 {
     benchFrames_ = frames;
@@ -159,11 +152,18 @@ void RenderThread::PublishViewportAspect(float aspect)
     viewportAspect_ = aspect;
 }
 
-void RenderThread::PublishFrameInputs(const FlightInput& input, float aspect)
+void RenderThread::PublishFrameInputs(const FlightInput& input, float aspect,
+                                      std::shared_ptr<const OverlayFrame> overlay)
 {
-    std::lock_guard<std::mutex> lock(cameraMutex_);
-    flightInput_ = input;
-    viewportAspect_ = aspect;
+    {
+        std::lock_guard<std::mutex> lock(cameraMutex_);
+        flightInput_ = input;
+        viewportAspect_ = aspect;
+        frameOverlay_ = std::move(overlay);
+    }
+    // A WM_PAINT wake may have been consumed before this snapshot arrived.
+    // Wake again after publication so the final UI state always gets painted.
+    Invalidate();
 }
 
 RenderThread::StatsSnapshot RenderThread::Stats() const
@@ -182,9 +182,6 @@ void RenderThread::AssertOnRenderThread() const
 
 bool RenderThread::InitializeOnThread(HWND window, std::wstring& error)
 {
-    path_.overlayEnabled = overlayEnabled_;
-    path_.overlayPrimitives = overlayPrimitives_;
-    path_.overlayTextRuns = overlayTextRuns_;
     return path_.Initialize(window, error);
 }
 
@@ -405,6 +402,8 @@ void RenderThread::RenderOneFrame()
     AssertOnRenderThread();
 
     DirectX::XMFLOAT4X4 viewProjection{};
+    DirectX::XMFLOAT4 orientation{};
+    std::shared_ptr<const OverlayFrame> overlay;
     {
         // Ticking and composing under the lock, then rendering without it:
         // holding it across BeginFrame's fence and frame-latency waits would
@@ -419,14 +418,16 @@ void RenderThread::RenderOneFrame()
         lastFrameSeconds_ = now;
         camera_.SetInput(flightInput_);
         camera_.Update(elapsed);
+        DirectX::XMStoreFloat4(&orientation, camera_.Orientation());
+        overlay = frameOverlay_;
         DirectX::XMStoreFloat4x4(&viewProjection,
                                   camera_.ViewMatrix() * camera_.ProjectionMatrix(viewportAspect_));
     }
 
     if (hasModel_.load(std::memory_order_acquire)) {
-        path_.RenderFrame(viewProjection);
+        path_.RenderFrame(viewProjection, orientation, *overlay);
     } else {
-        path_.RenderClearFrame();
+        path_.RenderClearFrame(orientation, *overlay);
     }
 
     // Republish only occasionally, never every frame. FrameStats::P95Ms

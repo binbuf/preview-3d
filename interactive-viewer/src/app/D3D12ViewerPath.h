@@ -2,17 +2,15 @@
 
 // Exclusive render path for Preview3D.exe, owned by RenderThread. Device
 // creation, presentation, resize, and shutdown all happen on that thread.
-// Renderer.cpp is retained for its camera implementation and as the source
-// for the upcoming D3D11On12 chrome port.
+// Renderer.cpp is retained for its camera implementation and deprecated
+// scene renderer.
 //
 // Geometry comes from D3D12ImportBridge.h's sandboxed import pipeline, not
 // Model.cpp's in-process parser. Rendering here is deliberately minimal:
 // one fixed root signature/PSO/shader pair targeting
 // model_core::VertexPositionNormalUv0F32's {position,normal,uv} layout with
-// base-color materials/textures and hemisphere lighting. There is no real
-// chrome/D2D overlay yet (needs the ~750 lines of
-// Renderer.cpp drawing ported onto the D3D11On12 bridge -- a separate,
-// later chunk). Point-cloud (PositionOnly_F32) chunks are silently skipped
+// base-color materials/textures and hemisphere lighting. Chrome is painted
+// through the D3D11On12/Direct2D bridge. Point-cloud (PositionOnly_F32) chunks are silently skipped
 // by BeginUploadModel, not rendered.
 //
 // Uploads run on their own copy queue through D3D12UploadRing and publish
@@ -67,39 +65,11 @@ struct D3D12ViewerPath
 
     FrameStats frameStats;
 
-    // ADR-010 spike scaffolding. `overlayEnabled` is set from
-    // --overlay-spike; when on, the scene pass leaves the back buffer in
-    // RENDER_TARGET and the bridge's Release transitions it to PRESENT
-    // (04-rendering-and-streaming.md:46). The synthetic content drawn is a
-    // stand-in sized to the real chrome's primitive count -- porting the
-    // actual ~750 lines of Renderer.cpp drawing is a later chunk, and doing
-    // it before the spike answers would be building on an unmeasured
-    // assumption.
+    // Chrome is always painted over the scene on the shared direct queue.
     D3D11On12Overlay overlay;
-    bool overlayEnabled = false;   // set before Initialize()
-    // How much synthetic content to draw. 0 isolates the interop overhead
-    // itself (Acquire/Release/Flush plus an empty BeginDraw/EndDraw) from
-    // the cost of the D2D drawing on top of it -- two very different
-    // questions, and only the first is really "what does D3D11On12 cost".
-    int overlayPrimitives = 250;
-    int overlayTextRuns = 40;
-    double lastOverlayMs = 0.0;    // CPU ms in the last overlay pass
-    double overlayTotalMs = 0.0;   // cumulative, for a mean over a run
+    double lastOverlayMs = 0.0;
+    double overlayTotalMs = 0.0;
     uint64_t overlayPasses = 0;
-    // Cached rather than rebuilt per frame, matching how Renderer.cpp keeps
-    // one brush and rebuilds text formats only on DPI change -- creating
-    // either per frame is expensive enough to turn a cost measurement into a
-    // strawman.
-    //
-    // One brush, not one per back buffer: the bridge now hands out a single
-    // ID2D1DeviceContext retargeted at a bitmap per buffer, so device
-    // resources are shared. Under the D2D 1.0 shape the spike used, each back
-    // buffer had its own independent render target and a brush belonged to
-    // whichever one created it, forcing a copy per buffer.
-    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> overlayBrush;
-    // IDWriteTextFormat is a DirectWrite resource and device-independent, so
-    // it survives even a target loss.
-    Microsoft::WRL::ComPtr<IDWriteTextFormat> overlayTextFormat;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
     Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
@@ -211,8 +181,8 @@ struct D3D12ViewerPath
 
     // Clears to the design doc's Gate 1 "immediate #1C1C1E" idle background
     // and presents, with no geometry -- used before a model is loaded and on
-    // import failure (there is no D2D error card on this path yet).
-    void RenderClearFrame();
+    // import failure, with chrome and the current state card overlaid.
+    void RenderClearFrame(const DirectX::XMFLOAT4& orientation, const OverlayFrame& chrome);
 
     // Draws every uploaded mesh with the supplied view-projection matrix.
     // One DrawIndexedInstanced per mesh -- never assumes exactly one chunk.
@@ -222,7 +192,8 @@ struct D3D12ViewerPath
     // whole frame -- including BeginFrame's fence and frame-latency waits --
     // would block input for the length of a GPU frame. The caller ticks the
     // camera and computes this under the lock, then releases it and renders.
-    void RenderFrame(const DirectX::XMFLOAT4X4& viewProjection);
+    void RenderFrame(const DirectX::XMFLOAT4X4& viewProjection, const DirectX::XMFLOAT4& orientation,
+                     const OverlayFrame& chrome);
 
     // Uploads every TriangleList/PositionNormalUv0_F32 mesh in `importedMeshes`
     // as a DEFAULT-heap vertex+index buffer pair (synchronous staging-buffer
@@ -284,10 +255,8 @@ private:
     UINT BeginFrame();
     // Present, then signal and record the fence value into the slot.
     void EndFrame(UINT frameIndex);
-    // Spike-only: draws a synthetic overlay of roughly the real chrome's
-    // primitive count, so the measured cost means something. Returns the
-    // CPU milliseconds spent between Acquire and Flush.
-    double DrawSpikeOverlay(UINT frameIndex);
+    // Records CPU time for the real chrome, including Acquire/Release/Flush.
+    void DrawChrome(UINT frameIndex, const DirectX::XMFLOAT4& orientation, const OverlayFrame& chrome);
     // Moves resources the copy queue may still be writing into onto the
     // retire list behind the ring's current submitted fence, instead of
     // letting them destruct here. Flushes first, so that fence value

@@ -22,6 +22,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstddef>
+#include <array>
+#include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -157,6 +160,82 @@ struct OverlayHarness {
         REQUIRE(fence != 0);
         REQUIRE(directQueue.WaitForValue(fence, 5000) == D3D12CommandQueue::WaitResult::Signaled);
         return endHr;
+    }
+
+    using Pixel = std::array<std::uint8_t, 4>;
+
+    // Read the real swap-chain pixels after Release/Flush. This catches a
+    // missing chrome pass or wrong target, even if EndDraw returns success.
+    std::vector<Pixel> DrawChromeAndReadback(const OverlayFrame& frame, UINT index = D3D12SwapChain::kBufferCount)
+    {
+        // Hidden windows can be occluded, so Present need not advance the
+        // index. Allow a test to explicitly exercise each target bitmap.
+        if (index == D3D12SwapChain::kBufferCount) index = swapChain.CurrentBackBufferIndex();
+        RecordSceneLeavingRenderTarget(index);
+        REQUIRE(SUCCEEDED(overlay.DrawChrome(index, { 0, 0, 0, 1 }, frame)));
+        auto wait = [&] {
+            const auto fence = directQueue.SignalNext();
+            REQUIRE(fence != 0);
+            REQUIRE(directQueue.WaitForValue(fence, 5000) == D3D12CommandQueue::WaitResult::Signaled);
+        };
+        wait(); // safe allocator reset after the scene and interop commands
+
+        ID3D12Resource* source = swapChain.BackBuffer(index);
+        const auto desc = source->GetDesc();
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+        UINT64 bytes = 0;
+        SharedDevice().Device()->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &bytes);
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC buffer{};
+        buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        buffer.Width = bytes;
+        buffer.Height = 1;
+        buffer.DepthOrArraySize = 1;
+        buffer.MipLevels = 1;
+        buffer.SampleDesc.Count = 1;
+        buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        Microsoft::WRL::ComPtr<ID3D12Resource> readback;
+        REQUIRE(SUCCEEDED(SharedDevice().Device()->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback))));
+        REQUIRE(SUCCEEDED(allocator->Reset()));
+        REQUIRE(SUCCEEDED(commandList->Reset(allocator.Get(), nullptr)));
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = source;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        commandList->ResourceBarrier(1, &barrier);
+        D3D12_TEXTURE_COPY_LOCATION from{};
+        from.pResource = source;
+        from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        D3D12_TEXTURE_COPY_LOCATION to{};
+        to.pResource = readback.Get();
+        to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        to.PlacedFootprint = footprint;
+        commandList->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+        std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+        commandList->ResourceBarrier(1, &barrier);
+        REQUIRE(SUCCEEDED(commandList->Close()));
+        ID3D12CommandList* lists[] = { commandList.Get() };
+        directQueue.Queue()->ExecuteCommandLists(1, lists);
+        wait();
+
+        std::vector<Pixel> pixels(static_cast<std::size_t>(swapChain.Width()) * swapChain.Height());
+        void* mapped = nullptr;
+        D3D12_RANGE range{ 0, static_cast<SIZE_T>(bytes) };
+        REQUIRE(SUCCEEDED(readback->Map(0, &range, &mapped)));
+        for (UINT y = 0; y < swapChain.Height(); ++y) {
+            std::memcpy(pixels.data() + static_cast<std::size_t>(y) * swapChain.Width(),
+                static_cast<const std::byte*>(mapped) + footprint.Offset + static_cast<std::size_t>(y) * footprint.Footprint.RowPitch,
+                static_cast<std::size_t>(swapChain.Width()) * sizeof(Pixel));
+        }
+        D3D12_RANGE noWrites{ 0, 0 };
+        readback->Unmap(0, &noWrites);
+        REQUIRE(SUCCEEDED(swapChain.Present()));
+        wait();
+        return pixels;
     }
 };
 
@@ -321,4 +400,79 @@ TEST_CASE("Shutdown releases the bridge without needing the swap chain", "[graph
     CHECK_FALSE(harness.overlay.IsReady());
     // Idempotent: the destructor runs Shutdown again on the way out.
     harness.overlay.Shutdown();
+}
+
+TEST_CASE("Real chrome paints the bars, information panel and navigation gizmo across buffers and resize", "[graphics][chrome]")
+{
+    bool queueAvailable = false;
+    const int errorsBefore = DebugLayerErrorCount(queueAvailable);
+    OverlayHarness harness;
+    REQUIRE(harness.overlay.Initialize(SharedDevice(), harness.directQueue, harness.swapChain, harness.error));
+
+    for (int pass = 0; pass < 4; ++pass) {
+        if (pass == 3) {
+            harness.overlay.ReleaseBackBufferReferences();
+            REQUIRE(harness.swapChain.Resize(1024, 768, harness.error));
+            REQUIRE(harness.overlay.RecreateBackBufferReferences(harness.swapChain, harness.error));
+        }
+        const int width = static_cast<int>(harness.swapChain.Width());
+        const int height = static_cast<int>(harness.swapChain.Height());
+        const float scale = pass == 3 ? 1.5f : 1.0f;
+        OverlayFrame frame;
+        frame.info.state = ViewerState::Ready;
+        frame.info.hasModel = true;
+        frame.info.dpiScale = scale;
+        frame.info.barToolbarHeight = static_cast<int>(40 * scale);
+        frame.info.barBottomBarHeight = static_cast<int>(40 * scale);
+        frame.info.infoPanelWidth = 200;
+        frame.info.infoPanelSections = { { L"Mesh Data", { { L"Triangles", L"12" } } } };
+        frame.info.infoButtonRect = { 8, height - 36, 40, height - 4 };
+        frame.info.fullscreenButtonRect = { width - 40, height - 36, width - 8, height - 4 };
+        frame.info.zoomTrackRect = { width - 250, height - 21, width - 120, height - 19 };
+        frame.chrome.UpdateLayout(width, frame.info.barToolbarHeight, scale, true, false, false);
+        frame.gizmo.UpdateLayout(width - 200, height, frame.info.barToolbarHeight, frame.info.barBottomBarHeight, scale);
+
+        const auto pixels = harness.DrawChromeAndReadback(frame, static_cast<UINT>(pass) % D3D12SwapChain::kBufferCount);
+        auto pixel = [&](int x, int y) { return pixels[static_cast<std::size_t>(y) * width + x]; };
+        const OverlayHarness::Pixel bar{ 0x2C, 0x2C, 0x2E, 0xFF };
+        const OverlayHarness::Pixel panel{ 0x24, 0x24, 0x26, 0xFF };
+        CHECK(pixel(2, 2) == bar);
+        CHECK(pixel(2, height - 2) == bar);
+        CHECK(pixel(width - 2, height / 2) == panel);
+
+        const auto geometry = frame.gizmo.ComputeDraw(DirectX::XMQuaternionIdentity());
+        const auto& node = geometry.positive[0];
+        const int nodeX = static_cast<int>(geometry.centerX + node.x);
+        const int nodeY = static_cast<int>(geometry.centerY + node.y);
+        // The red node is several pixels wide; sample away from its white X.
+        const auto red = pixel(nodeX, nodeY + static_cast<int>(geometry.nodeRadius * 0.6f));
+        CHECK(red[0] > red[1] + 50);
+        CHECK(red[0] > red[2] + 50);
+    }
+    if (queueAvailable) CHECK(DebugLayerErrorCount(queueAvailable) == errorsBefore);
+    else WARN("D3D12 info queue unavailable -- debug-layer validation not exercised in this build");
+}
+
+TEST_CASE("Loading and failure cards release the wrapped buffer and keep caption buttons visible", "[graphics][chrome]")
+{
+    OverlayHarness harness;
+    REQUIRE(harness.overlay.Initialize(SharedDevice(), harness.directQueue, harness.swapChain, harness.error));
+    for (const auto state : { ViewerState::Empty, ViewerState::Loading, ViewerState::Failed, ViewerState::Ready }) {
+        OverlayFrame frame;
+        frame.info.state = state;
+        frame.info.errorSummary = L"Could not open this model.";
+        frame.info.errorDetails = L"The file is not supported.";
+        frame.chrome.UpdateLayout(640, 40, 1.0f, false, false, false);
+        frame.chrome.hover = Chrome::Part::Close;
+        const auto pixels = harness.DrawChromeAndReadback(frame);
+        const RECT close = frame.chrome.Button(Chrome::Part::Close).rect;
+        const auto caption = pixels[static_cast<std::size_t>(close.top + 2) * 640 + close.left + 2];
+        CHECK(caption[0] > 150);
+        CHECK(caption[0] > caption[1] + 50);
+        if (state == ViewerState::Failed) {
+            const RECT card = CalculateErrorCardRect(640, 480, 40, 1.0f);
+            const OverlayHarness::Pixel fill{ 0x24, 0x24, 0x26, 0xFF };
+            CHECK(pixels[static_cast<std::size_t>(card.bottom - 30) * 640 + card.left + 30] == fill);
+        }
+    }
 }

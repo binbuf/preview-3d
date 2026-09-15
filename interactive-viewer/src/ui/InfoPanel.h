@@ -8,8 +8,8 @@
 
 // Read-only "Stats & Shading" side panel content, adapted from the fields the
 // (now defunct) Windows 11 3D Viewer showed. Pure data/layout — no D2D or
-// window dependency, the same split as NavGizmo vs. Renderer::DrawGizmo:
-// Renderer::DrawInfoPanel does the actual text drawing row-by-row within the
+// window dependency, the same split as NavGizmo vs. D3D11On12Overlay::DrawGizmo:
+// D3D11On12Overlay::DrawInfoPanel does the actual text drawing row-by-row within the
 // rect ComputeInfoPanelLayout returns.
 struct InfoPanelRow
 {
@@ -48,7 +48,7 @@ struct InfoPanelLayout
 InfoPanelLayout ComputeInfoPanelLayout(int viewportWidth, int viewportHeight,
     int titleBarHeight, int bottomBarHeight, float dpiScale);
 
-// Vertical geometry of the scrollable section list Renderer::DrawInfoPanel
+// Vertical geometry of the scrollable section list D3D11On12Overlay::DrawInfoPanel
 // draws below its fixed "Stats & Shading" header: `headerHeight` is the
 // header's own height (the scrollable area starts right below it),
 // `contentHeight` the full height of every section/row at this DPI. Mirrors

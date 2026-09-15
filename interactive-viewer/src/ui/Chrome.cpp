@@ -36,7 +36,7 @@ void Chrome::UpdateLayout(int clientWidth, int titleBarHeight, float dpiScale, b
     // System caption buttons: rightmost, full title-bar height (matches the
     // real caption buttons' hit target so DWM's Snap Layout hover flyout on
     // Maximize feels native). `isMaximized` only affects the drawn glyph
-    // (Renderer::DrawTitleBar), not this layout. Visible/enabled regardless
+    // (D3D11On12Overlay::DrawTitleBar), not this layout. Visible/enabled regardless
     // of whether a model is loaded — so the window can always be minimized,
     // maximized, and closed — except in Fullscreen, where the topmost,
     // monitor-filling window has nothing for them to do (no border to snap,

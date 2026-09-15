@@ -116,7 +116,7 @@ InfoPanelLayout ComputeInfoPanelLayout(int viewportWidth, int viewportHeight,
 namespace
 {
 // Kept numerically identical to the header/row/section-gap math in
-// Renderer::DrawInfoPanel (Renderer.cpp) — see that function before changing
+// D3D11On12Overlay::DrawInfoPanel (D3D11On12Overlay.cpp) — see that function before changing
 // any of these.
 constexpr float kHeaderTopPad = 18.0f;
 constexpr float kHeaderAdvance = 34.0f;

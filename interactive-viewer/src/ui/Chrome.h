@@ -9,8 +9,8 @@
 #include <windows.h>
 
 // Windows-11-Photos-style unified title bar: pure layout/hit-test state, no
-// drawing or COM dependency — mirrors NavGizmo's split from Renderer::DrawGizmo.
-// Renderer::DrawTitleBar consumes this class's rects to paint the D2D content;
+// drawing or COM dependency — mirrors NavGizmo's split from the overlay drawing.
+// D3D11On12Overlay::DrawTitleBar consumes this class's rects to paint the D2D content;
 // Preview3D.cpp's WM_NCHITTEST/WM_LBUTTONDOWN handlers consume HitTest to route
 // input. All rects are in client pixel coordinates.
 //

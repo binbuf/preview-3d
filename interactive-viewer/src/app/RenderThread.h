@@ -102,7 +102,6 @@ public:
     RenderThread& operator=(const RenderThread&) = delete;
 
     // Configuration, all before Start().
-    void SetOverlayOptions(bool enabled, int primitives, int textRuns);
     void SetBenchFrames(int frames);
 
     // Spawns the thread and waits, bounded, for it to create the device,
@@ -149,10 +148,9 @@ public:
     // are layout state the render thread has no view of.
     void PublishViewportAspect(float aspect);
 
-    // Both at once, under one lock. The message loop publishes these
-    // together every iteration, and two separate acquisitions there measurably
-    // contend with the render thread's own once-per-frame acquisition.
-    void PublishFrameInputs(const FlightInput& input, float aspect);
+    // Inputs, aspect and immutable chrome snapshot together, under one lock.
+    // Publishing wakes the renderer after the new UI state is available.
+    void PublishFrameInputs(const FlightInput& input, float aspect, std::shared_ptr<const OverlayFrame> overlay);
 
     // --- published state, safe from the UI thread ---
 
@@ -198,11 +196,12 @@ private:
     std::atomic<bool> hasModel_{ false };
     std::atomic<bool> benchComplete_{ false };
 
-    // Guards `camera_`, `flightInput_` and `viewportAspect_`, which are all
+    // Guards `camera_`, `flightInput_`, `viewportAspect_` and `frameOverlay_`, all
     // consumed together at the top of a frame.
     mutable std::mutex cameraMutex_;
     FlightInput flightInput_{};
     float viewportAspect_ = 1.0f;
+    std::shared_ptr<const OverlayFrame> frameOverlay_ = std::make_shared<OverlayFrame>();
 
     // Guards the command inbox below.
     mutable std::mutex commandMutex_;
@@ -233,9 +232,6 @@ private:
     std::wstring startError_;
 
     // Pre-Start configuration.
-    bool overlayEnabled_ = false;
-    int overlayPrimitives_ = 250;
-    int overlayTextRuns_ = 40;
     int benchFrames_ = 0;
     int benchRemaining_ = 0;
 
