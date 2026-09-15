@@ -11,10 +11,6 @@
 // session failure to user-facing text, and unpacking validated chunks into
 // the renderer-facing structs below.
 //
-// Still deferred to a later, streaming-focused slice: WorkerPool-based reuse
-// (there is no way yet to duplicate a *new* source file handle into an
-// already-running pooled worker) and a persistent AppContainer profile.
-
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
@@ -37,7 +33,7 @@ enum class SourceFormat {
 // nullopt for any extension this slice doesn't recognize.
 std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path);
 
-// One validated chunk, ready for D3D12ViewerPath::UploadModel. payload is
+// One validated chunk, ready for the upload coordinator. payload is
 // vertex bytes immediately followed by index bytes (index bytes only when
 // topology == TriangleList), matching GltfAdapter.cpp/StlAdapter.cpp/
 // PlyAdapter.cpp's wire packing -- no further chunk-table bookkeeping is
@@ -45,16 +41,16 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path);
 struct ImportedMesh {
     model_core::ChunkTopology topology = model_core::ChunkTopology::Unknown;
     model_core::VertexLayoutId vertexLayoutId = model_core::VertexLayoutId::Unknown;
+    uint32_t chunkId = 0;
     uint32_t vertexCount = 0;
     uint32_t indexCount = 0;
     std::vector<std::byte> payload;
-    uint32_t materialChunkId = 0; // 0 = none; resolves via ImportResult::materials' chunkId
+    uint32_t materialChunkId = 0; // 0 = none; generation-wide material identity
 };
 
-// Ids here are already validator-confirmed (SharedSectionValidator) to
-// cross-reference correctly within one ImportResult -- this struct is
-// purely mechanical unpacking of a Material-topology chunk's payload, no
-// re-validation needed.
+// Material/image ids refer to the generation-wide catalog, including bounded
+// forward references. The broker rejects unresolved or incorrectly typed
+// terminal catalogs; the renderer uses neutral fallback until dependencies arrive.
 struct ImportedMaterial {
     uint32_t chunkId = 0;
     model_core::MaterialPayload data{};
@@ -87,6 +83,8 @@ struct ImportResult {
     std::wstring errorDetails;
 };
 
+// With onBatch, transfers each host-owned batch without retaining payloads;
+// the terminal result contains only status. Without it, returns accumulated data.
 // Synchronous -- call from a detached background thread, mirroring
 // BeginOpen's std::thread(...).detach() pattern.
 //
@@ -94,7 +92,10 @@ struct ImportResult {
 // the import (the worker is killed by its Job Object) and yields a result
 // whose text the caller is expected to drop rather than display.
 ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
-                        std::function<bool()> isCancelled = {});
+                        std::function<bool()> isCancelled = {},
+                        std::function<void(ImportResult)> onBatch = {},
+                        uint64_t sectionBytes = 64ull * 1024 * 1024,
+                        bool delayBatchesForTesting = false);
 
 // Creates the import worker's AppContainer profile and grants it
 // read+execute on the worker's own directory -- without this the sandboxed

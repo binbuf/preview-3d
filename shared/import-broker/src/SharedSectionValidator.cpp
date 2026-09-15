@@ -65,7 +65,7 @@ bool AllFinite(std::initializer_list<float> values)
 
 ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                                          uint64_t expectedGenerationId, uint32_t maxChunkCount,
-                                         const KnownChunkCatalog* priorBatches)
+                                         const KnownChunkCatalog* priorBatches, bool allowForwardReferences)
 {
     // 1. The section must be at least large enough to hold a header before
     // any field of it is read.
@@ -273,7 +273,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             }
             for (uint32_t d = 0; d < descriptor.dependencyCount; ++d) {
                 if (descriptor.dependencyIds[d] == 0
-                    || resolveTopology(descriptor.dependencyIds[d]) == nullptr) {
+                    || (!allowForwardReferences && resolveTopology(descriptor.dependencyIds[d]) == nullptr)) {
                     return Reject(ImportErrorCode::MalformedData, "mesh dependency id not found");
                 }
             }
@@ -333,7 +333,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                         continue;
                     }
                     const ChunkTopology* dep = resolveTopology(descriptor.dependencyIds[d]);
-                    if (dep == nullptr || *dep != ChunkTopology::Image) {
+                    if ((dep == nullptr && !allowForwardReferences) || (dep && *dep != ChunkTopology::Image)) {
                         return Reject(ImportErrorCode::MalformedData,
                                       "material dependency is not an image chunk");
                     }

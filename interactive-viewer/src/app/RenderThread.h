@@ -29,6 +29,9 @@
 #include "Renderer.h" // Camera and FlightInput -- pure DirectXMath, no D3D11 coupling
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <unordered_map>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -45,6 +48,7 @@ struct RenderUploadResult
 {
     std::uint64_t generation = 0;
     bool ok = false;
+    bool terminal = false;
     std::wstring path;
     std::wstring errorSummary;
     std::wstring errorDetails;
@@ -124,10 +128,19 @@ public:
     // "coalesced and performed at a direct-fence-safe point; it never blocks
     // the UI message pump."
     void RequestResize(int width, int height);
-    // Takes ownership of the imported data. The render thread uploads it,
-    // computes bounds, applies them to the camera, and posts
-    // kRenderUploadCompleteMessage back to `window`.
-    void RequestUpload(d3d12_import_bridge::ImportResult result, std::uint64_t generation, std::wstring path);
+    // Creates a lifetime-safe batch sink for the broker thread. Capacity covers
+    // queued, coordinator-owned and published batches until render acceptance.
+    // Only this background sink may wait for capacity; cancellation wakes it.
+    std::function<void(d3d12_import_bridge::ImportResult)> BeginImport(
+        std::uint64_t generation, std::wstring path, std::shared_ptr<std::atomic_bool> cancellation);
+    void FinishImport(std::uint64_t generation);
+    void CancelUploads();
+    void SetSmokeUploads(unsigned copyMs, uint64_t sectionBytes, bool delayBatches) {
+        copyDelayMs_ = copyMs; smokeSectionBytes_ = sectionBytes; delayBatches_ = delayBatches;
+    }
+    void SetSmokeQueueCap(size_t bytes) { uploads_->byteLimit = bytes; }
+    uint64_t SmokeSectionBytes() const { return smokeSectionBytes_; }
+    bool DelayBatches() const { return delayBatches_; }
     void RequestClearModel();
     // Marks the next frame as needed and wakes the thread.
     void Invalidate();
@@ -176,11 +189,9 @@ public:
 private:
     void ThreadMain(HWND window);
     bool InitializeOnThread(HWND window, std::wstring& error);
-    void DrainCommands(HWND window);
-    // Retires finished copies and, on the tick an in-flight model becomes
-    // fully fence-complete, swaps it in and posts the held completion
-    // message. Called every loop iteration; cheap when nothing is
-    // outstanding.
+    void DrainCommands();
+    // Accepts one fence-complete publication between frames. Appends chunks
+    // and resolves generation catalog entries without touching the copy lane.
     void PumpUploads(HWND window);
     void RenderOneFrame();
     // Snapshots frame statistics for the UI thread. Deliberately not called
@@ -203,6 +214,7 @@ private:
     std::atomic<std::uint64_t> geometryUs_{ 0 };
     std::atomic<std::uint64_t> presentedGeneration_{ 0 };
     std::atomic<std::uint64_t> resizedExtent_{ 0 };
+    std::atomic<std::uint64_t> displayedChunks_{0}, texturedChunks_{0};
     std::uint64_t modelGeneration_ = 0; // render-thread-owned
 
     // Guards `camera_`, `flightInput_`, `viewportAspect_` and `frameOverlay_`, all
@@ -218,19 +230,43 @@ private:
     int resizeWidth_ = 0;
     int resizeHeight_ = 0;
     bool clearModelPending_ = false;
-    struct PendingUpload
-    {
+    struct UploadTask {
         d3d12_import_bridge::ImportResult result;
         std::uint64_t generation = 0;
         std::wstring path;
+        std::shared_ptr<std::atomic_bool> cancellation;
+        size_t bytes = 0;
+        bool terminal = false;
     };
-    std::optional<PendingUpload> uploadPending_;
-
-    // Built when an upload is queued, posted only once its copies are
-    // fence-complete. Render-thread-only, so it needs no lock: DrainCommands
-    // and PumpUploads both run there. Dropped rather than posted if the
-    // model is cleared or superseded before it lands.
-    std::unique_ptr<RenderUploadResult> pendingUploadMessage_;
+    struct Publication {
+        UploadTask task;
+        D3D12ViewerPath::ModelResources resources;
+        DirectX::XMFLOAT3 boundsMin{}, boundsMax{};
+        bool haveBounds = false;
+    };
+    struct UploadInbox {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::deque<UploadTask> tasks;
+        std::deque<Publication> publications;
+        size_t bytes = 0, count = 0, peakBytes = 0, peakCount = 0;
+        size_t byteLimit = 128ull * 1024 * 1024;
+        std::uint64_t generation = 0;
+        std::wstring path;
+        bool stopped = false;
+        static constexpr size_t countCap = 4;
+    };
+    std::shared_ptr<UploadInbox> uploads_ = std::make_shared<UploadInbox>();
+    std::thread uploadThread_;
+    void UploadMain();
+    unsigned copyDelayMs_ = 0;
+    uint64_t smokeSectionBytes_ = 64ull * 1024 * 1024;
+    bool delayBatches_ = false;
+    std::unordered_map<uint32_t, d3d12_import_bridge::ImportedMaterial> materials_;
+    D3D12ViewerPath::ModelResources stagedScene_;
+    std::uint64_t stagedGeneration_ = 0;
+    bool stagedHaveBounds_ = false, stagedFailed_ = false;
+    DirectX::XMFLOAT3 stagedMin_{}, stagedMax_{};
 
     mutable std::mutex statsMutex_;
     StatsSnapshot stats_;

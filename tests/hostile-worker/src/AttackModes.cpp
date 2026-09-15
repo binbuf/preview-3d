@@ -3,6 +3,8 @@
 #include "SyntheticSceneGenerator.h"
 
 #include "model_core/Checksum.h"
+#include "model_core/MaterialPayload.h"
+#include "model_core/PixelFormats.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
 #include "model_core/VertexLayouts.h"
@@ -409,6 +411,60 @@ int RunHonestBatches()
 
     uint64_t length = BuildOneChunkSection(view.bytes(), request.generationId, 3, 30.0f);
     return SendChunksReady(request.generationId, 1, length) ? 0 : 1;
+}
+
+int RunCatalogBatches(int mode)
+{
+    using namespace model_core;
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) return 1;
+    auto& [request, view] = *session;
+    auto write = [&](ChunkDescriptor desc, const void* payload, size_t bytes) {
+        desc.byteSize = desc.normalizedRangeLength = bytes;
+        desc.normalizedRangeOffset = kSectionHeaderSize + kChunkDescriptorSize;
+        desc.chunkChecksum = Fnv1a64(std::span(static_cast<const std::byte*>(payload), bytes));
+        std::memcpy(view.bytes().data() + desc.normalizedRangeOffset, payload, bytes);
+        std::memcpy(view.bytes().data() + kSectionHeaderSize, &desc, sizeof(desc));
+        SectionHeader header{};
+        header.magic = kSectionMagic; header.protocolVersion = kCurrentProtocolVersion;
+        header.generationId = request.generationId; header.chunkCount = 1;
+        header.sectionLength = desc.normalizedRangeOffset + bytes;
+        header.sectionChecksum = Fnv1a64(view.bytes().subspan(kSectionHeaderSize,
+            static_cast<size_t>(header.sectionLength - kSectionHeaderSize)));
+        std::memcpy(view.bytes().data(), &header, sizeof(header));
+        return header.sectionLength;
+    };
+    VertexPositionOnlyF32 point{1,2,3};
+    ChunkDescriptor mesh{}; mesh.chunkId = 1; mesh.topology = ChunkTopology::PointList;
+    mesh.vertexCount = 1; mesh.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionOnly_F32);
+    mesh.dependencyIds[0] = 2; mesh.dependencyCount = 1;
+    auto length = write(mesh, &point, sizeof(point));
+    if (!SendBatchReady(request.generationId,0,1,length) || !AwaitBatchConsumed()) return 1;
+    if (mode == 3) {
+        mesh.chunkId = 2; mesh.dependencyCount = 0; mesh.dependencyIds[0] = 0;
+        length = write(mesh, &point, sizeof(point));
+        return SendChunksReady(request.generationId,1,length) ? 0 : 1;
+    }
+    MaterialPayload mat{}; mat.baseColorFactor[3] = 1; mat.roughnessFactor = 1;
+    mat.uvScale[0] = mat.uvScale[1] = 1;
+    ChunkDescriptor material{}; material.chunkId = 2; material.topology = ChunkTopology::Material;
+    material.dependencyIds[2] = 3; material.dependencyCount = 1; // sparse normal slot
+    length = write(material, &mat, sizeof(mat));
+    if (!SendBatchReady(request.generationId,1,1,length) || !AwaitBatchConsumed()) return 1;
+    if (mode != 0) {
+        mesh.chunkId = mode == 1 ? 3 : 4; mesh.dependencyCount = 0; mesh.dependencyIds[0] = 0;
+        length = write(mesh, &point, sizeof(point));
+    } else {
+        ImagePayloadHeader image{};
+        image.pixelFormat = static_cast<uint32_t>(PixelFormatId::RGBA8_UNORM);
+        image.width = image.height = image.mipLevels = 1;
+        image.pixelDataByteSize = 4;
+        std::byte payload[sizeof(image) + 4]{};
+        std::memcpy(payload, &image, sizeof(image));
+        ChunkDescriptor desc{}; desc.chunkId = 3; desc.topology = ChunkTopology::Image;
+        length = write(desc, payload, sizeof(payload));
+    }
+    return SendChunksReady(request.generationId,1,length) ? 0 : 1;
 }
 
 int RunReplayBatchIndex()

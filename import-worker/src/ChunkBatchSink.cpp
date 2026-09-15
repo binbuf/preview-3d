@@ -38,6 +38,9 @@ bool ChunkBatchSink::PublishBatch(uint32_t chunkCount, uint64_t sectionBytesWrit
         return false;
     }
 
+    // Explicit developer mode delays the next batch/terminal IPC, after the
+    // acknowledged section is host-owned. Job termination interrupts this wait.
+    if (delayMs_) Sleep(delayMs_);
     ++batchesPublished_;
     return true;
 }

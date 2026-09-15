@@ -162,19 +162,9 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
 constexpr uint32_t kMaxSidecarRequestsPerGeneration = 64;
 constexpr uint64_t kMaxSidecarFileBytes = 256ull * 1024ull * 1024ull;
 
-// How many times one generation may fill and hand over the 64 MiB output
-// window (import_broker::kImportSectionBytes).
-//
-// Derived from the Tier A source budget rather than picked: 03-file-formats-
-// and-ingestion.md:162 caps a primary Tier A source at 8 GiB, and normalized
-// output is smaller than its source for every format this worker handles, so
-// 8 GiB / 64 MiB = 128 windows already covers the largest admissible file.
-// Doubled to 256 for headroom, which still bounds a runaway worker to a
-// finite number of round trips -- the point of having a cap at all.
-//
-// This is what a model larger than one window costs in round trips, not a
-// promise that one that size performs: A-large streaming is the LOD/proxy
-// builder's job, not this cap's.
+// Provisional finite round-trip ceiling retained for this slice. TSK-205
+// derives replacement batch/catalog ceilings from normalized expansion;
+// source bytes do not bound normalized bytes (e.g. instances/compression).
 constexpr uint32_t kMaxChunkBatchesPerGeneration = 256;
 
 } // namespace
@@ -194,7 +184,7 @@ void EnsureImportSandboxPrepared()
 }
 
 ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
-                        std::function<bool()> isCancelled)
+                        std::function<bool()> isCancelled, std::function<void(ImportResult)> onBatch, uint64_t sectionBytes, bool delayBatchesForTesting)
 {
     ImportResult result;
 
@@ -204,85 +194,86 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
     sessionRequest.generationId = generationId;
-    sessionRequest.sectionByteCapacity = import_broker::kImportSectionBytes;
+    sessionRequest.sectionByteCapacity = sectionBytes;
+    if (delayBatchesForTesting && format == SourceFormat::Glb)
+        sessionRequest.workerArgumentsOverride = L"--parse-gltf-delayed-batches";
+    sessionRequest.maxChunksPerGeneration = 65536;
     sessionRequest.maxChunkCount = import_broker::kImportMaxChunkCount;
     sessionRequest.maxSidecarRequestsPerGeneration = kMaxSidecarRequestsPerGeneration;
     sessionRequest.maxSidecarFileBytes = kMaxSidecarFileBytes;
     sessionRequest.maxChunkBatchesPerGeneration = kMaxChunkBatchesPerGeneration;
-    // No onBatch sink yet: this function still returns one finished model and
-    // its caller still uploads it in one go, so a batched import accumulates
-    // host-side exactly as a single-window one always did. Handing batches to
-    // the renderer as they land -- so the first geometry is on screen before
-    // the last batch crosses -- is the next chunk; the protocol and the
-    // acceptance rules it needs are what this one built.
-
-    import_broker::ImportSessionResult session = import_broker::RunImportSession(sessionRequest);
+    import_broker::KnownChunkCatalog catalog;
+    auto unpack = [&](std::vector<import_broker::ValidatedChunk> chunks) {
+        ImportResult result;
+        for (const auto& chunk : chunks) catalog.emplace(chunk.descriptor.chunkId, chunk.descriptor.topology);
+        for (auto& chunk : chunks) {
+            switch (chunk.descriptor.topology) {
+            case model_core::ChunkTopology::TriangleList:
+            case model_core::ChunkTopology::PointList: {
+                ImportedMesh mesh;
+                mesh.chunkId = chunk.descriptor.chunkId;
+                mesh.topology = chunk.descriptor.topology;
+                mesh.vertexLayoutId = static_cast<model_core::VertexLayoutId>(chunk.descriptor.vertexLayoutId);
+                mesh.vertexCount = chunk.descriptor.vertexCount;
+                mesh.indexCount = chunk.descriptor.indexCount;
+                mesh.payload = std::move(chunk.payload);
+                // Per WireFormat.h: a mesh's dependencyIds[0] is only a
+                // material reference when the target chunk's own topology is
+                // Material -- the same slot predates this and is also used for
+                // an unrelated LOD/derivation relationship elsewhere, so the
+                // target's topology (not the slot position) determines meaning.
+                if (chunk.descriptor.dependencyCount >= 1) {
+                    uint32_t targetId = chunk.descriptor.dependencyIds[0];
+                    auto target = catalog.find(targetId);
+                    if (target == catalog.end() || target->second == model_core::ChunkTopology::Material)
+                        mesh.materialChunkId = targetId;
+                }
+                result.meshes.push_back(std::move(mesh));
+                break;
+            }
+            case model_core::ChunkTopology::Material: {
+                ImportedMaterial material;
+                material.chunkId = chunk.descriptor.chunkId;
+                if (chunk.payload.size() == sizeof(model_core::MaterialPayload)) {
+                    std::memcpy(&material.data, chunk.payload.data(), sizeof(material.data));
+                }
+                if (chunk.descriptor.dependencyIds[0]) material.baseColorImageChunkId = chunk.descriptor.dependencyIds[0];
+                if (chunk.descriptor.dependencyIds[1]) material.metallicRoughnessImageChunkId = chunk.descriptor.dependencyIds[1];
+                if (chunk.descriptor.dependencyIds[2]) material.normalImageChunkId = chunk.descriptor.dependencyIds[2];
+                if (chunk.descriptor.dependencyIds[3]) material.emissiveImageChunkId = chunk.descriptor.dependencyIds[3];
+                result.materials.push_back(std::move(material));
+                break;
+            }
+            case model_core::ChunkTopology::Image: {
+                ImportedImage image;
+                image.chunkId = chunk.descriptor.chunkId;
+                if (chunk.payload.size() >= sizeof(model_core::ImagePayloadHeader)) {
+                    model_core::ImagePayloadHeader header{};
+                    std::memcpy(&header, chunk.payload.data(), sizeof(header));
+                    image.pixelFormat = static_cast<model_core::PixelFormatId>(header.pixelFormat);
+                    image.width = header.width;
+                    image.height = header.height;
+                    image.mipLevels = header.mipLevels;
+                    image.colorSpace = static_cast<model_core::ColorSpaceId>(header.colorSpace);
+                    image.pixelBytes.assign(chunk.payload.begin() + sizeof(header), chunk.payload.end());
+                }
+                result.images.push_back(std::move(image));
+                break;
+            }
+            default:
+                break; // unrecognized topology already rejected by the validator; never reached
+            }
+        }
+        result.ok = true;
+        return result;
+    };
+    if (onBatch) sessionRequest.onBatch = [&](auto chunks) { onBatch(unpack(std::move(chunks))); };
+    auto session = import_broker::RunImportSession(sessionRequest);
     if (!session.ok) {
         DescribeSessionFailure(session, result.errorSummary, result.errorDetails);
         return result;
     }
-
-    for (auto& chunk : session.chunks) {
-        switch (chunk.descriptor.topology) {
-        case model_core::ChunkTopology::TriangleList:
-        case model_core::ChunkTopology::PointList: {
-            ImportedMesh mesh;
-            mesh.topology = chunk.descriptor.topology;
-            mesh.vertexLayoutId = static_cast<model_core::VertexLayoutId>(chunk.descriptor.vertexLayoutId);
-            mesh.vertexCount = chunk.descriptor.vertexCount;
-            mesh.indexCount = chunk.descriptor.indexCount;
-            mesh.payload = std::move(chunk.payload);
-            // Per WireFormat.h: a mesh's dependencyIds[0] is only a
-            // material reference when the target chunk's own topology is
-            // Material -- the same slot predates this and is also used for
-            // an unrelated LOD/derivation relationship elsewhere, so the
-            // target's topology (not the slot position) determines meaning.
-            if (chunk.descriptor.dependencyCount >= 1) {
-                uint32_t targetId = chunk.descriptor.dependencyIds[0];
-                for (const auto& other : session.chunks) {
-                    if (other.descriptor.chunkId == targetId
-                        && other.descriptor.topology == model_core::ChunkTopology::Material) {
-                        mesh.materialChunkId = targetId;
-                        break;
-                    }
-                }
-            }
-            result.meshes.push_back(std::move(mesh));
-            break;
-        }
-        case model_core::ChunkTopology::Material: {
-            ImportedMaterial material;
-            material.chunkId = chunk.descriptor.chunkId;
-            if (chunk.payload.size() == sizeof(model_core::MaterialPayload)) {
-                std::memcpy(&material.data, chunk.payload.data(), sizeof(material.data));
-            }
-            if (chunk.descriptor.dependencyCount >= 1) material.baseColorImageChunkId = chunk.descriptor.dependencyIds[0];
-            if (chunk.descriptor.dependencyCount >= 2) material.metallicRoughnessImageChunkId = chunk.descriptor.dependencyIds[1];
-            if (chunk.descriptor.dependencyCount >= 3) material.normalImageChunkId = chunk.descriptor.dependencyIds[2];
-            if (chunk.descriptor.dependencyCount >= 4) material.emissiveImageChunkId = chunk.descriptor.dependencyIds[3];
-            result.materials.push_back(std::move(material));
-            break;
-        }
-        case model_core::ChunkTopology::Image: {
-            ImportedImage image;
-            image.chunkId = chunk.descriptor.chunkId;
-            if (chunk.payload.size() >= sizeof(model_core::ImagePayloadHeader)) {
-                model_core::ImagePayloadHeader header{};
-                std::memcpy(&header, chunk.payload.data(), sizeof(header));
-                image.pixelFormat = static_cast<model_core::PixelFormatId>(header.pixelFormat);
-                image.width = header.width;
-                image.height = header.height;
-                image.mipLevels = header.mipLevels;
-                image.colorSpace = static_cast<model_core::ColorSpaceId>(header.colorSpace);
-                image.pixelBytes.assign(chunk.payload.begin() + sizeof(header), chunk.payload.end());
-            }
-            result.images.push_back(std::move(image));
-            break;
-        }
-        default:
-            break; // unrecognized topology already rejected by the validator; never reached
-        }
-    }
+    if (!onBatch) return unpack(std::move(session.chunks));
     result.ok = true;
     return result;
 }

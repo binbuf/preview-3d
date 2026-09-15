@@ -62,3 +62,7 @@ TestResults/
 *.temp
 *.bak
 ~$*
+
+# Python smoke/fixture tooling
+__pycache__/
+*.pyc

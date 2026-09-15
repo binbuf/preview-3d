@@ -508,3 +508,39 @@ TEST_CASE("A material may depend on an image chunk carried by an earlier batch",
     REQUIRE(accepted.chunks.size() == 1);
     CHECK(accepted.chunks[0].descriptor.chunkId == 5);
 }
+
+TEST_CASE("Forward material and sparse image dependencies resolve across a generation", "[chunk-batch]")
+{
+    auto request = MakeBatchRequest(L"--catalog-forward", 8);
+    size_t batches = 0;
+    request.onBatch = [&](auto&& chunks) { ++batches; REQUIRE(chunks.size() == 1); };
+    auto result = import_broker::RunImportSession(request);
+    REQUIRE(result.ok);
+    CHECK(batches == 3);
+    CHECK(result.chunks.empty());
+}
+
+TEST_CASE("Terminal catalogs reject unresolved and incorrectly typed forward dependencies", "[chunk-batch]")
+{
+    const wchar_t* mode = nullptr;
+    SECTION("wrong image") { mode = L"--catalog-wrong-image"; }
+    SECTION("missing image") { mode = L"--catalog-missing-image"; }
+    SECTION("wrong material") { mode = L"--catalog-wrong-material"; }
+    auto result = import_broker::RunImportSession(MakeBatchRequest(mode, 8));
+    REQUIRE_FALSE(result.ok);
+    CHECK(result.stage == import_broker::ImportStage::ValidateSection);
+    CHECK(result.errorCode == ImportErrorCode::MalformedData);
+}
+
+TEST_CASE("Cancellation during downstream acceptance prevents the next batch acknowledgement", "[chunk-batch]")
+{
+    bool cancelled = false;
+    auto request = MakeBatchRequest(L"--batches-honest", 8);
+    request.isCancelled = [&] { return cancelled; };
+    request.onBatch = [&](auto&&) { cancelled = true; };
+    auto result = import_broker::RunImportSession(request);
+    REQUIRE_FALSE(result.ok);
+    CHECK(result.stage == import_broker::ImportStage::Cancelled);
+    CHECK(result.batchCount == 1);
+    CHECK(result.chunks.empty());
+}

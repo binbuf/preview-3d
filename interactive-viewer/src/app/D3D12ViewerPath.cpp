@@ -243,14 +243,7 @@ bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
     // matching the FrameRecorder convention SwapChainTests.cpp established.
     commandList->Close();
 
-    // The upload lane: its own copy-typed queue, allocator, list and fence,
-    // all owned by the ring. Nothing about a load is submitted to the direct
-    // queue any more.
-    if (!uploadRing.Initialize(device)) {
-        error = L"The D3D12 upload ring could not be created.";
-        return false;
-    }
-
+    // The coordinator initializes a separate upload-only path sharing this device.
     if (!CreateDepthBuffer(swapChainOptions.width, swapChainOptions.height, error)) return false;
     if (!CreatePipeline(error)) return false;
     if (!CreateTexturedPipeline(error)) return false;
@@ -529,7 +522,7 @@ void D3D12ViewerPath::WaitForIdle()
     // everything already submitted, without the ring having to expose its
     // own bookkeeping. This is a shutdown/resize drain -- the whole point of
     // the rest of this class is that no *ordinary* path waits here.
-    if (uploadInFlight || !retiredModels.empty() || hasModel) {
+    if (uploadRing.CopyQueue().Queue() && (uploadInFlight || !retiredModels.empty() || hasModel)) {
         uploadRing.FlushBatch();
         uint64_t copyValue = uploadRing.CopyQueue().SignalNext();
         if (copyValue != 0) {
@@ -694,12 +687,14 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     // signature/PSO bound before their draw calls; state changes are
     // per-draw at this scale, no batching/sorting needed.
     for (const auto& mesh : model.meshes) {
-        if (mesh.textureIndex >= 0 && model.srvHeap) {
+        if (mesh.textureIndex >= 0 && mesh.textureHeap) {
+            ID3D12DescriptorHeap* heaps[] = { mesh.textureHeap.Get() };
+            commandList->SetDescriptorHeaps(1, heaps);
             commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
             commandList->SetPipelineState(texturedPipelineState.Get());
             commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
-            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = model.srvHeap->GetGPUDescriptorHandleForHeapStart();
-            gpuHandle.ptr += static_cast<UINT64>(mesh.textureIndex) * model.srvDescriptorSize;
+            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+            gpuHandle.ptr += static_cast<UINT64>(mesh.textureIndex) * mesh.textureDescriptorSize;
             commandList->SetGraphicsRootDescriptorTable(1, gpuHandle);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
@@ -843,6 +838,8 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
     uploadInFlight = false;
 
     ModelResources staged;
+    staged.meshes.reserve(importedMeshes.size());
+    retiredModels.reserve(retiredModels.size() + 2);
 
     // Queue each unique image at most once, into a fresh shader-visible
     // heap sized to importedImages.size() -- created up front so each SRV
@@ -862,6 +859,9 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         staged.textures.resize(importedImages.size());
         for (size_t i = 0; i < importedImages.size(); ++i) {
             GpuTexture texture;
+            texture.chunkId = importedImages[i].chunkId;
+            texture.heap = staged.srvHeap;
+            texture.descriptorSize = staged.srvDescriptorSize;
             texture.srvHeapIndex = static_cast<UINT>(i);
             if (!CreateAndQueueTexture(importedImages[i], texture.srvHeapIndex, *staged.srvHeap.Get(),
                                         staged.srvDescriptorSize, static_cast<uint32_t>(kTextureClusterIdBase + i),
@@ -913,6 +913,10 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         // failure retires every resource the ring has already recorded a
         // copy into rather than destructing it under an unexecuted copy.
         GpuMesh gpuMesh;
+        gpuMesh.chunkId = mesh.chunkId;
+        gpuMesh.materialChunkId = mesh.materialChunkId;
+        gpuMesh.textureHeap = staged.srvHeap;
+        gpuMesh.textureDescriptorSize = staged.srvDescriptorSize;
         const bool vertexOk
             = CreateAndQueueBuffer(mesh.payload.data(), vertexBytes, clusterId++, gpuMesh.vertexBuffer, error);
         const bool indexOk = vertexOk
@@ -939,14 +943,6 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         }
 
         staged.meshes.push_back(std::move(gpuMesh));
-    }
-
-    if (staged.meshes.empty()) {
-        error = L"This file did not contain a mesh this preview slice can display yet.";
-        // Textures may already have been queued even though no mesh was.
-        RetireStagedResources(std::move(staged));
-        pendingResourceCount = 0;
-        return false;
     }
 
     // Submit whatever is still under the batch threshold, so the copies
@@ -1025,10 +1021,10 @@ bool D3D12ViewerPath::PollUploads()
 
 void D3D12ViewerPath::ReclaimRetired()
 {
-    uploadRing.ReclaimCompleted();
+    if (uploadRing.CopyQueue().Queue()) uploadRing.ReclaimCompleted();
 
-    const uint64_t directCompleted = directQueue.CompletedValue();
-    const uint64_t copyCompleted = uploadRing.CopyQueue().CompletedValue();
+    const uint64_t directCompleted = directQueue.Queue() ? directQueue.CompletedValue() : UINT64_MAX;
+    const uint64_t copyCompleted = uploadRing.CopyQueue().Queue() ? uploadRing.CopyQueue().CompletedValue() : UINT64_MAX;
     for (auto it = retiredModels.begin(); it != retiredModels.end();) {
         // Both timelines, not either: a superseded upload is constrained by
         // the copy fence and a displaced model by the direct one, and a set

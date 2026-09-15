@@ -4,6 +4,35 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 2 / TSK-201 (2026-09-15): complete.**
+  Wired `ImportSessionRequest::onBatch` to a cancellation-aware upload coordinator,
+  with accepted payload/vector/task capacity capped at 128 MiB and four batches
+  across queued, coordinator-owned and published work. Streaming imports retain
+  only a bounded generation catalog, and terminal completion carries status.
+  Default-heap allocation, copy recording/submission, staging-ring waits and bounds
+  scans leave the presenting render thread. Fence-complete publications append
+  geometry by generation/chunk identity; immutable texture heaps and material/image
+  bindings work across batches, including bounded forward references and sparse
+  slots. Invalid/unresolved terminal catalogs fail closed. Acknowledgements follow
+  bounded admission, and cancellation after acceptance suppresses the next ack.
+  Cancel/failure/replace/close wake backpressure, discard stale work and preserve
+  fence-safe resource retirement. Prior content remains visible and navigable while
+  replacement copies are delayed; partial content stays Loading. Ready follows
+  successful terminal catalog acceptance and all prior copies, with usable geometry.
+  Debug/Release solution builds and both Catch2 binaries pass: Unit 74 cases each,
+  ImportIsolation 155 cases each; targeted batch/hostile-worker coverage passes
+  18 cases. Four targeted app modes and the existing lifecycle smoke pass in each
+  configuration (ten viewer processes, zero survivors). Real 750 ms copy-fence
+  gates plus a delayed worker final batch display 20/64 chunks while Loading, then
+  all 64; full-queue cancel/replace/reopen and camera input while Loading pass.
+  Count pressure reaches four batches; a 16 KiB test byte cap holds at 14,840 bytes
+  Debug / 14,072 Release. Cross-batch texture binding remains intact. Exact commands,
+  committed reports, capacities and qualification limits are in
+  [TSK-201_VERIFICATION.md](./TSK-201_VERIFICATION.md).
+  No dependency/license changes. Large-source normalization/splitting, verified
+  metadata, complete coarse-proxy readiness and live GPU budgets remain their
+  subsequent tasks; **TSK-202 is next**.
+
 - **Scope-limited MVP, Phase 1 / TSK-104 (2026-09-15): complete.**
   Added a checksummed 33-input routine corpus and full A-small manifest, bounded
   deterministic small/medium/large GLB/STL/PLY mesh/point/endian recipes, source-byte

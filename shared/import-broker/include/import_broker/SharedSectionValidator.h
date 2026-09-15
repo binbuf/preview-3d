@@ -61,10 +61,14 @@ using KnownChunkCatalog = std::unordered_map<uint32_t, model_core::ChunkTopology
 // sectionView must be exactly the caller's actual MapViewOfFile size (never
 // the section's own self-declared length).
 //
+// allowForwardReferences is reserved for the session's bounded generation
+// acceptance path, which validates role consistency and rejects unresolved
+// terminal catalogs. Standalone callers remain strict by default.
 // priorBatches is null for a single-window import, which makes this function
 // behave exactly as it did before progressive delivery existed.
 ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                                          uint64_t expectedGenerationId, uint32_t maxChunkCount,
-                                         const KnownChunkCatalog* priorBatches = nullptr);
+                                         const KnownChunkCatalog* priorBatches = nullptr,
+                                         bool allowForwardReferences = false);
 
 } // namespace import_broker

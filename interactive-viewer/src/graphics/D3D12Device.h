@@ -44,6 +44,9 @@ public:
 
     CreateResult Initialize(const CreateOptions& options = {});
 
+    // Shares the existing device with an upload-only owner, without a factory/queues.
+    void AttachForUpload(ID3D12Device* device) { device_ = device; }
+
     ID3D12Device* Device() const noexcept { return device_.Get(); }
     IDXGIFactory6* Factory() const noexcept { return factory_.Get(); }
 

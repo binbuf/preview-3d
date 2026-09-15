@@ -221,7 +221,8 @@ double NowSeconds()
 // inlined here since CanNavigate is defined later in this file).
 bool HasNavigableModel(const ViewerApp& app)
 {
-    return app.state == ViewerState::Ready && app.renderThread.HasModel();
+    // Loading/error cards do not suspend interaction with usable prior content.
+    return app.renderThread.HasModel();
 }
 
 // Reserved bottom-bar VIEWPORT inset (not the bar's own drawn height, see
@@ -1187,6 +1188,8 @@ void CreateControls(ViewerApp& app)
 void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring& details,
     const std::wstring& failedPath = {})
 {
+    if (app.cancellation) app.cancellation->store(true, std::memory_order_relaxed);
+    app.renderThread.CancelUploads();
     app.state = ViewerState::Failed;
     app.errorSummary = summary;
     app.errorDetails = details;
@@ -1203,6 +1206,7 @@ void CancelOpen(ViewerApp& app)
     if (app.state != ViewerState::Loading) return;
     if (app.cancellation) app.cancellation->store(true, std::memory_order_relaxed);
     ++app.generation;
+    app.renderThread.CancelUploads();
     app.cancellation.reset();
     app.state = app.renderThread.HasModel() ? ViewerState::Ready : ViewerState::Empty;
     if (app.renderThread.HasModel()) app.filename = FileNameFromPath(app.currentPath);
@@ -1263,7 +1267,10 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
     const auto cancellation = app.cancellation;
 
     d3d12_import_bridge::SourceFormat format = *d3d12Format;
-    std::thread([window, generation, path, format, alive, cancellation]()
+    auto sink = app.renderThread.BeginImport(generation, path, cancellation);
+    const uint64_t sectionBytes = app.renderThread.SmokeSectionBytes();
+    const bool delayBatches = app.renderThread.DelayBatches();
+    std::thread([window, generation, path, format, alive, cancellation, sink, delayBatches, sectionBytes]()
     {
         d3d12_import_bridge::ImportResult result;
         try
@@ -1271,7 +1278,7 @@ void BeginOpen(ViewerApp& app, const std::wstring& path)
             result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
             {
                 return cancellation->load(std::memory_order_relaxed);
-            });
+            }, sink, sectionBytes, delayBatches);
         }
         catch (const std::bad_alloc&)
         {
@@ -1692,7 +1699,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message)
     {
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 5) return 0;
+        if (!app->appSmoke || wParam > 12) return 0;
         if (wParam == 0) return static_cast<LRESULT>(app->state) + 1;
         if (wParam == 1) return static_cast<LRESULT>(app->generation);
         return static_cast<LRESULT>(app->renderThread.SmokeValue(static_cast<unsigned>(wParam)));
@@ -2578,11 +2585,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path);
             return 0;
         }
-        // The upload and the bounds scan are GPU work and an O(vertices) walk
-        // -- both belong on the render thread, which owns the payloads from
-        // here. It posts kRenderUploadCompleteMessage back when it is done.
-        app->renderThread.PublishViewportAspect(ViewportAspect(*app));
-        app->renderThread.RequestUpload(std::move(complete->result), complete->generation, complete->path);
+        app->renderThread.FinishImport(complete->generation);
         return 0;
     }
     case kRenderUploadCompleteMessage:
@@ -2596,12 +2599,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         app->currentPath = uploaded->path;
         app->filename = FileNameFromPath(uploaded->path);
-        app->state = ViewerState::Ready;
+        app->state = uploaded->terminal ? ViewerState::Ready : ViewerState::Loading;
         app->failedPath.clear();
         app->errorSummary.clear();
         app->errorDetails.clear();
         UpdateTitle(*app);
-        SetFocus(window);
+        if (uploaded->terminal) SetFocus(window);
         UpdateButtonAvailability(*app);
         LayoutControls(*app);
         InvalidateRect(window, nullptr, FALSE);
@@ -2691,6 +2694,19 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         {
             if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
+            else if (_wcsicmp(arguments[i], L"--texture-batch-smoke") == 0) {
+                app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 420, false);
+            }
+            else if (_wcsicmp(arguments[i], L"--queue-smoke") == 0) {
+                app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 8192, false);
+            }
+            else if (_wcsicmp(arguments[i], L"--queue-byte-smoke") == 0) {
+                app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 8192, false);
+                app.renderThread.SetSmokeQueueCap(16 * 1024);
+            }
+            else if (_wcsicmp(arguments[i], L"--progressive-smoke") == 0) {
+                app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 4096, true);
+            }
             else if (_wcsicmp(arguments[i], L"--frame-stats") == 0) app.showFrameStats = true;
             // Deprecated spike flags are no-ops; every frame paints real chrome.
             else if (_wcsicmp(arguments[i], L"--overlay-spike") == 0 ||

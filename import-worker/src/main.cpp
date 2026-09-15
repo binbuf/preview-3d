@@ -1,4 +1,5 @@
 #include "ContainmentProbes.h"
+#include "ChunkBatchSink.h"
 #include "GenerationWorker.h"
 #include "GltfImportWorker.h"
 #include "PlyImportWorker.h"
@@ -65,6 +66,11 @@ int main(int argc, char* argv[])
 
     if (ArgEquals(argv[1], "--generate")) {
         return import_worker::RunGeneration();
+    }
+
+    if (ArgEquals(argv[1], "--parse-gltf-delayed-batches")) {
+        import_worker::ChunkBatchSink::SetDelayForTesting(1500);
+        return import_worker::RunGltfImport();
     }
 
     if (ArgEquals(argv[1], "--parse-gltf")) {

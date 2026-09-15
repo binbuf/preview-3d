@@ -162,6 +162,7 @@ struct BatchAcceptance {
     uint32_t nextBatchIndex = 0;
     uint32_t totalChunks = 0;
     KnownChunkCatalog catalog;
+    KnownChunkCatalog unresolved;
 
     void Record(const std::vector<ValidatedChunk>& chunks)
     {
@@ -298,7 +299,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         // was called before progressive delivery existed.
         const KnownChunkCatalog* prior = acceptance.nextBatchIndex > 0 ? &acceptance.catalog : nullptr;
         ValidationResult validation
-            = ValidateAndCopySection(view.bytes(), request.generationId, request.maxChunkCount, prior);
+            = ValidateAndCopySection(view.bytes(), request.generationId, request.maxChunkCount, prior, true);
         if (!validation.ok) {
             failure = Fail(ImportStage::ValidateSection, validation.errorCode);
             return false;
@@ -319,9 +320,42 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             return false;
         }
 
+        // Forward references are only material/image roles. Existing LOD
+        // references must resolve to an already validated chunk. Every missing
+        // role is bounded by the generation catalog cap and checked at terminal.
+        KnownChunkCatalog available = acceptance.catalog;
+        for (const auto& chunk : validation.chunks) available.emplace(chunk.descriptor.chunkId, chunk.descriptor.topology);
+        for (const auto& chunk : validation.chunks) {
+            auto pending = acceptance.unresolved.find(chunk.descriptor.chunkId);
+            if (pending != acceptance.unresolved.end()) {
+                if (pending->second != chunk.descriptor.topology) {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+                    return false;
+                }
+                acceptance.unresolved.erase(pending);
+            }
+            const auto& desc = chunk.descriptor;
+            for (uint32_t d = 0; d < model_core::kMaxDependencyIds; ++d) {
+                const auto id = desc.dependencyIds[d];
+                if (!id || available.contains(id)) continue;
+                const auto expected = desc.topology == model_core::ChunkTopology::Material
+                    ? model_core::ChunkTopology::Image : model_core::ChunkTopology::Material;
+                if (desc.topology != model_core::ChunkTopology::Material && d != 0) {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData); return false;
+                }
+                auto [it, inserted] = acceptance.unresolved.emplace(id, expected);
+                if ((!inserted && it->second != expected) || acceptance.unresolved.size() > chunkCountCap) {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData); return false;
+                }
+            }
+        }
         acceptance.Record(validation.chunks);
         if (request.onBatch) {
             request.onBatch(std::move(validation.chunks));
+            if (request.isCancelled && request.isCancelled()) {
+                failure = Fail(ImportStage::Cancelled);
+                return false;
+            }
         } else if (accumulated.empty()) {
             accumulated = std::move(validation.chunks);
         } else {
@@ -463,6 +497,8 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         failure->batchCount = acceptance.nextBatchIndex;
         return *failure;
     }
+    if (!acceptance.unresolved.empty())
+        return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
     // No ack for the terminal batch: there is no next write to gate, and the
     // worker is already on its way out.
 

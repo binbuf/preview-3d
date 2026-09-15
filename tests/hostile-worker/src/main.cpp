@@ -33,6 +33,11 @@ int main(int argc, char* argv[])
         return hostile_worker::RunLieLayout();
     }
 
+    if (ArgEquals(argv[1], "--catalog-forward")) return hostile_worker::RunCatalogBatches(0);
+    if (ArgEquals(argv[1], "--catalog-wrong-image")) return hostile_worker::RunCatalogBatches(1);
+    if (ArgEquals(argv[1], "--catalog-missing-image")) return hostile_worker::RunCatalogBatches(2);
+    if (ArgEquals(argv[1], "--catalog-wrong-material")) return hostile_worker::RunCatalogBatches(3);
+
     // Progressive-delivery attacks; see AttackModes.h.
     if (ArgEquals(argv[1], "--batches-honest")) {
         return hostile_worker::RunHonestBatches();

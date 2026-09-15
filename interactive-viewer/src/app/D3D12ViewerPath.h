@@ -99,12 +99,19 @@ struct D3D12ViewerPath
         Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
         D3D12_VERTEX_BUFFER_VIEW vbv{};
         D3D12_INDEX_BUFFER_VIEW ibv{};
+        uint32_t chunkId = 0;
+        uint32_t materialChunkId = 0;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> textureHeap;
+        UINT textureDescriptorSize = 0;
         UINT indexCount = 0;
         int textureIndex = -1; // index into textures[]; -1 = untextured PSO
     };
     struct GpuTexture
     {
         Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+        uint32_t chunkId = 0;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap;
+        UINT descriptorSize = 0;
         UINT srvHeapIndex = 0;
     };
 

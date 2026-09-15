@@ -35,6 +35,8 @@ namespace import_worker {
 
 class ChunkBatchSink {
 public:
+    static void SetDelayForTesting(unsigned milliseconds) { delayMs_ = milliseconds; }
+
     ChunkBatchSink(HANDLE stdIn, HANDLE stdOut, uint64_t generationId) noexcept
         : stdIn_(stdIn)
         , stdOut_(stdOut)
@@ -53,6 +55,7 @@ public:
     uint32_t BatchesPublished() const noexcept { return batchesPublished_; }
 
 private:
+    inline static unsigned delayMs_ = 0;
     HANDLE stdIn_;
     HANDLE stdOut_;
     uint64_t generationId_;
