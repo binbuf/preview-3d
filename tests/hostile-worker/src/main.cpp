@@ -37,6 +37,18 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--catalog-wrong-image")) return hostile_worker::RunCatalogBatches(1);
     if (ArgEquals(argv[1], "--catalog-missing-image")) return hostile_worker::RunCatalogBatches(2);
     if (ArgEquals(argv[1], "--catalog-wrong-material")) return hostile_worker::RunCatalogBatches(3);
+    if (ArgEquals(argv[1], "--origin-nan")) return hostile_worker::RunMetadataAttack(0);
+    if (ArgEquals(argv[1], "--origin-inf")) return hostile_worker::RunMetadataAttack(1);
+    if (ArgEquals(argv[1], "--bounds-fabricated")) return hostile_worker::RunMetadataAttack(2);
+    if (ArgEquals(argv[1], "--bounds-nan")) return hostile_worker::RunMetadataAttack(3);
+    if (ArgEquals(argv[1], "--bounds-reversed")) return hostile_worker::RunMetadataAttack(4);
+    if (ArgEquals(argv[1], "--metadata-enum")) return hostile_worker::RunMetadataAttack(5);
+    if (ArgEquals(argv[1], "--metadata-stale")) return hostile_worker::RunMetadataAttack(6);
+    if (ArgEquals(argv[1], "--protocol-old")) return hostile_worker::RunMetadataAttack(7);
+    if (ArgEquals(argv[1], "--metadata-changed")) return hostile_worker::RunMetadataAttack(8);
+    if (ArgEquals(argv[1], "--origin-distant-batch")) return hostile_worker::RunMetadataAttack(11);
+    if (ArgEquals(argv[1], "--position-nan")) return hostile_worker::RunMetadataAttack(9);
+    if (ArgEquals(argv[1], "--position-inf")) return hostile_worker::RunMetadataAttack(10);
 
     // Progressive-delivery attacks; see AttackModes.h.
     if (ArgEquals(argv[1], "--batches-honest")) {

@@ -30,6 +30,7 @@ namespace import_broker {
 struct ValidatedChunk {
     model_core::ChunkDescriptor descriptor; // copied into private host memory
     std::vector<std::byte> payload;         // copied into private host memory
+    model_core::SceneMetadata scene{};
 };
 
 struct ValidationResult {

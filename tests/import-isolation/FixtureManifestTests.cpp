@@ -81,7 +81,8 @@ TEST_CASE("Manifest Tier A fixtures preserve counts and geometric bounds through
                 std::array<float,3> p;
                 std::memcpy(p.data(), chunk.payload.data()+i*stride,12);
                 for (unsigned axis=0; axis<3; ++axis) {
-                    lo[axis]=std::min(lo[axis],p[axis]); hi[axis]=std::max(hi[axis],p[axis]);
+                    const float world = float(d.origin[axis] + p[axis]);
+                    lo[axis]=std::min(lo[axis],world); hi[axis]=std::max(hi[axis],world);
                 }
             }
         }

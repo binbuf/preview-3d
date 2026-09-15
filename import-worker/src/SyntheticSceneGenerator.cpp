@@ -4,6 +4,7 @@
 #include "model_core/ControlProtocol.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
+#include "model_core/GeometryBounds.h"
 
 #include <array>
 #include <cstring>
@@ -133,6 +134,8 @@ std::variant<GeneratedSectionInfo, ImportErrorCode> GenerateSyntheticScene(
     chunk1.dependencyIds[0] = 1; // references chunk0
     chunk1.chunkChecksum = Fnv1a64(destination.subspan(chunk1Offset, kChunk1PayloadBytes));
 
+    SetLocalBounds(chunk0, destination.subspan(size_t(chunk0.normalizedRangeOffset), size_t(chunk0.byteSize)));
+    SetLocalBounds(chunk1, destination.subspan(size_t(chunk1.normalizedRangeOffset), size_t(chunk1.byteSize)));
     std::memcpy(destination.data() + kSectionHeaderSize, &chunk0, sizeof(chunk0));
     std::memcpy(destination.data() + kSectionHeaderSize + kChunkDescriptorSize, &chunk1, sizeof(chunk1));
 
@@ -140,6 +143,7 @@ std::variant<GeneratedSectionInfo, ImportErrorCode> GenerateSyntheticScene(
     header.magic = kSectionMagic;
     header.protocolVersion = kCurrentProtocolVersion;
     header.generationId = generationId;
+    header.scene.generationId = generationId;
     header.sectionLength = sectionLength;
     header.chunkCount = 2;
     header.reserved = 0;

@@ -4,6 +4,38 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 2 / TSK-202 (2026-09-15): complete.**
+  Protocol v2 carries fixed-width double cluster origins, exact local bounds,
+  source mesh/node identities and generation-tagged format/unit/axis/scene facts.
+  Workers preserve double glTF transforms and both-endian PLY residuals before
+  float narrowing; double STL facet arithmetic preserves tiny nondegenerate faces.
+  The broker validates a private snapshot, independently verifies finite geometry
+  and exact extrema, rejects stale/changed metadata and unknown versions, and
+  caps generation-relative spans before unchanged float camera calculations.
+  Rendering subtracts origins and camera pivots in double before shader floats.
+  Compact immutable UI snapshots supply real counts, double Info dimensions,
+  provisional/verified state, exact native-orientation correction and Fit/Reset
+  bounds, with no retained CPU vertex/index payload. Later framing corrections
+  preserve live camera input by interaction epoch while updating home bounds.
+  Existing whole-document selection and Frame selected use depth-tested GPU
+  coverage with one asynchronous pixel readback; source IDs remain beside GPU
+  chunks. Position-only triangles and minimal one-pixel points are supported.
+  Debug/Release solution builds pass. Unit: 76 cases each / 6,034 Debug and 5,947
+  Release assertions; ImportIsolation: 160 cases / 3,247 assertions each,
+  including NaN/Inf, fabricated bounds, stale/changed facts, protocol mismatch,
+  hostile cross-batch spans and a seeded 512-input mutation corpus.
+  Six precision scenes, camera refinement checks, four progressive modes and
+  lifecycle smoke with point presentation required pass in each configuration:
+  twelve viewer processes, zero survivors. Delayed imports show 15/64 chunks
+  with provisional metadata, then 192 vertices / 64 triangles and verified bounds;
+  user zoom survives and Reset uses expanded bounds. Debug reports zero D3D12
+  errors. Count pressure still reaches four batches; the 16 KiB byte cap holds
+  at 12,772 bytes Debug / 12,388 Release. Commands, committed reports, limits and
+  remaining normalization/point-rendering work are in
+  [TSK-202_VERIFICATION.md](./TSK-202_VERIFICATION.md).
+  simdjson is now explicit in the manifest at its existing pinned version/features;
+  no new dependency version or license. **TSK-203 is next**.
+
 - **Scope-limited MVP, Phase 2 / TSK-201 (2026-09-15): complete.**
   Wired `ImportSessionRequest::onBatch` to a cancellation-aware upload coordinator,
   with accepted payload/vector/task capacity capped at 128 MiB and four batches

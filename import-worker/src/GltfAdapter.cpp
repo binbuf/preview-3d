@@ -12,10 +12,16 @@
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
+#include "model_core/GeometryBounds.h"
 #include "platform/CheckedMath.h"
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/tools.hpp>
+#pragma warning(push)
+#pragma warning(disable: 4100 4244) // warnings in the pinned third-party header only
+#include <simdjson.h>
+#pragma warning(pop)
+#include <cmath>
 
 #include <cstring>
 #include <filesystem>
@@ -53,6 +59,7 @@ constexpr uint64_t kMaxAggregateDecodedTexturePixels = 1'000'000'000;
 struct PendingChunk {
     std::vector<VertexPositionNormalUv0F32> vertices;
     std::vector<uint32_t> indices;
+    ChunkDescriptor geometry{};
     std::optional<size_t> pendingMaterialIndex; // index into WalkState::pendingMaterials
 };
 
@@ -93,16 +100,61 @@ ImportErrorCode MapFastgltfError(fastgltf::Error)
 // that order yields exactly T*R*S, the standard composition. This avoids
 // depending on fquat::asMatrix()'s return type/element-access syntax or any
 // guessed composition order.
-fastgltf::math::fmat4x4 LocalTransform(const fastgltf::Node& node)
+// fastgltf 0.9 stores node TRS/matrices as floats. Read only the bounded JSON
+// metadata again to preserve authored double transforms; the binary payload
+// remains mapped and is never copied for this pass.
+std::variant<std::vector<fastgltf::math::dmat4x4>, ImportErrorCode> ReadPreciseTransforms(
+    std::span<const std::byte> source, size_t nodeCount)
 {
-    if (const auto* trs = std::get_if<fastgltf::TRS>(&node.transform)) {
-        fastgltf::math::fmat4x4 local(1.0f);
-        local = fastgltf::math::translate(local, trs->translation);
-        local = fastgltf::math::rotate(local, trs->rotation);
-        local = fastgltf::math::scale(local, trs->scale);
-        return local;
+    using namespace fastgltf::math;
+    if (source.size() >= 4 && std::memcmp(source.data(), "glTF", 4) == 0) {
+        if (source.size() < 20) return ImportErrorCode::MalformedData;
+        uint32_t length; std::memcpy(&length,source.data()+12,sizeof(length));
+        if (length > source.size()-20) return ImportErrorCode::MalformedData;
+        source = source.subspan(20,length);
     }
-    return std::get<fastgltf::math::fmat4x4>(node.transform);
+    if (source.size() > 32ull*1024*1024 || nodeCount > 1'000'000) return ImportErrorCode::ResourceLimit;
+    simdjson::dom::parser parser;
+    simdjson::dom::element document;
+    if (parser.parse(reinterpret_cast<const uint8_t*>(source.data()),source.size()).get(document)) return ImportErrorCode::MalformedData;
+    simdjson::dom::array nodes;
+    if (document["nodes"].get_array().get(nodes) || nodes.size() != nodeCount) return ImportErrorCode::MalformedData;
+    std::vector<dmat4x4> transforms; transforms.reserve(nodeCount);
+    for (auto node : nodes) {
+        auto read = [&](const char* key, double* values, size_t count) {
+            simdjson::dom::element field;
+            const auto error = node[key].get(field);
+            if (error == simdjson::NO_SUCH_FIELD) return true;
+            simdjson::dom::array array;
+            if (error || field.get_array().get(array) || array.size() != count) return false;
+            size_t i=0;
+            for (auto value : array) {
+                if (value.get_double().get(values[i]) || !std::isfinite(values[i]) || std::abs(values[i]) > 1e30) return false;
+                ++i;
+            }
+            return true;
+        };
+        double translation[3]{}, scale[3]{1,1,1}, rotation[4]{0,0,0,1};
+        dmat4x4 matrix(1.0);
+        simdjson::dom::element authoredMatrix;
+        if (node["matrix"].get(authoredMatrix) == simdjson::SUCCESS) {
+            double values[16];
+            if (!read("matrix",values,16)) return ImportErrorCode::MalformedData;
+            for (unsigned col=0; col<4; ++col) for (unsigned row=0; row<4; ++row) matrix[col][row]=values[col*4+row];
+            if (matrix[0][3] != 0 || matrix[1][3] != 0 || matrix[2][3] != 0 || matrix[3][3] != 1)
+                return ImportErrorCode::MalformedData;
+        } else {
+            if (!read("translation",translation,3) || !read("scale",scale,3) || !read("rotation",rotation,4)) return ImportErrorCode::MalformedData;
+            double length = 0; for (double value : rotation) length += value*value;
+            if (!std::isfinite(length) || length <= 0) return ImportErrorCode::MalformedData;
+            length = std::sqrt(length); for (double& value : rotation) value /= length;
+            matrix = fastgltf::math::translate(matrix,dvec3(translation[0],translation[1],translation[2]));
+            matrix = fastgltf::math::rotate(matrix,dquat(rotation[0],rotation[1],rotation[2],rotation[3]));
+            matrix = fastgltf::math::scale(matrix,dvec3(scale[0],scale[1],scale[2]));
+        }
+        transforms.push_back(matrix);
+    }
+    return transforms;
 }
 
 // Manual accessor validation, mandatory before every templated fastgltf
@@ -180,6 +232,7 @@ struct ResolvedExternalBuffer {
 
 struct WalkState {
     const fastgltf::Asset& asset;
+    std::vector<fastgltf::math::dmat4x4> localTransforms;
     std::vector<uint8_t> visitState;
     std::vector<PendingChunk> chunks;
     std::vector<PendingMaterial> pendingMaterials;
@@ -605,7 +658,7 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
 }
 
 bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
-                       const fastgltf::math::fmat4x4& world, const fastgltf::math::fmat3x3& normalMatrix)
+                       const fastgltf::math::dmat4x4& world, const fastgltf::math::fmat3x3& normalMatrix, uint32_t meshId, uint32_t nodeId)
 {
     if (primitive.type != fastgltf::PrimitiveType::Triangles) {
         return true; // skip, not fatal -- mirrors Model.cpp's leniency for non-triangle primitives
@@ -675,6 +728,17 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
 
     PendingChunk chunk;
     chunk.vertices.resize(positionAccessor.count);
+    chunk.geometry.vertexCount = static_cast<uint32_t>(positionAccessor.count);
+    chunk.geometry.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0_F32);
+    chunk.geometry.meshId = meshId; chunk.geometry.nodeId = nodeId;
+    chunk.geometry.geometryFlags = hasUv ? kGeometryHasUv0 : 0;
+    if (primitive.findAttribute("TEXCOORD_1") != primitive.attributes.end()) chunk.geometry.geometryFlags |= kGeometryHasUv1;
+    if (primitive.findAttribute("COLOR_0") != primitive.attributes.end()) chunk.geometry.geometryFlags |= kGeometryHasColors;
+    for (unsigned axis = 0; axis < 3; ++axis) chunk.geometry.origin[axis] = world[3][axis];
+    // Separate translation before narrowing. Multiplying tiny residuals into
+    // a huge world position first loses precision even in double arithmetic.
+    auto linearWorld = world; linearWorld[3] = fastgltf::math::dvec4(0,0,0,1);
+
 
     if (primitive.dracoCompression != nullptr) {
         const fastgltf::DracoCompressedPrimitive& dracoPrimitive = *primitive.dracoCompression;
@@ -719,13 +783,13 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         DracoDecodedMesh& decodedMesh = std::get<DracoDecodedMesh>(decoded);
 
         for (size_t idx = 0; idx < chunk.vertices.size(); ++idx) {
-            fastgltf::math::fvec4 worldPos = world
-                * fastgltf::math::fvec4(decodedMesh.positions[idx * 3 + 0],
+            fastgltf::math::dvec4 worldPos = linearWorld
+                * fastgltf::math::dvec4(decodedMesh.positions[idx * 3 + 0],
                                          decodedMesh.positions[idx * 3 + 1],
                                          decodedMesh.positions[idx * 3 + 2], 1.0f);
-            chunk.vertices[idx].px = worldPos.x();
-            chunk.vertices[idx].py = worldPos.y();
-            chunk.vertices[idx].pz = worldPos.z();
+            chunk.vertices[idx].px = static_cast<float>(worldPos.x());
+            chunk.vertices[idx].py = static_cast<float>(worldPos.y());
+            chunk.vertices[idx].pz = static_cast<float>(worldPos.z());
 
             if (hasUv) {
                 chunk.vertices[idx].u = (*decodedMesh.uv0)[idx * 2 + 0];
@@ -780,11 +844,11 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
             state.asset, positionAccessor,
             [&](fastgltf::math::fvec3 pos, size_t idx) {
-                fastgltf::math::fvec4 worldPos
-                    = world * fastgltf::math::fvec4(pos.x(), pos.y(), pos.z(), 1.0f);
-                chunk.vertices[idx].px = worldPos.x();
-                chunk.vertices[idx].py = worldPos.y();
-                chunk.vertices[idx].pz = worldPos.z();
+                fastgltf::math::dvec4 worldPos
+                    = linearWorld * fastgltf::math::dvec4(pos.x(), pos.y(), pos.z(), 1.0f);
+                chunk.vertices[idx].px = static_cast<float>(worldPos.x());
+                chunk.vertices[idx].py = static_cast<float>(worldPos.y());
+                chunk.vertices[idx].pz = static_cast<float>(worldPos.z());
             },
             bufferAdapter);
 
@@ -839,6 +903,10 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         }
     }
 
+    if (!RebasePositions(chunk.geometry, std::span<std::byte>(
+            reinterpret_cast<std::byte*>(chunk.vertices.data()), chunk.vertices.size() * sizeof(chunk.vertices[0])))) {
+        state.error = ImportErrorCode::MalformedData; return false;
+    }
     state.totalVertices += chunk.vertices.size();
     state.totalIndices += chunk.indices.size();
 
@@ -859,7 +927,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
 // cycle (revisiting a node with state 1) is an error; a DAG diamond (two
 // parents sharing a child) is legally reprocessed, matching
 // interactive-viewer's existing Model.cpp::VisitNode semantics.
-bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::fmat4x4& parentWorld,
+bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::dmat4x4& parentWorld,
                int depth)
 {
     if (depth > kMaxNodeDepth) {
@@ -877,8 +945,9 @@ bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::fmat4x4
     state.visitState[nodeIndex] = 1;
 
     const fastgltf::Node& node = state.asset.nodes[nodeIndex];
-    fastgltf::math::fmat4x4 local = LocalTransform(node);
-    fastgltf::math::fmat4x4 world = parentWorld * local;
+    auto world = parentWorld * state.localTransforms[nodeIndex];
+    fastgltf::math::fmat3x3 linear(1.0f);
+    for (unsigned col=0; col<3; ++col) for (unsigned row=0; row<3; ++row) linear[col][row] = float(world[col][row]);
 
     if (node.meshIndex.has_value()) {
         if (*node.meshIndex >= state.asset.meshes.size()) {
@@ -887,10 +956,10 @@ bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::fmat4x4
         }
         const fastgltf::Mesh& mesh = state.asset.meshes[*node.meshIndex];
         fastgltf::math::fmat3x3 normalMatrix
-            = fastgltf::math::transpose(fastgltf::math::inverse(fastgltf::math::fmat3x3(world)));
+            = fastgltf::math::transpose(fastgltf::math::inverse(linear));
 
         for (const fastgltf::Primitive& primitive : mesh.primitives) {
-            if (!ConvertPrimitive(state, primitive, world, normalMatrix)) {
+            if (!ConvertPrimitive(state, primitive, world, normalMatrix, uint32_t(*node.meshIndex + 1), uint32_t(nodeIndex + 1))) {
                 return false;
             }
         }
@@ -942,7 +1011,7 @@ std::span<const std::byte> BytesOf(const std::vector<T>& values)
 // whole model. Returns the section length, or nullopt if the batch does not
 // fit -- which the caller must have already prevented.
 std::optional<uint64_t> WriteBatchSection(std::span<std::byte> destination,
-                                           std::span<PlannedChunk> batch, uint64_t generationId)
+                                           std::span<PlannedChunk> batch, uint64_t generationId, const SceneMetadata& scene)
 {
     auto descriptorTableBytes
         = CheckedMultiply(static_cast<uint64_t>(batch.size()), kChunkDescriptorSize);
@@ -990,6 +1059,8 @@ std::optional<uint64_t> WriteBatchSection(std::span<std::byte> destination,
     header.magic = kSectionMagic;
     header.protocolVersion = kCurrentProtocolVersion;
     header.generationId = generationId;
+    header.scene = scene;
+    header.scene.generationId = generationId;
     header.sectionLength = sectionLength;
     header.chunkCount = static_cast<uint32_t>(batch.size());
     header.reserved = 0;
@@ -1043,6 +1114,15 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                                                              SidecarFileClient* sidecarClient,
                                                              ChunkBatchSink* batchSink)
 {
+    // Bound metadata before either JSON parser allocates its document storage.
+    size_t metadataBytes = sourceGlbBytes.size();
+    if (sourceGlbBytes.size() >= 4 && std::memcmp(sourceGlbBytes.data(),"glTF",4) == 0) {
+        if (sourceGlbBytes.size() < 20) return ImportErrorCode::MalformedData;
+        uint32_t jsonBytes; std::memcpy(&jsonBytes,sourceGlbBytes.data()+12,sizeof(jsonBytes));
+        if (jsonBytes > sourceGlbBytes.size()-20) return ImportErrorCode::MalformedData;
+        metadataBytes = jsonBytes;
+    }
+    if (metadataBytes > 32ull*1024*1024) return ImportErrorCode::ResourceLimit;
     auto dataBufferResult
         = fastgltf::GltfDataBuffer::FromBytes(sourceGlbBytes.data(), sourceGlbBytes.size());
     if (!dataBufferResult) {
@@ -1071,6 +1151,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         return MapFastgltfError(assetResult.error());
     }
     const fastgltf::Asset& asset = assetResult.get();
+    if (asset.meshes.size() > 1'000'000 || asset.animations.size() > 1'000'000 || asset.skins.size() > 1'000'000)
+        return ImportErrorCode::ResourceLimit;
 
     if (asset.scenes.empty()) {
         return ImportErrorCode::MalformedData;
@@ -1081,11 +1163,14 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     }
 
     WalkState state{ asset };
+    auto preciseTransforms = ReadPreciseTransforms(sourceGlbBytes,asset.nodes.size());
+    if (auto error = std::get_if<ImportErrorCode>(&preciseTransforms)) return *error;
+    state.localTransforms = std::move(std::get<std::vector<fastgltf::math::dmat4x4>>(preciseTransforms));
     state.visitState.assign(asset.nodes.size(), 0);
     state.maxChunkCount = maxChunkCount;
     state.sidecarClient = sidecarClient;
 
-    fastgltf::math::fmat4x4 identity(1.0f);
+    fastgltf::math::dmat4x4 identity(1.0);
     for (size_t nodeIndex : asset.scenes[sceneIndex].nodeIndices) {
         if (!VisitNode(state, nodeIndex, identity, 0)) {
             return state.error;
@@ -1119,6 +1204,19 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     // into one joined buffer.
     std::vector<ImagePayloadHeader> imageHeaders(imageChunkCount);
 
+    SceneMetadata scene{};
+    scene.generationId = generationId;
+    scene.format = sourceGlbBytes.size() >= 4 && std::memcmp(sourceGlbBytes.data(), "glTF", 4) == 0
+        ? SourceFormatId::Glb : SourceFormatId::Gltf;
+    scene.upAxis = UpAxisId::Y; scene.metersPerUnit = 1.0;
+    scene.meshCount = static_cast<uint32_t>(state.asset.meshes.size());
+    scene.nodeCount = static_cast<uint32_t>(state.asset.nodes.size());
+    scene.animationCount = static_cast<uint32_t>(state.asset.animations.size());
+    scene.skinCount = static_cast<uint32_t>(state.asset.skins.size());
+    for (const auto& skin : state.asset.skins) {
+        if (skin.joints.size() > 1'000'000 - scene.boneCount) return ImportErrorCode::ResourceLimit;
+        scene.boneCount += static_cast<uint32_t>(skin.joints.size());
+    }
     std::vector<PlannedChunk> meshPlans(meshChunkCount);
     std::vector<PlannedChunk> materialPlans(materialChunkCount);
     std::vector<PlannedChunk> imagePlans(imageChunkCount);
@@ -1138,6 +1236,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         }
 
         PlannedChunk& plan = meshPlans[i];
+        plan.descriptor = chunk.geometry;
         plan.descriptor.sourceRangeOffset = 0;
         plan.descriptor.sourceRangeLength = 0;
         plan.descriptor.topology = ChunkTopology::TriangleList;
@@ -1285,7 +1384,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             return ImportErrorCode::ResourceLimit;
         }
 
-        auto sectionLength = WriteBatchSection(destination, remaining.subspan(0, taken), generationId);
+        auto sectionLength = WriteBatchSection(destination, remaining.subspan(0, taken), generationId, scene);
         if (!sectionLength) {
             return ImportErrorCode::ResourceLimit;
         }

@@ -16,6 +16,7 @@
 #include "model_core/ControlProtocol.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
+#include "model_core/GeometryBounds.h"
 #include "platform/MappedView.h"
 #include "platform/Win32Handle.h"
 
@@ -27,6 +28,7 @@
 #include <span>
 #include <string>
 #include <vector>
+#include <limits>
 
 namespace {
 
@@ -62,6 +64,7 @@ std::vector<std::byte> BuildMinimalValidSection(uint64_t generationId)
     descriptor.dependencyCount = 0;
     descriptor.chunkChecksum = Fnv1a64(std::span<const std::byte>(vertexBytes));
 
+    SetLocalBounds(descriptor, vertexBytes);
     std::memcpy(section.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
     std::memcpy(section.data() + payloadOffset, vertexBytes.data(), vertexBytes.size());
 
@@ -69,6 +72,7 @@ std::vector<std::byte> BuildMinimalValidSection(uint64_t generationId)
     header.magic = kSectionMagic;
     header.protocolVersion = kCurrentProtocolVersion;
     header.generationId = generationId;
+    header.scene.generationId = generationId;
     header.sectionLength = sectionLength;
     header.chunkCount = 1;
     header.reserved = 0;
@@ -81,6 +85,72 @@ std::vector<std::byte> BuildMinimalValidSection(uint64_t generationId)
 }
 
 } // namespace
+
+TEST_CASE("Private geometry validation rejects bounds lies malformed origins metadata and unknown protocols", "[import-pipeline][bounds][metadata]")
+{
+    for (unsigned attack=0; attack<10; ++attack) {
+        CAPTURE(attack);
+        auto section = BuildMinimalValidSection(202);
+        model_core::SectionHeader header; std::memcpy(&header,section.data(),sizeof(header));
+        model_core::ChunkDescriptor descriptor;
+        std::memcpy(&descriptor,section.data()+model_core::kSectionHeaderSize,sizeof(descriptor));
+        switch (attack) {
+        case 0: descriptor.origin[0] = 1e31; break;
+        case 1: descriptor.origin[2] = std::numeric_limits<double>::quiet_NaN(); break;
+        case 2: descriptor.localMax[0] += 1; break;
+        case 3: descriptor.boundsState = model_core::BoundsState::Provisional; break;
+        case 4: header.protocolVersion = 0; break;
+        case 5: header.protocolVersion = 0xFFFFFFFF; break;
+        case 6: header.scene.generationId = 201; break;
+        case 7: header.scene.metersPerUnit = std::numeric_limits<double>::infinity(); break;
+        case 8: header.scene.nodeCount = 1'000'001; break;
+        case 9: descriptor.geometryFlags = 0xFFFFFFFF; break;
+        }
+        std::memcpy(section.data()+model_core::kSectionHeaderSize,&descriptor,sizeof(descriptor));
+        header.sectionChecksum = model_core::Fnv1a64(std::span<const std::byte>(section).subspan(model_core::kSectionHeaderSize));
+        std::memcpy(section.data(),&header,sizeof(header));
+        auto result = import_broker::ValidateAndCopySection(section,202,8);
+        CHECK_FALSE(result.ok); CHECK(result.chunks.empty());
+    }
+}
+
+TEST_CASE("Protocol v2 copied geometry survives a bounded deterministic mutation corpus", "[fuzz][wire-format][bounds]")
+{
+    uint32_t seed = 0x202B0A7D;
+    unsigned accepted = 0, rejected = 0;
+    for (unsigned i=0; i<512; ++i) {
+        auto section = BuildMinimalValidSection(202);
+        seed ^= seed<<13; seed ^= seed>>17; seed ^= seed<<5;
+        if (i%32) section[seed%section.size()] ^= std::byte(uint8_t((seed>>8)|1));
+        model_core::SectionHeader header; std::memcpy(&header,section.data(),sizeof(header));
+        model_core::ChunkDescriptor descriptor;
+        std::memcpy(&descriptor,section.data()+sizeof(header),sizeof(descriptor));
+        // Rechecksum bounded ranges so most mutations exercise structural and
+        // geometric checks rather than stopping at checksum rejection.
+        if (descriptor.normalizedRangeOffset <= section.size()
+            && descriptor.byteSize <= section.size()-descriptor.normalizedRangeOffset) {
+            descriptor.chunkChecksum = model_core::Fnv1a64(std::span<const std::byte>(section).subspan(
+                size_t(descriptor.normalizedRangeOffset),size_t(descriptor.byteSize)));
+            std::memcpy(section.data()+sizeof(header),&descriptor,sizeof(descriptor));
+        }
+        if (header.sectionLength >= sizeof(header) && header.sectionLength <= section.size()) {
+            header.sectionChecksum = model_core::Fnv1a64(std::span<const std::byte>(section).subspan(
+                sizeof(header),size_t(header.sectionLength-sizeof(header))));
+            std::memcpy(section.data(),&header,sizeof(header));
+        }
+        auto result = import_broker::ValidateAndCopySection(section,202,8);
+        if (!result.ok) { ++rejected; CHECK(result.chunks.empty()); continue; }
+        ++accepted;
+        CHECK(header.protocolVersion == model_core::kCurrentProtocolVersion);
+        REQUIRE(result.chunks.size() <= 8);
+        for (const auto& copied : result.chunks) {
+            CHECK(copied.scene.generationId == 202);
+            CHECK(copied.descriptor.boundsState == model_core::BoundsState::Verified);
+            CHECK(copied.payload.size() <= section.size());
+        }
+    }
+    CHECK(accepted > 0); CHECK(rejected > 0);
+}
 
 TEST_CASE("Host can create, map, write, and read back a pagefile-backed shared section "
           "without launching a worker",

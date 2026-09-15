@@ -9,6 +9,7 @@
 #include "model_core/ControlProtocol.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
+#include "model_core/GeometryBounds.h"
 #include "platform/MappedView.h"
 
 #include <windows.h>
@@ -18,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <variant>
+#include <limits>
 
 namespace hostile_worker {
 
@@ -121,12 +123,15 @@ uint64_t BuildLyingSingleChunkSection(std::span<std::byte> destination, uint64_t
     // checksum below is computed over whatever ends up actually written.
     corrupt(descriptor, sectionLength);
 
+    if (descriptor.topology == ChunkTopology::TriangleList || descriptor.topology == ChunkTopology::PointList)
+        SetLocalBounds(descriptor, destination.subspan(size_t(payloadOffset), size_t(descriptor.byteSize)));
     std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
 
     SectionHeader header{};
     header.magic = kSectionMagic;
     header.protocolVersion = kCurrentProtocolVersion;
     header.generationId = generationId;
+    header.scene.generationId = generationId;
     header.sectionLength = sectionLength;
     header.chunkCount = 1;
     header.reserved = 0;
@@ -338,12 +343,15 @@ uint64_t BuildOneChunkSection(std::span<std::byte> destination, uint64_t generat
     descriptor.dependencyCount = 0;
     descriptor.chunkChecksum = Fnv1a64(destination.subspan(payloadOffset, sizeof(vertex)));
 
+    if (descriptor.topology == ChunkTopology::TriangleList || descriptor.topology == ChunkTopology::PointList)
+        SetLocalBounds(descriptor, destination.subspan(size_t(payloadOffset), size_t(descriptor.byteSize)));
     std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
 
     SectionHeader header{};
     header.magic = kSectionMagic;
     header.protocolVersion = kCurrentProtocolVersion;
     header.generationId = generationId;
+    header.scene.generationId = generationId;
     header.sectionLength = sectionLength;
     header.chunkCount = 1;
     header.reserved = 0;
@@ -422,12 +430,15 @@ int RunCatalogBatches(int mode)
     auto write = [&](ChunkDescriptor desc, const void* payload, size_t bytes) {
         desc.byteSize = desc.normalizedRangeLength = bytes;
         desc.normalizedRangeOffset = kSectionHeaderSize + kChunkDescriptorSize;
+        if (desc.topology == ChunkTopology::TriangleList || desc.topology == ChunkTopology::PointList)
+            SetLocalBounds(desc, std::span(static_cast<const std::byte*>(payload), bytes));
         desc.chunkChecksum = Fnv1a64(std::span(static_cast<const std::byte*>(payload), bytes));
         std::memcpy(view.bytes().data() + desc.normalizedRangeOffset, payload, bytes);
         std::memcpy(view.bytes().data() + kSectionHeaderSize, &desc, sizeof(desc));
         SectionHeader header{};
         header.magic = kSectionMagic; header.protocolVersion = kCurrentProtocolVersion;
-        header.generationId = request.generationId; header.chunkCount = 1;
+        header.generationId = request.generationId;
+    header.scene.generationId = request.generationId; header.chunkCount = 1;
         header.sectionLength = desc.normalizedRangeOffset + bytes;
         header.sectionChecksum = Fnv1a64(view.bytes().subspan(kSectionHeaderSize,
             static_cast<size_t>(header.sectionLength - kSectionHeaderSize)));
@@ -580,6 +591,52 @@ int RunBatchAfterTerminal()
     uint64_t extra = BuildOneChunkSection(view.bytes(), request.generationId, 2, 20.0f);
     SendBatchReady(request.generationId, 1, 1, extra);
     return 0;
+}
+
+int RunMetadataAttack(int mode)
+{
+    using namespace model_core;
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) return 1;
+    auto& [request, view] = *session;
+    auto generated = import_worker::GenerateSyntheticScene(view.bytes(),request.generationId,
+        kSceneVariant_CubeAndPointCluster,8);
+    auto info = std::get_if<import_worker::GeneratedSectionInfo>(&generated);
+    if (!info) return 1;
+    if ((mode == 8 || mode == 11) && (!SendBatchReady(request.generationId,0,info->chunkCount,info->sectionBytesWritten)
+        || !AwaitBatchConsumed())) return 1;
+    SectionHeader header; std::memcpy(&header,view.bytes().data(),sizeof(header));
+    ChunkDescriptor descriptor; std::memcpy(&descriptor,view.bytes().data()+kSectionHeaderSize,sizeof(descriptor));
+    const auto nan = std::numeric_limits<float>::quiet_NaN();
+    switch (mode) {
+    case 0: descriptor.origin[0] = std::numeric_limits<double>::quiet_NaN(); break;
+    case 1: descriptor.origin[1] = std::numeric_limits<double>::infinity(); break;
+    case 2: descriptor.localMax[0] += 1; break;
+    case 3: descriptor.localMin[0] = nan; break;
+    case 4: descriptor.localMin[0] = descriptor.localMax[0] + 1; break;
+    case 5: header.scene.format = SourceFormatId(0xFFFFFFFF); break;
+    case 6: --header.scene.generationId; break;
+    case 7: header.protocolVersion = 1; break;
+    case 8: case 11: {
+        if (mode == 8) header.scene.nodeCount = 1;
+        else descriptor.origin[0] = 1e20;
+        descriptor.chunkId += 2;
+        ChunkDescriptor other; std::memcpy(&other,view.bytes().data()+kSectionHeaderSize+kChunkDescriptorSize,sizeof(other));
+        other.chunkId += 2; other.dependencyIds[0] += 2;
+        std::memcpy(view.bytes().data()+kSectionHeaderSize+kChunkDescriptorSize,&other,sizeof(other));
+        break;
+    }
+    case 9: case 10: {
+        float value = mode == 9 ? nan : std::numeric_limits<float>::infinity();
+        std::memcpy(view.bytes().data()+descriptor.normalizedRangeOffset,&value,sizeof(value));
+        descriptor.chunkChecksum = Fnv1a64(view.bytes().subspan(size_t(descriptor.normalizedRangeOffset),size_t(descriptor.byteSize)));
+        break;
+    }
+    }
+    std::memcpy(view.bytes().data()+kSectionHeaderSize,&descriptor,sizeof(descriptor));
+    header.sectionChecksum = Fnv1a64(view.bytes().subspan(kSectionHeaderSize,size_t(header.sectionLength-kSectionHeaderSize)));
+    std::memcpy(view.bytes().data(),&header,sizeof(header));
+    return SendChunksReady(request.generationId,header.chunkCount,header.sectionLength) ? 0 : 1;
 }
 
 } // namespace hostile_worker

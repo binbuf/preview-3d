@@ -14,7 +14,9 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <exception>
 #include <iterator>
@@ -163,6 +165,8 @@ struct BatchAcceptance {
     uint32_t totalChunks = 0;
     KnownChunkCatalog catalog;
     KnownChunkCatalog unresolved;
+    std::optional<model_core::SceneMetadata> scene;
+    std::optional<std::array<double, 3>> origin;
 
     void Record(const std::vector<ValidatedChunk>& chunks)
     {
@@ -303,6 +307,36 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         if (!validation.ok) {
             failure = Fail(ImportStage::ValidateSection, validation.errorCode);
             return false;
+        }
+        for (const auto& chunk : validation.chunks) {
+            if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList
+                || chunk.descriptor.topology == model_core::ChunkTopology::PointList) {
+                const auto& geometry = chunk.descriptor;
+                if (!acceptance.origin) acceptance.origin = std::array<double,3>{geometry.origin[0],geometry.origin[1],geometry.origin[2]};
+                for (unsigned axis = 0; axis < 3; ++axis) {
+                    // Keep the unchanged float camera's normalization and clip
+                    // arithmetic in range, even across individually valid batches.
+                    // Absolute double origins may be large; only scene span is capped.
+                    const double offset = geometry.origin[axis] - (*acceptance.origin)[axis];
+                    if (std::abs(offset + double(geometry.localMin[axis])) > 1e15
+                        || std::abs(offset + double(geometry.localMax[axis])) > 1e15) {
+                        failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ResourceLimit);
+                        return false;
+                    }
+                }
+            }
+            if (acceptance.scene && std::memcmp(&*acceptance.scene, &chunk.scene, sizeof(chunk.scene))) {
+                failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ImportProtocolViolation);
+                return false;
+            }
+            acceptance.scene = chunk.scene;
+            const auto expectedFormat = request.format == ImportFormat::Gltf ? model_core::SourceFormatId::Gltf
+                : request.format == ImportFormat::Stl ? model_core::SourceFormatId::Stl : model_core::SourceFormatId::Ply;
+            if (request.workerArgumentsOverride.empty() && chunk.scene.format != expectedFormat
+                && !(request.format == ImportFormat::Gltf && chunk.scene.format == model_core::SourceFormatId::Glb)) {
+                failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ImportProtocolViolation);
+                return false;
+            }
         }
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the

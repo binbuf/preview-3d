@@ -12,6 +12,7 @@
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
+#include "model_core/GeometryBounds.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -41,6 +42,8 @@ std::vector<std::byte> BuildSection(std::vector<ChunkSpec> chunks, uint64_t gene
         c.descriptor.normalizedRangeOffset = offset;
         c.descriptor.normalizedRangeLength = c.payload.size();
         c.descriptor.byteSize = c.payload.size();
+        if (c.descriptor.topology == ChunkTopology::TriangleList || c.descriptor.topology == ChunkTopology::PointList)
+            SetLocalBounds(c.descriptor, c.payload);
         offset += c.payload.size();
     }
     uint64_t sectionLength = offset;
@@ -64,6 +67,7 @@ std::vector<std::byte> BuildSection(std::vector<ChunkSpec> chunks, uint64_t gene
     header.magic = kSectionMagic;
     header.protocolVersion = kCurrentProtocolVersion;
     header.generationId = generationId;
+    header.scene.generationId = generationId;
     header.sectionLength = sectionLength;
     header.chunkCount = static_cast<uint32_t>(chunks.size());
     header.reserved = 0;

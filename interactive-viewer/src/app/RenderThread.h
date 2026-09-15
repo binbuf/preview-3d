@@ -27,9 +27,11 @@
 #include "platform/Win32Handle.h"
 
 #include "Renderer.h" // Camera and FlightInput -- pure DirectXMath, no D3D11 coupling
+#include <d3d12sdklayers.h>
 
 #include <atomic>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <unordered_map>
 #include <cstdint>
@@ -43,6 +45,8 @@
 // move to Ready or Failed without ever having touched the GPU. lParam is a
 // heap-allocated RenderUploadResult the handler takes ownership of.
 constexpr UINT kRenderUploadCompleteMessage = WM_APP + 4;
+constexpr UINT kRenderPickCompleteMessage = WM_APP + 5;
+struct RenderPickResult { uint64_t generation; bool hit; };
 
 struct RenderUploadResult
 {
@@ -52,6 +56,7 @@ struct RenderUploadResult
     std::wstring path;
     std::wstring errorSummary;
     std::wstring errorDetails;
+    std::shared_ptr<const ModelData> metadata;
 };
 
 // A locked view of the Camera shared between the two threads.
@@ -76,10 +81,20 @@ struct RenderUploadResult
 class LockedCamera
 {
 public:
-    LockedCamera(std::mutex& mutex, Camera& camera)
+    LockedCamera(std::mutex& mutex, Camera& camera, std::atomic<uint64_t>& epoch)
         : lock_(mutex)
         , camera_(camera)
+        , before_(camera)
+        , epoch_(epoch)
     {
+    }
+    ~LockedCamera() {
+        if (camera_.targetX != before_.targetX || camera_.targetY != before_.targetY || camera_.targetZ != before_.targetZ
+            || camera_.desiredX != before_.desiredX || camera_.desiredY != before_.desiredY || camera_.desiredZ != before_.desiredZ
+            || camera_.targetDistance != before_.targetDistance || camera_.distance != before_.distance
+            || std::memcmp(&camera_.orientation, &before_.orientation, sizeof(camera_.orientation))
+            || std::memcmp(&camera_.desiredOrientation, &before_.desiredOrientation, sizeof(camera_.desiredOrientation))
+            || camera_.projection != before_.projection) ++epoch_;
     }
 
     Camera* operator->() const noexcept { return &camera_; }
@@ -88,6 +103,8 @@ public:
 private:
     std::unique_lock<std::mutex> lock_;
     Camera& camera_;
+    Camera before_;
+    std::atomic<uint64_t>& epoch_;
 };
 
 class RenderThread
@@ -184,7 +201,8 @@ public:
     };
     StatsSnapshot Stats() const;
 
-    LockedCamera LockCamera() { return LockedCamera(cameraMutex_, camera_); }
+    LockedCamera LockCamera() { return LockedCamera(cameraMutex_, camera_, interactionEpoch_); }
+    void RequestPick(int x, int y, uint64_t generation);
 
 private:
     void ThreadMain(HWND window);
@@ -202,6 +220,10 @@ private:
 
     D3D12ViewerPath path_;
     Camera& camera_;
+    std::atomic<uint64_t> interactionEpoch_{0};
+    uint64_t framingEpoch_ = 0;
+    std::shared_ptr<ModelData> stagedMetadata_;
+    bool haveSceneOrigin_ = false;
 
     std::thread thread_;
     std::atomic<bool> running_{ false };
@@ -215,6 +237,9 @@ private:
     std::atomic<std::uint64_t> presentedGeneration_{ 0 };
     std::atomic<std::uint64_t> resizedExtent_{ 0 };
     std::atomic<std::uint64_t> displayedChunks_{0}, texturedChunks_{0};
+    Microsoft::WRL::ComPtr<ID3D12InfoQueue> debugInfo_;
+    std::atomic<uint64_t> debugErrors_{0}, debugAvailable_{0};
+    std::atomic<uint64_t> pickCompletions_{0}, pickHits_{0};
     std::uint64_t modelGeneration_ = 0; // render-thread-owned
 
     // Guards `camera_`, `flightInput_`, `viewportAspect_` and `frameOverlay_`, all
@@ -230,6 +255,9 @@ private:
     int resizeWidth_ = 0;
     int resizeHeight_ = 0;
     bool clearModelPending_ = false;
+    struct PickRequest { int x, y; uint64_t generation; };
+    std::optional<PickRequest> pickRequest_;
+    std::optional<PickRequest> pendingPick_;
     struct UploadTask {
         d3d12_import_bridge::ImportResult result;
         std::uint64_t generation = 0;
@@ -241,8 +269,6 @@ private:
     struct Publication {
         UploadTask task;
         D3D12ViewerPath::ModelResources resources;
-        DirectX::XMFLOAT3 boundsMin{}, boundsMax{};
-        bool haveBounds = false;
     };
     struct UploadInbox {
         std::mutex mutex;
@@ -266,7 +292,6 @@ private:
     D3D12ViewerPath::ModelResources stagedScene_;
     std::uint64_t stagedGeneration_ = 0;
     bool stagedHaveBounds_ = false, stagedFailed_ = false;
-    DirectX::XMFLOAT3 stagedMin_{}, stagedMax_{};
 
     mutable std::mutex statsMutex_;
     StatsSnapshot stats_;

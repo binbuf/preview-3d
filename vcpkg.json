@@ -6,6 +6,7 @@
   "dependencies": [
     "catch2",
     "fastgltf",
+    "simdjson",
     "draco",
     "basisu",
     "ktx",

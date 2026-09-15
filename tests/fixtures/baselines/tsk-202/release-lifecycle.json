@@ -1,0 +1,176 @@
+{
+  "schema": 1,
+  "configuration": "Release",
+  "buildId": "bb4b39a6df32b40d700546b17d9c0878e41fc4bd",
+  "workingDiffSha256": "f2ea02afde4fd9451516b06c2b693d784ef5b695c21361989310f141f9985efc",
+  "harnessSha256": "09df299d0f99341aed70e27f9f0837a109de2cbc4c7c29db10193494313385a1",
+  "generatorSha256": "6f92158f8b98a4eca06130b6efdd5fef6ced26d065e02ccf646ba6253eb66b20",
+  "exeSha256": "3d0ebde452a06c57a5287394a48d723839b8975afee8d2bd02402bb890511e74",
+  "hardware": {
+    "build": "26200",
+    "cpu": [
+      "AMD Ryzen 9 7900X3D 12-Core Processor          "
+    ],
+    "ramBytes": 67810054144,
+    "disks": [
+      {
+        "FriendlyName": "Samsung SSD 970 EVO 1TB",
+        "MediaType": "SSD",
+        "BusType": "NVMe"
+      },
+      {
+        "FriendlyName": "SATA SSD",
+        "MediaType": "SSD",
+        "BusType": "SATA"
+      },
+      {
+        "FriendlyName": "CT1000P1SSD8",
+        "MediaType": "SSD",
+        "BusType": "NVMe"
+      },
+      {
+        "FriendlyName": "CT4000P3PSSD8",
+        "MediaType": "SSD",
+        "BusType": "NVMe"
+      },
+      {
+        "FriendlyName": "ST16000NM003G-2KH113",
+        "MediaType": "HDD",
+        "BusType": "SATA"
+      }
+    ],
+    "gpu": [
+      {
+        "Name": "NVIDIA GeForce RTX 4080",
+        "DriverVersion": "32.0.16.1664",
+        "CurrentRefreshRate": 240,
+        "CurrentHorizontalResolution": 3840,
+        "CurrentVerticalResolution": 2160
+      },
+      {
+        "Name": "AMD Radeon(TM) Graphics",
+        "DriverVersion": "32.0.21030.2001",
+        "CurrentRefreshRate": null,
+        "CurrentHorizontalResolution": null,
+        "CurrentVerticalResolution": null
+      }
+    ],
+    "power": "Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)",
+    "os": "Microsoft Windows 11 Pro"
+  },
+  "python": "3.12.9",
+  "clock": "namespace(implementation='QueryPerformanceCounter()', monotonic=True, adjustable=False, resolution=1e-07)",
+  "cacheState": "OS/driver caches uncontrolled; fresh process each run; no derived cache",
+  "measurement": "successful non-occluded Present return/QPC; sampled private commit (20 ms); no ETW scanout or input-to-present claim",
+  "fixtureManifestSha256": "5c0f18b1e19ce6ca5c1f3c3d563ce117ede4b713539132a47ea1b4c445d3b976",
+  "pointPresentationRequired": true,
+  "runCount": 1,
+  "failureCount": 0,
+  "runs": [
+    {
+      "events": [
+        {
+          "action": "open/replace",
+          "fixture": "A-small-glb.glb",
+          "generation": 1,
+          "firstGeometryMs": 83.291
+        },
+        {
+          "action": "open/replace",
+          "fixture": "A-small-stl.stl",
+          "generation": 3,
+          "firstGeometryMs": 66.188
+        },
+        {
+          "action": "open/replace",
+          "fixture": "A-small-ply-mesh-be.ply",
+          "generation": 5,
+          "firstGeometryMs": 89.599
+        },
+        {
+          "action": "open/replace",
+          "fixture": "A-small-ply-points-le.ply",
+          "generation": 7,
+          "firstGeometryMs": 78.639
+        },
+        {
+          "action": "open/replace",
+          "fixture": "sidecar-approved.gltf",
+          "generation": 9,
+          "firstGeometryMs": 98.753
+        },
+        {
+          "action": "cancel-pending",
+          "generation": 12,
+          "preservedGeneration": 9
+        },
+        {
+          "action": "cancel-loading",
+          "generation": 13
+        },
+        {
+          "action": "resize",
+          "client": [
+            878,
+            689
+          ]
+        },
+        {
+          "action": "resize",
+          "client": [
+            1258,
+            839
+          ]
+        },
+        {
+          "action": "resize",
+          "client": [
+            738,
+            609
+          ]
+        },
+        {
+          "action": "recover",
+          "firstGeometryMs": 76.874
+        }
+      ],
+      "viewerPeakPrivateBytes": 287571968,
+      "workerPeakPrivateBytes": 516096,
+      "maxObservedUiRoundTripMs": 0.7198999992397148,
+      "failure": null,
+      "windowDpi": 144,
+      "firstBackgroundMs": 397.008,
+      "baselineViewerPrivateBytes": 251432960,
+      "closeMs": 60.58150000171736,
+      "exitCode": 0,
+      "durationMs": 1286.784
+    }
+  ],
+  "summary": {
+    "firstBackgroundMs": {
+      "median": 397.008,
+      "p95": 397.008,
+      "maximum": 397.008
+    },
+    "closeMs": {
+      "median": 60.58150000171736,
+      "p95": 60.58150000171736,
+      "maximum": 60.58150000171736
+    },
+    "viewerPeakPrivateBytes": {
+      "median": 287571968,
+      "p95": 287571968,
+      "maximum": 287571968
+    },
+    "workerPeakPrivateBytes": {
+      "median": 516096,
+      "p95": 516096,
+      "maximum": 516096
+    },
+    "maxObservedUiRoundTripMs": {
+      "median": 0.7198999992397148,
+      "p95": 0.7198999992397148,
+      "maximum": 0.7198999992397148
+    }
+  }
+}

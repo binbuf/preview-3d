@@ -141,3 +141,20 @@ it currently returns nonzero. Zero-base sparse/non-indexed geometry, meshopt/Web
 Draw-heavy catalogs, representative proxy, and actual Pressure behavior likewise
 remain later tasks. This task provides fixtures and repeatable evidence, not MVP
 readiness. See [the baseline record](../../.docs/TSK-104_BASELINE.md).
+
+## TSK-202 precision and metadata qualification
+
+`tests/app-smoke/metadata.py` regenerates precision GLB, binary STL, and both-endian
+double-position PLY mesh/point fixtures twice and checks their SHA-256. It drives
+the real app through Info, native orientation, GPU pixel selection, Frame selected,
+and delayed provisional-to-verified framing with and without camera input. The
+compact UI metadata contains no CPU vertex/index payload. Protocol v2 fixture
+builders and hostile workers cover verified local bounds, double origins, stale
+scene facts, non-finite geometry, unknown/old versions and excessive scene spans;
+a seeded 512-input mutation corpus exercises the private-snapshot validator.
+
+The earlier point display qualification gap now passes through the minimal
+position-only point path. Round splats and color rendering remain TSK-208.
+Commands, limits and final Debug/Release evidence are in
+[TSK-202 verification](../../.docs/TSK-202_VERIFICATION.md), with raw reports in
+[baselines/tsk-202](baselines/tsk-202/).

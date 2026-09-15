@@ -18,6 +18,7 @@
 
 #include <iomanip>
 #include <sstream>
+#include <bit>
 
 using Microsoft::WRL::ComPtr;
 
@@ -174,7 +175,8 @@ struct ViewerApp
     std::wstring warning;
     std::wstring errorSummary;
     std::wstring errorDetails;
-    std::shared_ptr<ModelData> loadedModel;  // CPU copy kept alive for picking
+    std::shared_ptr<const ModelData> loadedModel; // immutable compact metadata; picking stays on the GPU
+    uint64_t smokePickRequests = 0;
     bool meshSelected = false;
     bool gridVisible = true;
     bool axisSnapEnabled = false;
@@ -320,12 +322,7 @@ float InfoPanelMaxScroll(const ViewerApp& app)
     const RECT panel = InfoPanelRect(app);
     const float panelHeight = static_cast<float>(panel.bottom - panel.top);
     if (panelHeight <= 0.0f) return 0.0f;
-    DirectX::XMFLOAT3 effectiveMin{};
-    DirectX::XMFLOAT3 effectiveMax{};
-    EffectiveBounds(app, effectiveMin, effectiveMax);
-    const std::vector<InfoPanelSection> sections = BuildInfoPanelSections(
-        app.loadedModel->stats, app.loadedModel->triangleCount, app.loadedModel->vertices.size(),
-        effectiveMin, effectiveMax);
+    const std::vector<InfoPanelSection> sections = BuildInfoPanelSections(*app.loadedModel, app.showNativeOrientation);
     const InfoPanelScrollMetrics metrics = ComputeInfoPanelScrollMetrics(sections, app.dpiScale);
     const float visibleHeight = std::max(0.0f, panelHeight - metrics.headerHeight);
     return std::max(0.0f, metrics.contentHeight - visibleHeight);
@@ -669,53 +666,15 @@ void TrackPanVelocity(ViewerApp& app, float deltaX, float deltaY)
     app.lastPanMoveSeconds = now;
 }
 
-void BuildPickRay(const Camera& camera, float pointerX, float pointerY,
-    float viewportWidth, float viewportHeight, DirectX::XMVECTOR& origin, DirectX::XMVECTOR& direction)
-{
-    using namespace DirectX;
-    const float width = std::max(1.0f, viewportWidth);
-    const float height = std::max(1.0f, viewportHeight);
-    const float ndcX = 2.0f * (pointerX / width) - 1.0f;
-    const float ndcY = 1.0f - 2.0f * (pointerY / height);
-    const XMVECTOR orientation = camera.Orientation();
-    const float tanHalf = std::tan(kVerticalFieldOfView * 0.5f);
-    if (camera.Projection() == ProjectionMode::Orthographic)
-    {
-        const float halfHeight = static_cast<float>(camera.distance) * tanHalf;
-        const float halfWidth = halfHeight * (width / height);
-        origin = camera.EyePosition() + XMVector3Rotate(
-            XMVectorSet(ndcX * halfWidth, ndcY * halfHeight, 0.0f, 0.0f), orientation);
-        direction = XMVector3Rotate(XMVectorSet(0.0f, 0.0f, -1.0f, 0.0f), orientation);
-    }
-    else
-    {
-        origin = camera.EyePosition();
-        direction = XMVector3Rotate(XMVector3Normalize(
-            XMVectorSet(ndcX * tanHalf * (width / height), ndcY * tanHalf, -1.0f, 0.0f)), orientation);
-    }
-}
-
 void ClickSelect(ViewerApp& app, const POINT& point)
 {
     if (!app.loadedModel) return;
-    const RECT viewport = ViewportRect(app);
-    DirectX::XMVECTOR origin{};
-    DirectX::XMVECTOR direction{};
-    BuildPickRay(*app.renderThread.LockCamera(), static_cast<float>(point.x), static_cast<float>(point.y),
-        static_cast<float>(viewport.right - viewport.left),
-        static_cast<float>(viewport.bottom - viewport.top), origin, direction);
-    // PickMesh scans vertices in the model's native/source space, which
-    // differs from the ray's app-world (Z-up) space whenever an up-axis
-    // correction is active — undo it on the ray rather than the mesh.
-    const DirectX::XMMATRIX inverseModel = DirectX::XMMatrixInverse(nullptr, ActiveModelTransform(app));
-    const DirectX::XMVECTOR localOrigin = DirectX::XMVector3TransformCoord(origin, inverseModel);
-    const DirectX::XMVECTOR localDirection = DirectX::XMVector3TransformNormal(direction, inverseModel);
-    DirectX::XMFLOAT3 originValue{};
-    DirectX::XMFLOAT3 directionValue{};
-    DirectX::XMStoreFloat3(&originValue, localOrigin);
-    DirectX::XMStoreFloat3(&directionValue, localDirection);
-    float hitDistance = 0.0f;
-    const bool hit = PickMesh(*app.loadedModel, originValue, directionValue, hitDistance);
+    if (app.appSmoke) ++app.smokePickRequests;
+    app.renderThread.RequestPick(point.x, point.y, app.loadedModel->source.generationId);
+}
+
+void ApplySelection(ViewerApp& app, bool hit)
+{
     if (hit && !app.meshSelected)
     {
         app.meshSelected = true;
@@ -1011,8 +970,6 @@ void ToggleAxisSnap(ViewerApp& app)
 void ToggleShowNativeOrientation(ViewerApp& app)
 {
     app.showNativeOrientation = !app.showNativeOrientation;
-    // The D3D12 import path does not publish CPU model metadata yet. Keep
-    // the current camera bounds until a source transform is available.
     if (HasNavigableModel(app) && app.loadedModel)
     {
         DirectX::XMFLOAT3 effectiveMin{};
@@ -1628,12 +1585,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.infoPanelWidth = InfoPanelWidthPixels(app);
     if (overlay.infoPanelWidth > 0 && app.loadedModel)
     {
-        DirectX::XMFLOAT3 effectiveMin{};
-        DirectX::XMFLOAT3 effectiveMax{};
-        EffectiveBounds(app, effectiveMin, effectiveMax);
-        overlay.infoPanelSections = BuildInfoPanelSections(
-            app.loadedModel->stats, app.loadedModel->triangleCount, app.loadedModel->vertices.size(),
-            effectiveMin, effectiveMax);
+        overlay.infoPanelSections = BuildInfoPanelSections(*app.loadedModel, app.showNativeOrientation);
         overlay.infoPanelScrollOffset = app.infoPanelScrollOffset;
     }
     overlay.zoomPercent = ZoomPercentFor(*app.renderThread.LockCamera());
@@ -1699,9 +1651,48 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message)
     {
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 12) return 0;
+        if (!app->appSmoke || wParam > 36) return 0;
         if (wParam == 0) return static_cast<LRESULT>(app->state) + 1;
         if (wParam == 1) return static_cast<LRESULT>(app->generation);
+        if (wParam == 21) return app->showNativeOrientation;
+        if (wParam == 34) return app->smokePickRequests;
+        if (wParam >= 13 && wParam <= 29) {
+            if (!app->loadedModel) return 0;
+            const auto& metadata = *app->loadedModel;
+            switch (wParam) {
+            case 13: return static_cast<LRESULT>(metadata.vertexCount);
+            case 14: return static_cast<LRESULT>(metadata.triangleCount);
+            case 15: return static_cast<LRESULT>(metadata.pointCount);
+            case 16: return metadata.boundsVerified;
+            case 17: return static_cast<LRESULT>(metadata.source.format);
+            case 18: return metadata.stats.hasUv0;
+            case 19: return metadata.stats.materialCount;
+            case 20: return metadata.stats.nodeCount;
+            case 21: return app->showNativeOrientation;
+            case 22: return app->meshSelected;
+            case 23: case 24: case 25: {
+                unsigned axis = unsigned(wParam-23);
+                if (!app->showNativeOrientation && metadata.source.upAxis == model_core::UpAxisId::Y && axis) axis = 3-axis;
+                return static_cast<LRESULT>(std::bit_cast<uint64_t>(metadata.relativeMax[axis]-metadata.relativeMin[axis]));
+            }
+            case 26: return static_cast<LRESULT>(std::bit_cast<uint64_t>(app->renderThread.LockCamera()->distance));
+            case 27: return static_cast<LRESULT>(std::bit_cast<uint64_t>(app->renderThread.LockCamera()->homeDistance));
+            case 28: return metadata.vertices.size() + metadata.indices.size();
+            case 29: {
+                const RECT viewport = ViewportRect(*app);
+                const float x = metadata.pointCount ? metadata.boundsMin.x : (metadata.boundsMin.x+metadata.boundsMax.x)*0.5f;
+                const float y = metadata.pointCount ? metadata.boundsMin.y : (metadata.boundsMin.y+metadata.boundsMax.y)*0.5f;
+                const float z = metadata.pointCount ? metadata.boundsMin.z : (metadata.boundsMin.z+metadata.boundsMax.z)*0.5f;
+                auto camera = app->renderThread.LockCamera();
+                const auto clip = DirectX::XMVector3TransformCoord(DirectX::XMVectorSet(x,y,z,1), ActiveModelTransform(*app)
+                    * camera->ViewMatrix() * camera->ProjectionMatrix(ViewportAspect(*app)));
+                const int pixelX = viewport.left + int((DirectX::XMVectorGetX(clip)+1)*0.5f*(viewport.right-viewport.left));
+                const int pixelY = viewport.top + int((1-DirectX::XMVectorGetY(clip))*0.5f*(viewport.bottom-viewport.top));
+                return MAKELPARAM(pixelX,pixelY);
+            }
+            }
+        }
+        if (wParam == 30) { ToggleShowNativeOrientation(*app); return app->showNativeOrientation; }
         return static_cast<LRESULT>(app->renderThread.SmokeValue(static_cast<unsigned>(wParam)));
     case WM_COPYDATA:
     {
@@ -2588,6 +2579,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         app->renderThread.FinishImport(complete->generation);
         return 0;
     }
+    case kRenderPickCompleteMessage:
+    {
+        std::unique_ptr<RenderPickResult> picked(reinterpret_cast<RenderPickResult*>(lParam));
+        if (picked && app->loadedModel && picked->generation == app->loadedModel->source.generationId)
+            ApplySelection(*app, picked->hit);
+        return 0;
+    }
     case kRenderUploadCompleteMessage:
     {
         std::unique_ptr<RenderUploadResult> uploaded(reinterpret_cast<RenderUploadResult*>(lParam));
@@ -2596,6 +2594,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             SetFailure(*app, uploaded->errorSummary, uploaded->errorDetails, uploaded->path);
             return 0;
+        }
+        if (uploaded->metadata) {
+            if (!app->loadedModel || app->loadedModel->source.generationId != uploaded->generation) app->meshSelected = false;
+            app->loadedModel = uploaded->metadata;
         }
         app->currentPath = uploaded->path;
         app->filename = FileNameFromPath(uploaded->path);

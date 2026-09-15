@@ -13,11 +13,12 @@
 // the copy-then-validate acceptance path that enforces this.
 
 #include <cstdint>
+#include <cstddef>
 
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-constexpr uint32_t kCurrentProtocolVersion = 1;
+constexpr uint32_t kCurrentProtocolVersion = 2;
 constexpr uint32_t kMaxDependencyIds = 4;
 
 enum class ChunkTopology : uint32_t {
@@ -29,6 +30,32 @@ enum class ChunkTopology : uint32_t {
 };
 
 #pragma pack(push, 1)
+
+enum class SourceFormatId : uint32_t { Unknown = 0, Gltf = 1, Stl = 2, Ply = 3, Glb = 4 };
+enum class UpAxisId : uint32_t { Unknown = 0, Y = 1, Z = 2 };
+enum class BoundsState : uint32_t { Unknown = 0, Provisional = 1, Verified = 2 };
+constexpr uint32_t kGeometryHasUv0 = 1;
+constexpr uint32_t kGeometryHasColors = 2;
+constexpr uint32_t kGeometryHasUv1 = 4;
+constexpr uint32_t kGeometryFlagsKnownMask = kGeometryHasUv0 | kGeometryHasColors | kGeometryHasUv1;
+
+// Generation-wide source facts, repeated unchanged in each batch. Zero units
+// means unspecified; STL/PLY must never be presented as metres by assumption.
+// Geometry counts and scene bounds are reduced from accepted descriptors,
+// rather than trusting accessor extrema or a worker's declared scene totals.
+struct SceneMetadata {
+    uint64_t generationId;
+    SourceFormatId format;
+    UpAxisId upAxis;
+    double metersPerUnit;
+    uint32_t meshCount;
+    uint32_t nodeCount;
+    uint32_t animationCount;
+    uint32_t skinCount;
+    uint32_t boneCount;
+    uint32_t reserved;
+};
+static_assert(sizeof(SceneMetadata) == 48);
 
 // Fixed-width section header, always at offset 0 of the shared section.
 // Read first and fully bounds-checked before any other field in the section
@@ -44,8 +71,9 @@ struct SectionHeader {
     uint32_t reserved;        // must be 0
     uint64_t sectionChecksum; // FNV-1a64 over bytes [sizeof(SectionHeader), sectionLength) --
                                // the descriptor table plus all payload bytes, not the header itself
+    SceneMetadata scene;
 };
-static_assert(sizeof(SectionHeader) == 40, "SectionHeader wire layout changed");
+static_assert(sizeof(SectionHeader) == 88, "SectionHeader wire layout changed");
 
 // Fixed-width, one per chunk, packed contiguously starting at offset
 // sizeof(SectionHeader). Never variable-length or self-describing -- the
@@ -81,8 +109,15 @@ struct ChunkDescriptor {
     uint32_t dependencyIds[kMaxDependencyIds];
     uint32_t dependencyCount;        // how many of dependencyIds[] are populated, <= kMaxDependencyIds
     uint64_t chunkChecksum;          // FNV-1a64 over payload bytes [normalizedRangeOffset, +byteSize)
+    double origin[3];                // native-space cluster origin; positions are LOCAL floats
+    float localMin[3];
+    float localMax[3];               // exact extrema of finite normalized positions
+    uint32_t meshId;                 // source mesh/node identity (0 = unspecified)
+    uint32_t nodeId;
+    uint32_t geometryFlags;
+    BoundsState boundsState;         // geometry must be Verified; other topologies Unknown
 };
-static_assert(sizeof(ChunkDescriptor) == 92, "ChunkDescriptor wire layout changed");
+static_assert(sizeof(ChunkDescriptor) == 156, "ChunkDescriptor wire layout changed");
 
 #pragma pack(pop)
 

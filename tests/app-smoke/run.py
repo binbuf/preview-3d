@@ -232,7 +232,7 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--runs',type=int,default=3)
     parser.add_argument('--timeout',type=float,default=15)
-    parser.add_argument('--require-points',action='store_true',help='Qualification assertion for the point display path (currently pending TSK-202)')
+    parser.add_argument('--require-points',action='store_true',help='Require navigable point presentation (round splats and colors are TSK-208)')
     args = parser.parse_args()
     if not user.SetProcessDpiAwarenessContext(W.HANDLE(-4)):
         raise C.WinError(C.get_last_error())

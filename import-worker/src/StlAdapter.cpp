@@ -4,6 +4,7 @@
 #include "model_core/Checksum.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
+#include "model_core/GeometryBounds.h"
 #include "platform/CheckedMath.h"
 
 #include <cmath>
@@ -52,9 +53,9 @@ uint32_t ReadU32LE(const std::byte* p)
 }
 
 struct Vec3 {
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
 
     Vec3 operator-(const Vec3& other) const { return { x - other.x, y - other.y, z - other.z }; }
 };
@@ -64,7 +65,7 @@ Vec3 Cross(const Vec3& a, const Vec3& b)
     return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };
 }
 
-float Dot(const Vec3& a, const Vec3& b)
+double Dot(const Vec3& a, const Vec3& b)
 {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
@@ -88,18 +89,18 @@ void ProcessFacet(const Vec3& suppliedNormal, const Vec3& v0, const Vec3& v1, co
     }
 
     Vec3 flatNormal = Cross(v1 - v0, v2 - v0);
-    float flatLengthSquared = Dot(flatNormal, flatNormal);
-    if (flatLengthSquared <= 1e-12f) {
+    double flatLengthSquared = Dot(flatNormal, flatNormal);
+    if (flatLengthSquared <= 0.0 || !std::isfinite(flatLengthSquared)) {
         return; // degenerate (near-zero-area) facet: dropped
     }
-    float flatInvLength = 1.0f / std::sqrt(flatLengthSquared);
+    double flatInvLength = 1.0f / std::sqrt(flatLengthSquared);
     Vec3 flatNormalized{ flatNormal.x * flatInvLength, flatNormal.y * flatInvLength,
                           flatNormal.z * flatInvLength };
 
-    float suppliedLengthSquared = Dot(suppliedNormal, suppliedNormal);
+    double suppliedLengthSquared = Dot(suppliedNormal, suppliedNormal);
     Vec3 normal;
     if (suppliedLengthSquared > 0.81f && suppliedLengthSquared < 1.21f) {
-        float invLength = 1.0f / std::sqrt(suppliedLengthSquared);
+        double invLength = 1.0f / std::sqrt(suppliedLengthSquared);
         normal = { suppliedNormal.x * invLength, suppliedNormal.y * invLength,
                    suppliedNormal.z * invLength };
     } else {
@@ -109,12 +110,12 @@ void ProcessFacet(const Vec3& suppliedNormal, const Vec3& v0, const Vec3& v1, co
     uint32_t baseIndex = static_cast<uint32_t>(vertices.size());
     for (const Vec3& v : { v0, v1, v2 }) {
         VertexPositionNormalUv0F32 vertex{};
-        vertex.px = v.x;
-        vertex.py = v.y;
-        vertex.pz = v.z;
-        vertex.nx = normal.x;
-        vertex.ny = normal.y;
-        vertex.nz = normal.z;
+        vertex.px = static_cast<float>(v.x);
+        vertex.py = static_cast<float>(v.y);
+        vertex.pz = static_cast<float>(v.z);
+        vertex.nx = static_cast<float>(normal.x);
+        vertex.ny = static_cast<float>(normal.y);
+        vertex.nz = static_cast<float>(normal.z);
         vertex.u = 0.0f;
         vertex.v = 0.0f;
         vertices.push_back(vertex);
@@ -129,7 +130,7 @@ void ProcessFacet(const Vec3& suppliedNormal, const Vec3& v0, const Vec3& v1, co
 // "compute everything, check once, then write sequentially, header last"
 // structure. Always exactly one chunk.
 std::variant<StlImportResult, ImportErrorCode> WriteStlChunk(
-    const std::vector<VertexPositionNormalUv0F32>& vertices, const std::vector<uint32_t>& indices,
+    std::vector<VertexPositionNormalUv0F32>& vertices, const std::vector<uint32_t>& indices,
     std::span<std::byte> destination, uint64_t generationId)
 {
     if (vertices.empty()) {
@@ -155,7 +156,7 @@ std::variant<StlImportResult, ImportErrorCode> WriteStlChunk(
         return ImportErrorCode::ResourceLimit;
     }
 
-    std::memcpy(destination.data() + payloadOffset, vertices.data(), vertexBytes);
+
     std::memcpy(destination.data() + payloadOffset + vertexBytes, indices.data(), indexBytes);
 
     ChunkDescriptor descriptor{};
@@ -171,6 +172,10 @@ std::variant<StlImportResult, ImportErrorCode> WriteStlChunk(
     descriptor.chunkId = 1;
     descriptor.byteSize = payloadSize;
     descriptor.dependencyCount = 0;
+    descriptor.meshId = 1;
+    if (!RebasePositions(descriptor, std::span<std::byte>(reinterpret_cast<std::byte*>(vertices.data()), size_t(vertexBytes))))
+        return ImportErrorCode::MalformedData;
+    std::memcpy(destination.data() + payloadOffset, vertices.data(), size_t(vertexBytes));
     descriptor.chunkChecksum = Fnv1a64(destination.subspan(payloadOffset, payloadSize));
 
     std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
@@ -179,6 +184,9 @@ std::variant<StlImportResult, ImportErrorCode> WriteStlChunk(
     header.magic = kSectionMagic;
     header.protocolVersion = kCurrentProtocolVersion;
     header.generationId = generationId;
+    header.scene.generationId = generationId;
+    header.scene.format = SourceFormatId::Stl; header.scene.meshCount = 1;
+    // STL has no specified units or up axis.
     header.sectionLength = sectionLength;
     header.chunkCount = 1;
     header.reserved = 0;

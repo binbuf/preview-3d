@@ -1,6 +1,7 @@
 #pragma once
 
 #include <DirectXMath.h>
+#include <model_core/WireFormat.h>
 
 #include <atomic>
 #include <cstdint>
@@ -53,6 +54,7 @@ struct ModelStats
 
     // Scene Data
     int nodeCount = 0;
+    int meshCount = 0;
 };
 
 // A source format's up axis at rest, as reported by its importer. Used only
@@ -67,13 +69,24 @@ enum class SourceUpAxis
 
 struct ModelData
 {
+    // Legacy loader storage. The progressive app leaves both vectors empty;
+    // its selection queries a bounded GPU pixel instead of retaining vertices.
     // Baked node transforms, exactly as the source format authored them
     // (glTF is Y-up) — never re-baked to the app's own Z-up convention.
     std::vector<ModelVertex> vertices;
     std::vector<std::uint32_t> indices;
-    DirectX::XMFLOAT3 boundsMin{};   // raw, in the same native/source space as `vertices`
+    // Progressive bounds are relative to sceneOrigin in native/source axes.
+    // Float boxes feed unchanged camera math; double boxes feed UI dimensions.
+    DirectX::XMFLOAT3 boundsMin{};
     DirectX::XMFLOAT3 boundsMax{};
     std::uint64_t triangleCount = 0;
+    std::uint64_t vertexCount = 0;
+    std::uint64_t pointCount = 0;
+    model_core::SceneMetadata source{};
+    double sceneOrigin[3]{};
+    double relativeMin[3]{};
+    double relativeMax[3]{};
+    bool boundsVerified = false;
     std::wstring warning;
     ModelStats stats;
 

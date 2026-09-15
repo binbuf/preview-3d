@@ -24,6 +24,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -408,6 +409,41 @@ TEST_CASE("The same geometry as binary_big_endian produces numerically identical
     }
 }
 
+TEST_CASE("Double binary PLY rebases tiny meshes and points before narrowing in either endian", "[ply-import][bounds][precision]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    for (bool bigEndian : {false,true}) for (bool mesh : {false,true}) {
+        CAPTURE(bigEndian,mesh);
+        std::string header = "ply\nformat " + std::string(bigEndian ? "binary_big_endian" : "binary_little_endian")
+            + " 1.0\nelement vertex 3\nproperty double x\nproperty double y\nproperty double z\n";
+        if (mesh) header += "element face 1\nproperty list uchar uint vertex_indices\n";
+        header += "end_header\n";
+        std::vector<std::byte> bytes(header.size()); std::memcpy(bytes.data(),header.data(),header.size());
+        auto append = [&](auto value) {
+            std::array<std::byte,sizeof(value)> encoded; std::memcpy(encoded.data(),&value,sizeof(value));
+            if (bigEndian) std::reverse(encoded.begin(),encoded.end());
+            bytes.insert(bytes.end(),encoded.begin(),encoded.end());
+        };
+        const double offset[3] = {1e9,-2e9,3e9};
+        for (unsigned point = 0; point < 3; ++point) {
+            append(offset[0] + (point == 1 ? 0.001 : 0));
+            append(offset[1] + (point == 2 ? 0.002 : 0)); append(offset[2]);
+        }
+        if (mesh) { append(uint8_t(3)); append(uint32_t(0)); append(uint32_t(1)); append(uint32_t(2)); }
+        ScratchPlyFile file(bytes);
+        auto run = RunPlyImportFromRealFile(fixture.sid,file.path,202,8);
+        REQUIRE(run.validation.ok); REQUIRE(run.validation.chunks.size() == 1);
+        const auto& chunk = run.validation.chunks[0];
+        CHECK(chunk.scene.generationId == 202); CHECK(chunk.scene.format == model_core::SourceFormatId::Ply);
+        CHECK(chunk.scene.metersPerUnit == 0); CHECK(chunk.scene.upAxis == model_core::UpAxisId::Unknown);
+        CHECK(chunk.descriptor.boundsState == model_core::BoundsState::Verified);
+        for (unsigned axis=0; axis<3; ++axis) CHECK(chunk.descriptor.origin[axis] == offset[axis]);
+        CHECK(chunk.descriptor.localMax[0] == Catch::Approx((offset[0]+0.001)-offset[0]).margin(1e-10));
+        CHECK(chunk.descriptor.localMax[1] == Catch::Approx((offset[1]+0.002)-offset[1]).margin(1e-10));
+        CHECK(chunk.descriptor.vertexCount == 3); CHECK(chunk.descriptor.indexCount == (mesh ? 3u : 0u));
+    }
+}
+
 TEST_CASE("A vertex-only PLY (no face element) emits a PointList chunk", "[ply-import]")
 {
     sandbox_test_support::SandboxFixture fixture;
@@ -428,7 +464,7 @@ TEST_CASE("A vertex-only PLY (no face element) emits a PointList chunk", "[ply-i
     REQUIRE(chunk.payload.size() >= 2 * sizeof(model_core::VertexPositionOnlyF32));
     model_core::VertexPositionOnlyF32 points[2]{};
     std::memcpy(points, chunk.payload.data(), sizeof(points));
-    CHECK(points[1].x == Catch::Approx(4.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[0] + points[1].x == Catch::Approx(4.0f));
 }
 
 TEST_CASE("A declared-but-empty face element is treated as a point cloud, not a mesh", "[ply-import]")
@@ -526,9 +562,9 @@ TEST_CASE("An unrecognized/skippable extra vertex property doesn't corrupt subse
     REQUIRE(run.validation.chunks[0].payload.size() >= sizeof(model_core::VertexPositionOnlyF32));
     model_core::VertexPositionOnlyF32 point{};
     std::memcpy(&point, run.validation.chunks[0].payload.data(), sizeof(point));
-    CHECK(point.x == Catch::Approx(1.0f));
-    CHECK(point.y == Catch::Approx(2.0f));
-    CHECK(point.z == Catch::Approx(3.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[0] + point.x == Catch::Approx(1.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[1] + point.y == Catch::Approx(2.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[2] + point.z == Catch::Approx(3.0f));
 }
 
 TEST_CASE("Vertex red/green/blue color is parsed-and-dropped without corrupting positions",
@@ -559,9 +595,9 @@ TEST_CASE("Vertex red/green/blue color is parsed-and-dropped without corrupting 
     REQUIRE(run.validation.ok);
     model_core::VertexPositionOnlyF32 point{};
     std::memcpy(&point, run.validation.chunks[0].payload.data(), sizeof(point));
-    CHECK(point.x == Catch::Approx(5.0f));
-    CHECK(point.y == Catch::Approx(6.0f));
-    CHECK(point.z == Catch::Approx(7.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[0] + point.x == Catch::Approx(5.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[1] + point.y == Catch::Approx(6.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[2] + point.z == Catch::Approx(7.0f));
 }
 
 TEST_CASE("A face's index-list length over the per-face sanity cap is rejected as ResourceLimit",
@@ -693,9 +729,9 @@ TEST_CASE("A minimal format-ascii PLY point cloud round-trips through the real s
     CHECK(chunk.descriptor.vertexCount == 1);
     model_core::VertexPositionOnlyF32 point{};
     std::memcpy(&point, chunk.payload.data(), sizeof(point));
-    CHECK(point.x == Catch::Approx(1.0f));
-    CHECK(point.y == Catch::Approx(2.0f));
-    CHECK(point.z == Catch::Approx(3.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[0] + point.x == Catch::Approx(1.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[1] + point.y == Catch::Approx(2.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[2] + point.z == Catch::Approx(3.0f));
 }
 
 TEST_CASE("A face referencing an out-of-range vertex index is dropped; a following good face survives",

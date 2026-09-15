@@ -76,6 +76,14 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> pointPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12Resource> pickTarget;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pickRtvHeap;
+    Microsoft::WRL::ComPtr<ID3D12Resource> pickReadback;
+    uint64_t pickFence = 0;
+    bool pickInFlight = false;
+    int pickX = -1, pickY = -1;
     // Additive textured variant: base-color-texture-or-flat-color only (no
     // metallic/roughness/normal/emissive maps this slice -- see
     // MaterialPayload's numeric fields, carried through to ImportedMaterial
@@ -101,9 +109,15 @@ struct D3D12ViewerPath
         D3D12_INDEX_BUFFER_VIEW ibv{};
         uint32_t chunkId = 0;
         uint32_t materialChunkId = 0;
+        uint32_t sourceMeshId = 0;
+        uint32_t sourceNodeId = 0;
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> textureHeap;
         UINT textureDescriptorSize = 0;
         UINT indexCount = 0;
+        UINT vertexCount = 0;
+        bool points = false;
+        bool positionOnly = false;
+        double origin[3]{};
         int textureIndex = -1; // index into textures[]; -1 = untextured PSO
     };
     struct GpuTexture
@@ -137,6 +151,8 @@ struct D3D12ViewerPath
     // against.
     ModelResources model;
     bool hasModel = false;
+    double sceneOrigin[3]{};
+    model_core::UpAxisId sourceUpAxis = model_core::UpAxisId::Unknown;
 
     // Being uploaded. These resources exist but their bytes are still in
     // flight on the copy queue, so nothing here may be drawn until
@@ -201,12 +217,12 @@ struct D3D12ViewerPath
     // would block input for the length of a GPU frame. The caller ticks the
     // camera and computes this under the lock, then releases it and renders.
     void RenderFrame(const DirectX::XMFLOAT4X4& viewProjection, const DirectX::XMFLOAT4& orientation,
-                     const OverlayFrame& chrome);
+                     const OverlayFrame& chrome, const double cameraTarget[3], const DirectX::XMFLOAT4& eyeSelection);
+    bool PollPick(bool& hit);
 
-    // Uploads every TriangleList/PositionNormalUv0_F32 mesh in `importedMeshes`
-    // as a DEFAULT-heap vertex+index buffer pair (synchronous staging-buffer
-    // copy). Meshes with any other topology/layout (e.g. a PLY point cloud)
-    // are silently skipped -- point-cloud rendering is a later slice. `images`
+    // Uploads TriangleList meshes in normal/UV or position-only layouts, and
+    // PositionOnly_F32 points, on the upload coordinator. Geometry keeps its
+    // validated double origin; points need no index buffer. `images`
     // are uploaded as DEFAULT-heap Texture2D resources (one SRV each, in a
     // fresh shader-visible heap sized to images.size()); a mesh whose
     // material resolves to a base-color image gets `textureIndex` set and
@@ -274,6 +290,7 @@ private:
     // supersedes it or the model is being torn down.
     void RetireInFlightUpload();
     bool CreateDepthBuffer(UINT width, UINT height, std::wstring& error);
+    bool CreatePickTarget(UINT width, UINT height, std::wstring& error);
     bool CreatePipeline(std::wstring& error);
     bool CreateTexturedPipeline(std::wstring& error);
     bool CreateFrameConstantBuffer(std::wstring& error);

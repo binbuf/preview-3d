@@ -23,15 +23,16 @@ struct InfoPanelSection
     std::vector<InfoPanelRow> rows;
 };
 
-// Builds the section/row text for a loaded model's scanned stats (see
-// ModelStats, Model.h). Fields the current GLB-only slice cannot populate
-// (texture/animation data on a model that has none) still get a row, reading
-// "0" or "No" rather than being omitted, so the panel's shape is stable.
-// `boundsMin`/`boundsMax` are the model's world-space AABB (Model.h,
-// ModelData::boundsMin/boundsMax), reported in glTF's implied meters.
+// Builds existing section/row text from scanned source facts and accepted
+// geometry counts. Unspecified source units are explicit. The compact model
+// overload keeps double dimensions and exact source-axis permutations.
 std::vector<InfoPanelSection> BuildInfoPanelSections(
     const ModelStats& stats, std::uint64_t triangleCount, std::uint64_t vertexCount,
-    const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax);
+    const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax,
+    double metersPerUnit = 1.0, std::uint64_t pointCount = 0, bool boundsVerified = true,
+    model_core::SourceFormatId format = model_core::SourceFormatId::Gltf, const double* dimensions = nullptr);
+
+std::vector<InfoPanelSection> BuildInfoPanelSections(const ModelData& metadata, bool showNativeOrientation);
 
 // Fixed-width panel docked to the right edge of the viewport, below the title
 // bar and above the bottom bar.

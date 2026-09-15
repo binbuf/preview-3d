@@ -341,7 +341,7 @@ struct ScratchExternalGltf {
         gltfPath = directory + L"\\scene.gltf";
     }
 
-    void WriteGltf(const std::string& bufferUri)
+    void WriteGltf(const std::string& bufferUri, bool precision = false)
     {
         std::string json
             = "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
@@ -352,6 +352,13 @@ struct ScratchExternalGltf {
               "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
               "\"buffers\":[{\"uri\":\""
             + bufferUri + "\",\"byteLength\":48}]}";
+        if (precision) {
+            const auto at = json.find("\"mesh\":0");
+            json.replace(at,8,"\"mesh\":0,\"translation\":[1000000000000,-2000000000000,3000000000000],\"scale\":[0.000001,0.000002,0.000003]");
+            // Deliberately false accessor extrema: never used for verified framing.
+            const auto accessor = json.find("\"type\":\"VEC3\"");
+            json.insert(accessor,"\"min\":[-100,-100,-100],\"max\":[100,100,100],");
+        }
         WriteRaw(L"scene.gltf", std::span<const std::byte>(
                                     reinterpret_cast<const std::byte*>(json.data()), json.size()));
     }
@@ -595,11 +602,11 @@ TEST_CASE("tri_transformed_node.glb bakes the parent node's world transform into
 
     // Source triangle (0,0,0),(1,0,0),(0,1,0), rotated 90deg about +Z then
     // translated by [2,0,0]: (x,y,0) -> (-y,x,0) -> (-y+2,x,0).
-    CHECK(vertices[0].px == Catch::Approx(2.0f).margin(1e-4));
+    CHECK(chunk.descriptor.origin[0] + vertices[0].px == Catch::Approx(2.0).margin(1e-4));
     CHECK(vertices[0].py == Catch::Approx(0.0f).margin(1e-4));
-    CHECK(vertices[1].px == Catch::Approx(2.0f).margin(1e-4));
+    CHECK(chunk.descriptor.origin[0] + vertices[1].px == Catch::Approx(2.0).margin(1e-4));
     CHECK(vertices[1].py == Catch::Approx(1.0f).margin(1e-4));
-    CHECK(vertices[2].px == Catch::Approx(1.0f).margin(1e-4));
+    CHECK(chunk.descriptor.origin[0] + vertices[2].px == Catch::Approx(1.0).margin(1e-4));
     CHECK(vertices[2].py == Catch::Approx(0.0f).margin(1e-4));
 
     for (const auto& v : vertices) {
@@ -610,6 +617,21 @@ TEST_CASE("tri_transformed_node.glb bakes the parent node's world transform into
         CHECK(v.ny == Catch::Approx(0.0f).margin(1e-4));
         CHECK(v.nz == Catch::Approx(1.0f).margin(1e-4));
     }
+}
+
+TEST_CASE("glTF double transforms and verified tiny bounds ignore fabricated accessor extrema", "[gltf-import][precision][bounds]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    ScratchExternalGltf scratch;
+    scratch.WriteGltf("geometry.bin",true); scratch.WriteBin(L"geometry.bin",48);
+    auto run = RunGltfImportFromRealFile(fixture.sid,scratch.gltfPath,202,8);
+    REQUIRE(run.validation.ok); REQUIRE(run.validation.chunks.size() == 1);
+    const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.scene.format == model_core::SourceFormatId::Gltf); CHECK(chunk.scene.upAxis == model_core::UpAxisId::Y);
+    CHECK(chunk.descriptor.origin[0] == 1e12); CHECK(chunk.descriptor.origin[1] == -2e12); CHECK(chunk.descriptor.origin[2] == 3e12);
+    CHECK(chunk.descriptor.localMin[0] == 0); CHECK(chunk.descriptor.localMax[0] == Catch::Approx(1e-6).margin(1e-12));
+    CHECK(chunk.descriptor.localMax[1] == Catch::Approx(2e-6).margin(1e-12)); CHECK(chunk.descriptor.localMax[2] == 0);
+    CHECK(chunk.descriptor.meshId == 1); CHECK(chunk.descriptor.nodeId == 1);
 }
 
 TEST_CASE("Truncated GLB bytes are rejected as a clean GenerationError, not a crash",

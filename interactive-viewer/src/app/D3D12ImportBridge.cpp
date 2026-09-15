@@ -205,12 +205,14 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     import_broker::KnownChunkCatalog catalog;
     auto unpack = [&](std::vector<import_broker::ValidatedChunk> chunks) {
         ImportResult result;
+        if (!chunks.empty()) result.scene = chunks.front().scene;
         for (const auto& chunk : chunks) catalog.emplace(chunk.descriptor.chunkId, chunk.descriptor.topology);
         for (auto& chunk : chunks) {
             switch (chunk.descriptor.topology) {
             case model_core::ChunkTopology::TriangleList:
             case model_core::ChunkTopology::PointList: {
                 ImportedMesh mesh;
+                mesh.geometry = chunk.descriptor;
                 mesh.chunkId = chunk.descriptor.chunkId;
                 mesh.topology = chunk.descriptor.topology;
                 mesh.vertexLayoutId = static_cast<model_core::VertexLayoutId>(chunk.descriptor.vertexLayoutId);

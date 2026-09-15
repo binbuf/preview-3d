@@ -30,8 +30,13 @@ constexpr char kVertexShaderSource[] = R"(
 cbuffer FrameConstants : register(b0)
 {
     row_major float4x4 gViewProjection;
+    float4 gEyeSelection;
 };
 
+cbuffer DrawConstants : register(b1)
+{
+    row_major float4x4 gLocalToCamera;
+};
 struct VSInput
 {
     float3 position : POSITION;
@@ -42,26 +47,32 @@ struct VSInput
 struct PSInput
 {
     float4 position : SV_POSITION;
+    float3 worldPosition : TEXCOORD1;
     float3 normal : NORMAL;
 };
 
 PSInput VSMain(VSInput input)
 {
     PSInput output;
-    output.position = mul(float4(input.position, 1.0f), gViewProjection);
-    output.normal = input.normal;
+    float4 relativePosition = mul(float4(input.position, 1.0f), gLocalToCamera);
+    output.position = mul(relativePosition, gViewProjection);
+    output.worldPosition = relativePosition.xyz;
+    output.normal = mul(input.normal, (float3x3)gLocalToCamera);
     return output;
 }
 )";
 
 constexpr char kPixelShaderSource[] = R"(
+cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; };
 struct PSInput
 {
     float4 position : SV_POSITION;
+    float3 worldPosition : TEXCOORD1;
     float3 normal : NORMAL;
 };
 
-float4 PSMain(PSInput input) : SV_TARGET
+struct PixelOutput { float4 color : SV_TARGET0; float pick : SV_TARGET1; };
+PixelOutput PSMain(PSInput input)
 {
     float3 n = normalize(input.normal);
     float3 lightDir = normalize(float3(0.4f, 0.7f, -0.5f));
@@ -69,7 +80,10 @@ float4 PSMain(PSInput input) : SV_TARGET
     float hemi = 0.5f + 0.5f * n.y;
     float3 albedo = float3(0.72f, 0.72f, 0.76f);
     float3 color = albedo * (0.25f + 0.5f * hemi + 0.4f * ndotl);
-    return float4(saturate(color), 1.0f);
+    float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
+    float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
+    color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
+    PixelOutput output; output.color = float4(saturate(color), 1.0f); output.pick = 1.0f; return output;
 }
 )";
 
@@ -82,8 +96,13 @@ constexpr char kTexturedVertexShaderSource[] = R"(
 cbuffer FrameConstants : register(b0)
 {
     row_major float4x4 gViewProjection;
+    float4 gEyeSelection;
 };
 
+cbuffer DrawConstants : register(b1)
+{
+    row_major float4x4 gLocalToCamera;
+};
 struct VSInput
 {
     float3 position : POSITION;
@@ -94,6 +113,7 @@ struct VSInput
 struct PSInput
 {
     float4 position : SV_POSITION;
+    float3 worldPosition : TEXCOORD1;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
 };
@@ -101,25 +121,30 @@ struct PSInput
 PSInput VSMain(VSInput input)
 {
     PSInput output;
-    output.position = mul(float4(input.position, 1.0f), gViewProjection);
-    output.normal = input.normal;
+    float4 relativePosition = mul(float4(input.position, 1.0f), gLocalToCamera);
+    output.position = mul(relativePosition, gViewProjection);
+    output.worldPosition = relativePosition.xyz;
+    output.normal = mul(input.normal, (float3x3)gLocalToCamera);
     output.uv = input.uv;
     return output;
 }
 )";
 
 constexpr char kTexturedPixelShaderSource[] = R"(
+cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; };
 Texture2D gBaseColor : register(t0);
 SamplerState gSampler : register(s0);
 
 struct PSInput
 {
     float4 position : SV_POSITION;
+    float3 worldPosition : TEXCOORD1;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
 };
 
-float4 PSMain(PSInput input) : SV_TARGET
+struct PixelOutput { float4 color : SV_TARGET0; float pick : SV_TARGET1; };
+PixelOutput PSMain(PSInput input)
 {
     float3 n = normalize(input.normal);
     float3 lightDir = normalize(float3(0.4f, 0.7f, -0.5f));
@@ -127,7 +152,10 @@ float4 PSMain(PSInput input) : SV_TARGET
     float hemi = 0.5f + 0.5f * n.y;
     float3 texColor = gBaseColor.Sample(gSampler, input.uv).rgb;
     float3 color = texColor * (0.25f + 0.5f * hemi + 0.4f * ndotl);
-    return float4(saturate(color), 1.0f);
+    float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
+    float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
+    color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
+    PixelOutput output; output.color = float4(saturate(color), 1.0f); output.pick = 1.0f; return output;
 }
 )";
 
@@ -297,7 +325,44 @@ bool D3D12ViewerPath::CreateDepthBuffer(UINT width, UINT height, std::wstring& e
     dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
     dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
     device.Device()->CreateDepthStencilView(depthBuffer.Get(), &dsvDesc, dsvHeap->GetCPUDescriptorHandleForHeapStart());
+    return CreatePickTarget(width, height, error);
+}
+
+bool D3D12ViewerPath::CreatePickTarget(UINT width, UINT height, std::wstring& error)
+{
+    // One byte per viewport pixel, plus one 256-byte readback slot. No CPU
+    // geometry catalog; picking uses exactly the depth-tested displayed pixels.
+    D3D12_DESCRIPTOR_HEAP_DESC heap{};
+    heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; heap.NumDescriptors = 1;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; desc.Width = width; desc.Height = height;
+    desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.Format = DXGI_FORMAT_R8_UNORM;
+    desc.SampleDesc.Count = 1; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    D3D12_HEAP_PROPERTIES properties{}; properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_CLEAR_VALUE clear{}; clear.Format = desc.Format;
+    pickTarget.Reset(); pickRtvHeap.Reset();
+    if (uint64_t(width) * height > 64ull * 1024 * 1024
+        || FAILED(device.Device()->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&pickRtvHeap)))
+        || FAILED(device.Device()->CreateCommittedResource(&properties, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, IID_PPV_ARGS(&pickTarget)))) {
+        error = L"The selection surface could not be created."; return false;
+    }
+    device.Device()->CreateRenderTargetView(pickTarget.Get(), nullptr, pickRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    if (!pickReadback) pickReadback = CreateBuffer(device.Device(), 256, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+    if (!pickReadback) { error = L"The selection readback could not be created."; return false; }
     return true;
+}
+
+bool D3D12ViewerPath::PollPick(bool& hit)
+{
+    if (!pickInFlight || directQueue.CompletedValue() < pickFence) return false;
+    D3D12_RANGE range{0,1}; void* bytes = nullptr;
+    hit = false;
+    if (SUCCEEDED(pickReadback->Map(0, &range, &bytes))) {
+        hit = *static_cast<unsigned char*>(bytes) != 0;
+        D3D12_RANGE written{0,0}; pickReadback->Unmap(0, &written);
+    }
+    pickInFlight = false; return true;
 }
 
 bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
@@ -306,11 +371,15 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParam.Descriptor.ShaderRegister = 0;
     rootParam.Descriptor.RegisterSpace = 0;
-    rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSigDesc{};
-    rootSigDesc.NumParameters = 1;
-    rootSigDesc.pParameters = &rootParam;
+    D3D12_ROOT_PARAMETER params[2] = {rootParam, {}};
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[1].Constants.ShaderRegister = 1; params[1].Constants.Num32BitValues = 16;
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootSigDesc.NumParameters = 2;
+    rootSigDesc.pParameters = params;
     rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> signatureBlob;
@@ -353,6 +422,7 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
 
     D3D12_BLEND_DESC blend{};
     blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
     D3D12_DEPTH_STENCIL_DESC depthStencil{};
     depthStencil.DepthEnable = TRUE;
@@ -370,8 +440,9 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     psoDesc.DepthStencilState = depthStencil;
     psoDesc.InputLayout = { inputElements, static_cast<UINT>(std::size(inputElements)) };
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    psoDesc.NumRenderTargets = 1;
+    psoDesc.NumRenderTargets = 2;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R8_UNORM;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count = 1;
 
@@ -379,16 +450,33 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
         error = L"The D3D12 pipeline state could not be created.";
         return false;
     }
+    std::string pointSource(kVertexShaderSource);
+    auto begin = pointSource.find("    float3 normal : NORMAL;\n    float2 uv : TEXCOORD0;");
+    pointSource.erase(begin, std::string("    float3 normal : NORMAL;\n    float2 uv : TEXCOORD0;").size());
+    auto normal = pointSource.find("input.normal");
+    pointSource.replace(normal, std::string("input.normal").size(), "float3(0,0,1)");
+    ComPtr<ID3DBlob> pointVs;
+    if (!CompileShader(pointSource.data(), pointSource.size(), "VSMain", "vs_5_1", pointVs, error)) return false;
+    psoDesc.VS = {pointVs->GetBufferPointer(), pointVs->GetBufferSize()};
+    psoDesc.InputLayout.NumElements = 1;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&positionOnlyPipelineState)))) {
+        error = L"The position-only mesh pipeline could not be created."; return false;
+    }
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pointPipelineState)))) {
+        error = L"The point pipeline could not be created."; return false;
+    }
+
     return true;
 }
 
 bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
 {
-    D3D12_ROOT_PARAMETER rootParams[2]{};
+    D3D12_ROOT_PARAMETER rootParams[3]{};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].Descriptor.RegisterSpace = 0;
-    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_DESCRIPTOR_RANGE srvRange{};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -401,6 +489,9 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
     rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[2].Constants.ShaderRegister = 1; rootParams[2].Constants.Num32BitValues = 16;
+    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -456,6 +547,7 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
 
     D3D12_BLEND_DESC blend{};
     blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
     D3D12_DEPTH_STENCIL_DESC depthStencil{};
     depthStencil.DepthEnable = TRUE;
@@ -473,8 +565,9 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     psoDesc.DepthStencilState = depthStencil;
     psoDesc.InputLayout = { inputElements, static_cast<UINT>(std::size(inputElements)) };
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    psoDesc.NumRenderTargets = 1;
+    psoDesc.NumRenderTargets = 2;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R8_UNORM;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count = 1;
 
@@ -629,7 +722,7 @@ void D3D12ViewerPath::RenderClearFrame(const DirectX::XMFLOAT4& orientation, con
 }
 
 void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
-                                   const DirectX::XMFLOAT4& orientation, const OverlayFrame& chrome)
+                                   const DirectX::XMFLOAT4& orientation, const OverlayFrame& chrome, const double cameraTarget[3], const DirectX::XMFLOAT4& eyeSelection)
 {
     const UINT index = BeginFrame();
 
@@ -652,7 +745,11 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     const float clearColor[4] = { 0x1C / 255.0f, 0x1C / 255.0f, 0x1E / 255.0f, 1.0f };
     commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
     commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-    commandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+    const auto pickRtv = pickRtvHeap->GetCPUDescriptorHandleForHeapStart();
+    const float pickClear[4]{};
+    commandList->ClearRenderTargetView(pickRtv, pickClear, 0, nullptr);
+    D3D12_CPU_DESCRIPTOR_HANDLE targets[2] = {rtv, pickRtv};
+    commandList->OMSetRenderTargets(2, targets, FALSE, &dsv);
 
     const bool loading = chrome.info.state == ViewerState::Loading;
     const LONG top = loading ? 0 : chrome.info.toolbarHeight;
@@ -674,6 +771,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     // GPU still reading the previous frame's matrix.
     const UINT64 constantBufferOffset = static_cast<UINT64>(index) * kConstantBufferSlotBytes;
     std::memcpy(frameConstantBufferMapped + constantBufferOffset, &viewProjection, sizeof(viewProjection));
+    std::memcpy(frameConstantBufferMapped + constantBufferOffset + sizeof(viewProjection), &eyeSelection, sizeof(eyeSelection));
     const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
         = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
 
@@ -687,6 +785,16 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     // signature/PSO bound before their draw calls; state changes are
     // per-draw at this scale, no batching/sorting needed.
     for (const auto& mesh : model.meshes) {
+        DirectX::XMFLOAT4X4 local;
+        DirectX::XMStoreFloat4x4(&local, !chrome.info.showNativeOrientation && sourceUpAxis == model_core::UpAxisId::Y
+            ? DirectX::XMMatrixSet(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1) : DirectX::XMMatrixIdentity());
+        const double native[3] = {mesh.origin[0]-sceneOrigin[0],mesh.origin[1]-sceneOrigin[1],mesh.origin[2]-sceneOrigin[2]};
+        // Rotation precedes subtraction in double; never cast the absolute
+        // source position or camera pivot to a shader float.
+        local._41 = float(native[0]*local._11 + native[1]*local._21 + native[2]*local._31 - cameraTarget[0]);
+        local._42 = float(native[0]*local._12 + native[1]*local._22 + native[2]*local._32 - cameraTarget[1]);
+        local._43 = float(native[0]*local._13 + native[1]*local._23 + native[2]*local._33 - cameraTarget[2]);
+        commandList->IASetPrimitiveTopology(mesh.points ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         if (mesh.textureIndex >= 0 && mesh.textureHeap) {
             ID3D12DescriptorHeap* heaps[] = { mesh.textureHeap.Get() };
             commandList->SetDescriptorHeaps(1, heaps);
@@ -696,16 +804,39 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
             gpuHandle.ptr += static_cast<UINT64>(mesh.textureIndex) * mesh.textureDescriptorSize;
             commandList->SetGraphicsRootDescriptorTable(1, gpuHandle);
+            commandList->SetGraphicsRoot32BitConstants(2, 16, &local, 0);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
-            commandList->SetPipelineState(pipelineState.Get());
+            commandList->SetPipelineState(mesh.points ? pointPipelineState.Get()
+                : mesh.positionOnly ? positionOnlyPipelineState.Get() : pipelineState.Get());
             commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
+            commandList->SetGraphicsRoot32BitConstants(1, 16, &local, 0);
         }
         commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
-        commandList->IASetIndexBuffer(&mesh.ibv);
-        commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
+        commandList->IASetIndexBuffer(mesh.points ? nullptr : &mesh.ibv);
+        if (mesh.points) commandList->DrawInstanced(mesh.vertexCount, 1, 0, 0);
+        else commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
     }
 
+    const bool picking = !pickInFlight && pickX >= 0 && pickY >= 0
+        && UINT(pickX) < swapChain.Width() && UINT(pickY) < swapChain.Height();
+    if (picking) {
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = pickTarget.Get();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        commandList->ResourceBarrier(1, &barrier);
+        D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = pickTarget.Get();
+        source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        D3D12_TEXTURE_COPY_LOCATION dest{}; dest.pResource = pickReadback.Get();
+        dest.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dest.PlacedFootprint.Footprint = {DXGI_FORMAT_R8_UNORM, 1, 1, 1, 256};
+        D3D12_BOX box{UINT(pickX),UINT(pickY),0,UINT(pickX+1),UINT(pickY+1),1};
+        commandList->CopyTextureRegion(&dest,0,0,0,&source,&box);
+        std::swap(barrier.Transition.StateBefore,barrier.Transition.StateAfter);
+        commandList->ResourceBarrier(1, &barrier);
+    }
 
     if (FAILED(commandList->Close())) return;
     ID3D12CommandList* lists[] = { commandList.Get() };
@@ -713,6 +844,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
 
     DrawChrome(index, orientation, chrome);
     EndFrame(index);
+    if (picking) { pickFence = frames[index].fenceValue; pickInFlight = true; pickX = pickY = -1; }
 }
 
 bool D3D12ViewerPath::CreateAndQueueBuffer(const void* data, uint64_t sizeBytes, uint32_t clusterId,
@@ -893,14 +1025,15 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
 
     uint32_t clusterId = 0;
     for (const auto& mesh : importedMeshes) {
-        if (mesh.topology != model_core::ChunkTopology::TriangleList
-            || mesh.vertexLayoutId != model_core::VertexLayoutId::PositionNormalUv0_F32) {
-            continue; // point clouds / unrecognized layouts: a later slice
-        }
-        if (mesh.vertexCount == 0 || mesh.indexCount == 0) continue;
+        const bool points = mesh.topology == model_core::ChunkTopology::PointList
+            && mesh.vertexLayoutId == model_core::VertexLayoutId::PositionOnly_F32;
+        const bool positionOnly = mesh.vertexLayoutId == model_core::VertexLayoutId::PositionOnly_F32;
+        if (!points && (mesh.topology != model_core::ChunkTopology::TriangleList
+            || (!positionOnly && mesh.vertexLayoutId != model_core::VertexLayoutId::PositionNormalUv0_F32))) continue;
+        if (mesh.vertexCount == 0 || (!points && mesh.indexCount == 0)) continue;
 
         const uint64_t vertexBytes
-            = static_cast<uint64_t>(mesh.vertexCount) * sizeof(model_core::VertexPositionNormalUv0F32);
+            = static_cast<uint64_t>(mesh.vertexCount) * (positionOnly ? sizeof(model_core::VertexPositionOnlyF32) : sizeof(model_core::VertexPositionNormalUv0F32));
         const uint64_t indexBytes = static_cast<uint64_t>(mesh.indexCount) * sizeof(uint32_t);
         if (mesh.payload.size() < vertexBytes + indexBytes) {
             error = L"An imported mesh's data was smaller than its declared size.";
@@ -915,25 +1048,30 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         GpuMesh gpuMesh;
         gpuMesh.chunkId = mesh.chunkId;
         gpuMesh.materialChunkId = mesh.materialChunkId;
+        gpuMesh.sourceMeshId = mesh.geometry.meshId;
+        gpuMesh.sourceNodeId = mesh.geometry.nodeId;
+        gpuMesh.points = points; gpuMesh.vertexCount = mesh.vertexCount;
+        gpuMesh.positionOnly = positionOnly;
+        std::memcpy(gpuMesh.origin, mesh.geometry.origin, sizeof(gpuMesh.origin));
         gpuMesh.textureHeap = staged.srvHeap;
         gpuMesh.textureDescriptorSize = staged.srvDescriptorSize;
         const bool vertexOk
             = CreateAndQueueBuffer(mesh.payload.data(), vertexBytes, clusterId++, gpuMesh.vertexBuffer, error);
         const bool indexOk = vertexOk
-            && CreateAndQueueBuffer(mesh.payload.data() + vertexBytes, indexBytes, clusterId++,
-                                     gpuMesh.indexBuffer, error);
+            && (points || CreateAndQueueBuffer(mesh.payload.data() + vertexBytes, indexBytes, clusterId++,
+                                     gpuMesh.indexBuffer, error));
         if (!vertexOk || !indexOk) {
             staged.meshes.push_back(std::move(gpuMesh));
             RetireStagedResources(std::move(staged));
             pendingResourceCount = 0;
             return false;
         }
-        pendingResourceCount += 2;
+        pendingResourceCount += points ? 1 : 2;
 
         gpuMesh.vbv.BufferLocation = gpuMesh.vertexBuffer->GetGPUVirtualAddress();
         gpuMesh.vbv.SizeInBytes = static_cast<UINT>(vertexBytes);
-        gpuMesh.vbv.StrideInBytes = sizeof(model_core::VertexPositionNormalUv0F32);
-        gpuMesh.ibv.BufferLocation = gpuMesh.indexBuffer->GetGPUVirtualAddress();
+        gpuMesh.vbv.StrideInBytes = positionOnly ? sizeof(model_core::VertexPositionOnlyF32) : sizeof(model_core::VertexPositionNormalUv0F32);
+        gpuMesh.ibv.BufferLocation = points ? 0 : gpuMesh.indexBuffer->GetGPUVirtualAddress();
         gpuMesh.ibv.SizeInBytes = static_cast<UINT>(indexBytes);
         gpuMesh.ibv.Format = DXGI_FORMAT_R32_UINT;
         gpuMesh.indexCount = mesh.indexCount;

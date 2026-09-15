@@ -4,6 +4,7 @@
 #include "model_core/Checksum.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
+#include "model_core/GeometryBounds.h"
 #include "platform/CheckedMath.h"
 
 #include <cmath>
@@ -501,6 +502,11 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     if (xIdx < 0 || yIdx < 0 || zIdx < 0) {
         return ImportErrorCode::MalformedData;
     }
+    const auto hasProperty = [&](const char* name) {
+        for (const auto& property : vertexElement->properties) if (!property.isList && property.name == name) return true;
+        return false;
+    };
+    const bool hasColors = hasProperty("red") && hasProperty("green") && hasProperty("blue");
     bool hasNormal = (nxIdx >= 0 && nyIdx >= 0 && nzIdx >= 0);
     bool hasUvUv = (uIdx >= 0 && vIdx >= 0);
     bool hasUvSt = (!hasUvUv) && (sIdx >= 0 && tIdx >= 0);
@@ -604,6 +610,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     std::vector<VertexPositionOnlyF32> pointVertices;
     std::vector<uint32_t> meshIndices;
     uint64_t triangleTotal = 0;
+    double clusterOrigin[3]{}; bool haveOrigin = false;
 
     if (hasFace) {
         meshVertices.reserve(static_cast<size_t>(vertexElement->count));
@@ -656,7 +663,9 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                     // discarded from wire output.
                 }
 
-                float px = static_cast<float>(x), py = static_cast<float>(y), pz = static_cast<float>(z);
+                if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return ImportErrorCode::MalformedData;
+                if (!haveOrigin) { clusterOrigin[0]=x; clusterOrigin[1]=y; clusterOrigin[2]=z; haveOrigin=true; }
+                float px = static_cast<float>(x-clusterOrigin[0]), py = static_cast<float>(y-clusterOrigin[1]), pz = static_cast<float>(z-clusterOrigin[2]);
                 if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz)) {
                     // Fails the whole file, unlike StlAdapter.cpp's per-facet
                     // drop: PLY vertices are shared/indexed across faces, so
@@ -912,6 +921,12 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     descriptor.chunkId = 1;
     descriptor.byteSize = payloadSize;
     descriptor.dependencyCount = 0;
+    std::memcpy(descriptor.origin, clusterOrigin, sizeof(clusterOrigin));
+    descriptor.meshId = hasFace ? 1 : 0;
+    descriptor.geometryFlags = hasUv && hasFace ? kGeometryHasUv0 : 0;
+    if (hasColors) descriptor.geometryFlags |= kGeometryHasColors;
+    if (!SetLocalBounds(descriptor, destination.subspan(size_t(payloadOffset), size_t(vertexBytes))))
+        return ImportErrorCode::MalformedData;
     descriptor.chunkChecksum = Fnv1a64(destination.subspan(payloadOffset, payloadSize));
 
     std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
@@ -920,6 +935,8 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     sectionHeader.magic = kSectionMagic;
     sectionHeader.protocolVersion = kCurrentProtocolVersion;
     sectionHeader.generationId = generationId;
+    sectionHeader.scene.generationId = generationId;
+    sectionHeader.scene.format = SourceFormatId::Ply; sectionHeader.scene.meshCount = hasFace ? 1 : 0;
     sectionHeader.sectionLength = sectionLength;
     sectionHeader.chunkCount = 1;
     sectionHeader.reserved = 0;

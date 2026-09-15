@@ -28,6 +28,7 @@
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
+#include "model_core/GeometryBounds.h"
 #include "SandboxTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -370,6 +371,8 @@ std::vector<std::byte> BuildSection(std::vector<ChunkSpec> chunks, uint64_t gene
         c.descriptor.normalizedRangeOffset = offset;
         c.descriptor.normalizedRangeLength = c.payload.size();
         c.descriptor.byteSize = c.payload.size();
+        if (c.descriptor.topology == ChunkTopology::TriangleList || c.descriptor.topology == ChunkTopology::PointList)
+            SetLocalBounds(c.descriptor, c.payload);
         offset += c.payload.size();
     }
     uint64_t sectionLength = offset;
@@ -392,6 +395,7 @@ std::vector<std::byte> BuildSection(std::vector<ChunkSpec> chunks, uint64_t gene
     header.magic = kSectionMagic;
     header.protocolVersion = kCurrentProtocolVersion;
     header.generationId = generationId;
+    header.scene.generationId = generationId;
     header.sectionLength = sectionLength;
     header.chunkCount = static_cast<uint32_t>(chunks.size());
     header.reserved = 0;
@@ -518,6 +522,23 @@ TEST_CASE("Forward material and sparse image dependencies resolve across a gener
     REQUIRE(result.ok);
     CHECK(batches == 3);
     CHECK(result.chunks.empty());
+}
+
+TEST_CASE("The sandboxed hostile worker cannot publish invalid origins bounds versions or metadata", "[hostile-worker][metadata][bounds]")
+{
+    for (const auto* mode : {L"--origin-nan",L"--origin-inf",L"--bounds-fabricated",L"--bounds-nan",
+        L"--bounds-reversed",L"--metadata-enum",L"--metadata-stale",L"--protocol-old",L"--metadata-changed",
+        L"--position-nan",L"--position-inf",L"--origin-distant-batch"}) {
+        CAPTURE(mode);
+        auto result = import_broker::RunImportSession(MakeBatchRequest(mode,8));
+        REQUIRE_FALSE(result.ok);
+        CHECK(result.stage == import_broker::ImportStage::ValidateSection);
+        const bool protocol = std::wstring(mode) == L"--metadata-stale" || std::wstring(mode) == L"--protocol-old"
+            || std::wstring(mode) == L"--metadata-changed";
+        CHECK(result.errorCode == (protocol ? ImportErrorCode::ImportProtocolViolation
+            : std::wstring(mode) == L"--origin-distant-batch" ? ImportErrorCode::ResourceLimit : ImportErrorCode::MalformedData));
+        CHECK(result.chunks.empty());
+    }
 }
 
 TEST_CASE("Terminal catalogs reject unresolved and incorrectly typed forward dependencies", "[chunk-batch]")

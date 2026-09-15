@@ -1,0 +1,89 @@
+{
+  "configuration": "Release",
+  "fixtureSha256": {
+    "large-offset-tiny.glb": "c5a013a7aaca92cf3a2558207eb794ca1d06d88700910c41ed6f38c18228abd8",
+    "large-offset-le-points.ply": "96e41892fa83baef551b701771672df485db71e9fa22e9d80ddcfec005d0c171",
+    "large-offset-le-mesh.ply": "97fafb70072329c41c31077a73f65470945d5553dbd142ce597fb425ea9d8bff",
+    "large-offset-be-points.ply": "d36a7e71eda6e41035539bac95a038a362a49fb6f79b1fb67a9f6f88fd7b3292",
+    "large-offset-be-mesh.ply": "b829014d50718cbb6d7ed1bcab991dd88a607f2839657763b7f7ea2d3ae2ffc9",
+    "tiny.stl": "df2e901afa2b9c741314d2c012ca38d6cff2d3b9fe2ebbe2a2943161a7b13219",
+    "progressive.glb": "7c2429ca86b870637155b61813d0104540f64f0caacd59649a797793dfc6ae13"
+  },
+  "exeSha256": "3d0ebde452a06c57a5287394a48d723839b8975afee8d2bd02402bb890511e74",
+  "failure": null,
+  "scenes": [
+    {
+      "fixture": "large-offset-tiny.glb",
+      "vertices": 4,
+      "triangles": 2,
+      "points": 0,
+      "width": 0.00019999999494757503,
+      "height": 9.999999747378752e-05,
+      "gpuPick": true,
+      "cpuPickPayloadCount": 0
+    },
+    {
+      "fixture": "large-offset-le-points.ply",
+      "vertices": 4,
+      "triangles": 0,
+      "points": 4,
+      "width": 0.001999974250793457,
+      "height": 0.0009999275207519531,
+      "gpuPick": true,
+      "cpuPickPayloadCount": 0
+    },
+    {
+      "fixture": "large-offset-le-mesh.ply",
+      "vertices": 4,
+      "triangles": 2,
+      "points": 0,
+      "width": 0.001999974250793457,
+      "height": 0.0009999275207519531,
+      "gpuPick": true,
+      "cpuPickPayloadCount": 0
+    },
+    {
+      "fixture": "large-offset-be-points.ply",
+      "vertices": 4,
+      "triangles": 0,
+      "points": 4,
+      "width": 0.001999974250793457,
+      "height": 0.0009999275207519531,
+      "gpuPick": true,
+      "cpuPickPayloadCount": 0
+    },
+    {
+      "fixture": "large-offset-be-mesh.ply",
+      "vertices": 4,
+      "triangles": 2,
+      "points": 0,
+      "width": 0.001999974250793457,
+      "height": 0.0009999275207519531,
+      "gpuPick": true,
+      "cpuPickPayloadCount": 0
+    },
+    {
+      "fixture": "tiny.stl",
+      "vertices": 6,
+      "triangles": 2,
+      "points": 0,
+      "width": 1.9999999949504854e-06,
+      "height": 9.999999974752427e-07,
+      "gpuPick": true,
+      "cpuPickPayloadCount": 0
+    }
+  ],
+  "nativeOrientationDimensions": true,
+  "interactionEpochFraming": {
+    "firstChunks": 15,
+    "terminalVertices": 192,
+    "userTargetPreserved": true,
+    "resetUsesVerifiedBounds": true
+  },
+  "untouchedCameraCorrection": true,
+  "debugLayerAvailable": false,
+  "debugLayerErrors": 0,
+  "survivingWorkers": [],
+  "exitCode": 0,
+  "graphicsDiagnostics": ""
+}

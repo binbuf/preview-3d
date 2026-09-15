@@ -46,6 +46,7 @@ struct ImportedMesh {
     uint32_t indexCount = 0;
     std::vector<std::byte> payload;
     uint32_t materialChunkId = 0; // 0 = none; generation-wide material identity
+    model_core::ChunkDescriptor geometry{};
 };
 
 // Material/image ids refer to the generation-wide catalog, including bounded
@@ -76,6 +77,7 @@ struct ImportedImage {
 
 struct ImportResult {
     bool ok = false;
+    model_core::SceneMetadata scene{};
     std::vector<ImportedMesh> meshes;
     std::vector<ImportedMaterial> materials;
     std::vector<ImportedImage> images;

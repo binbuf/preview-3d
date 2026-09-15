@@ -35,31 +35,37 @@ std::wstring TextureSlotValue(int textureCount, bool hasConstantFactor)
     return L"No";
 }
 
-std::wstring FormatMeters(float value)
+std::wstring FormatDimension(double value, double metersPerUnit)
 {
     std::wostringstream text;
-    text << std::fixed << std::setprecision(3) << value << L" m";
+    if (metersPerUnit > 0) value *= metersPerUnit;
+    if (value && std::abs(value) < 0.001) text << std::scientific << std::setprecision(3);
+    else text << std::fixed << std::setprecision(3);
+    text << value << (metersPerUnit > 0 ? L" m" : L" units");
     return text.str();
 }
 }
 
 std::vector<InfoPanelSection> BuildInfoPanelSections(
     const ModelStats& stats, std::uint64_t triangleCount, std::uint64_t vertexCount,
-    const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax)
+    const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax,
+    double metersPerUnit, std::uint64_t pointCount, bool boundsVerified, model_core::SourceFormatId format, const double* dimensions)
 {
     std::vector<InfoPanelSection> sections;
 
     sections.push_back({ L"Dimensions",
         {
-            { L"Width (X)", FormatMeters(boundsMax.x - boundsMin.x) },
-            { L"Depth (Y)", FormatMeters(boundsMax.y - boundsMin.y) },
-            { L"Height (Z)", FormatMeters(boundsMax.z - boundsMin.z) },
+            { L"Width (X)", FormatDimension(dimensions ? dimensions[0] : double(boundsMax.x) - double(boundsMin.x), metersPerUnit) },
+            { L"Depth (Y)", FormatDimension(dimensions ? dimensions[1] : double(boundsMax.y) - double(boundsMin.y), metersPerUnit) },
+            { L"Height (Z)", FormatDimension(dimensions ? dimensions[2] : double(boundsMax.z) - double(boundsMin.z), metersPerUnit) },
+            { L"Bounds", boundsVerified ? L"Verified" : L"Provisional (loading)" },
         } });
 
     sections.push_back({ L"Mesh Data",
         {
             { L"Triangles", FormatCount(triangleCount) },
             { L"Vertices", FormatCount(vertexCount) },
+            { L"Points", FormatCount(pointCount) },
             { L"UV Set 0", YesNo(stats.hasUv0) },
             { L"UV Set 1", YesNo(stats.hasUv1) },
             { L"Vertex Colors", YesNo(stats.hasVertexColors) },
@@ -95,9 +101,27 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
     sections.push_back({ L"Scene Data",
         {
             { L"Nodes", std::to_wstring(stats.nodeCount) },
+            { L"Meshes", std::to_wstring(stats.meshCount) },
+            { L"Format", format == model_core::SourceFormatId::Gltf ? L"glTF" : format == model_core::SourceFormatId::Glb ? L"GLB"
+                : format == model_core::SourceFormatId::Stl ? L"STL" : format == model_core::SourceFormatId::Ply ? L"PLY" : L"Unknown" },
+            { L"Units", metersPerUnit > 0 ? L"Metres" : L"Unspecified" },
         } });
 
     return sections;
+}
+
+std::vector<InfoPanelSection> BuildInfoPanelSections(const ModelData& metadata, bool showNativeOrientation)
+{
+    double dimensions[3] = {metadata.relativeMax[0]-metadata.relativeMin[0],
+        metadata.relativeMax[1]-metadata.relativeMin[1], metadata.relativeMax[2]-metadata.relativeMin[2]};
+    // The sole format-defined correction in this pass is glTF Y-up to Z-up.
+    // Swap dimensions exactly; trigonometric float residue would invent a
+    // nonzero extent on a planar tiny-scale model.
+    if (!showNativeOrientation && metadata.source.upAxis == model_core::UpAxisId::Y)
+        std::swap(dimensions[1],dimensions[2]);
+    return BuildInfoPanelSections(metadata.stats,metadata.triangleCount,metadata.vertexCount,
+        metadata.boundsMin,metadata.boundsMax,metadata.source.metersPerUnit,metadata.pointCount,
+        metadata.boundsVerified,metadata.source.format,dimensions);
 }
 
 InfoPanelLayout ComputeInfoPanelLayout(int viewportWidth, int viewportHeight,

@@ -66,6 +66,7 @@ int RunLieLayout();
 // rejection in the modes below is the host's doing and not a broken fixture.
 int RunHonestBatches();
 int RunCatalogBatches(int mode);
+int RunMetadataAttack(int mode);
 
 // Sends batch 0, waits for its ack, then sends batch 0 again instead of
 // batch 1. Proves a replayed index cannot re-present bytes the host already

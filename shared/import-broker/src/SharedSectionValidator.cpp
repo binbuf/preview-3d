@@ -4,6 +4,7 @@
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
+#include "model_core/GeometryBounds.h"
 #include "platform/CheckedMath.h"
 
 #include <cmath>
@@ -131,6 +132,25 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
     std::vector<std::byte> sectionCopy(sectionView.begin(),
                                         sectionView.begin() + header.sectionLength);
     std::span<const std::byte> section(sectionCopy);
+    // Never combine a raced header with a different private payload snapshot.
+    if (std::memcmp(section.data(), &header, sizeof(header)) != 0)
+        return Reject(ImportErrorCode::ImportProtocolViolation, "header changed during copy");
+    if (header.reserved || header.scene.reserved || header.scene.generationId != expectedGenerationId)
+        return Reject(ImportErrorCode::ImportProtocolViolation, "stale or malformed scene metadata");
+    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Glb)
+        || uint32_t(header.scene.upAxis) > uint32_t(model_core::UpAxisId::Z)
+        || !std::isfinite(header.scene.metersPerUnit) || header.scene.metersPerUnit < 0
+        || header.scene.metersPerUnit > 1e12
+        || header.scene.meshCount > 1'000'000 || header.scene.nodeCount > 1'000'000
+        || header.scene.skinCount > 1'000'000 || header.scene.animationCount > 1'000'000
+        || header.scene.boneCount > 1'000'000)
+        return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
+    if ((header.scene.format == model_core::SourceFormatId::Gltf || header.scene.format == model_core::SourceFormatId::Glb)
+        && (header.scene.upAxis != model_core::UpAxisId::Y || header.scene.metersPerUnit != 1.0))
+        return Reject(ImportErrorCode::MalformedData, "invalid glTF units/up axis");
+    if ((header.scene.format == model_core::SourceFormatId::Stl || header.scene.format == model_core::SourceFormatId::Ply)
+        && (header.scene.upAxis != model_core::UpAxisId::Unknown || header.scene.metersPerUnit != 0))
+        return Reject(ImportErrorCode::MalformedData, "unspecified source units/up axis must stay unknown");
 
     // 10. Recompute the section checksum over [header, sectionLength).
     auto payloadRegion
@@ -213,6 +233,14 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         if (descriptor.byteSize != descriptor.normalizedRangeLength) {
             return Reject(ImportErrorCode::MalformedData, "byteSize/normalizedRangeLength mismatch");
         }
+        if (descriptor.topology != ChunkTopology::TriangleList && descriptor.topology != ChunkTopology::PointList) {
+            if (descriptor.meshId || descriptor.nodeId || descriptor.geometryFlags
+                || descriptor.boundsState != model_core::BoundsState::Unknown)
+                return Reject(ImportErrorCode::MalformedData, "non-geometry chunk declares geometry metadata");
+            for (unsigned axis=0; axis<3; ++axis) if (descriptor.origin[axis] != 0
+                || descriptor.localMin[axis] != 0 || descriptor.localMax[axis] != 0)
+                return Reject(ImportErrorCode::MalformedData, "non-geometry chunk declares origin/bounds");
+        }
 
         // 12d. Pass B: topology-specific validation. Every branch either
         // Rejects or falls through to the common checksum/copy tail below.
@@ -255,6 +283,40 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
 
             if (expectedByteSize != descriptor.byteSize) {
                 return Reject(ImportErrorCode::MalformedData, "byteSize does not match declared counts");
+            }
+
+            if (descriptor.boundsState != model_core::BoundsState::Verified
+                || (descriptor.geometryFlags & ~model_core::kGeometryFlagsKnownMask) != 0
+                || (descriptor.meshId && descriptor.meshId > header.scene.meshCount)
+                || (descriptor.nodeId && descriptor.nodeId > header.scene.nodeCount))
+                return Reject(ImportErrorCode::MalformedData, "invalid geometry metadata");
+            for (unsigned axis = 0; axis < 3; ++axis) {
+                if (!std::isfinite(descriptor.origin[axis]) || std::abs(descriptor.origin[axis]) > 1e30
+                    || !std::isfinite(descriptor.localMin[axis]) || !std::isfinite(descriptor.localMax[axis])
+                    || descriptor.localMin[axis] > descriptor.localMax[axis]
+                    || std::abs(double(descriptor.localMin[axis])) > 1e30
+                    || std::abs(double(descriptor.localMax[axis])) > 1e30)
+                    return Reject(ImportErrorCode::MalformedData, "non-finite or malformed origin/bounds");
+            }
+            auto geometry = section.subspan(size_t(descriptor.normalizedRangeOffset), size_t(*vertexBytes));
+            auto reduced = descriptor;
+            if (!model_core::SetLocalBounds(reduced, geometry)
+                || std::memcmp(reduced.localMin, descriptor.localMin, sizeof(reduced.localMin))
+                || std::memcmp(reduced.localMax, descriptor.localMax, sizeof(reduced.localMax)))
+                return Reject(ImportErrorCode::MalformedData, "fabricated geometry bounds");
+            // Check every normalized attribute, including PositionOnly_F32.
+            for (size_t offset = 0; offset < geometry.size(); offset += sizeof(float)) {
+                float value; std::memcpy(&value, geometry.data() + offset, sizeof(value));
+                if (!std::isfinite(value)) return Reject(ImportErrorCode::MalformedData, "non-finite vertex");
+            }
+            if (descriptor.topology == ChunkTopology::TriangleList) {
+                if (descriptor.indexCount % 3) return Reject(ImportErrorCode::MalformedData, "partial triangle");
+                for (uint32_t index = 0; index < descriptor.indexCount; ++index) {
+                    uint32_t value;
+                    std::memcpy(&value, section.data() + descriptor.normalizedRangeOffset + *vertexBytes
+                        + size_t(index) * sizeof(value), sizeof(value));
+                    if (value >= descriptor.vertexCount) return Reject(ImportErrorCode::MalformedData, "invalid index");
+                }
             }
 
             // dependencyIds on a TriangleList/PointList chunk predates this
@@ -431,7 +493,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
 
         // 12i. Only now, copy the payload into host-owned private memory.
         std::vector<std::byte> payload(chunkPayloadView.begin(), chunkPayloadView.end());
-        result.chunks.push_back(ValidatedChunk{ descriptor, std::move(payload) });
+        result.chunks.push_back(ValidatedChunk{ descriptor, std::move(payload), header.scene });
     }
 
     // 13. Aggregate decoded-texture-pixel budget (1 gigapixel, Tier A),

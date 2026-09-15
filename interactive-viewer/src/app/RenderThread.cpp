@@ -5,6 +5,7 @@
 #define NOMINMAX
 
 #include "RenderThread.h"
+#include <cstdio>
 
 #include <windows.h>
 
@@ -51,9 +52,15 @@ std::uint64_t RenderThread::SmokeValue(unsigned field) const noexcept
     case 8: return displayedChunks_.load(std::memory_order_acquire);
     case 12: {
         std::lock_guard<std::mutex> lock(cameraMutex_);
-        uint32_t bits; std::memcpy(&bits, &camera_.distance, sizeof(bits)); return bits;
+        float distance = float(camera_.distance);
+        uint32_t bits; std::memcpy(&bits, &distance, sizeof(bits)); return bits;
     }
+    case 31: { std::lock_guard<std::mutex> lock(cameraMutex_); uint64_t bits; std::memcpy(&bits,&camera_.targetDistance,sizeof(bits)); return bits; }
     case 11: return texturedChunks_.load(std::memory_order_acquire);
+    case 35: return debugErrors_.load();
+    case 36: return debugAvailable_.load();
+    case 32: return pickCompletions_.load();
+    case 33: return pickHits_.load();
     case 10: { std::lock_guard<std::mutex> lock(uploads_->mutex); return uploads_->bytes; }
     case 9: { std::lock_guard<std::mutex> lock(uploads_->mutex); return uploads_->peakCount; }
     default: return 0;
@@ -131,6 +138,12 @@ void RenderThread::RequestResize(int width, int height)
         resizeWidth_ = width;
         resizeHeight_ = height;
     }
+    Invalidate();
+}
+
+void RenderThread::RequestPick(int x, int y, uint64_t generation)
+{
+    { std::lock_guard<std::mutex> lock(commandMutex_); pickRequest_ = PickRequest{x,y,generation}; }
     Invalidate();
 }
 
@@ -217,23 +230,6 @@ void RenderThread::UploadMain()
         };
         try {
             if (!pub.task.terminal && current()) {
-                auto grow = [&](float x, float y, float z) {
-                    if (!pub.haveBounds) { pub.boundsMin = pub.boundsMax = {x,y,z}; pub.haveBounds = true; }
-                    else {
-                        pub.boundsMin.x = std::min(pub.boundsMin.x,x); pub.boundsMax.x = std::max(pub.boundsMax.x,x);
-                        pub.boundsMin.y = std::min(pub.boundsMin.y,y); pub.boundsMax.y = std::max(pub.boundsMax.y,y);
-                        pub.boundsMin.z = std::min(pub.boundsMin.z,z); pub.boundsMax.z = std::max(pub.boundsMax.z,z);
-                    }
-                };
-                for (const auto& mesh : pub.task.result.meshes) {
-                    const auto stride = mesh.vertexLayoutId == model_core::VertexLayoutId::PositionOnly_F32
-                        ? sizeof(model_core::VertexPositionOnlyF32) : sizeof(model_core::VertexPositionNormalUv0F32);
-                    for (uint32_t i = 0; i < mesh.vertexCount; ++i) {
-                        if ((i & 4095) == 0 && !current()) break;
-                        float xyz[3]; std::memcpy(xyz, mesh.payload.data() + i * stride, sizeof(xyz));
-                        grow(xyz[0],xyz[1],xyz[2]);
-                    }
-                }
                 // Developer smoke gates the copy queue's execution, so the
                 // test exercises real fence-incomplete destinations and ring
                 // waits while the direct queue keeps presenting prior content.
@@ -272,7 +268,8 @@ void RenderThread::UploadMain()
                 }
                 // Keep only compact metadata after the copy; capacity remains
                 // charged until the render thread accepts or discards publication.
-                pub.task.result.meshes.clear(); pub.task.result.images.clear();
+                for (auto& mesh : pub.task.result.meshes) std::vector<std::byte>().swap(mesh.payload);
+                pub.task.result.images.clear();
             }
         } catch (const std::bad_alloc&) {
             uploader.WaitForIdle();
@@ -386,6 +383,13 @@ void RenderThread::ThreadMain(HWND window)
     }
 
     uploadThread_ = std::thread(&RenderThread::UploadMain, this);
+#ifdef _DEBUG
+    if (SUCCEEDED(path_.device.Device()->QueryInterface(IID_PPV_ARGS(&debugInfo_)))) {
+        D3D12_MESSAGE_SEVERITY severities[] = {D3D12_MESSAGE_SEVERITY_CORRUPTION,D3D12_MESSAGE_SEVERITY_ERROR};
+        D3D12_INFO_QUEUE_FILTER filter{}; filter.AllowList.NumSeverities = 2; filter.AllowList.pSeverityList = severities;
+        debugInfo_->AddStorageFilterEntries(&filter); debugInfo_->AddRetrievalFilterEntries(&filter); debugAvailable_.store(1);
+    }
+#endif
 
     while (!stopRequested_.load(std::memory_order_acquire)) {
         DrainCommands();
@@ -395,6 +399,25 @@ void RenderThread::ThreadMain(HWND window)
         // this is the tick the in-flight model became complete, swap it in
         // and notify. Cheap when nothing is outstanding.
         PumpUploads(window);
+        bool picked = false;
+        if (pendingPick_ && path_.PollPick(picked)) {
+            ++pickCompletions_; pickHits_.store(picked);
+            auto reply = std::make_unique<RenderPickResult>(RenderPickResult{pendingPick_->generation,picked});
+            if (pendingPick_->generation == modelGeneration_
+                && PostMessageW(window,kRenderPickCompleteMessage,0,reinterpret_cast<LPARAM>(reply.get()))) (void)reply.release();
+            pendingPick_.reset();
+        }
+        if (!pendingPick_) {
+            std::lock_guard<std::mutex> commandLock(commandMutex_);
+            if (pickRequest_) {
+                if (pickRequest_->generation == modelGeneration_ && pickRequest_->x >= 0 && pickRequest_->y >= 0
+                    && UINT(pickRequest_->x) < path_.swapChain.Width() && UINT(pickRequest_->y) < path_.swapChain.Height()) {
+                    path_.pickX = pickRequest_->x; path_.pickY = pickRequest_->y; pendingPick_ = pickRequest_;
+                    invalidated_.store(true);
+                }
+                pickRequest_.reset();
+            }
+        }
 
         bool cameraMoving = false;
         {
@@ -406,7 +429,7 @@ void RenderThread::ThreadMain(HWND window)
         // polled, not waited on, so something has to come back and look.
         // This is what replaces the old blocking wait -- the viewport stays
         // live, still presenting the previous model, while bytes land.
-        const bool uploading = path_.UploadInFlight();
+        const bool uploading = path_.UploadInFlight() || pendingPick_.has_value();
         const bool wanted = invalidated_.exchange(false, std::memory_order_acq_rel)
             || uiAnimating_.load(std::memory_order_acquire) || cameraMoving || benching || uploading;
 
@@ -496,7 +519,7 @@ void RenderThread::PumpUploads(HWND window)
     std::unique_lock<std::mutex> lock(uploads_->mutex);
     if (stagedGeneration_ && stagedGeneration_ != uploads_->generation) {
         stagedScene_ = {}; stagedGeneration_ = 0; stagedHaveBounds_ = false;
-        materials_.clear(); stagedFailed_ = false;
+        materials_.clear(); stagedFailed_ = false; stagedMetadata_.reset(); haveSceneOrigin_ = false;
     }
     if (uploads_->publications.empty()) return;
     auto pub = std::move(uploads_->publications.front()); uploads_->publications.pop_front();
@@ -508,6 +531,7 @@ void RenderThread::PumpUploads(HWND window)
     if (stagedGeneration_ != pub.task.generation) {
         stagedGeneration_ = pub.task.generation; stagedScene_ = {};
         materials_.clear(); stagedHaveBounds_ = false; stagedFailed_ = false;
+        stagedMetadata_ = std::make_shared<ModelData>(); haveSceneOrigin_ = false;
     }
     auto message = std::make_unique<RenderUploadResult>();
     message->generation = pub.task.generation; message->path = pub.task.path;
@@ -515,11 +539,66 @@ void RenderThread::PumpUploads(HWND window)
     if (pub.task.terminal) {
         message->ok = !stagedFailed_ && modelGeneration_ == pub.task.generation && path_.hasModel;
         if (!message->ok) message->errorDetails = L"The import completed without displayable geometry.";
+        if (message->ok && stagedMetadata_) {
+            stagedMetadata_->boundsVerified = true;
+            message->metadata = std::make_shared<const ModelData>(*stagedMetadata_);
+        }
     } else if (!pub.task.result.ok) {
         stagedFailed_ = true;
         message->errorDetails = pub.task.result.errorDetails;
     } else {
-        for (const auto& mat : pub.task.result.materials) materials_.emplace(mat.chunkId, mat);
+        auto& metadata = *stagedMetadata_;
+        metadata.source = pub.task.result.scene;
+        metadata.stats.nodeCount = int(metadata.source.nodeCount);
+        metadata.stats.meshCount = int(metadata.source.meshCount);
+        metadata.stats.animationCount = int(metadata.source.animationCount);
+        metadata.stats.skinCount = int(metadata.source.skinCount);
+        metadata.stats.boneCount = int(metadata.source.boneCount);
+        metadata.sourceUpAxis = metadata.source.upAxis == model_core::UpAxisId::Y ? SourceUpAxis::Y : SourceUpAxis::Unknown;
+        DirectX::XMStoreFloat4x4(&metadata.upAxisCorrection, metadata.sourceUpAxis == SourceUpAxis::Y
+            ? DirectX::XMMatrixSet(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1) : DirectX::XMMatrixIdentity());
+        for (const auto& imported : pub.task.result.meshes) {
+            const auto& geometry = imported.geometry;
+            if (!haveSceneOrigin_) {
+                std::memcpy(metadata.sceneOrigin, geometry.origin, sizeof(metadata.sceneOrigin)); haveSceneOrigin_ = true;
+            }
+            double minimum[3], maximum[3];
+            for (unsigned axis=0; axis<3; ++axis) {
+                // Subtract origins before adding local extrema; tiny residuals
+                // remain intact even when an absolute double sum would round.
+                const double offset = geometry.origin[axis] - metadata.sceneOrigin[axis];
+                minimum[axis] = offset + double(geometry.localMin[axis]);
+                maximum[axis] = offset + double(geometry.localMax[axis]);
+            }
+            if (!stagedHaveBounds_) {
+                std::memcpy(metadata.relativeMin, minimum, sizeof(minimum));
+                std::memcpy(metadata.relativeMax, maximum, sizeof(maximum)); stagedHaveBounds_ = true;
+            } else {
+                for (unsigned axis=0; axis<3; ++axis) {
+                    metadata.relativeMin[axis] = std::min(metadata.relativeMin[axis],minimum[axis]);
+                    metadata.relativeMax[axis] = std::max(metadata.relativeMax[axis],maximum[axis]);
+                }
+            }
+            metadata.boundsMin = {float(metadata.relativeMin[0]),float(metadata.relativeMin[1]),float(metadata.relativeMin[2])};
+            metadata.boundsMax = {float(metadata.relativeMax[0]),float(metadata.relativeMax[1]),float(metadata.relativeMax[2])};
+            metadata.vertexCount += imported.vertexCount;
+            metadata.triangleCount += imported.topology == model_core::ChunkTopology::TriangleList ? imported.indexCount/3 : 0;
+            metadata.pointCount += imported.topology == model_core::ChunkTopology::PointList ? imported.vertexCount : 0;
+            metadata.stats.hasUv0 |= (geometry.geometryFlags & model_core::kGeometryHasUv0) != 0;
+            metadata.stats.hasUv1 |= (geometry.geometryFlags & model_core::kGeometryHasUv1) != 0;
+            metadata.stats.hasVertexColors |= (geometry.geometryFlags & model_core::kGeometryHasColors) != 0;
+        }
+        for (const auto& mat : pub.task.result.materials) {
+            materials_.emplace(mat.chunkId, mat);
+            ++metadata.stats.materialCount;
+            metadata.stats.albedoTextureCount += mat.baseColorImageChunkId != 0;
+            metadata.stats.normalTextureCount += mat.normalImageChunkId != 0;
+            metadata.stats.specularMetallicTextureCount += mat.metallicRoughnessImageChunkId != 0;
+            metadata.stats.emissiveTextureCount += mat.emissiveImageChunkId != 0;
+            metadata.stats.hasConstantBaseColor |= mat.baseColorImageChunkId == 0;
+            metadata.stats.hasConstantEmissiveColor |= mat.data.emissiveFactor[0] != 0 || mat.data.emissiveFactor[1] != 0 || mat.data.emissiveFactor[2] != 0;
+            metadata.stats.hasTransparency |= mat.data.alphaMode != uint32_t(model_core::AlphaModeId::Opaque) || mat.data.baseColorFactor[3] < 1;
+        }
         auto& destination = modelGeneration_ == pub.task.generation ? path_.model : stagedScene_;
         destination.meshes.insert(destination.meshes.end(), std::make_move_iterator(pub.resources.meshes.begin()),
             std::make_move_iterator(pub.resources.meshes.end()));
@@ -534,14 +613,6 @@ void RenderThread::PumpUploads(HWND window)
                 break;
             }
         }
-        if (pub.haveBounds) {
-            if (!stagedHaveBounds_) { stagedMin_ = pub.boundsMin; stagedMax_ = pub.boundsMax; stagedHaveBounds_ = true; }
-            else {
-                stagedMin_.x = std::min(stagedMin_.x,pub.boundsMin.x); stagedMax_.x = std::max(stagedMax_.x,pub.boundsMax.x);
-                stagedMin_.y = std::min(stagedMin_.y,pub.boundsMin.y); stagedMax_.y = std::max(stagedMax_.y,pub.boundsMax.y);
-                stagedMin_.z = std::min(stagedMin_.z,pub.boundsMin.z); stagedMax_.z = std::max(stagedMax_.z,pub.boundsMax.z);
-            }
-        }
         if (!destination.meshes.empty()) {
             if (modelGeneration_ != pub.task.generation) {
                 uint64_t fence = 0;
@@ -549,16 +620,36 @@ void RenderThread::PumpUploads(HWND window)
                 if (path_.hasModel) path_.retiredModels.push_back({std::move(path_.model),fence,0});
                 path_.model = std::move(stagedScene_); stagedScene_ = {};
                 modelGeneration_ = pub.task.generation;
-                if (stagedHaveBounds_) {
-                    std::lock_guard<std::mutex> cameraLock(cameraMutex_);
-                    camera_.SetBounds(stagedMin_, stagedMax_, viewportAspect_);
-                }
+                std::memcpy(path_.sceneOrigin, metadata.sceneOrigin, sizeof(path_.sceneOrigin));
+                path_.sourceUpAxis = metadata.source.upAxis;
+                std::lock_guard<std::mutex> cameraLock(cameraMutex_);
+                framingEpoch_ = interactionEpoch_.load();
+                DirectX::XMFLOAT3 minimum, maximum;
+                const bool native = frameOverlay_->info.showNativeOrientation;
+                TransformBounds(metadata.boundsMin, metadata.boundsMax, native ? DirectX::XMMatrixIdentity()
+                    : DirectX::XMLoadFloat4x4(&metadata.upAxisCorrection), minimum, maximum);
+                camera_.SetBounds(minimum, maximum, viewportAspect_);
             }
             path_.hasModel = true; hasModel_.store(true, std::memory_order_release);
             displayedChunks_.store(path_.model.meshes.size(), std::memory_order_release);
             texturedChunks_.store(std::count_if(path_.model.meshes.begin(), path_.model.meshes.end(),
                 [](const auto& mesh) { return mesh.textureIndex >= 0 && mesh.textureHeap; }), std::memory_order_release);
         }
+        metadata.stats.drawCallCount = int(path_.model.meshes.size());
+        if (stagedHaveBounds_ && modelGeneration_ == pub.task.generation) {
+            std::lock_guard<std::mutex> cameraLock(cameraMutex_);
+            DirectX::XMFLOAT3 minimum, maximum;
+            TransformBounds(metadata.boundsMin, metadata.boundsMax, frameOverlay_->info.showNativeOrientation
+                ? DirectX::XMMatrixIdentity() : DirectX::XMLoadFloat4x4(&metadata.upAxisCorrection), minimum, maximum);
+            Camera framed = camera_; framed.SetBounds(minimum, maximum, viewportAspect_);
+            if (interactionEpoch_.load() == framingEpoch_) camera_ = framed;
+            else {
+                camera_.homeX = framed.homeX; camera_.homeY = framed.homeY; camera_.homeZ = framed.homeZ;
+                camera_.homeDistance = framed.homeDistance; camera_.homeBoundsMin = minimum; camera_.homeBoundsMax = maximum;
+                camera_.homeOrientation = framed.homeOrientation; camera_.sceneRadius = framed.sceneRadius;
+            }
+        }
+        message->metadata = std::make_shared<const ModelData>(metadata);
         message->ok = true;
         if (destination.meshes.empty() && modelGeneration_ != pub.task.generation) return;
     }
@@ -572,6 +663,8 @@ void RenderThread::RenderOneFrame()
 {
     AssertOnRenderThread();
 
+    double cameraTarget[3]{};
+    DirectX::XMFLOAT4 eyeSelection;
     DirectX::XMFLOAT4X4 viewProjection{};
     DirectX::XMFLOAT4 orientation{};
     std::shared_ptr<const OverlayFrame> overlay;
@@ -588,19 +681,38 @@ void RenderThread::RenderOneFrame()
         }
         lastFrameSeconds_ = now;
         camera_.SetInput(flightInput_);
+        if (flightInput_.right || flightInput_.up || flightInput_.forward || flightInput_.roll
+            || flightInput_.orbitX || flightInput_.orbitY || flightInput_.panX || flightInput_.panY) ++interactionEpoch_;
         camera_.Update(elapsed);
         DirectX::XMStoreFloat4(&orientation, camera_.Orientation());
         overlay = frameOverlay_;
+        cameraTarget[0] = camera_.targetX; cameraTarget[1] = camera_.targetY; cameraTarget[2] = camera_.targetZ;
+        Camera relative = camera_; relative.targetX = relative.targetY = relative.targetZ = 0;
+        DirectX::XMStoreFloat4(&eyeSelection,relative.EyePosition()); eyeSelection.w = overlay->info.selectionAmount;
         DirectX::XMStoreFloat4x4(&viewProjection,
-                                  camera_.ViewMatrix() * camera_.ProjectionMatrix(viewportAspect_));
+                                  relative.ViewMatrix() * camera_.ProjectionMatrix(viewportAspect_));
     }
 
     const auto framesBefore = path_.frameStats.PresentedFrames();
     path_.lastPresentResult = E_PENDING;
     if (hasModel_.load(std::memory_order_acquire)) {
-        path_.RenderFrame(viewProjection, orientation, *overlay);
+        path_.RenderFrame(viewProjection, orientation, *overlay, cameraTarget, eyeSelection);
     } else {
         path_.RenderClearFrame(orientation, *overlay);
+    }
+    if (debugInfo_) {
+        const auto count = debugInfo_->GetNumStoredMessagesAllowedByRetrievalFilter();
+        if (copyDelayMs_ && count && !debugErrors_.load()) {
+            // Bounded diagnostics for the explicit app smoke lane only.
+            size_t length = 0; debugInfo_->GetMessage(0,nullptr,&length);
+            if (length <= 4096) {
+                std::vector<std::byte> storage(length);
+                auto message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+                if (SUCCEEDED(debugInfo_->GetMessage(0,message,&length)))
+                    std::fprintf(stderr,"D3D12 smoke error %u: %.1000s\n",unsigned(message->ID),message->pDescription);
+            }
+        }
+        debugErrors_.store(count);
     }
 
     if (path_.frameStats.PresentedFrames() > framesBefore && path_.lastPresentResult == S_OK) {
