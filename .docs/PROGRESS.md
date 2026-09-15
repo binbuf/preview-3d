@@ -4,6 +4,26 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 1 / TSK-104 (2026-09-15): complete.**
+  Added a checksummed 33-input routine corpus and full A-small manifest, bounded
+  deterministic small/medium/large GLB/STL/PLY mesh/point/endian recipes, source-byte
+  metadata verification, and real-app open/replace/cancel/resize/recover/close smoke
+  through an opt-in bounded command seam. The render thread publishes successful
+  visible Present milestones and resize acknowledgements through atomics.
+  Fixed the fixture-exposed PLY header splitter scanning binary payload as text.
+  Debug/Release solution builds and both Catch2 binaries pass: Unit 74 cases,
+  ImportIsolation 152 cases. Two routine generations and a full A-small repeat
+  match their pinned hashes/metadata; twelve final real-app lifecycle runs pass
+  with zero surviving viewer/child worker processes. Full A-small GLB geometry
+  Present medians are 380.50 ms Debug / 125.55 ms Release. Raw reports, exact
+  commands, measurement limits and future-task fixture policies are recorded in
+  [TSK-104_BASELINE.md](./TSK-104_BASELINE.md) and
+  [tests/fixtures/README.md](../tests/fixtures/README.md).
+  Point normalization works but current point display fails its explicit
+  qualification assertion; non-indexed/sparse, large catalogs/proxies, meshopt/WebP,
+  shader semantics and actual pressure remain later tasks. No dependency/license
+  changes. Phase 1 is complete under the updated scope; **TSK-201 is next**.
+
 - **Scope-limited MVP, Phase 1 / TSK-103 (2026-09-15): complete.**
   All six UI binding locations already use the D3D12 model state following
   TSK-101's removal of the legacy renderer instance: `HasNavigableModel`,

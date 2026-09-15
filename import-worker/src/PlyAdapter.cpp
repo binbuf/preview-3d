@@ -225,6 +225,14 @@ std::optional<std::vector<HeaderLine>> SplitHeaderLines(std::string_view scanReg
         }
         size_t endOffset = (newlinePos == std::string_view::npos) ? scanRegion.size() : newlinePos + 1;
         lines.push_back({ line, endOffset });
+        // Header limits apply to text only. Binary vertex data can contain
+        // arbitrarily long runs without LF (or thousands of incidental LFs).
+        // Do not split/check the payload as if it were more header lines.
+        const auto first = line.find_first_not_of(" \t");
+        const auto last = line.find_last_not_of(" \t");
+        if (first != std::string_view::npos && line.substr(first, last - first + 1) == "end_header") {
+            break;
+        }
         if (newlinePos == std::string_view::npos) {
             break;
         }

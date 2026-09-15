@@ -1,0 +1,7 @@
+ply
+format binary_little_endian 1.0
+element vertex 18446744073709551615
+property float x
+property float y
+property float z
+end_header

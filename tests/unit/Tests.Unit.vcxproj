@@ -69,6 +69,7 @@
     <ClCompile Include="..\..\interactive-viewer\src\ui\NavGizmo.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\ui\InfoPanel.cpp" />
     <ClCompile Include="HarnessSmokeTests.cpp" />
+    <ClCompile Include="FixtureManifestTests.cpp" />
     <ClCompile Include="WireFormatTests.cpp" />
     <ClCompile Include="GraphicsDeviceTests.cpp" />
     <ClCompile Include="CommandQueueTests.cpp" />

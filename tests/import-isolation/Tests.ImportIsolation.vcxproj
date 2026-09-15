@@ -70,6 +70,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="HarnessSmokeTests.cpp" />
+    <ClCompile Include="FixtureManifestTests.cpp" />
     <ClCompile Include="SandboxLaunchTests.cpp" />
     <ClCompile Include="ImportPipelineTests.cpp" />
     <ClCompile Include="HostileWorkerTests.cpp" />

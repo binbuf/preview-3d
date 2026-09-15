@@ -40,6 +40,7 @@
 
 struct D3D12ViewerPath
 {
+    HRESULT lastPresentResult = E_PENDING;
     D3D12Device device;
     D3D12CommandQueue directQueue;
     D3D12SwapChain swapChain;

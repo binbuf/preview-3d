@@ -14,11 +14,16 @@ bridge on every frame, with GPU pixel-readback coverage for all back buffers, re
 TSK-103 is complete: the required model-state checks already use the render thread's atomic
 D3D12 state, and visible Empty/GLB/glTF runs verify the bottom bar and Information panel
 reserve space only with a loaded model, including after resize. Zoom/Fit/Reset respond;
-the existing chrome regression tests pass. Phase 1 is complete; **Phase 2 / TSK-201 is next**.
+the existing chrome regression tests pass. TSK-104 is complete: checksummed routine/full
+A-small manifests, bounded medium/large generation recipes, independent source metadata
+checks, Catch2 fixture coverage and repeatable app lifecycle smoke are now checked in.
+Debug/Release builds and both Catch2 binaries pass; twelve routine/full A-small app runs
+pass. See [TSK-104_BASELINE.md](./TSK-104_BASELINE.md) for timings, memory evidence and
+explicit qualification gaps. Phase 1 is complete; **Phase 2 / TSK-201 is next**.
 Information rows, picking, and native-orientation re-homing still require CPU model metadata
 from the D3D12 pipeline.
 
-**Broader gate baseline: `f0d2f86`**, amended for TSK-101/TSK-102/TSK-103 below.
+**Broader gate baseline: `f0d2f86`**, amended for TSK-101/TSK-102/TSK-103/TSK-104 below.
 
 Two rules this list is written to, both from the delivery plan itself:
 
@@ -59,8 +64,10 @@ did not, and each is still owed.
 - [ ] **ETW event schema** (`10-…:71`). `FrameStats.{h,cpp}` is a 240-sample mean/p95 ring and is
       explicitly not this. Everything that measures a frame gate downstream — Gate 1's NFR-03
       criteria, Gate 3's exit criterion 1, `09-…:87`'s present-event classification — needs it.
-- [ ] **Fixture manifest** (`10-…:71`). The performance corpus it would describe does not exist
-      either; see Gate 3 exit criterion 1.
+- [x] **Scope-limited viewer fixture manifest** (`10-…:71`, TSK-104): immutable routine
+      corpus, pinned full A-small manifest, deterministic medium/large recipes and
+      qualification artifact commands now exist. Tier B/cache/Explorer corpus is
+      deferred by the active scope; large/performance gates remain unqualified.
 - [ ] **Compatibility-host protocol / shared-section schema** (`10-…:70`). The derived-cache half
       of that line exists as a prototype; the compatibility-host half does not, and
       `compatibility-host/src/main.cpp` is a four-line `return 0;`. Gate 4 slice 5 depends on it.

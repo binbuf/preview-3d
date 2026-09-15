@@ -1,0 +1,892 @@
+{
+  "entries": [
+    {
+      "bytes": 19280,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": {
+          "baseColors": [
+            [
+              1,
+              0,
+              0,
+              1
+            ],
+            [
+              0,
+              1,
+              0,
+              1
+            ],
+            [
+              0,
+              0,
+              1,
+              1
+            ],
+            [
+              1,
+              1,
+              1,
+              1
+            ]
+          ],
+          "doubleSided": true,
+          "metallic": 0.25,
+          "roughness": 0.75
+        },
+        "materials": 4,
+        "points": 0,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 12,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 720,
+        "textures": [
+          {
+            "height": 2,
+            "rgba8": [
+              255,
+              0,
+              0,
+              255,
+              0,
+              255,
+              0,
+              255,
+              0,
+              0,
+              255,
+              255,
+              255,
+              255,
+              255,
+              255
+            ],
+            "width": 2
+          }
+        ],
+        "triangles": 240,
+        "vertexColors": "RGBA8 four groups"
+      },
+      "id": "A-small-glb",
+      "path": "A-small-glb.glb",
+      "recipe": {
+        "algorithm": "glb",
+        "primitives": 240,
+        "scaled": true,
+        "tier": "small"
+      },
+      "sha256": "412f9110575c0b425d8cdc4726ca5a59c4e91c09de4f3d56a226fd1f2fbb6240"
+    },
+    {
+      "bytes": 12084,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 0,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 12,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 720,
+        "textures": [],
+        "triangles": 240,
+        "vertexColors": "none"
+      },
+      "id": "A-small-stl",
+      "path": "A-small-stl.stl",
+      "recipe": {
+        "algorithm": "stl",
+        "primitives": 240,
+        "scaled": true,
+        "tier": "small"
+      },
+      "sha256": "5c93493ea081b589d57e2c4f12fdb0a01b0f0ba96b430d66d1d234bc254c975f"
+    },
+    {
+      "bytes": 14154,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 0,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 12,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 720,
+        "textures": [],
+        "triangles": 240,
+        "vertexColors": "RGB8 four groups"
+      },
+      "id": "A-small-ply-mesh-le",
+      "path": "A-small-ply-mesh-le.ply",
+      "recipe": {
+        "algorithm": "ply-mesh-le",
+        "primitives": 240,
+        "scaled": true,
+        "tier": "small"
+      },
+      "sha256": "5afbebf1508a09952a37478c150923c239f8678011107944c5d741918b805243"
+    },
+    {
+      "bytes": 14151,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 0,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 12,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 720,
+        "textures": [],
+        "triangles": 240,
+        "vertexColors": "RGB8 four groups"
+      },
+      "id": "A-small-ply-mesh-be",
+      "path": "A-small-ply-mesh-be.ply",
+      "recipe": {
+        "algorithm": "ply-mesh-be",
+        "primitives": 240,
+        "scaled": true,
+        "tier": "small"
+      },
+      "sha256": "94750f6c696cbe0e7e233d6d645ee488347b7c7b24ae5c1535dbe2d68dbb3dc5"
+    },
+    {
+      "bytes": 11913,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 240,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 12,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 240,
+        "textures": [],
+        "triangles": 0,
+        "vertexColors": "RGB8 four groups"
+      },
+      "id": "A-small-ply-points-le",
+      "path": "A-small-ply-points-le.ply",
+      "recipe": {
+        "algorithm": "ply-points-le",
+        "primitives": 240,
+        "scaled": true,
+        "tier": "small"
+      },
+      "sha256": "a8498cded553d61151db26dd9ba7b4bc6f21f756906b1a330e36780dbc92ace7"
+    },
+    {
+      "bytes": 11910,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 240,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 12,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 240,
+        "textures": [],
+        "triangles": 0,
+        "vertexColors": "RGB8 four groups"
+      },
+      "id": "A-small-ply-points-be",
+      "path": "A-small-ply-points-be.ply",
+      "recipe": {
+        "algorithm": "ply-points-be",
+        "primitives": 240,
+        "scaled": true,
+        "tier": "small"
+      },
+      "sha256": "b3513396ab8889eac9d6a6c9b9fc609eeccfe520ecb90c2629ceee1f7cd4d68b"
+    },
+    {
+      "bytes": 19280,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "materials": 4,
+        "pressure": "DXGI reduction injected by TSK-207/302; fixture alone does not lower the budget",
+        "triangles": 240
+      },
+      "id": "Pressure",
+      "path": "Pressure.glb",
+      "recipe": {
+        "algorithm": "glb",
+        "primitives": 240
+      },
+      "sha256": "412f9110575c0b425d8cdc4726ca5a59c4e91c09de4f3d56a226fd1f2fbb6240"
+    },
+    {
+      "bytes": 818,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "accept",
+        "triangles": 1
+      },
+      "id": "sidecar-approved",
+      "path": "sidecar-approved.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "approved.bin"
+      },
+      "sha256": "7b89b9e341e255c64a2d350a0896ccfd98a804506a4816835928f24c96657227"
+    },
+    {
+      "bytes": 817,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "reject",
+        "triangles": 1
+      },
+      "id": "sidecar-missing",
+      "path": "sidecar-missing.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "missing.bin"
+      },
+      "sha256": "6788ad4477f83612828df03d01d905ef268060be6d4baa5e28a903099e8318a5"
+    },
+    {
+      "bytes": 820,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "reject",
+        "triangles": 1
+      },
+      "id": "sidecar-traversal",
+      "path": "sidecar-traversal.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "../outside.bin"
+      },
+      "sha256": "4c9c053fa19cd6c71177f5d819895f6d9bbc9a799decdadc2927c691c5dd80c7"
+    },
+    {
+      "bytes": 824,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "reject",
+        "triangles": 1
+      },
+      "id": "sidecar-encoded-traversal",
+      "path": "sidecar-encoded-traversal.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "%2e%2e/outside.bin"
+      },
+      "sha256": "4cbba2d7c0deb03f6360ef4c51a506517385732252fa2fd9e622be14d2dc4e83"
+    },
+    {
+      "bytes": 820,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "reject",
+        "triangles": 1
+      },
+      "id": "sidecar-absolute",
+      "path": "sidecar-absolute.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "C:/outside.bin"
+      },
+      "sha256": "dd21d45f117c0ff78352b61a53418cbb7cc58efd1c028f186e263d7c0683f3d6"
+    },
+    {
+      "bytes": 838,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "reject",
+        "triangles": 1
+      },
+      "id": "sidecar-network",
+      "path": "sidecar-network.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "https://example.invalid/mesh.bin"
+      },
+      "sha256": "a3377e18d94c4c5479c99431db24cb08a8251da6c367a110f5df9d07fa30ffbd"
+    },
+    {
+      "bytes": 829,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "reject",
+        "triangles": 1
+      },
+      "id": "sidecar-unc",
+      "path": "sidecar-unc.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "//server/share/mesh.bin"
+      },
+      "sha256": "cbaf336d741fb505c9a8a9dc071024f3bbca497c7e6de30fa8a2b1ffebd86228"
+    },
+    {
+      "bytes": 825,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "reject",
+        "triangles": 1
+      },
+      "id": "sidecar-ads",
+      "path": "sidecar-ads.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "approved.bin:stream"
+      },
+      "sha256": "1675b70742a0b525b192773b858c94f2db5fb8faecb31d7e28be6e244972954d"
+    },
+    {
+      "bytes": 48,
+      "expected": {
+        "role": "broker-approved local sidecar"
+      },
+      "id": "approved",
+      "path": "approved.bin",
+      "recipe": {
+        "algorithm": "copy tri_external.bin"
+      },
+      "sha256": "577f5dd074efad2142c2fd1bc437cdfb72b528f551ef626cfdf45a95c240d241"
+    },
+    {
+      "bytes": 967,
+      "expected": {
+        "policy": "reject",
+        "reason": "non-increasing sparse indices"
+      },
+      "id": "sparse-invalid",
+      "path": "sparse-invalid.gltf",
+      "recipe": {
+        "algorithm": "sparse reverse-index mutation"
+      },
+      "sha256": "984cae81552ff270d5b039c1d93916bec7b7dcd86d79071b6bc4b91799e9796b"
+    },
+    {
+      "bytes": 40,
+      "expected": {
+        "role": "sparse sidecar"
+      },
+      "id": "sparse",
+      "path": "sparse.bin",
+      "recipe": {
+        "algorithm": "explicit 40-byte sparse data"
+      },
+      "sha256": "a04e3351807a61b4b5344282fcd688cdc43f8faca65860efdf37127138ebba62"
+    },
+    {
+      "bytes": 973,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "accept after TSK-205/209",
+        "triangles": 1
+      },
+      "id": "sparse-valid",
+      "path": "sparse-valid.gltf",
+      "recipe": {
+        "algorithm": "zero-base sparse accessor with increasing indices; non-indexed triangle"
+      },
+      "sha256": "6406b4d47b5257a6d9a46f230590bfe4b85526435699f5ac6e1e6ff77c981eba"
+    },
+    {
+      "bytes": 40,
+      "expected": {
+        "role": "sparse sidecar"
+      },
+      "id": "sparse-valid",
+      "path": "sparse-valid.bin",
+      "recipe": {
+        "algorithm": "explicit 40-byte valid sparse data"
+      },
+      "sha256": "9b963c53b59d395c1c754c12c99ea30362012d987250c3a48d1ab499028cadb9"
+    },
+    {
+      "bytes": 107864,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            32,
+            64,
+            0
+          ]
+        ],
+        "instances": 2048,
+        "materials": 128,
+        "policy": "accept after TSK-205 lifts the current 1024-chunk catalog cap",
+        "sourceTriangles": 128,
+        "triangles": 2048,
+        "uniquePayloadTriangles": 1
+      },
+      "id": "Draw-heavy",
+      "path": "Draw-heavy.glb",
+      "recipe": {
+        "algorithm": "32x64 translated instances; 128 meshes/material groups share tri_tight.glb accessors"
+      },
+      "sha256": "569ba584e449e9ed316a7131dfc03177579ecd9ce273410e127ba168246ccfe4"
+    },
+    {
+      "bytes": 1028,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "feature": "Draco",
+        "policy": "accept",
+        "texture": null,
+        "triangles": 1
+      },
+      "id": "draco_triangle",
+      "path": "draco_triangle.glb",
+      "recipe": {
+        "algorithm": "frozen encoded seed",
+        "regeneration": "interactive-viewer/tools/build-gen-glbs-draco.ps1 or build-gen-glbs-ktx2.ps1; new encoder output requires explicit manifest review",
+        "source": "draco_triangle.glb"
+      },
+      "sha256": "8a72f4877c31738c17f0d8504e7368c4ecd52dae36d30f729c4e79050413f749"
+    },
+    {
+      "bytes": 712,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "feature": "Draco",
+        "policy": "accept",
+        "texture": null,
+        "triangles": 1
+      },
+      "id": "draco_position_only",
+      "path": "draco_position_only.glb",
+      "recipe": {
+        "algorithm": "frozen encoded seed",
+        "regeneration": "interactive-viewer/tools/build-gen-glbs-draco.ps1 or build-gen-glbs-ktx2.ps1; new encoder output requires explicit manifest review",
+        "source": "draco_position_only.glb"
+      },
+      "sha256": "9fec2df76ef97746ae0b2503159e9ccde7a8f6a59da85f6bdea1f2fcfda32c45"
+    },
+    {
+      "bytes": 1280,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "feature": "KTX2/Basis",
+        "policy": "accept",
+        "texture": {
+          "encoding": "BC7 or RGBA8 fallback",
+          "height": 8,
+          "width": 8
+        },
+        "triangles": 1
+      },
+      "id": "basisu_textured_triangle",
+      "path": "basisu_textured_triangle.glb",
+      "recipe": {
+        "algorithm": "frozen encoded seed",
+        "regeneration": "interactive-viewer/tools/build-gen-glbs-draco.ps1 or build-gen-glbs-ktx2.ps1; new encoder output requires explicit manifest review",
+        "source": "basisu_textured_triangle.glb"
+      },
+      "sha256": "fc687c614ce36c140a4037c805b9bb4c95794354235f61ce7e6053300a54b50f"
+    },
+    {
+      "bytes": 992,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "feature": "KTX2/Basis",
+        "policy": "geometry with optional texture fallback",
+        "texture": null,
+        "triangles": 1
+      },
+      "id": "basisu_corrupt_ktx2",
+      "path": "basisu_corrupt_ktx2.glb",
+      "recipe": {
+        "algorithm": "frozen encoded seed",
+        "regeneration": "interactive-viewer/tools/build-gen-glbs-draco.ps1 or build-gen-glbs-ktx2.ps1; new encoder output requires explicit manifest review",
+        "source": "basisu_corrupt_ktx2.glb"
+      },
+      "sha256": "79bd29527d67669ac79d195d3a09c3bc3a9ae9df6d0b12e7dbfafbb97b892512"
+    },
+    {
+      "bytes": 664,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "feature": "EXT_meshopt_compression",
+        "policy": "accept after TSK-209",
+        "triangles": 1
+      },
+      "id": "meshopt",
+      "path": "meshopt.glb",
+      "recipe": {
+        "algorithm": "pinned meshoptimizer vertex encoder",
+        "stride": 12,
+        "vertices": 3
+      },
+      "sha256": "ed4a174748c2a1adaf15b0d8cc28d66e9b4b223495a9c06f19fb175f9501a555"
+    },
+    {
+      "bytes": 34,
+      "expected": {
+        "height": 1,
+        "role": "WebP sidecar",
+        "width": 1
+      },
+      "id": "sample",
+      "path": "sample.webp",
+      "recipe": {
+        "algorithm": "frozen lossless WebP seed"
+      },
+      "sha256": "86be52bdb7547413cafb3ed175a806a798c65de98b40849e0b974c47d187de65"
+    },
+    {
+      "bytes": 1297,
+      "expected": {
+        "feature": "EXT_texture_webp",
+        "policy": "accept after TSK-209",
+        "triangles": 1
+      },
+      "id": "webp",
+      "path": "webp.gltf",
+      "recipe": {
+        "algorithm": "WebP required texture glTF"
+      },
+      "sha256": "0e4465f1cb66901ebcd40add49603a0bd273ce7c70378f2b6150589a4d360eb3"
+    },
+    {
+      "bytes": 4,
+      "expected": {
+        "policy": "reject",
+        "reason": "truncated"
+      },
+      "id": "truncated",
+      "path": "truncated.glb",
+      "recipe": {
+        "algorithm": "explicit malformed header"
+      },
+      "sha256": "c74f919439792582aa4f0b188ec2a928675cdb3ba72797781ceb6dfaa86b313f"
+    },
+    {
+      "bytes": 84,
+      "expected": {
+        "policy": "reject",
+        "reason": "over-limit"
+      },
+      "id": "over-limit",
+      "path": "over-limit.stl",
+      "recipe": {
+        "algorithm": "explicit malformed header"
+      },
+      "sha256": "f2394e807625b529c011c4ea437a13f4e774f961c214a26e5e8bcc87bbff09ff"
+    },
+    {
+      "bytes": 84,
+      "expected": {
+        "policy": "reject",
+        "reason": "truncated"
+      },
+      "id": "truncated",
+      "path": "truncated.stl",
+      "recipe": {
+        "algorithm": "explicit malformed header"
+      },
+      "sha256": "ee76e96d8539348808ead934fbc84c5cdb1475b9396b879af6166bdfc0c4d921"
+    },
+    {
+      "bytes": 134,
+      "expected": {
+        "policy": "reject",
+        "reason": "over-limit"
+      },
+      "id": "over-limit",
+      "path": "over-limit.ply",
+      "recipe": {
+        "algorithm": "explicit malformed header"
+      },
+      "sha256": "647cf450e8d67952a773e27b9cb90106ea00b049401390f6baacc84feea7dad1"
+    },
+    {
+      "bytes": 115,
+      "expected": {
+        "policy": "reject",
+        "reason": "empty"
+      },
+      "id": "empty",
+      "path": "empty.ply",
+      "recipe": {
+        "algorithm": "explicit malformed header"
+      },
+      "sha256": "235143d3aac455b75daa35f7bf8688e8b6624c2773113dbb1f89808ad392520e"
+    }
+  ],
+  "lane": "routine",
+  "recipeVersion": 1,
+  "schema": 1,
+  "tier": "small"
+}

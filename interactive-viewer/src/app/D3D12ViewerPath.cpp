@@ -572,6 +572,7 @@ void D3D12ViewerPath::DrawChrome(UINT frameIndex, const DirectX::XMFLOAT4& orien
 void D3D12ViewerPath::EndFrame(UINT frameIndex)
 {
     const HRESULT presentResult = swapChain.Present();
+    lastPresentResult = presentResult;
     frameStats.RecordPresent(presentResult);
 
     const uint64_t signaled = directQueue.SignalNext();

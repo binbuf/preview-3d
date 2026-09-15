@@ -125,6 +125,7 @@ struct ViewerApp
     bool showFrameStats = false; // --frame-stats: see UpdateTitle
     // --frame-bench N sustains rendering for timing the actual scene and chrome.
     int benchFrames = 0;
+    bool appSmoke = false; // opt-in, bounded test commands; no normal activation IPC
     // Deliberately NOT named `camera`: once the render thread exists, every
     // access has to go through renderThread.LockCamera(). Renaming turned
     // each of the ~30 existing uses into a compile error rather than a race
@@ -1690,6 +1691,26 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 
     switch (message)
     {
+    case WM_APP + 104:
+        if (!app->appSmoke || wParam > 5) return 0;
+        if (wParam == 0) return static_cast<LRESULT>(app->state) + 1;
+        if (wParam == 1) return static_cast<LRESULT>(app->generation);
+        return static_cast<LRESULT>(app->renderThread.SmokeValue(static_cast<unsigned>(wParam)));
+    case WM_COPYDATA:
+    {
+        if (!app->appSmoke || !lParam) return 0;
+        const auto& data = *reinterpret_cast<const COPYDATASTRUCT*>(lParam);
+        if ((data.dwData != 104 && data.dwData != 105) || !data.lpData ||
+            data.cbData < sizeof(wchar_t) || data.cbData > 32768 || data.cbData % sizeof(wchar_t)) return 0;
+        const auto* text = static_cast<const wchar_t*>(data.lpData);
+        const size_t length = data.cbData / sizeof(wchar_t);
+        if (text[length - 1] != L'\0' || wcsnlen(text, length) != length - 1) return 0;
+        BeginOpen(*app, std::wstring(text, length - 1));
+        // Cancel before dispatching completion notices: deterministic pending-
+        // generation cancellation, independent of machine/fixture speed.
+        if (data.dwData == 105) CancelOpen(*app);
+        return static_cast<LRESULT>(app->generation);
+    }
     case WM_CREATE:
     {
         app->dpi = GetDpiForWindow(window);
@@ -2669,6 +2690,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         for (int i = 1; i < argumentCount; ++i)
         {
             if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
+            else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
             else if (_wcsicmp(arguments[i], L"--frame-stats") == 0) app.showFrameStats = true;
             // Deprecated spike flags are no-ops; every frame paints real chrome.
             else if (_wcsicmp(arguments[i], L"--overlay-spike") == 0 ||

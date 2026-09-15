@@ -157,6 +157,10 @@ public:
     bool HasModel() const noexcept { return hasModel_.load(std::memory_order_acquire); }
     bool BenchComplete() const noexcept { return benchComplete_.load(std::memory_order_acquire); }
 
+    // Monotonic-clock microseconds, recorded only after a successful visible
+    // Present. These are lifecycle smoke evidence, not ETW display timestamps.
+    std::uint64_t SmokeValue(unsigned field) const noexcept;
+
     struct StatsSnapshot
     {
         double meanMs = 0.0;
@@ -195,6 +199,11 @@ private:
     std::atomic<bool> uiAnimating_{ false };
     std::atomic<bool> hasModel_{ false };
     std::atomic<bool> benchComplete_{ false };
+    std::atomic<std::uint64_t> firstBackgroundUs_{ 0 };
+    std::atomic<std::uint64_t> geometryUs_{ 0 };
+    std::atomic<std::uint64_t> presentedGeneration_{ 0 };
+    std::atomic<std::uint64_t> resizedExtent_{ 0 };
+    std::uint64_t modelGeneration_ = 0; // render-thread-owned
 
     // Guards `camera_`, `flightInput_`, `viewportAspect_` and `frameOverlay_`, all
     // consumed together at the top of a frame.

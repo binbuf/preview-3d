@@ -1,0 +1,314 @@
+{
+  "schema": 1,
+  "configuration": "Debug",
+  "buildId": "b8f92bcefb263aa2b5a0ba336e1f13f1334409c6",
+  "workingDiffSha256": "41a7fb0851081e0a6322c97e1b6edf67968847197f0588558eba0f62ac8183a0",
+  "harnessSha256": "9d2c0a4f9c1da046b7308ecf8d10fa8e22852d57602b7198b0093e1ad63370d7",
+  "generatorSha256": "6f92158f8b98a4eca06130b6efdd5fef6ced26d065e02ccf646ba6253eb66b20",
+  "exeSha256": "211dcdcbd4f50c7219aebe7df93dad2d7a0dd4ea43c490e3040b68083fd1b1b9",
+  "hardware": {
+    "build": "26200",
+    "cpu": [
+      "AMD Ryzen 9 7900X3D 12-Core Processor          "
+    ],
+    "ramBytes": 67810054144,
+    "disks": [
+      {
+        "FriendlyName": "Samsung SSD 970 EVO 1TB",
+        "MediaType": "SSD",
+        "BusType": "NVMe"
+      },
+      {
+        "FriendlyName": "SATA SSD",
+        "MediaType": "SSD",
+        "BusType": "SATA"
+      },
+      {
+        "FriendlyName": "CT1000P1SSD8",
+        "MediaType": "SSD",
+        "BusType": "NVMe"
+      },
+      {
+        "FriendlyName": "CT4000P3PSSD8",
+        "MediaType": "SSD",
+        "BusType": "NVMe"
+      },
+      {
+        "FriendlyName": "ST16000NM003G-2KH113",
+        "MediaType": "HDD",
+        "BusType": "SATA"
+      }
+    ],
+    "gpu": [
+      {
+        "Name": "NVIDIA GeForce RTX 4080",
+        "DriverVersion": "32.0.16.1664",
+        "CurrentRefreshRate": 240,
+        "CurrentHorizontalResolution": 3840,
+        "CurrentVerticalResolution": 2160
+      },
+      {
+        "Name": "AMD Radeon(TM) Graphics",
+        "DriverVersion": "32.0.21030.2001",
+        "CurrentRefreshRate": null,
+        "CurrentHorizontalResolution": null,
+        "CurrentVerticalResolution": null
+      }
+    ],
+    "power": "Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)",
+    "os": "Microsoft Windows 11 Pro"
+  },
+  "python": "3.12.9",
+  "clock": "namespace(implementation='QueryPerformanceCounter()', monotonic=True, adjustable=False, resolution=1e-07)",
+  "cacheState": "OS/driver caches uncontrolled; fresh process each run; no derived cache",
+  "measurement": "successful non-occluded Present return/QPC; sampled private commit (20 ms); no ETW scanout or input-to-present claim",
+  "fixtureManifestSha256": "5c0f18b1e19ce6ca5c1f3c3d563ce117ede4b713539132a47ea1b4c445d3b976",
+  "pointPresentationRequired": false,
+  "runCount": 3,
+  "failureCount": 0,
+  "runs": [
+    {
+      "events": [
+        {
+          "action": "open/replace",
+          "fixture": "A-small-glb.glb",
+          "generation": 1,
+          "firstGeometryMs": 97.531
+        },
+        {
+          "action": "open/replace",
+          "fixture": "A-small-stl.stl",
+          "generation": 3,
+          "firstGeometryMs": 67.031
+        },
+        {
+          "action": "open/replace",
+          "fixture": "A-small-ply-mesh-be.ply",
+          "generation": 5,
+          "firstGeometryMs": 71.295
+        },
+        {
+          "action": "open/replace",
+          "fixture": "sidecar-approved.gltf",
+          "generation": 7,
+          "firstGeometryMs": 87.428
+        },
+        {
+          "action": "cancel-pending",
+          "generation": 10,
+          "preservedGeneration": 7
+        },
+        {
+          "action": "cancel-loading",
+          "generation": 11
+        },
+        {
+          "action": "resize",
+          "client": [
+            878,
+            689
+          ]
+        },
+        {
+          "action": "resize",
+          "client": [
+            1258,
+            839
+          ]
+        },
+        {
+          "action": "resize",
+          "client": [
+            738,
+            609
+          ]
+        },
+        {
+          "action": "recover",
+          "firstGeometryMs": 69.74
+        }
+      ],
+      "viewerPeakPrivateBytes": 796835840,
+      "workerPeakPrivateBytes": 1183744,
+      "maxObservedUiRoundTripMs": 0.8302999995066784,
+      "failure": null,
+      "windowDpi": 144,
+      "firstBackgroundMs": 406.467,
+      "baselineViewerPrivateBytes": 606539776,
+      "closeMs": 90.30560000246624,
+      "exitCode": 0,
+      "durationMs": 1209.224
+    },
+    {
+      "events": [
+        {
+          "action": "open/replace",
+          "fixture": "A-small-glb.glb",
+          "generation": 1,
+          "firstGeometryMs": 97.011
+        },
+        {
+          "action": "open/replace",
+          "fixture": "A-small-stl.stl",
+          "generation": 3,
+          "firstGeometryMs": 73.137
+        },
+        {
+          "action": "open/replace",
+          "fixture": "A-small-ply-mesh-be.ply",
+          "generation": 5,
+          "firstGeometryMs": 69.921
+        },
+        {
+          "action": "open/replace",
+          "fixture": "sidecar-approved.gltf",
+          "generation": 7,
+          "firstGeometryMs": 81.916
+        },
+        {
+          "action": "cancel-pending",
+          "generation": 10,
+          "preservedGeneration": 7
+        },
+        {
+          "action": "cancel-loading",
+          "generation": 11
+        },
+        {
+          "action": "resize",
+          "client": [
+            878,
+            689
+          ]
+        },
+        {
+          "action": "resize",
+          "client": [
+            1258,
+            839
+          ]
+        },
+        {
+          "action": "resize",
+          "client": [
+            738,
+            609
+          ]
+        },
+        {
+          "action": "recover",
+          "firstGeometryMs": 69.203
+        }
+      ],
+      "viewerPeakPrivateBytes": 796532736,
+      "workerPeakPrivateBytes": 1191936,
+      "maxObservedUiRoundTripMs": 1.4058000015211292,
+      "failure": null,
+      "windowDpi": 144,
+      "firstBackgroundMs": 407.089,
+      "baselineViewerPrivateBytes": 607162368,
+      "closeMs": 75.1626999990549,
+      "exitCode": 0,
+      "durationMs": 1211.098
+    },
+    {
+      "events": [
+        {
+          "action": "open/replace",
+          "fixture": "A-small-glb.glb",
+          "generation": 1,
+          "firstGeometryMs": 96.476
+        },
+        {
+          "action": "open/replace",
+          "fixture": "A-small-stl.stl",
+          "generation": 3,
+          "firstGeometryMs": 64.964
+        },
+        {
+          "action": "open/replace",
+          "fixture": "A-small-ply-mesh-be.ply",
+          "generation": 5,
+          "firstGeometryMs": 174.298
+        },
+        {
+          "action": "open/replace",
+          "fixture": "sidecar-approved.gltf",
+          "generation": 7,
+          "firstGeometryMs": 75.773
+        },
+        {
+          "action": "cancel-pending",
+          "generation": 10,
+          "preservedGeneration": 7
+        },
+        {
+          "action": "cancel-loading",
+          "generation": 11
+        },
+        {
+          "action": "resize",
+          "client": [
+            878,
+            689
+          ]
+        },
+        {
+          "action": "resize",
+          "client": [
+            1258,
+            839
+          ]
+        },
+        {
+          "action": "resize",
+          "client": [
+            738,
+            609
+          ]
+        },
+        {
+          "action": "recover",
+          "firstGeometryMs": 70.617
+        }
+      ],
+      "viewerPeakPrivateBytes": 796381184,
+      "workerPeakPrivateBytes": 2732032,
+      "maxObservedUiRoundTripMs": 1.7183000018121675,
+      "failure": null,
+      "windowDpi": 144,
+      "firstBackgroundMs": 402.535,
+      "baselineViewerPrivateBytes": 607027200,
+      "closeMs": 73.75619999947958,
+      "exitCode": 0,
+      "durationMs": 1329.035
+    }
+  ],
+  "summary": {
+    "firstBackgroundMs": {
+      "median": 406.467,
+      "p95": 407.089,
+      "maximum": 407.089
+    },
+    "closeMs": {
+      "median": 75.1626999990549,
+      "p95": 90.30560000246624,
+      "maximum": 90.30560000246624
+    },
+    "viewerPeakPrivateBytes": {
+      "median": 796532736,
+      "p95": 796835840,
+      "maximum": 796835840
+    },
+    "workerPeakPrivateBytes": {
+      "median": 1191936,
+      "p95": 2732032,
+      "maximum": 2732032
+    },
+    "maxObservedUiRoundTripMs": {
+      "median": 1.4058000015211292,
+      "p95": 1.7183000018121675,
+      "maximum": 1.7183000018121675
+    }
+  }
+}

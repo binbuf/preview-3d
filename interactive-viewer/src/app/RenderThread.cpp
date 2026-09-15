@@ -37,6 +37,17 @@ RenderThread::~RenderThread()
     Stop();
 }
 
+std::uint64_t RenderThread::SmokeValue(unsigned field) const noexcept
+{
+    switch (field) {
+    case 2: return firstBackgroundUs_.load(std::memory_order_acquire);
+    case 3: return geometryUs_.load(std::memory_order_acquire);
+    case 4: return presentedGeneration_.load(std::memory_order_acquire);
+    case 5: return resizedExtent_.load(std::memory_order_acquire);
+    default: return 0;
+    }
+}
+
 void RenderThread::SetBenchFrames(int frames)
 {
     benchFrames_ = frames;
@@ -287,11 +298,15 @@ void RenderThread::DrainCommands(HWND window)
             // wrong-sized rather than crash. Device-loss handling, which is
             // the real answer, is a later chunk.
             invalidated_.store(true, std::memory_order_release);
+        } else {
+            resizedExtent_.store((static_cast<std::uint64_t>(width) << 32)
+                                  | static_cast<std::uint32_t>(height), std::memory_order_release);
         }
     }
 
     if (doClear) {
         path_.ClearModel();
+        modelGeneration_ = 0;
         hasModel_.store(false, std::memory_order_release);
         // An upload abandoned mid-flight has no completion to report; its
         // message would otherwise be posted by a later PollUploads that can
@@ -391,6 +406,7 @@ void RenderThread::PumpUploads(HWND window)
         return;
     }
     auto message = std::move(pendingUploadMessage_);
+    modelGeneration_ = message->generation;
     if (!PostMessageW(window, kRenderUploadCompleteMessage, 0, reinterpret_cast<LPARAM>(message.get()))) {
         return; // unique_ptr frees it
     }
@@ -424,10 +440,23 @@ void RenderThread::RenderOneFrame()
                                   camera_.ViewMatrix() * camera_.ProjectionMatrix(viewportAspect_));
     }
 
+    const auto framesBefore = path_.frameStats.PresentedFrames();
+    path_.lastPresentResult = E_PENDING;
     if (hasModel_.load(std::memory_order_acquire)) {
         path_.RenderFrame(viewProjection, orientation, *overlay);
     } else {
         path_.RenderClearFrame(orientation, *overlay);
+    }
+
+    if (path_.frameStats.PresentedFrames() > framesBefore && path_.lastPresentResult == S_OK) {
+        const auto nowUs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+        if (!hasModel_.load(std::memory_order_acquire) && firstBackgroundUs_.load() == 0)
+            firstBackgroundUs_.store(nowUs, std::memory_order_release);
+        if (modelGeneration_ != 0 && presentedGeneration_.load() != modelGeneration_) {
+            geometryUs_.store(nowUs, std::memory_order_release);
+            presentedGeneration_.store(modelGeneration_, std::memory_order_release);
+        }
     }
 
     // Republish only occasionally, never every frame. FrameStats::P95Ms
