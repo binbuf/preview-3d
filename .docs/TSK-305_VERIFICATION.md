@@ -185,7 +185,7 @@ Formal offline proof remains part of the missing clean-VM row.
   parser, queue, Job and shared-section limits remain covered. A long-running
   external ASan/libFuzzer campaign was not available and is not silently claimed.
 - The package introduces no network capability, registration, thumbnail,
-  compatibility-host, cache, Tier B parser, or model-derived persistent write.
+  compatibility-host, model-derived cache, Tier B parser, or model-derived persistent write.
 
 Machine-readable final summaries are frozen in
 `tests/fixtures/baselines/tsk-305/acceptance.json`; detailed local logs and raw

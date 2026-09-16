@@ -3,8 +3,17 @@
 > Post-MVP amendment (2026-09-16): after the scope-limited implementation was
 > frozen, the product owner explicitly approved one viewing extension: a
 > persisted title-bar X/Y/Z model ground-axis cycle and signed-direction flip. It is implemented as an
-> additive post-MVP feature and does not reopen the Tier B, Shell, cache, LOD,
+> additive post-MVP feature and does not reopen the Tier B, Shell registration, model-derived cache, LOD,
 > or compatibility-host exclusions below.
+>
+> Post-MVP amendment (2026-09-16): the product owner also approved a bounded
+> enhancement to the existing title-bar Open With surface. It recognizes a
+> curated list of popular CAD, modeling, and 3D-printing applications from
+> Windows-registered handlers, persists only handler identity/display metadata,
+> discovers additions asynchronously on a seven-day cooldown, and invalidates
+> an entry after an invocation error. This does not add file associations,
+> Default Apps registration, an installer, model-path history, model-derived
+> data, executable command-line guessing, network access, or a new UI surface.
 
 This document outlines the sequential LLM prompts required to reach a deployable MVP, restricted strictly to Tier A formats (glTF, STL, PLY) and the existing UI. Tier B formats, the persistent cache, meshoptimizer clustering, and the thumbnail provider are explicitly out of scope for this pass.
 

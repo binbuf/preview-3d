@@ -83,6 +83,7 @@
     <ClInclude Include="src\app\Settings.h" />
     <ClInclude Include="src\app\GroundAxis.h" />
     <ClInclude Include="src\platform\ShellIntegration.h" />
+    <ClInclude Include="src\platform\OpenWithCache.h" />
     <ClInclude Include="src\app\targetver.h" />
     <ClInclude Include="src\app\D3D12ViewerPath.h" />
     <ClInclude Include="src\graphics\D3D12Device.h" />
@@ -126,6 +127,7 @@
     <ClCompile Include="src\app\Settings.cpp" />
     <ClCompile Include="src\render\Renderer.cpp" />
     <ClCompile Include="src\platform\ShellIntegration.cpp" />
+    <ClCompile Include="src\platform\OpenWithCache.cpp" />
     <ClCompile Include="src\app\D3D12ViewerPath.cpp" />
     <ClCompile Include="src\graphics\D3D12Device.cpp" />
     <ClCompile Include="src\graphics\D3D12CommandQueue.cpp" />

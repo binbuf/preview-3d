@@ -32,7 +32,7 @@ acceptance remain release gates. See
 [current verification](.docs/TSK-303_VERIFICATION.md).
 
 The limited MVP deliberately excludes installation/file associations, Explorer
-thumbnails, persistent cache, compatibility-host/USD support, and broad Tier B
+thumbnails, persistent model-derived cache, compatibility-host/USD support, and broad Tier B
 formats. Large-model performance failures recorded in
 [progress](.docs/PROGRESS.md) also remain release blockers.
 

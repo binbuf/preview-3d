@@ -4,6 +4,21 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Post-MVP Open With catalog amendment (2026-09-16): complete.** The existing
+  title-bar menu now promotes Windows-registered handlers from a curated list of
+  common CAD, modeling, and 3D-printing tools into labeled groups, retains other
+  Windows-recommended handlers, and keeps the system "Choose another app…"
+  fallback. A bounded, fail-closed metadata cache under `%LOCALAPPDATA%` avoids
+  repeated discovery; a dedicated Shell STA loads and incrementally refreshes it
+  at most weekly, resolves/invokes selected handlers, and invalidates/rescans on
+  launch failure without blocking the UI thread. It stores no model paths,
+  launch history, or model-derived data and adds no association/installer state.
+  Debug and Release solution builds pass with warnings as errors. The full Unit
+  suites pass 96 cases / 7,398 Debug and 7,310 Release assertions, including 3
+  new bounded-cache cases / 15 assertions in each configuration. A Release
+  real-process lifecycle/cache smoke opened and closed cleanly and produced a
+  bounded 1,132-byte cache.
+
 - **Large scan-throughput optimization follow-up (2026-09-16): STL and PLY now
   meet the retained five-second complete-coarse target; GLB is narrowly above
   it, with early display and small-file behavior preserved.** Protocol v9

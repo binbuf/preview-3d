@@ -37,6 +37,7 @@ constexpr UINT kAccessibilityQueryMessage = WM_APP + 9;
 constexpr UINT kAccessibilityActionMessage = WM_APP + 10;
 constexpr UINT kAccessibilityFocusMessage = WM_APP + 11;
 constexpr UINT kAccessibilityStatusMessage = WM_APP + 12;
+constexpr UINT kOpenWithLaunchFailedMessage = WM_APP + 13;
 constexpr float kArrowPixelsPerSecond = 340.0f;
 constexpr double kHudVisibleSeconds = 1.3;
 constexpr double kHudFadeSeconds = 0.30;
@@ -1865,18 +1866,45 @@ void HandleCommand(ViewerApp& app, int id)
     }
 }
 
-// Builds a real "Open with..." popup menu from the system's recommended
-// handlers for the current file (ShellIntegration.h), plus the trailing
-// "Choose another app..." fallback, anchored under the Open With button.
+// Builds a categorized Open With menu from the cached/incrementally refreshed
+// Shell catalog, plus the trailing system-picker fallback.
 void ShowOpenWithMenu(ViewerApp& app)
 {
     if (app.currentPath.empty()) return;
     std::vector<OpenWithEntry> entries = EnumerateOpenWithHandlers(app.currentPath);
     HMENU menu = CreatePopupMenu();
     constexpr UINT kBaseId = 40000;
+    OpenWithGroup currentGroup = OpenWithGroup::Status;
+    bool hasHeading = false;
+    bool hasMenuItem = false;
+    auto heading = [](OpenWithGroup group) -> const wchar_t* {
+        switch (group)
+        {
+        case OpenWithGroup::Cad: return L"CAD";
+        case OpenWithGroup::Modeling: return L"Modeling";
+        case OpenWithGroup::Printing: return L"3D printing";
+        case OpenWithGroup::Recommended: return L"Recommended by Windows";
+        default: return nullptr;
+        }
+    };
     for (std::size_t index = 0; index < entries.size(); ++index)
     {
-        AppendMenuW(menu, MF_STRING, kBaseId + static_cast<UINT>(index), entries[index].displayName.c_str());
+        const auto& entry = entries[index];
+        if (const wchar_t* label = heading(entry.group); label && (!hasHeading || currentGroup != entry.group))
+        {
+            if (hasMenuItem) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(menu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, label);
+            currentGroup = entry.group;
+            hasHeading = true;
+        }
+        else if (entry.group == OpenWithGroup::Fallback && hasMenuItem)
+        {
+            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        }
+        const UINT flags = entry.enabled ? MF_STRING : MF_STRING | MF_DISABLED | MF_GRAYED;
+        AppendMenuW(menu, flags, entry.enabled ? kBaseId + static_cast<UINT>(index) : 0,
+            entry.displayName.c_str());
+        hasMenuItem = true;
     }
     RECT button = app.chrome.Button(Chrome::Part::OpenWith).rect;
     POINT anchor{ button.left, button.bottom };
@@ -1886,7 +1914,9 @@ void ShowOpenWithMenu(ViewerApp& app)
     DestroyMenu(menu);
     if (selected >= static_cast<int>(kBaseId) && static_cast<std::size_t>(selected - kBaseId) < entries.size())
     {
-        entries[selected - kBaseId].invoke(app.currentPath);
+        const auto& entry = entries[selected - kBaseId];
+        if (entry.invoke && !entry.invoke(app.currentPath))
+            ShowModeHud(app, L"That app is no longer available");
     }
 }
 
@@ -2333,6 +2363,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         FocusAccessible(*app,static_cast<viewer_accessibility::Control>(wParam)); return 0;
     case kAccessibilityStatusMessage:
         if (auto* result=reinterpret_cast<std::wstring*>(lParam)) *result=AccessibilityStatus(*app);
+        return 0;
+    case kOpenWithLaunchFailedMessage:
+        ShowModeHud(*app, L"That app is no longer available");
         return 0;
     case kActivationMessage:
         for (auto& command : app->activeInstance.Drain())
@@ -3652,10 +3685,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
 
     if (!RegisterViewerClass(instance) || !CreateMainWindow(app, showCommand))
     {
+        ShutdownOpenWithCatalog();
         if (gBackgroundBrush) DeleteObject(gBackgroundBrush);
         if (SUCCEEDED(comResult)) CoUninitialize();
         return 1;
     }
+    InitializeOpenWithCatalog(gMainWindow, kOpenWithLaunchFailedMessage);
 
     HACCEL accelerators = LoadAcceleratorsW(instance, MAKEINTRESOURCEW(IDC_PREVIEW3D));
     MSG message{};
@@ -3755,6 +3790,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         MsgWaitForMultipleObjectsEx(0, nullptr, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 
+    ShutdownOpenWithCatalog();
     if (gBackgroundBrush) DeleteObject(gBackgroundBrush);
     if (SUCCEEDED(comResult)) CoUninitialize();
     return exitCode;

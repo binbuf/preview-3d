@@ -30,7 +30,8 @@ file registration, persistent caching, intermediate LOD construction, and broade
   the whole screen — distinct from Maximize, which snaps to the work area and keeps the taskbar and
   our own chrome visible; `Esc` (or `F11` again) restores the window; live-updating "Stats & Shading"
   Information side panel (mesh/texture/animation/performance/scene counts scanned from the glTF JSON)
-- Open With (real system-recommended handlers via `SHAssocEnumHandlers`, plus "Choose another app...")
+- Open With (cached Windows handlers, with installed CAD/modeling/3D-printing apps
+  promoted into purpose-based groups, plus "Choose another app...")
   and Windows Share (`DataTransferManager`/C++WinRT) for the currently open file
 
 ## Rendering and imports

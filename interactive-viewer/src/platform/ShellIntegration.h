@@ -12,10 +12,19 @@
 #include <string>
 #include <vector>
 
-// OS shell interop only — no UI. Both features degrade gracefully: an empty
-// EnumerateOpenWithHandlers result still gets the synthetic "Choose another
-// app..." entry, and ShowWindowsShare returns false with `error` set rather
-// than throwing when Share isn't available (e.g. unsupported Windows build).
+// OS shell interop only — no UI. Open With discovery is asynchronous and its
+// bounded local cache contains application-handler metadata only (never model
+// paths or launch history). Both features degrade gracefully.
+
+enum class OpenWithGroup
+{
+    Cad,
+    Modeling,
+    Printing,
+    Recommended,
+    Status,
+    Fallback,
+};
 
 // One entry in the "Open With" list for the current file — the same
 // recommended-handler list Explorer's own Open With submenu shows, via
@@ -24,8 +33,16 @@
 struct OpenWithEntry
 {
     std::wstring displayName;
+    OpenWithGroup group = OpenWithGroup::Recommended;
+    bool enabled = true;
     std::function<bool(const std::wstring& path)> invoke;
 };
+
+// Starts a background load/refresh. Cached handlers are not revalidated on
+// startup; discovery runs at most weekly to add newly registered apps. A
+// failed invocation invalidates that entry and requests an immediate rescan.
+void InitializeOpenWithCatalog(HWND notificationWindow, UINT launchFailureMessage);
+void ShutdownOpenWithCatalog();
 
 std::vector<OpenWithEntry> EnumerateOpenWithHandlers(const std::wstring& path);
 

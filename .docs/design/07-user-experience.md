@@ -126,7 +126,23 @@ Native-orientation display and an explicit model ground-axis and signed-directio
 
 Two on-demand, title-bar-triggered integrations exist, both invoked by the user rather than passive Explorer registration:
 
-- **Open With**: enumerates the current extension's recommended handlers with `SHAssocEnumHandlers` and falls back to `SHOpenWithDialog` for "Choose another app…".
+- **Open With**: loads a bounded local catalog of Windows handler identities and
+  displays recognized CAD, modeling, and 3D-printing applications first, grouped
+  by purpose, followed by other Windows-recommended handlers. The curated set is
+  FreeCAD, OpenSCAD, Autodesk Fusion, Rhino, SOLIDWORKS, Autodesk Inventor,
+  Blender, SketchUp, Autodesk 3ds Max, Autodesk Maya, ZBrush, MeshLab,
+  Plasticity, PrusaSlicer, OrcaSlicer, Bambu Studio, UltiMaker Cura, Lychee
+  Slicer, CHITUBOX, and Simplify3D. An app is shown only when Windows
+  registers it as a handler for the current extension; the viewer does not guess
+  vendor command lines. Discovery uses `SHAssocEnumHandlers` off the UI thread,
+  adds newly found handlers no more than once every seven days, and caches only
+  extension/handler/display/catalog metadata in
+  `%LOCALAPPDATA%\Binbuf\3D Preview\open-with-apps-v1.dat`—never model paths or
+  launch history. Selection queues registered-handler resolution and invocation
+  on the discovery thread; failure removes the stale entry, notifies the UI, and
+  requests an immediate background rescan. A session keeps a
+  successfully resolved handler in memory. `SHOpenWithDialog` remains available
+  as "Choose another app…".
 - **Share**: shares the current file as a `StorageFile` through `IDataTransferManagerInterop`/`DataTransferManager`.
 
 No thumbnail provider, no `IInitializeWithStream`/`IThumbnailProvider` implementation, and no installer/COM registration exist in this codebase yet; [05-thumbnail-provider.md](./05-thumbnail-provider.md) and [08-installation-and-registration.md](./08-installation-and-registration.md) describe work not yet started.
