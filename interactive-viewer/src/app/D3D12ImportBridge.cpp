@@ -294,7 +294,7 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
 
 void EnsureImportSandboxPrepared()
 {
-    import_broker::PrepareImportSandbox(ResolveWorkerExePath());
+    import_broker::PrepareImportWorkerPoolAsync(ResolveWorkerExePath());
 }
 
 ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
@@ -306,6 +306,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
 
     import_broker::ImportSessionRequest sessionRequest;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting;
+    sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
     if (!delayBatchesForTesting && !faultForTesting) {
         sessionRequest.nextDetail = std::move(nextDetail);

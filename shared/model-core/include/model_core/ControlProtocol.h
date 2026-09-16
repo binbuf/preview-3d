@@ -48,6 +48,12 @@ enum class ControlOpcode : uint32_t {
     RequestDetail = 14,           // host -> worker; one validated source region
 };
 
+enum : uint32_t {
+    kImportRequestCoarseProxy = 1u << 0,
+    kImportRequestDetailService = 1u << 1,
+    kImportRequestDelayedBatchesForTesting = 1u << 2,
+};
+
 // Bounded so a corrupt/oversized declared payload size can never drive an
 // unbounded allocation or read in ControlChannelIo::ReadControlMessage.
 constexpr uint32_t kMaxControlPayloadBytes = 256;
@@ -133,9 +139,10 @@ struct ParseGltfFileRequest {
     uint64_t sectionHandleValue;    // inherited OUTPUT-section HANDLE, numeric value
     uint64_t sectionByteCapacity;   // output section capacity
     uint32_t maxChunkCount;         // sanity cap on chunk count the worker may emit
-    uint32_t reserved0;
+    uint32_t requestFlags;            // closed kImportRequest* mask
+    uint64_t cancellationEventHandleValue; // duplicated manual-reset event; 0 for legacy tests
 };
-static_assert(sizeof(ParseGltfFileRequest) == 40, "ParseGltfFileRequest layout changed");
+static_assert(sizeof(ParseGltfFileRequest) == 48, "ParseGltfFileRequest layout changed");
 
 // Real-file request for the binary-STL adapter (StlAdapter.cpp) -- same
 // shape as ParseGltfFileRequest (a raw duplicated FILE handle plus output-
@@ -152,9 +159,10 @@ struct ParseStlFileRequest {
     uint64_t sectionHandleValue;    // inherited OUTPUT-section HANDLE, numeric value
     uint64_t sectionByteCapacity;   // output section capacity
     uint32_t maxChunkCount;         // sanity cap on chunk count the worker may emit
-    uint32_t reserved0;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
 };
-static_assert(sizeof(ParseStlFileRequest) == 40, "ParseStlFileRequest layout changed");
+static_assert(sizeof(ParseStlFileRequest) == 48, "ParseStlFileRequest layout changed");
 
 // Real-file request for the binary-PLY adapter (PlyAdapter.cpp) -- same
 // shape as ParseStlFileRequest/ParseGltfFileRequest (a raw duplicated FILE
@@ -169,9 +177,10 @@ struct ParsePlyFileRequest {
     uint64_t sectionHandleValue;    // inherited OUTPUT-section HANDLE, numeric value
     uint64_t sectionByteCapacity;   // output section capacity
     uint32_t maxChunkCount;         // sanity cap on chunk count the worker may emit
-    uint32_t reserved0;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
 };
-static_assert(sizeof(ParsePlyFileRequest) == 40, "ParsePlyFileRequest layout changed");
+static_assert(sizeof(ParsePlyFileRequest) == 48, "ParsePlyFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

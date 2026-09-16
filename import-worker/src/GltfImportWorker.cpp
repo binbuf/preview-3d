@@ -54,15 +54,15 @@ bool ReportError(HANDLE stdOut, uint64_t generationId, model_core::ImportErrorCo
 // host copied the GLB bytes into (StartGltfImport/ParseGltfRequest).
 bool HandleGltfImportRequest(HANDLE stdOut, const model_core::ParseGltfRequest& request)
 {
-    HANDLE sourceSection = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sourceHandleValue));
-    auto sourceView = platform::MappedView::Map(sourceSection, FILE_MAP_READ,
+    platform::Win32Handle sourceSection(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sourceHandleValue)));
+    auto sourceView = platform::MappedView::Map(sourceSection.get(), FILE_MAP_READ,
                                                  static_cast<SIZE_T>(request.sourceByteLength));
     if (!sourceView) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
 
-    HANDLE outputSection = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue));
-    auto outputView = platform::MappedView::Map(outputSection, FILE_MAP_WRITE | FILE_MAP_READ,
+    platform::Win32Handle outputSection(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue)));
+    auto outputView = platform::MappedView::Map(outputSection.get(), FILE_MAP_WRITE | FILE_MAP_READ,
                                                  static_cast<SIZE_T>(request.sectionByteCapacity));
     if (!outputView) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
@@ -93,8 +93,10 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
 
-    HANDLE outputSection = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue));
-    auto outputView = platform::MappedView::Map(outputSection, FILE_MAP_WRITE | FILE_MAP_READ,
+    platform::Win32Handle outputSection(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue)));
+    platform::Win32Handle cancellationEvent(reinterpret_cast<HANDLE>(
+        static_cast<uintptr_t>(request.cancellationEventHandleValue)));
+    auto outputView = platform::MappedView::Map(outputSection.get(), FILE_MAP_WRITE | FILE_MAP_READ,
                                                  static_cast<SIZE_T>(request.sectionByteCapacity));
     if (!outputView) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
@@ -106,10 +108,14 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
     // single window. The pre-made-section path above keeps its one-shot shape
     // -- its source is a section the host already sized to hold the whole
     // file, so it has no large-model case to serve.
-    ChunkBatchSink batchSink(stdIn, stdOut, request.generationId);
+    ChunkBatchSink batchSink(stdIn, stdOut, request.generationId, request.requestFlags,
+                             cancellationEvent.get());
     if (batchSink.ProxyEnabled()) sidecarClient.EnablePinnedReplay();
     TextureDecodeOptions textureOptions;
-    textureOptions.isCancelled=[stdIn] { DWORD available=0; return !PeekNamedPipe(stdIn,nullptr,0,nullptr,&available,nullptr); };
+    textureOptions.isCancelled=[stdIn, cancel = cancellationEvent.get()] {
+        if (cancel && WaitForSingleObject(cancel, 0) == WAIT_OBJECT_0) return true;
+        DWORD available=0; return !PeekNamedPipe(stdIn,nullptr,0,nullptr,&available,nullptr);
+    };
     try {
     auto result = ImportGltf(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
                               &sidecarClient, &batchSink,textureOptions);
@@ -140,6 +146,8 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
                             &sidecarClient, &batchSink, textureOptions);
         if (!ReportResult(stdOut, request.generationId, result)) return false;
     }
+    if (batchSink.DetailService() && batchSink.Cancelled())
+        return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::Cancelled);
     return true;
     } catch (const std::bad_alloc&) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::OutOfMemory);

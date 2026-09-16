@@ -8,18 +8,9 @@
 // into the already-running worker process via DuplicateSectionIntoWorker,
 // since inherited-handle-list membership can't be extended after launch.
 //
-// Cancellation is host-side, per .docs/design/06-application-lifecycle-and-ipc.md's
-// contract: a caller that has moved on to a newer generation simply stops
-// caring about a stale reply (platform::GenerationToken filtering is the
-// caller's job, mirroring D3D12UploadRing::DrainCompletedPublications) and,
-// if a worker doesn't reply within a bounded grace period, TerminateAndReplace
-// hard-kills it via the already-proven Job Object kill-on-close rather than
-// attempting an in-process interrupt -- true mid-parse cooperative
-// cancellation is out of scope for this prototype (see .docs/PROGRESS.md).
-//
-// Index-based, synchronous API -- deliberately not a general async task
-// queue; a prototype's job is to prove reuse-across-generations and
-// stale-reply/timeout semantics, not to be the final scheduler.
+// Each request also receives a duplicated cancellation-event handle. Parser,
+// decoder and batch-wait checkpoints observe it before the host falls back to
+// TerminateAndReplace after the bounded grace period.
 
 #include "import_broker/SandboxLauncher.h"
 #include "model_core/ControlChannelIo.h"
@@ -55,6 +46,12 @@ public:
     // from.
     bool Initialize(std::wstring exePath, platform::AppContainerSid sid, SandboxLimits limits,
                      size_t size, std::wstring& error);
+
+    // Product lifetime uses the process-wide AppContainer profile owned by
+    // ImportSession. Its SID outlives the pool, so retaining a non-owning SID
+    // avoids creating/deleting a second profile merely to prelaunch workers.
+    bool InitializeBorrowed(std::wstring exePath, PSID sid, SandboxLimits limits,
+                            size_t size, std::wstring& error);
 
     size_t Size() const noexcept;
     size_t IdleCount() const noexcept;
@@ -101,6 +98,9 @@ public:
     void Shutdown();
 
     HANDLE ProcessHandle(size_t index) const noexcept;
+    HANDLE JobHandle(size_t index) const noexcept;
+    HANDLE ControlInput(size_t index) const noexcept;
+    HANDLE ControlOutput(size_t index) const noexcept;
     DWORD ProcessId(size_t index) const noexcept;
 
 private:
@@ -115,6 +115,7 @@ private:
 
     std::wstring exePath_;
     platform::AppContainerSid sid_;
+    PSID borrowedSid_ = nullptr;
     SandboxLimits limits_{};
     std::vector<PooledWorker> workers_;
     bool shutdownCalled_ = false;

@@ -33,13 +33,13 @@ platform::Win32Handle CreateConfiguredJob(const SandboxLimits& limits)
 
 } // namespace
 
-std::optional<SandboxProcess> LaunchSuspendedSandboxed(const std::wstring& exePath,
-                                                        std::wstring commandLine,
-                                                        std::span<HANDLE> inheritedHandles,
-                                                        HANDLE stdOutput,
-                                                        const SandboxLimits& limits,
-                                                        const platform::AppContainerSid& sid,
-                                                        HANDLE stdInput)
+std::optional<SandboxProcess> LaunchSuspendedSandboxedWithSid(const std::wstring& exePath,
+                                                               std::wstring commandLine,
+                                                               std::span<HANDLE> inheritedHandles,
+                                                               HANDLE stdOutput,
+                                                               const SandboxLimits& limits,
+                                                               PSID sid,
+                                                               HANDLE stdInput)
 {
     platform::Win32Handle job = CreateConfiguredJob(limits);
     if (!job) {
@@ -47,7 +47,7 @@ std::optional<SandboxProcess> LaunchSuspendedSandboxed(const std::wstring& exePa
     }
 
     SECURITY_CAPABILITIES caps{};
-    caps.AppContainerSid = sid.get();
+    caps.AppContainerSid = sid;
     caps.Capabilities = nullptr;
     caps.CapabilityCount = 0;
     caps.Reserved = 0;
@@ -90,6 +90,18 @@ std::optional<SandboxProcess> LaunchSuspendedSandboxed(const std::wstring& exePa
 
     proc.job = std::move(job);
     return proc;
+}
+
+std::optional<SandboxProcess> LaunchSuspendedSandboxed(const std::wstring& exePath,
+                                                        std::wstring commandLine,
+                                                        std::span<HANDLE> inheritedHandles,
+                                                        HANDLE stdOutput,
+                                                        const SandboxLimits& limits,
+                                                        const platform::AppContainerSid& sid,
+                                                        HANDLE stdInput)
+{
+    return LaunchSuspendedSandboxedWithSid(exePath, std::move(commandLine), inheritedHandles,
+                                            stdOutput, limits, sid.get(), stdInput);
 }
 
 bool ResumeSandboxProcess(SandboxProcess& proc)

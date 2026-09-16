@@ -136,6 +136,7 @@
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\shared\import-broker\src\ControlChannelWait.cpp" />
     <ClCompile Include="..\shared\import-broker\src\ImportSession.cpp" />
+    <ClCompile Include="..\shared\import-broker\src\WorkerPool.cpp" />
     <ClCompile Include="..\shared\import-broker\src\SandboxLauncher.cpp" />
     <ClCompile Include="..\shared\import-broker\src\SharedSection.cpp" />
     <ClCompile Include="..\shared\import-broker\src\SharedSectionValidator.cpp" />

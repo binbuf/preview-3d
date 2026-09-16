@@ -149,6 +149,16 @@ def run(exe, directory):
         time.sleep(.3)
         assert query(0)==4, 'stale result replaced failure card'
         valid_reopen()
+        # Inject the same removal signal the render loop receives from Present.
+        # Product policy permits one rebuild, then reconstructs coarse/detail
+        # through the retained source path instead of keeping stale GPU state.
+        previous_generation = query(4)
+        previous_recoveries = query(66)
+        send(hwnd,0x8000+104,65,1)
+        wait(lambda: query(66)==previous_recoveries+1, 'device recovery attempt')
+        wait(lambda: query(0)==3 and query(4)>previous_generation, 'device recovery source reconstruction')
+        report['events'].append({'input':'injected-device-removal',
+                                 'generation':query(4),'recoveryAttempts':query(66)})
         send(hwnd,0x10)
         app.wait(timeout=10)
         assert app.returncode==0

@@ -41,9 +41,16 @@ class ChunkBatchSink {
 public:
     static void EnableCoarseProxy() { proxyEnabled_ = true; }
     static void EnableDetailService() { detailService_ = true; EnableCoarseProxy(); }
-    bool DetailService() const { return detailService_; }
+    bool DetailService() const { return detailService_ || (requestFlags_ & model_core::kImportRequestDetailService); }
     const model_core::ChunkDescriptor* RequestedSource() const { return requested_ ? &*requested_ : nullptr; }
     bool AwaitDetail() {
+        for (;;) {
+            if (Cancelled()) return false;
+            DWORD available = 0;
+            if (!PeekNamedPipe(stdIn_, nullptr, 0, nullptr, &available, nullptr)) return false;
+            if (available >= sizeof(model_core::ControlMessageHeader)) break;
+            Sleep(1);
+        }
         auto message = model_core::ReadControlMessage(stdIn_);
         if (!message || message->header.opcode != uint32_t(model_core::ControlOpcode::RequestDetail)
             || message->payload.size() != sizeof(model_core::DetailRequest)) return false;
@@ -54,17 +61,20 @@ public:
         requested_ = request.source;
         return true;
     }
-    bool ProxyEnabled() const { return proxyEnabled_; }
+    bool ProxyEnabled() const { return proxyEnabled_ || (requestFlags_ & model_core::kImportRequestCoarseProxy); }
     bool Preview() const { return proxyEnabled_ && !scanStarted_; }
     void BeginScan() { scanStarted_ = true; }
     bool Refinement() const { return refinement_; }
     void BeginRefinement() { refinement_ = true; }
     static void SetDelayForTesting(unsigned milliseconds) { delayMs_ = milliseconds; }
 
-    ChunkBatchSink(HANDLE stdIn, HANDLE stdOut, uint64_t generationId) noexcept
+    ChunkBatchSink(HANDLE stdIn, HANDLE stdOut, uint64_t generationId,
+                   uint32_t requestFlags = 0, HANDLE cancellationEvent = nullptr) noexcept
         : stdIn_(stdIn)
         , stdOut_(stdOut)
         , generationId_(generationId)
+        , requestFlags_(requestFlags)
+        , cancellationEvent_(cancellationEvent)
     {
     }
 
@@ -75,6 +85,7 @@ public:
     // into the window again.
     bool Cancelled() const
     {
+        if (cancellationEvent_ && WaitForSingleObject(cancellationEvent_, 0) == WAIT_OBJECT_0) return true;
         DWORD available = 0;
         return !PeekNamedPipe(stdIn_, nullptr, 0, nullptr, &available, nullptr);
     }
@@ -94,6 +105,8 @@ private:
     HANDLE stdIn_;
     HANDLE stdOut_;
     uint64_t generationId_;
+    uint32_t requestFlags_ = 0;
+    HANDLE cancellationEvent_ = nullptr;
     uint32_t batchesPublished_ = 0;
 };
 

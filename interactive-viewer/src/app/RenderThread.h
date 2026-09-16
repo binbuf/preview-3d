@@ -49,7 +49,11 @@
 // heap-allocated RenderUploadResult the handler takes ownership of.
 constexpr UINT kRenderUploadCompleteMessage = WM_APP + 4;
 constexpr UINT kRenderPickCompleteMessage = WM_APP + 5;
+constexpr UINT kRenderStartFailedMessage = WM_APP + 6;
+constexpr UINT kRenderDeviceRecoveryMessage = WM_APP + 7;
 struct RenderPickResult { uint64_t generation; bool hit; };
+struct RenderStartFailure { std::wstring details; };
+struct RenderDeviceRecoveryResult { bool recovered = false; std::wstring path; std::wstring details; };
 
 struct RenderUploadResult
 {
@@ -242,6 +246,7 @@ public:
 
     LockedCamera LockCamera() { return LockedCamera(cameraMutex_, camera_, interactionEpoch_); }
     void RequestPick(int x, int y, uint64_t generation);
+    void InjectDeviceRemovalForTesting() { injectDeviceRemoval_.store(true); Invalidate(); }
 
 private:
     void ThreadMain(HWND window);
@@ -251,6 +256,7 @@ private:
     // and resolves generation catalog entries without touching the copy lane.
     void PumpUploads(HWND window);
     void RenderOneFrame();
+    bool RecoverDevice();
     // Snapshots frame statistics for the UI thread. Deliberately not called
     // every frame -- FrameStats::P95Ms sorts its whole window, and doing that
     // in the frame path is measurably visible in the p95 it reports.
@@ -322,6 +328,7 @@ private:
         size_t byteLimit = 128ull * 1024 * 1024;
         std::uint64_t generation = 0;
         std::wstring path;
+        std::shared_ptr<std::atomic_bool> cancellation;
         bool stopped = false;
         std::deque<uint32_t> details;
         std::unordered_set<uint32_t> requestedDetails;
@@ -357,6 +364,11 @@ private:
     std::atomic<uint64_t> evictionCount_{0}, rejectedDetailCount_{0};
     std::atomic<bool> smokeUma_{false};
     bool initialTerminal_=false;
+    bool recoveryAttempted_ = false;
+    bool deviceFatal_ = false;
+    std::atomic<bool> injectDeviceRemoval_{false};
+    std::atomic<bool> recoveryRequested_{false};
+    std::atomic<uint64_t> recoveryCount_{0};
     double pauseDetailUntil_=0;
     std::unordered_map<uint32_t,model_core::ChunkDescriptor> scanCatalog_;
 

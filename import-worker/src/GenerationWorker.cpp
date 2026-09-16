@@ -4,6 +4,7 @@
 
 #include "model_core/ControlChannelIo.h"
 #include "platform/MappedView.h"
+#include "platform/Win32Handle.h"
 
 #include <cstring>
 #include <variant>
@@ -21,8 +22,8 @@ bool HandleStartGeneration(HANDLE stdOut, const model_core::StartGenerationReque
         return false;
     };
 
-    HANDLE section = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue));
-    auto view = platform::MappedView::Map(section, FILE_MAP_WRITE | FILE_MAP_READ,
+    platform::Win32Handle section(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue)));
+    auto view = platform::MappedView::Map(section.get(), FILE_MAP_WRITE | FILE_MAP_READ,
                                            static_cast<SIZE_T>(request.sectionByteCapacity));
     if (!view) {
         return sendError(model_core::ImportErrorCode::InternalImporterFailure);

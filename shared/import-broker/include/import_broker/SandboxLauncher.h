@@ -46,6 +46,17 @@ std::optional<SandboxProcess> LaunchSuspendedSandboxed(const std::wstring& exePa
                                                         const platform::AppContainerSid& sid,
                                                         HANDLE stdInput = nullptr);
 
+// Same launch contract for a SID whose lifetime is owned elsewhere (the
+// process-wide worker coordinator). The SID is only consumed synchronously
+// while the security capabilities attribute is constructed.
+std::optional<SandboxProcess> LaunchSuspendedSandboxedWithSid(const std::wstring& exePath,
+                                                               std::wstring commandLine,
+                                                               std::span<HANDLE> inheritedHandles,
+                                                               HANDLE stdOutput,
+                                                               const SandboxLimits& limits,
+                                                               PSID sid,
+                                                               HANDLE stdInput = nullptr);
+
 // Resumes a process created by LaunchSuspendedSandboxed. Never call this
 // before job assignment has happened, which LaunchSuspendedSandboxed already
 // guarantees by construction.

@@ -10,6 +10,7 @@
 
 #include "SandboxTestSupport.h"
 #include "import_broker/SharedSection.h"
+#include "import_broker/ImportSession.h"
 #include "import_broker/WorkerPool.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
@@ -18,6 +19,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <optional>
+#include <filesystem>
+#include <atomic>
 
 namespace {
 
@@ -60,6 +63,81 @@ std::optional<model_core::ReceivedControlMessage> RunGenerationThroughPool(impor
 }
 
 } // namespace
+
+TEST_CASE("The product pool reuses a sandboxed worker for real sidecar imports", "[worker-pool][session]")
+{
+    const auto worker = sandbox_test_support::WorkerExePath();
+    import_broker::PrepareImportWorkerPoolAsync(worker);
+
+    const auto source = (std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()
+        / "interactive-viewer" / "test-assets" / "tri_external.gltf").wstring();
+    auto request = [&] (uint64_t generation) {
+        import_broker::ImportSessionRequest value;
+        value.workerExePath = worker;
+        value.sourcePath = source;
+        value.format = import_broker::ImportFormat::Gltf;
+        value.generationId = generation;
+        value.sectionByteCapacity = 4ull * 1024 * 1024;
+        value.maxChunkCount = 64;
+        value.maxChunkBatchesPerGeneration = 16;
+        value.maxChunksPerGeneration = 1024;
+        value.maxSidecarRequestsPerGeneration = 16;
+        value.maxSidecarFileBytes = 16ull * 1024 * 1024;
+        value.useWorkerPool = true;
+        return value;
+    };
+
+    const auto first = import_broker::RunImportSession(request(9001));
+    REQUIRE(first.ok);
+    REQUIRE(first.workerProcessId != 0);
+    const auto second = import_broker::RunImportSession(request(9002));
+    REQUIRE(second.ok);
+    CHECK(second.workerProcessId == first.workerProcessId);
+}
+
+TEST_CASE("Pooled progressive cancellation is acknowledged and the worker remains reusable",
+          "[worker-pool][cancellation]")
+{
+    const auto worker = sandbox_test_support::WorkerExePath();
+    import_broker::PrepareImportWorkerPoolAsync(worker);
+    const auto source = (std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()
+        / "interactive-viewer" / "test-assets" / "corpus" / "A-small-glb.glb").wstring();
+
+    std::atomic_bool cancelled = false;
+    uint32_t batches = 0;
+    import_broker::ImportSessionRequest request;
+    request.workerExePath = worker;
+    request.sourcePath = source;
+    request.format = import_broker::ImportFormat::Gltf;
+    request.generationId = 9010;
+    request.sectionByteCapacity = 1024 * 1024;
+    request.maxChunkCount = 256;
+    request.maxChunkBatchesPerGeneration = 64;
+    request.maxChunksPerGeneration = 4096;
+    request.maxSidecarRequestsPerGeneration = 16;
+    request.maxSidecarFileBytes = 16ull * 1024 * 1024;
+    request.enableCoarseProxy = true;
+    request.useWorkerPool = true;
+    request.isCancelled = [&] { return cancelled.load(); };
+    request.onBatch = [&] (std::vector<import_broker::ValidatedChunk>&&) {
+        ++batches;
+        cancelled.store(true);
+    };
+
+    const auto cancelledResult = import_broker::RunImportSession(request);
+    REQUIRE_FALSE(cancelledResult.ok);
+    CHECK(cancelledResult.stage == import_broker::ImportStage::Cancelled);
+    REQUIRE(batches == 1);
+    REQUIRE(cancelledResult.workerProcessId != 0);
+
+    request.generationId = 9011;
+    request.enableCoarseProxy = false;
+    request.isCancelled = {};
+    request.onBatch = {};
+    const auto after = import_broker::RunImportSession(request);
+    REQUIRE(after.ok);
+    CHECK(after.workerProcessId == cancelledResult.workerProcessId);
+}
 
 TEST_CASE("The same pooled worker process handles two sequential generations without relaunch",
           "[worker-pool]")

@@ -202,6 +202,10 @@ struct ViewerApp
     std::uint64_t generation = 0;
     std::shared_ptr<std::atomic_bool> cancellation;
     std::shared_ptr<std::atomic_bool> alive = std::make_shared<std::atomic_bool>(true);
+    // Joinable background imports: cancellation is bounded by the broker's
+    // cooperative grace/worker replacement contract, so close cannot leave
+    // detached threads referring to HWND or app state after destruction.
+    std::vector<std::jthread> importThreads;
 };
 
 HBRUSH gBackgroundBrush = nullptr;
@@ -1259,7 +1263,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
     const uint32_t faultForTesting = app.appSmoke ? app.faultForTesting : 0;
     auto detailSource = app.renderThread.DetailSource(generation);
     auto cpuGuard = app.renderThread.CpuBudgetGuard();
-    std::thread([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting]()
+    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting]()
     {
         d3d12_import_bridge::ImportResult result;
         bool initialComplete = false;
@@ -1302,7 +1306,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
         auto* message = new (std::nothrow) D3D12CompleteMessage{ generation, path, std::move(result) };
         if (message && !PostMessageW(window, kD3D12ImportCompleteMessage, 0, reinterpret_cast<LPARAM>(message)))
             delete message;
-    }).detach();
+    });
 }
 
 void OpenDialog(ViewerApp& app)
@@ -1721,7 +1725,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message)
     {
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 64) return 0;
+        if (!app->appSmoke || wParam > 66) return 0;
         if (wParam == 52) { app->renderThread.RequestSmokeEviction(); return 1; }
         if (wParam == 47) return app->loadedModel ? static_cast<LRESULT>(app->loadedModel->source.generationId) : 0;
         if (wParam == 46) { app->holdUploadMessagesForTesting = lParam != 0; return 1; }
@@ -1772,6 +1776,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (wParam==62) { app->renderThread.SetSmokeBudget(uint64_t(lParam)*1024*1024); return 1; }
         if (wParam==63) { app->renderThread.SetSmokeUma(lParam!=0); return 1; }
+        if (wParam==65) { app->renderThread.InjectDeviceRemovalForTesting(); return 1; }
         if (wParam==40) return static_cast<LRESULT>(app->warning.size());
         if (wParam == 30) { ToggleShowNativeOrientation(*app); return app->showNativeOrientation; }
         return static_cast<LRESULT>(app->renderThread.SmokeValue(static_cast<unsigned>(wParam)));
@@ -2662,6 +2667,31 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return 0;
         }
         app->renderThread.FinishImport(complete->generation, complete->result.sourceIdentity);
+        return 0;
+    }
+    case kRenderStartFailedMessage:
+    {
+        std::unique_ptr<RenderStartFailure> failure(reinterpret_cast<RenderStartFailure*>(lParam));
+        app->rendererReady = false;
+        if (app->cancellation) app->cancellation->store(true, std::memory_order_relaxed);
+        app->importThreads.clear();
+        import_broker::ShutdownImportWorkerPool();
+        app->renderThread.CancelUploads();
+        SetFailure(*app, L"Graphics could not be started.",
+                   failure ? failure->details : L"The render thread stopped during initialization.");
+        return 0;
+    }
+    case kRenderDeviceRecoveryMessage:
+    {
+        std::unique_ptr<RenderDeviceRecoveryResult> recovery(
+            reinterpret_cast<RenderDeviceRecoveryResult*>(lParam));
+        if (!recovery) return 0;
+        if (recovery->recovered && !recovery->path.empty()) {
+            BeginOpen(*app, recovery->path);
+        } else {
+            SetFailure(*app, L"Graphics recovery failed.", recovery->details, recovery->path,
+                       model_core::ImportErrorCode::UploadFailure, import_broker::ImportStage::Upload);
+        }
         return 0;
     }
     case kRenderPickCompleteMessage:

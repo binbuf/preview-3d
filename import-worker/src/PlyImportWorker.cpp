@@ -69,14 +69,17 @@ bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileReq
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
 
-    HANDLE outputSection = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue));
-    auto outputView = platform::MappedView::Map(outputSection, FILE_MAP_WRITE | FILE_MAP_READ,
+    platform::Win32Handle outputSection(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue)));
+    platform::Win32Handle cancellationEvent(reinterpret_cast<HANDLE>(
+        static_cast<uintptr_t>(request.cancellationEventHandleValue)));
+    auto outputView = platform::MappedView::Map(outputSection.get(), FILE_MAP_WRITE | FILE_MAP_READ,
                                                  static_cast<SIZE_T>(request.sectionByteCapacity));
     if (!outputView) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
 
-    ChunkBatchSink batchSink(GetStdHandle(STD_INPUT_HANDLE), stdOut, request.generationId);
+    ChunkBatchSink batchSink(GetStdHandle(STD_INPUT_HANDLE), stdOut, request.generationId,
+                             request.requestFlags, cancellationEvent.get());
     try {
         auto result =
             ImportPly(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
@@ -105,6 +108,8 @@ bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileReq
                                false, &batchSink, &*openResult.file);
             if (!ReportResult(stdOut, request.generationId, result)) return false;
         }
+        if (batchSink.DetailService() && batchSink.Cancelled())
+            return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::Cancelled);
         return true;
     } catch (const std::bad_alloc&) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::OutOfMemory);

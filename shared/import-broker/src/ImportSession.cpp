@@ -7,6 +7,7 @@
 #include "import_broker/SharedSection.h"
 #include "import_broker/SidecarRequestServicer.h"
 #include "import_broker/SourceFileAccess.h"
+#include "import_broker/WorkerPool.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
 #include "platform/AppContainerSid.h"
@@ -24,8 +25,11 @@
 #include <exception>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -101,33 +105,42 @@ const wchar_t* ParseFlagFor(ImportFormat format)
 // codebase's "small deliberate duplication over cross-format coupling"
 // precedent, so this helper is a template rather than one shared struct.
 template <typename Request>
-Request MakeFileRequest(const ImportSessionRequest& session, HANDLE sourceFileHandle, HANDLE sectionHandle)
+Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFileHandle,
+                        uint64_t sectionHandle, uint64_t cancellationEventHandle)
 {
     Request request{};
     request.generationId = session.generationId;
-    request.sourceFileHandleValue = reinterpret_cast<uint64_t>(sourceFileHandle);
-    request.sectionHandleValue = reinterpret_cast<uint64_t>(sectionHandle);
+    request.sourceFileHandleValue = sourceFileHandle;
+    request.sectionHandleValue = sectionHandle;
     request.sectionByteCapacity = session.sectionByteCapacity;
     request.maxChunkCount = session.maxChunkCount;
+    request.requestFlags = (session.enableCoarseProxy ? model_core::kImportRequestCoarseProxy : 0)
+        | (session.nextDetail ? model_core::kImportRequestDetailService : 0)
+        | (session.workerArgumentsOverride == L"--parse-gltf-delayed-batches"
+            ? model_core::kImportRequestDelayedBatchesForTesting : 0);
+    request.cancellationEventHandleValue = cancellationEventHandle;
     return request;
 }
 
-bool SendStartRequest(const ImportSessionRequest& session, HANDLE controlInWrite, HANDLE sourceFileHandle,
-                       HANDLE sectionHandle)
+bool SendStartRequest(const ImportSessionRequest& session, HANDLE controlInWrite, uint64_t sourceFileHandle,
+                       uint64_t sectionHandle, uint64_t cancellationEventHandle)
 {
     switch (session.format) {
     case ImportFormat::Gltf: {
-        auto request = MakeFileRequest<model_core::ParseGltfFileRequest>(session, sourceFileHandle, sectionHandle);
+        auto request = MakeFileRequest<model_core::ParseGltfFileRequest>(session, sourceFileHandle, sectionHandle,
+                                                                         cancellationEventHandle);
         return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartGltfImportFromFile,
                                                 &request, sizeof(request));
     }
     case ImportFormat::Stl: {
-        auto request = MakeFileRequest<model_core::ParseStlFileRequest>(session, sourceFileHandle, sectionHandle);
+        auto request = MakeFileRequest<model_core::ParseStlFileRequest>(session, sourceFileHandle, sectionHandle,
+                                                                        cancellationEventHandle);
         return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartStlImportFromFile,
                                                 &request, sizeof(request));
     }
     case ImportFormat::Ply: {
-        auto request = MakeFileRequest<model_core::ParsePlyFileRequest>(session, sourceFileHandle, sectionHandle);
+        auto request = MakeFileRequest<model_core::ParsePlyFileRequest>(session, sourceFileHandle, sectionHandle,
+                                                                        cancellationEventHandle);
         return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartPlyImportFromFile,
                                                 &request, sizeof(request));
     }
@@ -216,11 +229,118 @@ struct BatchAcceptance {
     }
 };
 
+class ProductWorkerCoordinator {
+public:
+    ~ProductWorkerCoordinator()
+    {
+        Shutdown();
+    }
+
+    void PrepareAsync(const std::wstring& workerExePath, uint64_t commitLimitBytes)
+    {
+        std::lock_guard lock(mutex_);
+        if (initializing_ || ready_ || stopping_) return;
+        initializing_ = true;
+        initializer_ = std::thread([this, workerExePath, commitLimitBytes] {
+            auto candidate = std::make_unique<WorkerPool>();
+            std::wstring error;
+            const auto& container = AcquireWorkerContainer(workerExePath);
+            SandboxLimits limits{};
+            limits.processMemoryLimitBytes = static_cast<SIZE_T>(commitLimitBytes);
+            const bool ok = container.ready
+                && candidate->InitializeBorrowed(workerExePath, container.sid.get(), limits, 2, error);
+            std::lock_guard lock(mutex_);
+            if (ok && !stopping_) {
+                pool_ = std::move(candidate);
+                ready_ = true;
+            }
+            initializing_ = false;
+            changed_.notify_all();
+        });
+    }
+
+    struct Lease {
+        Lease(ProductWorkerCoordinator* ownerValue, WorkerPool* poolValue, size_t indexValue)
+            : owner(ownerValue), pool(poolValue), index(indexValue) {}
+        ProductWorkerCoordinator* owner = nullptr;
+        WorkerPool* pool = nullptr;
+        size_t index = 0;
+        bool reusable = false;
+        ~Lease() { if (owner) owner->Release(*this); }
+    };
+
+    std::unique_ptr<Lease> Acquire(const std::function<bool()>& cancelled)
+    {
+        std::unique_lock lock(mutex_);
+        while ((initializing_ || ready_) && !stopping_) {
+            if (cancelled && cancelled()) return {};
+            if (ready_) {
+                if (auto index = pool_->AcquireIdle())
+                    return std::make_unique<Lease>(this, pool_.get(), *index);
+            }
+            changed_.wait_for(lock, std::chrono::milliseconds(5));
+        }
+        return {};
+    }
+
+    void Shutdown()
+    {
+        {
+            std::lock_guard lock(mutex_);
+            if (stopping_) return;
+            stopping_ = true;
+            changed_.notify_all();
+        }
+        if (initializer_.joinable()) initializer_.join();
+        std::unique_ptr<WorkerPool> pool;
+        {
+            std::lock_guard lock(mutex_);
+            pool = std::move(pool_);
+            ready_ = false;
+        }
+        if (pool) pool->Shutdown();
+    }
+
+private:
+    void Release(Lease& lease)
+    {
+        std::wstring error;
+        const bool available = lease.reusable || lease.pool->TerminateAndReplace(lease.index, error);
+        std::lock_guard lock(mutex_);
+        if (available) lease.pool->Release(lease.index);
+        changed_.notify_one();
+    }
+
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    std::unique_ptr<WorkerPool> pool_;
+    std::thread initializer_;
+    bool initializing_ = false;
+    bool ready_ = false;
+    bool stopping_ = false;
+};
+
+ProductWorkerCoordinator& WorkerCoordinator()
+{
+    static ProductWorkerCoordinator coordinator;
+    return coordinator;
+}
+
 } // namespace
 
 bool PrepareImportSandbox(const std::wstring& workerExePath)
 {
     return AcquireWorkerContainer(workerExePath).ready;
+}
+
+void PrepareImportWorkerPoolAsync(const std::wstring& workerExePath, uint64_t commitLimitBytes)
+{
+    WorkerCoordinator().PrepareAsync(workerExePath, commitLimitBytes);
+}
+
+void ShutdownImportWorkerPool()
+{
+    WorkerCoordinator().Shutdown();
 }
 
 ImportSessionResult RunImportSession(const ImportSessionRequest& request)
@@ -258,11 +378,6 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     uint64_t allSourceBytes = primaryBytes;
     uint64_t accumulatedBytes = 0;
     std::vector<SourceChunkRange> sourceCatalog;
-    auto duplicatedFile = DuplicateInheritableHandle(opened.file.get());
-    if (!duplicatedFile) {
-        return Fail(ImportStage::DuplicateSourceHandle);
-    }
-
     platform::Win32Handle outputSection = CreateSharedSection(static_cast<SIZE_T>(request.sectionByteCapacity));
     if (!outputSection) {
         return Fail(ImportStage::CreateOutputSection);
@@ -273,54 +388,80 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         return Fail(ImportStage::CreateSandboxProfile);
     }
 
-    SECURITY_ATTRIBUTES sa{};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-    sa.lpSecurityDescriptor = nullptr;
+    platform::Win32Handle cancellationEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!cancellationEvent) return Fail(ImportStage::CreateControlChannel);
 
-    HANDLE inReadRaw = nullptr;
-    HANDLE inWriteRaw = nullptr;
-    HANDLE outReadRaw = nullptr;
-    HANDLE outWriteRaw = nullptr;
-    if (!CreatePipe(&inReadRaw, &inWriteRaw, &sa, 0) || !CreatePipe(&outReadRaw, &outWriteRaw, &sa, 0)) {
-        return Fail(ImportStage::CreateControlChannel);
-    }
-    platform::Win32Handle controlInRead(inReadRaw);
-    platform::Win32Handle controlInWrite(inWriteRaw);
-    platform::Win32Handle controlOutRead(outReadRaw);
-    platform::Win32Handle controlOutWrite(outWriteRaw);
-    SetHandleInformation(controlInWrite.get(), HANDLE_FLAG_INHERIT, 0);
-    SetHandleInformation(controlOutRead.get(), HANDLE_FLAG_INHERIT, 0);
+    std::unique_ptr<ProductWorkerCoordinator::Lease> pooledLease;
+    std::optional<SandboxProcess> proc;
+    platform::Win32Handle controlInRead, controlInWrite, controlOutRead, controlOutWrite;
+    platform::Win32Handle duplicatedFile, duplicatedCancellation;
+    HANDLE workerProcess = nullptr, workerJob = nullptr, controlInput = nullptr, controlOutput = nullptr;
+    uint64_t workerSource = 0, workerOutput = 0, workerCancellation = 0;
 
-    std::wstring workerArgs = request.workerArgumentsOverride.empty()
-        ? std::wstring(ParseFlagFor(request.format))
-        : request.workerArgumentsOverride;
-    if (request.enableCoarseProxy && request.workerArgumentsOverride.empty()) workerArgs += L"-proxy";
-    if (request.nextDetail && request.workerArgumentsOverride.empty()) workerArgs += L"-detail";
-    std::wstring cmdLine = L"\"" + request.workerExePath + L"\" " + workerArgs;
+    if (request.useWorkerPool && request.workerArgumentsOverride.empty()) {
+        pooledLease = WorkerCoordinator().Acquire(request.isCancelled);
+        if (!pooledLease)
+            return Fail(request.isCancelled && request.isCancelled() ? ImportStage::Cancelled
+                                                                      : ImportStage::LaunchWorker);
+        WorkerPool& pool = *pooledLease->pool;
+        const size_t index = pooledLease->index;
+        workerProcess = pool.ProcessHandle(index);
+        workerJob = pool.JobHandle(index);
+        controlInput = pool.ControlInput(index);
+        controlOutput = pool.ControlOutput(index);
+        auto sourceValue = DuplicateHandleIntoProcess(opened.file.get(), workerProcess);
+        auto outputValue = DuplicateHandleIntoProcess(outputSection.get(), workerProcess);
+        auto cancelValue = DuplicateHandleIntoProcess(cancellationEvent.get(), workerProcess);
+        if (!sourceValue || !outputValue || !cancelValue) return Fail(ImportStage::DuplicateSourceHandle);
+        workerSource = *sourceValue;
+        workerOutput = *outputValue;
+        workerCancellation = *cancelValue;
+    } else {
+        auto fileDuplicate = DuplicateInheritableHandle(opened.file.get());
+        auto cancelDuplicate = DuplicateInheritableHandle(cancellationEvent.get());
+        if (!fileDuplicate || !cancelDuplicate) return Fail(ImportStage::DuplicateSourceHandle);
+        duplicatedFile = std::move(*fileDuplicate);
+        duplicatedCancellation = std::move(*cancelDuplicate);
 
-    HANDLE inherited[] = { controlInRead.get(), controlOutWrite.get(), duplicatedFile->get(), outputSection.get() };
-    SandboxLimits limits{};
-    limits.processMemoryLimitBytes = static_cast<SIZE_T>(request.commitLimitBytes);
-    auto proc = LaunchSuspendedSandboxed(request.workerExePath, cmdLine, inherited, controlOutWrite.get(), limits,
-                                          container.sid, controlInRead.get());
-    controlInRead.reset();
-    controlOutWrite.reset();
-    if (!proc) {
-        return Fail(ImportStage::LaunchWorker);
-    }
-    if (!ResumeSandboxProcess(*proc)) {
-        return Fail(ImportStage::ResumeWorker);
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa); sa.bInheritHandle = TRUE;
+        HANDLE inReadRaw = nullptr, inWriteRaw = nullptr, outReadRaw = nullptr, outWriteRaw = nullptr;
+        if (!CreatePipe(&inReadRaw, &inWriteRaw, &sa, 0) || !CreatePipe(&outReadRaw, &outWriteRaw, &sa, 0))
+            return Fail(ImportStage::CreateControlChannel);
+        controlInRead.reset(inReadRaw); controlInWrite.reset(inWriteRaw);
+        controlOutRead.reset(outReadRaw); controlOutWrite.reset(outWriteRaw);
+        SetHandleInformation(controlInWrite.get(), HANDLE_FLAG_INHERIT, 0);
+        SetHandleInformation(controlOutRead.get(), HANDLE_FLAG_INHERIT, 0);
+
+        std::wstring workerArgs = request.workerArgumentsOverride.empty()
+            ? std::wstring(ParseFlagFor(request.format)) : request.workerArgumentsOverride;
+        if (request.enableCoarseProxy && request.workerArgumentsOverride.empty()) workerArgs += L"-proxy";
+        if (request.nextDetail && request.workerArgumentsOverride.empty()) workerArgs += L"-detail";
+        std::wstring cmdLine = L"\"" + request.workerExePath + L"\" " + workerArgs;
+        HANDLE inherited[] = { controlInRead.get(), controlOutWrite.get(), duplicatedFile.get(),
+                               outputSection.get(), duplicatedCancellation.get() };
+        SandboxLimits limits{};
+        limits.processMemoryLimitBytes = static_cast<SIZE_T>(request.commitLimitBytes);
+        proc = LaunchSuspendedSandboxed(request.workerExePath, cmdLine, inherited, controlOutWrite.get(), limits,
+                                         container.sid, controlInRead.get());
+        controlInRead.reset(); controlOutWrite.reset();
+        if (!proc) return Fail(ImportStage::LaunchWorker);
+        if (!ResumeSandboxProcess(*proc)) return Fail(ImportStage::ResumeWorker);
+        workerProcess = proc->process.get(); workerJob = proc->job.get();
+        controlInput = controlInWrite.get(); controlOutput = controlOutRead.get();
+        workerSource = reinterpret_cast<uint64_t>(duplicatedFile.get());
+        workerOutput = reinterpret_cast<uint64_t>(outputSection.get());
+        workerCancellation = reinterpret_cast<uint64_t>(duplicatedCancellation.get());
     }
 
     const auto cpuBudgetAllows=[&] {
         if (!request.cpuBudgetAllows) return true;
         PROCESS_MEMORY_COUNTERS_EX memory{};
         memory.cb=sizeof(memory);
-        return K32GetProcessMemoryInfo(proc->process.get(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))
+        return K32GetProcessMemoryInfo(workerProcess,reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))
             && request.cpuBudgetAllows(memory.PrivateUsage);
     };
-    if (!SendStartRequest(request, controlInWrite.get(), duplicatedFile->get(), outputSection.get())) {
+    if (!SendStartRequest(request, controlInput, workerSource, workerOutput, workerCancellation)) {
         return Fail(ImportStage::SendRequest);
     }
 
@@ -340,6 +481,11 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     // terminal ChunksReady/GenerationError reply. Degrades to exactly one
     // iteration for STL/PLY and any single-window GLB, which send neither.
     const auto replyTimeout = std::chrono::milliseconds(request.replyTimeoutMs);
+    const auto cancelProbe = [&] {
+        const bool cancelled = request.isCancelled && request.isCancelled();
+        if (cancelled) SetEvent(cancellationEvent.get());
+        return cancelled;
+    };
     uint32_t sidecarRequestCount = 0;
     BatchAcceptance acceptance;
     std::vector<ValidatedChunk> accumulated;
@@ -639,7 +785,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         }
         if (request.onBatch) {
             request.onBatch(std::move(validation.chunks));
-            if (request.isCancelled && request.isCancelled()) {
+            if (cancelProbe()) {
                 failure = Fail(ImportStage::Cancelled);
                 return false;
             }
@@ -653,7 +799,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     };
 
     model_core::ReceivedControlMessage received{};
-    ControlWaitOutcome outcome = ReadControlMessageBounded(controlOutRead.get(), replyTimeout, received, request.isCancelled);
+    ControlWaitOutcome outcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
 
     while (outcome == ControlWaitOutcome::Ready && !failure) {
         const auto opcode = static_cast<model_core::ControlOpcode>(received.header.opcode);
@@ -666,18 +812,18 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
 
             model_core::RequestSidecarFileNotice sidecar{};
             std::memcpy(&sidecar, received.payload.data(), sizeof(sidecar));
-            auto serviced = ServiceSidecarRequest(proc->process.get(), opened.canonicalPath, sidecar,
+            auto serviced = ServiceSidecarRequest(workerProcess, opened.canonicalPath, sidecar,
                                                   request.maxSidecarFileBytes,
                                                   12ull * 1024 * 1024 * 1024 - allSourceBytes);
 
             bool sentReply = false;
             if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {
                 allSourceBytes += ready->sidecarByteLength;
-                sentReply = model_core::WriteControlMessage(controlInWrite.get(),
+                sentReply = model_core::WriteControlMessage(controlInput,
                                                              model_core::ControlOpcode::SidecarFileReady, ready,
                                                              sizeof(*ready));
             } else if (const auto* unavailable = std::get_if<model_core::SidecarFileUnavailableNotice>(&serviced)) {
-                sentReply = model_core::WriteControlMessage(controlInWrite.get(),
+                sentReply = model_core::WriteControlMessage(controlInput,
                                                              model_core::ControlOpcode::SidecarFileUnavailable,
                                                              unavailable, sizeof(*unavailable));
             }
@@ -686,7 +832,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                 break;
             }
 
-            outcome = ReadControlMessageBounded(controlOutRead.get(), replyTimeout, received, request.isCancelled);
+            outcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
             continue;
         }
 
@@ -713,13 +859,13 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             model_core::ChunkBatchConsumedNotice ack{};
             ack.generationId = request.generationId;
             ack.batchIndex = notice.batchIndex;
-            if (!model_core::WriteControlMessage(controlInWrite.get(),
+            if (!model_core::WriteControlMessage(controlInput,
                                                   model_core::ControlOpcode::ChunkBatchConsumed, &ack, sizeof(ack))) {
                 failure = Fail(ImportStage::ChunkBatchAckFailed);
                 break;
             }
 
-            outcome = ReadControlMessageBounded(controlOutRead.get(), replyTimeout, received, request.isCancelled);
+            outcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
             continue;
         }
 
@@ -741,11 +887,28 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     auto fail = [&](ImportStage stage, model_core::ImportErrorCode code = model_core::ImportErrorCode::None) {
         ImportSessionResult result = Fail(stage, code);
         result.batchCount = acceptance.nextBatchIndex;
+        result.workerProcessId = GetProcessId(workerProcess);
         return result;
+    };
+
+    auto acknowledgeCancellation = [&] {
+        model_core::ReceivedControlMessage cancellationReply{};
+        const auto grace = ReadControlMessageBounded(controlOutput, std::chrono::milliseconds(500),
+                                                       cancellationReply);
+        if (pooledLease && grace == ControlWaitOutcome::Ready
+            && cancellationReply.header.opcode == uint32_t(model_core::ControlOpcode::GenerationError)
+            && cancellationReply.payload.size() == sizeof(model_core::GenerationErrorNotice)) {
+            model_core::GenerationErrorNotice notice{};
+            std::memcpy(&notice, cancellationReply.payload.data(), sizeof(notice));
+            pooledLease->reusable = notice.generationId == request.generationId
+                && notice.errorCode == uint32_t(model_core::ImportErrorCode::Cancelled);
+        }
     };
 
     if (failure) {
         failure->batchCount = acceptance.nextBatchIndex;
+        failure->workerProcessId = GetProcessId(workerProcess);
+        if (failure->stage == ImportStage::Cancelled) acknowledgeCancellation();
         return *failure;
     }
 
@@ -754,6 +917,10 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     }
 
     if (outcome == ControlWaitOutcome::Cancelled) {
+        // Cooperative first: the event wakes parser/decode and batch/detail
+        // waits. A pooled worker must acknowledge before reuse; otherwise its
+        // lease destructor replaces it after this 500 ms grace period.
+        acknowledgeCancellation();
         return fail(ImportStage::Cancelled);
     }
     if (outcome == ControlWaitOutcome::TimedOut) {
@@ -762,7 +929,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     if (outcome == ControlWaitOutcome::ProtocolViolation) return fail(ImportStage::UnexpectedReply);
     if (outcome != ControlWaitOutcome::Ready) {
         JOBOBJECT_LIMIT_VIOLATION_INFORMATION violation{};
-        if (QueryInformationJobObject(proc->job.get(), JobObjectLimitViolationInformation, &violation, sizeof(violation), nullptr)
+        if (QueryInformationJobObject(workerJob, JobObjectLimitViolationInformation, &violation, sizeof(violation), nullptr)
             && (violation.ViolationLimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY))
             return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::ResourceLimit);
         return fail(ImportStage::AwaitReply);
@@ -777,7 +944,11 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             || !model_core::IsKnownImportErrorCode(notice.errorCode))
             return fail(ImportStage::UnexpectedReply);
         if (notice.errorCode == uint32_t(model_core::ImportErrorCode::Cancelled))
+        {
+            if (pooledLease) pooledLease->reusable = true;
             return fail(ImportStage::Cancelled);
+        }
+        if (pooledLease) pooledLease->reusable = true;
         auto result = fail(ImportStage::WorkerReportedError, static_cast<model_core::ImportErrorCode>(notice.errorCode));
         result.errorPhase = static_cast<model_core::ImportFailurePhase>(notice.reserved0);
         return result;
@@ -826,6 +997,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     result.batchCount = acceptance.nextBatchIndex;
     result.sourceCatalog = std::move(sourceCatalog);
     result.sourceIdentity = sourceIdentity;
+    result.workerProcessId = GetProcessId(workerProcess);
     if (request.nextDetail) {
         if (!request.enableCoarseProxy || !request.onBatch || !request.onInitialComplete)
             return fail(ImportStage::UnexpectedReply);
@@ -833,8 +1005,16 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         // A single outstanding request owns the reused section. No new sidecar
         // requests are permitted: replay uses only the worker's pinned handles.
         for (;;) {
-            if (request.isCancelled && request.isCancelled()) return fail(ImportStage::Cancelled);
-            if (WaitForSingleObject(proc->process.get(), 0) == WAIT_OBJECT_0)
+            if (cancelProbe()) {
+                model_core::ReceivedControlMessage cancellationReply{};
+                const auto grace = ReadControlMessageBounded(controlOutput, std::chrono::milliseconds(500),
+                                                               cancellationReply);
+                if (pooledLease && grace == ControlWaitOutcome::Ready
+                    && cancellationReply.header.opcode == uint32_t(model_core::ControlOpcode::GenerationError))
+                    pooledLease->reusable = true;
+                return fail(ImportStage::Cancelled);
+            }
+            if (WaitForSingleObject(workerProcess, 0) == WAIT_OBJECT_0)
                 return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::WorkerCrashed);
             if (!cpuBudgetAllows()) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit);
             const uint32_t identity = request.nextDetail();
@@ -842,10 +1022,18 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             const auto region = acceptance.regions.find(identity);
             if (region == acceptance.regions.end()) return fail(ImportStage::UnexpectedReply);
             model_core::DetailRequest detail{request.generationId, region->second.scan};
-            if (!model_core::WriteControlMessage(controlInWrite.get(), model_core::ControlOpcode::RequestDetail, &detail, sizeof(detail)))
+            if (!model_core::WriteControlMessage(controlInput, model_core::ControlOpcode::RequestDetail, &detail, sizeof(detail)))
                 return fail(ImportStage::AwaitReply);
-            const auto detailOutcome = ReadControlMessageBounded(controlOutRead.get(), replyTimeout, received, request.isCancelled);
-            if (detailOutcome == ControlWaitOutcome::Cancelled) return fail(ImportStage::Cancelled);
+            const auto detailOutcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
+            if (detailOutcome == ControlWaitOutcome::Cancelled) {
+                model_core::ReceivedControlMessage cancellationReply{};
+                const auto grace = ReadControlMessageBounded(controlOutput, std::chrono::milliseconds(500),
+                                                               cancellationReply);
+                if (pooledLease && grace == ControlWaitOutcome::Ready
+                    && cancellationReply.header.opcode == uint32_t(model_core::ControlOpcode::GenerationError))
+                    pooledLease->reusable = true;
+                return fail(ImportStage::Cancelled);
+            }
             if (detailOutcome != ControlWaitOutcome::Ready) return fail(ImportStage::AwaitReply);
             if (received.header.opcode == uint32_t(model_core::ControlOpcode::GenerationError)
                 && received.payload.size() == sizeof(model_core::GenerationErrorNotice)) {
@@ -879,6 +1067,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             request.onBatch(std::move(validation.chunks));
         }
     }
+    if (pooledLease) pooledLease->reusable = true;
     return result;
 }
 

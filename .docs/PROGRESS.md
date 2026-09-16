@@ -4,6 +4,32 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 3 / TSK-301 (2026-09-16): complete.**
+  Product imports now use a two-process asynchronously provisioned AppContainer
+  pool. Each generation receives newly duplicated read-only primary/sidecar,
+  output-section and cancellation-event handles; all request state/handles are
+  closed before reuse, while detail service pins its worker to one generation.
+  Per-request flags prevent coarse/detail mode leakage. Cooperative checkpoints
+  cover parse/normalize/decode and blocked progressive/detail waits; cancellation
+  is acknowledged within a 500 ms grace or the slot is terminated/replaced.
+  Import threads are owned/joined, close wakes queues and performs bounded pool
+  shutdown, and stale generation publications remain filtered. D3D12 and sandbox
+  startup no longer block `WM_CREATE`; asynchronous failures use the existing
+  error surface. Device removed/reset/hung results stop uploads, rebuild the
+  graphics lanes once, and reopen the retained source for coarse/detail
+  reconstruction; repeated failure is terminal rather than a retry loop.
+  Debug/Release solution builds pass with zero warnings/errors. Unit: 85 cases,
+  7,318 Debug / 7,230 Release assertions. ImportIsolation: 200 cases / 51,943
+  assertions in each configuration, including stable-PID real `.gltf` sidecar
+  reuse and progressive cancellation followed by same-worker reuse. Lifecycle
+  and recovery app smokes pass in both configurations, with zero surviving
+  workers and one injected device-recovery/reconstruction. Commands, results,
+  measurements and qualification limits are in
+  [TSK-301_VERIFICATION.md](./TSK-301_VERIFICATION.md) and
+  `tests/fixtures/baselines/tsk-301/`. No path-authority, dependency, persistent
+  cache, or shared-section wire-version change. Reference p95/ETW/memory
+  qualification and physical device-loss soak remain TSK-302. **TSK-302 is next.**
+
 - **Scope-limited MVP, Phase 2 / TSK-209 (2026-09-15): complete.**
   Completed the documented static glTF subset. Quantized POSITION/TEXCOORD and
   normalized NORMAL/TANGENT accessors now convert through the existing bounded

@@ -25,6 +25,15 @@ bool ChunkBatchSink::PublishBatch(uint32_t chunkCount, uint64_t sectionBytesWrit
     // or a closed pipe because the host rejected the batch and gave up -- is
     // a refusal to continue, never something to retry: the window's contents
     // are no longer anything this worker can reason about.
+    // A pooled worker's pipe stays open across requests, so cancellation must
+    // wake this backpressure wait independently of pipe teardown.
+    for (;;) {
+        if (Cancelled()) return false;
+        DWORD available = 0;
+        if (!PeekNamedPipe(stdIn_, nullptr, 0, nullptr, &available, nullptr)) return false;
+        if (available >= sizeof(model_core::ControlMessageHeader)) break;
+        Sleep(1);
+    }
     auto received = model_core::ReadControlMessage(stdIn_);
     if (!received
         || received->header.opcode != static_cast<uint32_t>(model_core::ControlOpcode::ChunkBatchConsumed)
@@ -40,7 +49,13 @@ bool ChunkBatchSink::PublishBatch(uint32_t chunkCount, uint64_t sectionBytesWrit
 
     // Explicit developer mode delays the next batch/terminal IPC, after the
     // acknowledged section is host-owned. Job termination interrupts this wait.
-    if (delayMs_) Sleep(delayMs_);
+    const unsigned delay = (requestFlags_ & model_core::kImportRequestDelayedBatchesForTesting)
+        ? 1500u : delayMs_;
+    if (delay) {
+        const DWORD wait = cancellationEvent_
+            ? WaitForSingleObject(cancellationEvent_, delay) : (Sleep(delay), WAIT_TIMEOUT);
+        if (wait == WAIT_OBJECT_0) return false;
+    }
     ++batchesPublished_;
     return true;
 }

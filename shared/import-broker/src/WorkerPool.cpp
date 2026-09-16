@@ -42,8 +42,16 @@ std::optional<WorkerPool::PooledWorker> WorkerPool::LaunchOne(std::wstring& erro
     std::vector<HANDLE> inherited{ controlInRead.get(), controlOutWrite.get() };
     std::wstring cmdLine = L"\"" + exePath_ + L"\" --pool";
 
-    auto proc = LaunchSuspendedSandboxed(exePath_, cmdLine, inherited, controlOutWrite.get(), limits_,
-                                          sid_, controlInRead.get());
+    const PSID sid = borrowedSid_ ? borrowedSid_ : sid_.get();
+    if (!sid) {
+        error = L"The pooled worker AppContainer SID is unavailable.";
+        return std::nullopt;
+    }
+    // SandboxLauncher only observes the SID during CreateProcess. A tiny
+    // borrowed wrapper would double-free it, so use the explicit SID launch
+    // overload supplied for process-wide pools.
+    auto proc = LaunchSuspendedSandboxedWithSid(exePath_, cmdLine, inherited, controlOutWrite.get(), limits_,
+                                                 sid, controlInRead.get());
     if (!proc) {
         error = L"Failed to launch a pooled worker process.";
         return std::nullopt;
@@ -71,6 +79,7 @@ bool WorkerPool::Initialize(std::wstring exePath, platform::AppContainerSid sid,
 {
     exePath_ = std::move(exePath);
     sid_ = std::move(sid);
+    borrowedSid_ = nullptr;
     limits_ = limits;
 
     workers_.reserve(size);
@@ -78,6 +87,24 @@ bool WorkerPool::Initialize(std::wstring exePath, platform::AppContainerSid sid,
         auto worker = LaunchOne(error);
         if (!worker) {
             workers_.clear(); // drops every already-launched worker's Job Object handle -- kill-on-close
+            return false;
+        }
+        workers_.push_back(std::move(*worker));
+    }
+    return true;
+}
+
+bool WorkerPool::InitializeBorrowed(std::wstring exePath, PSID sid, SandboxLimits limits,
+                                    size_t size, std::wstring& error)
+{
+    exePath_ = std::move(exePath);
+    borrowedSid_ = sid;
+    limits_ = limits;
+    workers_.reserve(size);
+    for (size_t i = 0; i < size; ++i) {
+        auto worker = LaunchOne(error);
+        if (!worker) {
+            workers_.clear();
             return false;
         }
         workers_.push_back(std::move(*worker));
@@ -202,6 +229,21 @@ void WorkerPool::Shutdown()
 HANDLE WorkerPool::ProcessHandle(size_t index) const noexcept
 {
     return workers_[index].proc.process.get();
+}
+
+HANDLE WorkerPool::JobHandle(size_t index) const noexcept
+{
+    return workers_[index].proc.job.get();
+}
+
+HANDLE WorkerPool::ControlInput(size_t index) const noexcept
+{
+    return workers_[index].controlInWrite.get();
+}
+
+HANDLE WorkerPool::ControlOutput(size_t index) const noexcept
+{
+    return workers_[index].controlOutRead.get();
 }
 
 DWORD WorkerPool::ProcessId(size_t index) const noexcept

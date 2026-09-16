@@ -14,6 +14,7 @@
 #include <chrono>
 #include <utility>
 #include <stdexcept>
+#include <new>
 #include <cstring>
 #include <psapi.h>
 #include "DetailView.h"
@@ -23,7 +24,6 @@ namespace {
 // Bounded everywhere: `04-rendering-and-streaming.md:190` requires shutdown
 // to "wait with finite diagnostics timeouts", and "a driver hang must not
 // leave the UI thread waiting forever."
-constexpr DWORD kStartTimeoutMs = 10000;
 constexpr DWORD kStopTimeoutMs = 5000;
 // The idle wait. `04-...:38`: "A timer keeps animation/loading indicators
 // alive; there is no unconstrained busy loop."
@@ -33,6 +33,12 @@ double NowSeconds()
 {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     return std::chrono::duration<double>(now).count();
+}
+
+bool IsDeviceLoss(HRESULT value)
+{
+    return value == DXGI_ERROR_DEVICE_REMOVED || value == DXGI_ERROR_DEVICE_RESET
+        || value == DXGI_ERROR_DEVICE_HUNG;
 }
 
 } // namespace
@@ -53,6 +59,7 @@ std::uint64_t RenderThread::SmokeValue(unsigned field) const noexcept
     case 60: return rejectedDetailCount_.load();
     case 61: { std::lock_guard<std::mutex> lock(uploads_->mutex); return uploads_->requestedDetails.size(); }
     case 64: return isUma_ || smokeUma_.load();
+    case 66: return recoveryCount_.load();
     case 48: return coarseChunks_.load();
     case 49: return fineChunks_.load();
     case 50: return suppressedCoarse_.load();
@@ -101,25 +108,15 @@ bool RenderThread::Start(HWND window, std::wstring& error)
         return false;
     }
 
-    thread_ = std::thread(&RenderThread::ThreadMain, this, window);
-
-    // The one deliberately synchronous handshake. It happens in WM_CREATE,
-    // before there is any interaction to be responsive to, and the caller
-    // has to know whether graphics started at all. Bounded so a wedged
-    // driver cannot hang startup forever.
-    if (WaitForSingleObject(startedEvent_.get(), kStartTimeoutMs) != WAIT_OBJECT_0) {
-        error = L"The render thread did not start within its timeout.";
-        stopRequested_.store(true, std::memory_order_release);
-        SetEvent(wakeEvent_.get());
-        if (thread_.joinable()) thread_.join();
+    try {
+        thread_ = std::thread(&RenderThread::ThreadMain, this, window);
+    } catch (const std::exception&) {
+        error = L"The render coordinator thread could not be created.";
         return false;
     }
-
-    if (!startOk_) {
-        error = startError_;
-        if (thread_.joinable()) thread_.join();
-        return false;
-    }
+    // Graphics initialization and its driver calls remain on the render
+    // thread. Failure is posted back to the UI asynchronously; WM_CREATE no
+    // longer waits on device/swap-chain creation.
     return true;
 }
 
@@ -169,6 +166,7 @@ void RenderThread::RequestPick(int x, int y, uint64_t generation)
 void RenderThread::CancelUploads()
 {
     std::lock_guard<std::mutex> lock(uploads_->mutex);
+    if (uploads_->cancellation) uploads_->cancellation->store(true, std::memory_order_release);
     uploads_->generation = 0;
     for (const auto& task : uploads_->tasks) if (!task.terminal) { uploads_->bytes -= task.bytes; --uploads_->count; }
     for (const auto& pub : uploads_->publications) if (!pub.task.terminal) { uploads_->bytes -= pub.task.bytes; --uploads_->count; }
@@ -185,7 +183,8 @@ std::function<void(d3d12_import_bridge::ImportResult)> RenderThread::BeginImport
     CancelUploads();
     auto inbox = uploads_;
     scannedPrimitives_.store(0);
-    { std::lock_guard<std::mutex> lock(inbox->mutex); inbox->generation = generation; inbox->path = path; }
+    { std::lock_guard<std::mutex> lock(inbox->mutex); inbox->generation = generation; inbox->path = path;
+      inbox->cancellation = cancellation; }
     return [inbox, generation, path = std::move(path), cancellation](auto result) {
         size_t bytes = sizeof(UploadTask) + path.size() * sizeof(wchar_t)
             + result.meshes.capacity() * sizeof(d3d12_import_bridge::ImportedMesh)
@@ -342,6 +341,10 @@ void RenderThread::UploadMain()
                     ? model_core::ImportErrorCode::UploadFailure : uploader.uploadErrorCode;
                 pub.task.result.errorDetails = error;
                 if (!ok) { uploader.WaitForIdle(); uploader.ReclaimRetired(); }
+                if (!ok && IsDeviceLoss(uploader.device.Device()->GetDeviceRemovedReason())) {
+                    recoveryRequested_.store(true, std::memory_order_release);
+                    Invalidate();
+                }
                 if (!ok && copyDelayMs_) std::fwprintf(stderr,L"Upload smoke failure: %ls\n",error.c_str());
                 if (ok) {
                     bool completed = false;
@@ -483,6 +486,11 @@ void RenderThread::ThreadMain(HWND window)
     startOk_ = InitializeOnThread(window, startError_);
     SetEvent(startedEvent_.get());
     if (!startOk_) {
+        auto failure = std::make_unique<RenderStartFailure>();
+        failure->details = startError_;
+        if (PostMessageW(window, kRenderStartFailedMessage, 0,
+                         reinterpret_cast<LPARAM>(failure.get())))
+            (void)failure.release();
         running_.store(false, std::memory_order_release);
         return;
     }
@@ -499,6 +507,11 @@ void RenderThread::ThreadMain(HWND window)
     while (!stopRequested_.load(std::memory_order_acquire)) {
         DrainCommands();
         if (stopRequested_.load(std::memory_order_acquire)) break;
+        if (recoveryRequested_.exchange(false, std::memory_order_acq_rel)) {
+            deviceFatal_ = !RecoverDevice();
+            if (deviceFatal_) break;
+            continue;
+        }
 
         // Before deciding whether to render: retire finished copies and, if
         // this is the tick the in-flight model became complete, swap it in
@@ -544,6 +557,7 @@ void RenderThread::ThreadMain(HWND window)
         }
 
         RenderOneFrame();
+        if (deviceFatal_) break;
 
         if (benching) {
             --benchRemaining_;
@@ -564,8 +578,10 @@ void RenderThread::ThreadMain(HWND window)
     // Release D2D/D3D11On12 before the D3D12 objects, per `04-...:190`, and
     // make sure no GPU work outlives this thread.
     if (uploadThread_.joinable()) uploadThread_.join();
-    path_.WaitForIdle();
-    path_.ClearModel();
+    if (!deviceFatal_) {
+        path_.WaitForIdle();
+        path_.ClearModel();
+    }
     path_.overlay.Shutdown();
 
     running_.store(false, std::memory_order_release);
@@ -594,10 +610,9 @@ void RenderThread::DrainCommands()
     if (doResize) {
         std::wstring resizeError;
         if (!path_.Resize(width, height, resizeError)) {
-            // Nothing useful to do from here; the next frame will simply be
-            // wrong-sized rather than crash. Device-loss handling, which is
-            // the real answer, is a later chunk.
-            invalidated_.store(true, std::memory_order_release);
+            const HRESULT reason = path_.device.Device()->GetDeviceRemovedReason();
+            if (IsDeviceLoss(reason)) deviceFatal_ = !RecoverDevice();
+            else invalidated_.store(true, std::memory_order_release);
         } else {
             resizedExtent_.store((static_cast<std::uint64_t>(width) << 32)
                                   | static_cast<std::uint32_t>(height), std::memory_order_release);
@@ -954,6 +969,11 @@ void RenderThread::RenderOneFrame()
     } else {
         path_.RenderClearFrame(orientation, *overlay);
     }
+    if (injectDeviceRemoval_.exchange(false)) path_.lastPresentResult = DXGI_ERROR_DEVICE_REMOVED;
+    if (IsDeviceLoss(path_.lastPresentResult)) {
+        deviceFatal_ = !RecoverDevice();
+        return;
+    }
     if (debugInfo_) {
         const auto count = debugInfo_->GetNumStoredMessagesAllowedByRetrievalFilter();
         if (copyDelayMs_ && count && !debugErrors_.load()) {
@@ -988,6 +1008,65 @@ void RenderThread::RenderOneFrame()
     static constexpr std::uint64_t kStatsPublishInterval = 30;
     if (path_.frameStats.PresentedFrames() % kStatsPublishInterval != 0) return;
     PublishStats();
+}
+
+bool RenderThread::RecoverDevice()
+{
+    AssertOnRenderThread();
+    auto notice = std::make_unique<RenderDeviceRecoveryResult>();
+    if (const auto snapshot = DisplaySnapshot()) notice->path = snapshot->path;
+    if (recoveryAttempted_) {
+        notice->details = L"The graphics device failed again after one recovery attempt.";
+        PostMessageW(window_, kRenderDeviceRecoveryMessage, 0, reinterpret_cast<LPARAM>(notice.release()));
+        return false;
+    }
+    recoveryAttempted_ = true;
+    ++recoveryCount_;
+    const HRESULT removalReason = path_.device.Device()
+        ? path_.device.Device()->GetDeviceRemovedReason() : E_POINTER;
+    wchar_t diagnostic[160]{};
+    swprintf_s(diagnostic,
+               L"Preview3D device recovery: present/device HRESULT=0x%08X, removed reason=0x%08X\n",
+               unsigned(path_.lastPresentResult), unsigned(removalReason));
+    wchar_t optIn[2]{};
+    if (GetEnvironmentVariableW(L"PREVIEW3D_DEVICE_DIAGNOSTICS", optIn, 2) == 1 && optIn[0] == L'1')
+        OutputDebugStringW(diagnostic);
+
+    CancelUploads();
+    {
+        std::lock_guard lock(uploads_->mutex);
+        uploads_->stopped = true;
+        uploads_->changed.notify_all();
+    }
+    if (uploadThread_.joinable()) uploadThread_.join();
+
+    hasModel_.store(false, std::memory_order_release);
+    displaySnapshot_.store({});
+    debugInfo_.Reset();
+    path_.overlay.Shutdown();
+    path_.~D3D12ViewerPath();
+    new (&path_) D3D12ViewerPath();
+    budgetMonitor_.~DxgiBudgetMonitor();
+    new (&budgetMonitor_) DxgiBudgetMonitor();
+    {
+        std::lock_guard lock(uploads_->mutex);
+        uploads_->stopped = false;
+        uploads_->generation = 0;
+        uploads_->cancellation.reset();
+    }
+
+    std::wstring error;
+    if (!InitializeOnThread(window_, error)) {
+        notice->details = L"The graphics device could not be rebuilt once: " + error;
+        PostMessageW(window_, kRenderDeviceRecoveryMessage, 0, reinterpret_cast<LPARAM>(notice.release()));
+        return false;
+    }
+    uploadThread_ = std::thread(&RenderThread::UploadMain, this);
+    notice->recovered = true;
+    notice->details = L"The graphics device was rebuilt; the model will be reconstructed from its retained source. ";
+    notice->details += diagnostic;
+    PostMessageW(window_, kRenderDeviceRecoveryMessage, 0, reinterpret_cast<LPARAM>(notice.release()));
+    return true;
 }
 
 void RenderThread::PublishStats()

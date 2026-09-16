@@ -103,12 +103,10 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session,
 
 // With onBatch, transfers each host-owned batch without retaining payloads;
 // the terminal result contains only status. Without it, returns accumulated data.
-// Synchronous -- call from a detached background thread, mirroring
-// BeginOpen's std::thread(...).detach() pattern.
+// Synchronous -- call from one of BeginOpen's owned background threads.
 //
-// isCancelled is polled while waiting on the worker; returning true abandons
-// the import (the worker is killed by its Job Object) and yields a result
-// whose text the caller is expected to drop rather than display.
+// isCancelled is polled while waiting on the worker; returning true signals
+// cooperative cancellation and falls back to bounded worker replacement.
 ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
                         std::function<bool()> isCancelled = {},
                         std::function<void(ImportResult)> onBatch = {},

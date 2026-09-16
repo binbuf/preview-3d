@@ -3,8 +3,9 @@
 #include "model_core/FileIdentity.h"
 
 // One complete host-side sandboxed import: open+canonicalize a real on-disk
-// source, duplicate an inheritable handle for it, create the output shared
-// section, launch a one-shot zero-capability AppContainer worker, send the
+// source, duplicate read-only input/output/cancellation handles into a fixed
+// zero-capability AppContainer worker pool (or an isolated one-shot test
+// worker), send the
 // format's StartXxxImportFromFile request, service any RequestSidecarFile
 // messages, and copy-then-validate the worker's output section.
 //
@@ -133,16 +134,11 @@ struct ImportSessionRequest {
     // established for budget policy.
     uint64_t commitLimitBytes = kImportWorkerCommitLimitBytes;
     uint32_t replyTimeoutMs = kWorkerReplyTimeoutMs;
-    // Polled while waiting on the worker. Return true to abandon this
-    // generation: the wait stops, the worker is killed by its Job Object,
-    // and the result comes back with stage == Cancelled. Must be cheap and
+    // Polled while waiting on the worker. Return true to signal the request's
+    // duplicated cancellation event. The worker acknowledges cooperatively;
+    // a missed 500 ms grace terminates/replaces that pool slot. Must be cheap and
     // non-blocking. Empty means "never cancelled".
     //
-    // This is host-side abandonment only. The design also wants a
-    // cooperative in-parse cancel first (06-application-lifecycle-and-ipc.md
-    // :119, "cooperative cancel first; only its Job Object may be terminated
-    // after the finite grace period"); that half needs stop-token checkpoints
-    // threaded through the adapter loops and is not implemented yet.
     std::function<bool()> isCancelled;
     // Bounds how many times one generation may fill and hand over the output
     // window, the same "never trust worker self-restraint" rule
@@ -191,6 +187,10 @@ struct ImportSessionRequest {
     // *through this function* -- which needs to select that worker's attack
     // mode. Production callers leave it empty and get ParseFlagFor's mapping.
     std::wstring workerArgumentsOverride;
+    // Product imports use the prelaunched fixed pool. Tests that select an
+    // explicit attack-mode executable argument remain one-shot so each test
+    // keeps its isolated command-line contract.
+    bool useWorkerPool = false;
 };
 
 struct SourceChunkRange
@@ -219,6 +219,9 @@ struct ImportSessionResult {
     // Geometry provenance only; no normalized payload or source bytes.
     std::vector<SourceChunkRange> sourceCatalog;
     model_core::FileIdentity sourceIdentity{};
+    // Test/qualification evidence only; no handle authority crosses this
+    // boundary. Sequential pooled imports can prove reuse by stable PID.
+    uint32_t workerProcessId = 0;
 };
 
 // Creates (or opens) the single AppContainer profile every import runs
@@ -233,6 +236,13 @@ struct ImportSessionResult {
 // otherwise lands inside the A-small/A-medium gates in
 // .docs/design/09-quality-performance-and-security.md.
 bool PrepareImportSandbox(const std::wstring& workerExePath);
+
+// Starts profile provisioning and a two-process pool on a coordinator
+// thread. RunImportSession waits only on its own background caller when the
+// pool is still starting; the UI never participates in this handshake.
+void PrepareImportWorkerPoolAsync(const std::wstring& workerExePath,
+                                  uint64_t commitLimitBytes = kImportWorkerCommitLimitBytes);
+void ShutdownImportWorkerPool();
 
 // Synchronous, and blocking for as long as the worker takes to reply. Call
 // from a background thread. Never throws for an ordinary import failure --
