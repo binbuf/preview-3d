@@ -91,6 +91,12 @@ class BoundedChunkWriter
                 descriptor.chunkId |= kScanIdentity;
             }
         }
+        if (sink_ && sink_->RequestedSource() && geometry) {
+            const auto& source = *sink_->RequestedSource();
+            descriptor.chunkId = source.chunkId & ~model_core::kScanIdentity;
+            descriptor.dependencyCount = source.dependencyCount;
+            std::copy(std::begin(source.dependencyIds), std::end(source.dependencyIds), std::begin(descriptor.dependencyIds));
+        }
         return AddRaw(descriptor,a,b);
     }
     bool Complete() {

@@ -1,0 +1,4 @@
+
+  Preview3DImportWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DImportWorker.exe
+  RenderThread.cpp
+  Preview3D.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3D.exe

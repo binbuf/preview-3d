@@ -1,0 +1,9 @@
+
+  Preview3DImportWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Preview3DImportWorker.exe
+  RenderThread.cpp
+  Generating code
+  9 of 7542 functions ( 0.1%) were compiled, the rest were copied from previous compilation.
+    0 functions were new in current compilation
+    43 functions had inline decision re-evaluated but remain unchanged
+  Finished generating code
+  Preview3D.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Preview3D.exe

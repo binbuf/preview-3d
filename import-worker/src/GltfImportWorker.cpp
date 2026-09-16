@@ -133,7 +133,14 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
         result=ImportGltf(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,
                           &sidecarClient,&batchSink,textureOptions);
     }
-    return ReportResult(stdOut, request.generationId, result);
+    if (!ReportResult(stdOut, request.generationId, result)) return false;
+    while (batchSink.DetailService() && std::holds_alternative<GltfImportResult>(result) && batchSink.AwaitDetail()) {
+        if (!openResult.file->IsUnchanged()) return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::FileChanged);
+        result = ImportGltf(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
+                            &sidecarClient, &batchSink, textureOptions);
+        if (!ReportResult(stdOut, request.generationId, result)) return false;
+    }
+    return true;
     } catch (const std::bad_alloc&) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::OutOfMemory);
     } catch (...) {

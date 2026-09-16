@@ -180,3 +180,92 @@ TEST_CASE("Multi-GiB sources emit scene-wide preview geometry before full normal
                   << " primitives " << bytes << " bytes first=" << GetTickCount64()-start << "ms\n";
     }
 }
+
+
+TEST_CASE("Pinned worker re-decodes selected immutable source ranges repeatedly", "[detail-budget]") {
+    for (const auto* name:{L"A-small-glb.glb",L"A-small-stl.stl",L"A-small-ply-mesh-le.ply",
+        L"A-small-ply-mesh-be.ply",L"A-small-ply-points-le.ply",L"A-small-ply-points-be.ply",
+        L"sidecar-approved.gltf",L"draco_triangle.glb"}) {
+        const std::wstring path=std::wstring(PREVIEW3D_TEST_ASSETS_DIR)+L"corpus/"+name;
+        CAPTURE(path);
+        auto request=Request(path,path.ends_with(L".stl") ? import_broker::ImportFormat::Stl
+            : path.ends_with(L".ply") ? import_broker::ImportFormat::Ply : import_broker::ImportFormat::Gltf);
+        request.sectionByteCapacity=4096;
+        std::map<uint32_t,ChunkDescriptor> scans;
+        bool complete=false, cancelled=false; unsigned replies=0;
+        uint32_t selected=0;
+        request.onInitialComplete=[&](const auto&) { complete=true; REQUIRE_FALSE(scans.empty()); selected=scans.rbegin()->first; };
+        request.isCancelled=[&] { return cancelled; };
+        request.nextDetail=[&] { return selected; };
+        request.onBatch=[&](auto&& chunks) {
+            if (complete) {
+                REQUIRE(chunks.size()==1); const auto& d=chunks.front().descriptor;
+                CHECK(d.chunkId==selected); CHECK(d.lodLevel==kFineLod);
+                CHECK(d.chunkChecksum==scans.at(selected).chunkChecksum);
+                CHECK(d.sourceRangeOffset==scans.at(selected).sourceRangeOffset);
+                CHECK(d.sourceRangeLength==scans.at(selected).sourceRangeLength);
+                CHECK(chunks.front().payload.size()==scans.at(selected).byteSize);
+                if (++replies==2) cancelled=true;
+            } else for (const auto& chunk:chunks) if (chunk.descriptor.lodLevel==kScanLod)
+                scans.emplace(chunk.descriptor.chunkId & ~kScanIdentity,chunk.descriptor);
+        };
+        const auto result=import_broker::RunImportSession(request);
+        CAPTURE(result.stage,result.errorCode);
+        REQUIRE(complete); CHECK(replies==2); CHECK(result.stage==import_broker::ImportStage::Cancelled);
+    }
+}
+
+TEST_CASE("Detail requests reject ids outside the validated source catalog", "[detail-budget]") {
+    auto request=Request(std::wstring(PREVIEW3D_TEST_ASSETS_DIR)+L"corpus/A-small-stl.stl",import_broker::ImportFormat::Stl);
+    request.onBatch=[](auto&&) {};
+    request.onInitialComplete=[](const auto&) {};
+    request.nextDetail=[] { return uint32_t(0x0ffffffe); };
+    const auto result=import_broker::RunImportSession(request);
+    CHECK_FALSE(result.ok); CHECK(result.stage==import_broker::ImportStage::UnexpectedReply);
+}
+
+
+TEST_CASE("PLY detail replay preserves chunks starting inside a polygon fan", "[detail-budget]") {
+    const auto path=std::filesystem::temp_directory_path()/("Preview3D-detail-fan-"+std::to_string(GetCurrentProcessId())+".ply");
+    {
+        std::ofstream file(path,std::ios::binary);
+        file << "ply\nformat binary_little_endian 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\nelement face 100\nproperty list uchar uint vertex_indices\nend_header\n";
+        const float vertices[]={0,0,0,1,0,0,1,1,0,0,1,0};
+        file.write(reinterpret_cast<const char*>(vertices),sizeof(vertices));
+        for (unsigned i=0;i<100;++i) { file.put(4); const uint32_t indices[]={0,1,2,3}; file.write(reinterpret_cast<const char*>(indices),sizeof(indices)); }
+    }
+    auto request=Request(path.wstring(),import_broker::ImportFormat::Ply); request.sectionByteCapacity=4096;
+    std::map<uint32_t,ChunkDescriptor> scans; bool complete=false,cancelled=false; uint32_t selected=0;
+    request.isCancelled=[&] { return cancelled; };
+    request.onInitialComplete=[&](const auto&) {
+        complete=true;
+        for (const auto& [id,scan]:scans) if (scan.sourceElementOffset) { selected=id; break; }
+        REQUIRE(selected>0);
+    };
+    request.nextDetail=[&] { return selected; };
+    request.onBatch=[&](auto&& chunks) {
+        if (complete) {
+            REQUIRE(chunks.size()==1); CHECK(chunks.front().descriptor.chunkId==selected);
+            CHECK(chunks.front().descriptor.chunkChecksum==scans.at(selected).chunkChecksum);
+            CHECK(chunks.front().descriptor.sourceElementOffset==1); cancelled=true;
+        } else for (const auto& chunk:chunks) if (chunk.descriptor.lodLevel==kScanLod)
+            scans.emplace(chunk.descriptor.chunkId & ~kScanIdentity,chunk.descriptor);
+    };
+    const auto result=import_broker::RunImportSession(request);
+    // Job close terminates the sandbox asynchronously; allow its pinned file
+    // handle to close before removing the fixture this test created.
+    std::error_code cleanupError;
+    for (unsigned retry=0;retry<50;++retry) {
+        if (std::filesystem::remove(path,cleanupError) || !std::filesystem::exists(path)) break;
+        Sleep(20);
+    }
+    CHECK_FALSE(std::filesystem::exists(path));
+    CAPTURE(result.stage,result.errorCode); CHECK(complete); CHECK(cancelled); CHECK(result.stage==import_broker::ImportStage::Cancelled);
+}
+
+TEST_CASE("Product CPU admission can refuse a worker batch without GPU allocation", "[detail-budget]") {
+    auto request=Request(std::wstring(PREVIEW3D_TEST_ASSETS_DIR)+L"corpus/A-small-stl.stl",import_broker::ImportFormat::Stl);
+    request.cpuBudgetAllows=[](uint64_t bytes) { CHECK(bytes>0); return false; };
+    const auto result=import_broker::RunImportSession(request);
+    CHECK_FALSE(result.ok); CHECK(result.errorCode==ImportErrorCode::ResourceLimit);
+}

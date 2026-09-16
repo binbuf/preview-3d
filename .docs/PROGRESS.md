@@ -4,6 +4,41 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 2 / TSK-207 (2026-09-15): complete.**
+  Wired live DXGI budget sampling and notifications into destination admission,
+  publication and eviction. The model ceiling is at most 60% of local budget,
+  keeps 512 MiB headroom when possible and applies bounded CPU/UMA caps. Actual
+  aligned geometry, texture/descriptor, target/fallback, pending and retired
+  allocations are charged; deferred releases remain charged through direct and
+  copy fence completion. The complete coarse proxy remains resident. Pressure
+  sheds view-prioritized fine geometry and restores immutable texture mip tails;
+  a reserved set that cannot fit reaches the controlled resource card and can
+  reopen successfully.
+  Verified double-origin bounds now drive conservative CPU frustum culling and a
+  32-id view-priority queue. One request owns the reused section at a time. The
+  zero-capability worker re-decodes validated GLB/glTF, STL and both-endian PLY
+  ranges through its pinned primary and already-approved sidecar handles. The
+  broker revalidates complete descriptors, checksums, scene metadata and file
+  identity. Protocol v6 adds a fixed 168-byte detail request and a 160-byte
+  descriptor whose bounded PLY fan offset permits exact replay inside a polygon.
+  No normalized scene, source-sized private copy or persistent cache is retained.
+  Debug/Release builds pass. Unit suites: 85 cases / 7,317 Debug and 7,229 Release
+  assertions. ImportIsolation: 193 cases / 51,575 assertions each, including
+  repeated source-range replay, invalid ids, PLY polygon-fan continuation, CPU
+  refusal, verified-bound priority and real dual-fence retirement accounting.
+  On this desktop, NVIDIA discrete and physical AMD UMA pressure runs preserve
+  proxy/count coverage, reduce 2048-wide textures to retained 64-wide tails,
+  recover detail after a camera move/cap restoration, report zero D3D12 errors
+  and leave zero workers. Release also passes every two-/eight-million primitive
+  split fixture and a 3,000,000,084-byte, 60-million-triangle STL: its 916 coarse
+  chunks remain usable at a 60 MiB target while six fine chunks retire and detail
+  recovers. Existing coarse, progressive, texture, recovery and point-required
+  lifecycle smokes pass in both configurations. Frozen commands, hashes, reports
+  and qualification limits are in [TSK-207_VERIFICATION.md](./TSK-207_VERIFICATION.md).
+  No dependency/license change, persistent cache or additional path authority.
+  Reference-system resident memory and startup/frame/input p95 remain TSK-302.
+  **TSK-208 is next.**
+
 - **Scope-limited MVP, Phase 2 / TSK-206 (2026-09-15): complete.**
   Added deterministic source/spatial sampling, a bounded provisional preview,
   a complete coarse catalog and stable coarse/full region relationships.

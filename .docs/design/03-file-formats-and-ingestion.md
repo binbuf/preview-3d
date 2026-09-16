@@ -60,6 +60,15 @@ Normalized output crosses the process boundary only as chunk descriptors over a 
 
 A new protocol version is a breaking change requiring updated fixtures, fuzz corpora, and an explicit compatibility decision — the host never attempts to interpret a section whose version it does not recognize. This wire format, not the shared-memory mechanism by itself, is what lets the host snapshot rule in [02-system-architecture.md](./02-system-architecture.md) be a cheap, bounded, fully-checkable copy rather than an open-ended deserialization of untrusted structure.
 
+The scope-limited viewer uses protocol v6: an 88-byte header, 160-byte chunk
+descriptor and 168-byte detail request. PLY descriptors include a bounded fan
+offset within the first source face so a split polygon can be re-decoded exactly.
+Detail replies must match the original verified scan's geometry, provenance,
+checksum and metadata. They reuse pinned primary and approved sidecar handles;
+new sidecar requests are forbidden during replay. Viewer and worker binaries
+ship from the same build. Compatibility decision: reject v5 and every other
+unknown version; there is no migration or mixed-version fallback.
+
 ## Import generations
 
 Opening a file creates a monotonically increasing LoadGeneration with:

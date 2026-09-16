@@ -1,0 +1,120 @@
+{
+  "generatedUtc": "2026-09-16T03:00:05.438636+00:00",
+  "gitBase": "068aa27cdba4e13831a66bc736a8d98788dc4b8c",
+  "protocolVersion": 6,
+  "headerBytes": 88,
+  "descriptorBytes": 160,
+  "detailRequestBytes": 168,
+  "machine": {
+    "system": {
+      "Manufacturer": "ASUS",
+      "Model": "System Product Name",
+      "TotalPhysicalMemory": 67810054144
+    },
+    "adapters": [
+      {
+        "Name": "NVIDIA GeForce RTX 4080",
+        "DriverVersion": "32.0.16.1664"
+      },
+      {
+        "Name": "AMD Radeon(TM) Graphics",
+        "DriverVersion": "32.0.21030.2001"
+      }
+    ],
+    "os": {
+      "Caption": "Microsoft Windows 11 Pro",
+      "Version": "10.0.26200",
+      "BuildNumber": "26200"
+    }
+  },
+  "binaries": {
+    "Debug/Preview3D.exe": "35db5328ee42373ed203b823e8b7793d322346fb2deef7946849f3aed5321bd6",
+    "Debug/Preview3DImportWorker.exe": "ff9751649dc6644ac73ed868890ee7852b3e3e4460f4298da75e5837531b9bc2",
+    "Debug/Preview3DHostileWorker.exe": "0bbae8bc60d59770889d9d5eb7a6ea61f5820c77a5ceeda36d63a9482da431fe",
+    "Debug/Tests.Unit.exe": "989b4b9c50340972e594f0852f30ebea0eea8044f54ae4027e3f7b1b4d3a7cb0",
+    "Debug/Tests.ImportIsolation.exe": "eaf972c83b8e52c8e585405654d1077d43d3f082da4b7f612f17877af1bb1ae2",
+    "Debug/fastgltf.dll": "e449e84a6f28b4aeb4284222bf6aaf6ec53e457b25b7022d3aad7d6485a3838f",
+    "Debug/simdjson.dll": "3a2dd0dc0f1619db5bbb444d2a7276586bf78305b094a336a53449254be7b292",
+    "Debug/draco.dll": "463eef114a8eedcdb7109a7fd7cd93ecaeab4de8f0847a9266d39f37e9926177",
+    "Debug/ktx.dll": "00113b8eede1bd892ac01c0d7c6fce4f8f3a996c704ee12e59a3d9a0365db125",
+    "Debug/zstd.dll": "1c36025542442b1110dba2450d215e7de3d0eb3e689fb3e0b77e83cc477f211c",
+    "Release/Preview3D.exe": "df2291cffb14067803507ff4e99371df953fca19136a1e3feb570dc260c1e2af",
+    "Release/Preview3DImportWorker.exe": "66aab2226e332d61b2d01d3ae87951f3c712e6d9b959b806d7193df5d1ca7ad2",
+    "Release/Preview3DHostileWorker.exe": "89790ee1cf4a74c9ce0ef071a7f33b62b42e8daaaf649c0a80d213a49cc4ff6b",
+    "Release/Tests.Unit.exe": "2ed30dd2f9cd50522f0f3f538edc6721048f7c2063cbda458edd8858aadcb528",
+    "Release/Tests.ImportIsolation.exe": "f7da8f33d1c808ae392412eb80571cc44344caecaa1f71faeddf0c8655fb19ab",
+    "Release/fastgltf.dll": "be3b0ecd5996c11ba804d5ac9b517cc087bdf48a846517256e0459dade543398",
+    "Release/simdjson.dll": "ede2d9ba06c85a5b6dc65dac2b9b60f7a281107c2293a3b24603331a78466ea9",
+    "Release/draco.dll": "0f311a3f263ff1b77c1549c4f3a34ab96d494c37d40cc69640625ad48f9e942f",
+    "Release/ktx.dll": "ab20e4880e791e7120d82b0c7c779d882ae6410127292d883417e4530b5d42f1",
+    "Release/zstd.dll": "e2cc32e663d6584213cf3816127a1e12d8d1be4d81339c33ef3e1db49d982c5e"
+  },
+  "sourceSha256": {
+    "import-worker/src/BoundedChunkWriter.h": "0f3254b5001160370d21ce890e8c05107a240b39ba2c4030399005a8c81a0f9b",
+    "import-worker/src/ChunkBatchSink.h": "281a3845c40749082082572d7629ed042913c023d3a724d03411e2b91447619d",
+    "import-worker/src/GltfAdapter.cpp": "04113d5b670b3abf83bcd930a10cc66c08463cd0fe47905215e79f6ed53c9610",
+    "import-worker/src/GltfImportWorker.cpp": "d4d39ea266f9ecf5d42ca1994de080c4c7e6881b4e21b1d3db2c56623a3d20c2",
+    "import-worker/src/PlyAdapter.cpp": "6c43d903303737084e41212aa4770b3b00914cbb41b502e3c1555a9885238417",
+    "import-worker/src/PlyImportWorker.cpp": "30b07c08ac5b37e5bc68b57d52e4aca16941719d7b983da6e1f2a23d871e1182",
+    "import-worker/src/StlAdapter.cpp": "1599de1d76f222a3d65cf319fe7126dbd11fd6b56554a0798dcdcf0535befd13",
+    "import-worker/src/StlImportWorker.cpp": "53e5a35d4e522b1bbd907b649c0d6f436c058066142ad4020d5ac67824ef6757",
+    "import-worker/src/main.cpp": "69b4d24d29223a55f4cde3d0939e2579c5fde190ce18be4e4edd0705e7486d75",
+    "interactive-viewer/Preview3D.vcxproj": "1166447ad214dba145073c1da5abd4f87cd988201dbed95019f79a0be1053189",
+    "interactive-viewer/src/app/D3D12ImportBridge.cpp": "76820718144c704c28f59702abbd7addc86824da2915d4689d517aa0d0bf150e",
+    "interactive-viewer/src/app/D3D12ImportBridge.h": "a347ab51eb04ffd555bc4038b70ea13228cb7d96c866e7b66d94a2f9b187a6e7",
+    "interactive-viewer/src/app/D3D12ViewerPath.cpp": "30d46a34634e8149be1229ed3fb94582014450949c007ad22b74ecf31949507b",
+    "interactive-viewer/src/app/D3D12ViewerPath.h": "c207fb0de78e45d185692a92cca7edc957983e0408a69c4dc5ce3f3dcc421009",
+    "interactive-viewer/src/app/Preview3D.cpp": "0856601a006684e893c599d56e7d2cfc5f42cbfa198ff24b6e6ebf8d863e2e90",
+    "interactive-viewer/src/app/RenderThread.cpp": "1a6682509a7fb01cf9993e221974c91df255182b2f56babc5e323b6cd9cbceb6",
+    "interactive-viewer/src/app/RenderThread.h": "97cf79ecb3df50d827239dc7f5db85f3ea14a4ec75e46184debcb0f512d6680e",
+    "interactive-viewer/src/graphics/D3D12Device.cpp": "39534ba5adff1f5e90fe76d88151170268807c64e30d904ec880b8455238face",
+    "interactive-viewer/src/graphics/D3D12Device.h": "cea3ca730c8459466d15d4eb77093a5c17e7e5c20c3b3ac730b3314847be062f",
+    "interactive-viewer/src/graphics/DetailView.h": "b0b812e0079c2356277eaebd0ef3fb9fb08b7725e2b3669556bd4873808b31b4",
+    "interactive-viewer/src/graphics/DxgiBudgetMonitor.cpp": "17a731817de370295b7a14f630330c11b9b7ca652828f65983f40aea4cb2e68b",
+    "interactive-viewer/src/graphics/DxgiBudgetMonitor.h": "4af8bcadb96bef06328568d2abca500008b1ceb301706ee1bcbe927b17254fe9",
+    "interactive-viewer/src/graphics/SceneSnapshot.h": "f32467eadfa462c532f84eb48444389d3aba7e4bbbc8eb85aa7e11cb3ea7d144",
+    "shared/import-broker/include/import_broker/ImportSession.h": "42a46778f5fa4d86c748d96d5942c3aa1bb725e9524a7c71718263ce29e01660",
+    "shared/import-broker/src/ImportSession.cpp": "0adbe490fadfff3dcc5ff860cc13aad5956e607d8abba4e1b39d94a6266e5dc6",
+    "shared/import-broker/src/SharedSectionValidator.cpp": "33cff2c3cb3f367cb54d347366dc5dfe27b984b6c8ee7e0e8dde03bd86a708f6",
+    "shared/model-core/include/model_core/ControlProtocol.h": "1243d633e4646f69d8c9b40b903b2f2f43e55af7752ed65c7b3f5dfaba496df4",
+    "shared/model-core/include/model_core/WireFormat.h": "d5dbb0c16b561e194e5767ae781e2130f656916736d9593319c63e3270c485b4",
+    "tests/app-smoke/budget.py": "03d9c15ec70f5a6cb1947bd34b7013bfc48036aeb25dfa08875e73e4fad29e1b",
+    "tests/fixtures/README.md": "443d2c9975a91e6dabbbb7c87256840759cfa00aff34a2dd4768c48ebb6c5f94",
+    "tests/import-isolation/CoarseProxyTests.cpp": "0b406c804e571bca6de2129d03a176e6d7c841c4aecc7ea1796a5df924ad8ea3",
+    "tests/unit/DxgiBudgetMonitorTests.cpp": "7eb7ca08d49c00dfde24743c178cae3a087a5648a71822b9b47a21b2881b9368",
+    "tests/unit/WireFormatTests.cpp": "f969c8a5ee6a3288cf9032c31c3d431fbea1e03852d0a9f92c3504bc5be41acb"
+  },
+  "harnessSha256": {
+    "tests/app-smoke/budget.py": "03d9c15ec70f5a6cb1947bd34b7013bfc48036aeb25dfa08875e73e4fad29e1b",
+    "tests/app-smoke/bounded.py": "199e6c326176170f02129bac7827dba2621231dd289e1c49246025eddc5a90cb",
+    "tests/app-smoke/coarse.py": "aabc42e68c50cdcc7ef795ab77f2da3f8d1718b897de89329ae151507a772b24",
+    "tests/app-smoke/progressive.py": "f3c3888ccd0cc497a323b8f885a21cf0534b3e5445936049cda8030398c6de02",
+    "tests/app-smoke/textures.py": "fc9152e52f77ecab8cd85b51e3d88a6221f4f220028220c27dcc9cf4e25fccd6",
+    "tests/app-smoke/recovery.py": "32478aa0f32e63f3dc83d71e8b87b9f1ddd77094388d9c9f3adbf54b4f36d105",
+    "tests/app-smoke/run.py": "09df299d0f99341aed70e27f9f0837a109de2cbc4c7c29db10193494313385a1"
+  },
+  "reportsSha256": {
+    "Debug-budget.json": "34c9583e9ddd5027c8b7e0f18327851541e12698843bfe778b9052f26aad797e",
+    "Debug-build-final.txt": "ae158a09e1b8d5815b488829c5248eee27bc6b1049957fb1a22df846a82eff1b",
+    "Debug-build.txt": "56c37f0e3956fde9fb1efeaa769e1e605d0711d9ffa09467d8a42771c7727619",
+    "Debug-coarse.json": "a319021bb214eb66776b40f24de31685a508d47aba891858f3b55b102fafb1a3",
+    "Debug-isolation.txt": "e3077eaee9bb21579e557a6779e15e5ee7bbdfd6c63c9faff975e20308e9517c",
+    "Debug-lifecycle.json": "2531c9609706a632054eee05f6173041ab79c66df6f0501ba11afa630ec7182e",
+    "Debug-progressive.json": "112e991f94ffd3ffa8514a7e563d09546ea1f287f30c0e323507068903a591dd",
+    "Debug-recovery.json": "d55b3c7d28c00af31335b8ab1b37792334aef671be394c1f2ae1dd67a883b16c",
+    "Debug-texture-pressure.json": "b6392657f31e18de4e893755c1c0fc0e93e03173343af9fc1cf6c841e9dc7808",
+    "Debug-textures.json": "e5e12219c42d105b1f5f0a48d71a296c6384b14d7c5201ce58a3fbb4d0fd4c2b",
+    "Debug-unit.txt": "02edc599105ad2c57fb3d39505eca9cf65b4837952700fbcba94745491088e91",
+    "manifest.json": "434ec376d3722ea0bb0fdb7a3ba3cd021ea03d9b6bc3a7f5f9aefa6d7a62dcbd",
+    "Release-budget.json": "ab964241201ca52009ee04ba2ae0cc26818bf06ac6a5ff53602ca1a2213c93e2",
+    "Release-build-final.txt": "c4c552b59eaf6b09ba0d945d84fcda44c422732011ee68ae1eadf20326304d46",
+    "Release-build.txt": "fb516ebc90a5f9a983cd250a0f9fd885c5ca9e04c571cc9f4ecfe9c55df9acb2",
+    "Release-coarse.json": "be308473b4a611eb817b263c13ea1c5e8c9ef4f6cdbc9e68fd2ca18345bd8955",
+    "Release-isolation.txt": "53dc18c326b5236a1fb9a872463be261c4082eb3122e7ceccb69f98539b0c96a",
+    "Release-lifecycle.json": "22b1405ca43d1ebb7262b5d88058dd06c508e1d183a39b5ac280729b67e7fc31",
+    "Release-progressive.json": "b47e048dea04fed82dcf4d9547c1949904f11c3cbb56ea30515d79f3b57f328a",
+    "Release-recovery.json": "a864df059884f7e3a60bf08841e27c7782eaa87be183aa457c870c58dcb0a1e9",
+    "Release-textures.json": "495c1fd6aa5ce389e3839b765f2f2f29f494d536a152cb1b24eeb84664742927",
+    "Release-unit.txt": "60ee23670c93d9081739e96bd4d866c5aba020f412636a6030ea05773966d0bc"
+  }
+}

@@ -14,6 +14,7 @@
 #include "platform/Win32Handle.h"
 
 #include <windows.h>
+#include <psapi.h>
 
 #include <algorithm>
 #include <array>
@@ -295,6 +296,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         ? std::wstring(ParseFlagFor(request.format))
         : request.workerArgumentsOverride;
     if (request.enableCoarseProxy && request.workerArgumentsOverride.empty()) workerArgs += L"-proxy";
+    if (request.nextDetail && request.workerArgumentsOverride.empty()) workerArgs += L"-detail";
     std::wstring cmdLine = L"\"" + request.workerExePath + L"\" " + workerArgs;
 
     HANDLE inherited[] = { controlInRead.get(), controlOutWrite.get(), duplicatedFile->get(), outputSection.get() };
@@ -311,6 +313,13 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         return Fail(ImportStage::ResumeWorker);
     }
 
+    const auto cpuBudgetAllows=[&] {
+        if (!request.cpuBudgetAllows) return true;
+        PROCESS_MEMORY_COUNTERS_EX memory{};
+        memory.cb=sizeof(memory);
+        return K32GetProcessMemoryInfo(proc->process.get(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))
+            && request.cpuBudgetAllows(memory.PrivateUsage);
+    };
     if (!SendStartRequest(request, controlInWrite.get(), duplicatedFile->get(), outputSection.get())) {
         return Fail(ImportStage::SendRequest);
     }
@@ -349,6 +358,9 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         : static_cast<uint32_t>(std::min<uint64_t>(derivedCap, (std::numeric_limits<uint32_t>::max)()));
 
     auto acceptBatch = [&](uint32_t chunkCount) -> bool {
+        if (!cpuBudgetAllows()) {
+            failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit); return false;
+        }
         if (acceptance.nextBatchIndex >= request.maxChunkBatchesPerGeneration) {
             failure = Fail(ImportStage::ChunkBatchLimit);
             return false;
@@ -582,7 +594,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                     if (region==acceptance.regions.end()) return invalid();
                     const auto& scan=region->second.scan;
                     if (d.topology!=scan.topology || d.vertexLayoutId!=scan.vertexLayoutId || d.meshId!=scan.meshId
-                        || d.nodeId!=scan.nodeId || d.geometryFlags!=scan.geometryFlags
+                        || d.nodeId!=scan.nodeId || d.geometryFlags!=scan.geometryFlags || d.sourceElementOffset!=scan.sourceElementOffset
                         || d.sourceRangeOffset!=scan.sourceRangeOffset || d.sourceRangeLength!=scan.sourceRangeLength
                         || std::memcmp(d.origin,scan.origin,sizeof(d.origin))
                         || std::memcmp(d.dependencyIds,scan.dependencyIds,sizeof(d.dependencyIds))) return invalid();
@@ -814,6 +826,59 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     result.batchCount = acceptance.nextBatchIndex;
     result.sourceCatalog = std::move(sourceCatalog);
     result.sourceIdentity = sourceIdentity;
+    if (request.nextDetail) {
+        if (!request.enableCoarseProxy || !request.onBatch || !request.onInitialComplete)
+            return fail(ImportStage::UnexpectedReply);
+        request.onInitialComplete(sourceIdentity);
+        // A single outstanding request owns the reused section. No new sidecar
+        // requests are permitted: replay uses only the worker's pinned handles.
+        for (;;) {
+            if (request.isCancelled && request.isCancelled()) return fail(ImportStage::Cancelled);
+            if (WaitForSingleObject(proc->process.get(), 0) == WAIT_OBJECT_0)
+                return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::WorkerCrashed);
+            if (!cpuBudgetAllows()) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit);
+            const uint32_t identity = request.nextDetail();
+            if (!identity) { Sleep(20); continue; }
+            const auto region = acceptance.regions.find(identity);
+            if (region == acceptance.regions.end()) return fail(ImportStage::UnexpectedReply);
+            model_core::DetailRequest detail{request.generationId, region->second.scan};
+            if (!model_core::WriteControlMessage(controlInWrite.get(), model_core::ControlOpcode::RequestDetail, &detail, sizeof(detail)))
+                return fail(ImportStage::AwaitReply);
+            const auto detailOutcome = ReadControlMessageBounded(controlOutRead.get(), replyTimeout, received, request.isCancelled);
+            if (detailOutcome == ControlWaitOutcome::Cancelled) return fail(ImportStage::Cancelled);
+            if (detailOutcome != ControlWaitOutcome::Ready) return fail(ImportStage::AwaitReply);
+            if (received.header.opcode == uint32_t(model_core::ControlOpcode::GenerationError)
+                && received.payload.size() == sizeof(model_core::GenerationErrorNotice)) {
+                model_core::GenerationErrorNotice error; std::memcpy(&error, received.payload.data(), sizeof(error));
+                if (error.generationId != request.generationId || !model_core::IsKnownImportErrorCode(error.errorCode))
+                    return fail(ImportStage::UnexpectedReply);
+                return fail(ImportStage::WorkerReportedError, model_core::ImportErrorCode(error.errorCode));
+            }
+            if (received.header.opcode != uint32_t(model_core::ControlOpcode::ChunksReady)
+                || received.payload.size() != sizeof(model_core::ChunksReadyNotice)) return fail(ImportStage::UnexpectedReply);
+            model_core::ChunksReadyNotice ready; std::memcpy(&ready, received.payload.data(), sizeof(ready));
+            if (ready.generationId != request.generationId || ready.reserved0 || ready.chunkCount != 1)
+                return fail(ImportStage::UnexpectedReply);
+            acceptance.catalog.erase(identity); // permit this exact immutable replacement only
+            auto validation = ValidateAndCopySection(view.bytes(), request.generationId, 1, &acceptance.catalog, false);
+            acceptance.catalog.emplace(identity, region->second.scan.topology);
+            if (!validation.ok || validation.chunks.size() != 1) return fail(ImportStage::ValidateSection);
+            const auto& actual = validation.chunks.front().descriptor;
+            auto expected = region->second.scan;
+            expected.chunkId = identity; expected.lodLevel = model_core::kFineLod;
+            expected.normalizedRangeOffset = actual.normalizedRangeOffset;
+            if (std::memcmp(&actual, &expected, sizeof(expected))
+                || std::memcmp(&validation.chunks.front().scene, &*acceptance.scene, sizeof(model_core::SceneMetadata)))
+                return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ImportProtocolViolation);
+            BY_HANDLE_FILE_INFORMATION current{};
+            if (!GetFileInformationByHandle(opened.file.get(), &current)
+                || current.nFileSizeHigh != sourceBefore.nFileSizeHigh || current.nFileSizeLow != sourceBefore.nFileSizeLow
+                || CompareFileTime(&current.ftLastWriteTime, &sourceBefore.ftLastWriteTime))
+                return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::FileChanged);
+            if (!cpuBudgetAllows()) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit);
+            request.onBatch(std::move(validation.chunks));
+        }
+    }
     return result;
 }
 

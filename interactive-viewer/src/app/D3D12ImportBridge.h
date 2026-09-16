@@ -78,6 +78,7 @@ struct ImportedImage {
 };
 
 struct ImportResult {
+    bool detail = false;
     bool coarseComplete = false;
     bool ok = false;
     model_core::SceneMetadata scene{};
@@ -114,7 +115,10 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<bool()> isCancelled = {},
                         std::function<void(ImportResult)> onBatch = {},
                         uint64_t sectionBytes = 64ull * 1024 * 1024,
-                        bool delayBatchesForTesting = false, uint32_t faultForTesting = 0);
+                        bool delayBatchesForTesting = false, uint32_t faultForTesting = 0,
+                        std::function<uint32_t()> nextDetail = {},
+                        std::function<void(const model_core::FileIdentity&)> onInitialComplete = {},
+                        std::function<bool(uint64_t)> cpuBudgetAllows = {});
 
 // Creates the import worker's AppContainer profile and grants it
 // read+execute on the worker's own directory -- without this the sandboxed

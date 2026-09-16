@@ -18,7 +18,7 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-constexpr uint32_t kCurrentProtocolVersion = 5;
+constexpr uint32_t kCurrentProtocolVersion = 6;
 // Product coarse/full delivery has four closed geometry roles. Scan payloads
 // cross the validator, but are never allocated on the GPU or retained by it.
 constexpr uint32_t kFineLod = 0, kCoarseLod = 1, kScanLod = 2, kPreviewLod = 3;
@@ -154,8 +154,9 @@ struct ChunkDescriptor {
     uint32_t nodeId;
     uint32_t geometryFlags;
     BoundsState boundsState;         // geometry must be Verified; other topologies Unknown
+    uint32_t sourceElementOffset;    // PLY triangle fan offset in first source face, otherwise zero
 };
-static_assert(sizeof(ChunkDescriptor) == 156, "ChunkDescriptor wire layout changed");
+static_assert(sizeof(ChunkDescriptor) == 160, "ChunkDescriptor wire layout changed");
 
 #pragma pack(pop)
 

@@ -1,4 +1,5 @@
 #include "D3D12ViewerPath.h"
+#include "DetailView.h"
 
 #include <d3dcompiler.h>
 #include <windows.h>
@@ -235,7 +236,7 @@ ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, uint64_t sizeBytes, D3
 
 bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
 {
-    auto deviceResult = device.Initialize();
+    auto deviceResult = device.Initialize(deviceOptions);
     if (!deviceResult.success) {
         error = L"The D3D12 device could not be created (HRESULT " + std::to_wstring(deviceResult.hr) + L").";
         return false;
@@ -786,8 +787,12 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     // Untextured and textured meshes each need their own root
     // signature/PSO bound before their draw calls; state changes are
     // per-draw at this scale, no batching/sorting needed.
-    for (const auto& mesh : model.meshes) {
+    for (auto& mesh : model.meshes) {
         if (!mesh.drawEnabled) continue;
+        mesh.viewPriority = DetailViewPriority(mesh.sourceGeometry, sceneOrigin, cameraTarget,
+            !chrome.info.showNativeOrientation && sourceUpAxis == model_core::UpAxisId::Y, viewProjection);
+        if (mesh.viewPriority == 0) continue;
+        mesh.lastVisibleFrame = uint32_t(frameStats.PresentedFrames());
         DirectX::XMFLOAT4X4 local;
         DirectX::XMStoreFloat4x4(&local, !chrome.info.showNativeOrientation && sourceUpAxis == model_core::UpAxisId::Y
             ? DirectX::XMMatrixSet(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1) : DirectX::XMMatrixIdentity());
@@ -1034,6 +1039,8 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
                 return false;
             }
             staged.textures[i] = std::move(texture);
+            const auto textureDesc = staged.textures[i].resource->GetDesc();
+            staged.textures[i].allocationBytes = device.Device()->GetResourceAllocationInfo(0,1,&textureDesc).SizeInBytes;
             ++pendingResourceCount;
         }
     }
@@ -1125,6 +1132,12 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         pendingResourceCount += points ? 1 : 2;
 
         gpuMesh.vbv.BufferLocation = gpuMesh.vertexBuffer->GetGPUVirtualAddress()+vertexOffset;
+        const auto vertexDesc = gpuMesh.vertexBuffer->GetDesc();
+        gpuMesh.vertexAllocationBytes = device.Device()->GetResourceAllocationInfo(0,1,&vertexDesc).SizeInBytes;
+        if (gpuMesh.indexBuffer) {
+            const auto indexDesc = gpuMesh.indexBuffer->GetDesc();
+            gpuMesh.indexAllocationBytes = device.Device()->GetResourceAllocationInfo(0,1,&indexDesc).SizeInBytes;
+        }
         gpuMesh.vbv.SizeInBytes = static_cast<UINT>(vertexBytes);
         gpuMesh.vbv.StrideInBytes = positionOnly ? sizeof(model_core::VertexPositionOnlyF32) : sizeof(model_core::VertexPositionNormalUv0F32);
         gpuMesh.ibv.BufferLocation = points ? 0 : gpuMesh.indexBuffer->GetGPUVirtualAddress()+indexOffset;
@@ -1295,4 +1308,89 @@ void D3D12ViewerPath::ClearModel()
     uploadInFlight = false;
     pendingResourceCount = 0;
     hasModel = false;
+}
+
+
+uint64_t D3D12ViewerPath::EstimateUploadBytes(ID3D12Device* device,
+    std::span<const d3d12_import_bridge::ImportedMesh> meshes,
+    std::span<const d3d12_import_bridge::ImportedImage> images)
+{
+    const auto align = [](uint64_t n) { return (n+65535)/65536*65536; };
+    uint64_t bytes=0, packedVertices=0, packedIndices=0;
+    for (const auto& mesh:meshes) {
+        if (mesh.geometry.lodLevel == model_core::kScanLod) continue;
+        const uint64_t vertices = uint64_t(mesh.vertexCount)*model_core::VertexStrideForLayout(mesh.vertexLayoutId);
+        const uint64_t indices = uint64_t(mesh.indexCount)*4;
+        if (mesh.geometry.lodLevel >= model_core::kCoarseLod) { packedVertices+=vertices; packedIndices+=indices; }
+        else bytes+=align(vertices)+align(indices);
+    }
+    bytes+=align(packedVertices)+align(packedIndices);
+    for (const auto& image:images) {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D; desc.Width=image.width; desc.Height=image.height;
+        desc.DepthOrArraySize=1; desc.MipLevels=UINT16(image.mipLevels); desc.SampleDesc.Count=1;
+        auto format=DxgiFormatFor(image.pixelFormat,image.colorSpace);
+        if (!format) return UINT64_MAX;
+        desc.Format=*format;
+        const auto allocation=device->GetResourceAllocationInfo(0,1,&desc).SizeInBytes;
+        if (allocation == UINT64_MAX || allocation > UINT64_MAX-bytes) return UINT64_MAX;
+        bytes+=allocation;
+    }
+    if (!images.empty()) bytes+=align(uint64_t(images.size())*device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
+    return bytes;
+}
+
+uint64_t D3D12ViewerPath::AccountedAllocationBytes(const ModelResources* extra) const
+{
+    std::unordered_set<const void*> accounted;
+    uint64_t total=4ull*1024*1024; // permanent pipeline/overlay/descriptor headroom
+    const auto resource=[&](ID3D12Resource* value, uint64_t size=0) {
+        if (!value || !accounted.insert(value).second) return;
+        if (!size) { const auto desc=value->GetDesc(); size=device.Device()->GetResourceAllocationInfo(0,1,&desc).SizeInBytes; }
+        total+=size;
+    };
+    const auto heap=[&](ID3D12DescriptorHeap* value) {
+        if (!value || !accounted.insert(value).second) return;
+        const auto desc=value->GetDesc();
+        total+=(uint64_t(desc.NumDescriptors)*device.Device()->GetDescriptorHandleIncrementSize(desc.Type)+65535)/65536*65536;
+    };
+    const auto modelBytes=[&](const ModelResources& resources) {
+        for (const auto& mesh:resources.meshes) {
+            resource(mesh.vertexBuffer.Get(),mesh.vertexAllocationBytes); resource(mesh.indexBuffer.Get(),mesh.indexAllocationBytes); heap(mesh.textureHeap.Get());
+        }
+        for (const auto* textures:{&resources.textures,&resources.fallbackTextures})
+            for (const auto& texture:*textures) { resource(texture.resource.Get(),texture.allocationBytes); heap(texture.heap.Get()); }
+        heap(resources.srvHeap.Get());
+    };
+    for (UINT frame=0; frame<kFrameCount; ++frame) resource(swapChain.BackBuffer(frame));
+    resource(depthBuffer.Get()); resource(pickTarget.Get()); resource(pickReadback.Get()); resource(frameConstantBuffer.Get());
+    heap(dsvHeap.Get()); heap(pickRtvHeap.Get());
+    modelBytes(model); modelBytes(pendingModel);
+    for (const auto& retired:retiredModels) modelBytes(retired.resources);
+    if (extra) modelBytes(*extra);
+    return total;
+}
+
+void D3D12ViewerPath::ShedTextureDetail()
+{
+    ModelResources retired;
+    for (auto& texture:model.textures) {
+        auto fallback=std::find_if(model.fallbackTextures.begin(),model.fallbackTextures.end(),
+            [&](const auto& low) { return low.chunkId==texture.chunkId; });
+        if (fallback != model.fallbackTextures.end() && fallback->resource.Get()!=texture.resource.Get()) {
+            retired.textures.push_back(std::move(texture)); texture=*fallback;
+        }
+    }
+    // Drop all descriptor references from the old frame-boundary material state.
+    for (auto& mesh:model.meshes) {
+        if (mesh.textureIndex<0) continue;
+        for (const auto& old:retired.textures) if (mesh.textureHeap.Get()==old.heap.Get() && UINT(mesh.textureIndex)==old.srvHeapIndex) {
+            auto low=std::find_if(model.textures.begin(),model.textures.end(),[&](const auto& texture) { return texture.chunkId==old.chunkId; });
+            mesh.textureHeap=low->heap; mesh.textureIndex=int(low->srvHeapIndex); mesh.textureDescriptorSize=low->descriptorSize;
+            break;
+        }
+    }
+    model.srvHeap.Reset(); // texture records own their current/fallback heaps
+    uint64_t fence=0; for (const auto& frame:frames) fence=std::max(fence,frame.fenceValue);
+    if (!retired.textures.empty()) retiredModels.push_back({std::move(retired),fence,0});
 }

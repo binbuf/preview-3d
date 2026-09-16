@@ -249,6 +249,7 @@ struct WalkState {
     std::vector<PendingImage> pendingImages;
     std::unordered_map<size_t, size_t> imageIndexToPendingIndex; // glTF image index -> pendingImages index
     std::function<bool(PendingChunk&&)> emit;
+    const model_core::ChunkDescriptor* requested = nullptr;
     uint32_t emittedGeometry = 0;
     uint32_t primitiveOccurrences = 0;
     bool preview=false, previewCounting=false;
@@ -929,7 +930,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
              !EnsureAccessorBytesResolvable(state, state.asset.accessors[normalIt->accessorIndex])) ||
             (hasUv && !EnsureAccessorBytesResolvable(state, state.asset.accessors[uvIt->accessorIndex])))
             return false;
-        const auto material = !state.preview && primitive.materialIndex ? ResolveMaterial(state, *primitive.materialIndex)
+        const auto material = !state.preview && !state.requested && primitive.materialIndex ? ResolveMaterial(state, *primitive.materialIndex)
                                                       : std::optional<size_t>{};
         if (state.error != ImportErrorCode::None)
             return false;
@@ -938,7 +939,10 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         linear[3] = fastgltf::math::dvec4(0, 0, 0, 1);
         const auto previewOffsets=PreviewOffsets(indexAccessor.count/3);
         size_t previewStep=0;
-        for (size_t first = 0; first < indexAccessor.count;)
+        const size_t requestedFirst = state.requested ? uint32_t(state.requested->sourceRangeOffset) : 0;
+        const size_t requestedEnd = state.requested ? requestedFirst + state.requested->sourceRangeLength : indexAccessor.count;
+        if (requestedEnd > indexAccessor.count || requestedFirst % 3 || requestedEnd % 3) { state.error = ImportErrorCode::MalformedData; return false; }
+        for (size_t first = requestedFirst; first < requestedEnd;)
         {
             if (state.textureOptions.Cancelled())
             {
@@ -957,7 +961,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
                 part.geometry.geometryFlags |= kGeometryHasUv1;
             for (unsigned axis = 0; axis < 3; ++axis)
                 part.geometry.origin[axis] = world[3][axis];
-            const size_t end = (std::min)(indexAccessor.count, first + size_t(state.chunkTriangles) * 3);
+            const size_t end = (std::min)(requestedEnd, first + size_t(state.chunkTriangles) * 3);
             std::unordered_map<uint32_t, uint32_t> remap;
             remap.reserve(end - first);
             part.vertices.reserve(end - first);
@@ -1248,7 +1252,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
     state.totalVertices += chunk.vertices.size();
     state.totalIndices += chunk.indices.size();
 
-    if (!state.preview && primitive.materialIndex.has_value()) {
+    if (!state.preview && !state.requested && primitive.materialIndex.has_value()) {
         chunk.pendingMaterialIndex = ResolveMaterial(state, *primitive.materialIndex);
         if (state.error != ImportErrorCode::None) {
             return false;
@@ -1261,14 +1265,17 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         // result is split and emitted using cluster-local index remapping.
         const auto previewOffsets=PreviewOffsets(chunk.indices.size()/3);
         size_t previewStep=0;
-        for (size_t first = 0; first < chunk.indices.size();)
+        const size_t requestedFirst = state.requested ? uint32_t(state.requested->sourceRangeOffset) : 0;
+        const size_t requestedEnd = state.requested ? requestedFirst + state.requested->sourceRangeLength : chunk.indices.size();
+        if (requestedEnd > chunk.indices.size()) { state.error = ImportErrorCode::MalformedData; return false; }
+        for (size_t first = requestedFirst; first < requestedEnd;)
         {
             if (state.textureOptions.Cancelled())
             {
                 state.error = ImportErrorCode::Cancelled;
                 return false;
             }
-            const size_t end = (std::min)(chunk.indices.size(), first + size_t(state.chunkTriangles) * 3);
+            const size_t end = (std::min)(requestedEnd, first + size_t(state.chunkTriangles) * 3);
             PendingChunk part;
             part.geometry = chunk.geometry;
             part.pendingMaterialIndex = chunk.pendingMaterialIndex;
@@ -1338,6 +1345,8 @@ bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::dmat4x4
 
         for (size_t primitiveId = 0; primitiveId < mesh.primitives.size(); ++primitiveId)
         {
+            if (state.requested && (state.requested->meshId != *node.meshIndex + 1
+                || state.requested->nodeId != nodeIndex + 1 || (state.requested->sourceRangeOffset >> 32) != primitiveId)) continue;
             if (!ConvertPrimitive(state, mesh.primitives[primitiveId], world, normalMatrix,
                                   uint32_t(*node.meshIndex + 1), uint32_t(nodeIndex + 1),
                                   uint32_t(primitiveId)))
@@ -1831,7 +1840,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         }
         return true;
     };
-    if (batchSink)
+    if (batchSink) {
+        state.requested = batchSink->RequestedSource();
         state.emit = [&](PendingChunk&& chunk) {
             if (!emitDependencies())
                 return false;
@@ -1852,6 +1862,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             }
             return true;
         };
+    }
     fastgltf::math::dmat4x4 identity(1.0);
     if (state.preview) {
         state.previewCounting=true;

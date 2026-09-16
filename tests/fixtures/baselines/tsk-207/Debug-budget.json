@@ -1,0 +1,129 @@
+{
+  "configuration": "Debug",
+  "exeSha256": "35db5328ee42373ed203b823e8b7793d322346fb2deef7946849f3aed5321bd6",
+  "workerExeSha256": "ff9751649dc6644ac73ed868890ee7852b3e3e4460f4298da75e5837531b9bc2",
+  "fixtureSha256": {
+    "Pressure.glb": "e4baba26205121e2adc3ca5839059bd4936af09787cc20e86bfad5a91943d4bd",
+    "split.stl": "98f191e2e4035848175c047eaa0d0bc3a308323aeac2bdc1162bc12e520787c7"
+  },
+  "runs": [
+    {
+      "failure": null,
+      "events": [
+        {
+          "fixture": "Pressure.glb",
+          "generation": 1,
+          "sourceCounts": [
+            100000,
+            0
+          ],
+          "coarseChunks": 8,
+          "fineBeforeDrop": 8,
+          "fineUnderPressure": 2,
+          "fineRecovered": 3,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 39124992,
+          "targetGpuBytes": 201326592,
+          "evictions": 6,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "split.stl",
+          "generation": 2,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 31,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 42532864,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        }
+      ],
+      "requestedUmaDevice": false,
+      "peakQueueBytes": 63703562,
+      "peakOutstandingRequests": 23,
+      "peakViewerPrivateBytes": 939479040,
+      "actualUma": false,
+      "textureFixtureSha256": {
+        "raster-256.glb": "873ba959f2a02accfe3f77a8ca19017872dfb858eeea4f6fbce6eae483ac591a",
+        "raster-capped.glb": "6d56da4bd1a8fa4cf73f31e9dd34d2f202ee430da6d57d97dbe98cdafadd3305",
+        "raster-corrupt.glb": "bb28ec60eda8dd37e648122bab17384dc72c8ba2158a2cb26951118098b7d352"
+      },
+      "texturePressure": {
+        "generation": 3,
+        "fullWidth": 2048,
+        "fallbackWidth": 64,
+        "lowTargetMiB": 35,
+        "accountedGpuBytes": 34799616,
+        "targetGpuBytes": 36700160
+      },
+      "exitCode": 0,
+      "survivingWorkers": 0
+    },
+    {
+      "failure": null,
+      "events": [
+        {
+          "fixture": "Pressure.glb",
+          "generation": 1,
+          "sourceCounts": [
+            100000,
+            0
+          ],
+          "coarseChunks": 8,
+          "fineBeforeDrop": 8,
+          "fineUnderPressure": 1,
+          "fineRecovered": 2,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 38273024,
+          "targetGpuBytes": 201326592,
+          "evictions": 7,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "split.stl",
+          "generation": 2,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 31,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 37,
+          "accountedGpuBytes": 43122688,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        }
+      ],
+      "requestedUmaDevice": true,
+      "peakQueueBytes": 63703562,
+      "peakOutstandingRequests": 23,
+      "peakViewerPrivateBytes": 1044226048,
+      "actualUma": true,
+      "textureFixtureSha256": {
+        "raster-256.glb": "873ba959f2a02accfe3f77a8ca19017872dfb858eeea4f6fbce6eae483ac591a",
+        "raster-capped.glb": "6d56da4bd1a8fa4cf73f31e9dd34d2f202ee430da6d57d97dbe98cdafadd3305",
+        "raster-corrupt.glb": "bb28ec60eda8dd37e648122bab17384dc72c8ba2158a2cb26951118098b7d352"
+      },
+      "texturePressure": {
+        "generation": 3,
+        "fullWidth": 2048,
+        "fallbackWidth": 64,
+        "lowTargetMiB": 35,
+        "accountedGpuBytes": 35389440,
+        "targetGpuBytes": 36700160
+      },
+      "exitCode": 0,
+      "survivingWorkers": 0
+    }
+  ]
+}

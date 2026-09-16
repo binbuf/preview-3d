@@ -39,7 +39,7 @@ bool D3D12Device::TryEnableDebugLayerIfDeveloperBuild()
 #endif
 }
 
-ComPtr<IDXGIAdapter1> D3D12Device::SelectHardwareAdapter(IDXGIFactory6& factory)
+ComPtr<IDXGIAdapter1> D3D12Device::SelectHardwareAdapter(IDXGIFactory6& factory, bool preferUma)
 {
     ComPtr<IDXGIAdapter1> adapter;
     for (UINT i = 0; factory.EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
@@ -49,6 +49,13 @@ ComPtr<IDXGIAdapter1> D3D12Device::SelectHardwareAdapter(IDXGIFactory6& factory)
         DXGI_ADAPTER_DESC1 desc{};
         if (SUCCEEDED(adapter->GetDesc1(&desc)) && !IsSoftwareAdapter(desc)
             && ProbeFeatureLevel11_0(adapter.Get())) {
+            if (preferUma) {
+                ComPtr<ID3D12Device> candidate;
+                D3D12_FEATURE_DATA_ARCHITECTURE architecture{};
+                if (FAILED(D3D12CreateDevice(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&candidate)))
+                    || FAILED(candidate->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE,&architecture,sizeof(architecture)))
+                    || !architecture.UMA) { adapter.Reset(); continue; }
+            }
             return adapter;
         }
         adapter.Reset();
@@ -84,7 +91,7 @@ D3D12Device::CreateResult D3D12Device::Initialize(const CreateOptions& options)
     }
 
     ComPtr<IDXGIAdapter1> adapter = options.forceWarp ? SelectWarpAdapter(*factory_.Get())
-                                                       : SelectHardwareAdapter(*factory_.Get());
+                                                       : SelectHardwareAdapter(*factory_.Get(), options.preferUma);
     if (!adapter) {
         result.hr = DXGI_ERROR_NOT_FOUND;
         return result;

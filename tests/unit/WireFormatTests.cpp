@@ -23,7 +23,7 @@ TEST_CASE("SectionHeader and ChunkDescriptor match the documented fixed-width wi
           "[wire-format]")
 {
     REQUIRE(sizeof(model_core::SectionHeader) == 88);
-    REQUIRE(sizeof(model_core::ChunkDescriptor) == 156);
+    REQUIRE(sizeof(model_core::ChunkDescriptor) == 160);
 
     CHECK(offsetof(model_core::SectionHeader, magic) == 0);
     CHECK(offsetof(model_core::SectionHeader, protocolVersion) == 4);
@@ -36,6 +36,7 @@ TEST_CASE("SectionHeader and ChunkDescriptor match the documented fixed-width wi
     CHECK(offsetof(model_core::ChunkDescriptor, origin) == 92);
     CHECK(offsetof(model_core::ChunkDescriptor, localMin) == 116);
     CHECK(offsetof(model_core::ChunkDescriptor, boundsState) == 152);
+    CHECK(offsetof(model_core::ChunkDescriptor, sourceElementOffset) == 156);
     CHECK(sizeof(model_core::SceneMetadata) == 48);
     CHECK(sizeof(double) == 8);
     CHECK(std::numeric_limits<double>::is_iec559);

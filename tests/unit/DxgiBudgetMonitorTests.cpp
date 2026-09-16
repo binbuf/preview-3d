@@ -8,6 +8,8 @@
 #include "D3D12Device.h"
 #include "DxgiBudgetMonitor.h"
 #include "SceneSnapshot.h"
+#include "DetailView.h"
+#include "D3D12ViewerPath.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -89,7 +91,7 @@ TEST_CASE("ComputeDetailTargetBytes recalculates immediately when the injected b
     uint64_t after = monitor.ComputeDetailTargetBytes();
 
     CHECK(after < before);
-    CHECK(after == 0); // budget == headroom -> the headroom bound is 0, and it wins
+    CHECK(after == currentBudget*3/5); // retain the 60% cap when 512 MiB headroom is impossible
 }
 
 TEST_CASE("ComputeDetailTargetBytes respects the format policy cap", "[graphics]")
@@ -136,4 +138,71 @@ TEST_CASE("PlanEviction evicts least-recently-visible resources first, stopping 
     REQUIRE(plan.size() == 2);
     CHECK(plan[0].clusterId == 2);
     CHECK(plan[1].clusterId == 3);
+}
+
+
+TEST_CASE("Verified detail bounds cull offscreen regions and favor projected extent", "[detail-budget]") {
+    model_core::ChunkDescriptor d{}; d.localMin[0]=d.localMin[1]=-0.1f; d.localMin[2]=0.1f;
+    d.localMax[0]=d.localMax[1]=0.1f; d.localMax[2]=0.2f;
+    DirectX::XMFLOAT4X4 vp; DirectX::XMStoreFloat4x4(&vp,DirectX::XMMatrixIdentity());
+    double origin[3]={1e12,1e12,1e12},target[3]{}; std::copy(std::begin(origin),std::end(origin),std::begin(d.origin));
+    const float smallScore=DetailViewPriority(d,origin,target,false,vp); CHECK(smallScore>0);
+    d.localMin[0]=-0.9f; d.localMax[0]=0.9f;
+    CHECK(DetailViewPriority(d,origin,target,false,vp)>smallScore);
+    d.origin[0]+=10; CHECK(DetailViewPriority(d,origin,target,false,vp)==0);
+    target[0]=10; CHECK(DetailViewPriority(d,origin,target,false,vp)>0);
+}
+
+TEST_CASE("Destination admission charges aligned buffers and skips full scan payloads", "[detail-budget]") {
+    d3d12_import_bridge::ImportedMesh mesh; mesh.vertexCount=3; mesh.indexCount=3;
+    mesh.vertexLayoutId=model_core::VertexLayoutId::PositionNormalUv0_F32;
+    auto* device=SharedDevice().Device();
+    CHECK(D3D12ViewerPath::EstimateUploadBytes(device,std::span(&mesh,1),{})==131072);
+    mesh.geometry.lodLevel=model_core::kScanLod;
+    CHECK(D3D12ViewerPath::EstimateUploadBytes(device,std::span(&mesh,1),{})==0);
+    mesh.geometry.lodLevel=model_core::kCoarseLod;
+    std::vector<d3d12_import_bridge::ImportedMesh> samples(2048,mesh);
+    CHECK(D3D12ViewerPath::EstimateUploadBytes(device,samples,{})==262144);
+}
+
+
+TEST_CASE("Accounted shared buffers remain charged through both retirement fences", "[detail-budget]") {
+    auto* device=SharedDevice().Device();
+    D3D12ViewerPath path; path.device.AttachForUpload(device);
+    REQUIRE(path.directQueue.Initialize(*device,D3D12_COMMAND_LIST_TYPE_DIRECT,L"Budget direct"));
+    D3D12UploadRing::CreateOptions options; options.initialCapacityBytes=4096; options.maxCapacityBytes=4096;
+    REQUIRE(path.uploadRing.Initialize(path.device,options));
+    Microsoft::WRL::ComPtr<ID3D12Fence> directGate,copyGate;
+    REQUIRE(SUCCEEDED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&directGate))));
+    REQUIRE(SUCCEEDED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&copyGate))));
+    struct OpenGates {
+        ID3D12Fence* direct; ID3D12Fence* copy;
+        ~OpenGates() { direct->Signal(1); copy->Signal(1); }
+    } release{directGate.Get(),copyGate.Get()};
+    REQUIRE(SUCCEEDED(path.directQueue.Queue()->Wait(directGate.Get(),1)));
+    REQUIRE(SUCCEEDED(path.uploadRing.CopyQueue().Queue()->Wait(copyGate.Get(),1)));
+    const uint64_t directFence=path.directQueue.SignalNext(),copyFence=path.uploadRing.CopyQueue().SignalNext();
+    REQUIRE(directFence); REQUIRE(copyFence);
+    D3D12ViewerPath::GpuMesh fine; fine.chunkId=1; fine.sourceGeometry.lodLevel=model_core::kFineLod;
+    D3D12_HEAP_PROPERTIES heap{}; heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC desc{}; desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER; desc.Width=4096;
+    desc.Height=1; desc.DepthOrArraySize=1; desc.MipLevels=1; desc.SampleDesc.Count=1; desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COMMON,nullptr,IID_PPV_ARGS(&fine.vertexBuffer))));
+    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COMMON,nullptr,IID_PPV_ARGS(&fine.indexBuffer))));
+    D3D12ViewerPath::GpuMesh coarse; coarse.chunkId=model_core::kCoarseIdentity|1; coarse.sourceGeometry.lodLevel=model_core::kCoarseLod;
+    coarse.vertexBuffer=fine.vertexBuffer;
+    path.model.meshes.push_back(std::move(coarse)); path.model.meshes.push_back(std::move(fine));
+    const uint64_t before=path.AccountedAllocationBytes();
+    CHECK(before==4*1024*1024+2*65536);
+    path.frames[0].fenceValue=directFence;
+    const uint32_t identity=1; path.EvictFineChunks(std::span(&identity,1));
+    REQUIRE(path.retiredModels.size()==1); path.retiredModels.front().copyFenceValue=copyFence;
+    path.ReclaimRetired(); CHECK(path.AccountedAllocationBytes()==before);
+    directGate->Signal(1);
+    REQUIRE(path.directQueue.WaitForValue(directFence,2000)==D3D12CommandQueue::WaitResult::Signaled);
+    path.ReclaimRetired(); CHECK(path.AccountedAllocationBytes()==before);
+    copyGate->Signal(1);
+    REQUIRE(path.uploadRing.CopyQueue().WaitForValue(copyFence,2000)==D3D12CommandQueue::WaitResult::Signaled);
+    path.ReclaimRetired(); CHECK(path.retiredModels.empty());
+    CHECK(path.AccountedAllocationBytes()==before-65536);
 }

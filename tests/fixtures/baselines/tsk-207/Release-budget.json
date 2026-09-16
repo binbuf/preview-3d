@@ -1,0 +1,339 @@
+{
+  "configuration": "Release",
+  "exeSha256": "df2291cffb14067803507ff4e99371df953fca19136a1e3feb570dc260c1e2af",
+  "workerExeSha256": "66aab2226e332d61b2d01d3ae87951f3c712e6d9b959b806d7193df5d1ca7ad2",
+  "fixtureSha256": {
+    "Pressure.glb": "e4baba26205121e2adc3ca5839059bd4936af09787cc20e86bfad5a91943d4bd",
+    "split.glb": "c659531aa30a9db5575aa3e1313197f0f737e2a6ccd9929993efcd8c0c2abd76",
+    "split.stl": "98f191e2e4035848175c047eaa0d0bc3a308323aeac2bdc1162bc12e520787c7",
+    "mesh-le.ply": "588a8eae48478f58dabfbbaa8e1ec2a617ec1706ce590cf913c87ace3238f481",
+    "mesh-be.ply": "702537b384d0974ea9b740c0c73dd2d13c1d4abcdcc091a25d9630f1bb77dc72",
+    "points-le.ply": "abb00593050a788e973ab101850424817b9d3007e95d692933bbdd42c3992fb2",
+    "points-be.ply": "710072beb64dbb8ca3b1a633c2485a3ba20e9fb9e9d531b62a0521842f0e2fb9",
+    "A-large-stl.stl": "360819748f668e5a520f05684ab8069464cb74fce19edd4154468038dfa4b62e"
+  },
+  "runs": [
+    {
+      "failure": null,
+      "events": [
+        {
+          "fixture": "Pressure.glb",
+          "generation": 1,
+          "sourceCounts": [
+            100000,
+            0
+          ],
+          "coarseChunks": 8,
+          "fineBeforeDrop": 8,
+          "fineUnderPressure": 2,
+          "fineRecovered": 3,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 40566784,
+          "targetGpuBytes": 201326592,
+          "evictions": 6,
+          "detailRequests": 3
+        },
+        {
+          "fixture": "split.glb",
+          "generation": 2,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 32,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 42663936,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "split.stl",
+          "generation": 3,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 31,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 42532864,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "mesh-le.ply",
+          "generation": 4,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 31,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 42532864,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "mesh-be.ply",
+          "generation": 5,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 31,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 42532864,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "points-le.ply",
+          "generation": 6,
+          "sourceCounts": [
+            0,
+            8000000
+          ],
+          "coarseChunks": 16,
+          "fineBeforeDrop": 11,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 36569088,
+          "targetGpuBytes": 201326592,
+          "evictions": 11,
+          "detailRequests": 1
+        },
+        {
+          "fixture": "points-be.ply",
+          "generation": 7,
+          "sourceCounts": [
+            0,
+            8000000
+          ],
+          "coarseChunks": 16,
+          "fineBeforeDrop": 11,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 36569088,
+          "targetGpuBytes": 201326592,
+          "evictions": 11,
+          "detailRequests": 1
+        },
+        {
+          "fixture": "A-large-stl.stl",
+          "generation": 8,
+          "sourceCounts": [
+            60000000,
+            0
+          ],
+          "coarseChunks": 916,
+          "fineBeforeDrop": 6,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 60,
+          "accountedGpuBytes": 67043328,
+          "targetGpuBytes": 201326592,
+          "evictions": 6,
+          "detailRequests": 2
+        }
+      ],
+      "requestedUmaDevice": false,
+      "peakQueueBytes": 67194240,
+      "peakOutstandingRequests": 24,
+      "peakViewerPrivateBytes": 644411392,
+      "actualUma": false,
+      "textureFixtureSha256": {
+        "raster-256.glb": "873ba959f2a02accfe3f77a8ca19017872dfb858eeea4f6fbce6eae483ac591a",
+        "raster-capped.glb": "6d56da4bd1a8fa4cf73f31e9dd34d2f202ee430da6d57d97dbe98cdafadd3305",
+        "raster-corrupt.glb": "bb28ec60eda8dd37e648122bab17384dc72c8ba2158a2cb26951118098b7d352"
+      },
+      "texturePressure": {
+        "generation": 9,
+        "fullWidth": 2048,
+        "fallbackWidth": 64,
+        "lowTargetMiB": 35,
+        "accountedGpuBytes": 34799616,
+        "targetGpuBytes": 36700160
+      },
+      "exitCode": 0,
+      "survivingWorkers": 0
+    },
+    {
+      "failure": null,
+      "events": [
+        {
+          "fixture": "Pressure.glb",
+          "generation": 1,
+          "sourceCounts": [
+            100000,
+            0
+          ],
+          "coarseChunks": 8,
+          "fineBeforeDrop": 8,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 38273024,
+          "targetGpuBytes": 201326592,
+          "evictions": 8,
+          "detailRequests": 3
+        },
+        {
+          "fixture": "split.glb",
+          "generation": 2,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 32,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 37,
+          "accountedGpuBytes": 43253760,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "split.stl",
+          "generation": 3,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 31,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 37,
+          "accountedGpuBytes": 43122688,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "mesh-le.ply",
+          "generation": 4,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 31,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 37,
+          "accountedGpuBytes": 43122688,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "mesh-be.ply",
+          "generation": 5,
+          "sourceCounts": [
+            2000000,
+            0
+          ],
+          "coarseChunks": 31,
+          "fineBeforeDrop": 9,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 37,
+          "accountedGpuBytes": 43122688,
+          "targetGpuBytes": 201326592,
+          "evictions": 9,
+          "detailRequests": 2
+        },
+        {
+          "fixture": "points-le.ply",
+          "generation": 6,
+          "sourceCounts": [
+            0,
+            8000000
+          ],
+          "coarseChunks": 16,
+          "fineBeforeDrop": 11,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 37158912,
+          "targetGpuBytes": 201326592,
+          "evictions": 11,
+          "detailRequests": 1
+        },
+        {
+          "fixture": "points-be.ply",
+          "generation": 7,
+          "sourceCounts": [
+            0,
+            8000000
+          ],
+          "coarseChunks": 16,
+          "fineBeforeDrop": 11,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 36,
+          "accountedGpuBytes": 37158912,
+          "targetGpuBytes": 201326592,
+          "evictions": 11,
+          "detailRequests": 1
+        },
+        {
+          "fixture": "A-large-stl.stl",
+          "generation": 8,
+          "sourceCounts": [
+            60000000,
+            0
+          ],
+          "coarseChunks": 916,
+          "fineBeforeDrop": 6,
+          "fineUnderPressure": 0,
+          "fineRecovered": 1,
+          "lowTargetMiB": 60,
+          "accountedGpuBytes": 67633152,
+          "targetGpuBytes": 201326592,
+          "evictions": 6,
+          "detailRequests": 2
+        }
+      ],
+      "requestedUmaDevice": true,
+      "peakQueueBytes": 67194240,
+      "peakOutstandingRequests": 24,
+      "peakViewerPrivateBytes": 726265856,
+      "actualUma": true,
+      "textureFixtureSha256": {
+        "raster-256.glb": "873ba959f2a02accfe3f77a8ca19017872dfb858eeea4f6fbce6eae483ac591a",
+        "raster-capped.glb": "6d56da4bd1a8fa4cf73f31e9dd34d2f202ee430da6d57d97dbe98cdafadd3305",
+        "raster-corrupt.glb": "bb28ec60eda8dd37e648122bab17384dc72c8ba2158a2cb26951118098b7d352"
+      },
+      "texturePressure": {
+        "generation": 9,
+        "fullWidth": 2048,
+        "fallbackWidth": 64,
+        "lowTargetMiB": 35,
+        "accountedGpuBytes": 35389440,
+        "targetGpuBytes": 36700160
+      },
+      "exitCode": 0,
+      "survivingWorkers": 0
+    }
+  ]
+}

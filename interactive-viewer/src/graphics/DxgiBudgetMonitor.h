@@ -7,13 +7,8 @@
 // EnumAdapterByLuid(), then QIs to IDXGIAdapter3 for
 // QueryVideoMemoryInfo/RegisterVideoMemoryBudgetChangeNotificationEvent.
 //
-// Scoping note: "view-priority" here is recency (a caller-supplied
-// lastVisibleFrame on ReadyResourceInfo) plus size, not a camera/frustum
-// projected-screen-error system -- no renderer/camera exists in this
-// codebase yet to feed one. PlanEviction only ever produces a drop list;
-// it never calls Release() on a GPU resource itself, matching the design
-// doc's "removes a chunk from a new snapshot first" ordering, which is the
-// upload ring/future renderer's job, not this class's.
+// Product callers supply visibility recency and projected extent from verified
+// bounds. Planning removes fine draws first; Graphics owns deferred release.
 
 #include "SceneSnapshot.h"
 
@@ -63,7 +58,7 @@ public:
 
     // Recomputes the detail target fresh from the current budget query
     // every call (never cached), per the design doc's exact formula: no
-    // more than 60% of the reported local budget, at least 512 MiB of
+    // more than 60% of the reported local budget, 512 MiB of
     // headroom when the budget permits, no more than the format policy
     // cap. Returns 0 if the budget query itself fails (conservative: no
     // budget info, no detail).

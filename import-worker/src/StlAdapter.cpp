@@ -246,13 +246,19 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const s
     indices.reserve(size_t(clusterFacets) * 3);
     const auto previewOffsets=PreviewOffsets(triangleCount);
     size_t previewStep=0;
-    for (uint32_t first = 0; first < triangleCount;)
+    const auto* requested = batchSink ? batchSink->RequestedSource() : nullptr;
+    const uint64_t requestedEnd = requested ? requested->sourceRangeOffset + requested->sourceRangeLength : *expectedMinSizeOpt;
+    if (requested && (requested->sourceRangeOffset < kStlPrefixBytes || requestedEnd > *expectedMinSizeOpt
+        || (requested->sourceRangeOffset-kStlPrefixBytes)%kStlFacetBytes || requested->sourceRangeLength%kStlFacetBytes))
+        return ImportErrorCode::MalformedData;
+    const uint32_t finalFacet = requested ? uint32_t((requestedEnd-kStlPrefixBytes)/kStlFacetBytes) : triangleCount;
+    for (uint32_t first = requested ? uint32_t((requested->sourceRangeOffset-kStlPrefixBytes)/kStlFacetBytes) : 0; first < finalFacet;)
     {
         if (mappedSource && !mappedSource->IsUnchanged())
             return ImportErrorCode::FileChanged;
         if (batchSink && batchSink->Cancelled())
             return ImportErrorCode::Cancelled;
-        const uint32_t count = (std::min)(clusterFacets, triangleCount - first);
+        const uint32_t count = (std::min)(clusterFacets, finalFacet - first);
         vertices.clear();
         indices.clear();
         std::span<const std::byte> facets;

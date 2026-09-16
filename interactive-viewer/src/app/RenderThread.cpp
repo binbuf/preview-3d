@@ -15,6 +15,8 @@
 #include <utility>
 #include <stdexcept>
 #include <cstring>
+#include <psapi.h>
+#include "DetailView.h"
 
 namespace {
 
@@ -43,6 +45,14 @@ RenderThread::~RenderThread()
 std::uint64_t RenderThread::SmokeValue(unsigned field) const noexcept
 {
     switch (field) {
+    case 55: return accountedGpuBytes_.load();
+    case 56: return targetGpuBytes_.load();
+    case 57: return pendingGpuBytes_.load();
+    case 58: return evictionCount_.load();
+    case 59: { std::lock_guard<std::mutex> lock(uploads_->mutex); return uploads_->detailRequests; }
+    case 60: return rejectedDetailCount_.load();
+    case 61: { std::lock_guard<std::mutex> lock(uploads_->mutex); return uploads_->requestedDetails.size(); }
+    case 64: return isUma_ || smokeUma_.load();
     case 48: return coarseChunks_.load();
     case 49: return fineChunks_.load();
     case 50: return suppressedCoarse_.load();
@@ -163,7 +173,9 @@ void RenderThread::CancelUploads()
     for (const auto& task : uploads_->tasks) if (!task.terminal) { uploads_->bytes -= task.bytes; --uploads_->count; }
     for (const auto& pub : uploads_->publications) if (!pub.task.terminal) { uploads_->bytes -= pub.task.bytes; --uploads_->count; }
     uploads_->tasks.clear();
+    for (const auto& pub:uploads_->publications) uploads_->gpuPendingBytes-=pub.task.gpuBytes;
     uploads_->publications.clear(); // These resources have already completed the copy fence.
+    uploads_->details.clear(); uploads_->requestedDetails.clear();
     uploads_->changed.notify_all();
 }
 
@@ -266,6 +278,59 @@ void RenderThread::UploadMain()
                         gate->Signal(1);
                     });
                 }
+                // Reserve aligned destination allocations before any CreateCommittedResource.
+                // Pending reservations remain charged through copy completion and render acceptance.
+                {
+                    std::unique_lock<std::mutex> lock(inbox->mutex);
+                    if (pub.task.result.detail && !pub.task.result.meshes.empty()) pub.task.detailIdentity=pub.task.result.meshes.front().chunkId;
+                    inbox->mandatoryBytes=D3D12ViewerPath::EstimateUploadBytes(uploader.device.Device(),pub.task.result.meshes,{});
+                    for (const auto& mesh:pub.task.result.meshes)
+                        if (mesh.geometry.lodLevel==model_core::kFineLod && mesh.geometry.sourceRangeLength)
+                            inbox->mandatoryBytes-=D3D12ViewerPath::EstimateUploadBytes(uploader.device.Device(),std::span(&mesh,1),{});
+                    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+                    while (inbox->mandatoryBytes && !inbox->stopped && inbox->generation==pub.task.generation
+                        && (!pub.task.cancellation || !pub.task.cancellation->load())
+                        && inbox->mandatoryBytes<=inbox->gpuTargetBytes
+                        && inbox->gpuBaseBytes+inbox->gpuPendingBytes>inbox->gpuTargetBytes-inbox->mandatoryBytes
+                        && std::chrono::steady_clock::now()<deadline)
+                        inbox->changed.wait_for(lock,std::chrono::milliseconds(20));
+                    const uint64_t mandatory=inbox->mandatoryBytes; inbox->mandatoryBytes=0;
+                    const uint64_t used=inbox->gpuBaseBytes+inbox->gpuPendingBytes;
+                    uint64_t available=used<inbox->gpuTargetBytes ? inbox->gpuTargetBytes-used : 0;
+                    available=mandatory<available ? available-mandatory : 0;
+                    auto& meshes=pub.task.result.meshes;
+                    meshes.erase(std::remove_if(meshes.begin(),meshes.end(),[&](const auto& mesh) {
+                        if (mesh.geometry.lodLevel != model_core::kFineLod || !mesh.geometry.sourceRangeLength) return false;
+                        const uint64_t bytes=D3D12ViewerPath::EstimateUploadBytes(uploader.device.Device(),std::span(&mesh,1),{});
+                        if (bytes>available) { ++rejectedDetailCount_; pub.task.result.status.flags|=model_core::kStatusPressure; return true; }
+                        available-=bytes; return false;
+                    }),meshes.end());
+                    // Selecting an already-validated mip tail is neither image decode nor resampling.
+                    auto& images=pub.task.result.images;
+                    images.erase(std::remove_if(images.begin(),images.end(),[&](auto& image) {
+                        const uint64_t proxyReserve=inbox->coarseGeneration==pub.task.generation ? 0 : model_core::kCoarseReservedBytes;
+                        const uint64_t textureAvailable=(image.width>64 || image.height>64)
+                            ? (available>proxyReserve ? available-proxyReserve : 0) : available;
+                        while (image.mipLevels>1 && (image.width>64 || image.height>64)
+                            && D3D12ViewerPath::EstimateUploadBytes(uploader.device.Device(),{},std::span(&image,1))>textureAvailable) {
+                            const auto first=*model_core::ComputeImagePixelBytes(image.pixelFormat,image.width,image.height,1);
+                            image.pixelBytes.erase(image.pixelBytes.begin(),image.pixelBytes.begin()+size_t(first));
+                            image.width=std::max(1u,image.width/2); image.height=std::max(1u,image.height/2); --image.mipLevels;
+                            pub.task.result.status.flags|=model_core::kStatusPressure;
+                        }
+                        const uint64_t bytes=D3D12ViewerPath::EstimateUploadBytes(uploader.device.Device(),{},std::span(&image,1));
+                        if (bytes>available) {
+                            pub.task.result.status.textureWarnings=std::min(64u,pub.task.result.status.textureWarnings+1);
+                            pub.task.result.status.flags|=model_core::kStatusPressure; return true;
+                        }
+                        available-=bytes; return false;
+                    }),images.end());
+                    pub.task.gpuBytes=D3D12ViewerPath::EstimateUploadBytes(uploader.device.Device(),meshes,pub.task.result.images);
+                    if (pub.task.gpuBytes>inbox->gpuTargetBytes || used>inbox->gpuTargetBytes-pub.task.gpuBytes) {
+                        pub.task.gpuBytes=0; throw std::bad_alloc();
+                    }
+                    inbox->gpuPendingBytes+=pub.task.gpuBytes;
+                }
                 std::wstring error = initialized ? L"" : L"The upload coordinator could not be initialized.";
                 uploader.uploadIsCancelled=[current] {return !current();};
                 const bool ok = current() && initialized && !pub.task.result.forceUploadFailureForTesting && uploader.BeginUploadModel(pub.task.result.meshes,
@@ -274,6 +339,7 @@ void RenderThread::UploadMain()
                 if (!ok) pub.task.result.errorCode = pub.task.result.forceUploadFailureForTesting
                     ? model_core::ImportErrorCode::UploadFailure : uploader.uploadErrorCode;
                 pub.task.result.errorDetails = error;
+                if (!ok) { uploader.WaitForIdle(); uploader.ReclaimRetired(); }
                 if (!ok && copyDelayMs_) std::fwprintf(stderr,L"Upload smoke failure: %ls\n",error.c_str());
                 if (ok) {
                     bool completed = false;
@@ -298,13 +364,13 @@ void RenderThread::UploadMain()
                 pub.task.result.images.clear();
             }
         } catch (const std::bad_alloc&) {
-            uploader.WaitForIdle();
+            uploader.WaitForIdle(); uploader.ReclaimRetired();
             pub.task.result.ok = false;
             pub.task.result.errorCode = model_core::ImportErrorCode::OutOfMemory;
             pub.task.result.errorDetails = L"There is not enough memory to display this batch.";
             pub.task.result.meshes.clear(); pub.task.result.images.clear();
         } catch (...) {
-            uploader.WaitForIdle();
+            uploader.WaitForIdle(); uploader.ReclaimRetired();
             pub.task.result.ok = false;
             pub.task.result.errorCode = model_core::ImportErrorCode::UploadFailure;
             pub.task.result.errorDetails = L"The upload coordinator stopped while processing this batch.";
@@ -315,7 +381,7 @@ void RenderThread::UploadMain()
             if (!inbox->stopped && inbox->generation == pub.task.generation
                 && (!pub.task.cancellation || !pub.task.cancellation->load()))
                 inbox->publications.push_back(std::move(pub));
-            else if (!pub.task.terminal) { inbox->bytes -= pub.task.bytes; --inbox->count; }
+            else if (!pub.task.terminal) { inbox->bytes -= pub.task.bytes; --inbox->count; inbox->gpuPendingBytes-=pub.task.gpuBytes; }
             inbox->changed.notify_all();
         }
         Invalidate();
@@ -388,7 +454,16 @@ void RenderThread::AssertOnRenderThread() const
 
 bool RenderThread::InitializeOnThread(HWND window, std::wstring& error)
 {
-    return path_.Initialize(window, error);
+    window_=window;
+    if (!path_.Initialize(window, error) || !budgetMonitor_.Initialize(path_.device,{},error)) return false;
+    D3D12_FEATURE_DATA_ARCHITECTURE architecture{};
+    if (SUCCEEDED(path_.device.Device()->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE,&architecture,sizeof(architecture)))) isUma_=architecture.UMA;
+    MEMORYSTATUSEX physicalMemory{sizeof(physicalMemory)};
+    cpuPolicyCap_=GlobalMemoryStatusEx(&physicalMemory) ? std::min(1536ull*1024*1024,physicalMemory.ullTotalPhys/4) : 0;
+    PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb=sizeof(memory);
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))) baselineCpuBytes_=memory.PrivateUsage;
+    UpdateBudget();
+    return true;
 }
 
 void RenderThread::ThreadMain(HWND window)
@@ -548,10 +623,11 @@ void RenderThread::PumpUploads(HWND window)
     AssertOnRenderThread();
 
     path_.ReclaimRetired();
+    UpdateBudget();
     if (smokeEviction_.exchange(false)) {
         std::vector<uint32_t> fine;
         for (const auto& mesh:path_.model.meshes) if (mesh.sourceGeometry.lodLevel==model_core::kFineLod) fine.push_back(mesh.chunkId);
-        path_.EvictFineChunks(fine); UpdateResidencySmoke();
+        path_.EvictFineChunks(fine); pauseDetailUntil_=NowSeconds()+2; UpdateResidencySmoke();
     }
     std::unique_lock<std::mutex> lock(uploads_->mutex);
     if (stagedGeneration_ && stagedGeneration_ != uploads_->generation) {
@@ -564,6 +640,9 @@ void RenderThread::PumpUploads(HWND window)
     if (uploads_->publications.empty()) return;
     auto pub = std::move(uploads_->publications.front()); uploads_->publications.pop_front();
     if (!pub.task.terminal) { uploads_->bytes -= pub.task.bytes; --uploads_->count; }
+    uploads_->gpuPendingBytes-=pub.task.gpuBytes;
+    uploads_->gpuBaseBytes+=pub.task.gpuBytes; // conservatively charge until the next complete census
+    if (pub.task.detailIdentity) { uploads_->requestedDetails.erase(pub.task.detailIdentity); if (pub.resources.meshes.empty()) pauseDetailUntil_=NowSeconds()+0.5; }
     uploads_->changed.notify_all();
     // Hold the generation lock through frame-boundary acceptance so a new
     // activation cannot race an old publication into the scene.
@@ -573,28 +652,48 @@ void RenderThread::PumpUploads(HWND window)
         materials_.clear(); stagedHaveBounds_ = false; stagedFailed_ = false;
         stagedMetadata_ = std::make_shared<ModelData>(); haveSceneOrigin_ = false;
         stagedProxyMode_ = false; stagedProxyComplete_ = false;
-        stagedPreviewOnly_ = false;
+        stagedPreviewOnly_ = false; initialTerminal_=false; scanCatalog_.clear();
         scannedPrimitives_.store(0);
     }
     auto message = std::make_unique<RenderUploadResult>();
     message->generation = pub.task.generation; message->path = pub.task.path;
     message->terminal = pub.task.terminal;
+    message->refinement=pub.task.result.detail;
     if (pub.task.terminal) {
         message->ok = !stagedFailed_ && (!stagedProxyMode_ || stagedProxyComplete_) && modelGeneration_ == pub.task.generation && path_.hasModel && stagedHaveBounds_ && stagedMetadata_;
         if (!message->ok) { message->errorCode = model_core::ImportErrorCode::EmptyGeometry; message->errorDetails = L"The import completed without displayable geometry."; }
         if (message->ok && stagedMetadata_) {
             stagedMetadata_->sourceIdentity = pub.task.result.sourceIdentity;
             stagedMetadata_->boundsVerified = true;
-            stagedMetadata_->importStatus.flags = 0;
+            initialTerminal_=true;
+            stagedMetadata_->importStatus.flags = rejectedDetailCount_.load() ? model_core::kStatusPressure : 0;
             message->metadata = std::make_shared<const ModelData>(*stagedMetadata_);
         }
     } else if (!pub.task.result.ok) {
         stagedFailed_ = true;
         message->errorCode = pub.task.result.errorCode;
         message->errorDetails = pub.task.result.errorDetails;
+    } else if (pub.task.result.detail) {
+        for (auto& mesh:pub.resources.meshes) {
+            if (std::none_of(path_.model.meshes.begin(),path_.model.meshes.end(),[&](const auto& old) { return old.chunkId==mesh.chunkId; }))
+                path_.model.meshes.push_back(std::move(mesh));
+        }
+        D3D12ViewerPath::UpdateCoarseVisibility(path_.model);
+        for (auto& mesh:path_.model.meshes) {
+            const auto mat=materials_.find(mesh.materialChunkId);
+            if (mat==materials_.end()) continue;
+            for (const auto& texture:path_.model.textures) if (texture.chunkId==mat->second.baseColorImageChunkId) {
+                mesh.textureIndex=int(texture.srvHeapIndex); mesh.textureHeap=texture.heap; mesh.textureDescriptorSize=texture.descriptorSize;
+            }
+        }
+        UpdateResidencySmoke();
+        stagedMetadata_->stats.drawCallCount=int(displayedChunks_.load());
+        message->ok=true; message->terminal=true;
+        message->metadata=std::make_shared<const ModelData>(*stagedMetadata_);
     } else {
         auto& metadata = *stagedMetadata_;
         for (const auto& imported:pub.task.result.meshes) {
+            if (imported.geometry.lodLevel==model_core::kScanLod) scanCatalog_.emplace(imported.chunkId & ~model_core::kScanIdentity,imported.geometry);
             if (imported.geometry.lodLevel>=model_core::kScanLod) stagedProxyMode_=true;
             if (imported.geometry.lodLevel==model_core::kPreviewLod) stagedPreviewOnly_=true;
             if (imported.geometry.lodLevel==model_core::kScanLod && stagedPreviewOnly_) {
@@ -686,7 +785,11 @@ void RenderThread::PumpUploads(HWND window)
             auto old=std::find_if(destination.textures.begin(),destination.textures.end(),
                 [&](const auto& candidate) { return candidate.chunkId==texture.chunkId; });
             if (old==destination.textures.end()) destination.textures.push_back(std::move(texture));
-            else { displaced.textures.push_back(std::move(*old));*old=std::move(texture); }
+            else {
+                if (old->resource->GetDesc().Width<=64 && std::none_of(destination.fallbackTextures.begin(),destination.fallbackTextures.end(),[&](const auto& low) { return low.chunkId==old->chunkId; }))
+                    destination.fallbackTextures.push_back(*old);
+                displaced.textures.push_back(std::move(*old));*old=std::move(texture);
+            }
         }
         if (!displaced.textures.empty()) {
             uint64_t fence=0;for (const auto& frame:path_.frames) fence=std::max(fence,frame.fenceValue);
@@ -750,6 +853,8 @@ void RenderThread::PumpUploads(HWND window)
     }
     // Align cancel/recovery UI with the representation already accepted by the
     // render thread, even when its posted UI notification is still queued.
+    if (stagedProxyComplete_) uploads_->coarseGeneration=pub.task.generation;
+    uploads_->gpuBaseBytes=path_.AccountedAllocationBytes(&stagedScene_);
     if (message->ok && message->metadata)
         displaySnapshot_.store(std::make_shared<const RenderDisplaySnapshot>(RenderDisplaySnapshot{message->path,message->metadata}));
     if (!message->ok) message->errorSummary = message->errorCode == model_core::ImportErrorCode::OutOfMemory
@@ -771,6 +876,12 @@ void RenderThread::UpdateResidencySmoke()
     coarseChunks_.store(coarse); fineChunks_.store(fine); suppressedCoarse_.store(suppressed);
     coarseAllocationBytes_.store(path_.model.coarseAllocationBytes);
     displayedChunks_.store(coarse-suppressed+fine+preview);
+    uint64_t extent=0,mips=0;
+    for (const auto& texture:path_.model.textures) {
+        const auto desc=texture.resource->GetDesc();
+        extent=std::max(extent,desc.Width); mips=std::max(mips,uint64_t(desc.MipLevels));
+    }
+    textureExtent_.store(extent); textureCount_.store(path_.model.textures.size()); textureMips_.store(mips);
 }
 
 void RenderThread::RenderOneFrame()
@@ -807,6 +918,7 @@ void RenderThread::RenderOneFrame()
                                   relative.ViewMatrix() * camera_.ProjectionMatrix(viewportAspect_));
     }
 
+    RequestVisibleDetail(viewProjection,cameraTarget,!overlay->info.showNativeOrientation && path_.sourceUpAxis==model_core::UpAxisId::Y);
     const auto framesBefore = path_.frameStats.PresentedFrames();
     path_.lastPresentResult = E_PENDING;
     if (hasModel_.load(std::memory_order_acquire)) {
@@ -863,5 +975,102 @@ void RenderThread::PublishStats()
     {
         std::lock_guard<std::mutex> lock(statsMutex_);
         stats_ = snapshot;
+    }
+}
+
+
+void RenderThread::UpdateBudget()
+{
+    // Every tick observes a notification/drop, including idle presentation.
+    budgetMonitor_.HasBudgetChangeSignaled();
+    uint64_t target=std::min(budgetMonitor_.ComputeDetailTargetBytes(),smokeBudgetBytes_.load());
+    if (isUma_ || smokeUma_.load()) {
+        // UMA destinations consume the CPU allowance too. Charge the upload ring,
+        // host queue and a bounded worker allowance before admitting destinations.
+        const uint64_t cpuReserve=512ull*1024*1024;
+        target=std::min(target,cpuPolicyCap_>cpuReserve ? cpuPolicyCap_-cpuReserve : 0);
+    }
+    std::lock_guard<std::mutex> lock(uploads_->mutex);
+    uploads_->simulateUma=smokeUma_.load();
+    uint64_t base=path_.AccountedAllocationBytes(&stagedScene_);
+    if (base+uploads_->gpuPendingBytes+uploads_->mandatoryBytes>target && path_.model.coarseComplete) {
+        path_.ShedTextureDetail();
+        std::vector<ReadyResourceInfo> ready;
+        uint64_t fineBytes=0;
+        for (const auto& mesh:path_.model.meshes) if (mesh.sourceGeometry.lodLevel==model_core::kFineLod) {
+            const uint64_t bytes=mesh.vertexAllocationBytes+mesh.indexAllocationBytes; fineBytes+=bytes;
+            ready.push_back({mesh.vertexBuffer.Get(),modelGeneration_,mesh.chunkId,model_core::kFineLod,bytes,mesh.lastVisibleFrame,mesh.viewPriority});
+        }
+        const uint64_t reserved=base-fineBytes+uploads_->gpuPendingBytes+uploads_->mandatoryBytes;
+        const auto plan=PlanEviction(SceneSnapshot(std::move(ready)),reserved<target ? target-reserved : 0);
+        std::vector<uint32_t> identities;
+        for (const auto& entry:plan) identities.push_back(entry.clusterId);
+        path_.EvictFineChunks(identities); evictionCount_.fetch_add(identities.size());
+        UpdateResidencySmoke();
+        // Retirement is not free capacity. Both fences must finish first.
+        base=path_.AccountedAllocationBytes(&stagedScene_);
+        for (auto id:uploads_->details) uploads_->requestedDetails.erase(id);
+        uploads_->details.clear();
+        // Drop queued ids while retaining the single worker-owned request.
+        // Recomputed view requests below never grow beyond 32 entries.
+    }
+    if (path_.model.coarseComplete && base>target && !uploads_->gpuPendingBytes && path_.retiredModels.empty()
+        && !fineChunks_.load() && failedBudgetGeneration_!=modelGeneration_) {
+        failedBudgetGeneration_=modelGeneration_;
+        auto message=std::make_unique<RenderUploadResult>(); message->generation=modelGeneration_;
+        message->errorCode=model_core::ImportErrorCode::OutOfMemory;
+        message->errorSummary=L"There is not enough GPU memory to refine this model.";
+        message->errorDetails=L"The complete preview and viewer resources exceed the current memory budget. Close other applications, then retry.";
+        if (auto snapshot=displaySnapshot_.load()) message->path=snapshot->path;
+        if (PostMessageW(window_,kRenderUploadCompleteMessage,0,reinterpret_cast<LPARAM>(message.get()))) message.release();
+    }
+    if (initialTerminal_ && path_.model.coarseComplete && scanCatalog_.size()>fineChunks_.load()) invalidated_.store(true);
+    uploads_->gpuBaseBytes=base; uploads_->gpuTargetBytes=target;
+    uploads_->changed.notify_all();
+    accountedGpuBytes_.store(base+uploads_->gpuPendingBytes); targetGpuBytes_.store(target); pendingGpuBytes_.store(uploads_->gpuPendingBytes);
+}
+
+void RenderThread::RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3], bool rotateY)
+{
+    if (!initialTerminal_ || !path_.model.coarseComplete || NowSeconds()<pauseDetailUntil_) return;
+    std::lock_guard<std::mutex> lock(uploads_->mutex);
+    if (uploads_->generation!=modelGeneration_) return;
+    const auto aligned=[](uint64_t bytes) { return (bytes+65535)/65536*65536; };
+    const auto cost=[&](const model_core::ChunkDescriptor& d) {
+        return aligned(uint64_t(d.vertexCount)*model_core::VertexStrideForLayout(model_core::VertexLayoutId(d.vertexLayoutId)))+aligned(uint64_t(d.indexCount)*4);
+    };
+    // Replace queued view requests at every camera epoch. Only the one already
+    // removed by the broker may continue; generation/copy filters guard it.
+    for (auto id:uploads_->details) uploads_->requestedDetails.erase(id);
+    uploads_->details.clear();
+    std::unordered_set<uint32_t> resident;
+    for (auto& mesh:path_.model.meshes) if (mesh.sourceGeometry.lodLevel==model_core::kFineLod) {
+        resident.insert(mesh.chunkId);
+        mesh.viewPriority=DetailViewPriority(mesh.sourceGeometry,path_.sceneOrigin,target,rotateY,vp);
+    }
+    struct Candidate { uint32_t id; float priority; uint64_t bytes; };
+    std::vector<Candidate> candidates;
+    for (const auto& [id,d]:scanCatalog_) {
+        if (resident.contains(id) || uploads_->requestedDetails.contains(id)) continue;
+        const float priority=DetailViewPriority(d,path_.sceneOrigin,target,rotateY,vp);
+        if (!priority) continue;
+        candidates.push_back({id,priority,cost(d)});
+        std::sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b) { return a.priority!=b.priority ? a.priority>b.priority : a.id<b.id; });
+        if (candidates.size()>32) candidates.pop_back();
+    }
+    uint64_t used=uploads_->gpuBaseBytes+uploads_->gpuPendingBytes;
+    for (auto id:uploads_->requestedDetails) if (scanCatalog_.contains(id)) used+=cost(scanCatalog_.at(id));
+    bool room=false;
+    for (const auto& candidate:candidates) {
+        if (used>=uploads_->gpuTargetBytes || candidate.bytes>uploads_->gpuTargetBytes-used) continue;
+        if (uploads_->requestedDetails.size()==32) break;
+        uploads_->details.push_back(candidate.id); uploads_->requestedDetails.insert(candidate.id);
+        used+=candidate.bytes; room=true;
+    }
+    if (!room && !candidates.empty() && uploads_->requestedDetails.empty()) {
+        std::vector<uint32_t> invisible;
+        for (const auto& mesh:path_.model.meshes)
+            if (mesh.sourceGeometry.lodLevel==model_core::kFineLod && mesh.viewPriority==0) invisible.push_back(mesh.chunkId);
+        path_.EvictFineChunks(invisible); evictionCount_.fetch_add(invisible.size()); UpdateResidencySmoke();
     }
 }

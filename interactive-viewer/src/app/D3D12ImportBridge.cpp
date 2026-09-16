@@ -298,12 +298,19 @@ void EnsureImportSandboxPrepared()
 }
 
 ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
-                        std::function<bool()> isCancelled, std::function<void(ImportResult)> onBatch, uint64_t sectionBytes, bool delayBatchesForTesting, uint32_t faultForTesting)
+                        std::function<bool()> isCancelled, std::function<void(ImportResult)> onBatch, uint64_t sectionBytes, bool delayBatchesForTesting, uint32_t faultForTesting,
+                        std::function<uint32_t()> nextDetail,
+                        std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows)
 {
     ImportResult result;
 
     import_broker::ImportSessionRequest sessionRequest;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting;
+    sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
+    if (!delayBatchesForTesting && !faultForTesting) {
+        sessionRequest.nextDetail = std::move(nextDetail);
+        sessionRequest.onInitialComplete = std::move(onInitialComplete);
+    }
     sessionRequest.isCancelled = std::move(isCancelled);
     sessionRequest.workerExePath = ResolveWorkerExePath();
     sessionRequest.sourcePath = path;
@@ -326,9 +333,17 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     if (faultForTesting == 5) sessionRequest.workerArgumentsOverride = L"--test-invalid-import-reply";
     import_broker::KnownChunkCatalog catalog;
     model_core::FileIdentity openedIdentity;
+    bool initialComplete = false;
+    if (sessionRequest.onInitialComplete) {
+        auto complete = std::move(sessionRequest.onInitialComplete);
+        sessionRequest.onInitialComplete = [&, complete](const auto& identity) {
+            initialComplete = true; complete(identity);
+        };
+    }
     sessionRequest.onSourceOpened=[&](const auto& identity) { openedIdentity=identity; };
     auto unpack = [&](std::vector<import_broker::ValidatedChunk> chunks) {
         ImportResult result;
+        result.detail = initialComplete;
         result.sourceIdentity=openedIdentity;
         result.forceUploadFailureForTesting = faultForTesting == 4;
         if (!chunks.empty()) result.scene = chunks.front().scene;

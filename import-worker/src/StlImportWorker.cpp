@@ -98,7 +98,14 @@ bool HandleStlImportFileRequest(HANDLE stdOut, const model_core::ParseStlFileReq
             result=ImportStl(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,
                              false,&batchSink,&*openResult.file);
         }
-        return ReportResult(stdOut, request.generationId, result);
+        if (!ReportResult(stdOut, request.generationId, result)) return false;
+        while (batchSink.DetailService() && std::holds_alternative<StlImportResult>(result) && batchSink.AwaitDetail()) {
+            if (!openResult.file->IsUnchanged()) return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::FileChanged);
+            result = ImportStl(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
+                               false, &batchSink, &*openResult.file);
+            if (!ReportResult(stdOut, request.generationId, result)) return false;
+        }
+        return true;
     } catch (const std::bad_alloc&) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::OutOfMemory);
     } catch (...) {

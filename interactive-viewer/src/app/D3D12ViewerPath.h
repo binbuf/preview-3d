@@ -10,8 +10,8 @@
 // one fixed root signature/PSO/shader pair targeting
 // model_core::VertexPositionNormalUv0F32's {position,normal,uv} layout with
 // base-color materials/textures and hemisphere lighting. Chrome is painted
-// through the D3D11On12/Direct2D bridge. Point-cloud (PositionOnly_F32) chunks are silently skipped
-// by BeginUploadModel, not rendered.
+// through the D3D11On12/Direct2D bridge. Position-only point chunks use
+// the existing point pipeline; camera-scaled splats remain TSK-208.
 //
 // Uploads run on their own copy queue through D3D12UploadRing and publish
 // through SceneSnapshot, so no load-time GPU work is submitted to or waited
@@ -42,6 +42,7 @@ struct D3D12ViewerPath
 {
     HRESULT lastPresentResult = E_PENDING;
     D3D12Device device;
+    D3D12Device::CreateOptions deviceOptions;
     D3D12CommandQueue directQueue;
     D3D12SwapChain swapChain;
 
@@ -105,6 +106,9 @@ struct D3D12ViewerPath
     {
         Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer;
         Microsoft::WRL::ComPtr<ID3D12Resource> indexBuffer;
+        uint64_t vertexAllocationBytes = 0, indexAllocationBytes = 0;
+        uint32_t lastVisibleFrame = 0;
+        float viewPriority = 0;
         D3D12_VERTEX_BUFFER_VIEW vbv{};
         D3D12_INDEX_BUFFER_VIEW ibv{};
         uint32_t chunkId = 0;
@@ -129,6 +133,7 @@ struct D3D12ViewerPath
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap;
         UINT descriptorSize = 0;
         UINT srvHeapIndex = 0;
+        uint64_t allocationBytes = 0;
     };
 
     // One model's GPU-side resources as a unit, so a completed upload can
@@ -140,6 +145,7 @@ struct D3D12ViewerPath
         uint64_t coarseAllocationBytes = 0;
         std::vector<GpuMesh> meshes;
         std::vector<GpuTexture> textures;
+        std::vector<GpuTexture> fallbackTextures;
         // One small shader-visible CBV_SRV_UAV heap, sized to
         // textures.size() and created once per model -- not per frame.
         // Absent (nullptr) when the model has no textures.
@@ -157,6 +163,11 @@ struct D3D12ViewerPath
     static void UpdateCoarseVisibility(ModelResources& resources);
     void EvictFineChunks(std::span<const uint32_t> identities);
     void RetirePreviewChunks(ModelResources& resources);
+    uint64_t AccountedAllocationBytes(const ModelResources* extra = nullptr) const;
+    static uint64_t EstimateUploadBytes(ID3D12Device* device,
+        std::span<const d3d12_import_bridge::ImportedMesh> meshes,
+        std::span<const d3d12_import_bridge::ImportedImage> images);
+    void ShedTextureDetail();
     bool hasModel = false;
     double sceneOrigin[3]{};
     model_core::UpAxisId sourceUpAxis = model_core::UpAxisId::Unknown;

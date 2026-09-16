@@ -22,6 +22,9 @@
 // discipline on the same control channel.
 
 #include <cstdint>
+#include "model_core/ControlProtocol.h"
+#include <optional>
+#include <cstring>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -30,12 +33,27 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "model_core/ControlChannelIo.h"
 
 namespace import_worker {
 
 class ChunkBatchSink {
 public:
     static void EnableCoarseProxy() { proxyEnabled_ = true; }
+    static void EnableDetailService() { detailService_ = true; EnableCoarseProxy(); }
+    bool DetailService() const { return detailService_; }
+    const model_core::ChunkDescriptor* RequestedSource() const { return requested_ ? &*requested_ : nullptr; }
+    bool AwaitDetail() {
+        auto message = model_core::ReadControlMessage(stdIn_);
+        if (!message || message->header.opcode != uint32_t(model_core::ControlOpcode::RequestDetail)
+            || message->payload.size() != sizeof(model_core::DetailRequest)) return false;
+        model_core::DetailRequest request;
+        std::memcpy(&request, message->payload.data(), sizeof(request));
+        if (request.generationId != generationId_ || request.source.lodLevel != model_core::kScanLod
+            || !request.source.sourceRangeLength) return false;
+        requested_ = request.source;
+        return true;
+    }
     bool ProxyEnabled() const { return proxyEnabled_; }
     bool Preview() const { return proxyEnabled_ && !scanStarted_; }
     void BeginScan() { scanStarted_ = true; }
@@ -68,6 +86,8 @@ public:
 
 private:
     inline static bool proxyEnabled_ = false;
+    inline static bool detailService_ = false;
+    std::optional<model_core::ChunkDescriptor> requested_;
     bool refinement_ = false;
     bool scanStarted_ = false;
     inline static unsigned delayMs_ = 0;

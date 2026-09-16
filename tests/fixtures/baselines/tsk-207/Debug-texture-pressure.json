@@ -1,0 +1,50 @@
+[
+  {
+    "failure": null,
+    "events": [],
+    "requestedUmaDevice": false,
+    "peakQueueBytes": 2797200,
+    "peakOutstandingRequests": 0,
+    "peakViewerPrivateBytes": 620642304,
+    "actualUma": false,
+    "textureFixtureSha256": {
+      "raster-256.glb": "873ba959f2a02accfe3f77a8ca19017872dfb858eeea4f6fbce6eae483ac591a",
+      "raster-capped.glb": "6d56da4bd1a8fa4cf73f31e9dd34d2f202ee430da6d57d97dbe98cdafadd3305",
+      "raster-corrupt.glb": "bb28ec60eda8dd37e648122bab17384dc72c8ba2158a2cb26951118098b7d352"
+    },
+    "texturePressure": {
+      "generation": 1,
+      "fullWidth": 2048,
+      "fallbackWidth": 64,
+      "lowTargetMiB": 35,
+      "accountedGpuBytes": 34799616,
+      "targetGpuBytes": 36700160
+    },
+    "exitCode": 0,
+    "survivingWorkers": 0
+  },
+  {
+    "failure": null,
+    "events": [],
+    "requestedUmaDevice": true,
+    "peakQueueBytes": 2797200,
+    "peakOutstandingRequests": 0,
+    "peakViewerPrivateBytes": 739901440,
+    "actualUma": true,
+    "textureFixtureSha256": {
+      "raster-256.glb": "873ba959f2a02accfe3f77a8ca19017872dfb858eeea4f6fbce6eae483ac591a",
+      "raster-capped.glb": "6d56da4bd1a8fa4cf73f31e9dd34d2f202ee430da6d57d97dbe98cdafadd3305",
+      "raster-corrupt.glb": "bb28ec60eda8dd37e648122bab17384dc72c8ba2158a2cb26951118098b7d352"
+    },
+    "texturePressure": {
+      "generation": 1,
+      "fullWidth": 2048,
+      "fallbackWidth": 64,
+      "lowTargetMiB": 35,
+      "accountedGpuBytes": 35389440,
+      "targetGpuBytes": 36700160
+    },
+    "exitCode": 0,
+    "survivingWorkers": 0
+  }
+]

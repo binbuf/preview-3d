@@ -657,6 +657,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         if (vertexElement->count / 256 * 8 > TierAScratchLimit() / 4)
             return ImportErrorCode::ResourceLimit;
         uint64_t vertexStart = 0, vertexStride = 0, sourceFirst = 0, sourceEnd = 0, totalTriangles = 0;
+        uint32_t sourceElementOffset=0;
         bool vertexSeen = false, haveOrigin = false;
         double origin[3]{};
         for (const auto& property : vertexElement->properties)
@@ -741,6 +742,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             d.indexCount = uint32_t(indices.size());
             d.sourceRangeOffset = sourceFirst;
             d.sourceRangeLength = sourceEnd - sourceFirst;
+            d.sourceElementOffset=sourceElementOffset;
             std::memcpy(d.origin, origin, sizeof(origin));
             d.geometryFlags = hasFace && hasUv ? kGeometryHasUv0 : 0;
             if (hasColors)
@@ -781,6 +783,9 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             haveOrigin = false;
             return std::nullopt;
         };
+        const auto* requested = batchSink ? batchSink->RequestedSource() : nullptr;
+        if (requested && (requested->sourceRangeOffset > sourceSize || requested->sourceRangeLength > sourceSize - requested->sourceRangeOffset))
+            return ImportErrorCode::MalformedData;
         for (const auto& element : header.elements)
         {
             if (&element == vertexElement)
@@ -790,13 +795,16 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             }
             if (&element == faceElement && hasFace && !vertexSeen)
                 return ImportErrorCode::UnsupportedEncoding;
-            if (preview && &element==vertexElement && hasFace && vertexStride) {
+            if ((preview || requested) && &element==vertexElement && hasFace && vertexStride) {
                 const uint64_t bytes=element.count*vertexStride;
                 if (cursor>sourceSize || bytes>sourceSize-cursor) return ImportErrorCode::MalformedData;
                 cursor+=bytes; continue;
             }
+            if (requested && ((&element == faceElement && hasFace) || (&element == vertexElement && !hasFace))) cursor = requested->sourceRangeOffset;
             for (uint64_t record = 0; record < element.count; ++record)
             {
+                if (requested && ((&element == faceElement && hasFace) || (&element == vertexElement && !hasFace))
+                    && cursor >= requested->sourceRangeOffset + requested->sourceRangeLength) break;
                 if (preview && &element==vertexElement && !hasFace && vertexStride) {
                     const auto next=std::lower_bound(previewVertices.begin(),previewVertices.end(),record);
                     if (next==previewVertices.end()) break;
@@ -818,7 +826,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 {
                     if (!vertexStride && record % 256 == 0)
                         checkpoints.push_back(cursor);
-                    if (preview && hasFace) {
+                    if ((preview || requested) && hasFace) {
                         if (auto error=skipRecord(element)) return *error;
                         continue;
                     }
@@ -887,8 +895,10 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                     if (count - 2 > kTierATriangles - totalTriangles)
                         return ImportErrorCode::ResourceLimit;
                     totalTriangles += count - 2;
-                    for (size_t triangle = 1; triangle + 1 < count; ++triangle)
+                    const size_t firstTriangle=requested && start==requested->sourceRangeOffset ? 1+requested->sourceElementOffset : 1;
+                    for (size_t triangle = firstTriangle; triangle + 1 < count; ++triangle)
                     {
+                        if (requested && indices.size()>=requested->indexCount) break;
                         if (indices.size() / 3 == chunkTriangles)
                             if (auto error = flush())
                                 return *error;
@@ -919,7 +929,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                             if (!haveOrigin)
                             {
                                 std::memcpy(origin, position, sizeof(origin));
-                                sourceFirst = start;
+                                sourceFirst = start; sourceElementOffset=uint32_t(triangle-1);
                                 haveOrigin = true;
                             }
                             vertex.px = float(position[0] - origin[0]);
@@ -936,7 +946,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 else if (auto error = skipRecord(element))
                     return *error;
             }
-            if (preview && ((&element==faceElement && hasFace) || (&element==vertexElement && !hasFace))) break;
+            if ((preview || requested) && ((&element==faceElement && hasFace) || (&element==vertexElement && !hasFace))) break;
         }
         if (auto error = flush())
             return *error;

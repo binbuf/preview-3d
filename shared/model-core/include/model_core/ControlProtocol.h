@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model_core/ImportError.h"
+#include "model_core/WireFormat.h"
 
 #include <cstdint>
 
@@ -44,6 +45,7 @@ enum class ControlOpcode : uint32_t {
     // must block for it before touching the section again.
     ChunkBatchReady = 12,         // worker -> host, non-terminal
     ChunkBatchConsumed = 13,      // host -> worker
+    RequestDetail = 14,           // host -> worker; one validated source region
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -51,6 +53,12 @@ enum class ControlOpcode : uint32_t {
 constexpr uint32_t kMaxControlPayloadBytes = 256;
 
 #pragma pack(push, 1)
+
+struct DetailRequest {
+    uint64_t generationId;
+    ChunkDescriptor source;
+};
+static_assert(sizeof(DetailRequest) == 168);
 
 struct ControlMessageHeader {
     uint32_t opcode;      // ControlOpcode value

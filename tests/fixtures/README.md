@@ -198,3 +198,28 @@ and two-second first-preview qualification remain TSK-206. Generated source
 binaries remain outside git; final manifest/reports are retained in
 [baselines/tsk-205](baselines/tsk-205/). See
 [TSK-205 verification](../../.docs/TSK-205_VERIFICATION.md) for limits and commands.
+
+## TSK-207 live detail budget verification
+
+`tests/app-smoke/budget.py` reuses bounded recipes for Pressure, two-million
+triangle GLB/STL/both-endian PLY meshes and eight-million point PLYs. It selects
+physical discrete and UMA adapters, injects low model budgets, checks complete
+coarse coverage and fence retirement, then moves the camera and restores capacity
+to verify pinned worker source-range re-decode. A deterministic PNG scene checks
+texture reduction to its retained mip tail. Reserved-set failure, valid reopen
+and worker cleanup are required. `--large-fixture` adds an existing multi-GiB
+source; no generated binary is committed.
+
+```powershell
+python tests/app-smoke/budget.py --configuration Debug --output TestResults/tsk207-Debug-budget.json
+python tests/app-smoke/budget.py --configuration Release --large-fixture TestResults/tsk205-large-fixtures/A-large-stl.stl --output TestResults/tsk207-Release-budget.json
+& ./x64/Release/Tests.ImportIsolation.exe '[detail-budget]'
+& ./x64/Debug/Tests.Unit.exe '[detail-budget]'
+```
+
+Protocol v6's PLY polygon-fan offset permits exact replay when a region begins
+inside a face. Replay checks both byte orders, mesh/point paths, external glTF,
+Draco, repeated requests and refusal. GPU unit tests gate both queue fences to
+check retirement accounting and shared-resource deduplication. See
+[TSK-207 verification](../../.docs/TSK-207_VERIFICATION.md); final reports and
+source/binary/harness hashes are in [baselines/tsk-207](baselines/tsk-207/).

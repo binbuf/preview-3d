@@ -1,0 +1,157 @@
+
+  main.cpp
+  ContainmentProbes.cpp
+  GenerationWorker.cpp
+  SyntheticSceneGenerator.cpp
+  GltfImportWorker.cpp
+  GltfAdapter.cpp
+  DracoDecodeAdapter.cpp
+  TextureTranscodeAdapter.cpp
+  ImageFormatSniff.cpp
+  WicImageDecodeAdapter.cpp
+  SidecarFileClient.cpp
+  ChunkBatchSink.cpp
+  StlImportWorker.cpp
+  StlAdapter.cpp
+  PlyImportWorker.cpp
+  PlyAdapter.cpp
+  AsciiTokenizer.cpp
+  WorkerRequestDispatch.cpp
+  MappedView.cpp
+  ControlChannelIo.cpp
+  Generating Code...
+  Compiling...
+  MappedFile.cpp
+  Generating Code...
+  Preview3DImportWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DImportWorker.exe
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\draco.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\draco.dll done
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\fastgltf.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\fastgltf.dll done
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\simdjson.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\simdjson.dll done
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\ktx.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\ktx.dll done
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\zstd.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\zstd.dll done
+  Chrome.cpp
+  InfoPanel.cpp
+  Model.cpp
+  NavGizmo.cpp
+  Preview3D.cpp
+  Settings.cpp
+  Renderer.cpp
+  ShellIntegration.cpp
+  D3D12ViewerPath.cpp
+  D3D12Device.cpp
+  D3D12CommandQueue.cpp
+  RenderThread.cpp
+  DxgiBudgetMonitor.cpp
+  D3D11On12Overlay.cpp
+  D3D12SwapChain.cpp
+  FrameStats.cpp
+  D3D12UploadRing.cpp
+  D3D12ImportBridge.cpp
+  AppContainerSid.cpp
+  ProcThreadAttributeList.cpp
+  Generating Code...
+  Compiling...
+  MappedView.cpp
+  ControlChannelWait.cpp
+  ImportSession.cpp
+  SandboxLauncher.cpp
+  SharedSection.cpp
+  SharedSectionValidator.cpp
+  SourceFileAccess.cpp
+  SidecarPathResolver.cpp
+  SidecarRequestServicer.cpp
+  ControlChannelIo.cpp
+  Generating Code...
+  Preview3D.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3D.exe
+  Chrome.cpp
+  NavGizmo.cpp
+  InfoPanel.cpp
+  HarnessSmokeTests.cpp
+  FixtureManifestTests.cpp
+  WireFormatTests.cpp
+  CoarseProxyTests.cpp
+  GraphicsDeviceTests.cpp
+  CommandQueueTests.cpp
+  D3D11On12OverlayTests.cpp
+  FrameStatsTests.cpp
+  SwapChainTests.cpp
+  GenerationTests.cpp
+  UploadRingTests.cpp
+  WicImageDecodeAdapter.cpp
+  ImageFormatSniff.cpp
+  TextureTranscodeAdapter.cpp
+  D3D12ViewerPath.cpp
+  MappedFileTests.cpp
+  DxgiBudgetMonitorTests.cpp
+  Generating Code...
+  Compiling...
+  DerivedCacheTests.cpp
+  D3D12Device.cpp
+  D3D12CommandQueue.cpp
+  D3D12SwapChain.cpp
+  D3D11On12Overlay.cpp
+  FrameStats.cpp
+  D3D12UploadRing.cpp
+  SyntheticStreamingSource.cpp
+  DxgiBudgetMonitor.cpp
+  DerivedCache.cpp
+  MappedView.cpp
+  Sha256.cpp
+  MappedFile.cpp
+  Generating Code...
+  Tests.Unit.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Tests.Unit.exe
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\ktx.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\ktx.dll done
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\zstd.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\zstd.dll done
+  main.cpp
+  AttackModes.cpp
+  SyntheticSceneGenerator.cpp
+  MappedView.cpp
+  ControlChannelIo.cpp
+  Generating Code...
+  Preview3DHostileWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DHostileWorker.exe
+  HarnessSmokeTests.cpp
+  FixtureManifestTests.cpp
+  SandboxLaunchTests.cpp
+  ImportPipelineTests.cpp
+  HostileWorkerTests.cpp
+  GltfImportTests.cpp
+  StlImportTests.cpp
+  PlyImportTests.cpp
+  SourceFileAccessTests.cpp
+  WorkerPoolTests.cpp
+  SharedSectionValidatorTextureTests.cpp
+  SidecarPathResolverTests.cpp
+  SidecarProtocolTests.cpp
+  ChunkBatchTests.cpp
+  BoundedScanTests.cpp
+  CoarseProxyTests.cpp
+  DracoDecodeAdapterTests.cpp
+  TextureTranscodeAdapterTests.cpp
+  TexturePathTests.cpp
+  WicImageDecodeAdapter.cpp
+  Generating Code...
+  Compiling...
+  ImageFormatSniff.cpp
+  DracoDecodeAdapter.cpp
+  TextureTranscodeAdapter.cpp
+  AppContainerSid.cpp
+  ProcThreadAttributeList.cpp
+  MappedView.cpp
+  ImportSessionTests.cpp
+  RecoveryTests.cpp
+  D3D12ImportBridge.cpp
+  ControlChannelWait.cpp
+  ImportSession.cpp
+  SandboxLauncher.cpp
+  SharedSection.cpp
+  SharedSectionValidator.cpp
+  SourceFileAccess.cpp
+  SidecarPathResolver.cpp
+  SidecarRequestServicer.cpp
+  WorkerPool.cpp
+  ControlChannelIo.cpp
+  Generating Code...
+  Tests.ImportIsolation.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Tests.ImportIsolation.exe
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\draco.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\draco.dll done
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\ktx.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\ktx.dll done
+  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\zstd.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\zstd.dll done

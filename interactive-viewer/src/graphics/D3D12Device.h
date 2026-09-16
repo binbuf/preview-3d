@@ -25,6 +25,7 @@ public:
         // performance fallback." This must be threaded from an explicit
         // caller/command-line flag, never inferred.
         bool forceWarp = false;
+        bool preferUma = false; // explicit developer qualification only
     };
 
     struct CreateResult
@@ -52,7 +53,7 @@ public:
 
 private:
     static bool TryEnableDebugLayerIfDeveloperBuild();
-    static Microsoft::WRL::ComPtr<IDXGIAdapter1> SelectHardwareAdapter(IDXGIFactory6& factory);
+    static Microsoft::WRL::ComPtr<IDXGIAdapter1> SelectHardwareAdapter(IDXGIFactory6& factory, bool preferUma);
     static Microsoft::WRL::ComPtr<IDXGIAdapter1> SelectWarpAdapter(IDXGIFactory6& factory);
 
     Microsoft::WRL::ComPtr<IDXGIFactory6> factory_;

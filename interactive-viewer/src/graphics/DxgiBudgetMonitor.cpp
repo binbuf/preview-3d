@@ -65,12 +65,11 @@ uint64_t DxgiBudgetMonitor::ComputeDetailTargetBytes() const
         return 0;
     }
 
-    constexpr double kMaxFraction = 0.6;
     constexpr uint64_t kMinHeadroomBytes = 512ull * 1024 * 1024;
 
     uint64_t budget = info.Budget;
-    uint64_t sixtyPercent = static_cast<uint64_t>(static_cast<double>(budget) * kMaxFraction);
-    uint64_t withHeadroom = (budget > kMinHeadroomBytes) ? (budget - kMinHeadroomBytes) : 0;
+    uint64_t sixtyPercent = (budget/5)*3 + (budget%5)*3/5;
+    uint64_t withHeadroom = (budget > kMinHeadroomBytes) ? (budget - kMinHeadroomBytes) : sixtyPercent;
 
     // Both bounds apply to the same target -- not additive -- and this is
     // recomputed fresh from the live query on every call, never cached, so
@@ -105,7 +104,10 @@ std::vector<EvictionCandidate> PlanEviction(const SceneSnapshot& snapshot, uint6
     }
 
     std::sort(sorted.begin(), sorted.end(), [](const ReadyResourceInfo& a, const ReadyResourceInfo& b) {
-        return a.lastVisibleFrame < b.lastVisibleFrame;
+        if (a.lastVisibleFrame != b.lastVisibleFrame) return a.lastVisibleFrame < b.lastVisibleFrame;
+        if (a.projectedError != b.projectedError) return a.projectedError < b.projectedError;
+        if (a.approximateBytes != b.approximateBytes) return a.approximateBytes > b.approximateBytes;
+        return a.clusterId < b.clusterId;
     });
 
     std::vector<EvictionCandidate> plan;

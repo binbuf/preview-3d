@@ -248,7 +248,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         if (descriptor.lodLevel > model_core::kPreviewLod)
             return Reject(ImportErrorCode::MalformedData, "unknown geometry role");
         if (descriptor.topology != ChunkTopology::TriangleList && descriptor.topology != ChunkTopology::PointList) {
-            if (descriptor.lodLevel || descriptor.meshId || descriptor.nodeId || descriptor.geometryFlags
+            if (descriptor.lodLevel || descriptor.meshId || descriptor.nodeId || descriptor.geometryFlags || descriptor.sourceElementOffset
                 || descriptor.boundsState != model_core::BoundsState::Unknown)
                 return Reject(ImportErrorCode::MalformedData, "non-geometry chunk declares geometry metadata");
             for (unsigned axis=0; axis<3; ++axis) if (descriptor.origin[axis] != 0
@@ -315,6 +315,9 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                 return Reject(ImportErrorCode::MalformedData, "byteSize does not match declared counts");
             }
 
+            if (descriptor.sourceElementOffset>252 || (descriptor.sourceElementOffset
+                && (header.scene.format!=model_core::SourceFormatId::Ply || descriptor.topology!=model_core::ChunkTopology::TriangleList)))
+                return Reject(model_core::ImportErrorCode::ImportProtocolViolation, "invalid source fan offset");
             if (descriptor.boundsState != model_core::BoundsState::Verified
                 || (descriptor.geometryFlags & ~model_core::kGeometryFlagsKnownMask) != 0
                 || (descriptor.meshId && descriptor.meshId > header.scene.meshCount)

@@ -1257,15 +1257,25 @@ void BeginOpen(ViewerApp& app, std::wstring path)
     const uint64_t sectionBytes = app.renderThread.SmokeSectionBytes();
     const bool delayBatches = app.renderThread.DelayBatches();
     const uint32_t faultForTesting = app.appSmoke ? app.faultForTesting : 0;
-    std::thread([window, generation, path, format, alive, cancellation, sink, delayBatches, sectionBytes, faultForTesting]()
+    auto detailSource = app.renderThread.DetailSource(generation);
+    auto cpuGuard = app.renderThread.CpuBudgetGuard();
+    std::thread([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting]()
     {
         d3d12_import_bridge::ImportResult result;
+        bool initialComplete = false;
+        auto complete = [&](const model_core::FileIdentity& identity) {
+            initialComplete = true;
+            if (!alive->load() || cancellation->load()) return;
+            d3d12_import_bridge::ImportResult terminal; terminal.ok=true; terminal.sourceIdentity=identity;
+            auto* message = new (std::nothrow) D3D12CompleteMessage{generation,path,std::move(terminal)};
+            if (message && !PostMessageW(window,kD3D12ImportCompleteMessage,0,reinterpret_cast<LPARAM>(message))) delete message;
+        };
         try
         {
             result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
             {
                 return cancellation->load(std::memory_order_relaxed);
-            }, sink, sectionBytes, delayBatches, faultForTesting);
+            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard);
         }
         catch (const std::length_error&)
         {
@@ -1288,7 +1298,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
             result.errorSummary = L"This model could not be previewed.";
             result.errorDetails = L"The importer stopped unexpectedly while reading the model.";
         }
-        if (!alive->load(std::memory_order_relaxed)) return;
+        if (!alive->load(std::memory_order_relaxed) || (initialComplete && cancellation->load())) return;
         auto* message = new (std::nothrow) D3D12CompleteMessage{ generation, path, std::move(result) };
         if (message && !PostMessageW(window, kD3D12ImportCompleteMessage, 0, reinterpret_cast<LPARAM>(message)))
             delete message;
@@ -1711,7 +1721,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message)
     {
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 54) return 0;
+        if (!app->appSmoke || wParam > 64) return 0;
         if (wParam == 52) { app->renderThread.RequestSmokeEviction(); return 1; }
         if (wParam == 47) return app->loadedModel ? static_cast<LRESULT>(app->loadedModel->source.generationId) : 0;
         if (wParam == 46) { app->holdUploadMessagesForTesting = lParam != 0; return 1; }
@@ -1760,6 +1770,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             }
             }
         }
+        if (wParam==62) { app->renderThread.SetSmokeBudget(uint64_t(lParam)*1024*1024); return 1; }
+        if (wParam==63) { app->renderThread.SetSmokeUma(lParam!=0); return 1; }
         if (wParam==40) return static_cast<LRESULT>(app->warning.size());
         if (wParam == 30) { ToggleShowNativeOrientation(*app); return app->showNativeOrientation; }
         return static_cast<LRESULT>(app->renderThread.SmokeValue(static_cast<unsigned>(wParam)));
@@ -2681,7 +2693,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         app->errorSummary.clear();
         app->errorDetails.clear();
         UpdateTitle(*app);
-        if (uploaded->terminal) SetFocus(window);
+        if (uploaded->terminal && !uploaded->refinement) SetFocus(window);
         UpdateButtonAvailability(*app);
         LayoutControls(*app);
         InvalidateRect(window, nullptr, FALSE);
@@ -2771,6 +2783,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         {
             if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
+            else if (_wcsicmp(arguments[i], L"--uma-budget-smoke") == 0) {
+                app.appSmoke=true; app.renderThread.SetSmokeUmaDevice();
+            }
             else if (_wcsicmp(arguments[i], L"--coarse-proxy-smoke") == 0) {
                 app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 4ull*1024*1024, false);
             }

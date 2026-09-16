@@ -24,16 +24,19 @@
 // All application rendering runs here through D3D12ViewerPath.
 
 #include "D3D12ViewerPath.h"
+#include "DxgiBudgetMonitor.h"
 #include "platform/Win32Handle.h"
 
 #include "Renderer.h" // Camera and FlightInput -- pure DirectXMath, no D3D11 coupling
 #include <d3d12sdklayers.h>
+#include <psapi.h>
 
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -53,6 +56,7 @@ struct RenderUploadResult
     std::uint64_t generation = 0;
     bool ok = false;
     bool terminal = false;
+    bool refinement = false;
     std::wstring path;
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
     std::wstring errorSummary;
@@ -117,6 +121,29 @@ class RenderThread
 {
 public:
     void RequestSmokeEviction() { smokeEviction_.store(true); Invalidate(); }
+    void SetSmokeBudget(uint64_t bytes) { smokeBudgetBytes_.store(bytes); Invalidate(); }
+    void SetSmokeUma(bool enabled) { smokeUma_.store(enabled); Invalidate(); }
+    void SetSmokeUmaDevice() { path_.deviceOptions.preferUma=true; } // before Start only
+    std::function<bool(uint64_t)> CpuBudgetGuard() {
+        auto inbox=uploads_; const auto baseline=baselineCpuBytes_, cap=cpuPolicyCap_; const bool uma=isUma_;
+        return [inbox,baseline,cap,uma](uint64_t workerBytes) {
+            PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb=sizeof(memory);
+            if (!K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))) return false;
+            const uint64_t growth=memory.PrivateUsage>baseline ? memory.PrivateUsage-baseline : 0;
+            std::lock_guard<std::mutex> lock(inbox->mutex); inbox->workerPrivateBytes=workerBytes;
+            const uint64_t destinations=(uma || inbox->simulateUma) ? inbox->gpuBaseBytes+inbox->gpuPendingBytes : 0;
+            return workerBytes<=cap && growth<=cap-workerBytes && destinations<=cap-workerBytes-growth;
+        };
+    }
+    std::function<uint32_t()> DetailSource(std::uint64_t generation) {
+        auto inbox=uploads_;
+        return [inbox,generation] {
+            std::lock_guard<std::mutex> lock(inbox->mutex);
+            if (inbox->generation!=generation || inbox->details.empty()) return uint32_t(0);
+            ++inbox->detailRequests;
+            const auto identity=inbox->details.front(); inbox->details.pop_front(); return identity;
+        };
+    }
     // The camera is borrowed, not owned: UI input and the render loop share
     // exactly one camera, and both access it through LockCamera.
     explicit RenderThread(Camera& camera)
@@ -279,6 +306,8 @@ private:
         std::shared_ptr<std::atomic_bool> cancellation;
         size_t bytes = 0;
         bool terminal = false;
+        uint64_t gpuBytes = 0;
+        uint32_t detailIdentity = 0;
     };
     struct Publication {
         UploadTask task;
@@ -294,6 +323,11 @@ private:
         std::uint64_t generation = 0;
         std::wstring path;
         bool stopped = false;
+        std::deque<uint32_t> details;
+        std::unordered_set<uint32_t> requestedDetails;
+        uint64_t gpuBaseBytes=0, gpuPendingBytes=0, gpuTargetBytes=0, workerPrivateBytes=0, detailRequests=0;
+        bool simulateUma=false;
+        uint64_t mandatoryBytes=0, coarseGeneration=0;
         static constexpr size_t countCap = 4;
     };
     std::shared_ptr<UploadInbox> uploads_ = std::make_shared<UploadInbox>();
@@ -312,6 +346,19 @@ private:
     std::atomic<uint64_t> coarseChunks_{0}, fineChunks_{0}, suppressedCoarse_{0}, coarseCompleteGeneration_{0}, scannedPrimitives_{0};
     std::atomic<uint64_t> coarseAllocationBytes_{0};
     void UpdateResidencySmoke();
+    void UpdateBudget();
+    void RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3], bool rotateY);
+    DxgiBudgetMonitor budgetMonitor_;
+    bool isUma_=false;
+    uint64_t cpuPolicyCap_=0, baselineCpuBytes_=0;
+    HWND window_=nullptr;
+    uint64_t failedBudgetGeneration_=0;
+    std::atomic<uint64_t> smokeBudgetBytes_{UINT64_MAX}, accountedGpuBytes_{0}, targetGpuBytes_{0}, pendingGpuBytes_{0};
+    std::atomic<uint64_t> evictionCount_{0}, rejectedDetailCount_{0};
+    std::atomic<bool> smokeUma_{false};
+    bool initialTerminal_=false;
+    double pauseDetailUntil_=0;
+    std::unordered_map<uint32_t,model_core::ChunkDescriptor> scanCatalog_;
 
     mutable std::mutex statsMutex_;
     StatsSnapshot stats_;

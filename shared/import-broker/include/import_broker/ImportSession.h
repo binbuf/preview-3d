@@ -108,6 +108,11 @@ constexpr uint64_t kImportWorkerCommitLimitBytes = 4ull * 1024 * 1024 * 1024;
 constexpr uint32_t kWorkerReplyTimeoutMs = 120'000;
 
 struct ImportSessionRequest {
+    // Keeps pinned source/approved sidecars in the same zero-capability worker.
+    // The callback returns at most one region id; zero means no work this tick.
+    std::function<uint32_t()> nextDetail;
+    std::function<void(const model_core::FileIdentity&)> onInitialComplete;
+    std::function<bool(uint64_t)> cpuBudgetAllows; // worker private bytes; trusted product policy
     bool enableCoarseProxy = false;
     // Trusted handle-derived identity, available before preview/coarse handoff.
     std::function<void(const model_core::FileIdentity&)> onSourceOpened;
