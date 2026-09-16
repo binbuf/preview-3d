@@ -45,6 +45,9 @@ enum class Control
     ErrorRetry,
     ErrorOpenAnother,
     ErrorCopyDetails,
+    // Appended to preserve the stable numeric runtime IDs of existing UIA
+    // fragments. VisibleControls supplies its visual/tab order explicitly.
+    GroundAxis,
     Count,
 };
 

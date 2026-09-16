@@ -16,6 +16,7 @@ using namespace DirectX;
 enum class OverlayIconKind
 {
     Grid,
+    GroundAxis,
     AxisSnap,
     Speed,
     Fit,
@@ -67,6 +68,15 @@ void DrawIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush, OverlayIco
     const float stroke = Scale(1.4f, scale);
     switch (kind)
     {
+    case OverlayIconKind::GroundAxis:
+        // The current X/Y/Z letter is drawn with DirectWrite by DrawTitleBar.
+        // A small ground line and upward tick keep it recognizable as an
+        // orientation control rather than an arbitrary text button.
+        target->DrawLine(D2D1::Point2F(cx - Scale(7.0f, scale), cy + Scale(7.0f, scale)),
+            D2D1::Point2F(cx + Scale(7.0f, scale), cy + Scale(7.0f, scale)), brush, stroke);
+        target->DrawLine(D2D1::Point2F(cx - Scale(7.0f, scale), cy + Scale(7.0f, scale)),
+            D2D1::Point2F(cx - Scale(7.0f, scale), cy + Scale(2.0f, scale)), brush, stroke);
+        break;
     case OverlayIconKind::Grid:
     {
         const float half = Scale(7.0f, scale);
@@ -773,6 +783,16 @@ void D3D11On12Overlay::DrawTitleBar(const OverlayInfo& overlay, const Chrome& ch
         DrawIconButton(state.rect, icon, state.visible, state.enabled, active, hovered, pressedNow, scale);
     };
     drawActionButton(Chrome::Part::Grid, OverlayIconKind::Grid, overlay.gridVisible);
+    drawActionButton(Chrome::Part::GroundAxis, OverlayIconKind::GroundAxis, false);
+    const Chrome::ButtonState& groundAxis = chrome.Button(Chrome::Part::GroundAxis);
+    if (groundAxis.visible)
+    {
+        const std::wstring label = GroundAxisName(overlay.effectiveGroundAxis);
+        RECT labelRect = groundAxis.rect;
+        labelRect.bottom -= static_cast<LONG>(Scale(2.0f, scale));
+        DrawText(label, gizmoFormat.Get(), ToRectF(labelRect), D2D1::ColorF(0xF5F5F7),
+            DWRITE_TEXT_ALIGNMENT_CENTER);
+    }
     drawActionButton(Chrome::Part::AxisSnap, OverlayIconKind::AxisSnap, overlay.axisSnapEnabled);
     drawActionButton(Chrome::Part::Speed, OverlayIconKind::Speed, false);
     drawActionButton(Chrome::Part::Fit, OverlayIconKind::Fit, false);

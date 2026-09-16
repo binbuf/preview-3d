@@ -65,13 +65,27 @@ try {
 $viewer=Start-Viewer $good
 try {
     $controls=Children $viewer
-    foreach($expected in @('Ground grid','Axis snap','Travel speed','Fit selection or model','Reset view','Share','More options','Open with','Minimize','Maximize','Close','Model information','Zoom','Fullscreen','View from positive X','View from negative Z')){
+    foreach($expected in @('Ground grid','Model ground axis','Axis snap','Travel speed','Fit selection or model','Reset view','Share','More options','Open with','Minimize','Maximize','Close','Model information','Zoom','Fullscreen','View from positive X','View from negative Z')){
         $control=Find-Control $controls $expected
         Assert $control.Current.IsKeyboardFocusable "$expected is not keyboard focusable"
     }
     Assert ((Find-Control $controls 'Ground grid').Current.ControlType -eq [System.Windows.Automation.ControlType]::CheckBox) 'Grid role is not CheckBox'
     Assert ((Find-Control $controls 'Zoom').Current.ControlType -eq [System.Windows.Automation.ControlType]::Slider) 'Zoom role is not Slider'
     $checks.Add('UIA names, roles, states, and keyboard-focusable custom controls')
+
+    $ground=Find-Control $controls 'Model ground axis'
+    $axisBefore=[string]$ground.GetCurrentPropertyValue([System.Windows.Automation.ValuePatternIdentifiers]::ValueProperty)
+    Assert (@('X','Y','Z') -contains $axisBefore) 'Ground-axis UIA value is missing'
+    $originalAxis=[Preview3DNative]::SendMessage($viewer.MainWindowHandle,0x8068,[UIntPtr]71,[IntPtr]0).ToInt64()
+    ([System.Windows.Automation.InvokePattern]$ground.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    Start-Sleep -Milliseconds 400
+    $axisAfter=[string](Find-Control (Children $viewer) 'Model ground axis').GetCurrentPropertyValue([System.Windows.Automation.ValuePatternIdentifiers]::ValueProperty)
+    Assert ($axisAfter -ne $axisBefore -and @('X','Y','Z') -contains $axisAfter) 'Ground-axis UIA invoke did not cycle its value'
+    [Preview3DNative]::SendMessage($viewer.MainWindowHandle,0x8068,[UIntPtr]70,[IntPtr]$originalAxis)|Out-Null
+    # Save the restored axis without changing the final native-orientation state.
+    [Preview3DNative]::SendMessage($viewer.MainWindowHandle,0x8068,[UIntPtr]30,[IntPtr]0)|Out-Null
+    [Preview3DNative]::SendMessage($viewer.MainWindowHandle,0x8068,[UIntPtr]30,[IntPtr]0)|Out-Null
+    $checks.Add('ground-axis name, current value, Invoke action, and restored preference')
 
     $style=[Preview3DNative]::GetWindowLongPtr($viewer.MainWindowHandle,-16).ToInt64()
     Assert (($style -band 0x00080000) -ne 0 -and [Preview3DNative]::GetSystemMenu($viewer.MainWindowHandle,$false) -ne [IntPtr]::Zero) 'Alt+Space system menu contract is missing'

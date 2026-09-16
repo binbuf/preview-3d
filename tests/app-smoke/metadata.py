@@ -19,7 +19,10 @@ def fixtures(directory):
     binary = b''.join(struct.pack('<3f',*p) for p in positions)+struct.pack('<6I',0,1,2,0,2,3)
     document = {'asset':{'version':'2.0'},'scene':0,'scenes':[{'nodes':[0]}],
         'nodes':[{'mesh':0,'translation':[1e12,-2e12,3e12],'scale':[1e-4,1e-4,1e-4]}],
-        'meshes':[{'primitives':[{'attributes':{'POSITION':0},'indices':1}]}],
+        # Double-sided so every X/Y/Z grounding remains visible to the fixed
+        # Home camera; this fixture tests transforms/picking, not culling.
+        'materials':[{'doubleSided':True}],
+        'meshes':[{'primitives':[{'attributes':{'POSITION':0},'indices':1,'material':0}]}],
         'accessors':[{'bufferView':0,'componentType':5126,'count':4,'type':'VEC3',
                       'min':[-999,-999,-999],'max':[999,999,999]},
                      {'bufferView':1,'componentType':5125,'count':6,'type':'SCALAR'}],
@@ -68,6 +71,7 @@ def main():
     hwnd = 0
     workers = set()
     original_native = None
+    original_ground_axis = None
     def query(field): return send(hwnd,0x8000+104,field)
     def number(field): return struct.unpack('<d',struct.pack('<Q',query(field)))[0]
     def wait(predicate,label,timeout=25):
@@ -94,7 +98,9 @@ def main():
         hwnd = wait(lambda:find_window(app.pid),'window')
         wait(lambda:query(2),'background')
         original_native = query(21)
+        original_ground_axis = query(71)
         if original_native: query(30)
+        send(hwnd,0x8000+104,70,0) # Automatic; does not alter persisted settings.
         for name in hashes:
             if name == progressive.name: continue
             generation = open_file(directory/name)
@@ -134,6 +140,21 @@ def main():
                 query(30); assert abs(number(24)-1e-4)<1e-10 and abs(number(25))<1e-10
                 query(30); assert abs(number(25)-1e-4)<1e-10 and abs(number(24))<1e-10
                 report['nativeOrientationDimensions'] = True
+                # Exercise every explicit source/model up axis. X grounding
+                # moves the original X extent to world height and must remain
+                # GPU-pickable through the same transform used for drawing.
+                send(hwnd,0x8000+104,70,3) # Z
+                assert abs(number(24)-1e-4)<1e-10 and abs(number(25))<1e-10
+                frames = query(7)
+                send(hwnd,0x8000+104,70,1) # X
+                assert abs(number(23))<1e-10 and abs(number(25)-2e-4)<1e-10
+                wait(lambda:query(7)>frames,'X-grounded Present')
+                center = query(29); click(center)
+                wait(lambda:query(22)==1,'X-grounded GPU geometry selection')
+                send(hwnd,0x8000+104,70,2) # Y
+                assert abs(number(23)-2e-4)<1e-10 and abs(number(25)-1e-4)<1e-10
+                report['groundAxisCycle'] = {'Z':True,'Y':True,'X':True,'gpuPick':True}
+                send(hwnd,0x8000+104,70,0) # Restore automatic for remaining fixtures.
             send(hwnd,0x111,32789)
         generation = open_file(progressive)
         wait(lambda:query(4)==generation and query(8)<64,'partial metadata')
@@ -167,6 +188,7 @@ def main():
                 'cameraDistance':number(26),'cameraHomeDistance':number(27),'selected':query(22)}
     finally:
         if hwnd and app.poll() is None:
+            if original_ground_axis is not None: send(hwnd,0x8000+104,70,original_ground_axis)
             if original_native is not None and query(21)!=original_native: query(30)
             send(hwnd,0x10)
         try: app.wait(timeout=10)

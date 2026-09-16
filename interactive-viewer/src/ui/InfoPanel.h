@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Model.h"
+#include "GroundAxis.h"
 
 #include <cstdint>
 #include <string>
@@ -32,7 +33,8 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
     double metersPerUnit = 1.0, std::uint64_t pointCount = 0, bool boundsVerified = true,
     model_core::SourceFormatId format = model_core::SourceFormatId::Gltf, const double* dimensions = nullptr);
 
-std::vector<InfoPanelSection> BuildInfoPanelSections(const ModelData& metadata, bool showNativeOrientation);
+std::vector<InfoPanelSection> BuildInfoPanelSections(
+    const ModelData& metadata, bool showNativeOrientation, GroundAxis groundAxis = GroundAxis::Automatic);
 
 // Fixed-width panel docked to the right edge of the viewport, below the title
 // bar and above the bottom bar.

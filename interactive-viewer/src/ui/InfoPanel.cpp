@@ -110,15 +110,13 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
     return sections;
 }
 
-std::vector<InfoPanelSection> BuildInfoPanelSections(const ModelData& metadata, bool showNativeOrientation)
+std::vector<InfoPanelSection> BuildInfoPanelSections(
+    const ModelData& metadata, bool showNativeOrientation, GroundAxis groundAxis)
 {
     double dimensions[3] = {metadata.relativeMax[0]-metadata.relativeMin[0],
         metadata.relativeMax[1]-metadata.relativeMin[1], metadata.relativeMax[2]-metadata.relativeMin[2]};
-    // The sole format-defined correction in this pass is glTF Y-up to Z-up.
-    // Swap dimensions exactly; trigonometric float residue would invent a
-    // nonzero extent on a planar tiny-scale model.
-    if (!showNativeOrientation && metadata.source.upAxis == model_core::UpAxisId::Y)
-        std::swap(dimensions[1],dimensions[2]);
+    // Exact axis permutations avoid float residue on planar/tiny models.
+    PermuteGroundedDimensions(dimensions, groundAxis, metadata.source.upAxis, showNativeOrientation);
     return BuildInfoPanelSections(metadata.stats,metadata.triangleCount,metadata.vertexCount,
         metadata.boundsMin,metadata.boundsMax,metadata.source.metersPerUnit,metadata.pointCount,
         metadata.boundsVerified,metadata.source.format,dimensions);

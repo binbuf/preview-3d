@@ -146,11 +146,13 @@ TEST_CASE("Verified detail bounds cull offscreen regions and favor projected ext
     d.localMax[0]=d.localMax[1]=0.1f; d.localMax[2]=0.2f;
     DirectX::XMFLOAT4X4 vp; DirectX::XMStoreFloat4x4(&vp,DirectX::XMMatrixIdentity());
     double origin[3]={1e12,1e12,1e12},target[3]{}; std::copy(std::begin(origin),std::end(origin),std::begin(d.origin));
-    const float smallScore=DetailViewPriority(d,origin,target,false,vp); CHECK(smallScore>0);
+    DirectX::XMFLOAT4X4 modelTransform{};
+    DirectX::XMStoreFloat4x4(&modelTransform,DirectX::XMMatrixIdentity());
+    const float smallScore=DetailViewPriority(d,origin,target,modelTransform,vp); CHECK(smallScore>0);
     d.localMin[0]=-0.9f; d.localMax[0]=0.9f;
-    CHECK(DetailViewPriority(d,origin,target,false,vp)>smallScore);
-    d.origin[0]+=10; CHECK(DetailViewPriority(d,origin,target,false,vp)==0);
-    target[0]=10; CHECK(DetailViewPriority(d,origin,target,false,vp)>0);
+    CHECK(DetailViewPriority(d,origin,target,modelTransform,vp)>smallScore);
+    d.origin[0]+=10; CHECK(DetailViewPriority(d,origin,target,modelTransform,vp)==0);
+    target[0]=10; CHECK(DetailViewPriority(d,origin,target,modelTransform,vp)>0);
 }
 
 TEST_CASE("Destination admission charges aligned buffers and skips full scan payloads", "[detail-budget]") {

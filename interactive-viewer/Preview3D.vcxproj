@@ -81,6 +81,7 @@
     <ClInclude Include="src\render\Renderer.h" />
     <ClInclude Include="src\app\Resource.h" />
     <ClInclude Include="src\app\Settings.h" />
+    <ClInclude Include="src\app\GroundAxis.h" />
     <ClInclude Include="src\platform\ShellIntegration.h" />
     <ClInclude Include="src\app\targetver.h" />
     <ClInclude Include="src\app\D3D12ViewerPath.h" />

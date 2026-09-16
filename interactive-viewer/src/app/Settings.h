@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GroundAxis.h"
+
 // Tiny persisted-preference store: %LOCALAPPDATA%\Binbuf\3D Preview\settings.json,
 // a sibling of (not inside) the future DerivedCache\v1 folder described in the
 // design docs' rendering/streaming spec. Every field is optional and defaulted:
@@ -8,12 +10,16 @@
 // and this is never surfaced to the user as an error.
 struct ViewerSettings
 {
-    static constexpr int kCurrentVersion = 1;
+    static constexpr int kCurrentVersion = 2;
     int version = kCurrentVersion;
 
     // Display the model in the orientation its source file authored (true)
     // instead of this app's normalized Z-up correction (false, the default).
     bool showNativeOrientation = false;
+
+    // Automatic preserves the source-declared behavior until the user picks
+    // an explicit model axis to ground from the title-bar cycle button.
+    GroundAxis groundAxis = GroundAxis::Automatic;
 
     // Future preferences are added here as additional flat fields with their
     // own defaults — see Settings.cpp for why this needs no migration step.

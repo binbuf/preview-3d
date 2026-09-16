@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Chrome.h"
+#include "GroundAxis.h"
 #include "InfoPanel.h"
 #include "Model.h"
 #include "NavGizmo.h"
@@ -87,6 +88,8 @@ struct OverlayInfo
     RECT settingsToggleRowRect{};
     RECT settingsSwitchRect{};
     bool showNativeOrientation = false;   // current value, for drawing the switch's on/off state
+    GroundAxis groundAxis = GroundAxis::Automatic; // persisted selection used by rendering
+    GroundAxis effectiveGroundAxis = GroundAxis::Z; // resolved X/Y/Z shown by the toolbar
     float selectionAmount = 0.0f;   // 0..1 mesh-selection highlight
     std::wstring speedHud;          // transient fly-speed readout
     float speedHudAlpha = 0.0f;
@@ -99,10 +102,9 @@ struct OverlayInfo
     bool highContrast = false;
     bool keyboardFocusVisible = false;
     RECT keyboardFocusRect{};
-    // Root transform applied to the model draw only (never the grid) — see
-    // Model.h's ModelData::upAxisCorrection. Identity unless the loaded
-    // model's native orientation differs from this app's Z-up world and the
-    // "show native orientation" setting is off.
+    // Root transform applied to the model draw only (never the grid). It maps
+    // the selected model axis onto the app's fixed Z-up world; native
+    // orientation bypasses it.
     DirectX::XMFLOAT4X4 modelTransform = []
     {
         DirectX::XMFLOAT4X4 identity{};

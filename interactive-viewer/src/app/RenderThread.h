@@ -405,7 +405,8 @@ private:
     void UpdateBudget();
     // Requests the next visible fine-detail region and reports whether the
     // current view can still change as a result of outstanding refinement.
-    bool RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3], bool rotateY);
+    bool RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3],
+        const DirectX::XMFLOAT4X4& modelTransform);
     DxgiBudgetMonitor budgetMonitor_;
     std::atomic<bool> isUma_{false};
     uint64_t cpuPolicyCap_=0, baselineCpuBytes_=0;

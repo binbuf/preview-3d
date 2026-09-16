@@ -87,6 +87,36 @@ TEST_CASE("Info uses real counts units exact axis dimensions and provisional bou
     CHECK(metadata.vertices.empty()); CHECK(metadata.indices.empty());
 }
 
+TEST_CASE("Ground-axis selection cycles and applies exact axis permutations", "[bounds][metadata][ground-axis]")
+{
+    CHECK(ResolveGroundAxis(GroundAxis::Automatic, model_core::UpAxisId::Y) == GroundAxis::Y);
+    CHECK(ResolveGroundAxis(GroundAxis::Automatic, model_core::UpAxisId::Unknown) == GroundAxis::Z);
+    CHECK(NextGroundAxis(GroundAxis::Z, model_core::UpAxisId::Unknown) == GroundAxis::Y);
+    CHECK(NextGroundAxis(GroundAxis::Y, model_core::UpAxisId::Unknown) == GroundAxis::X);
+    CHECK(NextGroundAxis(GroundAxis::X, model_core::UpAxisId::Unknown) == GroundAxis::Z);
+
+    double dimensions[3] = { 2.0, 3.0, 4.0 };
+    PermuteGroundedDimensions(dimensions, GroundAxis::X, model_core::UpAxisId::Unknown, false);
+    CHECK(dimensions[0] == 4.0);
+    CHECK(dimensions[1] == 3.0);
+    CHECK(dimensions[2] == 2.0);
+
+    DirectX::XMFLOAT3 grounded{};
+    DirectX::XMStoreFloat3(&grounded, DirectX::XMVector3TransformNormal(
+        DirectX::XMVectorSet(1, 0, 0, 0),
+        GroundAxisTransform(GroundAxis::X, model_core::UpAxisId::Unknown, false)));
+    CHECK(grounded.x == 0.0f);
+    CHECK(grounded.y == 0.0f);
+    CHECK(grounded.z == 1.0f);
+
+    DirectX::XMStoreFloat3(&grounded, DirectX::XMVector3TransformNormal(
+        DirectX::XMVectorSet(0, 1, 0, 0),
+        GroundAxisTransform(GroundAxis::Y, model_core::UpAxisId::Unknown, false)));
+    CHECK(grounded.x == 0.0f);
+    CHECK(grounded.y == 0.0f);
+    CHECK(grounded.z == 1.0f);
+}
+
 TEST_CASE("Fnv1a64 is deterministic and detects single-byte corruption", "[wire-format]")
 {
     std::array<std::byte, 8> data{ std::byte{ 1 }, std::byte{ 2 }, std::byte{ 3 }, std::byte{ 4 },

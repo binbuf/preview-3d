@@ -227,6 +227,7 @@ struct ViewerApp
     // upAxisCorrection). Persisted via Settings.h; default matches
     // ViewerSettings' default (normalized).
     bool showNativeOrientation = false;
+    GroundAxis groundAxis = GroundAxis::Automatic;
     bool settingsPanelOpen = false;
     std::wstring speedHudText;
     double speedHudUntil = 0.0;
@@ -551,16 +552,15 @@ RECT InfoPanelRect(const ViewerApp& app)
         static_cast<int>(std::lround(layout.right)), static_cast<int>(std::lround(layout.bottom)) };
 }
 
-// The root transform currently mapping the loaded model's native/source axes
-// into the app's Z-up world: identity while "show native orientation" is on
-// (or there's no model), else ModelData::upAxisCorrection. Camera, grid, and
-// the Information panel must always reason about the model in this
+// The root transform currently mapping the selected source/model up axis into
+// the app's fixed Z-up world: identity while "show native orientation" is on
+// (or there's no model). Camera, grid, and the Information panel reason in this
 // transformed (effective) space — see EffectiveBounds below — while picking
 // (ClickSelect) must invert it to reach PickMesh's native-space vertices.
 DirectX::XMMATRIX ActiveModelTransform(const ViewerApp& app)
 {
-    if (!app.loadedModel || app.showNativeOrientation) return DirectX::XMMatrixIdentity();
-    return DirectX::XMLoadFloat4x4(&app.loadedModel->upAxisCorrection);
+    if (!app.loadedModel) return DirectX::XMMatrixIdentity();
+    return GroundAxisTransform(app.groundAxis, app.loadedModel->source.upAxis, app.showNativeOrientation);
 }
 
 // The bounds actually occupying the app's Z-up world right now. Every
@@ -589,7 +589,8 @@ float InfoPanelMaxScroll(const ViewerApp& app)
     const RECT panel = InfoPanelRect(app);
     const float panelHeight = static_cast<float>(panel.bottom - panel.top);
     if (panelHeight <= 0.0f) return 0.0f;
-    const std::vector<InfoPanelSection> sections = BuildInfoPanelSections(*app.loadedModel, app.showNativeOrientation);
+    const std::vector<InfoPanelSection> sections = BuildInfoPanelSections(
+        *app.loadedModel, app.showNativeOrientation, app.groundAxis);
     const InfoPanelScrollMetrics metrics = ComputeInfoPanelScrollMetrics(sections, app.dpiScale);
     const float visibleHeight = std::max(0.0f, panelHeight - metrics.headerHeight);
     return std::max(0.0f, metrics.contentHeight - visibleHeight);
@@ -1126,7 +1127,7 @@ struct TooltipInfo
 {
     int id = 0;
     RECT rect{};
-    const wchar_t* text = L"";
+    std::wstring text;
     bool below = true;   // true: title-bar buttons; false: bottom-bar buttons
 };
 
@@ -1139,6 +1140,14 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
         app.speedSliderDragging || app.zoomSliderDragging || app.speedFlyoutOpen || app.settingsPanelOpen)
     {
         return {};
+    }
+    if (app.chrome.hover == Chrome::Part::GroundAxis && app.loadedModel)
+    {
+        const GroundAxis current = ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis);
+        const GroundAxis next = NextGroundAxis(current, app.loadedModel->source.upAxis);
+        return { static_cast<int>(Chrome::Part::GroundAxis) + 1,
+            app.chrome.Button(Chrome::Part::GroundAxis).rect,
+            std::wstring(L"Ground axis ") + GroundAxisName(current) + L"; click for " + GroundAxisName(next), true };
     }
     struct Entry { Chrome::Part part; const wchar_t* text; };
     static constexpr Entry kEntries[] = {
@@ -1231,6 +1240,31 @@ void ToggleAxisSnap(ViewerApp& app)
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
+void SaveViewerPreferences(const ViewerApp& app)
+{
+    ViewerSettings settings;
+    settings.showNativeOrientation = app.showNativeOrientation;
+    settings.groundAxis = app.groundAxis;
+    SaveSettings(settings);
+}
+
+void CycleGroundAxis(ViewerApp& app)
+{
+    if (!CanNavigate(app) || !app.loadedModel || !ConsumeToggleCommand(app, ID_VIEW_GROUND_AXIS)) return;
+    app.groundAxis = NextGroundAxis(app.groundAxis, app.loadedModel->source.upAxis);
+    // An explicit grounding choice must be visible, so it supersedes native
+    // orientation while retaining the existing setting as a separate toggle.
+    app.showNativeOrientation = false;
+
+    DirectX::XMFLOAT3 effectiveMin{};
+    DirectX::XMFLOAT3 effectiveMax{};
+    EffectiveBounds(app, effectiveMin, effectiveMax);
+    app.renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(app));
+    ShowModeHud(app, std::wstring(L"Ground axis ") + GroundAxisName(app.groundAxis));
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
 // Persisted independently of whether a file is currently open (it's a
 // standing preference, not a per-document action), but only re-homes the
 // camera/grid when a model is actually loaded to apply against.
@@ -1249,9 +1283,7 @@ void ToggleShowNativeOrientation(ViewerApp& app)
         ShowModeHud(app, app.showNativeOrientation ? L"Native orientation" : L"Normalized orientation");
     }
     InvalidateRect(app.window, nullptr, FALSE);
-    ViewerSettings settings;
-    settings.showNativeOrientation = app.showNativeOrientation;
-    SaveSettings(settings);
+    SaveViewerPreferences(app);
 }
 
 void SnapViewCommand(ViewerApp& app, ViewDir view)
@@ -1682,6 +1714,7 @@ void ShowControls(HWND owner)
         L"Select\tClick a mesh; click the background to clear\n"
         L"Orbit\tLeft drag, gizmo ball drag, or arrow keys\n"
         L"Truck (pan)\tMiddle drag or Shift+arrow keys\n"
+        L"Ground axis\tClick the X/Y/Z axis button to cycle Z, Y, X\n"
         L"Axis snap\tToggle the Snap button to lock truck moves to X/Y\n"
         L"Zoom\tWheel, Ctrl+middle drag, +, or -\n"
         L"Fly\tHold right mouse + W/A/S/D, Q/E; wheel or slider sets speed\n"
@@ -1777,6 +1810,7 @@ void HandleCommand(ViewerApp& app, int id)
         }
         break;
     case ID_VIEW_GRID: ToggleGrid(app); break;
+    case ID_VIEW_GROUND_AXIS: CycleGroundAxis(app); break;
     case ID_VIEW_AXIS_SNAP: ToggleAxisSnap(app); break;
     case ID_VIEW_INFO: ToggleInfoPanel(app); break;
     case ID_VIEW_FULLSCREEN: ToggleFullscreen(app); break;
@@ -1852,6 +1886,7 @@ void HandleChromeAction(ViewerApp& app, Chrome::Part part)
     switch (part)
     {
     case Chrome::Part::Grid: HandleCommand(app, ID_VIEW_GRID); break;
+    case Chrome::Part::GroundAxis: HandleCommand(app, ID_VIEW_GROUND_AXIS); break;
     case Chrome::Part::AxisSnap: HandleCommand(app, ID_VIEW_AXIS_SNAP); break;
     case Chrome::Part::Speed: ToggleSpeedFlyout(app); break;
     case Chrome::Part::Fit: HandleCommand(app, ID_VIEW_FIT); break;
@@ -1877,6 +1912,14 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     switch (control)
     {
     case Control::Grid: chrome(Chrome::Part::Grid, L"Ground grid", L"Show or hide the ground grid"); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.gridVisible; break;
+    case Control::GroundAxis:
+    {
+        chrome(Chrome::Part::GroundAxis, L"Model ground axis", L"Cycle the model axis treated as vertical");
+        const GroundAxis effective = app.loadedModel
+            ? ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis) : GroundAxis::Z;
+        info.value = GroundAxisName(effective);
+        break;
+    }
     case Control::AxisSnap: chrome(Chrome::Part::AxisSnap, L"Axis snap", L"Snap truck movement to the nearest world axis"); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.axisSnapEnabled; break;
     case Control::Speed: chrome(Chrome::Part::Speed, L"Travel speed", L"Open the flight-speed control"); break;
     case Control::Fit: chrome(Chrome::Part::Fit, L"Fit selection or model"); break;
@@ -1981,6 +2024,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     switch (control)
     {
     case Control::Grid: HandleCommand(app,ID_VIEW_GRID); break;
+    case Control::GroundAxis: HandleCommand(app,ID_VIEW_GROUND_AXIS); break;
     case Control::AxisSnap: HandleCommand(app,ID_VIEW_AXIS_SNAP); break;
     case Control::Speed: ToggleSpeedFlyout(app); break;
     case Control::Fit: HandleCommand(app,ID_VIEW_FIT); break;
@@ -2141,7 +2185,8 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.infoPanelWidth = InfoPanelWidthPixels(app);
     if (overlay.infoPanelWidth > 0 && app.loadedModel)
     {
-        overlay.infoPanelSections = BuildInfoPanelSections(*app.loadedModel, app.showNativeOrientation);
+        overlay.infoPanelSections = BuildInfoPanelSections(
+            *app.loadedModel, app.showNativeOrientation, app.groundAxis);
         overlay.infoPanelScrollOffset = app.infoPanelScrollOffset;
     }
     overlay.zoomPercent = ZoomPercentFor(*app.renderThread.LockCamera());
@@ -2160,6 +2205,9 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.hasModel = app.renderThread.HasModel();
     overlay.gridVisible = app.gridVisible;
     overlay.axisSnapEnabled = app.axisSnapEnabled;
+    overlay.groundAxis = app.groundAxis;
+    overlay.effectiveGroundAxis = app.loadedModel
+        ? ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis) : GroundAxis::Z;
     DirectX::XMStoreFloat4x4(&overlay.modelTransform, ActiveModelTransform(app));
     overlay.infoPanelVisible = app.infoPanelVisible;
     overlay.speedFlyoutOpen = app.speedFlyoutOpen && HasNavigableModel(app);
@@ -2258,7 +2306,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return LresultFromObject(IID_IAccessible, wParam, app->accessible);
         break;
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 69) return 0;
+        if (!app->appSmoke || wParam > 71) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -2282,6 +2330,19 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (wParam == 0) return static_cast<LRESULT>(app->state) + 1;
         if (wParam == 1) return static_cast<LRESULT>(app->generation);
         if (wParam == 21) return app->showNativeOrientation;
+        if (wParam == 70) {
+            if (lParam < static_cast<LPARAM>(GroundAxis::Automatic) || lParam > static_cast<LPARAM>(GroundAxis::Z)) return 0;
+            app->groundAxis = static_cast<GroundAxis>(lParam);
+            app->showNativeOrientation = false;
+            if (app->loadedModel) {
+                DirectX::XMFLOAT3 minimum{}, maximum{};
+                EffectiveBounds(*app, minimum, maximum);
+                app->renderThread.LockCamera()->SetBounds(minimum, maximum, ViewportAspect(*app));
+            }
+            InvalidateRect(window,nullptr,FALSE);
+            return static_cast<LRESULT>(app->groundAxis);
+        }
+        if (wParam == 71) return static_cast<LRESULT>(app->groundAxis);
         if (wParam == 34) return app->smokePickRequests;
         if (wParam >= 13 && wParam <= 29) {
             if (!app->loadedModel) return 0;
@@ -2298,9 +2359,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             case 21: return app->showNativeOrientation;
             case 22: return app->meshSelected;
             case 23: case 24: case 25: {
-                unsigned axis = unsigned(wParam-23);
-                if (!app->showNativeOrientation && metadata.source.upAxis == model_core::UpAxisId::Y && axis) axis = 3-axis;
-                return static_cast<LRESULT>(std::bit_cast<uint64_t>(metadata.relativeMax[axis]-metadata.relativeMin[axis]));
+                double dimensions[3] = { metadata.relativeMax[0]-metadata.relativeMin[0],
+                    metadata.relativeMax[1]-metadata.relativeMin[1], metadata.relativeMax[2]-metadata.relativeMin[2] };
+                PermuteGroundedDimensions(dimensions, app->groundAxis, metadata.source.upAxis, app->showNativeOrientation);
+                return static_cast<LRESULT>(std::bit_cast<uint64_t>(dimensions[wParam-23]));
             }
             case 26: return static_cast<LRESULT>(std::bit_cast<uint64_t>(app->renderThread.LockCamera()->distance));
             case 27: return static_cast<LRESULT>(std::bit_cast<uint64_t>(app->renderThread.LockCamera()->homeDistance));
@@ -3387,6 +3449,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.benchmarkStartedUs = processStartedUs;
     const ViewerSettings settings = LoadSettings();
     app.showNativeOrientation = settings.showNativeOrientation;
+    app.groundAxis = settings.groundAxis;
     bool commandLineInvalid = false;
     bool bypassSingleInstance = false;
     int argumentCount = 0;

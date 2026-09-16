@@ -97,6 +97,11 @@ ViewerSettings LoadSettings()
     if (nativeText == "true") settings.showNativeOrientation = true;
     else if (nativeText == "false") settings.showNativeOrientation = false;
 
+    const std::string groundAxisText = FindJsonValue(content, "groundAxis");
+    if (groundAxisText == "\"X\"") settings.groundAxis = GroundAxis::X;
+    else if (groundAxisText == "\"Y\"") settings.groundAxis = GroundAxis::Y;
+    else if (groundAxisText == "\"Z\"") settings.groundAxis = GroundAxis::Z;
+
     return settings;
 }
 
@@ -112,8 +117,12 @@ void SaveSettings(const ViewerSettings& settings)
     const std::wstring finalPath = directory + L"\\" + kSettingsFileName;
     const std::wstring tempPath = finalPath + L".tmp";
 
+    const char* groundAxis = settings.groundAxis == GroundAxis::X ? "X"
+        : settings.groundAxis == GroundAxis::Y ? "Y"
+        : settings.groundAxis == GroundAxis::Z ? "Z" : "Automatic";
     const std::string json = "{\n  \"version\": " + std::to_string(settings.version) +
-        ",\n  \"showNativeOrientation\": " + (settings.showNativeOrientation ? "true" : "false") + "\n}\n";
+        ",\n  \"showNativeOrientation\": " + (settings.showNativeOrientation ? "true" : "false") +
+        ",\n  \"groundAxis\": \"" + groundAxis + "\"\n}\n";
 
     HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

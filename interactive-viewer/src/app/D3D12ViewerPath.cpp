@@ -903,21 +903,28 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
 
     std::vector<GpuMesh*> draws;
     draws.reserve(model.meshes.size());
-    const bool rotateY=!chrome.info.showNativeOrientation && sourceUpAxis==model_core::UpAxisId::Y;
+    DirectX::XMFLOAT4X4 modelTransform{};
+    DirectX::XMStoreFloat4x4(&modelTransform,
+        GroundAxisTransform(chrome.info.groundAxis, sourceUpAxis, chrome.info.showNativeOrientation));
     const auto viewProjectionMatrix=DirectX::XMLoadFloat4x4(&viewProjection);
     for (auto& mesh:model.meshes) {
         if (!mesh.drawEnabled) continue;
-        mesh.viewPriority = DetailViewPriority(mesh.sourceGeometry, sceneOrigin, cameraTarget,
-            rotateY, viewProjection);
+        mesh.viewPriority = DetailViewPriority(
+            mesh.sourceGeometry, sceneOrigin, cameraTarget, modelTransform, viewProjection);
         if (mesh.viewPriority == 0) continue;
         double center[3];
         for (unsigned axis=0;axis<3;++axis)
             center[axis]=mesh.sourceGeometry.origin[axis]-sceneOrigin[axis]
                 +(double(mesh.sourceGeometry.localMin[axis])+double(mesh.sourceGeometry.localMax[axis]))*0.5;
-        if (rotateY) { const double y=center[1];center[1]=-center[2];center[2]=y; }
+        const double transformedCenter[3] = {
+            center[0]*modelTransform._11 + center[1]*modelTransform._21 + center[2]*modelTransform._31,
+            center[0]*modelTransform._12 + center[1]*modelTransform._22 + center[2]*modelTransform._32,
+            center[0]*modelTransform._13 + center[1]*modelTransform._23 + center[2]*modelTransform._33,
+        };
         DirectX::XMFLOAT4 clip;
         DirectX::XMStoreFloat4(&clip,DirectX::XMVector4Transform(DirectX::XMVectorSet(
-            float(center[0]-cameraTarget[0]),float(center[1]-cameraTarget[1]),float(center[2]-cameraTarget[2]),1),
+            float(transformedCenter[0]-cameraTarget[0]),float(transformedCenter[1]-cameraTarget[1]),
+            float(transformedCenter[2]-cameraTarget[2]),1),
             viewProjectionMatrix));
         mesh.viewDepth=clip.w!=0 && std::isfinite(clip.z/clip.w) ? clip.z/clip.w : 1.0f;
         mesh.lastVisibleFrame = uint32_t(frameStats.PresentedFrames());
@@ -935,8 +942,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     for (GpuMesh* meshPtr:draws) {
         auto& mesh=*meshPtr;
         DirectX::XMFLOAT4X4 local;
-        DirectX::XMStoreFloat4x4(&local, !chrome.info.showNativeOrientation && sourceUpAxis == model_core::UpAxisId::Y
-            ? DirectX::XMMatrixSet(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1) : DirectX::XMMatrixIdentity());
+        local = modelTransform;
         const double native[3] = {mesh.origin[0]-sceneOrigin[0],mesh.origin[1]-sceneOrigin[1],mesh.origin[2]-sceneOrigin[2]};
         // Rotation precedes subtraction in double; never cast the absolute
         // source position or camera pivot to a shader float.

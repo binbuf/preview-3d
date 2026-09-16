@@ -35,6 +35,7 @@
 #define ID_VIEW_ZOOM_SLIDER     32790
 #define ID_VIEW_FULLSCREEN      32791
 #define ID_VIEW_SETTINGS        32792
+#define ID_VIEW_GROUND_AXIS     32793
 #ifndef IDC_STATIC
 #define IDC_STATIC				-1
 #endif

@@ -171,7 +171,7 @@ private:
 class UiaRoot;
 
 class UiaChild final : public IRawElementProviderSimple, public IRawElementProviderFragment,
-    public IInvokeProvider, public IToggleProvider
+    public IInvokeProvider, public IToggleProvider, public IValueProvider
 {
 public:
     UiaChild(UiaRoot* root, Control control);
@@ -192,6 +192,9 @@ public:
     HRESULT STDMETHODCALLTYPE Invoke() override;
     HRESULT STDMETHODCALLTYPE Toggle() override;
     HRESULT STDMETHODCALLTYPE get_ToggleState(ToggleState* state) override;
+    HRESULT STDMETHODCALLTYPE SetValue(LPCWSTR) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE get_Value(BSTR* value) override;
+    HRESULT STDMETHODCALLTYPE get_IsReadOnly(BOOL* value) override;
 private:
     std::atomic<ULONG> references_{1}; UiaRoot* root_; Control control_;
 };
@@ -268,6 +271,7 @@ HRESULT UiaChild::QueryInterface(REFIID iid,void** result)
     else if(iid==__uuidof(IRawElementProviderFragment))*result=static_cast<IRawElementProviderFragment*>(this);
     else if(iid==__uuidof(IInvokeProvider) && info.role!=ROLE_SYSTEM_SLIDER)*result=static_cast<IInvokeProvider*>(this);
     else if(iid==__uuidof(IToggleProvider) && info.role==ROLE_SYSTEM_CHECKBUTTON)*result=static_cast<IToggleProvider*>(this);
+    else if(iid==__uuidof(IValueProvider) && !info.value.empty())*result=static_cast<IValueProvider*>(this);
     if(!*result)return E_NOINTERFACE;AddRef();return S_OK;
 }
 HRESULT UiaChild::get_ProviderOptions(ProviderOptions* options){if(!options)return E_POINTER;*options=ProviderOptions_ServerSideProvider;return S_OK;}
@@ -276,6 +280,7 @@ HRESULT UiaChild::GetPatternProvider(PATTERNID id,IUnknown** provider)
     if(!provider)return E_POINTER;*provider=nullptr;const auto info=root_->query(control_);
     if(id==UIA_TogglePatternId && info.role==ROLE_SYSTEM_CHECKBUTTON)*provider=static_cast<IToggleProvider*>(this);
     else if(id==UIA_InvokePatternId && info.role!=ROLE_SYSTEM_SLIDER)*provider=static_cast<IInvokeProvider*>(this);
+    else if(id==UIA_ValuePatternId && !info.value.empty())*provider=static_cast<IValueProvider*>(this);
     if(*provider)AddRef();return S_OK;
 }
 HRESULT UiaChild::GetPropertyValue(PROPERTYID id,VARIANT* value)
@@ -283,6 +288,7 @@ HRESULT UiaChild::GetPropertyValue(PROPERTYID id,VARIANT* value)
     if(!value)return E_POINTER;VariantInit(value);const auto info=root_->query(control_);
     if(id==UIA_NamePropertyId){value->vt=VT_BSTR;value->bstrVal=SysAllocString(info.name.c_str());}
     else if(id==UIA_HelpTextPropertyId){value->vt=VT_BSTR;value->bstrVal=SysAllocString(info.description.c_str());}
+    else if(id==UIA_ValueValuePropertyId && !info.value.empty()){value->vt=VT_BSTR;value->bstrVal=SysAllocString(info.value.c_str());}
     else if(id==UIA_AutomationIdPropertyId){value->vt=VT_BSTR;const std::wstring idText=L"Preview3D.Control."+std::to_wstring(static_cast<int>(control_));value->bstrVal=SysAllocString(idText.c_str());}
     else if(id==UIA_ControlTypePropertyId){value->vt=VT_I4;value->lVal=info.role==ROLE_SYSTEM_SLIDER?UIA_SliderControlTypeId:info.role==ROLE_SYSTEM_CHECKBUTTON?UIA_CheckBoxControlTypeId:UIA_ButtonControlTypeId;}
     else if(id==UIA_IsEnabledPropertyId){value->vt=VT_BOOL;value->boolVal=info.enabled?VARIANT_TRUE:VARIANT_FALSE;}
@@ -318,13 +324,29 @@ HRESULT UiaChild::get_FragmentRoot(IRawElementProviderFragmentRoot** root){if(!r
 HRESULT UiaChild::Invoke(){if(!root_->query(control_).enabled)return UIA_E_ELEMENTNOTENABLED;root_->action(control_);return S_OK;}
 HRESULT UiaChild::Toggle(){return Invoke();}
 HRESULT UiaChild::get_ToggleState(ToggleState* state){if(!state)return E_POINTER;*state=root_->query(control_).checked?ToggleState_On:ToggleState_Off;return S_OK;}
+HRESULT UiaChild::get_Value(BSTR* value)
+{
+    if(!value)return E_POINTER;*value=nullptr;const auto text=root_->query(control_).value;
+    if(text.empty())return S_FALSE;*value=SysAllocString(text.c_str());return *value?S_OK:E_OUTOFMEMORY;
+}
+HRESULT UiaChild::get_IsReadOnly(BOOL* value){if(!value)return E_POINTER;*value=TRUE;return S_OK;}
 }
 
 std::vector<Control> VisibleControls(const Query& query)
 {
     std::vector<Control> result;
-    for (int value = static_cast<int>(Control::Grid); value < static_cast<int>(Control::Count); ++value) {
-        const Control control = static_cast<Control>(value);
+    static constexpr Control ordered[] = {
+        Control::Grid, Control::GroundAxis, Control::AxisSnap, Control::Speed,
+        Control::Fit, Control::Reset, Control::Share, Control::More,
+        Control::OpenWith, Control::Minimize, Control::Maximize, Control::Close,
+        Control::Info, Control::Zoom, Control::Fullscreen, Control::SpeedSlider,
+        Control::NativeOrientation,
+        Control::GizmoPositiveX, Control::GizmoNegativeX,
+        Control::GizmoPositiveY, Control::GizmoNegativeY,
+        Control::GizmoPositiveZ, Control::GizmoNegativeZ,
+        Control::ErrorRetry, Control::ErrorOpenAnother, Control::ErrorCopyDetails,
+    };
+    for (const Control control : ordered) {
         if (query(control).visible) result.push_back(control);
     }
     return result;

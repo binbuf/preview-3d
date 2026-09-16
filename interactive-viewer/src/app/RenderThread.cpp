@@ -922,9 +922,9 @@ void RenderThread::PumpUploads(HWND window)
                 std::lock_guard<std::mutex> cameraLock(cameraMutex_);
                 framingEpoch_ = interactionEpoch_.load();
                 DirectX::XMFLOAT3 minimum, maximum;
-                const bool native = frameOverlay_->info.showNativeOrientation;
-                TransformBounds(metadata.boundsMin, metadata.boundsMax, native ? DirectX::XMMatrixIdentity()
-                    : DirectX::XMLoadFloat4x4(&metadata.upAxisCorrection), minimum, maximum);
+                TransformBounds(metadata.boundsMin, metadata.boundsMax,
+                    GroundAxisTransform(frameOverlay_->info.groundAxis, metadata.source.upAxis,
+                        frameOverlay_->info.showNativeOrientation), minimum, maximum);
                 camera_.SetBounds(minimum, maximum, viewportAspect_);
             }
             path_.hasModel = true; hasModel_.store(true, std::memory_order_release);
@@ -938,8 +938,9 @@ void RenderThread::PumpUploads(HWND window)
         if (stagedHaveBounds_ && modelGeneration_ == pub.task.generation) {
             std::lock_guard<std::mutex> cameraLock(cameraMutex_);
             DirectX::XMFLOAT3 minimum, maximum;
-            TransformBounds(metadata.boundsMin, metadata.boundsMax, frameOverlay_->info.showNativeOrientation
-                ? DirectX::XMMatrixIdentity() : DirectX::XMLoadFloat4x4(&metadata.upAxisCorrection), minimum, maximum);
+            TransformBounds(metadata.boundsMin, metadata.boundsMax,
+                GroundAxisTransform(frameOverlay_->info.groundAxis, metadata.source.upAxis,
+                    frameOverlay_->info.showNativeOrientation), minimum, maximum);
             Camera framed = camera_; framed.SetBounds(minimum, maximum, viewportAspect_);
             if (interactionEpoch_.load() == framingEpoch_) camera_ = framed;
             else {
@@ -1021,8 +1022,10 @@ void RenderThread::RenderOneFrame()
                                   relative.ViewMatrix() * camera_.ProjectionMatrix(viewportAspect_));
     }
 
-    const bool visibleDetailPending = RequestVisibleDetail(viewProjection, cameraTarget,
-        !overlay->info.showNativeOrientation && path_.sourceUpAxis == model_core::UpAxisId::Y);
+    DirectX::XMFLOAT4X4 modelTransform{};
+    DirectX::XMStoreFloat4x4(&modelTransform,
+        GroundAxisTransform(overlay->info.groundAxis, path_.sourceUpAxis, overlay->info.showNativeOrientation));
+    const bool visibleDetailPending = RequestVisibleDetail(viewProjection, cameraTarget, modelTransform);
     const auto framesBefore = path_.frameStats.PresentedFrames();
     path_.lastPresentResult = E_PENDING;
     if (hasModel_.load(std::memory_order_acquire)) {
@@ -1236,7 +1239,8 @@ void RenderThread::UpdateBudget()
     accountedGpuBytes_.store(base+uploads_->gpuPendingBytes); targetGpuBytes_.store(target); pendingGpuBytes_.store(uploads_->gpuPendingBytes);
 }
 
-bool RenderThread::RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3], bool rotateY)
+bool RenderThread::RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3],
+    const DirectX::XMFLOAT4X4& modelTransform)
 {
     if (!initialTerminal_) return true;
     // Ordinary models have no scan catalog and are already at their final
@@ -1256,13 +1260,13 @@ bool RenderThread::RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const dou
     std::unordered_set<uint32_t> resident;
     for (auto& mesh:path_.model.meshes) if (mesh.sourceGeometry.lodLevel==model_core::kFineLod) {
         resident.insert(mesh.chunkId);
-        mesh.viewPriority=DetailViewPriority(mesh.sourceGeometry,path_.sceneOrigin,target,rotateY,vp);
+        mesh.viewPriority=DetailViewPriority(mesh.sourceGeometry,path_.sceneOrigin,target,modelTransform,vp);
     }
     struct Candidate { uint32_t id; float priority; uint64_t bytes; };
     std::vector<Candidate> candidates;
     for (const auto& [id,d]:scanCatalog_) {
         if (resident.contains(id) || uploads_->requestedDetails.contains(id)) continue;
-        const float priority=DetailViewPriority(d,path_.sceneOrigin,target,rotateY,vp);
+        const float priority=DetailViewPriority(d,path_.sceneOrigin,target,modelTransform,vp);
         if (!priority) continue;
         candidates.push_back({id,priority,cost(d)});
         std::sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b) { return a.priority!=b.priority ? a.priority>b.priority : a.id<b.id; });

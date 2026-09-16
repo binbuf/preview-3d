@@ -7,7 +7,8 @@
 // Uses only broker-verified bounds, with the same double-origin subtraction
 // and up-axis correction as drawing. Conservative at the near plane.
 inline float DetailViewPriority(const model_core::ChunkDescriptor& geometry,
-    const double sceneOrigin[3], const double cameraTarget[3], bool rotateY,
+    const double sceneOrigin[3], const double cameraTarget[3],
+    const DirectX::XMFLOAT4X4& modelTransform,
     const DirectX::XMFLOAT4X4& viewProjection)
 {
     const auto vp = DirectX::XMLoadFloat4x4(&viewProjection);
@@ -18,9 +19,14 @@ inline float DetailViewPriority(const model_core::ChunkDescriptor& geometry,
         for (unsigned axis=0; axis<3; ++axis)
             p[axis] = geometry.origin[axis]-sceneOrigin[axis]
                 + ((corner & (1u<<axis)) ? geometry.localMax[axis] : geometry.localMin[axis]);
-        if (rotateY) { const double y=p[1]; p[1]=-p[2]; p[2]=y; }
+        const double transformed[3] = {
+            p[0]*modelTransform._11 + p[1]*modelTransform._21 + p[2]*modelTransform._31,
+            p[0]*modelTransform._12 + p[1]*modelTransform._22 + p[2]*modelTransform._32,
+            p[0]*modelTransform._13 + p[1]*modelTransform._23 + p[2]*modelTransform._33,
+        };
         const auto clip = DirectX::XMVector4Transform(DirectX::XMVectorSet(
-            float(p[0]-cameraTarget[0]),float(p[1]-cameraTarget[1]),float(p[2]-cameraTarget[2]),1),vp);
+            float(transformed[0]-cameraTarget[0]),float(transformed[1]-cameraTarget[1]),
+            float(transformed[2]-cameraTarget[2]),1),vp);
         DirectX::XMFLOAT4 c; DirectX::XMStoreFloat4(&c,clip);
         if (!std::isfinite(c.x) || !std::isfinite(c.y) || !std::isfinite(c.z) || !std::isfinite(c.w)) return 1;
         outside[0] &= c.x < -c.w; outside[1] &= c.x > c.w;
