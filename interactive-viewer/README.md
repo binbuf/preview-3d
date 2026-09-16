@@ -68,8 +68,8 @@ checksummed portable archive.
 | Action | Input |
 | --- | --- |
 | Select mesh / clear | Click the mesh / click the background |
-| Orbit | Middle drag, gizmo ball drag, or arrow keys |
-| Pan | Shift+middle drag or Shift+arrow keys |
+| Orbit | Left drag, gizmo ball drag, or arrow keys |
+| Pan | Middle drag or Shift+arrow keys |
 | Fly (Unreal) | Hold right mouse + `W`/`A`/`S`/`D`, `Q`/`E` |
 | Roll | Hold right mouse + `Z`/`C` |
 | Fly faster | Hold right mouse + `Shift`; wheel, Speed flyout, or `+`/`-` sets speed |
@@ -91,9 +91,10 @@ checksummed portable archive.
 
 Camera motion is time-corrected and eased: flight ramps up and settles instead of stepping, wheel
 zoom and Fit/Reset glide to their destination, drags carry exponential inertia, and view snaps
-slerp the camera orientation along the shortest arc. Middle-drag orbit and pan wrap the cursor at
-the viewport edge so long gestures are never trapped by a display border; right-mouse flight hides
-and re-centers the cursor Unreal-style. Orientation is stored as a quaternion (yaw about the world
+slerp the camera orientation along the shortest arc. Mouse drags wrap the cursor at the viewport
+edge so long gestures are never trapped by a display border. By default, the pointer is hidden
+during left-, middle-, and right-mouse camera drags; this can be disabled in Settings. Right-mouse
+flight re-centers the cursor Unreal-style. Orientation is stored as a quaternion (yaw about the world
 up axis, pitch about the camera right axis), so there is no Euler order and no gimbal lock; pitch
 clamps just short of the up-axis pole so the horizon never flips. Rendering runs continuously only
 while anything is in motion; a still viewport idles at zero CPU/GPU cost.

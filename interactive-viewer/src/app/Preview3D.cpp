@@ -70,14 +70,14 @@ constexpr UINT kTooltipDelayMs = 1500;
 // whole gesture, so mid-drag modifier changes never switch modes.
 //
 //   None        idle; gizmo hover tracking only
-//   Orbit       LMB or MMB held on the canvas: orbit-drags the camera. An LMB
+//   Orbit       LMB held on the canvas: orbit-drags the camera. An LMB
 //               gesture that stays under the click/drag threshold also
 //               click-selects on release (drag and click share LMB).
 //   GizmoOrbit  LMB held on the gizmo ball: wrapped orbit drag (same math as
 //               Orbit, kept distinct only because it started on the gizmo).
 //   (Axis nodes/stems snap on press, so they never enter a drag mode.)
-//   FlyLook     RMB held: Unreal-style capture. Cursor is hidden and
-//               recentered each move; WASD/Q/E fly, wheel adjusts speed.
+//   FlyLook     RMB held: Unreal-style raw-input capture; WASD/Q/E fly and
+//               the wheel adjusts speed. The cursor returns on release.
 //   Truck       MMB held: trucks along the world ground plane (flattened
 //               forward/right), optionally snapped to the nearest world axis.
 //   DollyDrag   Ctrl+MMB: smooth exponential dolly on vertical drag.
@@ -230,6 +230,7 @@ struct ViewerApp
     bool showNativeOrientation = false;
     GroundAxis groundAxis = GroundAxis::Automatic;
     bool groundAxisInverted = false;
+    bool hideCursorWhileDragging = true;
     bool settingsPanelOpen = false;
     std::wstring speedHudText;
     double speedHudUntil = 0.0;
@@ -818,7 +819,7 @@ RECT SettingsPanelRect(const ViewerApp& app)
 {
     const RECT overflowButton = app.chrome.Button(Chrome::Part::Overflow).rect;
     const int width = Scale(app, 280);
-    const int height = Scale(app, 64);
+    const int height = Scale(app, 112);
     const int gap = Scale(app, 6);
     RECT client{};
     GetClientRect(app.window, &client);
@@ -832,12 +833,30 @@ RECT SettingsToggleRowRect(const ViewerApp& app)
 {
     const RECT panel = SettingsPanelRect(app);
     const int marginX = Scale(app, 16);
-    return RECT{ panel.left + marginX, panel.top, panel.right - marginX, panel.bottom };
+    return RECT{ panel.left + marginX, panel.top + Scale(app, 8),
+        panel.right - marginX, panel.top + Scale(app, 52) };
 }
 
 RECT SettingsSwitchRect(const ViewerApp& app)
 {
     const RECT row = SettingsToggleRowRect(app);
+    const int switchWidth = Scale(app, 36);
+    const int switchHeight = Scale(app, 20);
+    const int centerY = (row.top + row.bottom) / 2;
+    return RECT{ row.right - switchWidth, centerY - switchHeight / 2, row.right, centerY + switchHeight / 2 };
+}
+
+RECT SettingsCursorToggleRowRect(const ViewerApp& app)
+{
+    const RECT panel = SettingsPanelRect(app);
+    const int marginX = Scale(app, 16);
+    return RECT{ panel.left + marginX, panel.top + Scale(app, 56),
+        panel.right - marginX, panel.bottom - Scale(app, 8) };
+}
+
+RECT SettingsCursorSwitchRect(const ViewerApp& app)
+{
+    const RECT row = SettingsCursorToggleRowRect(app);
     const int switchWidth = Scale(app, 36);
     const int switchHeight = Scale(app, 20);
     const int centerY = (row.top + row.bottom) / 2;
@@ -853,6 +872,7 @@ void BeginWrappedDrag(ViewerApp& app, const POINT& point)
     RECT clip = ViewportRect(app);
     MapWindowPoints(app.window, nullptr, reinterpret_cast<LPPOINT>(&clip), 2);
     ClipCursor(&clip);
+    if (app.hideCursorWhileDragging) SetCursor(nullptr);
 }
 
 void WrapCursorIfNeeded(ViewerApp& app)
@@ -889,6 +909,7 @@ void WrapCursorIfNeeded(ViewerApp& app)
 
 void EndPointer(ViewerApp& app)
 {
+    const bool cursorWasHidden = app.hideCursorWhileDragging && app.pointerMode != PointerMode::None;
     if (app.wrapDrag)
     {
         app.wrapDrag = false;
@@ -901,6 +922,7 @@ void EndPointer(ViewerApp& app)
     }
     if (GetCapture() == app.window) ReleaseCapture();
     app.pointerMode = PointerMode::None;
+    if (cursorWasHidden) SetCursor(LoadCursorW(nullptr, IDC_ARROW));
 }
 
 void TrackOrbitVelocity(ViewerApp& app, float deltaX, float deltaY)
@@ -1258,6 +1280,7 @@ void SaveViewerPreferences(const ViewerApp& app)
     settings.showNativeOrientation = app.showNativeOrientation;
     settings.groundAxis = app.groundAxis;
     settings.groundAxisInverted = app.groundAxisInverted;
+    settings.hideCursorWhileDragging = app.hideCursorWhileDragging;
     SaveSettings(settings);
 }
 
@@ -1312,6 +1335,13 @@ void ToggleShowNativeOrientation(ViewerApp& app)
         app.renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(app));
         ShowModeHud(app, app.showNativeOrientation ? L"Native orientation" : L"Normalized orientation");
     }
+    InvalidateRect(app.window, nullptr, FALSE);
+    SaveViewerPreferences(app);
+}
+
+void ToggleHideCursorWhileDragging(ViewerApp& app)
+{
+    app.hideCursorWhileDragging = !app.hideCursorWhileDragging;
     InvalidateRect(app.window, nullptr, FALSE);
     SaveViewerPreferences(app);
 }
@@ -1759,8 +1789,9 @@ void ShowControls(HWND owner)
         L"Open\tCtrl+O\n"
         L"Fullscreen\tF11\n"
         L"Cancel open\tEsc\n\n"
-        L"Left-drag orbit and middle-drag truck wrap the cursor at the\n"
-        L"viewport edge, and drags glide to a stop with exponential inertia.",
+        L"Left-drag orbit and middle-drag truck wrap at the viewport edge,\n"
+        L"and drags glide to a stop with exponential inertia. The cursor is\n"
+        L"hidden during mouse drags by default; change this in Settings.",
         L"3D Preview controls", MB_OK | MB_ICONINFORMATION);
 }
 
@@ -2021,6 +2052,10 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     case Control::NativeOrientation:
         info.name=L"Show model in its original orientation"; info.rect=SettingsToggleRowRect(app);
         info.visible=app.settingsPanelOpen; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.showNativeOrientation; break;
+    case Control::HideCursorWhileDragging:
+        info.name=L"Hide cursor while dragging"; info.description=L"Hide the mouse pointer during viewport camera drags";
+        info.rect=SettingsCursorToggleRowRect(app); info.visible=app.settingsPanelOpen;
+        info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.hideCursorWhileDragging; break;
     case Control::GizmoPositiveX: case Control::GizmoNegativeX: case Control::GizmoPositiveY:
     case Control::GizmoNegativeY: case Control::GizmoPositiveZ: case Control::GizmoNegativeZ:
     {
@@ -2110,6 +2145,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::Info: ToggleInfoPanel(app); break;
     case Control::Fullscreen: ToggleFullscreen(app); break;
     case Control::NativeOrientation: ToggleShowNativeOrientation(app); break;
+    case Control::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
     case Control::GizmoPositiveX: SnapViewCommand(app,ViewDir::Right); break;
     case Control::GizmoNegativeX: SnapViewCommand(app,ViewDir::Left); break;
     case Control::GizmoPositiveY: SnapViewCommand(app,ViewDir::Back); break;
@@ -2293,11 +2329,14 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     }
     overlay.settingsPanelOpen = app.settingsPanelOpen;
     overlay.showNativeOrientation = app.showNativeOrientation;
+    overlay.hideCursorWhileDragging = app.hideCursorWhileDragging;
     if (overlay.settingsPanelOpen)
     {
         overlay.settingsPanelRect = SettingsPanelRect(app);
-        overlay.settingsToggleRowRect = SettingsToggleRowRect(app);
-        overlay.settingsSwitchRect = SettingsSwitchRect(app);
+        overlay.nativeOrientationRowRect = SettingsToggleRowRect(app);
+        overlay.nativeOrientationSwitchRect = SettingsSwitchRect(app);
+        overlay.hideCursorRowRect = SettingsCursorToggleRowRect(app);
+        overlay.hideCursorSwitchRect = SettingsCursorSwitchRect(app);
     }
     overlay.selectionAmount = app.meshSelected ? 1.0f : 0.0f;
     const double now = NowSeconds();
@@ -2864,7 +2903,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_SETCURSOR:
         if (LOWORD(lParam) == HTCLIENT)
         {
-            if (app->flyLook)
+            if (app->hideCursorWhileDragging && app->pointerMode != PointerMode::None)
             {
                 SetCursor(nullptr);
                 return TRUE;
@@ -2935,10 +2974,16 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (app->settingsPanelOpen)
         {
             const RECT switchRect = SettingsSwitchRect(*app);
+            const RECT cursorSwitchRect = SettingsCursorSwitchRect(*app);
             const RECT panel = SettingsPanelRect(*app);
             if (PtInRect(&switchRect, downPoint))
             {
                 ToggleShowNativeOrientation(*app);
+                return 0;
+            }
+            if (PtInRect(&cursorSwitchRect, downPoint))
+            {
+                ToggleHideCursorWhileDragging(*app);
                 return 0;
             }
             app->settingsPanelOpen = false;
@@ -3065,9 +3110,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             GetCursorPos(&app->flyPressPoint);
             // Look is driven by WM_INPUT's raw relative deltas (registered at
             // WM_CREATE), not cursor-position deltas, so there is no screen
-            // edge to fall off and nothing to recenter — just hide the cursor
-            // for the duration and restore it (EndPointer) on release.
-            SetCursor(nullptr);
+            // edge to fall off and nothing to recenter. Cursor visibility is
+            // controlled by the persisted drag setting.
+            if (app->hideCursorWhileDragging) SetCursor(nullptr);
         }
         return 0;
     case WM_MOUSEMOVE:
@@ -3184,8 +3229,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             {
             case PointerMode::FlyLook:
                 // Look is driven by WM_INPUT (raw deltas); the cursor is just
-                // kept hidden here since its position is otherwise unused.
-                SetCursor(nullptr);
+                // kept hidden here when requested since its position is unused.
+                if (app->hideCursorWhileDragging) SetCursor(nullptr);
                 break;
             case PointerMode::Orbit:
             case PointerMode::GizmoOrbit:
@@ -3539,6 +3584,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.showNativeOrientation = settings.showNativeOrientation;
     app.groundAxis = settings.groundAxis;
     app.groundAxisInverted = settings.groundAxisInverted;
+    app.hideCursorWhileDragging = settings.hideCursorWhileDragging;
     bool commandLineInvalid = false;
     bool bypassSingleInstance = false;
     int argumentCount = 0;

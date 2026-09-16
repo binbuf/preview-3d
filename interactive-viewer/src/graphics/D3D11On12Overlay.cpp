@@ -926,8 +926,10 @@ void D3D11On12Overlay::DrawSettingsPanel(const OverlayInfo& overlay, float scale
     SetBrush(D2D1::ColorF(0x3A3A3C));
     d2dContext_->DrawRoundedRectangle(D2D1::RoundedRect(panel, Scale(10, scale), Scale(10, scale)), overlayBrush.Get(), 1.0f);
 
-    DrawToggleRow(ToRectF(overlay.settingsToggleRowRect), ToRectF(overlay.settingsSwitchRect),
+    DrawToggleRow(ToRectF(overlay.nativeOrientationRowRect), ToRectF(overlay.nativeOrientationSwitchRect),
         L"Show model in its original orientation", overlay.showNativeOrientation, scale);
+    DrawToggleRow(ToRectF(overlay.hideCursorRowRect), ToRectF(overlay.hideCursorSwitchRect),
+        L"Hide cursor while dragging", overlay.hideCursorWhileDragging, scale);
 }
 
 // A small dark bubble naming the button under the cursor, shown once

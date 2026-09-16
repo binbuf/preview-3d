@@ -10,7 +10,7 @@
 // and this is never surfaced to the user as an error.
 struct ViewerSettings
 {
-    static constexpr int kCurrentVersion = 3;
+    static constexpr int kCurrentVersion = 4;
     int version = kCurrentVersion;
 
     // Display the model in the orientation its source file authored (true)
@@ -23,6 +23,10 @@ struct ViewerSettings
 
     // Treat the negative rather than positive side of groundAxis as up.
     bool groundAxisInverted = false;
+
+    // Hide the pointer during viewport mouse drags so wrapped/infinite
+    // camera gestures do not show the cursor jumping across the screen.
+    bool hideCursorWhileDragging = true;
 
     // Future preferences are added here as additional flat fields with their
     // own defaults — see Settings.cpp for why this needs no migration step.

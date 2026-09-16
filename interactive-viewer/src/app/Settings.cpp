@@ -106,6 +106,10 @@ ViewerSettings LoadSettings()
     if (groundAxisInvertedText == "true") settings.groundAxisInverted = true;
     else if (groundAxisInvertedText == "false") settings.groundAxisInverted = false;
 
+    const std::string hideCursorText = FindJsonValue(content, "hideCursorWhileDragging");
+    if (hideCursorText == "true") settings.hideCursorWhileDragging = true;
+    else if (hideCursorText == "false") settings.hideCursorWhileDragging = false;
+
     return settings;
 }
 
@@ -127,7 +131,8 @@ void SaveSettings(const ViewerSettings& settings)
     const std::string json = "{\n  \"version\": " + std::to_string(settings.version) +
         ",\n  \"showNativeOrientation\": " + (settings.showNativeOrientation ? "true" : "false") +
         ",\n  \"groundAxis\": \"" + groundAxis + "\"" +
-        ",\n  \"groundAxisInverted\": " + (settings.groundAxisInverted ? "true" : "false") + "\n}\n";
+        ",\n  \"groundAxisInverted\": " + (settings.groundAxisInverted ? "true" : "false") +
+        ",\n  \"hideCursorWhileDragging\": " + (settings.hideCursorWhileDragging ? "true" : "false") + "\n}\n";
 
     HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

@@ -85,9 +85,12 @@ struct OverlayInfo
     std::wstring speedValueText;   // e.g. "×1.00"
     bool settingsPanelOpen = false;
     RECT settingsPanelRect{};        // client px, valid only while settingsPanelOpen
-    RECT settingsToggleRowRect{};
-    RECT settingsSwitchRect{};
+    RECT nativeOrientationRowRect{};
+    RECT nativeOrientationSwitchRect{};
+    RECT hideCursorRowRect{};
+    RECT hideCursorSwitchRect{};
     bool showNativeOrientation = false;   // current value, for drawing the switch's on/off state
+    bool hideCursorWhileDragging = true;
     GroundAxis groundAxis = GroundAxis::Automatic; // persisted selection used by rendering
     GroundAxis effectiveGroundAxis = GroundAxis::Z; // resolved X/Y/Z shown by the toolbar
     bool groundAxisInverted = false; // negative side of effectiveGroundAxis is up

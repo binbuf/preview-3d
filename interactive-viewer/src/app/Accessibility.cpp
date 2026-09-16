@@ -340,7 +340,7 @@ std::vector<Control> VisibleControls(const Query& query)
         Control::Fit, Control::Reset, Control::Share, Control::More,
         Control::OpenWith, Control::Minimize, Control::Maximize, Control::Close,
         Control::Info, Control::Zoom, Control::Fullscreen, Control::SpeedSlider,
-        Control::NativeOrientation,
+        Control::NativeOrientation, Control::HideCursorWhileDragging,
         Control::GizmoPositiveX, Control::GizmoNegativeX,
         Control::GizmoPositiveY, Control::GizmoNegativeY,
         Control::GizmoPositiveZ, Control::GizmoNegativeZ,

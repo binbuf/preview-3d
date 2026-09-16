@@ -49,6 +49,7 @@ enum class Control
     // fragments. VisibleControls supplies its visual/tab order explicitly.
     GroundAxis,
     GroundDirection,
+    HideCursorWhileDragging,
     Count,
 };
 
