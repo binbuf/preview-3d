@@ -123,6 +123,9 @@ void RenderThread::SetBenchmarkLimits(int frames, std::uint64_t durationMs)
 void RenderThread::NotifyLoadingStarted(std::uint64_t generation)
 {
     loadingGeneration_.store(generation, std::memory_order_release);
+    completeModelAwaitingPresentGeneration_.store(0, std::memory_order_release);
+    completeModelPresentedGeneration_.store(0, std::memory_order_release);
+    completeModelPresentedUs_.store(0, std::memory_order_release);
     loadingUiUs_.store(0, std::memory_order_release);
     coarseUs_.store(0, std::memory_order_release);
     verifiedBoundsUs_.store(0, std::memory_order_release);
@@ -735,6 +738,7 @@ void RenderThread::PumpUploads(HWND window)
             stagedMetadata_->sourceIdentity = pub.task.result.sourceIdentity;
             stagedMetadata_->boundsVerified = true;
             initialTerminal_=true;
+            completeModelAwaitingPresentGeneration_.store(pub.task.generation, std::memory_order_release);
             stagedMetadata_->importStatus.flags = rejectedDetailCount_.load() ? model_core::kStatusPressure : 0;
             message->metadata = std::make_shared<const ModelData>(*stagedMetadata_);
         }
@@ -1017,7 +1021,8 @@ void RenderThread::RenderOneFrame()
                                   relative.ViewMatrix() * camera_.ProjectionMatrix(viewportAspect_));
     }
 
-    RequestVisibleDetail(viewProjection,cameraTarget,!overlay->info.showNativeOrientation && path_.sourceUpAxis==model_core::UpAxisId::Y);
+    const bool visibleDetailPending = RequestVisibleDetail(viewProjection, cameraTarget,
+        !overlay->info.showNativeOrientation && path_.sourceUpAxis == model_core::UpAxisId::Y);
     const auto framesBefore = path_.frameStats.PresentedFrames();
     path_.lastPresentResult = E_PENDING;
     if (hasModel_.load(std::memory_order_acquire)) {
@@ -1059,6 +1064,12 @@ void RenderThread::RenderOneFrame()
         if (modelGeneration_ != 0 && presentedGeneration_.load() != modelGeneration_) {
             geometryUs_.store(nowUs, std::memory_order_release);
             presentedGeneration_.store(modelGeneration_, std::memory_order_release);
+        }
+        if (!visibleDetailPending
+            && completeModelAwaitingPresentGeneration_.load(std::memory_order_acquire) == modelGeneration_) {
+            completeModelPresentedUs_.store(nowUs, std::memory_order_release);
+            completeModelPresentedGeneration_.store(modelGeneration_, std::memory_order_release);
+            completeModelAwaitingPresentGeneration_.store(0, std::memory_order_release);
         }
         const auto loading = loadingGeneration_.load(std::memory_order_acquire);
         if (loading && loadingUiUs_.load(std::memory_order_acquire) == 0)
@@ -1225,11 +1236,15 @@ void RenderThread::UpdateBudget()
     accountedGpuBytes_.store(base+uploads_->gpuPendingBytes); targetGpuBytes_.store(target); pendingGpuBytes_.store(uploads_->gpuPendingBytes);
 }
 
-void RenderThread::RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3], bool rotateY)
+bool RenderThread::RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3], bool rotateY)
 {
-    if (!initialTerminal_ || !path_.model.coarseComplete || NowSeconds()<pauseDetailUntil_) return;
+    if (!initialTerminal_) return true;
+    // Ordinary models have no scan catalog and are already at their final
+    // representation when the terminal marker is accepted.
+    if (scanCatalog_.empty()) return false;
+    if (!path_.model.coarseComplete || NowSeconds() < pauseDetailUntil_) return true;
     std::lock_guard<std::mutex> lock(uploads_->mutex);
-    if (uploads_->generation!=modelGeneration_) return;
+    if (uploads_->generation != modelGeneration_) return true;
     const auto aligned=[](uint64_t bytes) { return (bytes+65535)/65536*65536; };
     const auto cost=[&](const model_core::ChunkDescriptor& d) {
         return aligned(uint64_t(d.vertexCount)*model_core::VertexStrideForLayout(model_core::VertexLayoutId(d.vertexLayoutId)))+aligned(uint64_t(d.indexCount)*4);
@@ -1267,10 +1282,20 @@ void RenderThread::RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const dou
         uploads_->details.push_back(candidate.id); uploads_->requestedDetails.insert(candidate.id);
         used+=candidate.bytes; room=true;
     }
+    bool evictedForDetail = false;
     if (!room && !candidates.empty() && uploads_->requestedDetails.empty()) {
         std::vector<uint32_t> invisible;
         for (const auto& mesh:path_.model.meshes)
             if (mesh.sourceGeometry.lodLevel==model_core::kFineLod && mesh.viewPriority==0) invisible.push_back(mesh.chunkId);
-        path_.EvictFineChunks(invisible); evictionCount_.fetch_add(invisible.size()); UpdateResidencySmoke();
+        if (!invisible.empty()) {
+            path_.EvictFineChunks(invisible); evictionCount_.fetch_add(invisible.size()); UpdateResidencySmoke();
+            evictedForDetail = true;
+        }
     }
+    // requestedDetails covers queued, broker-owned, uploading and published
+    // detail until PumpUploads has incorporated it. If nothing is outstanding
+    // and no eviction can make room, the current on-screen representation is
+    // the most complete one this view and memory budget can produce.
+    const bool waitingForRetiredCapacity = !candidates.empty() && !path_.retiredModels.empty();
+    return !uploads_->requestedDetails.empty() || evictedForDetail || waitingForRetiredCapacity;
 }

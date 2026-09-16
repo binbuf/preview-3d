@@ -204,6 +204,9 @@ struct ViewerApp
     std::wstring currentPath;
     std::wstring failedPath;
     std::wstring filename;
+    std::uint64_t renderStartedMicroseconds = 0;
+    bool renderPresentationPending = false;
+    std::wstring renderDurationText;
     std::wstring warning;
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
     import_broker::ImportStage errorStage = import_broker::ImportStage::OpenSource;
@@ -1507,6 +1510,9 @@ void BeginOpen(ViewerApp& app, std::wstring path)
 
     app.diagnosticPath = path;
     app.state = ViewerState::Loading;
+    app.renderStartedMicroseconds = NowMicroseconds();
+    app.renderPresentationPending = false;
+    app.renderDurationText.clear();
     app.renderThread.NotifyLoadingStarted(app.generation);
     StopNavigation(app);
     EndPointer(app);
@@ -2080,8 +2086,28 @@ FlightInput BuildFlightInput(const ViewerApp& app)
 bool IsAnimatingWithoutCamera(const ViewerApp& app)
 {
     const double now = NowSeconds();
-    return (app.state == ViewerState::Loading && !app.reduceMotion) || HasNavigationInput(app) || now < app.speedHudUntil
+    return (app.state == ViewerState::Loading && !app.reduceMotion) || app.renderPresentationPending
+        || HasNavigationInput(app) || now < app.speedHudUntil
         || now < app.modeHudUntil;
+}
+
+// Keep the UI's loading loop alive until the render thread has presented the
+// completed model and drained the visible fine-detail refinement for its
+// initial view. This intentionally excludes early progressive-preview frames.
+void FinishRenderTimerIfPresented(ViewerApp& app)
+{
+    if (!app.renderPresentationPending || app.renderStartedMicroseconds == 0) return;
+    if (app.renderThread.CompleteModelPresentedGeneration() != app.generation) return;
+
+    const std::uint64_t presentedMicroseconds = app.renderThread.CompleteModelPresentedMicroseconds();
+    if (presentedMicroseconds < app.renderStartedMicroseconds) return;
+
+    std::wostringstream duration;
+    duration << std::fixed << std::setprecision(2)
+             << static_cast<double>(presentedMicroseconds - app.renderStartedMicroseconds) / 1'000'000.0 << L" s";
+    app.renderDurationText = duration.str();
+    app.renderStartedMicroseconds = 0;
+    app.renderPresentationPending = false;
 }
 
 // Builds the UI snapshot for the render thread's Direct2D chrome pass.
@@ -2102,6 +2128,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.errorSummary = app.errorSummary;
     overlay.errorDetails = app.errorDetails;
     overlay.warning = app.warning;
+    overlay.renderDurationText = app.renderDurationText;
     overlay.animationPhase = app.reduceMotion ? 0.0f : static_cast<float>(GetTickCount64() % 1400) / 1400.0f;
     overlay.dpiScale = app.dpiScale;
     overlay.toolbarHeight = EffectiveToolbarHeight(app);
@@ -3266,6 +3293,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         app->currentPath = uploaded->path;
         app->filename = FileNameFromPath(uploaded->path);
         app->state = uploaded->terminal ? ViewerState::Ready : ViewerState::Loading;
+        // Refinement publications also use `terminal` to mean that particular
+        // update is complete. Only the non-refinement marker ends the original
+        // file-open operation and should arm the load-to-present timer.
+        if (uploaded->terminal && !uploaded->refinement && app->renderStartedMicroseconds != 0)
+            app->renderPresentationPending = true;
         app->failedPath.clear();
         app->errorSummary.clear();
         app->errorDetails.clear();
@@ -3559,6 +3591,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         bool uiAnimating = false;
         if (gMainWindow && app.rendererReady)
         {
+            FinishRenderTimerIfPresented(app);
             uiAnimating = !IsIconic(gMainWindow) && IsAnimatingWithoutCamera(app);
             auto overlay = std::make_shared<OverlayFrame>();
             overlay->info = BuildOverlayInfo(app);

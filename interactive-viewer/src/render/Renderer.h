@@ -39,6 +39,10 @@ struct OverlayInfo
     std::wstring warning;
     std::wstring failureContext;
     std::wstring loadingStatus;
+    // Set after the successful Present that includes the final visible
+    // refinement for a newly opened file. This is the user-visible
+    // load-to-render duration, formatted by the UI thread.
+    std::wstring renderDurationText;
     float animationPhase = 0.0f;
     float dpiScale = 1.0f;
     // Reserved viewport inset: how much of the client area the title/bottom

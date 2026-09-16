@@ -610,6 +610,14 @@ void D3D11On12Overlay::DrawBottomBar(const OverlayInfo& overlay, float clientWid
     DrawIconButton(overlay.infoButtonRect, OverlayIconKind::Info, /*visible*/ true, /*enabled*/ true,
         overlay.infoPanelVisible, overlay.infoButtonHover, overlay.infoButtonPressed, scale);
 
+    if (!overlay.renderDurationText.empty())
+    {
+        const float left = static_cast<float>(overlay.infoButtonRect.right) + Scale(12, scale);
+        DrawText(overlay.renderDurationText, smallFormat.Get(),
+            D2D1::RectF(left, barTop, left + Scale(96, scale), clientHeight),
+            D2D1::ColorF(0xA1A1A6));
+    }
+
     const std::wstring percentText = std::to_wstring(static_cast<int>(std::lround(overlay.zoomPercent))) + L"%";
     const float labelWidth = Scale(56, scale);
     const float gap = Scale(10, scale);

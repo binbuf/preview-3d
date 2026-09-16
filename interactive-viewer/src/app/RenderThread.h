@@ -253,6 +253,17 @@ public:
     // Present. These are lifecycle smoke evidence, not ETW display timestamps.
     std::uint64_t SmokeValue(unsigned field) const noexcept;
 
+    // The terminal import marker has been accepted, visible refinement has
+    // drained, and the resulting model has reached a successful Present. The
+    // UI uses this pair to finish the user-visible load timer without treating
+    // an early proxy or coarse frame as a complete render.
+    std::uint64_t CompleteModelPresentedGeneration() const noexcept {
+        return completeModelPresentedGeneration_.load(std::memory_order_acquire);
+    }
+    std::uint64_t CompleteModelPresentedMicroseconds() const noexcept {
+        return completeModelPresentedUs_.load(std::memory_order_acquire);
+    }
+
     struct StatsSnapshot
     {
         double meanMs = 0.0;
@@ -316,6 +327,9 @@ private:
     std::atomic<std::uint64_t> benchmarkInputToPresentUs_{ 0 };
     std::atomic<std::uint64_t> benchmarkPresentedFrames_{ 0 };
     std::atomic<std::uint64_t> presentedGeneration_{ 0 };
+    std::atomic<std::uint64_t> completeModelAwaitingPresentGeneration_{ 0 };
+    std::atomic<std::uint64_t> completeModelPresentedGeneration_{ 0 };
+    std::atomic<std::uint64_t> completeModelPresentedUs_{ 0 };
     std::atomic<std::uint64_t> resizedExtent_{ 0 };
     std::atomic<std::uint64_t> displayedChunks_{0}, texturedChunks_{0};
     Microsoft::WRL::ComPtr<ID3D12InfoQueue> debugInfo_;
@@ -389,7 +403,9 @@ private:
     std::atomic<uint64_t> coarseAllocationBytes_{0};
     void UpdateResidencySmoke();
     void UpdateBudget();
-    void RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3], bool rotateY);
+    // Requests the next visible fine-detail region and reports whether the
+    // current view can still change as a result of outstanding refinement.
+    bool RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3], bool rotateY);
     DxgiBudgetMonitor budgetMonitor_;
     std::atomic<bool> isUma_{false};
     uint64_t cpuPolicyCap_=0, baselineCpuBytes_=0;
