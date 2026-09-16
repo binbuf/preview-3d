@@ -1,0 +1,51 @@
+{
+  "configuration": "Debug",
+  "fixtureSha256": {
+    "progressive-64.glb": "7c2429ca86b870637155b61813d0104540f64f0caacd59649a797793dfc6ae13",
+    "progressive-256.glb": "e6f74ab98fc33f9dd3ea91b64e1556280f5a55ea5ee9c9ae8134d648b6975c99"
+  },
+  "exeSha256": "60ebf314930baacaa9bab81f55c28f6bffe524c79026fd0c6d325ef8d5c82404",
+  "runs": [
+    {
+      "mode": "--progressive-smoke",
+      "failure": null,
+      "maxUiMs": 7.026899998891167,
+      "cameraInputDuringLoading": true,
+      "firstChunkCount": 11,
+      "cancelledPartialState": 5,
+      "failureWithDelayedUiMetadata": true,
+      "terminalChunkCount": 64,
+      "peakQueueBytes": 5736,
+      "peakQueueCount": 1,
+      "closeMs": 164.4592000011471
+    },
+    {
+      "mode": "--queue-smoke",
+      "failure": null,
+      "maxUiMs": 8.413900002778973,
+      "cameraInputDuringLoading": true,
+      "peakQueueBytes": 38256,
+      "peakQueueCount": 4,
+      "closeMs": 113.77840000204742
+    },
+    {
+      "mode": "--queue-byte-smoke",
+      "failure": null,
+      "maxUiMs": 6.73609999648761,
+      "cameraInputDuringLoading": true,
+      "peakQueueBytes": 15572,
+      "peakQueueCount": 3,
+      "closeMs": 157.65059999830555
+    },
+    {
+      "mode": "--texture-batch-smoke",
+      "failure": null,
+      "maxUiMs": 7.414499996230006,
+      "cameraInputDuringLoading": true,
+      "texturedChunkCount": 1,
+      "peakQueueBytes": 3976,
+      "peakQueueCount": 4,
+      "closeMs": 124.07289999828208
+    }
+  ]
+}

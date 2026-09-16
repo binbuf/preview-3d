@@ -82,6 +82,8 @@ std::variant<DracoDecodedMesh, ImportErrorCode> DecodeDracoMesh(
 
     const bool hasNormal = attributeIds.normal.has_value();
     const bool hasUv0 = attributeIds.uv0.has_value();
+    const bool hasTangent = attributeIds.tangent.has_value();
+    const bool hasColor = attributeIds.color0.has_value();
     uint64_t bytesPerPoint = sizeof(float) * 3; // position
     if (hasNormal) {
         bytesPerPoint += sizeof(float) * 3;
@@ -89,6 +91,8 @@ std::variant<DracoDecodedMesh, ImportErrorCode> DecodeDracoMesh(
     if (hasUv0) {
         bytesPerPoint += sizeof(float) * 2;
     }
+    if (hasTangent) bytesPerPoint += sizeof(float) * 4;
+    if (hasColor) bytesPerPoint += sizeof(float) * 4;
     auto pointBytes = CheckedMultiply(static_cast<uint64_t>(pointCount), bytesPerPoint);
     auto indexBytes = CheckedMultiply(static_cast<uint64_t>(faceCount) * 3, static_cast<uint64_t>(sizeof(uint32_t)));
     auto workingSetBytes = (pointBytes && indexBytes) ? CheckedAdd(*pointBytes, *indexBytes) : std::nullopt;
@@ -109,6 +113,10 @@ std::variant<DracoDecodedMesh, ImportErrorCode> DecodeDracoMesh(
     if (hasUv0 && uvAttr == nullptr) {
         return ImportErrorCode::MalformedData;
     }
+    const draco::PointAttribute* tangentAttr = hasTangent ? mesh->GetAttributeByUniqueId(*attributeIds.tangent) : nullptr;
+    const draco::PointAttribute* colorAttr = hasColor ? mesh->GetAttributeByUniqueId(*attributeIds.color0) : nullptr;
+    if ((hasTangent && tangentAttr == nullptr) || (hasColor && colorAttr == nullptr))
+        return ImportErrorCode::MalformedData;
 
     DracoDecodedMesh result;
     result.positions.resize(pointCount * 3);
@@ -118,6 +126,8 @@ std::variant<DracoDecodedMesh, ImportErrorCode> DecodeDracoMesh(
     if (hasUv0) {
         result.uv0 = std::vector<float>(pointCount * 2);
     }
+    if (hasTangent) result.tangents = std::vector<float>(pointCount * 4);
+    if (hasColor) result.colors = std::vector<float>(pointCount * 4, 1.0f);
 
     for (size_t p = 0; p < pointCount; ++p) {
         const draco::PointIndex pointIndex(static_cast<uint32_t>(p));
@@ -147,6 +157,24 @@ std::variant<DracoDecodedMesh, ImportErrorCode> DecodeDracoMesh(
             }
             (*result.uv0)[p * 2 + 0] = uv[0];
             (*result.uv0)[p * 2 + 1] = uv[1];
+        }
+        if (hasTangent) {
+            std::array<float, 4> value{};
+            if (!tangentAttr->GetValue<float, 4>(tangentAttr->mapped_index(pointIndex), &value))
+                return ImportErrorCode::MalformedData;
+            for (unsigned i=0;i<4;++i) (*result.tangents)[p*4+i]=value[i];
+        }
+        if (hasColor) {
+            std::array<float, 4> value{1,1,1,1};
+            if (colorAttr->num_components()==3) {
+                std::array<float,3> rgb{};
+                if (!colorAttr->GetValue<float,3>(colorAttr->mapped_index(pointIndex),&rgb))
+                    return ImportErrorCode::MalformedData;
+                value[0]=rgb[0];value[1]=rgb[1];value[2]=rgb[2];
+            } else if (!colorAttr->GetValue<float,4>(colorAttr->mapped_index(pointIndex),&value)) {
+                return ImportErrorCode::MalformedData;
+            }
+            for (unsigned i=0;i<4;++i) (*result.colors)[p*4+i]=value[i];
         }
     }
 

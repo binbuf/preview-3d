@@ -9,6 +9,7 @@
 #include "model_core/GeometryBounds.h"
 #include "platform/CheckedMath.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -71,6 +72,21 @@ size_t ScalarByteSize(PlyScalarType type)
         return 8;
     }
     return 0;
+}
+
+float NormalizeColor(double value, PlyScalarType type)
+{
+    double scale=1.0;
+    switch (type) {
+    case PlyScalarType::UInt8: scale=255.0; break;
+    case PlyScalarType::UInt16: scale=65535.0; break;
+    case PlyScalarType::UInt32: scale=4294967295.0; break;
+    case PlyScalarType::Int8: scale=127.0; break;
+    case PlyScalarType::Int16: scale=32767.0; break;
+    case PlyScalarType::Int32: scale=2147483647.0; break;
+    default: break;
+    }
+    return static_cast<float>(std::clamp(value/scale,0.0,1.0));
 }
 
 std::optional<PlyScalarType> ParseScalarTypeName(std::string_view name)
@@ -487,6 +503,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     int xIdx = -1, yIdx = -1, zIdx = -1;
     int nxIdx = -1, nyIdx = -1, nzIdx = -1;
     int uIdx = -1, vIdx = -1, sIdx = -1, tIdx = -1;
+    int redIdx=-1,greenIdx=-1,blueIdx=-1,alphaIdx=-1;
     for (size_t i = 0; i < vertexElement->properties.size(); ++i) {
         const PlyProperty& p = vertexElement->properties[i];
         if (p.isList) {
@@ -513,6 +530,10 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             sIdx = idx;
         else if (p.name == "t")
             tIdx = idx;
+        else if (p.name == "red" || p.name == "r") redIdx=idx;
+        else if (p.name == "green" || p.name == "g") greenIdx=idx;
+        else if (p.name == "blue" || p.name == "b") blueIdx=idx;
+        else if (p.name == "alpha" || p.name == "a") alphaIdx=idx;
     }
     if (xIdx < 0 || yIdx < 0 || zIdx < 0) {
         return ImportErrorCode::MalformedData;
@@ -521,7 +542,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         for (const auto& property : vertexElement->properties) if (!property.isList && property.name == name) return true;
         return false;
     };
-    const bool hasColors = hasProperty("red") && hasProperty("green") && hasProperty("blue");
+    const bool hasColors = redIdx>=0 && greenIdx>=0 && blueIdx>=0;
     bool hasNormal = (nxIdx >= 0 && nyIdx >= 0 && nzIdx >= 0);
     bool hasUvUv = (uIdx >= 0 && vIdx >= 0);
     bool hasUvSt = (!hasUvUv) && (sIdx >= 0 && tIdx >= 0);
@@ -643,14 +664,19 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                                   ? destination.size() - kSectionHeaderSize - kChunkDescriptorSize
                                   : 0;
         const bool preview=batchSink && batchSink->Preview();
-        const uint32_t chunkTriangles = preview ? 1 : uint32_t(std::min<uint64_t>(kChunkTriangles, room / 108));
-        const uint32_t chunkPoints = preview ? 3 : uint32_t(std::min<uint64_t>(kChunkPoints, room / 12));
+        const uint64_t triangleBytes=3*sizeof(VertexPositionNormalUv0TangentColorF32)+3*sizeof(uint32_t);
+        uint32_t chunkTriangles = preview ? 1 : uint32_t(std::min<uint64_t>(kChunkTriangles, room / triangleBytes));
+        // Keep an odd fan capacity when possible so a large polygon can be
+        // resumed at a non-zero fan offset; this also continuously exercises
+        // the exact source-range replay path instead of only face boundaries.
+        if (!preview && chunkTriangles>1 && !(chunkTriangles&1)) --chunkTriangles;
+        const uint32_t chunkPoints = preview ? 3 : uint32_t(std::min<uint64_t>(kChunkPoints, room / sizeof(VertexPositionNormalUv0TangentColorF32)));
         const auto previewVertices=PreviewOffsets(vertexElement->count,3);
         const auto previewFaces=PreviewOffsets(faceElement ? faceElement->count : 0);
         if ((hasFace && !chunkTriangles) || (!hasFace && !chunkPoints))
             return ImportErrorCode::ResourceLimit;
-        std::vector<VertexPositionNormalUv0F32> mesh;
-        std::vector<VertexPositionOnlyF32> points;
+        std::vector<VertexPositionNormalUv0TangentColorF32> mesh;
+        std::vector<VertexPositionNormalUv0TangentColorF32> points;
         std::vector<uint32_t> indices;
         std::unordered_map<uint64_t, uint32_t> remap;
         std::vector<uint64_t> checkpoints;
@@ -683,7 +709,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             return std::nullopt;
         };
         auto readVertex = [&](double* position,
-                              VertexPositionNormalUv0F32& vertex) -> std::optional<ImportErrorCode> {
+                              VertexPositionNormalUv0TangentColorF32& vertex) -> std::optional<ImportErrorCode> {
             double values[64]{};
             for (size_t i = 0; i < vertexElement->properties.size(); ++i)
             {
@@ -710,6 +736,8 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             vertex.nx = 0;
             vertex.ny = 0;
             vertex.nz = 1;
+            vertex.tx = 1; vertex.tw = 1;
+            vertex.r = vertex.g = vertex.b = vertex.a = 1;
             if (hasNormal)
             {
                 const double length =
@@ -727,6 +755,12 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 vertex.u = float(values[actualUIdx]);
                 vertex.v = float(values[actualVIdx]);
             }
+            if (hasColors) {
+                vertex.r=NormalizeColor(values[redIdx],vertexElement->properties[redIdx].valueType);
+                vertex.g=NormalizeColor(values[greenIdx],vertexElement->properties[greenIdx].valueType);
+                vertex.b=NormalizeColor(values[blueIdx],vertexElement->properties[blueIdx].valueType);
+                if (alphaIdx>=0) vertex.a=NormalizeColor(values[alphaIdx],vertexElement->properties[alphaIdx].valueType);
+            }
             return std::nullopt;
         };
         auto flush = [&]() -> std::optional<ImportErrorCode> {
@@ -737,7 +771,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             d.topology = hasFace ? ChunkTopology::TriangleList : ChunkTopology::PointList;
             d.meshId = hasFace ? 1 : 0;
             d.vertexLayoutId =
-                uint32_t(hasFace ? VertexLayoutId::PositionNormalUv0_F32 : VertexLayoutId::PositionOnly_F32);
+                uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
             d.vertexCount = uint32_t(hasFace ? mesh.size() : points.size());
             d.indexCount = uint32_t(indices.size());
             d.sourceRangeOffset = sourceFirst;
@@ -831,7 +865,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                         continue;
                     }
                     double position[3];
-                    VertexPositionNormalUv0F32 vertex{};
+                    VertexPositionNormalUv0TangentColorF32 vertex{};
                     if (auto error = readVertex(position, vertex))
                         return *error;
                     if (!hasFace)
@@ -845,9 +879,10 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                             sourceFirst = start;
                             haveOrigin = true;
                         }
-                        VertexPositionOnlyF32 point{float(position[0] - origin[0]),
-                                                    float(position[1] - origin[1]),
-                                                    float(position[2] - origin[2])};
+                        VertexPositionNormalUv0TangentColorF32 point=vertex;
+                        point.px=float(position[0] - origin[0]);
+                        point.py=float(position[1] - origin[1]);
+                        point.pz=float(position[2] - origin[2]);
                         points.push_back(point);
                         sourceEnd = cursor;
                     }
@@ -922,7 +957,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                                         return *error;
                             }
                             double position[3];
-                            VertexPositionNormalUv0F32 vertex{};
+                            VertexPositionNormalUv0TangentColorF32 vertex{};
                             if (auto error = readVertex(position, vertex))
                                 return *error;
                             cursor = end;
@@ -955,10 +990,10 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         if (!writer.Complete()) return writer.Error();
         return PlyImportResult{writer.Count(), writer.Length()};
     }
-    if (vertexElement->count * sizeof(VertexPositionNormalUv0F32) > TierAScratchLimit() / 4)
+    if (vertexElement->count * sizeof(VertexPositionNormalUv0TangentColorF32) > TierAScratchLimit() / 4)
         return ImportErrorCode::ResourceLimit;
-    std::vector<VertexPositionNormalUv0F32> meshVertices;
-    std::vector<VertexPositionOnlyF32> pointVertices;
+    std::vector<VertexPositionNormalUv0TangentColorF32> meshVertices;
+    std::vector<VertexPositionNormalUv0TangentColorF32> pointVertices;
     std::vector<uint32_t> meshIndices;
     uint64_t triangleTotal = 0;
     double clusterOrigin[3]{}; bool haveOrigin = false;
@@ -979,6 +1014,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         for (uint64_t recordIndex = 0; recordIndex < element.count; ++recordIndex) {
             if (isVertex) {
                 double x = 0, y = 0, z = 0, nx = 0, ny = 0, nz = 0, u = 0, v = 0;
+                double red=1,green=1,blue=1,alpha=1;
                 for (size_t pi = 0; pi < element.properties.size(); ++pi) {
                     const PlyProperty& prop = element.properties[pi];
                     if (prop.isList) {
@@ -1009,6 +1045,10 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                         u = *valOpt;
                     else if (hasUv && idx == actualVIdx)
                         v = *valOpt;
+                    else if (hasColors && idx==redIdx) red=*valOpt;
+                    else if (hasColors && idx==greenIdx) green=*valOpt;
+                    else if (hasColors && idx==blueIdx) blue=*valOpt;
+                    else if (hasColors && idx==alphaIdx) alpha=*valOpt;
                     // else: a recognized-but-unused (color, etc.) or wholly
                     // unrecognized scalar -- read for cursor correctness,
                     // discarded from wire output.
@@ -1043,7 +1083,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 }
 
                 if (hasFace) {
-                    VertexPositionNormalUv0F32 vertex{};
+                    VertexPositionNormalUv0TangentColorF32 vertex{};
                     vertex.px = px;
                     vertex.py = py;
                     vertex.pz = pz;
@@ -1052,9 +1092,27 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                     vertex.nz = pnz;
                     vertex.u = hasUv ? static_cast<float>(u) : 0.0f;
                     vertex.v = hasUv ? static_cast<float>(v) : 0.0f;
+                    vertex.tx=1;vertex.tw=1;vertex.r=vertex.g=vertex.b=vertex.a=1;
+                    if (hasColors) {
+                        vertex.r=NormalizeColor(red,vertexElement->properties[redIdx].valueType);
+                        vertex.g=NormalizeColor(green,vertexElement->properties[greenIdx].valueType);
+                        vertex.b=NormalizeColor(blue,vertexElement->properties[blueIdx].valueType);
+                        if (alphaIdx>=0) vertex.a=NormalizeColor(alpha,vertexElement->properties[alphaIdx].valueType);
+                    }
                     meshVertices.push_back(vertex);
                 } else {
-                    pointVertices.push_back(VertexPositionOnlyF32{ px, py, pz });
+                    VertexPositionNormalUv0TangentColorF32 vertex{};
+                    vertex.px=px;vertex.py=py;vertex.pz=pz;
+                    vertex.nx=pnx;vertex.ny=pny;vertex.nz=pnz;
+                    vertex.u=hasUv?float(u):0;vertex.v=hasUv?float(v):0;
+                    vertex.tx=1;vertex.tw=1;vertex.r=vertex.g=vertex.b=vertex.a=1;
+                    if (hasColors) {
+                        vertex.r=NormalizeColor(red,vertexElement->properties[redIdx].valueType);
+                        vertex.g=NormalizeColor(green,vertexElement->properties[greenIdx].valueType);
+                        vertex.b=NormalizeColor(blue,vertexElement->properties[blueIdx].valueType);
+                        if (alphaIdx>=0) vertex.a=NormalizeColor(alpha,vertexElement->properties[alphaIdx].valueType);
+                    }
+                    pointVertices.push_back(vertex);
                 }
             } else if (isFace) {
                 std::vector<uint64_t> faceIndices;
@@ -1200,10 +1258,10 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             }
         }
         topology = ChunkTopology::TriangleList;
-        vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0_F32);
+        vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0TangentColor_F32);
         vertexCountOut = meshVertices.size();
         indexCountOut = meshIndices.size();
-        vertexStride = sizeof(VertexPositionNormalUv0F32);
+        vertexStride = sizeof(VertexPositionNormalUv0TangentColorF32);
         vertexData = meshVertices.data();
         indexData = meshIndices.data();
     } else {
@@ -1211,10 +1269,10 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             return ImportErrorCode::EmptyGeometry;
         }
         topology = ChunkTopology::PointList;
-        vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionOnly_F32);
+        vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0TangentColor_F32);
         vertexCountOut = pointVertices.size();
         indexCountOut = 0;
-        vertexStride = sizeof(VertexPositionOnlyF32);
+        vertexStride = sizeof(VertexPositionNormalUv0TangentColorF32);
         vertexData = pointVertices.data();
         indexData = nullptr;
     }

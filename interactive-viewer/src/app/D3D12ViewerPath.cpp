@@ -24,15 +24,14 @@ constexpr uint32_t kTextureClusterIdBase = 1u << 20;
 
 // Embedded HLSL, compiled at runtime via D3DCompile -- same convention
 // Renderer.cpp's D3D11 shader strings already use; no .hlsl files on disk.
-// Deliberately minimal: no materials/textures (the wire format doesn't
-// carry any yet), a single hardcoded albedo shaded from the vertex normal
-// only. TEXCOORD0 is declared in the input layout/VSInput for future
-// texturing but not otherwise used.
+// The legacy shader remains for position-only geometry. Complete vertices
+// use the material shader below, while points use the splat shaders.
 constexpr char kVertexShaderSource[] = R"(
 cbuffer FrameConstants : register(b0)
 {
     row_major float4x4 gViewProjection;
     float4 gEyeSelection;
+    float4 gViewport;
 };
 
 cbuffer DrawConstants : register(b1)
@@ -65,7 +64,7 @@ PSInput VSMain(VSInput input)
 )";
 
 constexpr char kPixelShaderSource[] = R"(
-cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; };
+cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; float4 gViewport; };
 struct PSInput
 {
     float4 position : SV_POSITION;
@@ -89,27 +88,36 @@ PixelOutput PSMain(PSInput input)
 }
 )";
 
-// Textured variant: same vertex shader shape but passes uv through; pixel
-// shader samples a base-color texture and multiplies it into the same
-// hemisphere/Lambertian shade the untextured PSInstMain uses -- deliberately
-// not consuming MaterialPayload's baseColorFactor/metallic/roughness/
-// emissive fields yet (a one-line follow-up, scoped out of this slice).
+// Complete material variant. The shader consumes every normalized material
+// field and texture slot while keeping the legacy shader available for older
+// position-only geometry.
 constexpr char kTexturedVertexShaderSource[] = R"(
 cbuffer FrameConstants : register(b0)
 {
     row_major float4x4 gViewProjection;
     float4 gEyeSelection;
+    float4 gViewport;
 };
 
 cbuffer DrawConstants : register(b1)
 {
     row_major float4x4 gLocalToCamera;
 };
+cbuffer MaterialConstants : register(b2)
+{
+    float4 gBaseColorFactor;
+    float4 gMaterialFactors; // metallic, roughness, alpha cutoff, flags-as-float
+    float4 gEmissive;
+    float4 gUvTransform; // offset.xy, scale.xy
+    float4 gUvRotationAndMaps; // cos, sin, map mask, unused
+};
 struct VSInput
 {
     float3 position : POSITION;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
+    float4 tangent : TANGENT;
+    float4 color : COLOR0;
 };
 
 struct PSInput
@@ -118,6 +126,8 @@ struct PSInput
     float3 worldPosition : TEXCOORD1;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
+    float4 tangent : TANGENT;
+    float4 color : COLOR0;
 };
 
 PSInput VSMain(VSInput input)
@@ -127,15 +137,30 @@ PSInput VSMain(VSInput input)
     output.position = mul(relativePosition, gViewProjection);
     output.worldPosition = relativePosition.xyz;
     output.normal = mul(input.normal, (float3x3)gLocalToCamera);
-    output.uv = input.uv;
+    float2 scaled=input.uv*gUvTransform.zw;
+    output.uv=float2(scaled.x*gUvRotationAndMaps.x-scaled.y*gUvRotationAndMaps.y,
+                     scaled.x*gUvRotationAndMaps.y+scaled.y*gUvRotationAndMaps.x)+gUvTransform.xy;
+    output.tangent=float4(normalize(mul(input.tangent.xyz,(float3x3)gLocalToCamera)),input.tangent.w);
+    output.color=input.color;
     return output;
 }
 )";
 
 constexpr char kTexturedPixelShaderSource[] = R"(
-cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; };
+cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; float4 gViewport; };
 Texture2D gBaseColor : register(t0);
+Texture2D gMetallicRoughness : register(t1);
+Texture2D gNormal : register(t2);
+Texture2D gEmissive : register(t3);
 SamplerState gSampler : register(s0);
+cbuffer MaterialConstants : register(b2)
+{
+    float4 gBaseColorFactor;
+    float4 gMaterialFactors;
+    float4 gEmissiveFactor;
+    float4 gUvTransform;
+    float4 gUvRotationAndMaps;
+};
 
 struct PSInput
 {
@@ -143,22 +168,66 @@ struct PSInput
     float3 worldPosition : TEXCOORD1;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
+    float4 tangent : TANGENT;
+    float4 color : COLOR0;
 };
 
 struct PixelOutput { float4 color : SV_TARGET0; float pick : SV_TARGET1; };
 PixelOutput PSMain(PSInput input)
 {
-    float3 n = normalize(input.normal);
+    uint flags=(uint)gMaterialFactors.w;
+    uint maps=(uint)gUvRotationAndMaps.z;
+    float4 base=gBaseColorFactor*input.color;
+    if (maps&1) base*=gBaseColor.Sample(gSampler,input.uv);
+    if ((flags&4)!=0 && base.a<gMaterialFactors.z) discard;
+    float3 n=normalize(input.normal);
+    if (maps&4) {
+        float3 t=normalize(input.tangent.xyz);
+        float3 b=normalize(cross(n,t))*input.tangent.w;
+        float3 sampled=gNormal.Sample(gSampler,input.uv).xyz*2-1;
+        n=normalize(sampled.x*t+sampled.y*b+sampled.z*n);
+    }
     float3 lightDir = normalize(float3(0.4f, 0.7f, -0.5f));
     float ndotl = saturate(dot(n, lightDir));
     float hemi = 0.5f + 0.5f * n.y;
-    float3 texColor = gBaseColor.Sample(gSampler, input.uv).rgb;
-    float3 color = texColor * (0.25f + 0.5f * hemi + 0.4f * ndotl);
+    float metallic=gMaterialFactors.x, roughness=gMaterialFactors.y;
+    if (maps&2) { float4 mr=gMetallicRoughness.Sample(gSampler,input.uv); metallic*=mr.b; roughness*=mr.g; }
+    float3 emissive=gEmissiveFactor.rgb;
+    if (maps&8) emissive*=gEmissive.Sample(gSampler,input.uv).rgb;
+    float3 color=(flags&2) ? base.rgb : base.rgb*(0.18f+0.45f*hemi+0.45f*ndotl)*(1.0f-0.35f*metallic)
+        + pow(saturate(ndotl),max(2.0f,64.0f*(1.0f-roughness)))*lerp(float3(.04,.04,.04),base.rgb,metallic);
+    color+=emissive;
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
-    PixelOutput output; output.color = float4(saturate(color), 1.0f); output.pick = 1.0f; return output;
+    PixelOutput output; output.color = float4(saturate(color), base.a); output.pick = 1.0f; return output;
 }
+)";
+
+constexpr char kPointVertexShaderSource[] = R"(
+cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;};
+cbuffer DrawConstants:register(b1){row_major float4x4 gLocalToCamera;};
+struct V{float3 p:POSITION;}; struct O{float4 p:SV_POSITION;float4 c:COLOR0;};
+O VSMain(V v){O o;o.p=mul(mul(float4(v.p,1),gLocalToCamera),gViewProjection);o.c=float4(.76,.78,.84,1);return o;}
+)";
+constexpr char kColoredPointVertexShaderSource[] = R"(
+cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;};
+cbuffer DrawConstants:register(b1){row_major float4x4 gLocalToCamera;};
+struct V{float3 p:POSITION;float3 n:NORMAL;float2 uv:TEXCOORD0;float4 t:TANGENT;float4 c:COLOR0;};
+struct O{float4 p:SV_POSITION;float4 c:COLOR0;};
+O VSMain(V v){O o;o.p=mul(mul(float4(v.p,1),gLocalToCamera),gViewProjection);o.c=v.c;return o;}
+)";
+constexpr char kPointGeometryShaderSource[] = R"(
+cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;};
+struct I{float4 p:SV_POSITION;float4 c:COLOR0;}; struct O{float4 p:SV_POSITION;float4 c:COLOR0;float2 q:TEXCOORD0;};
+[maxvertexcount(4)] void GSMain(point I i[1],inout TriangleStream<O> s){
+ float radius=clamp(7.0/sqrt(max(.25,abs(i[0].p.w))),2.0,12.0);float2 clip=2.0*radius/max(gViewport.xy,float2(1,1));
+ float2 q[4]={float2(-1,-1),float2(-1,1),float2(1,-1),float2(1,1)};
+ [unroll]for(uint k=0;k<4;k++){O o;o.p=i[0].p;o.p.xy+=q[k]*clip*i[0].p.w;o.c=i[0].c;o.q=q[k];s.Append(o);} }
+)";
+constexpr char kPointPixelShaderSource[] = R"(
+struct I{float4 p:SV_POSITION;float4 c:COLOR0;float2 q:TEXCOORD0;};struct O{float4 c:SV_TARGET0;float pick:SV_TARGET1;};
+O PSMain(I i){if(dot(i.q,i.q)>1)discard;O o;o.c=i.c;o.pick=1;return o;}
 )";
 
 bool CompileShader(const char* source, size_t sourceLength, const char* entryPoint, const char* target,
@@ -453,21 +522,43 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
         error = L"The D3D12 pipeline state could not be created.";
         return false;
     }
-    std::string pointSource(kVertexShaderSource);
-    auto begin = pointSource.find("    float3 normal : NORMAL;\n    float2 uv : TEXCOORD0;");
-    pointSource.erase(begin, std::string("    float3 normal : NORMAL;\n    float2 uv : TEXCOORD0;").size());
-    auto normal = pointSource.find("input.normal");
-    pointSource.replace(normal, std::string("input.normal").size(), "float3(0,0,1)");
-    ComPtr<ID3DBlob> pointVs;
-    if (!CompileShader(pointSource.data(), pointSource.size(), "VSMain", "vs_5_1", pointVs, error)) return false;
+    std::string positionOnlySource(kVertexShaderSource);
+    auto positionOnlyBegin=positionOnlySource.find("    float3 normal : NORMAL;\n    float2 uv : TEXCOORD0;");
+    positionOnlySource.erase(positionOnlyBegin,std::string("    float3 normal : NORMAL;\n    float2 uv : TEXCOORD0;").size());
+    auto positionOnlyNormal=positionOnlySource.find("input.normal");
+    positionOnlySource.replace(positionOnlyNormal,std::string("input.normal").size(),"float3(0,0,1)");
+    ComPtr<ID3DBlob> positionOnlyVs, pointVs, coloredPointVs, pointGs, pointPs;
+    if (!CompileShader(positionOnlySource.data(),positionOnlySource.size(),"VSMain","vs_5_1",positionOnlyVs,error)) return false;
+    if (!CompileShader(kPointVertexShaderSource,sizeof(kPointVertexShaderSource)-1,"VSMain","vs_5_1",pointVs,error)
+        || !CompileShader(kColoredPointVertexShaderSource,sizeof(kColoredPointVertexShaderSource)-1,"VSMain","vs_5_1",coloredPointVs,error)
+        || !CompileShader(kPointGeometryShaderSource,sizeof(kPointGeometryShaderSource)-1,"GSMain","gs_5_1",pointGs,error)
+        || !CompileShader(kPointPixelShaderSource,sizeof(kPointPixelShaderSource)-1,"PSMain","ps_5_1",pointPs,error)) return false;
     psoDesc.VS = {pointVs->GetBufferPointer(), pointVs->GetBufferSize()};
+    psoDesc.GS = {pointGs->GetBufferPointer(), pointGs->GetBufferSize()};
+    psoDesc.PS = {pointPs->GetBufferPointer(), pointPs->GetBufferSize()};
     psoDesc.InputLayout.NumElements = 1;
-    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&positionOnlyPipelineState)))) {
-        error = L"The position-only mesh pipeline could not be created."; return false;
-    }
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pointPipelineState)))) {
         error = L"The point pipeline could not be created."; return false;
+    }
+    D3D12_INPUT_ELEMENT_DESC completeElements[] = {
+        {"POSITION",0,DXGI_FORMAT_R32G32B32_FLOAT,0,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
+        {"NORMAL",0,DXGI_FORMAT_R32G32B32_FLOAT,0,12,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
+        {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,24,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
+        {"TANGENT",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,32,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
+        {"COLOR",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,48,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
+    };
+    psoDesc.VS={coloredPointVs->GetBufferPointer(),coloredPointVs->GetBufferSize()};
+    psoDesc.InputLayout={completeElements,static_cast<UINT>(std::size(completeElements))};
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&coloredPointPipelineState)))) {
+        error=L"The colored point pipeline could not be created.";return false;
+    }
+    // Position-only triangles retain the original neutral shader.
+    psoDesc.GS={};psoDesc.PS={psBlob->GetBufferPointer(),psBlob->GetBufferSize()};
+    psoDesc.VS={positionOnlyVs->GetBufferPointer(),positionOnlyVs->GetBufferSize()};
+    psoDesc.InputLayout={inputElements,1};psoDesc.PrimitiveTopologyType=D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&positionOnlyPipelineState)))) {
+        error=L"The position-only mesh pipeline could not be created.";return false;
     }
 
     return true;
@@ -475,26 +566,28 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
 
 bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
 {
-    D3D12_ROOT_PARAMETER rootParams[3]{};
+    D3D12_ROOT_PARAMETER rootParams[7]{};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    D3D12_DESCRIPTOR_RANGE srvRange{};
-    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 1;
-    srvRange.BaseShaderRegister = 0;
-    srvRange.RegisterSpace = 0;
-    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-    rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[1].DescriptorTable.pDescriptorRanges = &srvRange;
-    rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-
-    rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[2].Constants.ShaderRegister = 1; rootParams[2].Constants.Num32BitValues = 16;
-    rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    D3D12_DESCRIPTOR_RANGE srvRanges[4]{};
+    for (UINT i=0;i<4;++i) {
+        srvRanges[i].RangeType=D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        srvRanges[i].NumDescriptors=1;srvRanges[i].BaseShaderRegister=i;
+        srvRanges[i].OffsetInDescriptorsFromTableStart=D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        rootParams[1+i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[1+i].DescriptorTable.NumDescriptorRanges=1;
+        rootParams[1+i].DescriptorTable.pDescriptorRanges=&srvRanges[i];
+        rootParams[1+i].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
+    }
+    rootParams[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[5].Constants.ShaderRegister = 1; rootParams[5].Constants.Num32BitValues = 16;
+    rootParams[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootParams[6].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[6].Constants.ShaderRegister=2;rootParams[6].Constants.Num32BitValues=20;
+    rootParams[6].ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
@@ -540,11 +633,13 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
     D3D12_RASTERIZER_DESC rasterizer{};
     rasterizer.FillMode = D3D12_FILL_MODE_SOLID;
-    rasterizer.CullMode = D3D12_CULL_MODE_NONE; // see CreatePipeline's identical comment
+    rasterizer.CullMode = D3D12_CULL_MODE_BACK;
     rasterizer.FrontCounterClockwise = FALSE;
     rasterizer.DepthClipEnable = TRUE;
 
@@ -577,6 +672,25 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&texturedPipelineState)))) {
         error = L"The textured D3D12 pipeline state could not be created.";
         return false;
+    }
+    psoDesc.RasterizerState.CullMode=D3D12_CULL_MODE_NONE;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedDoubleSidedPipelineState)))) {
+        error=L"The double-sided material pipeline state could not be created.";return false;
+    }
+    psoDesc.BlendState.RenderTarget[0].BlendEnable=TRUE;
+    psoDesc.BlendState.RenderTarget[0].SrcBlend=D3D12_BLEND_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].DestBlend=D3D12_BLEND_INV_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].BlendOp=D3D12_BLEND_OP_ADD;
+    psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha=D3D12_BLEND_ONE;
+    psoDesc.BlendState.RenderTarget[0].DestBlendAlpha=D3D12_BLEND_INV_SRC_ALPHA;
+    psoDesc.BlendState.RenderTarget[0].BlendOpAlpha=D3D12_BLEND_OP_ADD;
+    psoDesc.DepthStencilState.DepthWriteMask=D3D12_DEPTH_WRITE_MASK_ZERO;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedBlendDoubleSidedPipelineState)))) {
+        error=L"The blended double-sided material pipeline state could not be created.";return false;
+    }
+    psoDesc.RasterizerState.CullMode=D3D12_CULL_MODE_BACK;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedBlendPipelineState)))) {
+        error=L"The blended material pipeline state could not be created.";return false;
     }
     return true;
 }
@@ -775,6 +889,9 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     const UINT64 constantBufferOffset = static_cast<UINT64>(index) * kConstantBufferSlotBytes;
     std::memcpy(frameConstantBufferMapped + constantBufferOffset, &viewProjection, sizeof(viewProjection));
     std::memcpy(frameConstantBufferMapped + constantBufferOffset + sizeof(viewProjection), &eyeSelection, sizeof(eyeSelection));
+    const DirectX::XMFLOAT4 viewportConstants(float(right),float(bottom-top),0,0);
+    std::memcpy(frameConstantBufferMapped + constantBufferOffset + sizeof(viewProjection)+sizeof(eyeSelection),
+                &viewportConstants,sizeof(viewportConstants));
     const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
         = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
 
@@ -784,15 +901,39 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         commandList->SetDescriptorHeaps(1, heaps);
     }
 
-    // Untextured and textured meshes each need their own root
-    // signature/PSO bound before their draw calls; state changes are
-    // per-draw at this scale, no batching/sorting needed.
-    for (auto& mesh : model.meshes) {
+    std::vector<GpuMesh*> draws;
+    draws.reserve(model.meshes.size());
+    const bool rotateY=!chrome.info.showNativeOrientation && sourceUpAxis==model_core::UpAxisId::Y;
+    const auto viewProjectionMatrix=DirectX::XMLoadFloat4x4(&viewProjection);
+    for (auto& mesh:model.meshes) {
         if (!mesh.drawEnabled) continue;
         mesh.viewPriority = DetailViewPriority(mesh.sourceGeometry, sceneOrigin, cameraTarget,
-            !chrome.info.showNativeOrientation && sourceUpAxis == model_core::UpAxisId::Y, viewProjection);
+            rotateY, viewProjection);
         if (mesh.viewPriority == 0) continue;
+        double center[3];
+        for (unsigned axis=0;axis<3;++axis)
+            center[axis]=mesh.sourceGeometry.origin[axis]-sceneOrigin[axis]
+                +(double(mesh.sourceGeometry.localMin[axis])+double(mesh.sourceGeometry.localMax[axis]))*0.5;
+        if (rotateY) { const double y=center[1];center[1]=-center[2];center[2]=y; }
+        DirectX::XMFLOAT4 clip;
+        DirectX::XMStoreFloat4(&clip,DirectX::XMVector4Transform(DirectX::XMVectorSet(
+            float(center[0]-cameraTarget[0]),float(center[1]-cameraTarget[1]),float(center[2]-cameraTarget[2]),1),
+            viewProjectionMatrix));
+        mesh.viewDepth=clip.w!=0 && std::isfinite(clip.z/clip.w) ? clip.z/clip.w : 1.0f;
         mesh.lastVisibleFrame = uint32_t(frameStats.PresentedFrames());
+        draws.push_back(&mesh);
+    }
+    std::stable_sort(draws.begin(),draws.end(),[](const GpuMesh* a,const GpuMesh* b) {
+        const bool ablend=a->material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
+        const bool bblend=b->material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
+        if (ablend!=bblend) return !ablend;
+        if (ablend && a->viewDepth!=b->viewDepth) return a->viewDepth>b->viewDepth;
+        if (a->hasMaterial!=b->hasMaterial) return a->hasMaterial>b->hasMaterial;
+        if (a->materialChunkId!=b->materialChunkId) return a->materialChunkId<b->materialChunkId;
+        return a->chunkId<b->chunkId;
+    });
+    for (GpuMesh* meshPtr:draws) {
+        auto& mesh=*meshPtr;
         DirectX::XMFLOAT4X4 local;
         DirectX::XMStoreFloat4x4(&local, !chrome.info.showNativeOrientation && sourceUpAxis == model_core::UpAxisId::Y
             ? DirectX::XMMatrixSet(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1) : DirectX::XMMatrixIdentity());
@@ -803,19 +944,39 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         local._42 = float(native[0]*local._12 + native[1]*local._22 + native[2]*local._32 - cameraTarget[1]);
         local._43 = float(native[0]*local._13 + native[1]*local._23 + native[2]*local._33 - cameraTarget[2]);
         commandList->IASetPrimitiveTopology(mesh.points ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        if (mesh.textureIndex >= 0 && mesh.textureHeap) {
+        if (mesh.completeVertex && !mesh.points && mesh.textureHeap) {
             ID3D12DescriptorHeap* heaps[] = { mesh.textureHeap.Get() };
             commandList->SetDescriptorHeaps(1, heaps);
             commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
-            commandList->SetPipelineState(texturedPipelineState.Get());
+            const bool blend=mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
+            const bool twoSided=(mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
+            commandList->SetPipelineState(blend ? (twoSided?texturedBlendDoubleSidedPipelineState.Get():texturedBlendPipelineState.Get())
+                                                  : (twoSided?texturedDoubleSidedPipelineState.Get():texturedPipelineState.Get()));
             commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
-            D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
-            gpuHandle.ptr += static_cast<UINT64>(mesh.textureIndex) * mesh.textureDescriptorSize;
-            commandList->SetGraphicsRootDescriptorTable(1, gpuHandle);
-            commandList->SetGraphicsRoot32BitConstants(2, 16, &local, 0);
+            uint32_t mapMask=0;
+            for (UINT slot=0;slot<4;++slot) {
+                D3D12_GPU_DESCRIPTOR_HANDLE handle=mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+                const int selected=mesh.textureIndices[slot]>=0 ? mesh.textureIndices[slot] : int(mesh.neutralDescriptorBase+slot);
+                if (mesh.textureIndices[slot]>=0) mapMask|=1u<<slot;
+                handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
+                commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
+            }
+            commandList->SetGraphicsRoot32BitConstants(5, 16, &local, 0);
+            float material[20]{};
+            std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
+            material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
+            material[6]=mesh.material.alphaCutoff;
+            material[7]=float(((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
+                | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u));
+            std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
+            material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
+            material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
+            material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
+            material[18]=float(mapMask);
+            commandList->SetGraphicsRoot32BitConstants(6,20,material,0);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
-            commandList->SetPipelineState(mesh.points ? pointPipelineState.Get()
+            commandList->SetPipelineState(mesh.points ? (mesh.completeVertex?coloredPointPipelineState.Get():pointPipelineState.Get())
                 : mesh.positionOnly ? positionOnlyPipelineState.Get() : pipelineState.Get());
             commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
             commandList->SetGraphicsRoot32BitConstants(1, 16, &local, 0);
@@ -1005,13 +1166,18 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
     ModelResources staged;
     staged.meshes.reserve(importedMeshes.size());
     retiredModels.reserve(retiredModels.size() + 2);
+    const bool needsNeutralTextures=std::any_of(importedMeshes.begin(),importedMeshes.end(),[](const auto& mesh) {
+        return mesh.geometry.lodLevel!=model_core::kScanLod
+            && mesh.topology==model_core::ChunkTopology::TriangleList
+            && mesh.vertexLayoutId==model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32;
+    });
 
     // Queue each unique image at most once, into a fresh shader-visible
     // heap sized to importedImages.size() -- created up front so each SRV
     // can be written straight to its slot.
-    if (!importedImages.empty()) {
+    if (!importedImages.empty() || needsNeutralTextures) {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-        heapDesc.NumDescriptors = static_cast<UINT>(importedImages.size());
+        heapDesc.NumDescriptors = static_cast<UINT>(importedImages.size()+(needsNeutralTextures?4:0));
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         const HRESULT heapResult = device.Device()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&staged.srvHeap));
@@ -1041,6 +1207,26 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
             staged.textures[i] = std::move(texture);
             const auto textureDesc = staged.textures[i].resource->GetDesc();
             staged.textures[i].allocationBytes = device.Device()->GetResourceAllocationInfo(0,1,&textureDesc).SizeInBytes;
+            ++pendingResourceCount;
+        }
+        const uint8_t fallbackPixels[4][4]={{255,255,255,255},{255,255,255,255},{128,128,255,255},{0,0,0,255}};
+        staged.neutralTextures.resize(needsNeutralTextures?4:0);
+        for (size_t i=0;i<staged.neutralTextures.size();++i) {
+            d3d12_import_bridge::ImportedImage fallback;
+            fallback.pixelFormat=model_core::PixelFormatId::RGBA8_UNORM;
+            fallback.width=fallback.height=fallback.mipLevels=1;
+            fallback.colorSpace=i==0 ? model_core::ColorSpaceId::Srgb : model_core::ColorSpaceId::Linear;
+            fallback.pixelBytes.resize(4);
+            std::memcpy(fallback.pixelBytes.data(),fallbackPixels[i],4);
+            auto& texture=staged.neutralTextures[i];
+            texture.heap=staged.srvHeap;texture.descriptorSize=staged.srvDescriptorSize;
+            texture.srvHeapIndex=static_cast<UINT>(importedImages.size()+i);
+            if (!CreateAndQueueTexture(fallback,texture.srvHeapIndex,*staged.srvHeap.Get(),staged.srvDescriptorSize,
+                    static_cast<uint32_t>(kTextureClusterIdBase+importedImages.size()+i),texture.resource,error)) {
+                RetireStagedResources(std::move(staged));pendingResourceCount=0;return false;
+            }
+            const auto desc=texture.resource->GetDesc();
+            texture.allocationBytes=device.Device()->GetResourceAllocationInfo(0,1,&desc).SizeInBytes;
             ++pendingResourceCount;
         }
     }
@@ -1084,15 +1270,16 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
     uint32_t clusterId = 0;
     for (const auto& mesh : importedMeshes) {
         if (mesh.geometry.lodLevel == model_core::kScanLod) continue;
-        const bool points = mesh.topology == model_core::ChunkTopology::PointList
-            && mesh.vertexLayoutId == model_core::VertexLayoutId::PositionOnly_F32;
+        const bool points = mesh.topology == model_core::ChunkTopology::PointList;
         const bool positionOnly = mesh.vertexLayoutId == model_core::VertexLayoutId::PositionOnly_F32;
+        const bool completeVertex=mesh.vertexLayoutId==model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32;
         if (!points && (mesh.topology != model_core::ChunkTopology::TriangleList
-            || (!positionOnly && mesh.vertexLayoutId != model_core::VertexLayoutId::PositionNormalUv0_F32))) continue;
+            || (!positionOnly && !completeVertex && mesh.vertexLayoutId != model_core::VertexLayoutId::PositionNormalUv0_F32))) continue;
+        if (points && !positionOnly && !completeVertex) continue;
         if (mesh.vertexCount == 0 || (!points && mesh.indexCount == 0)) continue;
 
         const uint64_t vertexBytes
-            = static_cast<uint64_t>(mesh.vertexCount) * (positionOnly ? sizeof(model_core::VertexPositionOnlyF32) : sizeof(model_core::VertexPositionNormalUv0F32));
+            = static_cast<uint64_t>(mesh.vertexCount) * model_core::VertexStrideForLayout(mesh.vertexLayoutId);
         const uint64_t indexBytes = static_cast<uint64_t>(mesh.indexCount) * sizeof(uint32_t);
         if (mesh.payload.size() < vertexBytes + indexBytes) {
             error = L"An imported mesh's data was smaller than its declared size.";
@@ -1112,9 +1299,12 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         gpuMesh.sourceGeometry = mesh.geometry;
         gpuMesh.points = points; gpuMesh.vertexCount = mesh.vertexCount;
         gpuMesh.positionOnly = positionOnly;
+        gpuMesh.completeVertex=completeVertex;
         std::memcpy(gpuMesh.origin, mesh.geometry.origin, sizeof(gpuMesh.origin));
         gpuMesh.textureHeap = staged.srvHeap;
         gpuMesh.textureDescriptorSize = staged.srvDescriptorSize;
+        gpuMesh.neutralDescriptorBase=static_cast<UINT>(importedImages.size());
+        if (completeVertex && !points) for (UINT i=0;i<4;++i) gpuMesh.neutralResources[i]=staged.neutralTextures[i].resource;
         const bool coarse=mesh.geometry.lodLevel==model_core::kCoarseLod || mesh.geometry.lodLevel==model_core::kPreviewLod;
         const uint64_t vertexOffset=coarse ? coarseVertexOffset : 0, indexOffset=coarse ? coarseIndexOffset : 0;
         if (coarse) { gpuMesh.vertexBuffer=coarseVertices; gpuMesh.indexBuffer=coarseIndices; }
@@ -1139,7 +1329,7 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
             gpuMesh.indexAllocationBytes = device.Device()->GetResourceAllocationInfo(0,1,&indexDesc).SizeInBytes;
         }
         gpuMesh.vbv.SizeInBytes = static_cast<UINT>(vertexBytes);
-        gpuMesh.vbv.StrideInBytes = positionOnly ? sizeof(model_core::VertexPositionOnlyF32) : sizeof(model_core::VertexPositionNormalUv0F32);
+        gpuMesh.vbv.StrideInBytes = static_cast<UINT>(model_core::VertexStrideForLayout(mesh.vertexLayoutId));
         gpuMesh.ibv.BufferLocation = points ? 0 : gpuMesh.indexBuffer->GetGPUVirtualAddress()+indexOffset;
         gpuMesh.ibv.SizeInBytes = static_cast<UINT>(indexBytes);
         gpuMesh.ibv.Format = DXGI_FORMAT_R32_UINT;
@@ -1148,6 +1338,14 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
 
         if (const auto* material = findMaterial(mesh.materialChunkId)) {
             gpuMesh.textureIndex = findImageIndex(material->baseColorImageChunkId);
+            gpuMesh.textureIndices[0]=gpuMesh.textureIndex;
+            gpuMesh.textureIndices[1]=findImageIndex(material->metallicRoughnessImageChunkId);
+            gpuMesh.textureIndices[2]=findImageIndex(material->normalImageChunkId);
+            gpuMesh.textureIndices[3]=findImageIndex(material->emissiveImageChunkId);
+            gpuMesh.material=material->data;gpuMesh.hasMaterial=true;
+        } else {
+            gpuMesh.material.baseColorFactor[0]=gpuMesh.material.baseColorFactor[1]=gpuMesh.material.baseColorFactor[2]=gpuMesh.material.baseColorFactor[3]=1;
+            gpuMesh.material.roughnessFactor=1;
         }
 
         staged.meshes.push_back(std::move(gpuMesh));
@@ -1162,9 +1360,83 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
     return true;
 }
 
+bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std::wstring& error)
+{
+    const bool needsMaterialHeap=std::any_of(resources.meshes.begin(),resources.meshes.end(),[](const auto& mesh) {
+        return mesh.completeVertex && !mesh.points;
+    });
+    if (!needsMaterialHeap) return true;
+    if (resources.neutralTextures.size()<4) {
+        error=L"The material fallback catalog is incomplete.";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.NumDescriptors=static_cast<UINT>(resources.textures.size()+4);
+    heapDesc.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ComPtr<ID3D12DescriptorHeap> rebuilt;
+    if (FAILED(device.Device()->CreateDescriptorHeap(&heapDesc,IID_PPV_ARGS(&rebuilt)))) {
+        error=L"The progressive material descriptor catalog could not be rebuilt.";
+        return false;
+    }
+    const UINT descriptorSize=device.Device()->GetDescriptorHandleIncrementSize(heapDesc.Type);
+    const auto writeSrv=[&](ID3D12Resource* resource,UINT index) {
+        const auto resourceDesc=resource->GetDesc();
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Format=resourceDesc.Format;
+        srv.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;
+        srv.Texture2D.MipLevels=resourceDesc.MipLevels;
+        auto cpu=rebuilt->GetCPUDescriptorHandleForHeapStart();
+        cpu.ptr+=uint64_t(index)*descriptorSize;
+        device.Device()->CreateShaderResourceView(resource,&srv,cpu);
+    };
+    for (UINT i=0;i<resources.textures.size();++i) writeSrv(resources.textures[i].resource.Get(),i);
+    const UINT neutralBase=static_cast<UINT>(resources.textures.size());
+    for (UINT i=0;i<4;++i) writeSrv(resources.neutralTextures[i].resource.Get(),neutralBase+i);
+
+    ModelResources displaced;
+    std::unordered_set<ID3D12DescriptorHeap*> oldHeaps;
+    const auto retain=[&](ComPtr<ID3D12DescriptorHeap>& heap) {
+        if (heap && heap.Get()!=rebuilt.Get() && oldHeaps.insert(heap.Get()).second)
+            displaced.retainedDescriptorHeaps.push_back(heap);
+    };
+    retain(resources.srvHeap);
+    for (auto& texture:resources.textures) retain(texture.heap);
+    for (auto& texture:resources.neutralTextures) retain(texture.heap);
+    for (auto& mesh:resources.meshes) retain(mesh.textureHeap);
+
+    resources.srvHeap=rebuilt;
+    resources.srvDescriptorSize=descriptorSize;
+    for (UINT i=0;i<resources.textures.size();++i) {
+        resources.textures[i].heap=rebuilt;
+        resources.textures[i].descriptorSize=descriptorSize;
+        resources.textures[i].srvHeapIndex=i;
+    }
+    for (UINT i=0;i<4;++i) {
+        resources.neutralTextures[i].heap=rebuilt;
+        resources.neutralTextures[i].descriptorSize=descriptorSize;
+        resources.neutralTextures[i].srvHeapIndex=neutralBase+i;
+    }
+    for (auto& mesh:resources.meshes) if (mesh.completeVertex && !mesh.points) {
+        mesh.textureHeap=rebuilt;
+        mesh.textureDescriptorSize=descriptorSize;
+        mesh.neutralDescriptorBase=neutralBase;
+        for (UINT i=0;i<4;++i) mesh.neutralResources[i]=resources.neutralTextures[i].resource;
+    }
+    if (!displaced.retainedDescriptorHeaps.empty()) {
+        uint64_t fence=0;for (const auto& frame:frames) fence=std::max(fence,frame.fenceValue);
+        retiredModels.push_back({std::move(displaced),fence,0});
+    }
+    return true;
+}
+
 void D3D12ViewerPath::RetireStagedResources(ModelResources&& resources)
 {
-    if (resources.meshes.empty() && resources.textures.empty()) {
+    if (resources.meshes.empty() && resources.textures.empty()
+        && resources.neutralTextures.empty() && resources.fallbackTextures.empty()
+        && resources.retainedDescriptorHeaps.empty()) {
         return;
     }
     // Close any still-open batch first, so LastSubmittedFenceValue()
@@ -1313,7 +1585,8 @@ void D3D12ViewerPath::ClearModel()
 
 uint64_t D3D12ViewerPath::EstimateUploadBytes(ID3D12Device* device,
     std::span<const d3d12_import_bridge::ImportedMesh> meshes,
-    std::span<const d3d12_import_bridge::ImportedImage> images)
+    std::span<const d3d12_import_bridge::ImportedImage> images,
+    bool includeMaterialFallbacks)
 {
     const auto align = [](uint64_t n) { return (n+65535)/65536*65536; };
     uint64_t bytes=0, packedVertices=0, packedIndices=0;
@@ -1336,7 +1609,21 @@ uint64_t D3D12ViewerPath::EstimateUploadBytes(ID3D12Device* device,
         if (allocation == UINT64_MAX || allocation > UINT64_MAX-bytes) return UINT64_MAX;
         bytes+=allocation;
     }
-    if (!images.empty()) bytes+=align(uint64_t(images.size())*device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
+    const bool needsNeutral=includeMaterialFallbacks && std::any_of(meshes.begin(),meshes.end(),[](const auto& mesh) {
+        return mesh.geometry.lodLevel!=model_core::kScanLod
+            && mesh.topology==model_core::ChunkTopology::TriangleList
+            && mesh.vertexLayoutId==model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32;
+    });
+    if (needsNeutral) {
+        D3D12_RESOURCE_DESC neutral{};neutral.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        neutral.Width=1;neutral.Height=1;neutral.DepthOrArraySize=1;neutral.MipLevels=1;neutral.SampleDesc.Count=1;
+        neutral.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
+        const uint64_t allocation=device->GetResourceAllocationInfo(0,1,&neutral).SizeInBytes;
+        if (allocation==UINT64_MAX || allocation>(UINT64_MAX-bytes)/4) return UINT64_MAX;
+        bytes+=allocation*4;
+    }
+    if (!images.empty() || needsNeutral)
+        bytes+=align(uint64_t(images.size()+(needsNeutral?4:0))*device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
     return bytes;
 }
 
@@ -1357,10 +1644,12 @@ uint64_t D3D12ViewerPath::AccountedAllocationBytes(const ModelResources* extra) 
     const auto modelBytes=[&](const ModelResources& resources) {
         for (const auto& mesh:resources.meshes) {
             resource(mesh.vertexBuffer.Get(),mesh.vertexAllocationBytes); resource(mesh.indexBuffer.Get(),mesh.indexAllocationBytes); heap(mesh.textureHeap.Get());
+            for (const auto& neutral:mesh.neutralResources) resource(neutral.Get());
         }
-        for (const auto* textures:{&resources.textures,&resources.fallbackTextures})
+        for (const auto* textures:{&resources.textures,&resources.neutralTextures,&resources.fallbackTextures})
             for (const auto& texture:*textures) { resource(texture.resource.Get(),texture.allocationBytes); heap(texture.heap.Get()); }
         heap(resources.srvHeap.Get());
+        for (const auto& retained:resources.retainedDescriptorHeaps) heap(retained.Get());
     };
     for (UINT frame=0; frame<kFrameCount; ++frame) resource(swapChain.BackBuffer(frame));
     resource(depthBuffer.Get()); resource(pickTarget.Get()); resource(pickReadback.Get()); resource(frameConstantBuffer.Get());
@@ -1381,16 +1670,18 @@ void D3D12ViewerPath::ShedTextureDetail()
             retired.textures.push_back(std::move(texture)); texture=*fallback;
         }
     }
-    // Drop all descriptor references from the old frame-boundary material state.
-    for (auto& mesh:model.meshes) {
-        if (mesh.textureIndex<0) continue;
-        for (const auto& old:retired.textures) if (mesh.textureHeap.Get()==old.heap.Get() && UINT(mesh.textureIndex)==old.srvHeapIndex) {
-            auto low=std::find_if(model.textures.begin(),model.textures.end(),[&](const auto& texture) { return texture.chunkId==old.chunkId; });
-            mesh.textureHeap=low->heap; mesh.textureIndex=int(low->srvHeapIndex); mesh.textureDescriptorSize=low->descriptorSize;
-            break;
+    if (retired.textures.empty()) return;
+    std::wstring error;
+    if (!RebuildMaterialDescriptors(model,error)) {
+        // Descriptor allocation failure must not leave live descriptors
+        // pointing at resources moved into the retirement list.
+        for (auto& old:retired.textures) {
+            auto current=std::find_if(model.textures.begin(),model.textures.end(),
+                [&](const auto& texture) { return texture.chunkId==old.chunkId; });
+            if (current!=model.textures.end()) *current=std::move(old);
         }
+        return;
     }
-    model.srvHeap.Reset(); // texture records own their current/fallback heaps
     uint64_t fence=0; for (const auto& frame:frames) fence=std::max(fence,frame.fenceValue);
-    if (!retired.textures.empty()) retiredModels.push_back({std::move(retired),fence,0});
+    retiredModels.push_back({std::move(retired),fence,0});
 }

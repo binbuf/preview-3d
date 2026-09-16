@@ -30,12 +30,16 @@ struct DracoAttributeIds {
     std::optional<uint32_t> position; // required by the caller; absence is the caller's error to reject
     std::optional<uint32_t> normal;
     std::optional<uint32_t> uv0;
+    std::optional<uint32_t> tangent;
+    std::optional<uint32_t> color0;
 };
 
 struct DracoDecodedMesh {
     std::vector<float> positions;                // xyz triplets, size == 3 * pointCount
     std::optional<std::vector<float>> normals;    // xyz triplets, size == 3 * pointCount, if attributeIds.normal was set
     std::optional<std::vector<float>> uv0;        // uv pairs, size == 2 * pointCount, if attributeIds.uv0 was set
+    std::optional<std::vector<float>> tangents;   // xyzw quads
+    std::optional<std::vector<float>> colors;     // rgba quads (alpha synthesized for RGB)
     std::vector<uint32_t> indices;                // triangle list, size == 3 * faceCount
 };
 

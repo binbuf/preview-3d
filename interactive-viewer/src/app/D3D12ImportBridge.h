@@ -56,10 +56,8 @@ struct ImportedMesh {
 struct ImportedMaterial {
     uint32_t chunkId = 0;
     model_core::MaterialPayload data{};
-    // All four slots are populated: GltfAdapter.cpp resolves
+    // All four slots are populated and consumed: GltfAdapter.cpp resolves
     // metallicRoughness/normal/emissive alongside base color. 0 = none.
-    // (The renderer still samples only base color -- that gap is in the
-    // shaders, not here.)
     uint32_t baseColorImageChunkId = 0;
     uint32_t metallicRoughnessImageChunkId = 0;
     uint32_t normalImageChunkId = 0;

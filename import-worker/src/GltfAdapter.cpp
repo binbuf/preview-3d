@@ -57,7 +57,7 @@ constexpr uint64_t kMaxAggregateDecodedTexturePixels = 1'000'000'000;
 // mirrors SyntheticSceneGenerator's "compute everything, check once, then
 // write sequentially, header last" structure.
 struct PendingChunk {
-    std::vector<VertexPositionNormalUv0F32> vertices;
+    std::vector<VertexPositionNormalUv0TangentColorF32> vertices;
     std::vector<uint32_t> indices;
     ChunkDescriptor geometry{};
     std::optional<size_t> pendingMaterialIndex; // index into WalkState::pendingMaterials
@@ -183,6 +183,23 @@ bool ValidateVec2FloatAccessor(const fastgltf::Accessor& accessor)
         && accessor.componentType == fastgltf::ComponentType::Float;
 }
 
+bool ValidateTangentAccessor(const fastgltf::Accessor& accessor)
+{
+    return accessor.type == fastgltf::AccessorType::Vec4
+        && accessor.componentType == fastgltf::ComponentType::Float;
+}
+
+bool ValidateColorAccessor(const fastgltf::Accessor& accessor)
+{
+    const bool vectorType = accessor.type == fastgltf::AccessorType::Vec3
+        || accessor.type == fastgltf::AccessorType::Vec4;
+    const bool componentType = accessor.componentType == fastgltf::ComponentType::Float
+        || accessor.componentType == fastgltf::ComponentType::UnsignedByte
+        || accessor.componentType == fastgltf::ComponentType::UnsignedShort;
+    return vectorType && componentType
+        && (accessor.componentType == fastgltf::ComponentType::Float || accessor.normalized);
+}
+
 // iterateAccessor<uint32_t> against an UnsignedByte/UnsignedShort accessor
 // is fastgltf's designed up-conversion behavior, not an unsafe read --
 // accept any of the three legitimate index component types.
@@ -223,6 +240,32 @@ void GenerateFlatNormals(PendingChunk& chunk)
         chunk.vertices[i].nx = normalized.x();
         chunk.vertices[i].ny = normalized.y();
         chunk.vertices[i].nz = normalized.z();
+    }
+}
+
+void GenerateTangents(PendingChunk& chunk)
+{
+    std::vector<fastgltf::math::fvec3> tangent(chunk.vertices.size(), {0, 0, 0});
+    std::vector<fastgltf::math::fvec3> bitangent(chunk.vertices.size(), {0, 0, 0});
+    for (size_t i = 0; i + 2 < chunk.indices.size(); i += 3) {
+        const uint32_t ia = chunk.indices[i], ib = chunk.indices[i + 1], ic = chunk.indices[i + 2];
+        const auto& a = chunk.vertices[ia]; const auto& b = chunk.vertices[ib]; const auto& c = chunk.vertices[ic];
+        fastgltf::math::fvec3 e1(b.px-a.px,b.py-a.py,b.pz-a.pz), e2(c.px-a.px,c.py-a.py,c.pz-a.pz);
+        const float du1=b.u-a.u, dv1=b.v-a.v, du2=c.u-a.u, dv2=c.v-a.v;
+        const float determinant=du1*dv2-du2*dv1;
+        if (std::abs(determinant) <= 1e-12f) continue;
+        const float inv=1.0f/determinant;
+        const fastgltf::math::fvec3 t=(e1*dv2-e2*dv1)*inv;
+        const fastgltf::math::fvec3 bt=(e2*du1-e1*du2)*inv;
+        for (uint32_t index : {ia,ib,ic}) { tangent[index]+=t; bitangent[index]+=bt; }
+    }
+    for (size_t i=0;i<chunk.vertices.size();++i) {
+        auto& v=chunk.vertices[i];
+        const fastgltf::math::fvec3 n(v.nx,v.ny,v.nz);
+        fastgltf::math::fvec3 t=tangent[i]-n*fastgltf::math::dot(n,tangent[i]);
+        t=fastgltf::math::dot(t,t)>1e-12f ? fastgltf::math::normalize(t) : fastgltf::math::fvec3(1,0,0);
+        v.tx=t.x(); v.ty=t.y(); v.tz=t.z();
+        v.tw=fastgltf::math::dot(fastgltf::math::cross(n,t),bitangent[i]) < 0 ? -1.0f : 1.0f;
     }
 }
 
@@ -833,6 +876,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
                       const fastgltf::math::dmat4x4& world, const fastgltf::math::fmat3x3& normalMatrix,
                       uint32_t meshId, uint32_t nodeId, uint32_t primitiveId)
 {
+    const float transformHandedness=fastgltf::math::determinant(normalMatrix)<0 ? -1.0f : 1.0f;
     if (++state.primitiveOccurrences > kTierAObjectLimit)
     {
         state.error = ImportErrorCode::ResourceLimit;
@@ -922,13 +966,36 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         }
     }
 
+    auto tangentIt = primitive.findAttribute("TANGENT");
+    const bool hasTangent = tangentIt != primitive.attributes.end();
+    if (hasTangent) {
+        const auto& accessor = state.asset.accessors[tangentIt->accessorIndex];
+        if (!ValidateTangentAccessor(accessor) || accessor.count != positionAccessor.count) {
+            state.error = ImportErrorCode::MalformedData;
+            return false;
+        }
+    }
+    auto colorIt = primitive.findAttribute("COLOR_0");
+    const bool hasColor = colorIt != primitive.attributes.end();
+    if (hasColor) {
+        const auto& accessor = state.asset.accessors[colorIt->accessorIndex];
+        if (!ValidateColorAccessor(accessor) || accessor.count != positionAccessor.count) {
+            state.error = ImportErrorCode::MalformedData;
+            return false;
+        }
+    }
+    const bool requiresTangents = hasUv && primitive.materialIndex
+        && state.asset.materials[*primitive.materialIndex].normalTexture.has_value();
+
     if (state.emit && !primitive.dracoCompression)
     {
         if (!EnsureAccessorBytesResolvable(state, positionAccessor) ||
             (primitive.indicesAccessor && !EnsureAccessorBytesResolvable(state, indexAccessor)) ||
             (hasNormal &&
              !EnsureAccessorBytesResolvable(state, state.asset.accessors[normalIt->accessorIndex])) ||
-            (hasUv && !EnsureAccessorBytesResolvable(state, state.asset.accessors[uvIt->accessorIndex])))
+            (hasUv && !EnsureAccessorBytesResolvable(state, state.asset.accessors[uvIt->accessorIndex])) ||
+            (hasTangent && !EnsureAccessorBytesResolvable(state, state.asset.accessors[tangentIt->accessorIndex])) ||
+            (hasColor && !EnsureAccessorBytesResolvable(state, state.asset.accessors[colorIt->accessorIndex])))
             return false;
         const auto material = !state.preview && !state.requested && primitive.materialIndex ? ResolveMaterial(state, *primitive.materialIndex)
                                                       : std::optional<size_t>{};
@@ -953,9 +1020,9 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             part.pendingMaterialIndex = material;
             part.geometry.meshId = meshId;
             part.geometry.nodeId = nodeId;
-            part.geometry.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0_F32);
+            part.geometry.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
             part.geometry.geometryFlags = hasUv ? kGeometryHasUv0 : 0;
-            if (primitive.findAttribute("COLOR_0") != primitive.attributes.end())
+            if (hasColor)
                 part.geometry.geometryFlags |= kGeometryHasColors;
             if (primitive.findAttribute("TEXCOORD_1") != primitive.attributes.end())
                 part.geometry.geometryFlags |= kGeometryHasUv1;
@@ -989,7 +1056,8 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
                 const auto pos = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
                     state.asset, positionAccessor, sourceIndex, adapter);
                 const auto transformed = linear * fastgltf::math::dvec4(pos.x(), pos.y(), pos.z(), 1);
-                VertexPositionNormalUv0F32 v{};
+                VertexPositionNormalUv0TangentColorF32 v{};
+                v.tx=1.0f; v.tw=1.0f; v.r=v.g=v.b=v.a=1.0f;
                 v.px = float(transformed.x());
                 v.py = float(transformed.y());
                 v.pz = float(transformed.z());
@@ -1009,10 +1077,27 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
                     v.u = uv.x();
                     v.v = uv.y();
                 }
+                if (hasTangent) {
+                    const auto t=fastgltf::getAccessorElement<fastgltf::math::fvec4>(
+                        state.asset,state.asset.accessors[tangentIt->accessorIndex],sourceIndex,adapter);
+                    const auto wt=fastgltf::math::normalize(normalMatrix*fastgltf::math::fvec3(t.x(),t.y(),t.z()));
+                    v.tx=wt.x(); v.ty=wt.y(); v.tz=wt.z(); v.tw=t.w()*transformHandedness;
+                }
+                if (hasColor) {
+                    const auto& accessor=state.asset.accessors[colorIt->accessorIndex];
+                    if (accessor.type==fastgltf::AccessorType::Vec3) {
+                        const auto c=fastgltf::getAccessorElement<fastgltf::math::fvec3>(state.asset,accessor,sourceIndex,adapter);
+                        v.r=c.x();v.g=c.y();v.b=c.z();v.a=1.0f;
+                    } else {
+                        const auto c=fastgltf::getAccessorElement<fastgltf::math::fvec4>(state.asset,accessor,sourceIndex,adapter);
+                        v.r=c.x();v.g=c.y();v.b=c.z();v.a=c.w();
+                    }
+                }
                 part.vertices.push_back(v);
             }
             if (!hasNormal)
                 GenerateFlatNormals(part);
+            if (!hasTangent && requiresTangents) GenerateTangents(part);
             part.geometry.vertexCount = uint32_t(part.vertices.size());
             if (!RebasePositions(part.geometry, std::as_writable_bytes(std::span(part.vertices))))
             {
@@ -1031,7 +1116,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         state.totalIndices += indexAccessor.count;
         return true;
     }
-    if (!state.emit && (positionAccessor.count + state.totalVertices) * sizeof(VertexPositionNormalUv0F32) +
+    if (!state.emit && (positionAccessor.count + state.totalVertices) * sizeof(VertexPositionNormalUv0TangentColorF32) +
                                (indexAccessor.count + state.totalIndices) * sizeof(uint32_t) >
                            128ull * 1024 * 1024)
     {
@@ -1054,12 +1139,16 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
     }
     PendingChunk chunk;
     chunk.vertices.resize(positionAccessor.count);
+    for (auto& vertex : chunk.vertices) {
+        vertex.tx=1.0f; vertex.tw=1.0f;
+        vertex.r=vertex.g=vertex.b=vertex.a=1.0f;
+    }
     chunk.geometry.vertexCount = static_cast<uint32_t>(positionAccessor.count);
-    chunk.geometry.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0_F32);
+    chunk.geometry.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
     chunk.geometry.meshId = meshId; chunk.geometry.nodeId = nodeId;
     chunk.geometry.geometryFlags = hasUv ? kGeometryHasUv0 : 0;
     if (primitive.findAttribute("TEXCOORD_1") != primitive.attributes.end()) chunk.geometry.geometryFlags |= kGeometryHasUv1;
-    if (primitive.findAttribute("COLOR_0") != primitive.attributes.end()) chunk.geometry.geometryFlags |= kGeometryHasColors;
+    if (hasColor) chunk.geometry.geometryFlags |= kGeometryHasColors;
     for (unsigned axis = 0; axis < 3; ++axis) chunk.geometry.origin[axis] = world[3][axis];
     // Separate translation before narrowing. Multiplying tiny residuals into
     // a huge world position first loses precision even in double arithmetic.
@@ -1105,6 +1194,16 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             }
             attributeIds.uv0 = static_cast<uint32_t>(it->accessorIndex);
         }
+        if (hasTangent) {
+            auto it=dracoPrimitive.findAttribute("TANGENT");
+            if (it==dracoPrimitive.attributes.end()) { state.error=ImportErrorCode::MalformedData; return false; }
+            attributeIds.tangent=static_cast<uint32_t>(it->accessorIndex);
+        }
+        if (hasColor) {
+            auto it=dracoPrimitive.findAttribute("COLOR_0");
+            if (it==dracoPrimitive.attributes.end()) { state.error=ImportErrorCode::MalformedData; return false; }
+            attributeIds.color0=static_cast<uint32_t>(it->accessorIndex);
+        }
 
         auto decoded = DecodeDracoMesh(*compressedBytes, attributeIds, positionAccessor.count,
                                         indexAccessor.count);
@@ -1130,6 +1229,15 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
                 chunk.vertices[idx].u = 0.0f;
                 chunk.vertices[idx].v = 0.0f;
             }
+            if (hasTangent) {
+                const auto& t=*decodedMesh.tangents;
+                const auto wt=fastgltf::math::normalize(normalMatrix*fastgltf::math::fvec3(t[idx*4],t[idx*4+1],t[idx*4+2]));
+                chunk.vertices[idx].tx=wt.x();chunk.vertices[idx].ty=wt.y();chunk.vertices[idx].tz=wt.z();chunk.vertices[idx].tw=t[idx*4+3]*transformHandedness;
+            }
+            if (hasColor) {
+                const auto& c=*decodedMesh.colors;
+                chunk.vertices[idx].r=c[idx*4];chunk.vertices[idx].g=c[idx*4+1];chunk.vertices[idx].b=c[idx*4+2];chunk.vertices[idx].a=c[idx*4+3];
+            }
         }
         chunk.indices = std::move(decodedMesh.indices);
 
@@ -1153,6 +1261,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         } else {
             GenerateFlatNormals(chunk);
         }
+        if (!hasTangent && requiresTangents) GenerateTangents(chunk);
     } else {
         // Every accessor below is read through SidecarBufferDataAdapter, so
         // an external .bin resolves via this worker's sidecar cache exactly
@@ -1164,7 +1273,9 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             (primitive.indicesAccessor && !EnsureAccessorBytesResolvable(state, indexAccessor)) ||
             (hasUv && !EnsureAccessorBytesResolvable(state, state.asset.accessors[uvIt->accessorIndex])) ||
             (hasNormal &&
-             !EnsureAccessorBytesResolvable(state, state.asset.accessors[normalIt->accessorIndex])))
+             !EnsureAccessorBytesResolvable(state, state.asset.accessors[normalIt->accessorIndex])) ||
+            (hasTangent && !EnsureAccessorBytesResolvable(state, state.asset.accessors[tangentIt->accessorIndex])) ||
+            (hasColor && !EnsureAccessorBytesResolvable(state, state.asset.accessors[colorIt->accessorIndex])))
         {
             return false;
         }
@@ -1176,7 +1287,9 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         if (!diagnosticBasePresent(positionAccessor)
             || (primitive.indicesAccessor && !diagnosticBasePresent(indexAccessor))
             || (hasNormal && !diagnosticBasePresent(state.asset.accessors[normalIt->accessorIndex]))
-            || (hasUv && !diagnosticBasePresent(state.asset.accessors[uvIt->accessorIndex]))) return false;
+            || (hasUv && !diagnosticBasePresent(state.asset.accessors[uvIt->accessorIndex]))
+            || (hasTangent && !diagnosticBasePresent(state.asset.accessors[tangentIt->accessorIndex]))
+            || (hasColor && !diagnosticBasePresent(state.asset.accessors[colorIt->accessorIndex]))) return false;
         const SidecarBufferDataAdapter bufferAdapter(state);
 
         fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
@@ -1203,6 +1316,25 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             for (auto& v : chunk.vertices) {
                 v.u = 0.0f;
                 v.v = 0.0f;
+            }
+        }
+
+        if (hasTangent) {
+            const auto& accessor=state.asset.accessors[tangentIt->accessorIndex];
+            fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(state.asset,accessor,
+                [&](fastgltf::math::fvec4 t,size_t idx) {
+                    const auto wt=fastgltf::math::normalize(normalMatrix*fastgltf::math::fvec3(t.x(),t.y(),t.z()));
+                    auto& v=chunk.vertices[idx];v.tx=wt.x();v.ty=wt.y();v.tz=wt.z();v.tw=t.w()*transformHandedness;
+                },bufferAdapter);
+        }
+        if (hasColor) {
+            const auto& accessor=state.asset.accessors[colorIt->accessorIndex];
+            if (accessor.type==fastgltf::AccessorType::Vec3) {
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(state.asset,accessor,
+                    [&](fastgltf::math::fvec3 c,size_t idx) { auto& v=chunk.vertices[idx];v.r=c.x();v.g=c.y();v.b=c.z();v.a=1; },bufferAdapter);
+            } else {
+                fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec4>(state.asset,accessor,
+                    [&](fastgltf::math::fvec4 c,size_t idx) { auto& v=chunk.vertices[idx];v.r=c.x();v.g=c.y();v.b=c.z();v.a=c.w(); },bufferAdapter);
             }
         }
 
@@ -1236,6 +1368,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         } else {
             GenerateFlatNormals(chunk);
         }
+        if (!hasTangent && requiresTangents) GenerateTangents(chunk);
 
         // Defensive: the pre-flight above should make this unreachable, but
         // the adapter records rather than throws, so never fall through to
@@ -1751,7 +1884,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     state.maxChunkCount = maxChunkCount;
     state.chunkTriangles = uint32_t(std::min<uint64_t>(
         kChunkTriangles, destination.size() > kSectionHeaderSize + kChunkDescriptorSize
-                             ? (destination.size() - kSectionHeaderSize - kChunkDescriptorSize) / 108
+                             ? (destination.size() - kSectionHeaderSize - kChunkDescriptorSize)
+                                   / (3*sizeof(VertexPositionNormalUv0TangentColorF32)+3*sizeof(uint32_t))
                              : 0));
     if (!state.chunkTriangles)
         return ImportErrorCode::ResourceLimit;
@@ -2000,7 +2134,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     for (size_t i = 0; i < meshChunkCount; ++i) {
         const PendingChunk& chunk = state.chunks[i];
         auto vertexBytes = CheckedMultiply(static_cast<uint64_t>(chunk.vertices.size()),
-                                            sizeof(VertexPositionNormalUv0F32));
+                                            sizeof(VertexPositionNormalUv0TangentColorF32));
         auto indexBytes
             = CheckedMultiply(static_cast<uint64_t>(chunk.indices.size()), sizeof(uint32_t));
         if (!vertexBytes || !indexBytes) {
@@ -2018,7 +2152,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         plan.descriptor.topology = ChunkTopology::TriangleList;
         plan.descriptor.indexCount = static_cast<uint32_t>(chunk.indices.size());
         plan.descriptor.vertexCount = static_cast<uint32_t>(chunk.vertices.size());
-        plan.descriptor.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0_F32);
+        plan.descriptor.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0TangentColor_F32);
         plan.descriptor.lodLevel = 0;
         plan.descriptor.chunkId = meshChunkId(i);
         if (chunk.pendingMaterialIndex.has_value()) {

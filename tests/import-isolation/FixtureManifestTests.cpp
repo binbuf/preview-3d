@@ -42,6 +42,7 @@ TEST_CASE("Manifest Tier A fixtures preserve counts and geometric bounds through
         REQUIRE(result.ok);
         unsigned triangles = 0, points = 0, materials = 0, images = 0;
         unsigned colorMask = 0;
+        unsigned vertexColorMask = 0;
         std::array<float, 3> lo{ INFINITY, INFINITY, INFINITY }, hi{ -INFINITY, -INFINITY, -INFINITY };
         for (const auto& chunk : result.chunks) {
             const auto& d = chunk.descriptor;
@@ -85,6 +86,13 @@ TEST_CASE("Manifest Tier A fixtures preserve counts and geometric bounds through
                     const float world = float(d.origin[axis] + p[axis]);
                     lo[axis]=std::min(lo[axis],world); hi[axis]=std::max(hi[axis],world);
                 }
+                if ((d.geometryFlags & model_core::kGeometryHasColors) && stride==64) {
+                    std::array<float,4> color{};
+                    std::memcpy(color.data(),chunk.payload.data()+i*stride+48,sizeof(color));
+                    const std::array<std::array<float,4>,4> colors{{ {1,0,0,1}, {0,1,0,1}, {0,0,1,1}, {1,1,1,1} }};
+                    for (unsigned value=0;value<colors.size();++value)
+                        if (std::equal(colors[value].begin(),colors[value].end(),color.begin())) vertexColorMask|=1u<<value;
+                }
             }
         }
         CHECK(triangles == fixture.triangles);
@@ -93,6 +101,7 @@ TEST_CASE("Manifest Tier A fixtures preserve counts and geometric bounds through
         CHECK(materials == (format == import_broker::ImportFormat::Gltf ? 4u : 0u));
         CHECK(images == (format == import_broker::ImportFormat::Gltf ? 1u : 0u));
         CHECK(colorMask == (format == import_broker::ImportFormat::Gltf ? 15u : 0u));
+        CHECK(vertexColorMask == (format == import_broker::ImportFormat::Stl ? 0u : 15u));
     }
 }
 

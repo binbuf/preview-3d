@@ -286,7 +286,8 @@ void RenderThread::UploadMain()
                     inbox->mandatoryBytes=D3D12ViewerPath::EstimateUploadBytes(uploader.device.Device(),pub.task.result.meshes,{});
                     for (const auto& mesh:pub.task.result.meshes)
                         if (mesh.geometry.lodLevel==model_core::kFineLod && mesh.geometry.sourceRangeLength)
-                            inbox->mandatoryBytes-=D3D12ViewerPath::EstimateUploadBytes(uploader.device.Device(),std::span(&mesh,1),{});
+                            inbox->mandatoryBytes-=D3D12ViewerPath::EstimateUploadBytes(
+                                uploader.device.Device(),std::span(&mesh,1),{},false);
                     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
                     while (inbox->mandatoryBytes && !inbox->stopped && inbox->generation==pub.task.generation
                         && (!pub.task.cancellation || !pub.task.cancellation->load())
@@ -301,7 +302,8 @@ void RenderThread::UploadMain()
                     auto& meshes=pub.task.result.meshes;
                     meshes.erase(std::remove_if(meshes.begin(),meshes.end(),[&](const auto& mesh) {
                         if (mesh.geometry.lodLevel != model_core::kFineLod || !mesh.geometry.sourceRangeLength) return false;
-                        const uint64_t bytes=D3D12ViewerPath::EstimateUploadBytes(uploader.device.Device(),std::span(&mesh,1),{});
+                        const uint64_t bytes=D3D12ViewerPath::EstimateUploadBytes(
+                            uploader.device.Device(),std::span(&mesh,1),{},false);
                         if (bytes>available) { ++rejectedDetailCount_; pub.task.result.status.flags|=model_core::kStatusPressure; return true; }
                         available-=bytes; return false;
                     }),meshes.end());
@@ -678,17 +680,30 @@ void RenderThread::PumpUploads(HWND window)
             if (std::none_of(path_.model.meshes.begin(),path_.model.meshes.end(),[&](const auto& old) { return old.chunkId==mesh.chunkId; }))
                 path_.model.meshes.push_back(std::move(mesh));
         }
+        if (path_.model.neutralTextures.empty())
+            path_.model.neutralTextures=std::move(pub.resources.neutralTextures);
+        std::wstring descriptorError;
+        const bool descriptorsReady=path_.RebuildMaterialDescriptors(path_.model,descriptorError);
         D3D12ViewerPath::UpdateCoarseVisibility(path_.model);
         for (auto& mesh:path_.model.meshes) {
             const auto mat=materials_.find(mesh.materialChunkId);
             if (mat==materials_.end()) continue;
-            for (const auto& texture:path_.model.textures) if (texture.chunkId==mat->second.baseColorImageChunkId) {
-                mesh.textureIndex=int(texture.srvHeapIndex); mesh.textureHeap=texture.heap; mesh.textureDescriptorSize=texture.descriptorSize;
+            mesh.material=mat->second.data;mesh.hasMaterial=true;
+            const uint32_t ids[4]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
+                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId};
+            for (UINT slot=0;slot<4;++slot) for (const auto& texture:path_.model.textures) if (texture.chunkId==ids[slot]) {
+                mesh.textureIndices[slot]=int(texture.srvHeapIndex);
+                if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
+                break;
             }
         }
         UpdateResidencySmoke();
         stagedMetadata_->stats.drawCallCount=int(displayedChunks_.load());
-        message->ok=true; message->terminal=true;
+        message->ok=descriptorsReady; message->terminal=true;
+        if (!descriptorsReady) {
+            message->errorCode=model_core::ImportErrorCode::UploadFailure;
+            message->errorDetails=descriptorError;
+        }
         message->metadata=std::make_shared<const ModelData>(*stagedMetadata_);
     } else {
         auto& metadata = *stagedMetadata_;
@@ -763,6 +778,8 @@ void RenderThread::PumpUploads(HWND window)
         destination.coarseAllocationBytes+=pub.resources.coarseAllocationBytes;
         destination.meshes.insert(destination.meshes.end(), std::make_move_iterator(pub.resources.meshes.begin()),
             std::make_move_iterator(pub.resources.meshes.end()));
+        if (destination.neutralTextures.empty())
+            destination.neutralTextures=std::move(pub.resources.neutralTextures);
         if (stagedProxyComplete_ && !destination.coarseComplete) path_.RetirePreviewChunks(destination);
         destination.coarseComplete=stagedProxyComplete_;
         D3D12ViewerPath::UpdateCoarseVisibility(destination);
@@ -791,6 +808,13 @@ void RenderThread::PumpUploads(HWND window)
                 displaced.textures.push_back(std::move(*old));*old=std::move(texture);
             }
         }
+        std::wstring descriptorError;
+        const bool descriptorsReady=path_.RebuildMaterialDescriptors(destination,descriptorError);
+        if (!descriptorsReady) {
+            stagedFailed_=true;
+            message->errorCode=model_core::ImportErrorCode::UploadFailure;
+            message->errorDetails=descriptorError;
+        }
         if (!displaced.textures.empty()) {
             uint64_t fence=0;for (const auto& frame:path_.frames) fence=std::max(fence,frame.fenceValue);
             path_.retiredModels.push_back({std::move(displaced),fence,0});
@@ -803,13 +827,17 @@ void RenderThread::PumpUploads(HWND window)
         for (auto& mesh : destination.meshes) {
             auto mat = materials_.find(mesh.materialChunkId);
             if (mat == materials_.end()) continue; // Neutral, immutable until a dependency arrives.
-            for (const auto& texture : destination.textures) if (texture.chunkId == mat->second.baseColorImageChunkId) {
-                mesh.textureIndex = static_cast<int>(texture.srvHeapIndex);
-                mesh.textureHeap = texture.heap; mesh.textureDescriptorSize = texture.descriptorSize;
+            mesh.material=mat->second.data;mesh.hasMaterial=true;
+            const uint32_t ids[4]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
+                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId};
+            for (UINT slot=0;slot<4;++slot) for (const auto& texture:destination.textures) {
+                if (texture.chunkId!=ids[slot]) continue;
+                mesh.textureIndices[slot]=static_cast<int>(texture.srvHeapIndex);
+                if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
                 break;
             }
         }
-        if (!destination.meshes.empty() && (!stagedProxyMode_ || stagedProxyComplete_ || !path_.hasModel)) {
+        if (descriptorsReady && !destination.meshes.empty() && (!stagedProxyMode_ || stagedProxyComplete_ || !path_.hasModel)) {
             if (modelGeneration_ != pub.task.generation) {
                 uint64_t fence = 0;
                 for (const auto& frame : path_.frames) fence = std::max(fence,frame.fenceValue);
@@ -848,7 +876,7 @@ void RenderThread::PumpUploads(HWND window)
             }
         }
         message->metadata = std::make_shared<const ModelData>(metadata);
-        message->ok = true;
+        message->ok = descriptorsReady;
         if (modelGeneration_ != pub.task.generation) return;
     }
     // Align cancel/recovery UI with the representation already accepted by the

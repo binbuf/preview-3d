@@ -376,10 +376,10 @@ TEST_CASE("A valid little-endian binary PLY mesh round-trips through the real sa
     CHECK(chunk.descriptor.vertexCount == 6);
     CHECK(chunk.descriptor.indexCount == 6);
     CHECK(chunk.descriptor.vertexLayoutId
-          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
 
-    REQUIRE(chunk.payload.size() >= 6 * sizeof(model_core::VertexPositionNormalUv0F32));
-    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    REQUIRE(chunk.payload.size() >= 6 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[6]{};
     std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
     for (const auto& v : vertices) {
         CHECK(v.nx == Catch::Approx(0.0f).margin(1e-5));
@@ -398,9 +398,9 @@ TEST_CASE("The same geometry as binary_big_endian produces numerically identical
     auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/2, /*maxChunkCount=*/4);
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
-    REQUIRE(run.validation.chunks[0].payload.size() >= 6 * sizeof(model_core::VertexPositionNormalUv0F32));
+    REQUIRE(run.validation.chunks[0].payload.size() >= 6 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
 
-    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[6]{};
     std::memcpy(vertices, run.validation.chunks[0].payload.data(), sizeof(vertices));
     CHECK(vertices[1].px == Catch::Approx(1.0f).margin(1e-5));
     CHECK(vertices[2].py == Catch::Approx(1.0f).margin(1e-5));
@@ -459,12 +459,12 @@ TEST_CASE("A vertex-only PLY (no face element) emits a PointList chunk", "[ply-i
     CHECK(chunk.descriptor.topology == model_core::ChunkTopology::PointList);
     CHECK(chunk.descriptor.vertexCount == 2);
     CHECK(chunk.descriptor.indexCount == 0);
-    CHECK(chunk.descriptor.vertexLayoutId == static_cast<uint32_t>(model_core::VertexLayoutId::PositionOnly_F32));
+    CHECK(chunk.descriptor.vertexLayoutId == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
 
-    REQUIRE(chunk.payload.size() >= 2 * sizeof(model_core::VertexPositionOnlyF32));
-    model_core::VertexPositionOnlyF32 points[2]{};
+    REQUIRE(chunk.payload.size() >= 2 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    model_core::VertexPositionNormalUv0TangentColorF32 points[2]{};
     std::memcpy(points, chunk.payload.data(), sizeof(points));
-    CHECK(run.validation.chunks[0].descriptor.origin[0] + points[1].x == Catch::Approx(4.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[0] + points[1].px == Catch::Approx(4.0f));
 }
 
 TEST_CASE("A declared-but-empty face element is treated as a point cloud, not a mesh", "[ply-import]")
@@ -500,9 +500,9 @@ TEST_CASE("A quad face is fan-triangulated into 2 triangles with the expected in
     CHECK(chunk.descriptor.vertexCount == 4);
     CHECK(chunk.descriptor.indexCount == 6);
     REQUIRE(chunk.payload.size()
-            >= 4 * sizeof(model_core::VertexPositionNormalUv0F32) + 6 * sizeof(uint32_t));
+            >= 4 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32) + 6 * sizeof(uint32_t));
     uint32_t indices[6]{};
-    std::memcpy(indices, chunk.payload.data() + 4 * sizeof(model_core::VertexPositionNormalUv0F32),
+    std::memcpy(indices, chunk.payload.data() + 4 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32),
                 sizeof(indices));
     CHECK(std::vector<uint32_t>(indices, indices + 6) == std::vector<uint32_t>{ 0, 1, 2, 0, 2, 3 });
 }
@@ -559,15 +559,15 @@ TEST_CASE("An unrecognized/skippable extra vertex property doesn't corrupt subse
     auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/7, /*maxChunkCount=*/4);
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
-    REQUIRE(run.validation.chunks[0].payload.size() >= sizeof(model_core::VertexPositionOnlyF32));
-    model_core::VertexPositionOnlyF32 point{};
+    REQUIRE(run.validation.chunks[0].payload.size() >= sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    model_core::VertexPositionNormalUv0TangentColorF32 point{};
     std::memcpy(&point, run.validation.chunks[0].payload.data(), sizeof(point));
-    CHECK(run.validation.chunks[0].descriptor.origin[0] + point.x == Catch::Approx(1.0f));
-    CHECK(run.validation.chunks[0].descriptor.origin[1] + point.y == Catch::Approx(2.0f));
-    CHECK(run.validation.chunks[0].descriptor.origin[2] + point.z == Catch::Approx(3.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[0] + point.px == Catch::Approx(1.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[1] + point.py == Catch::Approx(2.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[2] + point.pz == Catch::Approx(3.0f));
 }
 
-TEST_CASE("Vertex red/green/blue color is parsed-and-dropped without corrupting positions",
+TEST_CASE("Vertex red/green/blue color is preserved without corrupting positions",
           "[ply-import]")
 {
     sandbox_test_support::SandboxFixture fixture;
@@ -593,11 +593,12 @@ TEST_CASE("Vertex red/green/blue color is parsed-and-dropped without corrupting 
     auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/8, /*maxChunkCount=*/4);
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
-    model_core::VertexPositionOnlyF32 point{};
+    model_core::VertexPositionNormalUv0TangentColorF32 point{};
     std::memcpy(&point, run.validation.chunks[0].payload.data(), sizeof(point));
-    CHECK(run.validation.chunks[0].descriptor.origin[0] + point.x == Catch::Approx(5.0f));
-    CHECK(run.validation.chunks[0].descriptor.origin[1] + point.y == Catch::Approx(6.0f));
-    CHECK(run.validation.chunks[0].descriptor.origin[2] + point.z == Catch::Approx(7.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[0] + point.px == Catch::Approx(5.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[1] + point.py == Catch::Approx(6.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[2] + point.pz == Catch::Approx(7.0f));
+    CHECK(point.r==Catch::Approx(1.0f));CHECK(point.g==Catch::Approx(128.0f/255.0f));CHECK(point.b==0.0f);
 }
 
 TEST_CASE("A face's index-list length over the per-face sanity cap is rejected as ResourceLimit",
@@ -727,11 +728,11 @@ TEST_CASE("A minimal format-ascii PLY point cloud round-trips through the real s
     const auto& chunk = run.validation.chunks[0];
     CHECK(chunk.descriptor.topology == model_core::ChunkTopology::PointList);
     CHECK(chunk.descriptor.vertexCount == 1);
-    model_core::VertexPositionOnlyF32 point{};
+    model_core::VertexPositionNormalUv0TangentColorF32 point{};
     std::memcpy(&point, chunk.payload.data(), sizeof(point));
-    CHECK(run.validation.chunks[0].descriptor.origin[0] + point.x == Catch::Approx(1.0f));
-    CHECK(run.validation.chunks[0].descriptor.origin[1] + point.y == Catch::Approx(2.0f));
-    CHECK(run.validation.chunks[0].descriptor.origin[2] + point.z == Catch::Approx(3.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[0] + point.px == Catch::Approx(1.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[1] + point.py == Catch::Approx(2.0f));
+    CHECK(run.validation.chunks[0].descriptor.origin[2] + point.pz == Catch::Approx(3.0f));
 }
 
 TEST_CASE("A face referencing an out-of-range vertex index is dropped; a following good face survives",
@@ -809,7 +810,7 @@ TEST_CASE("A non-finite supplied vertex normal falls back per-vertex to (0,0,1) 
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
 
-    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[6]{};
     std::memcpy(vertices, run.validation.chunks[0].payload.data(), sizeof(vertices));
     CHECK(vertices[0].nx == Catch::Approx(0.0f).margin(1e-5));
     CHECK(vertices[0].ny == Catch::Approx(0.0f).margin(1e-5));
@@ -828,9 +829,9 @@ TEST_CASE("A file supplying no normal properties gets generated smooth per-verte
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
     CHECK(run.validation.chunks[0].descriptor.vertexLayoutId
-          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
 
-    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[6]{};
     std::memcpy(vertices, run.validation.chunks[0].payload.data(), sizeof(vertices));
     for (const auto& v : vertices) {
         CHECK(v.nx == Catch::Approx(0.0f).margin(1e-5));
@@ -859,8 +860,8 @@ TEST_CASE("An ASCII PLY mesh with normals round-trips through the real sandboxed
     CHECK(chunk.descriptor.vertexCount == 6);
     CHECK(chunk.descriptor.indexCount == 6);
 
-    REQUIRE(chunk.payload.size() >= 6 * sizeof(model_core::VertexPositionNormalUv0F32));
-    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    REQUIRE(chunk.payload.size() >= 6 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[6]{};
     std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
     for (const auto& v : vertices) {
         CHECK(v.nz == Catch::Approx(1.0f).margin(1e-5));
@@ -887,9 +888,9 @@ TEST_CASE("An ASCII PLY quad face is fan-triangulated into 2 triangles with the 
     CHECK(chunk.descriptor.vertexCount == 4);
     CHECK(chunk.descriptor.indexCount == 6);
     REQUIRE(chunk.payload.size()
-            >= 4 * sizeof(model_core::VertexPositionNormalUv0F32) + 6 * sizeof(uint32_t));
+            >= 4 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32) + 6 * sizeof(uint32_t));
     uint32_t indices[6]{};
-    std::memcpy(indices, chunk.payload.data() + 4 * sizeof(model_core::VertexPositionNormalUv0F32),
+    std::memcpy(indices, chunk.payload.data() + 4 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32),
                 sizeof(indices));
     CHECK(std::vector<uint32_t>(indices, indices + 6) == std::vector<uint32_t>{ 0, 1, 2, 0, 2, 3 });
 }
@@ -1004,7 +1005,7 @@ TEST_CASE("An ASCII PLY non-finite supplied normal falls back per-vertex to (0,0
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
 
-    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[3]{};
     std::memcpy(vertices, run.validation.chunks[0].payload.data(), sizeof(vertices));
     CHECK(vertices[0].nx == Catch::Approx(0.0f).margin(1e-5));
     CHECK(vertices[0].ny == Catch::Approx(0.0f).margin(1e-5));
@@ -1023,9 +1024,9 @@ TEST_CASE("An ASCII PLY file supplying no normal properties gets generated smoot
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
     CHECK(run.validation.chunks[0].descriptor.vertexLayoutId
-          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
 
-    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[6]{};
     std::memcpy(vertices, run.validation.chunks[0].payload.data(), sizeof(vertices));
     for (const auto& v : vertices) {
         CHECK(v.nx == Catch::Approx(0.0f).margin(1e-5));

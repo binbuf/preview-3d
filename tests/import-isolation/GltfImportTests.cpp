@@ -414,10 +414,10 @@ TEST_CASE("tri_external.gltf sources uncompressed geometry from an external .bin
     CHECK(chunk.descriptor.vertexCount == 3);
     CHECK(chunk.descriptor.indexCount == 3);
     CHECK(chunk.descriptor.vertexLayoutId
-          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
 
-    REQUIRE(chunk.payload.size() >= 3 * sizeof(model_core::VertexPositionNormalUv0F32));
-    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    REQUIRE(chunk.payload.size() >= 3 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[3]{};
     std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
     const float expected[3][3] = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
     for (size_t i = 0; i < 3; ++i) {
@@ -518,8 +518,8 @@ TEST_CASE("A sparse accessor over an external buffer applies its overrides -- th
     REQUIRE(run.validation.chunks.size() == 1);
 
     const auto& chunk = run.validation.chunks[0];
-    REQUIRE(chunk.payload.size() >= 3 * sizeof(model_core::VertexPositionNormalUv0F32));
-    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    REQUIRE(chunk.payload.size() >= 3 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[3]{};
     std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
     CHECK(vertices[0].px == Catch::Approx(0.0f).margin(1e-5));
     CHECK(vertices[1].px == Catch::Approx(5.0f).margin(1e-5));
@@ -545,10 +545,10 @@ TEST_CASE("tri_tight.glb round-trips through the real fastgltf adapter", "[gltf-
     CHECK(chunk.descriptor.vertexCount == 3);
     CHECK(chunk.descriptor.indexCount == 3);
     CHECK(chunk.descriptor.vertexLayoutId
-          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
 
-    REQUIRE(chunk.payload.size() >= 3 * sizeof(model_core::VertexPositionNormalUv0F32));
-    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    REQUIRE(chunk.payload.size() >= 3 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[3]{};
     std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
     for (const auto& v : vertices) {
         CHECK(v.nx == Catch::Approx(0.0f).margin(1e-5));
@@ -576,7 +576,7 @@ TEST_CASE("tri_interleaved.glb round-trips through the real fastgltf adapter (ex
     CHECK(chunk.descriptor.vertexCount == 3);
     CHECK(chunk.descriptor.indexCount == 3);
 
-    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[3]{};
     std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
     for (const auto& v : vertices) {
         CHECK(v.nz == Catch::Approx(1.0f).margin(1e-5));
@@ -597,7 +597,7 @@ TEST_CASE("tri_transformed_node.glb bakes the parent node's world transform into
     REQUIRE(run.validation.chunks.size() == 1);
 
     const auto& chunk = run.validation.chunks[0];
-    model_core::VertexPositionNormalUv0F32 vertices[3]{};
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[3]{};
     std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
 
     // Source triangle (0,0,0),(1,0,0),(0,1,0), rotated 90deg about +Z then
@@ -693,10 +693,10 @@ TEST_CASE("draco_triangle.glb (KHR_draco_mesh_compression, position+normal+uv0) 
     CHECK(chunk.descriptor.vertexCount == 12); // 4 triangles * 3 corners, generator uses no dedup-friendly sharing
     CHECK(chunk.descriptor.indexCount == 12);
     CHECK(chunk.descriptor.vertexLayoutId
-          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
 
-    REQUIRE(chunk.payload.size() >= 12 * sizeof(model_core::VertexPositionNormalUv0F32));
-    model_core::VertexPositionNormalUv0F32 vertices[12]{};
+    REQUIRE(chunk.payload.size() >= 12 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[12]{};
     std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
     // Draco quantization (26 bits position / 16 bits normal+uv, see
     // gen-test-glbs-draco.cpp) is lossy but should stay well within a loose
@@ -727,7 +727,7 @@ TEST_CASE("draco_position_only.glb (no NORMAL/TEXCOORD_0) falls back to generate
     CHECK(chunk.descriptor.vertexCount == 6); // 2 triangles * 3 corners
     CHECK(chunk.descriptor.indexCount == 6);
 
-    model_core::VertexPositionNormalUv0F32 vertices[6]{};
+    model_core::VertexPositionNormalUv0TangentColorF32 vertices[6]{};
     std::memcpy(vertices, chunk.payload.data(), sizeof(vertices));
     for (const auto& v : vertices) {
         CHECK(v.nz == Catch::Approx(1.0f).margin(1e-3)); // generator's triangles all face +Z
@@ -904,5 +904,5 @@ TEST_CASE("A real on-disk GLB file reaches the sandboxed worker via a duplicated
     CHECK(chunk.descriptor.vertexCount == 3);
     CHECK(chunk.descriptor.indexCount == 3);
     CHECK(chunk.descriptor.vertexLayoutId
-          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
 }

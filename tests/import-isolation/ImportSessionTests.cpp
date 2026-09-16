@@ -92,7 +92,7 @@ TEST_CASE("A real glTF file imports end to end through the product's own session
     REQUIRE(result.chunks.size() == 1);
     CHECK(result.chunks[0].descriptor.topology == model_core::ChunkTopology::TriangleList);
     CHECK(result.chunks[0].descriptor.vertexLayoutId
-          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0_F32));
+          == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
     CHECK(result.chunks[0].descriptor.vertexCount == 3);
     CHECK(result.chunks[0].descriptor.indexCount == 3);
 }

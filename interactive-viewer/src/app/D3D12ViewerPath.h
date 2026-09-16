@@ -6,12 +6,10 @@
 // scene renderer.
 //
 // Geometry comes from D3D12ImportBridge.h's sandboxed import pipeline, not
-// Model.cpp's in-process parser. Rendering here is deliberately minimal:
-// one fixed root signature/PSO/shader pair targeting
-// model_core::VertexPositionNormalUv0F32's {position,normal,uv} layout with
-// base-color materials/textures and hemisphere lighting. Chrome is painted
-// through the D3D11On12/Direct2D bridge. Position-only point chunks use
-// the existing point pipeline; camera-scaled splats remain TSK-208.
+// Model.cpp's in-process parser. Triangle meshes support the complete
+// position/normal/UV/tangent/color layout and normalized material contract;
+// PointList chunks use depth-tested, camera-scaled round splats. Chrome is
+// painted through the D3D11On12/Direct2D bridge.
 //
 // Uploads run on their own copy queue through D3D12UploadRing and publish
 // through SceneSnapshot, so no load-time GPU work is submitted to or waited
@@ -78,20 +76,24 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pointPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> coloredPointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> completeVertexPipelineState;
     Microsoft::WRL::ComPtr<ID3D12Resource> pickTarget;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pickRtvHeap;
     Microsoft::WRL::ComPtr<ID3D12Resource> pickReadback;
     uint64_t pickFence = 0;
     bool pickInFlight = false;
     int pickX = -1, pickY = -1;
-    // Additive textured variant: base-color-texture-or-flat-color only (no
-    // metallic/roughness/normal/emissive maps this slice -- see
-    // MaterialPayload's numeric fields, carried through to ImportedMaterial
-    // but not consumed by either shader yet). Untextured meshes keep using
+    // Complete material variant: base-color, metallic/roughness, normal, and
+    // emissive maps plus normalized factors, alpha, unlit, UV transform, and
+    // double-sided behavior. Legacy position-only meshes keep using
     // rootSignature/pipelineState above unchanged.
     Microsoft::WRL::ComPtr<ID3D12RootSignature> texturedRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedDoubleSidedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendDoubleSidedPipelineState;
     // kFrameCount slots of 256 bytes (D3D12's CBV alignment), bound at
     // GetGPUVirtualAddress() + frameIndex * kConstantBufferSlotBytes. One
     // shared slot was correct only while every frame stalled to idle first;
@@ -109,6 +111,7 @@ struct D3D12ViewerPath
         uint64_t vertexAllocationBytes = 0, indexAllocationBytes = 0;
         uint32_t lastVisibleFrame = 0;
         float viewPriority = 0;
+        float viewDepth = 0;
         D3D12_VERTEX_BUFFER_VIEW vbv{};
         D3D12_INDEX_BUFFER_VIEW ibv{};
         uint32_t chunkId = 0;
@@ -122,9 +125,15 @@ struct D3D12ViewerPath
         UINT vertexCount = 0;
         bool points = false;
         bool positionOnly = false;
+        bool completeVertex = false;
         bool drawEnabled = true;
         double origin[3]{};
-        int textureIndex = -1; // index into textures[]; -1 = untextured PSO
+        int textureIndex = -1; // base-color index retained for pressure compatibility
+        int textureIndices[4]{-1,-1,-1,-1};
+        Microsoft::WRL::ComPtr<ID3D12Resource> neutralResources[4];
+        UINT neutralDescriptorBase = 0;
+        model_core::MaterialPayload material{};
+        bool hasMaterial = false;
     };
     struct GpuTexture
     {
@@ -145,10 +154,13 @@ struct D3D12ViewerPath
         uint64_t coarseAllocationBytes = 0;
         std::vector<GpuMesh> meshes;
         std::vector<GpuTexture> textures;
+        std::vector<GpuTexture> neutralTextures;
         std::vector<GpuTexture> fallbackTextures;
-        // One small shader-visible CBV_SRV_UAV heap, sized to
-        // textures.size() and created once per model -- not per frame.
-        // Absent (nullptr) when the model has no textures.
+        // Descriptor heaps displaced by a progressive catalog rebuild remain
+        // alive until every direct-queue frame that could reference them retires.
+        std::vector<Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>> retainedDescriptorHeaps;
+        // One shader-visible catalog for all current images plus the four
+        // neutral slots. Progressive publications rebuild it atomically.
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
         UINT srvDescriptorSize = 0;
     };
@@ -166,7 +178,9 @@ struct D3D12ViewerPath
     uint64_t AccountedAllocationBytes(const ModelResources* extra = nullptr) const;
     static uint64_t EstimateUploadBytes(ID3D12Device* device,
         std::span<const d3d12_import_bridge::ImportedMesh> meshes,
-        std::span<const d3d12_import_bridge::ImportedImage> images);
+        std::span<const d3d12_import_bridge::ImportedImage> images,
+        bool includeMaterialFallbacks = true);
+    bool RebuildMaterialDescriptors(ModelResources& resources, std::wstring& error);
     void ShedTextureDetail();
     bool hasModel = false;
     double sceneOrigin[3]{};
@@ -240,17 +254,11 @@ struct D3D12ViewerPath
                      const OverlayFrame& chrome, const double cameraTarget[3], const DirectX::XMFLOAT4& eyeSelection);
     bool PollPick(bool& hit);
 
-    // Uploads TriangleList meshes in normal/UV or position-only layouts, and
-    // PositionOnly_F32 points, on the upload coordinator. Geometry keeps its
-    // validated double origin; points need no index buffer. `images`
-    // are uploaded as DEFAULT-heap Texture2D resources (one SRV each, in a
-    // fresh shader-visible heap sized to images.size()); a mesh whose
-    // material resolves to a base-color image gets `textureIndex` set and
-    // renders through the textured PSO, sampling that texture and
-    // multiplying it into the existing hemisphere/Lambertian shade -- other
-    // MaterialPayload fields (metallic/roughness/emissive factors, other
-    // texture slots) are carried through `materials` but not consumed by
-    // either shader yet, a deliberate scope narrowing for this slice.
+    // Uploads TriangleList meshes in complete, normal/UV, or position-only
+    // layouts and PointList meshes in complete or position-only layouts on
+    // the upload coordinator. Geometry keeps its validated double origin;
+    // points need no index buffer. `images` become DEFAULT-heap Texture2D
+    // resources in one shader-visible heap alongside neutral map fallbacks.
     // Returns false (with `error` set) if no renderable mesh resulted.
     //
     // Asynchronous: this creates the destination resources and queues every

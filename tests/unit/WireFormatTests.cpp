@@ -107,6 +107,8 @@ TEST_CASE("VertexStrideForLayout returns 0 for Unknown and any value outside the
     CHECK(model_core::VertexStrideForLayout(model_core::VertexLayoutId::PositionOnly_F32) == 12);
     CHECK(model_core::VertexStrideForLayout(model_core::VertexLayoutId::PositionNormalUv0_F32)
           == 32);
+    CHECK(model_core::VertexStrideForLayout(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32)
+          == 64);
 
     auto outOfRange = static_cast<model_core::VertexLayoutId>(0xFFFFFFFFu);
     CHECK(model_core::VertexStrideForLayout(outOfRange) == 0);

@@ -4,6 +4,28 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 2 / TSK-208 (2026-09-15): complete.**
+  Protocol v7 adds a bounded 64-byte position/normal/UV/tangent/color vertex
+  layout. glTF/Draco/PLY preserve authored attributes; missing normals are
+  generated in the worker and tangents only when a normal-mapped primitive
+  requires them. STL remains neutral and node identity, transforms and double
+  origins are preserved. Point-only PLY now reaches Ready through a direct
+  depth-tested `PointList` path: the GPU emits camera-scaled 2–12 px round
+  splats for neutral or colored points, with no CPU triangle expansion.
+  The D3D12 material path consumes base color, metallic/roughness, normal and
+  emissive maps/factors, vertex color, unlit, UV transforms, alpha cutoff/blend
+  and double-sided culling. Opaque draws group by material; blended draws follow
+  in far-to-near depth order. Progressive batches atomically rebuild one
+  model-wide four-slot descriptor catalog, retain old heaps behind direct
+  fences and charge neutral resources once in budget admission.
+  Debug/Release builds pass with 0 warnings/errors. Unit: 85 cases / 7,318
+  Debug and 7,230 Release assertions. ImportIsolation: 193 cases / 51,826
+  assertions each. Progressive, texture and point-required lifecycle checks
+  pass in both configurations; the forced catalog split retains its textured
+  draw and Debug reports zero D3D12 errors. Commands, reports and qualification
+  limits are in [TSK-208_VERIFICATION.md](./TSK-208_VERIFICATION.md). No
+  dependency/license, cache or path-authority change. **TSK-209 is next.**
+
 - **Scope-limited MVP, Phase 2 / TSK-207 (2026-09-15): complete.**
   Wired live DXGI budget sampling and notifications into destination admission,
   publication and eviction. The model ceiling is at most 60% of local budget,

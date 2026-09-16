@@ -3,10 +3,9 @@
 // Fixed-size payload for ChunkTopology::Material chunks (see WireFormat.h).
 // Carries the full normalized-Material contract from
 // .docs/design/03-file-formats-and-ingestion.md (base color, metallic,
-// roughness, emissive, uv transform, alpha, double-sided/unlit) so a later
-// slice adding more texture maps doesn't need to widen this struct -- but
-// this chunk's adapter only ever populates dependencyIds[0] (base color) on
-// the ChunkDescriptor that carries this payload; see GltfAdapter.cpp.
+// roughness, emissive, uv transform, alpha, double-sided/unlit). The carrying
+// ChunkDescriptor's four dependency slots identify the base-color,
+// metallic/roughness, normal, and emissive images respectively.
 
 #include <cstdint>
 

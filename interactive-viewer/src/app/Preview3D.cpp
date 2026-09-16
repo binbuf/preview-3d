@@ -2793,7 +2793,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
                 app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 4ull*1024*1024, true);
             }
             else if (_wcsicmp(arguments[i], L"--texture-batch-smoke") == 0) {
-                app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 420, false);
+                // Protocol v7's complete 64-byte vertex layout makes the
+                // smallest ordinary triangle batch larger than the former
+                // 420-byte seam; 640 still splits the material/image catalog.
+                app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 640, false);
             }
             else if (_wcsicmp(arguments[i], L"--queue-smoke") == 0) {
                 app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 8192, false);

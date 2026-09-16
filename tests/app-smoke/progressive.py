@@ -139,6 +139,13 @@ def run(exe, flag, asset, count, cap):
             if name=='Preview3DImportWorker.exe' and (parent==app.pid or pid in workers)],'worker termination',require_alive=False)
     except Exception as error:
         report['failure'] = str(error)
+        if hwnd:
+            report['diagnosticState'] = query(0)
+            report['diagnosticErrorCode'] = query(41)
+            report['diagnosticErrorStage'] = query(42)
+            report['diagnosticDisplayGeneration'] = query(4)
+            report['diagnosticChunkCount'] = query(8)
+            report['diagnosticComplete'] = bool(query(45))
     finally:
         if app.poll() is None: app.kill(); app.wait(timeout=10)
     return report
