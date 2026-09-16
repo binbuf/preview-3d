@@ -70,9 +70,12 @@ std::optional<SandboxProcess> LaunchSuspendedSandboxedWithSid(const std::wstring
     si.lpAttributeList = attrList.get();
 
     PROCESS_INFORMATION pi{};
+    // Import workers are console-subsystem programs solely to use the inherited
+    // control pipes.  They never present console output to the user, so prevent
+    // Windows from creating a blank console window for every worker launch.
     BOOL created = CreateProcessW(exePath.c_str(), commandLine.data(), nullptr, nullptr,
                                    /*bInheritHandles=*/TRUE,
-                                   CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT, nullptr,
+                                   CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr,
                                    nullptr, &si.StartupInfo, &pi);
 
     if (!created) {
