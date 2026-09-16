@@ -4,6 +4,46 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Large scan-throughput optimization follow-up (2026-09-16): STL and PLY now
+  meet the retained five-second complete-coarse target; GLB is narrowly above
+  it, with early display and small-file behavior preserved.** Protocol v9
+  replaces byte-serial wire FNV with XXH64 for payloads below 10 MiB and a
+  fixed-leaf, split-invariant parallel XXH64 tree for larger payloads. The
+  integrity checksum remains non-cryptographic; AppContainer isolation plus
+  host copy-then-validate checks remain the security boundary. Coarse sampling
+  hashes positions rather than unrelated vertex attributes, directly traverses
+  validated deindexed geometry, and parallelizes large identity-indexed
+  triangle regions. Large catalogs reserve descriptor tables once rather than
+  repeatedly moving accumulated payload, while catalogs below 64 regions keep
+  the original single-batch path.
+
+  The Tier-A adapters retain their bounded-memory and replay contracts. Binary
+  STL normalizes independent valid facets in parallel and replays a bounded
+  block through the original scalar compactor if it contains an invalid facet.
+  Fixed-width point-only PLY skips unknown property conversion, reads each
+  contiguous record range once, and decodes XYZ plus bounds in bounded parallel
+  blocks. The common GLB path uses direct tight accessors, validates monotonic
+  index streams without retaining a duplicate index vector, uses bounded dense
+  remaps for clustered non-monotonic indices, integrates rebasing/bounds into
+  decode, and generates deindexed normals in parallel. Fine detail remains
+  demand-driven with one outstanding request.
+
+  Three fresh-process Release compatibility runs measured complete-coarse p95
+  at 4,185.989 ms for the 3.00 GB STL, 4,667.902 ms for the 2.88 GB
+  little-endian point PLY, and 5,217.987 ms for the 4.29 GB GLB. Their first-
+  geometry p95 values were 539.466, 506.841, and 511.429 ms respectively. Three
+  corpus A-small runs retained a 466.718 ms complete-coarse p95, and a separate
+  8 MiB A-small copy completed at 491.910 ms p95. These are local
+  Balanced/60 Hz compatibility results, not the unavailable performance-
+  reference qualification. The GLB complete-coarse row remains 217.987 ms over
+  target, and the STL compatibility runs still fail the separate frame-interval
+  gate while their coarse scan completes under target; neither is waived.
+  Both Debug and Release solution builds pass. The final Unit suites pass 92
+  cases / 7,360 Debug and 7,272 Release assertions; the final ImportIsolation
+  suites pass 200 cases / 52,068 assertions in each configuration, including
+  current hostile-worker protocol coverage. No MVP format, limit, isolation,
+  cache, or detail-residency scope was expanded.
+
 - **TSK-305 blocker remediation follow-up (2026-09-16): the retained 8M-point
   timeout is fixed; multi-GiB early proxy publication is fixed; large complete-
   coarse throughput is still above target.** The pooled product worker now

@@ -28,6 +28,7 @@
 #include <cmath>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <iterator>
@@ -36,6 +37,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+#include <ppl.h>
 
 namespace import_worker {
 
@@ -239,8 +241,25 @@ bool ValidateIndexAccessor(const fastgltf::Accessor& accessor)
 // normal (cross product of two edges) into its three vertices, normalizes
 // once at the end. Same algorithm interactive-viewer's Model.cpp uses
 // (GenerateNormals), written fresh here -- no linkage to interactive-viewer.
-void GenerateFlatNormals(PendingChunk& chunk)
+void GenerateFlatNormals(PendingChunk& chunk, bool knownDeindexed=false)
 {
+    bool deindexed=knownDeindexed || chunk.indices.size()==chunk.vertices.size();
+    for (size_t i=0;deindexed && !knownDeindexed && i<chunk.indices.size();++i)
+        deindexed=chunk.indices[i]==i;
+    if (deindexed) {
+        for (size_t i=0;i+2<chunk.vertices.size();i+=3) {
+            auto& a=chunk.vertices[i]; auto& b=chunk.vertices[i+1]; auto& c=chunk.vertices[i+2];
+            const fastgltf::math::fvec3 p0(a.px,a.py,a.pz),p1(b.px,b.py,b.pz),p2(c.px,c.py,c.pz);
+            auto normal=fastgltf::math::cross(p1-p0,p2-p0);
+            const float lengthSquared=fastgltf::math::dot(normal,normal);
+            normal=lengthSquared>1e-12f ? fastgltf::math::normalize(normal)
+                                        : fastgltf::math::fvec3(0.0f,0.0f,1.0f);
+            for (auto* vertex:{&a,&b,&c}) {
+                vertex->nx=normal.x(); vertex->ny=normal.y(); vertex->nz=normal.z();
+            }
+        }
+        return;
+    }
     std::vector<fastgltf::math::fvec3> accum(chunk.vertices.size(),
                                               fastgltf::math::fvec3(0.0f, 0.0f, 0.0f));
     for (size_t i = 0; i + 2 < chunk.indices.size(); i += 3) {
@@ -1123,6 +1142,44 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         SidecarBufferDataAdapter adapter(state);
         auto linear = world;
         linear[3] = fastgltf::math::dvec4(0, 0, 0, 1);
+        struct DirectAccessorView { std::span<const std::byte> bytes; size_t stride=0; };
+        auto directView=[&](const fastgltf::Accessor& accessor) -> std::optional<DirectAccessorView> {
+            if (accessor.sparse || !accessor.bufferViewIndex) return std::nullopt;
+            const size_t viewIndex=*accessor.bufferViewIndex;
+            if (viewIndex>=state.asset.bufferViews.size()) return std::nullopt;
+            auto bytes=ResolveBufferViewBytes(state,viewIndex);
+            const size_t element=fastgltf::getElementByteSize(accessor.type,accessor.componentType);
+            if (!bytes || !element || accessor.byteOffset>bytes->size()) return std::nullopt;
+            return DirectAccessorView{bytes->subspan(accessor.byteOffset),
+                state.asset.bufferViews[viewIndex].byteStride.value_or(element)};
+        };
+        const auto directIndex=primitive.indicesAccessor ? directView(indexAccessor)
+                                                         : std::optional<DirectAccessorView>{};
+        const auto directPosition=positionAccessor.componentType==fastgltf::ComponentType::Float
+            ? directView(positionAccessor) : std::optional<DirectAccessorView>{};
+        const auto* colorAccessor=hasColor ? &state.asset.accessors[colorIt->accessorIndex] : nullptr;
+        const auto directColor=colorAccessor && colorAccessor->componentType==fastgltf::ComponentType::UnsignedByte
+            && colorAccessor->normalized ? directView(*colorAccessor) : std::optional<DirectAccessorView>{};
+        bool identityLinear=true;
+        for (unsigned column=0;column<3;++column)
+            for (unsigned row=0;row<3;++row)
+                identityLinear &= linear[column][row]==(column==row ? 1.0 : 0.0);
+        auto readSourceIndex=[&](size_t element) {
+            if (!primitive.indicesAccessor) return uint32_t(element);
+            if (!directIndex)
+                return fastgltf::getAccessorElement<uint32_t>(state.asset,indexAccessor,element,adapter);
+            const auto* bytes=directIndex->bytes.data()+element*directIndex->stride;
+            switch (indexAccessor.componentType) {
+            case fastgltf::ComponentType::UnsignedByte:
+                return uint32_t(static_cast<unsigned char>(*bytes));
+            case fastgltf::ComponentType::UnsignedShort: {
+                uint16_t value; std::memcpy(&value,bytes,sizeof(value)); return uint32_t(value);
+            }
+            default: {
+                uint32_t value; std::memcpy(&value,bytes,sizeof(value)); return value;
+            }
+            }
+        };
         const auto previewOffsets=PreviewOffsets(indexAccessor.count/3);
         size_t previewStep=0;
         const size_t requestedFirst = state.requested ? uint32_t(state.requested->sourceRangeOffset) : 0;
@@ -1148,38 +1205,238 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             for (unsigned axis = 0; axis < 3; ++axis)
                 part.geometry.origin[axis] = world[3][axis];
             const size_t end = (std::min)(requestedEnd, first + size_t(state.chunkTriangles) * 3);
-            std::unordered_map<uint32_t, uint32_t> remap;
-            remap.reserve(end - first);
+            // Resolve source indices once. Most production exporters cluster
+            // an index interval tightly; a bounded dense remap avoids millions
+            // of node allocations/hash probes while retaining the sparse
+            // fallback for genuinely non-local topology.
+            std::vector<uint32_t> sourceIndices;
+            uint32_t minimumIndex=UINT32_MAX,maximumIndex=0;
+            bool ascendingIndices=true,descendingIndices=true;
+            const size_t sourceCount=end-first;
+            // A deindexed monotonic stream needs validation, but it does not
+            // need a second in-memory copy of every source index. Probe its
+            // direction, validate the expected sequence in parallel, and let
+            // normalization derive each index from the first value.
+            bool directLinear=false;
+            uint32_t directLinearFirst=0;
+            if (directIndex && sourceCount>=2) {
+                directLinearFirst=readSourceIndex(first);
+                const uint32_t second=readSourceIndex(first+1);
+                const bool candidateAscending=directLinearFirst<UINT32_MAX&&second==directLinearFirst+1;
+                const bool candidateDescending=directLinearFirst>0&&second==directLinearFirst-1;
+                if (candidateAscending||candidateDescending) {
+                    constexpr size_t kIndexBlock=16*1024;
+                    const size_t blocks=(sourceCount+kIndexBlock-1)/kIndexBlock;
+                    std::atomic_bool mismatch=false,invalidIndex=false;
+                    concurrency::parallel_for(size_t(0),blocks,[&](size_t block) {
+                        const size_t begin=block*kIndexBlock,endOffset=(std::min)(sourceCount,begin+kIndexBlock);
+                        for (size_t offset=begin;offset<endOffset;++offset) {
+                            const uint32_t sourceIndex=readSourceIndex(first+offset);
+                            const uint64_t expected=candidateAscending
+                                ? uint64_t(directLinearFirst)+offset
+                                : (offset<=directLinearFirst ? uint64_t(directLinearFirst)-offset : UINT64_MAX);
+                            if (sourceIndex!=expected) mismatch.store(true,std::memory_order_relaxed);
+                            if (sourceIndex>=positionAccessor.count) invalidIndex.store(true,std::memory_order_relaxed);
+                        }
+                    });
+                    if (invalidIndex.load(std::memory_order_relaxed)) { state.error=ImportErrorCode::MalformedData;return false; }
+                    directLinear=!mismatch.load(std::memory_order_relaxed);
+                    if (directLinear) {
+                        ascendingIndices=candidateAscending;descendingIndices=candidateDescending;
+                        const uint32_t last=readSourceIndex(end-1);
+                        minimumIndex=(std::min)(directLinearFirst,last);
+                        maximumIndex=(std::max)(directLinearFirst,last);
+                    }
+                }
+            }
+            if (!directLinear) sourceIndices.resize(sourceCount);
+            if (!directLinear && directIndex && sourceCount>=16384) {
+                constexpr size_t kIndexBlock=16*1024;
+                struct IndexBlock { uint32_t minimum=UINT32_MAX,maximum=0,first=0,last=0;bool ascending=true,descending=true; };
+                const size_t blocks=(sourceCount+kIndexBlock-1)/kIndexBlock;
+                std::vector<IndexBlock> summaries(blocks);
+                std::atomic_bool invalidIndex=false;
+                concurrency::parallel_for(size_t(0),blocks,[&](size_t block) {
+                    const size_t begin=block*kIndexBlock,endOffset=(std::min)(sourceCount,begin+kIndexBlock);
+                    auto& summary=summaries[block];
+                    for (size_t offset=begin;offset<endOffset;++offset) {
+                        const uint32_t sourceIndex=readSourceIndex(first+offset);
+                        sourceIndices[offset]=sourceIndex;
+                        if (sourceIndex>=positionAccessor.count) invalidIndex.store(true,std::memory_order_relaxed);
+                        if (offset==begin) summary.first=sourceIndex;
+                        else { summary.ascending &= sourceIndex==sourceIndices[offset-1]+1;
+                               summary.descending &= sourceIndices[offset-1]>0 && sourceIndex==sourceIndices[offset-1]-1; }
+                        summary.last=sourceIndex;
+                        summary.minimum=(std::min)(summary.minimum,sourceIndex);
+                        summary.maximum=(std::max)(summary.maximum,sourceIndex);
+                    }
+                });
+                if (invalidIndex.load(std::memory_order_relaxed)) { state.error=ImportErrorCode::MalformedData;return false; }
+                for (size_t block=0;block<blocks;++block) {
+                    minimumIndex=(std::min)(minimumIndex,summaries[block].minimum);
+                    maximumIndex=(std::max)(maximumIndex,summaries[block].maximum);
+                    ascendingIndices &= summaries[block].ascending && (!block || summaries[block].first==summaries[block-1].last+1);
+                    descendingIndices &= summaries[block].descending && (!block || (summaries[block-1].last>0 && summaries[block].first==summaries[block-1].last-1));
+                }
+                if (state.textureOptions.Cancelled()) { state.error=ImportErrorCode::Cancelled;return false; }
+            } else if (!directLinear) for (size_t offset=0;offset<sourceCount;++offset) {
+                if (offset%65536==0 && state.textureOptions.Cancelled()) { state.error=ImportErrorCode::Cancelled;return false; }
+                const uint32_t sourceIndex=readSourceIndex(first+offset);
+                if (sourceIndex>=positionAccessor.count) { state.error=ImportErrorCode::MalformedData;return false; }
+                if (offset) { ascendingIndices &= sourceIndex==sourceIndices[offset-1]+1;
+                              descendingIndices &= sourceIndices[offset-1]>0 && sourceIndex==sourceIndices[offset-1]-1; }
+                sourceIndices[offset]=sourceIndex;
+                minimumIndex=(std::min)(minimumIndex,sourceIndex);maximumIndex=(std::max)(maximumIndex,sourceIndex);
+            }
+            const uint64_t indexRange=uint64_t(maximumIndex)-minimumIndex+1;
+            const bool linearUnique=directLinear||ascendingIndices||descendingIndices;
+            const auto sourceIndexAt=[&](size_t offset) {
+                return directLinear ? uint32_t(ascendingIndices ? uint64_t(directLinearFirst)+offset
+                                                               : uint64_t(directLinearFirst)-offset)
+                                    : sourceIndices[offset];
+            };
+            if (linearUnique) part.geometry.geometryFlags|=kGeometryDeindexed;
+            const bool dense=!linearUnique && indexRange<=uint64_t(sourceIndices.size())*2;
+            std::vector<uint32_t> denseRemap;
+            std::unordered_map<uint32_t,uint32_t> sparseRemap;
+            if (dense) denseRemap.assign(size_t(indexRange),UINT32_MAX);
+            else if (!linearUnique) sparseRemap.reserve(sourceIndices.size());
             part.vertices.reserve(end - first);
             part.indices.reserve(end - first);
-            for (size_t i = first; i < end; ++i)
+            bool haveLocalOrigin=false;
+            double localShift[3]{};
+            const bool parallelDirect=linearUnique && identityLinear && directPosition && directColor
+                && !hasNormal && !hasUv && !hasTangent && !requiresTangents;
+            if (parallelDirect) {
+                float firstPosition[3];
+                std::memcpy(firstPosition,directPosition->bytes.data()+
+                    size_t(sourceIndexAt(0))*directPosition->stride,sizeof(firstPosition));
+                for (unsigned axis=0;axis<3;++axis) {
+                    const double candidate=part.geometry.origin[axis]+double(firstPosition[axis]);
+                    if (candidate-part.geometry.origin[axis]==double(firstPosition[axis])) {
+                        localShift[axis]=double(firstPosition[axis]);
+                        part.geometry.origin[axis]=candidate;
+                    }
+                }
+                haveLocalOrigin=true;
+                part.vertices.resize(sourceCount);
+                part.indices.resize(sourceCount);
+                constexpr size_t kParallelBlock=16*1024;
+                const size_t blockCount=(sourceCount+kParallelBlock-1)/kParallelBlock;
+                struct BlockBounds { float minimum[3]{},maximum[3]{}; };
+                std::vector<BlockBounds> blockBounds(blockCount);
+                std::atomic_bool invalid=false;
+                concurrency::parallel_for(size_t(0),blockCount,[&](size_t block) {
+                    const size_t begin=block*kParallelBlock,endOffset=(std::min)(sourceCount,begin+kParallelBlock);
+                    auto& bounds=blockBounds[block];
+                    for (size_t offset=begin;offset<endOffset;++offset) {
+                        const uint32_t sourceIndex=sourceIndexAt(offset);
+                        float position[3]; std::memcpy(position,directPosition->bytes.data()+
+                            size_t(sourceIndex)*directPosition->stride,sizeof(position));
+                        auto& v=part.vertices[offset];
+                        v.tx=1.0f;v.tw=1.0f;
+                        float* local=&v.px;
+                        for (unsigned axis=0;axis<3;++axis) {
+                            local[axis]=float(double(position[axis])-localShift[axis]);
+                            if (!std::isfinite(local[axis])) invalid.store(true,std::memory_order_relaxed);
+                            if (offset==begin) bounds.minimum[axis]=bounds.maximum[axis]=local[axis];
+                            else { bounds.minimum[axis]=(std::min)(bounds.minimum[axis],local[axis]);
+                                   bounds.maximum[axis]=(std::max)(bounds.maximum[axis],local[axis]); }
+                        }
+                        const auto* color=directColor->bytes.data()+size_t(sourceIndex)*directColor->stride;
+                        v.r=float(static_cast<unsigned char>(color[0]))/255.0f;
+                        v.g=float(static_cast<unsigned char>(color[1]))/255.0f;
+                        v.b=float(static_cast<unsigned char>(color[2]))/255.0f;
+                        v.a=colorAccessor->type==fastgltf::AccessorType::Vec4
+                            ? float(static_cast<unsigned char>(color[3]))/255.0f : 1.0f;
+                        part.indices[offset]=uint32_t(offset);
+                    }
+                });
+                if (invalid.load(std::memory_order_relaxed)) { state.error=ImportErrorCode::MalformedData; return false; }
+                for (size_t block=0;block<blockCount;++block)
+                    for (unsigned axis=0;axis<3;++axis) {
+                        if (!block) { part.geometry.localMin[axis]=blockBounds[block].minimum[axis];
+                                     part.geometry.localMax[axis]=blockBounds[block].maximum[axis]; }
+                        else { part.geometry.localMin[axis]=(std::min)(part.geometry.localMin[axis],blockBounds[block].minimum[axis]);
+                               part.geometry.localMax[axis]=(std::max)(part.geometry.localMax[axis],blockBounds[block].maximum[axis]); }
+                    }
+                const size_t triangles=part.vertices.size()/3;
+                const size_t normalBlocks=(triangles+kParallelBlock-1)/kParallelBlock;
+                concurrency::parallel_for(size_t(0),normalBlocks,[&](size_t block) {
+                    const size_t begin=block*kParallelBlock,endTriangle=(std::min)(triangles,begin+kParallelBlock);
+                    for (size_t triangle=begin;triangle<endTriangle;++triangle) {
+                        const size_t i=triangle*3;
+                        auto& a=part.vertices[i];auto& b=part.vertices[i+1];auto& c=part.vertices[i+2];
+                        auto normal=fastgltf::math::cross(
+                            fastgltf::math::fvec3(b.px-a.px,b.py-a.py,b.pz-a.pz),
+                            fastgltf::math::fvec3(c.px-a.px,c.py-a.py,c.pz-a.pz));
+                        const float lengthSquared=fastgltf::math::dot(normal,normal);
+                        normal=lengthSquared>1e-12f ? fastgltf::math::normalize(normal)
+                            : fastgltf::math::fvec3(0.0f,0.0f,1.0f);
+                        for (auto* vertex:{&a,&b,&c}) { vertex->nx=normal.x();vertex->ny=normal.y();vertex->nz=normal.z(); }
+                    }
+                });
+            }
+            if (!parallelDirect) for (size_t offset=0;offset<sourceCount;++offset)
             {
-                if (i % 4096 == 0 && state.textureOptions.Cancelled())
-                {
-                    state.error = ImportErrorCode::Cancelled;
-                    return false;
+                const uint32_t sourceIndex=sourceIndexAt(offset);
+                uint32_t localIndex;
+                bool inserted;
+                if (linearUnique) {
+                    localIndex=uint32_t(offset); inserted=true;
+                } else if (dense) {
+                    auto& entry=denseRemap[size_t(sourceIndex-minimumIndex)];
+                    inserted=entry==UINT32_MAX;
+                    if (inserted) entry=uint32_t(part.vertices.size());
+                    localIndex=entry;
+                } else {
+                    auto [entry,wasInserted]=sparseRemap.emplace(sourceIndex,uint32_t(part.vertices.size()));
+                    inserted=wasInserted; localIndex=entry->second;
                 }
-                const uint32_t sourceIndex =
-                    primitive.indicesAccessor
-                        ? fastgltf::getAccessorElement<uint32_t>(state.asset, indexAccessor, i, adapter)
-                        : uint32_t(i);
-                if (sourceIndex >= positionAccessor.count)
-                {
-                    state.error = ImportErrorCode::MalformedData;
-                    return false;
-                }
-                auto [entry, inserted] = remap.emplace(sourceIndex, uint32_t(part.vertices.size()));
-                part.indices.push_back(entry->second);
+                part.indices.push_back(localIndex);
                 if (!inserted)
                     continue;
-                const auto pos = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
-                    state.asset, positionAccessor, sourceIndex, adapter);
-                const auto transformed = linear * fastgltf::math::dvec4(pos.x(), pos.y(), pos.z(), 1);
+                fastgltf::math::fvec3 pos;
+                if (directPosition) {
+                    float values[3]; std::memcpy(values,directPosition->bytes.data()+
+                        size_t(sourceIndex)*directPosition->stride,sizeof(values));
+                    pos=fastgltf::math::fvec3(values[0],values[1],values[2]);
+                } else {
+                    pos=fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                        state.asset,positionAccessor,sourceIndex,adapter);
+                }
                 VertexPositionNormalUv0TangentColorF32 v{};
                 v.tx=1.0f; v.tw=1.0f; v.r=v.g=v.b=v.a=1.0f;
-                v.px = float(transformed.x());
-                v.py = float(transformed.y());
-                v.pz = float(transformed.z());
+                if (identityLinear) {
+                    v.px=pos.x(); v.py=pos.y(); v.pz=pos.z();
+                } else {
+                    const auto transformed=linear*fastgltf::math::dvec4(pos.x(),pos.y(),pos.z(),1);
+                    v.px=float(transformed.x()); v.py=float(transformed.y()); v.pz=float(transformed.z());
+                }
+                float* localPosition=&v.px;
+                if (!haveLocalOrigin) {
+                    for (unsigned axis=0;axis<3;++axis) {
+                        const double candidate=part.geometry.origin[axis]+double(localPosition[axis]);
+                        if (candidate-part.geometry.origin[axis]==double(localPosition[axis])) {
+                            localShift[axis]=double(localPosition[axis]);
+                            part.geometry.origin[axis]=candidate;
+                        }
+                    }
+                    haveLocalOrigin=true;
+                }
+                for (unsigned axis=0;axis<3;++axis) {
+                    localPosition[axis]=float(double(localPosition[axis])-localShift[axis]);
+                    if (!std::isfinite(localPosition[axis])) {
+                        state.error=ImportErrorCode::MalformedData;
+                        return false;
+                    }
+                    if (part.vertices.empty())
+                        part.geometry.localMin[axis]=part.geometry.localMax[axis]=localPosition[axis];
+                    else {
+                        part.geometry.localMin[axis]=(std::min)(part.geometry.localMin[axis],localPosition[axis]);
+                        part.geometry.localMax[axis]=(std::max)(part.geometry.localMax[axis],localPosition[axis]);
+                    }
+                }
                 if (hasNormal)
                 {
                     const auto n = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
@@ -1204,7 +1461,14 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
                 }
                 if (hasColor) {
                     const auto& accessor=state.asset.accessors[colorIt->accessorIndex];
-                    if (accessor.type==fastgltf::AccessorType::Vec3) {
+                    if (directColor) {
+                        const auto* values=directColor->bytes.data()+size_t(sourceIndex)*directColor->stride;
+                        v.r=float(static_cast<unsigned char>(values[0]))/255.0f;
+                        v.g=float(static_cast<unsigned char>(values[1]))/255.0f;
+                        v.b=float(static_cast<unsigned char>(values[2]))/255.0f;
+                        v.a=accessor.type==fastgltf::AccessorType::Vec4
+                            ? float(static_cast<unsigned char>(values[3]))/255.0f : 1.0f;
+                    } else if (accessor.type==fastgltf::AccessorType::Vec3) {
                         const auto c=fastgltf::getAccessorElement<fastgltf::math::fvec3>(state.asset,accessor,sourceIndex,adapter);
                         v.r=c.x();v.g=c.y();v.b=c.z();v.a=1.0f;
                     } else {
@@ -1214,15 +1478,12 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
                 }
                 part.vertices.push_back(v);
             }
-            if (!hasNormal)
-                GenerateFlatNormals(part);
+            if (!hasNormal && !parallelDirect)
+                GenerateFlatNormals(part,linearUnique);
             if (!hasTangent && requiresTangents) GenerateTangents(part);
             part.geometry.vertexCount = uint32_t(part.vertices.size());
-            if (!RebasePositions(part.geometry, std::as_writable_bytes(std::span(part.vertices))))
-            {
-                state.error = ImportErrorCode::MalformedData;
-                return false;
-            }
+            if (!haveLocalOrigin) { state.error=ImportErrorCode::MalformedData; return false; }
+            part.geometry.boundsState=BoundsState::Verified;
             // Accessor element interval: enough to re-read indices and resolve
             // nonlocal/sparse attributes using the retained glTF metadata.
             part.geometry.sourceRangeOffset = (uint64_t(primitiveId) << 32) | first;
@@ -1681,7 +1942,7 @@ std::optional<uint64_t> WriteBatchSection(std::span<std::byte> destination,
         if (!chunk.pieceB.empty()) {
             std::memcpy(payload + chunk.pieceA.size(), chunk.pieceB.data(), chunk.pieceB.size());
         }
-        chunk.descriptor.chunkChecksum = Fnv1a64(
+        chunk.descriptor.chunkChecksum = WireChecksum64(
             destination.subspan(chunk.descriptor.normalizedRangeOffset, chunk.payloadBytes));
 
         std::memcpy(destination.data() + kSectionHeaderSize + i * kChunkDescriptorSize,
@@ -1698,7 +1959,7 @@ std::optional<uint64_t> WriteBatchSection(std::span<std::byte> destination,
     header.chunkCount = static_cast<uint32_t>(batch.size());
     header.reserved = 0;
     header.sectionChecksum
-        = Fnv1a64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
+        = WireChecksum64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
 
     std::memcpy(destination.data(), &header, sizeof(header));
     return sectionLength;

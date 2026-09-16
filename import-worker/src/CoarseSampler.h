@@ -9,6 +9,7 @@
 #include <span>
 #include <functional>
 #include <vector>
+#include <ppl.h>
 
 namespace import_worker {
 inline std::vector<uint64_t> PreviewOffsets(uint64_t count,unsigned adjacent=1) {
@@ -45,19 +46,89 @@ inline CoarseSample SampleCoarse(model_core::ChunkDescriptor d, std::span<const 
     for (auto& candidate:candidates) candidate.key=UINT64_MAX;
     std::array<uint32_t, 6> extrema{};
     std::array<double, 6> extremeValues{};
+    std::array<double,3> inverseSpan{};
+    for (unsigned axis=0;axis<3;++axis) {
+        const double span=double(d.localMax[axis])-d.localMin[axis];
+        inverseSpan[axis]=span>0 ? 4.0/span : 0.0;
+    }
     auto vertexIndex = [&](uint32_t primitive, unsigned corner) {
+        if (!points && (d.geometryFlags & kGeometryDeindexed)) return primitive*3+corner;
         uint32_t index = primitive;
         if (!points) std::memcpy(&index, indices.data() + (size_t(primitive)*3+corner)*4, 4);
         return index;
     };
-    for (uint32_t primitive=0; primitive<count; ++primitive) {
-        if (primitive%4096==0 && cancelled && cancelled()) return {};
+    const bool parallelDeindexed=!points && (d.geometryFlags&kGeometryDeindexed) && count>=16384;
+    if (parallelDeindexed) {
+        constexpr uint32_t kBlockPrimitives=8192;
+        struct LocalCandidates {
+            std::array<Candidate,64> candidates{};
+            std::array<uint32_t,6> extrema{};
+            std::array<double,6> values{};
+        };
+        const uint32_t blocks=(count+kBlockPrimitives-1)/kBlockPrimitives;
+        std::vector<LocalCandidates> local(blocks);
+        concurrency::parallel_for(uint32_t(0),blocks,[&](uint32_t block) {
+            auto& output=local[block];
+            for (auto& candidate:output.candidates) candidate.key=UINT64_MAX;
+            const uint32_t begin=block*kBlockPrimitives,end=(std::min)(count,begin+kBlockPrimitives);
+            for (uint32_t primitive=begin;primitive<end;++primitive) {
+                double center[3]{}; uint64_t key=14695981039346656037ull;
+                for (unsigned corner=0;corner<3;++corner) {
+                    float position[3]; std::memcpy(position,vertices.data()+size_t(primitive*3+corner)*stride,sizeof(position));
+                    uint32_t bits[3];std::memcpy(bits,position,sizeof(bits));
+                    key^=uint64_t(bits[0])|(uint64_t(bits[1])<<32);key*=1099511628211ull;
+                    key^=bits[2];key*=1099511628211ull;
+                    for (unsigned axis=0;axis<3;++axis) {
+                        center[axis]+=position[axis]/3.0;
+                        for (unsigned side=0;side<2;++side) {
+                            const unsigned slot=axis*2+side;
+                            if ((primitive==begin && !corner) || (side ? position[axis]>output.values[slot]
+                                : position[axis]<output.values[slot])) {
+                                output.values[slot]=position[axis];output.extrema[slot]=primitive;
+                            }
+                        }
+                    }
+                }
+                uint32_t cell=0;
+                for (unsigned axis=0;axis<3;++axis) {
+                    const uint32_t coordinate=inverseSpan[axis]>0 ? uint32_t(std::clamp(
+                        (center[axis]-d.localMin[axis])*inverseSpan[axis],0.0,3.0)) : 0;
+                    cell|=coordinate<<(axis*2);
+                }
+                auto& candidate=output.candidates[cell];
+                if (key<candidate.key || (key==candidate.key && primitive<candidate.source))
+                    candidate={cell,primitive,key};
+            }
+        });
+        for (uint32_t block=0;block<blocks;++block) {
+            for (size_t cell=0;cell<candidates.size();++cell) {
+                const auto& candidate=local[block].candidates[cell];
+                auto& combined=candidates[cell];
+                if (candidate.key<combined.key || (candidate.key==combined.key && candidate.source<combined.source))
+                    combined=candidate;
+            }
+            for (unsigned slot=0;slot<6;++slot) {
+                const bool better=!block || (slot&1 ? local[block].values[slot]>extremeValues[slot]
+                    : local[block].values[slot]<extremeValues[slot]);
+                if (better) { extremeValues[slot]=local[block].values[slot];extrema[slot]=local[block].extrema[slot]; }
+            }
+        }
+        if (cancelled && cancelled()) return {};
+    }
+    if (!parallelDeindexed) for (uint32_t primitive=0; primitive<count; ++primitive) {
+        if (primitive%65536==0 && cancelled && cancelled()) return {};
         double center[3]{};
         uint64_t key = 14695981039346656037ull;
         for (unsigned corner=0; corner<(points ? 1u : 3u); ++corner) {
             auto vertex = vertices.subspan(size_t(vertexIndex(primitive,corner))*stride,stride);
-            key ^= Fnv1a64(vertex); key *= 1099511628211ull;
             float position[3]; std::memcpy(position, vertex.data(), sizeof(position));
+            // Representative selection depends on geometry, not on normals,
+            // colors, UVs, or padding. Mix the three position bit patterns
+            // directly instead of checksumming the entire vertex for every
+            // primitive in a multi-GiB scan.
+            uint32_t bits[3]; std::memcpy(bits,position,sizeof(bits));
+            key^=uint64_t(bits[0])|(uint64_t(bits[1])<<32); key*=1099511628211ull;
+            key^=bits[2]; key*=1099511628211ull;
             for (unsigned axis=0; axis<3; ++axis) {
                 center[axis] += position[axis] / (points ? 1.0 : 3.0);
                 for (unsigned side=0; side<2; ++side) {
@@ -70,8 +141,8 @@ inline CoarseSample SampleCoarse(model_core::ChunkDescriptor d, std::span<const 
         }
         uint32_t cell=0;
         for (unsigned axis=0; axis<3; ++axis) {
-            const double span=double(d.localMax[axis])-d.localMin[axis];
-            const uint32_t coordinate=span>0 ? uint32_t(std::clamp((center[axis]-d.localMin[axis])/span*4,0.0,3.0)) : 0;
+            const uint32_t coordinate=inverseSpan[axis]>0 ? uint32_t(std::clamp(
+                (center[axis]-d.localMin[axis])*inverseSpan[axis],0.0,3.0)) : 0;
             cell |= coordinate << (axis*2);
         }
         auto& candidate=candidates[cell];
@@ -87,8 +158,8 @@ inline CoarseSample SampleCoarse(model_core::ChunkDescriptor d, std::span<const 
         }
         uint32_t cell=0;
         for (unsigned axis=0;axis<3;++axis) {
-            const double span=double(d.localMax[axis])-d.localMin[axis];
-            const uint32_t coordinate=span>0 ? uint32_t(std::clamp((center[axis]-d.localMin[axis])/span*4,0.0,3.0)) : 0;
+            const uint32_t coordinate=inverseSpan[axis]>0 ? uint32_t(std::clamp(
+                (center[axis]-d.localMin[axis])*inverseSpan[axis],0.0,3.0)) : 0;
             cell |= coordinate << (axis*2);
         }
         candidates[cell].source=source;

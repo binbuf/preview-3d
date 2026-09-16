@@ -10,6 +10,8 @@
 #include "platform/CheckedMath.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -18,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <ppl.h>
 
 namespace import_worker {
 
@@ -695,6 +698,8 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         uint32_t sourceElementOffset=0;
         bool vertexSeen = false, haveOrigin = false;
         double origin[3]{};
+        bool havePrecomputedPointBounds=false;
+        float precomputedPointMin[3]{},precomputedPointMax[3]{};
         std::array<uint64_t, 64> vertexPropertyOffsets{};
         for (const auto& property : vertexElement->properties)
         {
@@ -705,6 +710,15 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             }
             vertexPropertyOffsets[&property - vertexElement->properties.data()] = vertexStride;
             vertexStride += ScalarByteSize(property.valueType);
+        }
+        std::array<int,12> fixedUsedProperties{};
+        size_t fixedUsedPropertyCount=0;
+        for (const int index:{xIdx,yIdx,zIdx,nxIdx,nyIdx,nzIdx,actualUIdx,actualVIdx,
+                              redIdx,greenIdx,blueIdx,alphaIdx}) {
+            if (index<0 || std::find(fixedUsedProperties.begin(),
+                fixedUsedProperties.begin()+fixedUsedPropertyCount,index)!=
+                fixedUsedProperties.begin()+fixedUsedPropertyCount) continue;
+            fixedUsedProperties[fixedUsedPropertyCount++]=index;
         }
         auto skipRecord = [&](const PlyElement& element) -> std::optional<ImportErrorCode> {
             for (const auto& property : element.properties)
@@ -719,33 +733,8 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             }
             return std::nullopt;
         };
-        auto readVertex = [&](double* position,
-                              VertexPositionNormalUv0TangentColorF32& vertex) -> std::optional<ImportErrorCode> {
-            double values[64]{};
-            if (vertexStride) {
-                auto record = readSource(cursor, vertexStride);
-                if (!record)
-                    return ImportErrorCode::MalformedData;
-                for (size_t i = 0; i < vertexElement->properties.size(); ++i) {
-                    const auto& property = vertexElement->properties[i];
-                    const size_t size = ScalarByteSize(property.valueType);
-                    values[i] = ReadScalarAsDouble(property.valueType, bigEndian,
-                        record->subspan(size_t(vertexPropertyOffsets[i]), size));
-                }
-            } else {
-                for (size_t i = 0; i < vertexElement->properties.size(); ++i) {
-                    const auto& property = vertexElement->properties[i];
-                    if (property.isList) {
-                        if (auto error = skipList(property))
-                            return error;
-                    } else {
-                        auto value = readScalar(property.valueType);
-                        if (!value)
-                            return ImportErrorCode::MalformedData;
-                        values[i] = *value;
-                    }
-                }
-            }
+        auto finishVertex = [&](const double* values, double* position,
+                                VertexPositionNormalUv0TangentColorF32& vertex) -> std::optional<ImportErrorCode> {
             position[0] = values[xIdx];
             position[1] = values[yIdx];
             position[2] = values[zIdx];
@@ -781,6 +770,46 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 if (alphaIdx>=0) vertex.a=NormalizeColor(values[alphaIdx],vertexElement->properties[alphaIdx].valueType);
             }
             return std::nullopt;
+        };
+        auto decodeFixedVertex = [&](std::span<const std::byte> record, double* position,
+                                     VertexPositionNormalUv0TangentColorF32& vertex) -> std::optional<ImportErrorCode> {
+            double values[64]{};
+            // Unknown fixed-width properties are skipped by advancing the
+            // record, as the PLY contract requires. Decoding every padding or
+            // application-specific scalar made wide point records needlessly
+            // expensive on the complete scan.
+            for (size_t used=0;used<fixedUsedPropertyCount;++used) {
+                const int index=fixedUsedProperties[used];
+                const auto& property=vertexElement->properties[size_t(index)];
+                const size_t size=ScalarByteSize(property.valueType);
+                values[index]=ReadScalarAsDouble(property.valueType,bigEndian,
+                    record.subspan(size_t(vertexPropertyOffsets[size_t(index)]),size));
+            }
+            return finishVertex(values,position,vertex);
+        };
+        auto readVertex = [&](double* position,
+                              VertexPositionNormalUv0TangentColorF32& vertex) -> std::optional<ImportErrorCode> {
+            if (vertexStride) {
+                auto record = readSource(cursor, vertexStride);
+                if (!record)
+                    return ImportErrorCode::MalformedData;
+                return decodeFixedVertex(*record,position,vertex);
+            } else {
+                double values[64]{};
+                for (size_t i = 0; i < vertexElement->properties.size(); ++i) {
+                    const auto& property = vertexElement->properties[i];
+                    if (property.isList) {
+                        if (auto error = skipList(property))
+                            return error;
+                    } else {
+                        auto value = readScalar(property.valueType);
+                        if (!value)
+                            return ImportErrorCode::MalformedData;
+                        values[i] = *value;
+                    }
+                }
+                return finishVertex(values,position,vertex);
+            }
         };
         auto flush = [&]() -> std::optional<ImportErrorCode> {
             if (mesh.empty() && points.empty() && positionOnlyPoints.empty())
@@ -833,8 +862,13 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             } else {
                 bytes = ChunkBytes(points);
             }
-            if (!SetLocalBounds(d, bytes))
+            if (havePrecomputedPointBounds) {
+                std::memcpy(d.localMin,precomputedPointMin,sizeof(d.localMin));
+                std::memcpy(d.localMax,precomputedPointMax,sizeof(d.localMax));
+                d.boundsState=BoundsState::Verified;
+            } else if (!SetLocalBounds(d, bytes)) {
                 return ImportErrorCode::MalformedData;
+            }
             if (!writer.Add(d, bytes, ChunkBytes(indices)))
                 return writer.Error();
             mesh.clear();
@@ -843,6 +877,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             indices.clear();
             remap.clear();
             haveOrigin = false;
+            havePrecomputedPointBounds=false;
             return std::nullopt;
         };
         const auto* requested = batchSink ? batchSink->RequestedSource() : nullptr;
@@ -863,6 +898,112 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 cursor+=bytes; continue;
             }
             if (requested && ((&element == faceElement && hasFace) || (&element == vertexElement && !hasFace))) cursor = requested->sourceRangeOffset;
+            if (&element == vertexElement && !hasFace && vertexStride && !preview)
+            {
+                uint64_t records=element.count;
+                if (requested) {
+                    const uint64_t vertexBytes=element.count*vertexStride;
+                    if (requested->sourceRangeOffset < vertexStart ||
+                        requested->sourceRangeOffset-vertexStart > vertexBytes ||
+                        (requested->sourceRangeOffset-vertexStart)%vertexStride ||
+                        requested->sourceRangeLength%vertexStride ||
+                        requested->sourceRangeLength > vertexBytes-(requested->sourceRangeOffset-vertexStart))
+                        return ImportErrorCode::MalformedData;
+                    records=requested->sourceRangeLength/vertexStride;
+                }
+                for (uint64_t first=0;first<records;)
+                {
+                    if (mappedSource && !mappedSource->IsUnchanged())
+                        return ImportErrorCode::FileChanged;
+                    if (batchSink && batchSink->Cancelled())
+                        return ImportErrorCode::Cancelled;
+                    const uint64_t count=(std::min)(uint64_t(chunkPoints),records-first);
+                    const uint64_t start=cursor;
+                    auto raw=readSource(cursor,count*vertexStride);
+                    if (!raw) return ImportErrorCode::MalformedData;
+                    double firstPosition[3];
+                    VertexPositionNormalUv0TangentColorF32 firstVertex{};
+                    if (auto error=decodeFixedVertex(raw->first(size_t(vertexStride)),firstPosition,firstVertex))
+                        return *error;
+                    std::memcpy(origin,firstPosition,sizeof(origin));
+                    haveOrigin=true; sourceFirst=start; sourceEnd=cursor;
+                    if (compactPointLayout && count>=16384) {
+                        constexpr uint64_t kPointBlock=8192;
+                        const size_t blocks=size_t((count+kPointBlock-1)/kPointBlock);
+                        std::vector<std::array<float,6>> bounds(blocks);
+                        std::atomic_bool valid=true;
+                        positionOnlyPoints.resize(size_t(count));
+                        concurrency::parallel_for(size_t(0),blocks,[&](size_t block) {
+                            const uint64_t begin=uint64_t(block)*kPointBlock;
+                            const uint64_t end=(std::min)(count,begin+kPointBlock);
+                            std::array<float,6> local{};
+                            for (uint64_t i=begin;i<end;++i) {
+                                const auto record=raw->subspan(size_t(i*vertexStride),size_t(vertexStride));
+                                const auto readCoordinate=[&](int index) {
+                                    const auto& property=vertexElement->properties[size_t(index)];
+                                    return ReadScalarAsDouble(property.valueType,bigEndian,
+                                        record.subspan(size_t(vertexPropertyOffsets[size_t(index)]),
+                                                       ScalarByteSize(property.valueType)));
+                                };
+                                const double position[]{readCoordinate(xIdx),readCoordinate(yIdx),readCoordinate(zIdx)};
+                                if (!std::isfinite(position[0])||!std::isfinite(position[1])||!std::isfinite(position[2])) {
+                                    valid.store(false,std::memory_order_relaxed);continue;
+                                }
+                                const float value[]{float(position[0]-origin[0]),float(position[1]-origin[1]),
+                                                    float(position[2]-origin[2])};
+                                positionOnlyPoints[size_t(i)]={value[0],value[1],value[2]};
+                                for (unsigned axis=0;axis<3;++axis) {
+                                    if (i==begin||value[axis]<local[axis]) local[axis]=value[axis];
+                                    if (i==begin||value[axis]>local[axis+3]) local[axis+3]=value[axis];
+                                }
+                            }
+                            bounds[block]=local;
+                        });
+                        if (!valid.load(std::memory_order_relaxed)) return ImportErrorCode::MalformedData;
+                        for (size_t block=0;block<blocks;++block) {
+                            for (unsigned axis=0;axis<3;++axis) {
+                                if (!block||bounds[block][axis]<precomputedPointMin[axis])
+                                    precomputedPointMin[axis]=bounds[block][axis];
+                                if (!block||bounds[block][axis+3]>precomputedPointMax[axis])
+                                    precomputedPointMax[axis]=bounds[block][axis+3];
+                            }
+                        }
+                        havePrecomputedPointBounds=true;
+                    } else {
+                        for (uint64_t i=0;i<count;++i)
+                        {
+                            double position[3];
+                            VertexPositionNormalUv0TangentColorF32 vertex{};
+                            if (i==0) {
+                                std::memcpy(position,firstPosition,sizeof(position));
+                                vertex=firstVertex;
+                            } else if (auto error=decodeFixedVertex(
+                                          raw->subspan(size_t(i*vertexStride),size_t(vertexStride)),position,vertex)) {
+                                return *error;
+                            }
+                            const float x=float(position[0]-origin[0]);
+                            const float y=float(position[1]-origin[1]);
+                            const float z=float(position[2]-origin[2]);
+                            const float local[]{x,y,z};
+                            for (unsigned axis=0;axis<3;++axis) {
+                                if (!i||local[axis]<precomputedPointMin[axis]) precomputedPointMin[axis]=local[axis];
+                                if (!i||local[axis]>precomputedPointMax[axis]) precomputedPointMax[axis]=local[axis];
+                            }
+                            havePrecomputedPointBounds=true;
+                            if (compactPointLayout)
+                                positionOnlyPoints.push_back({x,y,z});
+                            else {
+                                vertex.px=x; vertex.py=y; vertex.pz=z;
+                                points.push_back(vertex);
+                            }
+                        }
+                    }
+                    if (auto error=flush()) return *error;
+                    first+=count;
+                }
+                if (requested) break;
+                continue;
+            }
             for (uint64_t record = 0; record < element.count; ++record)
             {
                 if (requested && ((&element == faceElement && hasFace) || (&element == vertexElement && !hasFace))
@@ -1370,7 +1511,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     if (hasColors) descriptor.geometryFlags |= kGeometryHasColors;
     if (!SetLocalBounds(descriptor, destination.subspan(size_t(payloadOffset), size_t(vertexBytes))))
         return ImportErrorCode::MalformedData;
-    descriptor.chunkChecksum = Fnv1a64(destination.subspan(payloadOffset, payloadSize));
+    descriptor.chunkChecksum = WireChecksum64(destination.subspan(payloadOffset, payloadSize));
 
     std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
 
@@ -1384,7 +1525,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     sectionHeader.chunkCount = 1;
     sectionHeader.reserved = 0;
     sectionHeader.sectionChecksum
-        = Fnv1a64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
+        = WireChecksum64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
 
     std::memcpy(destination.data(), &sectionHeader, sizeof(sectionHeader));
 

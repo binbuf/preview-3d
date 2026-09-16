@@ -18,7 +18,7 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-constexpr uint32_t kCurrentProtocolVersion = 8;
+constexpr uint32_t kCurrentProtocolVersion = 9;
 // Product coarse/full delivery has four closed geometry roles. Scan payloads
 // cross the validator, but are never allocated on the GPU or retained by it.
 constexpr uint32_t kFineLod = 0, kCoarseLod = 1, kScanLod = 2, kPreviewLod = 3;
@@ -87,7 +87,8 @@ enum class BoundsState : uint32_t { Unknown = 0, Provisional = 1, Verified = 2 }
 constexpr uint32_t kGeometryHasUv0 = 1;
 constexpr uint32_t kGeometryHasColors = 2;
 constexpr uint32_t kGeometryHasUv1 = 4;
-constexpr uint32_t kGeometryFlagsKnownMask = kGeometryHasUv0 | kGeometryHasColors | kGeometryHasUv1;
+constexpr uint32_t kGeometryDeindexed = 8;
+constexpr uint32_t kGeometryFlagsKnownMask = kGeometryHasUv0 | kGeometryHasColors | kGeometryHasUv1 | kGeometryDeindexed;
 
 // Generation-wide source facts, repeated unchanged in each batch. Zero units
 // means unspecified; STL/PLY must never be presented as metres by assumption.
@@ -119,7 +120,7 @@ struct SectionHeader {
                                // for anything else
     uint32_t chunkCount;      // number of ChunkDescriptor entries immediately following the header
     uint32_t reserved;        // must be 0
-    uint64_t sectionChecksum; // FNV-1a64 over bytes [sizeof(SectionHeader), sectionLength) --
+    uint64_t sectionChecksum; // WireChecksum64 over bytes [sizeof(SectionHeader), sectionLength) --
                                // the descriptor table plus all payload bytes, not the header itself
     SceneMetadata scene;
 };
@@ -159,7 +160,7 @@ struct ChunkDescriptor {
     // image. The mesh -> material -> image dependency graph stays acyclic.
     uint32_t dependencyIds[kMaxDependencyIds];
     uint32_t dependencyCount;        // how many of dependencyIds[] are populated, <= kMaxDependencyIds
-    uint64_t chunkChecksum;          // FNV-1a64 over payload bytes [normalizedRangeOffset, +byteSize)
+    uint64_t chunkChecksum;          // WireChecksum64 over payload bytes [normalizedRangeOffset, +byteSize)
     double origin[3];                // native-space cluster origin; positions are LOCAL floats
     float localMin[3];
     float localMax[3];               // exact extrema of finite normalized positions

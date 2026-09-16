@@ -29,6 +29,30 @@ No failed or unavailable row is reported as passed. Fixing a blocker requires
 rerunning the affected lane and recreating the archive; it is not a documentation
 waiver or an implicit scope change.
 
+## Post-acceptance scan-throughput remediation
+
+The subsequent protocol-v9 and bounded-parser optimization pass preserves the
+accepted MVP architecture and limits; it does not waive or broaden them. On the
+same local compatibility machine, three fresh Release processes now reach
+complete coarse at 4,185.989 ms p95 for the retained 3.00 GB STL, 4,667.902 ms
+p95 for the 2.88 GB little-endian point PLY, and 5,217.987 ms p95 for the
+4.29 GB GLB. First geometry remains early at 539.466, 506.841, and 511.429 ms
+p95. Corpus A-small complete coarse is 466.718 ms p95, and a separate 8 MiB
+A-small copy is 491.910 ms p95. Thus the original no-geometry
+and >11-second STL/PLY blockers are fixed, but GLB remains 217.987 ms over the
+five-second complete-coarse target and the STL run still misses the separate
+frame-interval gate. Official high-performance-reference, unavailable hardware,
+signing, clean-VM, and package recreation rows remain open.
+
+The design-visible change is explicitly recorded in
+`design/03-file-formats-and-ingestion.md`: protocol v9 carries compact scan
+summaries, a validated deindexed hint, and the new split-invariant wire checksum.
+Viewer and worker still ship together and reject every other protocol version;
+hostile-worker coverage was updated rather than adding mixed-version migration.
+Final Debug/Release solution builds pass; Unit passes 92 cases / 7,360 Debug
+and 7,272 Release assertions, and ImportIsolation passes 200 cases / 52,068
+assertions in each configuration.
+
 ## Final build and automated suites
 
 Both solution configurations were rebuilt from scratch:

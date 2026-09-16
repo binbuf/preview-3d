@@ -9,6 +9,7 @@
 #include "platform/CheckedMath.h"
 
 #include <cmath>
+#include <atomic>
 #include <cstring>
 #include <initializer_list>
 #include <optional>
@@ -175,7 +176,7 @@ std::variant<StlImportResult, ImportErrorCode> WriteStlChunk(
     if (!RebasePositions(descriptor, std::span<std::byte>(reinterpret_cast<std::byte*>(vertices.data()), size_t(vertexBytes))))
         return ImportErrorCode::MalformedData;
     std::memcpy(destination.data() + payloadOffset, vertices.data(), size_t(vertexBytes));
-    descriptor.chunkChecksum = Fnv1a64(destination.subspan(payloadOffset, payloadSize));
+    descriptor.chunkChecksum = WireChecksum64(destination.subspan(payloadOffset, payloadSize));
 
     std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
 
@@ -190,7 +191,7 @@ std::variant<StlImportResult, ImportErrorCode> WriteStlChunk(
     header.chunkCount = 1;
     header.reserved = 0;
     header.sectionChecksum
-        = Fnv1a64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
+        = WireChecksum64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
 
     std::memcpy(destination.data(), &header, sizeof(header));
 
@@ -275,17 +276,67 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const s
         }
         else
             facets = sourceStlBytes.subspan(size_t(offset), size_t(bytes));
-        for (uint32_t i = 0; i < count; ++i)
-        {
-            if (i % 4096 == 0 && batchSink && batchSink->Cancelled())
-                return ImportErrorCode::Cancelled;
-            const std::byte* facet = facets.data() + size_t(i) * kStlFacetBytes;
-            Vec3 n{ReadFloatLE(facet), ReadFloatLE(facet + 4), ReadFloatLE(facet + 8)};
-            Vec3 v0{ReadFloatLE(facet + 12), ReadFloatLE(facet + 16), ReadFloatLE(facet + 20)};
-            Vec3 v1{ReadFloatLE(facet + 24), ReadFloatLE(facet + 28), ReadFloatLE(facet + 32)};
-            Vec3 v2{ReadFloatLE(facet + 36), ReadFloatLE(facet + 40), ReadFloatLE(facet + 44)};
-            ProcessFacet(n, v0, v1, v2, vertices, indices);
+        // The fixed binary record has no cross-facet dependency. Normalize a
+        // fully valid block in parallel into its final slots; if any facet is
+        // non-finite/degenerate, replay the bounded block through the compacting
+        // scalar path so drop semantics remain byte-for-byte unchanged.
+        constexpr uint32_t kParallelFacetBlock=4096;
+        if (count<kParallelFacetBlock) {
+            for (uint32_t i=0;i<count;++i) {
+                const std::byte* facet=facets.data()+size_t(i)*kStlFacetBytes;
+                Vec3 n{ReadFloatLE(facet),ReadFloatLE(facet+4),ReadFloatLE(facet+8)};
+                Vec3 v0{ReadFloatLE(facet+12),ReadFloatLE(facet+16),ReadFloatLE(facet+20)};
+                Vec3 v1{ReadFloatLE(facet+24),ReadFloatLE(facet+28),ReadFloatLE(facet+32)};
+                Vec3 v2{ReadFloatLE(facet+36),ReadFloatLE(facet+40),ReadFloatLE(facet+44)};
+                ProcessFacet(n,v0,v1,v2,vertices,indices);
+            }
+        } else {
+            std::atomic_bool allValid=true;
+            vertices.resize(size_t(count)*3);indices.resize(size_t(count)*3);
+            const uint32_t blocks=(count+kParallelFacetBlock-1)/kParallelFacetBlock;
+            concurrency::parallel_for(uint32_t(0),blocks,[&](uint32_t block) {
+            const uint32_t begin=block*kParallelFacetBlock,end=(std::min)(count,begin+kParallelFacetBlock);
+            for (uint32_t i=begin;i<end;++i) {
+                const std::byte* facet=facets.data()+size_t(i)*kStlFacetBytes;
+                Vec3 supplied{ReadFloatLE(facet),ReadFloatLE(facet+4),ReadFloatLE(facet+8)};
+                Vec3 source[3]{{ReadFloatLE(facet+12),ReadFloatLE(facet+16),ReadFloatLE(facet+20)},
+                               {ReadFloatLE(facet+24),ReadFloatLE(facet+28),ReadFloatLE(facet+32)},
+                               {ReadFloatLE(facet+36),ReadFloatLE(facet+40),ReadFloatLE(facet+44)}};
+                auto flat=Cross(source[1]-source[0],source[2]-source[0]);
+                const double flatLengthSquared=Dot(flat,flat);
+                if (!IsFinite(supplied)||!IsFinite(source[0])||!IsFinite(source[1])||!IsFinite(source[2])
+                    || flatLengthSquared<=0.0||!std::isfinite(flatLengthSquared)) {
+                    allValid.store(false,std::memory_order_relaxed);continue;
+                }
+                const double flatInv=1.0/std::sqrt(flatLengthSquared);
+                flat={flat.x*flatInv,flat.y*flatInv,flat.z*flatInv};
+                const double suppliedLengthSquared=Dot(supplied,supplied);
+                Vec3 normal=flat;
+                if (suppliedLengthSquared>0.81&&suppliedLengthSquared<1.21) {
+                    const double inverse=1.0/std::sqrt(suppliedLengthSquared);
+                    normal={supplied.x*inverse,supplied.y*inverse,supplied.z*inverse};
+                }
+                for (unsigned corner=0;corner<3;++corner) {
+                    auto& vertex=vertices[size_t(i)*3+corner];
+                    vertex.px=float(source[corner].x);vertex.py=float(source[corner].y);vertex.pz=float(source[corner].z);
+                    vertex.nx=float(normal.x);vertex.ny=float(normal.y);vertex.nz=float(normal.z);
+                    indices[size_t(i)*3+corner]=i*3+corner;
+                }
+            }
+            });
+            if (!allValid.load(std::memory_order_relaxed)) {
+                vertices.clear();indices.clear();
+                for (uint32_t i=0;i<count;++i) {
+                    const std::byte* facet=facets.data()+size_t(i)*kStlFacetBytes;
+                    Vec3 n{ReadFloatLE(facet),ReadFloatLE(facet+4),ReadFloatLE(facet+8)};
+                    Vec3 v0{ReadFloatLE(facet+12),ReadFloatLE(facet+16),ReadFloatLE(facet+20)};
+                    Vec3 v1{ReadFloatLE(facet+24),ReadFloatLE(facet+28),ReadFloatLE(facet+32)};
+                    Vec3 v2{ReadFloatLE(facet+36),ReadFloatLE(facet+40),ReadFloatLE(facet+44)};
+                    ProcessFacet(n,v0,v1,v2,vertices,indices);
+                }
+            }
         }
+        if (batchSink && batchSink->Cancelled()) return ImportErrorCode::Cancelled;
         if (!vertices.empty())
         {
             ChunkDescriptor d{};

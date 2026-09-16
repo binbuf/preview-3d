@@ -62,7 +62,7 @@ std::vector<std::byte> BuildMinimalValidSection(uint64_t generationId)
     descriptor.chunkId = 1;
     descriptor.byteSize = vertexBytes.size();
     descriptor.dependencyCount = 0;
-    descriptor.chunkChecksum = Fnv1a64(std::span<const std::byte>(vertexBytes));
+    descriptor.chunkChecksum = WireChecksum64(std::span<const std::byte>(vertexBytes));
 
     SetLocalBounds(descriptor, vertexBytes);
     std::memcpy(section.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
@@ -76,7 +76,7 @@ std::vector<std::byte> BuildMinimalValidSection(uint64_t generationId)
     header.sectionLength = sectionLength;
     header.chunkCount = 1;
     header.reserved = 0;
-    header.sectionChecksum = Fnv1a64(std::span<const std::byte>(
+    header.sectionChecksum = WireChecksum64(std::span<const std::byte>(
         section.data() + kSectionHeaderSize, sectionLength - kSectionHeaderSize));
 
     std::memcpy(section.data(), &header, sizeof(header));
@@ -108,7 +108,7 @@ TEST_CASE("Private geometry validation rejects bounds lies malformed origins met
         case 10: header.protocolVersion = 2; break;
         }
         std::memcpy(section.data()+model_core::kSectionHeaderSize,&descriptor,sizeof(descriptor));
-        header.sectionChecksum = model_core::Fnv1a64(std::span<const std::byte>(section).subspan(model_core::kSectionHeaderSize));
+        header.sectionChecksum = model_core::WireChecksum64(std::span<const std::byte>(section).subspan(model_core::kSectionHeaderSize));
         std::memcpy(section.data(),&header,sizeof(header));
         auto result = import_broker::ValidateAndCopySection(section,202,8);
         CHECK_FALSE(result.ok); CHECK(result.chunks.empty());
@@ -130,12 +130,12 @@ TEST_CASE("Protocol v3 copied geometry survives a bounded deterministic mutation
         // geometric checks rather than stopping at checksum rejection.
         if (descriptor.normalizedRangeOffset <= section.size()
             && descriptor.byteSize <= section.size()-descriptor.normalizedRangeOffset) {
-            descriptor.chunkChecksum = model_core::Fnv1a64(std::span<const std::byte>(section).subspan(
+            descriptor.chunkChecksum = model_core::WireChecksum64(std::span<const std::byte>(section).subspan(
                 size_t(descriptor.normalizedRangeOffset),size_t(descriptor.byteSize)));
             std::memcpy(section.data()+sizeof(header),&descriptor,sizeof(descriptor));
         }
         if (header.sectionLength >= sizeof(header) && header.sectionLength <= section.size()) {
-            header.sectionChecksum = model_core::Fnv1a64(std::span<const std::byte>(section).subspan(
+            header.sectionChecksum = model_core::WireChecksum64(std::span<const std::byte>(section).subspan(
                 sizeof(header),size_t(header.sectionLength-sizeof(header))));
             std::memcpy(section.data(),&header,sizeof(header));
         }

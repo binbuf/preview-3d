@@ -47,7 +47,7 @@ Model Core exposes a read-only MappedFile and MappingLease abstraction, used ins
 
 Mapping a file removes an eager full-file userspace copy; it does not make parsing allocation-free and does not make file bytes directly usable as GPU vertex data. The OS commits physical pages as they are touched. Normalized geometry, decompressed archives, decoded textures, acceleration data, upload staging, and GPU resources remain explicitly budgeted — and, for Tier A and Tier B alike, those budgets are now enforced against the import process's Job Object commit limit in addition to the in-process allocation callbacks.
 
-Validated upcoming sequential ranges may be submitted to `PrefetchVirtualMemory` when profiling shows a benefit; correctness and responsiveness cannot depend on prefetch completion. For glTF BIN data, binary STL, and supported binary PLY layouts, adapters retain validated source offsets and decode bounded ranges into reusable scratch blocks. A parser that requires contiguous ownership receives a budgeted arena, never an unbounded vector sized from a file field.
+Validated upcoming sequential ranges may be submitted to `PrefetchVirtualMemory` when profiling shows a benefit; correctness and responsiveness cannot depend on prefetch completion. For glTF BIN data, binary STL, and supported binary PLY layouts, adapters retain validated source offsets and decode bounded ranges into reusable scratch blocks. Fixed-width records and independent deindexed triangles may be normalized in parallel inside one such bounded block; cancellation and file-identity checks remain at block boundaries, and malformed STL blocks replay through the scalar compacting path so invalid-facet semantics do not change. Unknown fixed-width PLY properties advance the validated record stride without being converted. A parser that requires contiguous ownership receives a budgeted arena, never an unbounded vector sized from a file field.
 
 ## Wire format between the trusted process and an import process
 
@@ -60,14 +60,23 @@ Normalized output crosses the process boundary only as chunk descriptors over a 
 
 A new protocol version is a breaking change requiring updated fixtures, fuzz corpora, and an explicit compatibility decision — the host never attempts to interpret a section whose version it does not recognize. This wire format, not the shared-memory mechanism by itself, is what lets the host snapshot rule in [02-system-architecture.md](./02-system-architecture.md) be a cheap, bounded, fully-checkable copy rather than an open-ended deserialization of untrusted structure.
 
-The scope-limited viewer uses protocol v6: an 88-byte header, 160-byte chunk
-descriptor and 168-byte detail request. PLY descriptors include a bounded fan
-offset within the first source face so a split polygon can be re-decoded exactly.
-Detail replies must match the original verified scan's geometry, provenance,
-checksum and metadata. They reuse pinned primary and approved sidecar handles;
-new sidecar requests are forbidden during replay. Viewer and worker binaries
-ship from the same build. Compatibility decision: reject v5 and every other
-unknown version; there is no migration or mixed-version fallback.
+The scope-limited viewer uses protocol v9: an 88-byte header, 160-byte chunk
+descriptor, 40-byte scan-summary payload, and 168-byte detail request. A scan
+summary retains counts, verified bounds, source provenance, layout and the
+normalized-detail checksum without transferring a second copy of normalized
+geometry. Protocol-v9 section and payload integrity uses XXH64 directly below
+10 MiB and a split-invariant fixed-256-KiB-leaf XXH64 tree at or above 10 MiB;
+this is an incidental-corruption check, not an authentication boundary. A
+validated deindexed flag lets proxy sampling traverse identity-indexed triangle
+ranges without repeatedly reading their index buffer. PLY descriptors include a
+bounded fan offset within the first source face so a split polygon can be
+re-decoded exactly. Detail replies must match the original verified scan's
+geometry, provenance, checksum and metadata. They reuse pinned primary and
+approved sidecar handles; new sidecar requests are forbidden during replay.
+Viewer and worker binaries ship from the same build. Compatibility decision:
+reject v8 and every other unknown version; there is no migration or mixed-
+version fallback. Updated protocol fixtures and hostile-worker cases exercise
+the v9 checksum, scan-summary, flag and copy-then-validate paths.
 
 ## Import generations
 

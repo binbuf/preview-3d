@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <limits>
 #include <cstring>
+#include <vector>
 
 TEST_CASE("SectionHeader and ChunkDescriptor match the documented fixed-width wire layout",
           "[wire-format]")
@@ -98,6 +99,19 @@ TEST_CASE("Fnv1a64 is deterministic and detects single-byte corruption", "[wire-
     data[3] = std::byte{ 0xFF };
     uint64_t corrupted = model_core::Fnv1a64(data);
     CHECK(corrupted != first);
+}
+
+TEST_CASE("Protocol-v9 wire checksum is split-invariant across parallel block boundaries", "[wire-format]")
+{
+    std::vector<std::byte> data(11*1024*1024+37);
+    for (size_t i=0;i<data.size();++i) data[i]=std::byte((i*131+17)&0xff);
+    const uint64_t contiguous=model_core::WireChecksum64(data);
+    for (const size_t split:{size_t(1),size_t(256*1024-1),size_t(256*1024),
+                             size_t(10*1024*1024+13),data.size()-1})
+        CHECK(model_core::WireChecksum64(std::span(data).first(split),
+                                         std::span(data).subspan(split))==contiguous);
+    data[10*1024*1024+9]^=std::byte{0x80};
+    CHECK(model_core::WireChecksum64(data)!=contiguous);
 }
 
 TEST_CASE("VertexStrideForLayout returns 0 for Unknown and any value outside the closed enumeration",

@@ -117,7 +117,7 @@ uint64_t BuildLyingSingleChunkSection(std::span<std::byte> destination, uint64_t
     descriptor.chunkId = 1;
     descriptor.byteSize = sizeof(vertex);
     descriptor.dependencyCount = 0;
-    descriptor.chunkChecksum = Fnv1a64(destination.subspan(payloadOffset, sizeof(vertex)));
+    descriptor.chunkChecksum = WireChecksum64(destination.subspan(payloadOffset, sizeof(vertex)));
 
     // The caller's lie: e.g. an oversized byteSize, or a bogus
     // vertexLayoutId. Applied after honest defaults, before the section
@@ -137,7 +137,7 @@ uint64_t BuildLyingSingleChunkSection(std::span<std::byte> destination, uint64_t
     header.chunkCount = 1;
     header.reserved = 0;
     header.sectionChecksum
-        = Fnv1a64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
+        = WireChecksum64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
 
     std::memcpy(destination.data(), &header, sizeof(header));
 
@@ -342,7 +342,7 @@ uint64_t BuildOneChunkSection(std::span<std::byte> destination, uint64_t generat
     descriptor.chunkId = chunkId;
     descriptor.byteSize = sizeof(vertex);
     descriptor.dependencyCount = 0;
-    descriptor.chunkChecksum = Fnv1a64(destination.subspan(payloadOffset, sizeof(vertex)));
+    descriptor.chunkChecksum = WireChecksum64(destination.subspan(payloadOffset, sizeof(vertex)));
 
     if (descriptor.topology == ChunkTopology::TriangleList || descriptor.topology == ChunkTopology::PointList)
         SetLocalBounds(descriptor, destination.subspan(size_t(payloadOffset), size_t(descriptor.byteSize)));
@@ -357,7 +357,7 @@ uint64_t BuildOneChunkSection(std::span<std::byte> destination, uint64_t generat
     header.chunkCount = 1;
     header.reserved = 0;
     header.sectionChecksum
-        = Fnv1a64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
+        = WireChecksum64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
 
     std::memcpy(destination.data(), &header, sizeof(header));
     return sectionLength;
@@ -414,7 +414,7 @@ int RunCoarseAttack(int mode)
         ChunkDescriptor d; std::memcpy(&d,view.bytes().data()+kSectionHeaderSize,sizeof(d));
         d.lodLevel=lod; std::memcpy(view.bytes().data()+kSectionHeaderSize,&d,sizeof(d));
         SectionHeader h; std::memcpy(&h,view.bytes().data(),sizeof(h));
-        h.sectionChecksum=Fnv1a64(view.bytes().subspan(kSectionHeaderSize,length-kSectionHeaderSize));
+        h.sectionChecksum=WireChecksum64(view.bytes().subspan(kSectionHeaderSize,length-kSectionHeaderSize));
         std::memcpy(view.bytes().data(),&h,sizeof(h));
         if (terminal) return SendChunksReady(request.generationId,1,length);
         return SendBatchReady(request.generationId,batch++,1,length) && AwaitBatchConsumed();
@@ -425,12 +425,12 @@ int RunCoarseAttack(int mode)
         d.normalizedRangeOffset=kSectionHeaderSize+kChunkDescriptorSize;
         d.byteSize=d.normalizedRangeLength=sizeof(complete);
         std::memcpy(view.bytes().data()+d.normalizedRangeOffset,&complete,sizeof(complete));
-        d.chunkChecksum=Fnv1a64(view.bytes().subspan(d.normalizedRangeOffset,d.byteSize));
+        d.chunkChecksum=WireChecksum64(view.bytes().subspan(d.normalizedRangeOffset,d.byteSize));
         std::memcpy(view.bytes().data()+kSectionHeaderSize,&d,sizeof(d));
         SectionHeader h{}; h.magic=kSectionMagic; h.protocolVersion=kCurrentProtocolVersion;
         h.generationId=h.scene.generationId=request.generationId; h.chunkCount=1;
         h.sectionLength=d.normalizedRangeOffset+d.byteSize;
-        h.sectionChecksum=Fnv1a64(view.bytes().subspan(kSectionHeaderSize,h.sectionLength-kSectionHeaderSize));
+        h.sectionChecksum=WireChecksum64(view.bytes().subspan(kSectionHeaderSize,h.sectionLength-kSectionHeaderSize));
         std::memcpy(view.bytes().data(),&h,sizeof(h));
         if (terminal) return SendChunksReady(request.generationId,1,h.sectionLength);
         return SendBatchReady(request.generationId,batch++,1,h.sectionLength) && AwaitBatchConsumed();
@@ -448,12 +448,12 @@ int RunCoarseAttack(int mode)
             d.chunkId=(index ? kScanIdentity : kPreviewIdentity)|(index+1);
             d.normalizedRangeOffset=payload+index*sizeof(vertex);
             std::memcpy(view.bytes().data()+d.normalizedRangeOffset,&vertex,sizeof(vertex));
-            d.chunkChecksum=Fnv1a64(view.bytes().subspan(d.normalizedRangeOffset,sizeof(vertex)));
+            d.chunkChecksum=WireChecksum64(view.bytes().subspan(d.normalizedRangeOffset,sizeof(vertex)));
             std::memcpy(view.bytes().data()+offset,&d,sizeof(d));
         }
         SectionHeader h; std::memcpy(&h,view.bytes().data(),sizeof(h));
         h.chunkCount=2; h.sectionLength=length;
-        h.sectionChecksum=Fnv1a64(view.bytes().subspan(kSectionHeaderSize,length-kSectionHeaderSize));
+        h.sectionChecksum=WireChecksum64(view.bytes().subspan(kSectionHeaderSize,length-kSectionHeaderSize));
         std::memcpy(view.bytes().data(),&h,sizeof(h));
         return SendChunksReady(request.generationId,2,length) ? 0 : 1;
     }
@@ -502,7 +502,7 @@ int RunCatalogBatches(int mode)
         desc.normalizedRangeOffset = kSectionHeaderSize + kChunkDescriptorSize;
         if (desc.topology == ChunkTopology::TriangleList || desc.topology == ChunkTopology::PointList)
             SetLocalBounds(desc, std::span(static_cast<const std::byte*>(payload), bytes));
-        desc.chunkChecksum = Fnv1a64(std::span(static_cast<const std::byte*>(payload), bytes));
+        desc.chunkChecksum = WireChecksum64(std::span(static_cast<const std::byte*>(payload), bytes));
         std::memcpy(view.bytes().data() + desc.normalizedRangeOffset, payload, bytes);
         std::memcpy(view.bytes().data() + kSectionHeaderSize, &desc, sizeof(desc));
         SectionHeader header{};
@@ -510,7 +510,7 @@ int RunCatalogBatches(int mode)
         header.generationId = request.generationId;
     header.scene.generationId = request.generationId; header.chunkCount = 1;
         header.sectionLength = desc.normalizedRangeOffset + bytes;
-        header.sectionChecksum = Fnv1a64(view.bytes().subspan(kSectionHeaderSize,
+        header.sectionChecksum = WireChecksum64(view.bytes().subspan(kSectionHeaderSize,
             static_cast<size_t>(header.sectionLength - kSectionHeaderSize)));
         std::memcpy(view.bytes().data(), &header, sizeof(header));
         return header.sectionLength;
@@ -571,12 +571,12 @@ int RunTextureAttack(int mode)
             status.reserved=mode==7 ? 1 : 0;
             payload=payload.first(sizeof(status));std::memcpy(payload.data(),&status,sizeof(status));
         }
-        descriptor.chunkChecksum=Fnv1a64(payload);
+        descriptor.chunkChecksum=WireChecksum64(payload);
         std::memcpy(view.bytes().data()+kSectionHeaderSize,&descriptor,sizeof(descriptor));
         SectionHeader header{};header.magic=kSectionMagic;header.protocolVersion=kCurrentProtocolVersion;
         header.generationId=header.scene.generationId=request.generationId;header.chunkCount=1;
         header.sectionLength=descriptor.normalizedRangeOffset+descriptor.byteSize;
-        header.sectionChecksum=Fnv1a64(view.bytes().subspan(kSectionHeaderSize,header.sectionLength-kSectionHeaderSize));
+        header.sectionChecksum=WireChecksum64(view.bytes().subspan(kSectionHeaderSize,header.sectionLength-kSectionHeaderSize));
         std::memcpy(view.bytes().data(),&header,sizeof(header));return header.sectionLength;
     };
     ImagePayloadHeader image{};image.pixelFormat=uint32_t(PixelFormatId::RGBA8_UNORM);
@@ -756,12 +756,12 @@ int RunMetadataAttack(int mode)
     case 9: case 10: {
         float value = mode == 9 ? nan : std::numeric_limits<float>::infinity();
         std::memcpy(view.bytes().data()+descriptor.normalizedRangeOffset,&value,sizeof(value));
-        descriptor.chunkChecksum = Fnv1a64(view.bytes().subspan(size_t(descriptor.normalizedRangeOffset),size_t(descriptor.byteSize)));
+        descriptor.chunkChecksum = WireChecksum64(view.bytes().subspan(size_t(descriptor.normalizedRangeOffset),size_t(descriptor.byteSize)));
         break;
     }
     }
     std::memcpy(view.bytes().data()+kSectionHeaderSize,&descriptor,sizeof(descriptor));
-    header.sectionChecksum = Fnv1a64(view.bytes().subspan(kSectionHeaderSize,size_t(header.sectionLength-kSectionHeaderSize)));
+    header.sectionChecksum = WireChecksum64(view.bytes().subspan(kSectionHeaderSize,size_t(header.sectionLength-kSectionHeaderSize)));
     std::memcpy(view.bytes().data(),&header,sizeof(header));
     return SendChunksReady(request.generationId,header.chunkCount,header.sectionLength) ? 0 : 1;
 }

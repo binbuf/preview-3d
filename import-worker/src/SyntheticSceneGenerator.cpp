@@ -116,7 +116,7 @@ std::variant<GeneratedSectionInfo, ImportErrorCode> GenerateSyntheticScene(
     chunk0.chunkId = 1;
     chunk0.byteSize = kChunk0PayloadBytes;
     chunk0.dependencyCount = 0;
-    chunk0.chunkChecksum = Fnv1a64(destination.subspan(chunk0Offset, kChunk0PayloadBytes));
+    chunk0.chunkChecksum = WireChecksum64(destination.subspan(chunk0Offset, kChunk0PayloadBytes));
 
     ChunkDescriptor chunk1{};
     chunk1.sourceRangeOffset = 0;
@@ -132,7 +132,7 @@ std::variant<GeneratedSectionInfo, ImportErrorCode> GenerateSyntheticScene(
     chunk1.byteSize = kChunk1PayloadBytes;
     chunk1.dependencyCount = 1;
     chunk1.dependencyIds[0] = 1; // references chunk0
-    chunk1.chunkChecksum = Fnv1a64(destination.subspan(chunk1Offset, kChunk1PayloadBytes));
+    chunk1.chunkChecksum = WireChecksum64(destination.subspan(chunk1Offset, kChunk1PayloadBytes));
 
     SetLocalBounds(chunk0, destination.subspan(size_t(chunk0.normalizedRangeOffset), size_t(chunk0.byteSize)));
     SetLocalBounds(chunk1, destination.subspan(size_t(chunk1.normalizedRangeOffset), size_t(chunk1.byteSize)));
@@ -148,7 +148,7 @@ std::variant<GeneratedSectionInfo, ImportErrorCode> GenerateSyntheticScene(
     header.chunkCount = 2;
     header.reserved = 0;
     header.sectionChecksum
-        = Fnv1a64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
+        = WireChecksum64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
 
     std::memcpy(destination.data(), &header, sizeof(header));
 

@@ -383,7 +383,7 @@ std::vector<std::byte> BuildSection(std::vector<ChunkSpec> chunks, uint64_t gene
             std::memcpy(section.data() + c.descriptor.normalizedRangeOffset, c.payload.data(),
                         c.payload.size());
         }
-        c.descriptor.chunkChecksum = Fnv1a64(std::span<const std::byte>(
+        c.descriptor.chunkChecksum = WireChecksum64(std::span<const std::byte>(
             section.data() + c.descriptor.normalizedRangeOffset, c.payload.size()));
     }
     for (size_t i = 0; i < chunks.size(); ++i) {
@@ -399,7 +399,7 @@ std::vector<std::byte> BuildSection(std::vector<ChunkSpec> chunks, uint64_t gene
     header.sectionLength = sectionLength;
     header.chunkCount = static_cast<uint32_t>(chunks.size());
     header.reserved = 0;
-    header.sectionChecksum = Fnv1a64(std::span<const std::byte>(
+    header.sectionChecksum = WireChecksum64(std::span<const std::byte>(
         section.data() + kSectionHeaderSize, sectionLength - kSectionHeaderSize));
     std::memcpy(section.data(), &header, sizeof(header));
     return section;

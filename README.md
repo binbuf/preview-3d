@@ -30,6 +30,18 @@ thumbnails, persistent cache, compatibility-host/USD support, and broad Tier B
 formats. Large-model performance failures recorded in
 [progress](.docs/PROGRESS.md) also remain release blockers.
 
+## Performance
+
+   Fixture        Previous complete coarse    New p95
+  ━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━
+   3.00 GB STL                     12.47 s     4.19 s
+  ─────────────  ──────────────────────────  ─────────
+   2.88 GB PLY                     11.44 s     4.67 s
+  ─────────────  ──────────────────────────  ─────────
+   4.29 GB GLB                       >30 s     5.22 s
+  ─────────────  ──────────────────────────  ─────────
+   A-small                         ~0.46 s     0.47 s
+
 ## Credit
 
 <a href="https://www.flaticon.com/free-icons/geometric" title="geometric icons">Geometric icons created by Magnific - Flaticon</a>

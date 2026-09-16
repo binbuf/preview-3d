@@ -12,6 +12,7 @@
 #include <vector>
 #include <deque>
 #include <optional>
+#include <ppl.h>
 
 namespace import_worker
 {
@@ -80,12 +81,19 @@ class BoundedChunkWriter
             } else if (geometry) {
                 const uint64_t count = descriptor.topology == ChunkTopology::PointList ? descriptor.vertexCount : descriptor.indexCount/3;
                 validPrimitives_ += count;
-                const uint32_t quota = uint32_t(count < 20 ? (validPrimitives_<20 ? count : 1) : (std::min)(count/20,(std::max)(8ull,count/256)));
+                const uint32_t quota = uint32_t(count < 20 ? (validPrimitives_<20 ? count : 1) :
+                    (std::min)(count/20,(std::max)(8ull,count/1024)));
                 // Reserve before sampling; payload + single-cluster candidates are bounded.
                 const uint64_t stride=VertexStrideForLayout(VertexLayoutId(descriptor.vertexLayoutId));
                 const uint64_t reserve = uint64_t(quota) * (descriptor.topology == ChunkTopology::PointList ? stride : 3*stride+12);
                 if (reserve > kCoarseReservedBytes - coarseBytes_) return Fail(ImportErrorCode::ResourceLimit);
-                auto sample = SampleCoarse(descriptor,a,b,quota,[this] { return sink_->Cancelled(); });
+                CoarseSample sample;
+                uint64_t fullChecksum=0;
+                auto sampleWork=[&] { sample=SampleCoarse(descriptor,a,b,quota,[this] { return sink_->Cancelled(); }); };
+                auto checksumWork=[&] { fullChecksum=WireChecksum64(a,b); };
+                if (a.size()+b.size()>=1024*1024)
+                    concurrency::parallel_invoke(sampleWork,checksumWork);
+                else { sampleWork(); checksumWork(); }
                 if (!sample.Primitives()) return Fail(ImportErrorCode::Cancelled);
                 coarseBytes_ += sample.vertices.size()+sample.indices.size()*4;
                 samples_.push_back(std::move(sample));
@@ -93,7 +101,7 @@ class BoundedChunkWriter
                 descriptor.chunkId |= kScanIdentity;
                 scanSummary.emplace();
                 scanSummary->fullPayloadBytes = a.size() + uint64_t(b.size());
-                scanSummary->fullPayloadChecksum = Fnv1a64Append(Fnv1a64(a), b);
+                scanSummary->fullPayloadChecksum = fullChecksum;
                 std::copy(std::begin(descriptor.localMin), std::end(descriptor.localMin),
                           std::begin(scanSummary->localMin));
                 std::copy(std::begin(descriptor.localMax), std::end(descriptor.localMax),
@@ -120,6 +128,11 @@ class BoundedChunkWriter
             // the absolute primitive and reserved-byte ceilings remain hard.
             const uint64_t cap=CoarsePrimitiveCap(validPrimitives_,samples_.size());
             if (!cap || samples_.size()>cap) return Fail(ImportErrorCode::ResourceLimit);
+            // Large catalogs publish their compact scan summaries first, then
+            // reserve the following descriptor tables once. Keep small files
+            // in the original single-batch path to avoid an extra handshake.
+            const bool reserveCoarse=samples_.size()>=64;
+            if (reserveCoarse && !PublishPending()) return false;
             // Start coarse delivery in scene-wide source strata. The first
             // bounded section spans the catalog instead of exhausting its prefix.
             std::vector<size_t> order;
@@ -131,6 +144,21 @@ class BoundedChunkWriter
             for (size_t index=0;index<samples_.size();++index) if (!chosen[index]) order.push_back(index);
             uint64_t remaining=cap, primitives=0, bytes=0;
             for (size_t i=0;i<samples_.size();++i) {
+                if (reserveCoarse && !reservedDescriptors_) {
+                    if (Count() && !PublishPending()) return false;
+                    size_t slots=0;
+                    uint64_t sectionBytes=kSectionHeaderSize;
+                    for (size_t j=i;j<samples_.size() && slots<maxChunks_;++j) {
+                        const auto& candidate=samples_[order[j]];
+                        const uint64_t payload=candidate.vertices.size()+candidate.indices.size()*4;
+                        if (sectionBytes+kChunkDescriptorSize+payload>output_.size()) break;
+                        sectionBytes+=kChunkDescriptorSize+payload;++slots;
+                    }
+                    if (i+slots==samples_.size() && slots<maxChunks_ &&
+                        sectionBytes+kChunkDescriptorSize+sizeof(CoarseCompletePayload)<=output_.size())
+                        ++slots;
+                    if (!slots || !ReserveDescriptorSlots(slots)) return false;
+                }
                 auto& sample=samples_[order[i]];
                 const uint64_t quota=(std::min)(sample.Primitives(),remaining-(samples_.size()-i-1));
                 if (quota<sample.Primitives()) {
@@ -142,6 +170,10 @@ class BoundedChunkWriter
                 if (!AddRaw(sample.descriptor,sample.vertices,std::as_bytes(std::span(sample.indices)))) return false;
             }
             if (!CommitCoarseBudget()) return false;
+            if (reserveCoarse && !reservedDescriptors_) {
+                if (Count() && !PublishPending()) return false;
+                if (!ReserveDescriptorSlots(1)) return false;
+            }
             CoarseCompletePayload complete{uint32_t(samples_.size()),0,primitives,bytes};
             ChunkDescriptor d{}; d.topology=ChunkTopology::CoarseComplete; d.chunkId=0xf0000002u;
             if (!AddRaw(d,std::as_bytes(std::span(&complete,1)))) return false;
@@ -161,8 +193,11 @@ class BoundedChunkWriter
             return Fail(ImportErrorCode::ScratchLimit);
         if (bytes > output_.size() || kSectionHeaderSize + kChunkDescriptorSize + bytes > output_.size())
             return Fail(ImportErrorCode::ResourceLimit);
-        if (descriptors_.size() >= maxChunks_ || length_ + kChunkDescriptorSize + bytes > output_.size())
+        const uint64_t descriptorBytes=reservedDescriptors_ ? 0 : kChunkDescriptorSize;
+        if (descriptors_.size() >= maxChunks_ || length_ + descriptorBytes + bytes > output_.size())
         {
+            if (reservedDescriptors_)
+                return Fail(ImportErrorCode::ResourceLimit);
             if (!sink_)
                 return Fail(ImportErrorCode::ResourceLimit);
             if (!CommitCoarseBudget()) return false;
@@ -172,13 +207,17 @@ class BoundedChunkWriter
             descriptors_.clear();
             length_ = kSectionHeaderSize;
         }
-        // Growing the descriptor table moves only the bounded current window.
-        const size_t oldStart = kSectionHeaderSize + descriptors_.size() * kChunkDescriptorSize;
-        std::memmove(output_.data() + oldStart + kChunkDescriptorSize, output_.data() + oldStart,
-                     size_t(length_ - oldStart));
-        for (auto& old : descriptors_)
-            old.normalizedRangeOffset += kChunkDescriptorSize;
-        length_ += kChunkDescriptorSize;
+        if (reservedDescriptors_) {
+            --reservedDescriptors_;
+        } else {
+            // Growing the descriptor table moves only the bounded current window.
+            const size_t oldStart = kSectionHeaderSize + descriptors_.size() * kChunkDescriptorSize;
+            std::memmove(output_.data() + oldStart + kChunkDescriptorSize, output_.data() + oldStart,
+                         size_t(length_ - oldStart));
+            for (auto& old : descriptors_)
+                old.normalizedRangeOffset += kChunkDescriptorSize;
+            length_ += kChunkDescriptorSize;
+        }
         descriptor.normalizedRangeOffset = length_;
         descriptor.normalizedRangeLength = bytes;
         descriptor.byteSize = bytes;
@@ -187,7 +226,7 @@ class BoundedChunkWriter
         if (!b.empty())
             std::memcpy(output_.data() + length_ + a.size(), b.data(), b.size());
         descriptor.chunkChecksum = retainedChecksum.value_or(
-            Fnv1a64(output_.subspan(size_t(length_), size_t(bytes))));
+            WireChecksum64(output_.subspan(size_t(length_), size_t(bytes))));
         if (descriptor.lodLevel==kCoarseLod) { coarseVertexBatch_+=a.size(); coarseIndexBatch_+=b.size(); }
         descriptors_.push_back(descriptor);
         catalog_.push_back(descriptor);
@@ -207,6 +246,7 @@ class BoundedChunkWriter
             return Fail(model_core::ImportErrorCode::ImportProtocolViolation);
         descriptors_.clear();
         length_ = model_core::kSectionHeaderSize;
+        reservedDescriptors_=0;
         return true;
     }
     void Finalize()
@@ -224,7 +264,7 @@ class BoundedChunkWriter
         header.chunkCount = Count();
         header.sectionLength = length_;
         header.sectionChecksum =
-            Fnv1a64(output_.subspan(kSectionHeaderSize, size_t(length_ - kSectionHeaderSize)));
+            WireChecksum64(output_.subspan(kSectionHeaderSize, size_t(length_ - kSectionHeaderSize)));
         std::memcpy(output_.data(), &header, sizeof(header));
     }
     uint32_t Count() const
@@ -245,6 +285,18 @@ class BoundedChunkWriter
     }
 
   private:
+    bool ReserveDescriptorSlots(size_t count) {
+        using namespace model_core;
+        if (reservedDescriptors_ || descriptors_.size()+count>maxChunks_ ||
+            count>(output_.size()-length_)/kChunkDescriptorSize)
+            return Fail(ImportErrorCode::ResourceLimit);
+        const size_t bytes=count*kChunkDescriptorSize;
+        const size_t oldStart=kSectionHeaderSize+descriptors_.size()*kChunkDescriptorSize;
+        std::memmove(output_.data()+oldStart+bytes,output_.data()+oldStart,size_t(length_-oldStart));
+        for (auto& old:descriptors_) old.normalizedRangeOffset+=bytes;
+        length_+=bytes;reservedDescriptors_=count;
+        return true;
+    }
     bool CommitCoarseBudget() {
         auto aligned=[](uint64_t bytes) { return (bytes+65535)/65536*65536; };
         coarseAllocationBytes_+=aligned(coarseVertexBatch_)+aligned(coarseIndexBatch_);
@@ -262,6 +314,7 @@ class BoundedChunkWriter
     model_core::SceneMetadata scene_;
     ChunkBatchSink* sink_;
     uint64_t length_ = model_core::kSectionHeaderSize;
+    size_t reservedDescriptors_=0;
     std::vector<model_core::ChunkDescriptor> descriptors_;
     std::deque<model_core::ChunkDescriptor> catalog_;
     model_core::ImportErrorCode error_ = model_core::ImportErrorCode::None;

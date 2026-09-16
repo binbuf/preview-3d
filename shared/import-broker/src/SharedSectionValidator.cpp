@@ -23,7 +23,7 @@ using model_core::ChunkDescriptor;
 using model_core::ChunkTopology;
 using model_core::ColorSpaceId;
 using model_core::ComputeImagePixelBytes;
-using model_core::Fnv1a64;
+using model_core::WireChecksum64;
 using model_core::ImagePayloadHeader;
 using model_core::ImportErrorCode;
 using model_core::kMaterialFlagsKnownMask;
@@ -158,7 +158,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
     // 10. Recompute the section checksum over [header, sectionLength).
     auto payloadRegion
         = section.subspan(sizeof(SectionHeader), header.sectionLength - sizeof(SectionHeader));
-    uint64_t recomputedChecksum = Fnv1a64(payloadRegion);
+    uint64_t recomputedChecksum = WireChecksum64(payloadRegion);
     if (recomputedChecksum != header.sectionChecksum) {
         return Reject(ImportErrorCode::MalformedData, "section checksum mismatch");
     }
@@ -569,7 +569,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         // range. Common to every topology.
         auto chunkPayloadView
             = section.subspan(descriptor.normalizedRangeOffset, descriptor.byteSize);
-        uint64_t recomputedChunkChecksum = Fnv1a64(chunkPayloadView);
+        uint64_t recomputedChunkChecksum = WireChecksum64(chunkPayloadView);
         if (descriptor.lodLevel != model_core::kScanLod
             && recomputedChunkChecksum != descriptor.chunkChecksum) {
             return Reject(ImportErrorCode::MalformedData, "chunk checksum mismatch");
