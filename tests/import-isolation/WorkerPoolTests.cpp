@@ -119,8 +119,15 @@ TEST_CASE("Pooled progressive cancellation is acknowledged and the worker remain
     request.enableCoarseProxy = true;
     request.useWorkerPool = true;
     request.isCancelled = [&] { return cancelled.load(); };
-    request.onBatch = [&] (std::vector<import_broker::ValidatedChunk>&&) {
+    request.onBatch = [&] (std::vector<import_broker::ValidatedChunk>&& chunks) {
         ++batches;
+        REQUIRE_FALSE(chunks.empty());
+        for (const auto& chunk : chunks) {
+            if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList
+                || chunk.descriptor.topology == model_core::ChunkTopology::PointList) {
+                CHECK(chunk.descriptor.lodLevel == model_core::kPreviewLod);
+            }
+        }
         cancelled.store(true);
     };
 

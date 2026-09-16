@@ -55,6 +55,12 @@ void Verify(import_broker::ImportSessionRequest request, uint64_t expected, bool
                 continue;
             }
             if (d.lodLevel==kScanLod) {
+                REQUIRE(chunk.payload.size()==sizeof(ScanSummaryPayload));
+                ScanSummaryPayload summary{};
+                std::memcpy(&summary,chunk.payload.data(),sizeof(summary));
+                CHECK(summary.fullPayloadChecksum==d.chunkChecksum);
+                CHECK(summary.fullPayloadBytes==uint64_t(d.vertexCount)*VertexStrideForLayout(VertexLayoutId(d.vertexLayoutId))
+                    +uint64_t(d.indexCount)*sizeof(uint32_t));
                 CHECK_FALSE(complete); REQUIRE(scans.emplace(identity,d).second);
                 valid+=points ? d.vertexCount : d.indexCount/3;
             } else if (d.lodLevel==kCoarseLod) {
@@ -192,6 +198,7 @@ TEST_CASE("Pinned worker re-decodes selected immutable source ranges repeatedly"
             : path.ends_with(L".ply") ? import_broker::ImportFormat::Ply : import_broker::ImportFormat::Gltf);
         request.sectionByteCapacity=4096;
         std::map<uint32_t,ChunkDescriptor> scans;
+        std::map<uint32_t,uint64_t> fineBytes;
         bool complete=false, cancelled=false; unsigned replies=0;
         uint32_t selected=0;
         request.onInitialComplete=[&](const auto&) { complete=true; REQUIRE_FALSE(scans.empty()); selected=scans.rbegin()->first; };
@@ -204,10 +211,15 @@ TEST_CASE("Pinned worker re-decodes selected immutable source ranges repeatedly"
                 CHECK(d.chunkChecksum==scans.at(selected).chunkChecksum);
                 CHECK(d.sourceRangeOffset==scans.at(selected).sourceRangeOffset);
                 CHECK(d.sourceRangeLength==scans.at(selected).sourceRangeLength);
-                CHECK(chunks.front().payload.size()==scans.at(selected).byteSize);
+                CHECK(chunks.front().payload.size()==fineBytes.at(selected));
                 if (++replies==2) cancelled=true;
-            } else for (const auto& chunk:chunks) if (chunk.descriptor.lodLevel==kScanLod)
-                scans.emplace(chunk.descriptor.chunkId & ~kScanIdentity,chunk.descriptor);
+            } else for (const auto& chunk:chunks) if (chunk.descriptor.lodLevel==kScanLod) {
+                const auto id=chunk.descriptor.chunkId & ~kScanIdentity;
+                ScanSummaryPayload summary{};
+                REQUIRE(chunk.payload.size()==sizeof(summary));
+                std::memcpy(&summary,chunk.payload.data(),sizeof(summary));
+                scans.emplace(id,chunk.descriptor); fineBytes.emplace(id,summary.fullPayloadBytes);
+            }
         };
         const auto result=import_broker::RunImportSession(request);
         CAPTURE(result.stage,result.errorCode);

@@ -4,16 +4,53 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
-- **Scope-limited MVP, Phase 3 / TSK-305 release acceptance (2026-09-16):
-  executed; release blocked.** Clean Debug/Release solution rebuilds pass. Unit
+- **TSK-305 blocker remediation follow-up (2026-09-16): the retained 8M-point
+  timeout is fixed; multi-GiB early proxy publication is fixed; large complete-
+  coarse throughput is still above target.** The pooled product worker now
+  enters the same representative preview pass as one-shot workers (the request
+  flag had enabled proxy mode without enabling `Preview()`), so the retained
+  3 GB STL, 2.88 GB PLY points, and 4.29 GB GLB all publish representative
+  geometry in roughly 0.42--0.56 seconds instead of showing no geometry for
+  30 seconds. Protocol v8 replaces each scan region's duplicated normalized
+  payload with a fixed 40-byte, section-checksummed catalog summary while the
+  descriptor retains full counts, verified bounds, layout, source range, and
+  normalized-detail checksum. The host validates those summaries and still
+  validates every requested fine payload before upload. Product detail-service
+  imports now terminate their initial response at the complete coarse catalog
+  and decode fine regions only on request; the single reusable worker section
+  admits one highest-priority detail at a time, eliminating a stale 18-request
+  backlog across budget drops. Binary PLY fixed-width records are read once per
+  record, position-only point clouds stay in the 12-byte layout, and full-layout
+  point regions are capped at 8 MiB.
+
+  The exact formerly failing 8,000,000-point little-endian PLY now reaches first
+  geometry / verified complete coarse / first refinement at 424.325 / 1,526.166 /
+  1,659.380 ms in a Release qualification run. Its pressure/eviction/source-
+  pinned-recovery lane passes separately on both the discrete adapter and the
+  simulated-UMA adapter, with 62 coarse regions, one admitted fine region, one
+  eviction/recovery request, <=1 outstanding detail request, bounded queues,
+  texture fallback, controlled resource error/reopen, zero surviving workers,
+  and no 180-second timeout. The discrete run also passes the same full lane for
+  the 60-million-triangle / 3,000,000,084-byte STL. Multi-GiB compatibility
+  measurements now complete verified coarse for STL at 12,471.528 ms and PLY
+  points at 11,438.074 ms; the 4.29 GB GLB publishes representative geometry at
+  475.661 ms but still does not complete its scan inside 30 seconds. Therefore
+  the named absence-of-proxy failures and 8M timeout are resolved, but the
+  retained <=5-second large complete-coarse acceptance row remains blocking and
+  the release is still not ready. After the protocol change, full Debug and
+  Release suites pass: Unit 91 cases / 7,354 Debug and 7,266 Release assertions;
+  ImportIsolation 200 cases / 52,068 assertions in each configuration.
+
+- **Scope-limited MVP, Phase 3 / TSK-305 release acceptance baseline (2026-09-16):
+  executed; release blocked.** At that acceptance commit, clean Debug/Release solution rebuilds pass. Unit
   passes 91 cases / 7,354 Debug and 7,266 Release assertions; ImportIsolation
   passes 200 cases / 51,943 assertions in each configuration, including the
   current hostile-worker/protocol boundary. Debug/Release activation,
   accessibility and lifecycle smokes pass, as do the final Release progressive,
   texture, recovery and coarse-handoff lanes. Three A-small compatibility runs
   pass with 456.796 ms complete-coarse p95, 4.391 ms frame p95 / 17.315 ms max,
-  and 4.619 ms input p95. The 3 GB STL still produces no geometry in 30 seconds,
-  and an isolated 8M-point PLY now reproducibly times out at the budget lane's
+  and 4.619 ms input p95. The 3 GB STL produced no geometry in 30 seconds,
+  and an isolated 8M-point PLY reproducibly timed out at the budget lane's
   180-second complete-proxy bound in both discrete and simulated-UMA modes.
   Performance-reference, physical UMA/mixed-DPI/assistive-technology, signing,
   and clean offline standard-user VM evidence remain unavailable. The first

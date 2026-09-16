@@ -11,6 +11,7 @@
 #include <span>
 #include <vector>
 #include <deque>
+#include <optional>
 
 namespace import_worker
 {
@@ -66,6 +67,7 @@ class BoundedChunkWriter
     {
         using namespace model_core;
         const bool geometry = descriptor.topology == ChunkTopology::TriangleList || descriptor.topology == ChunkTopology::PointList;
+        std::optional<model_core::ScanSummaryPayload> scanSummary;
         if (sink_ && sink_->ProxyEnabled()) {
             if (sink_->Preview()) {
                 if (!geometry) return true;
@@ -89,6 +91,13 @@ class BoundedChunkWriter
                 samples_.push_back(std::move(sample));
                 descriptor.lodLevel = kScanLod;
                 descriptor.chunkId |= kScanIdentity;
+                scanSummary.emplace();
+                scanSummary->fullPayloadBytes = a.size() + uint64_t(b.size());
+                scanSummary->fullPayloadChecksum = Fnv1a64Append(Fnv1a64(a), b);
+                std::copy(std::begin(descriptor.localMin), std::end(descriptor.localMin),
+                          std::begin(scanSummary->localMin));
+                std::copy(std::begin(descriptor.localMax), std::end(descriptor.localMax),
+                          std::begin(scanSummary->localMax));
             }
         }
         if (sink_ && sink_->RequestedSource() && geometry) {
@@ -96,6 +105,11 @@ class BoundedChunkWriter
             descriptor.chunkId = source.chunkId & ~model_core::kScanIdentity;
             descriptor.dependencyCount = source.dependencyCount;
             std::copy(std::begin(source.dependencyIds), std::end(source.dependencyIds), std::begin(descriptor.dependencyIds));
+        }
+        if (scanSummary) {
+            descriptor.chunkChecksum = scanSummary->fullPayloadChecksum;
+            return AddRaw(descriptor, std::as_bytes(std::span(&*scanSummary, 1)), {},
+                          descriptor.chunkChecksum);
         }
         return AddRaw(descriptor,a,b);
     }
@@ -137,7 +151,7 @@ class BoundedChunkWriter
     }
   private:
     bool AddRaw(model_core::ChunkDescriptor descriptor, std::span<const std::byte> a,
-                std::span<const std::byte> b = {})
+                std::span<const std::byte> b = {}, std::optional<uint64_t> retainedChecksum = {})
     {
         using namespace model_core;
         const uint64_t bytes = a.size() + uint64_t(b.size());
@@ -172,7 +186,8 @@ class BoundedChunkWriter
             std::memcpy(output_.data() + length_, a.data(), a.size());
         if (!b.empty())
             std::memcpy(output_.data() + length_ + a.size(), b.data(), b.size());
-        descriptor.chunkChecksum = Fnv1a64(output_.subspan(size_t(length_), size_t(bytes)));
+        descriptor.chunkChecksum = retainedChecksum.value_or(
+            Fnv1a64(output_.subspan(size_t(length_), size_t(bytes))));
         if (descriptor.lodLevel==kCoarseLod) { coarseVertexBatch_+=a.size(); coarseIndexBatch_+=b.size(); }
         descriptors_.push_back(descriptor);
         catalog_.push_back(descriptor);

@@ -1258,7 +1258,12 @@ void RenderThread::RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const dou
     bool room=false;
     for (const auto& candidate:candidates) {
         if (used>=uploads_->gpuTargetBytes || candidate.bytes>uploads_->gpuTargetBytes-used) continue;
-        if (uploads_->requestedDetails.size()==32) break;
+        // The broker has one reusable section and services one detail request
+        // synchronously. Queueing 32 identities here cannot increase decode
+        // concurrency; it only leaves stale work ahead of a budget drop or
+        // camera reprioritization. Keep one admitted request at a time so
+        // pressure recovery can select the current highest-priority region.
+        if (uploads_->requestedDetails.size()==1) break;
         uploads_->details.push_back(candidate.id); uploads_->requestedDetails.insert(candidate.id);
         used+=candidate.bytes; room=true;
     }

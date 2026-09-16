@@ -130,14 +130,22 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
         result=ImportGltf(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,&sidecarClient,&batchSink,textureOptions);
     }
     if (batchSink.ProxyEnabled() && std::holds_alternative<GltfImportResult>(result)) {
-        const auto first=std::get<GltfImportResult>(result);
-        if (!batchSink.PublishBatch(first.chunkCount,first.sectionBytesWritten))
-            return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::Cancelled);
-        if (!openResult.file->IsUnchanged())
-            return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::FileChanged);
-        batchSink.BeginRefinement();
-        result=ImportGltf(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,
-                          &sidecarClient,&batchSink,textureOptions);
+        // A detail-service import terminates its initial response at complete
+        // coarse. Fine regions are replayed only after explicit host requests;
+        // eagerly decoding every region here defeats the CPU/GPU budgets on
+        // the exact large files the service exists to support.
+        if (!batchSink.DetailService()) {
+            const auto first=std::get<GltfImportResult>(result);
+            if (!batchSink.PublishBatch(first.chunkCount,first.sectionBytesWritten))
+                return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::Cancelled);
+            if (!openResult.file->IsUnchanged())
+                return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::FileChanged);
+            batchSink.BeginRefinement();
+            result=ImportGltf(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,
+                              &sidecarClient,&batchSink,textureOptions);
+        } else {
+            batchSink.BeginRefinement();
+        }
     }
     if (!ReportResult(stdOut, request.generationId, result)) return false;
     while (batchSink.DetailService() && std::holds_alternative<GltfImportResult>(result) && batchSink.AwaitDetail()) {

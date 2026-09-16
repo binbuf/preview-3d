@@ -18,7 +18,7 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-constexpr uint32_t kCurrentProtocolVersion = 7;
+constexpr uint32_t kCurrentProtocolVersion = 8;
 // Product coarse/full delivery has four closed geometry roles. Scan payloads
 // cross the validator, but are never allocated on the GPU or retained by it.
 constexpr uint32_t kFineLod = 0, kCoarseLod = 1, kScanLod = 2, kPreviewLod = 3;
@@ -54,6 +54,19 @@ struct CoarseCompletePayload {
     uint64_t geometryBytes;
 };
 static_assert(sizeof(CoarseCompletePayload) == 24);
+
+// Scan records carry the trusted-to-be-bounded catalog facts needed to admit
+// coarse and later detail chunks, not a second copy of the complete normalized
+// geometry. The descriptor retains the full counts/layout/bounds/checksum; this
+// fixed payload cross-checks the values whose ordinary geometry payload is
+// intentionally absent. The section checksum protects this summary itself.
+struct ScanSummaryPayload {
+    uint64_t fullPayloadBytes;
+    uint64_t fullPayloadChecksum;
+    float localMin[3];
+    float localMax[3];
+};
+static_assert(sizeof(ScanSummaryPayload) == 40);
 
 constexpr uint32_t kStatusProvisional = 1;
 constexpr uint32_t kStatusRefining = 2;

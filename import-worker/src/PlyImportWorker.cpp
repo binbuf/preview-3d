@@ -94,12 +94,16 @@ bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileReq
             result=ImportPly(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,false,&batchSink,&*openResult.file);
         }
         if (batchSink.ProxyEnabled() && std::holds_alternative<PlyImportResult>(result)) {
-            const auto first=std::get<PlyImportResult>(result);
-            if (!batchSink.PublishBatch(first.chunkCount,first.sectionBytesWritten))
-                return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::Cancelled);
-            batchSink.BeginRefinement();
-            result=ImportPly(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,
-                             false,&batchSink,&*openResult.file);
+            if (!batchSink.DetailService()) {
+                const auto first=std::get<PlyImportResult>(result);
+                if (!batchSink.PublishBatch(first.chunkCount,first.sectionBytesWritten))
+                    return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::Cancelled);
+                batchSink.BeginRefinement();
+                result=ImportPly(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,
+                                 false,&batchSink,&*openResult.file);
+            } else {
+                batchSink.BeginRefinement();
+            }
         }
         if (!ReportResult(stdOut, request.generationId, result)) return false;
         while (batchSink.DetailService() && std::holds_alternative<PlyImportResult>(result) && batchSink.AwaitDetail()) {

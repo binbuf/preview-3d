@@ -311,7 +311,9 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                 expectedByteSize = *vertexBytes;
             }
 
-            if (expectedByteSize != descriptor.byteSize) {
+            const bool scanSummary = descriptor.lodLevel == model_core::kScanLod;
+            if ((!scanSummary && expectedByteSize != descriptor.byteSize)
+                || (scanSummary && descriptor.byteSize != sizeof(model_core::ScanSummaryPayload))) {
                 return Reject(ImportErrorCode::MalformedData, "byteSize does not match declared counts");
             }
 
@@ -331,18 +333,28 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                     || std::abs(double(descriptor.localMax[axis])) > 1e30)
                     return Reject(ImportErrorCode::MalformedData, "non-finite or malformed origin/bounds");
             }
-            auto geometry = section.subspan(size_t(descriptor.normalizedRangeOffset), size_t(*vertexBytes));
-            auto reduced = descriptor;
-            if (!model_core::SetLocalBounds(reduced, geometry)
-                || std::memcmp(reduced.localMin, descriptor.localMin, sizeof(reduced.localMin))
-                || std::memcmp(reduced.localMax, descriptor.localMax, sizeof(reduced.localMax)))
-                return Reject(ImportErrorCode::MalformedData, "fabricated geometry bounds");
-            // Check every normalized attribute, including PositionOnly_F32.
-            for (size_t offset = 0; offset < geometry.size(); offset += sizeof(float)) {
-                float value; std::memcpy(&value, geometry.data() + offset, sizeof(value));
-                if (!std::isfinite(value)) return Reject(ImportErrorCode::MalformedData, "non-finite vertex");
+            if (scanSummary) {
+                model_core::ScanSummaryPayload summary{};
+                std::memcpy(&summary, section.data() + descriptor.normalizedRangeOffset, sizeof(summary));
+                if (summary.fullPayloadBytes != expectedByteSize
+                    || summary.fullPayloadChecksum != descriptor.chunkChecksum
+                    || std::memcmp(summary.localMin, descriptor.localMin, sizeof(summary.localMin))
+                    || std::memcmp(summary.localMax, descriptor.localMax, sizeof(summary.localMax)))
+                    return Reject(ImportErrorCode::MalformedData, "invalid scan summary");
+            } else {
+                auto geometry = section.subspan(size_t(descriptor.normalizedRangeOffset), size_t(*vertexBytes));
+                auto reduced = descriptor;
+                if (!model_core::SetLocalBounds(reduced, geometry)
+                    || std::memcmp(reduced.localMin, descriptor.localMin, sizeof(reduced.localMin))
+                    || std::memcmp(reduced.localMax, descriptor.localMax, sizeof(reduced.localMax)))
+                    return Reject(ImportErrorCode::MalformedData, "fabricated geometry bounds");
+                // Check every normalized attribute, including PositionOnly_F32.
+                for (size_t offset = 0; offset < geometry.size(); offset += sizeof(float)) {
+                    float value; std::memcpy(&value, geometry.data() + offset, sizeof(value));
+                    if (!std::isfinite(value)) return Reject(ImportErrorCode::MalformedData, "non-finite vertex");
+                }
             }
-            if (descriptor.topology == ChunkTopology::TriangleList) {
+            if (!scanSummary && descriptor.topology == ChunkTopology::TriangleList) {
                 if (descriptor.indexCount % 3) return Reject(ImportErrorCode::MalformedData, "partial triangle");
                 for (uint32_t index = 0; index < descriptor.indexCount; ++index) {
                     uint32_t value;
@@ -558,7 +570,8 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         auto chunkPayloadView
             = section.subspan(descriptor.normalizedRangeOffset, descriptor.byteSize);
         uint64_t recomputedChunkChecksum = Fnv1a64(chunkPayloadView);
-        if (recomputedChunkChecksum != descriptor.chunkChecksum) {
+        if (descriptor.lodLevel != model_core::kScanLod
+            && recomputedChunkChecksum != descriptor.chunkChecksum) {
             return Reject(ImportErrorCode::MalformedData, "chunk checksum mismatch");
         }
 

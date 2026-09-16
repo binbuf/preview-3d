@@ -62,7 +62,12 @@ public:
         return true;
     }
     bool ProxyEnabled() const { return proxyEnabled_ || (requestFlags_ & model_core::kImportRequestCoarseProxy); }
-    bool Preview() const { return proxyEnabled_ && !scanStarted_; }
+    // One-shot workers enable proxy mode through their command-line switch,
+    // while the reusable product pool supplies the same mode per request.
+    // Both paths must enter the representative preview pass before scanning;
+    // checking only the process-wide switch made pooled large imports start
+    // full normalization without publishing early geometry.
+    bool Preview() const { return ProxyEnabled() && !scanStarted_; }
     void BeginScan() { scanStarted_ = true; }
     bool Refinement() const { return refinement_; }
     void BeginRefinement() { refinement_ = true; }

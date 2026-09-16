@@ -664,19 +664,28 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                                   ? destination.size() - kSectionHeaderSize - kChunkDescriptorSize
                                   : 0;
         const bool preview=batchSink && batchSink->Preview();
+        const bool compactPointLayout = !hasFace && !hasNormal && !hasUv && !hasColors;
         const uint64_t triangleBytes=3*sizeof(VertexPositionNormalUv0TangentColorF32)+3*sizeof(uint32_t);
         uint32_t chunkTriangles = preview ? 1 : uint32_t(std::min<uint64_t>(kChunkTriangles, room / triangleBytes));
         // Keep an odd fan capacity when possible so a large polygon can be
         // resumed at a non-zero fan offset; this also continuously exercises
         // the exact source-range replay path instead of only face boundaries.
         if (!preview && chunkTriangles>1 && !(chunkTriangles&1)) --chunkTriangles;
-        const uint32_t chunkPoints = preview ? 3 : uint32_t(std::min<uint64_t>(kChunkPoints, room / sizeof(VertexPositionNormalUv0TangentColorF32)));
+        const uint64_t pointBytes = compactPointLayout ? sizeof(VertexPositionOnlyF32)
+                                                       : sizeof(VertexPositionNormalUv0TangentColorF32);
+        // Keep colored/full-layout point regions independently admissible
+        // under the 96 MiB pressure-smoke target after the immutable renderer
+        // and coarse reserves are charged. The validator's 16 MiB ceiling is
+        // an absolute limit, not a desirable streaming granularity.
+        const uint64_t pointRoom = (std::min)(room, 8ull * 1024 * 1024);
+        const uint32_t chunkPoints = preview ? 3 : uint32_t(std::min<uint64_t>(kChunkPoints, pointRoom / pointBytes));
         const auto previewVertices=PreviewOffsets(vertexElement->count,3);
         const auto previewFaces=PreviewOffsets(faceElement ? faceElement->count : 0);
         if ((hasFace && !chunkTriangles) || (!hasFace && !chunkPoints))
             return ImportErrorCode::ResourceLimit;
         std::vector<VertexPositionNormalUv0TangentColorF32> mesh;
         std::vector<VertexPositionNormalUv0TangentColorF32> points;
+        std::vector<VertexPositionOnlyF32> positionOnlyPoints;
         std::vector<uint32_t> indices;
         std::unordered_map<uint64_t, uint32_t> remap;
         std::vector<uint64_t> checkpoints;
@@ -686,6 +695,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         uint32_t sourceElementOffset=0;
         bool vertexSeen = false, haveOrigin = false;
         double origin[3]{};
+        std::array<uint64_t, 64> vertexPropertyOffsets{};
         for (const auto& property : vertexElement->properties)
         {
             if (property.isList)
@@ -693,6 +703,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 vertexStride = 0;
                 break;
             }
+            vertexPropertyOffsets[&property - vertexElement->properties.data()] = vertexStride;
             vertexStride += ScalarByteSize(property.valueType);
         }
         auto skipRecord = [&](const PlyElement& element) -> std::optional<ImportErrorCode> {
@@ -711,20 +722,28 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         auto readVertex = [&](double* position,
                               VertexPositionNormalUv0TangentColorF32& vertex) -> std::optional<ImportErrorCode> {
             double values[64]{};
-            for (size_t i = 0; i < vertexElement->properties.size(); ++i)
-            {
-                const auto& property = vertexElement->properties[i];
-                if (property.isList)
-                {
-                    if (auto error = skipList(property))
-                        return error;
+            if (vertexStride) {
+                auto record = readSource(cursor, vertexStride);
+                if (!record)
+                    return ImportErrorCode::MalformedData;
+                for (size_t i = 0; i < vertexElement->properties.size(); ++i) {
+                    const auto& property = vertexElement->properties[i];
+                    const size_t size = ScalarByteSize(property.valueType);
+                    values[i] = ReadScalarAsDouble(property.valueType, bigEndian,
+                        record->subspan(size_t(vertexPropertyOffsets[i]), size));
                 }
-                else
-                {
-                    auto value = readScalar(property.valueType);
-                    if (!value)
-                        return ImportErrorCode::MalformedData;
-                    values[i] = *value;
+            } else {
+                for (size_t i = 0; i < vertexElement->properties.size(); ++i) {
+                    const auto& property = vertexElement->properties[i];
+                    if (property.isList) {
+                        if (auto error = skipList(property))
+                            return error;
+                    } else {
+                        auto value = readScalar(property.valueType);
+                        if (!value)
+                            return ImportErrorCode::MalformedData;
+                        values[i] = *value;
+                    }
                 }
             }
             position[0] = values[xIdx];
@@ -764,15 +783,16 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             return std::nullopt;
         };
         auto flush = [&]() -> std::optional<ImportErrorCode> {
-            if (mesh.empty() && points.empty())
+            if (mesh.empty() && points.empty() && positionOnlyPoints.empty())
                 return std::nullopt;
             ChunkDescriptor d{};
             d.chunkId = writer.NextId();
             d.topology = hasFace ? ChunkTopology::TriangleList : ChunkTopology::PointList;
             d.meshId = hasFace ? 1 : 0;
-            d.vertexLayoutId =
-                uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
-            d.vertexCount = uint32_t(hasFace ? mesh.size() : points.size());
+            d.vertexLayoutId = uint32_t(compactPointLayout ? VertexLayoutId::PositionOnly_F32
+                                                           : VertexLayoutId::PositionNormalUv0TangentColor_F32);
+            d.vertexCount = uint32_t(hasFace ? mesh.size()
+                                             : compactPointLayout ? positionOnlyPoints.size() : points.size());
             d.indexCount = uint32_t(indices.size());
             d.sourceRangeOffset = sourceFirst;
             d.sourceRangeLength = sourceEnd - sourceFirst;
@@ -805,13 +825,21 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                     }
                 }
             }
-            auto bytes = hasFace ? ChunkBytes(mesh) : ChunkBytes(points);
+            std::span<const std::byte> bytes;
+            if (hasFace) {
+                bytes = ChunkBytes(mesh);
+            } else if (compactPointLayout) {
+                bytes = ChunkBytes(positionOnlyPoints);
+            } else {
+                bytes = ChunkBytes(points);
+            }
             if (!SetLocalBounds(d, bytes))
                 return ImportErrorCode::MalformedData;
             if (!writer.Add(d, bytes, ChunkBytes(indices)))
                 return writer.Error();
             mesh.clear();
             points.clear();
+            positionOnlyPoints.clear();
             indices.clear();
             remap.clear();
             haveOrigin = false;
@@ -870,7 +898,8 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                         return *error;
                     if (!hasFace)
                     {
-                        if (points.size() == chunkPoints)
+                        const size_t pointCount = compactPointLayout ? positionOnlyPoints.size() : points.size();
+                        if (pointCount == chunkPoints)
                             if (auto error = flush())
                                 return *error;
                         if (!haveOrigin)
@@ -879,11 +908,16 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                             sourceFirst = start;
                             haveOrigin = true;
                         }
-                        VertexPositionNormalUv0TangentColorF32 point=vertex;
-                        point.px=float(position[0] - origin[0]);
-                        point.py=float(position[1] - origin[1]);
-                        point.pz=float(position[2] - origin[2]);
-                        points.push_back(point);
+                        const float x=float(position[0] - origin[0]);
+                        const float y=float(position[1] - origin[1]);
+                        const float z=float(position[2] - origin[2]);
+                        if (compactPointLayout) {
+                            positionOnlyPoints.push_back({x, y, z});
+                        } else {
+                            VertexPositionNormalUv0TangentColorF32 point=vertex;
+                            point.px=x; point.py=y; point.pz=z;
+                            points.push_back(point);
+                        }
                         sourceEnd = cursor;
                     }
                 }

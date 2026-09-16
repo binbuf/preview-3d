@@ -61,7 +61,10 @@ def run(exe, paths, uma):
             wait(lambda: query(51) == generation and query(4) == generation, 'complete proxy')
             wait(lambda: query(0) in (3, 4), 'initial scan/fine terminal')
             assert query(0) == 3, f'import failure {query(41)}'
-            assert query(16) and query(48) and query(49), 'usable verified coarse/fine set'
+            # Initial completion now terminates at the verified coarse catalog;
+            # the first fine region is deliberately demand-driven rather than
+            # eagerly replaying the entire document before entering service.
+            wait(lambda: query(16) and query(48) and query(49), 'usable verified coarse/fine set')
             original_fine = query(49)
             original_counts = (query(14), query(15))
             original_coarse = query(48)

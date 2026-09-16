@@ -975,7 +975,8 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
     if (request.enableCoarseProxy) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
-        for (const auto& [id,region]:acceptance.regions) if (!region.coarse || !region.fine)
+        for (const auto& [id,region]:acceptance.regions)
+            if (!region.coarse || (!request.nextDetail && !region.fine))
             return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
     }
     // No ack for the terminal batch: there is no next write to gate, and the
@@ -1050,11 +1051,16 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             acceptance.catalog.erase(identity); // permit this exact immutable replacement only
             auto validation = ValidateAndCopySection(view.bytes(), request.generationId, 1, &acceptance.catalog, false);
             acceptance.catalog.emplace(identity, region->second.scan.topology);
-            if (!validation.ok || validation.chunks.size() != 1) return fail(ImportStage::ValidateSection);
+            if (!validation.ok)
+                return fail(ImportStage::ValidateSection, validation.errorCode);
+            if (validation.chunks.size() != 1)
+                return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ImportProtocolViolation);
             const auto& actual = validation.chunks.front().descriptor;
             auto expected = region->second.scan;
             expected.chunkId = identity; expected.lodLevel = model_core::kFineLod;
             expected.normalizedRangeOffset = actual.normalizedRangeOffset;
+            expected.normalizedRangeLength = actual.normalizedRangeLength;
+            expected.byteSize = actual.byteSize;
             if (std::memcmp(&actual, &expected, sizeof(expected))
                 || std::memcmp(&validation.chunks.front().scene, &*acceptance.scene, sizeof(model_core::SceneMetadata)))
                 return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ImportProtocolViolation);
