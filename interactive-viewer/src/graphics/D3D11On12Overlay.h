@@ -149,6 +149,7 @@ private:
     // Set when the targets were lost and rebuilt, cleared by
     // ConsumeTargetsWereRecreated.
     bool targetsRecreated_ = false;
+    bool highContrastFrame_ = false;
     // Kept so a lost target can be rebuilt without the caller handing the
     // swap chain back in.
     D3D12SwapChain* swapChain_ = nullptr;

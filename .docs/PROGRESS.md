@@ -4,6 +4,32 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 3 / TSK-304 (2026-09-16): complete.**
+  Normal launches now elect one primary per interactive user/session and forward
+  one bounded Open or Activate command over a local-only named pipe protected by
+  an explicit current-user/System ACL, client SID/session authentication, strict
+  versioned framing/UTF-8 JSON, and a bounded UI-thread notification queue.
+  Later opens use the existing asynchronous generation replacement path; close
+  leaves no daemon, and foreground-policy denial flashes the taskbar. Custom
+  title, bottom-bar and gizmo controls now have keyboard navigation and native
+  UIA fragments with names, roles, state, bounds and Invoke/Toggle behavior;
+  native error buttons and dialog focus behavior remain intact. Load/error/warning
+  changes are announced. High contrast uses system colors, and reduced motion
+  removes transient animation/inertia while preserving the default camera feel.
+  DPI relayout now includes both bars. Debug/Release solution builds pass with
+  zero warnings/errors. Unit passes 91 cases / 7,354 Debug and 7,266 Release
+  assertions; ImportIsolation remains 200 cases / 51,943 assertions in each
+  configuration. Debug/Release activation, accessibility and lifecycle real-app
+  smokes pass, including replacement during load, recovery after failure,
+  malformed/oversized pipe frames, close/relaunch, UIA actions during work,
+  Alt+Space/Snap/fullscreen behavior, native-dialog focus restoration, preference
+  paths, and narrow 96/144/192-DPI layouts. The available two-monitor machine is
+  150% on both displays, so physical unlike-DPI crossing and assistive-technology
+  speech review remain explicit TSK-305 compatibility-matrix work. Exact behavior,
+  commands, results and qualification notes are in
+  [TSK-304_VERIFICATION.md](./TSK-304_VERIFICATION.md) and
+  `tests/fixtures/baselines/tsk-304/`. **TSK-305 is next.**
+
 - **Scope-limited MVP, Phase 3 / TSK-303 (2026-09-16): portable
   packaging implemented; signed clean-VM acceptance remains open.**
   `msbuild Preview3D.slnx /t:CreatePortableRelease

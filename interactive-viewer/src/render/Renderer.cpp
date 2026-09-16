@@ -242,6 +242,12 @@ void Camera::FrameBox(const XMFLOAT3& minimum, const XMFLOAT3& maximum, float as
     pivotFromZ = targetZ;
     pivotAnimElapsed = 0.0;
     pivotAnimating = true;
+    if (reduceMotion)
+    {
+        targetX = desiredX; targetY = desiredY; targetZ = desiredZ;
+        distance = targetDistance;
+        pivotAnimating = false;
+    }
     CancelInertia();
 }
 
@@ -252,6 +258,11 @@ void Camera::Reset(float aspect)
     orientationFrom = orientation;
     orientationAnimElapsed = 0.0;
     orientationAnimating = true;
+    if (reduceMotion)
+    {
+        orientation = desiredOrientation;
+        orientationAnimating = false;
+    }
     // Reset also restores the cached default projection mode.
     SetProjection(ProjectionMode::Perspective);
 }
@@ -262,12 +273,18 @@ void Camera::SnapToView(XMVECTOR viewOrientation)
     orientationFrom = orientation;
     orientationAnimElapsed = 0.0;
     orientationAnimating = true;
+    if (reduceMotion)
+    {
+        orientation = desiredOrientation;
+        orientationAnimating = false;
+    }
     CancelInertia();
 }
 
 void Camera::SetProjection(ProjectionMode mode)
 {
     projection = mode;
+    if (reduceMotion) projectionBlend = projection == ProjectionMode::Orthographic ? 1.0 : 0.0;
 }
 
 void Camera::SetFlySpeedScale(double scale)
@@ -511,6 +528,15 @@ void Camera::Update(double deltaTime)
         Look(static_cast<float>(pendingLookX), static_cast<float>(pendingLookY));
         pendingLookX = 0.0;
         pendingLookY = 0.0;
+    }
+
+    if (reduceMotion)
+    {
+        CancelInertia();
+        projectionBlend = projection == ProjectionMode::Orthographic ? 1.0 : 0.0;
+        distance = targetDistance;
+        if (pivotAnimating) { targetX=desiredX; targetY=desiredY; targetZ=desiredZ; pivotAnimating=false; }
+        if (orientationAnimating) { orientation=desiredOrientation; orientationAnimating=false; }
     }
 
     const double flightEase = EaseFactor(deltaTime, kFlightAccelSeconds);

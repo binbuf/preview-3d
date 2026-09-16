@@ -112,7 +112,9 @@ Controls uses the existing `MessageBoxW` control scheme. About describes GLB/glT
 
 ## Accessibility
 
-Accessibility support is minimal today and this document does not claim more than exists: DPI scaling is real and per-monitor-v2, and the three HWND error-card buttons carry `WS_TABSTOP` and get default Win32 automation for free. There is no UI Automation provider for the D2D-drawn chrome, gizmo, info panel, or canvas; no high-contrast palette swap; no reduce-motion handling for orbit inertia, HUD fades, or the ortho/perspective cross-fade; and no live-region status announcements. [NFR-10](./01-product-scope.md) remains an open gap against this slice, to be closed alongside the accessibility work already scoped in [10-delivery-plan.md](./10-delivery-plan.md) Gate 5.
+The D2D-drawn title/bottom-bar controls and six gizmo axis actions are exposed as UI Automation Button, CheckBox, or Slider fragments with stable names, help text, enabled/checked/focused state, bounds, Invoke/Toggle patterns where applicable, and keyboard focus. Tab/Shift+Tab traverse the visible virtual controls; Enter/Space activates them and arrow keys adjust the focused zoom or speed slider. The three error-card actions remain real tab-stop HWND buttons and also have stable Button fragments, so their native dialog behavior is preserved. Document Loading, Ready, warning, and error changes raise bounded UIA notifications.
+
+Per-monitor-v2 DPI relayout remains active. Windows high-contrast changes remap the overlay through the current system window/text/highlight colors. When client-area animations are disabled, the loading indicator remains static, HUDs do not fade, camera fit/reset/snap, wheel zoom and projection changes settle without transitional animation, and post-drag inertia is suppressed. Default visuals and camera easing are unchanged when these preferences are off. The 3D canvas itself is intentionally a single interactive surface rather than an accessibility tree of mesh geometry; this viewer does not add scene editing or object-browser semantics.
 
 ## Settings and persistence
 

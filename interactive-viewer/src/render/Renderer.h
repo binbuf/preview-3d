@@ -92,6 +92,9 @@ struct OverlayInfo
     RECT tooltipAnchorRect{};       // client px, the hovered button this tooltip describes
     std::wstring tooltipText;
     bool tooltipBelow = true;       // true: title-bar buttons (bubble drawn below); false: bottom-bar buttons (drawn above)
+    bool highContrast = false;
+    bool keyboardFocusVisible = false;
+    RECT keyboardFocusRect{};
     // Root transform applied to the model draw only (never the grid) — see
     // Model.h's ModelData::upAxisCorrection. Identity unless the loaded
     // model's native orientation differs from this app's Z-up world and the
@@ -157,6 +160,7 @@ struct Camera
     bool orientationAnimating = false;
     double orientationAnimElapsed = 0.0;
     DirectX::XMFLOAT4 orientationFrom{ 0.0f, 0.0f, 0.0f, 1.0f };
+    bool reduceMotion = false;
 
     // Perspective/orthographic toggle. The orthographic half-height equals
     // distance * tan(fov/2), so switching projection preserves the framing at

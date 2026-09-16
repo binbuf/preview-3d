@@ -483,6 +483,14 @@ bool D3D11On12Overlay::CreateTextFormats(float scale)
 
 void D3D11On12Overlay::SetBrush(D2D1_COLOR_F color)
 {
+    if (highContrastFrame_)
+    {
+        const float luminance = color.r * 0.2126f + color.g * 0.7152f + color.b * 0.0722f;
+        const COLORREF system = luminance < 0.35f ? GetSysColor(COLOR_WINDOW)
+            : luminance > 0.72f ? GetSysColor(COLOR_WINDOWTEXT) : GetSysColor(COLOR_HIGHLIGHT);
+        color = D2D1::ColorF(GetRValue(system) / 255.0f, GetGValue(system) / 255.0f,
+            GetBValue(system) / 255.0f, std::max(color.a, 0.82f));
+    }
     overlayBrush->SetColor(color);
 }
 
@@ -918,6 +926,7 @@ void D3D11On12Overlay::DrawTooltip(const OverlayInfo& overlay, float clientWidth
 void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome)
 {
     if (!d2dContext_ || !overlayBrush) return;
+    highContrastFrame_ = overlay.highContrast;
     if (!CreateTextFormats(overlay.dpiScale)) return;
     const float scale = overlay.dpiScale;
     const float toolbar = static_cast<float>(overlay.barToolbarHeight);
@@ -1079,6 +1088,12 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     DrawSpeedFlyout(overlay, scale);
     DrawSettingsPanel(overlay, scale);
     DrawTooltip(overlay, clientWidth, scale);
+    if (overlay.keyboardFocusVisible)
+    {
+        SetBrush(D2D1::ColorF(0xFFFFFF));
+        const D2D1_RECT_F focus = ToRectF(overlay.keyboardFocusRect);
+        d2dContext_->DrawRectangle(focus, overlayBrush.Get(), Scale(2.0f, scale), dashedStroke.Get());
+    }
 
 }
 

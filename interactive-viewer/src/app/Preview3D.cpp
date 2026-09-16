@@ -1,5 +1,7 @@
 #include "framework.h"
 #include "Preview3D.h"
+#include "Accessibility.h"
+#include "ActiveInstance.h"
 #include "Chrome.h"
 #include "D3D12ImportBridge.h"
 #include "RenderThread.h"
@@ -30,6 +32,11 @@ constexpr wchar_t kWindowClass[] = L"Preview3DWindow";
 constexpr wchar_t kApplicationName[] = L"3D Preview";
 // Sandboxed import completion is separate from render-thread upload completion.
 constexpr UINT kD3D12ImportCompleteMessage = WM_APP + 3;
+constexpr UINT kActivationMessage = WM_APP + 8;
+constexpr UINT kAccessibilityQueryMessage = WM_APP + 9;
+constexpr UINT kAccessibilityActionMessage = WM_APP + 10;
+constexpr UINT kAccessibilityFocusMessage = WM_APP + 11;
+constexpr UINT kAccessibilityStatusMessage = WM_APP + 12;
 constexpr float kArrowPixelsPerSecond = 340.0f;
 constexpr double kHudVisibleSeconds = 1.3;
 constexpr double kHudFadeSeconds = 0.30;
@@ -146,6 +153,12 @@ struct ViewerApp
     bool benchmarkInputSent = false;
     std::jthread benchmarkSampler;
     bool appSmoke = false; // opt-in, bounded test commands; no normal activation IPC
+    active_instance::Coordinator activeInstance;
+    IAccessible* accessible = nullptr;
+    IRawElementProviderSimple* uiaAccessible = nullptr;
+    viewer_accessibility::Control keyboardControl = viewer_accessibility::Control::None;
+    bool highContrast = false;
+    bool reduceMotion = false;
     // Deliberately NOT named `camera`: once the render thread exists, every
     // access has to go through renderThread.LockCamera(). Renaming turned
     // each of the ~30 existing uses into a compile error rather than a race
@@ -225,6 +238,15 @@ struct ViewerApp
     // cooperative grace/worker replacement contract, so close cannot leave
     // detached threads referring to HWND or app state after destruction.
     std::vector<std::jthread> importThreads;
+};
+
+std::wstring AccessibilityStatus(const ViewerApp& app);
+void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control);
+
+struct AccessibilityQueryRequest
+{
+    viewer_accessibility::Control control{};
+    viewer_accessibility::ControlInfo result;
 };
 
 HBRUSH gBackgroundBrush = nullptr;
@@ -1346,8 +1368,19 @@ void RecreateButtonFont(ViewerApp& app)
 
 HWND CreateButton(ViewerApp& app, int id, const wchar_t* text)
 {
-    return CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+    return CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
         0, 0, 10, 10, app.window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), app.instance, nullptr);
+}
+
+LRESULT CALLBACK ErrorButtonAccessibilitySubclass(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
+    UINT_PTR, DWORD_PTR)
+{
+    // The top-level fragment provider owns the automation metadata for these
+    // HWND buttons; their native tab, click, default-button, and dialog input
+    // behavior remains handled by the standard button window procedure.
+    if (message == WM_GETOBJECT && (static_cast<LONG>(lParam) == UiaRootObjectId ||
+        static_cast<LONG>(lParam) == OBJID_CLIENT)) return 0;
+    return DefSubclassProc(window, message, wParam, lParam);
 }
 
 void AddTooltip(ViewerApp& app, HWND control, const wchar_t* text)
@@ -1372,6 +1405,8 @@ void CreateControls(ViewerApp& app)
     app.retryButton = CreateButton(app, ID_VIEW_RETRY, L"Retry");
     app.openAnotherButton = CreateButton(app, ID_VIEW_OPEN_ANOTHER, L"Open another");
     app.copyButton = CreateButton(app, ID_VIEW_COPY_DETAILS, L"Copy details");
+    for (HWND button : { app.retryButton, app.openAnotherButton, app.copyButton })
+        SetWindowSubclass(button, ErrorButtonAccessibilitySubclass, 1, 0);
     app.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, app.window, nullptr, app.instance, nullptr);
     SetWindowPos(app.tooltip, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -1416,6 +1451,7 @@ void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring&
     UpdateButtonAvailability(app);
     LayoutControls(app);
     InvalidateRect(app.window, nullptr, FALSE);
+    viewer_accessibility::Announce(app.window, app.uiaAccessible, AccessibilityStatus(app));
 }
 
 void CancelOpen(ViewerApp& app)
@@ -1435,6 +1471,7 @@ void CancelOpen(ViewerApp& app)
     UpdateButtonAvailability(app);
     LayoutControls(app);
     InvalidateRect(app.window, nullptr, FALSE);
+    viewer_accessibility::Announce(app.window, app.uiaAccessible, AccessibilityStatus(app));
 }
 
 void BeginOpen(ViewerApp& app, std::wstring path)
@@ -1482,6 +1519,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
     UpdateButtonAvailability(app);
     LayoutControls(app);
     InvalidateRect(app.window, nullptr, FALSE);
+    viewer_accessibility::Announce(app.window, app.uiaAccessible, AccessibilityStatus(app));
 
     // The token abandons superseded imports and imports still running at close.
     // Catch exceptions here: escaping a std::thread entry would terminate the app.
@@ -1819,6 +1857,191 @@ void HandleChromeAction(ViewerApp& app, Chrome::Part part)
     }
 }
 
+viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessibility::Control control)
+{
+    using viewer_accessibility::Control;
+    viewer_accessibility::ControlInfo info;
+    info.focused = app.keyboardControl == control && GetFocus() == app.window;
+    const bool model = HasNavigableModel(app);
+    auto chrome = [&](Chrome::Part part, const wchar_t* name, const wchar_t* description = L"") {
+        const auto& button = app.chrome.Button(part);
+        info.name = name; info.description = description; info.rect = button.rect;
+        info.visible = button.visible; info.enabled = button.enabled;
+    };
+    switch (control)
+    {
+    case Control::Grid: chrome(Chrome::Part::Grid, L"Ground grid", L"Show or hide the ground grid"); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.gridVisible; break;
+    case Control::AxisSnap: chrome(Chrome::Part::AxisSnap, L"Axis snap", L"Snap truck movement to the nearest world axis"); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.axisSnapEnabled; break;
+    case Control::Speed: chrome(Chrome::Part::Speed, L"Travel speed", L"Open the flight-speed control"); break;
+    case Control::Fit: chrome(Chrome::Part::Fit, L"Fit selection or model"); break;
+    case Control::Reset: chrome(Chrome::Part::Reset, L"Reset view"); break;
+    case Control::Share: chrome(Chrome::Part::Share, L"Share"); break;
+    case Control::More: chrome(Chrome::Part::Overflow, L"More options"); break;
+    case Control::OpenWith: chrome(Chrome::Part::OpenWith, L"Open with"); break;
+    case Control::Minimize: chrome(Chrome::Part::Minimize, L"Minimize"); break;
+    case Control::Maximize: chrome(Chrome::Part::Maximize, IsZoomed(app.window) ? L"Restore" : L"Maximize"); break;
+    case Control::Close: chrome(Chrome::Part::Close, L"Close"); break;
+    case Control::Info:
+        info.name=L"Model information"; info.description=L"Show or hide Stats and Shading"; info.rect=InfoButtonRect(app);
+        info.visible=model; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.infoPanelVisible; break;
+    case Control::Zoom:
+    {
+        info.name=L"Zoom"; info.description=L"Adjust camera zoom"; info.rect=ZoomTrackRect(app); info.visible=model; info.role=ROLE_SYSTEM_SLIDER;
+        auto camera=app.renderThread.LockCamera(); info.value=std::to_wstring(static_cast<int>(std::lround(ZoomPercentFor(*camera))))+L" percent"; break;
+    }
+    case Control::Fullscreen:
+        info.name=L"Fullscreen"; info.description=L"Enter or leave fullscreen"; info.rect=FullscreenButtonRect(app);
+        info.visible=model; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.isFullscreen; break;
+    case Control::SpeedSlider:
+    {
+        info.name=L"Travel speed"; info.description=L"Adjust flight speed"; info.rect=SpeedFlyoutTrackRect(app);
+        info.visible=app.speedFlyoutOpen; info.role=ROLE_SYSTEM_SLIDER;
+        auto camera=app.renderThread.LockCamera(); info.value=L"times "+FormatMultiplier(camera->FlySpeedScale()); break;
+    }
+    case Control::NativeOrientation:
+        info.name=L"Show model in its original orientation"; info.rect=SettingsToggleRowRect(app);
+        info.visible=app.settingsPanelOpen; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.showNativeOrientation; break;
+    case Control::GizmoPositiveX: case Control::GizmoNegativeX: case Control::GizmoPositiveY:
+    case Control::GizmoNegativeY: case Control::GizmoPositiveZ: case Control::GizmoNegativeZ:
+    {
+        static constexpr const wchar_t* names[] = { L"View from positive X", L"View from negative X", L"View from positive Y",
+            L"View from negative Y", L"View from positive Z", L"View from negative Z" };
+        const int index=static_cast<int>(control)-static_cast<int>(Control::GizmoPositiveX);
+        info.name=names[index]; info.description=L"Snap the camera to this axis"; info.visible=model;
+        DirectX::XMFLOAT4 orientation{}; { auto camera=app.renderThread.LockCamera(); orientation=camera->orientation; }
+        const auto geometry=app.gizmo.ComputeDraw(DirectX::XMLoadFloat4(&orientation));
+        const int axis=index/2; const bool positive=index%2==0;
+        const auto node=positive?geometry.positive[axis]:geometry.negative[axis];
+        const float radius=positive?geometry.nodeRadius:geometry.dotRadius;
+        info.rect={LONG(geometry.centerX+node.x-radius),LONG(geometry.centerY+node.y-radius),
+            LONG(geometry.centerX+node.x+radius),LONG(geometry.centerY+node.y+radius)};
+        break;
+    }
+    case Control::ErrorRetry: case Control::ErrorOpenAnother: case Control::ErrorCopyDetails:
+    {
+        HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton:app.copyButton;
+        info.name=control==Control::ErrorRetry?L"Retry":control==Control::ErrorOpenAnother?L"Open another":L"Copy details";
+        RECT screen{};GetWindowRect(button,&screen);POINT corners[2]={{screen.left,screen.top},{screen.right,screen.bottom}};
+        MapWindowPoints(nullptr,app.window,corners,2);info.rect={corners[0].x,corners[0].y,corners[1].x,corners[1].y};
+        info.visible=app.state==ViewerState::Failed;info.enabled=IsWindowEnabled(button)!=FALSE;info.focused=GetFocus()==button;
+        break;
+    }
+    default: break;
+    }
+    return info;
+}
+
+void FocusAccessible(ViewerApp& app, viewer_accessibility::Control control)
+{
+    app.keyboardControl = control;
+    SetFocus(app.window);
+    if (control==viewer_accessibility::Control::ErrorRetry) SetFocus(app.retryButton);
+    else if (control==viewer_accessibility::Control::ErrorOpenAnother) SetFocus(app.openAnotherButton);
+    else if (control==viewer_accessibility::Control::ErrorCopyDetails) SetFocus(app.copyButton);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+viewer_accessibility::ControlInfo QueryAccessibleMarshaled(ViewerApp& app, viewer_accessibility::Control control)
+{
+    if (GetCurrentThreadId()==GetWindowThreadProcessId(app.window,nullptr)) return AccessibleInfo(app,control);
+    AccessibilityQueryRequest request{control,{}};
+    SendMessageW(app.window,kAccessibilityQueryMessage,0,reinterpret_cast<LPARAM>(&request));
+    return request.result;
+}
+
+void InvokeAccessibleMarshaled(ViewerApp& app, viewer_accessibility::Control control)
+{
+    if (GetCurrentThreadId()==GetWindowThreadProcessId(app.window,nullptr)) InvokeAccessible(app,control);
+    else SendMessageW(app.window,kAccessibilityActionMessage,static_cast<WPARAM>(control),0);
+}
+
+void FocusAccessibleMarshaled(ViewerApp& app, viewer_accessibility::Control control)
+{
+    if (GetCurrentThreadId()==GetWindowThreadProcessId(app.window,nullptr)) FocusAccessible(app,control);
+    else SendMessageW(app.window,kAccessibilityFocusMessage,static_cast<WPARAM>(control),0);
+}
+
+std::wstring AccessibilityStatusMarshaled(ViewerApp& app)
+{
+    if (GetCurrentThreadId()==GetWindowThreadProcessId(app.window,nullptr)) return AccessibilityStatus(app);
+    std::wstring result;
+    SendMessageW(app.window,kAccessibilityStatusMessage,0,reinterpret_cast<LPARAM>(&result));
+    return result;
+}
+
+void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
+{
+    using viewer_accessibility::Control;
+    switch (control)
+    {
+    case Control::Grid: HandleCommand(app,ID_VIEW_GRID); break;
+    case Control::AxisSnap: HandleCommand(app,ID_VIEW_AXIS_SNAP); break;
+    case Control::Speed: ToggleSpeedFlyout(app); break;
+    case Control::Fit: HandleCommand(app,ID_VIEW_FIT); break;
+    case Control::Reset: HandleCommand(app,ID_VIEW_RESET); break;
+    case Control::Share: DoShare(app); break;
+    case Control::More: ShowMoreMenu(app); break;
+    case Control::OpenWith: ShowOpenWithMenu(app); break;
+    case Control::Minimize: ShowWindow(app.window,SW_MINIMIZE); break;
+    case Control::Maximize: ShowWindow(app.window,IsZoomed(app.window)?SW_RESTORE:SW_MAXIMIZE); break;
+    case Control::Close: PostMessageW(app.window,WM_CLOSE,0,0); break;
+    case Control::Info: ToggleInfoPanel(app); break;
+    case Control::Fullscreen: ToggleFullscreen(app); break;
+    case Control::NativeOrientation: ToggleShowNativeOrientation(app); break;
+    case Control::GizmoPositiveX: SnapViewCommand(app,ViewDir::Right); break;
+    case Control::GizmoNegativeX: SnapViewCommand(app,ViewDir::Left); break;
+    case Control::GizmoPositiveY: SnapViewCommand(app,ViewDir::Back); break;
+    case Control::GizmoNegativeY: SnapViewCommand(app,ViewDir::Front); break;
+    case Control::GizmoPositiveZ: SnapViewCommand(app,ViewDir::Top); break;
+    case Control::GizmoNegativeZ: SnapViewCommand(app,ViewDir::Bottom); break;
+    case Control::ErrorRetry: HandleCommand(app,ID_VIEW_RETRY); break;
+    case Control::ErrorOpenAnother: HandleCommand(app,ID_VIEW_OPEN_ANOTHER); break;
+    case Control::ErrorCopyDetails: HandleCommand(app,ID_VIEW_COPY_DETAILS); break;
+    default: break;
+    }
+}
+
+std::wstring AccessibilityStatus(const ViewerApp& app)
+{
+    if (app.state==ViewerState::Loading) return L"Loading "+d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath);
+    if (app.state==ViewerState::Failed) return app.errorSummary+L" "+app.errorDetails;
+    if (!app.warning.empty()) return L"Model loaded with warnings. "+app.warning;
+    if (app.state==ViewerState::Ready) return app.filename.empty()?L"Model ready":app.filename+L" ready";
+    if (app.state==ViewerState::Partial) return L"Preview cancelled; incomplete geometry remains visible";
+    return L"No model open";
+}
+
+bool MoveAccessibleFocus(ViewerApp& app, bool backward)
+{
+    const auto controls=viewer_accessibility::VisibleControls([&](auto control){return AccessibleInfo(app,control);});
+    if (controls.empty()) return false;
+    auto found=std::find(controls.begin(),controls.end(),app.keyboardControl);
+    std::ptrdiff_t index=found==controls.end()?(backward?0:-1):std::distance(controls.begin(),found);
+    index=(index+(backward?-1:1)+static_cast<std::ptrdiff_t>(controls.size()))%static_cast<std::ptrdiff_t>(controls.size());
+    FocusAccessible(app,controls[static_cast<std::size_t>(index)]);
+    NotifyWinEvent(EVENT_OBJECT_FOCUS,app.window,OBJID_CLIENT,static_cast<LONG>(index+1));
+    return true;
+}
+
+bool HandleAccessibleKey(ViewerApp& app, WPARAM key)
+{
+    using viewer_accessibility::Control;
+    if (key==VK_TAB) return MoveAccessibleFocus(app,(GetKeyState(VK_SHIFT)&0x8000)!=0);
+    if (app.keyboardControl==Control::None) return false;
+    if (key==VK_RETURN || key==VK_SPACE) { InvokeAccessible(app,app.keyboardControl); return true; }
+    const int direction=(key==VK_RIGHT || key==VK_UP)?1:(key==VK_LEFT || key==VK_DOWN)?-1:0;
+    if (!direction) return false;
+    if (app.keyboardControl==Control::Zoom)
+    {
+        auto camera=app.renderThread.LockCamera();
+        const int position=std::clamp(ZoomSliderPositionFor(*camera)+direction*25,0,kZoomSliderMax);
+        const double distance=ZoomDistanceForSliderPosition(*camera,position); camera->distance=distance; camera->targetDistance=distance;
+        InvalidateRect(app.window,nullptr,FALSE); return true;
+    }
+    if (app.keyboardControl==Control::SpeedSlider) { AdjustFlySpeed(app,static_cast<float>(direction)); return true; }
+    return false;
+}
+
 FlightInput BuildFlightInput(const ViewerApp& app)
 {
     FlightInput input;
@@ -1857,7 +2080,7 @@ FlightInput BuildFlightInput(const ViewerApp& app)
 bool IsAnimatingWithoutCamera(const ViewerApp& app)
 {
     const double now = NowSeconds();
-    return app.state == ViewerState::Loading || HasNavigationInput(app) || now < app.speedHudUntil
+    return (app.state == ViewerState::Loading && !app.reduceMotion) || HasNavigationInput(app) || now < app.speedHudUntil
         || now < app.modeHudUntil;
 }
 
@@ -1879,7 +2102,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.errorSummary = app.errorSummary;
     overlay.errorDetails = app.errorDetails;
     overlay.warning = app.warning;
-    overlay.animationPhase = static_cast<float>(GetTickCount64() % 1400) / 1400.0f;
+    overlay.animationPhase = app.reduceMotion ? 0.0f : static_cast<float>(GetTickCount64() % 1400) / 1400.0f;
     overlay.dpiScale = app.dpiScale;
     overlay.toolbarHeight = EffectiveToolbarHeight(app);
     overlay.bottomBarHeight = EffectiveBottomBarHeight(app);
@@ -1931,15 +2154,42 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.selectionAmount = app.meshSelected ? 1.0f : 0.0f;
     const double now = NowSeconds();
     overlay.speedHud = app.speedHudText;
-    overlay.speedHudAlpha = static_cast<float>(HudAlpha(app.speedHudUntil, now));
+    overlay.speedHudAlpha = app.reduceMotion ? (now < app.speedHudUntil ? 1.0f : 0.0f) : static_cast<float>(HudAlpha(app.speedHudUntil, now));
     overlay.modeHud = app.modeHudText;
-    overlay.modeHudAlpha = static_cast<float>(HudAlpha(app.modeHudUntil, now));
+    overlay.modeHudAlpha = app.reduceMotion ? (now < app.modeHudUntil ? 1.0f : 0.0f) : static_cast<float>(HudAlpha(app.modeHudUntil, now));
     overlay.tooltipVisible = app.tooltipVisible;
     overlay.tooltipAnchorRect = app.tooltipAnchorRect;
     overlay.tooltipText = app.tooltipText;
     overlay.tooltipBelow = app.tooltipAnchorBelow;
+    overlay.highContrast = app.highContrast;
+    if (app.keyboardControl != viewer_accessibility::Control::None)
+    {
+        const auto focused = AccessibleInfo(app, app.keyboardControl);
+        overlay.keyboardFocusVisible = focused.visible && GetFocus() == app.window;
+        overlay.keyboardFocusRect = focused.rect;
+    }
     UpdateChromeLayout(app);
     return overlay;
+}
+
+void RefreshSystemPreferences(ViewerApp& app)
+{
+    HIGHCONTRASTW contrast{sizeof(contrast)};
+    app.highContrast = SystemParametersInfoW(SPI_GETHIGHCONTRAST,sizeof(contrast),&contrast,0)
+        && (contrast.dwFlags&HCF_HIGHCONTRASTON)!=0;
+    BOOL animations=TRUE;
+    app.reduceMotion = SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION,0,&animations,0) && !animations;
+    app.renderThread.LockCamera()->reduceMotion = app.reduceMotion;
+}
+
+void ActivatePrimaryWindow(ViewerApp& app)
+{
+    if (IsIconic(app.window)) ShowWindow(app.window,SW_RESTORE);
+    if (!SetForegroundWindow(app.window))
+    {
+        FLASHWINFO flash{sizeof(flash),app.window,FLASHW_TRAY|FLASHW_TIMERNOFG,3,0};
+        FlashWindowEx(&flash);
+    }
 }
 
 LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
@@ -1956,8 +2206,44 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 
     switch (message)
     {
+    case kAccessibilityQueryMessage:
+        if (auto* request=reinterpret_cast<AccessibilityQueryRequest*>(lParam)) request->result=AccessibleInfo(*app,request->control);
+        return 0;
+    case kAccessibilityActionMessage:
+        InvokeAccessible(*app,static_cast<viewer_accessibility::Control>(wParam)); return 0;
+    case kAccessibilityFocusMessage:
+        FocusAccessible(*app,static_cast<viewer_accessibility::Control>(wParam)); return 0;
+    case kAccessibilityStatusMessage:
+        if (auto* result=reinterpret_cast<std::wstring*>(lParam)) *result=AccessibilityStatus(*app);
+        return 0;
+    case kActivationMessage:
+        for (auto& command : app->activeInstance.Drain())
+        {
+            ActivatePrimaryWindow(*app);
+            if (command.type == active_instance::CommandType::Open && !app->closing)
+                BeginOpen(*app, std::move(command.path));
+        }
+        return 0;
+    case WM_GETOBJECT:
+        if (static_cast<LONG>(lParam) == UiaRootObjectId && app->uiaAccessible)
+            return UiaReturnRawElementProvider(window, wParam, lParam, app->uiaAccessible);
+        if (static_cast<LONG>(lParam) == OBJID_CLIENT && app->accessible)
+            return LresultFromObject(IID_IAccessible, wParam, app->accessible);
+        break;
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 66) return 0;
+        if (!app->appSmoke || wParam > 69) return 0;
+        if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
+            app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
+            app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
+            RecreateButtonFont(*app); LayoutControls(*app); UpdateGizmoLayout(*app); UpdateChromeLayout(*app);
+            InvalidateRect(window,nullptr,TRUE); return 1;
+        }
+        if (wParam == 68) {
+            app->highContrast=(lParam&1)!=0; app->reduceMotion=(lParam&2)!=0;
+            app->renderThread.LockCamera()->reduceMotion=app->reduceMotion;
+            InvalidateRect(window,nullptr,TRUE); return 1;
+        }
+        if (wParam == 69) return (app->highContrast?1:0)|(app->reduceMotion?2:0);
         if (wParam == 52) { app->renderThread.RequestSmokeEviction(); return 1; }
         if (wParam == 47) return app->loadedModel ? static_cast<LRESULT>(app->loadedModel->source.generationId) : 0;
         if (wParam == 46) { app->holdUploadMessagesForTesting = lParam != 0; return 1; }
@@ -2033,6 +2319,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         app->dpi = GetDpiForWindow(window);
         app->dpiScale = static_cast<float>(app->dpi) / 96.0f;
         app->toolbarHeight = Scale(*app, 52);
+        app->bottomBarHeight = Scale(*app, 44);
         BOOL dark = TRUE;
         DwmSetWindowAttribute(window, 20, &dark, sizeof(dark));
         const int cornerPreference = 2;
@@ -2059,6 +2346,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         CreateControls(*app);
         UpdateGizmoLayout(*app);
         UpdateChromeLayout(*app);
+        RefreshSystemPreferences(*app);
+        const auto accessibilityAlive=app->alive;
+        app->accessible = viewer_accessibility::CreateProvider(window,
+            [app,accessibilityAlive](auto control) { return accessibilityAlive->load()?QueryAccessibleMarshaled(*app, control):viewer_accessibility::ControlInfo{}; },
+            [app,accessibilityAlive](auto control) { if(accessibilityAlive->load())InvokeAccessibleMarshaled(*app, control); },
+            [app,accessibilityAlive](auto control) { if(accessibilityAlive->load())FocusAccessibleMarshaled(*app, control); },
+            [app,accessibilityAlive] { return accessibilityAlive->load()?AccessibilityStatusMarshaled(*app):std::wstring{}; });
+        app->uiaAccessible = viewer_accessibility::CreateUiaProvider(window,
+            [app,accessibilityAlive](auto control) { return accessibilityAlive->load()?QueryAccessibleMarshaled(*app, control):viewer_accessibility::ControlInfo{}; },
+            [app,accessibilityAlive](auto control) { if(accessibilityAlive->load())InvokeAccessibleMarshaled(*app, control); },
+            [app,accessibilityAlive](auto control) { if(accessibilityAlive->load())FocusAccessibleMarshaled(*app, control); },
+            [app,accessibilityAlive] { return accessibilityAlive->load()?AccessibilityStatusMarshaled(*app):std::wstring{}; });
         std::wstring renderError;
         if (app->benchmarkMode)
         {
@@ -2085,6 +2384,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             d3d12_import_bridge::EnsureImportSandboxPrepared();
         }
         UpdateButtonAvailability(*app);
+        std::wstring activationError;
+        if (!app->activeInstance.StartListener(window, kActivationMessage, activationError))
+            SetFailure(*app, L"Single-instance activation is unavailable.", activationError);
         if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath);
         return 0;
     }
@@ -2292,6 +2594,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         InvalidateRect(window, nullptr, FALSE);
         return 0;
     }
+    case WM_SETTINGCHANGE:
+    case WM_THEMECHANGED:
+        RefreshSystemPreferences(*app);
+        InvalidateRect(window, nullptr, TRUE);
+        return 0;
     case WM_GETMINMAXINFO:
     {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
@@ -2872,6 +3179,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             CancelOpen(*app);
             return 0;
         }
+        if (HandleAccessibleKey(*app, wParam)) return 0;
         if (!CanNavigate(*app)) break;
         if (SetNavigationKey(*app, wParam, true)) return 0;
         if (wParam == VK_OEM_PLUS || wParam == VK_ADD) app->renderThread.LockCamera()->Dolly(1.0f);
@@ -2962,10 +3270,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         app->errorSummary.clear();
         app->errorDetails.clear();
         UpdateTitle(*app);
-        if (uploaded->terminal && !uploaded->refinement) SetFocus(window);
+        if (uploaded->terminal && !uploaded->refinement && GetForegroundWindow()==window) SetFocus(window);
         UpdateButtonAvailability(*app);
         LayoutControls(*app);
         InvalidateRect(window, nullptr, FALSE);
+        if (uploaded->terminal || !app->warning.empty())
+            viewer_accessibility::Announce(window, app->uiaAccessible, AccessibilityStatus(*app));
         return 0;
     }
     case WM_TIMER:
@@ -2983,6 +3293,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_DESTROY:
         app->closing = true;
         app->alive->store(false, std::memory_order_relaxed);
+        if(app->uiaAccessible) UiaDisconnectProvider(app->uiaAccessible);
+        app->activeInstance.Stop();
         if (app->cancellation) app->cancellation->store(true, std::memory_order_relaxed);
         if (app->buttonFont) { DeleteObject(app->buttonFont); app->buttonFont = nullptr; }
         // Stop() signals, then joins with a bounded wait and drains the GPU
@@ -2990,6 +3302,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // shutdown waits "with finite diagnostics timeouts" and "a driver
         // hang must not leave the UI thread waiting forever".
         app->renderThread.Stop();
+        if (app->accessible) { app->accessible->Release(); app->accessible = nullptr; }
+        if (app->uiaAccessible) { app->uiaAccessible->Release(); app->uiaAccessible = nullptr; }
         PostQuitMessage(0);
         return 0;
     }
@@ -3034,16 +3348,15 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
 {
     const auto processStartedUs = NowMicroseconds();
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    INITCOMMONCONTROLSEX commonControls{ sizeof(commonControls), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES };
-    InitCommonControlsEx(&commonControls);
-    gBackgroundBrush = CreateSolidBrush(RGB(28, 28, 30));
+    HRESULT comResult = E_FAIL;
 
     ViewerApp app;
     app.instance = instance;
     app.benchmarkStartedUs = processStartedUs;
     const ViewerSettings settings = LoadSettings();
     app.showNativeOrientation = settings.showNativeOrientation;
+    bool commandLineInvalid = false;
+    bool bypassSingleInstance = false;
     int argumentCount = 0;
     PWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
     if (arguments)
@@ -3052,7 +3365,13 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         // The first remaining argument is the initial file path.
         for (int i = 1; i < argumentCount; ++i)
         {
-            if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
+            if (_wcsicmp(arguments[i], L"--open") == 0)
+            {
+                if (++i >= argumentCount || !app.initialPath.empty() || arguments[i][0] == L'\0') commandLineInvalid = true;
+                else app.initialPath = arguments[i];
+            }
+            else if (_wcsicmp(arguments[i], L"--new-instance") == 0) bypassSingleInstance = true;
+            else if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
             else if (_wcsicmp(arguments[i], L"--uma-budget-smoke") == 0) {
                 app.appSmoke=true; app.renderThread.SetSmokeUmaDevice();
@@ -3110,9 +3429,24 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
                 app.benchFrames = _wtoi(arguments[i] + 14);
                 app.showFrameStats = true;
             }
+            else if (arguments[i][0] == L'-') commandLineInvalid = true;
             else if (app.initialPath.empty()) app.initialPath = arguments[i];
+            else commandLineInvalid = true;
         }
         LocalFree(arguments);
+    }
+
+    if (!app.initialPath.empty())
+    {
+        std::wstring normalized, pathError;
+        if (!active_instance::NormalizeForwardPath(app.initialPath, normalized, pathError)) commandLineInvalid = true;
+        else app.initialPath = std::move(normalized);
+    }
+    if (commandLineInvalid)
+    {
+        MessageBoxW(nullptr, L"Usage: Preview3D.exe [model-path]\n       Preview3D.exe --open <model-path>",
+            kApplicationName, MB_OK | MB_ICONERROR);
+        return 2;
     }
 
     if (app.benchmarkMode) {
@@ -3138,6 +3472,32 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             }
         });
     }
+
+    std::wstring instanceError;
+    const bool developerRun = bypassSingleInstance || app.appSmoke || app.benchmarkMode || app.benchFrames > 0;
+    const auto instanceRole = app.activeInstance.Initialize(developerRun, instanceError);
+    if (instanceRole == active_instance::Coordinator::Role::Failed)
+    {
+        MessageBoxW(nullptr, instanceError.c_str(), kApplicationName, MB_OK | MB_ICONERROR);
+        return 5;
+    }
+    if (instanceRole == active_instance::Coordinator::Role::Secondary)
+    {
+        active_instance::Command command;
+        command.type = app.initialPath.empty() ? active_instance::CommandType::Activate : active_instance::CommandType::Open;
+        command.path = app.initialPath;
+        if (app.activeInstance.Forward(command, instanceError)) return 0;
+        MessageBoxW(nullptr, instanceError.c_str(), kApplicationName, MB_OK | MB_ICONERROR);
+        return 3;
+    }
+
+    comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    INITCOMMONCONTROLSEX commonControls{ sizeof(commonControls), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES };
+    InitCommonControlsEx(&commonControls);
+    HIGHCONTRASTW startupContrast{sizeof(startupContrast)};
+    const bool startupHighContrast = SystemParametersInfoW(SPI_GETHIGHCONTRAST,sizeof(startupContrast),&startupContrast,0)
+        && (startupContrast.dwFlags&HCF_HIGHCONTRASTON)!=0;
+    gBackgroundBrush = CreateSolidBrush(startupHighContrast ? GetSysColor(COLOR_WINDOW) : RGB(28, 28, 30));
 
     if (!RegisterViewerClass(instance) || !CreateMainWindow(app, showCommand))
     {
@@ -3179,7 +3539,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             // makes IsDialogMessageW treat it as dialog-like and silently eat
             // Escape as a "cancel" keystroke before WM_KEYDOWN's own
             // Escape-exits-Fullscreen/cancel-open handling ever runs.
-            if (message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE)
+            if (message.message == WM_KEYDOWN && (message.wParam == VK_ESCAPE ||
+                (message.wParam == VK_TAB && GetFocus() == gMainWindow)))
             {
                 TranslateMessage(&message);
                 DispatchMessageW(&message);

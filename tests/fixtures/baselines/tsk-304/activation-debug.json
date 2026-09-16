@@ -1,0 +1,10 @@
+{
+  "configuration": "Debug",
+  "checks": [
+    "second-process replacement during load",
+    "valid activation after document failure",
+    "pathless activation preserves one primary",
+    "close and immediate relaunch"
+  ],
+  "status": "passed"
+}

@@ -1,0 +1,14 @@
+{
+  "configuration": "Release",
+  "status": "passed",
+  "checks": [
+    "existing controls remain callable while replacement work is active",
+    "UIA names, roles, states, and keyboard-focusable custom controls",
+    "Alt+Space, Snap Layout hit test, and fullscreen/maximize distinction",
+    "UIA focus, Toggle, and Invoke patterns",
+    "focus restoration after the native Open dialog",
+    "narrow layout at 100, 150, and 200 percent DPI layout scales",
+    "high contrast and reduced motion application paths",
+    "native error actions exposed as focusable UIA Buttons"
+  ]
+}
