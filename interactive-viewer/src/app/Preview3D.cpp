@@ -2648,7 +2648,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path, complete->result.errorCode, complete->result.errorStage, complete->result.errorPhase);
             return 0;
         }
-        app->renderThread.FinishImport(complete->generation);
+        app->renderThread.FinishImport(complete->generation, complete->result.sourceIdentity);
         return 0;
     }
     case kRenderPickCompleteMessage:

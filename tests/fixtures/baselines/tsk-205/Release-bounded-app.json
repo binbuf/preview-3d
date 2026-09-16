@@ -1,0 +1,103 @@
+{
+  "configuration": "Release",
+  "exeSha256": "f008c272e24db06dc93c297b6e337f6c14023a0c511f6514d0294e8355d7af9c",
+  "workerExeSha256": "b0239a2b655c59258c15bdc576612a94b3b0a7632b603d8bf317a6e77ae791a7",
+  "fixtureSha256": {
+    "mesh-be.ply": "702537b384d0974ea9b740c0c73dd2d13c1d4abcdcc091a25d9630f1bb77dc72",
+    "mesh-le.ply": "588a8eae48478f58dabfbbaa8e1ec2a617ec1706ce590cf913c87ace3238f481",
+    "points-be.ply": "710072beb64dbb8ca3b1a633c2485a3ba20e9fb9e9d531b62a0521842f0e2fb9",
+    "points-le.ply": "abb00593050a788e973ab101850424817b9d3007e95d692933bbdd42c3992fb2",
+    "split.glb": "c659531aa30a9db5575aa3e1313197f0f737e2a6ccd9929993efcd8c0c2abd76",
+    "split.stl": "98f191e2e4035848175c047eaa0d0bc3a308323aeac2bdc1162bc12e520787c7"
+  },
+  "run": {
+    "failure": null,
+    "events": [
+      {
+        "fixture": "split.glb",
+        "firstGeometryMs": 746.8024000045261,
+        "firstTriangles": 565536,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 2277.7925999980653,
+        "chunks": 32
+      },
+      {
+        "fixture": "split.stl",
+        "firstGeometryMs": 489.8366000052192,
+        "firstTriangles": 589824,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 1277.8211000040756,
+        "chunks": 31
+      },
+      {
+        "fixture": "mesh-le.ply",
+        "firstGeometryMs": 1416.2579999974696,
+        "firstTriangles": 589824,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 3055.9721999961766,
+        "chunks": 31
+      },
+      {
+        "fixture": "mesh-be.ply",
+        "firstGeometryMs": 1423.0693999998039,
+        "firstTriangles": 589824,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 3048.507300001802,
+        "chunks": 31
+      },
+      {
+        "fixture": "points-le.ply",
+        "firstGeometryMs": 2234.8686999976053,
+        "firstTriangles": 0,
+        "firstPoints": 5242880,
+        "firstState": 2,
+        "readyMs": 2749.107000003278,
+        "chunks": 16
+      },
+      {
+        "fixture": "points-be.ply",
+        "firstGeometryMs": 1568.2339999984833,
+        "firstTriangles": 0,
+        "firstPoints": 5242880,
+        "firstState": 2,
+        "readyMs": 2138.169400001061,
+        "chunks": 16
+      },
+      {
+        "fixture": "A-large-glb.glb",
+        "firstGeometryMs": 752.8671000036411,
+        "firstTriangles": 589824,
+        "firstPoints": 0
+      },
+      {
+        "fixture": "A-large-stl.stl",
+        "firstGeometryMs": 731.5535999950953,
+        "firstTriangles": 589824,
+        "firstPoints": 0
+      },
+      {
+        "fixture": "A-large-ply-mesh-le.ply",
+        "firstGeometryMs": 13751.108899996325,
+        "firstTriangles": 589824,
+        "firstPoints": 0
+      },
+      {
+        "fixture": "A-large-ply-points-be.ply",
+        "firstGeometryMs": 1748.8544000007096,
+        "firstTriangles": 0,
+        "firstPoints": 5242880
+      }
+    ],
+    "viewerPeakPrivateBytes": 810532864,
+    "workerPeakPrivateBytes": 30826496,
+    "peakQueueBytes": 66847418,
+    "maxUiMs": 373.92779999936465,
+    "baselineViewerPrivateBytes": 249380864,
+    "exitCode": 0,
+    "survivingWorkers": 0
+  }
+}

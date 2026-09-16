@@ -49,6 +49,12 @@ public:
     // handshake failed -- a rejected batch, or a host that is simply gone --
     // in which case the caller must abandon the generation rather than write
     // into the window again.
+    bool Cancelled() const
+    {
+        DWORD available = 0;
+        return !PeekNamedPipe(stdIn_, nullptr, 0, nullptr, &available, nullptr);
+    }
+
     bool PublishBatch(uint32_t chunkCount, uint64_t sectionBytesWritten);
 
     // Batches successfully handed over so far, terminal one excluded.

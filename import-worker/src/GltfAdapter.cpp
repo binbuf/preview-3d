@@ -1,4 +1,6 @@
 #include "GltfAdapter.h"
+#include "BoundedChunkWriter.h"
+#include <functional>
 
 #include "ChunkBatchSink.h"
 #include "DracoDecodeAdapter.h"
@@ -39,11 +41,9 @@ using namespace model_core;
 using platform::CheckedAdd;
 using platform::CheckedMultiply;
 
-// No full Tier-A hard-limits table enforcement yet (.docs/design/03-file-formats-and-ingestion.md)
-// -- a later refinement once real large fixtures are being tested. These
-// are the sanity caps for this slice.
-constexpr size_t kMaxVertices = 1'000'000;
-constexpr size_t kMaxIndices = 3'000'000;
+// Tier A source counts, independent of the bounded cluster working set.
+constexpr size_t kMaxVertices = size_t(kTierAVertices);
+constexpr size_t kMaxIndices = size_t(kTierATriangles * 3);
 constexpr int kMaxNodeDepth = 256;
 
 // Aggregate decoded-texture-pixel budget (Tier A), enforced here before any
@@ -234,6 +234,8 @@ void GenerateFlatNormals(PendingChunk& chunk)
 // MalformedData.
 struct ResolvedExternalBuffer {
     std::optional<std::vector<std::byte>> bytes;
+    std::optional<model_core::MappedFile> file;
+    std::optional<model_core::MappingLease> mapping;
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
 };
 
@@ -246,6 +248,13 @@ struct WalkState {
     std::unordered_map<size_t, size_t> materialIndexToPendingIndex; // glTF material index -> pendingMaterials index
     std::vector<PendingImage> pendingImages;
     std::unordered_map<size_t, size_t> imageIndexToPendingIndex; // glTF image index -> pendingImages index
+    std::function<bool(PendingChunk&&)> emit;
+    uint32_t emittedGeometry = 0;
+    uint32_t primitiveOccurrences = 0;
+    uint32_t chunkTriangles = kChunkTriangles;
+    uint64_t scratchLimit = TierAScratchLimit();
+    uint64_t scratchReserve = 160ull * 1024 * 1024;
+    uint64_t sourceBytes = 0;
     size_t totalVertices = 0;
     size_t totalIndices = 0;
     uint64_t totalDecodedImagePixels = 0;
@@ -287,13 +296,30 @@ std::optional<std::span<const std::byte>> ResolveBufferViewBytes(WalkState& stat
     std::span<const std::byte> bufferBytes;
     if (const auto* array = std::get_if<fastgltf::sources::Array>(&buffer.data)) {
         bufferBytes = std::span<const std::byte>(array->bytes.data(), array->bytes.size());
-    } else if (const auto* uriSource = std::get_if<fastgltf::sources::URI>(&buffer.data)) {
+    }
+    else if (const auto* viewSource = std::get_if<fastgltf::sources::ByteView>(&buffer.data))
+    {
+        bufferBytes = {viewSource->bytes.data(), viewSource->bytes.size()};
+    }
+    else if (const auto* uriSource = std::get_if<fastgltf::sources::URI>(&buffer.data))
+    {
         auto cached = state.resolvedExternalBuffers.find(view.bufferIndex);
         if (cached == state.resolvedExternalBuffers.end()) {
             ResolvedExternalBuffer resolved;
             if (state.sidecarClient != nullptr) {
                 auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()),
-            state.textureOptions.maxEncodedBytes-state.totalEncodedImageBytes);
+                                                                       kTierAPrimaryBytes, true);
+                if (result.mapping)
+                {
+                    if (result.mapping->Bytes().size() > kTierAAllSourceBytes - state.sourceBytes)
+                    {
+                        state.error = ImportErrorCode::AggregateSourceLimit;
+                        return std::nullopt;
+                    }
+                    state.sourceBytes += result.mapping->Bytes().size();
+                }
+                resolved.file = std::move(result.file);
+                resolved.mapping = std::move(result.mapping);
                 resolved.bytes = std::move(result.bytes);
                 resolved.errorCode = result.errorCode;
             } else {
@@ -304,12 +330,16 @@ std::optional<std::span<const std::byte>> ResolveBufferViewBytes(WalkState& stat
             }
             cached = state.resolvedExternalBuffers.emplace(view.bufferIndex, std::move(resolved)).first;
         }
-        if (!cached->second.bytes.has_value()) {
+        if (!cached->second.bytes.has_value() && !cached->second.mapping)
+        {
             return std::nullopt;
         }
-        bufferBytes
-            = std::span<const std::byte>(cached->second.bytes->data(), cached->second.bytes->size());
-    } else {
+        bufferBytes = cached->second.mapping ? cached->second.mapping->Bytes()
+                                             : std::span<const std::byte>(cached->second.bytes->data(),
+                                                                          cached->second.bytes->size());
+    }
+    else
+    {
         return std::nullopt;
     }
 
@@ -412,24 +442,78 @@ bool EnsureAccessorBytesResolvable(WalkState& state, const fastgltf::Accessor& a
         return true;
     };
 
-    // A sparse accessor may legally omit bufferView entirely (its base
-    // values are then all zeros), but fastgltf's IterableAccessor
-    // constructor indexes asset.bufferViews[*accessor.bufferViewIndex]
-    // unconditionally, with no has_value() guard -- so handing it such an
-    // accessor dereferences an empty optional. Reject rather than crash;
-    // this is a rare authoring shape, and the previous code reached it too.
-    if (!accessor.bufferViewIndex.has_value()) {
+    const auto elementBytes = fastgltf::getElementByteSize(accessor.type, accessor.componentType);
+    if (!elementBytes || accessor.count > kTierAVertices)
+    {
+        state.error = ImportErrorCode::ResourceLimit;
+        return false;
+    }
+    auto extent = [&](size_t view, size_t offset, size_t count, size_t stride, size_t element) {
+        if (!viewIsReadable(view, offset))
+            return false;
+        auto bytes = ResolveBufferViewBytes(state, view);
+        auto end =
+            count ? CheckedMultiply(uint64_t(count - 1), uint64_t(stride)) : std::optional<uint64_t>(0);
+        auto length = end ? CheckedAdd(*end, count ? uint64_t(element) : 0) : std::nullopt;
+        if (!length || *length > bytes->size() - offset || stride < element)
+        {
+            state.error = ImportErrorCode::MalformedData;
+            return false;
+        }
+        return true;
+    };
+    if (accessor.bufferViewIndex)
+    {
+        const auto view = *accessor.bufferViewIndex;
+        if (view >= state.asset.bufferViews.size())
+        {
+            state.error = ImportErrorCode::MalformedData;
+            return false;
+        }
+        if (!extent(view, accessor.byteOffset, accessor.count,
+                    state.asset.bufferViews[view].byteStride.value_or(elementBytes), elementBytes))
+            return false;
+    }
+    else if (!accessor.sparse)
+    {
         state.error = ImportErrorCode::MalformedData;
         return false;
     }
-    if (!viewIsReadable(*accessor.bufferViewIndex, accessor.byteOffset)) {
-        return false;
-    }
-    if (accessor.sparse.has_value()) {
-        if (!viewIsReadable(accessor.sparse->indicesBufferView, accessor.sparse->indicesByteOffset)
-            || !viewIsReadable(accessor.sparse->valuesBufferView,
-                               accessor.sparse->valuesByteOffset)) {
+    if (accessor.sparse)
+    {
+        const auto& sparse = *accessor.sparse;
+        if (sparse.indexComponentType != fastgltf::ComponentType::UnsignedByte &&
+            sparse.indexComponentType != fastgltf::ComponentType::UnsignedShort &&
+            sparse.indexComponentType != fastgltf::ComponentType::UnsignedInt)
+        {
+            state.error = ImportErrorCode::MalformedData;
             return false;
+        }
+        const size_t stride =
+            fastgltf::getElementByteSize(fastgltf::AccessorType::Scalar, sparse.indexComponentType);
+        if (!stride || sparse.count > accessor.count ||
+            !extent(sparse.indicesBufferView, sparse.indicesByteOffset, sparse.count, stride, stride) ||
+            !extent(sparse.valuesBufferView, sparse.valuesByteOffset, sparse.count, elementBytes,
+                    elementBytes))
+            return false;
+        auto indices =
+            ResolveBufferViewBytes(state, sparse.indicesBufferView)->subspan(sparse.indicesByteOffset);
+        uint32_t previous = 0;
+        for (size_t i = 0; i < sparse.count; ++i)
+        {
+            if ((i % 4096) == 0 && state.textureOptions.Cancelled())
+            {
+                state.error = ImportErrorCode::Cancelled;
+                return false;
+            }
+            const uint32_t index = fastgltf::internal::getAccessorElementAt<uint32_t>(
+                sparse.indexComponentType, indices.data() + i * stride);
+            if (index >= accessor.count || (i && index <= previous))
+            {
+                state.error = ImportErrorCode::MalformedData;
+                return false;
+            }
+            previous = index;
         }
     }
     return true;
@@ -445,8 +529,13 @@ bool EnsureAccessorBytesResolvable(WalkState& state, const fastgltf::Accessor& a
 // to sources::URI's *local-path* branch, not the isDataUri() branch, since
 // decoding a data URI needs no filesystem I/O) -- so sources::URI here
 // always means a real external file reference.
-std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state, size_t imageIndex)
+std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state, size_t imageIndex,
+                                                               uint64_t maxEncodedBytes)
 {
+    if (state.totalEncodedImageBytes > state.textureOptions.maxEncodedBytes)
+        return std::nullopt;
+    const uint64_t remaining =
+        (std::min)(maxEncodedBytes, state.textureOptions.maxEncodedBytes - state.totalEncodedImageBytes);
     if (imageIndex >= state.asset.images.size()) {
         return std::nullopt;
     }
@@ -457,21 +546,28 @@ std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state,
         if (!bytes) {
             return std::nullopt;
         }
-        if (bytes->size()>state.textureOptions.maxEncodedBytes-state.totalEncodedImageBytes) return std::nullopt;
+        if (bytes->size() > remaining)
+            return std::nullopt;
         return std::vector<std::byte>(bytes->begin(), bytes->end());
     }
 
+    if (const auto* view = std::get_if<fastgltf::sources::ByteView>(&image.data))
+    {
+        if (view->bytes.size() > remaining)
+            return std::nullopt;
+        return std::vector<std::byte>(view->bytes.begin(), view->bytes.end());
+    }
     if (const auto* array=std::get_if<fastgltf::sources::Array>(&image.data)) {
-        if (array->bytes.size()>state.textureOptions.maxEncodedBytes-state.totalEncodedImageBytes) return std::nullopt;
+        if (array->bytes.size() > remaining)
+            return std::nullopt;
         return std::vector<std::byte>(array->bytes.begin(),array->bytes.end());
     }
     if (const auto* uriSource = std::get_if<fastgltf::sources::URI>(&image.data)) {
         if (state.sidecarClient == nullptr) {
             return std::nullopt;
         }
-        auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()),
-            state.textureOptions.maxEncodedBytes-state.totalEncodedImageBytes);
-        return result.bytes; // nullopt on any failure -- images are never geometry-required
+        auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()), remaining);
+        return std::move(result.bytes); // nullopt on any failure -- images are never geometry-required
     }
 
     return std::nullopt;
@@ -495,7 +591,8 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
 {
     if (state.textureOptions.Cancelled()) { state.error=ImportErrorCode::Cancelled;return std::nullopt; }
     if (imageIndex>=state.asset.images.size()) {
-        state.textureWarningCount=std::min(64u,state.textureWarningCount+1);return std::nullopt;
+        state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
+        return std::nullopt;
     }
     const size_t semanticKey = imageIndex*4 + static_cast<size_t>(semantic);
     auto existing = state.imageIndexToPendingIndex.find(semanticKey);
@@ -503,11 +600,19 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
         return existing->second;
     }
 
-    auto encodedBytes = ResolveImageEncodedBytes(state, imageIndex);
+    const uint64_t reserved = state.scratchReserve + state.totalDecodedImageBytes;
+    if (reserved >= state.scratchLimit)
+    {
+        state.error = ImportErrorCode::ScratchLimit;
+        return std::nullopt;
+    }
+    auto encodedBytes = ResolveImageEncodedBytes(state, imageIndex, (state.scratchLimit - reserved) / 2);
     if (state.textureOptions.Cancelled()) { state.error=ImportErrorCode::Cancelled; return std::nullopt; }
     auto options=state.textureOptions;
     options.semantic=semantic;
-    options.maxDecodedBytes=std::min(options.maxDecodedBytes, kMaxAggregateTextureBytes-state.totalDecodedImageBytes);
+    options.maxDecodedBytes =
+        (std::min)({options.maxDecodedBytes, kMaxAggregateTextureBytes - state.totalDecodedImageBytes,
+                    (state.scratchLimit - reserved) / 2});
     options.maxPixels=kMaxAggregateTexturePixels-state.totalDecodedImagePixels;
     while (options.maxDimension>1) {
         const auto bytes=ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,options.maxDimension,options.maxDimension,
@@ -564,7 +669,7 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
 
     if (options.Cancelled()) { state.error=ImportErrorCode::Cancelled; return std::nullopt; }
     if (!decoded) {
-        state.textureWarningCount=std::min(64u,state.textureWarningCount+1);
+        state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
         PendingImage fallback;
         fallback.pixelFormat=PixelFormatId::RGBA8_UNORM; fallback.colorSpace=colorSpace;
         fallback.width=fallback.height=semantic==TextureSemantic::Color ? 2u : 1u;
@@ -581,7 +686,7 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     }
     if (decoded->pixelBytes.size()>kMaxAggregateTextureBytes-state.totalDecodedImageBytes) {
         // Budget exhausted: retain the material's deterministic neutral factors.
-        state.textureWarningCount=std::min(64u,state.textureWarningCount+1);
+        state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
         return std::nullopt;
     }
     state.totalDecodedImageBytes+=decoded->pixelBytes.size();
@@ -594,8 +699,9 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     }
     state.totalDecodedImagePixels = *newTotal;
 
-    if (state.chunks.size() + state.pendingMaterials.size() + state.pendingImages.size()
-        >= state.maxChunkCount) {
+    if (state.chunks.size() + state.pendingMaterials.size() + state.pendingImages.size() >=
+        (state.emit ? kTierACatalogLimit : state.maxChunkCount))
+    {
         state.error = ImportErrorCode::ResourceLimit;
         return std::nullopt;
     }
@@ -645,8 +751,9 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         state.error = ImportErrorCode::MalformedData;
         return std::nullopt;
     }
-    if (state.chunks.size() + state.pendingMaterials.size() + state.pendingImages.size()
-        >= state.maxChunkCount) {
+    if (state.chunks.size() + state.pendingMaterials.size() + state.pendingImages.size() >=
+        (state.emit ? kTierACatalogLimit : state.maxChunkCount))
+    {
         state.error = ImportErrorCode::ResourceLimit;
         return std::nullopt;
     }
@@ -720,8 +827,14 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
 }
 
 bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
-                       const fastgltf::math::dmat4x4& world, const fastgltf::math::fmat3x3& normalMatrix, uint32_t meshId, uint32_t nodeId)
+                      const fastgltf::math::dmat4x4& world, const fastgltf::math::fmat3x3& normalMatrix,
+                      uint32_t meshId, uint32_t nodeId, uint32_t primitiveId)
 {
+    if (++state.primitiveOccurrences > kTierAObjectLimit)
+    {
+        state.error = ImportErrorCode::ResourceLimit;
+        return false;
+    }
     if (primitive.type != fastgltf::PrimitiveType::Triangles) {
         return true; // skip, not fatal -- mirrors Model.cpp's leniency for non-triangle primitives
     }
@@ -731,12 +844,24 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         return true; // skip, not fatal
     }
 
-    if (state.chunks.size() + state.pendingMaterials.size() + state.pendingImages.size()
-        >= state.maxChunkCount) {
+    if (state.chunks.size() + state.pendingMaterials.size() + state.pendingImages.size() >=
+        (state.emit ? kTierACatalogLimit : state.maxChunkCount))
+    {
         state.error = ImportErrorCode::ResourceLimit;
         return false;
     }
 
+    for (const auto& attribute : primitive.attributes)
+        if (attribute.accessorIndex >= state.asset.accessors.size())
+        {
+            state.error = ImportErrorCode::MalformedData;
+            return false;
+        }
+    if (primitive.indicesAccessor && *primitive.indicesAccessor >= state.asset.accessors.size())
+    {
+        state.error = ImportErrorCode::MalformedData;
+        return false;
+    }
     const fastgltf::Accessor& positionAccessor = state.asset.accessors[positionIt->accessorIndex];
     if (!ValidateVec3FloatAccessor(positionAccessor)) {
         state.error = ImportErrorCode::MalformedData;
@@ -748,13 +873,12 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         return false;
     }
 
-    if (!primitive.indicesAccessor.has_value()) {
-        // Options::GenerateMeshIndices is always requested, so an
-        // index-less primitive should never reach here.
-        state.error = ImportErrorCode::InternalImporterFailure;
-        return false;
-    }
-    const fastgltf::Accessor& indexAccessor = state.asset.accessors[*primitive.indicesAccessor];
+    fastgltf::Accessor implicitIndices;
+    implicitIndices.type = fastgltf::AccessorType::Scalar;
+    implicitIndices.componentType = fastgltf::ComponentType::UnsignedInt;
+    implicitIndices.count = positionAccessor.count;
+    const fastgltf::Accessor& indexAccessor =
+        primitive.indicesAccessor ? state.asset.accessors[*primitive.indicesAccessor] : implicitIndices;
     if (!ValidateIndexAccessor(indexAccessor)) {
         state.error = ImportErrorCode::MalformedData;
         return false;
@@ -788,6 +912,131 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         }
     }
 
+    if (state.emit && !primitive.dracoCompression)
+    {
+        if (!EnsureAccessorBytesResolvable(state, positionAccessor) ||
+            (primitive.indicesAccessor && !EnsureAccessorBytesResolvable(state, indexAccessor)) ||
+            (hasNormal &&
+             !EnsureAccessorBytesResolvable(state, state.asset.accessors[normalIt->accessorIndex])) ||
+            (hasUv && !EnsureAccessorBytesResolvable(state, state.asset.accessors[uvIt->accessorIndex])))
+            return false;
+        const auto material = primitive.materialIndex ? ResolveMaterial(state, *primitive.materialIndex)
+                                                      : std::optional<size_t>{};
+        if (state.error != ImportErrorCode::None)
+            return false;
+        SidecarBufferDataAdapter adapter(state);
+        auto linear = world;
+        linear[3] = fastgltf::math::dvec4(0, 0, 0, 1);
+        for (size_t first = 0; first < indexAccessor.count;)
+        {
+            if (state.textureOptions.Cancelled())
+            {
+                state.error = ImportErrorCode::Cancelled;
+                return false;
+            }
+            PendingChunk part;
+            part.pendingMaterialIndex = material;
+            part.geometry.meshId = meshId;
+            part.geometry.nodeId = nodeId;
+            part.geometry.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0_F32);
+            part.geometry.geometryFlags = hasUv ? kGeometryHasUv0 : 0;
+            if (primitive.findAttribute("COLOR_0") != primitive.attributes.end())
+                part.geometry.geometryFlags |= kGeometryHasColors;
+            if (primitive.findAttribute("TEXCOORD_1") != primitive.attributes.end())
+                part.geometry.geometryFlags |= kGeometryHasUv1;
+            for (unsigned axis = 0; axis < 3; ++axis)
+                part.geometry.origin[axis] = world[3][axis];
+            const size_t end = (std::min)(indexAccessor.count, first + size_t(state.chunkTriangles) * 3);
+            std::unordered_map<uint32_t, uint32_t> remap;
+            remap.reserve(end - first);
+            part.vertices.reserve(end - first);
+            part.indices.reserve(end - first);
+            for (size_t i = first; i < end; ++i)
+            {
+                if (i % 4096 == 0 && state.textureOptions.Cancelled())
+                {
+                    state.error = ImportErrorCode::Cancelled;
+                    return false;
+                }
+                const uint32_t sourceIndex =
+                    primitive.indicesAccessor
+                        ? fastgltf::getAccessorElement<uint32_t>(state.asset, indexAccessor, i, adapter)
+                        : uint32_t(i);
+                if (sourceIndex >= positionAccessor.count)
+                {
+                    state.error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+                auto [entry, inserted] = remap.emplace(sourceIndex, uint32_t(part.vertices.size()));
+                part.indices.push_back(entry->second);
+                if (!inserted)
+                    continue;
+                const auto pos = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                    state.asset, positionAccessor, sourceIndex, adapter);
+                const auto transformed = linear * fastgltf::math::dvec4(pos.x(), pos.y(), pos.z(), 1);
+                VertexPositionNormalUv0F32 v{};
+                v.px = float(transformed.x());
+                v.py = float(transformed.y());
+                v.pz = float(transformed.z());
+                if (hasNormal)
+                {
+                    const auto n = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                        state.asset, state.asset.accessors[normalIt->accessorIndex], sourceIndex, adapter);
+                    const auto wn = fastgltf::math::normalize(normalMatrix * n);
+                    v.nx = wn.x();
+                    v.ny = wn.y();
+                    v.nz = wn.z();
+                }
+                if (hasUv)
+                {
+                    const auto uv = fastgltf::getAccessorElement<fastgltf::math::fvec2>(
+                        state.asset, state.asset.accessors[uvIt->accessorIndex], sourceIndex, adapter);
+                    v.u = uv.x();
+                    v.v = uv.y();
+                }
+                part.vertices.push_back(v);
+            }
+            if (!hasNormal)
+                GenerateFlatNormals(part);
+            part.geometry.vertexCount = uint32_t(part.vertices.size());
+            if (!RebasePositions(part.geometry, std::as_writable_bytes(std::span(part.vertices))))
+            {
+                state.error = ImportErrorCode::MalformedData;
+                return false;
+            }
+            // Accessor element interval: enough to re-read indices and resolve
+            // nonlocal/sparse attributes using the retained glTF metadata.
+            part.geometry.sourceRangeOffset = (uint64_t(primitiveId) << 32) | first;
+            part.geometry.sourceRangeLength = end - first;
+            if (!state.emit(std::move(part)))
+                return false;
+            first = end;
+        }
+        state.totalVertices += positionAccessor.count;
+        state.totalIndices += indexAccessor.count;
+        return true;
+    }
+    if (!state.emit && (positionAccessor.count + state.totalVertices) * sizeof(VertexPositionNormalUv0F32) +
+                               (indexAccessor.count + state.totalIndices) * sizeof(uint32_t) >
+                           128ull * 1024 * 1024)
+    {
+        state.error = ImportErrorCode::ResourceLimit;
+        return false;
+    }
+    if (primitive.dracoCompression)
+    {
+        const uint64_t declared = positionAccessor.count * 64ull + indexAccessor.count * 8ull;
+        if (indexAccessor.count / 3 > 10000000 || declared > 512ull * 1024 * 1024)
+        {
+            state.error = ImportErrorCode::DracoPrimitiveLimit;
+            return false;
+        }
+        if (state.scratchReserve + state.totalDecodedImageBytes + declared * 2 > state.scratchLimit)
+        {
+            state.error = ImportErrorCode::ScratchLimit;
+            return false;
+        }
+    }
     PendingChunk chunk;
     chunk.vertices.resize(positionAccessor.count);
     chunk.geometry.vertexCount = static_cast<uint32_t>(positionAccessor.count);
@@ -803,6 +1052,12 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
 
 
     if (primitive.dracoCompression != nullptr) {
+        const uint64_t declared = positionAccessor.count * 64ull + indexAccessor.count * 8ull;
+        if (state.scratchReserve + state.totalDecodedImageBytes + declared * 2 > state.scratchLimit)
+        {
+            state.error = ImportErrorCode::ScratchLimit;
+            return false;
+        }
         const fastgltf::DracoCompressedPrimitive& dracoPrimitive = *primitive.dracoCompression;
         auto compressedBytes = ResolveBufferViewBytes(state, dracoPrimitive.bufferView);
         if (!compressedBytes) {
@@ -890,17 +1145,23 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         // them up front -- see EnsureAccessorBytesResolvable for why this
         // cannot be deferred into the adapter -- and a failure is hard, not
         // a soft skip, since this is core geometry.
-        if (!EnsureAccessorBytesResolvable(state, positionAccessor)
-            || !EnsureAccessorBytesResolvable(state, indexAccessor)
-            || (hasUv
-                && !EnsureAccessorBytesResolvable(state,
-                                                  state.asset.accessors[uvIt->accessorIndex]))
-            || (hasNormal
-                && !EnsureAccessorBytesResolvable(
-                    state, state.asset.accessors[normalIt->accessorIndex]))) {
+        if (!EnsureAccessorBytesResolvable(state, positionAccessor) ||
+            (primitive.indicesAccessor && !EnsureAccessorBytesResolvable(state, indexAccessor)) ||
+            (hasUv && !EnsureAccessorBytesResolvable(state, state.asset.accessors[uvIt->accessorIndex])) ||
+            (hasNormal &&
+             !EnsureAccessorBytesResolvable(state, state.asset.accessors[normalIt->accessorIndex])))
+        {
             return false;
         }
 
+        auto diagnosticBasePresent=[&](const fastgltf::Accessor& accessor) {
+            if (!accessor.bufferViewIndex) {state.error=ImportErrorCode::UnsupportedEncoding;return false;}
+            return true;
+        };
+        if (!diagnosticBasePresent(positionAccessor)
+            || (primitive.indicesAccessor && !diagnosticBasePresent(indexAccessor))
+            || (hasNormal && !diagnosticBasePresent(state.asset.accessors[normalIt->accessorIndex]))
+            || (hasUv && !diagnosticBasePresent(state.asset.accessors[uvIt->accessorIndex]))) return false;
         const SidecarBufferDataAdapter bufferAdapter(state);
 
         fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
@@ -931,9 +1192,13 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         }
 
         chunk.indices.resize(indexAccessor.count);
-        fastgltf::iterateAccessorWithIndex<uint32_t>(
-            state.asset, indexAccessor,
-            [&](uint32_t index, size_t idx) { chunk.indices[idx] = index; }, bufferAdapter);
+        if (primitive.indicesAccessor)
+            fastgltf::iterateAccessorWithIndex<uint32_t>(
+                state.asset, indexAccessor, [&](uint32_t index, size_t idx) { chunk.indices[idx] = index; },
+                bufferAdapter);
+        else
+            for (size_t i = 0; i < chunk.indices.size(); ++i)
+                chunk.indices[i] = uint32_t(i);
 
         for (uint32_t index : chunk.indices) {
             if (index >= chunk.vertices.size()) {
@@ -979,6 +1244,44 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         }
     }
 
+    if (state.emit)
+    {
+        // Draco is an independently bounded decode unit, then its normalized
+        // result is split and emitted using cluster-local index remapping.
+        for (size_t first = 0; first < chunk.indices.size();)
+        {
+            if (state.textureOptions.Cancelled())
+            {
+                state.error = ImportErrorCode::Cancelled;
+                return false;
+            }
+            const size_t end = (std::min)(chunk.indices.size(), first + size_t(state.chunkTriangles) * 3);
+            PendingChunk part;
+            part.geometry = chunk.geometry;
+            part.pendingMaterialIndex = chunk.pendingMaterialIndex;
+            std::unordered_map<uint32_t, uint32_t> remap;
+            remap.reserve(end - first);
+            for (size_t i = first; i < end; ++i)
+            {
+                auto [entry, inserted] = remap.emplace(chunk.indices[i], uint32_t(part.vertices.size()));
+                if (inserted)
+                    part.vertices.push_back(chunk.vertices[chunk.indices[i]]);
+                part.indices.push_back(entry->second);
+            }
+            part.geometry.vertexCount = uint32_t(part.vertices.size());
+            if (!RebasePositions(part.geometry, std::as_writable_bytes(std::span(part.vertices))))
+            {
+                state.error = ImportErrorCode::MalformedData;
+                return false;
+            }
+            part.geometry.sourceRangeOffset = (uint64_t(primitiveId) << 32) | first;
+            part.geometry.sourceRangeLength = end - first;
+            if (!state.emit(std::move(part)))
+                return false;
+            first = end;
+        }
+        return true;
+    }
     state.chunks.push_back(std::move(chunk));
     return true;
 }
@@ -1020,8 +1323,12 @@ bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::dmat4x4
         fastgltf::math::fmat3x3 normalMatrix
             = fastgltf::math::transpose(fastgltf::math::inverse(linear));
 
-        for (const fastgltf::Primitive& primitive : mesh.primitives) {
-            if (!ConvertPrimitive(state, primitive, world, normalMatrix, uint32_t(*node.meshIndex + 1), uint32_t(nodeIndex + 1))) {
+        for (size_t primitiveId = 0; primitiveId < mesh.primitives.size(); ++primitiveId)
+        {
+            if (!ConvertPrimitive(state, mesh.primitives[primitiveId], world, normalMatrix,
+                                  uint32_t(*node.meshIndex + 1), uint32_t(nodeIndex + 1),
+                                  uint32_t(primitiveId)))
+            {
                 return false;
             }
         }
@@ -1176,6 +1483,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                                                              SidecarFileClient* sidecarClient,
                                                              ChunkBatchSink* batchSink, const TextureDecodeOptions& textureOptions)
 {
+    if (sourceGlbBytes.size() < 12)
+        return ImportErrorCode::MalformedData;
     // Bound metadata before either JSON parser allocates its document storage.
     size_t metadataBytes = sourceGlbBytes.size();
     if (sourceGlbBytes.size() >= 4 && std::memcmp(sourceGlbBytes.data(),"glTF",4) == 0) {
@@ -1185,12 +1494,155 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         metadataBytes = jsonBytes;
     }
     if (metadataBytes > 32ull*1024*1024) return ImportErrorCode::ResourceLimit;
-    auto dataBufferResult
-        = fastgltf::GltfDataBuffer::FromBytes(sourceGlbBytes.data(), sourceGlbBytes.size());
-    if (!dataBufferResult) {
-        return MapFastgltfError(dataBufferResult.error());
+    if (sourceGlbBytes.size() > kTierAPrimaryBytes)
+        return ImportErrorCode::PrimarySourceLimit;
+    if (maxChunkCount == 0)
+        return ImportErrorCode::ResourceLimit;
+    if (TierAScratchLimit() < 128ull * 1024 * 1024)
+        return ImportErrorCode::ScratchLimit;
+    if (160ull * 1024 * 1024 + metadataBytes * 8ull > TierAScratchLimit())
+        return ImportErrorCode::ScratchLimit;
+    std::span<const std::byte> bin;
+    if (sourceGlbBytes.size() >= 4 && std::memcmp(sourceGlbBytes.data(), "glTF", 4) == 0)
+    {
+        uint32_t version, total, jsonType;
+        std::memcpy(&version, sourceGlbBytes.data() + 4, 4);
+        std::memcpy(&total, sourceGlbBytes.data() + 8, 4);
+        std::memcpy(&jsonType, sourceGlbBytes.data() + 16, 4);
+        if (version != 2 || total != sourceGlbBytes.size() || jsonType != 0x4e4f534a || metadataBytes % 4)
+            return ImportErrorCode::MalformedData;
+        const size_t offset = 20 + metadataBytes;
+        if (offset < sourceGlbBytes.size())
+        {
+            if (sourceGlbBytes.size() - offset < 8)
+                return ImportErrorCode::MalformedData;
+            uint32_t bytes, type;
+            std::memcpy(&bytes, sourceGlbBytes.data() + offset, 4);
+            std::memcpy(&type, sourceGlbBytes.data() + offset + 4, 4);
+            if (type != 0x004e4942 || bytes != sourceGlbBytes.size() - offset - 8 || bytes % 4)
+                return ImportErrorCode::MalformedData;
+            bin = sourceGlbBytes.subspan(offset + 8, bytes);
+        }
     }
-
+    // fastgltf reserves its asset arrays while parsing, before adapter checks.
+    // Preflight only the bounded JSON DOM, then release it before constructing
+    // that asset. Include conservative storage for every nested array entry.
+    uint64_t parserReserve = 160ull * 1024 * 1024 + metadataBytes * 8ull;
+    {
+        const auto json = sourceGlbBytes.subspan(
+            bin.empty() && std::memcmp(sourceGlbBytes.data(), "glTF", 4) != 0 ? 0 : 20, metadataBytes);
+        simdjson::dom::parser preflight;
+        simdjson::dom::element root;
+        if (preflight.parse(reinterpret_cast<const char*>(json.data()), json.size()).get(root))
+            return ImportErrorCode::MalformedData;
+        simdjson::dom::object object;
+        if (root.get_object().get(object))
+            return ImportErrorCode::MalformedData;
+        for (const auto& field : object)
+        {
+            simdjson::dom::array array;
+            if (field.value.get_array().get(array))
+                continue;
+            uint64_t limit = kTierAObjectLimit;
+            if (field.key == "accessors" || field.key == "bufferViews")
+                limit = 300000;
+            else if (field.key == "materials")
+                limit = kTierAMaterialLimit;
+            else if (field.key == "images" || field.key == "textures" || field.key == "samplers")
+                limit = uint64_t(kTierAMaterialLimit) * 4;
+            else if (field.key != "nodes" && field.key != "meshes" && field.key != "buffers" &&
+                     field.key != "scenes" && field.key != "skins" && field.key != "animations")
+                continue;
+            if (array.size() > limit)
+                return ImportErrorCode::ResourceLimit;
+        }
+        auto countStorage = [&](auto&& self, simdjson::dom::element value,
+                                unsigned depth) -> ImportErrorCode {
+            if (depth > 256)
+                return ImportErrorCode::UnsupportedEncoding;
+            simdjson::dom::array array;
+            if (!value.get_array().get(array))
+            {
+                if (array.size() > 300000)
+                    return ImportErrorCode::ResourceLimit;
+                constexpr size_t entryBytes =
+                    (std::max)({size_t(1024), sizeof(fastgltf::Material), sizeof(fastgltf::Node),
+                                sizeof(fastgltf::Accessor)});
+                const uint64_t bytes = uint64_t(array.size()) * entryBytes;
+                if (bytes > TierAScratchLimit() - parserReserve)
+                    return ImportErrorCode::ScratchLimit;
+                parserReserve += bytes;
+                for (auto item : array)
+                    if (auto error = self(self, item, depth + 1); error != ImportErrorCode::None)
+                        return error;
+            }
+            else
+            {
+                simdjson::dom::object nested;
+                if (!value.get_object().get(nested))
+                    for (const auto& field : nested)
+                        if (auto error = self(self, field.value, depth + 1); error != ImportErrorCode::None)
+                            return error;
+            }
+            return ImportErrorCode::None;
+        };
+        if (auto error = countStorage(countStorage, root, 0); error != ImportErrorCode::None)
+            return error;
+        simdjson::dom::array meshes;
+        uint64_t primitives = 0;
+        if (!object["meshes"].get_array().get(meshes))
+            for (auto mesh : meshes)
+            {
+                simdjson::dom::array array;
+                if (!mesh["primitives"].get_array().get(array))
+                {
+                    primitives += array.size();
+                    if (primitives > kTierAObjectLimit)
+                        return ImportErrorCode::ResourceLimit;
+                }
+            }
+    }
+    // fastgltf receives bounded padded JSON and aliases the already mapped BIN.
+    // Its buffer allocation callback returns the BIN address; read(void*) detects
+    // that exact alias and performs no write to the read-only file mapping.
+    class MappedGetter final : public fastgltf::GltfDataGetter
+    {
+      public:
+        std::span<const std::byte> source, bin;
+        size_t offset = 0;
+        std::vector<std::byte> metadata;
+        std::vector<std::vector<std::byte>> decoded;
+        void read(void* ptr, size_t count) override
+        {
+            if (count > source.size() - offset)
+                throw std::out_of_range("source range");
+            if (ptr != source.data() + offset)
+                std::memcpy(ptr, source.data() + offset, count);
+            offset += count;
+        }
+        fastgltf::span<std::byte> read(size_t count, size_t padding) override
+        {
+            if (count > 32ull * 1024 * 1024 || padding > 4096 || count > source.size() - offset)
+                throw std::out_of_range("metadata limit");
+            metadata.resize(count + padding);
+            read(metadata.data(), count);
+            return fastgltf::span<std::byte>(metadata.data(), count + padding);
+        }
+        void reset() override
+        {
+            offset = 0;
+        }
+        size_t bytesRead() override
+        {
+            return offset;
+        }
+        size_t totalSize() override
+        {
+            return source.size();
+        }
+    } getter;
+    getter.source = sourceGlbBytes;
+    getter.bin = bin;
     // Only these three extensions are enabled -- a file requiring any other
     // one still fails cleanly with MissingExtensions/UnknownRequiredExtension
     // rather than being parsed. KHR_texture_transform is enabled read-only,
@@ -1207,13 +1659,53 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     // .gltf via fastgltf::determineGltfFileType internally -- needed so a
     // real multi-file .gltf (this chunk's whole point) parses at all; a
     // self-contained .glb continues to work identically either way.
-    auto assetResult = parser.loadGltf(dataBufferResult.get(), std::filesystem::path{},
-                                        fastgltf::Options::GenerateMeshIndices);
+    parser.setUserPointer(&getter);
+    parser.setBufferAllocationCallback(+[](uint64_t bytes, void* user) -> fastgltf::BufferInfo {
+        auto& data = *static_cast<MappedGetter*>(user);
+        if (!data.bin.empty() && data.source.data() + data.offset == data.bin.data() &&
+            bytes <= data.bin.size())
+            return {const_cast<std::byte*>(data.bin.data()), 0};
+        if (bytes > 32ull * 1024 * 1024)
+            throw std::out_of_range("data URI limit");
+        data.decoded.emplace_back(size_t(bytes));
+        return {data.decoded.back().data(), uint32_t(data.decoded.size())};
+    });
+    auto assetResult = parser.loadGltf(getter, std::filesystem::path{}, fastgltf::Options::None);
     if (!assetResult) {
         return MapFastgltfError(assetResult.error());
     }
-    const fastgltf::Asset& asset = assetResult.get();
-    if (asset.meshes.size() > 1'000'000 || asset.animations.size() > 1'000'000 || asset.skins.size() > 1'000'000)
+    auto& asset = assetResult.get();
+    if (!bin.empty())
+    {
+        if (asset.buffers.empty() || asset.buffers[0].byteLength > bin.size())
+            return ImportErrorCode::MalformedData;
+        fastgltf::sources::ByteView view;
+        view.bytes = fastgltf::span<const std::byte>(bin.data(), bin.size());
+        asset.buffers[0].data = view;
+    }
+    auto bindCustom = [&](fastgltf::DataSource& source) {
+        if (auto custom = std::get_if<fastgltf::sources::CustomBuffer>(&source))
+        {
+            if (!custom->id || custom->id > getter.decoded.size())
+                return false;
+            auto& bytes = getter.decoded[size_t(custom->id) - 1];
+            fastgltf::sources::ByteView view;
+            view.bytes = fastgltf::span<const std::byte>(bytes.data(), bytes.size());
+            view.mimeType = custom->mimeType;
+            source = view;
+        }
+        return true;
+    };
+    for (auto& buffer : asset.buffers)
+        if (!bindCustom(buffer.data))
+            return ImportErrorCode::MalformedData;
+    for (auto& image : asset.images)
+        if (!bindCustom(image.data))
+            return ImportErrorCode::MalformedData;
+    if (asset.nodes.size() > 100000 || asset.materials.size() > 65536 || asset.accessors.size() > 300000 ||
+        asset.bufferViews.size() > 300000)
+        return ImportErrorCode::ResourceLimit;
+    if (asset.meshes.size() > kTierAObjectLimit || asset.animations.size() > kTierAObjectLimit || asset.skins.size() > kTierAObjectLimit)
         return ImportErrorCode::ResourceLimit;
 
     if (asset.scenes.empty()) {
@@ -1225,14 +1717,126 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     }
 
     WalkState state{ asset };
-    state.textureOptions=textureOptions;
+    state.textureOptions = textureOptions;
+    state.sourceBytes = sourceGlbBytes.size();
+    state.scratchReserve = parserReserve;
+    if (state.scratchReserve > state.scratchLimit)
+        return ImportErrorCode::ScratchLimit;
     auto preciseTransforms = ReadPreciseTransforms(sourceGlbBytes,asset.nodes.size());
     if (auto error = std::get_if<ImportErrorCode>(&preciseTransforms)) return *error;
     state.localTransforms = std::move(std::get<std::vector<fastgltf::math::dmat4x4>>(preciseTransforms));
     state.visitState.assign(asset.nodes.size(), 0);
     state.maxChunkCount = maxChunkCount;
+    state.chunkTriangles = uint32_t(std::min<uint64_t>(
+        kChunkTriangles, destination.size() > kSectionHeaderSize + kChunkDescriptorSize
+                             ? (destination.size() - kSectionHeaderSize - kChunkDescriptorSize) / 108
+                             : 0));
+    if (!state.chunkTriangles)
+        return ImportErrorCode::ResourceLimit;
     state.sidecarClient = sidecarClient;
 
+    SceneMetadata streamingScene{};
+    streamingScene.format = bin.empty() ? SourceFormatId::Gltf : SourceFormatId::Glb;
+    streamingScene.upAxis = UpAxisId::Y;
+    streamingScene.metersPerUnit = 1;
+    streamingScene.meshCount = uint32_t(asset.meshes.size());
+    streamingScene.nodeCount = uint32_t(asset.nodes.size());
+    streamingScene.animationCount = uint32_t(asset.animations.size());
+    streamingScene.skinCount = uint32_t(asset.skins.size());
+    for (const auto& skin : asset.skins)
+    {
+        if (skin.joints.size() > 100000 - streamingScene.boneCount)
+            return ImportErrorCode::ResourceLimit;
+        streamingScene.boneCount += uint32_t(skin.joints.size());
+    }
+    BoundedChunkWriter streamingWriter(destination, generationId, maxChunkCount, streamingScene, batchSink);
+    size_t emittedImages = 0, emittedMaterials = 0;
+    constexpr uint32_t materialBase = 0x40000000u, imageBase = 0x80000000u;
+    auto emitImage = [&](size_t i, bool low) {
+        auto& image = state.pendingImages[i];
+        uint32_t w = image.width, h = image.height, first = 0;
+        size_t offset = 0;
+        if (low)
+            while ((w > 64 || h > 64) && first + 1 < image.mipLevels)
+            {
+                offset += size_t(*ComputeImagePixelBytes(image.pixelFormat, w, h, 1));
+                w = (std::max)(1u, w / 2);
+                h = (std::max)(1u, h / 2);
+                ++first;
+            }
+        ImagePayloadHeader header{};
+        header.pixelFormat = uint32_t(image.pixelFormat);
+        header.width = w;
+        header.height = h;
+        header.mipLevels = image.mipLevels - first;
+        header.colorSpace = uint32_t(image.colorSpace);
+        header.pixelDataByteSize = image.pixelBytes.size() - offset;
+        header.reserved0 = low ? 0 : (image.refines ? imageBase + uint32_t(i) + 1 : 0);
+        ChunkDescriptor d{};
+        d.topology = ChunkTopology::Image;
+        d.chunkId = imageBase + uint32_t(i) + 1 + (header.reserved0 ? 0x10000000u : 0);
+        if (!streamingWriter.Add(d, ChunkBytes(header),
+                                 std::span<const std::byte>(image.pixelBytes).subspan(offset)))
+        {
+            state.error = streamingWriter.Error();
+            return false;
+        }
+        if (first)
+            image.refines = i;
+        return true;
+    };
+    auto emitDependencies = [&] {
+        while (emittedImages < state.pendingImages.size())
+        {
+            if (!emitImage(emittedImages, true))
+                return false;
+            ++emittedImages;
+        }
+        while (emittedMaterials < state.pendingMaterials.size())
+        {
+            const auto& material = state.pendingMaterials[emittedMaterials];
+            ChunkDescriptor d{};
+            d.topology = ChunkTopology::Material;
+            d.chunkId = materialBase + uint32_t(emittedMaterials) + 1;
+            const std::optional<size_t> images[]{
+                material.pendingBaseColorImageIndex, material.pendingMetallicRoughnessImageIndex,
+                material.pendingNormalImageIndex, material.pendingEmissiveImageIndex};
+            for (unsigned i = 0; i < 4; ++i)
+                if (images[i])
+                {
+                    d.dependencyIds[i] = imageBase + uint32_t(*images[i]) + 1;
+                    ++d.dependencyCount;
+                }
+            if (!streamingWriter.Add(d, ChunkBytes(material.data)))
+            {
+                state.error = streamingWriter.Error();
+                return false;
+            }
+            ++emittedMaterials;
+        }
+        return true;
+    };
+    if (batchSink)
+        state.emit = [&](PendingChunk&& chunk) {
+            if (!emitDependencies())
+                return false;
+            auto d = chunk.geometry;
+            d.topology = ChunkTopology::TriangleList;
+            d.chunkId = ++state.emittedGeometry;
+            d.vertexCount = uint32_t(chunk.vertices.size());
+            d.indexCount = uint32_t(chunk.indices.size());
+            if (chunk.pendingMaterialIndex)
+            {
+                d.dependencyIds[0] = materialBase + uint32_t(*chunk.pendingMaterialIndex) + 1;
+                d.dependencyCount = 1;
+            }
+            if (!streamingWriter.Add(d, ChunkBytes(chunk.vertices), ChunkBytes(chunk.indices)))
+            {
+                state.error = streamingWriter.Error();
+                return false;
+            }
+            return true;
+        };
     fastgltf::math::dmat4x4 identity(1.0);
     for (size_t nodeIndex : asset.scenes[sceneIndex].nodeIndices) {
         if (!VisitNode(state, nodeIndex, identity, 0)) {
@@ -1240,6 +1844,52 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         }
     }
 
+    if (batchSink)
+    {
+        for (const auto& [index, resolved] : state.resolvedExternalBuffers)
+        {
+            (void)index;
+            if (resolved.file && !resolved.file->IsUnchanged())
+                return ImportErrorCode::FileChanged;
+        }
+        if (!state.emittedGeometry)
+            return ImportErrorCode::EmptyGeometry;
+        const bool haveRefinements = std::any_of(state.pendingImages.begin(), state.pendingImages.end(),
+                                                 [](const auto& image) { return image.refines.has_value(); });
+        if (haveRefinements && !streamingWriter.PublishPending())
+            return streamingWriter.Error();
+        for (size_t i = 0; i < state.pendingImages.size(); ++i)
+            if (state.pendingImages[i].refines)
+            {
+                if (textureOptions.Cancelled())
+                    return ImportErrorCode::Cancelled;
+                if (!emitImage(i, false))
+                    return state.error;
+            }
+        ImportStatusPayload status{};
+        for (const auto& extension : asset.extensionsUsed)
+            if (extension != "KHR_draco_mesh_compression" && extension != "KHR_texture_basisu" &&
+                extension != "KHR_texture_transform")
+                status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
+        if (status.optionalFeatureWarnings)
+        {
+            ChunkDescriptor d{};
+            d.topology = ChunkTopology::ImportStatus;
+            d.chunkId = 0xf0000000u;
+            if (!streamingWriter.Add(d, ChunkBytes(status)))
+                return streamingWriter.Error();
+        }
+        if (state.textureWarningCount)
+        {
+            ChunkDescriptor d{};
+            d.topology = ChunkTopology::TextureWarning;
+            d.chunkId = 0xf0000001u;
+            if (!streamingWriter.Add(d, ChunkBytes(state.textureWarningCount)))
+                return streamingWriter.Error();
+        }
+        streamingWriter.Finalize();
+        return GltfImportResult{streamingWriter.Count(), streamingWriter.Length()};
+    }
     if (state.chunks.empty()) {
         return ImportErrorCode::EmptyGeometry; // no supported geometry found
     }
@@ -1253,7 +1903,9 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         size_t offset=0;
         while ((w>64 || h>64) && first+1<image.mipLevels) {
             offset+=static_cast<size_t>(*ComputeImagePixelBytes(image.pixelFormat,w,h,1));
-            w=std::max(1u,w/2); h=std::max(1u,h/2); ++first;
+            w = (std::max)(1u, w / 2);
+            h = (std::max)(1u, h / 2);
+            ++first;
         }
         if (!first) continue;
         PendingImage full=std::move(image);
@@ -1452,7 +2104,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     model_core::ImportStatusPayload status{};
     for (const auto& extension : asset.extensionsUsed) {
         if (extension != "KHR_draco_mesh_compression" && extension != "KHR_texture_basisu" && extension != "KHR_texture_transform")
-            status.optionalFeatureWarnings = std::min(64u, status.optionalFeatureWarnings + 1);
+            status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
     }
     if (!refinements.empty()) status.flags |= model_core::kStatusRefining;
     if (status.flags || status.optionalFeatureWarnings) {
@@ -1484,7 +2136,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     for (;;) {
         if (textureOptions.Cancelled()) return ImportErrorCode::Cancelled;
         size_t taken = CountChunksThatFit(remaining, destination.size(), maxChunkCount);
-        if (!refinements.empty() && emitted<initialPlanCount) taken=std::min(taken,initialPlanCount-emitted);
+        if (!refinements.empty() && emitted < initialPlanCount)
+            taken = (std::min)(taken, initialPlanCount - emitted);
         emitted+=taken;
         if (taken == 0) {
             // Not even one chunk fits, so no sequence of batches can ever

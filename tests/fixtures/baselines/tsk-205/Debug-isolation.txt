@@ -1,0 +1,13 @@
+Randomness seeded to: 1794057397
+bounded-scan Preview3D-bounded-33044.stl: 131072 triangles 0 points 2 chunks 1 batches first=302.002ms total=314.02ms worker=10383360 host=67190784 bytes workerMapped=24231936 hostMapped=25657344 address bytes
+bounded-scan Preview3D-bounded-33044.glb: 131072 triangles 0 points 2 chunks 1 batches first=1676.72ms total=1689.34ms worker=33472512 host=67383296 bytes workerMapped=40087552 hostMapped=25657344 address bytes
+bounded-scan Preview3D-bounded-33044.ply: 0 triangles 1048576 points 2 chunks 1 batches first=1626.55ms total=1635.82ms worker=17395712 host=67395584 bytes workerMapped=30568448 hostMapped=25657344 address bytes
+bounded-scan Preview3D-bounded-33044.stl: 400000 triangles 0 points 7 chunks 3 batches first=299.825ms total=778.352ms worker=10399744 host=67313664 bytes workerMapped=24231936 hostMapped=25657344 address bytes
+bounded-scan Preview3D-bounded-33044.glb: 400000 triangles 0 points 7 chunks 3 batches first=1454.3ms total=3331.25ms worker=33476608 host=67387392 bytes workerMapped=35287040 hostMapped=25657344 address bytes
+bounded-scan Preview3D-bounded-33044.glb: 400000 triangles 0 points 7 chunks 3 batches first=1780.86ms total=3802.05ms worker=33468416 host=67407872 bytes workerMapped=40087552 hostMapped=25657344 address bytes
+bounded-scan Preview3D-bounded-33044.ply: 150000 triangles 0 points 16 chunks 2 batches first=480.238ms total=845.856ms worker=3710976 host=67395584 bytes workerMapped=8523776 hostMapped=9928704 address bytes
+bounded-scan Preview3D-bounded-33044.ply: 0 triangles 1500000 points 3 chunks 2 batches first=1738.41ms total=1841.75ms worker=17408000 host=67395584 bytes workerMapped=30568448 hostMapped=25657344 address bytes
+bounded-scan Preview3D-bounded-33044.ply: 150000 triangles 0 points 16 chunks 2 batches first=486.74ms total=854.016ms worker=3579904 host=67383296 bytes workerMapped=8523776 hostMapped=9928704 address bytes
+bounded-scan Preview3D-bounded-33044.ply: 0 triangles 1500000 points 3 chunks 2 batches first=1657.92ms total=1768.71ms worker=17391616 host=67395584 bytes workerMapped=30568448 hostMapped=25657344 address bytes
+===============================================================================
+All tests passed (48952 assertions in 185 test cases)

@@ -34,28 +34,15 @@ struct GltfImportResult {
     uint64_t sectionBytesWritten = 0;
 };
 
-// Parses sourceGlbBytes (a .glb container OR a plain-JSON .gltf -- auto-
-// detected) and writes header+descriptors+payload into destination, per
-// the model_core wire format -- same "compute everything, check total size
-// once, then write sequentially with the header written last" structure as
-// SyntheticSceneGenerator::GenerateSyntheticScene. sidecarClient is nullptr
-// for the always-self-contained shared-section ParseGltfRequest path (a
-// .glb never needs sidecars); non-null for the real-file
-// ParseGltfFileRequest path, letting a plain .gltf resolve its external
-// .bin/.png/.jpg/.jpeg/.webp/.ktx2 siblings. Returns an ImportErrorCode
-// instead of a GltfImportResult on any parse failure, resource-limit
-// violation, or malformed/unsupported content.
+// Parses a read-only mapped GLB or bounded JSON glTF. GLB BIN and brokered
+// geometry sidecars remain mapped; only padded metadata and bounded image
+// encodings are copied. With a batch sink, ordinary primitives are normalized,
+// remapped, emitted and freed one cluster at a time. Draco remains an
+// independently capped decode unit and is split after decode. The bounded
+// single-section developer path fails if its normalized scratch/window fills.
 //
-// batchSink is nullptr for a caller that can only take one section: the whole
-// model must then fit the window or the result is ResourceLimit, which is
-// what this function always did. Non-null allows progressive delivery -- the
-// model is split across as many windows as it needs, each handed over through
-// the sink -- and only then can a model larger than the window be imported at
-// all.
-//
-// Either way the FINAL batch is left sitting in `destination` and described
-// by the returned GltfImportResult; the caller sends the terminal ChunksReady
-// for it. So the single-window case emits exactly the traffic it always did.
+// The final section stays in destination for the caller's ChunksReady notice.
+// Progressive sections wait for host ownership/capacity before window reuse.
 std::variant<GltfImportResult, model_core::ImportErrorCode> ImportGltf(
     std::span<const std::byte> sourceGlbBytes, std::span<std::byte> destination,
     uint64_t generationId, uint32_t maxChunkCount, SidecarFileClient* sidecarClient = nullptr,

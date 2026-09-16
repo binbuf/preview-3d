@@ -7,6 +7,7 @@
 // reference an external buffer/image the worker cannot open itself.
 
 #include "model_core/ImportError.h"
+#include "model_core/MappedFile.h"
 
 #include <cstdint>
 #include <optional>
@@ -34,15 +35,18 @@ public:
 
     struct Result {
         std::optional<std::vector<std::byte>> bytes;
+        std::optional<model_core::MappedFile> file;
+        std::optional<model_core::MappingLease> mapping;
         model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
     };
 
     // Sends RequestSidecarFile and blocks for exactly one reply
     // (SidecarFileReady or SidecarFileUnavailable) before returning --
     // matches the channel's existing strictly-synchronous shape.
-    Result RequestSidecarBytes(const std::string& relativePathUtf8, uint64_t maxBytes=256ull*1024*1024);
+    Result RequestSidecarBytes(const std::string& relativePathUtf8, uint64_t maxBytes = 256ull * 1024 * 1024,
+                               bool mappedOnly = false);
 
-private:
+  private:
     HANDLE stdIn_;
     HANDLE stdOut_;
     uint64_t generationId_;

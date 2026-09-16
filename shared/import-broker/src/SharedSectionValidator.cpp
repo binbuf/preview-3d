@@ -1,3 +1,4 @@
+#include "model_core/TierALimits.h"
 #include "import_broker/SharedSectionValidator.h"
 
 #include "model_core/Checksum.h"
@@ -140,13 +141,12 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         return Reject(ImportErrorCode::ImportProtocolViolation, "header changed during copy");
     if (header.reserved || header.scene.reserved || header.scene.generationId != expectedGenerationId)
         return Reject(ImportErrorCode::ImportProtocolViolation, "stale or malformed scene metadata");
-    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Glb)
-        || uint32_t(header.scene.upAxis) > uint32_t(model_core::UpAxisId::Z)
-        || !std::isfinite(header.scene.metersPerUnit) || header.scene.metersPerUnit < 0
-        || header.scene.metersPerUnit > 1e12
-        || header.scene.meshCount > 1'000'000 || header.scene.nodeCount > 1'000'000
-        || header.scene.skinCount > 1'000'000 || header.scene.animationCount > 1'000'000
-        || header.scene.boneCount > 1'000'000)
+    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Glb) ||
+        uint32_t(header.scene.upAxis) > uint32_t(model_core::UpAxisId::Z) ||
+        !std::isfinite(header.scene.metersPerUnit) || header.scene.metersPerUnit < 0 ||
+        header.scene.metersPerUnit > 1e12 || header.scene.meshCount > model_core::kTierAObjectLimit ||
+        header.scene.nodeCount > model_core::kTierAObjectLimit || header.scene.skinCount > 1'000'000 ||
+        header.scene.animationCount > 1'000'000 || header.scene.boneCount > 1'000'000)
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
     if ((header.scene.format == model_core::SourceFormatId::Gltf || header.scene.format == model_core::SourceFormatId::Glb)
         && (header.scene.upAxis != model_core::UpAxisId::Y || header.scene.metersPerUnit != 1.0))
@@ -181,6 +181,13 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
 
         // 12a. chunkId 0 is the "no dependency" sentinel -- a chunk must not
         // claim it as its own identity.
+        const auto& bounded = descriptors[i];
+        if ((bounded.topology == model_core::ChunkTopology::TriangleList ||
+             bounded.topology == model_core::ChunkTopology::PointList) &&
+            (bounded.byteSize > 16ull * 1024 * 1024 || bounded.vertexCount > 1048576 ||
+             (bounded.topology == model_core::ChunkTopology::TriangleList &&
+              bounded.indexCount > 262144u * 3)))
+            return Reject(ImportErrorCode::ResourceLimit, "normalized geometry cluster limit");
         if (descriptors[i].chunkId == 0) {
             return Reject(ImportErrorCode::MalformedData, "chunk declares reserved chunkId 0");
         }

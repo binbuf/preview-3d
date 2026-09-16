@@ -111,6 +111,7 @@ struct D3D12ViewerPath
         uint32_t materialChunkId = 0;
         uint32_t sourceMeshId = 0;
         uint32_t sourceNodeId = 0;
+        model_core::ChunkDescriptor sourceGeometry{}; // retained bounded source provenance for re-decode
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> textureHeap;
         UINT textureDescriptorSize = 0;
         UINT indexCount = 0;

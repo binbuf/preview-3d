@@ -1,0 +1,102 @@
+{
+  "environment": {
+    "windows": "Microsoft Windows 11 Pro",
+    "build": "26200",
+    "version": "10.0.26200",
+    "cpu": "AMD Ryzen 9 7900X3D 12-Core Processor          ",
+    "logicalProcessors": 24,
+    "physicalRamBytes": 67810054144,
+    "cache": "Uncontrolled OS/driver caches; concurrent CPU-only qualification runs may affect elapsed times",
+    "videoAdapters": [
+      {
+        "Name": "NVIDIA GeForce RTX 4080",
+        "DriverVersion": "32.0.16.1664"
+      },
+      {
+        "Name": "AMD Radeon(TM) Graphics",
+        "DriverVersion": "32.0.21030.2001"
+      }
+    ]
+  },
+  "binaries": {
+    "Debug/Preview3D.exe": "d09bdfea91f70c28069579ee8f2729866d00ea12dfea35f77e87b2d4dce3220d",
+    "Debug/Preview3DImportWorker.exe": "45bb56d3c94b9f7ca724f5f6dda012034dcff05b34ae62c72fbd802fd88ee8d4",
+    "Debug/Preview3DHostileWorker.exe": "9247c02af19fc6313c24d22d009c722f90c69f884c95b86369a53bb43b926840",
+    "Debug/Tests.Unit.exe": "a81202ce26c4bb204d89aaf2f660437395176c81166d7b2872bc563d7a3d680b",
+    "Debug/Tests.ImportIsolation.exe": "61eb3702c98e8ee9721caa6798bb2e002a14d57ceda06c19e4fca2eca0f71544",
+    "Release/Preview3D.exe": "f008c272e24db06dc93c297b6e337f6c14023a0c511f6514d0294e8355d7af9c",
+    "Release/Preview3DImportWorker.exe": "b0239a2b655c59258c15bdc576612a94b3b0a7632b603d8bf317a6e77ae791a7",
+    "Release/Preview3DHostileWorker.exe": "4af2bd5860eddcfa1cbe01c195da91dca63ea5434f1bf2c2340496347d162bc5",
+    "Release/Tests.Unit.exe": "9120548afdf45f07139bab37c0407f18d4313fcbf7d5be56d825942f55dd1a84",
+    "Release/Tests.ImportIsolation.exe": "110ddeb1c953ef9249e593735b37bf30c1e2af9fa6f3af9e03148b01b4adc53d"
+  },
+  "sourceSha256": {
+    "import-worker/src/BoundedChunkWriter.h": "23bdf2d5cb0139940e08ec1feba44f77b992653465f10eeb8a5e214d88683c1b",
+    "import-worker/src/ChunkBatchSink.h": "fdb75cc8faa723254dcca120096042fba76b7b01e3c5d056fc25590bc376a591",
+    "import-worker/src/DracoDecodeAdapter.cpp": "623236de42b30ca2a4a178bd04b80ac93eff3a139133af061c511e2fdfeb8092",
+    "import-worker/src/GltfAdapter.cpp": "9c4a3eb621116c3e02807ac088afdf818763a960f0bed2a9efb46162c13e3404",
+    "import-worker/src/GltfAdapter.h": "6bc787119d9b8c56bafa6a970544f04bc932e8f6cdb9edcfa68193700be00dbd",
+    "import-worker/src/PlyAdapter.cpp": "4c4745edd812842dbc2b702cdfe97e3ed3d5390bf559618059edaa3678ce196c",
+    "import-worker/src/PlyAdapter.h": "5846c216871bdddccd5a4ad814369c34723bd6ace0609455610d46b56f205ab4",
+    "import-worker/src/PlyImportWorker.cpp": "6ba461ac0ae8de8ecbf24e97ab2a5bde8bf1174007a004698888701cf1312d54",
+    "import-worker/src/SidecarFileClient.cpp": "11ba4a3803c6328782d91a36e849171aeb74f78822bbd4b2fae90dc170bbd2cb",
+    "import-worker/src/SidecarFileClient.h": "fe2f7b053899523302e1b5a4e205f7389b0972e672bf85270b7f1f4d9a6bb2a9",
+    "import-worker/src/StlAdapter.cpp": "84d01f8e637d452255f59d7ba0bde96904544833892f449c222a516213157af2",
+    "import-worker/src/StlAdapter.h": "50058a718236cbc82b6d9a0747ed4a412f55bb803e225582a25c89a0f354962b",
+    "import-worker/src/StlImportWorker.cpp": "ce471977db7eb285b5e149b0259d41cb506efae6b00ef3fe5815879b46fd018b",
+    "interactive-viewer/src/app/D3D12ImportBridge.cpp": "436bb74c5b8936044c187df75ae99d37173685837b26c9f354e268ecccc5e837",
+    "interactive-viewer/src/app/D3D12ImportBridge.h": "5a3b8ff56895196b4e3019f6365537397807420af2474811ec4ea50796153355",
+    "interactive-viewer/src/app/D3D12ViewerPath.cpp": "710732ac173b3fe789163f38bf51a330884bb2d865d40e764e76153aed2ba7e1",
+    "interactive-viewer/src/app/D3D12ViewerPath.h": "d8e055aa3610c1c07812e9a95fda242e35345cae76ce969e7614416a1fc7820a",
+    "interactive-viewer/src/app/Preview3D.cpp": "13a10b8a10a54a0aaafa08149e38d1b39e88f4608bd90340f9e906f3c3bf7097",
+    "interactive-viewer/src/app/RenderThread.cpp": "cf193f66584e44635da73ba419ef0661eb5ee9fb6acd5a5ff6cfe92498f7208c",
+    "interactive-viewer/src/app/RenderThread.h": "72d1bebb1aafd1f888997e361dc2a6a6d49d52a53f82dbabef4173c67222a067",
+    "interactive-viewer/src/render/Model.h": "59bfcd2dbc252b0bdeec3af9ff2a286ffd27bde69773968c400094b0bdc5035c",
+    "shared/import-broker/include/import_broker/ImportSession.h": "4a4774febf0d04d26c51e7b51bcdcbc57139e040f1bad30f1a0a234ce008ca26",
+    "shared/import-broker/include/import_broker/SharedSection.h": "aac75fc99bd1bd0335ae63ed47884857e213b01f22f7083094fd9d71b2510ad5",
+    "shared/import-broker/include/import_broker/SidecarRequestServicer.h": "09bebdbb91d69a884ffb666514b46cdadebb8b7393af5807237f832f818dc12e",
+    "shared/import-broker/src/ImportSession.cpp": "858f3ba1b54e5af0015b392951e4b89ca0685410bbd1515db067c50320399bf2",
+    "shared/import-broker/src/SharedSectionValidator.cpp": "8e80cba0d1d905f28f94475b0e4afcdd30e68cf774d8b837acecfcd6569786fa",
+    "shared/import-broker/src/SidecarRequestServicer.cpp": "9b2cccf4988e59043efab3569b9a164facd654b6ca2b737adf6dd5b9d5394ebd",
+    "shared/model-core/include/model_core/FileIdentity.h": "2c5afa2cddad221da93589da16ac0ce35984b58a718218ddd5e64ce89486ad1a",
+    "shared/model-core/include/model_core/ImportError.h": "0662d618be848577c87641351d9476ca8ca5cecc412e4ecd4773ad2628a6493b",
+    "shared/model-core/include/model_core/MappedFile.h": "c68305cc4fb93639574ef331d3f21e4dcf6e7859a4f34b104b8dd190ced9188d",
+    "shared/model-core/include/model_core/TierALimits.h": "0acece537ef195fb0dfa83b844e1888743339679ed5e24bcf341203245253c0b",
+    "shared/model-core/include/model_core/WireFormat.h": "553e5d5d92c7657ee1aea5f3ea5ecfcaab9c11663db4d7f4fda5700aba4fe51a",
+    "shared/model-core/src/MappedFile.cpp": "901c9cfbc65f8b8182d12102d04886f71502b6b30bcd16568b017ff4b4ebadd8",
+    "tests/app-smoke/bounded.py": "64feab6da18062d18521ec354a8f1e205c6acba8ad108d1571da9c63f947e494",
+    "tests/hostile-worker/src/AttackModes.cpp": "523f341dca1a945e7f61e10bbc55e145db3c05afb0748020ca4a86eed71a179a",
+    "tests/hostile-worker/src/main.cpp": "9c24c59fe716fdb94b183d1ab960f7ef84b429ce00d9023213e15b1017ba5346",
+    "tests/import-isolation/BoundedScanTests.cpp": "c8fc41f5bc7d61c06e730cb8c36d631f44846c8305084a8f3c17cf3681b4f02c",
+    "tests/import-isolation/DracoDecodeAdapterTests.cpp": "11910700ac03dd1ffb3250fac342b84cf0f1fe63471762943bfb69f511fc2901",
+    "tests/import-isolation/PlyImportTests.cpp": "e8437ad5781c01487cc1fead62a9cafe23dfdee6cdb551dcbe9fb0a0c87fa9f2",
+    "tests/import-isolation/StlImportTests.cpp": "c53c8cffe1543e1ffe88562d7aceeee926a50692274ba8253e657b1e40061b1e",
+    "tests/import-isolation/Tests.ImportIsolation.vcxproj": "78bbb881f056c458d0619ddf7f608f27a5225aefc3085516e02e8c7f1d39af38"
+  },
+  "harnessSha256": {
+    "bounded": "64feab6da18062d18521ec354a8f1e205c6acba8ad108d1571da9c63f947e494",
+    "progressive": "f3c3888ccd0cc497a323b8f885a21cf0534b3e5445936049cda8030398c6de02",
+    "textures": "fc9152e52f77ecab8cd85b51e3d88a6221f4f220028220c27dcc9cf4e25fccd6",
+    "recovery": "32478aa0f32e63f3dc83d71e8b87b9f1ddd77094388d9c9f3adbf54b4f36d105",
+    "generator": "6f92158f8b98a4eca06130b6efdd5fef6ced26d065e02ccf646ba6253eb66b20"
+  },
+  "results": {
+    "Debug/unit": {
+      "cases": 79,
+      "assertions": 7210
+    },
+    "Debug/isolation": {
+      "cases": 185,
+      "assertions": 48952
+    },
+    "Release/unit": {
+      "cases": 79,
+      "assertions": 7122
+    },
+    "Release/isolation": {
+      "cases": 185,
+      "assertions": 48952
+    }
+  },
+  "largeManifestSha256": "5b0cfca456d7a36d2e2bc4589f44239b6bbeab4e2791a035a0ab1f0eb38d1f67"
+}

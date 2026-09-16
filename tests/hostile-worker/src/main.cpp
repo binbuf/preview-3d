@@ -78,6 +78,12 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--position-nan")) return hostile_worker::RunMetadataAttack(9);
     if (ArgEquals(argv[1], "--position-inf")) return hostile_worker::RunMetadataAttack(10);
 
+    if (ArgEquals(argv[1], "--source-byte-offset")) return hostile_worker::RunMetadataAttack(12);
+    if (ArgEquals(argv[1], "--source-byte-length")) return hostile_worker::RunMetadataAttack(13);
+    if (ArgEquals(argv[1], "--source-primitive-id")) return hostile_worker::RunMetadataAttack(14);
+    if (ArgEquals(argv[1], "--source-accessor-range")) return hostile_worker::RunMetadataAttack(15);
+    if (ArgEquals(argv[1], "--source-range-valid")) return hostile_worker::RunMetadataAttack(16);
+
     // Progressive-delivery attacks; see AttackModes.h.
     if (ArgEquals(argv[1], "--batches-honest")) {
         return hostile_worker::RunHonestBatches();

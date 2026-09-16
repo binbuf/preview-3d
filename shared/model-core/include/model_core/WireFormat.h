@@ -94,8 +94,9 @@ static_assert(sizeof(SectionHeader) == 88, "SectionHeader wire layout changed");
 // sizeof(SectionHeader). Never variable-length or self-describing -- the
 // host must be able to bounds-check it before interpreting any of it.
 struct ChunkDescriptor {
-    uint64_t sourceRangeOffset;     // opaque provenance value (stands in for a real source-file offset)
-    uint64_t sourceRangeLength;
+    uint64_t
+        sourceRangeOffset; // STL/PLY: byte offset. glTF: (mesh primitive ordinal << 32) | first index element
+    uint64_t sourceRangeLength; // STL/PLY: byte extent. glTF: index-element count; meshId/nodeId disambiguate
     uint64_t normalizedRangeOffset; // byte offset of this chunk's payload, relative to section start
     uint64_t normalizedRangeLength; // redundant cross-check against byteSize
     ChunkTopology topology;

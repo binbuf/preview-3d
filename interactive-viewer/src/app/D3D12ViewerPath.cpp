@@ -1077,6 +1077,7 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         gpuMesh.materialChunkId = mesh.materialChunkId;
         gpuMesh.sourceMeshId = mesh.geometry.meshId;
         gpuMesh.sourceNodeId = mesh.geometry.nodeId;
+        gpuMesh.sourceGeometry = mesh.geometry;
         gpuMesh.points = points; gpuMesh.vertexCount = mesh.vertexCount;
         gpuMesh.positionOnly = positionOnly;
         std::memcpy(gpuMesh.origin, mesh.geometry.origin, sizeof(gpuMesh.origin));

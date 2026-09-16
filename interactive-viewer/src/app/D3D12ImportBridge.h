@@ -80,6 +80,7 @@ struct ImportedImage {
 struct ImportResult {
     bool ok = false;
     model_core::SceneMetadata scene{};
+    model_core::FileIdentity sourceIdentity{};
     uint32_t textureWarningCount = 0;
     model_core::ImportStatusPayload status{};
     bool forceUploadFailureForTesting = false;

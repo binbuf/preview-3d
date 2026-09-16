@@ -127,3 +127,13 @@ TEST_CASE("DecodeDracoMesh rejects when the caller's DracoAttributeIds has no po
     REQUIRE(std::holds_alternative<model_core::ImportErrorCode>(result));
     CHECK(std::get<model_core::ImportErrorCode>(result) == model_core::ImportErrorCode::MalformedData);
 }
+
+TEST_CASE("Draco declared expansion is checked before invoking the decoder", "[draco][bounded-scan]")
+{
+    const std::byte bytes[]{std::byte('D'), std::byte('R'), std::byte('A'), std::byte('C'), std::byte('O')};
+    import_worker::DracoAttributeIds ids;
+    ids.position = 0;
+    auto result = import_worker::DecodeDracoMesh(bytes, ids, 300000000, 30000000);
+    REQUIRE(std::holds_alternative<model_core::ImportErrorCode>(result));
+    CHECK(std::get<model_core::ImportErrorCode>(result) == model_core::ImportErrorCode::DracoPrimitiveLimit);
+}

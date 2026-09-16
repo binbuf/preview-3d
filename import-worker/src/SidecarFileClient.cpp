@@ -9,7 +9,8 @@
 
 namespace import_worker {
 
-SidecarFileClient::Result SidecarFileClient::RequestSidecarBytes(const std::string& relativePathUtf8, uint64_t maxBytes)
+SidecarFileClient::Result SidecarFileClient::RequestSidecarBytes(const std::string& relativePathUtf8,
+                                                                 uint64_t maxBytes, bool mappedOnly)
 {
     Result result;
 
@@ -69,12 +70,15 @@ SidecarFileClient::Result SidecarFileClient::RequestSidecarBytes(const std::stri
         return result;
     }
 
-    // Copy once here rather than threading a MappingLease through
-    // GltfAdapter.cpp's WalkState -- a deliberate simplicity-over-micro-
-    // optimization call; sidecar files are individually size-capped by the
-    // host (ready.sidecarByteLength, never trusted beyond what the mapping
-    // itself proves), so this is bounded.
-    result.bytes = std::vector<std::byte>(lease.Bytes().begin(), lease.Bytes().end());
+    // Geometry sidecars retain a read-only lease; bounded encoded images
+    // retain an owned copy for decoder APIs. Neither path grants new path authority.
+    if (mappedOnly)
+    {
+        result.file = std::move(openResult.file);
+        result.mapping = std::move(lease);
+    }
+    else
+        result.bytes = std::vector<std::byte>(lease.Bytes().begin(), lease.Bytes().end());
     return result;
 }
 

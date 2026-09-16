@@ -1,0 +1,11 @@
+Filters: [large-scan]
+Randomness seeded to: 2659109801
+bounded-scan A-large-glb.glb: 60000000 triangles 0 points 920 chunks 102 batches first=699.972ms total=63406.5ms worker=31436800 host=134537216 bytes workerMapped=4366319616 hostMapped=71208960 address bytes
+bounded-scan A-large-stl.stl: 60000000 triangles 0 points 916 chunks 102 batches first=368.587ms total=34449ms worker=8982528 host=134230016 bytes workerMapped=74563584 hostMapped=71208960 address bytes
+bounded-scan A-large-ply-mesh-le.ply: 60000000 triangles 0 points 916 chunks 102 batches first=15723.9ms total=100746ms worker=24428544 host=134225920 bytes workerMapped=88064000 hostMapped=71208960 address bytes
+bounded-scan A-large-ply-mesh-be.ply: 60000000 triangles 0 points 916 chunks 102 batches first=17281.5ms total=103941ms worker=24424448 host=134291456 bytes workerMapped=88064000 hostMapped=71208960 address bytes
+bounded-scan A-large-ply-points-le.ply: 0 triangles 60000000 points 115 chunks 12 batches first=1396.32ms total=15887.8ms worker=15826944 host=134324224 bytes workerMapped=88064000 hostMapped=71208960 address bytes
+bounded-scan A-large-ply-points-be.ply: 0 triangles 60000000 points 115 chunks 12 batches first=1414.95ms total=16504ms worker=15810560 host=134266880 bytes workerMapped=88064000 hostMapped=71208960 address bytes
+bounded-scan A-adversarial-layout.gltf: 35791392 triangles 0 points 552 chunks 61 batches first=735.197ms total=39924.1ms worker=27033600 host=134266880 bytes workerMapped=2218913792 hostMapped=71208960 address bytes
+===============================================================================
+All tests passed (31776 assertions in 1 test case)

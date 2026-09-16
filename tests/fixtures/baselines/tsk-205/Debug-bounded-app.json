@@ -1,0 +1,79 @@
+{
+  "configuration": "Debug",
+  "exeSha256": "d09bdfea91f70c28069579ee8f2729866d00ea12dfea35f77e87b2d4dce3220d",
+  "workerExeSha256": "45bb56d3c94b9f7ca724f5f6dda012034dcff05b34ae62c72fbd802fd88ee8d4",
+  "fixtureSha256": {
+    "mesh-be.ply": "702537b384d0974ea9b740c0c73dd2d13c1d4abcdcc091a25d9630f1bb77dc72",
+    "mesh-le.ply": "588a8eae48478f58dabfbbaa8e1ec2a617ec1706ce590cf913c87ace3238f481",
+    "points-be.ply": "710072beb64dbb8ca3b1a633c2485a3ba20e9fb9e9d531b62a0521842f0e2fb9",
+    "points-le.ply": "abb00593050a788e973ab101850424817b9d3007e95d692933bbdd42c3992fb2",
+    "split.glb": "c659531aa30a9db5575aa3e1313197f0f737e2a6ccd9929993efcd8c0c2abd76",
+    "split.stl": "98f191e2e4035848175c047eaa0d0bc3a308323aeac2bdc1162bc12e520787c7"
+  },
+  "run": {
+    "failure": null,
+    "events": [
+      {
+        "fixture": "split.glb",
+        "firstGeometryMs": 5627.491899998859,
+        "firstTriangles": 565536,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 17680.889600000228,
+        "chunks": 32
+      },
+      {
+        "fixture": "split.stl",
+        "firstGeometryMs": 1359.4344000011915,
+        "firstTriangles": 589824,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 4063.3425999985775,
+        "chunks": 31
+      },
+      {
+        "fixture": "mesh-le.ply",
+        "firstGeometryMs": 20963.2780000029,
+        "firstTriangles": 589824,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 38035.81440000562,
+        "chunks": 31
+      },
+      {
+        "fixture": "mesh-be.ply",
+        "firstGeometryMs": 20276.079800001753,
+        "firstTriangles": 589824,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 37183.365500000946,
+        "chunks": 31
+      },
+      {
+        "fixture": "points-le.ply",
+        "firstGeometryMs": 32152.787200000603,
+        "firstTriangles": 0,
+        "firstPoints": 5242880,
+        "firstState": 2,
+        "readyMs": 44295.043500002066,
+        "chunks": 16
+      },
+      {
+        "fixture": "points-be.ply",
+        "firstGeometryMs": 26813.126200002444,
+        "firstTriangles": 0,
+        "firstPoints": 5242880,
+        "firstState": 2,
+        "readyMs": 37227.417800000694,
+        "chunks": 16
+      }
+    ],
+    "viewerPeakPrivateBytes": 1117663232,
+    "workerPeakPrivateBytes": 41791488,
+    "peakQueueBytes": 66847570,
+    "maxUiMs": 463.5067999988678,
+    "baselineViewerPrivateBytes": 421318656,
+    "exitCode": 0,
+    "survivingWorkers": 0
+  }
+}

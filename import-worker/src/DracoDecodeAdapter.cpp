@@ -1,4 +1,5 @@
 #include "DracoDecodeAdapter.h"
+#include "BoundedChunkWriter.h"
 
 #include "platform/CheckedMath.h"
 
@@ -46,6 +47,13 @@ std::variant<DracoDecodedMesh, ImportErrorCode> DecodeDracoMesh(
         return ImportErrorCode::MalformedData;
     }
 
+    const auto declaredVertices = CheckedMultiply(uint64_t(expectedVertexCount), uint64_t(64));
+    const auto declaredIndices = CheckedMultiply(uint64_t(expectedIndexCount), uint64_t(8));
+    const auto declared =
+        declaredVertices && declaredIndices ? CheckedAdd(*declaredVertices, *declaredIndices) : std::nullopt;
+    if (expectedIndexCount % 3 || expectedIndexCount / 3 > kMaxDracoTriangles || !declared ||
+        *declared > kMaxDracoDecodedWorkingSetBytes || *declared > TierAScratchLimit() / 2)
+        return ImportErrorCode::DracoPrimitiveLimit;
     draco::DecoderBuffer buffer;
     buffer.Init(reinterpret_cast<const char*>(compressedBufferViewBytes.data()),
                 compressedBufferViewBytes.size());

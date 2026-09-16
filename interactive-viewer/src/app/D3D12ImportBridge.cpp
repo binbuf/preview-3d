@@ -1,3 +1,4 @@
+#include "model_core/TierALimits.h"
 #include "D3D12ImportBridge.h"
 #include <cstdio>
 
@@ -69,6 +70,27 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     case model_core::ImportErrorCode::MalformedData:
         summary = L"This file could not be read.";
         details = L"The importer found data that doesn't match the expected file format.";
+        return;
+    case model_core::ImportErrorCode::PrimarySourceLimit:
+        summary = L"The primary source exceeds the import limit.";
+        details = L"Tier A primary files are limited to 8 GiB.";
+        return;
+    case model_core::ImportErrorCode::AggregateSourceLimit:
+        summary = L"The model and sidecars exceed the import limit.";
+        details = L"Combined local source files are limited to 12 GiB.";
+        return;
+    case model_core::ImportErrorCode::ScratchLimit:
+        summary = L"The importer scratch budget was exceeded.";
+        details = L"Import scratch is limited to 1 GiB or 25% of physical RAM, whichever is lower.";
+        return;
+    case model_core::ImportErrorCode::ChunkCatalogLimit:
+        summary = L"The model has too many source ranges.";
+        details = L"The bounded geometry, material and image catalog cannot accept more entries.";
+        return;
+    case model_core::ImportErrorCode::DracoPrimitiveLimit:
+        summary = L"A compressed primitive exceeds the decode limit.";
+        details =
+            L"One Draco primitive is limited to 512 MiB of estimated decode work and 10 million triangles.";
         return;
     case model_core::ImportErrorCode::ResourceLimit:
         summary = L"This model is too large to preview.";
@@ -181,12 +203,11 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
 }
 
 constexpr uint32_t kMaxSidecarRequestsPerGeneration = 64;
-constexpr uint64_t kMaxSidecarFileBytes = 256ull * 1024ull * 1024ull;
+constexpr uint64_t kMaxSidecarFileBytes = 8ull * 1024ull * 1024ull * 1024ull;
 
-// Provisional finite round-trip ceiling retained for this slice. TSK-205
-// derives replacement batch/catalog ceilings from normalized expansion;
-// source bytes do not bound normalized bytes (e.g. instances/compression).
-constexpr uint32_t kMaxChunkBatchesPerGeneration = 256;
+// Derived from normalized expansion, logical occurrence tails, material slots
+// and immutable texture replacements; also safe for one-chunk test windows.
+constexpr uint32_t kMaxChunkBatchesPerGeneration = model_core::kTierABatchLimit;
 
 } // namespace
 
@@ -197,10 +218,12 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
         && session.errorCode == model_core::ImportErrorCode::MalformedData)
         DescribeImportError(model_core::ImportErrorCode::ImportProtocolViolation, summary, details);
     // Codes with a specific document explanation override generic stage text.
-    if (session.errorCode == model_core::ImportErrorCode::FileChanged
-        || session.errorCode == model_core::ImportErrorCode::OutOfMemory
-        || session.errorCode == model_core::ImportErrorCode::WorkerCrashed
-        || session.errorCode == model_core::ImportErrorCode::ResourceLimit)
+    if (session.errorCode == model_core::ImportErrorCode::FileChanged ||
+        session.errorCode == model_core::ImportErrorCode::OutOfMemory ||
+        session.errorCode == model_core::ImportErrorCode::WorkerCrashed ||
+        session.errorCode == model_core::ImportErrorCode::ResourceLimit ||
+        (session.errorCode >= model_core::ImportErrorCode::PrimarySourceLimit &&
+         session.errorCode <= model_core::ImportErrorCode::DracoPrimitiveLimit))
         DescribeImportError(session.errorCode, summary, details);
 }
 
@@ -288,7 +311,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.sectionByteCapacity = sectionBytes;
     if (delayBatchesForTesting && format == SourceFormat::Glb)
         sessionRequest.workerArgumentsOverride = L"--parse-gltf-delayed-batches";
-    sessionRequest.maxChunksPerGeneration = 65536;
+    sessionRequest.maxChunksPerGeneration = model_core::kTierACatalogLimit;
     sessionRequest.maxChunkCount = import_broker::kImportMaxChunkCount;
     sessionRequest.maxSidecarRequestsPerGeneration = kMaxSidecarRequestsPerGeneration;
     sessionRequest.maxSidecarFileBytes = kMaxSidecarFileBytes;
@@ -387,7 +410,13 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         DescribeSessionFailure(session, result.errorSummary, result.errorDetails);
         return result;
     }
-    if (!onBatch) return unpack(std::move(session.chunks));
+    if (!onBatch)
+    {
+        result = unpack(std::move(session.chunks));
+        result.sourceIdentity = session.sourceIdentity;
+        return result;
+    }
+    result.sourceIdentity = session.sourceIdentity;
     result.ok = true;
     return result;
 }

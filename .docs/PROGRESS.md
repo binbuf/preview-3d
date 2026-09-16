@@ -4,6 +4,37 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 2 / TSK-205 (2026-09-15): complete.**
+  Replaced product whole-model normalization with bounded glTF primitive,
+  binary STL and both-endian PLY mesh/point clusters. Nonlocal PLY vertices use
+  indexed mapped windows; variable-width records retain sparse offset checkpoints.
+  Remapping, sparse accessor validation, polygon fans and unknown lists are
+  bounded. Geometry publishes progressively with acknowledgement backpressure;
+  normalized CPU payloads are released after upload. Source/count/scratch and
+  independent Draco limits precede allocations, including a bounded JSON
+  preflight before fastgltf reserves asset arrays. Catalog/batch ceilings derive
+  from split expansion and occurrence tails. The broker rejects hostile source
+  ranges and changed files; immutable model/GPU records retain full primary
+  identity and source descriptors for later worker re-decode. Protocol v4 and
+  wire layouts remain unchanged; five closed limit codes identify failures.
+  Debug/Release solution builds pass. Unit: 79 cases each / 7,210 Debug and
+  7,122 Release assertions. ImportIsolation: 185 cases / 48,952 assertions each.
+  Seven explicit large scans pass 31,776 assertions: 2–4 GiB GLB/STL and both
+  PLY byte orders for 60 million triangles/points, plus a mapped 2 GiB glTF
+  sidecar. Counts/bounds, progressive publication and bounded catalogs pass;
+  peak worker private memory stays below 30 MiB, host growth below 129 MiB.
+  Mapped address space is recorded separately and is not resident-RAM evidence.
+  Both viewers complete six split fixtures; Release also opens/cancels four
+  multi-GiB sources and recovers. Queued payloads stay below 64 MiB, measured
+  aggregate private growth below 704 MiB Debug / 565 MiB Release. Progressive,
+  texture and recovery checks pass: fourteen final viewer processes, zero
+  survivors, zero Debug texture D3D12 errors. Frozen manifest, binary/harness
+  hashes and reports are in [TSK-205_VERIFICATION.md](./TSK-205_VERIFICATION.md).
+  No dependency/license changes or persistent cache. Large PLY mesh first
+  batches take 16–17 seconds; useful representative preview, live GPU detail
+  budgets/eviction and startup/frame/input qualification remain later tasks.
+  **TSK-206 is next.**
+
 - **Scope-limited MVP, Phase 2 / TSK-204 (2026-09-15): complete.**
   Added closed failure codes and validated worker phases, generation/length/enum
   checks on error notices, distinct empty/malformed/deferred-encoding handling,

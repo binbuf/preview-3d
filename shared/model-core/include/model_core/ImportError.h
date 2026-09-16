@@ -29,12 +29,17 @@ enum class ImportErrorCode : uint32_t {
     WorkerCrashed = 14,
     WorkerTimedOut = 15,
     UploadFailure = 16,
+    PrimarySourceLimit = 17,
+    AggregateSourceLimit = 18,
+    ScratchLimit = 19,
+    ChunkCatalogLimit = 20,
+    DracoPrimitiveLimit = 21,
 };
 
 constexpr bool IsKnownImportErrorCode(uint32_t code)
 {
-    return code >= uint32_t(ImportErrorCode::MalformedData)
-        && code <= uint32_t(ImportErrorCode::UploadFailure);
+    return code >= uint32_t(ImportErrorCode::MalformedData) &&
+           code <= uint32_t(ImportErrorCode::DracoPrimitiveLimit);
 }
 
 } // namespace model_core

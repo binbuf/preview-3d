@@ -411,7 +411,7 @@ TEST_CASE("A declared triangle count exceeding the sanity cap is rejected as Res
     sandbox_test_support::SandboxFixture fixture;
 
     std::vector<std::byte> bytes(84, std::byte{ 0 });
-    uint32_t hugeCount = 2'000'001; // one past StlAdapter.cpp's kMaxFacets
+    uint32_t hugeCount = 100'000'001; // one past Tier A triangle cap
     std::memcpy(bytes.data() + 80, &hugeCount, sizeof(hugeCount));
     ScratchStlFile file(bytes);
 

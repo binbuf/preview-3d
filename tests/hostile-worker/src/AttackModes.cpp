@@ -676,6 +676,14 @@ int RunMetadataAttack(int mode)
         std::memcpy(view.bytes().data()+kSectionHeaderSize+kChunkDescriptorSize,&other,sizeof(other));
         break;
     }
+    case 12: case 13: case 14: case 15: case 16: {
+        header.chunkCount=1;
+        header.scene.format=mode==12 ? SourceFormatId::Stl : mode==13 ? SourceFormatId::Ply : mode==14 ? SourceFormatId::Gltf:SourceFormatId::Glb;
+        if (mode>=14) {header.scene.upAxis=UpAxisId::Y;header.scene.metersPerUnit=1;}
+        descriptor.sourceRangeOffset=mode==12 ? UINT64_MAX : mode==14 ? (uint64_t(100000)<<32) : mode==15 ? 300000000 : 0;
+        descriptor.sourceRangeLength=mode==13 ? UINT64_MAX: mode==16 ? descriptor.indexCount:mode==15 ? 2:1;
+        break;
+    }
     case 9: case 10: {
         float value = mode == 9 ? nan : std::numeric_limits<float>::infinity();
         std::memcpy(view.bytes().data()+descriptor.normalizedRangeOffset,&value,sizeof(value));

@@ -1,3 +1,4 @@
+#include "model_core/TierALimits.h"
 #include "import_broker/ImportSession.h"
 
 #include "import_broker/ControlChannelWait.h"
@@ -176,6 +177,7 @@ ImportSessionResult Fail(ImportStage stage, model_core::ImportErrorCode code = m
 struct BatchAcceptance {
     uint32_t nextBatchIndex = 0;
     uint32_t totalChunks = 0;
+    uint64_t triangles = 0, points = 0, vertices = 0;
     KnownChunkCatalog catalog;
     KnownChunkCatalog unresolved;
     KnownImageCatalog images;
@@ -229,6 +231,22 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     BY_HANDLE_FILE_INFORMATION sourceBefore{};
     if (!GetFileInformationByHandle(opened.file.get(), &sourceBefore))
         return Fail(ImportStage::OpenSource, model_core::ImportErrorCode::FileUnavailable);
+    const uint64_t primaryBytes = (uint64_t(sourceBefore.nFileSizeHigh) << 32) | sourceBefore.nFileSizeLow;
+    if (primaryBytes > 8ull * 1024 * 1024 * 1024)
+        return Fail(ImportStage::OpenSource, model_core::ImportErrorCode::PrimarySourceLimit);
+    FILE_ID_INFO primaryId{};
+    if (!GetFileInformationByHandleEx(opened.file.get(), FileIdInfo, &primaryId, sizeof(primaryId)))
+        return Fail(ImportStage::OpenSource, model_core::ImportErrorCode::FileUnavailable);
+    model_core::FileIdentity sourceIdentity{};
+    sourceIdentity.volumeSerialNumber = primaryId.VolumeSerialNumber;
+    std::memcpy(sourceIdentity.fileId128.data(), primaryId.FileId.Identifier,
+                sourceIdentity.fileId128.size());
+    sourceIdentity.sizeBytes = primaryBytes;
+    sourceIdentity.lastWriteTime = int64_t((uint64_t(sourceBefore.ftLastWriteTime.dwHighDateTime) << 32) |
+                                           sourceBefore.ftLastWriteTime.dwLowDateTime);
+    uint64_t allSourceBytes = primaryBytes;
+    uint64_t accumulatedBytes = 0;
+    std::vector<SourceChunkRange> sourceCatalog;
     auto duplicatedFile = DuplicateInheritableHandle(opened.file.get());
     if (!duplicatedFile) {
         return Fail(ImportStage::DuplicateSourceHandle);
@@ -424,7 +442,91 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                 }
             }
         }
+        uint64_t newTriangles = acceptance.triangles, newPoints = acceptance.points,
+                 newVertices = acceptance.vertices;
+        for (const auto& chunk : validation.chunks)
+        {
+            const auto& d = chunk.descriptor;
+            if (d.topology == model_core::ChunkTopology::TriangleList)
+                newTriangles += d.indexCount / 3;
+            if (d.topology == model_core::ChunkTopology::PointList)
+                newPoints += d.vertexCount;
+            if (d.topology == model_core::ChunkTopology::TriangleList ||
+                d.topology == model_core::ChunkTopology::PointList)
+                newVertices += d.vertexCount;
+        }
+        if (newTriangles > model_core::kTierATriangleLimit || newPoints > model_core::kTierAPointLimit ||
+            newVertices > model_core::kTierAVertexLimit)
+        {
+            failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ResourceLimit);
+            return false;
+        }
+        acceptance.triangles = newTriangles;
+        acceptance.points = newPoints;
+        acceptance.vertices = newVertices;
+        BY_HANDLE_FILE_INFORMATION currentSource{};
+        if (!GetFileInformationByHandle(opened.file.get(), &currentSource) ||
+            currentSource.nFileSizeHigh != sourceBefore.nFileSizeHigh ||
+            currentSource.nFileSizeLow != sourceBefore.nFileSizeLow ||
+            CompareFileTime(&currentSource.ftLastWriteTime, &sourceBefore.ftLastWriteTime))
+        {
+            failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::FileChanged);
+            return false;
+        }
+        for (const auto& chunk : validation.chunks)
+        {
+            const auto& d = chunk.descriptor;
+            if (d.topology != model_core::ChunkTopology::TriangleList &&
+                d.topology != model_core::ChunkTopology::PointList)
+                continue;
+            if (!d.sourceRangeLength && chunk.scene.format != model_core::SourceFormatId::Unknown)
+            {
+                failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+                return false;
+            }
+            if (d.sourceRangeLength)
+            {
+                if ((chunk.scene.format == model_core::SourceFormatId::Stl ||
+                     chunk.scene.format == model_core::SourceFormatId::Ply) &&
+                    (d.sourceRangeOffset > primaryBytes ||
+                     d.sourceRangeLength > primaryBytes - d.sourceRangeOffset))
+                {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+                    return false;
+                }
+                if (chunk.scene.format == model_core::SourceFormatId::Stl &&
+                    (d.sourceRangeOffset < 84 || (d.sourceRangeOffset - 84) % 50 ||
+                     d.sourceRangeLength % 50 || d.indexCount / 3 > d.sourceRangeLength / 50))
+                {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+                    return false;
+                }
+                if ((chunk.scene.format == model_core::SourceFormatId::Gltf ||
+                     chunk.scene.format == model_core::SourceFormatId::Glb) &&
+                    ((d.sourceRangeOffset >> 32) >= model_core::kTierAObjectLimit ||
+                     uint32_t(d.sourceRangeOffset) > 300000000 ||
+                     d.sourceRangeLength > 300000000 - uint32_t(d.sourceRangeOffset) ||
+                     d.sourceRangeLength != d.indexCount))
+                {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+                    return false;
+                }
+                sourceCatalog.push_back({request.generationId, d});
+            }
+        }
         acceptance.Record(validation.chunks);
+        if (!request.onBatch)
+        {
+            for (const auto& chunk : validation.chunks)
+            {
+                if (chunk.payload.size() > 128ull * 1024 * 1024 - accumulatedBytes)
+                {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ResourceLimit);
+                    return false;
+                }
+                accumulatedBytes += chunk.payload.size();
+            }
+        }
         if (request.onBatch) {
             request.onBatch(std::move(validation.chunks));
             if (request.isCancelled && request.isCancelled()) {
@@ -455,10 +557,12 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             model_core::RequestSidecarFileNotice sidecar{};
             std::memcpy(&sidecar, received.payload.data(), sizeof(sidecar));
             auto serviced = ServiceSidecarRequest(proc->process.get(), opened.canonicalPath, sidecar,
-                                                   request.maxSidecarFileBytes);
+                                                  request.maxSidecarFileBytes,
+                                                  12ull * 1024 * 1024 * 1024 - allSourceBytes);
 
             bool sentReply = false;
             if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {
+                allSourceBytes += ready->sidecarByteLength;
                 sentReply = model_core::WriteControlMessage(controlInWrite.get(),
                                                              model_core::ControlOpcode::SidecarFileReady, ready,
                                                              sizeof(*ready));
@@ -605,6 +709,8 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     result.stage = ImportStage::Completed;
     result.chunks = std::move(accumulated);
     result.batchCount = acceptance.nextBatchIndex;
+    result.sourceCatalog = std::move(sourceCatalog);
+    result.sourceIdentity = sourceIdentity;
     return result;
 }
 

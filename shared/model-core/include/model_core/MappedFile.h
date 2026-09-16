@@ -9,10 +9,10 @@
 // trusted process's job, per that document's "Input boundary" section)
 // and cross-process handle duplication (the broker's job) are both a
 // later slice -- this type just opens a path with CreateFileW and maps
-// windows of the resulting handle. Re-verifying "did the file change
-// since open" against a fresh identity query is likewise left to whatever
-// future generation-lifecycle caller needs it; this type only exposes
-// Identity(), it does not re-check it itself.
+// windows of the resulting handle. Identity includes write time; IsUnchanged
+// and mapping checkpoints re-check size/write time through the pinned handle.
+
+#include "FileIdentity.h"
 
 #include <platform/MappedView.h>
 #include <platform/Win32Handle.h>
@@ -31,19 +31,6 @@ enum class MappedFileAccessHint {
     Unknown,    // no hint -- access pattern not yet known; never a trust decision
     Sequential, // STL/PLY/packaged sequential scans
     Random,     // glTF/USD offset graphs
-};
-
-struct FileIdentity {
-    uint64_t volumeSerialNumber = 0;
-    std::array<std::byte, 16> fileId128{}; // FILE_ID_INFO::FileId, from GetFileInformationByHandleEx
-    uint64_t sizeBytes = 0;
-
-    bool operator==(const FileIdentity& other) const noexcept
-    {
-        return volumeSerialNumber == other.volumeSerialNumber && fileId128 == other.fileId128
-            && sizeBytes == other.sizeBytes;
-    }
-    bool operator!=(const FileIdentity& other) const noexcept { return !(*this == other); }
 };
 
 // A bounded-lifetime view over part of a MappedFile. Owns the underlying
@@ -111,6 +98,7 @@ public:
 
     const FileIdentity& Identity() const noexcept { return identity_; }
     uint64_t SizeBytes() const noexcept { return identity_.sizeBytes; }
+    bool IsUnchanged() const noexcept;
 
     // Maps [offset, offset + length), rounding the mapping's base down to
     // the system allocation granularity internally -- the returned

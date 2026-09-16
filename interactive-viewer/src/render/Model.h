@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model_core/FileIdentity.h"
+
 #include <DirectXMath.h>
 #include <model_core/WireFormat.h>
 
@@ -83,6 +85,7 @@ struct ModelData
     std::uint64_t vertexCount = 0;
     std::uint64_t pointCount = 0;
     model_core::SceneMetadata source{};
+    model_core::FileIdentity sourceIdentity{};
     double sceneOrigin[3]{};
     double relativeMin[3]{};
     double relativeMax[3]{};

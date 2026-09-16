@@ -50,8 +50,8 @@ constexpr uint64_t kImportSectionBytes = 4 * kMaxDetailChunkPayloadBytes;
 // chunkCount, checked before any payload is trusted
 // (SharedSectionValidator.cpp:102).
 //
-// At model_core::kChunkDescriptorSize (92 bytes) 1024 entries is 92 KiB --
-// 0.14% of the window, so the byte budget stays the binding limit rather
+// At model_core::kChunkDescriptorSize (156 bytes) 1024 entries is 156 KiB --
+// 0.24% of the window, so the byte budget stays the binding limit rather
 // than the count. The previous 64 was chosen for a ~1.5 KiB synthetic
 // fixture: A-medium's 2,000 nodes alone can produce more chunks than that
 // once logical primitives are split "while preserving material and instance

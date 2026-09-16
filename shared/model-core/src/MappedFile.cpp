@@ -79,10 +79,17 @@ MappedFileOpenResult MappedFile::BuildFromOpenFile(platform::Win32Handle file)
         return result;
     }
 
+    FILE_BASIC_INFO basic{};
+    if (!GetFileInformationByHandleEx(file.get(), FileBasicInfo, &basic, sizeof(basic)))
+    {
+        result.error = L"The file write time could not be read.";
+        return result;
+    }
     FileIdentity identity;
     identity.volumeSerialNumber = idInfo.VolumeSerialNumber;
     std::memcpy(identity.fileId128.data(), idInfo.FileId.Identifier, identity.fileId128.size());
     identity.sizeBytes = sizeBytes;
+    identity.lastWriteTime = basic.LastWriteTime.QuadPart;
 
     HANDLE rawMapping = CreateFileMappingW(file.get(), nullptr, PAGE_READONLY, 0, 0, nullptr);
     if (rawMapping == nullptr) {
@@ -95,8 +102,23 @@ MappedFileOpenResult MappedFile::BuildFromOpenFile(platform::Win32Handle file)
     return result;
 }
 
+bool MappedFile::IsUnchanged() const noexcept
+{
+    FILE_STANDARD_INFO standard{};
+    FILE_BASIC_INFO basic{};
+    return GetFileInformationByHandleEx(file_.get(), FileStandardInfo, &standard, sizeof(standard)) &&
+           GetFileInformationByHandleEx(file_.get(), FileBasicInfo, &basic, sizeof(basic)) &&
+           uint64_t(standard.EndOfFile.QuadPart) == identity_.sizeBytes &&
+           basic.LastWriteTime.QuadPart == identity_.lastWriteTime;
+}
+
 MappingLease MappedFile::MapWindow(uint64_t offset, uint64_t length, std::wstring& error) const
 {
+    if (!IsUnchanged())
+    {
+        error = L"The source changed during scanning.";
+        return MappingLease();
+    }
     if (length == 0) {
         error = L"A mapping window's length must be non-zero.";
         return MappingLease();

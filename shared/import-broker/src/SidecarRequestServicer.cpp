@@ -7,7 +7,8 @@ namespace import_broker {
 
 std::variant<model_core::SidecarFileReadyNotice, model_core::SidecarFileUnavailableNotice>
 ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonicalPath,
-                       const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes)
+                      const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes,
+                      uint64_t remainingSourceBytes)
 {
     model_core::SidecarFileUnavailableNotice unavailable{};
     unavailable.generationId = request.generationId;
@@ -25,6 +26,11 @@ ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonical
         return unavailable;
     }
 
+    if (resolution.fileSizeBytes > remainingSourceBytes)
+    {
+        unavailable.errorCode = uint32_t(model_core::ImportErrorCode::AggregateSourceLimit);
+        return unavailable;
+    }
     auto duplicated = DuplicateHandleIntoProcess(resolution.file.get(), workerProcess);
     // resolution.file goes out of scope and closes here regardless -- the
     // worker's just-duplicated handle is an independent reference to the

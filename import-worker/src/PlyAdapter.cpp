@@ -1,4 +1,6 @@
 #include "PlyAdapter.h"
+#include "BoundedChunkWriter.h"
+#include <unordered_map>
 
 #include "AsciiTokenizer.h"
 #include "model_core/Checksum.h"
@@ -24,20 +26,19 @@ using namespace model_core;
 using platform::CheckedAdd;
 using platform::CheckedMultiply;
 
-// No full Tier-A hard-limits table enforcement yet (.docs/design/03-file-formats-and-ingestion.md)
-// -- self-contained sanity constants, same simplification StlAdapter.cpp's
-// kMaxFacets already made.
+// Header/list/decode-unit limits supplement the Tier A count and scratch caps.
 constexpr size_t kMaxHeaderBytes = 64 * 1024;
 constexpr size_t kMaxLineLength = 4096;
 constexpr size_t kMaxHeaderLines = 4096;
 constexpr size_t kMaxElementCount = 64;
 constexpr size_t kMaxPropertiesPerElement = 64;
-constexpr uint64_t kMaxVertices = 20'000'000;
-constexpr uint64_t kMaxFaces = 4'000'000;
+constexpr uint64_t kMaxVertices = kTierAVertices;
+constexpr uint64_t kMaxFaces = kTierATriangles;
 constexpr uint64_t kMaxPolygonVerticesPerFace = 255; // largest value a conventional uchar count_type encodes
-constexpr uint64_t kMaxTrianglesAfterTriangulation = 8'000'000; // running total across all faces --
-    // kMaxFaces * (kMaxPolygonVerticesPerFace-2) alone amplifies past any single-file limit
-constexpr uint64_t kMaxSkippedElementRecordCount = 4'000'000;
+constexpr uint64_t kMaxTrianglesAfterTriangulation =
+    kTierATriangles; // running total across all faces --
+                     // kMaxFaces * (kMaxPolygonVerticesPerFace-2) alone amplifies past any single-file limit
+constexpr uint64_t kMaxSkippedElementRecordCount = kTierAVertices;
 constexpr uint64_t kMaxSkippedListLength = 65'536; // generic bound for any list-typed property
     // this adapter doesn't specifically recognize (vertex-element lists, non-index face lists,
     // and any property on an unrecognized element)
@@ -439,10 +440,23 @@ float Dot(const Vec3& a, const Vec3& b)
 } // namespace
 
 std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::byte> sourcePlyBytes,
-                                                            std::span<std::byte> destination,
-                                                            uint64_t generationId,
-                                                            uint32_t maxChunkCount, bool allowAscii)
+                                                         std::span<std::byte> destination,
+                                                         uint64_t generationId, uint32_t maxChunkCount,
+                                                         bool allowAscii, ChunkBatchSink* batchSink,
+                                                         model_core::MappedFile* mappedSource)
 {
+    const uint64_t sourceSize = mappedSource ? mappedSource->SizeBytes() : sourcePlyBytes.size();
+    BoundedMappedReader mappedReader(mappedSource);
+    auto readSource = [&](uint64_t& at, uint64_t bytes) -> std::optional<std::span<const std::byte>> {
+        if (!mappedSource)
+            return ReadBytes(sourcePlyBytes, at, bytes);
+        auto result = mappedReader.Read(at, bytes);
+        if (result)
+            at += bytes;
+        return result;
+    };
+    if (sourceSize > kTierAPrimaryBytes || TierAScratchLimit() < 32ull * 1024 * 1024)
+        return ImportErrorCode::ResourceLimit;
     if (maxChunkCount < 1) {
         return ImportErrorCode::ResourceLimit;
     }
@@ -553,7 +567,8 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     bool bigEndian = (header.format == PlyFormat::BinaryBigEndian);
 
     uint64_t cursor = header.bodyOffset; // binary path only
-    if (!ascii && cursor > sourcePlyBytes.size()) {
+    if (!ascii && cursor > sourceSize)
+    {
         return ImportErrorCode::MalformedData;
     }
     AsciiTokenizer tokenizer(sourcePlyBytes, static_cast<size_t>(header.bodyOffset)); // ASCII path only
@@ -580,14 +595,15 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         skipRawValue = [&](PlyScalarType) -> bool { return tokenizer.NextToken().has_value(); };
     } else {
         readScalar = [&, bigEndian](PlyScalarType type) -> std::optional<double> {
-            auto bytes = ReadBytes(sourcePlyBytes, cursor, ScalarByteSize(type));
-            if (!bytes) {
+            auto bytes = readSource(cursor, ScalarByteSize(type));
+            if (!bytes)
+            {
                 return std::nullopt;
             }
             return ReadScalarAsDouble(type, bigEndian, *bytes);
         };
         skipRawValue = [&](PlyScalarType type) -> bool {
-            return ReadBytes(sourcePlyBytes, cursor, ScalarByteSize(type)).has_value();
+            return readSource(cursor, ScalarByteSize(type)).has_value();
         };
     }
 
@@ -601,6 +617,8 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         }
         uint64_t count = static_cast<uint64_t>(*countOpt);
         for (uint64_t i = 0; i < count; ++i) {
+            if (i % 4096 == 0 && batchSink && batchSink->Cancelled())
+                return ImportErrorCode::Cancelled;
             if (!skipRawValue(prop.valueType)) {
                 return ImportErrorCode::MalformedData;
             }
@@ -608,6 +626,297 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         return std::nullopt;
     };
 
+    if (!ascii)
+    {
+        if (!hasFace && vertexElement->count > kTierAPoints)
+            return ImportErrorCode::ResourceLimit;
+        SceneMetadata scene{};
+        scene.format = SourceFormatId::Ply;
+        scene.meshCount = hasFace ? 1 : 0;
+        BoundedChunkWriter writer(destination, generationId, maxChunkCount, scene, batchSink);
+        const uint64_t room = destination.size() > kSectionHeaderSize + kChunkDescriptorSize
+                                  ? destination.size() - kSectionHeaderSize - kChunkDescriptorSize
+                                  : 0;
+        const uint32_t chunkTriangles = uint32_t(std::min<uint64_t>(kChunkTriangles, room / 108));
+        const uint32_t chunkPoints = uint32_t(std::min<uint64_t>(kChunkPoints, room / 12));
+        if ((hasFace && !chunkTriangles) || (!hasFace && !chunkPoints))
+            return ImportErrorCode::ResourceLimit;
+        std::vector<VertexPositionNormalUv0F32> mesh;
+        std::vector<VertexPositionOnlyF32> points;
+        std::vector<uint32_t> indices;
+        std::unordered_map<uint64_t, uint32_t> remap;
+        std::vector<uint64_t> checkpoints;
+        if (vertexElement->count / 256 * 8 > TierAScratchLimit() / 4)
+            return ImportErrorCode::ResourceLimit;
+        uint64_t vertexStart = 0, vertexStride = 0, sourceFirst = 0, sourceEnd = 0, totalTriangles = 0;
+        bool vertexSeen = false, haveOrigin = false;
+        double origin[3]{};
+        for (const auto& property : vertexElement->properties)
+        {
+            if (property.isList)
+            {
+                vertexStride = 0;
+                break;
+            }
+            vertexStride += ScalarByteSize(property.valueType);
+        }
+        auto skipRecord = [&](const PlyElement& element) -> std::optional<ImportErrorCode> {
+            for (const auto& property : element.properties)
+            {
+                if (property.isList)
+                {
+                    if (auto error = skipList(property))
+                        return error;
+                }
+                else if (!skipRawValue(property.valueType))
+                    return ImportErrorCode::MalformedData;
+            }
+            return std::nullopt;
+        };
+        auto readVertex = [&](double* position,
+                              VertexPositionNormalUv0F32& vertex) -> std::optional<ImportErrorCode> {
+            double values[64]{};
+            for (size_t i = 0; i < vertexElement->properties.size(); ++i)
+            {
+                const auto& property = vertexElement->properties[i];
+                if (property.isList)
+                {
+                    if (auto error = skipList(property))
+                        return error;
+                }
+                else
+                {
+                    auto value = readScalar(property.valueType);
+                    if (!value)
+                        return ImportErrorCode::MalformedData;
+                    values[i] = *value;
+                }
+            }
+            position[0] = values[xIdx];
+            position[1] = values[yIdx];
+            position[2] = values[zIdx];
+            for (unsigned axis = 0; axis < 3; ++axis)
+                if (!std::isfinite(position[axis]))
+                    return ImportErrorCode::MalformedData;
+            vertex.nx = 0;
+            vertex.ny = 0;
+            vertex.nz = 1;
+            if (hasNormal)
+            {
+                const double length =
+                    std::sqrt(values[nxIdx] * values[nxIdx] + values[nyIdx] * values[nyIdx] +
+                              values[nzIdx] * values[nzIdx]);
+                if (std::isfinite(length) && length > 1e-12)
+                {
+                    vertex.nx = float(values[nxIdx] / length);
+                    vertex.ny = float(values[nyIdx] / length);
+                    vertex.nz = float(values[nzIdx] / length);
+                }
+            }
+            if (hasUv)
+            {
+                vertex.u = float(values[actualUIdx]);
+                vertex.v = float(values[actualVIdx]);
+            }
+            return std::nullopt;
+        };
+        auto flush = [&]() -> std::optional<ImportErrorCode> {
+            if (mesh.empty() && points.empty())
+                return std::nullopt;
+            ChunkDescriptor d{};
+            d.chunkId = writer.NextId();
+            d.topology = hasFace ? ChunkTopology::TriangleList : ChunkTopology::PointList;
+            d.meshId = hasFace ? 1 : 0;
+            d.vertexLayoutId =
+                uint32_t(hasFace ? VertexLayoutId::PositionNormalUv0_F32 : VertexLayoutId::PositionOnly_F32);
+            d.vertexCount = uint32_t(hasFace ? mesh.size() : points.size());
+            d.indexCount = uint32_t(indices.size());
+            d.sourceRangeOffset = sourceFirst;
+            d.sourceRangeLength = sourceEnd - sourceFirst;
+            std::memcpy(d.origin, origin, sizeof(origin));
+            d.geometryFlags = hasFace && hasUv ? kGeometryHasUv0 : 0;
+            if (hasColors)
+                d.geometryFlags |= kGeometryHasColors;
+            if (hasFace && !hasNormal)
+            {
+                std::vector<Vec3> accum(mesh.size());
+                for (size_t i = 0; i < indices.size(); i += 3)
+                {
+                    const auto& a = mesh[indices[i]];
+                    const auto& b = mesh[indices[i + 1]];
+                    const auto& c = mesh[indices[i + 2]];
+                    const auto n = Cross(Vec3{b.px - a.px, b.py - a.py, b.pz - a.pz},
+                                         Vec3{c.px - a.px, c.py - a.py, c.pz - a.pz});
+                    for (unsigned j = 0; j < 3; ++j)
+                        accum[indices[i + j]] = accum[indices[i + j]] + n;
+                }
+                for (size_t i = 0; i < mesh.size(); ++i)
+                {
+                    const float length = std::sqrt(Dot(accum[i], accum[i]));
+                    if (length > 1e-12f && std::isfinite(length))
+                    {
+                        mesh[i].nx = accum[i].x / length;
+                        mesh[i].ny = accum[i].y / length;
+                        mesh[i].nz = accum[i].z / length;
+                    }
+                }
+            }
+            auto bytes = hasFace ? ChunkBytes(mesh) : ChunkBytes(points);
+            if (!SetLocalBounds(d, bytes))
+                return ImportErrorCode::MalformedData;
+            if (!writer.Add(d, bytes, ChunkBytes(indices)))
+                return writer.Error();
+            mesh.clear();
+            points.clear();
+            indices.clear();
+            remap.clear();
+            haveOrigin = false;
+            return std::nullopt;
+        };
+        for (const auto& element : header.elements)
+        {
+            if (&element == vertexElement)
+            {
+                vertexStart = cursor;
+                vertexSeen = true;
+            }
+            if (&element == faceElement && hasFace && !vertexSeen)
+                return ImportErrorCode::UnsupportedEncoding;
+            for (uint64_t record = 0; record < element.count; ++record)
+            {
+                if (record % 4096 == 0 && mappedSource && !mappedSource->IsUnchanged())
+                    return ImportErrorCode::FileChanged;
+                if (record % 1024 == 0 && batchSink && batchSink->Cancelled())
+                    return ImportErrorCode::Cancelled;
+                const uint64_t start = cursor;
+                if (&element == vertexElement)
+                {
+                    if (!vertexStride && record % 256 == 0)
+                        checkpoints.push_back(cursor);
+                    double position[3];
+                    VertexPositionNormalUv0F32 vertex{};
+                    if (auto error = readVertex(position, vertex))
+                        return *error;
+                    if (!hasFace)
+                    {
+                        if (points.size() == chunkPoints)
+                            if (auto error = flush())
+                                return *error;
+                        if (!haveOrigin)
+                        {
+                            std::memcpy(origin, position, sizeof(origin));
+                            sourceFirst = start;
+                            haveOrigin = true;
+                        }
+                        VertexPositionOnlyF32 point{float(position[0] - origin[0]),
+                                                    float(position[1] - origin[1]),
+                                                    float(position[2] - origin[2])};
+                        points.push_back(point);
+                        sourceEnd = cursor;
+                    }
+                }
+                else if (&element == faceElement && hasFace)
+                {
+                    uint64_t polygon[255]{};
+                    size_t count = 0;
+                    bool valid = true;
+                    for (size_t pi = 0; pi < element.properties.size(); ++pi)
+                    {
+                        const auto& property = element.properties[pi];
+                        if (int(pi) != listPropIdx)
+                        {
+                            if (property.isList)
+                            {
+                                if (auto error = skipList(property))
+                                    return *error;
+                            }
+                            else if (!skipRawValue(property.valueType))
+                                return ImportErrorCode::MalformedData;
+                            continue;
+                        }
+                        auto size = readScalar(property.countType);
+                        if (!size || *size < 0 || std::floor(*size) != *size)
+                            return ImportErrorCode::MalformedData;
+                        if (*size > 255)
+                            return ImportErrorCode::ResourceLimit;
+                        count = size_t(*size);
+                        for (size_t i = 0; i < count; ++i)
+                        {
+                            auto index = readScalar(property.valueType);
+                            if (!index || !std::isfinite(*index) || *index < 0 ||
+                                std::floor(*index) != *index)
+                                return ImportErrorCode::MalformedData;
+                            if (*index >= double(vertexElement->count))
+                                valid = false;
+                            else
+                                polygon[i] = uint64_t(*index);
+                        }
+                    }
+                    const uint64_t end = cursor;
+                    if (!valid || count < 3)
+                        continue;
+                    if (count - 2 > kTierATriangles - totalTriangles)
+                        return ImportErrorCode::ResourceLimit;
+                    totalTriangles += count - 2;
+                    for (size_t triangle = 1; triangle + 1 < count; ++triangle)
+                    {
+                        if (indices.size() / 3 == chunkTriangles)
+                            if (auto error = flush())
+                                return *error;
+                        const uint64_t sourceIndices[]{polygon[0], polygon[triangle], polygon[triangle + 1]};
+                        for (const auto sourceIndex : sourceIndices)
+                        {
+                            auto found = remap.find(sourceIndex);
+                            if (found != remap.end())
+                            {
+                                indices.push_back(found->second);
+                                continue;
+                            }
+                            if (vertexStride)
+                                cursor = vertexStart + sourceIndex * vertexStride;
+                            else
+                            {
+                                cursor = checkpoints[size_t(sourceIndex / 256)];
+                                for (uint64_t skipped = sourceIndex / 256 * 256; skipped < sourceIndex;
+                                     ++skipped)
+                                    if (auto error = skipRecord(*vertexElement))
+                                        return *error;
+                            }
+                            double position[3];
+                            VertexPositionNormalUv0F32 vertex{};
+                            if (auto error = readVertex(position, vertex))
+                                return *error;
+                            cursor = end;
+                            if (!haveOrigin)
+                            {
+                                std::memcpy(origin, position, sizeof(origin));
+                                sourceFirst = start;
+                                haveOrigin = true;
+                            }
+                            vertex.px = float(position[0] - origin[0]);
+                            vertex.py = float(position[1] - origin[1]);
+                            vertex.pz = float(position[2] - origin[2]);
+                            const uint32_t local = uint32_t(mesh.size());
+                            remap.emplace(sourceIndex, local);
+                            mesh.push_back(vertex);
+                            indices.push_back(local);
+                        }
+                        sourceEnd = end;
+                    }
+                }
+                else if (auto error = skipRecord(element))
+                    return *error;
+            }
+        }
+        if (auto error = flush())
+            return *error;
+        if (!writer.Count())
+            return ImportErrorCode::EmptyGeometry;
+        writer.Finalize();
+        return PlyImportResult{writer.Count(), writer.Length()};
+    }
+    if (vertexElement->count * sizeof(VertexPositionNormalUv0F32) > TierAScratchLimit() / 4)
+        return ImportErrorCode::ResourceLimit;
     std::vector<VertexPositionNormalUv0F32> meshVertices;
     std::vector<VertexPositionOnlyF32> pointVertices;
     std::vector<uint32_t> meshIndices;

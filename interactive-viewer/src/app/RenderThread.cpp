@@ -192,13 +192,18 @@ std::function<void(d3d12_import_bridge::ImportResult)> RenderThread::BeginImport
     };
 }
 
-void RenderThread::FinishImport(std::uint64_t generation)
+void RenderThread::FinishImport(std::uint64_t generation, model_core::FileIdentity sourceIdentity)
 {
     // The terminal marker follows every accepted batch. It carries no payload
     // and takes no capacity; at most one marker exists for the active generation.
     std::lock_guard<std::mutex> lock(uploads_->mutex);
-    if (!uploads_->stopped && uploads_->generation == generation) {
-        UploadTask task; task.generation = generation; task.terminal = true; task.path = uploads_->path;
+    if (!uploads_->stopped && uploads_->generation == generation)
+    {
+        UploadTask task;
+        task.generation = generation;
+        task.terminal = true;
+        task.path = uploads_->path;
+        task.result.sourceIdentity = sourceIdentity;
         uploads_->tasks.push_back(std::move(task));
         uploads_->changed.notify_all();
     }
@@ -558,6 +563,7 @@ void RenderThread::PumpUploads(HWND window)
         message->ok = !stagedFailed_ && modelGeneration_ == pub.task.generation && path_.hasModel && stagedHaveBounds_ && stagedMetadata_;
         if (!message->ok) { message->errorCode = model_core::ImportErrorCode::EmptyGeometry; message->errorDetails = L"The import completed without displayable geometry."; }
         if (message->ok && stagedMetadata_) {
+            stagedMetadata_->sourceIdentity = pub.task.result.sourceIdentity;
             stagedMetadata_->boundsVerified = true;
             stagedMetadata_->importStatus.flags = 0;
             message->metadata = std::make_shared<const ModelData>(*stagedMetadata_);

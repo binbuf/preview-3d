@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model_core/FileIdentity.h"
+
 // One complete host-side sandboxed import: open+canonicalize a real on-disk
 // source, duplicate an inheritable handle for it, create the output shared
 // section, launch a one-shot zero-capability AppContainer worker, send the
@@ -183,6 +185,12 @@ struct ImportSessionRequest {
     std::wstring workerArgumentsOverride;
 };
 
+struct SourceChunkRange
+{
+    uint64_t generationId = 0;
+    model_core::ChunkDescriptor descriptor{};
+};
+
 struct ImportSessionResult {
     bool ok = false;
     ImportStage stage = ImportStage::Completed;
@@ -200,6 +208,9 @@ struct ImportSessionResult {
     // 1 for every import that fits in a single window. Meaningful on failure
     // too: it says how far a rejected generation got.
     uint32_t batchCount = 0;
+    // Geometry provenance only; no normalized payload or source bytes.
+    std::vector<SourceChunkRange> sourceCatalog;
+    model_core::FileIdentity sourceIdentity{};
 };
 
 // Creates (or opens) the single AppContainer profile every import runs

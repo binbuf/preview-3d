@@ -1,4 +1,5 @@
 #include "StlAdapter.h"
+#include "BoundedChunkWriter.h"
 
 #include "AsciiTokenizer.h"
 #include "model_core/Checksum.h"
@@ -27,10 +28,8 @@ constexpr size_t kStlCountBytes = 4;
 constexpr size_t kStlFacetBytes = 50; // 12 (normal) + 36 (3 verts) + 2 (attribute count, unused)
 constexpr size_t kStlPrefixBytes = kStlHeaderBytes + kStlCountBytes; // 84
 
-// No full Tier-A hard-limits table enforcement yet (.docs/design/03-file-formats-and-ingestion.md)
-// -- a later refinement once real large fixtures are being tested, same
-// simplification GltfAdapter.cpp's kMaxVertices/kMaxIndices already made.
-constexpr uint32_t kMaxFacets = 2'000'000;
+// Tier A facet count is checked before any cluster allocation.
+constexpr uint32_t kMaxFacets = uint32_t(kTierATriangles);
 
 // Bounds how many tokens after "solid" are skipped looking for the first
 // "facet"/"endsolid" keyword -- the free-form solid name can be empty,
@@ -202,8 +201,10 @@ std::variant<StlImportResult, ImportErrorCode> WriteStlChunk(
 }
 
 std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const std::byte> sourceStlBytes,
-                                                                  std::span<std::byte> destination,
-                                                                  uint64_t generationId)
+                                                               std::span<std::byte> destination,
+                                                               uint64_t generationId, uint32_t maxChunkCount,
+                                                               ChunkBatchSink* batchSink,
+                                                               model_core::MappedFile* mappedSource)
 {
     if (sourceStlBytes.size() < kStlPrefixBytes) {
         return ImportErrorCode::MalformedData;
@@ -224,28 +225,81 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const s
     }
     // Trailing bytes beyond the declared facet table are tolerated, per
     // the design doc -- only a truncated (too-short) file is rejected.
-    if (sourceStlBytes.size() < *expectedMinSizeOpt) {
+    if ((mappedSource ? mappedSource->SizeBytes() : sourceStlBytes.size()) < *expectedMinSizeOpt)
+    {
         return ImportErrorCode::MalformedData;
     }
 
+    SceneMetadata scene{};
+    scene.format = SourceFormatId::Stl;
+    scene.meshCount = 1;
+    BoundedChunkWriter writer(destination, generationId, maxChunkCount, scene, batchSink);
+    const uint32_t clusterFacets = uint32_t(std::min<uint64_t>(
+        kChunkTriangles, destination.size() > kSectionHeaderSize + kChunkDescriptorSize
+                             ? (destination.size() - kSectionHeaderSize - kChunkDescriptorSize) / 108
+                             : 0));
+    if (!clusterFacets || TierAScratchLimit() < 16ull * 1024 * 1024)
+        return ImportErrorCode::ResourceLimit;
     std::vector<VertexPositionNormalUv0F32> vertices;
-    vertices.reserve(static_cast<size_t>(triangleCount) * 3);
+    vertices.reserve(size_t(clusterFacets) * 3);
     std::vector<uint32_t> indices;
-    indices.reserve(static_cast<size_t>(triangleCount) * 3);
-
-    const std::byte* facetBase = sourceStlBytes.data() + kStlPrefixBytes;
-    for (uint32_t i = 0; i < triangleCount; ++i) {
-        const std::byte* facet = facetBase + static_cast<size_t>(i) * kStlFacetBytes;
-
-        Vec3 suppliedNormal{ ReadFloatLE(facet + 0), ReadFloatLE(facet + 4), ReadFloatLE(facet + 8) };
-        Vec3 v0{ ReadFloatLE(facet + 12), ReadFloatLE(facet + 16), ReadFloatLE(facet + 20) };
-        Vec3 v1{ ReadFloatLE(facet + 24), ReadFloatLE(facet + 28), ReadFloatLE(facet + 32) };
-        Vec3 v2{ ReadFloatLE(facet + 36), ReadFloatLE(facet + 40), ReadFloatLE(facet + 44) };
-
-        ProcessFacet(suppliedNormal, v0, v1, v2, vertices, indices);
+    indices.reserve(size_t(clusterFacets) * 3);
+    for (uint32_t first = 0; first < triangleCount;)
+    {
+        if (mappedSource && !mappedSource->IsUnchanged())
+            return ImportErrorCode::FileChanged;
+        if (batchSink && batchSink->Cancelled())
+            return ImportErrorCode::Cancelled;
+        const uint32_t count = (std::min)(clusterFacets, triangleCount - first);
+        vertices.clear();
+        indices.clear();
+        std::span<const std::byte> facets;
+        model_core::MappingLease lease;
+        const uint64_t offset = kStlPrefixBytes + uint64_t(first) * kStlFacetBytes,
+                       bytes = uint64_t(count) * kStlFacetBytes;
+        if (mappedSource)
+        {
+            std::wstring error;
+            lease = mappedSource->MapWindow(offset, bytes, error);
+            if (!lease)
+                return ImportErrorCode::FileUnavailable;
+            facets = lease.Bytes();
+        }
+        else
+            facets = sourceStlBytes.subspan(size_t(offset), size_t(bytes));
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            if (i % 4096 == 0 && batchSink && batchSink->Cancelled())
+                return ImportErrorCode::Cancelled;
+            const std::byte* facet = facets.data() + size_t(i) * kStlFacetBytes;
+            Vec3 n{ReadFloatLE(facet), ReadFloatLE(facet + 4), ReadFloatLE(facet + 8)};
+            Vec3 v0{ReadFloatLE(facet + 12), ReadFloatLE(facet + 16), ReadFloatLE(facet + 20)};
+            Vec3 v1{ReadFloatLE(facet + 24), ReadFloatLE(facet + 28), ReadFloatLE(facet + 32)};
+            Vec3 v2{ReadFloatLE(facet + 36), ReadFloatLE(facet + 40), ReadFloatLE(facet + 44)};
+            ProcessFacet(n, v0, v1, v2, vertices, indices);
+        }
+        if (!vertices.empty())
+        {
+            ChunkDescriptor d{};
+            d.chunkId = writer.NextId();
+            d.meshId = 1;
+            d.sourceRangeOffset = kStlPrefixBytes + uint64_t(first) * kStlFacetBytes;
+            d.sourceRangeLength = uint64_t(count) * kStlFacetBytes;
+            d.topology = ChunkTopology::TriangleList;
+            d.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0_F32);
+            d.vertexCount = uint32_t(vertices.size());
+            d.indexCount = uint32_t(indices.size());
+            if (!RebasePositions(d, std::as_writable_bytes(std::span(vertices))))
+                return ImportErrorCode::MalformedData;
+            if (!writer.Add(d, ChunkBytes(vertices), ChunkBytes(indices)))
+                return writer.Error();
+        }
+        first += count;
     }
-
-    return WriteStlChunk(vertices, indices, destination, generationId);
+    if (!writer.Count())
+        return ImportErrorCode::EmptyGeometry;
+    writer.Finalize();
+    return StlImportResult{writer.Count(), writer.Length()};
 }
 
 std::variant<StlImportResult, ImportErrorCode> ImportStlAscii(std::span<const std::byte> sourceStlBytes,
@@ -341,10 +395,13 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlAscii(std::span<const st
 } // namespace
 
 std::variant<StlImportResult, ImportErrorCode> ImportStl(std::span<const std::byte> sourceStlBytes,
-                                                            std::span<std::byte> destination,
-                                                            uint64_t generationId,
-                                                            uint32_t maxChunkCount, bool allowAscii)
+                                                         std::span<std::byte> destination,
+                                                         uint64_t generationId, uint32_t maxChunkCount,
+                                                         bool allowAscii, ChunkBatchSink* batchSink,
+                                                         model_core::MappedFile* mappedSource)
 {
+    if ((mappedSource ? mappedSource->SizeBytes() : sourceStlBytes.size()) > kTierAPrimaryBytes)
+        return ImportErrorCode::ResourceLimit;
     if (maxChunkCount < 1) {
         return ImportErrorCode::ResourceLimit;
     }
@@ -365,7 +422,9 @@ std::variant<StlImportResult, ImportErrorCode> ImportStl(std::span<const std::by
             auto expectedMinSizeOpt = facetsBytesOpt
                 ? CheckedAdd(static_cast<uint64_t>(kStlPrefixBytes), *facetsBytesOpt)
                 : std::nullopt;
-            if (facetsBytesOpt && expectedMinSizeOpt && sourceStlBytes.size() >= *expectedMinSizeOpt) {
+            if (facetsBytesOpt && expectedMinSizeOpt &&
+                (mappedSource ? mappedSource->SizeBytes() : sourceStlBytes.size()) >= *expectedMinSizeOpt)
+            {
                 isBinaryShape = true;
             }
         }
@@ -380,7 +439,7 @@ std::variant<StlImportResult, ImportErrorCode> ImportStl(std::span<const std::by
         if (!allowAscii) return ImportErrorCode::UnsupportedEncoding;
         return ImportStlAscii(sourceStlBytes, destination, generationId);
     }
-    return ImportStlBinary(sourceStlBytes, destination, generationId);
+    return ImportStlBinary(sourceStlBytes, destination, generationId, maxChunkCount, batchSink, mappedSource);
 }
 
 } // namespace import_worker

@@ -26,6 +26,7 @@ namespace import_broker {
 // closed before returning either way.
 std::variant<model_core::SidecarFileReadyNotice, model_core::SidecarFileUnavailableNotice>
 ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonicalPath,
-                       const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes);
+                      const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes,
+                      uint64_t remainingSourceBytes = UINT64_MAX);
 
 } // namespace import_broker

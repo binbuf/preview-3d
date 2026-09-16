@@ -634,11 +634,11 @@ TEST_CASE("A declared vertex count over the sanity cap is rejected as ResourceLi
     sandbox_test_support::SandboxFixture fixture;
 
     std::string header = "ply\nformat binary_little_endian 1.0\n"
-                          "element vertex 20000001\n"
-                          "property float x\n"
-                          "property float y\n"
-                          "property float z\n"
-                          "end_header\n";
+                         "element vertex 300000001\n"
+                         "property float x\n"
+                         "property float y\n"
+                         "property float z\n"
+                         "end_header\n";
     ScratchPlyFile file(BuildBinaryPly(header, {})); // no body needed -- rejected before any body scan
 
     auto run = RunPlyImportFromRealFile(fixture.sid, file.path, /*generationId=*/10, /*maxChunkCount=*/4);

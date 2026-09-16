@@ -1,6 +1,8 @@
 #include "StlImportWorker.h"
 
 #include "StlAdapter.h"
+#include "BoundedChunkWriter.h"
+#include "ChunkBatchSink.h"
 
 #include "model_core/ControlChannelIo.h"
 #include "model_core/MappedFile.h"
@@ -56,8 +58,13 @@ bool HandleStlImportFileRequest(HANDLE stdOut, const model_core::ParseStlFileReq
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
 
+    if (openResult.file->SizeBytes() > kTierAPrimaryBytes)
+        return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::PrimarySourceLimit);
     std::wstring mapError;
-    auto lease = openResult.file->MapWhole(mapError);
+    auto lease =
+        allowAsciiForTesting
+            ? openResult.file->MapWhole(mapError)
+            : openResult.file->MapWindow(0, (std::min)(openResult.file->SizeBytes(), 64ull * 1024), mapError);
     if (!lease) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
@@ -69,9 +76,12 @@ bool HandleStlImportFileRequest(HANDLE stdOut, const model_core::ParseStlFileReq
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
 
+    ChunkBatchSink batchSink(GetStdHandle(STD_INPUT_HANDLE), stdOut, request.generationId);
     try {
-    auto result = ImportStl(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount, allowAsciiForTesting);
-    return ReportResult(stdOut, request.generationId, result);
+        auto result =
+            ImportStl(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
+                      allowAsciiForTesting, &batchSink, allowAsciiForTesting ? nullptr : &*openResult.file);
+        return ReportResult(stdOut, request.generationId, result);
     } catch (const std::bad_alloc&) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::OutOfMemory);
     } catch (...) {

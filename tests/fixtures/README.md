@@ -172,3 +172,29 @@ is test-only; shipping decode remains in the sandbox worker.
 Commands, budgets and final Debug/Release results are in
 [TSK-203 verification](../../.docs/TSK-203_VERIFICATION.md), with raw app reports in
 [baselines/tsk-203](baselines/tsk-203/).
+
+## TSK-205 bounded scan verification
+
+`tests/import-isolation/BoundedScanTests.cpp` covers oversized indexed/non-indexed
+glTF primitives, STL splits, both-endian PLY nonlocal faces and variable-width
+unknown lists, point splits, cancellation, late truncation, source identity,
+hostile provenance and source-budget admission. Routine tests generate small
+inputs with bounded writes. The hidden `[large-scan]` test uses the existing
+large qualification recipes, checks complete counts/bounds and catalogs, and
+measures private-memory peaks separately from mapped address space:
+
+```powershell
+python tests/fixtures/generate.py --output TestResults/tsk205-large-fixtures --lane qualification --tier large
+$env:PREVIEW3D_TSK205_FIXTURES = (Resolve-Path TestResults/tsk205-large-fixtures).Path
+& ./x64/Release/Tests.ImportIsolation.exe '[large-scan]'
+python tests/app-smoke/bounded.py --configuration Release --output TestResults/tsk205-Release-bounded-app.json --large-fixtures TestResults/tsk205-large-fixtures
+```
+
+The viewer harness checks complete medium-size imports, first partial geometry,
+bounded upload queues, no UI vertex/index arrays, cancellation of multi-GiB
+sources, valid reopen, clean exit and worker cleanup. It fails on any assertion
+or timeout. These are scan/cancellation checks; representative proxy usefulness
+and two-second first-preview qualification remain TSK-206. Generated source
+binaries remain outside git; final manifest/reports are retained in
+[baselines/tsk-205](baselines/tsk-205/). See
+[TSK-205 verification](../../.docs/TSK-205_VERIFICATION.md) for limits and commands.
