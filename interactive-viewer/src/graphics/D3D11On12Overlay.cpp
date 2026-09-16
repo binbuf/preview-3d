@@ -532,6 +532,24 @@ void D3D11On12Overlay::DrawText(const std::wstring& text, IDWriteTextFormat* for
         D2D1_DRAW_TEXT_OPTIONS_CLIP);
 }
 
+void D3D11On12Overlay::DrawSpinner(D2D1_POINT_2F center, float animationPhase, float innerRadius,
+    float outerRadius, float strokeWidth)
+{
+    constexpr int spokeCount = 12;
+    const int leadingSpoke = static_cast<int>(animationPhase * spokeCount) % spokeCount;
+    for (int spoke = 0; spoke < spokeCount; ++spoke)
+    {
+        const float angle = static_cast<float>(spoke) / spokeCount * XM_2PI - XM_PIDIV2;
+        const int age = (spoke - leadingSpoke + spokeCount) % spokeCount;
+        const float alpha = 0.14f + 0.78f * (1.0f - static_cast<float>(age) / spokeCount);
+        SetBrush(D2D1::ColorF(0xF5F5F7, alpha));
+        d2dContext_->DrawLine(
+            D2D1::Point2F(center.x + std::cos(angle) * innerRadius, center.y + std::sin(angle) * innerRadius),
+            D2D1::Point2F(center.x + std::cos(angle) * outerRadius, center.y + std::sin(angle) * outerRadius),
+            overlayBrush.Get(), strokeWidth, spinnerStroke.Get());
+    }
+}
+
 void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const NavGizmo& gizmo, float scale)
 {
     if (!gizmoFormat) return;
@@ -638,11 +656,17 @@ void D3D11On12Overlay::DrawBottomBar(const OverlayInfo& overlay, float clientWid
     DrawIconButton(overlay.infoButtonRect, OverlayIconKind::Info, /*visible*/ true, /*enabled*/ true,
         overlay.infoPanelVisible, overlay.infoButtonHover, overlay.infoButtonPressed, scale);
 
-    if (!overlay.renderDurationText.empty())
+    const float durationLeft = static_cast<float>(overlay.infoButtonRect.right) + Scale(12, scale);
+    if (overlay.renderTimerRunning)
     {
-        const float left = static_cast<float>(overlay.infoButtonRect.right) + Scale(12, scale);
+        DrawSpinner(D2D1::Point2F(durationLeft + Scale(7, scale),
+            (barTop + clientHeight) * 0.5f), overlay.animationPhase,
+            Scale(3, scale), Scale(7, scale), Scale(1.6f, scale));
+    }
+    else if (!overlay.renderDurationText.empty())
+    {
         DrawText(overlay.renderDurationText, smallFormat.Get(),
-            D2D1::RectF(left, barTop, left + Scale(96, scale), clientHeight),
+            D2D1::RectF(durationLeft, barTop, durationLeft + Scale(96, scale), clientHeight),
             D2D1::ColorF(0xA1A1A6));
     }
 
@@ -1010,21 +1034,9 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     {
         const float centerX = clientWidth * 0.5f;
         const float centerY = clientHeight * 0.5f;
-        constexpr int spokeCount = 12;
-        const int leadingSpoke = static_cast<int>(overlay.animationPhase * spokeCount) % spokeCount;
-        for (int spoke = 0; overlay.state == ViewerState::Loading && spoke < spokeCount; ++spoke)
-        {
-            const float angle = static_cast<float>(spoke) / spokeCount * XM_2PI - XM_PIDIV2;
-            const int age = (spoke - leadingSpoke + spokeCount) % spokeCount;
-            const float alpha = 0.14f + 0.78f * (1.0f - static_cast<float>(age) / spokeCount);
-            const float innerRadius = Scale(10.0f, scale);
-            const float outerRadius = Scale(17.0f, scale);
-            SetBrush(D2D1::ColorF(0xF5F5F7, alpha));
-            d2dContext_->DrawLine(
-                D2D1::Point2F(centerX + std::cos(angle) * innerRadius, centerY + std::sin(angle) * innerRadius),
-                D2D1::Point2F(centerX + std::cos(angle) * outerRadius, centerY + std::sin(angle) * outerRadius),
-                overlayBrush.Get(), Scale(2.4f, scale), spinnerStroke.Get());
-        }
+        if (overlay.state == ViewerState::Loading)
+            DrawSpinner(D2D1::Point2F(centerX, centerY), overlay.animationPhase,
+                Scale(10.0f, scale), Scale(17.0f, scale), Scale(2.4f, scale));
         DrawText(overlay.loadingStatus, smallFormat.Get(), D2D1::RectF(centerX - Scale(240, scale),
             centerY + Scale(25, scale), centerX + Scale(240, scale), centerY + Scale(55, scale)),
             D2D1::ColorF(0xA1A1A6), DWRITE_TEXT_ALIGNMENT_CENTER);

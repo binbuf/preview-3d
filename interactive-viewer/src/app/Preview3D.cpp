@@ -2281,6 +2281,8 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.errorDetails = app.errorDetails;
     overlay.warning = app.warning;
     overlay.renderDurationText = app.renderDurationText;
+    overlay.renderTimerRunning = app.renderStartedMicroseconds != 0
+        && (app.state == ViewerState::Loading || app.renderPresentationPending);
     overlay.animationPhase = app.reduceMotion ? 0.0f : static_cast<float>(GetTickCount64() % 1400) / 1400.0f;
     overlay.dpiScale = app.dpiScale;
     overlay.toolbarHeight = EffectiveToolbarHeight(app);

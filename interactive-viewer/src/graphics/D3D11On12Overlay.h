@@ -114,6 +114,8 @@ private:
     void SetBrush(D2D1_COLOR_F color);
     void DrawText(const std::wstring& text, IDWriteTextFormat* format, D2D1_RECT_F rectangle,
         D2D1_COLOR_F color, DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING);
+    void DrawSpinner(D2D1_POINT_2F center, float animationPhase, float innerRadius,
+        float outerRadius, float strokeWidth);
     void DrawGizmo(const DirectX::XMFLOAT4& orientation, const NavGizmo& gizmo, float scale);
     void DrawBottomBar(const OverlayInfo& overlay, float clientWidth, float clientHeight, float scale);
     void DrawIconButton(const RECT& rectI, OverlayIconKind icon, bool visible, bool enabled, bool active,

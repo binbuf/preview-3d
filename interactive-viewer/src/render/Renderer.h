@@ -44,6 +44,9 @@ struct OverlayInfo
     // refinement for a newly opened file. This is the user-visible
     // load-to-render duration, formatted by the UI thread.
     std::wstring renderDurationText;
+    // True while the load-to-render timer above is still running. The bottom
+    // bar uses this to occupy the eventual duration slot with a spinner.
+    bool renderTimerRunning = false;
     float animationPhase = 0.0f;
     float dpiScale = 1.0f;
     // Reserved viewport inset: how much of the client area the title/bottom

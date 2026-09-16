@@ -453,6 +453,47 @@ TEST_CASE("Real chrome paints the bars, information panel and navigation gizmo a
     else WARN("D3D12 info queue unavailable -- debug-layer validation not exercised in this build");
 }
 
+TEST_CASE("The bottom bar animates while the render timer runs and then shows its duration", "[graphics][chrome]")
+{
+    OverlayHarness harness;
+    REQUIRE(harness.overlay.Initialize(SharedDevice(), harness.directQueue, harness.swapChain, harness.error));
+
+    const int width = static_cast<int>(harness.swapChain.Width());
+    const int height = static_cast<int>(harness.swapChain.Height());
+    OverlayFrame frame;
+    frame.info.state = ViewerState::Ready;
+    frame.info.hasModel = true;
+    frame.info.barToolbarHeight = 40;
+    frame.info.barBottomBarHeight = 40;
+    frame.info.infoButtonRect = { 8, height - 36, 40, height - 4 };
+    frame.info.fullscreenButtonRect = { width - 40, height - 36, width - 8, height - 4 };
+    frame.info.zoomTrackRect = { width - 250, height - 21, width - 120, height - 19 };
+    frame.info.renderTimerRunning = true;
+    frame.chrome.UpdateLayout(width, frame.info.barToolbarHeight, 1.0f, true, false, false);
+
+    frame.info.animationPhase = 0.0f;
+    const auto firstSpinner = harness.DrawChromeAndReadback(frame);
+    frame.info.animationPhase = 0.5f;
+    const auto secondSpinner = harness.DrawChromeAndReadback(frame);
+
+    auto differentPixels = [&](const auto& first, const auto& second) {
+        std::size_t count = 0;
+        for (int y = height - 34; y < height - 6; ++y) {
+            for (int x = 48; x < 150; ++x) {
+                const auto index = static_cast<std::size_t>(y) * width + x;
+                if (first[index] != second[index]) ++count;
+            }
+        }
+        return count;
+    };
+    CHECK(differentPixels(firstSpinner, secondSpinner) > 0);
+
+    frame.info.renderTimerRunning = false;
+    frame.info.renderDurationText = L"1.25 s";
+    const auto duration = harness.DrawChromeAndReadback(frame);
+    CHECK(differentPixels(secondSpinner, duration) > 0);
+}
+
 TEST_CASE("Loading and failure cards release the wrapped buffer and keep caption buttons visible", "[graphics][chrome]")
 {
     OverlayHarness harness;
