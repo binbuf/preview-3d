@@ -1,0 +1,22 @@
+Preview3D third-party notices
+=============================
+
+This distribution contains components restored from the vcpkg baseline recorded
+in SBOM.cdx.json and MANIFEST.json. The complete upstream notices/license texts
+installed by those pinned ports are preserved in licenses\:
+
+  basisu.txt       Basis Universal transcoder code used by KTX-Software
+  draco.txt        Google Draco
+  fastgltf.txt     fastgltf
+  ktx.txt          Khronos KTX-Software
+  libwebp.txt      WebP codec and libsharpyuv
+  meshoptimizer.txt meshoptimizer
+  simdjson.txt     simdjson
+  zstd.txt         Zstandard
+
+The app-local Microsoft Visual C++ Runtime files are Microsoft distributable
+code supplied by the installed Visual Studio C++ toolset. Their redistribution
+is governed by the Microsoft Visual Studio license terms for the build tools.
+
+Windows graphics, imaging, shell, and Universal CRT system components are used
+from Windows and are not copied into this archive.

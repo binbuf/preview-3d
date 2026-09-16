@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="CreatePortableRelease">
+  <PropertyGroup>
+    <!-- Do not leave a trailing backslash here: a quoted trailing backslash
+         escapes the quote when Exec builds a Windows command line. -->
+    <RepositoryRoot>$(MSBuildThisFileDirectory)..</RepositoryRoot>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <PortableTimestampUrl Condition="'$(PortableTimestampUrl)' == ''">https://timestamp.digicert.com</PortableTimestampUrl>
+  </PropertyGroup>
+
+  <Target Name="ValidatePortableReleaseProperties">
+    <Error Condition="'$(Configuration)' != 'Release'"
+           Text="CreatePortableRelease only supports Configuration=Release." />
+    <Error Condition="'$(Platform)' != 'x64'"
+           Text="CreatePortableRelease only supports Platform=x64." />
+  </Target>
+
+  <Target Name="BuildPortableReleaseInputs"
+          DependsOnTargets="ValidatePortableReleaseProperties">
+    <!-- Preview3D's project reference builds the worker first. This is the
+         complete product build for the limited portable scope: tests,
+         thumbnail provider, and compatibility host are intentionally absent. -->
+    <MSBuild Projects="$(RepositoryRoot)\interactive-viewer\Preview3D.vcxproj"
+             Targets="Build"
+             Properties="Configuration=Release;Platform=x64;SolutionDir=$(RepositoryRoot)\"
+             BuildInParallel="false" />
+  </Target>
+
+  <Target Name="CreatePortableRelease"
+          DependsOnTargets="BuildPortableReleaseInputs">
+    <!-- This call is deliberately singular: the script cleans one staging
+         directory, validates one allowlist, and creates one ZIP. -->
+    <Exec Command="powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)portable\Create-PortableRelease.ps1&quot; -RepositoryRoot &quot;$(RepositoryRoot)&quot; -CertificateThumbprint &quot;$(PortableSigningThumbprint)&quot; -TimestampUrl &quot;$(PortableTimestampUrl)&quot;" />
+  </Target>
+</Project>

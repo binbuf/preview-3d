@@ -40,6 +40,15 @@ std::wstring ResolveWorkerExePath()
     std::wstring path(modulePath, length);
     auto lastSlash = path.find_last_of(L"\\/");
     std::wstring directory = (lastSlash == std::wstring::npos) ? L"." : path.substr(0, lastSlash);
+    // Portable releases keep the AppContainer payload in its own directory.
+    // ImportSession grants read/execute to the worker executable's directory,
+    // so this layout avoids granting the sandbox access to the viewer, docs,
+    // or cleanup tooling. Developer/test builds retain the shared-OutDir
+    // fallback used by the solution.
+    const std::wstring packaged = directory + L"\\worker\\Preview3DImportWorker.exe";
+    if (GetFileAttributesW(packaged.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return packaged;
+    }
     return directory + L"\\Preview3DImportWorker.exe";
 }
 

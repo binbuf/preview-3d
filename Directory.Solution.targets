@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <PropertyGroup>
+    <PortableTimestampUrl Condition="'$(PortableTimestampUrl)' == ''">https://timestamp.digicert.com</PortableTimestampUrl>
+  </PropertyGroup>
+  <!--
+    Imported by MSBuild's generated solution metaproject. Keeping this target
+    here (rather than in Directory.Build.targets) makes it an actual
+    solution-level entry point and prevents ordinary project builds from
+    packaging as a side effect.
+  -->
+  <Target Name="CreatePortableRelease">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)packaging\CreatePortableRelease.proj"
+             Targets="CreatePortableRelease"
+             Properties="Configuration=$(Configuration);Platform=$(Platform);PortableSigningThumbprint=$(PortableSigningThumbprint);PortableTimestampUrl=$(PortableTimestampUrl)"
+             BuildInParallel="false" />
+  </Target>
+</Project>

@@ -4,6 +4,39 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 3 / TSK-303 (2026-09-16): portable
+  packaging implemented; signed clean-VM acceptance remains open.**
+  `msbuild Preview3D.slnx /t:CreatePortableRelease
+  /p:Configuration=Release /p:Platform=x64` is now a real solution-level
+  target, builds only the Release x64 viewer/worker product graph, waits for
+  app-local deployment, then runs one clean allowlisted packaging pass. The
+  viewer prefers a packaged `worker\` subdirectory (with the existing shared
+  output fallback for development), so first-use AppContainer provisioning
+  grants read/execute only to the sandbox runtime payload rather than the
+  archive root. The archive includes the exact viewer/worker PE closure,
+  app-local MSVC CRT, pinned-version CycloneDX SBOM and vcpkg ABI/baseline
+  provenance, installed-port license texts/notices, support/limit/cleanup docs,
+  per-file hashes, and an adjacent archive SHA-256. It rejects missing or
+  unresolved non-system imports, excluded binaries, debug runtimes, symbols,
+  libraries, and stale shared-output files. Certificate-thumbprint signing
+  signs and verifies staged viewer/worker copies before hashing/archiving;
+  absent credentials produce an explicit unsigned engineering artifact.
+  The final local ZIP hash is
+  `156eed9a52b585f84f51c485e5ab0e69961c5a73130fc90709456deceaa07118`.
+  A clean extraction passed GLB, local-sidecar glTF, binary STL, PLY mesh and
+  PLY point benchmark smokes with no process remnants. The unelevated
+  first-use check placed zero AppContainer ACEs on the package root and two
+  read/execute ACE forms on `worker\`; cleanup removed both and the per-user
+  profile and was idempotent. An ordinary Release solution build did not
+  recreate the archive; Unit passed 87 cases / 7,239 assertions and
+  ImportIsolation passed 200 cases / 51,943 assertions. The local executables
+  are intentionally unsigned
+  (`MANIFEST.json` says so), and no clean offline Windows 11 standard-user VM
+  was available. Signing and that VM matrix remain required in TSK-305; the
+  TSK-302 large-model failures also remain release blockers. Exact content,
+  commands, timings, dependencies, signing procedure and open evidence are in
+  [TSK-303_VERIFICATION.md](./TSK-303_VERIFICATION.md). TSK-304 is next.
+
 - **Scope-limited MVP, Phase 3 / TSK-302 (2026-09-16): harness complete; retained large-model gates remain blocking.**
   `Preview3D.exe --benchmark=<fixture>` now sustains rendering on the dedicated
   render thread while keeping the UI pump live, with bounded duration/frame/repeat

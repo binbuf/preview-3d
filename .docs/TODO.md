@@ -8,20 +8,16 @@ when they disagree, `.docs/design/` wins and this file is what needs fixing.
 
 **Scope-limited MVP:** [NEW_SCOPE_LIMITED_MVP_TASKS.md](./NEW_SCOPE_LIMITED_MVP_TASKS.md)
 is the active implementation sequence and overrides the broader gate scope below.
-TSK-101 is implemented: D3D12 is exclusive and the legacy renderer instance/import path is
-removed. TSK-102 is implemented: real chrome/state cards now draw through the D3D11On12
-bridge on every frame, with GPU pixel-readback coverage for all back buffers, resize, and DPI.
-TSK-103 is complete: the required model-state checks already use the render thread's atomic
-D3D12 state, and visible Empty/GLB/glTF runs verify the bottom bar and Information panel
-reserve space only with a loaded model, including after resize. Zoom/Fit/Reset respond;
-the existing chrome regression tests pass. TSK-104 is complete: checksummed routine/full
-A-small manifests, bounded medium/large generation recipes, independent source metadata
-checks, Catch2 fixture coverage and repeatable app lifecycle smoke are now checked in.
-Debug/Release builds and both Catch2 binaries pass; twelve routine/full A-small app runs
-pass. See [TSK-104_BASELINE.md](./TSK-104_BASELINE.md) for timings, memory evidence and
-explicit qualification gaps. Phase 1 is complete; **Phase 2 / TSK-201 is next**.
-Information rows, picking, and native-orientation re-homing still require CPU model metadata
-from the D3D12 pipeline.
+TSK-101 through TSK-301 are implemented. TSK-302 added the qualification harness,
+but its retained multi-GiB GLB/STL/PLY gates are red and still block release.
+TSK-303 now has a solution-level portable-package target, isolated `worker\`
+layout, app-local dependency closure validation, licenses/notices, SBOM,
+hash manifest/archive checksum, optional Authenticode signing, support docs,
+and current-user profile cleanup. Local extracted GLB/glTF-sidecar/STL/PLY
+smokes pass. **A signed archive and clean standard-user Windows 11 offline VM
+run are still required; they are not implied by the local engineering archive.**
+See [TSK-303_VERIFICATION.md](./TSK-303_VERIFICATION.md). TSK-304 is the next
+implementation slice; TSK-305 owns final candidate recreation/acceptance.
 
 **Broader gate baseline: `f0d2f86`**, amended for TSK-101/TSK-102/TSK-103/TSK-104 below.
 
@@ -59,8 +55,11 @@ did not, and each is still owed.
 
 - [ ] **CI build/unit-test job** (`10-…:73`). Nothing exists: no `.github/`, no pipeline file, no
       MSBuild test target, no ctest. Both Catch2 binaries are run by hand out of `x64\<Config>\`.
-- [ ] **Licensing skeleton and SBOM draft** (`10-…:72`, exit `10-…:80`). No SBOM, NOTICE or LICENSE
-      file anywhere. `vcpkg.json` pins versions, which is the dependency-lock half only.
+- [ ] **Original-scope licensing/SBOM closure** (`10-…:72`, exit `10-…:80`).
+      TSK-303 now generates the limited portable archive's CycloneDX SBOM,
+      notices, installed-port license texts and per-file hashes. The original
+      MSI/thumbnail/compatibility-host surface remains deferred and therefore
+      is not represented as completed.
 - [ ] **ETW event schema** (`10-…:71`). `FrameStats.{h,cpp}` is a 240-sample mean/p95 ring and is
       explicitly not this. Everything that measures a frame gate downstream — Gate 1's NFR-03
       criteria, Gate 3's exit criterion 1, `09-…:87`'s present-event classification — needs it.
@@ -401,7 +400,10 @@ No `installer/` directory exists.
       search lockdown, and rollback.
 - [ ] Install, repair, upgrade, rollback, handler-conflict, Restart Manager, notification and
       uninstall logic.
-- [ ] Authenticode signing pipeline, SBOM/notices, release manifests.
+- [ ] Authenticode signing pipeline, SBOM/notices, release manifests. TSK-303
+      supplies the limited portable pipeline and certificate-thumbprint seam;
+      no signing certificate was available locally, and the original MSI
+      payload remains outside scope.
 - [ ] ASan, static analysis, Application Verifier, D3D validation, fuzz and dependency-review
       closure.
 - [ ] Local redacted diagnostics and support-bundle behaviour.

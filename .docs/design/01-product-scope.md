@@ -20,11 +20,11 @@ The Explorer Preview pane (`IPreviewHandler`) and a global spacebar/Quick Look h
 | Viewer graphics | Direct3D 12 adapter supporting feature level 11_0 or later; WARP is diagnostic fallback, not a performance target |
 | Display | DPI-aware windowed desktop; 60–144 Hz tested |
 | Storage | Local NTFS/ReFS source paths; best-effort per-user LocalAppData derived cache; source may be on slower media but performance targets use NVMe |
-| Distribution | Signed per-machine MSI |
+| Distribution | Original MVP: signed per-machine MSI. Scope-limited MVP exception: signed, checksummed portable x64 ZIP per ADR-016. |
 | Connectivity | No product network access or remote-resource resolution |
 | Locale | English UI; Unicode file paths fully supported |
 
-Windows 10, ARM64/x86, Store/MSIX packaging, server/headless sessions, UNC/device paths, and portable ZIP distribution are not supported targets.
+Windows 10, ARM64/x86, Store/MSIX packaging, server/headless sessions, and UNC/device paths are not supported targets. Portable ZIP is supported only for the scope-limited MVP exception in ADR-016; it does not provide the original MSI/shell feature set.
 
 ## Functional requirements
 

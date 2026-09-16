@@ -1,7 +1,7 @@
-# Interactive viewer vertical slice
+# Interactive viewer
 
-This project is a focused native Windows 11 GLB viewer. It intentionally leaves the thumbnail provider,
-file registration, caching, streaming/LOD infrastructure, and broader format support for later slices.
+This project is the native Windows 11 scope-limited viewer. It intentionally leaves the thumbnail provider,
+file registration, persistent caching, intermediate LOD construction, and broader format support for later work.
 
 ## Included
 
@@ -42,8 +42,12 @@ chunks. The old `--d3d12` argument is accepted as a deprecated no-op.
 The sandboxed importer accepts `.glb`, `.gltf` (including external `.bin`/image siblings fetched
 through the brokered sidecar protocol), `.stl`, and `.ply`. Its static glTF path supports bounded
 Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP, material texture slots and
-texture transforms. The Open dialog still filters for GLB; pass other formats on the command line
-or drop them onto the window.
+texture transforms. The Open dialog, command line, and drag/drop accept all four direct formats.
+
+Portable packaging keeps `Preview3D.exe` at the package root and the sandbox
+executable plus its private DLL closure under `worker\`. The viewer prefers that
+layout and grants the AppContainer read/execute only on `worker\`; same-directory
+worker lookup remains as a developer/test-build fallback.
 
 ## Current limitations and deferred work
 
@@ -53,8 +57,9 @@ documented compressed glTF subset. `Renderer.cpp` remains only as legacy camera/
 its D3D11 renderer is never instantiated.
 
 Still deferred: TGA/DDS/HDR, animation/skins/morphs, advanced material lobes, meshoptimizer-built
-LOD/hierarchies, persistent derived cache, and broad Tier B formats. Shell registration and
-installer work are outside this MVP pass.
+LOD/hierarchies, persistent derived cache, and broad Tier B formats. Shell registration,
+thumbnails, and installer work are outside this MVP pass; the active delivery is a
+checksummed portable archive.
 
 ## Controls
 
