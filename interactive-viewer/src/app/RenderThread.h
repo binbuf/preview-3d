@@ -43,6 +43,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 // Posted by the render thread when an upload finishes, so the UI thread can
 // move to Ready or Failed without ever having touched the GPU. lParam is a
@@ -129,10 +130,11 @@ public:
     void SetSmokeUma(bool enabled) { smokeUma_.store(enabled); Invalidate(); }
     void SetSmokeUmaDevice() { path_.deviceOptions.preferUma=true; } // before Start only
     std::function<bool(uint64_t)> CpuBudgetGuard() {
-        auto inbox=uploads_; const auto baseline=baselineCpuBytes_, cap=cpuPolicyCap_; const bool uma=isUma_;
-        return [inbox,baseline,cap,uma](uint64_t workerBytes) {
+        auto inbox=uploads_;
+        return [this,inbox](uint64_t workerBytes) {
             PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb=sizeof(memory);
             if (!K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))) return false;
+            const auto baseline=baselineCpuBytes_, cap=cpuPolicyCap_; const bool uma=isUma_;
             const uint64_t growth=memory.PrivateUsage>baseline ? memory.PrivateUsage-baseline : 0;
             std::lock_guard<std::mutex> lock(inbox->mutex); inbox->workerPrivateBytes=workerBytes;
             const uint64_t destinations=(uma || inbox->simulateUma) ? inbox->gpuBaseBytes+inbox->gpuPendingBytes : 0;
@@ -153,6 +155,15 @@ public:
     explicit RenderThread(Camera& camera)
         : camera_(camera)
     {
+        // Command-line activation may begin importing before the asynchronous
+        // graphics thread is initialized. Establish the host CPU policy here
+        // so its guard can never capture a transient zero-byte cap.
+        MEMORYSTATUSEX physicalMemory{sizeof(physicalMemory)};
+        cpuPolicyCap_=GlobalMemoryStatusEx(&physicalMemory)
+            ? std::min(1536ull*1024*1024,physicalMemory.ullTotalPhys/4) : 1536ull*1024*1024;
+        PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb=sizeof(memory);
+        if (K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory)))
+            baselineCpuBytes_=memory.PrivateUsage;
     }
 
     ~RenderThread();
@@ -162,6 +173,14 @@ public:
 
     // Configuration, all before Start().
     void SetBenchFrames(int frames);
+    void SetBenchmarkLimits(int frames, std::uint64_t durationMs);
+    void SetBenchmarkOccludedForTesting() { benchmarkForceOccluded_ = true; }
+    void NotifyLoadingStarted(std::uint64_t generation);
+    void NotifyBenchmarkInput(std::uint64_t timestampUs) {
+        benchmarkInputUs_.store(timestampUs, std::memory_order_release);
+        benchmarkInputToPresentUs_.store(0, std::memory_order_release);
+        Invalidate();
+    }
 
     // Spawns the thread and waits, bounded, for it to create the device,
     // swap chain and pipelines. This one startup handshake is synchronous by
@@ -237,12 +256,17 @@ public:
     struct StatsSnapshot
     {
         double meanMs = 0.0;
+        double medianMs = 0.0;
         double p95Ms = 0.0;
+        double maxMs = 0.0;
         double overlayMeanMs = 0.0;
         std::uint64_t frames = 0;
         std::uint64_t occluded = 0;
+        std::uint64_t failed = 0;
+        std::vector<double> rawIntervalsMs;
     };
     StatsSnapshot Stats() const;
+    StatsSnapshot BenchmarkStats() const;
 
     LockedCamera LockCamera() { return LockedCamera(cameraMutex_, camera_, interactionEpoch_); }
     void RequestPick(int x, int y, uint64_t generation);
@@ -260,7 +284,7 @@ private:
     // Snapshots frame statistics for the UI thread. Deliberately not called
     // every frame -- FrameStats::P95Ms sorts its whole window, and doing that
     // in the frame path is measurably visible in the p95 it reports.
-    void PublishStats();
+    void PublishStats(bool includeRaw = false);
     void AssertOnRenderThread() const;
 
     D3D12ViewerPath path_;
@@ -280,6 +304,17 @@ private:
     std::atomic<bool> benchComplete_{ false };
     std::atomic<std::uint64_t> firstBackgroundUs_{ 0 };
     std::atomic<std::uint64_t> geometryUs_{ 0 };
+    std::atomic<std::uint64_t> loadingUiUs_{ 0 };
+    std::atomic<std::uint64_t> coarseUs_{ 0 };
+    std::atomic<std::uint64_t> verifiedBoundsUs_{ 0 };
+    std::atomic<std::uint64_t> refinementUs_{ 0 };
+    std::atomic<std::uint64_t> loadingGeneration_{ 0 };
+    std::atomic<std::uint64_t> pendingCoarseGeneration_{ 0 };
+    std::atomic<std::uint64_t> pendingVerifiedGeneration_{ 0 };
+    std::atomic<std::uint64_t> pendingRefinementGeneration_{ 0 };
+    std::atomic<std::uint64_t> benchmarkInputUs_{ 0 };
+    std::atomic<std::uint64_t> benchmarkInputToPresentUs_{ 0 };
+    std::atomic<std::uint64_t> benchmarkPresentedFrames_{ 0 };
     std::atomic<std::uint64_t> presentedGeneration_{ 0 };
     std::atomic<std::uint64_t> resizedExtent_{ 0 };
     std::atomic<std::uint64_t> displayedChunks_{0}, texturedChunks_{0};
@@ -356,7 +391,7 @@ private:
     void UpdateBudget();
     void RequestVisibleDetail(const DirectX::XMFLOAT4X4& vp, const double target[3], bool rotateY);
     DxgiBudgetMonitor budgetMonitor_;
-    bool isUma_=false;
+    std::atomic<bool> isUma_{false};
     uint64_t cpuPolicyCap_=0, baselineCpuBytes_=0;
     HWND window_=nullptr;
     uint64_t failedBudgetGeneration_=0;
@@ -374,6 +409,8 @@ private:
 
     mutable std::mutex statsMutex_;
     StatsSnapshot stats_;
+    StatsSnapshot benchmarkStats_;
+    FrameStats benchmarkFrameStats_;
 
     platform::Win32Handle wakeEvent_;
     platform::Win32Handle startedEvent_;
@@ -383,6 +420,9 @@ private:
     // Pre-Start configuration.
     int benchFrames_ = 0;
     int benchRemaining_ = 0;
+    std::uint64_t benchDurationMs_ = 0;
+    std::chrono::steady_clock::time_point benchDeadline_{};
+    bool benchmarkForceOccluded_ = false;
 
     double lastFrameSeconds_ = 0.0;
     std::thread::id renderThreadId_{};

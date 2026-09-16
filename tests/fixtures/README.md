@@ -222,3 +222,14 @@ Draco, repeated requests and refusal. GPU unit tests gate both queue fences to
 check retirement accounting and shared-resource deduplication. See
 [TSK-207 verification](../../.docs/TSK-207_VERIFICATION.md); final reports and
 source/binary/harness hashes are in [baselines/tsk-207](baselines/tsk-207/).
+
+## TSK-302 performance qualification
+
+The viewer's bounded `--benchmark=<fixture>` mode writes raw frame intervals,
+lifecycle milestones, responsiveness, memory and GPU/queue accounting as JSON and
+returns nonzero for applicable gate failures. `tests/performance/qualify.py` adds
+cold-process repeats, hashes, machine/run metadata and optional PresentMon 2.x ETW
+correlation. Exact options, commands, applicability rules and measurement limits
+are in [TSK-302 verification](../../.docs/TSK-302_VERIFICATION.md). Large inputs
+continue to use this document's generated qualification recipes; no large binary
+is added to Git.

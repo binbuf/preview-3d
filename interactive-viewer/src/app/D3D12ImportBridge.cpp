@@ -332,6 +332,10 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     }
     if (faultForTesting == 3) sessionRequest.maxChunkCount = 0;
     if (faultForTesting == 5) sessionRequest.workerArgumentsOverride = L"--test-invalid-import-reply";
+    if (faultForTesting == 6) {
+        sessionRequest.commitLimitBytes = 1ull * 1024 * 1024;
+        sessionRequest.replyTimeoutMs = 500;
+    }
     import_broker::KnownChunkCatalog catalog;
     model_core::FileIdentity openedIdentity;
     bool initialComplete = false;

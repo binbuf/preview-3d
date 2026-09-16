@@ -20,7 +20,9 @@ TEST_CASE("A fresh FrameStats reports nothing", "[graphics]")
     // No interval has been recorded, so there is no average to report --
     // 0 rather than a division by zero.
     CHECK(stats.MeanMs() == 0.0);
+    CHECK(stats.MedianMs() == 0.0);
     CHECK(stats.P95Ms() == 0.0);
+    CHECK(stats.MaxMs() == 0.0);
 }
 
 TEST_CASE("The first present seeds the clock without producing an interval", "[graphics]")
@@ -46,6 +48,8 @@ TEST_CASE("Mean and p95 are computed over the recorded intervals", "[graphics]")
     CHECK(stats.MeanMs() > 50.4);
     CHECK(stats.MeanMs() < 50.6);
     CHECK(stats.P95Ms() == 95.0);
+    CHECK(stats.MedianMs() == 50.5);
+    CHECK(stats.MaxMs() == 100.0);
 }
 
 TEST_CASE("The interval ring keeps only its most recent window", "[graphics]")
@@ -77,6 +81,25 @@ TEST_CASE("Occluded presents are counted but still count as presented", "[graphi
     // DXGI_STATUS_OCCLUDED is a SUCCEEDED() code -- the frame was presented,
     // it just went nowhere visible.
     CHECK(stats.OccludedPresents() == 1);
+    CHECK(stats.FailedPresents() == 0);
+}
+
+TEST_CASE("FrameStats retains raw intervals in chronological ring order", "[graphics]")
+{
+    FrameStats stats;
+    for (size_t i = 0; i < FrameStats::kCapacity + 3; ++i)
+        stats.RecordIntervalForTest(static_cast<double>(i), S_OK);
+    const auto raw = stats.RawIntervalsMs();
+    REQUIRE(raw.size() == FrameStats::kCapacity);
+    CHECK(raw.front() == 3.0);
+    CHECK(raw.back() == static_cast<double>(FrameStats::kCapacity + 2));
+}
+
+TEST_CASE("FrameStats counts failed Present results", "[graphics]")
+{
+    FrameStats stats;
+    stats.RecordIntervalForTest(1.0, E_FAIL);
+    CHECK(stats.FailedPresents() == 1);
 }
 
 TEST_CASE("Reset clears both the interval window and the lifetime counters", "[graphics]")

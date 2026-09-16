@@ -4,6 +4,37 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 3 / TSK-302 (2026-09-16): harness complete; retained large-model gates remain blocking.**
+  `Preview3D.exe --benchmark=<fixture>` now sustains rendering on the dedicated
+  render thread while keeping the UI pump live, with bounded duration/frame/repeat
+  options, result-file or attached/allocated-console JSON, raw intervals and
+  mean/median/p95/max/failure/exclusion data. It records background/loading UI,
+  first geometry, complete coarse, verified bounds, refinement, synthetic
+  input-to-present and heartbeat milestones. A background sampler reports viewer
+  and pooled-worker private commit plus committed mapped views separately; worker
+  private commit is also asserted as a labeled conservative scratch upper bound; queue
+  and live/pending/retired GPU accounting and the actual configured general-worker
+  Job cap are included. Applicable violated gates return nonzero. The opt-in
+  PresentMon 2.x wrapper preserves ETW present intervals with automatic exclusion
+  reasons and adds hashes plus design-doc-09 machine/run metadata. Warm cache,
+  Tier B, thumbnails and MSI are absent by design.
+  Qualification exposed and fixed an immediate command-line-open race that had
+  captured a zero CPU cap before asynchronous renderer initialization. Debug and
+  Release solution builds pass; Unit now passes 87 cases / 7,327 Debug and 7,239
+  Release assertions, and ImportIsolation passes 200 cases / 51,943 assertions in
+  each configuration. Three Release compatibility A-small runs, Draw-heavy and
+  delayed-copy Pressure pass applicable gates. A-small coarse p95 is 430.259 ms,
+  frame p95 4.406 ms / max 14.549 ms, input p95 3.656 ms; viewer/worker peaks are
+  290,263,040 / 3,612,672 bytes. Worker-Job and occlusion negative controls fail
+  explicitly as intended. Existing generated multi-GiB GLB/STL/PLY runs do **not**
+  pass: GLB/STL present no proxy within 30 s and PLY fails validation with a named
+  resource limit. A-medium and real ETW remain unrun locally. Exact commands,
+  applicability, artifacts and limits are in
+  [TSK-302_VERIFICATION.md](./TSK-302_VERIFICATION.md) and
+  `tests/fixtures/baselines/tsk-302/`. These failures are not waived and block the
+  scope-limited MVP exit criteria; TSK-303 is next, but packaging cannot establish
+  release readiness while these retained gates remain red.
+
 - **Scope-limited MVP, Phase 3 / TSK-301 (2026-09-16): complete.**
   Product imports now use a two-process asynchronously provisioned AppContainer
   pool. Each generation receives newly duplicated read-only primary/sidecar,

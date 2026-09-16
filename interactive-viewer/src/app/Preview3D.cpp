@@ -14,11 +14,13 @@
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <tlhelp32.h>
 #include <wrl/client.h>
 
 #include <iomanip>
 #include <sstream>
 #include <bit>
+#include <string_view>
 
 using Microsoft::WRL::ComPtr;
 
@@ -126,6 +128,23 @@ struct ViewerApp
     bool showFrameStats = false; // --frame-stats: see UpdateTitle
     // --frame-bench N sustains rendering for timing the actual scene and chrome.
     int benchFrames = 0;
+    bool benchmarkMode = false;
+    int benchmarkFrameLimit = 1200;
+    int benchmarkRepeat = 3;
+    std::uint64_t benchmarkDurationMs = 10'000;
+    std::wstring benchmarkResultPath;
+    std::wstring benchmarkReference = L"compatibility";
+    std::wstring benchmarkEtwPath;
+    bool benchmarkOcclusion = false;
+    std::uint64_t benchmarkStartedUs = 0;
+    std::uint64_t benchmarkViewerBaselinePrivate = 0;
+    std::atomic<std::uint64_t> benchmarkViewerPeakPrivate{0};
+    std::atomic<std::uint64_t> benchmarkViewerPeakMapped{0};
+    std::atomic<std::uint64_t> benchmarkWorkerPeakPrivate{0};
+    std::atomic<std::uint64_t> benchmarkWorkerPeakMapped{0};
+    std::atomic<std::uint64_t> benchmarkHeartbeatMaxUs{0};
+    bool benchmarkInputSent = false;
+    std::jthread benchmarkSampler;
     bool appSmoke = false; // opt-in, bounded test commands; no normal activation IPC
     // Deliberately NOT named `camera`: once the render thread exists, every
     // access has to go through renderThread.LockCamera(). Renaming turned
@@ -227,6 +246,218 @@ double NowSeconds()
     LARGE_INTEGER counter{};
     QueryPerformanceCounter(&counter);
     return static_cast<double>(counter.QuadPart) / frequency;
+}
+
+std::uint64_t NowMicroseconds()
+{
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+void AtomicMaximum(std::atomic<std::uint64_t>& destination, std::uint64_t value)
+{
+    auto old = destination.load(std::memory_order_relaxed);
+    while (old < value && !destination.compare_exchange_weak(old, value, std::memory_order_relaxed)) {}
+}
+
+std::uint64_t PrivateCommit(HANDLE process)
+{
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    counters.cb = sizeof(counters);
+    return K32GetProcessMemoryInfo(process, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))
+        ? static_cast<std::uint64_t>(counters.PrivateUsage) : 0;
+}
+
+std::uint64_t CommittedMappedViews(HANDLE process)
+{
+    MEMORY_BASIC_INFORMATION region{};
+    std::uint64_t total = 0;
+    std::uintptr_t address = 0;
+    while (VirtualQueryEx(process, reinterpret_cast<LPCVOID>(address), &region, sizeof(region)) == sizeof(region)) {
+        if (region.State == MEM_COMMIT && region.Type == MEM_MAPPED)
+            total += static_cast<std::uint64_t>(region.RegionSize);
+        const auto next = reinterpret_cast<std::uintptr_t>(region.BaseAddress) + region.RegionSize;
+        if (next <= address) break;
+        address = next;
+    }
+    return total;
+}
+
+void SampleBenchmarkMemory(ViewerApp& app)
+{
+    AtomicMaximum(app.benchmarkViewerPeakPrivate, PrivateCommit(GetCurrentProcess()));
+    AtomicMaximum(app.benchmarkViewerPeakMapped, CommittedMappedViews(GetCurrentProcess()));
+    const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W entry{sizeof(entry)};
+    std::uint64_t workerPrivate = 0, workerMapped = 0;
+    if (Process32FirstW(snapshot, &entry)) do {
+        if (entry.th32ParentProcessID != GetCurrentProcessId()
+            || _wcsicmp(entry.szExeFile, L"Preview3DImportWorker.exe") != 0) continue;
+        const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, entry.th32ProcessID);
+        if (!process) continue;
+        workerPrivate += PrivateCommit(process);
+        workerMapped += CommittedMappedViews(process);
+        CloseHandle(process);
+    } while (Process32NextW(snapshot, &entry));
+    CloseHandle(snapshot);
+    AtomicMaximum(app.benchmarkWorkerPeakPrivate, workerPrivate);
+    AtomicMaximum(app.benchmarkWorkerPeakMapped, workerMapped);
+}
+
+std::string JsonString(std::wstring_view value)
+{
+    const int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    std::string utf8(count > 0 ? static_cast<size_t>(count) : 0, '\0');
+    if (count > 0) WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), utf8.data(), count, nullptr, nullptr);
+    std::string escaped = "\"";
+    for (const unsigned char ch : utf8) {
+        switch (ch) {
+        case '\\': escaped += "\\\\"; break;
+        case '"': escaped += "\\\""; break;
+        case '\n': escaped += "\\n"; break;
+        case '\r': escaped += "\\r"; break;
+        case '\t': escaped += "\\t"; break;
+        default:
+            if (ch < 0x20) {
+                char buffer[7]{}; sprintf_s(buffer, "\\u%04x", ch); escaped += buffer;
+            } else escaped += static_cast<char>(ch);
+        }
+    }
+    escaped += '"';
+    return escaped;
+}
+
+double MilestoneMs(std::uint64_t timestamp, std::uint64_t start)
+{
+    return timestamp >= start ? static_cast<double>(timestamp - start) / 1000.0 : -1.0;
+}
+
+bool WriteBenchmarkResult(ViewerApp& app, int& exitCode)
+{
+    app.benchmarkSampler.request_stop();
+    if (app.benchmarkSampler.joinable()) app.benchmarkSampler.join();
+    SampleBenchmarkMemory(app);
+    const auto stats = app.renderThread.BenchmarkStats();
+    const double background = MilestoneMs(app.renderThread.SmokeValue(2), app.benchmarkStartedUs);
+    const double loading = MilestoneMs(app.renderThread.SmokeValue(67), app.benchmarkStartedUs);
+    const double geometry = MilestoneMs(app.renderThread.SmokeValue(3), app.benchmarkStartedUs);
+    const double coarse = MilestoneMs(app.renderThread.SmokeValue(68), app.benchmarkStartedUs);
+    const double verified = MilestoneMs(app.renderThread.SmokeValue(69), app.benchmarkStartedUs);
+    const double refinement = MilestoneMs(app.renderThread.SmokeValue(70), app.benchmarkStartedUs);
+    const double intervalGate = app.benchmarkReference == L"performance" ? 8.3 : 16.7;
+    const double inputGate = app.benchmarkReference == L"performance" ? 16.0 : 33.0;
+    const double coarseGate = app.initialPath.find(L"large") != std::wstring::npos ? 5000.0
+        : app.initialPath.find(L"medium") != std::wstring::npos ? 2000.0 : 500.0;
+    const auto viewerGrowth = app.benchmarkViewerPeakPrivate.load() > app.benchmarkViewerBaselinePrivate
+        ? app.benchmarkViewerPeakPrivate.load() - app.benchmarkViewerBaselinePrivate : 0;
+    const auto aggregateGrowth = viewerGrowth + app.benchmarkWorkerPeakPrivate.load();
+    MEMORYSTATUSEX physicalMemory{sizeof(physicalMemory)};
+    const auto scratchCap = GlobalMemoryStatusEx(&physicalMemory)
+        ? std::min<std::uint64_t>(1024ull * 1024 * 1024, physicalMemory.ullTotalPhys / 4)
+        : 1024ull * 1024 * 1024;
+    const bool performanceReference = app.benchmarkReference == L"performance";
+    const bool timingPassed = background >= 0 && loading >= 0 && geometry >= 0 && coarse >= 0 && verified >= 0
+        && (!performanceReference || (background <= 150.0 && loading <= 200.0 && coarse <= coarseGate));
+    const bool framePassed = stats.p95Ms <= intervalGate && stats.maxMs <= 50.0
+        && stats.failed == 0 && stats.occluded == 0;
+    const bool inputPassed = app.renderThread.SmokeValue(71) > 0
+        && static_cast<double>(app.renderThread.SmokeValue(71)) / 1000.0 <= inputGate;
+    const bool heartbeatPassed = app.benchmarkHeartbeatMaxUs.load() <= 100'000;
+    const bool memoryPassed = aggregateGrowth <= 1536ull * 1024 * 1024;
+    const bool queuePassed = app.renderThread.SmokeValue(6) <= 512ull * 1024 * 1024;
+    const bool workerCapPassed = app.benchmarkWorkerPeakPrivate.load() <= import_broker::kImportWorkerCommitLimitBytes;
+    // The worker does not yet publish allocator-category counters. Its whole
+    // private commit is a conservative upper bound on live scratch: if that
+    // stronger quantity is below the scratch cap, scratch necessarily is too.
+    const bool scratchUpperBoundPassed = app.benchmarkWorkerPeakPrivate.load() <= scratchCap;
+    const bool passed = timingPassed
+        && framePassed && inputPassed && heartbeatPassed && memoryPassed && queuePassed
+        && workerCapPassed && scratchUpperBoundPassed;
+    exitCode = passed ? 0 : 2;
+
+    std::ostringstream json;
+    json << std::fixed << std::setprecision(3)
+         << "{\n  \"schema\": 1,\n  \"mode\": \"scope-limited-mvp\",\n"
+         << "  \"status\": \"" << (passed ? "pass" : "fail") << "\",\n"
+         << "  \"viewerState\": " << static_cast<int>(app.state)
+         << ", \"errorCode\": " << static_cast<unsigned>(app.errorCode)
+         << ", \"errorStage\": " << static_cast<unsigned>(app.errorStage)
+         << ", \"errorSummary\": " << JsonString(app.errorSummary)
+         << ", \"errorDetails\": " << JsonString(app.errorDetails) << ",\n"
+         << "  \"fixture\": " << JsonString(app.initialPath) << ",\n"
+         << "  \"reference\": " << JsonString(app.benchmarkReference) << ",\n"
+         << "  \"limits\": {\"durationMs\": " << app.benchmarkDurationMs
+         << ", \"frameLimit\": " << app.benchmarkFrameLimit << ", \"repeatCount\": " << app.benchmarkRepeat
+         << ", \"renderDurationMs\": " << app.renderThread.SmokeValue(72)
+         << ", \"renderFrameLimitWithWarmup\": " << app.renderThread.SmokeValue(73)
+         << ", \"renderObservedPresents\": " << app.renderThread.SmokeValue(74)
+         << ", \"generalWorkerJobCommitBytes\": " << import_broker::kImportWorkerCommitLimitBytes << "},\n"
+         << "  \"milestonesMs\": {\"firstBackground\": " << background << ", \"loadingUi\": " << loading
+         << ", \"firstGeometry\": " << geometry << ", \"completeCoarse\": " << coarse
+         << ", \"verifiedBounds\": " << verified << ", \"firstRefinement\": " << refinement << "},\n"
+         << "  \"gates\": {\"timing\": " << (timingPassed ? "true" : "false")
+         << ", \"startupTimingApplicable\": " << (performanceReference ? "true" : "false")
+         << ", \"frameIntervals\": " << (framePassed ? "true" : "false")
+         << ", \"inputToPresent\": " << (inputPassed ? "true" : "false")
+         << ", \"heartbeat\": " << (heartbeatPassed ? "true" : "false")
+         << ", \"aggregatePrivateCommit\": " << (memoryPassed ? "true" : "false")
+         << ", \"uploadQueue\": " << (queuePassed ? "true" : "false")
+         << ", \"workerJobCommit\": " << (workerCapPassed ? "true" : "false")
+         << ", \"scratchUpperBound\": " << (scratchUpperBoundPassed ? "true" : "false") << "},\n"
+         << "  \"frames\": {\"count\": " << stats.frames << ", \"meanMs\": " << stats.meanMs
+         << ", \"medianMs\": " << stats.medianMs << ", \"p95Ms\": " << stats.p95Ms
+         << ", \"maxMs\": " << stats.maxMs << ", \"presentFailures\": " << stats.failed
+         << ", \"rawCapacity\": " << FrameStats::kCapacity
+         << ", \"rawDropped\": " << (stats.frames > stats.rawIntervalsMs.size() + 1
+                ? stats.frames - stats.rawIntervalsMs.size() - 1 : 0)
+         << ", \"excluded\": {\"occluded\": " << stats.occluded
+         << ", \"etwCorrelated\": false, \"etwSource\": " << JsonString(app.benchmarkEtwPath)
+         << "}, \"rawIntervalsMs\": [";
+    for (size_t i = 0; i < stats.rawIntervalsMs.size(); ++i) {
+        if (i) json << ',';
+        json << stats.rawIntervalsMs[i];
+    }
+    json << "]},\n  \"responsiveness\": {\"maxUiHeartbeatGapMs\": "
+         << static_cast<double>(app.benchmarkHeartbeatMaxUs.load()) / 1000.0
+         << ", \"inputToPresentMs\": " << static_cast<double>(app.renderThread.SmokeValue(71)) / 1000.0
+         << ", \"cancelObservationMs\": null},\n"
+         << "  \"memory\": {\"viewerBaselinePrivateBytes\": " << app.benchmarkViewerBaselinePrivate
+         << ", \"viewerPeakPrivateBytes\": " << app.benchmarkViewerPeakPrivate.load()
+         << ", \"workerPeakPrivateBytes\": " << app.benchmarkWorkerPeakPrivate.load()
+         << ", \"viewerPeakMappedBytes\": " << app.benchmarkViewerPeakMapped.load()
+         << ", \"workerPeakMappedBytes\": " << app.benchmarkWorkerPeakMapped.load()
+         << ", \"viewerPolicyBaselineBytes\": " << app.renderThread.SmokeValue(75)
+         << ", \"viewerPolicyCapBytes\": " << app.renderThread.SmokeValue(76)
+         << ", \"viewerPrivateAtReportBytes\": " << app.renderThread.SmokeValue(77)
+         << ", \"uploadQueuePeakBytes\": " << app.renderThread.SmokeValue(6)
+         << ", \"gpuLivePendingRetiredBytes\": " << app.renderThread.SmokeValue(55)
+         << ", \"gpuPendingBytes\": " << app.renderThread.SmokeValue(57)
+         << ", \"scratchCapBytes\": " << scratchCap
+         << ", \"scratchPrivateCommitUpperBoundBytes\": " << app.benchmarkWorkerPeakPrivate.load() << "},\n"
+         << "  \"measurementNotes\": [\"Present-return intervals are retained raw; ETW classification is opt-in through the qualification harness.\","
+            "\"Mapped committed views are reported separately from private commit.\","
+            "\"Worker private commit is a conservative upper bound on scratch, not an allocator-category measurement.\","
+            "\"The null cancellation field is not silently treated as a cancellation qualification.\"]\n}\n";
+    const auto text = json.str();
+    HANDLE output = INVALID_HANDLE_VALUE;
+    bool closeOutput = false;
+    if (!app.benchmarkResultPath.empty()) {
+        output = CreateFileW(app.benchmarkResultPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        closeOutput = output != INVALID_HANDLE_VALUE;
+    } else {
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
+        output = GetStdHandle(STD_OUTPUT_HANDLE);
+    }
+    DWORD written = 0;
+    const bool ok = output != INVALID_HANDLE_VALUE && WriteFile(output, text.data(), static_cast<DWORD>(text.size()), &written, nullptr)
+        && written == text.size();
+    if (closeOutput) CloseHandle(output);
+    if (!ok) exitCode = 3;
+    return ok;
 }
 
 // The bottom bar and Information panel only reserve screen space while a
@@ -1239,6 +1470,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
 
     app.diagnosticPath = path;
     app.state = ViewerState::Loading;
+    app.renderThread.NotifyLoadingStarted(app.generation);
     StopNavigation(app);
     EndPointer(app);
     app.failedPath.clear();
@@ -1828,7 +2060,14 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         UpdateGizmoLayout(*app);
         UpdateChromeLayout(*app);
         std::wstring renderError;
-        app->renderThread.SetBenchFrames(app->benchFrames);
+        if (app->benchmarkMode)
+        {
+            if (app->benchmarkOcclusion) app->renderThread.SetBenchmarkOccludedForTesting();
+            app->renderThread.SetBenchmarkLimits(app->benchFrames,
+                app->benchmarkDurationMs * static_cast<std::uint64_t>(app->benchmarkRepeat));
+        }
+        else
+            app->renderThread.SetBenchFrames(app->benchFrames);
         auto overlay = std::make_shared<OverlayFrame>();
         overlay->info = BuildOverlayInfo(*app);
         overlay->gizmo = app->gizmo;
@@ -2793,6 +3032,7 @@ bool CreateMainWindow(ViewerApp& app, int showCommand)
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
 {
+    const auto processStartedUs = NowMicroseconds();
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     INITCOMMONCONTROLSEX commonControls{ sizeof(commonControls), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES };
@@ -2801,6 +3041,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
 
     ViewerApp app;
     app.instance = instance;
+    app.benchmarkStartedUs = processStartedUs;
     const ViewerSettings settings = LoadSettings();
     app.showNativeOrientation = settings.showNativeOrientation;
     int argumentCount = 0;
@@ -2839,6 +3080,28 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
                 app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 4096, true);
             }
             else if (_wcsicmp(arguments[i], L"--frame-stats") == 0) app.showFrameStats = true;
+            else if (_wcsicmp(arguments[i], L"--benchmark") == 0) app.benchmarkMode = true;
+            else if (_wcsnicmp(arguments[i], L"--benchmark=", 12) == 0) {
+                app.benchmarkMode = true;
+                app.initialPath = arguments[i] + 12;
+            }
+            else if (_wcsnicmp(arguments[i], L"--benchmark-result=", 19) == 0)
+                app.benchmarkResultPath = arguments[i] + 19;
+            else if (_wcsnicmp(arguments[i], L"--benchmark-duration-ms=", 24) == 0)
+                app.benchmarkDurationMs = _wcstoui64(arguments[i] + 24, nullptr, 10);
+            else if (_wcsnicmp(arguments[i], L"--benchmark-frames=", 19) == 0)
+                app.benchmarkFrameLimit = _wtoi(arguments[i] + 19);
+            else if (_wcsnicmp(arguments[i], L"--benchmark-repeat=", 19) == 0)
+                app.benchmarkRepeat = _wtoi(arguments[i] + 19);
+            else if (_wcsnicmp(arguments[i], L"--benchmark-reference=", 22) == 0)
+                app.benchmarkReference = arguments[i] + 22;
+            else if (_wcsnicmp(arguments[i], L"--benchmark-etw=", 16) == 0)
+                app.benchmarkEtwPath = arguments[i] + 16;
+            else if (_wcsicmp(arguments[i], L"--benchmark-worker-budget-failure") == 0) {
+                app.appSmoke = true; app.faultForTesting = 6;
+            }
+            else if (_wcsicmp(arguments[i], L"--benchmark-occluded") == 0)
+                app.benchmarkOcclusion = true;
             // Deprecated spike flags are no-ops; every frame paints real chrome.
             else if (_wcsicmp(arguments[i], L"--overlay-spike") == 0 ||
                      _wcsnicmp(arguments[i], L"--overlay-spike=", 16) == 0) continue;
@@ -2850,6 +3113,30 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             else if (app.initialPath.empty()) app.initialPath = arguments[i];
         }
         LocalFree(arguments);
+    }
+
+    if (app.benchmarkMode) {
+        const bool validReference = app.benchmarkReference == L"performance" || app.benchmarkReference == L"compatibility";
+        if (app.initialPath.empty() || app.benchmarkFrameLimit < 1 || app.benchmarkFrameLimit > 100'000
+            || app.benchmarkRepeat < 1 || app.benchmarkRepeat > 100 || app.benchmarkDurationMs < 100
+            || app.benchmarkDurationMs > 600'000 || !validReference) {
+            if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
+            const char message[] = "Invalid --benchmark arguments (fixture, frames 1..100000, duration 100..600000 ms, repeat 1..100, reference performance|compatibility).\n";
+            DWORD written = 0; WriteFile(GetStdHandle(STD_ERROR_HANDLE), message, sizeof(message) - 1, &written, nullptr);
+            if (gBackgroundBrush) DeleteObject(gBackgroundBrush);
+            if (SUCCEEDED(comResult)) CoUninitialize();
+            return 64;
+        }
+        app.showFrameStats = true;
+        const auto requested = static_cast<std::uint64_t>(app.benchmarkFrameLimit) * app.benchmarkRepeat + 120;
+        app.benchFrames = static_cast<int>(std::min<std::uint64_t>(requested, 10'000'000));
+        app.benchmarkViewerBaselinePrivate = PrivateCommit(GetCurrentProcess());
+        app.benchmarkSampler = std::jthread([&app](std::stop_token stop) {
+            while (!stop.stop_requested()) {
+                SampleBenchmarkMemory(app);
+                Sleep(50);
+            }
+        });
     }
 
     if (!RegisterViewerClass(instance) || !CreateMainWindow(app, showCommand))
@@ -2864,8 +3151,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     int exitCode = 0;
     bool quitting = false;
     bool benchReported = false;
+    std::uint64_t lastHeartbeatUs = NowMicroseconds();
     while (!quitting)
     {
+        const auto heartbeatUs = NowMicroseconds();
+        if (app.benchmarkMode) AtomicMaximum(app.benchmarkHeartbeatMaxUs, heartbeatUs - lastHeartbeatUs);
+        lastHeartbeatUs = heartbeatUs;
         // Bounded to a single burst: a self-recentering FlyLook mouse-move can
         // otherwise repost itself indefinitely (some input stacks emit a fresh
         // WM_MOUSEMOVE for every SetCursorPos, even a no-op one) and never let
@@ -2876,7 +3167,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             ++drained;
             if (message.message == WM_QUIT)
             {
-                exitCode = static_cast<int>(message.wParam);
+                if (!app.benchmarkMode || exitCode == 0)
+                    exitCode = static_cast<int>(message.wParam);
                 quitting = true;
                 break;
             }
@@ -2913,6 +3205,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             overlay->chrome = app.chrome;
             app.renderThread.PublishFrameInputs(BuildFlightInput(app), ViewportAspect(app), std::move(overlay));
             app.renderThread.SetUiAnimating(uiAnimating);
+            if (app.benchmarkMode && !app.benchmarkInputSent && app.renderThread.SmokeValue(3) != 0) {
+                app.benchmarkInputSent = true;
+                app.renderThread.NotifyBenchmarkInput(NowMicroseconds());
+                PostMessageW(gMainWindow, WM_KEYDOWN, VK_LEFT, 0);
+                PostMessageW(gMainWindow, WM_KEYUP, VK_LEFT, 0);
+            }
             if (GetUpdateRect(gMainWindow, nullptr, FALSE))
             {
                 ValidateRect(gMainWindow, nullptr);
@@ -2925,6 +3223,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             {
                 benchReported = true;
                 UpdateTitle(app);
+                if (app.benchmarkMode) {
+                    WriteBenchmarkResult(app, exitCode);
+                    PostMessageW(gMainWindow, WM_CLOSE, 0, 0);
+                }
             }
         }
         // Only poll while something UI-owned is animating (held keys,
@@ -2935,7 +3237,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         // or nothing is left to notice it finished.
         const bool benchWaiting = app.benchFrames > 0 && !benchReported;
         const DWORD wait = uiAnimating ? kUiPollIntervalMs
-            : benchWaiting             ? kBenchPollIntervalMs
+            : benchWaiting             ? (app.benchmarkMode ? kUiPollIntervalMs : kBenchPollIntervalMs)
                                         : INFINITE;
         MsgWaitForMultipleObjectsEx(0, nullptr, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }

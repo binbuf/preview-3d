@@ -68,6 +68,21 @@ std::uint64_t RenderThread::SmokeValue(unsigned field) const noexcept
     case 54: return coarseAllocationBytes_.load();
     case 2: return firstBackgroundUs_.load(std::memory_order_acquire);
     case 3: return geometryUs_.load(std::memory_order_acquire);
+    case 67: return loadingUiUs_.load(std::memory_order_acquire);
+    case 68: return coarseUs_.load(std::memory_order_acquire);
+    case 69: return verifiedBoundsUs_.load(std::memory_order_acquire);
+    case 70: return refinementUs_.load(std::memory_order_acquire);
+    case 71: return benchmarkInputToPresentUs_.load(std::memory_order_acquire);
+    case 72: return benchDurationMs_;
+    case 73: return static_cast<std::uint64_t>(benchFrames_);
+    case 74: return benchmarkPresentedFrames_.load(std::memory_order_acquire);
+    case 75: return baselineCpuBytes_;
+    case 76: return cpuPolicyCap_;
+    case 77: {
+        PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb=sizeof(memory);
+        return K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))
+            ? memory.PrivateUsage : 0;
+    }
     case 4: return presentedGeneration_.load(std::memory_order_acquire);
     case 5: return resizedExtent_.load(std::memory_order_acquire);
     case 6: { std::lock_guard<std::mutex> lock(uploads_->mutex); return uploads_->peakBytes; }
@@ -97,6 +112,22 @@ void RenderThread::SetBenchFrames(int frames)
 {
     benchFrames_ = frames;
     benchRemaining_ = frames;
+}
+
+void RenderThread::SetBenchmarkLimits(int frames, std::uint64_t durationMs)
+{
+    SetBenchFrames(frames);
+    benchDurationMs_ = durationMs;
+}
+
+void RenderThread::NotifyLoadingStarted(std::uint64_t generation)
+{
+    loadingGeneration_.store(generation, std::memory_order_release);
+    loadingUiUs_.store(0, std::memory_order_release);
+    coarseUs_.store(0, std::memory_order_release);
+    verifiedBoundsUs_.store(0, std::memory_order_release);
+    refinementUs_.store(0, std::memory_order_release);
+    Invalidate();
 }
 
 bool RenderThread::Start(HWND window, std::wstring& error)
@@ -449,6 +480,12 @@ RenderThread::StatsSnapshot RenderThread::Stats() const
     return stats_;
 }
 
+RenderThread::StatsSnapshot RenderThread::BenchmarkStats() const
+{
+    std::lock_guard<std::mutex> lock(statsMutex_);
+    return benchmarkStats_;
+}
+
 void RenderThread::AssertOnRenderThread() const
 {
     // `04-rendering-and-streaming.md:194`: "Developer builds assert queue
@@ -463,10 +500,6 @@ bool RenderThread::InitializeOnThread(HWND window, std::wstring& error)
     if (!path_.Initialize(window, error) || !budgetMonitor_.Initialize(path_.device,{},error)) return false;
     D3D12_FEATURE_DATA_ARCHITECTURE architecture{};
     if (SUCCEEDED(path_.device.Device()->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE,&architecture,sizeof(architecture)))) isUma_=architecture.UMA;
-    MEMORYSTATUSEX physicalMemory{sizeof(physicalMemory)};
-    cpuPolicyCap_=GlobalMemoryStatusEx(&physicalMemory) ? std::min(1536ull*1024*1024,physicalMemory.ullTotalPhys/4) : 0;
-    PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb=sizeof(memory);
-    if (K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))) baselineCpuBytes_=memory.PrivateUsage;
     UpdateBudget();
     return true;
 }
@@ -496,6 +529,8 @@ void RenderThread::ThreadMain(HWND window)
     }
 
     uploadThread_ = std::thread(&RenderThread::UploadMain, this);
+    if (benchDurationMs_)
+        benchDeadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(benchDurationMs_);
 #ifdef _DEBUG
     if (SUCCEEDED(path_.device.Device()->QueryInterface(IID_PPV_ARGS(&debugInfo_)))) {
         D3D12_MESSAGE_SEVERITY severities[] = {D3D12_MESSAGE_SEVERITY_CORRUPTION,D3D12_MESSAGE_SEVERITY_ERROR};
@@ -542,7 +577,13 @@ void RenderThread::ThreadMain(HWND window)
             std::lock_guard<std::mutex> lock(cameraMutex_);
             cameraMoving = camera_.HasMotion();
         }
-        const bool benching = benchRemaining_ > 0;
+        const bool beforeDeadline = benchDurationMs_ == 0 || std::chrono::steady_clock::now() < benchDeadline_;
+        const bool benching = benchRemaining_ > 0 && beforeDeadline;
+        if (benchRemaining_ > 0 && !beforeDeadline) {
+            benchRemaining_ = 0;
+            PublishStats(true);
+            benchComplete_.store(true, std::memory_order_release);
+        }
         // An upload in flight keeps the loop awake: the copy fence is
         // polled, not waited on, so something has to come back and look.
         // This is what replaces the old blocking wait -- the viewport stays
@@ -556,20 +597,31 @@ void RenderThread::ThreadMain(HWND window)
             continue;
         }
 
+        const auto presentedBeforeBenchmarkFrame = path_.frameStats.PresentedFrames();
         RenderOneFrame();
         if (deviceFatal_) break;
 
-        if (benching) {
+        if (benching && benchDurationMs_ && benchmarkFrameStats_.PresentedFrames()
+            >= static_cast<std::uint64_t>(std::max(1, benchFrames_ - 120))) {
+            benchRemaining_ = 0;
+            PublishStats(true);
+            benchComplete_.store(true, std::memory_order_release);
+        } else if (benching && !benchDurationMs_
+                   && path_.frameStats.PresentedFrames() > presentedBeforeBenchmarkFrame) {
             --benchRemaining_;
             // Discard the first 120 frames as warm-up -- shader/PSO and
             // first-touch costs say nothing about steady state.
             if (benchRemaining_ == benchFrames_ - 120) {
-                path_.frameStats.Reset();
-                path_.overlayTotalMs = 0.0;
-                path_.overlayPasses = 0;
+                // Legacy --frame-bench remains a steady-state stopwatch.
+                // --benchmark retains startup/loading intervals as raw data.
+                if (!benchDurationMs_) {
+                    path_.frameStats.Reset();
+                    path_.overlayTotalMs = 0.0;
+                    path_.overlayPasses = 0;
+                }
             }
             if (benchRemaining_ == 0) {
-                PublishStats(); // forced, so the final numbers are not a multiple-of-30 away
+                PublishStats(true); // forced, so the final numbers are not a multiple-of-30 away
                 benchComplete_.store(true, std::memory_order_release);
             }
         }
@@ -801,6 +853,8 @@ void RenderThread::PumpUploads(HWND window)
         if (stagedProxyComplete_) {
             metadata.boundsVerified=true;
             metadata.importStatus.flags=model_core::kStatusRefining;
+            pendingCoarseGeneration_.store(pub.task.generation, std::memory_order_release);
+            pendingVerifiedGeneration_.store(pub.task.generation, std::memory_order_release);
         }
         if (stagedProxyMode_ && !stagedPreviewOnly_) scannedPrimitives_.store(metadata.triangleCount+metadata.pointCount);
         metadata.importStatus.textureWarnings = std::max(metadata.importStatus.textureWarnings,
@@ -900,6 +954,8 @@ void RenderThread::PumpUploads(HWND window)
     uploads_->gpuBaseBytes=path_.AccountedAllocationBytes(&stagedScene_);
     if (message->ok && message->metadata)
         displaySnapshot_.store(std::make_shared<const RenderDisplaySnapshot>(RenderDisplaySnapshot{message->path,message->metadata}));
+    if (message->ok && message->refinement)
+        pendingRefinementGeneration_.store(message->generation, std::memory_order_release);
     if (!message->ok) message->errorSummary = message->errorCode == model_core::ImportErrorCode::OutOfMemory
         ? L"There is not enough memory to display this model."
         : message->errorCode == model_core::ImportErrorCode::EmptyGeometry ? L"This model has no displayable geometry."
@@ -989,6 +1045,12 @@ void RenderThread::RenderOneFrame()
         debugErrors_.store(count);
     }
 
+    if (path_.frameStats.PresentedFrames() > framesBefore) {
+        if (benchDurationMs_) {
+            benchmarkFrameStats_.RecordPresent(benchmarkForceOccluded_ ? DXGI_STATUS_OCCLUDED : path_.lastPresentResult);
+            benchmarkPresentedFrames_.fetch_add(1, std::memory_order_release);
+        }
+    }
     if (path_.frameStats.PresentedFrames() > framesBefore && path_.lastPresentResult == S_OK) {
         const auto nowUs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -998,6 +1060,21 @@ void RenderThread::RenderOneFrame()
             geometryUs_.store(nowUs, std::memory_order_release);
             presentedGeneration_.store(modelGeneration_, std::memory_order_release);
         }
+        const auto loading = loadingGeneration_.load(std::memory_order_acquire);
+        if (loading && loadingUiUs_.load(std::memory_order_acquire) == 0)
+            loadingUiUs_.store(nowUs, std::memory_order_release);
+        if (modelGeneration_ != 0 && pendingCoarseGeneration_.load(std::memory_order_acquire) == modelGeneration_
+            && coarseUs_.load(std::memory_order_acquire) == 0)
+            coarseUs_.store(nowUs, std::memory_order_release);
+        if (modelGeneration_ != 0 && pendingVerifiedGeneration_.load(std::memory_order_acquire) == modelGeneration_
+            && verifiedBoundsUs_.load(std::memory_order_acquire) == 0)
+            verifiedBoundsUs_.store(nowUs, std::memory_order_release);
+        if (modelGeneration_ != 0 && pendingRefinementGeneration_.load(std::memory_order_acquire) == modelGeneration_
+            && refinementUs_.load(std::memory_order_acquire) == 0)
+            refinementUs_.store(nowUs, std::memory_order_release);
+        const auto inputUs = benchmarkInputUs_.exchange(0, std::memory_order_acq_rel);
+        if (inputUs && nowUs >= inputUs)
+            benchmarkInputToPresentUs_.store(nowUs - inputUs, std::memory_order_release);
     }
 
     // Republish only occasionally, never every frame. FrameStats::P95Ms
@@ -1005,6 +1082,9 @@ void RenderThread::RenderOneFrame()
     // frame path cost roughly 8 ms of p95 when it was measured -- an
     // allocation and a sort per frame is exactly the kind of thing that
     // shows up as an occasional missed vsync rather than as a slower mean.
+    // Qualification keeps the entire bounded ring and publishes only once at
+    // completion; sorting it every 30 frames would contaminate its own p95.
+    if (benchDurationMs_) return;
     static constexpr std::uint64_t kStatsPublishInterval = 30;
     if (path_.frameStats.PresentedFrames() % kStatsPublishInterval != 0) return;
     PublishStats();
@@ -1062,6 +1142,8 @@ bool RenderThread::RecoverDevice()
         return false;
     }
     uploadThread_ = std::thread(&RenderThread::UploadMain, this);
+    if (benchDurationMs_)
+        benchDeadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(benchDurationMs_);
     notice->recovered = true;
     notice->details = L"The graphics device was rebuilt; the model will be reconstructed from its retained source. ";
     notice->details += diagnostic;
@@ -1069,19 +1151,25 @@ bool RenderThread::RecoverDevice()
     return true;
 }
 
-void RenderThread::PublishStats()
+void RenderThread::PublishStats(bool includeRaw)
 {
     const double overlayMean
         = path_.overlayPasses > 0 ? path_.overlayTotalMs / static_cast<double>(path_.overlayPasses) : 0.0;
+    const FrameStats& source = benchDurationMs_ ? benchmarkFrameStats_ : path_.frameStats;
     StatsSnapshot snapshot;
-    snapshot.meanMs = path_.frameStats.MeanMs();
-    snapshot.p95Ms = path_.frameStats.P95Ms();
+    snapshot.meanMs = source.MeanMs();
+    snapshot.medianMs = source.MedianMs();
+    snapshot.p95Ms = source.P95Ms();
+    snapshot.maxMs = source.MaxMs();
     snapshot.overlayMeanMs = overlayMean;
-    snapshot.frames = path_.frameStats.PresentedFrames();
-    snapshot.occluded = path_.frameStats.OccludedPresents();
+    snapshot.frames = source.PresentedFrames();
+    snapshot.occluded = source.OccludedPresents();
+    snapshot.failed = source.FailedPresents();
+    if (includeRaw) snapshot.rawIntervalsMs = source.RawIntervalsMs();
     {
         std::lock_guard<std::mutex> lock(statsMutex_);
         stats_ = snapshot;
+        if (includeRaw) benchmarkStats_ = snapshot;
     }
 }
 
