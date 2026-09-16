@@ -20,7 +20,8 @@ file registration, persistent caching, intermediate LOD construction, and broade
 - DPI-aware dark native UI, keyboard-reachable controls, tooltips, and a neutral studio/grid render
 - a Windows 11 Photos-style unified title bar (custom `WM_NCCALCSIZE`/`WM_NCHITTEST` non-client
   handling, with `DwmDefWindowProc` passthrough so Snap Layout hover-on-maximize still works): icon
-  action buttons (Grid/Snap/Speed/Fit/Reset/Share/•••) on the left, the centered file name, and
+  action buttons (Grid/Ground axis/Ground direction/Snap/Speed/Fit/Reset/Share/•••) on the left,
+  the centered file name, and
   Open-With plus the system minimize/maximize/close on the right — the caption buttons stay usable
   even before a model finishes loading
 - a Photos-style bottom bar (shown once a model is loaded) with the Information toggle, a zoom slider

@@ -336,7 +336,7 @@ std::vector<Control> VisibleControls(const Query& query)
 {
     std::vector<Control> result;
     static constexpr Control ordered[] = {
-        Control::Grid, Control::GroundAxis, Control::AxisSnap, Control::Speed,
+        Control::Grid, Control::GroundAxis, Control::GroundDirection, Control::AxisSnap, Control::Speed,
         Control::Fit, Control::Reset, Control::Share, Control::More,
         Control::OpenWith, Control::Minimize, Control::Maximize, Control::Close,
         Control::Info, Control::Zoom, Control::Fullscreen, Control::SpeedSlider,

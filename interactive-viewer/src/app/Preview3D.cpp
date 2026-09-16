@@ -228,6 +228,7 @@ struct ViewerApp
     // ViewerSettings' default (normalized).
     bool showNativeOrientation = false;
     GroundAxis groundAxis = GroundAxis::Automatic;
+    bool groundAxisInverted = false;
     bool settingsPanelOpen = false;
     std::wstring speedHudText;
     double speedHudUntil = 0.0;
@@ -560,7 +561,8 @@ RECT InfoPanelRect(const ViewerApp& app)
 DirectX::XMMATRIX ActiveModelTransform(const ViewerApp& app)
 {
     if (!app.loadedModel) return DirectX::XMMatrixIdentity();
-    return GroundAxisTransform(app.groundAxis, app.loadedModel->source.upAxis, app.showNativeOrientation);
+    return GroundAxisTransform(app.groundAxis, app.loadedModel->source.upAxis,
+        app.showNativeOrientation, app.groundAxisInverted);
 }
 
 // The bounds actually occupying the app's Z-up world right now. Every
@@ -1149,6 +1151,15 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
             app.chrome.Button(Chrome::Part::GroundAxis).rect,
             std::wstring(L"Ground axis ") + GroundAxisName(current) + L"; click for " + GroundAxisName(next), true };
     }
+    if (app.chrome.hover == Chrome::Part::GroundDirection && app.loadedModel)
+    {
+        const GroundAxis axis = ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis);
+        const wchar_t* currentSign = app.groundAxisInverted ? L"-" : L"+";
+        const wchar_t* nextSign = app.groundAxisInverted ? L"+" : L"-";
+        return { static_cast<int>(Chrome::Part::GroundDirection) + 1,
+            app.chrome.Button(Chrome::Part::GroundDirection).rect,
+            std::wstring(currentSign) + GroundAxisName(axis) + L" is up; click for " + nextSign + GroundAxisName(axis), true };
+    }
     struct Entry { Chrome::Part part; const wchar_t* text; };
     static constexpr Entry kEntries[] = {
         { Chrome::Part::Grid, L"Toggle ground grid" },
@@ -1245,6 +1256,7 @@ void SaveViewerPreferences(const ViewerApp& app)
     ViewerSettings settings;
     settings.showNativeOrientation = app.showNativeOrientation;
     settings.groundAxis = app.groundAxis;
+    settings.groundAxisInverted = app.groundAxisInverted;
     SaveSettings(settings);
 }
 
@@ -1261,6 +1273,23 @@ void CycleGroundAxis(ViewerApp& app)
     EffectiveBounds(app, effectiveMin, effectiveMax);
     app.renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(app));
     ShowModeHud(app, std::wstring(L"Ground axis ") + GroundAxisName(app.groundAxis));
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void ToggleGroundDirection(ViewerApp& app)
+{
+    if (!CanNavigate(app) || !app.loadedModel || !ConsumeToggleCommand(app, ID_VIEW_GROUND_DIRECTION)) return;
+    app.groundAxisInverted = !app.groundAxisInverted;
+    app.showNativeOrientation = false;
+
+    DirectX::XMFLOAT3 effectiveMin{};
+    DirectX::XMFLOAT3 effectiveMax{};
+    EffectiveBounds(app, effectiveMin, effectiveMax);
+    app.renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(app));
+    const GroundAxis axis = ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis);
+    ShowModeHud(app, std::wstring(L"Ground direction ") +
+        (app.groundAxisInverted ? L"-" : L"+") + GroundAxisName(axis) + L" up");
     SaveViewerPreferences(app);
     InvalidateRect(app.window, nullptr, FALSE);
 }
@@ -1811,6 +1840,7 @@ void HandleCommand(ViewerApp& app, int id)
         break;
     case ID_VIEW_GRID: ToggleGrid(app); break;
     case ID_VIEW_GROUND_AXIS: CycleGroundAxis(app); break;
+    case ID_VIEW_GROUND_DIRECTION: ToggleGroundDirection(app); break;
     case ID_VIEW_AXIS_SNAP: ToggleAxisSnap(app); break;
     case ID_VIEW_INFO: ToggleInfoPanel(app); break;
     case ID_VIEW_FULLSCREEN: ToggleFullscreen(app); break;
@@ -1887,6 +1917,7 @@ void HandleChromeAction(ViewerApp& app, Chrome::Part part)
     {
     case Chrome::Part::Grid: HandleCommand(app, ID_VIEW_GRID); break;
     case Chrome::Part::GroundAxis: HandleCommand(app, ID_VIEW_GROUND_AXIS); break;
+    case Chrome::Part::GroundDirection: HandleCommand(app, ID_VIEW_GROUND_DIRECTION); break;
     case Chrome::Part::AxisSnap: HandleCommand(app, ID_VIEW_AXIS_SNAP); break;
     case Chrome::Part::Speed: ToggleSpeedFlyout(app); break;
     case Chrome::Part::Fit: HandleCommand(app, ID_VIEW_FIT); break;
@@ -1918,6 +1949,16 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         const GroundAxis effective = app.loadedModel
             ? ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis) : GroundAxis::Z;
         info.value = GroundAxisName(effective);
+        break;
+    }
+    case Control::GroundDirection:
+    {
+        chrome(Chrome::Part::GroundDirection, L"Ground direction", L"Use the opposite side of the selected axis as up");
+        info.role = ROLE_SYSTEM_CHECKBUTTON;
+        info.checked = app.groundAxisInverted;
+        const GroundAxis effective = app.loadedModel
+            ? ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis) : GroundAxis::Z;
+        info.value = std::wstring(app.groundAxisInverted ? L"Negative " : L"Positive ") + GroundAxisName(effective) + L" is up";
         break;
     }
     case Control::AxisSnap: chrome(Chrome::Part::AxisSnap, L"Axis snap", L"Snap truck movement to the nearest world axis"); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.axisSnapEnabled; break;
@@ -2025,6 +2066,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     {
     case Control::Grid: HandleCommand(app,ID_VIEW_GRID); break;
     case Control::GroundAxis: HandleCommand(app,ID_VIEW_GROUND_AXIS); break;
+    case Control::GroundDirection: HandleCommand(app,ID_VIEW_GROUND_DIRECTION); break;
     case Control::AxisSnap: HandleCommand(app,ID_VIEW_AXIS_SNAP); break;
     case Control::Speed: ToggleSpeedFlyout(app); break;
     case Control::Fit: HandleCommand(app,ID_VIEW_FIT); break;
@@ -2206,6 +2248,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.gridVisible = app.gridVisible;
     overlay.axisSnapEnabled = app.axisSnapEnabled;
     overlay.groundAxis = app.groundAxis;
+    overlay.groundAxisInverted = app.groundAxisInverted;
     overlay.effectiveGroundAxis = app.loadedModel
         ? ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis) : GroundAxis::Z;
     DirectX::XMStoreFloat4x4(&overlay.modelTransform, ActiveModelTransform(app));
@@ -2343,6 +2386,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return static_cast<LRESULT>(app->groundAxis);
         }
         if (wParam == 71) return static_cast<LRESULT>(app->groundAxis);
+        if (wParam == 78) {
+            app->groundAxisInverted = lParam != 0;
+            app->showNativeOrientation = false;
+            if (app->loadedModel) {
+                DirectX::XMFLOAT3 minimum{}, maximum{};
+                EffectiveBounds(*app, minimum, maximum);
+                app->renderThread.LockCamera()->SetBounds(minimum, maximum, ViewportAspect(*app));
+            }
+            InvalidateRect(window,nullptr,FALSE);
+            return app->groundAxisInverted;
+        }
+        if (wParam == 79) return app->groundAxisInverted;
         if (wParam == 34) return app->smokePickRequests;
         if (wParam >= 13 && wParam <= 29) {
             if (!app->loadedModel) return 0;
@@ -3450,6 +3505,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     const ViewerSettings settings = LoadSettings();
     app.showNativeOrientation = settings.showNativeOrientation;
     app.groundAxis = settings.groundAxis;
+    app.groundAxisInverted = settings.groundAxisInverted;
     bool commandLineInvalid = false;
     bool bypassSingleInstance = false;
     int argumentCount = 0;

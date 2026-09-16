@@ -22,6 +22,31 @@ constexpr DWORD kIdleWaitTimeoutMs = 5000;
 // must not share an id space. Meshes count up from 0; textures start here.
 constexpr uint32_t kTextureClusterIdBase = 1u << 20;
 
+void TransformGridBounds(const DirectX::XMFLOAT3& minimum, const DirectX::XMFLOAT3& maximum,
+                         DirectX::FXMMATRIX transform, DirectX::XMFLOAT3& outMinimum,
+                         DirectX::XMFLOAT3& outMaximum)
+{
+    const DirectX::XMVECTOR corners[8] = {
+        DirectX::XMVectorSet(minimum.x, minimum.y, minimum.z, 1),
+        DirectX::XMVectorSet(maximum.x, minimum.y, minimum.z, 1),
+        DirectX::XMVectorSet(minimum.x, maximum.y, minimum.z, 1),
+        DirectX::XMVectorSet(maximum.x, maximum.y, minimum.z, 1),
+        DirectX::XMVectorSet(minimum.x, minimum.y, maximum.z, 1),
+        DirectX::XMVectorSet(maximum.x, minimum.y, maximum.z, 1),
+        DirectX::XMVectorSet(minimum.x, maximum.y, maximum.z, 1),
+        DirectX::XMVectorSet(maximum.x, maximum.y, maximum.z, 1),
+    };
+    DirectX::XMVECTOR transformedMinimum = DirectX::g_XMFltMax;
+    DirectX::XMVECTOR transformedMaximum = -DirectX::g_XMFltMax;
+    for (const auto& corner : corners) {
+        const auto transformed = DirectX::XMVector3TransformCoord(corner, transform);
+        transformedMinimum = DirectX::XMVectorMin(transformedMinimum, transformed);
+        transformedMaximum = DirectX::XMVectorMax(transformedMaximum, transformed);
+    }
+    DirectX::XMStoreFloat3(&outMinimum, transformedMinimum);
+    DirectX::XMStoreFloat3(&outMaximum, transformedMaximum);
+}
+
 // Embedded HLSL, compiled at runtime via D3DCompile -- same convention
 // Renderer.cpp's D3D11 shader strings already use; no .hlsl files on disk.
 // The legacy shader remains for position-only geometry. Complete vertices
@@ -201,6 +226,53 @@ PixelOutput PSMain(PSInput input)
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
     PixelOutput output; output.color = float4(saturate(color), base.a); output.pick = 1.0f; return output;
+}
+)";
+
+// The grid is generated from SV_VertexID, so it needs no persistent vertex
+// buffer or upload. Draw constants carry its camera-relative center, ground
+// height, and span; this preserves the large-coordinate precision policy used
+// by model draws while keeping the grid in the viewer's fixed Z-up world.
+constexpr char kGridVertexShaderSource[] = R"(
+cbuffer FrameConstants : register(b0)
+{
+    row_major float4x4 gViewProjection;
+    float4 gEyeSelection;
+    float4 gViewport;
+};
+cbuffer GridConstants : register(b1)
+{
+    float4 gGrid; // center x, center y, ground z (camera relative), span
+};
+struct GridOutput { float4 position : SV_POSITION; float4 color : COLOR0; };
+GridOutput VSMain(uint vertexId : SV_VertexID)
+{
+    const uint divisions = 20;
+    uint lineIndex = vertexId / 4;
+    uint endpoint = vertexId % 4;
+    float offset = lerp(-gGrid.w, gGrid.w, (float)lineIndex / (float)divisions);
+    float3 position;
+    if (endpoint < 2)
+        position = float3(gGrid.x + (endpoint == 0 ? -gGrid.w : gGrid.w), gGrid.y + offset, gGrid.z);
+    else
+        position = float3(gGrid.x + offset, gGrid.y + (endpoint == 2 ? -gGrid.w : gGrid.w), gGrid.z);
+    bool major = lineIndex == divisions / 2 || lineIndex % 5 == 0;
+    GridOutput output;
+    output.position = mul(float4(position, 1), gViewProjection);
+    output.color = major ? float4(.22, .25, .30, .52) : float4(.16, .18, .22, .36);
+    return output;
+}
+)";
+
+constexpr char kGridPixelShaderSource[] = R"(
+struct GridInput { float4 position : SV_POSITION; float4 color : COLOR0; };
+struct GridOutput { float4 color : SV_TARGET0; float pick : SV_TARGET1; };
+GridOutput PSMain(GridInput input)
+{
+    GridOutput output;
+    output.color = input.color;
+    output.pick = 0;
+    return output;
 }
 )";
 
@@ -520,6 +592,31 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
 
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState)))) {
         error = L"The D3D12 pipeline state could not be created.";
+        return false;
+    }
+    ComPtr<ID3DBlob> gridVsBlob;
+    ComPtr<ID3DBlob> gridPsBlob;
+    if (!CompileShader(kGridVertexShaderSource, sizeof(kGridVertexShaderSource) - 1,
+                       "VSMain", "vs_5_1", gridVsBlob, error)
+        || !CompileShader(kGridPixelShaderSource, sizeof(kGridPixelShaderSource) - 1,
+                          "PSMain", "ps_5_1", gridPsBlob, error)) {
+        return false;
+    }
+    auto gridPsoDesc = psoDesc;
+    gridPsoDesc.VS = { gridVsBlob->GetBufferPointer(), gridVsBlob->GetBufferSize() };
+    gridPsoDesc.PS = { gridPsBlob->GetBufferPointer(), gridPsBlob->GetBufferSize() };
+    gridPsoDesc.InputLayout = {};
+    gridPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    auto& gridBlend = gridPsoDesc.BlendState.RenderTarget[0];
+    gridBlend.BlendEnable = TRUE;
+    gridBlend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    gridBlend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    gridBlend.BlendOp = D3D12_BLEND_OP_ADD;
+    gridBlend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    gridBlend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    gridBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&gridPsoDesc, IID_PPV_ARGS(&gridPipelineState)))) {
+        error = L"The ground-grid pipeline state could not be created.";
         return false;
     }
     std::string positionOnlySource(kVertexShaderSource);
@@ -895,6 +992,34 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
         = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
 
+    if (chrome.info.gridVisible && haveModelBounds) {
+        DirectX::XMFLOAT3 boundsMin;
+        DirectX::XMFLOAT3 boundsMax;
+        TransformGridBounds(modelBoundsMin, modelBoundsMax,
+            GroundAxisTransform(chrome.info.groundAxis, sourceUpAxis, chrome.info.showNativeOrientation,
+                chrome.info.groundAxisInverted),
+            boundsMin, boundsMax);
+        const float extentX = boundsMax.x - boundsMin.x;
+        const float extentY = boundsMax.y - boundsMin.y;
+        const float extentZ = boundsMax.z - boundsMin.z;
+        const float radius = std::max(0.001f,
+            std::sqrt(extentX * extentX + extentY * extentY + extentZ * extentZ) * 0.5f);
+        const float gridConstants[4] = {
+            (boundsMin.x + boundsMax.x) * 0.5f - static_cast<float>(cameraTarget[0]),
+            (boundsMin.y + boundsMax.y) * 0.5f - static_cast<float>(cameraTarget[1]),
+            boundsMin.z - radius * 0.012f - static_cast<float>(cameraTarget[2]),
+            radius * 2.2f,
+        };
+        commandList->SetGraphicsRootSignature(rootSignature.Get());
+        commandList->SetPipelineState(gridPipelineState.Get());
+        commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
+        commandList->SetGraphicsRoot32BitConstants(1, 4, gridConstants, 0);
+        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+        commandList->IASetVertexBuffers(0, 0, nullptr);
+        commandList->IASetIndexBuffer(nullptr);
+        commandList->DrawInstanced(84, 1, 0, 0);
+    }
+
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     if (model.srvHeap) {
         ID3D12DescriptorHeap* heaps[] = { model.srvHeap.Get() };
@@ -905,7 +1030,8 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     draws.reserve(model.meshes.size());
     DirectX::XMFLOAT4X4 modelTransform{};
     DirectX::XMStoreFloat4x4(&modelTransform,
-        GroundAxisTransform(chrome.info.groundAxis, sourceUpAxis, chrome.info.showNativeOrientation));
+        GroundAxisTransform(chrome.info.groundAxis, sourceUpAxis, chrome.info.showNativeOrientation,
+            chrome.info.groundAxisInverted));
     const auto viewProjectionMatrix=DirectX::XMLoadFloat4x4(&viewProjection);
     for (auto& mesh:model.meshes) {
         if (!mesh.drawEnabled) continue;
@@ -1586,6 +1712,7 @@ void D3D12ViewerPath::ClearModel()
     uploadInFlight = false;
     pendingResourceCount = 0;
     hasModel = false;
+    haveModelBounds = false;
 }
 
 

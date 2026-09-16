@@ -90,6 +90,7 @@ struct OverlayInfo
     bool showNativeOrientation = false;   // current value, for drawing the switch's on/off state
     GroundAxis groundAxis = GroundAxis::Automatic; // persisted selection used by rendering
     GroundAxis effectiveGroundAxis = GroundAxis::Z; // resolved X/Y/Z shown by the toolbar
+    bool groundAxisInverted = false; // negative side of effectiveGroundAxis is up
     float selectionAmount = 0.0f;   // 0..1 mesh-selection highlight
     std::wstring speedHud;          // transient fly-speed readout
     float speedHudAlpha = 0.0f;

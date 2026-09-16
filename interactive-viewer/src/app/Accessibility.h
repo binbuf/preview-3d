@@ -48,6 +48,7 @@ enum class Control
     // Appended to preserve the stable numeric runtime IDs of existing UIA
     // fragments. VisibleControls supplies its visual/tab order explicitly.
     GroundAxis,
+    GroundDirection,
     Count,
 };
 

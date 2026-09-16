@@ -10,7 +10,7 @@
 // and this is never surfaced to the user as an error.
 struct ViewerSettings
 {
-    static constexpr int kCurrentVersion = 2;
+    static constexpr int kCurrentVersion = 3;
     int version = kCurrentVersion;
 
     // Display the model in the orientation its source file authored (true)
@@ -20,6 +20,9 @@ struct ViewerSettings
     // Automatic preserves the source-declared behavior until the user picks
     // an explicit model axis to ground from the title-bar cycle button.
     GroundAxis groundAxis = GroundAxis::Automatic;
+
+    // Treat the negative rather than positive side of groundAxis as up.
+    bool groundAxisInverted = false;
 
     // Future preferences are added here as additional flat fields with their
     // own defaults — see Settings.cpp for why this needs no migration step.

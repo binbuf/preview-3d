@@ -28,6 +28,7 @@ def main():
     hwnd = 0
     original_native = None
     original_axis = None
+    original_direction = None
     report = {'configuration':args.configuration,'meshAxes':{},'pointAxes':{},'failure':None}
 
     def query(field,lparam=0): return send(hwnd,0x8000+104,field,lparam)
@@ -62,7 +63,7 @@ def main():
     try:
         hwnd=wait(lambda:find_window(app.pid),'window')
         wait(lambda:query(2),'background')
-        original_native=query(21); original_axis=query(71)
+        original_native=query(21); original_axis=query(71); original_direction=query(79)
         open_model(model)
 
         expected={3:(2e-4,1e-4,0.0),2:(2e-4,0.0,1e-4),1:(0.0,1e-4,2e-4)}
@@ -75,7 +76,16 @@ def main():
                 assert abs(actual-wanted)<1e-10,(names[axis],dimensions)
             pick_current(f'{names[axis]} mesh pick')
             assert abs(number(26)-number(27))<1e-15,f'{names[axis]} did not become Home'
-            report['meshAxes'][names[axis]]={'dimensions':dimensions,'gpuPick':True,'isHome':True}
+            frames=query(7);query(78,1)
+            wait(lambda:query(7)>frames,f'-{names[axis]} Present')
+            inverted_dimensions=(number(23),number(24),number(25))
+            for actual,wanted in zip(inverted_dimensions,expected[axis]):
+                assert abs(actual-wanted)<1e-10,(f'-{names[axis]}',inverted_dimensions)
+            pick_current(f'-{names[axis]} mesh pick')
+            assert abs(number(26)-number(27))<1e-15,f'-{names[axis]} did not become Home'
+            report['meshAxes'][names[axis]]={'dimensions':dimensions,'gpuPick':True,'isHome':True,
+                                             'negativeUp':True}
+            query(78,0)
 
         open_model(point_model)
         point_source=(0.001999974250793457,0.0009999275207519531,0.0)
@@ -96,6 +106,7 @@ def main():
     finally:
         if hwnd and app.poll() is None:
             if original_axis is not None: query(70,original_axis)
+            if original_direction is not None: query(78,original_direction)
             if original_native is not None and query(21)!=original_native: query(30)
             send(hwnd,0x10)
         try: app.wait(timeout=10)

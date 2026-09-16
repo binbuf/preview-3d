@@ -17,6 +17,8 @@ enum class OverlayIconKind
 {
     Grid,
     GroundAxis,
+    GroundDirectionPositive,
+    GroundDirectionNegative,
     AxisSnap,
     Speed,
     Fit,
@@ -77,6 +79,22 @@ void DrawIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush, OverlayIco
         target->DrawLine(D2D1::Point2F(cx - Scale(7.0f, scale), cy + Scale(7.0f, scale)),
             D2D1::Point2F(cx - Scale(7.0f, scale), cy + Scale(2.0f, scale)), brush, stroke);
         break;
+    case OverlayIconKind::GroundDirectionPositive:
+    case OverlayIconKind::GroundDirectionNegative:
+    {
+        const bool negative = kind == OverlayIconKind::GroundDirectionNegative;
+        const float groundY = cy + (negative ? Scale(-5.0f, scale) : Scale(5.0f, scale));
+        const float tipY = cy + (negative ? Scale(6.0f, scale) : Scale(-6.0f, scale));
+        const float arrowBaseY = cy + (negative ? Scale(2.0f, scale) : Scale(-2.0f, scale));
+        target->DrawLine(D2D1::Point2F(cx - Scale(7.0f, scale), groundY),
+            D2D1::Point2F(cx + Scale(7.0f, scale), groundY), brush, stroke);
+        target->DrawLine(D2D1::Point2F(cx, groundY), D2D1::Point2F(cx, tipY), brush, stroke);
+        target->DrawLine(D2D1::Point2F(cx, tipY),
+            D2D1::Point2F(cx - Scale(3.5f, scale), arrowBaseY), brush, stroke);
+        target->DrawLine(D2D1::Point2F(cx, tipY),
+            D2D1::Point2F(cx + Scale(3.5f, scale), arrowBaseY), brush, stroke);
+        break;
+    }
     case OverlayIconKind::Grid:
     {
         const float half = Scale(7.0f, scale);
@@ -793,6 +811,10 @@ void D3D11On12Overlay::DrawTitleBar(const OverlayInfo& overlay, const Chrome& ch
         DrawText(label, gizmoFormat.Get(), ToRectF(labelRect), D2D1::ColorF(0xF5F5F7),
             DWRITE_TEXT_ALIGNMENT_CENTER);
     }
+    drawActionButton(Chrome::Part::GroundDirection,
+        overlay.groundAxisInverted ? OverlayIconKind::GroundDirectionNegative
+                                   : OverlayIconKind::GroundDirectionPositive,
+        overlay.groundAxisInverted);
     drawActionButton(Chrome::Part::AxisSnap, OverlayIconKind::AxisSnap, overlay.axisSnapEnabled);
     drawActionButton(Chrome::Part::Speed, OverlayIconKind::Speed, false);
     drawActionButton(Chrome::Part::Fit, OverlayIconKind::Fit, false);

@@ -24,7 +24,7 @@ All chrome except three error-state buttons is drawn with Direct2D/DirectWrite o
 
 ### Title bar (52 logical px)
 
-Left to right, present while a model is loaded: **Grid**, **Ground axis** (shows the effective X/Y/Z model-up axis and cycles Z → Y → X), **Snap** (axis snap for the truck/pan tool), **Speed** (opens the speed flyout), **Fit**, **Reset**, **Share**, and an overflow **"…"** button — each a 40-logical-pixel icon button (overflow 34px). Choosing a ground axis maps that positive model axis to the viewer's fixed Z-up world, disables native-orientation display so the choice takes effect, immediately captures the resulting framing as Home/Reset, and persists the explicit choice. Automatic behavior before the first explicit choice remains source Y-up for glTF and Z-up for formats without declared axes. A draggable empty strip follows, then the centered filename, then another drag strip. On the right, **Open With** (72px, hidden with no model loaded or while fullscreen) precedes the system **Minimize / Maximize-Restore / Close** buttons (46px each), which remain visible even in fullscreen.
+Left to right, present while a model is loaded: **Grid**, **Ground axis** (shows the effective X/Y/Z model-up axis and cycles Z → Y → X), **Ground direction** (flips whether the positive or negative side of that axis is up), **Snap** (axis snap for the truck/pan tool), **Speed** (opens the speed flyout), **Fit**, **Reset**, **Share**, and an overflow **"…"** button — each a 40-logical-pixel icon button (overflow 34px). Choosing a ground axis or direction maps that signed model axis to the viewer's fixed Z-up world, disables native-orientation display so the choice takes effect, immediately captures the resulting framing as Home/Reset, and persists the explicit choice. Automatic behavior before the first explicit choice remains source +Y-up for glTF and +Z-up for formats without declared axes. A draggable empty strip follows, then the centered filename, then another drag strip. On the right, **Open With** (72px, hidden with no model loaded or while fullscreen) precedes the system **Minimize / Maximize-Restore / Close** buttons (46px each), which remain visible even in fullscreen.
 
 The overflow menu is a native popup `HMENU` (the one non-D2D menu surface) containing, conditionally, "Model warnings…" and a separator, then "Controls", a separator, and "About 3D Preview". It does **not** contain cache commands — there is no derived-data cache in this slice — or a recent-files list.
 
@@ -46,7 +46,7 @@ Docked to the right edge, a fixed 300 logical px wide (clamped to 90% of viewpor
 
 ### Transient HUDs and tooltips
 
-A speed HUD ("Travel speed ×1.20") and a mode HUD ("Ground grid shown", "Ground axis Y", "Orthographic", "Axis snap on") appear on the corresponding action and fade out: visible 1.3 s, then a 0.30 s fade. Chrome buttons use a custom hover-delay tooltip (1500 ms delay) rather than the stock Win32 tooltip control.
+A speed HUD ("Travel speed ×1.20") and a mode HUD ("Ground grid shown", "Ground axis Y", "Ground direction -Y up", "Orthographic", "Axis snap on") appear on the corresponding action and fade out: visible 1.3 s, then a 0.30 s fade. Chrome buttons use a custom hover-delay tooltip (1500 ms delay) rather than the stock Win32 tooltip control.
 
 ### Color palette
 
@@ -97,6 +97,7 @@ Camera orientation is a double-precision quaternion with no Euler-angle singular
 | View snaps | Numpad 1/3/7 for Front/Right/Top (Ctrl+ same key for Back/Left/Bottom); Numpad 5 cross-fades Perspective/Orthographic over 0.16 s |
 | Toggle ground grid | G or Shift+Alt+G, or the Grid button; guarded against key-repeat for 0.30 s |
 | Cycle model ground axis | X/Y/Z title-bar button; cycles Z → Y → X and immediately establishes a new Home/Reset framing |
+| Flip model ground direction | Ground-direction title-bar button; toggles the selected axis between positive-up and negative-up and immediately establishes a new Home/Reset framing |
 | Cancel open / exit fullscreen | Esc |
 | Toggle fullscreen | F11 |
 | Open overflow menu | Alt+M |
@@ -119,7 +120,7 @@ Per-monitor-v2 DPI relayout remains active. Windows high-contrast changes remap 
 
 ## Settings and persistence
 
-Native-orientation display and an explicit model ground-axis choice persist in `%LOCALAPPDATA%\Binbuf\3D Preview\settings.json`; a missing, corrupt, or older settings file restores automatic axis selection and normalized orientation. Grid visibility, axis-snap state, and window placement (the latter tracked only in memory to support fullscreen restore) reset on the next run. No settings are written to the registry. AppContainer provisioning is separate, and no derived-data cache — the cache-enabled preference, `%LOCALAPPDATA%` cache directory, and Clear cached previews command described in [04-rendering-and-streaming.md](./04-rendering-and-streaming.md) are forward targets, not current behavior.
+Native-orientation display and an explicit model ground-axis and signed-direction choice persist in `%LOCALAPPDATA%\Binbuf\3D Preview\settings.json`; a missing, corrupt, or older settings file restores automatic axis selection and normalized orientation. Grid visibility, axis-snap state, and window placement (the latter tracked only in memory to support fullscreen restore) reset on the next run. No settings are written to the registry. AppContainer provisioning is separate, and no derived-data cache — the cache-enabled preference, `%LOCALAPPDATA%` cache directory, and Clear cached previews command described in [04-rendering-and-streaming.md](./04-rendering-and-streaming.md) are forward targets, not current behavior.
 
 ## Shell integration
 

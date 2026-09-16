@@ -110,8 +110,29 @@ TEST_CASE("Ground-axis selection cycles and applies exact axis permutations", "[
     CHECK(grounded.z == 1.0f);
 
     DirectX::XMStoreFloat3(&grounded, DirectX::XMVector3TransformNormal(
+        DirectX::XMVectorSet(-1, 0, 0, 0),
+        GroundAxisTransform(GroundAxis::X, model_core::UpAxisId::Unknown, false, true)));
+    CHECK(grounded.x == 0.0f);
+    CHECK(grounded.y == 0.0f);
+    CHECK(grounded.z == 1.0f);
+
+    DirectX::XMStoreFloat3(&grounded, DirectX::XMVector3TransformNormal(
         DirectX::XMVectorSet(0, 1, 0, 0),
         GroundAxisTransform(GroundAxis::Y, model_core::UpAxisId::Unknown, false)));
+    CHECK(grounded.x == 0.0f);
+    CHECK(grounded.y == 0.0f);
+    CHECK(grounded.z == 1.0f);
+
+    DirectX::XMStoreFloat3(&grounded, DirectX::XMVector3TransformNormal(
+        DirectX::XMVectorSet(0, -1, 0, 0),
+        GroundAxisTransform(GroundAxis::Y, model_core::UpAxisId::Unknown, false, true)));
+    CHECK(grounded.x == 0.0f);
+    CHECK(grounded.y == 0.0f);
+    CHECK(grounded.z == 1.0f);
+
+    DirectX::XMStoreFloat3(&grounded, DirectX::XMVector3TransformNormal(
+        DirectX::XMVectorSet(0, 0, -1, 0),
+        GroundAxisTransform(GroundAxis::Z, model_core::UpAxisId::Unknown, false, true)));
     CHECK(grounded.x == 0.0f);
     CHECK(grounded.y == 0.0f);
     CHECK(grounded.z == 1.0f);

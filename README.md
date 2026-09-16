@@ -11,9 +11,11 @@ enabled, or build `Release|x64` with MSBuild. Run `x64\Release\Preview3D.exe`
 and use Ctrl+O, drag one supported file onto the window, or pass a path on the
 command line.
 
-The title-bar X/Y/Z control cycles which positive model axis is treated as up
-and mapped to the ground plane. Each choice immediately becomes the Reset/Home
-view and is remembered for later launches.
+The title-bar X/Y/Z control cycles which model axis is treated as up and mapped
+to the ground plane. The adjacent direction button flips between the positive
+and negative side of that axis, so upside-down source models can be grounded on
+their feet. Each choice immediately becomes the Reset/Home view and is
+remembered for later launches.
 
 The scope-limited portable package has an explicit solution target:
 

@@ -64,14 +64,14 @@ void Chrome::UpdateLayout(int clientWidth, int titleBarHeight, float dpiScale, b
 
     const int rightGroupStart = right - margin;
 
-    // Left-anchored group: Grid, Ground axis, Snap, Speed, Fit, Reset, Share,
-    // Overflow —
+    // Left-anchored group: Grid, Ground axis, Ground direction, Snap, Speed,
+    // Fit, Reset, Share, Overflow —
     // small square icon buttons, in that order.
     struct Entry { ButtonState* state; int width; };
     const int iconButtonWidth = Scale(40, dpiScale);
     const int overflowWidth = Scale(34, dpiScale);
     const Entry entries[] = {
-        { &grid_, iconButtonWidth }, { &groundAxis_, iconButtonWidth },
+        { &grid_, iconButtonWidth }, { &groundAxis_, iconButtonWidth }, { &groundDirection_, iconButtonWidth },
         { &axisSnap_, iconButtonWidth }, { &speed_, iconButtonWidth },
         { &fit_, iconButtonWidth }, { &reset_, iconButtonWidth }, { &share_, iconButtonWidth },
         { &overflow_, overflowWidth },
@@ -96,7 +96,8 @@ Chrome::Part Chrome::HitTest(POINT clientPoint) const
         { Part::Close, &close_ }, { Part::Maximize, &maximize_ }, { Part::Minimize, &minimize_ },
         { Part::OpenWith, &openWith_ }, { Part::Overflow, &overflow_ }, { Part::Share, &share_ },
         { Part::Reset, &reset_ }, { Part::Fit, &fit_ }, { Part::Speed, &speed_ },
-        { Part::AxisSnap, &axisSnap_ }, { Part::GroundAxis, &groundAxis_ }, { Part::Grid, &grid_ },
+        { Part::AxisSnap, &axisSnap_ }, { Part::GroundDirection, &groundDirection_ },
+        { Part::GroundAxis, &groundAxis_ }, { Part::Grid, &grid_ },
     };
     for (const auto& candidate : candidates)
     {
@@ -114,6 +115,7 @@ const Chrome::ButtonState& Chrome::Button(Part part) const
     {
     case Part::Grid: return grid_;
     case Part::GroundAxis: return groundAxis_;
+    case Part::GroundDirection: return groundDirection_;
     case Part::AxisSnap: return axisSnap_;
     case Part::Speed: return speed_;
     case Part::Fit: return fit_;

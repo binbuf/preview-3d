@@ -919,12 +919,15 @@ void RenderThread::PumpUploads(HWND window)
                 modelGeneration_ = pub.task.generation;
                 std::memcpy(path_.sceneOrigin, metadata.sceneOrigin, sizeof(path_.sceneOrigin));
                 path_.sourceUpAxis = metadata.source.upAxis;
+                path_.modelBoundsMin = metadata.boundsMin;
+                path_.modelBoundsMax = metadata.boundsMax;
+                path_.haveModelBounds = true;
                 std::lock_guard<std::mutex> cameraLock(cameraMutex_);
                 framingEpoch_ = interactionEpoch_.load();
                 DirectX::XMFLOAT3 minimum, maximum;
                 TransformBounds(metadata.boundsMin, metadata.boundsMax,
                     GroundAxisTransform(frameOverlay_->info.groundAxis, metadata.source.upAxis,
-                        frameOverlay_->info.showNativeOrientation), minimum, maximum);
+                        frameOverlay_->info.showNativeOrientation, frameOverlay_->info.groundAxisInverted), minimum, maximum);
                 camera_.SetBounds(minimum, maximum, viewportAspect_);
             }
             path_.hasModel = true; hasModel_.store(true, std::memory_order_release);
@@ -936,11 +939,14 @@ void RenderThread::PumpUploads(HWND window)
         }
         metadata.stats.drawCallCount = int(displayedChunks_.load());
         if (stagedHaveBounds_ && modelGeneration_ == pub.task.generation) {
+            path_.modelBoundsMin = metadata.boundsMin;
+            path_.modelBoundsMax = metadata.boundsMax;
+            path_.haveModelBounds = true;
             std::lock_guard<std::mutex> cameraLock(cameraMutex_);
             DirectX::XMFLOAT3 minimum, maximum;
             TransformBounds(metadata.boundsMin, metadata.boundsMax,
                 GroundAxisTransform(frameOverlay_->info.groundAxis, metadata.source.upAxis,
-                    frameOverlay_->info.showNativeOrientation), minimum, maximum);
+                    frameOverlay_->info.showNativeOrientation, frameOverlay_->info.groundAxisInverted), minimum, maximum);
             Camera framed = camera_; framed.SetBounds(minimum, maximum, viewportAspect_);
             if (interactionEpoch_.load() == framingEpoch_) camera_ = framed;
             else {
@@ -1024,7 +1030,8 @@ void RenderThread::RenderOneFrame()
 
     DirectX::XMFLOAT4X4 modelTransform{};
     DirectX::XMStoreFloat4x4(&modelTransform,
-        GroundAxisTransform(overlay->info.groundAxis, path_.sourceUpAxis, overlay->info.showNativeOrientation));
+        GroundAxisTransform(overlay->info.groundAxis, path_.sourceUpAxis, overlay->info.showNativeOrientation,
+            overlay->info.groundAxisInverted));
     const bool visibleDetailPending = RequestVisibleDetail(viewProjection, cameraTarget, modelTransform);
     const auto framesBefore = path_.frameStats.PresentedFrames();
     path_.lastPresentResult = E_PENDING;

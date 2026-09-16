@@ -14,8 +14,8 @@
 // Preview3D.cpp's WM_NCHITTEST/WM_LBUTTONDOWN handlers consume HitTest to route
 // input. All rects are in client pixel coordinates.
 //
-// Layout, left to right: the navigation action buttons (Grid/Ground axis/Snap/Speed/
-// Fit/Reset/Share/Overflow), an empty drag strip, the centered filename, more
+// Layout, left to right: the navigation action buttons (Grid/Ground axis/Ground
+// direction/Snap/Speed/Fit/Reset/Share/Overflow), an empty drag strip, the centered filename, more
 // empty drag strip, then Open With and the system min/max/close.
 class Chrome
 {
@@ -26,6 +26,7 @@ public:
         Caption,       // empty drag strip
         Grid,
         GroundAxis,
+        GroundDirection,
         AxisSnap,
         Speed,
         Fit,
@@ -74,6 +75,7 @@ private:
     bool isMaximized_ = false;
     ButtonState grid_;
     ButtonState groundAxis_;
+    ButtonState groundDirection_;
     ButtonState axisSnap_;
     ButtonState speed_;
     ButtonState fit_;

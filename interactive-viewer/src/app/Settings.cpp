@@ -102,6 +102,10 @@ ViewerSettings LoadSettings()
     else if (groundAxisText == "\"Y\"") settings.groundAxis = GroundAxis::Y;
     else if (groundAxisText == "\"Z\"") settings.groundAxis = GroundAxis::Z;
 
+    const std::string groundAxisInvertedText = FindJsonValue(content, "groundAxisInverted");
+    if (groundAxisInvertedText == "true") settings.groundAxisInverted = true;
+    else if (groundAxisInvertedText == "false") settings.groundAxisInverted = false;
+
     return settings;
 }
 
@@ -122,7 +126,8 @@ void SaveSettings(const ViewerSettings& settings)
         : settings.groundAxis == GroundAxis::Z ? "Z" : "Automatic";
     const std::string json = "{\n  \"version\": " + std::to_string(settings.version) +
         ",\n  \"showNativeOrientation\": " + (settings.showNativeOrientation ? "true" : "false") +
-        ",\n  \"groundAxis\": \"" + groundAxis + "\"\n}\n";
+        ",\n  \"groundAxis\": \"" + groundAxis + "\"" +
+        ",\n  \"groundAxisInverted\": " + (settings.groundAxisInverted ? "true" : "false") + "\n}\n";
 
     HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

@@ -2,7 +2,7 @@
 
 > Post-MVP amendment (2026-09-16): after the scope-limited implementation was
 > frozen, the product owner explicitly approved one viewing extension: a
-> persisted title-bar X/Y/Z model ground-axis cycle. It is implemented as an
+> persisted title-bar X/Y/Z model ground-axis cycle and signed-direction flip. It is implemented as an
 > additive post-MVP feature and does not reopen the Tier B, Shell, cache, LOD,
 > or compatibility-host exclusions below.
 

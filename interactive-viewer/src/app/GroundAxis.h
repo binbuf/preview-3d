@@ -49,31 +49,48 @@ inline const wchar_t* GroundAxisName(GroundAxis axis)
     }
 }
 
-// Maps the selected positive source axis onto the viewer's positive Z axis.
+// Maps the selected source axis onto the viewer's positive Z axis. When the
+// direction is inverted, the negative side of that same source axis becomes
+// up, allowing an upside-down/inside-out authored model to be grounded on its
+// opposite end without changing the selected X/Y/Z axis.
 // Exact signed permutations avoid trigonometric residue in bounds and retain
 // the existing glTF Y-up correction byte-for-byte.
 inline DirectX::XMMATRIX GroundAxisTransform(
-    GroundAxis selected, model_core::UpAxisId sourceUpAxis, bool showNativeOrientation)
+    GroundAxis selected, model_core::UpAxisId sourceUpAxis, bool showNativeOrientation,
+    bool groundAxisInverted = false)
 {
     if (showNativeOrientation) return DirectX::XMMatrixIdentity();
+    DirectX::XMMATRIX transform;
     switch (ResolveGroundAxis(selected, sourceUpAxis))
     {
     case GroundAxis::X:
-        return DirectX::XMMatrixSet(
+        transform = DirectX::XMMatrixSet(
             0, 0, 1, 0,
             0, 1, 0, 0,
            -1, 0, 0, 0,
             0, 0, 0, 1);
+        break;
     case GroundAxis::Y:
-        return DirectX::XMMatrixSet(
+        transform = DirectX::XMMatrixSet(
             1, 0, 0, 0,
             0, 0, 1, 0,
             0,-1, 0, 0,
             0, 0, 0, 1);
+        break;
     case GroundAxis::Z:
     default:
-        return DirectX::XMMatrixIdentity();
+        transform = DirectX::XMMatrixIdentity();
+        break;
     }
+    if (!groundAxisInverted) return transform;
+    // Rotate 180 degrees around world X after the ordinary axis correction:
+    // output Z changes sign while the matrix remains a proper rotation.
+    const DirectX::XMMATRIX flipWorldUp = DirectX::XMMatrixSet(
+        1, 0, 0, 0,
+        0,-1, 0, 0,
+        0, 0,-1, 0,
+        0, 0, 0, 1);
+    return DirectX::XMMatrixMultiply(transform, flipWorldUp);
 }
 
 inline void PermuteGroundedDimensions(double dimensions[3], GroundAxis selected,

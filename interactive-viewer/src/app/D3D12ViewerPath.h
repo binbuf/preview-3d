@@ -75,6 +75,7 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> gridPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> coloredPointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyPipelineState;
@@ -185,6 +186,9 @@ struct D3D12ViewerPath
     bool hasModel = false;
     double sceneOrigin[3]{};
     model_core::UpAxisId sourceUpAxis = model_core::UpAxisId::Unknown;
+    DirectX::XMFLOAT3 modelBoundsMin{};
+    DirectX::XMFLOAT3 modelBoundsMax{};
+    bool haveModelBounds = false;
 
     // Being uploaded. These resources exist but their bytes are still in
     // flight on the copy queue, so nothing here may be drawn until
