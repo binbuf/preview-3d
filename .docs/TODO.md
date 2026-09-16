@@ -8,16 +8,16 @@ when they disagree, `.docs/design/` wins and this file is what needs fixing.
 
 **Scope-limited MVP:** [NEW_SCOPE_LIMITED_MVP_TASKS.md](./NEW_SCOPE_LIMITED_MVP_TASKS.md)
 is the active implementation sequence and overrides the broader gate scope below.
-TSK-101 through TSK-301 are implemented. TSK-302 added the qualification harness,
-but its retained multi-GiB GLB/STL/PLY gates are red and still block release.
-TSK-303 now has a solution-level portable-package target, isolated `worker\`
-layout, app-local dependency closure validation, licenses/notices, SBOM,
-hash manifest/archive checksum, optional Authenticode signing, support docs,
-and current-user profile cleanup. Local extracted GLB/glTF-sidecar/STL/PLY
-smokes pass. **A signed archive and clean standard-user Windows 11 offline VM
-run are still required; they are not implied by the local engineering archive.**
-See [TSK-303_VERIFICATION.md](./TSK-303_VERIFICATION.md). TSK-304 is the next
-implementation slice; TSK-305 owns final candidate recreation/acceptance.
+TSK-101 through TSK-304 are implemented. TSK-305 release acceptance has been
+executed, but the scope-limited MVP is not release-ready. The retained
+multi-GiB GLB/STL/PLY usefulness gates remain red; the final budget matrix also
+reproduces an 8M-point PLY complete-proxy timeout in discrete and simulated-UMA
+modes. Performance-reference and physical compatibility evidence remains open.
+The final local portable archive passes closure, hashes, Unicode extraction,
+Tier A/compressed sidecar smokes and cleanup, but it is unsigned and has not run
+on a clean offline standard-user Windows 11 VM. None of these rows is waived.
+See [TSK-305_VERIFICATION.md](./TSK-305_VERIFICATION.md) for the acceptance
+matrix and exact blocker handoff.
 
 **Broader gate baseline: `f0d2f86`**, amended for TSK-101/TSK-102/TSK-103/TSK-104 below.
 

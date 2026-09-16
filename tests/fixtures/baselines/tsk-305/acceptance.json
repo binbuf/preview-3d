@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "task": "TSK-305",
+  "date": "2026-09-16",
+  "releaseReady": false,
+  "sourceCommit": "eccd8bae8167f38f0e224e989a99a93484c6549e",
+  "builds": {
+    "debugRebuild": "pass",
+    "releaseRebuild": "pass",
+    "unitDebug": { "cases": 91, "assertions": 7354, "status": "pass" },
+    "unitRelease": { "cases": 91, "assertions": 7266, "status": "pass" },
+    "importIsolationDebug": { "cases": 200, "assertions": 51943, "status": "pass" },
+    "importIsolationRelease": { "cases": 200, "assertions": 51943, "status": "pass" }
+  },
+  "aSmall": {
+    "sha256": "412f9110575c0b425d8cdc4726ca5a59c4e91c09de4f3d56a226fd1f2fbb6240",
+    "runs": 3,
+    "failureCount": 0,
+    "firstGeometryP95Ms": 456.796,
+    "completeCoarseP95Ms": 456.796,
+    "frameP95Ms": 4.391,
+    "frameMaximumMs": 17.315,
+    "inputToPresentP95Ms": 4.619,
+    "viewerPeakPrivateBytes": 290811904,
+    "workerPeakPrivateBytes": 3584000
+  },
+  "largeStl": {
+    "sha256": "360819748f668e5a520f05684ab8069464cb74fce19edd4154468038dfa4b62e",
+    "bytes": 3000000084,
+    "failureCount": 1,
+    "firstGeometryMs": null,
+    "completeCoarseMs": null,
+    "durationMs": 30000,
+    "frameP95Ms": 4.387,
+    "frameMaximumMs": 20.743,
+    "viewerPeakPrivateBytes": 407711744,
+    "workerPeakPrivateBytes": 36204544
+  },
+  "pointBudgetBlocker": {
+    "sha256": "abb00593050a788e973ab101850424817b9d3007e95d692933bbdd42c3992fb2",
+    "points": 8000000,
+    "discrete": "complete proxy timeout at 180 seconds",
+    "simulatedUma": "complete proxy timeout at 180 seconds",
+    "peakQueueBytes": 0
+  },
+  "portable": {
+    "archiveSha256": "c1938aeaf67d7792d2b27f5e50a7bd56383c7ca3c303ae6242b1e3994c582c7b",
+    "signed": false,
+    "stagedFiles": 31,
+    "manifestEntries": 30,
+    "viewerSha256": "3b91bda17029645118271ef4c0034cb35fba77a7b3e131a8bce013b529e0dadf",
+    "workerSha256": "12854ea424a9003646f5b313f8fcbab8bb6832cfd5b6f75d7739faebdf32cf3a",
+    "manifestHashesVerified": true,
+    "unicodeExtractionAndSidecars": "pass",
+    "localTierASmokes": 9,
+    "survivingProcesses": 0,
+    "cleanupIdempotent": true,
+    "cleanOfflineStandardUserVm": "not available"
+  },
+  "blockingRows": [
+    "performance-reference startup and 144 Hz responsiveness",
+    "A-medium and multi-GiB progressive usefulness",
+    "8M-point out-of-core budget qualification",
+    "physical UMA and mixed-DPI/accessibility hardware matrix",
+    "signed clean-standard-user offline portable candidate"
+  ]
+}

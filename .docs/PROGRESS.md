@@ -4,6 +4,31 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 3 / TSK-305 release acceptance (2026-09-16):
+  executed; release blocked.** Clean Debug/Release solution rebuilds pass. Unit
+  passes 91 cases / 7,354 Debug and 7,266 Release assertions; ImportIsolation
+  passes 200 cases / 51,943 assertions in each configuration, including the
+  current hostile-worker/protocol boundary. Debug/Release activation,
+  accessibility and lifecycle smokes pass, as do the final Release progressive,
+  texture, recovery and coarse-handoff lanes. Three A-small compatibility runs
+  pass with 456.796 ms complete-coarse p95, 4.391 ms frame p95 / 17.315 ms max,
+  and 4.619 ms input p95. The 3 GB STL still produces no geometry in 30 seconds,
+  and an isolated 8M-point PLY now reproducibly times out at the budget lane's
+  180-second complete-proxy bound in both discrete and simulated-UMA modes.
+  Performance-reference, physical UMA/mixed-DPI/assistive-technology, signing,
+  and clean offline standard-user VM evidence remain unavailable. The first
+  post-TSK-304 package correctly failed because its strict system-DLL allowlist
+  lacked the new inbox imports; adding `bcrypt`, `oleacc`, and
+  `uiautomationcore` fixed the package closure. The final unsigned engineering
+  ZIP hash is
+  `c1938aeaf67d7792d2b27f5e50a7bd56383c7ca3c303ae6242b1e3994c582c7b`.
+  All manifest hashes and nine extracted-package Tier A/compressed/Unicode-
+  sidecar smokes pass with zero process remnants and idempotent profile cleanup.
+  Exact commands, the retained acceptance matrix, material limitations and
+  blocker handoff are in [TSK-305_VERIFICATION.md](./TSK-305_VERIFICATION.md)
+  and `tests/fixtures/baselines/tsk-305/acceptance.json`. **The scope-limited MVP
+  is not release-ready; no failed or unavailable retained row is waived.**
+
 - **Scope-limited MVP, Phase 3 / TSK-304 (2026-09-16): complete.**
   Normal launches now elect one primary per interactive user/session and forward
   one bounded Open or Activate command over a local-only named pipe protected by

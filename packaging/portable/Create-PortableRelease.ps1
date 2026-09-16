@@ -233,10 +233,11 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
 
 $dumpbin = Find-Dumpbin $visualStudioRoot
 $systemDlls = @(
-    'advapi32.dll', 'comctl32.dll', 'd2d1.dll', 'd3d11.dll', 'd3d12.dll',
+    'advapi32.dll', 'bcrypt.dll', 'comctl32.dll', 'd2d1.dll', 'd3d11.dll', 'd3d12.dll',
     'd3dcompiler_47.dll', 'dwrite.dll', 'dwmapi.dll', 'dxgi.dll', 'gdi32.dll',
-    'kernel32.dll', 'ole32.dll', 'oleaut32.dll', 'runtimeobject.dll', 'shell32.dll',
-    'user32.dll', 'userenv.dll', 'windowscodecs.dll', 'ws2_32.dll'
+    'kernel32.dll', 'ole32.dll', 'oleacc.dll', 'oleaut32.dll', 'runtimeobject.dll',
+    'shell32.dll', 'uiautomationcore.dll', 'user32.dll', 'userenv.dll',
+    'windowscodecs.dll', 'ws2_32.dll'
 )
 $peFiles = Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.Extension -in @('.exe', '.dll') }
 foreach ($pe in $peFiles) {
