@@ -1,0 +1,9 @@
+
+  ModelCore.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\ModelCore.lib
+  Preview3DImportWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DImportWorker.exe
+  Preview3DThumbnailProvider.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DThumbnailProvider.dll
+  Tests.Unit.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Tests.Unit.exe
+  Preview3DHostileWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DHostileWorker.exe
+  Preview3D.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3D.exe
+  Preview3DImportHost.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DImportHost.exe
+  Tests.ImportIsolation.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Tests.ImportIsolation.exe

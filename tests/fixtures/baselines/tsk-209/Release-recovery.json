@@ -1,0 +1,182 @@
+{
+  "configuration": "Release",
+  "fixtureSha256": {
+    "zero.glb": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "zero.gltf": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "zero.stl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "zero.ply": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "unsupported.FBX": "bb42ad52871ef06fbf75d4a045473cda5d5a23ef0b39ade7980b7dd60918ebb4",
+    "ascii.STL": "7de6f7dd34ca0384c020dc536ba64516cf3daa492a8e4c4c7eecdefed779d233",
+    "ascii.PLY": "bfb923d2c48bd8c8103813a66b52b03c582a609cab6e986db4c794891ec99f24",
+    "empty.stl": "4fea5e6a3ec5f5474a26d858bc77b6d7bd3ab864ea02d988683fdc648602b248",
+    "empty.ply": "235143d3aac455b75daa35f7bf8688e8b6624c2773113dbb1f89808ad392520e",
+    "empty.gltf": "5f55a888539d586cb8472f5037f3340f39d4a697228b245318c408f95923124e",
+    "required.gltf": "68eccc7c26194ad8b4e90c3854792ab37418e131aa57a4270826c9fac81a9c1c",
+    "malformed.glb": "708811ccb1510c6d6c6e6379ef09be39bdbb0e7edcf44fefcca21c6228ee6d89",
+    "malformed.stl": "01d448afd928065458cf670b60f5a594d735af0172c8d67f22a81680132681ca",
+    "malformed.ply": "1a1e30a2c5846d6d672aaadff35f78c738657b2a492115b475377e1dedb4cf54",
+    "optional.glb": "3d4f7dac6051a7e0606b11e0d1cfceff599985fcba978c0b843dd7d3f664f302"
+  },
+  "exeSha256": "967365d5f0f66ce462733a0697cc7401d12c20a838b784675bacb3f4752942e9",
+  "run": {
+    "failure": null,
+    "events": [
+      {
+        "input": "zero.glb",
+        "generation": 2,
+        "code": 11,
+        "details": "This file could not be opened.\r\n\r\nThe file is empty. Export a model with triangles or points and retry.\r\n\r\nFormat: GLB\r\nPhase: opening source\r\nCode: 11"
+      },
+      {
+        "input": "zero.gltf",
+        "generation": 4,
+        "code": 11,
+        "details": "This file could not be opened.\r\n\r\nThe file is empty. Export a model with triangles or points and retry.\r\n\r\nFormat: glTF\r\nPhase: opening source\r\nCode: 11"
+      },
+      {
+        "input": "zero.stl",
+        "generation": 6,
+        "code": 11,
+        "details": "This file could not be opened.\r\n\r\nThe file is empty. Export a model with triangles or points and retry.\r\n\r\nFormat: STL\r\nPhase: opening source\r\nCode: 11"
+      },
+      {
+        "input": "zero.ply",
+        "generation": 8,
+        "code": 11,
+        "details": "This file could not be opened.\r\n\r\nThe file is empty. Export a model with triangles or points and retry.\r\n\r\nFormat: PLY\r\nPhase: opening source\r\nCode: 11"
+      },
+      {
+        "input": "unsupported.FBX",
+        "generation": 10,
+        "code": 8,
+        "details": "This model format is not supported.\r\n\r\nOpen a .glb, .gltf, .stl, or .ply file. STL and PLY must use binary encoding; other model formats are deferred.\r\n\r\nFormat: FBX\r\nPhase: opening source\r\nCode: 8"
+      },
+      {
+        "input": "ascii.STL",
+        "generation": 12,
+        "code": 9,
+        "details": "This encoding is not supported.\r\n\r\nUse glTF 2.0, binary STL, or binary little/big-endian PLY. ASCII STL and PLY are deferred.\r\n\r\nFormat: STL\r\nPhase: parsing geometry\r\nCode: 9"
+      },
+      {
+        "input": "ascii.PLY",
+        "generation": 14,
+        "code": 9,
+        "details": "This encoding is not supported.\r\n\r\nUse glTF 2.0, binary STL, or binary little/big-endian PLY. ASCII STL and PLY are deferred.\r\n\r\nFormat: PLY\r\nPhase: parsing geometry\r\nCode: 9"
+      },
+      {
+        "input": "empty.stl",
+        "generation": 16,
+        "code": 11,
+        "details": "This model has no displayable geometry.\r\n\r\nNo valid triangles or points remain in the selected scene.\r\n\r\nFormat: STL\r\nPhase: parsing geometry\r\nCode: 11"
+      },
+      {
+        "input": "empty.ply",
+        "generation": 18,
+        "code": 11,
+        "details": "This model has no displayable geometry.\r\n\r\nNo valid triangles or points remain in the selected scene.\r\n\r\nFormat: PLY\r\nPhase: parsing geometry\r\nCode: 11"
+      },
+      {
+        "input": "empty.gltf",
+        "generation": 20,
+        "code": 11,
+        "details": "This model has no displayable geometry.\r\n\r\nNo valid triangles or points remain in the selected scene.\r\n\r\nFormat: glTF\r\nPhase: parsing geometry\r\nCode: 11"
+      },
+      {
+        "input": "required.gltf",
+        "generation": 22,
+        "code": 10,
+        "details": "This model requires an unsupported feature.\r\n\r\nExport a static glTF model using the supported extensions.\r\n\r\nFormat: glTF\r\nPhase: parsing geometry\r\nCode: 10"
+      },
+      {
+        "input": "malformed.glb",
+        "generation": 24,
+        "code": 1,
+        "details": "This file could not be read.\r\n\r\nThe importer found data that doesn't match the expected file format.\r\n\r\nFormat: GLB\r\nPhase: parsing geometry\r\nCode: 1"
+      },
+      {
+        "input": "malformed.stl",
+        "generation": 26,
+        "code": 1,
+        "details": "This file could not be read.\r\n\r\nThe importer found data that doesn't match the expected file format.\r\n\r\nFormat: STL\r\nPhase: parsing geometry\r\nCode: 1"
+      },
+      {
+        "input": "malformed.ply",
+        "generation": 28,
+        "code": 1,
+        "details": "This file could not be read.\r\n\r\nThe importer found data that doesn't match the expected file format.\r\n\r\nFormat: PLY\r\nPhase: parsing geometry\r\nCode: 1"
+      },
+      {
+        "input": "sidecar-missing.gltf",
+        "generation": 30,
+        "code": 6,
+        "details": "This model could not be previewed.\r\n\r\nA file this model depends on could not be opened.\r\n\r\nFormat: glTF\r\nPhase: resolving sidecars\r\nCode: 6"
+      },
+      {
+        "input": "sidecar-traversal.gltf",
+        "generation": 32,
+        "code": 5,
+        "details": "This model could not be previewed.\r\n\r\nThe file references another file in a way that isn't allowed.\r\n\r\nFormat: glTF\r\nPhase: resolving sidecars\r\nCode: 5"
+      },
+      {
+        "input": "remote.PLY",
+        "generation": 34,
+        "code": 5,
+        "details": "Remote model paths are not opened.\r\n\r\nChoose a supported model stored on a local drive for this viewer.\r\n\r\nFormat: PLY\r\nPhase: opening source\r\nCode: 5"
+      },
+      {
+        "input": "tri_tight.glb",
+        "generation": 36,
+        "code": 14,
+        "details": "The sandboxed importer stopped unexpectedly.\r\n\r\nThe worker exited before completing this model. Retry or open another model.\r\n\r\nFormat: GLB\r\nPhase: waiting for importer\r\nCode: 14",
+        "retrySucceeded": true
+      },
+      {
+        "input": "tri_tight.glb",
+        "generation": 38,
+        "code": 15,
+        "details": "This model could not be previewed.\r\n\r\nThe sandboxed importer stopped responding and was shut down.\r\n\r\nFormat: GLB\r\nPhase: waiting for importer\r\nCode: 15",
+        "retrySucceeded": true
+      },
+      {
+        "input": "tri_tight.glb",
+        "generation": 40,
+        "code": 2,
+        "details": "This model is too large to preview.\r\n\r\nThe file exceeds a resource limit the sandboxed importer enforces.\r\n\r\nFormat: GLB\r\nPhase: parsing geometry\r\nCode: 2",
+        "retrySucceeded": true
+      },
+      {
+        "input": "tri_tight.glb",
+        "generation": 42,
+        "code": 16,
+        "details": "The model was read but could not be displayed.\r\n\r\n\r\n\r\nFormat: GLB\r\nPhase: uploading geometry / textures\r\nCode: 16",
+        "retrySucceeded": true
+      },
+      {
+        "input": "tri_tight.glb",
+        "generation": 44,
+        "code": 3,
+        "details": "This model could not be previewed.\r\n\r\nThe sandboxed importer returned an unexpected response.\r\n\r\nFormat: GLB\r\nPhase: validating import\r\nCode: 3",
+        "retrySucceeded": true
+      },
+      {
+        "input": "retry-private.glb",
+        "generation": 46,
+        "code": 1,
+        "details": "This file could not be read.\r\n\r\nThe importer found data that doesn't match the expected file format.\r\n\r\nFormat: GLB\r\nPhase: parsing geometry\r\nCode: 1"
+      },
+      {
+        "input": "unsupported.FBX",
+        "generation": 48,
+        "code": 8,
+        "details": "This model format is not supported.\r\n\r\nOpen a .glb, .gltf, .stl, or .ply file. STL and PLY must use binary encoding; other model formats are deferred.\r\n\r\nFormat: FBX\r\nPhase: opening source\r\nCode: 8"
+      },
+      {
+        "input": "unsupported.FBX",
+        "generation": 53,
+        "code": 8,
+        "details": "This model format is not supported.\r\n\r\nOpen a .glb, .gltf, .stl, or .ply file. STL and PLY must use binary encoding; other model formats are deferred.\r\n\r\nFormat: FBX\r\nPhase: opening source\r\nCode: 8"
+      }
+    ],
+    "warningCharacters": 86
+  }
+}

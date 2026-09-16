@@ -18,7 +18,11 @@ kernel.GlobalUnlock.argtypes = [W.HANDLE]
 
 
 def clipboard():
-    assert user.OpenClipboard(None), 'clipboard unavailable'
+    deadline = time.monotonic() + 2
+    while not user.OpenClipboard(None):
+        if time.monotonic() >= deadline:
+            raise RuntimeError('clipboard unavailable')
+        time.sleep(.02)
     try:
         memory = user.GetClipboardData(13)
         pointer = kernel.GlobalLock(memory)

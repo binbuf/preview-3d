@@ -4,6 +4,32 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 2 / TSK-209 (2026-09-15): complete.**
+  Completed the documented static glTF subset. Quantized POSITION/TEXCOORD and
+  normalized NORMAL/TANGENT accessors now convert through the existing bounded
+  layouts. Required `EXT_meshopt_compression` bufferViews decode once through a
+  checked 512 MiB/remaining-scratch unit boundary; optional streams retain their
+  core fallback. This is compressed-data decode only, not meshoptimizer LOD.
+  Valid zero-base sparse/non-indexed accessors work in streaming and legacy
+  single-section paths, while strict sparse index/range checks remain.
+  `EXT_texture_webp` uses a sniff/MIME-validated static libwebp adapter with
+  external RGBA output, bounded scaling and the existing cancellable semantic
+  mip/fallback path. Unknown required extensions fail; optional extensions warn.
+  Local BIN/image sidecars remain sibling-only and handle-brokered, and corrupt
+  required geometry never becomes an incomplete Ready scene.
+  Meshoptimizer 1.2 (MIT) and libwebp 1.6.0#3/libsharpyuv (BSD-style) now link
+  only into the sandboxed worker/test boundary. Unused DirectXTex was removed
+  from the manifest while TGA/DDS/HDR remain deferred. Exact limits, malformed
+  seeds, threat review, performance classification and SBOM/thumbnail decisions
+  are in [TSK-209_VERIFICATION.md](./TSK-209_VERIFICATION.md) and the updated
+  R-22 record. Debug/Release builds pass. Unit: 85 cases / 7,318 Debug and 7,230
+  Release assertions. ImportIsolation: 198 cases / 51,933 assertions each.
+  Real-app lifecycle now opens sparse, meshopt and WebP fixtures; lifecycle,
+  texture, progressive and recovery smokes pass in both configurations, with
+  zero Debug texture-layer errors. Reports are under
+  `tests/fixtures/baselines/tsk-209/`. No persistent cache or new path authority.
+  **Phase 2 is complete; TSK-301 is next.**
+
 - **Scope-limited MVP, Phase 2 / TSK-208 (2026-09-15): complete.**
   Protocol v7 adds a bounded 64-byte position/normal/UV/tangent/color vertex
   layout. glTF/Draco/PLY preserve authored attributes; missing normals are

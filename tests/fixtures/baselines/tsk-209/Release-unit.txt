@@ -1,0 +1,39 @@
+Randomness seeded to: 4254080138
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Tests.Unit.exe is a Catch2 v3.16.0 host application.
+Run with -? for options
+
+-------------------------------------------------------------------------------
+Overlay frames and a resize leave the debug layer silent
+-------------------------------------------------------------------------------
+D:\repos\binbuf\3d-preview-windows\tests\unit\D3D11On12OverlayTests.cpp(357)
+...............................................................................
+
+D:\repos\binbuf\3d-preview-windows\tests\unit\D3D11On12OverlayTests.cpp(369): warning:
+  D3D12 info queue unavailable -- debug-layer validation not exercised in this
+  build
+
+-------------------------------------------------------------------------------
+Real chrome paints the bars, information panel and navigation gizmo across
+buffers and resize
+-------------------------------------------------------------------------------
+D:\repos\binbuf\3d-preview-windows\tests\unit\D3D11On12OverlayTests.cpp(405)
+...............................................................................
+
+D:\repos\binbuf\3d-preview-windows\tests\unit\D3D11On12OverlayTests.cpp(453): warning:
+  D3D12 info queue unavailable -- debug-layer validation not exercised in this
+  build
+
+-------------------------------------------------------------------------------
+A mixed buffer/texture upload batch raises no debug-layer error
+-------------------------------------------------------------------------------
+D:\repos\binbuf\3d-preview-windows\tests\unit\UploadRingTests.cpp(434)
+...............................................................................
+
+D:\repos\binbuf\3d-preview-windows\tests\unit\UploadRingTests.cpp(446): warning:
+  D3D12 info queue unavailable (Release build or no Graphics Tools feature) --
+  debug-layer assertion skipped
+
+===============================================================================
+All tests passed (7230 assertions in 85 test cases)

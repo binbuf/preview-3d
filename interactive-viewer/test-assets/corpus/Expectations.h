@@ -45,6 +45,6 @@ inline constexpr File files[] = {
     { L"corpus/truncated.stl", "ee76e96d8539348808ead934fbc84c5cdb1475b9396b879af6166bdfc0c4d921" },
     { L"corpus/over-limit.ply", "647cf450e8d67952a773e27b9cb90106ea00b049401390f6baacc84feea7dad1" },
     { L"corpus/empty.ply", "235143d3aac455b75daa35f7bf8688e8b6624c2773113dbb1f89808ad392520e" },
-    { L"corpus/manifest.json", "5c0f18b1e19ce6ca5c1f3c3d563ce117ede4b713539132a47ea1b4c445d3b976" },
+    { L"corpus/manifest.json", "47e8073055cf0311a2259ed5c7b87a0a9b79c7768229f58f27b272e7469a4f97" },
 };
 } // namespace fixture_manifest

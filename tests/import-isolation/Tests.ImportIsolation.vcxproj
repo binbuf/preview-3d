@@ -85,13 +85,16 @@
     <ClCompile Include="ChunkBatchTests.cpp" />
     <ClCompile Include="BoundedScanTests.cpp" />
     <ClCompile Include="CoarseProxyTests.cpp" />
+    <ClCompile Include="CompressedFeatureTests.cpp" />
     <ClCompile Include="DracoDecodeAdapterTests.cpp" />
     <ClCompile Include="TextureTranscodeAdapterTests.cpp" />
     <ClCompile Include="TexturePathTests.cpp" />
     <ClCompile Include="..\..\import-worker\src\WicImageDecodeAdapter.cpp" />
     <ClCompile Include="..\..\import-worker\src\ImageFormatSniff.cpp" />
     <ClCompile Include="..\..\import-worker\src\DracoDecodeAdapter.cpp" />
+    <ClCompile Include="..\..\import-worker\src\MeshoptDecodeAdapter.cpp" />
     <ClCompile Include="..\..\import-worker\src\TextureTranscodeAdapter.cpp" />
+    <ClCompile Include="..\..\import-worker\src\WebpDecodeAdapter.cpp" />
     <ClCompile Include="..\..\shared\platform\src\AppContainerSid.cpp" />
     <ClCompile Include="..\..\shared\platform\src\ProcThreadAttributeList.cpp" />
     <ClCompile Include="..\..\shared\platform\src\MappedView.cpp" />
@@ -136,7 +139,9 @@
     <ClInclude Include="..\..\shared\model-core\include\model_core\MaterialPayload.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\PixelFormats.h" />
     <ClInclude Include="..\..\import-worker\src\DracoDecodeAdapter.h" />
+    <ClInclude Include="..\..\import-worker\src\MeshoptDecodeAdapter.h" />
     <ClInclude Include="..\..\import-worker\src\TextureTranscodeAdapter.h" />
+    <ClInclude Include="..\..\import-worker\src\WebpDecodeAdapter.h" />
   </ItemGroup>
   <ItemGroup>
     <!-- Build-order only (exe to exe, nothing to link): the test needs

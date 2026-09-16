@@ -592,7 +592,7 @@
             0
           ]
         ],
-        "policy": "accept after TSK-205/209",
+        "policy": "accept",
         "triangles": 1
       },
       "id": "sparse-valid",
@@ -779,7 +779,7 @@
           ]
         ],
         "feature": "EXT_meshopt_compression",
-        "policy": "accept after TSK-209",
+        "policy": "accept",
         "triangles": 1
       },
       "id": "meshopt",
@@ -809,7 +809,7 @@
       "bytes": 1297,
       "expected": {
         "feature": "EXT_texture_webp",
-        "policy": "accept after TSK-209",
+        "policy": "accept",
         "triangles": 1
       },
       "id": "webp",

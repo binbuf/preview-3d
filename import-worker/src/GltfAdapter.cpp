@@ -5,8 +5,10 @@
 #include "ChunkBatchSink.h"
 #include "DracoDecodeAdapter.h"
 #include "ImageFormatSniff.h"
+#include "MeshoptDecodeAdapter.h"
 #include "SidecarFileClient.h"
 #include "TextureTranscodeAdapter.h"
+#include "WebpDecodeAdapter.h"
 #include "WicImageDecodeAdapter.h"
 
 #include "model_core/Checksum.h"
@@ -25,11 +27,13 @@
 #pragma warning(pop)
 #include <cmath>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <iterator>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -171,22 +175,42 @@ std::variant<std::vector<fastgltf::math::dmat4x4>, ImportErrorCode> ReadPreciseT
 // accessor here is a signal of a corrupt/hostile file, not an
 // optional-feature gap -- never trust the library's own assert-based
 // checks in this worker.
-bool ValidateVec3FloatAccessor(const fastgltf::Accessor& accessor)
+bool IsQuantizedInteger(const fastgltf::Accessor& accessor, bool allowUnsigned,
+                        bool requireNormalized)
 {
-    return accessor.type == fastgltf::AccessorType::Vec3
-        && accessor.componentType == fastgltf::ComponentType::Float;
+    return (!requireNormalized || accessor.normalized)
+        && (accessor.componentType == fastgltf::ComponentType::Byte
+            || accessor.componentType == fastgltf::ComponentType::Short
+            || (allowUnsigned && (accessor.componentType == fastgltf::ComponentType::UnsignedByte
+                                  || accessor.componentType == fastgltf::ComponentType::UnsignedShort)));
 }
 
-bool ValidateVec2FloatAccessor(const fastgltf::Accessor& accessor)
+bool ValidatePositionAccessor(const fastgltf::Accessor& accessor)
+{
+    return accessor.type == fastgltf::AccessorType::Vec3
+        && (accessor.componentType == fastgltf::ComponentType::Float
+            || IsQuantizedInteger(accessor, true, false));
+}
+
+bool ValidateNormalAccessor(const fastgltf::Accessor& accessor)
+{
+    return accessor.type == fastgltf::AccessorType::Vec3
+        && (accessor.componentType == fastgltf::ComponentType::Float
+            || IsQuantizedInteger(accessor, false, true));
+}
+
+bool ValidateTexcoordAccessor(const fastgltf::Accessor& accessor)
 {
     return accessor.type == fastgltf::AccessorType::Vec2
-        && accessor.componentType == fastgltf::ComponentType::Float;
+        && (accessor.componentType == fastgltf::ComponentType::Float
+            || IsQuantizedInteger(accessor, true, false));
 }
 
 bool ValidateTangentAccessor(const fastgltf::Accessor& accessor)
 {
     return accessor.type == fastgltf::AccessorType::Vec4
-        && accessor.componentType == fastgltf::ComponentType::Float;
+        && (accessor.componentType == fastgltf::ComponentType::Float
+            || IsQuantizedInteger(accessor, false, true));
 }
 
 bool ValidateColorAccessor(const fastgltf::Accessor& accessor)
@@ -282,6 +306,11 @@ struct ResolvedExternalBuffer {
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
 };
 
+struct DecodedMeshoptView {
+    std::optional<std::vector<std::byte>> bytes;
+    ImportErrorCode errorCode = ImportErrorCode::None;
+};
+
 struct WalkState {
     const fastgltf::Asset& asset;
     std::vector<fastgltf::math::dmat4x4> localTransforms;
@@ -306,6 +335,7 @@ struct WalkState {
     uint64_t totalDecodedImagePixels = 0;
     uint64_t totalEncodedImageBytes = 0;
     uint64_t totalDecodedImageBytes = 0;
+    uint64_t totalDecodedMeshoptBytes = 0;
     uint32_t textureWarningCount = 0;
     TextureDecodeOptions textureOptions;
     uint32_t maxChunkCount = 0;
@@ -319,8 +349,64 @@ struct WalkState {
     // shared-section ParseGltfRequest path) means an external buffer is
     // simply never resolvable.
     std::unordered_map<size_t, ResolvedExternalBuffer> resolvedExternalBuffers;
+    std::unordered_map<size_t, DecodedMeshoptView> decodedMeshoptViews;
     SidecarFileClient* sidecarClient = nullptr;
 };
+
+bool RequiresExtension(const WalkState& state, std::string_view name)
+{
+    return std::find(state.asset.extensionsRequired.begin(), state.asset.extensionsRequired.end(), name)
+        != state.asset.extensionsRequired.end();
+}
+
+bool IsSupportedExtension(std::string_view extension)
+{
+    return extension == "KHR_draco_mesh_compression"
+        || extension == "KHR_texture_basisu"
+        || extension == "KHR_texture_transform"
+        || extension == "KHR_mesh_quantization"
+        || extension == "EXT_meshopt_compression"
+        || extension == "EXT_texture_webp"
+        || extension == "KHR_materials_unlit";
+}
+
+std::optional<std::span<const std::byte>> ResolveBufferBytes(WalkState& state, size_t bufferIndex)
+{
+    if (bufferIndex >= state.asset.buffers.size()) return std::nullopt;
+    const fastgltf::Buffer& buffer = state.asset.buffers[bufferIndex];
+    if (const auto* array = std::get_if<fastgltf::sources::Array>(&buffer.data))
+        return std::span<const std::byte>(array->bytes.data(), array->bytes.size());
+    if (const auto* view = std::get_if<fastgltf::sources::ByteView>(&buffer.data))
+        return std::span<const std::byte>(view->bytes.data(), view->bytes.size());
+    if (const auto* uri = std::get_if<fastgltf::sources::URI>(&buffer.data)) {
+        auto cached = state.resolvedExternalBuffers.find(bufferIndex);
+        if (cached == state.resolvedExternalBuffers.end()) {
+            ResolvedExternalBuffer resolved;
+            if (state.sidecarClient) {
+                auto result = state.sidecarClient->RequestSidecarBytes(
+                    std::string(uri->uri.path()), kTierAPrimaryBytes, true);
+                if (result.mapping) {
+                    if (result.mapping->Bytes().size() > kTierAAllSourceBytes - state.sourceBytes) {
+                        state.error = ImportErrorCode::AggregateSourceLimit;
+                        return std::nullopt;
+                    }
+                    state.sourceBytes += result.mapping->Bytes().size();
+                }
+                resolved.file = std::move(result.file);
+                resolved.mapping = std::move(result.mapping);
+                resolved.bytes = std::move(result.bytes);
+                resolved.errorCode = result.errorCode;
+            } else {
+                resolved.errorCode = ImportErrorCode::FileUnavailable;
+            }
+            cached = state.resolvedExternalBuffers.emplace(bufferIndex, std::move(resolved)).first;
+        }
+        if (cached->second.mapping) return cached->second.mapping->Bytes();
+        if (cached->second.bytes)
+            return std::span<const std::byte>(cached->second.bytes->data(), cached->second.bytes->size());
+    }
+    return std::nullopt;
+}
 
 // GLB-embedded (sources::Array) buffers, or an external (sources::URI)
 // buffer lazily resolved via state.sidecarClient on first access and
@@ -337,57 +423,68 @@ std::optional<std::span<const std::byte>> ResolveBufferViewBytes(WalkState& stat
     if (view.bufferIndex >= state.asset.buffers.size()) {
         return std::nullopt;
     }
-    const fastgltf::Buffer& buffer = state.asset.buffers[view.bufferIndex];
-
-    std::span<const std::byte> bufferBytes;
-    if (const auto* array = std::get_if<fastgltf::sources::Array>(&buffer.data)) {
-        bufferBytes = std::span<const std::byte>(array->bytes.data(), array->bytes.size());
-    }
-    else if (const auto* viewSource = std::get_if<fastgltf::sources::ByteView>(&buffer.data))
-    {
-        bufferBytes = {viewSource->bytes.data(), viewSource->bytes.size()};
-    }
-    else if (const auto* uriSource = std::get_if<fastgltf::sources::URI>(&buffer.data))
-    {
-        auto cached = state.resolvedExternalBuffers.find(view.bufferIndex);
-        if (cached == state.resolvedExternalBuffers.end()) {
-            ResolvedExternalBuffer resolved;
-            if (state.sidecarClient != nullptr) {
-                auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()),
-                                                                       kTierAPrimaryBytes, true);
-                if (result.mapping)
-                {
-                    if (result.mapping->Bytes().size() > kTierAAllSourceBytes - state.sourceBytes)
-                    {
-                        state.error = ImportErrorCode::AggregateSourceLimit;
-                        return std::nullopt;
-                    }
-                    state.sourceBytes += result.mapping->Bytes().size();
+    if (view.meshoptCompression) {
+        auto cached = state.decodedMeshoptViews.find(bufferViewIndex);
+        if (cached == state.decodedMeshoptViews.end()) {
+            DecodedMeshoptView decoded;
+            const auto& compressed = *view.meshoptCompression;
+            auto source = ResolveBufferBytes(state, compressed.bufferIndex);
+            auto end = CheckedAdd(uint64_t(compressed.byteOffset), uint64_t(compressed.byteLength));
+            if (!source || !end || *end > source->size()) {
+                decoded.errorCode = ImportErrorCode::MalformedData;
+                if (!source) {
+                    auto external = state.resolvedExternalBuffers.find(compressed.bufferIndex);
+                    decoded.errorCode = external != state.resolvedExternalBuffers.end()
+                        && external->second.errorCode != ImportErrorCode::None
+                        ? external->second.errorCode : ImportErrorCode::FileUnavailable;
                 }
-                resolved.file = std::move(result.file);
-                resolved.mapping = std::move(result.mapping);
-                resolved.bytes = std::move(result.bytes);
-                resolved.errorCode = result.errorCode;
             } else {
-                // No sidecar channel at all (the always-self-contained
-                // shared-section ParseGltfRequest path): an external
-                // reference is unresolvable by construction, not by policy.
-                resolved.errorCode = ImportErrorCode::FileUnavailable;
+                MeshoptDecodeMode mode = MeshoptDecodeMode::Attributes;
+                switch (compressed.mode) {
+                case fastgltf::MeshoptCompressionMode::Attributes: mode=MeshoptDecodeMode::Attributes; break;
+                case fastgltf::MeshoptCompressionMode::Triangles: mode=MeshoptDecodeMode::Triangles; break;
+                case fastgltf::MeshoptCompressionMode::Indices: mode=MeshoptDecodeMode::Indices; break;
+                }
+                MeshoptDecodeFilter filter = MeshoptDecodeFilter::None;
+                switch (compressed.filter) {
+                case fastgltf::MeshoptCompressionFilter::None: filter=MeshoptDecodeFilter::None; break;
+                case fastgltf::MeshoptCompressionFilter::Octahedral: filter=MeshoptDecodeFilter::Octahedral; break;
+                case fastgltf::MeshoptCompressionFilter::Quaternion: filter=MeshoptDecodeFilter::Quaternion; break;
+                case fastgltf::MeshoptCompressionFilter::Exponential: filter=MeshoptDecodeFilter::Exponential; break;
+                }
+                const uint64_t reserved = state.scratchReserve + state.totalDecodedImageBytes
+                    + state.totalDecodedMeshoptBytes;
+                MeshoptDecodeOptions options;
+                options.maxDecodedBytes = reserved < state.scratchLimit
+                    ? (std::min)(512ull * 1024 * 1024, state.scratchLimit - reserved) : 0;
+                options.isCancelled = state.textureOptions.isCancelled;
+                auto result = DecodeMeshoptBuffer(
+                    source->subspan(compressed.byteOffset, compressed.byteLength), compressed.count,
+                    compressed.byteStride, view.byteLength, mode, filter, options);
+                if (auto* bytes = std::get_if<std::vector<std::byte>>(&result)) {
+                    state.totalDecodedMeshoptBytes += bytes->size();
+                    decoded.bytes = std::move(*bytes);
+                } else {
+                    decoded.errorCode = std::get<ImportErrorCode>(result);
+                    if (decoded.errorCode == ImportErrorCode::ResourceLimit)
+                        decoded.errorCode = ImportErrorCode::ScratchLimit;
+                }
             }
-            cached = state.resolvedExternalBuffers.emplace(view.bufferIndex, std::move(resolved)).first;
+            cached = state.decodedMeshoptViews.emplace(bufferViewIndex, std::move(decoded)).first;
         }
-        if (!cached->second.bytes.has_value() && !cached->second.mapping)
-        {
+        if (cached->second.bytes)
+            return std::span<const std::byte>(cached->second.bytes->data(), cached->second.bytes->size());
+        if (RequiresExtension(state, "EXT_meshopt_compression")
+            || cached->second.errorCode == ImportErrorCode::Cancelled) {
+            state.error = cached->second.errorCode;
             return std::nullopt;
         }
-        bufferBytes = cached->second.mapping ? cached->second.mapping->Bytes()
-                                             : std::span<const std::byte>(cached->second.bytes->data(),
-                                                                          cached->second.bytes->size());
+        // Optional EXT_meshopt_compression has mandatory core fallback bytes.
     }
-    else
-    {
-        return std::nullopt;
-    }
+
+    auto resolved = ResolveBufferBytes(state, view.bufferIndex);
+    if (!resolved) return std::nullopt;
+    const auto bufferBytes = *resolved;
 
     auto end = CheckedAdd(static_cast<uint64_t>(view.byteOffset), static_cast<uint64_t>(view.byteLength));
     if (!end || *end > bufferBytes.size()) {
@@ -404,6 +501,13 @@ std::optional<std::span<const std::byte>> ResolveBufferViewBytes(WalkState& stat
 // that overruns the resolved buffer.
 ImportErrorCode ExternalBufferFailureCode(const WalkState& state, size_t bufferViewIndex)
 {
+    if (state.error != ImportErrorCode::None) return state.error;
+    auto decoded = state.decodedMeshoptViews.find(bufferViewIndex);
+    if (decoded != state.decodedMeshoptViews.end()
+        && decoded->second.errorCode != ImportErrorCode::None
+        && (RequiresExtension(state, "EXT_meshopt_compression")
+            || decoded->second.errorCode == ImportErrorCode::Cancelled))
+        return decoded->second.errorCode;
     if (bufferViewIndex >= state.asset.bufferViews.size()) {
         return ImportErrorCode::MalformedData;
     }
@@ -675,7 +779,8 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
         const auto sniff=SniffImageFormat(*encodedBytes);
         if (!((mime==fastgltf::MimeType::PNG && sniff==SniffedImageFormat::Png)
             || (mime==fastgltf::MimeType::JPEG && sniff==SniffedImageFormat::Jpeg)
-            || (mime==fastgltf::MimeType::KTX2 && sniff==SniffedImageFormat::Ktx2))) encodedBytes.reset();
+            || (mime==fastgltf::MimeType::KTX2 && sniff==SniffedImageFormat::Ktx2)
+            || (mime==fastgltf::MimeType::WEBP && sniff==SniffedImageFormat::WebP))) encodedBytes.reset();
     }
     std::optional<PendingImage> decoded;
     switch (encodedBytes ? SniffImageFormat(*encodedBytes) : SniffedImageFormat::Unknown) {
@@ -707,7 +812,20 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
         }
         break;
     }
-    case SniffedImageFormat::WebP: // bounded WebP decode is TSK-209
+    case SniffedImageFormat::WebP:
+    {
+        if (auto raster = DecodeWebpImage(*encodedBytes, colorSpace, options)) {
+            PendingImage pending;
+            pending.pixelFormat = raster->pixelFormat;
+            pending.mipLevels = raster->mipLevels;
+            pending.width = raster->width;
+            pending.height = raster->height;
+            pending.colorSpace = raster->colorSpace;
+            pending.pixelBytes = std::move(raster->pixelBytes);
+            decoded = std::move(pending);
+        }
+        break;
+    }
     case SniffedImageFormat::Unknown:
     default:
         break;
@@ -770,8 +888,9 @@ std::optional<size_t> ResolveTextureSlotImage(WalkState& state, const fastgltf::
         return std::nullopt;
     }
     const fastgltf::Texture& texture = state.asset.textures[textureInfo->textureIndex];
-    std::optional<size_t> gltfImageIndex
-        = texture.basisuImageIndex.has_value() ? texture.basisuImageIndex : texture.imageIndex;
+    std::optional<size_t> gltfImageIndex = texture.basisuImageIndex.has_value()
+        ? texture.basisuImageIndex
+        : (texture.webpImageIndex.has_value() ? texture.webpImageIndex : texture.imageIndex);
     if (!gltfImageIndex.has_value()) {
         return std::nullopt;
     }
@@ -917,7 +1036,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         return false;
     }
     const fastgltf::Accessor& positionAccessor = state.asset.accessors[positionIt->accessorIndex];
-    if (!ValidateVec3FloatAccessor(positionAccessor)) {
+    if (!ValidatePositionAccessor(positionAccessor)) {
         state.error = ImportErrorCode::MalformedData;
         return false;
     }
@@ -950,7 +1069,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
     bool hasNormal = normalIt != primitive.attributes.end();
     if (hasNormal) {
         const fastgltf::Accessor& normalAccessor = state.asset.accessors[normalIt->accessorIndex];
-        if (!ValidateVec3FloatAccessor(normalAccessor) || normalAccessor.count != positionAccessor.count) {
+        if (!ValidateNormalAccessor(normalAccessor) || normalAccessor.count != positionAccessor.count) {
             state.error = ImportErrorCode::MalformedData;
             return false;
         }
@@ -960,7 +1079,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
     bool hasUv = uvIt != primitive.attributes.end();
     if (hasUv) {
         const fastgltf::Accessor& uvAccessor = state.asset.accessors[uvIt->accessorIndex];
-        if (!ValidateVec2FloatAccessor(uvAccessor) || uvAccessor.count != positionAccessor.count) {
+        if (!ValidateTexcoordAccessor(uvAccessor) || uvAccessor.count != positionAccessor.count) {
             state.error = ImportErrorCode::MalformedData;
             return false;
         }
@@ -1280,16 +1399,6 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             return false;
         }
 
-        auto diagnosticBasePresent=[&](const fastgltf::Accessor& accessor) {
-            if (!accessor.bufferViewIndex) {state.error=ImportErrorCode::UnsupportedEncoding;return false;}
-            return true;
-        };
-        if (!diagnosticBasePresent(positionAccessor)
-            || (primitive.indicesAccessor && !diagnosticBasePresent(indexAccessor))
-            || (hasNormal && !diagnosticBasePresent(state.asset.accessors[normalIt->accessorIndex]))
-            || (hasUv && !diagnosticBasePresent(state.asset.accessors[uvIt->accessorIndex]))
-            || (hasTangent && !diagnosticBasePresent(state.asset.accessors[tangentIt->accessorIndex]))
-            || (hasColor && !diagnosticBasePresent(state.asset.accessors[colorIt->accessorIndex]))) return false;
         const SidecarBufferDataAdapter bufferAdapter(state);
 
         fastgltf::iterateAccessorWithIndex<fastgltf::math::fvec3>(
@@ -1798,7 +1907,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     } getter;
     getter.source = sourceGlbBytes;
     getter.bin = bin;
-    // Only these three extensions are enabled -- a file requiring any other
+    // Only the documented static-scene extensions are enabled -- a file requiring any other
     // one still fails cleanly with MissingExtensions/UnknownRequiredExtension
     // rather than being parsed. KHR_texture_transform is enabled read-only,
     // purely so MaterialPayload's uvOffset/uvScale/uvRotation fields can be
@@ -1809,7 +1918,11 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     // 0.9.0 (now default behaviour) and deliberately not passed.
     fastgltf::Parser parser(fastgltf::Extensions::KHR_draco_mesh_compression
                              | fastgltf::Extensions::KHR_texture_basisu
-                             | fastgltf::Extensions::KHR_texture_transform);
+                             | fastgltf::Extensions::KHR_texture_transform
+                             | fastgltf::Extensions::KHR_mesh_quantization
+                             | fastgltf::Extensions::EXT_meshopt_compression
+                             | fastgltf::Extensions::EXT_texture_webp
+                             | fastgltf::Extensions::KHR_materials_unlit);
     // loadGltf (rather than loadGltfBinary) auto-detects GLB vs. plain-JSON
     // .gltf via fastgltf::determineGltfFileType internally -- needed so a
     // real multi-file .gltf (this chunk's whole point) parses at all; a
@@ -2036,8 +2149,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             }
         ImportStatusPayload status{};
         for (const auto& extension : asset.extensionsUsed)
-            if (extension != "KHR_draco_mesh_compression" && extension != "KHR_texture_basisu" &&
-                extension != "KHR_texture_transform")
+            if (!IsSupportedExtension(extension))
                 status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
         if (status.optionalFeatureWarnings)
         {
@@ -2271,7 +2383,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     plans.insert(plans.end(),refinements.begin(),refinements.end());
     model_core::ImportStatusPayload status{};
     for (const auto& extension : asset.extensionsUsed) {
-        if (extension != "KHR_draco_mesh_compression" && extension != "KHR_texture_basisu" && extension != "KHR_texture_transform")
+        if (!IsSupportedExtension(extension))
             status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
     }
     if (!refinements.empty()) status.flags |= model_core::kStatusRefining;

@@ -136,11 +136,10 @@ worker point normalization is covered by Catch2. This gap remains explicit:
 python tests/app-smoke/run.py --configuration Debug --output TestResults/tsk-104/points-gap.json --runs 1 --require-points
 ```
 
-That qualification assertion must pass after the point display work in TSK-202;
-it currently returns nonzero. Zero-base sparse/non-indexed geometry, meshopt/WebP,
-Draw-heavy catalogs, representative proxy, and actual Pressure behavior likewise
-remain later tasks. This task provides fixtures and repeatable evidence, not MVP
-readiness. See [the baseline record](../../.docs/TSK-104_BASELINE.md).
+That historical qualification assertion now passes after the point display work.
+Zero-base sparse/non-indexed geometry and meshopt/WebP are accepted as of TSK-209.
+Draw-heavy performance and full reference-system Pressure behavior remain later
+qualification tasks. See [the baseline record](../../.docs/TSK-104_BASELINE.md).
 
 ## TSK-202 precision and metadata qualification
 

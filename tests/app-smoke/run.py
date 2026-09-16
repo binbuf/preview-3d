@@ -156,7 +156,8 @@ def one_run(exe, corpus, timeout, require_points):
         result['baselineViewerPrivateBytes'] = private_bytes(app.pid)
         if query(0) != 1:
             raise RuntimeError('expected initial Empty state')
-        fixtures = ['A-small-glb.glb','A-small-stl.stl','A-small-ply-mesh-be.ply','sidecar-approved.gltf']
+        fixtures = ['A-small-glb.glb','A-small-stl.stl','A-small-ply-mesh-be.ply',
+                    'sidecar-approved.gltf','sparse-valid.gltf','meshopt.glb','webp.gltf']
         if require_points:
             fixtures.insert(3,'A-small-ply-points-le.ply')
         for name in fixtures:

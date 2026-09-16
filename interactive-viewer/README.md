@@ -40,24 +40,21 @@ creation, presentation, resize, and shutdown. All files are parsed inside
 chunks. The old `--d3d12` argument is accepted as a deprecated no-op.
 
 The sandboxed importer accepts `.glb`, `.gltf` (including external `.bin`/image siblings fetched
-through the brokered sidecar protocol), `.stl`, and `.ply`. It renders base-color textures from
-KTX2/Basis or WIC-decoded PNG/JPEG/BMP/TIFF. The Open dialog still filters for GLB; pass other
-formats on the command line or drop them onto the window.
+through the brokered sidecar protocol), `.stl`, and `.ply`. Its static glTF path supports bounded
+Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP, material texture slots and
+texture transforms. The Open dialog still filters for GLB; pass other formats on the command line
+or drop them onto the window.
 
 ## Current limitations and deferred work
 
-The real Direct2D chrome has not yet been ported onto the D3D11On12 bridge (TSK-102).
-The controls above describe the existing UI being restored in Phase 1; title/bottom bars,
-Information panel, navigation gizmo, and error cards are currently not drawn. `--overlay-spike`
-retains the bridge's developer stand-in primitives. `Renderer.cpp` remains as the camera
-implementation and reference for the chrome port, but its D3D11 renderer is never instantiated.
-CPU model data for picking, statistics, and native-orientation transforms is also not yet
-published by the D3D12 import path.
+The limited MVP now includes the D3D11On12 Direct2D chrome, information/navigation/error UI,
+bounded picking metadata, point splats, semantic mip chains, static PBR/unlit materials and the
+documented compressed glTF subset. `Renderer.cpp` remains only as legacy camera/reference code;
+its D3D11 renderer is never instantiated.
 
-Also deferred: point-cloud rendering (`.ply` point clouds import but are not drawn), mip levels
-beyond 0, metallic-roughness/normal/emissive texture slots, PBR shading,
-`EXT_meshopt_compression`/`KHR_mesh_quantization`, WebP, TGA/DDS/HDR, LOD/proxy generation,
-and derived cache. Shell registration and installer work are outside this MVP pass.
+Still deferred: TGA/DDS/HDR, animation/skins/morphs, advanced material lobes, meshoptimizer-built
+LOD/hierarchies, persistent derived cache, and broad Tier B formats. Shell registration and
+installer work are outside this MVP pass.
 
 ## Controls
 

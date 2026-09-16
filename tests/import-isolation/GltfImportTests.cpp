@@ -31,6 +31,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -655,6 +656,16 @@ TEST_CASE("A file requiring an unrecognized extension is rejected as a clean Gen
 
     auto bytes = ReadFileBytes(TestAssetPath(L"unsupported_extension.glb"));
     REQUIRE(bytes.has_value());
+    // The historical fixture names KHR_materials_unlit, which became part of
+    // the documented static-material subset in TSK-208. Keep exercising a
+    // genuinely unknown required extension with an equal-length mutation so
+    // the frozen GLB container lengths remain valid.
+    constexpr std::string_view oldName = "KHR_materials_unlit";
+    constexpr std::string_view newName = "UNSUPPORTED_private";
+    auto chars = std::span(reinterpret_cast<char*>(bytes->data()), bytes->size());
+    for (size_t offset = 0; offset + oldName.size() <= chars.size(); ++offset)
+        if (std::memcmp(chars.data() + offset, oldName.data(), oldName.size()) == 0)
+            std::memcpy(chars.data() + offset, newName.data(), newName.size());
 
     auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/14, /*maxChunkCount=*/8);
     CHECK_FALSE(run.ready);
@@ -905,4 +916,106 @@ TEST_CASE("A real on-disk GLB file reaches the sandboxed worker via a duplicated
     CHECK(chunk.descriptor.indexCount == 3);
     CHECK(chunk.descriptor.vertexLayoutId
           == static_cast<uint32_t>(model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
+}
+
+TEST_CASE("required EXT_meshopt_compression decodes inside the sandbox and corrupt data fails hard",
+          "[gltf-import][meshopt][compressed]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"corpus\\meshopt.glb"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, 2091, 8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    REQUIRE(run.validation.chunks.size() == 1);
+    const auto& chunk = run.validation.chunks.front();
+    CHECK(chunk.descriptor.vertexCount == 3);
+    CHECK(chunk.descriptor.indexCount == 3);
+    CHECK(chunk.descriptor.localMin[0] == Catch::Approx(0.0));
+    CHECK(chunk.descriptor.localMax[0] == Catch::Approx(1.0));
+    CHECK(chunk.descriptor.localMax[1] == Catch::Approx(1.0));
+
+    uint32_t jsonLength = 0;
+    std::memcpy(&jsonLength, bytes->data() + 12, sizeof(jsonLength));
+    const size_t compressedOffset = 20 + jsonLength + 8;
+    REQUIRE(compressedOffset < bytes->size());
+    (*bytes)[compressedOffset] = std::byte{0};
+    auto corrupt = RunGltfImport(fixture.sid, *bytes, 2092, 8);
+    CHECK_FALSE(corrupt.ready);
+    CHECK(corrupt.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
+TEST_CASE("KHR_mesh_quantization accepts normalized and unnormalized integer positions",
+          "[gltf-import][quantized]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    for (bool normalized : {true, false}) {
+        std::string json =
+            R"({"asset":{"version":"2.0"},"extensionsUsed":["KHR_mesh_quantization"],"extensionsRequired":["KHR_mesh_quantization"],"scenes":[{"nodes":[0]}],"scene":0,"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"bufferView":0,"componentType":5122,"normalized":true,"count":3,"type":"VEC3"}],"bufferViews":[{"buffer":0,"byteLength":18}],"buffers":[{"byteLength":18}]})";
+        if (!normalized) json.replace(json.find("normalized\":true") + 12, 4, "false");
+        while (json.size() % 4) json.push_back(' ');
+        const int16_t maximum = normalized ? 32767 : 1;
+        const int16_t positions[9]{0,0,0, maximum,0,0, 0,maximum,0};
+        std::vector<std::byte> bin(sizeof(positions));
+        std::memcpy(bin.data(), positions, sizeof(positions));
+        while (bin.size() % 4) bin.push_back(std::byte{0});
+        std::vector<std::byte> glb;
+        auto push32 = [&](uint32_t value) {
+            for (unsigned i=0;i<4;++i) glb.push_back(std::byte((value >> (i*8)) & 0xff));
+        };
+        push32(0x46546c67); push32(2);
+        push32(static_cast<uint32_t>(12 + 8 + json.size() + 8 + bin.size()));
+        push32(static_cast<uint32_t>(json.size())); push32(0x4e4f534a);
+        for (char value : json) glb.push_back(std::byte(static_cast<unsigned char>(value)));
+        push32(static_cast<uint32_t>(bin.size())); push32(0x004e4942);
+        glb.insert(glb.end(), bin.begin(), bin.end());
+
+        auto run = RunGltfImport(fixture.sid, glb, normalized ? 2093 : 2094, 8);
+        REQUIRE(run.ready);
+        REQUIRE(run.validation.ok);
+        REQUIRE(run.validation.chunks.size() == 1);
+        const auto& chunk = run.validation.chunks.front();
+        CHECK(chunk.descriptor.localMin[0] == Catch::Approx(0.0));
+        CHECK(chunk.descriptor.localMax[0] == Catch::Approx(1.0));
+        CHECK(chunk.descriptor.localMax[1] == Catch::Approx(1.0));
+    }
+}
+
+TEST_CASE("zero-base sparse positions and EXT_texture_webp resolve through brokered sidecars",
+          "[gltf-import][sparse][webp][sidecar]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto sparse = RunGltfImportFromRealFile(
+        fixture.sid, TestAssetPath(L"corpus\\sparse-valid.gltf"), 2095, 8);
+    REQUIRE(sparse.ready);
+    REQUIRE(sparse.validation.ok);
+    CHECK(sparse.sidecarRequestCount == 1);
+    REQUIRE(sparse.validation.chunks.size() == 1);
+    CHECK(sparse.validation.chunks.front().descriptor.localMax[0] == Catch::Approx(1.0));
+    CHECK(sparse.validation.chunks.front().descriptor.localMax[1] == Catch::Approx(1.0));
+
+    auto webp = RunGltfImportFromRealFile(
+        fixture.sid, TestAssetPath(L"corpus\\webp.gltf"), 2096, 8);
+    REQUIRE(webp.ready);
+    REQUIRE(webp.validation.ok);
+    CHECK(webp.sidecarRequestCount == 2);
+    const import_broker::ValidatedChunk* image = nullptr;
+    const import_broker::ValidatedChunk* material = nullptr;
+    for (const auto& chunk : webp.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image) image = &chunk;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material) material = &chunk;
+    }
+    REQUIRE(image != nullptr);
+    REQUIRE(material != nullptr);
+    REQUIRE(image->payload.size() >= sizeof(model_core::ImagePayloadHeader) + 4);
+    model_core::ImagePayloadHeader header{};
+    std::memcpy(&header, image->payload.data(), sizeof(header));
+    CHECK(header.width == 1);
+    CHECK(header.height == 1);
+    CHECK(header.mipLevels == 1);
+    CHECK(header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Srgb));
+    CHECK(material->descriptor.dependencyCount == 1);
+    CHECK(material->descriptor.dependencyIds[0] == image->descriptor.chunkId);
 }

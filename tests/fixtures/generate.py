@@ -245,7 +245,7 @@ def generate(output, lane, tier):
         valid_binary = bytes([0,1,2,0]) + struct.pack('<9f', 0,0,0, 1,0,0, 0,1,0)
         (output/'sparse-valid.bin').write_bytes(valid_binary)
         (output/'sparse-valid.gltf').write_bytes(canonical(sparse))
-        add('sparse-valid.gltf', {'policy':'accept after TSK-205/209','triangles':1,'bounds':[[0,0,0],[1,1,0]]}, {'algorithm':'zero-base sparse accessor with increasing indices; non-indexed triangle'})
+        add('sparse-valid.gltf', {'policy':'accept','triangles':1,'bounds':[[0,0,0],[1,1,0]]}, {'algorithm':'zero-base sparse accessor with increasing indices; non-indexed triangle'})
         add('sparse-valid.bin', {'role':'sparse sidecar'}, {'algorithm':'explicit 40-byte valid sparse data'})
         # Many real instances; geometry payload stays small.
         source = (ASSETS/'tri_tight.glb').read_bytes()
@@ -272,7 +272,7 @@ def generate(output, lane, tier):
                        'policy':'geometry with optional texture fallback' if 'corrupt' in name else 'accept'},
                 {'algorithm':'frozen encoded seed', 'source':name, 'regeneration':'interactive-viewer/tools/build-gen-glbs-draco.ps1 or build-gen-glbs-ktx2.ps1; new encoder output requires explicit manifest review'})
         meshopt(output/'meshopt.glb')
-        add('meshopt.glb', {'triangles':1,'bounds':[[0,0,0],[1,1,0]],'feature':'EXT_meshopt_compression','policy':'accept after TSK-209'},
+        add('meshopt.glb', {'triangles':1,'bounds':[[0,0,0],[1,1,0]],'feature':'EXT_meshopt_compression','policy':'accept'},
             {'algorithm':'pinned meshoptimizer vertex encoder', 'vertices':3, 'stride':12})
         # Valid RIFF WebP lossless 1x1 transparent seed, no external codec required.
         import base64
@@ -288,7 +288,7 @@ def generate(output, lane, tier):
         textured['meshes'][0]['primitives'][0]['material'] = 0
         (output/'webp.gltf').write_bytes(canonical(textured))
         add('sample.webp', {'width':1,'height':1,'role':'WebP sidecar'}, {'algorithm':'frozen lossless WebP seed'})
-        add('webp.gltf', {'triangles':1,'feature':'EXT_texture_webp','policy':'accept after TSK-209'}, {'algorithm':'WebP required texture glTF'})
+        add('webp.gltf', {'triangles':1,'feature':'EXT_texture_webp','policy':'accept'}, {'algorithm':'WebP required texture glTF'})
         malformed = {'truncated.glb': b'glTF', 'over-limit.stl': bytes(80)+struct.pack('<I',0xffffffff),
                      'truncated.stl': bytes(80)+struct.pack('<I',8),
                      'over-limit.ply': b'ply\nformat binary_little_endian 1.0\nelement vertex 18446744073709551615\nproperty float x\nproperty float y\nproperty float z\nend_header\n',
