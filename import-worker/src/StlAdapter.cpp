@@ -234,7 +234,7 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const s
     scene.format = SourceFormatId::Stl;
     scene.meshCount = 1;
     BoundedChunkWriter writer(destination, generationId, maxChunkCount, scene, batchSink);
-    const uint32_t clusterFacets = uint32_t(std::min<uint64_t>(
+    const uint32_t clusterFacets = batchSink && batchSink->Preview() ? 1 : uint32_t(std::min<uint64_t>(
         kChunkTriangles, destination.size() > kSectionHeaderSize + kChunkDescriptorSize
                              ? (destination.size() - kSectionHeaderSize - kChunkDescriptorSize) / 108
                              : 0));
@@ -244,6 +244,8 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const s
     vertices.reserve(size_t(clusterFacets) * 3);
     std::vector<uint32_t> indices;
     indices.reserve(size_t(clusterFacets) * 3);
+    const auto previewOffsets=PreviewOffsets(triangleCount);
+    size_t previewStep=0;
     for (uint32_t first = 0; first < triangleCount;)
     {
         if (mappedSource && !mappedSource->IsUnchanged())
@@ -294,11 +296,12 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const s
             if (!writer.Add(d, ChunkBytes(vertices), ChunkBytes(indices)))
                 return writer.Error();
         }
-        first += count;
+        if (batchSink && batchSink->Preview()) first=uint32_t(++previewStep<previewOffsets.size() ? previewOffsets[previewStep] : triangleCount);
+        else first += count;
     }
     if (!writer.Count())
         return ImportErrorCode::EmptyGeometry;
-    writer.Finalize();
+    if (!writer.Complete()) return writer.Error();
     return StlImportResult{writer.Count(), writer.Length()};
 }
 

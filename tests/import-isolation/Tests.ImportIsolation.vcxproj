@@ -84,6 +84,7 @@
     <ClCompile Include="SidecarProtocolTests.cpp" />
     <ClCompile Include="ChunkBatchTests.cpp" />
     <ClCompile Include="BoundedScanTests.cpp" />
+    <ClCompile Include="CoarseProxyTests.cpp" />
     <ClCompile Include="DracoDecodeAdapterTests.cpp" />
     <ClCompile Include="TextureTranscodeAdapterTests.cpp" />
     <ClCompile Include="TexturePathTests.cpp" />

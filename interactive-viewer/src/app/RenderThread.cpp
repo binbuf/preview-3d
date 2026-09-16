@@ -43,6 +43,12 @@ RenderThread::~RenderThread()
 std::uint64_t RenderThread::SmokeValue(unsigned field) const noexcept
 {
     switch (field) {
+    case 48: return coarseChunks_.load();
+    case 49: return fineChunks_.load();
+    case 50: return suppressedCoarse_.load();
+    case 51: return coarseCompleteGeneration_.load();
+    case 53: return scannedPrimitives_.load();
+    case 54: return coarseAllocationBytes_.load();
     case 2: return firstBackgroundUs_.load(std::memory_order_acquire);
     case 3: return geometryUs_.load(std::memory_order_acquire);
     case 4: return presentedGeneration_.load(std::memory_order_acquire);
@@ -166,6 +172,7 @@ std::function<void(d3d12_import_bridge::ImportResult)> RenderThread::BeginImport
 {
     CancelUploads();
     auto inbox = uploads_;
+    scannedPrimitives_.store(0);
     { std::lock_guard<std::mutex> lock(inbox->mutex); inbox->generation = generation; inbox->path = path; }
     return [inbox, generation, path = std::move(path), cancellation](auto result) {
         size_t bytes = sizeof(UploadTask) + path.size() * sizeof(wchar_t)
@@ -526,6 +533,8 @@ void RenderThread::DrainCommands()
         hasModel_.store(false, std::memory_order_release);
         displaySnapshot_.store({});
         displayedChunks_.store(0, std::memory_order_release);
+        coarseChunks_.store(0); fineChunks_.store(0); suppressedCoarse_.store(0);
+        coarseCompleteGeneration_.store(0); coarseAllocationBytes_.store(0); scannedPrimitives_.store(0);
         texturedChunks_.store(0, std::memory_order_release);
         textureExtent_.store(0);textureCount_.store(0);textureMips_.store(0);
         stagedScene_ = {}; stagedGeneration_ = 0; materials_.clear();
@@ -539,10 +548,18 @@ void RenderThread::PumpUploads(HWND window)
     AssertOnRenderThread();
 
     path_.ReclaimRetired();
+    if (smokeEviction_.exchange(false)) {
+        std::vector<uint32_t> fine;
+        for (const auto& mesh:path_.model.meshes) if (mesh.sourceGeometry.lodLevel==model_core::kFineLod) fine.push_back(mesh.chunkId);
+        path_.EvictFineChunks(fine); UpdateResidencySmoke();
+    }
     std::unique_lock<std::mutex> lock(uploads_->mutex);
     if (stagedGeneration_ && stagedGeneration_ != uploads_->generation) {
         stagedScene_ = {}; stagedGeneration_ = 0; stagedHaveBounds_ = false;
         materials_.clear(); stagedFailed_ = false; stagedMetadata_.reset(); haveSceneOrigin_ = false;
+        stagedProxyMode_ = false; stagedProxyComplete_ = false;
+        stagedPreviewOnly_ = false;
+        scannedPrimitives_.store(0);
     }
     if (uploads_->publications.empty()) return;
     auto pub = std::move(uploads_->publications.front()); uploads_->publications.pop_front();
@@ -555,12 +572,15 @@ void RenderThread::PumpUploads(HWND window)
         stagedGeneration_ = pub.task.generation; stagedScene_ = {};
         materials_.clear(); stagedHaveBounds_ = false; stagedFailed_ = false;
         stagedMetadata_ = std::make_shared<ModelData>(); haveSceneOrigin_ = false;
+        stagedProxyMode_ = false; stagedProxyComplete_ = false;
+        stagedPreviewOnly_ = false;
+        scannedPrimitives_.store(0);
     }
     auto message = std::make_unique<RenderUploadResult>();
     message->generation = pub.task.generation; message->path = pub.task.path;
     message->terminal = pub.task.terminal;
     if (pub.task.terminal) {
-        message->ok = !stagedFailed_ && modelGeneration_ == pub.task.generation && path_.hasModel && stagedHaveBounds_ && stagedMetadata_;
+        message->ok = !stagedFailed_ && (!stagedProxyMode_ || stagedProxyComplete_) && modelGeneration_ == pub.task.generation && path_.hasModel && stagedHaveBounds_ && stagedMetadata_;
         if (!message->ok) { message->errorCode = model_core::ImportErrorCode::EmptyGeometry; message->errorDetails = L"The import completed without displayable geometry."; }
         if (message->ok && stagedMetadata_) {
             stagedMetadata_->sourceIdentity = pub.task.result.sourceIdentity;
@@ -574,10 +594,20 @@ void RenderThread::PumpUploads(HWND window)
         message->errorDetails = pub.task.result.errorDetails;
     } else {
         auto& metadata = *stagedMetadata_;
+        for (const auto& imported:pub.task.result.meshes) {
+            if (imported.geometry.lodLevel>=model_core::kScanLod) stagedProxyMode_=true;
+            if (imported.geometry.lodLevel==model_core::kPreviewLod) stagedPreviewOnly_=true;
+            if (imported.geometry.lodLevel==model_core::kScanLod && stagedPreviewOnly_) {
+                stagedPreviewOnly_=false; stagedHaveBounds_=false;
+                metadata.vertexCount=metadata.triangleCount=metadata.pointCount=0;
+            }
+        }
+        if (pub.task.result.coarseComplete) { stagedProxyMode_=true; stagedProxyComplete_=true; }
         metadata.importStatus.flags = (metadata.importStatus.flags & model_core::kStatusRefining)
             | pub.task.result.status.flags | model_core::kStatusProvisional;
         metadata.importStatus.optionalFeatureWarnings = std::max(metadata.importStatus.optionalFeatureWarnings, pub.task.result.status.optionalFeatureWarnings);
         metadata.source = pub.task.result.scene;
+        metadata.sourceIdentity = pub.task.result.sourceIdentity;
         metadata.stats.nodeCount = int(metadata.source.nodeCount);
         metadata.stats.meshCount = int(metadata.source.meshCount);
         metadata.stats.animationCount = int(metadata.source.animationCount);
@@ -588,6 +618,8 @@ void RenderThread::PumpUploads(HWND window)
             ? DirectX::XMMatrixSet(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1) : DirectX::XMMatrixIdentity());
         for (const auto& imported : pub.task.result.meshes) {
             const auto& geometry = imported.geometry;
+            if (stagedProxyMode_ && geometry.lodLevel!=model_core::kScanLod
+                && !(stagedPreviewOnly_ && geometry.lodLevel==model_core::kPreviewLod)) continue;
             if (!haveSceneOrigin_) {
                 std::memcpy(metadata.sceneOrigin, geometry.origin, sizeof(metadata.sceneOrigin)); haveSceneOrigin_ = true;
             }
@@ -629,8 +661,17 @@ void RenderThread::PumpUploads(HWND window)
             metadata.stats.hasTransparency |= mat.data.alphaMode != uint32_t(model_core::AlphaModeId::Opaque) || mat.data.baseColorFactor[3] < 1;
         }
         auto& destination = modelGeneration_ == pub.task.generation ? path_.model : stagedScene_;
+        destination.coarseAllocationBytes+=pub.resources.coarseAllocationBytes;
         destination.meshes.insert(destination.meshes.end(), std::make_move_iterator(pub.resources.meshes.begin()),
             std::make_move_iterator(pub.resources.meshes.end()));
+        if (stagedProxyComplete_ && !destination.coarseComplete) path_.RetirePreviewChunks(destination);
+        destination.coarseComplete=stagedProxyComplete_;
+        D3D12ViewerPath::UpdateCoarseVisibility(destination);
+        if (stagedProxyComplete_) {
+            metadata.boundsVerified=true;
+            metadata.importStatus.flags=model_core::kStatusRefining;
+        }
+        if (stagedProxyMode_ && !stagedPreviewOnly_) scannedPrimitives_.store(metadata.triangleCount+metadata.pointCount);
         metadata.importStatus.textureWarnings = std::max(metadata.importStatus.textureWarnings,
             std::max(pub.task.result.textureWarningCount, pub.task.result.status.textureWarnings));
         metadata.warning.clear();
@@ -665,7 +706,7 @@ void RenderThread::PumpUploads(HWND window)
                 break;
             }
         }
-        if (!destination.meshes.empty()) {
+        if (!destination.meshes.empty() && (!stagedProxyMode_ || stagedProxyComplete_ || !path_.hasModel)) {
             if (modelGeneration_ != pub.task.generation) {
                 uint64_t fence = 0;
                 for (const auto& frame : path_.frames) fence = std::max(fence,frame.fenceValue);
@@ -683,11 +724,13 @@ void RenderThread::PumpUploads(HWND window)
                 camera_.SetBounds(minimum, maximum, viewportAspect_);
             }
             path_.hasModel = true; hasModel_.store(true, std::memory_order_release);
-            displayedChunks_.store(path_.model.meshes.size(), std::memory_order_release);
+            if (stagedProxyComplete_) coarseCompleteGeneration_.store(pub.task.generation);
+            UpdateResidencySmoke();
+            displayedChunks_.store(std::count_if(path_.model.meshes.begin(),path_.model.meshes.end(),[](const auto& mesh) { return mesh.drawEnabled; }), std::memory_order_release);
             texturedChunks_.store(std::count_if(path_.model.meshes.begin(), path_.model.meshes.end(),
-                [](const auto& mesh) { return mesh.textureIndex >= 0 && mesh.textureHeap; }), std::memory_order_release);
+                [](const auto& mesh) { return mesh.drawEnabled && mesh.textureIndex >= 0 && mesh.textureHeap; }), std::memory_order_release);
         }
-        metadata.stats.drawCallCount = int(path_.model.meshes.size());
+        metadata.stats.drawCallCount = int(displayedChunks_.load());
         if (stagedHaveBounds_ && modelGeneration_ == pub.task.generation) {
             std::lock_guard<std::mutex> cameraLock(cameraMutex_);
             DirectX::XMFLOAT3 minimum, maximum;
@@ -703,7 +746,7 @@ void RenderThread::PumpUploads(HWND window)
         }
         message->metadata = std::make_shared<const ModelData>(metadata);
         message->ok = true;
-        if (destination.meshes.empty() && modelGeneration_ != pub.task.generation) return;
+        if (modelGeneration_ != pub.task.generation) return;
     }
     // Align cancel/recovery UI with the representation already accepted by the
     // render thread, even when its posted UI notification is still queued.
@@ -716,6 +759,18 @@ void RenderThread::PumpUploads(HWND window)
     if (PostMessageW(window, kRenderUploadCompleteMessage, 0, reinterpret_cast<LPARAM>(message.get())))
         (void)message.release();
     invalidated_.store(true, std::memory_order_release);
+}
+
+void RenderThread::UpdateResidencySmoke()
+{
+    uint64_t coarse=0,fine=0,suppressed=0,preview=0;
+    for (const auto& mesh:path_.model.meshes) {
+        if (mesh.sourceGeometry.lodLevel==model_core::kCoarseLod) { ++coarse; suppressed+=!mesh.drawEnabled; }
+        else if (mesh.drawEnabled) { if (mesh.sourceGeometry.lodLevel==model_core::kPreviewLod) ++preview; else ++fine; }
+    }
+    coarseChunks_.store(coarse); fineChunks_.store(fine); suppressedCoarse_.store(suppressed);
+    coarseAllocationBytes_.store(path_.model.coarseAllocationBytes);
+    displayedChunks_.store(coarse-suppressed+fine+preview);
 }
 
 void RenderThread::RenderOneFrame()

@@ -1,0 +1,103 @@
+{
+  "configuration": "Release",
+  "exeSha256": "f474875009e8213f0b5542fe15727111a73683b1ae3e6a216ff6d3a26ef757d5",
+  "workerExeSha256": "291aee260e1e415b75846e71d51448b297164a96b9949cb7f9503533f3cc02e5",
+  "fixtureSha256": {
+    "mesh-be.ply": "702537b384d0974ea9b740c0c73dd2d13c1d4abcdcc091a25d9630f1bb77dc72",
+    "mesh-le.ply": "588a8eae48478f58dabfbbaa8e1ec2a617ec1706ce590cf913c87ace3238f481",
+    "points-be.ply": "710072beb64dbb8ca3b1a633c2485a3ba20e9fb9e9d531b62a0521842f0e2fb9",
+    "points-le.ply": "abb00593050a788e973ab101850424817b9d3007e95d692933bbdd42c3992fb2",
+    "split.glb": "c659531aa30a9db5575aa3e1313197f0f737e2a6ccd9929993efcd8c0c2abd76",
+    "split.stl": "98f191e2e4035848175c047eaa0d0bc3a308323aeac2bdc1162bc12e520787c7"
+  },
+  "run": {
+    "failure": null,
+    "events": [
+      {
+        "fixture": "split.glb",
+        "firstGeometryMs": 85.76139999786392,
+        "firstTriangles": 64,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 3692.0406999997795,
+        "chunks": 32
+      },
+      {
+        "fixture": "split.stl",
+        "firstGeometryMs": 1281.1558000030345,
+        "firstTriangles": 2000000,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 2275.103100000706,
+        "chunks": 31
+      },
+      {
+        "fixture": "mesh-le.ply",
+        "firstGeometryMs": 2705.4879999996047,
+        "firstTriangles": 2000000,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 5420.166900003096,
+        "chunks": 31
+      },
+      {
+        "fixture": "mesh-be.ply",
+        "firstGeometryMs": 2669.815599998401,
+        "firstTriangles": 2000000,
+        "firstPoints": 0,
+        "firstState": 2,
+        "readyMs": 5340.075400003116,
+        "chunks": 31
+      },
+      {
+        "fixture": "points-le.ply",
+        "firstGeometryMs": 2149.77689999796,
+        "firstTriangles": 0,
+        "firstPoints": 8000000,
+        "firstState": 2,
+        "readyMs": 3949.7501000005286,
+        "chunks": 16
+      },
+      {
+        "fixture": "points-be.ply",
+        "firstGeometryMs": 1900.0498000023072,
+        "firstTriangles": 0,
+        "firstPoints": 8000000,
+        "firstState": 2,
+        "readyMs": 3675.2828000026057,
+        "chunks": 16
+      },
+      {
+        "fixture": "A-large-glb.glb",
+        "firstScanMs": 683.9040000049863,
+        "scannedPrimitives": 589824,
+        "priorGeneration": 6
+      },
+      {
+        "fixture": "A-large-stl.stl",
+        "firstScanMs": 429.48669999896083,
+        "scannedPrimitives": 589824,
+        "priorGeneration": 6
+      },
+      {
+        "fixture": "A-large-ply-mesh-le.ply",
+        "firstScanMs": 14537.323399999877,
+        "scannedPrimitives": 589824,
+        "priorGeneration": 6
+      },
+      {
+        "fixture": "A-large-ply-points-be.ply",
+        "firstScanMs": 1416.7392000017571,
+        "scannedPrimitives": 5242880,
+        "priorGeneration": 6
+      }
+    ],
+    "viewerPeakPrivateBytes": 761626624,
+    "workerPeakPrivateBytes": 31862784,
+    "peakQueueBytes": 66847418,
+    "maxUiMs": 338.01329999550944,
+    "baselineViewerPrivateBytes": 248877056,
+    "exitCode": 0,
+    "survivingWorkers": 0
+  }
+}

@@ -1,5 +1,6 @@
 #pragma once
 #include "ChunkBatchSink.h"
+#include "CoarseSampler.h"
 #include "model_core/Checksum.h"
 #include "model_core/ImportError.h"
 #include "model_core/MappedFile.h"
@@ -14,8 +15,8 @@
 namespace import_worker
 {
 inline uint64_t TierAScratchLimit();
-// Payload is copied into the reusable output window immediately. No normalized
-// geometry survives Add; only a fixed-width source catalog survives publication.
+// Source payloads are copied into the reusable output window immediately.
+// Only bounded coarse samples and fixed-width descriptors survive publication.
 class BoundedMappedReader
 {
   public:
@@ -64,6 +65,75 @@ class BoundedChunkWriter
              std::span<const std::byte> b = {})
     {
         using namespace model_core;
+        const bool geometry = descriptor.topology == ChunkTopology::TriangleList || descriptor.topology == ChunkTopology::PointList;
+        if (sink_ && sink_->ProxyEnabled()) {
+            if (sink_->Preview()) {
+                if (!geometry) return true;
+                descriptor.lodLevel=kPreviewLod;
+                descriptor.chunkId |= kPreviewIdentity;
+                descriptor.dependencyCount=0;
+                std::fill(std::begin(descriptor.dependencyIds),std::end(descriptor.dependencyIds),0);
+            } else if (sink_->Refinement()) {
+                if (!geometry) return true; // immutable dependency catalog was delivered during scan
+            } else if (geometry) {
+                const uint64_t count = descriptor.topology == ChunkTopology::PointList ? descriptor.vertexCount : descriptor.indexCount/3;
+                validPrimitives_ += count;
+                const uint32_t quota = uint32_t(count < 20 ? (validPrimitives_<20 ? count : 1) : (std::min)(count/20,(std::max)(8ull,count/256)));
+                // Reserve before sampling; payload + single-cluster candidates are bounded.
+                const uint64_t stride=VertexStrideForLayout(VertexLayoutId(descriptor.vertexLayoutId));
+                const uint64_t reserve = uint64_t(quota) * (descriptor.topology == ChunkTopology::PointList ? stride : 3*stride+12);
+                if (reserve > kCoarseReservedBytes - coarseBytes_) return Fail(ImportErrorCode::ResourceLimit);
+                auto sample = SampleCoarse(descriptor,a,b,quota,[this] { return sink_->Cancelled(); });
+                if (!sample.Primitives()) return Fail(ImportErrorCode::Cancelled);
+                coarseBytes_ += sample.vertices.size()+sample.indices.size()*4;
+                samples_.push_back(std::move(sample));
+                descriptor.lodLevel = kScanLod;
+                descriptor.chunkId |= kScanIdentity;
+            }
+        }
+        return AddRaw(descriptor,a,b);
+    }
+    bool Complete() {
+        using namespace model_core;
+        if (sink_ && sink_->ProxyEnabled() && !sink_->Preview() && !sink_->Refinement()) {
+            // ADR-015 defines the mandatory region floor for tiny components;
+            // the absolute primitive and reserved-byte ceilings remain hard.
+            const uint64_t cap=CoarsePrimitiveCap(validPrimitives_,samples_.size());
+            if (!cap || samples_.size()>cap) return Fail(ImportErrorCode::ResourceLimit);
+            // Start coarse delivery in scene-wide source strata. The first
+            // bounded section spans the catalog instead of exhausting its prefix.
+            std::vector<size_t> order;
+            std::vector<bool> chosen(samples_.size());
+            for (size_t stratum=0;stratum<8;++stratum) {
+                const size_t index=(stratum*samples_.size()+samples_.size()/2)/8;
+                if (index<samples_.size() && !chosen[index]) { order.push_back(index); chosen[index]=true; }
+            }
+            for (size_t index=0;index<samples_.size();++index) if (!chosen[index]) order.push_back(index);
+            uint64_t remaining=cap, primitives=0, bytes=0;
+            for (size_t i=0;i<samples_.size();++i) {
+                auto& sample=samples_[order[i]];
+                const uint64_t quota=(std::min)(sample.Primitives(),remaining-(samples_.size()-i-1));
+                if (quota<sample.Primitives()) {
+                    auto d=sample.descriptor; d.chunkId &= ~kCoarseIdentity;
+                    sample=SampleCoarse(d,sample.vertices,std::as_bytes(std::span(sample.indices)),uint32_t(quota));
+                }
+                primitives+=sample.Primitives(); remaining-=sample.Primitives();
+                bytes+=sample.vertices.size()+sample.indices.size()*4;
+                if (!AddRaw(sample.descriptor,sample.vertices,std::as_bytes(std::span(sample.indices)))) return false;
+            }
+            if (!CommitCoarseBudget()) return false;
+            CoarseCompletePayload complete{uint32_t(samples_.size()),0,primitives,bytes};
+            ChunkDescriptor d{}; d.topology=ChunkTopology::CoarseComplete; d.chunkId=0xf0000002u;
+            if (!AddRaw(d,std::as_bytes(std::span(&complete,1)))) return false;
+        }
+        Finalize();
+        return true;
+    }
+  private:
+    bool AddRaw(model_core::ChunkDescriptor descriptor, std::span<const std::byte> a,
+                std::span<const std::byte> b = {})
+    {
+        using namespace model_core;
         const uint64_t bytes = a.size() + uint64_t(b.size());
         if (catalog_.size() >= kTierACatalogLimit)
             return Fail(ImportErrorCode::ChunkCatalogLimit);
@@ -75,6 +145,7 @@ class BoundedChunkWriter
         {
             if (!sink_)
                 return Fail(ImportErrorCode::ResourceLimit);
+            if (!CommitCoarseBudget()) return false;
             Finalize();
             if (!sink_->PublishBatch(Count(), length_))
                 return Fail(ImportErrorCode::ImportProtocolViolation);
@@ -96,17 +167,20 @@ class BoundedChunkWriter
         if (!b.empty())
             std::memcpy(output_.data() + length_ + a.size(), b.data(), b.size());
         descriptor.chunkChecksum = Fnv1a64(output_.subspan(size_t(length_), size_t(bytes)));
+        if (descriptor.lodLevel==kCoarseLod) { coarseVertexBatch_+=a.size(); coarseIndexBatch_+=b.size(); }
         descriptors_.push_back(descriptor);
         catalog_.push_back(descriptor);
         length_ += bytes;
         return true;
     }
+  public:
     bool PublishPending()
     {
         if (!Count())
             return true;
         if (!sink_)
             return Fail(model_core::ImportErrorCode::ResourceLimit);
+        if (!CommitCoarseBudget()) return false;
         Finalize();
         if (!sink_->PublishBatch(Count(), length_))
             return Fail(model_core::ImportErrorCode::ImportProtocolViolation);
@@ -150,6 +224,12 @@ class BoundedChunkWriter
     }
 
   private:
+    bool CommitCoarseBudget() {
+        auto aligned=[](uint64_t bytes) { return (bytes+65535)/65536*65536; };
+        coarseAllocationBytes_+=aligned(coarseVertexBatch_)+aligned(coarseIndexBatch_);
+        coarseVertexBatch_=coarseIndexBatch_=0;
+        return coarseAllocationBytes_<=model_core::kCoarseReservedBytes || Fail(model_core::ImportErrorCode::ResourceLimit);
+    }
     bool Fail(model_core::ImportErrorCode error)
     {
         error_ = error;
@@ -164,6 +244,9 @@ class BoundedChunkWriter
     std::vector<model_core::ChunkDescriptor> descriptors_;
     std::deque<model_core::ChunkDescriptor> catalog_;
     model_core::ImportErrorCode error_ = model_core::ImportErrorCode::None;
+    uint64_t validPrimitives_=0, coarseBytes_=0;
+    uint64_t coarseVertexBatch_=0,coarseIndexBatch_=0,coarseAllocationBytes_=0;
+    std::vector<CoarseSample> samples_;
 };
 template <class T> std::span<const std::byte> ChunkBytes(const std::vector<T>& values)
 {

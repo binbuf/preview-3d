@@ -118,6 +118,7 @@ struct D3D12ViewerPath
         UINT vertexCount = 0;
         bool points = false;
         bool positionOnly = false;
+        bool drawEnabled = true;
         double origin[3]{};
         int textureIndex = -1; // index into textures[]; -1 = untextured PSO
     };
@@ -135,6 +136,8 @@ struct D3D12ViewerPath
     // be retired behind one fence value rather than tracked piecemeal.
     struct ModelResources
     {
+        bool coarseComplete = false;
+        uint64_t coarseAllocationBytes = 0;
         std::vector<GpuMesh> meshes;
         std::vector<GpuTexture> textures;
         // One small shader-visible CBV_SRV_UAV heap, sized to
@@ -151,6 +154,9 @@ struct D3D12ViewerPath
     // behaviour Gate 2's forced-copy-delay exit criterion is written
     // against.
     ModelResources model;
+    static void UpdateCoarseVisibility(ModelResources& resources);
+    void EvictFineChunks(std::span<const uint32_t> identities);
+    void RetirePreviewChunks(ModelResources& resources);
     bool hasModel = false;
     double sceneOrigin[3]{};
     model_core::UpAxisId sourceUpAxis = model_core::UpAxisId::Unknown;
@@ -306,7 +312,8 @@ private:
     // empirically for buffers on this exact path in Gate 2 workstream B
     // slice 3 (see .docs/PROGRESS.md's upload-ring risk table).
     bool CreateAndQueueBuffer(const void* data, uint64_t sizeBytes, uint32_t clusterId,
-                               Microsoft::WRL::ComPtr<ID3D12Resource>& outBuffer, std::wstring& error);
+                               Microsoft::WRL::ComPtr<ID3D12Resource>& outBuffer, std::wstring& error,
+                               uint64_t destinationOffset = 0);
     // Creates one image's immutable DEFAULT-heap mip chain (in COMMON for
     // the same implicit-promotion reason as buffers), writes its SRV into
     // `heap` at heapIndex, and queues its copy onto the upload ring. The

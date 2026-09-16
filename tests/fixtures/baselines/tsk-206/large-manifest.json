@@ -1,0 +1,353 @@
+{
+  "entries": [
+    {
+      "bytes": 4294901760,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": {
+          "baseColors": [
+            [
+              1,
+              0,
+              0,
+              1
+            ],
+            [
+              0,
+              1,
+              0,
+              1
+            ],
+            [
+              0,
+              0,
+              1,
+              1
+            ],
+            [
+              1,
+              1,
+              1,
+              1
+            ]
+          ],
+          "doubleSided": true,
+          "metallic": 0.25,
+          "roughness": 0.75
+        },
+        "materials": 4,
+        "points": 0,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 2000000,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 180000000,
+        "textures": [
+          {
+            "height": 2,
+            "rgba8": [
+              255,
+              0,
+              0,
+              255,
+              0,
+              255,
+              0,
+              255,
+              0,
+              0,
+              255,
+              255,
+              255,
+              255,
+              255,
+              255
+            ],
+            "width": 2
+          }
+        ],
+        "triangles": 60000000,
+        "vertexColors": "RGBA8 four groups"
+      },
+      "id": "A-large-glb",
+      "path": "A-large-glb.glb",
+      "recipe": {
+        "algorithm": "glb",
+        "primitives": 60000000,
+        "scaled": false,
+        "tier": "large"
+      },
+      "sha256": "44389b88dfc6c79025121072793e56536bfcc7650a6c746d4961a9118e355c1b"
+    },
+    {
+      "bytes": 3000000084,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 0,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 2000000,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 180000000,
+        "textures": [],
+        "triangles": 60000000,
+        "vertexColors": "none"
+      },
+      "id": "A-large-stl",
+      "path": "A-large-stl.stl",
+      "recipe": {
+        "algorithm": "stl",
+        "primitives": 60000000,
+        "scaled": false,
+        "tier": "large"
+      },
+      "sha256": "360819748f668e5a520f05684ab8069464cb74fce19edd4154468038dfa4b62e"
+    },
+    {
+      "bytes": 3480000245,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 0,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 2000000,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 180000000,
+        "textures": [],
+        "triangles": 60000000,
+        "vertexColors": "RGB8 four groups"
+      },
+      "id": "A-large-ply-mesh-le",
+      "path": "A-large-ply-mesh-le.ply",
+      "recipe": {
+        "algorithm": "ply-mesh-le",
+        "primitives": 60000000,
+        "scaled": false,
+        "tier": "large"
+      },
+      "sha256": "52867c4c68bb48d7add3b8cab1a33c00c87f9e0bf43b4023de3b236a6125b7db"
+    },
+    {
+      "bytes": 3480000242,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 0,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 2000000,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 180000000,
+        "textures": [],
+        "triangles": 60000000,
+        "vertexColors": "RGB8 four groups"
+      },
+      "id": "A-large-ply-mesh-be",
+      "path": "A-large-ply-mesh-be.ply",
+      "recipe": {
+        "algorithm": "ply-mesh-be",
+        "primitives": 60000000,
+        "scaled": false,
+        "tier": "large"
+      },
+      "sha256": "6c51b941d762ea2c3f9825eba39c0689a50ae862e3dad6fef5b9dcfc65d252b9"
+    },
+    {
+      "bytes": 2880000398,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 60000000,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 2000000,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 60000000,
+        "textures": [],
+        "triangles": 0,
+        "vertexColors": "RGB8 four groups"
+      },
+      "id": "A-large-ply-points-le",
+      "path": "A-large-ply-points-le.ply",
+      "recipe": {
+        "algorithm": "ply-points-le",
+        "primitives": 60000000,
+        "scaled": false,
+        "tier": "large"
+      },
+      "sha256": "85712e8ffbde5759449fd5e6cb27b018c500faf71a20105f5267e61d812c6781"
+    },
+    {
+      "bytes": 2880000395,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "materialFactors": null,
+        "materials": 0,
+        "points": 60000000,
+        "proxy": {
+          "boundsVerified": true,
+          "coarseMaxPrimitives": 2000000,
+          "completeMinComponents": 8,
+          "firstMinComponents": 8,
+          "firstMinPrimitives": 8,
+          "thresholdApplies": "large proxy qualification after TSK-206"
+        },
+        "sourceVertices": 60000000,
+        "textures": [],
+        "triangles": 0,
+        "vertexColors": "RGB8 four groups"
+      },
+      "id": "A-large-ply-points-be",
+      "path": "A-large-ply-points-be.ply",
+      "recipe": {
+        "algorithm": "ply-points-be",
+        "primitives": 60000000,
+        "scaled": false,
+        "tier": "large"
+      },
+      "sha256": "6a4b677acf9787feb6ab224a1995a114387f3ba48606ecdd9eb329d96541bb21"
+    },
+    {
+      "bytes": 2147483596,
+      "expected": {
+        "bytes": 2147483596,
+        "role": "approximately 2 GiB nonlocal sidecar"
+      },
+      "id": "A-adversarial-layout",
+      "path": "A-adversarial-layout.bin",
+      "recipe": {
+        "algorithm": "GLB BIN externalization with 1 MiB copy windows",
+        "triangles": 35791392
+      },
+      "sha256": "c88f58a2dc9b38075ce81e0451cff1eb6c46f173343ae8ca44931e5faf640af4"
+    },
+    {
+      "bytes": 9719,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            11,
+            11,
+            11
+          ]
+        ],
+        "components": 8,
+        "triangles": 35791392
+      },
+      "id": "A-adversarial-layout",
+      "path": "A-adversarial-layout.gltf",
+      "recipe": {
+        "algorithm": "reverse mesh traversal against ascending BIN views",
+        "sparseCompanion": "routine sparse-valid.gltf and sparse-invalid.gltf"
+      },
+      "sha256": "c52c569ff0090ef57bef9a38401b3d161eb9fa89ba72f2b688b32f623be34ed3"
+    }
+  ],
+  "lane": "qualification",
+  "recipeVersion": 1,
+  "schema": 1,
+  "tier": "large"
+}

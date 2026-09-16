@@ -303,6 +303,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     ImportResult result;
 
     import_broker::ImportSessionRequest sessionRequest;
+    sessionRequest.enableCoarseProxy = !delayBatchesForTesting;
     sessionRequest.isCancelled = std::move(isCancelled);
     sessionRequest.workerExePath = ResolveWorkerExePath();
     sessionRequest.sourcePath = path;
@@ -324,13 +325,19 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     if (faultForTesting == 3) sessionRequest.maxChunkCount = 0;
     if (faultForTesting == 5) sessionRequest.workerArgumentsOverride = L"--test-invalid-import-reply";
     import_broker::KnownChunkCatalog catalog;
+    model_core::FileIdentity openedIdentity;
+    sessionRequest.onSourceOpened=[&](const auto& identity) { openedIdentity=identity; };
     auto unpack = [&](std::vector<import_broker::ValidatedChunk> chunks) {
         ImportResult result;
+        result.sourceIdentity=openedIdentity;
         result.forceUploadFailureForTesting = faultForTesting == 4;
         if (!chunks.empty()) result.scene = chunks.front().scene;
         for (const auto& chunk : chunks) catalog.emplace(chunk.descriptor.chunkId, chunk.descriptor.topology);
         for (auto& chunk : chunks) {
             switch (chunk.descriptor.topology) {
+            case model_core::ChunkTopology::CoarseComplete:
+                result.coarseComplete = true;
+                break;
             case model_core::ChunkTopology::TriangleList:
             case model_core::ChunkTopology::PointList: {
                 ImportedMesh mesh;

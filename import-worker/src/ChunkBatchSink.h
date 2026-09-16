@@ -35,6 +35,12 @@ namespace import_worker {
 
 class ChunkBatchSink {
 public:
+    static void EnableCoarseProxy() { proxyEnabled_ = true; }
+    bool ProxyEnabled() const { return proxyEnabled_; }
+    bool Preview() const { return proxyEnabled_ && !scanStarted_; }
+    void BeginScan() { scanStarted_ = true; }
+    bool Refinement() const { return refinement_; }
+    void BeginRefinement() { refinement_ = true; }
     static void SetDelayForTesting(unsigned milliseconds) { delayMs_ = milliseconds; }
 
     ChunkBatchSink(HANDLE stdIn, HANDLE stdOut, uint64_t generationId) noexcept
@@ -61,6 +67,9 @@ public:
     uint32_t BatchesPublished() const noexcept { return batchesPublished_; }
 
 private:
+    inline static bool proxyEnabled_ = false;
+    bool refinement_ = false;
+    bool scanStarted_ = false;
     inline static unsigned delayMs_ = 0;
     HANDLE stdIn_;
     HANDLE stdOut_;

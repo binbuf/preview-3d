@@ -81,6 +81,23 @@ bool HandleStlImportFileRequest(HANDLE stdOut, const model_core::ParseStlFileReq
         auto result =
             ImportStl(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
                       allowAsciiForTesting, &batchSink, allowAsciiForTesting ? nullptr : &*openResult.file);
+        if (batchSink.Preview()) {
+            if (const auto* preview=std::get_if<StlImportResult>(&result)) {
+                if (!batchSink.PublishBatch(preview->chunkCount,preview->sectionBytesWritten))
+                    return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::Cancelled);
+            } else if (std::get<model_core::ImportErrorCode>(result)!=model_core::ImportErrorCode::EmptyGeometry)
+                return ReportResult(stdOut,request.generationId,result);
+            batchSink.BeginScan();
+            result=ImportStl(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,false,&batchSink,&*openResult.file);
+        }
+        if (batchSink.ProxyEnabled() && std::holds_alternative<StlImportResult>(result)) {
+            const auto first=std::get<StlImportResult>(result);
+            if (!batchSink.PublishBatch(first.chunkCount,first.sectionBytesWritten))
+                return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::Cancelled);
+            batchSink.BeginRefinement();
+            result=ImportStl(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,
+                             false,&batchSink,&*openResult.file);
+        }
         return ReportResult(stdOut, request.generationId, result);
     } catch (const std::bad_alloc&) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::OutOfMemory);

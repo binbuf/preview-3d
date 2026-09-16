@@ -107,11 +107,32 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
     // -- its source is a section the host already sized to hold the whole
     // file, so it has no large-model case to serve.
     ChunkBatchSink batchSink(stdIn, stdOut, request.generationId);
+    if (batchSink.ProxyEnabled()) sidecarClient.EnablePinnedReplay();
     TextureDecodeOptions textureOptions;
     textureOptions.isCancelled=[stdIn] { DWORD available=0; return !PeekNamedPipe(stdIn,nullptr,0,nullptr,&available,nullptr); };
     try {
     auto result = ImportGltf(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
                               &sidecarClient, &batchSink,textureOptions);
+    if (batchSink.Preview()) {
+        if (const auto* preview=std::get_if<GltfImportResult>(&result)) {
+            if (!batchSink.PublishBatch(preview->chunkCount,preview->sectionBytesWritten))
+                return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::Cancelled);
+        } else if (std::get<model_core::ImportErrorCode>(result)!=model_core::ImportErrorCode::EmptyGeometry)
+            return ReportResult(stdOut,request.generationId,result);
+        if (!openResult.file->IsUnchanged()) return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::FileChanged);
+        batchSink.BeginScan();
+        result=ImportGltf(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,&sidecarClient,&batchSink,textureOptions);
+    }
+    if (batchSink.ProxyEnabled() && std::holds_alternative<GltfImportResult>(result)) {
+        const auto first=std::get<GltfImportResult>(result);
+        if (!batchSink.PublishBatch(first.chunkCount,first.sectionBytesWritten))
+            return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::Cancelled);
+        if (!openResult.file->IsUnchanged())
+            return ReportError(stdOut,request.generationId,model_core::ImportErrorCode::FileChanged);
+        batchSink.BeginRefinement();
+        result=ImportGltf(lease.Bytes(),outputView.bytes(),request.generationId,request.maxChunkCount,
+                          &sidecarClient,&batchSink,textureOptions);
+    }
     return ReportResult(stdOut, request.generationId, result);
     } catch (const std::bad_alloc&) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::OutOfMemory);

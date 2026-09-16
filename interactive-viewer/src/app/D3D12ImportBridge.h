@@ -78,6 +78,7 @@ struct ImportedImage {
 };
 
 struct ImportResult {
+    bool coarseComplete = false;
     bool ok = false;
     model_core::SceneMetadata scene{};
     model_core::FileIdentity sourceIdentity{};

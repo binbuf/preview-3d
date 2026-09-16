@@ -798,6 +798,44 @@ TEST_CASE("Texture chains copy each padded subresource and publish only after th
     if (debug) { bool available=false;CHECK(DebugLayerErrorCount(available)==before); }
 }
 
+TEST_CASE("Coarse regions share bounded GPU buffers and publish only after every slice copy completes", "[graphics][coarse-proxy]")
+{
+    using namespace model_core;
+    D3D12ViewerPath uploader; uploader.device.AttachForUpload(SharedDevice().Device());
+    REQUIRE(uploader.uploadRing.Initialize(uploader.device));
+    Microsoft::WRL::ComPtr<ID3D12Fence> gate;
+    REQUIRE(SUCCEEDED(uploader.device.Device()->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&gate))));
+    REQUIRE(SUCCEEDED(uploader.uploadRing.CopyQueue().Queue()->Wait(gate.Get(),1)));
+    std::vector<d3d12_import_bridge::ImportedMesh> meshes(2);
+    std::vector<std::byte> expectedVertices,expectedIndices;
+    for (unsigned i=0;i<2;++i) {
+        auto& mesh=meshes[i]; mesh.chunkId=kCoarseIdentity|(i+1); mesh.vertexCount=3; mesh.indexCount=3;
+        mesh.topology=ChunkTopology::TriangleList; mesh.vertexLayoutId=VertexLayoutId::PositionOnly_F32;
+        mesh.geometry.lodLevel=kCoarseLod;
+        const VertexPositionOnlyF32 vertices[]{{float(i*10),0,0},{float(i*10+1),0,0},{float(i*10),1,0}};
+        const uint32_t indices[]{0,1,2};
+        auto vb=std::as_bytes(std::span(vertices)); auto ib=std::as_bytes(std::span(indices));
+        mesh.payload.assign(vb.begin(),vb.end()); mesh.payload.insert(mesh.payload.end(),ib.begin(),ib.end());
+        expectedVertices.insert(expectedVertices.end(),vb.begin(),vb.end()); expectedIndices.insert(expectedIndices.end(),ib.begin(),ib.end());
+    }
+    std::wstring error; REQUIRE(uploader.BeginUploadModel(meshes,{}, {},error));
+    CHECK_FALSE(uploader.PollUploads());
+    REQUIRE(SUCCEEDED(gate->Signal(1)));
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while (!uploader.PollUploads() && std::chrono::steady_clock::now()<deadline) Sleep(1);
+    REQUIRE(uploader.hasModel); REQUIRE(uploader.model.meshes.size()==2);
+    const auto& first=uploader.model.meshes[0]; const auto& second=uploader.model.meshes[1];
+    CHECK(first.vertexBuffer==second.vertexBuffer); CHECK(first.indexBuffer==second.indexBuffer);
+    CHECK(second.vbv.BufferLocation-first.vbv.BufferLocation==36);
+    CHECK(second.ibv.BufferLocation-first.ibv.BufferLocation==12);
+    CHECK(ReadBack(uploader.device,uploader.uploadRing,*first.vertexBuffer.Get(),expectedVertices.size())==expectedVertices);
+    CHECK(ReadBack(uploader.device,uploader.uploadRing,*first.indexBuffer.Get(),expectedIndices.size())==expectedIndices);
+    const auto vd=first.vertexBuffer->GetDesc(),id=first.indexBuffer->GetDesc();
+    const auto va=uploader.device.Device()->GetResourceAllocationInfo(0,1,&vd),ia=uploader.device.Device()->GetResourceAllocationInfo(0,1,&id);
+    CHECK(va.SizeInBytes+ia.SizeInBytes==131072);
+    uploader.WaitForIdle();
+}
+
 TEST_CASE("Product texture uploader validates complete payloads and preserves immutable color-space mip chains", "[graphics][texture-upload]")
 {
     D3D12ViewerPath uploader;uploader.device.AttachForUpload(SharedDevice().Device());

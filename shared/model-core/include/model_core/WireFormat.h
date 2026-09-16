@@ -18,7 +18,20 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-constexpr uint32_t kCurrentProtocolVersion = 4;
+constexpr uint32_t kCurrentProtocolVersion = 5;
+// Product coarse/full delivery has four closed geometry roles. Scan payloads
+// cross the validator, but are never allocated on the GPU or retained by it.
+constexpr uint32_t kFineLod = 0, kCoarseLod = 1, kScanLod = 2, kPreviewLod = 3;
+constexpr uint32_t kScanIdentity = 0x10000000u, kCoarseIdentity = 0x20000000u;
+constexpr uint32_t kPreviewIdentity = 0x30000000u;
+constexpr uint64_t kPreviewPrimitiveLimit = 4096, kPreviewByteLimit = 1024*1024;
+constexpr uint64_t kPreviewReservedBytes = 8ull*1024*1024;
+constexpr uint64_t kCoarseReservedBytes = 64ull * 1024 * 1024;
+constexpr uint64_t kCoarsePrimitiveLimit = 2000000;
+inline uint64_t CoarsePrimitiveCap(uint64_t valid, uint64_t nonemptyRegions = 1) {
+    const uint64_t density=valid < 20 ? valid : (valid/20 > nonemptyRegions ? valid/20 : nonemptyRegions);
+    return density < kCoarsePrimitiveLimit ? density : kCoarsePrimitiveLimit;
+}
 constexpr uint32_t kMaxDependencyIds = 4;
 
 enum class ChunkTopology : uint32_t {
@@ -29,9 +42,18 @@ enum class ChunkTopology : uint32_t {
     Image = 4,    // payload is a model_core::ImagePayloadHeader + pixel bytes (PixelFormats.h)
     TextureWarning = 5, // one uint32 fallback count, [1,64]; no paths or arbitrary worker text
     ImportStatus = 6,
+    CoarseComplete = 7, // only after every validated scan region has a usable sample
 };
 
 #pragma pack(push, 1)
+
+struct CoarseCompletePayload {
+    uint32_t regions;
+    uint32_t reserved;
+    uint64_t primitives;
+    uint64_t geometryBytes;
+};
+static_assert(sizeof(CoarseCompletePayload) == 24);
 
 constexpr uint32_t kStatusProvisional = 1;
 constexpr uint32_t kStatusRefining = 2;

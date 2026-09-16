@@ -1711,7 +1711,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     switch (message)
     {
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 47) return 0;
+        if (!app->appSmoke || wParam > 54) return 0;
+        if (wParam == 52) { app->renderThread.RequestSmokeEviction(); return 1; }
         if (wParam == 47) return app->loadedModel ? static_cast<LRESULT>(app->loadedModel->source.generationId) : 0;
         if (wParam == 46) { app->holdUploadMessagesForTesting = lParam != 0; return 1; }
         if (wParam == 45) return app->renderThread.HasCompleteModel();
@@ -2770,6 +2771,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         {
             if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
+            else if (_wcsicmp(arguments[i], L"--coarse-proxy-smoke") == 0) {
+                app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 4ull*1024*1024, false);
+            }
             else if (_wcsicmp(arguments[i], L"--texture-mip-smoke") == 0) {
                 app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 4ull*1024*1024, true);
             }

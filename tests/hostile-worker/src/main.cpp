@@ -20,6 +20,16 @@ int main(int argc, char* argv[])
     if (argc < 2) {
         return 1;
     }
+    if (ArgEquals(argv[1], "--coarse-premature")) return hostile_worker::RunCoarseAttack(0);
+    if (ArgEquals(argv[1], "--coarse-missing-region")) return hostile_worker::RunCoarseAttack(1);
+    if (ArgEquals(argv[1], "--coarse-duplicate")) return hostile_worker::RunCoarseAttack(2);
+    if (ArgEquals(argv[1], "--coarse-changed-fine")) return hostile_worker::RunCoarseAttack(3);
+    if (ArgEquals(argv[1], "--coarse-outside-bounds")) return hostile_worker::RunCoarseAttack(4);
+    if (ArgEquals(argv[1], "--coarse-unknown-role")) return hostile_worker::RunCoarseAttack(5);
+    if (ArgEquals(argv[1], "--coarse-false-totals")) return hostile_worker::RunCoarseAttack(6);
+    if (ArgEquals(argv[1], "--coarse-terminal-scan")) return hostile_worker::RunCoarseAttack(7);
+    if (ArgEquals(argv[1], "--coarse-missing-fine")) return hostile_worker::RunCoarseAttack(8);
+    if (ArgEquals(argv[1], "--coarse-mixed-preview")) return hostile_worker::RunCoarseAttack(9);
     if (std::strncmp(argv[1], "--error-", 8) == 0) {
         auto request = model_core::ReadControlMessage(GetStdHandle(STD_INPUT_HANDLE));
         if (!request || request->payload.size() < 8) return 1;

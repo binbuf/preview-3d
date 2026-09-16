@@ -245,8 +245,10 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         if (descriptor.byteSize != descriptor.normalizedRangeLength) {
             return Reject(ImportErrorCode::MalformedData, "byteSize/normalizedRangeLength mismatch");
         }
+        if (descriptor.lodLevel > model_core::kPreviewLod)
+            return Reject(ImportErrorCode::MalformedData, "unknown geometry role");
         if (descriptor.topology != ChunkTopology::TriangleList && descriptor.topology != ChunkTopology::PointList) {
-            if (descriptor.meshId || descriptor.nodeId || descriptor.geometryFlags
+            if (descriptor.lodLevel || descriptor.meshId || descriptor.nodeId || descriptor.geometryFlags
                 || descriptor.boundsState != model_core::BoundsState::Unknown)
                 return Reject(ImportErrorCode::MalformedData, "non-geometry chunk declares geometry metadata");
             for (unsigned axis=0; axis<3; ++axis) if (descriptor.origin[axis] != 0
@@ -257,6 +259,22 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         // 12d. Pass B: topology-specific validation. Every branch either
         // Rejects or falls through to the common checksum/copy tail below.
         switch (descriptor.topology) {
+        case ChunkTopology::CoarseComplete: {
+            if (descriptor.byteSize != sizeof(model_core::CoarseCompletePayload) || descriptor.lodLevel
+                || descriptor.chunkId != 0xf0000002u
+                || descriptor.vertexCount || descriptor.indexCount || descriptor.vertexLayoutId || descriptor.dependencyCount
+                || descriptor.sourceRangeOffset || descriptor.sourceRangeLength)
+                return Reject(ImportErrorCode::MalformedData,"invalid coarse completion record");
+            for (auto id:descriptor.dependencyIds) if (id)
+                return Reject(ImportErrorCode::MalformedData,"coarse completion has dependencies");
+            model_core::CoarseCompletePayload complete{};
+            std::memcpy(&complete,section.data()+descriptor.normalizedRangeOffset,sizeof(complete));
+            if (!complete.regions || complete.reserved || !complete.primitives
+                || complete.primitives > model_core::kCoarsePrimitiveLimit
+                || !complete.geometryBytes || complete.geometryBytes > model_core::kCoarseReservedBytes)
+                return Reject(ImportErrorCode::MalformedData,"invalid coarse completion totals");
+            break;
+        }
         case ChunkTopology::TriangleList:
         case ChunkTopology::PointList: {
             // Unrecognized layout ID is never guessed.

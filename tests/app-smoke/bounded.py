@@ -64,8 +64,12 @@ def run(exe, directory, large):
             wait(lambda: query(4) == generation and query(47) == generation, 'first split geometry')
             event = {'fixture': name, 'firstGeometryMs': (time.perf_counter()-at)*1000,
                      'firstTriangles': query(14), 'firstPoints': query(15), 'firstState': query(0)}
-            assert event['firstTriangles'] < triangles or event['firstPoints'] < points
-            assert event['firstState'] == 2
+            if query(51) == generation:
+                assert query(16), 'document handoff requires verified complete coarse geometry'
+                assert event['firstTriangles'] == triangles and event['firstPoints'] == points
+            else:
+                assert event['firstTriangles'] < triangles or event['firstPoints'] < points
+            assert event['firstState'] in (2, 3)
             wait(lambda: query(0) in (3, 4), 'complete split import')
             assert query(0) == 3, f'error code {query(41)}'
             assert query(14) == triangles and query(15) == points and query(16)
@@ -78,12 +82,13 @@ def run(exe, directory, large):
             for name in ['A-large-glb.glb', 'A-large-stl.stl', 'A-large-ply-mesh-le.ply', 'A-large-ply-points-be.ply']:
                 at = time.perf_counter()
                 generation = open_file(large/name)
-                wait(lambda: query(4) == generation or query(0) == 4, 'large first geometry', timeout=600)
-                assert query(4) == generation and query(0) == 2, f'large source failed {query(41)}'
-                event = {'fixture': name, 'firstGeometryMs': (time.perf_counter()-at)*1000,
-                         'firstTriangles': query(14), 'firstPoints': query(15)}
+                wait(lambda: query(53) > 0 or query(0) == 4, 'large scan before handoff', timeout=600)
+                assert query(0) == 2 and query(51) != generation, f'large source failed {query(41)}'
+                previous = query(4)
+                event = {'fixture': name, 'firstScanMs': (time.perf_counter()-at)*1000,
+                         'scannedPrimitives': query(53), 'priorGeneration': previous}
                 send(hwnd, 0x100, 0x1b)
-                assert query(0) == 5 and not query(16)
+                assert query(0) == 3 and query(4) == previous
                 report['events'].append(event)
                 sample()
         generation = open_file(ROOT/'interactive-viewer/test-assets/tri_tight.glb')

@@ -251,6 +251,8 @@ struct WalkState {
     std::function<bool(PendingChunk&&)> emit;
     uint32_t emittedGeometry = 0;
     uint32_t primitiveOccurrences = 0;
+    bool preview=false, previewCounting=false;
+    uint32_t previewOccurrences=0;
     uint32_t chunkTriangles = kChunkTriangles;
     uint64_t scratchLimit = TierAScratchLimit();
     uint64_t scratchReserve = 160ull * 1024 * 1024;
@@ -835,6 +837,13 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         state.error = ImportErrorCode::ResourceLimit;
         return false;
     }
+    if (state.previewCounting) return true;
+    if (state.preview) {
+        bool selected=false;
+        for (uint64_t stratum=0;stratum<8;++stratum)
+            selected |= state.primitiveOccurrences-1 == stratum*state.previewOccurrences/8;
+        if (!selected) return true;
+    }
     if (primitive.type != fastgltf::PrimitiveType::Triangles) {
         return true; // skip, not fatal -- mirrors Model.cpp's leniency for non-triangle primitives
     }
@@ -920,13 +929,15 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
              !EnsureAccessorBytesResolvable(state, state.asset.accessors[normalIt->accessorIndex])) ||
             (hasUv && !EnsureAccessorBytesResolvable(state, state.asset.accessors[uvIt->accessorIndex])))
             return false;
-        const auto material = primitive.materialIndex ? ResolveMaterial(state, *primitive.materialIndex)
+        const auto material = !state.preview && primitive.materialIndex ? ResolveMaterial(state, *primitive.materialIndex)
                                                       : std::optional<size_t>{};
         if (state.error != ImportErrorCode::None)
             return false;
         SidecarBufferDataAdapter adapter(state);
         auto linear = world;
         linear[3] = fastgltf::math::dvec4(0, 0, 0, 1);
+        const auto previewOffsets=PreviewOffsets(indexAccessor.count/3);
+        size_t previewStep=0;
         for (size_t first = 0; first < indexAccessor.count;)
         {
             if (state.textureOptions.Cancelled())
@@ -1010,7 +1021,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             part.geometry.sourceRangeLength = end - first;
             if (!state.emit(std::move(part)))
                 return false;
-            first = end;
+            first = state.preview ? (++previewStep<previewOffsets.size() ? size_t(previewOffsets[previewStep]*3) : indexAccessor.count) : end;
         }
         state.totalVertices += positionAccessor.count;
         state.totalIndices += indexAccessor.count;
@@ -1237,7 +1248,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
     state.totalVertices += chunk.vertices.size();
     state.totalIndices += chunk.indices.size();
 
-    if (primitive.materialIndex.has_value()) {
+    if (!state.preview && primitive.materialIndex.has_value()) {
         chunk.pendingMaterialIndex = ResolveMaterial(state, *primitive.materialIndex);
         if (state.error != ImportErrorCode::None) {
             return false;
@@ -1248,6 +1259,8 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
     {
         // Draco is an independently bounded decode unit, then its normalized
         // result is split and emitted using cluster-local index remapping.
+        const auto previewOffsets=PreviewOffsets(chunk.indices.size()/3);
+        size_t previewStep=0;
         for (size_t first = 0; first < chunk.indices.size();)
         {
             if (state.textureOptions.Cancelled())
@@ -1278,7 +1291,7 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             part.geometry.sourceRangeLength = end - first;
             if (!state.emit(std::move(part)))
                 return false;
-            first = end;
+            first = state.preview ? (++previewStep<previewOffsets.size() ? size_t(previewOffsets[previewStep]*3) : chunk.indices.size()) : end;
         }
         return true;
     }
@@ -1734,6 +1747,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     if (!state.chunkTriangles)
         return ImportErrorCode::ResourceLimit;
     state.sidecarClient = sidecarClient;
+    state.preview=batchSink && batchSink->Preview();
+    if (state.preview) state.chunkTriangles=1;
 
     SceneMetadata streamingScene{};
     streamingScene.format = bin.empty() ? SourceFormatId::Gltf : SourceFormatId::Glb;
@@ -1838,6 +1853,14 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             return true;
         };
     fastgltf::math::dmat4x4 identity(1.0);
+    if (state.preview) {
+        state.previewCounting=true;
+        for (size_t nodeIndex:asset.scenes[sceneIndex].nodeIndices)
+            if (!VisitNode(state,nodeIndex,identity,0)) return state.error;
+        state.previewOccurrences=state.primitiveOccurrences;
+        state.primitiveOccurrences=0; state.previewCounting=false;
+        std::fill(state.visitState.begin(),state.visitState.end(),uint8_t(0));
+    }
     for (size_t nodeIndex : asset.scenes[sceneIndex].nodeIndices) {
         if (!VisitNode(state, nodeIndex, identity, 0)) {
             return state.error;
@@ -1887,7 +1910,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             if (!streamingWriter.Add(d, ChunkBytes(state.textureWarningCount)))
                 return streamingWriter.Error();
         }
-        streamingWriter.Finalize();
+        if (!streamingWriter.Complete()) return streamingWriter.Error();
         return GltfImportResult{streamingWriter.Count(), streamingWriter.Length()};
     }
     if (state.chunks.empty()) {

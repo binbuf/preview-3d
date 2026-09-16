@@ -1,0 +1,388 @@
+{
+  "configuration": "Debug",
+  "exeSha256": "3de2248dd620ccbdaddcbfb90744f67d08b9109a8eec0f54e1c35fa4452323c0",
+  "workerExeSha256": "964048e9da6873dd5e1077c81a1b41036aaf0851f2dc44165904f3e7d671e390",
+  "fixtures": {
+    "recipe": "coarse.py v1; 100000 primitives; eight separated components; no random seed",
+    "entries": [
+      {
+        "path": "glb.glb",
+        "sha256": "e4baba26205121e2adc3ca5839059bd4936af09787cc20e86bfad5a91943d4bd",
+        "bytes": 6005076,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "glb-reordered.glb",
+        "sha256": "7a8b91446e09f067f5df5149cc0fcec62c40fed757a5205a4284ecb9eae4dd0a",
+        "bytes": 6005076,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "stl.stl",
+        "sha256": "df32c1c808e2adcb390d311bb57916575eb20e182ff4db285457928c2be6ec44",
+        "bytes": 5000084,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "stl-reordered.stl",
+        "sha256": "3f0cb9a8475b52e086ac2ac3be457d0daf45f2f06583905d448fc1f30b553406",
+        "bytes": 5000084,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "mesh-le.ply",
+        "sha256": "f88eed23d3e2119597363c0be7c2d45234ec97a3697b4438914fdede3e38b99c",
+        "bytes": 5800240,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "mesh-le-reordered.ply",
+        "sha256": "cd77d5b57212c5ff71f052610ff0f84ec66556773bfae43c533983b67d67b5ab",
+        "bytes": 5800240,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "mesh-be.ply",
+        "sha256": "18086c0184e8beba2963d3c8276bdd8b104973a4c2fd26fd394a258650653c54",
+        "bytes": 5800237,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "mesh-be-reordered.ply",
+        "sha256": "a201a6ddbb75fe76e8ea0ee0cd7a3d050e880602b1905418df4ab6e41c8cdcf0",
+        "bytes": 5800237,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "points-le.ply",
+        "sha256": "8cac50bce840427c0525fa768f1d388ce7f368245dc33c47092f1e7c1106e436",
+        "bytes": 4800396,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "points-le-reordered.ply",
+        "sha256": "7f21fadbd77d55de356bb8092dc5ac448b163f1757aafb9615b635bd5dbe06ec",
+        "bytes": 4800396,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "points-be.ply",
+        "sha256": "3b6f3bf33bbe92d6163c4d0d930fd5a8de30825cab56b88eed8a5f36151ac206",
+        "bytes": 4800393,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      },
+      {
+        "path": "points-be-reordered.ply",
+        "sha256": "b7850559f4b9ee3d26a0b0f3a07d721d5c29e887a3749a00a40a133ac31c3fdf",
+        "bytes": 4800393,
+        "expected": {
+          "validPrimitives": 100000,
+          "firstMinComponents": 8,
+          "completeMinComponents": 8,
+          "coarseMaxPrimitives": 5000,
+          "gpuGeometryMaxBytes": 67108864,
+          "bounds": [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              11,
+              11,
+              11
+            ]
+          ]
+        }
+      }
+    ]
+  },
+  "run": {
+    "failure": null,
+    "events": [
+      {
+        "action": "cancel-before-handoff",
+        "preservedGeneration": 1
+      },
+      {
+        "action": "failure-before-handoff",
+        "errorCode": 1,
+        "preservedGeneration": 1
+      },
+      {
+        "fixture": "glb.glb",
+        "proxyHandoffMs": 2392.1478999982355,
+        "coarseChunks": 8,
+        "fineAtHandoff": 0,
+        "verifiedBounds": true,
+        "coarseAllocationBytes": 131072,
+        "visibleAfterEviction": 8,
+        "fineRetainedAfterEviction": 0
+      },
+      {
+        "fixture": "stl-reordered.stl",
+        "proxyHandoffMs": 1726.4936000065063,
+        "coarseChunks": 3,
+        "fineAtHandoff": 0,
+        "verifiedBounds": true,
+        "coarseAllocationBytes": 131072,
+        "visibleAfterEviction": 3,
+        "fineRetainedAfterEviction": 0
+      },
+      {
+        "fixture": "mesh-le-reordered.ply",
+        "proxyHandoffMs": 2447.829199998523,
+        "coarseChunks": 3,
+        "fineAtHandoff": 0,
+        "verifiedBounds": true,
+        "coarseAllocationBytes": 131072,
+        "visibleAfterEviction": 3,
+        "fineRetainedAfterEviction": 0
+      },
+      {
+        "fixture": "mesh-be.ply",
+        "proxyHandoffMs": 2439.5599999988917,
+        "coarseChunks": 3,
+        "fineAtHandoff": 0,
+        "verifiedBounds": true,
+        "coarseAllocationBytes": 131072,
+        "visibleAfterEviction": 3,
+        "fineRetainedAfterEviction": 0
+      },
+      {
+        "fixture": "points-le-reordered.ply",
+        "proxyHandoffMs": 1609.5859999986715,
+        "coarseChunks": 1,
+        "fineAtHandoff": 0,
+        "verifiedBounds": true,
+        "coarseAllocationBytes": 65536,
+        "visibleAfterEviction": 1,
+        "fineRetainedAfterEviction": 0
+      },
+      {
+        "fixture": "points-be.ply",
+        "proxyHandoffMs": 1608.9336999939405,
+        "coarseChunks": 1,
+        "fineAtHandoff": 0,
+        "verifiedBounds": true,
+        "coarseAllocationBytes": 65536,
+        "visibleAfterEviction": 1,
+        "fineRetainedAfterEviction": 0
+      },
+      {
+        "fixture": "Draw-heavy.glb",
+        "proxyHandoffMs": 3273.5661000042455,
+        "coarseChunks": 2048,
+        "fineAtHandoff": 0,
+        "verifiedBounds": true,
+        "coarseAllocationBytes": 524288,
+        "visibleAfterEviction": 2048,
+        "fineRetainedAfterEviction": 0
+      }
+    ],
+    "maxUiMs": 391.26319999923,
+    "peakQueueBytes": 15039728,
+    "viewerPeakPrivateBytes": 614572032,
+    "workerPeakPrivateBytes": 27963392,
+    "exitCode": 0,
+    "survivingWorkers": 0
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "generatedUtc": "2026-09-16T01:51:40.726456+00:00",
+  "gitBase": "f0fb2d95258f32d7fd1cd14f911e6f48e4d8d092",
+  "binaries": {
+    "Debug/Preview3D.exe": "3de2248dd620ccbdaddcbfb90744f67d08b9109a8eec0f54e1c35fa4452323c0",
+    "Debug/Preview3DImportWorker.exe": "964048e9da6873dd5e1077c81a1b41036aaf0851f2dc44165904f3e7d671e390",
+    "Debug/Preview3DHostileWorker.exe": "b451fe4ed72746f9efa32835d21b8c1fb9b3c9661677b72fe2a86db0fb303e32",
+    "Debug/Tests.Unit.exe": "1b9756fc1597b15a5cd297d17401e6e860092630d2cb06bac92cd1b6513b2b86",
+    "Debug/Tests.ImportIsolation.exe": "6296223f5d6e88197f787a69cf271027d399d3aaff939490e7cc8ca52da5ec99",
+    "Release/Preview3D.exe": "f474875009e8213f0b5542fe15727111a73683b1ae3e6a216ff6d3a26ef757d5",
+    "Release/Preview3DImportWorker.exe": "291aee260e1e415b75846e71d51448b297164a96b9949cb7f9503533f3cc02e5",
+    "Release/Preview3DHostileWorker.exe": "80b6ee80348b65b1c1f30e62b5af1e05cb1a2795b9deaf58e8730259ceb3f954",
+    "Release/Tests.Unit.exe": "7f98aecd6f954e46654f7ea14cb93a93f7b49fac90e1fec3c7792c68d7771179",
+    "Release/Tests.ImportIsolation.exe": "bf39204d9437f0e0ae2c43ea4e2a5922d1bdeb4c9b8ac918c8ab7e8155d815c3"
+  },
+  "sourceSha256": {
+    "import-worker/src/BoundedChunkWriter.h": "aa6895b3ed162d803547f862e9e41c70a0d218d37f11df69ef99c401ce880387",
+    "import-worker/src/ChunkBatchSink.h": "a3df3f85b90e5ce2ff94c9ef0e29b9f4178f1a6c59679f945e4d3bc9d8ea762d",
+    "import-worker/src/CoarseSampler.h": "93f38d59730855b549b755cd735fb53f32c6aba29ca1bd2e820151cd8e09d3ff",
+    "import-worker/src/GltfAdapter.cpp": "f588fd62ff9d34c5cd3a9d334977f70ea37663ea4ee83169439f8d42d8de3bca",
+    "import-worker/src/GltfImportWorker.cpp": "41cd14ba75eaa60a183628a5d53642470d5c70fb81caae273c703f222706070f",
+    "import-worker/src/PlyAdapter.cpp": "3fd634cc1e2ae01bc3636b76fc123412eb820022874d7a70009ca4c20cf151f8",
+    "import-worker/src/PlyImportWorker.cpp": "f03ab093e93d20600d31a0576f94387a0b4b6562e445e99b5003c1992a89f267",
+    "import-worker/src/SidecarFileClient.cpp": "859750359aa585638adb691a5a27128aca4aea6f03b4f331b14edaebaba66f12",
+    "import-worker/src/SidecarFileClient.h": "b6cf8e74c9eaf254ea9cdde1949ccf8449bf70bf988c3c9b2d87f1c483c207c1",
+    "import-worker/src/StlAdapter.cpp": "884901e82b459516fe79cb68a74efd1e296c37f2a54e728dd003e90acca5fdfa",
+    "import-worker/src/StlImportWorker.cpp": "0895e5d49a31e6dddbe4840bc132a66292f04a7ac540cbfca0884c1284d565ed",
+    "import-worker/src/main.cpp": "328280323f5eecb86224d4fd9a782064058e8aaad55f73068ed3d8153e4126b5",
+    "interactive-viewer/src/app/D3D12ImportBridge.cpp": "b5603a7aa5ff70e69f504205619596495689dd0d7abf9860262db94b415dc5a8",
+    "interactive-viewer/src/app/D3D12ImportBridge.h": "08e8170bb7c5f21f53b66033fca8fe366f5fce6286efe8f4c42e9c685c45a89e",
+    "interactive-viewer/src/app/D3D12ViewerPath.cpp": "42731fba350e5c99105a47a1aaa97bb5977b5975e53357ae8fff36a59576781b",
+    "interactive-viewer/src/app/D3D12ViewerPath.h": "b21024579cc31ec697631f7af939349ab17e69c3f02017d36cad55b4fcef8653",
+    "interactive-viewer/src/app/Preview3D.cpp": "106c469a557393ed94de43a53e8c382cefccc0fafcf50ceea7b869f72f400976",
+    "interactive-viewer/src/app/RenderThread.cpp": "777cbde2aea77e72bc6b3189ce228b1f01bf0eba224cfeb833ec2a2422668c11",
+    "interactive-viewer/src/app/RenderThread.h": "d32b768cbc57afd95dfa8c3efc5f58b8694b7c41673b977416e62bb92d13e79b",
+    "shared/import-broker/include/import_broker/ImportSession.h": "9cdb9f607aac4ab6f7c8dfdbca26190975a49cf936e4c8c0448ebde023462126",
+    "shared/import-broker/src/ImportSession.cpp": "8d8354ea2a9bd59ecc4b1779aa70e7c157a44807474a0f9465705abf48625f40",
+    "shared/import-broker/src/SharedSectionValidator.cpp": "7f01386d0b8bfee8e5dc3869269ba36f429fb7b4dac90e2b67c0bdc81f4e1f33",
+    "shared/model-core/include/model_core/TierALimits.h": "27ce57bad10c3db82a02dadc9a34b60df7385d890704feb5d74168191c725406",
+    "shared/model-core/include/model_core/WireFormat.h": "280e505c328baeeb6f237973252ddb1ed2617056ed895878addc64a1eae689c7",
+    "tests/app-smoke/bounded.py": "199e6c326176170f02129bac7827dba2621231dd289e1c49246025eddc5a90cb",
+    "tests/hostile-worker/src/AttackModes.cpp": "178898024983c68614d3a7ed40f9429b6b80d1ca77beed57ebd640b447953f7f",
+    "tests/hostile-worker/src/AttackModes.h": "3a8fa1c5cd847cc78c625da8c64e330348e7eaab034baf79003bc82532ea3f8c",
+    "tests/hostile-worker/src/main.cpp": "d5dc861748d7c2c8ce08296c9f56ae66f7f1e0c69648564367850b4eaf2d8f29",
+    "tests/import-isolation/CoarseProxyTests.cpp": "587825c419c0fe4e84469fd77c81af123126682ab2284bd2edb0641a1759b47e",
+    "tests/import-isolation/Tests.ImportIsolation.vcxproj": "528075c3fa1c60f899ae42bc036e57ffd46c77e1a4e8ffe04a287205f3a73026",
+    "tests/unit/CoarseProxyTests.cpp": "f7ed11e320bbfd4304089b0b8ca091b0dcb47c788b0817949a39644961cb9c69",
+    "tests/unit/Tests.Unit.vcxproj": "d15c730543bb3df7b3231ae52f8f503194e4fcb6a0fd3a8e2ccdf51a086b6915",
+    "tests/unit/UploadRingTests.cpp": "f0390cf3eb6b665703dfa37e8bf5759c42065f3d0959c50770978da369b7693c"
+  },
+  "harnessSha256": {
+    "tests/app-smoke/coarse.py": "aabc42e68c50cdcc7ef795ab77f2da3f8d1718b897de89329ae151507a772b24",
+    "tests/app-smoke/bounded.py": "199e6c326176170f02129bac7827dba2621231dd289e1c49246025eddc5a90cb",
+    "tests/app-smoke/progressive.py": "f3c3888ccd0cc497a323b8f885a21cf0534b3e5445936049cda8030398c6de02",
+    "tests/app-smoke/textures.py": "fc9152e52f77ecab8cd85b51e3d88a6221f4f220028220c27dcc9cf4e25fccd6",
+    "tests/app-smoke/recovery.py": "32478aa0f32e63f3dc83d71e8b87b9f1ddd77094388d9c9f3adbf54b4f36d105",
+    "tests/app-smoke/run.py": "09df299d0f99341aed70e27f9f0837a109de2cbc4c7c29db10193494313385a1",
+    "tests/fixtures/coarse.py": "e3009551927bd774700c48d0e70f609eb73a78737b3ade446160afdcbb9ece54",
+    "tests/fixtures/generate.py": "6f92158f8b98a4eca06130b6efdd5fef6ced26d065e02ccf646ba6253eb66b20"
+  },
+  "results": {
+    "Debug/unit": {
+      "assertions": 7291,
+      "cases": 82
+    },
+    "Debug/isolation": {
+      "assertions": 51433,
+      "cases": 189
+    },
+    "Debug/reordered": {
+      "assertions": 862,
+      "cases": 1
+    },
+    "Release/unit": {
+      "assertions": 7203,
+      "cases": 82
+    },
+    "Release/isolation": {
+      "assertions": 51433,
+      "cases": 189
+    },
+    "Release/reordered": {
+      "assertions": 862,
+      "cases": 1
+    }
+  },
+  "reportsSha256": {
+    "coarse-manifest.json": "9ff42405daa0ed6bdcc8836662a6d25fd6e8fa72d5b2840d51279d4ae5743449",
+    "Debug-bounded-app.json": "21c800a41b42ad43ef9b72809d5367bf78d1f796c49be766dcf96b62815245f1",
+    "Debug-build.txt": "53f544af9513ce615cae52228812fcc476b17d7eecd3bd0c835cfce14f44b2ac",
+    "Debug-coarse-app.json": "75f6c35681ceb7ca83b23b3d42c80588495e56e0ed89492d436bed53f8d08a32",
+    "Debug-hostile.txt": "d56d63d0fdedcc62909b7097d06250b8409cceec17316e13265bea1b9c90b9aa",
+    "Debug-isolation.txt": "e7e6c182874d1fbad55d84298295cfe686ce46c07881d5a46cec644099ef0278",
+    "Debug-lifecycle.json": "d718e3ddbf57b639b8b2df2ccd02014fed8b7d8496fadffb1dffab0557f5aed7",
+    "Debug-progressive.json": "00aecf923c5023966fdf43102ed6cd130637d3415f5b87a909b294af9896ec2c",
+    "Debug-recovery.json": "9a7bdc328083723d51c2bc39fa4deda926c624b941ceddb368e2928661cf2ea4",
+    "Debug-reordered.txt": "625c25d27a6b729f64617bc0875a385ff3b89ff47f7ea4ec1539e723b637ada2",
+    "Debug-textures.json": "36cf33862fba10a7c85611ee8c2029b32dce917a5196a2bace8b58a2a822a25e",
+    "Debug-unit.txt": "9ba317e53f373d92e5adb2c5c489e716d43ba907022e7c9451fad3e30281be29",
+    "large-manifest.json": "5b0cfca456d7a36d2e2bc4589f44239b6bbeab4e2791a035a0ab1f0eb38d1f67",
+    "Release-bounded-app.json": "5bdeada7270b0b30c054b87367f347bd8ad79852339d9a875cd98e22fcb38592",
+    "Release-build.txt": "cd999e6d9e528c5c65f6414e0c35651798d08d655159cce0343d69193c60b9dc",
+    "Release-coarse-app.json": "90f9180ac372b88a17f7d579028d6e9e85ef7f3281d60360e1b9059eebf2660b",
+    "Release-isolation.txt": "2fd809bb7d84640ef0f05caac866cb4a0de791294d66314ed25693d2d5988f01",
+    "Release-large-preview.txt": "cc436a9331f81947585eb5685f6e46611e03c6529df373f661bf66027b452f19",
+    "Release-lifecycle.json": "db36826514aac6de986a19be5af1f9376c3429d572efa58dbe5f88f500b6dad0",
+    "Release-progressive.json": "13fd7dcd00df40faa89918f01498cd339218c7f36cbfe420496a353d758498af",
+    "Release-recovery.json": "7e7252a2eb3ee76ac3d4c98adb43b418be1e876b054d92f640283774d273ff4b",
+    "Release-reordered.txt": "0467c0aabf9216fbc5045d1459859733150ce7be19c3c1ade75bd34bd5147626",
+    "Release-textures.json": "9c06345a96a077be37f36cfd68c6044cea43d43b91e1324271c44733195657c2",
+    "Release-unit.txt": "ce514830c5eb5ffdd748bfa979aed4d86b584cced44fc04a13b617770d6fccba"
+  },
+  "fixturesSha256": {
+    "coarse-manifest": "9ff42405daa0ed6bdcc8836662a6d25fd6e8fa72d5b2840d51279d4ae5743449",
+    "large-manifest": "5b0cfca456d7a36d2e2bc4589f44239b6bbeab4e2791a035a0ab1f0eb38d1f67"
+  },
+  "repeatCoarseManifestIdentical": true,
+  "environment": {
+    "version": "10.0.26200",
+    "build": "26200",
+    "logicalProcessors": 24,
+    "physicalRamBytes": 67810054144,
+    "videoAdapters": [
+      {
+        "Name": "NVIDIA GeForce RTX 4080",
+        "DriverVersion": "32.0.16.1664"
+      },
+      {
+        "Name": "AMD Radeon(TM) Graphics",
+        "DriverVersion": "32.0.21030.2001"
+      }
+    ],
+    "windows": "Microsoft Windows 11 Pro",
+    "cpu": "AMD Ryzen 9 7900X3D 12-Core Processor          ",
+    "cache": "Uncontrolled OS/driver caches; local diagnostics, no reference-system performance claim"
+  }
+}

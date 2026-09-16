@@ -1,0 +1,11 @@
+
+  Preview3DImportWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DImportWorker.exe
+  ImportSession.cpp
+  Preview3D.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3D.exe
+  Tests.Unit.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Tests.Unit.exe
+  AttackModes.cpp
+  main.cpp
+  Generating Code...
+  Preview3DHostileWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DHostileWorker.exe
+  CoarseProxyTests.cpp
+  Tests.ImportIsolation.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Tests.ImportIsolation.exe

@@ -403,6 +403,75 @@ bool SendOneHonestBatch(std::span<std::byte> destination, uint64_t generationId,
 
 } // namespace
 
+int RunCoarseAttack(int mode)
+{
+    using namespace model_core;
+    auto session=ReadFileImportRequestAndMapSection(); if (!session) return 1;
+    auto& [request,view]=*session;
+    uint32_t batch=0;
+    auto geometry=[&](uint32_t id,uint32_t lod,float position,bool terminal=false) {
+        const auto length=BuildOneChunkSection(view.bytes(),request.generationId,id,position);
+        ChunkDescriptor d; std::memcpy(&d,view.bytes().data()+kSectionHeaderSize,sizeof(d));
+        d.lodLevel=lod; std::memcpy(view.bytes().data()+kSectionHeaderSize,&d,sizeof(d));
+        SectionHeader h; std::memcpy(&h,view.bytes().data(),sizeof(h));
+        h.sectionChecksum=Fnv1a64(view.bytes().subspan(kSectionHeaderSize,length-kSectionHeaderSize));
+        std::memcpy(view.bytes().data(),&h,sizeof(h));
+        if (terminal) return SendChunksReady(request.generationId,1,length);
+        return SendBatchReady(request.generationId,batch++,1,length) && AwaitBatchConsumed();
+    };
+    auto completion=[&](uint32_t regions,uint64_t primitives,uint64_t bytes,bool terminal=false) {
+        CoarseCompletePayload complete{regions,0,primitives,bytes};
+        ChunkDescriptor d{}; d.chunkId=0xf0000002u; d.topology=ChunkTopology::CoarseComplete;
+        d.normalizedRangeOffset=kSectionHeaderSize+kChunkDescriptorSize;
+        d.byteSize=d.normalizedRangeLength=sizeof(complete);
+        std::memcpy(view.bytes().data()+d.normalizedRangeOffset,&complete,sizeof(complete));
+        d.chunkChecksum=Fnv1a64(view.bytes().subspan(d.normalizedRangeOffset,d.byteSize));
+        std::memcpy(view.bytes().data()+kSectionHeaderSize,&d,sizeof(d));
+        SectionHeader h{}; h.magic=kSectionMagic; h.protocolVersion=kCurrentProtocolVersion;
+        h.generationId=h.scene.generationId=request.generationId; h.chunkCount=1;
+        h.sectionLength=d.normalizedRangeOffset+d.byteSize;
+        h.sectionChecksum=Fnv1a64(view.bytes().subspan(kSectionHeaderSize,h.sectionLength-kSectionHeaderSize));
+        std::memcpy(view.bytes().data(),&h,sizeof(h));
+        if (terminal) return SendChunksReady(request.generationId,1,h.sectionLength);
+        return SendBatchReady(request.generationId,batch++,1,h.sectionLength) && AwaitBatchConsumed();
+    };
+    if (mode==9) {
+        BuildOneChunkSection(view.bytes(),request.generationId,1,1);
+        ChunkDescriptor base; std::memcpy(&base,view.bytes().data()+kSectionHeaderSize,sizeof(base));
+        const VertexPositionOnlyF32 vertex{1,0,0};
+        const uint64_t payload=kSectionHeaderSize+2*kChunkDescriptorSize;
+        const uint64_t length=payload+2*sizeof(vertex);
+        for (uint32_t index=0;index<2;++index) {
+            const size_t offset=kSectionHeaderSize+index*kChunkDescriptorSize;
+            ChunkDescriptor d=base;
+            d.lodLevel=index ? kScanLod : kPreviewLod;
+            d.chunkId=(index ? kScanIdentity : kPreviewIdentity)|(index+1);
+            d.normalizedRangeOffset=payload+index*sizeof(vertex);
+            std::memcpy(view.bytes().data()+d.normalizedRangeOffset,&vertex,sizeof(vertex));
+            d.chunkChecksum=Fnv1a64(view.bytes().subspan(d.normalizedRangeOffset,sizeof(vertex)));
+            std::memcpy(view.bytes().data()+offset,&d,sizeof(d));
+        }
+        SectionHeader h; std::memcpy(&h,view.bytes().data(),sizeof(h));
+        h.chunkCount=2; h.sectionLength=length;
+        h.sectionChecksum=Fnv1a64(view.bytes().subspan(kSectionHeaderSize,length-kSectionHeaderSize));
+        std::memcpy(view.bytes().data(),&h,sizeof(h));
+        return SendChunksReady(request.generationId,2,length) ? 0 : 1;
+    }
+    if (mode==0) return completion(1,1,12,true) ? 0 : 1;
+    if (mode==5) return geometry(kScanIdentity|1,3,1,true) ? 0 : 1;
+    if (mode==7) return geometry(kScanIdentity|1,kScanLod,1,true) ? 0 : 1;
+    if (!geometry(kScanIdentity|1,kScanLod,1)) return 1;
+    if (mode==1 && !geometry(kScanIdentity|2,kScanLod,1)) return 1;
+    if (mode==4) return geometry(kCoarseIdentity|1,kCoarseLod,2,true) ? 0 : 1;
+    if (!geometry(kCoarseIdentity|1,kCoarseLod,1)) return 1;
+    if (mode==2) return geometry(kCoarseIdentity|1,kCoarseLod,1,true) ? 0 : 1;
+    if (mode==1) return completion(2,1,12,true) ? 0 : 1;
+    if (mode==6) return completion(1,1,13,true) ? 0 : 1;
+    if (mode==8) return completion(1,1,12,true) ? 0 : 1;
+    if (!completion(1,1,12)) return 1;
+    return geometry(1,kFineLod,2,true) ? 0 : 1;
+}
+
 int RunHonestBatches()
 {
     auto session = ReadFileImportRequestAndMapSection();

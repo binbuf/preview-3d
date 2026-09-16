@@ -1,0 +1,4 @@
+Filters: [coarse-proxy] [hostile-worker]
+Randomness seeded to: 1434608364
+===============================================================================
+All tests passed (20 assertions in 1 test case)

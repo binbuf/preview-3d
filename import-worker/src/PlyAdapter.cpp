@@ -616,6 +616,11 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             return ImportErrorCode::ResourceLimit;
         }
         uint64_t count = static_cast<uint64_t>(*countOpt);
+        if (!ascii) {
+            const uint64_t bytes=count*ScalarByteSize(prop.valueType);
+            if (!readSource(cursor,bytes)) return ImportErrorCode::MalformedData;
+            return std::nullopt;
+        }
         for (uint64_t i = 0; i < count; ++i) {
             if (i % 4096 == 0 && batchSink && batchSink->Cancelled())
                 return ImportErrorCode::Cancelled;
@@ -637,8 +642,11 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         const uint64_t room = destination.size() > kSectionHeaderSize + kChunkDescriptorSize
                                   ? destination.size() - kSectionHeaderSize - kChunkDescriptorSize
                                   : 0;
-        const uint32_t chunkTriangles = uint32_t(std::min<uint64_t>(kChunkTriangles, room / 108));
-        const uint32_t chunkPoints = uint32_t(std::min<uint64_t>(kChunkPoints, room / 12));
+        const bool preview=batchSink && batchSink->Preview();
+        const uint32_t chunkTriangles = preview ? 1 : uint32_t(std::min<uint64_t>(kChunkTriangles, room / 108));
+        const uint32_t chunkPoints = preview ? 3 : uint32_t(std::min<uint64_t>(kChunkPoints, room / 12));
+        const auto previewVertices=PreviewOffsets(vertexElement->count,3);
+        const auto previewFaces=PreviewOffsets(faceElement ? faceElement->count : 0);
         if ((hasFace && !chunkTriangles) || (!hasFace && !chunkPoints))
             return ImportErrorCode::ResourceLimit;
         std::vector<VertexPositionNormalUv0F32> mesh;
@@ -782,8 +790,25 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
             }
             if (&element == faceElement && hasFace && !vertexSeen)
                 return ImportErrorCode::UnsupportedEncoding;
+            if (preview && &element==vertexElement && hasFace && vertexStride) {
+                const uint64_t bytes=element.count*vertexStride;
+                if (cursor>sourceSize || bytes>sourceSize-cursor) return ImportErrorCode::MalformedData;
+                cursor+=bytes; continue;
+            }
             for (uint64_t record = 0; record < element.count; ++record)
             {
+                if (preview && &element==vertexElement && !hasFace && vertexStride) {
+                    const auto next=std::lower_bound(previewVertices.begin(),previewVertices.end(),record);
+                    if (next==previewVertices.end()) break;
+                    record=*next; cursor=vertexStart+record*vertexStride;
+                }
+                if (preview && &element==faceElement && hasFace) {
+                    if (!previewFaces.empty() && record>previewFaces.back()) break;
+                    if (!std::binary_search(previewFaces.begin(),previewFaces.end(),record)) {
+                        if (auto error=skipRecord(element)) return *error;
+                        continue;
+                    }
+                }
                 if (record % 4096 == 0 && mappedSource && !mappedSource->IsUnchanged())
                     return ImportErrorCode::FileChanged;
                 if (record % 1024 == 0 && batchSink && batchSink->Cancelled())
@@ -793,6 +818,10 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 {
                     if (!vertexStride && record % 256 == 0)
                         checkpoints.push_back(cursor);
+                    if (preview && hasFace) {
+                        if (auto error=skipRecord(element)) return *error;
+                        continue;
+                    }
                     double position[3];
                     VertexPositionNormalUv0F32 vertex{};
                     if (auto error = readVertex(position, vertex))
@@ -907,12 +936,13 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 else if (auto error = skipRecord(element))
                     return *error;
             }
+            if (preview && ((&element==faceElement && hasFace) || (&element==vertexElement && !hasFace))) break;
         }
         if (auto error = flush())
             return *error;
         if (!writer.Count())
             return ImportErrorCode::EmptyGeometry;
-        writer.Finalize();
+        if (!writer.Complete()) return writer.Error();
         return PlyImportResult{writer.Count(), writer.Length()};
     }
     if (vertexElement->count * sizeof(VertexPositionNormalUv0F32) > TierAScratchLimit() / 4)

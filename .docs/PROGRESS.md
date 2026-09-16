@@ -4,6 +4,46 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Scope-limited MVP, Phase 2 / TSK-206 (2026-09-15): complete.**
+  Added deterministic source/spatial sampling, a bounded provisional preview,
+  a complete coarse catalog and stable coarse/full region relationships.
+  Preview covers source/occurrence strata before full normalization; complete
+  sampling protects occupied spatial cells and boundaries while retaining
+  attributes, winding, material/node identity and source ranges. Full scans
+  cross host validation without GPU upload and provide accurate counts/bounds.
+  Worker-owned coarse samples stay bounded; packed GPU buffers enforce a
+  64 MiB reserve including allocation alignment. Preview has independent
+  4,096-primitive / 1 MiB payload / 8 MiB GPU limits. Protocol v5 preserves wire
+  structure sizes and rejects inconsistent roles, regions, provenance, totals,
+  dependencies and terminal coverage. Fine re-decode uses pinned primary and
+  broker-approved sidecar handles and must match validated scan checksums.
+  Replacement handoff waits for the complete usable coarse set's copy fences;
+  earlier cancel/failure preserves the prior document and metadata. Fine draws
+  suppress only their ready coarse parents; fence-safe eviction restores them
+  without gaps or duplicate surfaces. Intermediate LODs/cross-fades remain
+  deferred. [ADR-015](./design/11-decisions-and-risks.md#adr-015-bounded-coarsefull-sampling-and-the-mandatory-coverage-floor)
+  records the explicit density exception: one primitive per nonempty source
+  region when 5% cannot cover all regions, demonstrated by Draw-heavy's 2,048
+  single-triangle instances. The 2-million primitive / 64 MiB hard limits remain.
+  Debug/Release builds and unit suites pass: 82 cases each / 7,291 Debug and
+  7,203 Release assertions. ImportIsolation: 189 cases / 51,433 assertions each.
+  Twelve original/reordered GLB/STL/both-endian PLY mesh/point fixtures pass
+  862 explicit assertions per configuration, including first-publication and
+  complete eight-component coverage. Six 2–4 GiB previews pass 141 assertions:
+  8–64 representative primitives arrive before full normalization in local
+  measurements of 15–1,250 ms. These are single-run broker timings, not reference
+  p95 presentation qualification. Coarse app checks pass in both configurations:
+  cancel/late failure preserve prior content, complete handoff remains refining,
+  fine suppression/eviction preserve counts, reserved allocation is 64–512 KiB,
+  zero D3D12 errors and zero surviving workers. Larger split imports, progressive,
+  textures, recovery and point-required lifecycle checks also pass. Frozen hashes,
+  fixture manifests, commands and limits are in
+  [TSK-206_VERIFICATION.md](./TSK-206_VERIFICATION.md).
+  No dependency/license changes or persistent cache. Live GPU detail admission,
+  automatic eviction/re-requests and pressure/UMA qualification remain TSK-207;
+  full multi-GiB coarse timing and startup/frame/input gates remain unqualified.
+  **TSK-207 is next.**
+
 - **Scope-limited MVP, Phase 2 / TSK-205 (2026-09-15): complete.**
   Replaced product whole-model normalization with bounded glTF primitive,
   binary STL and both-endian PLY mesh/point clusters. Nonlocal PLY vertices use

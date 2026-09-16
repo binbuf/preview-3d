@@ -1,0 +1,24 @@
+
+  Preview3DImportWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Preview3DImportWorker.exe
+  ImportSession.cpp
+  Generating code
+  8 of 6692 functions ( 0.1%) were compiled, the rest were copied from previous compilation.
+    2 functions were new in current compilation
+    12 functions had inline decision re-evaluated but remain unchanged
+  Finished generating code
+  Preview3D.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Preview3D.exe
+  Tests.Unit.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Tests.Unit.exe
+  AttackModes.cpp
+  main.cpp
+  Generating code
+  Previous IPDB and IOBJ mismatch, fall back to full compilation.
+  All 288 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  Finished generating code
+  Preview3DHostileWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Preview3DHostileWorker.exe
+  CoarseProxyTests.cpp
+  Generating code
+  195 of 5864 functions ( 3.3%) were compiled, the rest were copied from previous compilation.
+    0 functions were new in current compilation
+    166 functions had inline decision re-evaluated but remain unchanged
+  Finished generating code
+  Tests.ImportIsolation.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Tests.ImportIsolation.exe

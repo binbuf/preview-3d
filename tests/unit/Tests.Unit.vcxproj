@@ -71,6 +71,7 @@
     <ClCompile Include="HarnessSmokeTests.cpp" />
     <ClCompile Include="FixtureManifestTests.cpp" />
     <ClCompile Include="WireFormatTests.cpp" />
+    <ClCompile Include="CoarseProxyTests.cpp" />
     <ClCompile Include="GraphicsDeviceTests.cpp" />
     <ClCompile Include="CommandQueueTests.cpp" />
     <ClCompile Include="D3D11On12OverlayTests.cpp" />

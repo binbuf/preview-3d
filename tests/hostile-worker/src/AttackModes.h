@@ -17,6 +17,7 @@
 // untouched.
 
 namespace hostile_worker {
+int RunCoarseAttack(int mode);
 
 // Writes a byte-identical honest fixture (reusing
 // import_worker::GenerateSyntheticScene), sends ChunksReadyNotice, then --

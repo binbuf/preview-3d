@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <map>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -26,6 +27,7 @@ namespace import_worker {
 
 class SidecarFileClient {
 public:
+    void EnablePinnedReplay() { pinnedReplay_ = true; }
     SidecarFileClient(HANDLE stdIn, HANDLE stdOut, uint64_t generationId) noexcept
         : stdIn_(stdIn)
         , stdOut_(stdOut)
@@ -50,6 +52,9 @@ public:
     HANDLE stdIn_;
     HANDLE stdOut_;
     uint64_t generationId_;
+    struct Pinned { platform::Win32Handle handle; model_core::FileIdentity identity; };
+    std::map<std::string,Pinned> pinned_;
+    bool pinnedReplay_ = false;
 };
 
 } // namespace import_worker

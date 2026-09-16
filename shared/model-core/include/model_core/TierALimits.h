@@ -12,12 +12,13 @@ constexpr uint32_t kTierAMaterialLimit = 65536;
 constexpr uint32_t kTierAClusterTriangles = 65536;
 constexpr uint32_t kTierAClusterPoints = 524288;
 // One tail per logical occurrence, plus full clusters, all material slots,
-// initial/refined texture identities, and two bounded warning/status records.
+// initial/refined texture identities, bounded preview primitives, and three
+// warning/status/completion records. Scan/coarse/full each retain region IDs.
 constexpr uint32_t kTierAGeometryCatalogLimit =
     kTierAObjectLimit + (kTierATriangleLimit + kTierAClusterTriangles - 1) / kTierAClusterTriangles +
     (kTierAPointLimit + kTierAClusterPoints - 1) / kTierAClusterPoints;
 constexpr uint32_t kTierACatalogLimit =
-    kTierAGeometryCatalogLimit + kTierAMaterialLimit + 2 * 4 * kTierAMaterialLimit + 2;
+    3 * kTierAGeometryCatalogLimit + 4096 + kTierAMaterialLimit + 2 * 4 * kTierAMaterialLimit + 3;
 // Every nonempty section consumes an identity. This remains safe for a test
 // window admitting just one chunk; the production byte window batches many.
 constexpr uint32_t kTierABatchLimit = kTierACatalogLimit;

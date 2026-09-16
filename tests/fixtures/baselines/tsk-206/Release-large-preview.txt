@@ -1,0 +1,10 @@
+Filters: [coarse-large-preview]
+Randomness seeded to: 3356209082
+coarse-large-preview A-large-glb.glb: 64 primitives 6912 bytes first=31ms
+coarse-large-preview A-large-stl.stl: 8 primitives 864 bytes first=16ms
+coarse-large-preview A-large-ply-mesh-le.ply: 8 primitives 864 bytes first=1250ms
+coarse-large-preview A-large-ply-mesh-be.ply: 8 primitives 864 bytes first=1250ms
+coarse-large-preview A-large-ply-points-le.ply: 24 primitives 288 bytes first=16ms
+coarse-large-preview A-large-ply-points-be.ply: 24 primitives 288 bytes first=15ms
+===============================================================================
+All tests passed (141 assertions in 1 test case)

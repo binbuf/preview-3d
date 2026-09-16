@@ -108,6 +108,9 @@ constexpr uint64_t kImportWorkerCommitLimitBytes = 4ull * 1024 * 1024 * 1024;
 constexpr uint32_t kWorkerReplyTimeoutMs = 120'000;
 
 struct ImportSessionRequest {
+    bool enableCoarseProxy = false;
+    // Trusted handle-derived identity, available before preview/coarse handoff.
+    std::function<void(const model_core::FileIdentity&)> onSourceOpened;
     std::wstring workerExePath;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;

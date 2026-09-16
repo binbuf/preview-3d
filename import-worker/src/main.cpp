@@ -89,6 +89,15 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--parse-gltf")) {
         return import_worker::RunGltfImport();
     }
+    if (ArgEquals(argv[1], "--parse-gltf-proxy")) {
+        import_worker::ChunkBatchSink::EnableCoarseProxy(); return import_worker::RunGltfImport();
+    }
+    if (ArgEquals(argv[1], "--parse-stl-proxy")) {
+        import_worker::ChunkBatchSink::EnableCoarseProxy(); return import_worker::RunStlImport();
+    }
+    if (ArgEquals(argv[1], "--parse-ply-proxy")) {
+        import_worker::ChunkBatchSink::EnableCoarseProxy(); return import_worker::RunPlyImport();
+    }
 
     if (ArgEquals(argv[1], "--parse-stl")) {
         return import_worker::RunStlImport();

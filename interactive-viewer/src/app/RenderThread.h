@@ -116,6 +116,7 @@ private:
 class RenderThread
 {
 public:
+    void RequestSmokeEviction() { smokeEviction_.store(true); Invalidate(); }
     // The camera is borrowed, not owned: UI input and the render loop share
     // exactly one camera, and both access it through LockCamera.
     explicit RenderThread(Camera& camera)
@@ -305,6 +306,12 @@ private:
     D3D12ViewerPath::ModelResources stagedScene_;
     std::uint64_t stagedGeneration_ = 0;
     bool stagedHaveBounds_ = false, stagedFailed_ = false;
+    bool stagedProxyMode_ = false, stagedProxyComplete_ = false;
+    bool stagedPreviewOnly_ = false;
+    std::atomic<bool> smokeEviction_{false};
+    std::atomic<uint64_t> coarseChunks_{0}, fineChunks_{0}, suppressedCoarse_{0}, coarseCompleteGeneration_{0}, scannedPrimitives_{0};
+    std::atomic<uint64_t> coarseAllocationBytes_{0};
+    void UpdateResidencySmoke();
 
     mutable std::mutex statsMutex_;
     StatsSnapshot stats_;

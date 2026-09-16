@@ -1,5 +1,6 @@
 #include "model_core/TierALimits.h"
 #include "import_broker/ImportSession.h"
+#include "model_core/VertexLayouts.h"
 
 #include "import_broker/ControlChannelWait.h"
 #include "import_broker/SandboxLauncher.h"
@@ -185,6 +186,14 @@ struct BatchAcceptance {
     bool haveTextureWarning=false, haveStatus=false;
     std::optional<model_core::SceneMetadata> scene;
     std::optional<std::array<double, 3>> origin;
+    struct Region { model_core::ChunkDescriptor scan; bool coarse=false, fine=false; };
+    std::unordered_map<uint32_t,Region> regions;
+    uint64_t coarsePrimitives=0, coarseBytes=0;
+    uint64_t coarseAllocationBytes=0;
+    uint64_t previewPrimitives=0, previewBytes=0;
+    uint64_t previewAllocationBytes=0;
+    uint32_t coarseRegions=0;
+    bool coarseComplete=false;
 
     void Record(const std::vector<ValidatedChunk>& chunks)
     {
@@ -244,6 +253,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     sourceIdentity.sizeBytes = primaryBytes;
     sourceIdentity.lastWriteTime = int64_t((uint64_t(sourceBefore.ftLastWriteTime.dwHighDateTime) << 32) |
                                            sourceBefore.ftLastWriteTime.dwLowDateTime);
+    if (request.onSourceOpened) request.onSourceOpened(sourceIdentity);
     uint64_t allSourceBytes = primaryBytes;
     uint64_t accumulatedBytes = 0;
     std::vector<SourceChunkRange> sourceCatalog;
@@ -284,6 +294,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     std::wstring workerArgs = request.workerArgumentsOverride.empty()
         ? std::wstring(ParseFlagFor(request.format))
         : request.workerArgumentsOverride;
+    if (request.enableCoarseProxy && request.workerArgumentsOverride.empty()) workerArgs += L"-proxy";
     std::wstring cmdLine = L"\"" + request.workerExePath + L"\" " + workerArgs;
 
     HANDLE inherited[] = { controlInRead.get(), controlOutWrite.get(), duplicatedFile->get(), outputSection.get() };
@@ -447,6 +458,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         for (const auto& chunk : validation.chunks)
         {
             const auto& d = chunk.descriptor;
+            if (request.enableCoarseProxy && d.lodLevel != model_core::kScanLod) continue;
             if (d.topology == model_core::ChunkTopology::TriangleList)
                 newTriangles += d.indexCount / 3;
             if (d.topology == model_core::ChunkTopology::PointList)
@@ -506,12 +518,98 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierAObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > 300000000 ||
                      d.sourceRangeLength > 300000000 - uint32_t(d.sourceRangeOffset) ||
-                     d.sourceRangeLength != d.indexCount))
+                     (d.lodLevel != model_core::kCoarseLod && d.sourceRangeLength != d.indexCount)))
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
                 }
-                sourceCatalog.push_back({request.generationId, d});
+                if (!request.enableCoarseProxy || d.lodLevel == model_core::kScanLod)
+                    sourceCatalog.push_back({request.generationId, d});
+            }
+        }
+        uint64_t coarseVertexBatch=0,coarseIndexBatch=0,previewVertexBatch=0,previewIndexBatch=0;
+        bool havePreview=false,haveOtherGeometry=false;
+        for (const auto& chunk:validation.chunks) {
+            const auto& d=chunk.descriptor;
+            if (d.topology!=model_core::ChunkTopology::TriangleList && d.topology!=model_core::ChunkTopology::PointList) continue;
+            if (d.lodLevel==model_core::kPreviewLod) havePreview=true; else haveOtherGeometry=true;
+        }
+        // Provisional preview publications are separate from the validated
+        // scan/coarse/full phases, including their packed GPU allocation budget.
+        if (request.enableCoarseProxy && havePreview && haveOtherGeometry) {
+            failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData); return false;
+        }
+        for (const auto& chunk:validation.chunks) if (chunk.descriptor.lodLevel==model_core::kCoarseLod && request.enableCoarseProxy) {
+            coarseVertexBatch+=uint64_t(chunk.descriptor.vertexCount)*model_core::VertexStrideForLayout(model_core::VertexLayoutId(chunk.descriptor.vertexLayoutId));
+            coarseIndexBatch+=uint64_t(chunk.descriptor.indexCount)*4;
+        }
+        acceptance.coarseAllocationBytes+=(coarseVertexBatch+65535)/65536*65536+(coarseIndexBatch+65535)/65536*65536;
+        for (const auto& chunk:validation.chunks) if (chunk.descriptor.lodLevel==model_core::kPreviewLod && request.enableCoarseProxy) {
+            previewVertexBatch+=uint64_t(chunk.descriptor.vertexCount)*model_core::VertexStrideForLayout(model_core::VertexLayoutId(chunk.descriptor.vertexLayoutId));
+            previewIndexBatch+=uint64_t(chunk.descriptor.indexCount)*4;
+        }
+        acceptance.previewAllocationBytes+=(previewVertexBatch+65535)/65536*65536+(previewIndexBatch+65535)/65536*65536;
+        if (acceptance.previewAllocationBytes>model_core::kPreviewReservedBytes) {
+            failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit); return false;
+        }
+        if (acceptance.coarseAllocationBytes>model_core::kCoarseReservedBytes) {
+            failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit); return false;
+        }
+        for (const auto& chunk:validation.chunks) {
+            const auto& d=chunk.descriptor;
+            const bool geometry=d.topology==model_core::ChunkTopology::TriangleList || d.topology==model_core::ChunkTopology::PointList;
+            if (!request.enableCoarseProxy) {
+                if (d.lodLevel>=model_core::kScanLod || d.topology==model_core::ChunkTopology::CoarseComplete) {
+                    failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData); return false;
+                }
+                continue;
+            }
+            auto invalid=[&] { failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData); return false; };
+            if (geometry) {
+                const uint32_t identity=d.chunkId & 0x0fffffffu;
+                if (!identity) return invalid();
+                if (d.lodLevel==model_core::kPreviewLod) {
+                    if (d.chunkId!=(identity|model_core::kPreviewIdentity) || !acceptance.regions.empty()
+                        || acceptance.coarseComplete || d.dependencyCount) return invalid();
+                    acceptance.previewPrimitives+=d.topology==model_core::ChunkTopology::PointList ? d.vertexCount : d.indexCount/3;
+                    acceptance.previewBytes+=d.byteSize;
+                    if (acceptance.previewPrimitives>model_core::kPreviewPrimitiveLimit || acceptance.previewBytes>model_core::kPreviewByteLimit) return invalid();
+                } else if (d.lodLevel==model_core::kScanLod) {
+                    if (d.chunkId!=(identity|model_core::kScanIdentity) || acceptance.coarseComplete
+                        || !acceptance.regions.emplace(identity,BatchAcceptance::Region{d}).second) return invalid();
+                } else {
+                    auto region=acceptance.regions.find(identity);
+                    if (region==acceptance.regions.end()) return invalid();
+                    const auto& scan=region->second.scan;
+                    if (d.topology!=scan.topology || d.vertexLayoutId!=scan.vertexLayoutId || d.meshId!=scan.meshId
+                        || d.nodeId!=scan.nodeId || d.geometryFlags!=scan.geometryFlags
+                        || d.sourceRangeOffset!=scan.sourceRangeOffset || d.sourceRangeLength!=scan.sourceRangeLength
+                        || std::memcmp(d.origin,scan.origin,sizeof(d.origin))
+                        || std::memcmp(d.dependencyIds,scan.dependencyIds,sizeof(d.dependencyIds))) return invalid();
+                    if (d.lodLevel==model_core::kCoarseLod) {
+                        if (d.chunkId!=(identity|model_core::kCoarseIdentity) || region->second.coarse || acceptance.coarseComplete) return invalid();
+                        for (unsigned axis=0;axis<3;++axis)
+                            if (d.localMin[axis]<scan.localMin[axis] || d.localMax[axis]>scan.localMax[axis]) return invalid();
+                        const uint64_t primitives=d.topology==model_core::ChunkTopology::PointList ? d.vertexCount : d.indexCount/3;
+                        if (!primitives || primitives>(scan.topology==model_core::ChunkTopology::PointList ? scan.vertexCount : scan.indexCount/3)) return invalid();
+                        acceptance.coarsePrimitives+=primitives; acceptance.coarseBytes+=d.byteSize;
+                        if (acceptance.coarsePrimitives>model_core::kCoarsePrimitiveLimit || acceptance.coarseBytes>model_core::kCoarseReservedBytes) return invalid();
+                        region->second.coarse=true; ++acceptance.coarseRegions;
+                    } else {
+                        if (d.chunkId!=identity || !acceptance.coarseComplete || region->second.fine
+                            || d.chunkChecksum!=scan.chunkChecksum || d.indexCount!=scan.indexCount || d.vertexCount!=scan.vertexCount
+                            || std::memcmp(d.localMin,scan.localMin,sizeof(d.localMin))
+                            || std::memcmp(d.localMax,scan.localMax,sizeof(d.localMax))) return invalid();
+                        region->second.fine=true;
+                    }
+                }
+            } else if (d.topology==model_core::ChunkTopology::CoarseComplete) {
+                model_core::CoarseCompletePayload complete; std::memcpy(&complete,chunk.payload.data(),sizeof(complete));
+                if (acceptance.coarseComplete || complete.regions!=acceptance.regions.size() || complete.regions!=acceptance.coarseRegions
+                    || complete.primitives!=acceptance.coarsePrimitives || complete.geometryBytes!=acceptance.coarseBytes
+                    || complete.primitives>model_core::CoarsePrimitiveCap(acceptance.triangles+acceptance.points,acceptance.regions.size())
+                    || !acceptance.unresolved.empty()) return invalid();
+                acceptance.coarseComplete=true;
             }
         }
         acceptance.Record(validation.chunks);
@@ -692,6 +790,11 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     }
     if (!acceptance.unresolved.empty())
         return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+    if (request.enableCoarseProxy) {
+        if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
+        for (const auto& [id,region]:acceptance.regions) if (!region.coarse || !region.fine)
+            return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
+    }
     // No ack for the terminal batch: there is no next write to gate, and the
     // worker is already on its way out.
 

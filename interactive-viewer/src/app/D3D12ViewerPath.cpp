@@ -9,6 +9,7 @@
 #include <iterator>
 #include <utility>
 #include <vector>
+#include <unordered_set>
 
 using Microsoft::WRL::ComPtr;
 
@@ -786,6 +787,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     // signature/PSO bound before their draw calls; state changes are
     // per-draw at this scale, no batching/sorting needed.
     for (const auto& mesh : model.meshes) {
+        if (!mesh.drawEnabled) continue;
         DirectX::XMFLOAT4X4 local;
         DirectX::XMStoreFloat4x4(&local, !chrome.info.showNativeOrientation && sourceUpAxis == model_core::UpAxisId::Y
             ? DirectX::XMMatrixSet(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1) : DirectX::XMMatrixIdentity());
@@ -849,10 +851,10 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
 }
 
 bool D3D12ViewerPath::CreateAndQueueBuffer(const void* data, uint64_t sizeBytes, uint32_t clusterId,
-                                            ComPtr<ID3D12Resource>& outBuffer, std::wstring& error)
+                                           ComPtr<ID3D12Resource>& outBuffer, std::wstring& error, uint64_t destinationOffset)
 {
     HRESULT allocationResult = S_OK;
-    auto destination = CreateBuffer(device.Device(), sizeBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, &allocationResult);
+    auto destination = outBuffer ? outBuffer : CreateBuffer(device.Device(), sizeBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, &allocationResult);
     if (!destination) {
         if (allocationResult == E_OUTOFMEMORY) uploadErrorCode = model_core::ImportErrorCode::OutOfMemory;
         error = L"A GPU buffer could not be created.";
@@ -863,6 +865,7 @@ bool D3D12ViewerPath::CreateAndQueueBuffer(const void* data, uint64_t sizeBytes,
     request.sourceBytes = std::span<const std::byte>(static_cast<const std::byte*>(data),
                                                       static_cast<size_t>(sizeBytes));
     request.destination = destination.Get();
+    request.destinationOffset = destinationOffset;
     request.generation = pendingToken;
     request.clusterId = clusterId;
 
@@ -1050,8 +1053,30 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         return nullptr;
     };
 
+    // Coarse regions share immutable buffers within a bounded publication.
+    // Individual 108-byte samples must not each consume two 64-KiB heaps.
+    uint64_t coarseVertexBytes=0,coarseIndexBytes=0,coarseVertexOffset=0,coarseIndexOffset=0;
+    for (const auto& mesh:importedMeshes) if (mesh.geometry.lodLevel==model_core::kCoarseLod || mesh.geometry.lodLevel==model_core::kPreviewLod) {
+        coarseVertexBytes+=uint64_t(mesh.vertexCount)*model_core::VertexStrideForLayout(mesh.vertexLayoutId);
+        coarseIndexBytes+=uint64_t(mesh.indexCount)*4;
+    }
+    ComPtr<ID3D12Resource> coarseVertices,coarseIndices;
+    HRESULT coarseVertexResult=S_OK,coarseIndexResult=S_OK;
+    if (coarseVertexBytes) coarseVertices=CreateBuffer(device.Device(),coarseVertexBytes,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COMMON,&coarseVertexResult);
+    if (coarseIndexBytes) coarseIndices=CreateBuffer(device.Device(),coarseIndexBytes,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COMMON,&coarseIndexResult);
+    if ((coarseVertexBytes && !coarseVertices) || (coarseIndexBytes && !coarseIndices)) {
+        if (coarseVertexResult==E_OUTOFMEMORY || coarseIndexResult==E_OUTOFMEMORY) uploadErrorCode=model_core::ImportErrorCode::OutOfMemory;
+        error=L"The reserved coarse buffers could not be created.";
+        RetireStagedResources(std::move(staged)); return false;
+    }
+    if (std::any_of(importedMeshes.begin(),importedMeshes.end(),[](const auto& mesh) { return mesh.geometry.lodLevel==model_core::kCoarseLod; })) {
+        for (const auto& buffer:{coarseVertices,coarseIndices}) if (buffer) {
+            const auto desc=buffer->GetDesc(); staged.coarseAllocationBytes+=device.Device()->GetResourceAllocationInfo(0,1,&desc).SizeInBytes;
+        }
+    }
     uint32_t clusterId = 0;
     for (const auto& mesh : importedMeshes) {
+        if (mesh.geometry.lodLevel == model_core::kScanLod) continue;
         const bool points = mesh.topology == model_core::ChunkTopology::PointList
             && mesh.vertexLayoutId == model_core::VertexLayoutId::PositionOnly_F32;
         const bool positionOnly = mesh.vertexLayoutId == model_core::VertexLayoutId::PositionOnly_F32;
@@ -1083,11 +1108,14 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         std::memcpy(gpuMesh.origin, mesh.geometry.origin, sizeof(gpuMesh.origin));
         gpuMesh.textureHeap = staged.srvHeap;
         gpuMesh.textureDescriptorSize = staged.srvDescriptorSize;
+        const bool coarse=mesh.geometry.lodLevel==model_core::kCoarseLod || mesh.geometry.lodLevel==model_core::kPreviewLod;
+        const uint64_t vertexOffset=coarse ? coarseVertexOffset : 0, indexOffset=coarse ? coarseIndexOffset : 0;
+        if (coarse) { gpuMesh.vertexBuffer=coarseVertices; gpuMesh.indexBuffer=coarseIndices; }
         const bool vertexOk
-            = CreateAndQueueBuffer(mesh.payload.data(), vertexBytes, clusterId++, gpuMesh.vertexBuffer, error);
+            = CreateAndQueueBuffer(mesh.payload.data(), vertexBytes, clusterId++, gpuMesh.vertexBuffer, error, vertexOffset);
         const bool indexOk = vertexOk
             && (points || CreateAndQueueBuffer(mesh.payload.data() + vertexBytes, indexBytes, clusterId++,
-                                     gpuMesh.indexBuffer, error));
+                                     gpuMesh.indexBuffer, error, indexOffset));
         if (!vertexOk || !indexOk) {
             staged.meshes.push_back(std::move(gpuMesh));
             RetireStagedResources(std::move(staged));
@@ -1096,13 +1124,14 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         }
         pendingResourceCount += points ? 1 : 2;
 
-        gpuMesh.vbv.BufferLocation = gpuMesh.vertexBuffer->GetGPUVirtualAddress();
+        gpuMesh.vbv.BufferLocation = gpuMesh.vertexBuffer->GetGPUVirtualAddress()+vertexOffset;
         gpuMesh.vbv.SizeInBytes = static_cast<UINT>(vertexBytes);
         gpuMesh.vbv.StrideInBytes = positionOnly ? sizeof(model_core::VertexPositionOnlyF32) : sizeof(model_core::VertexPositionNormalUv0F32);
-        gpuMesh.ibv.BufferLocation = points ? 0 : gpuMesh.indexBuffer->GetGPUVirtualAddress();
+        gpuMesh.ibv.BufferLocation = points ? 0 : gpuMesh.indexBuffer->GetGPUVirtualAddress()+indexOffset;
         gpuMesh.ibv.SizeInBytes = static_cast<UINT>(indexBytes);
         gpuMesh.ibv.Format = DXGI_FORMAT_R32_UINT;
         gpuMesh.indexCount = mesh.indexCount;
+        if (coarse) { coarseVertexOffset+=vertexBytes; coarseIndexOffset+=indexBytes; }
 
         if (const auto* material = findMaterial(mesh.materialChunkId)) {
             gpuMesh.textureIndex = findImageIndex(material->baseColorImageChunkId);
@@ -1183,6 +1212,53 @@ bool D3D12ViewerPath::PollUploads()
     pendingResourceCount = 0;
     hasModel = true;
     return true;
+}
+
+void D3D12ViewerPath::UpdateCoarseVisibility(ModelResources& resources)
+{
+    std::unordered_set<uint32_t> fine;
+    bool preview=false;
+    for (const auto& mesh:resources.meshes)
+        if (mesh.sourceGeometry.lodLevel==model_core::kFineLod) fine.insert(mesh.chunkId);
+        else if (mesh.sourceGeometry.lodLevel==model_core::kPreviewLod) preview=true;
+    for (auto& mesh:resources.meshes)
+        mesh.drawEnabled = !(mesh.sourceGeometry.lodLevel==model_core::kPreviewLod && resources.coarseComplete)
+            && !(mesh.sourceGeometry.lodLevel==model_core::kCoarseLod && preview && !resources.coarseComplete)
+            && !(mesh.sourceGeometry.lodLevel==model_core::kCoarseLod
+            && (mesh.chunkId & model_core::kCoarseIdentity)
+            && fine.contains(mesh.chunkId & ~model_core::kCoarseIdentity));
+}
+
+void D3D12ViewerPath::EvictFineChunks(std::span<const uint32_t> identities)
+{
+    std::unordered_set<uint32_t> requested(identities.begin(),identities.end());
+    std::unordered_set<uint32_t> parents;
+    for (const auto& mesh:model.meshes)
+        if (mesh.sourceGeometry.lodLevel==model_core::kCoarseLod && (mesh.chunkId&model_core::kCoarseIdentity))
+            parents.insert(mesh.chunkId&~model_core::kCoarseIdentity);
+    ModelResources retired;
+    auto end=std::remove_if(model.meshes.begin(),model.meshes.end(),[&](auto& mesh) {
+        if (mesh.sourceGeometry.lodLevel!=model_core::kFineLod || !requested.contains(mesh.chunkId)) return false;
+        // Never evict a region whose always-resident coarse parent is absent.
+        if (!parents.contains(mesh.chunkId)) return false;
+        retired.meshes.push_back(std::move(mesh)); return true;
+    });
+    model.meshes.erase(end,model.meshes.end());
+    uint64_t fence=0; for (const auto& frame:frames) fence=(std::max)(fence,frame.fenceValue);
+    if (!retired.meshes.empty()) retiredModels.push_back({std::move(retired),fence,0});
+    UpdateCoarseVisibility(model);
+}
+
+void D3D12ViewerPath::RetirePreviewChunks(ModelResources& resources)
+{
+    ModelResources retired;
+    auto end=std::remove_if(resources.meshes.begin(),resources.meshes.end(),[&](auto& mesh) {
+        if (mesh.sourceGeometry.lodLevel!=model_core::kPreviewLod) return false;
+        retired.meshes.push_back(std::move(mesh)); return true;
+    });
+    resources.meshes.erase(end,resources.meshes.end());
+    uint64_t fence=0; for (const auto& frame:frames) fence=(std::max)(fence,frame.fenceValue);
+    if (!retired.meshes.empty()) retiredModels.push_back({std::move(retired),fence,0});
 }
 
 void D3D12ViewerPath::ReclaimRetired()
