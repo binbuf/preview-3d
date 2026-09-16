@@ -2,6 +2,7 @@
 <Project>
   <PropertyGroup>
     <PortableTimestampUrl Condition="'$(PortableTimestampUrl)' == ''">https://timestamp.digicert.com</PortableTimestampUrl>
+    <InstallerTimestampUrl Condition="'$(InstallerTimestampUrl)' == ''">https://timestamp.digicert.com</InstallerTimestampUrl>
   </PropertyGroup>
   <!--
     Imported by MSBuild's generated solution metaproject. Keeping this target
@@ -13,6 +14,15 @@
     <MSBuild Projects="$(MSBuildThisFileDirectory)packaging\CreatePortableRelease.proj"
              Targets="CreatePortableRelease"
              Properties="Configuration=$(Configuration);Platform=$(Platform);PortableSigningThumbprint=$(PortableSigningThumbprint);PortableTimestampUrl=$(PortableTimestampUrl)"
+             BuildInParallel="false" />
+  </Target>
+
+  <!-- Additive post-MVP delivery target. It shares the portable target's
+       validated payload closure but emits the NSIS installer exactly once. -->
+  <Target Name="CreateInstaller">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)packaging\CreateInstaller.proj"
+             Targets="CreateInstaller"
+             Properties="Configuration=$(Configuration);Platform=$(Platform);InstallerSigningThumbprint=$(InstallerSigningThumbprint);InstallerTimestampUrl=$(InstallerTimestampUrl);NsisPath=$(NsisPath)"
              BuildInParallel="false" />
   </Target>
 </Project>

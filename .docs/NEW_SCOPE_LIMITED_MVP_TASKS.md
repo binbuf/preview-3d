@@ -1,5 +1,15 @@
 # 3D Preview: Scope-Limited MVP Task Manifest
 
+> Post-MVP delivery amendment (2026-09-16): the product owner requested an
+> NSIS installer and supported-extension default-app integration after the
+> portable MVP was completed. This supersedes only the portable-only/no-file-
+> association delivery statements below. The installed payload remains the
+> same viewer plus general import worker, registers only `.glb`, `.gltf`,
+> `.stl`, and `.ply`, and opens the Windows 11 Default Apps confirmation UI;
+> it does not overwrite a protected per-user default choice. Explorer
+> thumbnails, COM handlers, Tier B formats, compatibility host, persistent
+> model-derived cache, services, and background processes remain excluded.
+>
 > Post-MVP amendment (2026-09-16): after the scope-limited implementation was
 > frozen, the product owner explicitly approved one viewing extension: a
 > persisted title-bar X/Y/Z model ground-axis cycle and signed-direction flip. It is implemented as an
@@ -90,7 +100,7 @@ This is a **viewer-only, scope-limited MVP**, not completion of every requiremen
 | Rendering | Static meshes/instances, source or generated normals, vertex colors, studio lighting, and glTF metallic/roughness, unlit, alpha, double-sided, and texture-transform semantics. PNG/JPEG and existing KTX2/Basis support remain; add WebP as part of the documented glTF subset. |
 | Large models | Representative early geometry, verified bounds, a bounded complete coarse proxy, and view-prioritized fine detail under the live DXGI budget. No whole-source private heap copy or whole-scene normalized payload retained in either process. |
 | Existing UI | Preserve chrome, layout, camera feel, fullscreen, gizmo, Info, Fit/Reset, native orientation, and existing selection behavior. Update format text, real metadata, loading/error/warning states, and accessibility within these surfaces. |
-| Delivery | Portable viewer ZIP, an explicit departure from the original signed per-machine MSI target. No associations, COM registration, installer lifecycle, or Explorer integration is claimed. |
+| Delivery | Portable viewer ZIP plus an additive per-machine NSIS installer. The installer registers Default Apps/Open With capabilities only for the four direct extensions and preserves Windows user choice. No COM registration, thumbnail provider, MSI lifecycle, or other Explorer integration is claimed. |
 | Deferred | Tier B formats, thumbnails, compatibility host, persistent derived cache and warm-cache gates, meshoptimizer **LOD/cluster construction**, intermediate LODs/cross-fades, TGA/DDS/HDR, and indirect submission optimization. Bounded chunk splitting and coarse sampling are still required; meshopt **compressed-data decoding** is included. |
 
 The original responsiveness, parser isolation, handle-based path policy, copy-then-validate acceptance, generation filtering, bounded queues/allocations, and fence-safe publication/retirement requirements still apply. All parsing, normalization, image decode, and compressed-data decode stay inside the zero-capability AppContainer worker. Disk/broker waits, normalization, bounds scans, default-heap allocation, and copy recording/submission stay off the UI thread; upload allocation/submission must also leave the presenting render thread. No product network access or persistent model-derived writes are introduced.

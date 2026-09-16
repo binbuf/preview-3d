@@ -1,0 +1,77 @@
+# Scope-limited NSIS installer verification
+
+Date: 2026-09-16  
+Configuration: Release x64  
+Installer: NSIS 3.11
+
+## Implemented surface
+
+- Per-machine Windows 11 x64 install under `Program Files\Binbuf\3D Preview`.
+- Allowlisted viewer, isolated worker, app-local CRT/dependencies, notices,
+  licenses, SBOM, and per-file manifest. The thumbnail provider,
+  compatibility host, tests, PDBs, and debug runtime are rejected from staging.
+- Stable ProgIDs for glTF (`.glb`, `.gltf`), STL (`.stl`), and PLY (`.ply`).
+- Default Apps capabilities, `RegisteredApplications`, `OpenWithProgids`,
+  `Applications\Preview3D.exe\SupportedTypes`, and App Paths registration.
+- Quoted activation command: `"Preview3D.exe" --open "%1"`.
+- Elevated setup provisions the deterministic import-worker AppContainer SID
+  with inheritable read/execute access on only the private worker directory.
+  Broad inherited application-package grants are removed from that directory;
+  normal-user launches accept the pre-provisioned exact grant without needing
+  `WRITE_DAC` under Program Files.
+- Add/Remove Programs metadata, Start menu shortcuts, association-change
+  notifications, running-viewer checks, and product-owned uninstall cleanup.
+- Best-effort cleanup of the uninstalling user's import-worker AppContainer;
+  preferences and source models are deliberately preserved.
+- Finish-page handoff to the app-specific Windows 11 Default Apps page. Setup
+  never writes or removes a protected per-user `UserChoice` value.
+
+## Commands and results
+
+The supported entry point completed successfully:
+
+```powershell
+msbuild Preview3D.slnx /t:CreateInstaller /p:Configuration=Release /p:Platform=x64
+```
+
+The human-facing script was also run with no arguments from outside the
+repository. It inferred the repository from its own location, found
+Visual Studio/MSBuild and NSIS, rebuilt Release x64, and emitted setup:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\packaging\installer\Create-Installer.ps1
+```
+
+Results:
+
+- Viewer and worker rebuilt successfully.
+- Installer staging completed with 34 files.
+- PE dependency closure validation found and corrected a pre-existing omission:
+  `concrt140.dll` is now staged beside both importing executables.
+- `makensis /WX` completed with no warnings.
+- Output: `artifacts\installer\Preview3D-0.1.0-x64-setup.exe`.
+- Engineering-build SHA-256:
+  `b1ca08168d54571f5fb67c65dd830e0a9f12bec8e7bba20118f4e204e53b6523`.
+- Adjacent `.sha256` verification matched the emitted setup executable.
+- The portable solution target was rerun successfully after sharing the staging
+  change; its stage contains both required `concrt140.dll` copies.
+- The ACL helper was exercised on an isolated directory and left one exact
+  Preview3D package-SID grant with read/execute plus object/container
+  inheritance. Release import-isolation `[sandbox]` tests passed all 34
+  assertions across six cases after rebuilding the changed platform code.
+
+The output is intentionally reported as an unsigned engineering installer
+because no signing thumbprint was supplied. The signing path covers the viewer,
+worker, embedded uninstaller, and final setup executable when
+`/p:InstallerSigningThumbprint=<SHA-1>` is provided.
+
+## Remaining release gates
+
+Run clean Windows 11 x64 VM install/upgrade/uninstall tests as both an
+interactive administrator and a standard user supplying elevation. Confirm all
+four extensions appear on the app-specific Default Apps page, select them,
+open adversarial quoted/Unicode paths, verify worker isolation, and confirm
+uninstall removes product-owned registration without changing unrelated
+defaults. Also verify signed-file trust and hashes when a release certificate is
+available. No clean-VM lifecycle or signed-candidate claim is made by this
+engineering build.

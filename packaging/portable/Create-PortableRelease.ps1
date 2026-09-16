@@ -5,7 +5,10 @@ param(
 
     [string]$CertificateThumbprint = '',
 
-    [string]$TimestampUrl = 'https://timestamp.digicert.com'
+    [string]$TimestampUrl = 'https://timestamp.digicert.com',
+
+    [ValidateSet('Portable', 'Installer')]
+    [string]$Distribution = 'Portable'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,7 +28,7 @@ function Assert-ChildPath([string]$Parent, [string]$Child) {
 
 function Copy-RequiredFile([string]$Source, [string]$Destination) {
     if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
-        throw "Required portable-release input is missing: $Source"
+        throw "Required release input is missing: $Source"
     }
     $destinationDirectory = Split-Path -Parent $Destination
     if (-not (Test-Path -LiteralPath $destinationDirectory -PathType Container)) {
@@ -145,7 +148,8 @@ function Get-Sha256([string]$Path) {
 
 $repository = (Resolve-FullPath $RepositoryRoot).TrimEnd('\')
 $buildOutput = Join-Path $repository 'x64\Release'
-$artifacts = Join-Path $repository 'artifacts\portable'
+$distributionDirectory = $Distribution.ToLowerInvariant()
+$artifacts = Join-Path $repository "artifacts\$distributionDirectory"
 $stage = Join-Path $artifacts 'stage'
 $archive = Join-Path $artifacts 'Preview3D-0.1.0-portable-x64.zip'
 $archiveChecksum = "$archive.sha256"
@@ -159,10 +163,10 @@ if (Test-Path -LiteralPath $stage) {
 }
 New-Item -ItemType Directory -Path $workerStage -Force | Out-Null
 New-Item -ItemType Directory -Path $licensesStage -Force | Out-Null
-if (Test-Path -LiteralPath $archive) {
+if ($Distribution -eq 'Portable' -and (Test-Path -LiteralPath $archive)) {
     Remove-Item -LiteralPath $archive -Force
 }
-if (Test-Path -LiteralPath $archiveChecksum) {
+if ($Distribution -eq 'Portable' -and (Test-Path -LiteralPath $archiveChecksum)) {
     Remove-Item -LiteralPath $archiveChecksum -Force
 }
 
@@ -187,8 +191,8 @@ foreach ($name in $workerFiles) {
 
 $visualStudioRoot = Find-VisualStudioInstallation
 $crtDirectory = Find-CrtDirectory $visualStudioRoot
-$viewerCrt = @('msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
-$workerCrt = @('msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+$viewerCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+$workerCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 foreach ($name in $viewerCrt) {
     Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $stage $name)
 }
@@ -203,8 +207,14 @@ foreach ($name in $thirdParty) {
     Copy-RequiredFile (Join-Path $vcpkgTripletRoot "share\$name\copyright") (Join-Path $licensesStage "$name.txt")
 }
 Copy-RequiredFile (Join-Path $repository 'packaging\portable\THIRD-PARTY-NOTICES.txt') (Join-Path $stage 'THIRD-PARTY-NOTICES.txt')
-Copy-RequiredFile (Join-Path $repository 'packaging\portable\PORTABLE-README.txt') (Join-Path $stage 'README.txt')
-Copy-RequiredFile (Join-Path $repository 'packaging\portable\Remove-Preview3DProfile.ps1') (Join-Path $stage 'Remove-Preview3DProfile.ps1')
+if ($Distribution -eq 'Portable') {
+    Copy-RequiredFile (Join-Path $repository 'packaging\portable\PORTABLE-README.txt') (Join-Path $stage 'README.txt')
+    Copy-RequiredFile (Join-Path $repository 'packaging\portable\Remove-Preview3DProfile.ps1') (Join-Path $stage 'Remove-Preview3DProfile.ps1')
+} else {
+    Copy-RequiredFile (Join-Path $repository 'packaging\installer\INSTALLER-README.txt') (Join-Path $stage 'README.txt')
+    Copy-RequiredFile (Join-Path $repository 'packaging\portable\Remove-Preview3DProfile.ps1') (Join-Path $stage 'Remove-Preview3DProfile.ps1')
+    Copy-RequiredFile (Join-Path $repository 'packaging\installer\Provision-Preview3DWorkerAcl.ps1') (Join-Path $stage 'Provision-Preview3DWorkerAcl.ps1')
+}
 
 $signed = $false
 if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
@@ -218,7 +228,7 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
             Select-Object -First 1 -ExpandProperty FullName
     }
     if ([string]::IsNullOrWhiteSpace($signTool)) {
-        throw 'PortableSigningThumbprint was supplied, but signtool.exe could not be found.'
+        throw 'A signing thumbprint was supplied, but signtool.exe could not be found.'
     }
     foreach ($binary in @((Join-Path $stage 'Preview3D.exe'), (Join-Path $workerStage 'Preview3DImportWorker.exe'))) {
         & $signTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $binary
@@ -228,7 +238,7 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
     }
     $signed = $true
 } else {
-    Write-Warning 'Creating an unsigned engineering archive. TSK-305 release acceptance requires /p:PortableSigningThumbprint=<SHA1>.'
+    Write-Warning "Creating an unsigned engineering $distributionDirectory payload. Release acceptance requires an Authenticode certificate thumbprint."
 }
 
 $dumpbin = Find-Dumpbin $visualStudioRoot
@@ -301,6 +311,7 @@ $sbom = [ordered]@{
         properties = @(
             @{ name = 'preview3d:configuration'; value = 'Release' },
             @{ name = 'preview3d:platform'; value = 'x64' },
+            @{ name = 'preview3d:distribution'; value = $distributionDirectory },
             @{ name = 'preview3d:vcpkg-baseline'; value = $baseline },
             @{ name = 'preview3d:signed'; value = $signed.ToString().ToLowerInvariant() }
         )
@@ -319,7 +330,7 @@ foreach ($forbidden in $forbiddenNames) {
 }
 $debugRuntimePattern = '^(?:msvcp140d(?:_atomic_wait|_codecvt_ids)?|msvcp140_[12]d|vcruntime140d|vcruntime140_1d|concrt140d|ucrtbased)\.dll$'
 if (Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.Name -match $debugRuntimePattern -or $_.Extension -in @('.pdb', '.lib') }) {
-    throw 'A debug runtime, PDB, or import/static library entered the portable stage.'
+    throw 'A debug runtime, PDB, or import/static library entered the release stage.'
 }
 
 $manifestEntries = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
@@ -335,6 +346,7 @@ $manifest = [ordered]@{
     version = '0.1.0'
     configuration = 'Release'
     platform = 'x64'
+    distribution = $distributionDirectory
     signed = $signed
     vcpkg_baseline = $baseline
     generated_utc = (Get-Date).ToUniversalTime().ToString('o')
@@ -343,12 +355,16 @@ $manifest = [ordered]@{
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $stage 'MANIFEST.json') -Encoding UTF8
 
 # MANIFEST.json intentionally cannot hash itself. Every other payload is
-# covered by that manifest, while the archive (including the manifest) is
-# covered by the adjacent SHA-256 file.
-Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
-$archiveHash = Get-Sha256 $archive
-"$archiveHash  $([System.IO.Path]::GetFileName($archive))" | Set-Content -LiteralPath $archiveChecksum -Encoding ASCII
-
-Write-Host "Portable release: $archive"
-Write-Host "SHA-256: $archiveHash"
+# covered by that manifest. Portable output additionally covers the complete
+# archive (including the manifest) with the adjacent SHA-256 file; installer
+# output is finalized and checksummed by Create-Installer.ps1.
+if ($Distribution -eq 'Portable') {
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
+    $archiveHash = Get-Sha256 $archive
+    "$archiveHash  $([System.IO.Path]::GetFileName($archive))" | Set-Content -LiteralPath $archiveChecksum -Encoding ASCII
+    Write-Host "Portable release: $archive"
+    Write-Host "SHA-256: $archiveHash"
+} else {
+    Write-Host "Installer payload: $stage"
+}
 Write-Host "Staged files: $((Get-ChildItem -LiteralPath $stage -File -Recurse).Count)"

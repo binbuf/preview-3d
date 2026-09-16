@@ -1859,7 +1859,7 @@ void HandleCommand(ViewerApp& app, int id)
         MessageBoxW(app.window, app.warning.c_str(), L"Model warnings", MB_OK | MB_ICONWARNING);
         break;
     case IDM_ABOUT:
-        MessageBoxW(app.window, L"A native static viewer for GLB, glTF with local sidecars, binary STL, and binary PLY meshes and points.\n\nImports are bounded and isolated. No cloud, editing, file modification, thumbnails, file associations, or persistent model cache.",
+        MessageBoxW(app.window, L"A native static viewer for GLB, glTF with local sidecars, binary STL, and binary PLY meshes and points.\n\nImports are bounded and isolated. No cloud, editing, file modification, Explorer thumbnails, or persistent model cache.",
             L"About 3D Preview", MB_OK | MB_ICONINFORMATION);
         break;
     case IDM_EXIT: DestroyWindow(app.window); break;

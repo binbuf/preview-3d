@@ -39,7 +39,7 @@ Two rules this list is written to, both from the delivery plan itself:
 | 4 — Tier B breadth | 5 of 5 open | 6 of 6 open | Not started; no dependency pinned |
 | 5 — integrated viewer UX | 10 of 10 open | 5 of 5 open | Not started |
 | 6 — Explorer thumbnails | 6 of 6 open | 6 of 6 open | Stub DLL only |
-| 7 — installer and hardening | 6 of 6 open | 5 of 5 open | Not started; no `installer/` directory |
+| 7 — installer and hardening | 6 of 6 open | 5 of 5 open | Original WiX/MSI gate remains open; additive scope-limited NSIS installer now exists under `packaging/installer/` |
 | 8 — release candidate | 6 of 6 open | 4 of 4 open | Not started |
 
 **Closing a blocker is not closing a gate.** Gate 3's two structural blockers — the 1 MiB output
@@ -393,7 +393,10 @@ malformed/fuzz/parallel/unload soak produces no crash, hang, handle leak or pers
 
 ## Gate 7 — installer and hardening
 
-No `installer/` directory exists.
+A scope-limited NSIS installer now exists under `packaging/installer/` and
+registers only the current Tier A viewer extensions. It does not complete this
+original WiX/MSI gate, thumbnail registration, compatibility-host packaging,
+or the full lifecycle/rollback acceptance matrix below.
 
 - [ ] WiX MSI, stable component identities, capabilities/ProgID/Open With/thumbnail registration.
 - [ ] AppContainer compatibility-host and OpenUSD payload packaging, signing, ACLs, DLL/plug-in

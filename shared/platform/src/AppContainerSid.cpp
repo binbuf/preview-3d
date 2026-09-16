@@ -13,6 +13,42 @@ namespace platform {
 
 namespace {
 
+bool HasInheritedReadExecuteAce(PACL dacl, PSID sid)
+{
+    if (dacl == nullptr || sid == nullptr) {
+        return false;
+    }
+
+    const DWORD requiredFlags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    const DWORD requiredAccess = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+    GENERIC_MAPPING fileMapping{
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS
+    };
+
+    for (DWORD index = 0; index < dacl->AceCount; ++index) {
+        void* rawAce = nullptr;
+        if (!GetAce(dacl, index, &rawAce) || rawAce == nullptr) {
+            continue;
+        }
+        const auto* header = static_cast<const ACE_HEADER*>(rawAce);
+        if (header->AceType != ACCESS_ALLOWED_ACE_TYPE
+            || (header->AceFlags & INHERIT_ONLY_ACE) != 0
+            || (header->AceFlags & requiredFlags) != requiredFlags) {
+            continue;
+        }
+        const auto* allowed = static_cast<const ACCESS_ALLOWED_ACE*>(rawAce);
+        if (!EqualSid(sid, const_cast<DWORD*>(&allowed->SidStart))) {
+            continue;
+        }
+        DWORD accessMask = allowed->Mask;
+        MapGenericMask(&accessMask, &fileMapping);
+        if ((accessMask & requiredAccess) == requiredAccess) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool ApplyDirectoryAce(const std::wstring& directory, PSID sid, ACCESS_MODE mode)
 {
     if (sid == nullptr || directory.empty()) {
@@ -29,6 +65,14 @@ bool ApplyDirectoryAce(const std::wstring& directory, PSID sid, ACCESS_MODE mode
                                &existingDacl, nullptr, &descriptor)
         != ERROR_SUCCESS) {
         return false;
+    }
+
+    // Installed payloads live below Program Files. Setup grants this exact
+    // package SID while elevated; a normal-user first launch must accept that
+    // provisioned ACE rather than require WRITE_DAC on the worker directory.
+    if (mode == GRANT_ACCESS && HasInheritedReadExecuteAce(existingDacl, sid)) {
+        LocalFree(descriptor);
+        return true;
     }
 
     EXPLICIT_ACCESS_W access{};
