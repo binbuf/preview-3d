@@ -73,6 +73,7 @@
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\ContainmentProbes.cpp" />
     <ClCompile Include="src\GenerationWorker.cpp" />
+    <ClCompile Include="src\FbxSpikeWorker.cpp" />
     <ClCompile Include="src\SyntheticSceneGenerator.cpp" />
     <ClCompile Include="src\GltfImportWorker.cpp" />
     <ClCompile Include="src\GltfAdapter.cpp" />
@@ -99,6 +100,7 @@
   <ItemGroup>
     <ClInclude Include="src\ContainmentProbes.h" />
     <ClInclude Include="src\GenerationWorker.h" />
+    <ClInclude Include="src\FbxSpikeWorker.h" />
     <ClInclude Include="src\SyntheticSceneGenerator.h" />
     <ClInclude Include="src\GltfImportWorker.h" />
     <ClInclude Include="src\GltfAdapter.h" />

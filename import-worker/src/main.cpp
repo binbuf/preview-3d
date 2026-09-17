@@ -1,6 +1,7 @@
 #include "ContainmentProbes.h"
 #include "ChunkBatchSink.h"
 #include "GenerationWorker.h"
+#include "FbxSpikeWorker.h"
 #include "GltfImportWorker.h"
 #include "PlyImportWorker.h"
 #include "ObjImportWorker.h"
@@ -125,6 +126,9 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--test-parse-ply-ascii")) return import_worker::RunPlyImport(true);
     if (ArgEquals(argv[1], "--pool")) {
         return import_worker::RunPoolMode();
+    }
+    if (ArgEquals(argv[1], "--fbx-spike-pool")) {
+        return import_worker::RunFbxSpikePoolMode();
     }
 
     if (ArgEquals(argv[1], "--probes")) {

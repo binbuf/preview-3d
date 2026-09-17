@@ -1,6 +1,6 @@
 # FBX-001: capped-memory and cancellation spike
 
-Status: ready  
+Status: complete
 Depends on: none  
 Unblocks: FBX-002 through FBX-008
 
@@ -84,4 +84,3 @@ used by the production adapter.
   cancellation, and forced worker termination.
 - The results document contains an explicit proceed/revise decision. FBX-002
   may start only on a proceed decision.
-
