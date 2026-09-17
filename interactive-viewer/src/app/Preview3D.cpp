@@ -123,6 +123,11 @@ struct ViewerApp
     bool infoPanelCloseButtonPressed = false;
     bool fullscreenButtonHover = false;
     bool fullscreenButtonPressed = false;
+    LightingMode lightingMode = LightingMode::Studio;
+    float directionalLightAngle = 0.875f;
+    int lightingButtonPressed = -1; // 0 Studio, 1 Clay, 2 Directional, 3 Wireframe
+    int lightingButtonHover = -1;
+    bool directionalSliderDragging = false;
     bool isFullscreen = false;
     // Hover-delay tooltip (see ComputeTooltipInfo/UpdateTooltipTracking):
     // tooltipTargetId identifies the hovered button (0 == none) so tracking
@@ -1159,6 +1164,83 @@ RECT InfoButtonRect(const ViewerApp& app)
     return RECT{ margin, centerY - height / 2, margin + width, centerY + height / 2 };
 }
 
+struct LightingToolbarLayout
+{
+    RECT bounds{};
+    RECT studio{};
+    RECT clay{};
+    RECT directional{};
+    RECT wireframe{};
+    RECT directionalTrack{};
+};
+
+// Centered segmented lighting control. It floats within the bottom chrome
+// independently of the left information and right zoom groups, matching the
+// compact transient toolbars used by Windows Photos editing surfaces.
+LightingToolbarLayout ComputeLightingToolbarLayout(const ViewerApp& app)
+{
+    RECT client{};
+    GetClientRect(app.window,&client);
+    const int buttonHeight=Scale(app,30);
+    const int padding=Scale(app,5);
+    const int gap=Scale(app,3);
+    const int studioWidth=Scale(app,70);
+    const int clayWidth=Scale(app,54);
+    const int directionalWidth=Scale(app,92);
+    const int wireWidth=Scale(app,34);
+    const int trackWidth=app.lightingMode==LightingMode::Directional ? Scale(app,94) : 0;
+    const int divider=trackWidth ? Scale(app,9) : 0;
+    const int width=padding*2+studioWidth+clayWidth+directionalWidth+wireWidth+gap*3+trackWidth+divider;
+    const int centerY=client.bottom-app.bottomBarHeight/2;
+    int left=(client.right-width)/2;
+    const int safeLeft=InfoButtonRect(app).right+Scale(app,110);
+    const int safeRight=ZoomTrackRect(app).left-Scale(app,10);
+    if (safeRight-safeLeft>=width) left=std::clamp(left,safeLeft,safeRight-width);
+    LightingToolbarLayout layout;
+    layout.bounds={left,centerY-buttonHeight/2-padding,left+width,centerY+buttonHeight/2+padding};
+    int x=left+padding;
+    layout.studio={x,centerY-buttonHeight/2,x+studioWidth,centerY+buttonHeight/2};x+=studioWidth+gap;
+    layout.clay={x,centerY-buttonHeight/2,x+clayWidth,centerY+buttonHeight/2};x+=clayWidth+gap;
+    layout.directional={x,centerY-buttonHeight/2,x+directionalWidth,centerY+buttonHeight/2};x+=directionalWidth+gap;
+    layout.wireframe={x,centerY-buttonHeight/2,x+wireWidth,centerY+buttonHeight/2};x+=wireWidth;
+    if (trackWidth) {
+        x+=divider;
+        layout.directionalTrack={x,centerY-Scale(app,8),x+trackWidth,centerY+Scale(app,8)};
+    }
+    return layout;
+}
+
+int HitLightingButton(const ViewerApp& app,POINT point)
+{
+    const auto layout=ComputeLightingToolbarLayout(app);
+    if (PtInRect(&layout.studio,point)) return 0;
+    if (PtInRect(&layout.clay,point)) return 1;
+    if (PtInRect(&layout.directional,point)) return 2;
+    if (PtInRect(&layout.wireframe,point)) return 3;
+    return -1;
+}
+
+void SetDirectionalLightFromTrackX(ViewerApp& app,int x)
+{
+    const RECT track=ComputeLightingToolbarLayout(app).directionalTrack;
+    if (track.right<=track.left) return;
+    app.directionalLightAngle=std::clamp(
+        static_cast<float>(x-track.left)/static_cast<float>(track.right-track.left),0.0f,1.0f);
+    app.modeHudText=L"Directional light  "
+        +std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle*360.0f)))+L"°";
+    app.modeHudUntil=NowSeconds()+kHudVisibleSeconds;
+}
+
+void SetLightingMode(ViewerApp& app,LightingMode mode)
+{
+    app.lightingMode=mode;
+    app.modeHudText=mode==LightingMode::Studio ? L"Studio lighting"
+        : mode==LightingMode::Clay ? L"Clay / Solid"
+        : mode==LightingMode::Directional ? L"Directional light" : L"Wireframe";
+    app.modeHudUntil=NowSeconds()+kHudVisibleSeconds;
+    InvalidateRect(app.window,nullptr,FALSE);
+}
+
 // What ComputeTooltipInfo resolves the current hover into: an id (0 == none,
 // otherwise unique per button so UpdateTooltipTracking can tell "still this
 // button" from "moved to a new one"), the button's rect (so the bubble can
@@ -1179,6 +1261,7 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     // never appears over something the user is actively using.
     if (app.chrome.pressed != Chrome::Part::None || app.infoButtonPressed || app.infoPanelCloseButtonPressed ||
         app.fullscreenButtonPressed || app.speedSliderDragging || app.zoomSliderDragging ||
+        app.lightingButtonPressed>=0 || app.directionalSliderDragging ||
         app.speedFlyoutOpen || app.settingsPanelOpen)
     {
         return {};
@@ -1221,6 +1304,14 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     if (app.infoButtonHover) return { 100, InfoButtonRect(app), L"Model information", false };
     if (app.fullscreenButtonHover) return { 101, FullscreenButtonRect(app), L"Fullscreen", false };
     if (app.infoPanelCloseButtonHover) return { 102, InfoPanelCloseButtonRect(app), L"Close information panel", true };
+    if (app.lightingButtonHover>=0) {
+        const auto layout=ComputeLightingToolbarLayout(app);
+        const RECT rects[]={layout.studio,layout.clay,layout.directional,layout.wireframe};
+        static constexpr const wchar_t* labels[]={
+            L"Studio: neutral material lighting",L"Clay: inspect geometry without textures",
+            L"Directional: rotate a sharp inspection light",L"Wireframe: show only mesh edges"};
+        return {110+app.lightingButtonHover,rects[app.lightingButtonHover],labels[app.lightingButtonHover],false};
+    }
     return {};
 }
 
@@ -2057,6 +2148,27 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     case Control::Fullscreen:
         info.name=L"Fullscreen"; info.description=L"Enter or leave fullscreen"; info.rect=FullscreenButtonRect(app);
         info.visible=model; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.isFullscreen; break;
+    case Control::LightingStudio:
+        info.name=L"Studio lighting"; info.description=L"Neutral colorless lighting for evaluating PBR materials";
+        info.rect=ComputeLightingToolbarLayout(app).studio;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
+        info.checked=app.lightingMode==LightingMode::Studio;break;
+    case Control::LightingClay:
+        info.name=L"Clay or solid shading";info.description=L"Matte gray material for inspecting geometry";
+        info.rect=ComputeLightingToolbarLayout(app).clay;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
+        info.checked=app.lightingMode==LightingMode::Clay;break;
+    case Control::LightingDirectional:
+        info.name=L"Directional lighting";info.description=L"Sharp rotatable light for inspecting surface detail";
+        info.rect=ComputeLightingToolbarLayout(app).directional;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
+        info.checked=app.lightingMode==LightingMode::Directional;break;
+    case Control::DirectionalLightAngle:
+        info.name=L"Directional light angle";info.description=L"Rotate the inspection light horizontally";
+        info.rect=ComputeLightingToolbarLayout(app).directionalTrack;
+        info.visible=model&&app.lightingMode==LightingMode::Directional;info.role=ROLE_SYSTEM_SLIDER;
+        info.value=std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle*360.0f)))+L" degrees";break;
+    case Control::Wireframe:
+        info.name=L"Wireframe";info.description=L"Show only mesh edges with all triangle surfaces hidden";
+        info.rect=ComputeLightingToolbarLayout(app).wireframe;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
+        info.checked=app.lightingMode==LightingMode::Wireframe;break;
     case Control::SpeedSlider:
     {
         info.name=L"Travel speed"; info.description=L"Adjust flight speed"; info.rect=SpeedFlyoutTrackRect(app);
@@ -2159,6 +2271,10 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::Info: ToggleInfoPanel(app); break;
     case Control::InfoPanelClose: CloseInfoPanel(app); break;
     case Control::Fullscreen: ToggleFullscreen(app); break;
+    case Control::LightingStudio: SetLightingMode(app,LightingMode::Studio); break;
+    case Control::LightingClay: SetLightingMode(app,LightingMode::Clay); break;
+    case Control::LightingDirectional: SetLightingMode(app,LightingMode::Directional); break;
+    case Control::Wireframe: SetLightingMode(app,LightingMode::Wireframe); break;
     case Control::NativeOrientation: ToggleShowNativeOrientation(app); break;
     case Control::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
     case Control::GizmoPositiveX: SnapViewCommand(app,ViewDir::Right); break;
@@ -2212,6 +2328,11 @@ bool HandleAccessibleKey(ViewerApp& app, WPARAM key)
         InvalidateRect(app.window,nullptr,FALSE); return true;
     }
     if (app.keyboardControl==Control::SpeedSlider) { AdjustFlySpeed(app,static_cast<float>(direction)); return true; }
+    if (app.keyboardControl==Control::DirectionalLightAngle)
+    {
+        app.directionalLightAngle=std::clamp(app.directionalLightAngle+direction/36.0f,0.0f,1.0f);
+        InvalidateRect(app.window,nullptr,FALSE);return true;
+    }
     return false;
 }
 
@@ -2328,8 +2449,25 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.fullscreenButtonRect = FullscreenButtonRect(app);
         overlay.fullscreenButtonHover = app.fullscreenButtonHover;
         overlay.fullscreenButtonPressed = app.fullscreenButtonPressed;
+        const auto lighting=ComputeLightingToolbarLayout(app);
+        overlay.lightingToolbarRect=lighting.bounds;
+        overlay.studioButtonRect=lighting.studio;
+        overlay.clayButtonRect=lighting.clay;
+        overlay.directionalButtonRect=lighting.directional;
+        overlay.wireframeButtonRect=lighting.wireframe;
+        overlay.directionalTrackRect=lighting.directionalTrack;
+        overlay.studioButtonHover=app.lightingButtonHover==0;
+        overlay.clayButtonHover=app.lightingButtonHover==1;
+        overlay.directionalButtonHover=app.lightingButtonHover==2;
+        overlay.wireframeButtonHover=app.lightingButtonHover==3;
+        overlay.studioButtonPressed=app.lightingButtonPressed==0;
+        overlay.clayButtonPressed=app.lightingButtonPressed==1;
+        overlay.directionalButtonPressed=app.lightingButtonPressed==2;
+        overlay.wireframeButtonPressed=app.lightingButtonPressed==3;
     }
     overlay.isFullscreen = app.isFullscreen;
+    overlay.lightingMode=app.lightingMode;
+    overlay.directionalLightAngle=app.directionalLightAngle;
     overlay.hasModel = app.renderThread.HasModel();
     overlay.gridVisible = app.gridVisible;
     overlay.axisSnapEnabled = app.axisSnapEnabled;
@@ -2953,7 +3091,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
             }
-            if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover)
+            if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover
+                || app->lightingButtonHover>=0 || app->directionalSliderDragging)
             {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
@@ -2973,11 +3112,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             app->chrome.hover = Chrome::Part::None;
             InvalidateRect(window, nullptr, FALSE);
         }
-        if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover)
+        if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover || app->lightingButtonHover>=0)
         {
             app->infoButtonHover = false;
             app->infoPanelCloseButtonHover = false;
             app->fullscreenButtonHover = false;
+            app->lightingButtonHover = -1;
             InvalidateRect(window, nullptr, FALSE);
         }
         UpdateTooltipTracking(*app);
@@ -3059,6 +3199,30 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (CanNavigate(*app))
         {
+            const auto lighting=ComputeLightingToolbarLayout(*app);
+            if (app->lightingMode==LightingMode::Directional)
+            {
+                RECT hitTrack=lighting.directionalTrack;
+                InflateRect(&hitTrack,0,Scale(*app,8));
+                if (PtInRect(&hitTrack,downPoint))
+                {
+                    SetCapture(window);
+                    app->directionalSliderDragging=true;
+                    SetDirectionalLightFromTrackX(*app,downPoint.x);
+                    InvalidateRect(window,nullptr,FALSE);
+                    UpdateTooltipTracking(*app);
+                    return 0;
+                }
+            }
+            const int lightingButton=HitLightingButton(*app,downPoint);
+            if (lightingButton>=0)
+            {
+                SetCapture(window);
+                app->lightingButtonPressed=lightingButton;
+                InvalidateRect(window,nullptr,FALSE);
+                UpdateTooltipTracking(*app);
+                return 0;
+            }
             RECT hitTrack = ZoomTrackRect(*app);
             InflateRect(&hitTrack, 0, Scale(*app, 8));
             if (PtInRect(&hitTrack, downPoint))
@@ -3172,6 +3336,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         }
+        if (app->directionalSliderDragging)
+        {
+            if (GetCapture()==window) SetDirectionalLightFromTrackX(*app,movePoint.x);
+            InvalidateRect(window,nullptr,FALSE);
+            return 0;
+        }
         if (app->zoomSliderDragging)
         {
             if (GetCapture() == window) SetZoomFromTrackX(*app, movePoint.x);
@@ -3179,7 +3349,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return 0;
         }
         if (app->chrome.pressed != Chrome::Part::None) return 0;
-        if (app->infoButtonPressed || app->infoPanelCloseButtonPressed || app->fullscreenButtonPressed) return 0;
+        if (app->infoButtonPressed || app->infoPanelCloseButtonPressed || app->fullscreenButtonPressed
+            || app->lightingButtonPressed>=0) return 0;
         if (app->pointerMode == PointerMode::None)
         {
             const RECT panelCloseButton = InfoPanelCloseButtonRect(*app);
@@ -3237,11 +3408,14 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     const RECT fullscreenButton = FullscreenButtonRect(*app);
                     const bool overInfo = PtInRect(&infoButton, movePoint) != FALSE;
                     const bool overFullscreen = PtInRect(&fullscreenButton, movePoint) != FALSE;
-                    if (overInfo != app->infoButtonHover || overFullscreen != app->fullscreenButtonHover)
+                    const int overLighting=HitLightingButton(*app,movePoint);
+                    if (overInfo != app->infoButtonHover || overFullscreen != app->fullscreenButtonHover
+                        || overLighting!=app->lightingButtonHover)
                     {
                         app->infoButtonHover = overInfo;
                         app->fullscreenButtonHover = overFullscreen;
-                        if (overInfo || overFullscreen)
+                        app->lightingButtonHover=overLighting;
+                        if (overInfo || overFullscreen || overLighting>=0)
                         {
                             TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, window, 0 };
                             TrackMouseEvent(&track);
@@ -3249,10 +3423,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                         InvalidateRect(window, nullptr, FALSE);
                     }
                 }
-                else if (app->infoButtonHover || app->fullscreenButtonHover)
+                else if (app->infoButtonHover || app->fullscreenButtonHover || app->lightingButtonHover>=0)
                 {
                     app->infoButtonHover = false;
                     app->fullscreenButtonHover = false;
+                    app->lightingButtonHover=-1;
                     InvalidateRect(window, nullptr, FALSE);
                 }
             }
@@ -3331,6 +3506,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             UpdateTooltipTracking(*app);
             return 0;
         }
+        if (app->directionalSliderDragging)
+        {
+            app->directionalSliderDragging=false;
+            if (GetCapture()==window) ReleaseCapture();
+            UpdateTooltipTracking(*app);
+            return 0;
+        }
         if (app->zoomSliderDragging)
         {
             app->zoomSliderDragging = false;
@@ -3348,6 +3530,22 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (upPoint.y < app->toolbarHeight && app->chrome.HitTest(upPoint) == pressedPart)
             {
                 HandleChromeAction(*app, pressedPart);
+            }
+            UpdateTooltipTracking(*app);
+            return 0;
+        }
+        if (app->lightingButtonPressed>=0)
+        {
+            const POINT upPoint{GET_X_LPARAM(lParam),GET_Y_LPARAM(lParam)};
+            const int pressed=app->lightingButtonPressed;
+            app->lightingButtonPressed=-1;
+            if (GetCapture()==window) ReleaseCapture();
+            if (HitLightingButton(*app,upPoint)==pressed)
+            {
+                if (pressed==0) SetLightingMode(*app,LightingMode::Studio);
+                else if (pressed==1) SetLightingMode(*app,LightingMode::Clay);
+                else if (pressed==2) SetLightingMode(*app,LightingMode::Directional);
+                else SetLightingMode(*app,LightingMode::Wireframe);
             }
             UpdateTooltipTracking(*app);
             return 0;
@@ -3410,6 +3608,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     case WM_CAPTURECHANGED:
     case WM_CANCELMODE:
+        app->directionalSliderDragging=false;
+        app->lightingButtonPressed=-1;
         EndPointer(*app);
         return 0;
     case WM_LBUTTONDBLCLK:

@@ -24,7 +24,9 @@ file registration, persistent caching, intermediate LOD construction, and broade
   the centered file name, and
   Open-With plus the system minimize/maximize/close on the right — the caption buttons stay usable
   even before a model finishes loading
-- a Photos-style bottom bar (shown once a model is loaded) with the Information toggle, a zoom slider
+- a Photos-style bottom bar (shown once a model is loaded) with a centered lighting toolbar: neutral
+  Studio lighting by default, texture-free Clay/Solid inspection, a rotatable sharp Directional light,
+  and a fill-free Wireframe mode; the bar also includes the Information toggle, a zoom slider
   synced to camera distance, and a Fullscreen toggle (also `F11`) that expands the window edge-to-edge
   over its monitor — above the taskbar and with the title bar/bottom bar hidden so the viewport fills
   the whole screen — distinct from Maximize, which snaps to the work area and keeps the taskbar and
@@ -87,6 +89,9 @@ static subset. Explorer thumbnails, including FBX thumbnails, remain a separate 
 | Ground grid | `G` / `Shift+Alt+G` / the title bar's Grid button |
 | Axis-snap truck | The title bar's Snap button |
 | Model information | The bottom bar's Info button (opens the Stats & Shading side panel) |
+| Studio / Clay / Directional lighting | The centered bottom lighting toolbar |
+| Rotate directional light | The angle slider shown in Directional mode |
+| Wireframe | The mesh icon beside the lighting modes; hides all triangle surfaces |
 | Share the open file | The title bar's Share button (Windows Share) |
 | Open the file in another app | The title bar's Open With dropdown |
 | Reset view | `Home` or `R`, or the title bar's Reset button |

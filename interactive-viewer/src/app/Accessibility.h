@@ -51,6 +51,11 @@ enum class Control
     GroundDirection,
     HideCursorWhileDragging,
     InfoPanelClose,
+    LightingStudio,
+    LightingClay,
+    LightingDirectional,
+    DirectionalLightAngle,
+    Wireframe,
     Count,
 };
 

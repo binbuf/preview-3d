@@ -290,7 +290,7 @@ HRESULT UiaChild::GetPropertyValue(PROPERTYID id,VARIANT* value)
     else if(id==UIA_HelpTextPropertyId){value->vt=VT_BSTR;value->bstrVal=SysAllocString(info.description.c_str());}
     else if(id==UIA_ValueValuePropertyId && !info.value.empty()){value->vt=VT_BSTR;value->bstrVal=SysAllocString(info.value.c_str());}
     else if(id==UIA_AutomationIdPropertyId){value->vt=VT_BSTR;const std::wstring idText=L"Preview3D.Control."+std::to_wstring(static_cast<int>(control_));value->bstrVal=SysAllocString(idText.c_str());}
-    else if(id==UIA_ControlTypePropertyId){value->vt=VT_I4;value->lVal=info.role==ROLE_SYSTEM_SLIDER?UIA_SliderControlTypeId:info.role==ROLE_SYSTEM_CHECKBUTTON?UIA_CheckBoxControlTypeId:UIA_ButtonControlTypeId;}
+    else if(id==UIA_ControlTypePropertyId){value->vt=VT_I4;value->lVal=info.role==ROLE_SYSTEM_SLIDER?UIA_SliderControlTypeId:info.role==ROLE_SYSTEM_CHECKBUTTON?UIA_CheckBoxControlTypeId:info.role==ROLE_SYSTEM_RADIOBUTTON?UIA_RadioButtonControlTypeId:UIA_ButtonControlTypeId;}
     else if(id==UIA_IsEnabledPropertyId){value->vt=VT_BOOL;value->boolVal=info.enabled?VARIANT_TRUE:VARIANT_FALSE;}
     else if(id==UIA_IsKeyboardFocusablePropertyId){value->vt=VT_BOOL;value->boolVal=VARIANT_TRUE;}
     else if(id==UIA_HasKeyboardFocusPropertyId){value->vt=VT_BOOL;value->boolVal=info.focused?VARIANT_TRUE:VARIANT_FALSE;}
@@ -339,7 +339,9 @@ std::vector<Control> VisibleControls(const Query& query)
         Control::Grid, Control::GroundAxis, Control::GroundDirection, Control::AxisSnap, Control::Speed,
         Control::Fit, Control::Reset, Control::Share, Control::More,
         Control::OpenWith, Control::Minimize, Control::Maximize, Control::Close,
-        Control::Info, Control::InfoPanelClose, Control::Zoom, Control::Fullscreen, Control::SpeedSlider,
+        Control::Info, Control::InfoPanelClose, Control::LightingStudio, Control::LightingClay,
+        Control::LightingDirectional, Control::DirectionalLightAngle, Control::Wireframe,
+        Control::Zoom, Control::Fullscreen, Control::SpeedSlider,
         Control::NativeOrientation, Control::HideCursorWhileDragging,
         Control::GizmoPositiveX, Control::GizmoNegativeX,
         Control::GizmoPositiveY, Control::GizmoNegativeY,

@@ -75,6 +75,7 @@ cbuffer FrameConstants : register(b0)
     row_major float4x4 gViewProjection;
     float4 gEyeSelection;
     float4 gViewport;
+    float4 gLighting; // mode, directional azimuth, reserved, reserved
 };
 
 cbuffer DrawConstants : register(b1)
@@ -111,7 +112,7 @@ PSInput VSMain(VSInput input)
 )";
 
 constexpr char kPixelShaderSource[] = R"(
-cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; float4 gViewport; };
+cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; float4 gViewport; float4 gLighting; };
 struct PSInput
 {
     float4 position : SV_POSITION;
@@ -123,12 +124,22 @@ struct PSInput
 struct PixelOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
 PixelOutput PSMain(PSInput input)
 {
+    if ((input.pickId&0x80000000u)!=0) {
+        PixelOutput wire;wire.color=float4(.72f,.76f,.82f,1);wire.pick=input.pickId&0x7fffffffu;return wire;
+    }
     float3 n = normalize(input.normal);
-    float3 lightDir = normalize(float3(0.4f, 0.7f, -0.5f));
-    float ndotl = saturate(dot(n, lightDir));
-    float hemi = 0.5f + 0.5f * n.y;
-    float3 albedo = float3(0.72f, 0.72f, 0.76f);
-    float3 color = albedo * (0.25f + 0.5f * hemi + 0.4f * ndotl);
+    float3 albedo = gLighting.x>0.5f && gLighting.x<1.5f
+        ? float3(.58f,.58f,.58f) : float3(0.72f, 0.72f, 0.76f);
+    float3 color;
+    if (gLighting.x > 1.5f) {
+        float3 lightDir=normalize(float3(cos(gLighting.y),sin(gLighting.y),0.24f));
+        color=albedo*(0.035f+1.35f*saturate(dot(n,lightDir)));
+    } else {
+        float key=saturate(dot(n,normalize(float3(.45f,-.55f,.70f))));
+        float fill=saturate(dot(n,normalize(float3(-.70f,.25f,.38f))));
+        float rim=saturate(dot(n,normalize(float3(.18f,.76f,.28f))));
+        color=albedo*(0.22f+0.78f*key+0.34f*fill+0.18f*rim);
+    }
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
@@ -145,6 +156,7 @@ cbuffer FrameConstants : register(b0)
     row_major float4x4 gViewProjection;
     float4 gEyeSelection;
     float4 gViewport;
+    float4 gLighting;
 };
 
 cbuffer DrawConstants : register(b1)
@@ -199,7 +211,7 @@ PSInput VSMain(VSInput input)
 )";
 
 constexpr char kTexturedPixelShaderSource[] = R"(
-cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; float4 gViewport; };
+cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; float4 gViewport; float4 gLighting; };
 Texture2D gBaseColor : register(t0);
 Texture2D gMetallicRoughness : register(t1);
 Texture2D gNormal : register(t2);
@@ -226,34 +238,88 @@ struct PSInput
 };
 
 struct PixelOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
+
+float DistributionGGX(float3 n,float3 h,float roughness)
+{
+    float a=roughness*roughness, a2=a*a;
+    float nh=saturate(dot(n,h));
+    float d=nh*nh*(a2-1.0f)+1.0f;
+    return a2/max(0.001f,3.14159265f*d*d);
+}
+float GeometrySchlickGGX(float nv,float roughness)
+{
+    float r=roughness+1.0f, k=(r*r)/8.0f;
+    return nv/(nv*(1.0f-k)+k);
+}
+float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float roughness,float intensity)
+{
+    float3 h=normalize(v+l);
+    float nl=saturate(dot(n,l)), nv=saturate(dot(n,v));
+    float3 f0=lerp(float3(.04f,.04f,.04f),base,metallic);
+    float3 f=f0+(1.0f-f0)*pow(1.0f-saturate(dot(h,v)),5.0f);
+    float d=DistributionGGX(n,h,roughness);
+    float g=GeometrySchlickGGX(nv,roughness)*GeometrySchlickGGX(nl,roughness);
+    float3 specular=d*g*f/max(0.004f,4.0f*nv*nl);
+    float3 diffuse=(1.0f-f)*(1.0f-metallic)*base/3.14159265f;
+    return (diffuse+specular)*nl*intensity;
+}
+float3 DisplayMap(float3 color)
+{
+    color=color/(color+0.82f);
+    return pow(saturate(color),1.0f/2.2f);
+}
 PixelOutput PSMain(PSInput input)
 {
+    if ((input.pickId&0x80000000u)!=0) {
+        PixelOutput wire;wire.color=float4(.72f,.76f,.82f,1);wire.pick=input.pickId&0x7fffffffu;return wire;
+    }
     uint flags=(uint)gMaterialFactors.w;
     uint maps=(uint)gUvRotationAndMaps.z;
-    float4 base=gBaseColorFactor*input.color;
-    if (maps&1) base*=gBaseColor.Sample(gSampler,input.uv);
+    bool clay=gLighting.x>0.5f && gLighting.x<1.5f;
+    float4 base=clay ? float4(.58f,.58f,.58f,1.0f) : gBaseColorFactor*input.color;
+    if (!clay && (maps&1)) base*=gBaseColor.Sample(gSampler,input.uv);
     if ((flags&4)!=0 && base.a<gMaterialFactors.z) discard;
     float3 n=normalize(input.normal);
-    if (maps&4) {
+    if (!clay && (maps&4)) {
         float3 t=normalize(input.tangent.xyz);
         float3 b=normalize(cross(n,t))*input.tangent.w;
         float3 sampled=gNormal.Sample(gSampler,input.uv).xyz*2-1;
         n=normalize(sampled.x*t+sampled.y*b+sampled.z*n);
     }
-    float3 lightDir = normalize(float3(0.4f, 0.7f, -0.5f));
-    float ndotl = saturate(dot(n, lightDir));
-    float hemi = 0.5f + 0.5f * n.y;
-    float metallic=gMaterialFactors.x, roughness=gMaterialFactors.y;
-    if (maps&2) { float4 mr=gMetallicRoughness.Sample(gSampler,input.uv); metallic*=mr.b; roughness*=mr.g; }
-    float3 emissive=gEmissiveFactor.rgb;
-    if (maps&8) emissive*=gEmissive.Sample(gSampler,input.uv).rgb;
-    float3 color=(flags&2) ? base.rgb : base.rgb*(0.18f+0.45f*hemi+0.45f*ndotl)*(1.0f-0.35f*metallic)
-        + pow(saturate(ndotl),max(2.0f,64.0f*(1.0f-roughness)))*lerp(float3(.04,.04,.04),base.rgb,metallic);
-    color+=emissive;
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
+    float metallic=clay?0.0f:gMaterialFactors.x, roughness=clay?.82f:gMaterialFactors.y;
+    if (!clay && (maps&2)) { float4 mr=gMetallicRoughness.Sample(gSampler,input.uv); metallic*=mr.b; roughness*=mr.g; }
+    roughness=clamp(roughness,.045f,1.0f);
+    float3 color;
+    if (!clay && (flags&2)) {
+        color=base.rgb;
+    } else if (gLighting.x>1.5f) {
+        // A deliberately low, hard key: rotating it is a fast normal-map
+        // and displacement inspection tool rather than a beauty light.
+        float3 lightDir=normalize(float3(cos(gLighting.y),sin(gLighting.y),0.24f));
+        color=EvaluateLight(n,viewDir,lightDir,base.rgb,metallic,roughness,4.2f)
+            + base.rgb*(1.0f-metallic)*.025f;
+    } else {
+        // Neutral high-dynamic-range studio environment. Three broad white
+        // sources and a colorless diffuse/specular floor preserve authored
+        // base color while making metallic and roughness easy to evaluate.
+        color=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb,metallic,roughness,2.45f);
+        color+=EvaluateLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),base.rgb,metallic,roughness,1.15f);
+        color+=EvaluateLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),base.rgb,metallic,roughness,.72f);
+        float3 f0=lerp(float3(.04f,.04f,.04f),base.rgb,metallic);
+        float nv=saturate(dot(n,viewDir));
+        float3 fresnel=f0+(1.0f-f0)*pow(1.0f-nv,5.0f);
+        color+=base.rgb*(1.0f-metallic)*(.13f+.07f*saturate(n.z));
+        color+=fresnel*(.12f+.22f*(1.0f-roughness)*(1.0f-roughness));
+    }
+    if (!clay) {
+        float3 emissive=gEmissiveFactor.rgb;
+        if (maps&8) emissive*=gEmissive.Sample(gSampler,input.uv).rgb;
+        color+=emissive;
+    }
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
-    PixelOutput output; output.color = float4(saturate(color), base.a); output.pick = input.pickId; return output;
+    PixelOutput output; output.color = float4(DisplayMap(color), base.a); output.pick = input.pickId; return output;
 }
 )";
 
@@ -305,20 +371,20 @@ GridOutput PSMain(GridInput input)
 )";
 
 constexpr char kPointVertexShaderSource[] = R"(
-cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;};
+cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;float4 gLighting;};
 cbuffer DrawConstants:register(b1){row_major float4x4 gLocalToCamera;row_major float4x4 gNormalToCamera;uint gPickId;};
 struct V{float3 p:POSITION;}; struct O{float4 p:SV_POSITION;float4 c:COLOR0;nointerpolation uint id:TEXCOORD7;};
 O VSMain(V v){O o;o.p=mul(mul(float4(v.p,1),gLocalToCamera),gViewProjection);o.c=float4(.76,.78,.84,1);o.id=gPickId;return o;}
 )";
 constexpr char kColoredPointVertexShaderSource[] = R"(
-cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;};
+cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;float4 gLighting;};
 cbuffer DrawConstants:register(b1){row_major float4x4 gLocalToCamera;row_major float4x4 gNormalToCamera;uint gPickId;};
 struct V{float3 p:POSITION;float3 n:NORMAL;float2 uv:TEXCOORD0;float4 t:TANGENT;float4 c:COLOR0;};
 struct O{float4 p:SV_POSITION;float4 c:COLOR0;nointerpolation uint id:TEXCOORD7;};
 O VSMain(V v){O o;o.p=mul(mul(float4(v.p,1),gLocalToCamera),gViewProjection);o.c=v.c;o.id=gPickId;return o;}
 )";
 constexpr char kPointGeometryShaderSource[] = R"(
-cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;};
+cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;float4 gLighting;};
 struct I{float4 p:SV_POSITION;float4 c:COLOR0;nointerpolation uint id:TEXCOORD7;}; struct O{float4 p:SV_POSITION;float4 c:COLOR0;float2 q:TEXCOORD0;nointerpolation uint id:TEXCOORD7;};
 [maxvertexcount(4)] void GSMain(point I i[1],inout TriangleStream<O> s){
  float radius=clamp(7.0/sqrt(max(.25,abs(i[0].p.w))),2.0,12.0);float2 clip=2.0*radius/max(gViewport.xy,float2(1,1));
@@ -627,6 +693,16 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
         error = L"The D3D12 pipeline state could not be created.";
         return false;
     }
+    auto wirePsoDesc = psoDesc;
+    wirePsoDesc.PS = { psBlob->GetBufferPointer(), psBlob->GetBufferSize() };
+    wirePsoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    wirePsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    wirePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    wirePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&wirePsoDesc, IID_PPV_ARGS(&wireframePipelineState)))) {
+        error = L"The wireframe overlay pipeline state could not be created.";
+        return false;
+    }
     ComPtr<ID3DBlob> gridVsBlob;
     ComPtr<ID3DBlob> gridPsBlob;
     if (!CompileShader(kGridVertexShaderSource, sizeof(kGridVertexShaderSource) - 1,
@@ -689,6 +765,11 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     psoDesc.InputLayout={inputElements,1};psoDesc.PrimitiveTopologyType=D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&positionOnlyPipelineState)))) {
         error=L"The position-only mesh pipeline could not be created.";return false;
+    }
+    wirePsoDesc.VS={positionOnlyVs->GetBufferPointer(),positionOnlyVs->GetBufferSize()};
+    wirePsoDesc.InputLayout={inputElements,1};
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&wirePsoDesc,IID_PPV_ARGS(&positionOnlyWireframePipelineState)))) {
+        error=L"The position-only wireframe overlay pipeline state could not be created.";return false;
     }
 
     return true;
@@ -804,6 +885,18 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&texturedPipelineState)))) {
         error = L"The textured D3D12 pipeline state could not be created.";
         return false;
+    }
+    auto wirePsoDesc = psoDesc;
+    wirePsoDesc.PS = { psBlob->GetBufferPointer(), psBlob->GetBufferSize() };
+    wirePsoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
+    wirePsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    wirePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    wirePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    const HRESULT wireResult=device.Device()->CreateGraphicsPipelineState(
+        &wirePsoDesc,IID_PPV_ARGS(&texturedWireframePipelineState));
+    if (FAILED(wireResult)) {
+        error=L"The textured wireframe overlay pipeline state could not be created (HRESULT "
+            +std::to_wstring(static_cast<long>(wireResult))+L").";return false;
     }
     psoDesc.RasterizerState.FrontCounterClockwise=TRUE;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedMirroredPipelineState)))) {
@@ -1033,6 +1126,12 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     const DirectX::XMFLOAT4 viewportConstants(float(right),float(bottom-top),0,0);
     std::memcpy(frameConstantBufferMapped + constantBufferOffset + sizeof(viewProjection)+sizeof(eyeSelection),
                 &viewportConstants,sizeof(viewportConstants));
+    const DirectX::XMFLOAT4 lightingConstants(
+        static_cast<float>(chrome.info.lightingMode),
+        chrome.info.directionalLightAngle * DirectX::XM_2PI, 0.0f, 0.0f);
+    std::memcpy(frameConstantBufferMapped + constantBufferOffset + sizeof(viewProjection)
+                    + sizeof(eyeSelection) + sizeof(viewportConstants),
+                &lightingConstants, sizeof(lightingConstants));
     const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
         = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
 
@@ -1114,7 +1213,8 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         if (a->materialChunkId!=b->materialChunkId) return a->materialChunkId<b->materialChunkId;
         return a->chunkId<b->chunkId;
     });
-    for (GpuMesh* meshPtr:draws) {
+    if (chrome.info.lightingMode!=LightingMode::Wireframe) {
+      for (GpuMesh* meshPtr:draws) {
         auto& mesh=*meshPtr;
         DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
             sceneOrigin,cameraTarget,modelTransform);
@@ -1164,6 +1264,57 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         commandList->IASetIndexBuffer(mesh.points ? nullptr : &mesh.ibv);
         if (mesh.points) commandList->DrawInstanced(mesh.vertexCount, 1, 0, 0);
         else commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
+      }
+    }
+
+    // Wireframe is its own fill-free inspection mode. The material pass above
+    // is skipped completely, so textures and triangle surfaces are invisible.
+    if (chrome.info.lightingMode==LightingMode::Wireframe) {
+        for (GpuMesh* meshPtr:draws) {
+            auto& mesh=*meshPtr;
+            if (mesh.points) continue;
+            DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
+                sceneOrigin,cameraTarget,modelTransform);
+            drawConstants.pickId=(mesh.instanceId ? mesh.instanceId : mesh.chunkId)|0x80000000u;
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            if (mesh.completeVertex && mesh.textureHeap) {
+                ID3D12DescriptorHeap* heaps[] = { mesh.textureHeap.Get() };
+                commandList->SetDescriptorHeaps(1, heaps);
+                commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
+                commandList->SetPipelineState(texturedWireframePipelineState.Get());
+                commandList->SetGraphicsRootConstantBufferView(0,constantBufferAddress);
+                uint32_t mapMask=0;
+                for (UINT slot=0;slot<4;++slot) {
+                    D3D12_GPU_DESCRIPTOR_HANDLE handle=mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+                    const int selected=mesh.textureIndices[slot]>=0 ? mesh.textureIndices[slot] : int(mesh.neutralDescriptorBase+slot);
+                    if (mesh.textureIndices[slot]>=0) mapMask|=1u<<slot;
+                    handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
+                    commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
+                }
+                commandList->SetGraphicsRoot32BitConstants(5,33,&drawConstants,0);
+                float material[20]{};
+                std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
+                material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
+                material[6]=mesh.material.alphaCutoff;
+                material[7]=float(((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
+                    | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u));
+                std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
+                material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
+                material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
+                material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
+                material[18]=float(mapMask);
+                commandList->SetGraphicsRoot32BitConstants(6,20,material,0);
+            } else {
+                commandList->SetGraphicsRootSignature(rootSignature.Get());
+                commandList->SetPipelineState(mesh.positionOnly
+                    ? positionOnlyWireframePipelineState.Get() : wireframePipelineState.Get());
+                commandList->SetGraphicsRootConstantBufferView(0,constantBufferAddress);
+                commandList->SetGraphicsRoot32BitConstants(1,33,&drawConstants,0);
+            }
+            commandList->IASetVertexBuffers(0,1,&mesh.vbv);
+            commandList->IASetIndexBuffer(&mesh.ibv);
+            commandList->DrawIndexedInstanced(mesh.indexCount,1,0,0,0);
+        }
     }
 
     const bool picking = !pickInFlight && pickX >= 0 && pickY >= 0

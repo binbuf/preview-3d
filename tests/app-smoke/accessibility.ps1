@@ -65,13 +65,19 @@ try {
 $viewer=Start-Viewer $good
 try {
     $controls=Children $viewer
-    foreach($expected in @('Ground grid','Model ground axis','Ground direction','Axis snap','Travel speed','Fit selection or model','Reset view','Share','More options','Open with','Minimize','Maximize','Close','Model information','Zoom','Fullscreen','View from positive X','View from negative Z')){
+    foreach($expected in @('Ground grid','Model ground axis','Ground direction','Axis snap','Travel speed','Fit selection or model','Reset view','Share','More options','Open with','Minimize','Maximize','Close','Model information','Studio lighting','Clay or solid shading','Directional lighting','Wireframe','Zoom','Fullscreen','View from positive X','View from negative Z')){
         $control=Find-Control $controls $expected
         Assert $control.Current.IsKeyboardFocusable "$expected is not keyboard focusable"
     }
     Assert ((Find-Control $controls 'Ground grid').Current.ControlType -eq [System.Windows.Automation.ControlType]::CheckBox) 'Grid role is not CheckBox'
     Assert ((Find-Control $controls 'Ground direction').Current.ControlType -eq [System.Windows.Automation.ControlType]::CheckBox) 'Ground direction role is not CheckBox'
     Assert ((Find-Control $controls 'Zoom').Current.ControlType -eq [System.Windows.Automation.ControlType]::Slider) 'Zoom role is not Slider'
+    Assert ((Find-Control $controls 'Studio lighting').Current.ControlType -eq [System.Windows.Automation.ControlType]::RadioButton) 'Studio role is not RadioButton'
+    Assert ((Find-Control $controls 'Wireframe').Current.ControlType -eq [System.Windows.Automation.ControlType]::RadioButton) 'Wireframe role is not RadioButton'
+    ([System.Windows.Automation.InvokePattern](Find-Control $controls 'Directional lighting').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    Start-Sleep -Milliseconds 300
+    Assert ((Find-Control (Children $viewer) 'Directional light angle').Current.ControlType -eq [System.Windows.Automation.ControlType]::Slider) 'Directional angle role is not Slider'
+    ([System.Windows.Automation.InvokePattern](Find-Control (Children $viewer) 'Studio lighting').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
     $checks.Add('UIA names, roles, states, and keyboard-focusable custom controls')
 
     $ground=Find-Control $controls 'Model ground axis'

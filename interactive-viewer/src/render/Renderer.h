@@ -31,6 +31,18 @@ enum class ProjectionMode
     Orthographic
 };
 
+// Viewport shading is deliberately independent from the imported material
+// catalog. Studio is the neutral/default material-review environment, Clay
+// removes material distractions, and Directional exposes fine surface detail
+// under a single user-rotatable raking light.
+enum class LightingMode
+{
+    Studio,
+    Clay,
+    Directional,
+    Wireframe
+};
+
 struct OverlayInfo
 {
     ViewerState state = ViewerState::Empty;
@@ -80,6 +92,22 @@ struct OverlayInfo
     bool fullscreenButtonHover = false;
     bool fullscreenButtonPressed = false;
     bool isFullscreen = false;
+    LightingMode lightingMode = LightingMode::Studio;
+    float directionalLightAngle = 0.0f; // normalized 0..1 horizontal rotation
+    RECT lightingToolbarRect{};
+    RECT studioButtonRect{};
+    RECT clayButtonRect{};
+    RECT directionalButtonRect{};
+    RECT wireframeButtonRect{};
+    RECT directionalTrackRect{};
+    bool studioButtonHover = false;
+    bool clayButtonHover = false;
+    bool directionalButtonHover = false;
+    bool wireframeButtonHover = false;
+    bool studioButtonPressed = false;
+    bool clayButtonPressed = false;
+    bool directionalButtonPressed = false;
+    bool wireframeButtonPressed = false;
     bool hasModel = false;
     bool gridVisible = true;
     bool axisSnapEnabled = false;

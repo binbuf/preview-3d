@@ -79,6 +79,8 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> coloredPointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> wireframePipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyWireframePipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> completeVertexPipelineState;
     Microsoft::WRL::ComPtr<ID3D12Resource> pickTarget;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pickRtvHeap;
@@ -98,6 +100,7 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendMirroredPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendDoubleSidedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedWireframePipelineState;
     // kFrameCount slots of 256 bytes (D3D12's CBV alignment), bound at
     // GetGPUVirtualAddress() + frameIndex * kConstantBufferSlotBytes. One
     // shared slot was correct only while every frame stalled to idle first;

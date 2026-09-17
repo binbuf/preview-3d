@@ -30,6 +30,7 @@ enum class OverlayIconKind
     Close,
     FullscreenEnter,
     FullscreenExit,
+    Wireframe,
 };
 
 namespace {
@@ -102,6 +103,20 @@ void DrawIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush, OverlayIco
         target->DrawRectangle(D2D1::RectF(cx - half, cy - half, cx + half, cy + half), brush, stroke);
         target->DrawLine(D2D1::Point2F(cx, cy - half), D2D1::Point2F(cx, cy + half), brush, stroke);
         target->DrawLine(D2D1::Point2F(cx - half, cy), D2D1::Point2F(cx + half, cy), brush, stroke);
+        break;
+    }
+    case OverlayIconKind::Wireframe:
+    {
+        const float half=Scale(7.0f,scale);
+        const D2D1_POINT_2F top{cx,cy-half};
+        const D2D1_POINT_2F left{cx-half,cy+half*0.72f};
+        const D2D1_POINT_2F right{cx+half,cy+half*0.72f};
+        target->DrawLine(top,left,brush,stroke);
+        target->DrawLine(left,right,brush,stroke);
+        target->DrawLine(right,top,brush,stroke);
+        target->DrawLine(top,D2D1::Point2F(cx,cy+half*0.72f),brush,stroke);
+        target->DrawLine(left,D2D1::Point2F(cx+half*0.5f,cy),brush,stroke);
+        target->DrawLine(right,D2D1::Point2F(cx-half*0.5f,cy),brush,stroke);
         break;
     }
     case OverlayIconKind::AxisSnap:
@@ -676,6 +691,46 @@ void D3D11On12Overlay::DrawBottomBar(const OverlayInfo& overlay, float clientWid
         DrawText(overlay.renderDurationText, smallFormat.Get(),
             D2D1::RectF(durationLeft, barTop, durationLeft + Scale(96, scale), clientHeight),
             D2D1::ColorF(0xA1A1A6));
+    }
+
+    if (overlay.lightingToolbarRect.right>overlay.lightingToolbarRect.left
+        && overlay.lightingToolbarRect.bottom>overlay.lightingToolbarRect.top) {
+        const D2D1_RECT_F lightingBounds=ToRectF(overlay.lightingToolbarRect);
+        SetBrush(D2D1::ColorF(0x1C1C1E,overlay.isFullscreen?0.94f:0.82f));
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(lightingBounds,Scale(9,scale),Scale(9,scale)),overlayBrush.Get());
+        SetBrush(D2D1::ColorF(0x48484C));
+        d2dContext_->DrawRoundedRectangle(D2D1::RoundedRect(lightingBounds,Scale(9,scale),Scale(9,scale)),overlayBrush.Get(),1.0f);
+
+    auto drawModeButton=[&](const RECT& rect,const wchar_t* label,bool active,bool hovered,bool pressed) {
+        const D2D1_RECT_F button=ToRectF(rect);
+        D2D1_COLOR_F fill=D2D1::ColorF(0x000000,0.0f);
+        if (active) fill=D2D1::ColorF(0x0A84FF,0.34f);
+        if (hovered) fill=active?D2D1::ColorF(0x0A84FF,0.48f):D2D1::ColorF(0x4A4A4F,0.78f);
+        if (pressed) fill=active?D2D1::ColorF(0x0A84FF,0.62f):D2D1::ColorF(0x5A5A60,0.72f);
+        SetBrush(fill);
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(button,Scale(6,scale),Scale(6,scale)),overlayBrush.Get());
+        DrawText(label,smallFormat.Get(),button,active?D2D1::ColorF(0xFFFFFF):D2D1::ColorF(0xD1D1D6),DWRITE_TEXT_ALIGNMENT_CENTER);
+    };
+    drawModeButton(overlay.studioButtonRect,L"Studio",overlay.lightingMode==LightingMode::Studio,
+        overlay.studioButtonHover,overlay.studioButtonPressed);
+    drawModeButton(overlay.clayButtonRect,L"Clay",overlay.lightingMode==LightingMode::Clay,
+        overlay.clayButtonHover,overlay.clayButtonPressed);
+    drawModeButton(overlay.directionalButtonRect,L"Directional",overlay.lightingMode==LightingMode::Directional,
+        overlay.directionalButtonHover,overlay.directionalButtonPressed);
+    DrawIconButton(overlay.wireframeButtonRect,OverlayIconKind::Wireframe,true,true,
+        overlay.lightingMode==LightingMode::Wireframe,
+        overlay.wireframeButtonHover,overlay.wireframeButtonPressed,scale);
+        if (overlay.lightingMode==LightingMode::Directional) {
+            const D2D1_RECT_F lightTrack=ToRectF(overlay.directionalTrackRect);
+            const float y=(lightTrack.top+lightTrack.bottom)*.5f;
+            SetBrush(D2D1::ColorF(0x57575D));
+            d2dContext_->DrawLine(D2D1::Point2F(lightTrack.left,y),D2D1::Point2F(lightTrack.right,y),overlayBrush.Get(),Scale(3,scale));
+            const float x=lightTrack.left+(lightTrack.right-lightTrack.left)*std::clamp(overlay.directionalLightAngle,0.0f,1.0f);
+            SetBrush(D2D1::ColorF(0xFFD60A));
+            d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x,y),Scale(6,scale),Scale(6,scale)),overlayBrush.Get());
+            SetBrush(D2D1::ColorF(0xFFFFFF));
+            d2dContext_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(x,y),Scale(6,scale),Scale(6,scale)),overlayBrush.Get(),1.0f);
+        }
     }
 
     const std::wstring percentText = std::to_wstring(static_cast<int>(std::lround(overlay.zoomPercent))) + L"%";
