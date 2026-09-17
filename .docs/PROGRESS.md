@@ -4,6 +4,53 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **FBX-004 deterministic static deformation pose (2026-09-17): complete.**
+  The AppContainer FBX adapter now evaluates the first authored animation
+  stack at its authored start, or the default/rest animation at zero, and bakes
+  supported linear, rigid, dual-quaternion, blended DQ/linear, blend-only, and
+  combined skin-plus-blend deformation into the existing static scene/instance
+  contract. `SceneMetadata` records animation-stack, skin-deformer, and bone
+  counts without retaining names or curves. Load and evaluation have separate
+  explicit temp/result allocation limits; caches and external files remain
+  disabled.
+
+  A crucial normalization detail for later FBX work: ufbx 0.23.0 exposes
+  undeformed `skinned_*` attributes as local data (`skinned_is_local=true`) but
+  may expose evaluated deformation in world space. Local data must use
+  `node.geometry_to_node`; world data must be transformed by inverse
+  `node.node_to_world` before it enters the node-local wire geometry, otherwise
+  the retained node transform is applied twice. Normals use the matching
+  inverse transpose. Blend results are already present in `skinned_*` after the
+  one scene evaluation and must not be applied a second time.
+
+  Deformed reuse compares the canonical node-local evaluated output, not mesh
+  pointers or node transforms. The fingerprint includes source mesh identity,
+  topology/attribute decisions and winding, is followed by exact comparison,
+  and charges all scan/comparison work to the Tier-B index limit. This both
+  shares equivalent results and prevents a hostile instance catalog from
+  creating unbounded comparison work. Material bindings remain per instance
+  for FBX-005.
+
+  Cache-deformed/subdivision meshes are omitted rather than rendered at rest;
+  caches, constraints, NURBS/trim objects, subdivision and procedural geometry
+  warn only when independent visible polygons remain, while required-only
+  unsupported geometry fails typed. The existing combined skin/blend fixture
+  also contains cache-deformed meshes, making it a useful regression for the
+  warn-and-omit branch. `nurbs-only-ascii.fbx` covers required failure and has
+  SHA-256 `E62D8758117D22020552B9DD5D27BB93C1D81CFB1EE915C95479B89F972869CB`.
+
+  ufbx still has no evaluation progress callback. Product cancellation checks
+  bracket evaluation and continue through canonical comparison/normalization;
+  cancellation inside evaluation relies on the already-proven 500 ms broker
+  grace and worker replacement. A 1 KiB evaluator-limit seam proves typed
+  `ScratchLimit` and same-worker recovery. Numeric 1e-6 wire goldens cover all
+  supported deformation modes, stack/rest selection, transforms, normals,
+  tangents, bounds, metadata, warnings and deformed sharing in Debug and
+  Release. Focused FBX passes 13 cases / 47,670 assertions; full Unit passes 98
+  cases / 7,609 Debug and 7,521 Release assertions, and full ImportIsolation
+  passes 237 cases / 100,395 assertions in both configurations. FBX remains
+  undiscoverable in viewer/Shell surfaces until FBX-005 and FBX-006.
+
 - **Gate 4 Slice 1 OBJ/MTL product path (2026-09-16): implemented; release
   qualification remains open.** ufbx 0.23.0 is pinned through a repository
   vcpkg overlay and is linked only into the AppContainer import worker. Direct

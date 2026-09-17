@@ -13,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -89,15 +90,18 @@ void GenerateTriangleTangent(VertexPositionNormalUv0TangentColorF32* vertices)
     const float du1 = vertices[1].u - vertices[0].u, dv1 = vertices[1].v - vertices[0].v;
     const float du2 = vertices[2].u - vertices[0].u, dv2 = vertices[2].v - vertices[0].v;
     const float determinant = du1 * dv2 - du2 * dv1;
-    float tangent[3]{1.0f, 0.0f, 0.0f}, handedness = 1.0f;
+    float tangent[3]{}, handedness = 1.0f;
     if (std::abs(determinant) > 1.0e-12f) {
         const float inverse = 1.0f / determinant;
         for (uint32_t axis = 0; axis < 3; ++axis)
             tangent[axis] = (e1[axis] * dv2 - e2[axis] * dv1) * inverse;
         const float length = std::sqrt(tangent[0] * tangent[0] + tangent[1] * tangent[1]
                                        + tangent[2] * tangent[2]);
-        if (length > 1.0e-12f)
+        if (length > 1.0e-12f) {
             for (float& value : tangent) value /= length;
+        } else {
+            tangent[0] = tangent[1] = tangent[2] = 0.0f;
+        }
         const float bitangent[3]{(e2[0] * du1 - e1[0] * du2) * inverse,
                                  (e2[1] * du1 - e1[1] * du2) * inverse,
                                  (e2[2] * du1 - e1[2] * du2) * inverse};
@@ -106,6 +110,22 @@ void GenerateTriangleTangent(VertexPositionNormalUv0TangentColorF32* vertices)
                              vertices[0].nx * tangent[1] - vertices[0].ny * tangent[0]};
         handedness = cross[0] * bitangent[0] + cross[1] * bitangent[1]
             + cross[2] * bitangent[2] < 0.0f ? -1.0f : 1.0f;
+    }
+    if (tangent[0] == 0.0f && tangent[1] == 0.0f && tangent[2] == 0.0f) {
+        const float ax = std::abs(vertices[0].nx), ay = std::abs(vertices[0].ny);
+        const float az = std::abs(vertices[0].nz);
+        const float basis[3]{ax <= ay && ax <= az ? 1.0f : 0.0f,
+                             ay < ax && ay <= az ? 1.0f : 0.0f,
+                             az < ax && az < ay ? 1.0f : 0.0f};
+        tangent[0] = basis[1] * vertices[0].nz - basis[2] * vertices[0].ny;
+        tangent[1] = basis[2] * vertices[0].nx - basis[0] * vertices[0].nz;
+        tangent[2] = basis[0] * vertices[0].ny - basis[1] * vertices[0].nx;
+        const float length = std::sqrt(tangent[0] * tangent[0] + tangent[1] * tangent[1]
+                                       + tangent[2] * tangent[2]);
+        if (length > 1.0e-12f)
+            for (float& value : tangent) value /= length;
+        else
+            tangent[0] = 1.0f;
     }
     for (uint32_t index = 0; index < 3; ++index) {
         vertices[index].tx = tangent[0]; vertices[index].ty = tangent[1];
@@ -134,10 +154,144 @@ bool ValidMatrix(const double matrix[16])
     return Finite(determinant) && std::abs(determinant) >= 1.0e-18;
 }
 
-bool SameMatrix(const ufbx_matrix& left, const ufbx_matrix& right)
+double MatrixDeterminant(const ufbx_matrix& matrix);
+
+bool ValidMatrix(const ufbx_matrix& matrix)
 {
-    for (uint32_t index = 0; index < 12; ++index)
-        if (left.v[index] != right.v[index]) return false;
+    for (double value : matrix.v)
+        if (!Finite(value)) return false;
+    const double determinant = MatrixDeterminant(matrix);
+    return Finite(determinant) && std::abs(determinant) >= 1.0e-18;
+}
+
+bool InheritedVisible(const ufbx_node* node)
+{
+    for (const ufbx_node* current = node; current; current = current->parent)
+        if (!current->visible) return false;
+    return true;
+}
+
+bool UnsupportedMeshGeometry(const ufbx_mesh& mesh)
+{
+    return mesh.cache_deformers.count != 0 || mesh.subdivision_preview_levels != 0
+        || mesh.subdivision_render_levels != 0 || mesh.subdivision_evaluated
+        || mesh.from_tessellated_nurbs;
+}
+
+bool PositionTransformToNode(const ufbx_node& node, const ufbx_mesh& mesh,
+                             ufbx_matrix& transform)
+{
+    if (mesh.skinned_is_local) {
+        transform = node.geometry_to_node;
+    } else {
+        if (!ValidMatrix(node.node_to_world)) return false;
+        transform = ufbx_matrix_invert(&node.node_to_world);
+    }
+    return ValidMatrix(transform);
+}
+
+bool EvaluatedPositionNormal(const ufbx_mesh& mesh, const ufbx_matrix& transform,
+                             const ufbx_matrix& normalTransform, uint32_t sourceIndex,
+                             ufbx_vec3& position, ufbx_vec3& normal, bool& normalUsable)
+{
+    if (sourceIndex >= mesh.num_indices || !mesh.skinned_position.exists) return false;
+    position = ufbx_transform_position(
+        &transform, ufbx_get_vertex_vec3(&mesh.skinned_position, sourceIndex));
+    if (!Finite(position.x) || !Finite(position.y) || !Finite(position.z)) return false;
+
+    normalUsable = false;
+    if (mesh.skinned_normal.exists) {
+        normal = ufbx_transform_direction(
+            &normalTransform, ufbx_get_vertex_vec3(&mesh.skinned_normal, sourceIndex));
+        const double length = std::sqrt(normal.x * normal.x + normal.y * normal.y
+                                        + normal.z * normal.z);
+        normalUsable = Finite(normal.x) && Finite(normal.y) && Finite(normal.z)
+            && Finite(length) && length > 1.0e-20;
+    }
+    return true;
+}
+
+void HashValue(uint64_t& hash, uint64_t value)
+{
+    for (uint32_t shift = 0; shift < 64; shift += 8) {
+        hash ^= static_cast<uint8_t>(value >> shift);
+        hash *= 1099511628211ull;
+    }
+}
+
+void HashDouble(uint64_t& hash, double value)
+{
+    if (value == 0.0) value = 0.0; // canonicalize negative zero
+    uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    HashValue(hash, bits);
+}
+
+std::optional<uint64_t> EvaluatedGeometryHash(const ufbx_node& node,
+                                              const FbxImportOptions& options)
+{
+    const ufbx_mesh& mesh = *node.mesh;
+    ufbx_matrix transform{};
+    if (!PositionTransformToNode(node, mesh, transform)) return std::nullopt;
+    const ufbx_matrix normalTransform = ufbx_matrix_for_normals(&transform);
+    if (!ValidMatrix(normalTransform)) return std::nullopt;
+    uint64_t hash = 1469598103934665603ull;
+    HashValue(hash, mesh.typed_id);
+    HashValue(hash, mesh.num_indices);
+    HashValue(hash, mesh.reversed_winding ? 1u : 0u);
+    HashValue(hash, mesh.generated_normals ? 1u : 0u);
+    HashValue(hash, mesh.material_parts.count);
+    for (const ufbx_mesh_part& part : mesh.material_parts) {
+        HashValue(hash, part.index);
+        HashValue(hash, part.face_indices.count);
+    }
+    for (uint32_t index = 0; index < mesh.num_indices; ++index) {
+        if ((index & 1023u) == 0 && options.Cancelled()) return std::nullopt;
+        ufbx_vec3 position{}, normal{};
+        bool normalUsable = false;
+        if (!EvaluatedPositionNormal(mesh, transform, normalTransform, index,
+                                     position, normal, normalUsable)) return std::nullopt;
+        HashDouble(hash, position.x); HashDouble(hash, position.y); HashDouble(hash, position.z);
+        HashValue(hash, normalUsable ? 1u : 0u);
+        if (normalUsable) {
+            HashDouble(hash, normal.x); HashDouble(hash, normal.y); HashDouble(hash, normal.z);
+        }
+    }
+    return hash;
+}
+
+bool EquivalentEvaluatedGeometry(const ufbx_node& leftNode, const ufbx_node& rightNode,
+                                 const FbxImportOptions& options)
+{
+    const ufbx_mesh& left = *leftNode.mesh;
+    const ufbx_mesh& right = *rightNode.mesh;
+    if (left.typed_id != right.typed_id || left.num_indices != right.num_indices
+        || left.reversed_winding != right.reversed_winding
+        || left.generated_normals != right.generated_normals
+        || left.material_parts.count != right.material_parts.count) return false;
+    for (size_t index = 0; index < left.material_parts.count; ++index) {
+        if (left.material_parts.data[index].index != right.material_parts.data[index].index
+            || left.material_parts.data[index].face_indices.count
+                != right.material_parts.data[index].face_indices.count) return false;
+    }
+    ufbx_matrix leftTransform{}, rightTransform{};
+    if (!PositionTransformToNode(leftNode, left, leftTransform)
+        || !PositionTransformToNode(rightNode, right, rightTransform)) return false;
+    const ufbx_matrix leftNormal = ufbx_matrix_for_normals(&leftTransform);
+    const ufbx_matrix rightNormal = ufbx_matrix_for_normals(&rightTransform);
+    for (uint32_t index = 0; index < left.num_indices; ++index) {
+        if ((index & 1023u) == 0 && options.Cancelled()) return false;
+        ufbx_vec3 leftPosition{}, leftDirection{}, rightPosition{}, rightDirection{};
+        bool leftUsable = false, rightUsable = false;
+        if (!EvaluatedPositionNormal(left, leftTransform, leftNormal, index,
+                                     leftPosition, leftDirection, leftUsable)
+            || !EvaluatedPositionNormal(right, rightTransform, rightNormal, index,
+                                        rightPosition, rightDirection, rightUsable)) return false;
+        if (std::memcmp(&leftPosition, &rightPosition, sizeof(leftPosition)) != 0
+            || leftUsable != rightUsable
+            || (leftUsable && std::memcmp(&leftDirection, &rightDirection,
+                                          sizeof(leftDirection)) != 0)) return false;
+    }
     return true;
 }
 
@@ -156,7 +310,8 @@ struct GeometryRecord {
 
 struct MeshVariant {
     const ufbx_mesh* mesh = nullptr;
-    ufbx_matrix geometryToNode{};
+    const ufbx_node* representative = nullptr;
+    uint64_t evaluatedHash = 0;
     std::vector<const ufbx_node*> nodes;
     std::vector<GeometryRecord> geometry;
 };
@@ -169,15 +324,12 @@ struct GeometryChunk {
 };
 
 bool AddVertex(GeometryChunk& chunk, const ufbx_mesh& mesh, const ufbx_matrix& transform,
-               const ufbx_matrix& normalTransform, uint32_t sourceIndex)
+               const ufbx_matrix& normalTransform,
+               uint32_t sourceIndex, bool& normalUsable)
 {
-    if (sourceIndex >= mesh.num_indices) return false;
-    const ufbx_vec3 position = ufbx_transform_position(
-        &transform, ufbx_get_vertex_vec3(&mesh.vertex_position, sourceIndex));
-    const ufbx_vec3 normal = ufbx_transform_direction(
-        &normalTransform, ufbx_get_vertex_vec3(&mesh.vertex_normal, sourceIndex));
-    if (!Finite(position.x) || !Finite(position.y) || !Finite(position.z)
-        || !Finite(normal.x) || !Finite(normal.y) || !Finite(normal.z)) return false;
+    ufbx_vec3 position{}, normal{};
+    if (!EvaluatedPositionNormal(mesh, transform, normalTransform, sourceIndex,
+                                 position, normal, normalUsable)) return false;
 
     if (!chunk.hasOrigin) {
         chunk.descriptor.origin[0] = position.x;
@@ -189,9 +341,11 @@ bool AddVertex(GeometryChunk& chunk, const ufbx_mesh& mesh, const ufbx_matrix& t
     if (!ToFloat(position.x - chunk.descriptor.origin[0], vertex.px)
         || !ToFloat(position.y - chunk.descriptor.origin[1], vertex.py)
         || !ToFloat(position.z - chunk.descriptor.origin[2], vertex.pz)) return false;
-    float normalized[3]{};
-    if (!Normalize(normal, normalized)) return false;
-    vertex.nx = normalized[0]; vertex.ny = normalized[1]; vertex.nz = normalized[2];
+    if (normalUsable) {
+        float normalized[3]{};
+        if (!Normalize(normal, normalized)) return false;
+        vertex.nx = normalized[0]; vertex.ny = normalized[1]; vertex.nz = normalized[2];
+    }
     if (mesh.vertex_uv.exists) {
         const ufbx_vec2 uv = ufbx_get_vertex_vec2(&mesh.vertex_uv, sourceIndex);
         if (!ToFloat(uv.x, vertex.u) || !ToFloat(uv.y, vertex.v)) return false;
@@ -241,8 +395,13 @@ bool EmitVariant(BoundedChunkWriter& writer, MeshVariant& variant, uint32_t mesh
                  ImportErrorCode& error)
 {
     const ufbx_mesh& mesh = *variant.mesh;
-    const ufbx_matrix normalTransform = ufbx_matrix_for_normals(&variant.geometryToNode);
-    const double geometryDeterminant = MatrixDeterminant(variant.geometryToNode);
+    const ufbx_node& representative = *variant.representative;
+    ufbx_matrix positionTransform{};
+    if (!PositionTransformToNode(representative, mesh, positionTransform)) {
+        error = ImportErrorCode::MalformedData; return false;
+    }
+    const ufbx_matrix normalTransform = ufbx_matrix_for_normals(&positionTransform);
+    const double geometryDeterminant = MatrixDeterminant(positionTransform);
     if (!Finite(geometryDeterminant) || std::abs(geometryDeterminant) < 1.0e-18) {
         error = ImportErrorCode::MalformedData; return false;
     }
@@ -294,9 +453,33 @@ bool EmitVariant(BoundedChunkWriter& writer, MeshVariant& variant, uint32_t mesh
                                     triangles[triangle * 3 + 2]};
                 if (reverseWinding) std::swap(corners[1], corners[2]);
                 const size_t firstVertex = chunk.vertices.size();
+                bool normalUsable[3]{};
+                uint32_t cornerIndex = 0;
                 for (uint32_t corner : corners) {
-                    if (!AddVertex(chunk, mesh, variant.geometryToNode, normalTransform, corner)) {
+                    if (!AddVertex(chunk, mesh, positionTransform, normalTransform,
+                                   corner, normalUsable[cornerIndex++])) {
                         error = ImportErrorCode::MalformedData; return false;
+                    }
+                }
+                if (!normalUsable[0] || !normalUsable[1] || !normalUsable[2]) {
+                    auto* vertices = chunk.vertices.data() + firstVertex;
+                    const ufbx_vec3 edge1{vertices[1].px - vertices[0].px,
+                                          vertices[1].py - vertices[0].py,
+                                          vertices[1].pz - vertices[0].pz};
+                    const ufbx_vec3 edge2{vertices[2].px - vertices[0].px,
+                                          vertices[2].py - vertices[0].py,
+                                          vertices[2].pz - vertices[0].pz};
+                    const ufbx_vec3 faceNormal{edge1.y * edge2.z - edge1.z * edge2.y,
+                                               edge1.z * edge2.x - edge1.x * edge2.z,
+                                               edge1.x * edge2.y - edge1.y * edge2.x};
+                    float normalized[3]{};
+                    if (!Normalize(faceNormal, normalized)) {
+                        error = ImportErrorCode::MalformedData; return false;
+                    }
+                    for (uint32_t index = 0; index < 3; ++index) {
+                        if (normalUsable[index]) continue;
+                        vertices[index].nx = normalized[0]; vertices[index].ny = normalized[1];
+                        vertices[index].nz = normalized[2];
                     }
                 }
                 GenerateTriangleTangent(chunk.vertices.data() + firstVertex);
@@ -365,13 +548,14 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
     options.no_format_from_content = true;
     options.no_format_from_extension = true;
     options.filename = {"document.fbx", 12};
-    options.ignore_animation = true;
+    options.ignore_animation = false;
     options.ignore_embedded = true;
-    options.evaluate_skinning = false;
+    options.evaluate_skinning = true;
     options.evaluate_caches = false;
     options.load_external_files = false;
     options.ignore_missing_external_files = true;
-    options.skip_skin_vertices = true;
+    options.skip_skin_vertices = false;
+    options.clean_skin_weights = true;
     options.strict = true;
     options.force_single_thread_ascii_parsing = true;
     options.generate_missing_normals = true;
@@ -396,19 +580,22 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
     options.progress_interval_hint = 1u << 20;
 
     ufbx_error loadError{};
-    ScenePtr scene(ufbx_load_memory(sourceBytes.data(), sourceBytes.size(), &options, &loadError));
-    if (!scene) return Fail(MapLoadError(loadError));
+    ScenePtr loadedScene(ufbx_load_memory(sourceBytes.data(), sourceBytes.size(), &options, &loadError));
+    if (!loadedScene) return Fail(MapLoadError(loadError));
     if (importOptions.Cancelled()) return Fail(ImportErrorCode::Cancelled);
-    if (scene->metadata.file_format != UFBX_FILE_FORMAT_FBX)
+    if (loadedScene->metadata.file_format != UFBX_FILE_FORMAT_FBX)
         return Fail(ImportErrorCode::UnsupportedFormat);
-    if (scene->nodes.count > kTierBObjectLimit || scene->meshes.count > kTierBObjectLimit
-        || scene->materials.count > kTierBMaterialLimit)
+    if (loadedScene->nodes.count > kTierBObjectLimit
+        || loadedScene->meshes.count > kTierBObjectLimit
+        || loadedScene->materials.count > kTierBMaterialLimit
+        || loadedScene->anim_stacks.count > kTierBObjectLimit
+        || loadedScene->skin_deformers.count > kTierBObjectLimit
+        || loadedScene->bones.count > kTierBObjectLimit)
         return Fail(ImportErrorCode::ResourceLimit);
-    if (scene->skin_deformers.count || scene->blend_deformers.count)
-        return Fail(ImportErrorCode::UnsupportedRequiredFeature);
 
     uint64_t sourceTriangles = 0, sourceVertices = 0;
-    for (const ufbx_mesh* mesh : scene->meshes) {
+    bool hasSubdivision = false;
+    for (const ufbx_mesh* mesh : loadedScene->meshes) {
         if (!mesh || mesh->num_triangles > kTierBTriangleLimit - sourceTriangles
             || mesh->num_vertices > kTierBVertexLimit - sourceVertices
             || mesh->num_indices > kTierBIndexLimit
@@ -416,21 +603,57 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
             return Fail(ImportErrorCode::ResourceLimit);
         sourceTriangles += mesh->num_triangles;
         sourceVertices += mesh->num_vertices;
+        hasSubdivision |= mesh->subdivision_preview_levels != 0
+            || mesh->subdivision_render_levels != 0 || mesh->subdivision_evaluated
+            || mesh->from_tessellated_nurbs;
     }
-    const bool omittedGeometry = scene->cache_deformers.count || scene->cache_files.count
-        || scene->constraints.count || scene->nurbs_curves.count || scene->nurbs_surfaces.count
-        || scene->procedural_geometries.count;
-    if (!sourceTriangles)
-        return Fail(omittedGeometry ? ImportErrorCode::UnsupportedRequiredFeature
-                                    : ImportErrorCode::EmptyGeometry);
+    const bool hasCaches = loadedScene->cache_deformers.count || loadedScene->cache_files.count;
+    const bool hasNurbs = loadedScene->nurbs_curves.count || loadedScene->nurbs_surfaces.count
+        || loadedScene->nurbs_trim_surfaces.count || loadedScene->nurbs_trim_boundaries.count;
+    const bool hasProcedural = loadedScene->procedural_geometries.count != 0;
+    const bool hasConstraints = loadedScene->constraints.count != 0;
+    const bool omittedGeometry = hasCaches || hasNurbs || hasProcedural || hasSubdivision;
+
+    const ufbx_anim* animation = loadedScene->anim;
+    double evaluationTime = 0.0;
+    if (loadedScene->anim_stacks.count) {
+        const ufbx_anim_stack* first = loadedScene->anim_stacks.data[0];
+        if (!first || !first->anim || !Finite(first->time_begin))
+            return Fail(ImportErrorCode::MalformedData);
+        animation = first->anim;
+        evaluationTime = first->time_begin;
+    }
+    if (!animation) return Fail(ImportErrorCode::MalformedData);
+    if (importOptions.Cancelled()) return Fail(ImportErrorCode::Cancelled);
+    ufbx_evaluate_opts evaluateOptions{};
+    const size_t evaluationAllocatorLimit = importOptions.evaluationAllocatorLimit
+        ? importOptions.evaluationAllocatorLimit : static_cast<size_t>(scratchLimit / 2);
+    evaluateOptions.temp_allocator.memory_limit = evaluationAllocatorLimit;
+    evaluateOptions.result_allocator.memory_limit = evaluationAllocatorLimit;
+    evaluateOptions.temp_allocator.allocation_limit = 1'000'000;
+    evaluateOptions.result_allocator.allocation_limit = 1'000'000;
+    evaluateOptions.evaluate_skinning = true;
+    evaluateOptions.evaluate_caches = false;
+    evaluateOptions.evaluate_flags = 0;
+    evaluateOptions.load_external_files = false;
+    evaluateOptions.open_file_cb.fn = DenyExternalFile;
+    ufbx_error evaluationError{};
+    ScenePtr evaluatedScene(ufbx_evaluate_scene(loadedScene.get(), animation, evaluationTime,
+                                                &evaluateOptions, &evaluationError));
+    if (!evaluatedScene) return Fail(MapLoadError(evaluationError));
+    if (importOptions.Cancelled()) return Fail(ImportErrorCode::Cancelled);
+    const ufbx_scene* scene = evaluatedScene.get();
 
     SceneMetadata metadata{};
     metadata.generationId = generationId;
     metadata.format = SourceFormatId::Fbx;
     metadata.upAxis = UpAxisId::Y;
     metadata.metersPerUnit = 1.0;
-    metadata.meshCount = static_cast<uint32_t>(scene->meshes.count);
-    metadata.nodeCount = static_cast<uint32_t>(scene->nodes.count);
+    metadata.meshCount = static_cast<uint32_t>(loadedScene->meshes.count);
+    metadata.nodeCount = static_cast<uint32_t>(loadedScene->nodes.count);
+    metadata.animationCount = static_cast<uint32_t>(loadedScene->anim_stacks.count);
+    metadata.skinCount = static_cast<uint32_t>(loadedScene->skin_deformers.count);
+    metadata.boneCount = static_cast<uint32_t>(loadedScene->bones.count);
     BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
     if (destination.size() <= kSectionHeaderSize + kChunkDescriptorSize)
         return Fail(ImportErrorCode::ResourceLimit);
@@ -457,18 +680,56 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
 
     std::vector<MeshVariant> variants;
     variants.reserve(scene->nodes.count);
+    bool hasSupportedVisibleGeometry = false;
+    bool omittedVisibleGeometry = false;
+    uint64_t sharingComparisonIndices = 0;
+    auto chargeSharingComparison = [&](size_t count) {
+        if (count > kTierBIndexLimit - sharingComparisonIndices) return false;
+        sharingComparisonIndices += count;
+        return true;
+    };
     for (const ufbx_node* node : scene->nodes) {
+        if (importOptions.Cancelled()) return Fail(ImportErrorCode::Cancelled);
         if (!node || !node->mesh || !node->mesh->num_triangles) continue;
-        auto found = std::find_if(variants.begin(), variants.end(), [&](const MeshVariant& variant) {
-            return variant.mesh == node->mesh && SameMatrix(variant.geometryToNode, node->geometry_to_node);
-        });
+        if (UnsupportedMeshGeometry(*node->mesh)) {
+            omittedVisibleGeometry |= InheritedVisible(node);
+            continue;
+        }
+        hasSupportedVisibleGeometry |= InheritedVisible(node);
+        if (!chargeSharingComparison(node->mesh->num_indices))
+            return Fail(ImportErrorCode::ResourceLimit);
+        const auto evaluatedHash = EvaluatedGeometryHash(*node, importOptions);
+        if (!evaluatedHash)
+            return Fail(importOptions.Cancelled() ? ImportErrorCode::Cancelled
+                                                  : ImportErrorCode::MalformedData);
+        auto found = variants.end();
+        for (auto candidate = variants.begin(); candidate != variants.end(); ++candidate) {
+            if (candidate->evaluatedHash != *evaluatedHash) continue;
+            if (!chargeSharingComparison(node->mesh->num_indices))
+                return Fail(ImportErrorCode::ResourceLimit);
+            const bool equivalent = EquivalentEvaluatedGeometry(
+                *candidate->representative, *node, importOptions);
+            if (importOptions.Cancelled()) return Fail(ImportErrorCode::Cancelled);
+            if (equivalent) { found = candidate; break; }
+        }
         if (found == variants.end()) {
             if (variants.size() >= kTierBObjectLimit) return Fail(ImportErrorCode::ResourceLimit);
-            variants.push_back({node->mesh, node->geometry_to_node});
+            MeshVariant variant{};
+            variant.mesh = node->mesh;
+            variant.representative = node;
+            variant.evaluatedHash = *evaluatedHash;
+            variants.push_back(std::move(variant));
             found = std::prev(variants.end());
         }
         found->nodes.push_back(node);
     }
+    if (omittedGeometry && !hasSupportedVisibleGeometry)
+        return Fail(ImportErrorCode::UnsupportedRequiredFeature);
+    if (omittedVisibleGeometry && !hasSupportedVisibleGeometry)
+        return Fail(ImportErrorCode::UnsupportedRequiredFeature);
+    if (!sourceTriangles || variants.empty())
+        return Fail(omittedGeometry ? ImportErrorCode::UnsupportedRequiredFeature
+                                    : ImportErrorCode::EmptyGeometry);
 
     uint64_t normalizedTriangles = 0, normalizedVertices = 0;
     ImportErrorCode emitError = ImportErrorCode::None;
@@ -532,8 +793,10 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
         }
     }
 
+    const size_t featureWarnings = size_t(hasCaches) + size_t(hasNurbs)
+        + size_t(hasProcedural) + size_t(hasSubdivision) + size_t(hasConstraints);
     const uint32_t optionalWarnings = static_cast<uint32_t>((std::min)(
-        size_t(64), scene->metadata.warnings.count + size_t(omittedGeometry ? 1 : 0)));
+        size_t(64), loadedScene->metadata.warnings.count + featureWarnings));
     if (optionalWarnings) {
         ImportStatusPayload status{};
         status.optionalFeatureWarnings = optionalWarnings;

@@ -73,6 +73,8 @@ bool HandleFbxImportFileRequest(HANDLE stdIn, HANDLE stdOut,
     ChunkBatchSink sink(stdIn, stdOut, request.generationId, 0, cancellationEvent.get());
     FbxImportOptions options;
     options.isCancelled = [&sink] { return sink.Cancelled(); };
+    if (request.requestFlags & model_core::kImportRequestFbxTinyEvaluationLimitForTesting)
+        options.evaluationAllocatorLimit = 1024;
     try {
         return ReportOutcome(stdOut, request.generationId,
             ImportFbx(source.Bytes(), output.bytes(), request.generationId,

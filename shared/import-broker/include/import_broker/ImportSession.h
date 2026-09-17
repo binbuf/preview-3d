@@ -193,6 +193,9 @@ struct ImportSessionRequest {
     // explicit attack-mode executable argument remain one-shot so each test
     // keeps its isolated command-line contract.
     bool useWorkerPool = false;
+    // FBX qualification seam: leaves load limits unchanged but constrains both
+    // ufbx evaluation allocators to 1 KiB, proving typed exhaustion/recovery.
+    bool fbxTinyEvaluationLimitForTesting = false;
 };
 
 struct SourceChunkRange

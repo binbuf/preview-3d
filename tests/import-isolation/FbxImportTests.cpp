@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -87,6 +88,42 @@ std::string ReadAsciiFixture(std::string_view name)
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
+void ReplaceOnce(std::string& text, std::string_view needle, std::string_view replacement);
+
+std::string MakeInstancedDualQuaternion(double translationX)
+{
+    std::string ascii = ReadAsciiFixture("dual-quaternion-ascii.fbx");
+    ReplaceOnce(ascii, "Definitions:  {\n\tVersion: 100\n\tCount: 19",
+                       "Definitions:  {\n\tVersion: 100\n\tCount: 20");
+    ReplaceOnce(ascii, "\tObjectType: \"Model\" {\n\t\tCount: 4",
+                       "\tObjectType: \"Model\" {\n\t\tCount: 5");
+    const std::string duplicate =
+        "\tModel: 999000000001, \"Model::pCubeDuplicate\", \"Mesh\" {\n"
+        "\t\tVersion: 232\n"
+        "\t\tProperties70:  {\n"
+        "\t\t\tP: \"RotationActive\", \"bool\", \"\", \"\",1\n"
+        "\t\t\tP: \"InheritType\", \"enum\", \"\", \"\",1\n"
+        "\t\t\tP: \"ScalingMax\", \"Vector3D\", \"Vector\", \"\",0,0,0\n"
+        "\t\t\tP: \"DefaultAttributeIndex\", \"int\", \"Integer\", \"\",0\n"
+        "\t\t\tP: \"Lcl Translation\", \"Lcl Translation\", \"\", \"AL7\","
+        + std::to_string(translationX) + ",0,0\n"
+        "\t\t\tP: \"Lcl Rotation\", \"Lcl Rotation\", \"\", \"AL7\",0,0,0\n"
+        "\t\t\tP: \"Lcl Scaling\", \"Lcl Scaling\", \"\", \"AL7\",1,1,1\n"
+        "\t\t\tP: \"currentUVSet\", \"KString\", \"\", \"U\", \"map1\"\n"
+        "\t\t}\n\t\tShading: T\n\t\tCulling: \"CullingOff\"\n\t}\n";
+    ReplaceOnce(ascii, "\tModel: 2256094537568, \"Model::joint1\", \"LimbNode\" {",
+                       duplicate + "\tModel: 2256094537568, \"Model::joint1\", \"LimbNode\" {");
+    ReplaceOnce(ascii, "\t;Model::joint1, Model::RootNode\n\tC: \"OO\",2256094537568,0",
+        "\t;Model::pCubeDuplicate, Model::RootNode\n"
+        "\tC: \"OO\",999000000001,0\n\n"
+        "\t;Geometry::, Model::pCubeDuplicate\n"
+        "\tC: \"OO\",2259119305632,999000000001\n\n"
+        "\t;Material::lambert1, Model::pCubeDuplicate\n"
+        "\tC: \"OO\",2256094207216,999000000001\n\n"
+        "\t;Model::joint1, Model::RootNode\n\tC: \"OO\",2256094537568,0");
+    return ascii;
+}
+
 void ReplaceOnce(std::string& text, std::string_view needle, std::string_view replacement)
 {
     const size_t offset = text.find(needle);
@@ -115,6 +152,100 @@ uint32_t Count(const import_broker::ImportSessionResult& result, model_core::Chu
         [topology](const import_broker::ValidatedChunk& chunk) {
             return chunk.descriptor.topology == topology;
         }));
+}
+
+void HashUint64(uint64_t& hash, uint64_t value)
+{
+    for (uint32_t shift = 0; shift < 64; shift += 8) {
+        hash ^= static_cast<uint8_t>(value >> shift);
+        hash *= 1099511628211ull;
+    }
+}
+
+void HashNumber(uint64_t& hash, double value)
+{
+    REQUIRE(std::isfinite(value));
+    constexpr double tolerance = 1.0e-6;
+    const double quantized = std::nearbyint(value / tolerance);
+    REQUIRE(quantized >= static_cast<double>((std::numeric_limits<int64_t>::min)()));
+    REQUIRE(quantized <= static_cast<double>((std::numeric_limits<int64_t>::max)()));
+    HashUint64(hash, static_cast<uint64_t>(static_cast<int64_t>(quantized)));
+}
+
+struct WireSnapshot {
+    uint64_t hash = 1469598103934665603ull;
+    uint64_t triangles = 0;
+    uint64_t vertices = 0;
+    uint32_t nodes = 0;
+    uint32_t instances = 0;
+    uint32_t geometryChunks = 0;
+    uint32_t warnings = 0;
+    model_core::SceneMetadata scene{};
+};
+
+WireSnapshot Snapshot(const import_broker::ImportSessionResult& result)
+{
+    REQUIRE(result.ok);
+    REQUIRE_FALSE(result.chunks.empty());
+    WireSnapshot snapshot{};
+    snapshot.scene = result.chunks.front().scene;
+    for (const auto& chunk : result.chunks) {
+        const auto& descriptor = chunk.descriptor;
+        switch (descriptor.topology) {
+        case model_core::ChunkTopology::TriangleList: {
+            ++snapshot.geometryChunks;
+            snapshot.triangles += descriptor.indexCount / 3;
+            snapshot.vertices += descriptor.vertexCount;
+            HashUint64(snapshot.hash, descriptor.meshId);
+            HashUint64(snapshot.hash, descriptor.vertexCount);
+            HashUint64(snapshot.hash, descriptor.indexCount);
+            for (uint32_t axis = 0; axis < 3; ++axis) {
+                HashNumber(snapshot.hash, descriptor.origin[axis] + descriptor.localMin[axis]);
+                HashNumber(snapshot.hash, descriptor.origin[axis] + descriptor.localMax[axis]);
+            }
+            const auto* vertices = reinterpret_cast<
+                const model_core::VertexPositionNormalUv0TangentColorF32*>(chunk.payload.data());
+            for (uint32_t index = 0; index < descriptor.vertexCount; ++index) {
+                HashNumber(snapshot.hash, descriptor.origin[0] + vertices[index].px);
+                HashNumber(snapshot.hash, descriptor.origin[1] + vertices[index].py);
+                HashNumber(snapshot.hash, descriptor.origin[2] + vertices[index].pz);
+                HashNumber(snapshot.hash, vertices[index].nx);
+                HashNumber(snapshot.hash, vertices[index].ny);
+                HashNumber(snapshot.hash, vertices[index].nz);
+                HashNumber(snapshot.hash, vertices[index].tx);
+                HashNumber(snapshot.hash, vertices[index].ty);
+                HashNumber(snapshot.hash, vertices[index].tz);
+                HashNumber(snapshot.hash, vertices[index].tw);
+            }
+            break;
+        }
+        case model_core::ChunkTopology::Node: {
+            ++snapshot.nodes;
+            model_core::NodePayload node{};
+            std::memcpy(&node, chunk.payload.data(), sizeof(node));
+            HashUint64(snapshot.hash, node.flags);
+            for (double value : node.localTransform) HashNumber(snapshot.hash, value);
+            break;
+        }
+        case model_core::ChunkTopology::MeshInstance: {
+            ++snapshot.instances;
+            model_core::MeshInstancePayload instance{};
+            std::memcpy(&instance, chunk.payload.data(), sizeof(instance));
+            HashUint64(snapshot.hash, instance.flags);
+            for (double value : instance.worldMin) HashNumber(snapshot.hash, value);
+            for (double value : instance.worldMax) HashNumber(snapshot.hash, value);
+            break;
+        }
+        case model_core::ChunkTopology::ImportStatus: {
+            model_core::ImportStatusPayload status{};
+            std::memcpy(&status, chunk.payload.data(), sizeof(status));
+            snapshot.warnings += status.optionalFeatureWarnings;
+            break;
+        }
+        default: break;
+        }
+    }
+    return snapshot;
 }
 
 } // namespace
@@ -279,17 +410,129 @@ TEST_CASE("FBX geometry crosses small shared sections in progressive batches", "
     CHECK(Count(result, model_core::ChunkTopology::MeshInstance) > 1);
 }
 
-TEST_CASE("FBX deformation is rejected until the static-pose task", "[fbx][deformation]")
+TEST_CASE("FBX deterministic static pose bakes skin and blend deformation",
+          "[fbx][deformation][golden]")
 {
-    for (const char* fixture : {"linear-skin-binary.fbx.base64", "shape-animation-binary.fbx.base64"}) {
+    struct Golden {
+        const char* fixture;
+        uint64_t hash;
+        uint64_t triangles;
+        uint64_t vertices;
+        uint32_t nodes;
+        uint32_t instances;
+        uint32_t geometryChunks;
+        uint32_t animations;
+        uint32_t skins;
+        uint32_t bones;
+        uint32_t warnings;
+    };
+    const Golden goldens[]{
+        {"linear-skin-binary.fbx.base64", 0x398380dd84bbda31ull,
+            2, 6, 5, 1, 1, 0, 1, 2, 0},
+        {"dual-quaternion-ascii.fbx", 0x8c89d1367ba7bf59ull,
+            84, 252, 5, 1, 1, 1, 1, 3, 0},
+        {"blended-skin-binary.fbx.base64", 0xa60df3590d6b687aull,
+            176, 528, 7, 1, 1, 1, 1, 5, 0},
+        {"shape-animation-binary.fbx.base64", 0xf337a4a546728ecdull,
+            12, 36, 2, 1, 1, 1, 0, 0, 0},
+        {"combined-skin-blend-ascii.fbx", 0x9dad0b2ea1cba400ull,
+            176, 528, 15, 5, 5, 1, 1, 4, 1},
+    };
+    uint64_t generation = 520;
+    for (const auto& golden : goldens) {
         ScratchFbx source;
-        source.Write(ReadFixture(fixture));
-        const auto result = import_broker::RunImportSession(Request(source.path, 504));
-        CAPTURE(fixture, result.stage, result.errorCode);
-        REQUIRE_FALSE(result.ok);
-        CHECK(result.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
-        CHECK(result.errorPhase == model_core::ImportFailurePhase::Geometry);
+        source.Write(ReadFixture(golden.fixture));
+        const auto result = import_broker::RunImportSession(Request(source.path, generation++));
+        CAPTURE(golden.fixture, result.stage, result.errorCode);
+        const WireSnapshot snapshot = Snapshot(result);
+        CAPTURE(snapshot.hash, snapshot.triangles, snapshot.vertices, snapshot.nodes,
+                snapshot.instances, snapshot.geometryChunks, snapshot.scene.animationCount,
+                snapshot.scene.skinCount, snapshot.scene.boneCount, snapshot.warnings);
+        CHECK(snapshot.hash == golden.hash);
+        CHECK(snapshot.triangles == golden.triangles);
+        CHECK(snapshot.vertices == golden.vertices);
+        CHECK(snapshot.nodes == golden.nodes);
+        CHECK(snapshot.instances == golden.instances);
+        CHECK(snapshot.geometryChunks == golden.geometryChunks);
+        CHECK(snapshot.scene.animationCount == golden.animations);
+        CHECK(snapshot.scene.skinCount == golden.skins);
+        CHECK(snapshot.scene.boneCount == golden.bones);
+        CHECK(snapshot.warnings == golden.warnings);
     }
+}
+
+TEST_CASE("FBX first-stack start and rest fallback are deterministic numeric poses",
+          "[fbx][pose][golden]")
+{
+    struct Golden { const char* fixture; uint64_t hash; uint32_t animations; };
+    const Golden goldens[]{
+        {"multiple-stacks-ascii.fbx", 0xcb59db2242f2b906ull, 3},
+        {"cube-binary.fbx.base64", 0x7cc5b538fdd7df79ull, 0},
+    };
+    uint64_t generation = 530;
+    for (const auto& golden : goldens) {
+        ScratchFbx source;
+        source.Write(ReadFixture(golden.fixture));
+        const WireSnapshot first = Snapshot(import_broker::RunImportSession(
+            Request(source.path, generation++)));
+        const WireSnapshot second = Snapshot(import_broker::RunImportSession(
+            Request(source.path, generation++)));
+        CAPTURE(golden.fixture, first.hash, first.scene.animationCount);
+        CHECK(first.hash == golden.hash);
+        CHECK(first.scene.animationCount == golden.animations);
+        CHECK(second.hash == first.hash);
+    }
+}
+
+TEST_CASE("FBX evaluated geometry shares only when deformed results are equivalent",
+          "[fbx][deformation][instances]")
+{
+    struct Case { double translationX; uint32_t geometry; } cases[]{
+        {0.0, 1},
+        {2.0, 2},
+    };
+    uint64_t generation = 540;
+    for (const auto& test : cases) {
+        ScratchFbx source;
+        source.Write(MakeInstancedDualQuaternion(test.translationX));
+        const auto result = import_broker::RunImportSession(Request(source.path, generation++));
+        CAPTURE(test.translationX, result.stage, result.errorCode);
+        REQUIRE(result.ok);
+        CHECK(Count(result, model_core::ChunkTopology::TriangleList) == test.geometry);
+        CHECK(Count(result, model_core::ChunkTopology::MeshInstance) == 2);
+    }
+}
+
+TEST_CASE("FBX required unsupported geometry fails while evaluator exhaustion recovers",
+          "[fbx][deformation][limits][recovery]")
+{
+    ScratchFbx nurbs;
+    nurbs.Write(ReadFixture("nurbs-only-ascii.fbx"));
+    auto result = import_broker::RunImportSession(Request(nurbs.path, 550));
+    REQUIRE_FALSE(result.ok);
+    CHECK(result.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+    CHECK(result.errorPhase == model_core::ImportFailurePhase::Geometry);
+
+    import_broker::PrepareImportWorkerPoolAsync(sandbox_test_support::WorkerExePath());
+    ScratchFbx deformed;
+    deformed.Write(ReadFixture("combined-skin-blend-ascii.fbx"));
+    auto exhausted = Request(deformed.path, 551);
+    exhausted.useWorkerPool = true;
+    exhausted.fbxTinyEvaluationLimitForTesting = true;
+    result = import_broker::RunImportSession(exhausted);
+    REQUIRE_FALSE(result.ok);
+    CHECK(result.errorCode == model_core::ImportErrorCode::ScratchLimit);
+    CHECK(result.errorPhase == model_core::ImportFailurePhase::Geometry);
+    const uint32_t worker = result.workerProcessId;
+
+    ScratchFbx valid;
+    valid.Write(ReadFixture("cube-binary.fbx.base64"));
+    auto recovered = Request(valid.path, 552);
+    recovered.useWorkerPool = true;
+    result = import_broker::RunImportSession(recovered);
+    CAPTURE(result.stage, result.errorCode);
+    REQUIRE(result.ok);
+    CHECK(result.workerProcessId == worker);
 }
 
 TEST_CASE("Malformed and cancelled FBX requests do not poison pooled recovery", "[fbx][recovery][pool]")

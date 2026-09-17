@@ -121,7 +121,9 @@ Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFile
     request.requestFlags = (session.enableCoarseProxy ? model_core::kImportRequestCoarseProxy : 0)
         | (session.nextDetail ? model_core::kImportRequestDetailService : 0)
         | (session.workerArgumentsOverride == L"--parse-gltf-delayed-batches"
-            ? model_core::kImportRequestDelayedBatchesForTesting : 0);
+            ? model_core::kImportRequestDelayedBatchesForTesting : 0)
+        | (session.fbxTinyEvaluationLimitForTesting
+            ? model_core::kImportRequestFbxTinyEvaluationLimitForTesting : 0);
     request.cancellationEventHandleValue = cancellationEventHandle;
     return request;
 }

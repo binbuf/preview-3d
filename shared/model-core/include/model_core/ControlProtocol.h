@@ -54,6 +54,8 @@ enum : uint32_t {
     kImportRequestCoarseProxy = 1u << 0,
     kImportRequestDetailService = 1u << 1,
     kImportRequestDelayedBatchesForTesting = 1u << 2,
+    // Test-only ufbx evaluator fault injection. Product callers never set it.
+    kImportRequestFbxTinyEvaluationLimitForTesting = 1u << 3,
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
