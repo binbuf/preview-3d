@@ -73,6 +73,7 @@
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\ContainmentProbes.cpp" />
     <ClCompile Include="src\GenerationWorker.cpp" />
+    <ClCompile Include="src\FbxSpikeWorker.cpp" />
     <ClCompile Include="src\SyntheticSceneGenerator.cpp" />
     <ClCompile Include="src\GltfImportWorker.cpp" />
     <ClCompile Include="src\GltfAdapter.cpp" />
@@ -90,6 +91,9 @@
     <ClCompile Include="src\PlyAdapter.cpp" />
     <ClCompile Include="src\ObjImportWorker.cpp" />
     <ClCompile Include="src\ObjAdapter.cpp" />
+    <ClCompile Include="src\UfbxMaterialConversion.cpp" />
+    <ClCompile Include="src\FbxImportWorker.cpp" />
+    <ClCompile Include="src\FbxAdapter.cpp" />
     <ClCompile Include="src\AsciiTokenizer.cpp" />
     <ClCompile Include="src\WorkerRequestDispatch.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
@@ -99,6 +103,7 @@
   <ItemGroup>
     <ClInclude Include="src\ContainmentProbes.h" />
     <ClInclude Include="src\GenerationWorker.h" />
+    <ClInclude Include="src\FbxSpikeWorker.h" />
     <ClInclude Include="src\SyntheticSceneGenerator.h" />
     <ClInclude Include="src\GltfImportWorker.h" />
     <ClInclude Include="src\GltfAdapter.h" />
@@ -115,6 +120,9 @@
     <ClInclude Include="src\PlyAdapter.h" />
     <ClInclude Include="src\ObjImportWorker.h" />
     <ClInclude Include="src\ObjAdapter.h" />
+    <ClInclude Include="src\UfbxMaterialConversion.h" />
+    <ClInclude Include="src\FbxImportWorker.h" />
+    <ClInclude Include="src\FbxAdapter.h" />
     <ClInclude Include="src\AsciiTokenizer.h" />
     <ClInclude Include="src\WorkerRequestDispatch.h" />
     <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />

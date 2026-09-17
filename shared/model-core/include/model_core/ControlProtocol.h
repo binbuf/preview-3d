@@ -47,12 +47,17 @@ enum class ControlOpcode : uint32_t {
     ChunkBatchConsumed = 13,      // host -> worker
     RequestDetail = 14,           // host -> worker; one validated source region
     StartObjImportFromFile = 15,  // host -> worker
+    StartFbxImportFromFile = 16,  // host -> worker
 };
 
 enum : uint32_t {
     kImportRequestCoarseProxy = 1u << 0,
     kImportRequestDetailService = 1u << 1,
     kImportRequestDelayedBatchesForTesting = 1u << 2,
+    // Test-only ufbx evaluator fault injection. Product callers never set it.
+    kImportRequestFbxTinyEvaluationLimitForTesting = 1u << 3,
+    // Test-only FBX aggregate decoded-texture limit. Product callers never set it.
+    kImportRequestFbxTinyTextureLimitForTesting = 1u << 4,
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -195,6 +200,21 @@ struct ParseObjFileRequest {
     uint64_t cancellationEventHandleValue;
 };
 static_assert(sizeof(ParseObjFileRequest) == 48, "ParseObjFileRequest layout changed");
+
+// Tier-B FBX request. FBX dependencies are deliberately not brokered at this
+// stage: geometry caches are never evaluated and FBX-005 owns image sidecars.
+// Keep this as a named per-format request even though its fixed layout matches
+// the other real-file requests.
+struct ParseFbxFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue;
+    uint64_t sectionHandleValue;
+    uint64_t sectionByteCapacity;
+    uint32_t maxChunkCount;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
+};
+static_assert(sizeof(ParseFbxFileRequest) == 48, "ParseFbxFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

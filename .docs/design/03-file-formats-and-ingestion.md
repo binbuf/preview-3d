@@ -60,11 +60,11 @@ Normalized output crosses the process boundary only as chunk descriptors over a 
 
 A new protocol version is a breaking change requiring updated fixtures, fuzz corpora, and an explicit compatibility decision — the host never attempts to interpret a section whose version it does not recognize. This wire format, not the shared-memory mechanism by itself, is what lets the host snapshot rule in [02-system-architecture.md](./02-system-architecture.md) be a cheap, bounded, fully-checkable copy rather than an open-ended deserialization of untrusted structure.
 
-The scope-limited viewer uses protocol v9: an 88-byte header, 160-byte chunk
+The viewer uses protocol v10: an 88-byte header, 160-byte chunk
 descriptor, 40-byte scan-summary payload, and 168-byte detail request. A scan
 summary retains counts, verified bounds, source provenance, layout and the
 normalized-detail checksum without transferring a second copy of normalized
-geometry. Protocol-v9 section and payload integrity uses XXH64 directly below
+geometry. Protocol-v10 section and payload integrity uses XXH64 directly below
 10 MiB and a split-invariant fixed-256-KiB-leaf XXH64 tree at or above 10 MiB;
 this is an incidental-corruption check, not an authentication boundary. A
 validated deindexed flag lets proxy sampling traverse identity-indexed triangle
@@ -74,9 +74,36 @@ re-decoded exactly. Detail replies must match the original verified scan's
 geometry, provenance, checksum and metadata. They reuse pinned primary and
 approved sidecar handles; new sidecar requests are forbidden during replay.
 Viewer and worker binaries ship from the same build. Compatibility decision:
-reject v8 and every other unknown version; there is no migration or mixed-
+reject v9 and every other unknown version; there is no migration or mixed-
 version fallback. Updated protocol fixtures and hostile-worker cases exercise
-the v9 checksum, scan-summary, flag and copy-then-validate paths.
+the v10 checksum, scan-summary, scene-record, flag and copy-then-validate paths.
+
+Protocol v10 adds two fixed payloads. `NodePayload` is 144 bytes: a stable
+nonzero ID, optional parent ID, closed visibility flags, and a finite
+double-precision row-vector affine 4x4 local transform. `MeshInstancePayload`
+is 80 bytes: a stable nonzero ID, node/geometry/material IDs, closed visibility
+flags, and finite verified double-precision world bounds. IDs are unique in the
+generation-wide chunk namespace. Node matrices must be nonsingular affine
+matrices with an exact `{0,0,0,1}` final column; hierarchy depth is capped at
+256. The host resolves the hierarchy, rejects cycles, and recomputes every
+instance AABB from all eight corners of the referenced geometry's local bounds
+and double origin before publishing it.
+
+Dependency slots have closed meanings for scene records:
+
+| Record | Dependency slots |
+| --- | --- |
+| Triangle/point geometry | Existing bounded association slots remain compatible; slot 0 may identify a legacy geometry material. Geometry marked `ReusableInstanceSource` is a resource template and is drawn only through instance records. |
+| Material | Slots 0–3 are base-color, metallic/roughness, normal, and emissive image IDs; sparse slots are allowed and the populated count must be exact. |
+| Node | Slot 0 is the optional parent Node ID; slots 1–3 are zero; count is 0 or 1. |
+| Mesh instance | Slot 0 is required triangle/point geometry, slot 1 is an optional Material, slot 2 is required Node, and slot 3 is zero; count is 2 or 3. |
+
+References within a section resolve against its copied descriptor table;
+references to earlier progressive batches resolve only through the bounded
+generation catalog. Scene references do not reach outside that catalog, and
+the terminal generation check requires the accepted Node catalog to match the
+declared node count. This makes cross-window edges strictly backward, so a
+worker cannot hide a cycle or an unbounded late dependency graph.
 
 ## Import generations
 
@@ -147,7 +174,8 @@ Importer-specific objects never cross into Streaming or Graphics. Model Core pro
 | Object | Required fields |
 | --- | --- |
 | SceneMetadata | generation, source format, source units/up axis, node/material/triangle counts, warnings, provisional/verified bounds |
-| Node | parent, double-precision local transform, optional mesh reference, visibility |
+| Node | stable ID, parent, double-precision local transform, visibility |
+| MeshInstance | stable ID, node, reusable geometry, per-instance material, verified world bounds, visibility |
 | Material | base color factor/texture, metallic, roughness, emissive, normal texture, UV transform, unlit, alpha mode/cutoff, double-sided flag |
 | TextureSource | bounded encoded bytes or validated mapping range, MIME/container, mip metadata, color space, sampler |
 | MeshCluster | mesh/node IDs, triangle-or-point topology, double-precision origin, local AABB/sphere, material, LOD descriptors |

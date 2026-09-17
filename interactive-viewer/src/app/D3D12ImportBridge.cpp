@@ -10,6 +10,8 @@
 
 #include <cstring>
 #include <cwctype>
+#include <functional>
+#include <unordered_map>
 
 namespace d3d12_import_bridge {
 
@@ -57,7 +59,7 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     switch (code) {
     case model_core::ImportErrorCode::UnsupportedEncoding:
         summary = L"This encoding is not supported.";
-        details = L"Use glTF 2.0, STL, or ASCII/binary little- or big-endian PLY."; return;
+        details = L"Use glTF 2.0, ASCII/binary STL or PLY, OBJ, or ASCII/binary FBX."; return;
     case model_core::ImportErrorCode::WorkerCrashed:
         summary = L"The sandboxed importer stopped unexpectedly.";
         details = L"The worker exited before completing this model. Retry or open another model."; return;
@@ -207,6 +209,8 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
         return import_broker::ImportFormat::Ply;
     case SourceFormat::Obj:
         return import_broker::ImportFormat::Obj;
+    case SourceFormat::Fbx:
+        return import_broker::ImportFormat::Fbx;
     case SourceFormat::Glb:
     default:
         return import_broker::ImportFormat::Gltf;
@@ -246,6 +250,7 @@ std::wstring SourceFormatLabel(const std::wstring& path)
     if (ext == L"stl") return L"STL";
     if (ext == L"ply") return L"PLY";
     if (ext == L"obj") return L"OBJ";
+    if (ext == L"fbx") return L"FBX";
     // Extension only, capped and restricted to printable alphanumerics.
     if (ext.empty() || ext.size() > 16) return L"Unknown";
     std::wstring label;
@@ -302,6 +307,7 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     if (ext == L"stl") return SourceFormat::Stl;
     if (ext == L"ply") return SourceFormat::Ply;
     if (ext == L"obj") return SourceFormat::Obj;
+    if (ext == L"fbx") return SourceFormat::Fbx;
     return std::nullopt;
 }
 
@@ -318,7 +324,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     ImportResult result;
 
     import_broker::ImportSessionRequest sessionRequest;
-    sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj;
+    sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
+        && format != SourceFormat::Fbx;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
     if (!delayBatchesForTesting && !faultForTesting) {
@@ -350,6 +357,9 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         sessionRequest.replyTimeoutMs = 500;
     }
     import_broker::KnownChunkCatalog catalog;
+    std::unordered_map<uint32_t, model_core::NodePayload> nodeCatalog;
+    struct ResolvedNode { double world[16]{}; bool visible=false; bool active=false; };
+    std::unordered_map<uint32_t,ResolvedNode> resolvedNodes;
     model_core::FileIdentity openedIdentity;
     bool initialComplete = false;
     if (sessionRequest.onInitialComplete) {
@@ -368,6 +378,19 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         for (const auto& chunk : chunks) catalog.emplace(chunk.descriptor.chunkId, chunk.descriptor.topology);
         for (auto& chunk : chunks) {
             switch (chunk.descriptor.topology) {
+            case model_core::ChunkTopology::Node: {
+                ImportedNode node;
+                std::memcpy(&node.data, chunk.payload.data(), sizeof(node.data));
+                nodeCatalog.emplace(node.data.nodeId,node.data);
+                result.nodes.push_back(node);
+                break;
+            }
+            case model_core::ChunkTopology::MeshInstance: {
+                ImportedInstance instance;
+                std::memcpy(&instance.data, chunk.payload.data(), sizeof(instance.data));
+                result.instances.push_back(instance);
+                break;
+            }
             case model_core::ChunkTopology::CoarseComplete:
                 result.coarseComplete = true;
                 break;
@@ -435,6 +458,24 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 break; // unrecognized topology already rejected by the validator; never reached
             }
         }
+        std::function<bool(uint32_t)> resolveNode=[&](uint32_t id) {
+            if(auto found=resolvedNodes.find(id);found!=resolvedNodes.end()&&!found->second.active)return true;
+            auto source=nodeCatalog.find(id);if(source==nodeCatalog.end())return false;
+            auto& resolved=resolvedNodes[id];if(resolved.active)return false;resolved.active=true;
+            std::memcpy(resolved.world,source->second.localTransform,sizeof(resolved.world));
+            resolved.visible=(source->second.flags&model_core::kSceneRecordVisible)!=0;
+            if(source->second.parentNodeId){if(!resolveNode(source->second.parentNodeId))return false;
+                double world[16]{};const auto& parent=resolvedNodes.at(source->second.parentNodeId);
+                for(uint32_t row=0;row<4;++row)for(uint32_t column=0;column<4;++column)for(uint32_t k=0;k<4;++k)
+                    world[row*4+column]+=source->second.localTransform[row*4+k]*parent.world[k*4+column];
+                std::memcpy(resolved.world,world,sizeof(world));resolved.visible=resolved.visible&&parent.visible;}
+            resolved.active=false;return true;
+        };
+        for(auto& instance:result.instances){if(resolveNode(instance.data.nodeId)){const auto& node=resolvedNodes.at(instance.data.nodeId);
+            std::memcpy(instance.worldTransform,node.world,sizeof(instance.worldTransform));
+            instance.resolvedVisible=node.visible&&(instance.data.flags&model_core::kSceneRecordVisible);
+            const auto* m=instance.worldTransform;const double determinant=m[0]*(m[5]*m[10]-m[6]*m[9])
+                -m[1]*(m[4]*m[10]-m[6]*m[8])+m[2]*(m[4]*m[9]-m[5]*m[8]);instance.mirrored=determinant<0;}}
         result.ok = true;
         return result;
     };
@@ -448,6 +489,15 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         result.errorStage = session.stage;
         result.errorPhase = session.errorPhase;
         DescribeSessionFailure(session, result.errorSummary, result.errorDetails);
+        if (format == SourceFormat::Fbx) {
+            if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
+                result.errorDetails = L"Export or bake this FBX as static polygon geometry using the supported material and deformation subset.";
+            } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
+                result.errorDetails = L"FBX files are limited to the bounded Tier B source size.";
+            } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
+                result.errorDetails = L"FBX parsing or static-pose evaluation exceeded the bounded importer scratch budget.";
+            }
+        }
         return result;
     }
     if (!onBatch)

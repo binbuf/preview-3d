@@ -1628,7 +1628,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
         SetFailure(app, L"This model format is not supported.",
-            L"Open a .glb, .gltf, .stl, .ply, or .obj file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
+            L"Open a .glb, .gltf, .stl, .ply, .obj, or .fbx file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
         return;
     }
 
@@ -1726,11 +1726,12 @@ void OpenDialog(ViewerApp& app)
         return;
     }
     const COMDLG_FILTERSPEC filters[] = {
-        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj" },
+        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx" },
         { L"glTF models (*.glb; *.gltf)", L"*.glb;*.gltf" },
         { L"STL (*.stl)", L"*.stl" },
         { L"PLY meshes and points (*.ply)", L"*.ply" },
         { L"Wavefront OBJ with MTL (*.obj)", L"*.obj" },
+        { L"Autodesk FBX (*.fbx)", L"*.fbx" },
         { L"All files (*.*)", L"*.*" }
     };
     dialog->SetFileTypes(ARRAYSIZE(filters), filters);
@@ -1740,7 +1741,7 @@ void OpenDialog(ViewerApp& app)
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
     if (FAILED(shown))
     {
-        SetFailure(app, L"The Open dialog stopped unexpectedly.", L"Try dropping a local .glb, .gltf, .stl, .ply, or .obj file into the window.");
+        SetFailure(app, L"The Open dialog stopped unexpectedly.", L"Try dropping a local .glb, .gltf, .stl, .ply, .obj, or .fbx file into the window.");
         return;
     }
     ComPtr<IShellItem> item;
@@ -1900,7 +1901,7 @@ void HandleCommand(ViewerApp& app, int id)
         MessageBoxW(app.window, app.warning.c_str(), L"Model warnings", MB_OK | MB_ICONWARNING);
         break;
     case IDM_ABOUT:
-        MessageBoxW(app.window, L"A native static viewer for GLB, glTF with local sidecars, ASCII/binary STL, and ASCII/binary PLY meshes and points.\n\nImports are bounded and isolated. No cloud, editing, file modification, Explorer thumbnails, or persistent model cache.",
+        MessageBoxW(app.window, L"A native static viewer for GLB, glTF and OBJ with local sidecars, ASCII/binary STL and PLY, and binary/ASCII FBX with a deterministic static pose.\n\nImports are bounded and isolated. No cloud, animation playback, editing, file modification, Explorer thumbnails, or persistent model cache.",
             L"About 3D Preview", MB_OK | MB_ICONINFORMATION);
         break;
     case IDM_EXIT: DestroyWindow(app.window); break;
@@ -2440,7 +2441,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return LresultFromObject(IID_IAccessible, wParam, app->accessible);
         break;
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 71) return 0;
+        if (!app->appSmoke || wParam > 83) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -2531,18 +2532,33 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (wParam==63) { app->renderThread.SetSmokeUma(lParam!=0); return 1; }
         if (wParam==65) { app->renderThread.InjectDeviceRemovalForTesting(); return 1; }
         if (wParam==40) return static_cast<LRESULT>(app->warning.size());
+        if (wParam >= 80 && wParam <= 83) {
+            if (!app->loadedModel) return 0;
+            const auto& stats = app->loadedModel->stats;
+            if (wParam == 80) return stats.meshCount;
+            if (wParam == 81) return stats.animationCount;
+            if (wParam == 82) return stats.skinCount;
+            return stats.boneCount;
+        }
         if (wParam == 30) { ToggleShowNativeOrientation(*app); return app->showNativeOrientation; }
         return static_cast<LRESULT>(app->renderThread.SmokeValue(static_cast<unsigned>(wParam)));
     case WM_COPYDATA:
     {
         if (!app->appSmoke || !lParam) return 0;
         const auto& data = *reinterpret_cast<const COPYDATASTRUCT*>(lParam);
-        if ((data.dwData != 104 && data.dwData != 105 && data.dwData != 106) || !data.lpData ||
+        if ((data.dwData != 104 && data.dwData != 105 && data.dwData != 106 && data.dwData != 107) || !data.lpData ||
             data.cbData < sizeof(wchar_t) || data.cbData > 32768 || data.cbData % sizeof(wchar_t)) return 0;
         const auto* text = static_cast<const wchar_t*>(data.lpData);
         const size_t length = data.cbData / sizeof(wchar_t);
         if (text[length - 1] != L'\0' || wcsnlen(text, length) != length - 1) return 0;
         if (data.dwData == 106) { app->smokePickerPath.assign(text,length-1); return 1; }
+        if (data.dwData == 107) {
+            // WM_DROPFILES carries process-local storage that an external smoke
+            // driver cannot manufacture safely. Exercise the same one-path
+            // opening boundary after the shell has decoded that storage.
+            BeginOpen(*app, std::wstring(text, length - 1));
+            return static_cast<LRESULT>(app->generation);
+        }
         BeginOpen(*app, std::wstring(text, length - 1));
         // Cancel before dispatching completion notices: deterministic pending-
         // generation cancellation, independent of machine/fixture speed.
@@ -2848,7 +2864,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (count != 1)
         {
             DragFinish(drop);
-            SetFailure(*app, L"Open one model at a time.", L"Drop exactly one local .glb, .gltf, .stl, .ply, or .obj file into the viewer.");
+            SetFailure(*app, L"Open one model at a time.", L"Drop exactly one local .glb, .gltf, .stl, .ply, .obj, or .fbx file into the viewer.");
             return 0;
         }
         const UINT length = DragQueryFileW(drop, 0, nullptr, 0);
@@ -3643,6 +3659,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.hideCursorWhileDragging = settings.hideCursorWhileDragging;
     bool commandLineInvalid = false;
     bool bypassSingleInstance = false;
+    bool activationSmoke = false;
     int argumentCount = 0;
     PWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
     if (arguments)
@@ -3659,6 +3676,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             else if (_wcsicmp(arguments[i], L"--new-instance") == 0) bypassSingleInstance = true;
             else if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
+            else if (_wcsicmp(arguments[i], L"--activation-smoke") == 0) {
+                app.appSmoke = true;
+                activationSmoke = true;
+            }
             else if (_wcsicmp(arguments[i], L"--uma-budget-smoke") == 0) {
                 app.appSmoke=true; app.renderThread.SetSmokeUmaDevice();
             }
@@ -3760,7 +3781,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     }
 
     std::wstring instanceError;
-    const bool developerRun = bypassSingleInstance || app.appSmoke || app.benchmarkMode || app.benchFrames > 0;
+    const bool developerRun = bypassSingleInstance || (app.appSmoke && !activationSmoke)
+        || app.benchmarkMode || app.benchFrames > 0;
     const auto instanceRole = app.activeInstance.Initialize(developerRun, instanceError);
     if (instanceRole == active_instance::Coordinator::Role::Failed)
     {

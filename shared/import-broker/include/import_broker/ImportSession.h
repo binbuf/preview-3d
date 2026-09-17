@@ -40,6 +40,7 @@ enum class ImportFormat : uint32_t {
     Stl,
     Ply,
     Obj,
+    Fbx,
 };
 
 // How far the session got. model_core::ImportErrorCode is not sufficient on
@@ -192,6 +193,12 @@ struct ImportSessionRequest {
     // explicit attack-mode executable argument remain one-shot so each test
     // keeps its isolated command-line contract.
     bool useWorkerPool = false;
+    // FBX qualification seam: leaves load limits unchanged but constrains both
+    // ufbx evaluation allocators to 1 KiB, proving typed exhaustion/recovery.
+    bool fbxTinyEvaluationLimitForTesting = false;
+    // FBX qualification seam: constrains the aggregate decoded texture budget
+    // so pressure and same-worker recovery are practical to exercise.
+    bool fbxTinyTextureLimitForTesting = false;
 };
 
 struct SourceChunkRange

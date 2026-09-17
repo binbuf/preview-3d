@@ -53,6 +53,15 @@ public:
     bool InitializeBorrowed(std::wstring exePath, PSID sid, SandboxLimits limits,
                             size_t size, std::wstring& error);
 
+    // Non-product validation seam: launch the same AppContainer/Job/pipes pool
+    // with an explicit worker mode. Used by FBX-001 to hold a worker inside
+    // ufbx_evaluate_scene() and exercise the real terminate-and-replace path.
+    // Product callers always use Initialize()/InitializeBorrowed(), which
+    // force the ordinary --pool mode.
+    bool InitializeForTesting(std::wstring exePath, platform::AppContainerSid sid,
+                              SandboxLimits limits, size_t size,
+                              std::wstring workerArguments, std::wstring& error);
+
     size_t Size() const noexcept;
     size_t IdleCount() const noexcept;
 
@@ -117,6 +126,7 @@ private:
     platform::AppContainerSid sid_;
     PSID borrowedSid_ = nullptr;
     SandboxLimits limits_{};
+    std::wstring workerArguments_ = L"--pool";
     std::vector<PooledWorker> workers_;
     bool shutdownCalled_ = false;
 };

@@ -97,7 +97,8 @@ def run(exe, flag, asset, count, cap):
             report['cancelledPartialState'] = query(0)
             failed_replacement = open_file(asset)
             wait(lambda:query(4)==failed_replacement,'replacement geometry before delayed UI metadata')
-            open_file(asset.parent/'unsupported.FBX')
+            unsupported = asset.parent/'unsupported.3mf'
+            open_file(unsupported)
             assert query(0)==4 and query(47)==failed_replacement, 'failure retained stale display metadata'
             report['failureWithDelayedUiMetadata'] = True
             send(hwnd,0x8000+104,46,0)

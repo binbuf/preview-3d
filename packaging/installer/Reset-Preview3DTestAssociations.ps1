@@ -6,7 +6,7 @@ Removes stale per-user Preview3D file-association state before installer tests.
 Developer builds or an earlier Open With selection can leave an HKCU
 Applications\Preview3D.exe command that overrides the installer's HKLM command.
 This script removes only Preview3D-owned per-user registration and Preview3D.exe
-entries from the four supported extensions' Open With history. It does not
+entries from the supported extensions' Open With history. It does not
 remove other applications, source files, settings, the installed product, or a
 Windows-protected UserChoice value.
 
@@ -21,11 +21,13 @@ Set-StrictMode -Version 3.0
 
 $applicationExe = 'Preview3D.exe'
 $applicationName = '3D Preview'
-$extensions = @('.glb', '.gltf', '.stl', '.ply', '.obj')
+$extensions = @('.glb', '.gltf', '.stl', '.ply', '.obj', '.fbx')
 $progIds = @(
     'Binbuf.Preview3D.glTF.1',
     'Binbuf.Preview3D.STL.1',
-    'Binbuf.Preview3D.PLY.1'
+    'Binbuf.Preview3D.PLY.1',
+    'Binbuf.Preview3D.OBJ.1',
+    'Binbuf.Preview3D.FBX.1'
 )
 
 if (Get-Process -Name Preview3D, Preview3DImportWorker -ErrorAction SilentlyContinue) {

@@ -4,6 +4,151 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **FBX-006 viewer, activation, and installer integration (2026-09-17):
+  complete.** `.fbx` now routes case-insensitively through the existing
+  AppContainer import bridge and normalized progressive renderer. Direct and
+  secondary activation, the picker, one-file drop boundary, retry/replacement,
+  metadata, Info UI, Open With discovery, portable distribution, and NSIS all
+  agree on the format. Shell catalog revision 4 invalidates the previous
+  five-extension Open With cache. NSIS owns `Binbuf.Preview3D.FBX.1`, advertises
+  capabilities and SupportedTypes without touching `UserChoice`, and removes
+  only product-owned state. The reset helper now also includes the formerly
+  omitted OBJ ProgID. No thumbnail CLSID or `shellex` registration was added.
+
+  The real-app static-pose check presents the combined skin/blend fixture as
+  528 vertices, 176 triangles, 4 materials, 15 nodes, 6 meshes, 1 animation,
+  1 skin, and 4 bones with verified bounds and 26 displayed GPU chunks. It
+  revealed two reusable renderer lessons. First, progressive node records may
+  be split across publications; the import bridge owns the generation-wide
+  node catalog and stamps resolved instance transforms, so the GPU uploader
+  must not reject a publication-local child merely because its parent arrived
+  in an earlier batch. Second, the color MRT and integer `R32_UINT` pick-ID MRT
+  require `IndependentBlendEnable`; inheriting alpha blend state into the
+  integer target causes current D3D12 drivers to reject otherwise-valid grid
+  and blended-material PSOs during startup.
+
+  Product-facing bridge tests must call `EnsureImportSandboxPrepared()` before
+  a filtered/standalone pooled `RunImport`; full-suite ordering can otherwise
+  conceal a `LaunchWorker` failure. Real activation smoke uses a dedicated
+  singleton-aware smoke flag because the general `--app-smoke` contract
+  intentionally bypasses normal activation IPC. Cross-process tests also must
+  not manufacture `HDROP` storage in the Python process: the bounded drop-path
+  injection starts after the Shell-decoded one-path boundary and shares the
+  production open path.
+
+  Debug and Release Unit pass 98 cases / 7,612 and 7,524 assertions. Full
+  ImportIsolation passed 250 cases / 100,704 assertions in both configurations
+  before the final viewer-only corrections; focused FBX passes 26 / 47,977
+  afterward. Activation, targeted metadata/static-pose, and malformed-FBX
+  recovery smokes pass in both configurations with no leaked worker and no
+  Debug D3D errors. Portable packaging passes with 34 files and SHA-256
+  `28e8344f768581975afc019bf20ee89e843dd17d69e10c93826a26d13d6d69ee`;
+  NSIS `/WX` passes with 35 files and setup SHA-256
+  `375938af2dbd97ca6d7467785e1971d566329db75f1df9c05ca906b6fc8978f7`.
+  The VS 18.10 Release LTCG linker intermittently ICEs on the unusually large
+  ImportIsolation binary; a serial non-LTCG build and focused FBX run pass, and
+  the Release viewer/worker rebuild cleanly through both package targets.
+  FBX-007 is unblocked for corpus/fuzz/performance and clean-VM release evidence;
+  Explorer thumbnails remain separately deferred to FBX-008.
+
+- **FBX-005 unified materials and texture dependencies (2026-09-17):
+  complete.** The static FBX adapter emits normalized material chunks from
+  ufbx unified PBR maps with FBX diffuse/transparency/emission fallbacks,
+  bounded non-finite clamping, alpha/double-sided/unlit state, and per-instance
+  material selection without duplicating shared geometry. The material-factor
+  conversion is a small common helper used by OBJ as well; the OBJ policy path
+  deliberately retains its previous payload behavior.
+
+  FBX enables ufbx embedded media and decodes embedded bytes directly in the
+  AppContainer. External image references do not enable ufbx file access:
+  they go through `RequestSidecarFile`, the existing pinned-replay client, the
+  host containment checks, byte/request caps, byte sniffing, explicit WIC or
+  WebP/KTX2 decode paths, and aggregate decoded-image budgets. Unsupported
+  layered/procedural/shader texture graphs only accept one unambiguous file
+  leaf (with a bounded approximation warning); otherwise the deterministic
+  optional texture fallback is emitted. Unsafe sidecar results stay terminal
+  and report the Sidecars phase. FBX remains disabled on viewer/Shell/product
+  surfaces until FBX-006.
+
+  The reported external-texture worker crash was a test-harness limit, not a
+  worker/control-channel fault. `FbxImportTests` constructed requests with
+  `maxSidecarRequestsPerGeneration == 0` and `maxSidecarFileBytes == 0`; the
+  trusted broker therefore correctly stopped the first request at
+  `SidecarRequestLimit`, and the one-shot job then closed. Production's
+  `D3D12ImportBridge` already supplied nonzero limits. An untouched upstream
+  external-texture FBX reproduced the same limit before the helper was fixed.
+  Future format tests that expect sidecars must initialize both caps explicitly
+  rather than diagnosing the expected one-shot exit as a worker crash.
+
+  Embedded PNG/JPEG/WebP, approved local sidecars, sRGB/linear texture roles,
+  material factors, alpha, emissive, normal/bump, UV transforms, deterministic
+  missing/corrupt/byte-cap fallback, and hard path attacks are covered. The
+  pinned upstream instanced-material fixture proves distinct instance material
+  IDs keep one geometry resource; the layered-texture fixture proves ambiguous
+  graphs retain visible geometry with bounded warnings. A test-only aggregate
+  budget flag proves decoded texture pressure is a typed `ResourceLimit` and
+  that the same pooled worker recovers, without changing the production 128 MiB
+  limit. Progressive image/material dependency validation and cancellation /
+  recovery coverage remain green.
+
+  One additional harness lesson: the FBX scratch-directory name used only PID
+  plus `GetTickCount64()`, which could collide when multiple fixtures stayed
+  alive in one fast test. A monotonic process-local suffix now makes those
+  directories unique independent of clock resolution.
+
+  Debug and Release solution builds pass. Focused materials pass 12 cases / 284
+  assertions; all FBX passes 25 / 47,968; Unit passes 98 / 7,609 Debug and
+  7,521 Release; full ImportIsolation passes 249 / 100,693 in each
+  configuration. OBJ regression parity passes 7 / 82 in both configurations.
+  FBX-006 is unblocked; thumbnails remain separately deferred to FBX-008.
+
+- **FBX-004 deterministic static deformation pose (2026-09-17): complete.**
+  The AppContainer FBX adapter now evaluates the first authored animation
+  stack at its authored start, or the default/rest animation at zero, and bakes
+  supported linear, rigid, dual-quaternion, blended DQ/linear, blend-only, and
+  combined skin-plus-blend deformation into the existing static scene/instance
+  contract. `SceneMetadata` records animation-stack, skin-deformer, and bone
+  counts without retaining names or curves. Load and evaluation have separate
+  explicit temp/result allocation limits; caches and external files remain
+  disabled.
+
+  A crucial normalization detail for later FBX work: ufbx 0.23.0 exposes
+  undeformed `skinned_*` attributes as local data (`skinned_is_local=true`) but
+  may expose evaluated deformation in world space. Local data must use
+  `node.geometry_to_node`; world data must be transformed by inverse
+  `node.node_to_world` before it enters the node-local wire geometry, otherwise
+  the retained node transform is applied twice. Normals use the matching
+  inverse transpose. Blend results are already present in `skinned_*` after the
+  one scene evaluation and must not be applied a second time.
+
+  Deformed reuse compares the canonical node-local evaluated output, not mesh
+  pointers or node transforms. The fingerprint includes source mesh identity,
+  topology/attribute decisions and winding, is followed by exact comparison,
+  and charges all scan/comparison work to the Tier-B index limit. This both
+  shares equivalent results and prevents a hostile instance catalog from
+  creating unbounded comparison work. Material bindings remain per instance
+  for FBX-005.
+
+  Cache-deformed/subdivision meshes are omitted rather than rendered at rest;
+  caches, constraints, NURBS/trim objects, subdivision and procedural geometry
+  warn only when independent visible polygons remain, while required-only
+  unsupported geometry fails typed. The existing combined skin/blend fixture
+  also contains cache-deformed meshes, making it a useful regression for the
+  warn-and-omit branch. `nurbs-only-ascii.fbx` covers required failure and has
+  SHA-256 `E62D8758117D22020552B9DD5D27BB93C1D81CFB1EE915C95479B89F972869CB`.
+
+  ufbx still has no evaluation progress callback. Product cancellation checks
+  bracket evaluation and continue through canonical comparison/normalization;
+  cancellation inside evaluation relies on the already-proven 500 ms broker
+  grace and worker replacement. A 1 KiB evaluator-limit seam proves typed
+  `ScratchLimit` and same-worker recovery. Numeric 1e-6 wire goldens cover all
+  supported deformation modes, stack/rest selection, transforms, normals,
+  tangents, bounds, metadata, warnings and deformed sharing in Debug and
+  Release. Focused FBX passes 13 cases / 47,670 assertions; full Unit passes 98
+  cases / 7,609 Debug and 7,521 Release assertions, and full ImportIsolation
+  passes 237 cases / 100,395 assertions in both configurations. FBX remains
+  undiscoverable in viewer/Shell surfaces until FBX-005 and FBX-006.
+
 - **Gate 4 Slice 1 OBJ/MTL product path (2026-09-16): implemented; release
   qualification remains open.** ufbx 0.23.0 is pinned through a repository
   vcpkg overlay and is linked only into the AppContainer import worker. Direct

@@ -18,7 +18,7 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-constexpr uint32_t kCurrentProtocolVersion = 9;
+constexpr uint32_t kCurrentProtocolVersion = 10;
 // Product coarse/full delivery has four closed geometry roles. Scan payloads
 // cross the validator, but are never allocated on the GPU or retained by it.
 constexpr uint32_t kFineLod = 0, kCoarseLod = 1, kScanLod = 2, kPreviewLod = 3;
@@ -33,6 +33,9 @@ inline uint64_t CoarsePrimitiveCap(uint64_t valid, uint64_t nonemptyRegions = 1)
     return density < kCoarsePrimitiveLimit ? density : kCoarsePrimitiveLimit;
 }
 constexpr uint32_t kMaxDependencyIds = 4;
+constexpr uint32_t kMaxSceneHierarchyDepth = 256;
+constexpr uint32_t kSceneRecordVisible = 1u << 0;
+constexpr uint32_t kSceneRecordFlagsKnownMask = kSceneRecordVisible;
 
 enum class ChunkTopology : uint32_t {
     Unknown = 0,
@@ -43,9 +46,42 @@ enum class ChunkTopology : uint32_t {
     TextureWarning = 5, // one uint32 fallback count, [1,64]; no paths or arbitrary worker text
     ImportStatus = 6,
     CoarseComplete = 7, // only after every validated scan region has a usable sample
+    Node = 8,           // payload is one fixed NodePayload
+    MeshInstance = 9,  // payload is one fixed MeshInstancePayload
 };
 
 #pragma pack(push, 1)
+
+// Row-major, row-vector affine transform. The final column is exactly
+// {0,0,0,1}; translation occupies elements 12..14. A node's chunkId and
+// nodeId are required to match so all references use the generation-wide
+// dependency namespace. dependencyIds[0] is parentNodeId when nonzero.
+struct NodePayload {
+    uint32_t nodeId;
+    uint32_t parentNodeId; // 0 = root
+    uint32_t flags;        // kSceneRecord*; visibility is inherited
+    uint32_t reserved;
+    double localTransform[16];
+};
+static_assert(sizeof(NodePayload) == 144);
+
+// One draw occurrence of reusable geometry. The three references are also
+// repeated in the descriptor's closed slots: [0] geometry (required), [1]
+// material (optional), [2] node (required), [3] zero. Repetition is an
+// intentional consistency check, not a self-describing record. worldMin/max
+// are the exact finite AABB obtained by transforming the referenced
+// geometry's local AABB (including its double origin) by the node hierarchy.
+struct MeshInstancePayload {
+    uint32_t instanceId;
+    uint32_t nodeId;
+    uint32_t geometryChunkId;
+    uint32_t materialChunkId; // 0 = neutral material
+    uint32_t flags;           // kSceneRecord*; combined with node visibility
+    uint32_t reserved[3];
+    double worldMin[3];
+    double worldMax[3];
+};
+static_assert(sizeof(MeshInstancePayload) == 80);
 
 struct CoarseCompletePayload {
     uint32_t regions;
@@ -90,6 +126,7 @@ enum class SourceFormatId : uint32_t {
     AsciiStl = 5,
     AsciiPly = 6,
     Obj = 7,
+    Fbx = 8,
 };
 enum class UpAxisId : uint32_t { Unknown = 0, Y = 1, Z = 2 };
 enum class BoundsState : uint32_t { Unknown = 0, Provisional = 1, Verified = 2 };
@@ -97,7 +134,9 @@ constexpr uint32_t kGeometryHasUv0 = 1;
 constexpr uint32_t kGeometryHasColors = 2;
 constexpr uint32_t kGeometryHasUv1 = 4;
 constexpr uint32_t kGeometryDeindexed = 8;
-constexpr uint32_t kGeometryFlagsKnownMask = kGeometryHasUv0 | kGeometryHasColors | kGeometryHasUv1 | kGeometryDeindexed;
+constexpr uint32_t kGeometryReusableInstanceSource = 16;
+constexpr uint32_t kGeometryFlagsKnownMask = kGeometryHasUv0 | kGeometryHasColors | kGeometryHasUv1
+    | kGeometryDeindexed | kGeometryReusableInstanceSource;
 
 // Generation-wide source facts, repeated unchanged in each batch. Zero units
 // means unspecified; STL/PLY must never be presented as metres by assumption.
@@ -164,6 +203,10 @@ struct ChunkDescriptor {
     // slot order {baseColor, metallicRoughness, normal, emissive}; each must
     // resolve to a chunk with Image topology specifically (a new invariant,
     // since nothing wrote Material chunks before this).
+    // Node -- slot 0 is its optional parent Node chunk. All other slots are
+    // zero and dependencyCount is 0 or 1.
+    // MeshInstance -- slots are {geometry, optional material, node, zero};
+    // dependencyCount equals the number of populated slots (2 or 3).
     // Image -- must have dependencyCount==0. Refinement roots are encoded
     // separately in ImagePayloadHeader and must identify an earlier initial
     // image. The mesh -> material -> image dependency graph stays acyclic.

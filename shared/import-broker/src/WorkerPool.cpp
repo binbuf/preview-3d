@@ -40,7 +40,7 @@ std::optional<WorkerPool::PooledWorker> WorkerPool::LaunchOne(std::wstring& erro
     SetHandleInformation(controlOutRead.get(), HANDLE_FLAG_INHERIT, 0);
 
     std::vector<HANDLE> inherited{ controlInRead.get(), controlOutWrite.get() };
-    std::wstring cmdLine = L"\"" + exePath_ + L"\" --pool";
+    std::wstring cmdLine = L"\"" + exePath_ + L"\" " + workerArguments_;
 
     const PSID sid = borrowedSid_ ? borrowedSid_ : sid_.get();
     if (!sid) {
@@ -78,6 +78,7 @@ bool WorkerPool::Initialize(std::wstring exePath, platform::AppContainerSid sid,
                              size_t size, std::wstring& error)
 {
     exePath_ = std::move(exePath);
+    workerArguments_ = L"--pool";
     sid_ = std::move(sid);
     borrowedSid_ = nullptr;
     limits_ = limits;
@@ -98,10 +99,36 @@ bool WorkerPool::InitializeBorrowed(std::wstring exePath, PSID sid, SandboxLimit
                                     size_t size, std::wstring& error)
 {
     exePath_ = std::move(exePath);
+    workerArguments_ = L"--pool";
     borrowedSid_ = sid;
     limits_ = limits;
     workers_.reserve(size);
     for (size_t i = 0; i < size; ++i) {
+        auto worker = LaunchOne(error);
+        if (!worker) {
+            workers_.clear();
+            return false;
+        }
+        workers_.push_back(std::move(*worker));
+    }
+    return true;
+}
+
+bool WorkerPool::InitializeForTesting(std::wstring exePath, platform::AppContainerSid sid,
+                                      SandboxLimits limits, size_t size,
+                                      std::wstring workerArguments, std::wstring& error)
+{
+    if (workerArguments.empty()) {
+        error = L"The test worker arguments are empty.";
+        return false;
+    }
+    exePath_ = std::move(exePath);
+    workerArguments_ = std::move(workerArguments);
+    sid_ = std::move(sid);
+    borrowedSid_ = nullptr;
+    limits_ = limits;
+    workers_.reserve(size);
+    for (size_t index = 0; index < size; ++index) {
         auto worker = LaunchOne(error);
         if (!worker) {
             workers_.clear();

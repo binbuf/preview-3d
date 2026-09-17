@@ -41,6 +41,22 @@ struct ValidationResult {
     std::string diagnosticMessage; // developer-facing only, never parsed
 };
 
+struct KnownNodeRecord {
+    model_core::NodePayload payload{};
+    double worldTransform[16]{};
+    uint32_t depth = 0;
+    bool visible = false;
+};
+
+// Bounded by ImportSessionRequest::maxChunksPerGeneration and, for scene
+// records, by the Tier-A/Tier-B object cap. It contains values copied from
+// already validated batches only; shared-section storage is never retained.
+struct KnownSceneCatalog {
+    std::unordered_map<uint32_t, model_core::ChunkDescriptor> geometry;
+    std::unordered_map<uint32_t, KnownNodeRecord> nodes;
+    std::unordered_map<uint32_t, model_core::MeshInstancePayload> instances;
+};
+
 // chunkId -> topology for every chunk already accepted in EARLIER batches of
 // the same generation, when a model is delivered progressively across several
 // writes of the output window (model_core::ControlOpcode::ChunkBatchReady).
@@ -74,6 +90,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                                          const KnownChunkCatalog* priorBatches = nullptr,
                                          bool allowForwardReferences = false,
                                          const KnownImageCatalog* priorImages = nullptr,
-                                         uint64_t priorTextureBytes = 0, uint64_t priorTexturePixels = 0);
+                                         uint64_t priorTextureBytes = 0, uint64_t priorTexturePixels = 0,
+                                         KnownSceneCatalog* sceneCatalog = nullptr);
 
 } // namespace import_broker

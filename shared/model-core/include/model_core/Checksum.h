@@ -34,7 +34,7 @@ inline uint64_t Fnv1a64(std::span<const std::byte> data) noexcept
     return Fnv1a64Append(kOffsetBasis, data);
 }
 
-// Protocol-v9 uses XXH64 directly for small payloads and a fixed 256-KiB XXH64
+// Protocol-v10 uses XXH64 directly for small payloads and a fixed 256-KiB XXH64
 // tree for large payloads. The fixed leaves make the result independent of span
 // boundaries while allowing large normalized scans to validate in parallel.
 // This remains an integrity checksum, not an authentication primitive: the

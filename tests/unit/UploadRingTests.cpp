@@ -9,6 +9,7 @@
 #include "D3D12Device.h"
 #include "D3D12UploadRing.h"
 #include "D3D12ViewerPath.h"
+#include "DetailView.h"
 #include "WicImageDecodeAdapter.h"
 #include "TextureTranscodeAdapter.h"
 #include <filesystem>
@@ -864,6 +865,43 @@ TEST_CASE("Product texture uploader validates complete payloads and preserves im
     for (unsigned i=0;i<2000 && !uploader.PollUploads();++i)std::this_thread::sleep_for(std::chrono::milliseconds(1));
     REQUIRE(uploader.model.textures.size()==1);CHECK(uploader.model.textures[0].resource->GetDesc().Format==DXGI_FORMAT_R8G8B8A8_UNORM);
     uploader.uploadIsCancelled=[] {return true;};CHECK_FALSE(uploader.BeginUploadModel({}, {}, {image},error));
+    uploader.WaitForIdle();
+}
+
+TEST_CASE("One uploaded geometry allocation backs many stable hierarchical instance draws", "[graphics][fbx-002][instances]")
+{
+    const double identity[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    const double preciseOrigin[3]={1.0e12+0.25,-2.0e12+0.5,3.0e12+0.75};
+    const double preciseScene[3]={1.0e12,-2.0e12,3.0e12};const double preciseCamera[3]={0.125,0.25,0.5};
+    DirectX::XMFLOAT4X4 identityAxis;DirectX::XMStoreFloat4x4(&identityAxis,DirectX::XMMatrixIdentity());
+    const auto relative=BuildCameraRelativeInstanceTransform(identity,preciseOrigin,preciseScene,preciseCamera,identityAxis);
+    CHECK(relative.localToCamera._41==0.125f);CHECK(relative.localToCamera._42==0.25f);CHECK(relative.localToCamera._43==0.25f);
+    D3D12ViewerPath uploader;uploader.device.AttachForUpload(SharedDevice().Device());
+    D3D12UploadRing::CreateOptions options;options.initialCapacityBytes=64*1024;options.maxCapacityBytes=64*1024;options.growthIncrementBytes=0;
+    REQUIRE(uploader.uploadRing.Initialize(uploader.device,options));
+    d3d12_import_bridge::ImportedMesh mesh;mesh.chunkId=1;mesh.topology=model_core::ChunkTopology::TriangleList;
+    mesh.vertexLayoutId=model_core::VertexLayoutId::PositionOnly_F32;mesh.vertexCount=3;mesh.indexCount=3;
+    mesh.geometry.chunkId=1;mesh.geometry.topology=mesh.topology;mesh.geometry.vertexCount=3;mesh.geometry.indexCount=3;
+    mesh.geometry.vertexLayoutId=uint32_t(mesh.vertexLayoutId);mesh.geometry.origin[0]=1.0e12;
+    const model_core::VertexPositionOnlyF32 vertices[3]={{0,0,0},{1,0,0},{0,1,0}};const uint32_t indices[3]={0,1,2};
+    const auto vb=std::as_bytes(std::span(vertices));const auto ib=std::as_bytes(std::span(indices));
+    mesh.payload.assign(vb.begin(),vb.end());mesh.payload.insert(mesh.payload.end(),ib.begin(),ib.end());
+    std::vector<d3d12_import_bridge::ImportedNode> nodes(32);
+    std::vector<d3d12_import_bridge::ImportedInstance> instances(32);
+    for(uint32_t i=0;i<32;++i){auto& node=nodes[i].data;node.nodeId=100+i;node.parentNodeId=i?100:0;
+        node.flags=model_core::kSceneRecordVisible;node.localTransform[0]=i==31?-1:1;
+        node.localTransform[5]=node.localTransform[10]=node.localTransform[15]=1;node.localTransform[12]=i?double(i)*8:1.0e12;
+        auto& instance=instances[i].data;instance.instanceId=1000+i;instance.nodeId=node.nodeId;
+        instance.geometryChunkId=1;instance.flags=model_core::kSceneRecordVisible;
+        instance.worldMin[0]=1.0e12;instance.worldMax[0]=1.0e12+1;instance.worldMin[1]=0;instance.worldMax[1]=1;
+    }
+    std::wstring error;REQUIRE(uploader.BeginUploadModel({mesh},{},{},error,nodes,instances));
+    REQUIRE(uploader.pendingModel.meshes.size()==32);CHECK(uploader.pendingResourceCount==2);
+    auto* sharedVertex=uploader.pendingModel.meshes[0].vertexBuffer.Get();auto* sharedIndex=uploader.pendingModel.meshes[0].indexBuffer.Get();
+    for(uint32_t i=0;i<32;++i){const auto& draw=uploader.pendingModel.meshes[i];
+        CHECK(draw.vertexBuffer.Get()==sharedVertex);CHECK(draw.indexBuffer.Get()==sharedIndex);
+        CHECK(draw.instanceId==1000+i);CHECK(draw.instanceTransform[12]>=1.0e12);}
+    CHECK(uploader.pendingModel.meshes.back().mirrored);
     uploader.WaitForIdle();
 }
 

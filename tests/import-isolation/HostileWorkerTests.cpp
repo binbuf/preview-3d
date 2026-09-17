@@ -222,3 +222,40 @@ TEST_CASE("Hostile worker claiming an unrecognized vertex layout ID is rejected 
 
     WaitForSingleObject(launch->proc.process.get(), 5000);
 }
+
+TEST_CASE("Hostile scene-instance graph attacks are rejected before any record is published",
+          "[hostile-worker][fbx-002]")
+{
+    const std::wstring modes[]={L"--scene-invalid-parent",L"--scene-cycle",L"--scene-nan",L"--scene-inf",
+        L"--scene-illegal-topology",L"--scene-duplicate",L"--scene-oversized",L"--scene-unresolved"};
+    uint64_t generation=800;
+    for(size_t modeIndex=0;modeIndex<std::size(modes);++modeIndex){const auto& mode=modes[modeIndex];DYNAMIC_SECTION("scene attack " << modeIndex){
+        sandbox_test_support::SandboxFixture fixture;
+        auto section=import_broker::CreateSharedSection(import_broker::kSyntheticSectionBytes);REQUIRE(section);
+        auto launch=LaunchHostileWorker(fixture.sid,mode,section.get());REQUIRE(launch);REQUIRE(import_broker::ResumeSandboxProcess(launch->proc));
+        model_core::StartGenerationRequest request{};request.generationId=generation++;request.sceneVariant=model_core::kSceneVariant_CubeAndPointCluster;
+        request.sectionHandleValue=reinterpret_cast<uint64_t>(section.get());request.sectionByteCapacity=import_broker::kSyntheticSectionBytes;request.maxChunkCount=8;
+        REQUIRE(model_core::WriteControlMessage(launch->controlInWrite.get(),model_core::ControlOpcode::StartGeneration,&request,sizeof(request)));
+        auto received=model_core::ReadControlMessage(launch->controlOutRead.get());REQUIRE(received);
+        auto view=platform::MappedView::Map(section.get(),FILE_MAP_READ,import_broker::kSyntheticSectionBytes);REQUIRE(view);
+        auto result=import_broker::ValidateAndCopySection(view.bytes(),request.generationId,request.maxChunkCount);
+        CHECK_FALSE(result.ok);CHECK(result.chunks.empty());WaitForSingleObject(launch->proc.process.get(),5000);
+    }}
+}
+
+TEST_CASE("Hostile worker cannot mutate an accepted instance hierarchy after the host copy",
+          "[hostile-worker][fbx-002]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto section=import_broker::CreateSharedSection(import_broker::kSyntheticSectionBytes);REQUIRE(section);
+    auto launch=LaunchHostileWorker(fixture.sid,L"--scene-mutate",section.get());REQUIRE(launch);REQUIRE(import_broker::ResumeSandboxProcess(launch->proc));
+    model_core::StartGenerationRequest request{};request.generationId=900;request.sceneVariant=model_core::kSceneVariant_CubeAndPointCluster;
+    request.sectionHandleValue=reinterpret_cast<uint64_t>(section.get());request.sectionByteCapacity=import_broker::kSyntheticSectionBytes;request.maxChunkCount=8;
+    REQUIRE(model_core::WriteControlMessage(launch->controlInWrite.get(),model_core::ControlOpcode::StartGeneration,&request,sizeof(request)));
+    auto received=model_core::ReadControlMessage(launch->controlOutRead.get());REQUIRE(received);
+    auto view=platform::MappedView::Map(section.get(),FILE_MAP_READ,import_broker::kSyntheticSectionBytes);REQUIRE(view);
+    auto result=import_broker::ValidateAndCopySection(view.bytes(),request.generationId,8);REQUIRE(result.ok);REQUIRE(result.chunks.size()==4);
+    model_core::NodePayload accepted{};std::memcpy(&accepted,result.chunks[2].payload.data(),sizeof(accepted));CHECK(accepted.localTransform[12]==2);
+    REQUIRE(WaitForSingleObject(launch->proc.process.get(),5000)==WAIT_OBJECT_0);
+    model_core::NodePayload after{};std::memcpy(&after,result.chunks[2].payload.data(),sizeof(after));CHECK(after.localTransform[12]==2);
+}

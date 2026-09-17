@@ -55,6 +55,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--configuration',choices=['Debug','Release'],default='Debug')
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--fbx-only',action='store_true',help='Run only the FBX product metadata and static-pose checks')
     args = parser.parse_args()
     if not user.SetProcessDpiAwarenessContext(W.HANDLE(-4)):
         raise C.WinError(C.get_last_error())
@@ -101,7 +102,7 @@ def main():
         original_ground_axis = query(71)
         if original_native: query(30)
         send(hwnd,0x8000+104,70,0) # Automatic; does not alter persisted settings.
-        for name in hashes:
+        for name in (() if args.fbx_only else hashes):
             if name == progressive.name: continue
             generation = open_file(directory/name)
             wait(lambda:query(0)==3 and query(4)==generation,'verified scene '+name)
@@ -156,27 +157,39 @@ def main():
                 report['groundAxisCycle'] = {'Z':True,'Y':True,'X':True,'gpuPick':True}
                 send(hwnd,0x8000+104,70,0) # Restore automatic for remaining fixtures.
             send(hwnd,0x111,32789)
-        generation = open_file(progressive)
-        wait(lambda:query(4)==generation and query(8)<64,'partial metadata')
-        assert query(0)==2 and query(16)==0 and query(13)==query(8)*3
-        first = query(8)
-        send(hwnd,0x20a,120<<16)
-        target_distance = number(31)
-        home = number(27)
-        wait(lambda:query(0)==3,'terminal verified metadata')
-        assert query(16)==1 and query(13)==192 and query(14)==64 and query(20)==64
-        assert number(31)==target_distance, 'late bounds correction overwrote user movement'
-        assert number(27)>home, 'verified bounds did not update home framing'
-        send(hwnd,0x111,32773)
-        assert number(31)>target_distance, 'Reset did not use verified home bounds'
-        report['interactionEpochFraming'] = {'firstChunks':first,'terminalVertices':query(13),'userTargetPreserved':True,'resetUsesVerifiedBounds':True}
-        # A second import without user movement must correct live framing too.
-        generation = open_file(progressive)
-        wait(lambda:query(4)==generation and query(8)<64,'untouched partial framing')
-        target_distance = number(31)
-        wait(lambda:query(0)==3,'untouched terminal framing')
-        assert number(31)>target_distance and number(31)==number(27)
-        report['untouchedCameraCorrection'] = True
+        fbx = ROOT/'tests/fixtures/fbx-spike/combined-skin-blend-ascii.fbx'
+        generation = open_file(fbx)
+        wait(lambda:query(0)==3 and query(4)==generation,'deformed FBX metadata and pose')
+        assert query(17)==8 and query(16)==1, 'FBX format or transformed bounds were lost'
+        assert query(13)==528 and query(14)==176 and query(15)==0
+        assert query(19)>0 and query(20)==15 and query(80)>0
+        assert query(81)==1 and query(82)==1 and query(83)==4
+        assert query(8)>0, 'deformed FBX produced no displayed GPU chunks'
+        report['scenes'].append({'fixture':fbx.name,'vertices':query(13),'triangles':query(14),
+            'materials':query(19),'nodes':query(20),'meshes':query(80),'animations':query(81),
+            'skins':query(82),'bones':query(83),'verifiedBounds':bool(query(16)),'gpuChunks':query(8)})
+        if not args.fbx_only:
+            generation = open_file(progressive)
+            wait(lambda:query(4)==generation and query(8)<64,'partial metadata')
+            assert query(0)==2 and query(16)==0 and query(13)==query(8)*3
+            first = query(8)
+            send(hwnd,0x20a,120<<16)
+            target_distance = number(31)
+            home = number(27)
+            wait(lambda:query(0)==3,'terminal verified metadata')
+            assert query(16)==1 and query(13)==192 and query(14)==64 and query(20)==64
+            assert number(31)==target_distance, 'late bounds correction overwrote user movement'
+            assert number(27)>home, 'verified bounds did not update home framing'
+            send(hwnd,0x111,32773)
+            assert number(31)>target_distance, 'Reset did not use verified home bounds'
+            report['interactionEpochFraming'] = {'firstChunks':first,'terminalVertices':query(13),'userTargetPreserved':True,'resetUsesVerifiedBounds':True}
+            # A second import without user movement must correct live framing too.
+            generation = open_file(progressive)
+            wait(lambda:query(4)==generation and query(8)<64,'untouched partial framing')
+            target_distance = number(31)
+            wait(lambda:query(0)==3,'untouched terminal framing')
+            assert number(31)>target_distance and number(31)==number(27)
+            report['untouchedCameraCorrection'] = True
         report['debugLayerAvailable'] = bool(query(36))
         report['debugLayerErrors'] = query(35)
         assert query(35)==0, 'D3D12 debug errors'

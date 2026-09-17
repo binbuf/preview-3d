@@ -1,6 +1,6 @@
 # FBX post-MVP work plan
 
-Status: proposed execution plan  
+Status: active execution plan; FBX-006 complete
 Prepared: 2026-09-17  
 Design authority: [../design/README.md](../design/README.md)
 
@@ -18,14 +18,18 @@ validation spike. Implement it through the tasks in this directory.
 - The worker pool, brokered primary/sidecar handles, cancellation event,
   progressive shared-section batches, copy-then-validate host path, Tier-B
   limits, PBR material payload, and image decode path already serve OBJ/MTL.
-- The OBJ adapter world-bakes node transforms into duplicated geometry.
-  Protocol v9 has mesh/node numeric labels but no validated node/instance
-  payload, so it cannot preserve FBX hierarchy and reusable instances as the
-  design requires.
-- There is no FBX control opcode, request, adapter, broker format, source-format
-  ID, renderer route, fixture corpus, or qualification evidence.
-- `.fbx` is deliberately rejected by command-line/secondary activation, the
-  picker, drag/drop, Shell integration, and packaging documentation.
+- Protocol v10 has validated node/instance payloads and the renderer's shared
+  geometry/instance path. The FBX control opcode, request, source-format ID,
+  worker adapter, deterministic static deformation evaluation, and focused
+  binary/ASCII fixture corpus are present behind that sandbox boundary.
+- FBX-005 is complete: normalized material conversion, embedded images,
+  brokered sidecars, sidecar attacks, corrupt/pressure fallback, progressive
+  dependencies, layered-texture policy, and distinct per-instance materials
+  are qualified in Debug and Release.
+- FBX-006 is complete: `.fbx` is enabled by command-line/secondary activation,
+  the picker, drag/drop boundary, renderer, Open With discovery, NSIS
+  registration, metadata, and packaging documentation. Explorer thumbnails
+  remain deliberately absent.
 - The Explorer thumbnail project is only a DLL entry-point stub. FBX thumbnail
   work therefore depends on the general Gate 6 provider foundation; it must not
   be smuggled into the viewer slice.
@@ -72,8 +76,9 @@ unbrokered filesystem access remain out of scope.
 Tasks are deliberately sequential. FBX-002 changes the normalized scene
 contract consumed by later tasks; FBX-003 through FBX-005 build one adapter in
 layers; FBX-006 must not advertise the extension before the parser and feature
-policy are complete. Within a task, implementation and its focused tests land
-together.
+policy are complete. FBX-006 completed the product integration and unblocks
+FBX-007 qualification.
+Within a task, implementation and its focused tests land together.
 
 ## Completion boundaries
 
@@ -105,4 +110,3 @@ together.
    required.
 8. A failed spike changes the design/ADR and this plan before implementation;
    it does not justify relaxing isolation, memory, or cancellation invariants.
-

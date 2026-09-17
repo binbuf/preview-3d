@@ -69,6 +69,10 @@ int RunHonestBatches();
 int RunCatalogBatches(int mode);
 int RunTextureAttack(int mode);
 int RunMetadataAttack(int mode);
+// Protocol-v10 scene-record attacks: invalid parent, cycle, non-finite
+// transforms, topology/reference lies, duplicate/oversized catalogs, a late
+// unresolved cross-generation id, and post-read mutation.
+int RunSceneInstanceAttack(int mode);
 
 // Sends batch 0, waits for its ack, then sends batch 0 again instead of
 // batch 1. Proves a replayed index cannot re-present bytes the host already

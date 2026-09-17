@@ -84,6 +84,7 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> pickRtvHeap;
     Microsoft::WRL::ComPtr<ID3D12Resource> pickReadback;
     uint64_t pickFence = 0;
+    uint32_t lastPickedId = 0;
     bool pickInFlight = false;
     int pickX = -1, pickY = -1;
     // Complete material variant: base-color, metallic/roughness, normal, and
@@ -92,8 +93,10 @@ struct D3D12ViewerPath
     // rootSignature/pipelineState above unchanged.
     Microsoft::WRL::ComPtr<ID3D12RootSignature> texturedRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedMirroredPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedDoubleSidedPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendMirroredPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendDoubleSidedPipelineState;
     // kFrameCount slots of 256 bytes (D3D12's CBV alignment), bound at
     // GetGPUVirtualAddress() + frameIndex * kConstantBufferSlotBytes. One
@@ -119,6 +122,7 @@ struct D3D12ViewerPath
         uint32_t materialChunkId = 0;
         uint32_t sourceMeshId = 0;
         uint32_t sourceNodeId = 0;
+        uint32_t instanceId = 0; // stable scene/picking id; 0 for legacy world-baked draws
         model_core::ChunkDescriptor sourceGeometry{}; // retained bounded source provenance for re-decode
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> textureHeap;
         UINT textureDescriptorSize = 0;
@@ -129,6 +133,9 @@ struct D3D12ViewerPath
         bool completeVertex = false;
         bool drawEnabled = true;
         double origin[3]{};
+        double instanceTransform[16]{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+        double instanceBoundsMin[3]{}, instanceBoundsMax[3]{};
+        bool mirrored = false;
         int textureIndex = -1; // base-color index retained for pressure compatibility
         int textureIndices[4]{-1,-1,-1,-1};
         Microsoft::WRL::ComPtr<ID3D12Resource> neutralResources[4];
@@ -257,6 +264,7 @@ struct D3D12ViewerPath
     void RenderFrame(const DirectX::XMFLOAT4X4& viewProjection, const DirectX::XMFLOAT4& orientation,
                      const OverlayFrame& chrome, const double cameraTarget[3], const DirectX::XMFLOAT4& eyeSelection);
     bool PollPick(bool& hit);
+    uint32_t LastPickedId() const noexcept { return lastPickedId; }
 
     // Uploads TriangleList meshes in complete, normal/UV, or position-only
     // layouts and PointList meshes in complete or position-only layouts on
@@ -274,7 +282,9 @@ struct D3D12ViewerPath
     bool BeginUploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
                            const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
                            const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
-                           std::wstring& error);
+                           std::wstring& error,
+                           std::span<const d3d12_import_bridge::ImportedNode> importedNodes = {},
+                           std::span<const d3d12_import_bridge::ImportedInstance> importedInstances = {});
 
     // Drains the ring's fence-complete publications and, once every
     // resource of the in-flight model is ready, swaps it in as the drawable

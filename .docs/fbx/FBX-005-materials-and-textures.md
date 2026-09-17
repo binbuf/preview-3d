@@ -1,6 +1,6 @@
 # FBX-005: unified materials and texture dependencies
 
-Status: blocked on FBX-004  
+Status: complete
 Depends on: FBX-004  
 Unblocks: FBX-006
 
@@ -64,3 +64,33 @@ sidecars under the common decode budgets.
 - OBJ/MTL material and texture regression tests are byte/semantically unchanged.
 - Debug/Release Unit and full ImportIsolation suites pass.
 
+## Completion (2026-09-17)
+
+- The apparent external-image worker crash was a harness defect, not an FBX
+  protocol defect: the FBX request helper left both sidecar limits at their
+  zero defaults, so the trusted broker correctly stopped the first request at
+  `SidecarRequestLimit`. The helper now supplies the same bounded nonzero shape
+  as product callers. Untouched upstream external-texture FBX reproduced the
+  limit before the fix; no containment or worker-failure rule was weakened.
+- Embedded PNG/JPEG/WebP and broker-approved local JPEG sidecars decode through
+  byte sniffing and the existing explicit codec paths. Tests cover sRGB/linear
+  role semantics, full raster mip chains, factors, transparency/alpha mode,
+  emissive, normal and bump fallback, UV transforms, deterministic missing,
+  corrupt and byte-capped fallbacks, and hard traversal/absolute/UNC/remote/ADS
+  rejection.
+- Aggregate decoded texture pressure now remains a typed `ResourceLimit`
+  instead of being mistaken for an optional corrupt texture. A test-only
+  request flag reduces that aggregate budget to exercise failure and
+  same-worker recovery without allocating the production 128 MiB allowance;
+  production limits are unchanged.
+- Pinned upstream `max_instanced_material_7700_ascii.fbx` proves one geometry
+  upload can serve three instances with distinct material IDs. Pinned upstream
+  `maya_texture_layers_7500_ascii.fbx` proves ambiguous layered graphs preserve
+  supported visible geometry and emit bounded warnings. Progressive material /
+  image dependencies validate across batches, and existing cancellation and
+  pooled recovery coverage remains green.
+- Debug and Release solution builds pass. Focused FBX materials pass 12 cases /
+  284 assertions; the complete FBX subset passes 25 / 47,968; Unit passes 98 /
+  7,609 Debug and 7,521 Release assertions; full ImportIsolation passes 249 /
+  100,693 assertions in each configuration. The unchanged OBJ regression subset
+  passes 7 / 82 in both configurations. FBX-006 is unblocked.

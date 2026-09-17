@@ -1,6 +1,6 @@
 # FBX-006: viewer, activation, and installer integration
 
-Status: blocked on FBX-005  
+Status: complete (2026-09-17)
 Depends on: FBX-003 through FBX-005  
 Unblocks: FBX-007
 
@@ -8,6 +8,46 @@ Unblocks: FBX-007
 
 Expose the completed FBX adapter through every viewer activation route and the
 current NSIS/Open With integration, without claiming Explorer thumbnails.
+
+## Start audit (2026-09-17)
+
+FBX-003 and FBX-004 provide the sandboxed `ImportFormat::Fbx` route and the
+normalized node/instance/deformed-geometry payloads. FBX-005 is now complete:
+embedded PNG/JPEG/WebP, sidecar/path-attack, corrupt/aggregate-pressure,
+layered-texture, progressive-dependency, and different-per-instance-material
+coverage is green in full Debug and Release qualification. Product integration
+may proceed without changing the worker boundary.
+
+The following integration inventory was recorded now so the unblock is a
+single consistent change rather than a series of partially-visible routes:
+
+- `D3D12ImportBridge` needs `SourceFormat::Fbx`, case-insensitive `.fbx`
+  classification, broker mapping, and FBX-specific user wording. Its generic
+  format label already safely produces `FBX`, but that is not a substitute for
+  accepting the route.
+- `ActiveInstance`, the file dialog, unsupported-format/retry wording, drag
+  and drop wording, and the About text each have separate closed extension
+  lists. All must include `.fbx` together.
+- `ShellIntegration` has a five-element supported-extension array; increasing
+  it invalidates/sanitizes the bounded Open With cache through its catalog
+  revision. This is viewer Open With discovery only, not thumbnail registration.
+- The NSIS product needs `Binbuf.Preview3D.FBX.1` in its ProgID,
+  capabilities, `OpenWithProgids`, uninstall, and association refresh paths.
+  The test-association reset script also currently omits the existing OBJ
+  ProgID, so its owned ProgID list must be corrected while adding FBX.
+- Existing recovery smoke deliberately uses `unsupported.FBX` as its rejected
+  input. Once FBX is enabled it must instead use a genuinely unsupported
+  extension (for example `.3mf`), while binary and ASCII FBX fixtures exercise
+  direct, forwarded, picker, and drop paths plus a valid reopen after failure.
+- Product documentation, portable/installer support limits, and the `ufbx`
+  notice all still describe FBX as deferred or OBJ-only. They need simultaneous
+  updates that explicitly retain the separate “Explorer thumbnails unavailable”
+  statement.
+
+The existing generic upload path already consumes validated geometry,
+materials, images, nodes, and instances. FBX-006 therefore must prove those
+results through the real app (including bounds and metadata) rather than add a
+viewer-side FBX parser or a parallel rendering route.
 
 ## Context to load
 
@@ -68,3 +108,49 @@ current NSIS/Open With integration, without claiming Explorer thumbnails.
   worker dependency/license closure, and have no unresolved non-system import.
 - Install/uninstall tests show `.fbx` in Open With/Default Apps without changing
   the user's selected default and without registering a thumbnail handler.
+
+## Completion (2026-09-17)
+
+FBX is enabled case-insensitively through the product import bridge, direct and
+secondary activation, picker, one-file drop boundary, Open With discovery,
+metadata UI, portable documentation, and NSIS registration. The installer owns
+`Binbuf.Preview3D.FBX.1`, advertises `.fbx` without writing `UserChoice`, and
+removes only its own registration. Shell integration catalog revision 4 forces
+one bounded rediscovery of the six supported extensions. No FBX thumbnail
+handler or `shellex` registration was added.
+
+The viewer continues to consume only validated normalized scene records from
+the AppContainer worker. Product smoke found that node chunks may span
+progressive publications: `D3D12ViewerPath` must not re-resolve a publication-
+local node fragment when the bridge has already stamped each instance with its
+generation-wide world transform. The corrected route presents the combined
+skin/blend fixture with 528 vertices, 176 triangles, 4 materials, 15 nodes, 6
+meshes, 1 animation stack, 1 skin, and 4 bones, verified transformed bounds,
+26 GPU chunks, and no Debug D3D validation errors.
+
+The same real-app pass exposed a pre-existing PSO portability issue. Color
+alpha blending must use independent render-target state so the `R32_UINT`
+pick-ID MRT never inherits target 0 blending; current drivers otherwise reject
+the grid and blended-material pipelines during startup.
+
+Verification completed in Debug and Release:
+
+- Unit: 98 cases / 7,612 assertions Debug; 98 / 7,524 Release.
+- ImportIsolation: full 250 / 100,704 in both configurations before the final
+  viewer-only fixes; focused FBX after the product bridge test: 26 / 47,977 in
+  both configurations.
+- Real-app activation: direct ASCII, uppercase binary secondary activation,
+  picker, drop boundary, replacement while loading, post-failure reopen,
+  pathless activation, and immediate relaunch all passed in both configurations.
+- Targeted real-app FBX metadata/static-pose and malformed-FBX recovery passed
+  in both configurations with no leaked worker.
+- Unsigned engineering portable packaging passed with 34 staged files and
+  SHA-256 `28e8344f768581975afc019bf20ee89e843dd17d69e10c93826a26d13d6d69ee`.
+  Unsigned NSIS packaging passed `/WX` with 35 staged files and setup SHA-256
+  `375938af2dbd97ca6d7467785e1971d566329db75f1df9c05ca906b6fc8978f7`.
+
+The VS 18.10 Release LTCG linker intermittently raised internal error C1001/
+LNK1000 while linking the large ImportIsolation executable. A serial non-LTCG
+test build completed and focused FBX remained green; the Release viewer and
+worker themselves rebuilt through both packaging targets. Clean-VM lifecycle,
+signed-candidate, corpus/fuzz, and performance evidence remain FBX-007 work.

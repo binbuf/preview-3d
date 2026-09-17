@@ -39,7 +39,8 @@ def fixtures(directory):
     directory.mkdir(parents=True, exist_ok=True)
     inputs = {
         'zero.glb': b'', 'zero.gltf': b'', 'zero.stl': b'', 'zero.ply': b'',
-        'unsupported.FBX': b'FBX',
+        'unsupported.3mf': b'3MF',
+        'malformed.FBX': b'not an fbx',
         'ascii.STL': b'solid triangle\nendsolid triangle\n',
         'ascii.PLY': b'ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n',
         'empty.stl': bytes(84),
@@ -63,7 +64,7 @@ def fixtures(directory):
     return {name: hashlib.sha256(data).hexdigest() for name, data in inputs.items()}
 
 
-def run(exe, directory):
+def run(exe, directory, fbx_only=False):
     app = subprocess.Popen([str(exe), '--app-smoke'])
     report = {'failure': None, 'events': []}
     hwnd = 0
@@ -110,10 +111,17 @@ def run(exe, directory):
         hwnd = find_window(app.pid)
         wait(lambda: query(2), 'visible background')
         valid_reopen()
+        if fbx_only:
+            failure(directory/'malformed.FBX',1,'parsing geometry')
+            valid_reopen()
+            send(hwnd,0x10)
+            app.wait(timeout=10)
+            assert app.returncode==0
+            return report
         for name in ['zero.glb','zero.gltf','zero.stl','zero.ply']:
             failure(directory/name,11,'opening source')
             valid_reopen()
-        for name, code in [('unsupported.FBX',8),('ascii.STL',9),('ascii.PLY',9),('empty.stl',11),('empty.ply',11),('empty.gltf',11),('required.gltf',10),('malformed.glb',1),('malformed.stl',1),('malformed.ply',1)]:
+        for name, code in [('unsupported.3mf',8),('malformed.FBX',1),('ascii.STL',9),('ascii.PLY',9),('empty.stl',11),('empty.ply',11),('empty.gltf',11),('required.gltf',10),('malformed.glb',1),('malformed.stl',1),('malformed.ply',1)]:
             failure(directory/name,code, 'opening source' if code==8 else 'parsing geometry')
             valid_reopen()
         corpus = ROOT/'interactive-viewer/test-assets/corpus'
@@ -135,7 +143,7 @@ def run(exe, directory):
         retry_path.write_bytes(triangle.read_bytes())
         send(hwnd,0x111,32775)
         wait(lambda: query(0)==3,'same-path corrected Retry')
-        failure(directory/'unsupported.FBX',8,'opening source')
+        failure(directory/'unsupported.3mf',8,'opening source')
         open_file(triangle,106)  # bounded stand-in for picker selection
         send(hwnd,0x111,32776)  # actual Open another card command
         wait(lambda: query(0)==3,'Open another Ready')
@@ -145,7 +153,7 @@ def run(exe, directory):
         report['warningCharacters'] = query(40)
         # Cancel before old replies can enter the UI, followed by invalid activation.
         open_file(triangle,105)
-        failure(directory/'unsupported.FBX',8)
+        failure(directory/'unsupported.3mf',8)
         time.sleep(.3)
         assert query(0)==4, 'stale result replaced failure card'
         valid_reopen()
@@ -178,12 +186,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--configuration', choices=['Debug','Release'],default='Debug')
     parser.add_argument('--output', type=Path,required=True)
+    parser.add_argument('--fbx-only',action='store_true',help='Run only malformed-FBX recovery and valid reopen')
     args = parser.parse_args()
     output = args.output.resolve(); output.parent.mkdir(parents=True,exist_ok=True)
     directory = output.parent/'recovery-fixtures'
     hashes = fixtures(directory); assert fixtures(directory)==hashes
     exe = ROOT/f'x64/{args.configuration}/Preview3D.exe'
-    report = {'configuration':args.configuration,'fixtureSha256':hashes,'exeSha256':hashlib.sha256(exe.read_bytes()).hexdigest(),'run':run(exe,directory)}
+    report = {'configuration':args.configuration,'fixtureSha256':hashes,'exeSha256':hashlib.sha256(exe.read_bytes()).hexdigest(),'run':run(exe,directory,args.fbx_only)}
     output.write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps(report,indent=2))
     if report['run']['failure']:

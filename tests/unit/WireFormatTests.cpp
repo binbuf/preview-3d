@@ -25,6 +25,9 @@ TEST_CASE("SectionHeader and ChunkDescriptor match the documented fixed-width wi
 {
     REQUIRE(sizeof(model_core::SectionHeader) == 88);
     REQUIRE(sizeof(model_core::ChunkDescriptor) == 160);
+    REQUIRE(model_core::kCurrentProtocolVersion == 10);
+    REQUIRE(sizeof(model_core::NodePayload) == 144);
+    REQUIRE(sizeof(model_core::MeshInstancePayload) == 80);
 
     CHECK(offsetof(model_core::SectionHeader, magic) == 0);
     CHECK(offsetof(model_core::SectionHeader, protocolVersion) == 4);
@@ -90,6 +93,8 @@ TEST_CASE("Info uses real counts units exact axis dimensions and provisional bou
     CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"PLY (ASCII)");
     metadata.source.format = model_core::SourceFormatId::Obj;
     CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"OBJ");
+    metadata.source.format = model_core::SourceFormatId::Fbx;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"FBX");
     CHECK(metadata.vertices.empty()); CHECK(metadata.indices.empty());
 }
 
@@ -158,7 +163,7 @@ TEST_CASE("Fnv1a64 is deterministic and detects single-byte corruption", "[wire-
     CHECK(corrupted != first);
 }
 
-TEST_CASE("Protocol-v9 wire checksum is split-invariant across parallel block boundaries", "[wire-format]")
+TEST_CASE("Protocol-v10 wire checksum is split-invariant across parallel block boundaries", "[wire-format]")
 {
     std::vector<std::byte> data(11*1024*1024+37);
     for (size_t i=0;i<data.size();++i) data[i]=std::byte((i*131+17)&0xff);

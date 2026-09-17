@@ -338,6 +338,11 @@ still open. lib3mf, TinyUSDZ and OpenUSD are not pinned, and
   - [ ] Execute the dependency-ordered FBX viewer plan in [`fbx/README.md`](fbx/README.md)
         through FBX-007. FBX-008 is the later original-MVP thumbnail adapter and remains
         blocked on the shared Gate 6 thumbnail-provider foundation.
+  - [x] FBX-001 through FBX-006: bounded worker adapter, normalized scene/instance
+        contract, deterministic deformation, materials/textures, and all viewer,
+        activation, Open With, installer, documentation, and package surfaces.
+  - [ ] FBX-007 corpus, fuzz, security, performance, clean-VM, and signed release
+        qualification. Viewer support is implemented; Gate 4 evidence is not yet complete.
 - [ ] **Slice 3** — 3MF Core/Materials/Production/Beam Lattice preview through lib3mf.
 - [ ] **Slice 4** — USDA/USDC/USD and USDZ common static subset through TinyUSDZ, inside the
       general import worker.
