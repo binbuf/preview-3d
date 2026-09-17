@@ -66,7 +66,7 @@
       <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>ws2_32.lib;windowscodecs.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;windowscodecs.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -74,6 +74,8 @@
     <ClCompile Include="src\ContainmentProbes.cpp" />
     <ClCompile Include="src\GenerationWorker.cpp" />
     <ClCompile Include="src\FbxSpikeWorker.cpp" />
+    <ClCompile Include="src\UsdSpikeWorker.cpp" />
+    <ClCompile Include="src\UsdZipPreflight.cpp" />
     <ClCompile Include="src\SyntheticSceneGenerator.cpp" />
     <ClCompile Include="src\GltfImportWorker.cpp" />
     <ClCompile Include="src\GltfAdapter.cpp" />
@@ -104,6 +106,8 @@
     <ClInclude Include="src\ContainmentProbes.h" />
     <ClInclude Include="src\GenerationWorker.h" />
     <ClInclude Include="src\FbxSpikeWorker.h" />
+    <ClInclude Include="src\UsdSpikeWorker.h" />
+    <ClInclude Include="src\UsdZipPreflight.h" />
     <ClInclude Include="src\SyntheticSceneGenerator.h" />
     <ClInclude Include="src\GltfImportWorker.h" />
     <ClInclude Include="src\GltfAdapter.h" />

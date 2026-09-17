@@ -1,6 +1,7 @@
 # USD post-MVP work plan
 
-Status: planned; no USD product route is implemented  
+Status: implementation in progress; USD-001 spike complete, no USD product route is implemented
+
 Prepared: 2026-09-17  
 Design authority: [design/README.md](design/README.md)
 
@@ -47,10 +48,11 @@ The design is internally consistent about the intended endpoint:
 - `design/11-decisions-and-risks.md` requires separate TinyUSDZ and OpenUSD
   validation spikes before either route can be treated as production-ready.
 
-The implementation has none of the USD vertical slice yet:
+The product implementation still has none of the USD vertical slice. USD-001
+added only a pinned dependency and test-only worker route:
 
-- `vcpkg.json` pins neither TinyUSDZ nor OpenUSD. There is no checked-in
-  TinyUSDZ port or minimal OpenUSD build recipe.
+- `vcpkg.json` and the checked-in overlay pin TinyUSDZ 0.9.1 for the completed
+  feasibility spike. OpenUSD is not pinned and has no minimal build recipe.
 - `compatibility-host/src/main.cpp` is an empty four-line process, and its
   project has no broker, model-core, OpenUSD, sandbox-client, or adapter code.
 - Protocol v10 has no USD start opcode/request, `SourceFormatId`,
@@ -144,7 +146,8 @@ typed fallback and compatibility host work end to end.
 
 ## USD-001: TinyUSDZ feasibility and policy spike
 
-Status: ready  
+Status: complete (2026-09-17); proceed with the revised self-contained-layer fast subset in [USD-001-SPIKE-RESULTS.md](USD-001-SPIKE-RESULTS.md)
+
 Depends on: none  
 Unblocks: USD-002 and USD-003
 
@@ -204,7 +207,8 @@ opcode.
 
 ## USD-002: OpenUSD host and resolver spike
 
-Status: blocked on USD-001's feature matrix  
+Status: ready; USD-001 feature matrix complete
+
 Depends on: USD-001  
 Unblocks: USD-003, USD-006, and USD-007
 
@@ -720,4 +724,3 @@ OpenUSD and the compatibility host are never part of this path.
 - [OpenUSD `UsdStage` loading API](https://openusd.org/release/api/class_usd_stage.html)
 - [OpenUSD asset resolution](https://openusd.org/release/wp_ar2.html)
 - [OpenUSD USDZ specification](https://openusd.org/files/USDZFileFormatSpecification.pdf)
-

@@ -4,6 +4,55 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **USD-001 TinyUSDZ feasibility and policy spike (2026-09-17): complete with
+  a revised fast-path boundary.** The repository now pins TinyUSDZ v0.9.1 at
+  commit `a04ee0bcbd1a930e30cc40938fcee3526a6fa8eb` through a checked-in static
+  overlay. USDA, USDC, and stored/aligned USDZ load from broker-supplied memory
+  and produce identical normalized hashes in Debug and Release inside the real
+  zero-capability AppContainer worker. This is a test-only
+  `--usd-spike-pool` route; no product opcode, extension, viewer route, or
+  thumbnail behavior is exposed.
+
+  TinyUSDZ has a usable whole-asset resolver callback but no ranged asset,
+  allocator, progress, or cancellation callback. Its
+  `max_memory_limit_in_mb` option is advisory: a roughly 4 MiB USDA load
+  succeeded with a 1 MiB setting. A 16 MiB Job limit instead produced a
+  controlled allocation failure and the same worker handled the next valid
+  request. Noninterruptible work is contained by the existing 500 ms grace,
+  terminate/replace path (515 ms Debug, 514 ms Release). Future adapters must
+  preflight/account everything they own and treat the worker Job limit as the
+  hard in-call allocation backstop; do not describe the library option as a
+  budget. Define `NOMINMAX` before the installed TinyUSDZ headers on Windows.
+
+  The exact fast policy is now deliberately a self-contained root layer. Any
+  USD composition arc returns `UnsupportedComposition` before publication and
+  is eligible for the OpenUSD host; image asset dependencies remain brokered
+  bytes, not composition. Malformed, unsafe, archive-limit,
+  unsupported-required-schema, and resource-limit failures never get a more
+  permissive retry. Product code independently preflights USDZ EOCD,
+  central/local agreement, normalized paths, case collisions, ZIP64,
+  encryption, stored-only method/size, 64-byte alignment, entries, aggregate
+  expansion, and ratio before TinyUSDZ access.
+
+  The Release worker grew from 779,264 B to 5,304,320 B (4,525,056 B delta);
+  no DLL was added. The upstream static archive is monolithic and includes
+  vendored code even though codecs/bridges are disabled, so USD-005 must audit
+  actual linked members and embedded third-party notices instead of shipping
+  only the top-level Apache-2.0 file. The Visual Studio-bundled vcpkg
+  `2026-07-27` is required for this repository baseline; the older standalone
+  `2025-06` client fails in current helper scripts with unsupported CMake list
+  operations.
+
+  Focused USD passes 7 cases / 180 assertions in both configurations. MSVC
+  14.51 LTCG ICEs after the TinyUSDZ archive is added to the already-large
+  Release ImportIsolation harness, so WPO is disabled only for that test
+  executable; product Release LTCG remains enabled. A full Debug isolation run
+  reached 257 cases / 100,850 assertions with four independently reproducible
+  pre-existing FBX fixture-string rewrite failures; the USD cases remain
+  green. Full dependency, API, feature-policy, measurement, fixture, and
+  follow-on details are in `.docs/USD-001-SPIKE-RESULTS.md`. USD-002 and
+  USD-003 are unblocked; thumbnails remain a separate USD-010 task.
+
 - **FBX-006 viewer, activation, and installer integration (2026-09-17):
   complete.** `.fbx` now routes case-insensitively through the existing
   AppContainer import bridge and normalized progressive renderer. Direct and

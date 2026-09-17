@@ -1,0 +1,15 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1356,0 +1357,11 @@ endif(TINYUSDZ_BUILD_TESTS)
++# Preview3D's vcpkg overlay consumes only the static reader/conversion
++# library. Upstream currently has no library/header install rules.
++install(TARGETS tinyusdz_static
++        ARCHIVE DESTINATION lib)
++install(DIRECTORY "${PROJECT_SOURCE_DIR}/src/"
++        DESTINATION include
++        FILES_MATCHING
++        PATTERN "*.h"
++        PATTERN "*.hh"
++        PATTERN "*.hpp"
++        PATTERN "*.inc")
