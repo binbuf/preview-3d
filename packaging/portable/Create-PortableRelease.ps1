@@ -203,7 +203,7 @@ foreach ($name in $workerCrt) {
     Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $workerStage $name)
 }
 
-$thirdParty = @('basisu', 'draco', 'fastgltf', 'ktx', 'libwebp', 'meshoptimizer', 'simdjson', 'zstd')
+$thirdParty = @('basisu', 'draco', 'fastgltf', 'ktx', 'libwebp', 'meshoptimizer', 'simdjson', 'ufbx', 'zstd')
 $vcpkgTripletRoot = Join-Path $repository 'vcpkg_installed\x64-windows\x64-windows'
 $vcpkgStatusPath = Join-Path $repository 'vcpkg_installed\x64-windows\vcpkg\status'
 foreach ($name in $thirdParty) {

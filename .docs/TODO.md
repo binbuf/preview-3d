@@ -7,8 +7,8 @@ happened and what surprised us, this one records what is left. Neither replaces 
 when they disagree, `.docs/design/` wins and this file is what needs fixing.
 
 **Scope-limited MVP:** [NEW_SCOPE_LIMITED_MVP_TASKS.md](./NEW_SCOPE_LIMITED_MVP_TASKS.md)
-is the active implementation sequence and overrides the broader gate scope below.
-TSK-101 through TSK-304 are implemented. TSK-305 release acceptance has been
+is the completed historical implementation sequence; it no longer overrides the
+post-MVP gate work below. TSK-101 through TSK-304 are implemented. TSK-305 release acceptance has been
 executed, but the scope-limited MVP is not release-ready. The retained
 multi-GiB GLB/STL/PLY usefulness gates remain red; the final budget matrix also
 reproduces an 8M-point PLY complete-proxy timeout in discrete and simulated-UMA
@@ -35,8 +35,8 @@ Two rules this list is written to, both from the delivery plan itself:
 | 0 — foundations | 4 of 7 partly open | 1 of 5 open | Primitives landed; CI, SBOM, ETW schema and fixture manifest never did |
 | 1 — responsive native shell | 5 of 6 partly open | 5 of 5 open | Renderer built; shell obligations and all evidence outstanding |
 | 2 — streaming proof + import sandbox | done | 2 of 8 open | Deliverables complete; three components never wired into the app |
-| 3 — Tier A formats | 7.5 of 11 open | 6 of 6 open | **Current gate.** Both structural blockers now closed |
-| 4 — Tier B breadth | 5 of 5 open | 6 of 6 open | Not started; no dependency pinned |
+| 3 — Tier A formats | 7.5 of 11 open | 6 of 6 open | Retained qualification/debt; both structural blockers are closed |
+| 4 — Tier B breadth | 5 of 5 open | 6 of 6 open | **Active post-MVP gate.** OBJ/MTL product path landed; its qualification bundle and the other four slices remain open |
 | 5 — integrated viewer UX | 10 of 10 open | 5 of 5 open | Not started |
 | 6 — Explorer thumbnails | 6 of 6 open | 6 of 6 open | Stub DLL only |
 | 7 — installer and hardening | 6 of 6 open | 5 of 5 open | Original WiX/MSI gate remains open; additive scope-limited NSIS installer now exists under `packaging/installer/` |
@@ -172,10 +172,10 @@ and does not appear in the design docs.
   - [ ] `EXT_meshopt_compression` and `KHR_mesh_quantization` (`GltfAdapter.cpp:922-931` enables
         only `KHR_texture_transform`). Also closes validation spike 3.
 - [x] **3. Binary/ASCII STL and PLY mesh/point-cloud adapters** — *import only.*
-  - [ ] **PLY point clouds are never rendered** — `D3D12ViewerPath.cpp:972` skips
-        `PointList`/`PositionOnly_F32`. `04-…:60` wants depth-tested camera-scaled round splats.
-  - [ ] **Both emit exactly one chunk per file**, so neither can use progressive delivery and
-        A-large-stl/ply stay unreachable until deliverable 5's splitting lands.
+  - [x] PLY point clouds render as depth-tested camera-scaled splats.
+  - [x] Binary STL/PLY use the Tier A scan/coarse/detail pipeline; post-MVP ASCII
+        STL/PLY emit bounded progressive Tier B batches without claiming the Tier A
+        coarse-proxy or multi-gigabyte performance contract.
 - [x] **4. Bounded Draco decode + KTX2/Basis transcode**
 - [ ] **5. Verified bounds, double-origin cluster normalization, normal/tangent policy.** Not
       started, and the largest structural item left.
@@ -239,8 +239,9 @@ and does not appear in the design docs.
   - [ ] **No warning channel exists at all** — needs a bounded warning list on the wire.
   - [ ] Preserve format, byte offset / object path where safe, and a correlation ID in diagnostic
         logs; map typed codes to user text app-side.
-  - [ ] An ASCII-PLY file currently reuses `MalformedData`, a worse diagnostic than a dedicated
-        unsupported-dialect code.
+  - [x] ASCII STL/PLY carry distinct source-format provenance and normal shipping
+        imports no longer fail as an unsupported dialect; malformed text remains a
+        typed `MalformedData` failure.
 
 ### Exit criteria — 0 of 6 demonstrable
 
@@ -311,11 +312,27 @@ Both structural blockers are closed and none of these is the output window:
 
 ## Gate 4 — Tier B format breadth
 
-Five independent vertical slices (`10-…:155-174`), none started. **No Tier B dependency is pinned**
-— `vcpkg.json` has no ufbx, lib3mf, TinyUSDZ or OpenUSD — and `compatibility-host/src/main.cpp` is
-a four-line `return 0;`.
+Five independent vertical slices (`10-…:155-174`). The first product path is implemented and
+ufbx 0.23.0 is pinned through the repository vcpkg overlay. Its release-qualification bundle is
+still open. lib3mf, TinyUSDZ and OpenUSD are not pinned, and
+`compatibility-host/src/main.cpp` remains a four-line `return 0;`.
 
 - [ ] **Slice 1** — OBJ plus MTL through ufbx, including local texture policy.
+  - [x] Product path: direct `.obj` open through one-shot and pooled AppContainer workers;
+        ufbx polygon triangulation, smoothing/generated normals, UVs, vertex colors and
+        object/group mesh separation; MTL factors plus broker-approved local base-color,
+        normal/bump and emissive maps; progressive normalized batches; dialog, drop,
+        activation, shell association, package and license wiring.
+  - [x] Focused adapter evidence: textured quad/material normalization, missing MTL fallback,
+        escaping MTL and texture rejection, object/material partitioning with generated normals,
+        small-section progressive batching, malformed-then-valid recovery, and shared
+        validator/protocol tests.
+  - [x] Dependency/license and regression closure: portable packaging includes the pinned ufbx
+        notice, and both portable and NSIS installer targets build; Debug and Release solution
+        builds, full Unit suites, and full 209-case ImportIsolation suites (including the hostile
+        worker) pass.
+  - [ ] Release qualification: checked-in conformance/golden and malformed corpora, fuzz seed,
+        cache-version evidence, and clean offline standard-user VM evidence.
 - [ ] **Slice 2** — FBX deterministic static start-pose evaluation through ufbx, including
       supported skin/blend deformation and unified PBR mapping.
 - [ ] **Slice 3** — 3MF Core/Materials/Production/Beam Lattice preview through lib3mf.

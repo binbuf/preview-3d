@@ -14,6 +14,7 @@
 #include "model_core/Checksum.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
+#include "model_core/TierALimits.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
 #include "model_core/GeometryBounds.h"
@@ -88,7 +89,7 @@ std::vector<std::byte> BuildMinimalValidSection(uint64_t generationId)
 
 TEST_CASE("Private geometry validation rejects bounds lies malformed origins metadata and unknown protocols", "[import-pipeline][bounds][metadata]")
 {
-    for (unsigned attack=0; attack<11; ++attack) {
+    for (unsigned attack=0; attack<12; ++attack) {
         CAPTURE(attack);
         auto section = BuildMinimalValidSection(202);
         model_core::SectionHeader header; std::memcpy(&header,section.data(),sizeof(header));
@@ -106,6 +107,10 @@ TEST_CASE("Private geometry validation rejects bounds lies malformed origins met
         case 8: header.scene.nodeCount = 1'000'001; break;
         case 9: descriptor.geometryFlags = 0xFFFFFFFF; break;
         case 10: header.protocolVersion = 2; break;
+        case 11:
+            header.scene.format = model_core::SourceFormatId::AsciiPly;
+            header.scene.meshCount = model_core::kTierBObjectLimit + 1;
+            break;
         }
         std::memcpy(section.data()+model_core::kSectionHeaderSize,&descriptor,sizeof(descriptor));
         header.sectionChecksum = model_core::WireChecksum64(std::span<const std::byte>(section).subspan(model_core::kSectionHeaderSize));

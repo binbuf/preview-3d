@@ -84,6 +84,12 @@ TEST_CASE("Info uses real counts units exact axis dimensions and provisional bou
     CHECK(sections[0].rows[1].value == L"3.000 m");
     metadata.relativeMax[0] = 1e-6;
     CHECK(BuildInfoPanelSections(metadata,true)[0].rows[0].value == L"1.000e-06 m");
+    metadata.source.format = model_core::SourceFormatId::AsciiStl;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"STL (ASCII)");
+    metadata.source.format = model_core::SourceFormatId::AsciiPly;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"PLY (ASCII)");
+    metadata.source.format = model_core::SourceFormatId::Obj;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"OBJ");
     CHECK(metadata.vertices.empty()); CHECK(metadata.indices.empty());
 }
 

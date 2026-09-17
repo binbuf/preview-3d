@@ -67,6 +67,9 @@ struct OverlayInfo
     int infoPanelWidth = 0;   // 0 when the Information panel is closed
     std::vector<InfoPanelSection> infoPanelSections;   // only meaningful while infoPanelWidth > 0
     float infoPanelScrollOffset = 0.0f;   // logical px scrolled down the section list, from WM_MOUSEWHEEL
+    RECT infoPanelCloseButtonRect{};   // client px, right-aligned in the fixed panel header
+    bool infoPanelCloseButtonHover = false;
+    bool infoPanelCloseButtonPressed = false;
     float zoomPercent = 100.0f;   // 100 == the default Fit framing distance
     RECT zoomTrackRect{};         // client px, the D2D-drawn zoom slider's track, valid while barBottomBarHeight > 0
     float zoomSliderT = 0.0f;     // 0..1 normalized zoom-slider thumb position

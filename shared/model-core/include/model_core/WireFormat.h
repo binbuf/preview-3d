@@ -81,7 +81,16 @@ struct ImportStatusPayload {
 };
 static_assert(sizeof(ImportStatusPayload) == 16);
 
-enum class SourceFormatId : uint32_t { Unknown = 0, Gltf = 1, Stl = 2, Ply = 3, Glb = 4 };
+enum class SourceFormatId : uint32_t {
+    Unknown = 0,
+    Gltf = 1,
+    Stl = 2,
+    Ply = 3,
+    Glb = 4,
+    AsciiStl = 5,
+    AsciiPly = 6,
+    Obj = 7,
+};
 enum class UpAxisId : uint32_t { Unknown = 0, Y = 1, Z = 2 };
 enum class BoundsState : uint32_t { Unknown = 0, Provisional = 1, Verified = 2 };
 constexpr uint32_t kGeometryHasUv0 = 1;

@@ -26,8 +26,12 @@ struct StlImportResult {
 // clusters. sourceStlBytes may be only the 84-byte prefix when mappedSource is
 // supplied. A binary-shaped file takes precedence over a leading "solid" name;
 // declared count, source extent and Tier A limits are checked before allocation.
-// ASCII remains an opted-in developer path. The final section is left in
-// destination; intermediate sections wait for batchSink acknowledgement.
+// ASCII uses the Tier B limits and the same bounded batch writer, but does
+// not participate in the Tier A random-detail/coarse-proxy protocol.
+// The final section is left in destination; intermediate sections wait for
+// batchSink acknowledgement.
+bool IsAsciiStl(std::span<const std::byte> sourcePrefix, uint64_t sourceSize);
+
 std::variant<StlImportResult, model_core::ImportErrorCode> ImportStl(
     std::span<const std::byte> sourceStlBytes, std::span<std::byte> destination, uint64_t generationId,
     uint32_t maxChunkCount, bool allowAscii = true, ChunkBatchSink* batchSink = nullptr,

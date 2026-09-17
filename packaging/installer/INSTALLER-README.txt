@@ -4,10 +4,11 @@
 3D Preview is a local, read-only viewer for these direct-open types:
 
 * .glb and .gltf 2.0, including broker-approved local relative sidecars;
-* binary .stl; and
-* binary little- or big-endian .ply triangle meshes and point clouds.
+* .obj polygon meshes with optional local .mtl and texture sidecars;
+* ASCII or binary .stl; and
+* ASCII or binary little- or big-endian .ply triangle meshes and point clouds.
 
-ASCII STL/PLY, OBJ, FBX, 3MF, USD, CAD formats, Explorer thumbnails, editing,
+FBX, 3MF, USD, CAD formats, Explorer thumbnails, editing,
 animation, network assets, and a persistent model-derived cache are not part of
 this scope-limited release.
 
@@ -15,7 +16,7 @@ File associations
 -----------------
 
 Setup registers 3D Preview with Windows Default Apps and Open With for .glb,
-.gltf, .stl, and .ply. Windows 11 requires the signed-in user to confirm default
+.gltf, .obj, .stl, and .ply. Windows 11 requires the signed-in user to confirm default
 app choices. Setup offers to open 3D Preview's Default Apps page after install;
 select 3D Preview for each listed extension there. Existing user choices are
 never overwritten by setup.

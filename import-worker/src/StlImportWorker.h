@@ -12,12 +12,13 @@ namespace import_worker {
 // GenerationError to stdOut. Returns true iff ChunksReady was sent.
 // Shared by both the one-shot --parse-stl entry point (RunStlImport) and
 // the --pool mode's request loop (WorkerRequestDispatch.cpp).
-bool HandleStlImportFileRequest(HANDLE stdOut, const model_core::ParseStlFileRequest& request, bool allowAsciiForTesting = false);
+bool HandleStlImportFileRequest(HANDLE stdOut, const model_core::ParseStlFileRequest& request,
+                                bool allowAscii = true);
 
 // Owns the --parse-stl mode's control-channel read/dispatch/write
 // sequence: reads one ParseStlFileRequest from the inherited stdin pipe
 // and dispatches to HandleStlImportFileRequest. Returns the process exit
 // code (0 on success). Mirrors GltfImportWorker::RunGltfImport's shape.
-int RunStlImport(bool allowAsciiForTesting = false);
+int RunStlImport(bool allowAscii = true);
 
 } // namespace import_worker

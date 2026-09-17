@@ -39,6 +39,7 @@ enum class ImportFormat : uint32_t {
     Gltf, // .glb and .gltf (the latter may pull sidecars)
     Stl,
     Ply,
+    Obj,
 };
 
 // How far the session got. model_core::ImportErrorCode is not sufficient on

@@ -268,7 +268,7 @@ std::optional<PlyImportLaunch> LaunchPlyImportWorker(const platform::AppContaine
 
     std::vector<HANDLE> inherited{ controlInRead.get(), controlOutWrite.get(), sourceFileHandle,
                                     outputSectionHandle };
-    std::wstring cmdLine = L"\"" + std::wstring(sandbox_test_support::WorkerExePath()) + L"\" --test-parse-ply-ascii";
+    std::wstring cmdLine = L"\"" + std::wstring(sandbox_test_support::WorkerExePath()) + L"\" --parse-ply";
 
     import_broker::SandboxLimits limits{};
     auto proc = import_broker::LaunchSuspendedSandboxed(
@@ -456,6 +456,7 @@ TEST_CASE("A vertex-only PLY (no face element) emits a PointList chunk", "[ply-i
     REQUIRE(run.validation.ok);
 
     const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.scene.format == model_core::SourceFormatId::Ply);
     CHECK(chunk.descriptor.topology == model_core::ChunkTopology::PointList);
     CHECK(chunk.descriptor.vertexCount == 2);
     CHECK(chunk.descriptor.indexCount == 0);
@@ -726,6 +727,7 @@ TEST_CASE("A minimal format-ascii PLY point cloud round-trips through the real s
     REQUIRE(run.ready);
     REQUIRE(run.validation.ok);
     const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.scene.format == model_core::SourceFormatId::AsciiPly);
     CHECK(chunk.descriptor.topology == model_core::ChunkTopology::PointList);
     CHECK(chunk.descriptor.vertexCount == 1);
     model_core::VertexPositionNormalUv0TangentColorF32 point{};
@@ -856,6 +858,7 @@ TEST_CASE("An ASCII PLY mesh with normals round-trips through the real sandboxed
     REQUIRE(run.validation.chunks.size() == 1);
 
     const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.scene.format == model_core::SourceFormatId::AsciiPly);
     CHECK(chunk.descriptor.topology == model_core::ChunkTopology::TriangleList);
     CHECK(chunk.descriptor.vertexCount == 6);
     CHECK(chunk.descriptor.indexCount == 6);
@@ -885,14 +888,14 @@ TEST_CASE("An ASCII PLY quad face is fan-triangulated into 2 triangles with the 
     REQUIRE(run.validation.ok);
 
     const auto& chunk = run.validation.chunks[0];
-    CHECK(chunk.descriptor.vertexCount == 4);
+    CHECK(chunk.descriptor.vertexCount == 6);
     CHECK(chunk.descriptor.indexCount == 6);
     REQUIRE(chunk.payload.size()
-            >= 4 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32) + 6 * sizeof(uint32_t));
+            >= 6 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32) + 6 * sizeof(uint32_t));
     uint32_t indices[6]{};
-    std::memcpy(indices, chunk.payload.data() + 4 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32),
+    std::memcpy(indices, chunk.payload.data() + 6 * sizeof(model_core::VertexPositionNormalUv0TangentColorF32),
                 sizeof(indices));
-    CHECK(std::vector<uint32_t>(indices, indices + 6) == std::vector<uint32_t>{ 0, 1, 2, 0, 2, 3 });
+    CHECK(std::vector<uint32_t>(indices, indices + 6) == std::vector<uint32_t>{ 0, 1, 2, 3, 4, 5 });
 }
 
 TEST_CASE("An ASCII PLY with a non-numeric token where a scalar is expected is rejected as MalformedData",

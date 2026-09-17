@@ -29,6 +29,7 @@ enum class SourceFormat {
     Glb,
     Stl,
     Ply,
+    Obj,
 };
 
 // nullopt for any extension this slice doesn't recognize.

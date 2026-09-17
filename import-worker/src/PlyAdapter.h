@@ -20,8 +20,12 @@ struct PlyImportResult {
 // bounded header. Indexed faces resolve vertices through two mapped windows;
 // variable vertex records use a capped checkpoint catalog. Vertex-before-face
 // layouts are supported; face-before-vertex binary layouts fail UnsupportedEncoding.
-// ASCII is available only to explicitly opted-in developer callers.
-// The final section stays in destination; intermediate sections use batchSink.
+// ASCII uses the Tier B materializing path and emits bounded progressive
+// batches, but does not participate in the Tier A random-detail/coarse-proxy
+// protocol. The final section stays in destination; intermediate sections
+// use batchSink.
+bool IsAsciiPly(std::span<const std::byte> sourceHeader);
+
 std::variant<PlyImportResult, model_core::ImportErrorCode> ImportPly(
     std::span<const std::byte> sourcePlyBytes, std::span<std::byte> destination, uint64_t generationId,
     uint32_t maxChunkCount, bool allowAscii = true, ChunkBatchSink* batchSink = nullptr,

@@ -39,6 +39,7 @@ public:
     std::optional<double> NextNumber();
 
     bool AtEnd() const;
+    size_t Offset() const noexcept { return cursor_; }
 
 private:
     std::string_view text_;

@@ -11,6 +11,7 @@
     "basisu",
     "ktx",
     "meshoptimizer",
-    "libwebp"
+    "libwebp",
+    "ufbx"
   ]
 }

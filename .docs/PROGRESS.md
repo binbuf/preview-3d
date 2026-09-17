@@ -4,6 +4,51 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **Gate 4 Slice 1 OBJ/MTL product path (2026-09-16): implemented; release
+  qualification remains open.** ufbx 0.23.0 is pinned through a repository
+  vcpkg overlay and is linked only into the AppContainer import worker. Direct
+  `.obj` opens now use the existing trusted primary-file handle and broker-only
+  sidecar protocol: `.mtl` and supported local texture references are contained
+  to the source directory, byte-capped, and never opened directly by the worker.
+  MTL remains sidecar-only. The adapter imports polygon faces with deterministic
+  triangulation, smoothing/generated normals, UVs, vertex colors and object/group
+  mesh separation, then normalizes MTL colors, opacity, roughness/metalness,
+  double-sided state, UV transforms and broker-approved base-color, normal/bump
+  and emissive maps into the existing image/material/mesh wire chunks. Distinct
+  scalar roughness and metalness maps currently produce an optional-feature
+  warning rather than an invented packed texture.
+
+  OBJ deliberately uses the bounded Tier B contract: 2 GiB primary source,
+  4 GiB aggregate source, 20 million triangles, 60 million expanded vertices,
+  50,000 objects and 32,768 materials. It emits progressively sized normalized
+  batches but does not claim the Tier A representative-coarse/detail protocol.
+  The viewer, secondary activation, Open dialog/drop copy, Information panel,
+  installer/portable documentation and `.obj` shell registration are wired.
+  Focused isolation coverage proves textured quad/material normalization,
+  missing-MTL geometry fallback, escaping-sidecar rejection, multi-batch output
+  through a 4 KiB section, object/material partitioning with generated normals,
+  and malformed-then-valid worker recovery. Debug and Release solution builds
+  pass; the full Unit suites pass 97 cases / 7,458 Debug and 7,370 Release
+  assertions, and the full ImportIsolation suites (including hostile-worker
+  coverage) pass 209 cases / 52,164 assertions in both configurations. The
+  unsigned portable target passes closure and includes `licenses/ufbx.txt`; the
+  unsigned NSIS installer target also builds with the new `.obj` registration.
+  The remaining Gate 4 bundle is explicit in TODO: checked-in golden/malformed
+  corpora, a fuzz seed, cache-version evidence and clean offline standard-user
+  VM qualification are not claimed by this implementation pass.
+
+- **Post-MVP ASCII STL/PLY amendment (2026-09-16): complete in the product
+  import path.** The existing product-owned ASCII parsers are no longer hidden
+  behind test-only worker switches. Format detection now selects a bounded
+  Tier B path in normal one-shot and pooled workers, reports distinct ASCII
+  source provenance, and emits progressive wire batches while deliberately
+  bypassing the Tier A coarse-proxy/detail protocol. The broker independently
+  validates Tier B geometry limits and source ranges. ASCII input is capped at
+  2 GiB, 20 million triangles or points, 60 million expanded vertices, and the
+  lower of 1.5 GiB or 35% of physical RAM for scratch. STL/PLY parser suites and
+  the shipping pooled/coarse-request integration path pass; UI, picker, About,
+  portable, installer, and active-scope copy now advertise ASCII support.
+
 - **Post-MVP Open With catalog amendment (2026-09-16): complete.** The existing
   title-bar menu now promotes Windows-registered handlers from a curated list of
   common CAD, modeling, and 3D-printing tools into labeled groups, retains other

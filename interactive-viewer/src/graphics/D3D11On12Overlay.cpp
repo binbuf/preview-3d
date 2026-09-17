@@ -27,6 +27,7 @@ enum class OverlayIconKind
     Overflow,
     OpenWith,
     Info,
+    Close,
     FullscreenEnter,
     FullscreenExit,
 };
@@ -200,6 +201,13 @@ void DrawIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush, OverlayIco
         target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius), brush, stroke);
         target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy - radius * 0.42f), Scale(1.15f, scale), Scale(1.15f, scale)), brush);
         target->DrawLine(D2D1::Point2F(cx, cy - radius * 0.02f), D2D1::Point2F(cx, cy + radius * 0.5f), brush, Scale(1.7f, scale));
+        break;
+    }
+    case OverlayIconKind::Close:
+    {
+        const float radius = Scale(5.0f, scale);
+        target->DrawLine(D2D1::Point2F(cx - radius, cy - radius), D2D1::Point2F(cx + radius, cy + radius), brush, stroke);
+        target->DrawLine(D2D1::Point2F(cx + radius, cy - radius), D2D1::Point2F(cx - radius, cy + radius), brush, stroke);
         break;
     }
     case OverlayIconKind::Share:
@@ -732,11 +740,20 @@ void D3D11On12Overlay::DrawInfoPanel(const OverlayInfo& overlay, float clientWid
     const float rowHeight = Scale(24, scale);
     const float sectionGap = Scale(18, scale);
     const float textLeft = left + margin;
-    const float textRight = clientWidth - margin;
+    const D2D1_RECT_F closeButton = ToRectF(overlay.infoPanelCloseButtonRect);
+    const float textRight = closeButton.left > textLeft
+        ? closeButton.left - Scale(8, scale)
+        : clientWidth - margin;
     float y = top + Scale(18, scale);
 
     DrawText(L"Stats & Shading", filenameFormat.Get(),
         D2D1::RectF(textLeft, y, textRight, y + Scale(22, scale)), D2D1::ColorF(0xF5F5F7));
+    if (overlay.infoPanelCloseButtonRect.right > overlay.infoPanelCloseButtonRect.left &&
+        overlay.infoPanelCloseButtonRect.bottom > overlay.infoPanelCloseButtonRect.top)
+    {
+        DrawIconButton(overlay.infoPanelCloseButtonRect, OverlayIconKind::Close, /*visible*/ true, /*enabled*/ true,
+            /*active*/ false, overlay.infoPanelCloseButtonHover, overlay.infoPanelCloseButtonPressed, scale);
+    }
     y += Scale(34, scale);
 
     // Everything below the fixed header scrolls as one block
@@ -1072,10 +1089,10 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
         DrawText(L"Drop a 3D model here", headingFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
             centerY - Scale(12, scale), centerX + cardWidth * 0.45f, centerY + Scale(34, scale)), primaryText,
             DWRITE_TEXT_ALIGNMENT_CENTER);
-        DrawText(L"or choose Open to browse", bodyFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
-            centerY + Scale(40, scale), centerX + cardWidth * 0.45f, centerY + Scale(68, scale)), secondaryText,
-            DWRITE_TEXT_ALIGNMENT_CENTER);
-        DrawText(L"GLB / glTF  •  binary STL / PLY", smallFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
+        // DrawText(L"or choose Open to browse", bodyFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
+        //     centerY + Scale(40, scale), centerX + cardWidth * 0.45f, centerY + Scale(68, scale)), secondaryText,
+        //     DWRITE_TEXT_ALIGNMENT_CENTER);
+        DrawText(L"Supported formats: GLB, GLTF, STL, PLY, & OBJ/MTL", smallFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
             centerY + Scale(74, scale), centerX + cardWidth * 0.45f, centerY + Scale(100, scale)),
             D2D1::ColorF(0x747B86), DWRITE_TEXT_ALIGNMENT_CENTER);
     }

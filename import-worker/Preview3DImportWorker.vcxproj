@@ -88,6 +88,8 @@
     <ClCompile Include="src\StlAdapter.cpp" />
     <ClCompile Include="src\PlyImportWorker.cpp" />
     <ClCompile Include="src\PlyAdapter.cpp" />
+    <ClCompile Include="src\ObjImportWorker.cpp" />
+    <ClCompile Include="src\ObjAdapter.cpp" />
     <ClCompile Include="src\AsciiTokenizer.cpp" />
     <ClCompile Include="src\WorkerRequestDispatch.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
@@ -111,6 +113,8 @@
     <ClInclude Include="src\StlAdapter.h" />
     <ClInclude Include="src\PlyImportWorker.h" />
     <ClInclude Include="src\PlyAdapter.h" />
+    <ClInclude Include="src\ObjImportWorker.h" />
+    <ClInclude Include="src\ObjAdapter.h" />
     <ClInclude Include="src\AsciiTokenizer.h" />
     <ClInclude Include="src\WorkerRequestDispatch.h" />
     <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />

@@ -125,82 +125,7 @@ void ProcessFacet(const Vec3& suppliedNormal, const Vec3& v0, const Vec3& v1, co
     indices.push_back(baseIndex + 2);
 }
 
-// Shared wire-format write, once facet parsing (binary or ASCII) has
-// produced a vertex/index list. Mirrors GltfAdapter.cpp/SyntheticSceneGenerator's
-// "compute everything, check once, then write sequentially, header last"
-// structure. Always exactly one chunk.
-std::variant<StlImportResult, ImportErrorCode> WriteStlChunk(
-    std::vector<VertexPositionNormalUv0F32>& vertices, const std::vector<uint32_t>& indices,
-    std::span<std::byte> destination, uint64_t generationId)
-{
-    if (vertices.empty()) {
-        return ImportErrorCode::EmptyGeometry; // every facet was dropped
-    }
-
-    uint64_t vertexBytes = static_cast<uint64_t>(vertices.size()) * sizeof(VertexPositionNormalUv0F32);
-    uint64_t indexBytes = static_cast<uint64_t>(indices.size()) * sizeof(uint32_t);
-    auto payloadSizeOpt = CheckedAdd(vertexBytes, indexBytes);
-    if (!payloadSizeOpt) {
-        return ImportErrorCode::ResourceLimit;
-    }
-    uint64_t headerAndTable = static_cast<uint64_t>(kSectionHeaderSize) + kChunkDescriptorSize;
-    auto sectionLengthOpt = CheckedAdd(headerAndTable, *payloadSizeOpt);
-    if (!sectionLengthOpt) {
-        return ImportErrorCode::ResourceLimit;
-    }
-    uint64_t payloadOffset = headerAndTable;
-    uint64_t payloadSize = *payloadSizeOpt;
-    uint64_t sectionLength = *sectionLengthOpt;
-
-    if (sectionLength > destination.size()) {
-        return ImportErrorCode::ResourceLimit;
-    }
-
-
-    std::memcpy(destination.data() + payloadOffset + vertexBytes, indices.data(), indexBytes);
-
-    ChunkDescriptor descriptor{};
-    descriptor.sourceRangeOffset = 0;
-    descriptor.sourceRangeLength = 0;
-    descriptor.normalizedRangeOffset = payloadOffset;
-    descriptor.normalizedRangeLength = payloadSize;
-    descriptor.topology = ChunkTopology::TriangleList;
-    descriptor.indexCount = static_cast<uint32_t>(indices.size());
-    descriptor.vertexCount = static_cast<uint32_t>(vertices.size());
-    descriptor.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0_F32);
-    descriptor.lodLevel = 0;
-    descriptor.chunkId = 1;
-    descriptor.byteSize = payloadSize;
-    descriptor.dependencyCount = 0;
-    descriptor.meshId = 1;
-    if (!RebasePositions(descriptor, std::span<std::byte>(reinterpret_cast<std::byte*>(vertices.data()), size_t(vertexBytes))))
-        return ImportErrorCode::MalformedData;
-    std::memcpy(destination.data() + payloadOffset, vertices.data(), size_t(vertexBytes));
-    descriptor.chunkChecksum = WireChecksum64(destination.subspan(payloadOffset, payloadSize));
-
-    std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
-
-    SectionHeader header{};
-    header.magic = kSectionMagic;
-    header.protocolVersion = kCurrentProtocolVersion;
-    header.generationId = generationId;
-    header.scene.generationId = generationId;
-    header.scene.format = SourceFormatId::Stl; header.scene.meshCount = 1;
-    // STL has no specified units or up axis.
-    header.sectionLength = sectionLength;
-    header.chunkCount = 1;
-    header.reserved = 0;
-    header.sectionChecksum
-        = WireChecksum64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
-
-    std::memcpy(destination.data(), &header, sizeof(header));
-
-    StlImportResult result;
-    result.chunkCount = 1;
-    result.sectionBytesWritten = sectionLength;
-    return result;
-}
-
+// Binary Tier A path: scan mapped source ranges and emit bounded clusters.
 std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const std::byte> sourceStlBytes,
                                                                std::span<std::byte> destination,
                                                                uint64_t generationId, uint32_t maxChunkCount,
@@ -362,10 +287,13 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const s
     return StlImportResult{writer.Count(), writer.Length()};
 }
 
-std::variant<StlImportResult, ImportErrorCode> ImportStlAscii(std::span<const std::byte> sourceStlBytes,
-                                                                 std::span<std::byte> destination,
-                                                                 uint64_t generationId)
+std::variant<StlImportResult, ImportErrorCode> ImportStlAscii(
+    std::span<const std::byte> sourceStlBytes, std::span<std::byte> destination,
+    uint64_t generationId, uint32_t maxChunkCount, ChunkBatchSink* batchSink,
+    model_core::MappedFile* mappedSource)
 {
+    if (sourceStlBytes.size() > kTierBPrimarySourceBytes || TierBScratchLimit() < 16ull * 1024 * 1024)
+        return ImportErrorCode::ResourceLimit;
     AsciiTokenizer tokenizer(sourceStlBytes);
 
     auto expectKeyword = [&](std::string_view keyword) -> bool {
@@ -393,14 +321,55 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlAscii(std::span<const st
         }
     }
 
+    SceneMetadata scene{};
+    scene.format = SourceFormatId::AsciiStl;
+    scene.meshCount = 1;
+    BoundedChunkWriter writer(destination, generationId, maxChunkCount, scene, batchSink);
+    const uint64_t room = destination.size() > kSectionHeaderSize + kChunkDescriptorSize
+        ? destination.size() - kSectionHeaderSize - kChunkDescriptorSize : 0;
+    const uint32_t clusterFacets = uint32_t((std::min<uint64_t>)(
+        kChunkTriangles, room / (3 * sizeof(VertexPositionNormalUv0F32) + 3 * sizeof(uint32_t))));
+    if (!clusterFacets)
+        return ImportErrorCode::ResourceLimit;
     std::vector<VertexPositionNormalUv0F32> vertices;
     std::vector<uint32_t> indices;
+    vertices.reserve(size_t(clusterFacets) * 3);
+    indices.reserve(size_t(clusterFacets) * 3);
     uint32_t facetCount = 0;
+    uint64_t chunkSourceStart = 0;
+    uint64_t chunkSourceEnd = 0;
+
+    auto flush = [&]() -> bool {
+        if (vertices.empty())
+            return true;
+        ChunkDescriptor descriptor{};
+        descriptor.chunkId = writer.NextId();
+        descriptor.meshId = 1;
+        descriptor.sourceRangeOffset = chunkSourceStart;
+        descriptor.sourceRangeLength = chunkSourceEnd - chunkSourceStart;
+        descriptor.topology = ChunkTopology::TriangleList;
+        descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0_F32);
+        descriptor.vertexCount = uint32_t(vertices.size());
+        descriptor.indexCount = uint32_t(indices.size());
+        if (!RebasePositions(descriptor, std::as_writable_bytes(std::span(vertices))))
+            return false;
+        if (!writer.Add(descriptor, ChunkBytes(vertices), ChunkBytes(indices)))
+            return false;
+        vertices.clear();
+        indices.clear();
+        return true;
+    };
 
     while (next && *next == "facet") {
-        if (facetCount >= kMaxFacets) {
+        if (facetCount >= kTierBTriangleLimit) {
             return ImportErrorCode::ResourceLimit;
         }
+        if (batchSink && batchSink->Cancelled())
+            return ImportErrorCode::Cancelled;
+        if (mappedSource && !mappedSource->IsUnchanged())
+            return ImportErrorCode::FileChanged;
+        if (vertices.empty())
+            chunkSourceStart = uint64_t(next->data() - reinterpret_cast<const char*>(sourceStlBytes.data()));
         ++facetCount;
 
         if (!expectKeyword("normal")) {
@@ -437,6 +406,9 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlAscii(std::span<const st
         }
 
         ProcessFacet(suppliedNormal, verts[0], verts[1], verts[2], vertices, indices);
+        chunkSourceEnd = tokenizer.Offset();
+        if (indices.size() / 3 >= clusterFacets && !flush())
+            return writer.Error() == ImportErrorCode::None ? ImportErrorCode::MalformedData : writer.Error();
 
         next = tokenizer.NextToken();
         if (!next) {
@@ -449,10 +421,33 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlAscii(std::span<const st
     }
     // Any trailing solid-name tokens after "endsolid" are ignored.
 
-    return WriteStlChunk(vertices, indices, destination, generationId);
+    if (!flush())
+        return writer.Error() == ImportErrorCode::None ? ImportErrorCode::MalformedData : writer.Error();
+    if (writer.NextId() == 1)
+        return ImportErrorCode::EmptyGeometry;
+    if (!writer.Complete())
+        return writer.Error();
+    return StlImportResult{writer.Count(), writer.Length()};
 }
 
 } // namespace
+
+bool IsAsciiStl(std::span<const std::byte> sourcePrefix, uint64_t sourceSize)
+{
+    bool binaryShape = false;
+    if (sourcePrefix.size() >= kStlPrefixBytes) {
+        const uint32_t triangleCount = ReadU32LE(sourcePrefix.data() + kStlHeaderBytes);
+        if (triangleCount <= kMaxFacets) {
+            const auto facetBytes = CheckedMultiply(uint64_t(triangleCount), uint64_t(kStlFacetBytes));
+            const auto expectedSize = facetBytes
+                ? CheckedAdd(uint64_t(kStlPrefixBytes), *facetBytes) : std::nullopt;
+            binaryShape = expectedSize && sourceSize >= *expectedSize;
+        }
+    }
+    constexpr std::string_view keyword = "solid";
+    return !binaryShape && sourcePrefix.size() >= keyword.size()
+        && std::string_view(reinterpret_cast<const char*>(sourcePrefix.data()), keyword.size()) == keyword;
+}
 
 std::variant<StlImportResult, ImportErrorCode> ImportStl(std::span<const std::byte> sourceStlBytes,
                                                          std::span<std::byte> destination,
@@ -473,31 +468,13 @@ std::variant<StlImportResult, ImportErrorCode> ImportStl(std::span<const std::by
     // Anything else falls through to ImportStlBinary, which reproduces the
     // exact MalformedData/ResourceLimit outcomes this function already
     // returned before ASCII support existed.
-    bool isBinaryShape = false;
-    if (sourceStlBytes.size() >= kStlPrefixBytes) {
-        uint32_t triangleCount = ReadU32LE(sourceStlBytes.data() + kStlHeaderBytes);
-        if (triangleCount <= kMaxFacets) {
-            auto facetsBytesOpt = CheckedMultiply(static_cast<uint64_t>(triangleCount),
-                                                   static_cast<uint64_t>(kStlFacetBytes));
-            auto expectedMinSizeOpt = facetsBytesOpt
-                ? CheckedAdd(static_cast<uint64_t>(kStlPrefixBytes), *facetsBytesOpt)
-                : std::nullopt;
-            if (facetsBytesOpt && expectedMinSizeOpt &&
-                (mappedSource ? mappedSource->SizeBytes() : sourceStlBytes.size()) >= *expectedMinSizeOpt)
-            {
-                isBinaryShape = true;
-            }
-        }
-    }
-
-    constexpr std::string_view kAsciiKeyword = "solid";
-    bool looksAscii = !isBinaryShape && sourceStlBytes.size() >= kAsciiKeyword.size()
-        && std::string_view(reinterpret_cast<const char*>(sourceStlBytes.data()), kAsciiKeyword.size())
-            == kAsciiKeyword;
+    const bool looksAscii = IsAsciiStl(
+        sourceStlBytes, mappedSource ? mappedSource->SizeBytes() : sourceStlBytes.size());
 
     if (looksAscii) {
         if (!allowAscii) return ImportErrorCode::UnsupportedEncoding;
-        return ImportStlAscii(sourceStlBytes, destination, generationId);
+        return ImportStlAscii(sourceStlBytes, destination, generationId, maxChunkCount, batchSink,
+                              mappedSource);
     }
     return ImportStlBinary(sourceStlBytes, destination, generationId, maxChunkCount, batchSink, mappedSource);
 }

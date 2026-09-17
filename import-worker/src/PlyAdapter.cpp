@@ -458,6 +458,14 @@ float Dot(const Vec3& a, const Vec3& b)
 
 } // namespace
 
+bool IsAsciiPly(std::span<const std::byte> sourceHeader)
+{
+    auto parsed = ParseHeader(sourceHeader);
+    if (const auto* header = std::get_if<PlyHeader>(&parsed))
+        return header->format == PlyFormat::Ascii;
+    return false;
+}
+
 std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::byte> sourcePlyBytes,
                                                          std::span<std::byte> destination,
                                                          uint64_t generationId, uint32_t maxChunkCount,
@@ -485,6 +493,14 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         return *err;
     }
     PlyHeader header = std::move(std::get<PlyHeader>(headerResult));
+    const bool ascii = header.format == PlyFormat::Ascii;
+    if (ascii && !allowAscii)
+        return ImportErrorCode::UnsupportedEncoding;
+    if (ascii && (sourceSize > kTierBPrimarySourceBytes || TierBScratchLimit() < 32ull * 1024 * 1024))
+        return ImportErrorCode::ResourceLimit;
+    const uint64_t vertexLimit = ascii ? kTierBVertexLimit : kMaxVertices;
+    const uint64_t faceLimit = ascii ? kTierBTriangleLimit : kMaxFaces;
+    const uint64_t skippedRecordLimit = ascii ? kTierBVertexLimit : kMaxSkippedElementRecordCount;
 
     PlyElement* vertexElement = nullptr;
     PlyElement* faceElement = nullptr;
@@ -499,7 +515,7 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         return ImportErrorCode::MalformedData;
     }
     if (vertexElement->count == 0) return ImportErrorCode::EmptyGeometry;
-    if (vertexElement->count > kMaxVertices) {
+    if (vertexElement->count > vertexLimit) {
         return ImportErrorCode::ResourceLimit;
     }
 
@@ -554,9 +570,11 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
     int actualVIdx = hasUvUv ? vIdx : (hasUvSt ? tIdx : -1);
 
     bool hasFace = (faceElement != nullptr && faceElement->count > 0);
+    if (ascii && !hasFace && vertexElement->count > kTierBPointLimit)
+        return ImportErrorCode::ResourceLimit;
     int listPropIdx = -1;
     if (faceElement != nullptr) {
-        if (faceElement->count > kMaxFaces) {
+        if (faceElement->count > faceLimit) {
             return ImportErrorCode::ResourceLimit;
         }
         if (hasFace) {
@@ -581,13 +599,11 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         if (isVertex || isFace) {
             continue;
         }
-        if (element.count > kMaxSkippedElementRecordCount) {
+        if (element.count > skippedRecordLimit) {
             return ImportErrorCode::ResourceLimit;
         }
     }
 
-    bool ascii = (header.format == PlyFormat::Ascii);
-    if (ascii && !allowAscii) return ImportErrorCode::UnsupportedEncoding;
     bool bigEndian = (header.format == PlyFormat::BinaryBigEndian);
 
     uint64_t cursor = header.bodyOffset; // binary path only
@@ -1165,7 +1181,14 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         if (!writer.Complete()) return writer.Error();
         return PlyImportResult{writer.Count(), writer.Length()};
     }
-    if (vertexElement->count * sizeof(VertexPositionNormalUv0TangentColorF32) > TierAScratchLimit() / 4)
+    const uint64_t tierBScratch = TierBScratchLimit();
+    const auto baseVertexBytes = CheckedMultiply(
+        vertexElement->count, uint64_t(sizeof(VertexPositionNormalUv0TangentColorF32)));
+    // A point cloud retains only its vertex array. Meshes also retain a
+    // triangulated index array (and may temporarily accumulate normals), so
+    // reserve half of the Tier B scratch budget for that bounded expansion.
+    const uint64_t vertexBudget = hasFace ? tierBScratch / 2 : tierBScratch;
+    if (!baseVertexBytes || *baseVertexBytes > vertexBudget)
         return ImportErrorCode::ResourceLimit;
     std::vector<VertexPositionNormalUv0TangentColorF32> meshVertices;
     std::vector<VertexPositionNormalUv0TangentColorF32> pointVertices;
@@ -1187,6 +1210,12 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         bool isFace = (faceElement != nullptr && &element == faceElement);
 
         for (uint64_t recordIndex = 0; recordIndex < element.count; ++recordIndex) {
+            if ((recordIndex & 4095) == 0) {
+                if (batchSink && batchSink->Cancelled())
+                    return ImportErrorCode::Cancelled;
+                if (mappedSource && !mappedSource->IsUnchanged())
+                    return ImportErrorCode::FileChanged;
+            }
             if (isVertex) {
                 double x = 0, y = 0, z = 0, nx = 0, ny = 0, nz = 0, u = 0, v = 0;
                 double red=1,green=1,blue=1,alpha=1;
@@ -1359,9 +1388,13 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
 
                 uint64_t triCount = static_cast<uint64_t>(faceIndices.size()) - 2;
                 auto newTotalOpt = CheckedAdd(triangleTotal, triCount);
-                if (!newTotalOpt || *newTotalOpt > kMaxTrianglesAfterTriangulation) {
+                if (!newTotalOpt || *newTotalOpt > kTierBTriangleLimit) {
                     return ImportErrorCode::ResourceLimit;
                 }
+                const auto indexBytes = CheckedMultiply(*newTotalOpt, uint64_t(3 * sizeof(uint32_t)));
+                if (!indexBytes || *indexBytes > tierBScratch
+                    || *baseVertexBytes > tierBScratch - *indexBytes)
+                    return ImportErrorCode::ResourceLimit;
                 triangleTotal = *newTotalOpt;
 
                 for (size_t i = 1; i + 1 < faceIndices.size(); ++i) {
@@ -1391,19 +1424,17 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
         }
     }
 
-    ChunkTopology topology = ChunkTopology::Unknown;
-    uint32_t vertexLayoutId = 0;
-    uint64_t vertexCountOut = 0;
-    uint64_t indexCountOut = 0;
-    size_t vertexStride = 0;
-    const void* vertexData = nullptr;
-    const void* indexData = nullptr;
-
     if (hasFace) {
         if (meshIndices.empty()) {
             return ImportErrorCode::EmptyGeometry; // every face dropped
         }
         if (!hasNormal) {
+            const auto normalBytes = CheckedMultiply(uint64_t(meshVertices.size()), uint64_t(sizeof(Vec3)));
+            const uint64_t retainedBytes = uint64_t(meshVertices.size()) * sizeof(meshVertices[0])
+                + uint64_t(meshIndices.size()) * sizeof(meshIndices[0]);
+            if (!normalBytes || retainedBytes > tierBScratch
+                || *normalBytes > tierBScratch - retainedBytes)
+                return ImportErrorCode::ResourceLimit;
             std::vector<Vec3> accum(meshVertices.size(), Vec3{});
             for (size_t i = 0; i + 2 < meshIndices.size(); i += 3) {
                 uint32_t ia = meshIndices[i], ib = meshIndices[i + 1], ic = meshIndices[i + 2];
@@ -1432,107 +1463,87 @@ std::variant<PlyImportResult, ImportErrorCode> ImportPly(std::span<const std::by
                 }
             }
         }
-        topology = ChunkTopology::TriangleList;
-        vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0TangentColor_F32);
-        vertexCountOut = meshVertices.size();
-        indexCountOut = meshIndices.size();
-        vertexStride = sizeof(VertexPositionNormalUv0TangentColorF32);
-        vertexData = meshVertices.data();
-        indexData = meshIndices.data();
     } else {
         if (pointVertices.empty()) {
             return ImportErrorCode::EmptyGeometry;
         }
-        topology = ChunkTopology::PointList;
-        vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0TangentColor_F32);
-        vertexCountOut = pointVertices.size();
-        indexCountOut = 0;
-        vertexStride = sizeof(VertexPositionNormalUv0TangentColorF32);
-        vertexData = pointVertices.data();
-        indexData = nullptr;
     }
 
-    // Compute layout and total size before writing anything -- mirrors
-    // StlAdapter.cpp/GltfAdapter.cpp's "compute everything, check once, then
-    // write sequentially, header last" structure. Always exactly one chunk.
-    auto vertexBytesOpt = CheckedMultiply(vertexCountOut, static_cast<uint64_t>(vertexStride));
-    if (!vertexBytesOpt) {
-        return ImportErrorCode::ResourceLimit;
-    }
-    uint64_t vertexBytes = *vertexBytesOpt;
-
-    uint64_t indexBytes = 0;
+    SceneMetadata scene{};
+    scene.format = SourceFormatId::AsciiPly;
+    scene.meshCount = hasFace ? 1 : 0;
+    BoundedChunkWriter writer(destination, generationId, maxChunkCount, scene, batchSink);
+    const uint64_t room = destination.size() > kSectionHeaderSize + kChunkDescriptorSize
+        ? destination.size() - kSectionHeaderSize - kChunkDescriptorSize : 0;
     if (hasFace) {
-        auto indexBytesOpt = CheckedMultiply(indexCountOut, static_cast<uint64_t>(sizeof(uint32_t)));
-        if (!indexBytesOpt) {
+        const uint32_t trianglesPerChunk = uint32_t((std::min<uint64_t>)(
+            kChunkTriangles, room / (3 * sizeof(VertexPositionNormalUv0TangentColorF32)
+                                      + 3 * sizeof(uint32_t))));
+        if (!trianglesPerChunk)
             return ImportErrorCode::ResourceLimit;
+        std::vector<VertexPositionNormalUv0TangentColorF32> vertices;
+        std::vector<uint32_t> indices;
+        vertices.reserve(size_t(trianglesPerChunk) * 3);
+        indices.reserve(size_t(trianglesPerChunk) * 3);
+        const uint64_t triangleCount = meshIndices.size() / 3;
+        for (uint64_t first = 0; first < triangleCount; first += trianglesPerChunk) {
+            if (batchSink && batchSink->Cancelled())
+                return ImportErrorCode::Cancelled;
+            const uint32_t count = uint32_t((std::min<uint64_t>)(trianglesPerChunk,
+                                                                 triangleCount - first));
+            vertices.clear();
+            indices.clear();
+            for (uint32_t triangle = 0; triangle < count; ++triangle) {
+                for (uint32_t corner = 0; corner < 3; ++corner) {
+                    vertices.push_back(meshVertices[meshIndices[size_t(first + triangle) * 3 + corner]]);
+                    indices.push_back(uint32_t(indices.size()));
+                }
+            }
+            ChunkDescriptor descriptor{};
+            descriptor.chunkId = writer.NextId();
+            descriptor.meshId = 1;
+            descriptor.sourceRangeLength = sourceSize;
+            descriptor.topology = ChunkTopology::TriangleList;
+            descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
+            descriptor.vertexCount = uint32_t(vertices.size());
+            descriptor.indexCount = uint32_t(indices.size());
+            std::memcpy(descriptor.origin, clusterOrigin, sizeof(clusterOrigin));
+            descriptor.geometryFlags = kGeometryDeindexed | (hasUv ? kGeometryHasUv0 : 0)
+                | (hasColors ? kGeometryHasColors : 0);
+            if (!SetLocalBounds(descriptor, std::as_bytes(std::span(vertices))))
+                return ImportErrorCode::MalformedData;
+            if (!writer.Add(descriptor, ChunkBytes(vertices), ChunkBytes(indices)))
+                return writer.Error();
         }
-        indexBytes = *indexBytesOpt;
+    } else {
+        const uint32_t pointsPerChunk = uint32_t((std::min<uint64_t>)(
+            kChunkPoints, room / sizeof(VertexPositionNormalUv0TangentColorF32)));
+        if (!pointsPerChunk)
+            return ImportErrorCode::ResourceLimit;
+        for (uint64_t first = 0; first < pointVertices.size(); first += pointsPerChunk) {
+            if (batchSink && batchSink->Cancelled())
+                return ImportErrorCode::Cancelled;
+            const uint32_t count = uint32_t((std::min<uint64_t>)(pointsPerChunk,
+                                                                 pointVertices.size() - first));
+            auto points = std::span(pointVertices).subspan(size_t(first), count);
+            ChunkDescriptor descriptor{};
+            descriptor.chunkId = writer.NextId();
+            descriptor.sourceRangeLength = sourceSize;
+            descriptor.topology = ChunkTopology::PointList;
+            descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
+            descriptor.vertexCount = count;
+            std::memcpy(descriptor.origin, clusterOrigin, sizeof(clusterOrigin));
+            descriptor.geometryFlags = hasColors ? kGeometryHasColors : 0;
+            const auto bytes = std::as_bytes(points);
+            if (!SetLocalBounds(descriptor, bytes))
+                return ImportErrorCode::MalformedData;
+            if (!writer.Add(descriptor, bytes))
+                return writer.Error();
+        }
     }
-
-    auto payloadSizeOpt = CheckedAdd(vertexBytes, indexBytes);
-    if (!payloadSizeOpt) {
-        return ImportErrorCode::ResourceLimit;
-    }
-    uint64_t headerAndTable = static_cast<uint64_t>(kSectionHeaderSize) + kChunkDescriptorSize;
-    auto sectionLengthOpt = CheckedAdd(headerAndTable, *payloadSizeOpt);
-    if (!sectionLengthOpt) {
-        return ImportErrorCode::ResourceLimit;
-    }
-    uint64_t payloadOffset = headerAndTable;
-    uint64_t payloadSize = *payloadSizeOpt;
-    uint64_t sectionLength = *sectionLengthOpt;
-
-    if (sectionLength > destination.size()) {
-        return ImportErrorCode::ResourceLimit;
-    }
-
-    std::memcpy(destination.data() + payloadOffset, vertexData, vertexBytes);
-    if (hasFace) {
-        std::memcpy(destination.data() + payloadOffset + vertexBytes, indexData, indexBytes);
-    }
-
-    ChunkDescriptor descriptor{};
-    descriptor.sourceRangeOffset = 0;
-    descriptor.sourceRangeLength = 0;
-    descriptor.normalizedRangeOffset = payloadOffset;
-    descriptor.normalizedRangeLength = payloadSize;
-    descriptor.topology = topology;
-    descriptor.indexCount = static_cast<uint32_t>(indexCountOut);
-    descriptor.vertexCount = static_cast<uint32_t>(vertexCountOut);
-    descriptor.vertexLayoutId = vertexLayoutId;
-    descriptor.lodLevel = 0;
-    descriptor.chunkId = 1;
-    descriptor.byteSize = payloadSize;
-    descriptor.dependencyCount = 0;
-    std::memcpy(descriptor.origin, clusterOrigin, sizeof(clusterOrigin));
-    descriptor.meshId = hasFace ? 1 : 0;
-    descriptor.geometryFlags = hasUv && hasFace ? kGeometryHasUv0 : 0;
-    if (hasColors) descriptor.geometryFlags |= kGeometryHasColors;
-    if (!SetLocalBounds(descriptor, destination.subspan(size_t(payloadOffset), size_t(vertexBytes))))
-        return ImportErrorCode::MalformedData;
-    descriptor.chunkChecksum = WireChecksum64(destination.subspan(payloadOffset, payloadSize));
-
-    std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
-
-    SectionHeader sectionHeader{};
-    sectionHeader.magic = kSectionMagic;
-    sectionHeader.protocolVersion = kCurrentProtocolVersion;
-    sectionHeader.generationId = generationId;
-    sectionHeader.scene.generationId = generationId;
-    sectionHeader.scene.format = SourceFormatId::Ply; sectionHeader.scene.meshCount = hasFace ? 1 : 0;
-    sectionHeader.sectionLength = sectionLength;
-    sectionHeader.chunkCount = 1;
-    sectionHeader.reserved = 0;
-    sectionHeader.sectionChecksum
-        = WireChecksum64(destination.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
-
-    std::memcpy(destination.data(), &sectionHeader, sizeof(sectionHeader));
-
-    PlyImportResult result;
-    result.chunkCount = 1;
-    result.sectionBytesWritten = sectionLength;
-    return result;
+    if (!writer.Complete())
+        return writer.Error();
+    return PlyImportResult{writer.Count(), writer.Length()};
 }
 
 } // namespace import_worker

@@ -50,6 +50,7 @@ enum class Control
     GroundAxis,
     GroundDirection,
     HideCursorWhileDragging,
+    InfoPanelClose,
     Count,
 };
 

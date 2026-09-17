@@ -46,6 +46,7 @@ enum class ControlOpcode : uint32_t {
     ChunkBatchReady = 12,         // worker -> host, non-terminal
     ChunkBatchConsumed = 13,      // host -> worker
     RequestDetail = 14,           // host -> worker; one validated source region
+    StartObjImportFromFile = 15,  // host -> worker
 };
 
 enum : uint32_t {
@@ -181,6 +182,19 @@ struct ParsePlyFileRequest {
     uint64_t cancellationEventHandleValue;
 };
 static_assert(sizeof(ParsePlyFileRequest) == 48, "ParsePlyFileRequest layout changed");
+
+// Tier-B OBJ/MTL request. MTL and texture dependencies are discovered inside
+// the sandbox and resolved exclusively through RequestSidecarFile.
+struct ParseObjFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue;
+    uint64_t sectionHandleValue;
+    uint64_t sectionByteCapacity;
+    uint32_t maxChunkCount;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
+};
+static_assert(sizeof(ParseObjFileRequest) == 48, "ParseObjFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

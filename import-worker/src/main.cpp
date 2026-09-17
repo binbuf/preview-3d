@@ -3,6 +3,7 @@
 #include "GenerationWorker.h"
 #include "GltfImportWorker.h"
 #include "PlyImportWorker.h"
+#include "ObjImportWorker.h"
 #include "StlImportWorker.h"
 #include "WorkerRequestDispatch.h"
 #include "model_core/ControlChannelIo.h"
@@ -115,8 +116,11 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--parse-ply")) {
         return import_worker::RunPlyImport();
     }
+    if (ArgEquals(argv[1], "--parse-obj")) {
+        return import_worker::RunObjImport();
+    }
 
-    // Retain regression coverage for deferred adapters; the broker never selects these.
+    // Backward-compatible aliases retained for older parser regression commands.
     if (ArgEquals(argv[1], "--test-parse-stl-ascii")) return import_worker::RunStlImport(true);
     if (ArgEquals(argv[1], "--test-parse-ply-ascii")) return import_worker::RunPlyImport(true);
     if (ArgEquals(argv[1], "--pool")) {

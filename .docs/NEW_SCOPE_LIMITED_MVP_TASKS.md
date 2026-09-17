@@ -1,5 +1,14 @@
 # 3D Preview: Scope-Limited MVP Task Manifest
 
+> Post-MVP delivery amendment (2026-09-16): the product owner approved ASCII
+> STL and ASCII PLY as the first two Tier B inputs. They ship through the same
+> AppContainer/broker path and emit bounded progressive batches, but use a
+> materializing parser with lower limits: 2 GiB primary source, 20 million
+> triangles or points, 60 million expanded vertices, and scratch capped at the
+> lower of 1.5 GiB or 35% of physical RAM. Tier A coarse-proxy/refinement and
+> multi-gigabyte performance promises do not apply. All other Tier B formats
+> remain excluded.
+>
 > Post-MVP delivery amendment (2026-09-16): the product owner requested an
 > NSIS installer and supported-extension default-app integration after the
 > portable MVP was completed. This supersedes only the portable-only/no-file-
@@ -7,7 +16,7 @@
 > same viewer plus general import worker, registers only `.glb`, `.gltf`,
 > `.stl`, and `.ply`, and opens the Windows 11 Default Apps confirmation UI;
 > it does not overwrite a protected per-user default choice. Explorer
-> thumbnails, COM handlers, Tier B formats, compatibility host, persistent
+> thumbnails, COM handlers, other Tier B formats, compatibility host, persistent
 > model-derived cache, services, and background processes remain excluded.
 >
 > Post-MVP amendment (2026-09-16): after the scope-limited implementation was
@@ -25,7 +34,7 @@
 > Default Apps registration, an installer, model-path history, model-derived
 > data, executable command-line guessing, network access, or a new UI surface.
 
-This document outlines the sequential LLM prompts required to reach a deployable MVP, restricted strictly to Tier A formats (glTF, STL, PLY) and the existing UI. Tier B formats, the persistent cache, meshoptimizer clustering, and the thumbnail provider are explicitly out of scope for this pass.
+This document outlines the sequential LLM prompts required to reach a deployable MVP, originally restricted strictly to Tier A formats (glTF, STL, PLY) and the existing UI. Except for the explicit post-MVP amendments above, Tier B formats, the persistent cache, meshoptimizer clustering, and the thumbnail provider are out of scope for this pass.
 
 ## Phase 1: Renderer Consolidation & UI Hookup
 
@@ -96,7 +105,7 @@ This is a **viewer-only, scope-limited MVP**, not completion of every requiremen
 | Area | Commitment for this pass |
 | --- | --- |
 | Environment | Serviced Windows 11, x64, D3D12 feature level 11_0 or later; local regular files and Unicode paths. WARP is a correctness/diagnostic fallback. |
-| Direct inputs | `.glb`, `.gltf` with broker-approved local binary/image sidecars, binary STL, and supported binary little/big-endian PLY meshes **and point clouds**, case-insensitively. ASCII STL/PLY are Tier B and not release commitments in this pass. |
+| Direct inputs | `.glb`, `.gltf` with broker-approved local binary/image sidecars, ASCII/binary STL, and supported ASCII/binary little/big-endian PLY meshes **and point clouds**, case-insensitively. ASCII STL/PLY are post-MVP Tier B additions with lower limits and no Tier A performance promise. |
 | Rendering | Static meshes/instances, source or generated normals, vertex colors, studio lighting, and glTF metallic/roughness, unlit, alpha, double-sided, and texture-transform semantics. PNG/JPEG and existing KTX2/Basis support remain; add WebP as part of the documented glTF subset. |
 | Large models | Representative early geometry, verified bounds, a bounded complete coarse proxy, and view-prioritized fine detail under the live DXGI budget. No whole-source private heap copy or whole-scene normalized payload retained in either process. |
 | Existing UI | Preserve chrome, layout, camera feel, fullscreen, gizmo, Info, Fit/Reset, native orientation, and existing selection behavior. Update format text, real metadata, loading/error/warning states, and accessibility within these surfaces. |
@@ -297,7 +306,7 @@ Targets use the reference systems and measurement rules in [09-quality-performan
 
 | Retained acceptance | Required evidence | Tasks |
 | --- | --- | --- |
-| Supported content | GLB/glTF local sidecars, binary STL, both-endian binary PLY mesh/points, glTF supported-feature/material/texture scenes match expected counts/bounds/visuals; unsupported required features fail clearly. | 202–204, 208–209 |
+| Supported content | GLB/glTF local sidecars, ASCII/binary STL, ASCII and both-endian binary PLY mesh/points, glTF supported-feature/material/texture scenes match expected counts/bounds/visuals; unsupported required features fail clearly. | 202–204, 208–209, post-MVP ASCII amendment |
 | Startup | Cold background <=150 ms; file-launch loading UI <=200 ms, before parsing/upload and without a synchronous worker/device wait in the UI thread. | 104, 301–302 |
 | Progressive usefulness | Small complete coarse <=500 ms; medium <=2 s; large representative partial <=2 s and verified complete coarse <=5 s. A fixture defines spatial/component usefulness; a first arbitrary primitive does not pass. | 201–202, 205–206, 302 |
 | Loading responsiveness | Performance reference: frame interval <=8.3 ms at 144 Hz, input-to-affected-present <=16 ms; no load-caused frame >50 ms or message heartbeat gap >100 ms. Compatibility: loading interval <=16.7 ms and input <=33 ms. | 201, 301–302, 304 |
@@ -309,4 +318,4 @@ Targets use the reference systems and measurement rules in [09-quality-performan
 | Isolation/visual correctness | AppContainer/Job/handle policy, sidecar security, copy-then-validate, changed-source/overflow/malformed/fuzz and hostile-worker suites pass; no D3D debug/GPU-validation errors or partially copied draws. | All affected slices, 305 |
 | Portable delivery | Final signed viewer/worker and runtime closure work offline for a standard user on a clean Windows 11 x64 machine; archive carries hashes, SBOM/licenses, usage/support limits, and no excluded binaries. | 303, 305 |
 
-**Deferred original requirements:** FR-01's Tier B breadth; FR-02/NFR-09 thumbnails; FR-12/FR-13 installation/registration; FR-14/NFR-13 persistent cache and warm-cache gates; FR-15 compatibility host. Advanced image containers, full intermediate LOD generation, and indirect submission are also deferred as stated above. These remain future work, not completed original MVP gates.
+**Deferred original requirements:** FR-01's remaining Tier B breadth beyond ASCII STL/PLY; FR-02/NFR-09 thumbnails; FR-12/FR-13 installation/registration; FR-14/NFR-13 persistent cache and warm-cache gates; FR-15 compatibility host. Advanced image containers, full intermediate LOD generation, and indirect submission are also deferred as stated above. These remain future work, not completed original MVP gates.

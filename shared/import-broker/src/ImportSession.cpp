@@ -92,6 +92,8 @@ const wchar_t* ParseFlagFor(ImportFormat format)
         return L"--parse-stl";
     case ImportFormat::Ply:
         return L"--parse-ply";
+    case ImportFormat::Obj:
+        return L"--parse-obj";
     case ImportFormat::Gltf:
     default:
         return L"--parse-gltf";
@@ -142,6 +144,12 @@ bool SendStartRequest(const ImportSessionRequest& session, HANDLE controlInWrite
         auto request = MakeFileRequest<model_core::ParsePlyFileRequest>(session, sourceFileHandle, sectionHandle,
                                                                         cancellationEventHandle);
         return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartPlyImportFromFile,
+                                                &request, sizeof(request));
+    }
+    case ImportFormat::Obj: {
+        auto request = MakeFileRequest<model_core::ParseObjFileRequest>(session, sourceFileHandle, sectionHandle,
+                                                                        cancellationEventHandle);
+        return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartObjImportFromFile,
                                                 &request, sizeof(request));
     }
     }
@@ -558,14 +566,26 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                 return false;
             }
             acceptance.scene = chunk.scene;
-            const auto expectedFormat = request.format == ImportFormat::Gltf ? model_core::SourceFormatId::Gltf
-                : request.format == ImportFormat::Stl ? model_core::SourceFormatId::Stl : model_core::SourceFormatId::Ply;
-            if (request.workerArgumentsOverride.empty() && chunk.scene.format != expectedFormat
-                && !(request.format == ImportFormat::Gltf && chunk.scene.format == model_core::SourceFormatId::Glb)) {
+            const bool expectedFormat = request.format == ImportFormat::Gltf
+                ? (chunk.scene.format == model_core::SourceFormatId::Gltf
+                   || chunk.scene.format == model_core::SourceFormatId::Glb)
+                : request.format == ImportFormat::Stl
+                    ? (chunk.scene.format == model_core::SourceFormatId::Stl
+                       || chunk.scene.format == model_core::SourceFormatId::AsciiStl)
+                    : request.format == ImportFormat::Ply
+                        ? (chunk.scene.format == model_core::SourceFormatId::Ply
+                           || chunk.scene.format == model_core::SourceFormatId::AsciiPly)
+                        : chunk.scene.format == model_core::SourceFormatId::Obj;
+            if (request.workerArgumentsOverride.empty() && !expectedFormat) {
                 failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ImportProtocolViolation);
                 return false;
             }
         }
+        const bool tierBFormat = acceptance.scene
+            && (acceptance.scene->format == model_core::SourceFormatId::AsciiStl
+                || acceptance.scene->format == model_core::SourceFormatId::AsciiPly
+                || acceptance.scene->format == model_core::SourceFormatId::Obj);
+        const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
         // two are describing different things, which is a protocol violation
@@ -616,7 +636,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         for (const auto& chunk : validation.chunks)
         {
             const auto& d = chunk.descriptor;
-            if (request.enableCoarseProxy && d.lodLevel != model_core::kScanLod) continue;
+            if (coarseProtocol && d.lodLevel != model_core::kScanLod) continue;
             if (d.topology == model_core::ChunkTopology::TriangleList)
                 newTriangles += d.indexCount / 3;
             if (d.topology == model_core::ChunkTopology::PointList)
@@ -625,8 +645,10 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                 d.topology == model_core::ChunkTopology::PointList)
                 newVertices += d.vertexCount;
         }
-        if (newTriangles > model_core::kTierATriangleLimit || newPoints > model_core::kTierAPointLimit ||
-            newVertices > model_core::kTierAVertexLimit)
+        const uint64_t triangleLimit = tierBFormat ? model_core::kTierBTriangleLimit : model_core::kTierATriangleLimit;
+        const uint64_t pointLimit = tierBFormat ? model_core::kTierBPointLimit : model_core::kTierAPointLimit;
+        const uint64_t vertexLimit = tierBFormat ? model_core::kTierBVertexLimit : model_core::kTierAVertexLimit;
+        if (newTriangles > triangleLimit || newPoints > pointLimit || newVertices > vertexLimit)
         {
             failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ResourceLimit);
             return false;
@@ -657,7 +679,9 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             if (d.sourceRangeLength)
             {
                 if ((chunk.scene.format == model_core::SourceFormatId::Stl ||
-                     chunk.scene.format == model_core::SourceFormatId::Ply) &&
+                     chunk.scene.format == model_core::SourceFormatId::Ply ||
+                     chunk.scene.format == model_core::SourceFormatId::AsciiStl ||
+                     chunk.scene.format == model_core::SourceFormatId::AsciiPly) &&
                     (d.sourceRangeOffset > primaryBytes ||
                      d.sourceRangeLength > primaryBytes - d.sourceRangeOffset))
                 {
@@ -681,7 +705,16 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
                 }
-                if (!request.enableCoarseProxy || d.lodLevel == model_core::kScanLod)
+                if (chunk.scene.format == model_core::SourceFormatId::Obj &&
+                    ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
+                     uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
+                     d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
+                     d.sourceRangeLength != d.indexCount))
+                {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+                    return false;
+                }
+                if (!coarseProtocol || d.lodLevel == model_core::kScanLod)
                     sourceCatalog.push_back({request.generationId, d});
             }
         }
@@ -694,15 +727,15 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         }
         // Provisional preview publications are separate from the validated
         // scan/coarse/full phases, including their packed GPU allocation budget.
-        if (request.enableCoarseProxy && havePreview && haveOtherGeometry) {
+        if (coarseProtocol && havePreview && haveOtherGeometry) {
             failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData); return false;
         }
-        for (const auto& chunk:validation.chunks) if (chunk.descriptor.lodLevel==model_core::kCoarseLod && request.enableCoarseProxy) {
+        for (const auto& chunk:validation.chunks) if (chunk.descriptor.lodLevel==model_core::kCoarseLod && coarseProtocol) {
             coarseVertexBatch+=uint64_t(chunk.descriptor.vertexCount)*model_core::VertexStrideForLayout(model_core::VertexLayoutId(chunk.descriptor.vertexLayoutId));
             coarseIndexBatch+=uint64_t(chunk.descriptor.indexCount)*4;
         }
         acceptance.coarseAllocationBytes+=(coarseVertexBatch+65535)/65536*65536+(coarseIndexBatch+65535)/65536*65536;
-        for (const auto& chunk:validation.chunks) if (chunk.descriptor.lodLevel==model_core::kPreviewLod && request.enableCoarseProxy) {
+        for (const auto& chunk:validation.chunks) if (chunk.descriptor.lodLevel==model_core::kPreviewLod && coarseProtocol) {
             previewVertexBatch+=uint64_t(chunk.descriptor.vertexCount)*model_core::VertexStrideForLayout(model_core::VertexLayoutId(chunk.descriptor.vertexLayoutId));
             previewIndexBatch+=uint64_t(chunk.descriptor.indexCount)*4;
         }
@@ -716,7 +749,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         for (const auto& chunk:validation.chunks) {
             const auto& d=chunk.descriptor;
             const bool geometry=d.topology==model_core::ChunkTopology::TriangleList || d.topology==model_core::ChunkTopology::PointList;
-            if (!request.enableCoarseProxy) {
+            if (!coarseProtocol) {
                 if (d.lodLevel>=model_core::kScanLod || d.topology==model_core::ChunkTopology::CoarseComplete) {
                     failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData); return false;
                 }
@@ -973,7 +1006,11 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     }
     if (!acceptance.unresolved.empty())
         return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
-    if (request.enableCoarseProxy) {
+    const bool tierBResult = acceptance.scene
+        && (acceptance.scene->format == model_core::SourceFormatId::AsciiStl
+            || acceptance.scene->format == model_core::SourceFormatId::AsciiPly
+            || acceptance.scene->format == model_core::SourceFormatId::Obj);
+    if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)
             if (!region.coarse || (!request.nextDetail && !region.fine))
@@ -999,7 +1036,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     result.sourceCatalog = std::move(sourceCatalog);
     result.sourceIdentity = sourceIdentity;
     result.workerProcessId = GetProcessId(workerProcess);
-    if (request.nextDetail) {
+    if (request.nextDetail && !tierBResult) {
         if (!request.enableCoarseProxy || !request.onBatch || !request.onInitialComplete)
             return fail(ImportStage::UnexpectedReply);
         request.onInitialComplete(sourceIdentity);

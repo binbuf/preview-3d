@@ -168,7 +168,7 @@ std::optional<StlImportLaunch> LaunchStlImportWorker(const platform::AppContaine
 
     std::vector<HANDLE> inherited{ controlInRead.get(), controlOutWrite.get(), sourceFileHandle,
                                     outputSectionHandle };
-    std::wstring cmdLine = L"\"" + std::wstring(sandbox_test_support::WorkerExePath()) + L"\" --test-parse-stl-ascii";
+    std::wstring cmdLine = L"\"" + std::wstring(sandbox_test_support::WorkerExePath()) + L"\" --parse-stl";
 
     import_broker::SandboxLimits limits{};
     auto proc = import_broker::LaunchSuspendedSandboxed(
@@ -286,6 +286,7 @@ TEST_CASE("A valid binary STL with several facets round-trips through the real s
     REQUIRE(run.validation.chunks.size() == 1);
 
     const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.scene.format == model_core::SourceFormatId::Stl);
     CHECK(chunk.descriptor.topology == model_core::ChunkTopology::TriangleList);
     CHECK(chunk.descriptor.vertexCount == 9);
     CHECK(chunk.descriptor.indexCount == 9);
@@ -452,6 +453,7 @@ TEST_CASE("A valid ASCII STL with several facets round-trips through the real sa
     REQUIRE(run.validation.chunks.size() == 1);
 
     const auto& chunk = run.validation.chunks[0];
+    CHECK(chunk.scene.format == model_core::SourceFormatId::AsciiStl);
     CHECK(chunk.descriptor.topology == model_core::ChunkTopology::TriangleList);
     CHECK(chunk.descriptor.vertexCount == 9);
     CHECK(chunk.descriptor.indexCount == 9);

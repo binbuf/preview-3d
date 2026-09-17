@@ -42,9 +42,13 @@ creation, presentation, resize, and shutdown. All files are parsed inside
 chunks. The old `--d3d12` argument is accepted as a deprecated no-op.
 
 The sandboxed importer accepts `.glb`, `.gltf` (including external `.bin`/image siblings fetched
-through the brokered sidecar protocol), `.stl`, and `.ply`. Its static glTF path supports bounded
+through the brokered sidecar protocol), `.obj` with optional local `.mtl` and texture sidecars,
+ASCII/binary `.stl`, and ASCII/binary `.ply`. Its static glTF path supports bounded
 Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP, material texture slots and
-texture transforms. The Open dialog, command line, and drag/drop accept all four direct formats.
+texture transforms. The OBJ path uses ufbx for polygon triangulation, smoothing/generated normals,
+UVs, vertex colors, object/group meshes, and MTL material factors, with broker-approved base-color,
+normal/bump, and emissive maps. The Open dialog, command line, and drag/drop accept all five direct
+formats; `.mtl` remains a sidecar and is never a primary open type.
 
 Portable packaging keeps `Preview3D.exe` at the package root and the sandbox
 executable plus its private DLL closure under `worker\`. The viewer prefers that
@@ -59,7 +63,7 @@ documented compressed glTF subset. `Renderer.cpp` remains only as legacy camera/
 its D3D11 renderer is never instantiated.
 
 Still deferred: TGA/DDS/HDR, animation/skins/morphs, advanced material lobes, meshoptimizer-built
-LOD/hierarchies, persistent derived cache, and broad Tier B formats. Shell registration,
+LOD/hierarchies, persistent derived cache, and the remaining Tier B formats. Shell registration,
 thumbnails, and installer work are outside this MVP pass; the active delivery is a
 checksummed portable archive.
 

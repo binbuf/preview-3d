@@ -57,7 +57,7 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     switch (code) {
     case model_core::ImportErrorCode::UnsupportedEncoding:
         summary = L"This encoding is not supported.";
-        details = L"Use glTF 2.0, binary STL, or binary little/big-endian PLY. ASCII STL and PLY are deferred."; return;
+        details = L"Use glTF 2.0, STL, or ASCII/binary little- or big-endian PLY."; return;
     case model_core::ImportErrorCode::WorkerCrashed:
         summary = L"The sandboxed importer stopped unexpectedly.";
         details = L"The worker exited before completing this model. Retry or open another model."; return;
@@ -82,7 +82,7 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
         return;
     case model_core::ImportErrorCode::PrimarySourceLimit:
         summary = L"The primary source exceeds the import limit.";
-        details = L"Tier A primary files are limited to 8 GiB.";
+        details = L"ASCII STL/PLY files are limited to 2 GiB; Tier A primary files are limited to 8 GiB.";
         return;
     case model_core::ImportErrorCode::AggregateSourceLimit:
         summary = L"The model and sidecars exceed the import limit.";
@@ -205,6 +205,8 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
         return import_broker::ImportFormat::Stl;
     case SourceFormat::Ply:
         return import_broker::ImportFormat::Ply;
+    case SourceFormat::Obj:
+        return import_broker::ImportFormat::Obj;
     case SourceFormat::Glb:
     default:
         return import_broker::ImportFormat::Gltf;
@@ -243,6 +245,7 @@ std::wstring SourceFormatLabel(const std::wstring& path)
     if (ext == L"glb") return L"GLB";
     if (ext == L"stl") return L"STL";
     if (ext == L"ply") return L"PLY";
+    if (ext == L"obj") return L"OBJ";
     // Extension only, capped and restricted to printable alphanumerics.
     if (ext.empty() || ext.size() > 16) return L"Unknown";
     std::wstring label;
@@ -298,6 +301,7 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     if (ext == L"glb" || ext == L"gltf") return SourceFormat::Glb;
     if (ext == L"stl") return SourceFormat::Stl;
     if (ext == L"ply") return SourceFormat::Ply;
+    if (ext == L"obj") return SourceFormat::Obj;
     return std::nullopt;
 }
 
@@ -314,7 +318,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     ImportResult result;
 
     import_broker::ImportSessionRequest sessionRequest;
-    sessionRequest.enableCoarseProxy = !delayBatchesForTesting;
+    sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
     if (!delayBatchesForTesting && !faultForTesting) {

@@ -22,6 +22,7 @@ Unicode true
 !define PROGID_GLTF "Binbuf.Preview3D.glTF.1"
 !define PROGID_STL "Binbuf.Preview3D.STL.1"
 !define PROGID_PLY "Binbuf.Preview3D.PLY.1"
+!define PROGID_OBJ "Binbuf.Preview3D.OBJ.1"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -171,6 +172,7 @@ Section "3D Preview" SEC_MAIN
   !insertmacro RegisterProgId "${PROGID_GLTF}" "3D model (glTF)"
   !insertmacro RegisterProgId "${PROGID_STL}" "3D model (STL)"
   !insertmacro RegisterProgId "${PROGID_PLY}" "3D model (PLY)"
+  !insertmacro RegisterProgId "${PROGID_OBJ}" "3D model (Wavefront OBJ)"
 
   WriteRegStr HKLM "Software\Classes\Applications\${PRODUCT_EXE}" "FriendlyAppName" "${PRODUCT_NAME}"
   WriteRegStr HKLM "Software\Classes\Applications\${PRODUCT_EXE}" "ApplicationCompany" "${PRODUCT_PUBLISHER}"
@@ -184,6 +186,7 @@ Section "3D Preview" SEC_MAIN
   !insertmacro RegisterExtension ".gltf" "${PROGID_GLTF}"
   !insertmacro RegisterExtension ".stl" "${PROGID_STL}"
   !insertmacro RegisterExtension ".ply" "${PROGID_PLY}"
+  !insertmacro RegisterExtension ".obj" "${PROGID_OBJ}"
   WriteRegStr HKLM "Software\RegisteredApplications" "${PRODUCT_NAME}" "${PRODUCT_KEY}\Capabilities"
 
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\${PRODUCT_EXE}" "" "$INSTDIR\${PRODUCT_EXE}"
@@ -223,9 +226,11 @@ profile_cleanup_done:
   !insertmacro UnregisterExtension ".gltf" "${PROGID_GLTF}"
   !insertmacro UnregisterExtension ".stl" "${PROGID_STL}"
   !insertmacro UnregisterExtension ".ply" "${PROGID_PLY}"
+  !insertmacro UnregisterExtension ".obj" "${PROGID_OBJ}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_GLTF}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_STL}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_PLY}"
+  DeleteRegKey HKLM "Software\Classes\${PROGID_OBJ}"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
   DeleteRegKey HKLM "${PRODUCT_KEY}"
   DeleteRegKey /IfEmpty HKLM "Software\Binbuf"
@@ -257,6 +262,7 @@ profile_cleanup_done:
   Delete "$INSTDIR\licenses\libwebp.txt"
   Delete "$INSTDIR\licenses\meshoptimizer.txt"
   Delete "$INSTDIR\licenses\simdjson.txt"
+  Delete "$INSTDIR\licenses\ufbx.txt"
   Delete "$INSTDIR\licenses\zstd.txt"
   RMDir "$INSTDIR\licenses"
 

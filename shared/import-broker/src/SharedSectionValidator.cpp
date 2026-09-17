@@ -141,17 +141,27 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         return Reject(ImportErrorCode::ImportProtocolViolation, "header changed during copy");
     if (header.reserved || header.scene.reserved || header.scene.generationId != expectedGenerationId)
         return Reject(ImportErrorCode::ImportProtocolViolation, "stale or malformed scene metadata");
-    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Glb) ||
-        uint32_t(header.scene.upAxis) > uint32_t(model_core::UpAxisId::Z) ||
+    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Obj))
+        return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
+    const bool tierBFormat = header.scene.format == model_core::SourceFormatId::AsciiStl
+        || header.scene.format == model_core::SourceFormatId::AsciiPly
+        || header.scene.format == model_core::SourceFormatId::Obj;
+    const uint32_t objectLimit = tierBFormat ? model_core::kTierBObjectLimit
+                                             : model_core::kTierAObjectLimit;
+    if (uint32_t(header.scene.upAxis) > uint32_t(model_core::UpAxisId::Z) ||
         !std::isfinite(header.scene.metersPerUnit) || header.scene.metersPerUnit < 0 ||
-        header.scene.metersPerUnit > 1e12 || header.scene.meshCount > model_core::kTierAObjectLimit ||
-        header.scene.nodeCount > model_core::kTierAObjectLimit || header.scene.skinCount > 1'000'000 ||
+        header.scene.metersPerUnit > 1e12 || header.scene.meshCount > objectLimit ||
+        header.scene.nodeCount > objectLimit || header.scene.skinCount > 1'000'000 ||
         header.scene.animationCount > 1'000'000 || header.scene.boneCount > 1'000'000)
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
     if ((header.scene.format == model_core::SourceFormatId::Gltf || header.scene.format == model_core::SourceFormatId::Glb)
         && (header.scene.upAxis != model_core::UpAxisId::Y || header.scene.metersPerUnit != 1.0))
         return Reject(ImportErrorCode::MalformedData, "invalid glTF units/up axis");
-    if ((header.scene.format == model_core::SourceFormatId::Stl || header.scene.format == model_core::SourceFormatId::Ply)
+    if ((header.scene.format == model_core::SourceFormatId::Stl
+         || header.scene.format == model_core::SourceFormatId::Ply
+         || header.scene.format == model_core::SourceFormatId::AsciiStl
+         || header.scene.format == model_core::SourceFormatId::AsciiPly
+         || header.scene.format == model_core::SourceFormatId::Obj)
         && (header.scene.upAxis != model_core::UpAxisId::Unknown || header.scene.metersPerUnit != 0))
         return Reject(ImportErrorCode::MalformedData, "unspecified source units/up axis must stay unknown");
 
@@ -318,7 +328,9 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             }
 
             if (descriptor.sourceElementOffset>252 || (descriptor.sourceElementOffset
-                && (header.scene.format!=model_core::SourceFormatId::Ply || descriptor.topology!=model_core::ChunkTopology::TriangleList)))
+                && ((header.scene.format!=model_core::SourceFormatId::Ply
+                     && header.scene.format!=model_core::SourceFormatId::AsciiPly)
+                    || descriptor.topology!=model_core::ChunkTopology::TriangleList)))
                 return Reject(model_core::ImportErrorCode::ImportProtocolViolation, "invalid source fan offset");
             if (descriptor.boundsState != model_core::BoundsState::Verified
                 || (descriptor.geometryFlags & ~model_core::kGeometryFlagsKnownMask) != 0

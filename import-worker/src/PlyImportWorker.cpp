@@ -50,7 +50,8 @@ bool ReportError(HANDLE stdOut, uint64_t generationId, model_core::ImportErrorCo
 
 } // namespace
 
-bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileRequest& request, bool allowAsciiForTesting)
+bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileRequest& request,
+                                bool allowAscii)
 {
     HANDLE rawFile = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sourceFileHandleValue));
     auto openResult = model_core::MappedFile::FromHandle(platform::Win32Handle(rawFile));
@@ -61,12 +62,18 @@ bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileReq
     if (openResult.file->SizeBytes() > kTierAPrimaryBytes)
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::PrimarySourceLimit);
     std::wstring mapError;
-    auto lease =
-        allowAsciiForTesting
-            ? openResult.file->MapWhole(mapError)
-            : openResult.file->MapWindow(0, (std::min)(openResult.file->SizeBytes(), 64ull * 1024), mapError);
+    auto lease = openResult.file->MapWindow(
+        0, (std::min)(openResult.file->SizeBytes(), 64ull * 1024), mapError);
     if (!lease) {
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
+    }
+    const bool ascii = IsAsciiPly(lease.Bytes());
+    if (ascii && openResult.file->SizeBytes() > model_core::kTierBPrimarySourceBytes)
+        return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::PrimarySourceLimit);
+    if (ascii && allowAscii) {
+        lease = openResult.file->MapWhole(mapError);
+        if (!lease)
+            return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::InternalImporterFailure);
     }
 
     platform::Win32Handle outputSection(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue)));
@@ -79,11 +86,13 @@ bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileReq
     }
 
     ChunkBatchSink batchSink(GetStdHandle(STD_INPUT_HANDLE), stdOut, request.generationId,
-                             request.requestFlags, cancellationEvent.get());
+                             ascii ? 0 : request.requestFlags, cancellationEvent.get());
     try {
         auto result =
             ImportPly(lease.Bytes(), outputView.bytes(), request.generationId, request.maxChunkCount,
-                      allowAsciiForTesting, &batchSink, allowAsciiForTesting ? nullptr : &*openResult.file);
+                      allowAscii, &batchSink, &*openResult.file);
+        if (ascii)
+            return ReportResult(stdOut, request.generationId, result);
         if (batchSink.Preview()) {
             if (const auto* preview=std::get_if<PlyImportResult>(&result)) {
                 if (!batchSink.PublishBatch(preview->chunkCount,preview->sectionBytesWritten))
@@ -122,7 +131,7 @@ bool HandlePlyImportFileRequest(HANDLE stdOut, const model_core::ParsePlyFileReq
     }
 }
 
-int RunPlyImport(bool allowAsciiForTesting)
+int RunPlyImport(bool allowAscii)
 {
     HANDLE stdIn = GetStdHandle(STD_INPUT_HANDLE);
     HANDLE stdOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -142,7 +151,7 @@ int RunPlyImport(bool allowAsciiForTesting)
     model_core::ParsePlyFileRequest request{};
     std::memcpy(&request, received->payload.data(), sizeof(request));
 
-    return HandlePlyImportFileRequest(stdOut, request, allowAsciiForTesting) ? 0 : 1;
+    return HandlePlyImportFileRequest(stdOut, request, allowAscii) ? 0 : 1;
 }
 
 } // namespace import_worker

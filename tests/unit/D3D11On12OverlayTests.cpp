@@ -426,6 +426,10 @@ TEST_CASE("Real chrome paints the bars, information panel and navigation gizmo a
         frame.info.barBottomBarHeight = static_cast<int>(40 * scale);
         frame.info.infoPanelWidth = 200;
         frame.info.infoPanelSections = { { L"Mesh Data", { { L"Triangles", L"12" } } } };
+        const int closeSize = static_cast<int>(28 * scale);
+        const int closeRight = width - static_cast<int>(12 * scale);
+        const int closeTop = frame.info.barToolbarHeight + static_cast<int>(15 * scale);
+        frame.info.infoPanelCloseButtonRect = { closeRight - closeSize, closeTop, closeRight, closeTop + closeSize };
         frame.info.infoButtonRect = { 8, height - 36, 40, height - 4 };
         frame.info.fullscreenButtonRect = { width - 40, height - 36, width - 8, height - 4 };
         frame.info.zoomTrackRect = { width - 250, height - 21, width - 120, height - 19 };
@@ -439,6 +443,11 @@ TEST_CASE("Real chrome paints the bars, information panel and navigation gizmo a
         CHECK(pixel(2, 2) == bar);
         CHECK(pixel(2, height - 2) == bar);
         CHECK(pixel(width - 2, height / 2) == panel);
+        const auto closeGlyph = pixel((frame.info.infoPanelCloseButtonRect.left + frame.info.infoPanelCloseButtonRect.right) / 2,
+            (frame.info.infoPanelCloseButtonRect.top + frame.info.infoPanelCloseButtonRect.bottom) / 2);
+        CHECK(closeGlyph[0] > 180);
+        CHECK(closeGlyph[1] > 180);
+        CHECK(closeGlyph[2] > 180);
 
         const auto geometry = frame.gizmo.ComputeDraw(DirectX::XMQuaternionIdentity());
         const auto& node = geometry.positive[0];

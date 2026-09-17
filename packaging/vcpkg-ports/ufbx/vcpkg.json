@@ -1,0 +1,13 @@
+{
+  "name": "ufbx",
+  "version": "0.23.0",
+  "description": "Single-source-file FBX and OBJ/MTL loader",
+  "homepage": "https://github.com/ufbx/ufbx",
+  "license": "MIT OR Unlicense",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    }
+  ]
+}

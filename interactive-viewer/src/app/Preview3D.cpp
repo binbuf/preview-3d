@@ -119,6 +119,8 @@ struct ViewerApp
     bool zoomSliderDragging = false;
     bool infoButtonHover = false;
     bool infoButtonPressed = false;
+    bool infoPanelCloseButtonHover = false;
+    bool infoPanelCloseButtonPressed = false;
     bool fullscreenButtonHover = false;
     bool fullscreenButtonPressed = false;
     bool isFullscreen = false;
@@ -554,6 +556,19 @@ RECT InfoPanelRect(const ViewerApp& app)
         client.right, client.bottom, app.toolbarHeight, app.bottomBarHeight, app.dpiScale);
     return RECT{ static_cast<int>(std::lround(layout.left)), static_cast<int>(std::lround(layout.top)),
         static_cast<int>(std::lround(layout.right)), static_cast<int>(std::lround(layout.bottom)) };
+}
+
+// Small close button aligned with the fixed "Stats & Shading" header.
+// Its center matches the header text row, while the panel body continues to
+// start below both controls and scroll independently.
+RECT InfoPanelCloseButtonRect(const ViewerApp& app)
+{
+    const RECT panel = InfoPanelRect(app);
+    if (panel.right <= panel.left || panel.bottom <= panel.top) return RECT{};
+    const int size = Scale(app, 28);
+    const int right = panel.right - Scale(app, 12);
+    const int top = panel.top + Scale(app, 15);
+    return RECT{ right - size, top, right, top + size };
 }
 
 // The root transform currently mapping the selected source/model up axis into
@@ -1162,8 +1177,9 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     // Suppressed mid-interaction (dragging a slider, a button already
     // pressed, the Speed flyout open) rather than just delayed, so a tooltip
     // never appears over something the user is actively using.
-    if (app.chrome.pressed != Chrome::Part::None || app.infoButtonPressed || app.fullscreenButtonPressed ||
-        app.speedSliderDragging || app.zoomSliderDragging || app.speedFlyoutOpen || app.settingsPanelOpen)
+    if (app.chrome.pressed != Chrome::Part::None || app.infoButtonPressed || app.infoPanelCloseButtonPressed ||
+        app.fullscreenButtonPressed || app.speedSliderDragging || app.zoomSliderDragging ||
+        app.speedFlyoutOpen || app.settingsPanelOpen)
     {
         return {};
     }
@@ -1204,6 +1220,7 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     }
     if (app.infoButtonHover) return { 100, InfoButtonRect(app), L"Model information", false };
     if (app.fullscreenButtonHover) return { 101, FullscreenButtonRect(app), L"Fullscreen", false };
+    if (app.infoPanelCloseButtonHover) return { 102, InfoPanelCloseButtonRect(app), L"Close information panel", true };
     return {};
 }
 
@@ -1396,14 +1413,32 @@ void LayoutControls(ViewerApp& app)
 
 // Toggling the panel changes the viewport width (InfoPanelWidthPixels), so
 // it needs the same full relayout a resize would trigger.
-void ToggleInfoPanel(ViewerApp& app)
+void SetInfoPanelVisible(ViewerApp& app, bool visible)
 {
-    if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_INFO)) return;
-    app.infoPanelVisible = !app.infoPanelVisible;
-    if (!app.infoPanelVisible) app.infoPanelScrollOffset = 0.0f;
+    if (app.infoPanelVisible == visible) return;
+    app.infoPanelVisible = visible;
+    if (!visible)
+    {
+        app.infoPanelScrollOffset = 0.0f;
+        app.infoPanelCloseButtonHover = false;
+        app.infoPanelCloseButtonPressed = false;
+        if (app.keyboardControl == viewer_accessibility::Control::InfoPanelClose)
+            app.keyboardControl = viewer_accessibility::Control::Info;
+    }
     LayoutControls(app);
     UpdateGizmoLayout(app);
     InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void ToggleInfoPanel(ViewerApp& app)
+{
+    if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_INFO)) return;
+    SetInfoPanelVisible(app, !app.infoPanelVisible);
+}
+
+void CloseInfoPanel(ViewerApp& app)
+{
+    SetInfoPanelVisible(app, false);
 }
 
 // Immersive-fullscreen toggle: expands the window to exactly cover its
@@ -1593,7 +1628,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
         SetFailure(app, L"This model format is not supported.",
-            L"Open a .glb, .gltf, .stl, or .ply file. STL and PLY must use binary encoding; other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
+            L"Open a .glb, .gltf, .stl, .ply, or .obj file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
         return;
     }
 
@@ -1691,10 +1726,11 @@ void OpenDialog(ViewerApp& app)
         return;
     }
     const COMDLG_FILTERSPEC filters[] = {
-        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply" },
+        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj" },
         { L"glTF models (*.glb; *.gltf)", L"*.glb;*.gltf" },
-        { L"Binary STL (*.stl)", L"*.stl" },
-        { L"Binary PLY meshes and points (*.ply)", L"*.ply" },
+        { L"STL (*.stl)", L"*.stl" },
+        { L"PLY meshes and points (*.ply)", L"*.ply" },
+        { L"Wavefront OBJ with MTL (*.obj)", L"*.obj" },
         { L"All files (*.*)", L"*.*" }
     };
     dialog->SetFileTypes(ARRAYSIZE(filters), filters);
@@ -1704,7 +1740,7 @@ void OpenDialog(ViewerApp& app)
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
     if (FAILED(shown))
     {
-        SetFailure(app, L"The Open dialog stopped unexpectedly.", L"Try dropping a local .glb, .gltf, binary .stl, or binary .ply file into the window.");
+        SetFailure(app, L"The Open dialog stopped unexpectedly.", L"Try dropping a local .glb, .gltf, .stl, .ply, or .obj file into the window.");
         return;
     }
     ComPtr<IShellItem> item;
@@ -1864,7 +1900,7 @@ void HandleCommand(ViewerApp& app, int id)
         MessageBoxW(app.window, app.warning.c_str(), L"Model warnings", MB_OK | MB_ICONWARNING);
         break;
     case IDM_ABOUT:
-        MessageBoxW(app.window, L"A native static viewer for GLB, glTF with local sidecars, binary STL, and binary PLY meshes and points.\n\nImports are bounded and isolated. No cloud, editing, file modification, Explorer thumbnails, or persistent model cache.",
+        MessageBoxW(app.window, L"A native static viewer for GLB, glTF with local sidecars, ASCII/binary STL, and ASCII/binary PLY meshes and points.\n\nImports are bounded and isolated. No cloud, editing, file modification, Explorer thumbnails, or persistent model cache.",
             L"About 3D Preview", MB_OK | MB_ICONINFORMATION);
         break;
     case IDM_EXIT: DestroyWindow(app.window); break;
@@ -2009,6 +2045,9 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     case Control::Info:
         info.name=L"Model information"; info.description=L"Show or hide Stats and Shading"; info.rect=InfoButtonRect(app);
         info.visible=model; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.infoPanelVisible; break;
+    case Control::InfoPanelClose:
+        info.name=L"Close model information"; info.description=L"Close Stats and Shading";
+        info.rect=InfoPanelCloseButtonRect(app); info.visible=model && app.infoPanelVisible; break;
     case Control::Zoom:
     {
         info.name=L"Zoom"; info.description=L"Adjust camera zoom"; info.rect=ZoomTrackRect(app); info.visible=model; info.role=ROLE_SYSTEM_SLIDER;
@@ -2117,6 +2156,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::Maximize: ShowWindow(app.window,IsZoomed(app.window)?SW_RESTORE:SW_MAXIMIZE); break;
     case Control::Close: PostMessageW(app.window,WM_CLOSE,0,0); break;
     case Control::Info: ToggleInfoPanel(app); break;
+    case Control::InfoPanelClose: CloseInfoPanel(app); break;
     case Control::Fullscreen: ToggleFullscreen(app); break;
     case Control::NativeOrientation: ToggleShowNativeOrientation(app); break;
     case Control::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
@@ -2272,6 +2312,9 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.infoPanelSections = BuildInfoPanelSections(
             *app.loadedModel, app.showNativeOrientation, app.groundAxis);
         overlay.infoPanelScrollOffset = app.infoPanelScrollOffset;
+        overlay.infoPanelCloseButtonRect = InfoPanelCloseButtonRect(app);
+        overlay.infoPanelCloseButtonHover = app.infoPanelCloseButtonHover;
+        overlay.infoPanelCloseButtonPressed = app.infoPanelCloseButtonPressed;
     }
     overlay.zoomPercent = ZoomPercentFor(*app.renderThread.LockCamera());
     if (overlay.barBottomBarHeight > 0)
@@ -2805,7 +2848,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (count != 1)
         {
             DragFinish(drop);
-            SetFailure(*app, L"Open one model at a time.", L"Drop exactly one local .glb, .gltf, binary .stl, or binary .ply file into the viewer.");
+            SetFailure(*app, L"Open one model at a time.", L"Drop exactly one local .glb, .gltf, .stl, .ply, or .obj file into the viewer.");
             return 0;
         }
         const UINT length = DragQueryFileW(drop, 0, nullptr, 0);
@@ -2894,7 +2937,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
             }
-            if (app->infoButtonHover || app->fullscreenButtonHover)
+            if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover)
             {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
@@ -2914,9 +2957,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             app->chrome.hover = Chrome::Part::None;
             InvalidateRect(window, nullptr, FALSE);
         }
-        if (app->infoButtonHover || app->fullscreenButtonHover)
+        if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover)
         {
             app->infoButtonHover = false;
+            app->infoPanelCloseButtonHover = false;
             app->fullscreenButtonHover = false;
             InvalidateRect(window, nullptr, FALSE);
         }
@@ -2968,6 +3012,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             // Same outside-click semantics as the Speed flyout above: close
             // and still fall through, so a click on another button both
             // dismisses this panel and performs that click in one action.
+        }
+        if (app->infoPanelVisible)
+        {
+            const RECT closeButton = InfoPanelCloseButtonRect(*app);
+            if (PtInRect(&closeButton, downPoint))
+            {
+                SetCapture(window);
+                app->infoPanelCloseButtonPressed = true;
+                InvalidateRect(window, nullptr, FALSE);
+                UpdateTooltipTracking(*app);
+                return 0;
+            }
         }
         // The raw toolbarHeight, not EffectiveToolbarHeight (0 in Fullscreen)
         // — the action buttons stay clickable there as a floating toolbar
@@ -3107,9 +3163,21 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return 0;
         }
         if (app->chrome.pressed != Chrome::Part::None) return 0;
-        if (app->infoButtonPressed || app->fullscreenButtonPressed) return 0;
+        if (app->infoButtonPressed || app->infoPanelCloseButtonPressed || app->fullscreenButtonPressed) return 0;
         if (app->pointerMode == PointerMode::None)
         {
+            const RECT panelCloseButton = InfoPanelCloseButtonRect(*app);
+            const bool overPanelClose = app->infoPanelVisible && PtInRect(&panelCloseButton, movePoint) != FALSE;
+            if (overPanelClose != app->infoPanelCloseButtonHover)
+            {
+                app->infoPanelCloseButtonHover = overPanelClose;
+                if (overPanelClose)
+                {
+                    TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, window, 0 };
+                    TrackMouseEvent(&track);
+                }
+                InvalidateRect(window, nullptr, FALSE);
+            }
             // Idle hover tracking: the title-bar action buttons above the
             // viewport, the gizmo within it. (Min/Max/Close hover is tracked
             // separately via WM_NCMOUSEMOVE, since those points are always
@@ -3276,6 +3344,17 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             InvalidateRect(window, nullptr, FALSE);
             const RECT infoButton = InfoButtonRect(*app);
             if (PtInRect(&infoButton, upPoint)) HandleCommand(*app, ID_VIEW_INFO);
+            UpdateTooltipTracking(*app);
+            return 0;
+        }
+        if (app->infoPanelCloseButtonPressed)
+        {
+            const POINT upPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            app->infoPanelCloseButtonPressed = false;
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+            const RECT closeButton = InfoPanelCloseButtonRect(*app);
+            if (PtInRect(&closeButton, upPoint)) CloseInfoPanel(*app);
             UpdateTooltipTracking(*app);
             return 0;
         }

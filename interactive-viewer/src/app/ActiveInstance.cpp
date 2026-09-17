@@ -207,7 +207,8 @@ bool IsSupportedExtension(const std::wstring& path)
     if (dot == std::wstring::npos) return false;
     std::wstring extension = path.substr(dot);
     std::transform(extension.begin(), extension.end(), extension.begin(), std::towlower);
-    return extension == L".glb" || extension == L".gltf" || extension == L".stl" || extension == L".ply";
+    return extension == L".glb" || extension == L".gltf" || extension == L".stl" ||
+        extension == L".ply" || extension == L".obj";
 }
 
 bool WaitOverlapped(HANDLE object, OVERLAPPED& operation, HANDLE stopEvent, DWORD timeout, DWORD& transferred,
@@ -334,7 +335,7 @@ bool NormalizeForwardPath(const std::wstring& input, std::wstring& absolutePath,
     const bool extendedDrive = resolved.size() >= 7 && resolved.rfind(L"\\\\?\\", 0) == 0
         && std::iswalpha(resolved[4]) && resolved[5] == L':' && resolved[6] == L'\\';
     if (!drivePath && !extendedDrive) { error = L"Only local drive paths can be activated."; return false; }
-    if (!IsSupportedExtension(resolved)) { error = L"Open a .glb, .gltf, .stl, or .ply file."; return false; }
+    if (!IsSupportedExtension(resolved)) { error = L"Open a .glb, .gltf, .stl, .ply, or .obj file."; return false; }
     absolutePath = std::move(resolved);
     return true;
 }

@@ -1,8 +1,8 @@
 # 3D Preview
 
-A small native Windows 11 viewer for local GLB/glTF, binary STL, and binary
-PLY mesh/point files. Imports run in a zero-capability AppContainer worker;
-the viewer does not upload, edit, or modify models.
+A small native Windows 11 viewer for local GLB/glTF, OBJ/MTL, ASCII or binary
+STL, and ASCII or binary PLY mesh/point files. Imports run in a zero-capability
+AppContainer worker; the viewer does not upload, edit, or modify models.
 
 ## Build and run
 
@@ -53,10 +53,10 @@ acceptance remain release gates. See [portable package notes](packaging/portable
 [portable verification](.docs/TSK-303_VERIFICATION.md).
 
 The installer registers 3D Preview in Windows Default Apps and Open With for
-`.glb`, `.gltf`, `.stl`, and `.ply`, and offers the Windows 11 confirmation page
+`.glb`, `.gltf`, `.obj`, `.stl`, and `.ply`, and offers the Windows 11 confirmation page
 after setup. Windows protects per-user default choices, so setup does not alter
 an existing `UserChoice` value. Explorer thumbnails, persistent model-derived
-cache, compatibility-host/USD support, and broad Tier B formats remain excluded.
+cache, compatibility-host/USD support, and the remaining Tier B formats remain excluded.
 Large-model performance failures recorded in
 [progress](.docs/PROGRESS.md) also remain release blockers.
 

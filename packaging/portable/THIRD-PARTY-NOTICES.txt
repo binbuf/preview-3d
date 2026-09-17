@@ -12,6 +12,7 @@ installed by those pinned ports are preserved in licenses\:
   libwebp.txt      WebP codec and libsharpyuv
   meshoptimizer.txt meshoptimizer
   simdjson.txt     simdjson
+  ufbx.txt         ufbx OBJ/MTL loader
   zstd.txt         Zstandard
 
 The app-local Microsoft Visual C++ Runtime files are Microsoft distributable

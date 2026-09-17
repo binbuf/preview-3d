@@ -103,7 +103,11 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
             { L"Nodes", std::to_wstring(stats.nodeCount) },
             { L"Meshes", std::to_wstring(stats.meshCount) },
             { L"Format", format == model_core::SourceFormatId::Gltf ? L"glTF" : format == model_core::SourceFormatId::Glb ? L"GLB"
-                : format == model_core::SourceFormatId::Stl ? L"STL" : format == model_core::SourceFormatId::Ply ? L"PLY" : L"Unknown" },
+                : format == model_core::SourceFormatId::Stl ? L"STL (binary)"
+                : format == model_core::SourceFormatId::AsciiStl ? L"STL (ASCII)"
+                : format == model_core::SourceFormatId::Ply ? L"PLY (binary)"
+                : format == model_core::SourceFormatId::AsciiPly ? L"PLY (ASCII)"
+                : format == model_core::SourceFormatId::Obj ? L"OBJ" : L"Unknown" },
             { L"Units", metersPerUnit > 0 ? L"Metres" : L"Unspecified" },
         } });
 

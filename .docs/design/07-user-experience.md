@@ -71,10 +71,10 @@ Each open runs a broker session on a detached background thread with a zero-capa
 Open is available through:
 
 - the initial command-line path, if one was passed to the process;
-- Ctrl+O or the (currently overflow-only, chrome-driven) Open action using `IFileOpenDialog`, filtered to supported models (`*.glb;*.gltf;*.stl;*.ply`), glTF, binary STL, binary PLY meshes/points, and All files, with `FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST`;
+- Ctrl+O or the (currently overflow-only, chrome-driven) Open action using `IFileOpenDialog`, filtered to supported models (`*.glb;*.gltf;*.obj;*.stl;*.ply`), glTF, OBJ, STL, PLY meshes/points, and All files, with `FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST`;
 - drag/drop, implemented as `WM_DROPFILES` via `DragAcceptFiles` (a plain OLE drag-accept, not a custom `IDropTarget`).
 
-`.glb`, `.gltf` with broker-approved local sidecars, binary STL, and binary little/big-endian PLY meshes and points are accepted case-insensitively. ASCII STL/PLY are recognized but explicitly deferred; unsupported extensions fail before parsing. Malformed Tier A data receives a separate typed error. Remote/UNC, mapped network drives, and device paths are rejected; local regular files and Unicode paths are supported. Dropping multiple files reports "Open one model at a time." A later valid activation is accepted after failure without relaunch. Single-instance launch forwarding remains later lifecycle work.
+`.glb`, `.gltf` with broker-approved local sidecars, `.obj` with optional broker-approved local `.mtl` and texture sidecars, ASCII/binary STL, and ASCII/binary little/big-endian PLY meshes and points are accepted case-insensitively. MTL is sidecar-only and is never a primary open type. OBJ and ASCII STL/PLY use bounded Tier B paths and have lower source, geometry, and scratch limits than the binary Tier A paths; unsupported extensions fail before parsing. Malformed data receives a separate typed error. Remote/UNC, mapped network drives, device paths, and escaping sidecar references are rejected; local regular files and Unicode paths are supported. Dropping multiple files reports "Open one model at a time." A later valid activation is accepted after failure without relaunch. Single-instance launch forwarding remains later lifecycle work.
 
 
 ## Camera and input
@@ -109,7 +109,7 @@ The error card is drawn with Direct2D; only its three action buttons — **Retry
 
 Copy details writes the host-owned summary/details, actual format, failing phase, and numeric code. Source paths and basenames are omitted unconditionally; no worker-provided diagnostic text is accepted. Optional-feature/texture warnings use fixed host-owned text in the existing warning badge/menu, capped at 64 facts per category and one validated status payload per generation. New generations clear warnings; stale or late-after-failure publications cannot replace the card.
 
-Controls uses the existing `MessageBoxW` control scheme. About describes GLB/glTF with local sidecars, binary STL, and binary PLY meshes/points. The unused `IDD_ABOUTBOX` resource remains separate from the active About command.
+Controls uses the existing `MessageBoxW` control scheme. About describes GLB/glTF with local sidecars plus ASCII/binary STL and PLY meshes/points. The unused `IDD_ABOUTBOX` resource remains separate from the active About command.
 
 
 ## Accessibility
@@ -150,7 +150,7 @@ No thumbnail provider, no `IInitializeWithStream`/`IThumbnailProvider` implement
 ## UX acceptance scenarios (current slice)
 
 1. Cold launch shows the #1C1C1E background immediately with no white/flash frame, then the empty-state drop target.
-2. Opening a valid .glb replaces the empty state with the loading spinner, then the model; opening a second supported file keeps prior content interactive until usable replacement geometry arrives; partial geometry remains Loading until terminal acceptance.
+2. Opening a valid .glb or .obj replaces the empty state with the loading spinner, then the model; opening a second supported file keeps prior content interactive until usable replacement geometry arrives; partial geometry remains Loading until terminal acceptance.
 3. Dropping an unsupported format, a UNC path, or more than one file each produce the corresponding actionable error and leave any currently open model untouched.
 4. Every camera action in the table above is reachable by mouse, keyboard, or touch as specified, including fly-look, orbit inertia, and the perspective/orthographic cross-fade.
 5. Fullscreen (F11) and Maximize are visibly distinct and independently reversible; Esc exits fullscreen without closing the document.

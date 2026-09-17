@@ -17,6 +17,7 @@
 namespace import_worker
 {
 inline uint64_t TierAScratchLimit();
+inline uint64_t TierBScratchLimit();
 // Source payloads are copied into the reusable output window immediately.
 // Only bounded coarse samples and fixed-width descriptors survive publication.
 class BoundedMappedReader
@@ -343,5 +344,13 @@ inline uint64_t TierAScratchLimit()
     MEMORYSTATUSEX memory{};
     memory.dwLength = sizeof(memory);
     return GlobalMemoryStatusEx(&memory) ? (std::min)(1ull * 1024 * 1024 * 1024, memory.ullTotalPhys / 4) : 0;
+}
+inline uint64_t TierBScratchLimit()
+{
+    MEMORYSTATUSEX memory{};
+    memory.dwLength = sizeof(memory);
+    return GlobalMemoryStatusEx(&memory)
+        ? (std::min)(1536ull * 1024 * 1024, memory.ullTotalPhys * 35 / 100)
+        : 0;
 }
 } // namespace import_worker
