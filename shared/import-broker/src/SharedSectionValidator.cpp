@@ -203,11 +203,12 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         return Reject(ImportErrorCode::ImportProtocolViolation, "header changed during copy");
     if (header.reserved || header.scene.reserved || header.scene.generationId != expectedGenerationId)
         return Reject(ImportErrorCode::ImportProtocolViolation, "stale or malformed scene metadata");
-    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Obj))
+    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Fbx))
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
     const bool tierBFormat = header.scene.format == model_core::SourceFormatId::AsciiStl
         || header.scene.format == model_core::SourceFormatId::AsciiPly
-        || header.scene.format == model_core::SourceFormatId::Obj;
+        || header.scene.format == model_core::SourceFormatId::Obj
+        || header.scene.format == model_core::SourceFormatId::Fbx;
     const uint32_t objectLimit = tierBFormat ? model_core::kTierBObjectLimit
                                              : model_core::kTierAObjectLimit;
     if (uint32_t(header.scene.upAxis) > uint32_t(model_core::UpAxisId::Z) ||
@@ -226,6 +227,9 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
          || header.scene.format == model_core::SourceFormatId::Obj)
         && (header.scene.upAxis != model_core::UpAxisId::Unknown || header.scene.metersPerUnit != 0))
         return Reject(ImportErrorCode::MalformedData, "unspecified source units/up axis must stay unknown");
+    if (header.scene.format == model_core::SourceFormatId::Fbx
+        && (header.scene.upAxis != model_core::UpAxisId::Y || header.scene.metersPerUnit != 1.0))
+        return Reject(ImportErrorCode::MalformedData, "invalid normalized FBX units/up axis");
 
     // 10. Recompute the section checksum over [header, sectionLength).
     auto payloadRegion

@@ -1,6 +1,7 @@
 #include "WorkerRequestDispatch.h"
 
 #include "GenerationWorker.h"
+#include "FbxImportWorker.h"
 #include "GltfImportWorker.h"
 #include "PlyImportWorker.h"
 #include "ObjImportWorker.h"
@@ -68,6 +69,14 @@ DispatchOutcome DispatchOneRequest(HANDLE stdIn, HANDLE stdOut)
         model_core::ParseObjFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
         HandleObjImportFileRequest(stdIn, stdOut, request);
+        return DispatchOutcome::Continue;
+    }
+
+    if (received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartFbxImportFromFile)
+        && received->payload.size() == sizeof(model_core::ParseFbxFileRequest)) {
+        model_core::ParseFbxFileRequest request{};
+        std::memcpy(&request, received->payload.data(), sizeof(request));
+        HandleFbxImportFileRequest(stdIn, stdOut, request);
         return DispatchOutcome::Continue;
     }
 

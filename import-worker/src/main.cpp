@@ -2,6 +2,7 @@
 #include "ChunkBatchSink.h"
 #include "GenerationWorker.h"
 #include "FbxSpikeWorker.h"
+#include "FbxImportWorker.h"
 #include "GltfImportWorker.h"
 #include "PlyImportWorker.h"
 #include "ObjImportWorker.h"
@@ -119,6 +120,9 @@ int main(int argc, char* argv[])
     }
     if (ArgEquals(argv[1], "--parse-obj")) {
         return import_worker::RunObjImport();
+    }
+    if (ArgEquals(argv[1], "--parse-fbx")) {
+        return import_worker::RunFbxImport();
     }
 
     // Backward-compatible aliases retained for older parser regression commands.

@@ -279,7 +279,8 @@ bool IsFileImportOpcode(uint32_t opcode)
     return opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartGltfImportFromFile)
         || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartStlImportFromFile)
         || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartPlyImportFromFile)
-        || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartObjImportFromFile);
+        || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartObjImportFromFile)
+        || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartFbxImportFromFile);
 }
 
 struct BatchSession {

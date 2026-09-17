@@ -94,6 +94,8 @@ const wchar_t* ParseFlagFor(ImportFormat format)
         return L"--parse-ply";
     case ImportFormat::Obj:
         return L"--parse-obj";
+    case ImportFormat::Fbx:
+        return L"--parse-fbx";
     case ImportFormat::Gltf:
     default:
         return L"--parse-gltf";
@@ -150,6 +152,12 @@ bool SendStartRequest(const ImportSessionRequest& session, HANDLE controlInWrite
         auto request = MakeFileRequest<model_core::ParseObjFileRequest>(session, sourceFileHandle, sectionHandle,
                                                                         cancellationEventHandle);
         return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartObjImportFromFile,
+                                                &request, sizeof(request));
+    }
+    case ImportFormat::Fbx: {
+        auto request = MakeFileRequest<model_core::ParseFbxFileRequest>(session, sourceFileHandle, sectionHandle,
+                                                                        cancellationEventHandle);
+        return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartFbxImportFromFile,
                                                 &request, sizeof(request));
     }
     }
@@ -577,7 +585,9 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                     : request.format == ImportFormat::Ply
                         ? (chunk.scene.format == model_core::SourceFormatId::Ply
                            || chunk.scene.format == model_core::SourceFormatId::AsciiPly)
-                        : chunk.scene.format == model_core::SourceFormatId::Obj;
+                        : request.format == ImportFormat::Obj
+                            ? chunk.scene.format == model_core::SourceFormatId::Obj
+                            : chunk.scene.format == model_core::SourceFormatId::Fbx;
             if (request.workerArgumentsOverride.empty() && !expectedFormat) {
                 failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ImportProtocolViolation);
                 return false;
@@ -586,7 +596,8 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         const bool tierBFormat = acceptance.scene
             && (acceptance.scene->format == model_core::SourceFormatId::AsciiStl
                 || acceptance.scene->format == model_core::SourceFormatId::AsciiPly
-                || acceptance.scene->format == model_core::SourceFormatId::Obj);
+                || acceptance.scene->format == model_core::SourceFormatId::Obj
+                || acceptance.scene->format == model_core::SourceFormatId::Fbx);
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -707,7 +718,8 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
                 }
-                if (chunk.scene.format == model_core::SourceFormatId::Obj &&
+                if ((chunk.scene.format == model_core::SourceFormatId::Obj
+                     || chunk.scene.format == model_core::SourceFormatId::Fbx) &&
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
                      d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
@@ -1014,7 +1026,8 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     const bool tierBResult = acceptance.scene
         && (acceptance.scene->format == model_core::SourceFormatId::AsciiStl
             || acceptance.scene->format == model_core::SourceFormatId::AsciiPly
-            || acceptance.scene->format == model_core::SourceFormatId::Obj);
+            || acceptance.scene->format == model_core::SourceFormatId::Obj
+            || acceptance.scene->format == model_core::SourceFormatId::Fbx);
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)

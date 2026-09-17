@@ -91,6 +91,8 @@
     <ClCompile Include="src\PlyAdapter.cpp" />
     <ClCompile Include="src\ObjImportWorker.cpp" />
     <ClCompile Include="src\ObjAdapter.cpp" />
+    <ClCompile Include="src\FbxImportWorker.cpp" />
+    <ClCompile Include="src\FbxAdapter.cpp" />
     <ClCompile Include="src\AsciiTokenizer.cpp" />
     <ClCompile Include="src\WorkerRequestDispatch.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
@@ -117,6 +119,8 @@
     <ClInclude Include="src\PlyAdapter.h" />
     <ClInclude Include="src\ObjImportWorker.h" />
     <ClInclude Include="src\ObjAdapter.h" />
+    <ClInclude Include="src\FbxImportWorker.h" />
+    <ClInclude Include="src\FbxAdapter.h" />
     <ClInclude Include="src\AsciiTokenizer.h" />
     <ClInclude Include="src\WorkerRequestDispatch.h" />
     <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />

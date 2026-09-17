@@ -40,6 +40,7 @@ enum class ImportFormat : uint32_t {
     Stl,
     Ply,
     Obj,
+    Fbx,
 };
 
 // How far the session got. model_core::ImportErrorCode is not sufficient on

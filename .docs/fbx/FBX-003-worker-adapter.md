@@ -1,6 +1,6 @@
 # FBX-003: sandboxed FBX worker adapter
 
-Status: blocked on FBX-002  
+Status: complete (2026-09-17)
 Depends on: FBX-001, FBX-002  
 Unblocks: FBX-004
 
@@ -71,3 +71,37 @@ until deformation and materials are complete.
   subsequent valid import succeeds in the same application session.
 - Debug and Release worker, Unit, and full ImportIsolation suites pass.
 
+## Completion record
+
+- Added the dedicated `SourceFormatId::Fbx`, `ImportFormat::Fbx`, FBX control
+  opcode/request, one-shot `--parse-fbx` entry point, pooled dispatch, strict
+  host format matching, and hostile-worker opcode recognition. No viewer,
+  picker/drop, shell, installer, thumbnail, or public-documentation surface
+  recognizes `.fbx` yet.
+- The worker maps only the duplicated primary handle, enforces the Tier-B
+  2 GiB source ceiling, observes the duplicated cancellation event, and
+  converts allocation/library exceptions to typed geometry-phase errors.
+  `ufbx` is forced to FBX with strict index/Unicode parsing, a 256-node depth
+  cap, explicit split temp/result allocators, progress cancellation, generated
+  normalized normals, right-handed Y-up/metre conversion, retained pivots and
+  geometry transforms, helper nodes for inherit modes, and denied external
+  file/cache evaluation.
+- Static polygon meshes are triangulated into bounded deindexed 4–16 MiB-class
+  chunks with finite local-float positions plus double origins, normals, UVs,
+  colors, tangents, verified bounds, mesh-part provenance, and checked Tier-B
+  counts. Compatible mesh/geometry-transform variants share one geometry
+  payload across node instances; incompatible geometry transforms split
+  deterministically without charging source parser counts per instance.
+- Protocol-v10 nodes and mesh instances preserve hierarchy, double transforms,
+  visibility, per-instance verified world bounds, and neutral material
+  bindings. Skin or blend data fails with `UnsupportedRequiredFeature` until
+  FBX-004; materials/images remain neutral and sidecar-free until FBX-005.
+- Focused ASCII/binary tests cover hierarchy, shared instances, pivots,
+  mirrored transforms, axes/units, polygon triangulation, generated normals,
+  UV/color payloads, small-section progressive delivery, malformed input,
+  hierarchy-depth enforcement, cancellation, pooled recovery, and forced-format
+  spoofing. On 2026-09-17,
+  Debug passed 7,609 Unit assertions and 52,968 ImportIsolation assertions in
+  234 cases; Release passed 7,521 Unit assertions and the same 52,968
+  ImportIsolation assertions in 234 cases. The focused FBX-003 slice passed
+  243 assertions in ten cases in both configurations.
