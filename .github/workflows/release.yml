@@ -55,6 +55,19 @@ jobs:
             throw "MSBuild was not found at '$msbuild'."
           }
 
+          $vcpkgRoots = @(
+            $env:VCPKG_INSTALLATION_ROOT,
+            (Join-Path $visualStudio 'VC\vcpkg')
+          ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          $vcpkgRoot = $vcpkgRoots |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ 'vcpkg.exe') -PathType Leaf } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($vcpkgRoot)) {
+            throw 'vcpkg.exe was not found on the runner.'
+          }
+          $vcpkgRoot = [IO.Path]::GetFullPath($vcpkgRoot).TrimEnd('\')
+          $vcpkg = Join-Path $vcpkgRoot 'vcpkg.exe'
+
           # Download the official portable distribution instead of depending on
           # Chocolatey's community feed, which can intermittently return 5xx.
           $nsisVersion = '3.12'
@@ -86,6 +99,30 @@ jobs:
 
           "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
           "nsis=$nsis" >> $env:GITHUB_OUTPUT
+          "vcpkg=$vcpkg" >> $env:GITHUB_OUTPUT
+          "vcpkg_root=$vcpkgRoot" >> $env:GITHUB_OUTPUT
+
+      - name: Restore vcpkg dependencies
+        shell: pwsh
+        env:
+          VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
+        run: |
+          & $env:VCPKG_EXE integrate install
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg MSBuild integration failed with exit code $LASTEXITCODE."
+          }
+
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows'
+          & $env:VCPKG_EXE install `
+            --triplet x64-windows `
+            "--x-manifest-root=$env:GITHUB_WORKSPACE" `
+            "--x-install-root=$installRoot" `
+            "--vcpkg-root=$env:VCPKG_ROOT" `
+            --x-wait-for-lock
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg dependency restore failed with exit code $LASTEXITCODE."
+          }
 
       - name: Import optional signing certificate
         id: signing
@@ -120,6 +157,7 @@ jobs:
         shell: pwsh
         env:
           MSBUILD_PATH: ${{ steps.tools.outputs.msbuild }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           SIGNING_THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
         run: |
@@ -129,6 +167,8 @@ jobs:
             '/p:Configuration=Release',
             '/p:Platform=x64',
             "/p:ReleaseVersion=$env:RELEASE_VERSION",
+            "/p:VcpkgRoot=$env:VCPKG_ROOT",
+            '/p:VcpkgManifestInstall=false',
             '/m:1',
             '/v:minimal'
           )
@@ -145,6 +185,7 @@ jobs:
         env:
           MSBUILD_PATH: ${{ steps.tools.outputs.msbuild }}
           NSIS_PATH: ${{ steps.tools.outputs.nsis }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           SIGNING_THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
         run: |
@@ -155,6 +196,8 @@ jobs:
             '/p:Platform=x64',
             "/p:ReleaseVersion=$env:RELEASE_VERSION",
             "/p:NsisPath=$env:NSIS_PATH",
+            "/p:VcpkgRoot=$env:VCPKG_ROOT",
+            '/p:VcpkgManifestInstall=false',
             '/m:1',
             '/v:minimal'
           )
