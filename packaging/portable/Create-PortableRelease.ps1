@@ -277,13 +277,13 @@ $components = @()
 foreach ($name in $thirdParty) {
     if (-not $status.ContainsKey($name)) { throw "vcpkg status has no entry for '$name'." }
     $entry = $status[$name]
-    $version = if ($entry.ContainsKey('Version')) { $entry.Version } elseif ($entry.ContainsKey('Version-Semver')) { $entry.'Version-Semver' } else { 'unknown' }
-    if ($entry.ContainsKey('Port-Version') -and $entry.'Port-Version' -ne '0') { $version = "$version#$($entry.'Port-Version')" }
+    $packageVersion = if ($entry.ContainsKey('Version')) { $entry.Version } elseif ($entry.ContainsKey('Version-Semver')) { $entry.'Version-Semver' } else { 'unknown' }
+    if ($entry.ContainsKey('Port-Version') -and $entry.'Port-Version' -ne '0') { $packageVersion = "$packageVersion#$($entry.'Port-Version')" }
     $component = [ordered]@{
         type = 'library'
         name = $name
-        version = $version
-        'bom-ref' = "pkg:vcpkg/$name@${version}?triplet=x64-windows"
+        version = $packageVersion
+        'bom-ref' = "pkg:vcpkg/$name@${packageVersion}?triplet=x64-windows"
         licenses = @(@{ license = @{ name = "See licenses/$name.txt" } })
         properties = @(
             @{ name = 'preview3d:vcpkg-baseline'; value = $baseline },
