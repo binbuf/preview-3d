@@ -1,6 +1,6 @@
 # FBX-006: viewer, activation, and installer integration
 
-Status: in progress — FBX-005 gate satisfied
+Status: complete (2026-09-17)
 Depends on: FBX-003 through FBX-005  
 Unblocks: FBX-007
 
@@ -108,3 +108,49 @@ viewer-side FBX parser or a parallel rendering route.
   worker dependency/license closure, and have no unresolved non-system import.
 - Install/uninstall tests show `.fbx` in Open With/Default Apps without changing
   the user's selected default and without registering a thumbnail handler.
+
+## Completion (2026-09-17)
+
+FBX is enabled case-insensitively through the product import bridge, direct and
+secondary activation, picker, one-file drop boundary, Open With discovery,
+metadata UI, portable documentation, and NSIS registration. The installer owns
+`Binbuf.Preview3D.FBX.1`, advertises `.fbx` without writing `UserChoice`, and
+removes only its own registration. Shell integration catalog revision 4 forces
+one bounded rediscovery of the six supported extensions. No FBX thumbnail
+handler or `shellex` registration was added.
+
+The viewer continues to consume only validated normalized scene records from
+the AppContainer worker. Product smoke found that node chunks may span
+progressive publications: `D3D12ViewerPath` must not re-resolve a publication-
+local node fragment when the bridge has already stamped each instance with its
+generation-wide world transform. The corrected route presents the combined
+skin/blend fixture with 528 vertices, 176 triangles, 4 materials, 15 nodes, 6
+meshes, 1 animation stack, 1 skin, and 4 bones, verified transformed bounds,
+26 GPU chunks, and no Debug D3D validation errors.
+
+The same real-app pass exposed a pre-existing PSO portability issue. Color
+alpha blending must use independent render-target state so the `R32_UINT`
+pick-ID MRT never inherits target 0 blending; current drivers otherwise reject
+the grid and blended-material pipelines during startup.
+
+Verification completed in Debug and Release:
+
+- Unit: 98 cases / 7,612 assertions Debug; 98 / 7,524 Release.
+- ImportIsolation: full 250 / 100,704 in both configurations before the final
+  viewer-only fixes; focused FBX after the product bridge test: 26 / 47,977 in
+  both configurations.
+- Real-app activation: direct ASCII, uppercase binary secondary activation,
+  picker, drop boundary, replacement while loading, post-failure reopen,
+  pathless activation, and immediate relaunch all passed in both configurations.
+- Targeted real-app FBX metadata/static-pose and malformed-FBX recovery passed
+  in both configurations with no leaked worker.
+- Unsigned engineering portable packaging passed with 34 staged files and
+  SHA-256 `28e8344f768581975afc019bf20ee89e843dd17d69e10c93826a26d13d6d69ee`.
+  Unsigned NSIS packaging passed `/WX` with 35 staged files and setup SHA-256
+  `375938af2dbd97ca6d7467785e1971d566329db75f1df9c05ca906b6fc8978f7`.
+
+The VS 18.10 Release LTCG linker intermittently raised internal error C1001/
+LNK1000 while linking the large ImportIsolation executable. A serial non-LTCG
+test build completed and focused FBX remained green; the Release viewer and
+worker themselves rebuilt through both packaging targets. Clean-VM lifecycle,
+signed-candidate, corpus/fuzz, and performance evidence remain FBX-007 work.

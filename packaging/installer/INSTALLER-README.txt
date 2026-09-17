@@ -5,18 +5,21 @@
 
 * .glb and .gltf 2.0, including broker-approved local relative sidecars;
 * .obj polygon meshes with optional local .mtl and texture sidecars;
+* binary or ASCII .fbx with static hierarchy/instances, supported materials and
+  textures, and a deterministic baked start pose;
 * ASCII or binary .stl; and
 * ASCII or binary little- or big-endian .ply triangle meshes and point clouds.
 
-FBX, 3MF, USD, CAD formats, Explorer thumbnails, editing,
-animation, network assets, and a persistent model-derived cache are not part of
-this scope-limited release.
+3MF, USD, CAD formats, Explorer thumbnails (including for FBX), editing,
+animation playback, network assets, and a persistent model-derived cache are
+not part of this release. FBX geometry caches, dynamic constraints,
+NURBS/subdivision tessellation, cameras, and lights are outside its static subset.
 
 File associations
 -----------------
 
 Setup registers 3D Preview with Windows Default Apps and Open With for .glb,
-.gltf, .obj, .stl, and .ply. Windows 11 requires the signed-in user to confirm default
+.gltf, .obj, .fbx, .stl, and .ply. Windows 11 requires the signed-in user to confirm default
 app choices. Setup offers to open 3D Preview's Default Apps page after install;
 select 3D Preview for each listed extension there. Existing user choices are
 never overwritten by setup.

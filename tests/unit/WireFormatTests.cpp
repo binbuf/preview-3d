@@ -93,6 +93,8 @@ TEST_CASE("Info uses real counts units exact axis dimensions and provisional bou
     CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"PLY (ASCII)");
     metadata.source.format = model_core::SourceFormatId::Obj;
     CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"OBJ");
+    metadata.source.format = model_core::SourceFormatId::Fbx;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"FBX");
     CHECK(metadata.vertices.empty()); CHECK(metadata.indices.empty());
 }
 

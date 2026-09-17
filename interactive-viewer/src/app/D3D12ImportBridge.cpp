@@ -59,7 +59,7 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     switch (code) {
     case model_core::ImportErrorCode::UnsupportedEncoding:
         summary = L"This encoding is not supported.";
-        details = L"Use glTF 2.0, STL, or ASCII/binary little- or big-endian PLY."; return;
+        details = L"Use glTF 2.0, ASCII/binary STL or PLY, OBJ, or ASCII/binary FBX."; return;
     case model_core::ImportErrorCode::WorkerCrashed:
         summary = L"The sandboxed importer stopped unexpectedly.";
         details = L"The worker exited before completing this model. Retry or open another model."; return;
@@ -209,6 +209,8 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
         return import_broker::ImportFormat::Ply;
     case SourceFormat::Obj:
         return import_broker::ImportFormat::Obj;
+    case SourceFormat::Fbx:
+        return import_broker::ImportFormat::Fbx;
     case SourceFormat::Glb:
     default:
         return import_broker::ImportFormat::Gltf;
@@ -248,6 +250,7 @@ std::wstring SourceFormatLabel(const std::wstring& path)
     if (ext == L"stl") return L"STL";
     if (ext == L"ply") return L"PLY";
     if (ext == L"obj") return L"OBJ";
+    if (ext == L"fbx") return L"FBX";
     // Extension only, capped and restricted to printable alphanumerics.
     if (ext.empty() || ext.size() > 16) return L"Unknown";
     std::wstring label;
@@ -304,6 +307,7 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     if (ext == L"stl") return SourceFormat::Stl;
     if (ext == L"ply") return SourceFormat::Ply;
     if (ext == L"obj") return SourceFormat::Obj;
+    if (ext == L"fbx") return SourceFormat::Fbx;
     return std::nullopt;
 }
 
@@ -320,7 +324,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     ImportResult result;
 
     import_broker::ImportSessionRequest sessionRequest;
-    sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj;
+    sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
+        && format != SourceFormat::Fbx;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
     if (!delayBatchesForTesting && !faultForTesting) {
@@ -484,6 +489,15 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         result.errorStage = session.stage;
         result.errorPhase = session.errorPhase;
         DescribeSessionFailure(session, result.errorSummary, result.errorDetails);
+        if (format == SourceFormat::Fbx) {
+            if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
+                result.errorDetails = L"Export or bake this FBX as static polygon geometry using the supported material and deformation subset.";
+            } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
+                result.errorDetails = L"FBX files are limited to the bounded Tier B source size.";
+            } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
+                result.errorDetails = L"FBX parsing or static-pose evaluation exceeded the bounded importer scratch budget.";
+            }
+        }
         return result;
     }
     if (!onBatch)

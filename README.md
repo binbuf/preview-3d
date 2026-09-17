@@ -6,7 +6,7 @@ A fast optimized 3D viewer for Windows 11.
 
 ## Highlights
 
-- Open local GLB/glTF, OBJ/MTL, STL, and PLY files.
+- Open local GLB/glTF, OBJ/MTL, FBX, STL, and PLY files.
 - Navigate with familiar orbit, pan, fly, frame, and orthographic-view controls.
 - Drag and drop files, use **Open**, or pass a path on the command line.
 - Run parsing and decoding in a zero-capability AppContainer worker; models stay local and are never modified.
@@ -18,11 +18,13 @@ A fast optimized 3D viewer for Windows 11.
 | --- | --- |
 | glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars |
 | Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars |
+| FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose |
 | STL | ASCII and binary |
 | PLY | ASCII and binary triangle meshes and point clouds |
 
-This is a static, read-only viewer. Animation, editing, USD/FBX/3MF/CAD formats,
-Explorer thumbnails, and network assets are not currently included.
+This is a static, read-only viewer. Animation playback, editing, USD/3MF/CAD
+formats, Explorer thumbnails (including for FBX), and network assets are not
+currently included.
 
 ## Install and use
 

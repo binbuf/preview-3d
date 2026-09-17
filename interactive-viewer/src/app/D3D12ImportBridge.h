@@ -30,6 +30,7 @@ enum class SourceFormat {
     Stl,
     Ply,
     Obj,
+    Fbx,
 };
 
 // nullopt for any extension this slice doesn't recognize.

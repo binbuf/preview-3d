@@ -10,7 +10,8 @@ Installer: NSIS 3.11
 - Allowlisted viewer, isolated worker, app-local CRT/dependencies, notices,
   licenses, SBOM, and per-file manifest. The thumbnail provider,
   compatibility host, tests, PDBs, and debug runtime are rejected from staging.
-- Stable ProgIDs for glTF (`.glb`, `.gltf`), STL (`.stl`), and PLY (`.ply`).
+- Stable ProgIDs for glTF (`.glb`, `.gltf`), STL (`.stl`), PLY (`.ply`),
+  OBJ (`.obj`), and FBX (`.fbx`).
 - Default Apps capabilities, `RegisteredApplications`, `OpenWithProgids`,
   `Applications\Preview3D.exe\SupportedTypes`, and App Paths registration.
 - Quoted activation command: `"Preview3D.exe" --open "%1"`.
@@ -65,11 +66,28 @@ because no signing thumbprint was supplied. The signing path covers the viewer,
 worker, embedded uninstaller, and final setup executable when
 `/p:InstallerSigningThumbprint=<SHA-1>` is provided.
 
+## FBX-006 addendum (2026-09-17)
+
+The installer now registers `Binbuf.Preview3D.FBX.1` through capabilities,
+`OpenWithProgids`, and `Applications\Preview3D.exe\SupportedTypes`, with matching
+uninstall cleanup and no thumbnail/shellex key. The association reset helper
+preserves `UserChoice` and includes all six product ProgIDs, including the
+previously omitted OBJ entry.
+
+`packaging\CreateInstaller.proj` rebuilt the Release viewer/worker, staged 35
+allowlisted files, and completed `makensis /WX`. The unsigned engineering setup
+SHA-256 is
+`375938af2dbd97ca6d7467785e1971d566329db75f1df9c05ca906b6fc8978f7`.
+The corresponding 34-file portable archive SHA-256 is
+`28e8344f768581975afc019bf20ee89e843dd17d69e10c93826a26d13d6d69ee`.
+Both stages contain the pinned ufbx license, updated notice, and SBOM entry.
+Clean-VM association lifecycle and signed-candidate checks remain below.
+
 ## Remaining release gates
 
 Run clean Windows 11 x64 VM install/upgrade/uninstall tests as both an
 interactive administrator and a standard user supplying elevation. Confirm all
-four extensions appear on the app-specific Default Apps page, select them,
+six extensions appear on the app-specific Default Apps page, select them,
 open adversarial quoted/Unicode paths, verify worker isolation, and confirm
 uninstall removes product-owned registration without changing unrelated
 defaults. Also verify signed-file trust and hashes when a release certificate is

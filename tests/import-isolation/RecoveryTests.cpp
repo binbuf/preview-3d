@@ -90,6 +90,9 @@ TEST_CASE("Copied diagnostics name source format and phase without source paths"
     CHECK(text.find(L"Format: glTF")!=std::wstring::npos); CHECK(text.find(L"Phase: resolving sidecars")!=std::wstring::npos);
     CHECK(text.find(L"private-user")==std::wstring::npos); CHECK(text.find(L"secret-model")==std::wstring::npos);
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.FBX")==L"FBX");
+    CHECK(d3d12_import_bridge::ClassifyByExtension(L"C:\\private\\model.FBX")
+        == d3d12_import_bridge::SourceFormat::Fbx);
+    CHECK_FALSE(d3d12_import_bridge::ClassifyByExtension(L"C:\\private\\model.3mf"));
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.bad\npath")==L"Unknown");
 }
 

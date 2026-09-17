@@ -67,13 +67,15 @@ TEST_CASE("Activation payload validation is strict and bounded", "[activation]")
     CHECK(DecodePayload(CommandType::Activate,nullptr,0,command,error));
 }
 
-TEST_CASE("Forward paths are absolute local Tier A paths", "[activation]")
+TEST_CASE("Forward paths are absolute local supported-model paths", "[activation]")
 {
     std::wstring path,error;
     REQUIRE(NormalizeForwardPath(L"relative model.ply",path,error));
     CHECK(std::filesystem::path(path).is_absolute());
     CHECK_FALSE(NormalizeForwardPath(L"\\\\server\\share\\model.glb",path,error));
-    CHECK_FALSE(NormalizeForwardPath(L"model.fbx",path,error));
+    REQUIRE(NormalizeForwardPath(L"model.FBX",path,error));
+    CHECK(std::filesystem::path(path).is_absolute());
+    CHECK_FALSE(NormalizeForwardPath(L"model.3mf",path,error));
 }
 
 TEST_CASE("Session coordinator forwards and survives a close relaunch race", "[activation]")

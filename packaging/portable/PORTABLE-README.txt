@@ -10,6 +10,8 @@ Supported content
 
 * GLB and glTF 2.0 with local relative binary/image sidecars.
 * OBJ polygon meshes with optional local MTL and texture sidecars.
+* Binary and ASCII FBX with static hierarchy/instances, supported materials and
+  textures, and a deterministic baked start pose for supported skin/blend data.
 * ASCII and binary STL.
 * ASCII and binary little- or big-endian PLY triangle meshes and point clouds.
 * The bounded glTF subset includes static meshes/instances, vertex colors,
@@ -21,8 +23,8 @@ Supported content
 Important limits
 ----------------
 
-This is a local, read-only static viewer. Animation, editing, network assets,
-USD, 3MF, FBX, CAD, thumbnails, file associations, and a
+This is a local, read-only static viewer. Animation playback, editing, network
+assets, USD, 3MF, CAD, thumbnails (including FBX Explorer thumbnails), file associations, and a
 persistent derived cache are outside this limited MVP. Optional unsupported
 glTF material/image features may fall back with a warning; required unsupported
 extensions fail. OBJ supports faces, triangulation, smoothing/generated normals,
@@ -30,6 +32,8 @@ UVs, vertex colors, object/group meshes, MTL factors, and broker-approved
 base-color, normal/bump, and emissive maps. Lines, curves, animation, and distinct
 roughness/metalness texture maps are not rendered. Imports and decoded data are
 bounded; over-limit or malformed models fail instead of rendering partially.
+FBX geometry caches, dynamic constraints, NURBS/subdivision tessellation,
+cameras, and lights are not rendered.
 
 The worker runs in a zero-capability AppContainer. On first import, Preview3D
 creates the current-user profile Binbuf.Preview3D.ImportWorker and grants that

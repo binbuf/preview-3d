@@ -594,6 +594,10 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     rasterizer.DepthClipEnable = TRUE;
 
     D3D12_BLEND_DESC blend{};
+    // Color may blend, but the second MRT is an integer pick ID and must
+    // never inherit target 0's blend state. Recent drivers reject that PSO
+    // combination instead of deferring the mismatch until draw time.
+    blend.IndependentBlendEnable = TRUE;
     blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
@@ -770,6 +774,8 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     rasterizer.DepthClipEnable = TRUE;
 
     D3D12_BLEND_DESC blend{};
+    // Keep color alpha blending independent from the integer pick-ID MRT.
+    blend.IndependentBlendEnable = TRUE;
     blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
@@ -1448,12 +1454,10 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         resolved.resolving = false;
         return true;
     };
-    for (const auto& node : importedNodes) {
-        if (!resolveNode(node.data.nodeId)) {
-            error = L"The imported scene hierarchy could not be resolved.";
-            return false;
-        }
-    }
+    // Node records are allowed to span progressive publications. The import
+    // bridge keeps the generation-wide catalog and stamps resolved world
+    // transforms onto instances; eagerly resolving this publication's node
+    // fragment would reject a child whose parent arrived in an earlier batch.
     std::unordered_map<uint32_t, std::vector<const model_core::MeshInstancePayload*>> instancesByGeometry;
     std::unordered_map<uint32_t, const d3d12_import_bridge::ImportedInstance*> importedInstanceById;
     for (const auto& instance : importedInstances) {

@@ -27,11 +27,11 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
-constexpr std::uint32_t kCatalogRevision = 3;
+constexpr std::uint32_t kCatalogRevision = 4;
 constexpr std::uint64_t kDiscoveryInterval = 7ull * 24 * 60 * 60 * 10'000'000;
 constexpr std::size_t kMaximumCacheBytes = 256 * 1024;
 constexpr wchar_t kCacheFileName[] = L"open-with-apps-v1.dat";
-constexpr std::array<const wchar_t*, 5> kSupportedExtensions{ L".glb", L".gltf", L".stl", L".ply", L".obj" };
+constexpr std::array<const wchar_t*, 6> kSupportedExtensions{ L".glb", L".gltf", L".stl", L".ply", L".obj", L".fbx" };
 
 struct CatalogApp
 {

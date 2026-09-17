@@ -1,4 +1,5 @@
 #include "SandboxTestSupport.h"
+#include "../../interactive-viewer/src/app/D3D12ImportBridge.h"
 #include "import_broker/ImportSession.h"
 #include "import_broker/SharedSection.h"
 #include "model_core/MaterialPayload.h"
@@ -407,6 +408,23 @@ TEST_CASE("ASCII FBX preserves hierarchy and shares static mesh geometry across 
     CHECK(authoredMaterial != 0);
     CHECK(materialBoundInstances >= 2);
     CHECK(transformedNode);
+}
+
+TEST_CASE("Viewer bridge routes uppercase FBX through the product broker mapping",
+          "[fbx][product-integration]")
+{
+    ScratchFbx source;
+    source.path = source.directory / L"model.FBX";
+    source.Write(ReadFixture("cube-binary.fbx.base64"));
+    d3d12_import_bridge::EnsureImportSandboxPrepared();
+    const auto result = d3d12_import_bridge::RunImport(
+        d3d12_import_bridge::SourceFormat::Fbx, source.path.wstring(), 5001);
+    CAPTURE(result.errorStage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    CHECK(result.scene.format == model_core::SourceFormatId::Fbx);
+    CHECK_FALSE(result.meshes.empty());
+    CHECK_FALSE(result.nodes.empty());
+    CHECK_FALSE(result.instances.empty());
 }
 
 TEST_CASE("FBX decodes an embedded PNG without a filesystem sidecar", "[fbx][materials][embedded-image]")

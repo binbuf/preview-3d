@@ -1,6 +1,6 @@
 # FBX-007: corpus, hardening, and release qualification
 
-Status: blocked on FBX-006  
+Status: ready — FBX-006 complete
 Depends on: FBX-001 through FBX-006  
 Unblocks: viewer FBX support claim and FBX-008
 
@@ -71,4 +71,3 @@ performance, or package evidence must be implemented and rerun.
   applicable design gates, or the design is revised rather than waived.
 - Documentation accurately distinguishes viewer FBX support from the still
   separate Explorer-thumbnail deliverable.
-

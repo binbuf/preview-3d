@@ -1,6 +1,6 @@
 # FBX post-MVP work plan
 
-Status: proposed execution plan  
+Status: active execution plan; FBX-006 complete
 Prepared: 2026-09-17  
 Design authority: [../design/README.md](../design/README.md)
 
@@ -25,9 +25,11 @@ validation spike. Implement it through the tasks in this directory.
 - FBX-005 is complete: normalized material conversion, embedded images,
   brokered sidecars, sidecar attacks, corrupt/pressure fallback, progressive
   dependencies, layered-texture policy, and distinct per-instance materials
-  are qualified in Debug and Release. FBX-006 may now enable product surfaces.
-- `.fbx` is deliberately rejected by command-line/secondary activation, the
-  picker, drag/drop, Shell integration, and packaging documentation.
+  are qualified in Debug and Release.
+- FBX-006 is complete: `.fbx` is enabled by command-line/secondary activation,
+  the picker, drag/drop boundary, renderer, Open With discovery, NSIS
+  registration, metadata, and packaging documentation. Explorer thumbnails
+  remain deliberately absent.
 - The Explorer thumbnail project is only a DLL entry-point stub. FBX thumbnail
   work therefore depends on the general Gate 6 provider foundation; it must not
   be smuggled into the viewer slice.
@@ -74,8 +76,8 @@ unbrokered filesystem access remain out of scope.
 Tasks are deliberately sequential. FBX-002 changes the normalized scene
 contract consumed by later tasks; FBX-003 through FBX-005 build one adapter in
 layers; FBX-006 must not advertise the extension before the parser and feature
-policy are complete. FBX-006 has completed its integration audit and is now
-unblocked by FBX-005.
+policy are complete. FBX-006 completed the product integration and unblocks
+FBX-007 qualification.
 Within a task, implementation and its focused tests land together.
 
 ## Completion boundaries
