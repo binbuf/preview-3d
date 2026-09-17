@@ -1,101 +1,57 @@
-# 3D Preview
+# Preview 3D
 
-A small native Windows 11 viewer for local GLB/glTF, OBJ/MTL, ASCII or binary
-STL, and ASCII or binary PLY mesh/point files. Imports run in a zero-capability
-AppContainer worker; the viewer does not upload, edit, or modify models.
+A fast optimized 3D viewer for Windows 11.
 
-## Build and run
+[Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Windows security help](.docs/WINDOWS-SECURITY.md)
 
-Open `Preview3D.slnx` in Visual Studio with the Desktop C++ workload and vcpkg
-enabled, or build `Release|x64` with MSBuild. Run `x64\Release\Preview3D.exe`
-and use Ctrl+O, drag one supported file onto the window, or pass a path on the
-command line.
+## Highlights
 
-The title-bar X/Y/Z control cycles which model axis is treated as up and mapped
-to the ground plane. The adjacent direction button flips between the positive
-and negative side of that axis, so upside-down source models can be grounded on
-their feet. Each choice immediately becomes the Reset/Home view and is
-remembered for later launches.
+- Open local GLB/glTF, OBJ/MTL, STL, and PLY files.
+- Navigate with familiar orbit, pan, fly, frame, and orthographic-view controls.
+- Drag and drop files, use **Open**, or pass a path on the command line.
+- Run parsing and decoding in a zero-capability AppContainer worker; models stay local and are never modified.
+- Install file associations for supported formats, or use a portable ZIP with no installer.
 
-The scope-limited release has explicit portable and installer solution targets:
+## Supported formats
+
+| Format | Support |
+| --- | --- |
+| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars |
+| Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars |
+| STL | ASCII and binary |
+| PLY | ASCII and binary triangle meshes and point clouds |
+
+This is a static, read-only viewer. Animation, editing, USD/FBX/3MF/CAD formats,
+Explorer thumbnails, and network assets are not currently included.
+
+## Install and use
+
+1. Download the installer or portable ZIP from [Releases](https://github.com/binbuf/preview-3d/releases/latest).
+2. For the portable ZIP, extract it and keep `worker` beside `Preview3D.exe`.
+3. Open a model with `Ctrl+O`, drag a supported file onto the window, or run `Preview3D.exe <path-to-model>`.
+
+The installer adds 3D Preview to **Open with** and **Default apps** for the supported extensions. Windows keeps existing default-app choices; confirm any changes in Default apps after installation.
+
+> [!IMPORTANT]
+> Windows may flag a new or unsigned release while code-signing and reputation work is in progress. Only download from this repository’s Releases page and verify the supplied SHA-256 checksum. See [Windows security help](.docs/WINDOWS-SECURITY.md) for safe, specific steps—including the difference between a file’s **Unblock** checkbox and Smart App Control.
+
+## Build from source
+
+Open `Preview3D.slnx` in Visual Studio with the **Desktop development with C++** workload and vcpkg available, then build `Release | x64`.
 
 ```powershell
 msbuild Preview3D.slnx /t:CreatePortableRelease /p:Configuration=Release /p:Platform=x64
 msbuild Preview3D.slnx /t:CreateInstaller /p:Configuration=Release /p:Platform=x64
 ```
 
-For the direct installer workflow, run this from any working directory; it
-finds the repository, Visual Studio/MSBuild, and NSIS automatically, builds the
-current Release x64 binaries, and emits setup under `artifacts\installer`:
+The first command writes the portable archive and checksum to `artifacts\portable`; the second requires NSIS 3 and writes the installer to `artifacts\installer`. See the [portable package notes](packaging/portable/PORTABLE-README.txt) and [installer notes](packaging/installer/INSTALLER-README.txt) for release and cleanup details.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\packaging\installer\Create-Installer.ps1
-```
+## Project notes
 
-If development builds or earlier Open With tests left per-user registration
-that shadows the installed command, preview and reset only Preview3D's test
-association state with:
+- [Windows download and protection guidance](.docs/WINDOWS-SECURITY.md)
+- [Installer verification](.docs/INSTALLER_VERIFICATION.md)
+- [Release workflow](.github/workflows/release.yml)
 
-```powershell
-.\packaging\installer\Reset-Preview3DTestAssociations.ps1 -WhatIf
-.\packaging\installer\Reset-Preview3DTestAssociations.ps1
-```
+## Credits
 
-The portable target writes one clean archive and SHA-256 to `artifacts\portable`.
-The installer target requires NSIS 3 and writes a setup executable and SHA-256
-to `artifacts\installer`; override NSIS discovery with
-`/p:NsisPath=<path-to-makensis.exe>` when needed. Unsigned output is explicitly
-an engineering build. Signed candidates additionally supply
-`/p:PortableSigningThumbprint=<certificate SHA-1>` or
-`/p:InstallerSigningThumbprint=<certificate SHA-1>`. Final signing and clean-VM
-acceptance remain release gates. See [portable package notes](packaging/portable/PORTABLE-README.txt),
-[installer notes](packaging/installer/INSTALLER-README.txt), and
-[portable verification](.docs/TSK-303_VERIFICATION.md).
-
-The installer registers 3D Preview in Windows Default Apps and Open With for
-`.glb`, `.gltf`, `.obj`, `.stl`, and `.ply`, and offers the Windows 11 confirmation page
-after setup. Windows protects per-user default choices, so setup does not alter
-an existing `UserChoice` value. Explorer thumbnails, persistent model-derived
-cache, compatibility-host/USD support, and the remaining Tier B formats remain excluded.
-Large-model performance failures recorded in
-[progress](.docs/PROGRESS.md) also remain release blockers.
-
-## Releases
-
-GitHub Actions builds and publishes a release only when a tag matching
-`vMAJOR.MINOR.PATCH` is pushed. SemVer prerelease and build suffixes are also
-accepted (for example, `v0.2.0-rc.1`). The tag version is embedded in the
-portable archive, installer metadata, SBOM, manifest, and artifact names.
-
-```powershell
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-The release contains the portable ZIP, the NSIS installer, and a SHA-256 file
-for each. Builds are unsigned unless both `WINDOWS_CERTIFICATE_BASE64` (a
-base64-encoded PFX) and `WINDOWS_CERTIFICATE_PASSWORD` are configured as GitHub
-Actions repository secrets. When present, the workflow temporarily imports the
-certificate and signs both payloads and the installer.
-
-## Performance
-
-   Fixture        Previous complete coarse    New p95
-  ━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━
-   3.00 GB STL                     12.47 s     4.19 s
-  ─────────────  ──────────────────────────  ─────────
-   2.88 GB PLY                     11.44 s     4.67 s
-  ─────────────  ──────────────────────────  ─────────
-   4.29 GB GLB                       >30 s     5.22 s
-  ─────────────  ──────────────────────────  ─────────
-   A-small                         ~0.46 s     0.47 s
-
-## Credit
-
-<a href="https://www.flaticon.com/free-icons/geometric" title="geometric icons">Geometric icons created by Magnific - Flaticon</a>
-
-<a href="https://www.flaticon.com/free-icons/perspective" title="perspective icons">Perspective icons created by Iconir - Flaticon</a>
-
-<a href="https://www.flaticon.com/free-icons/grid" title="grid icons">Grid icons created by Magnific - Flaticon</a>
-
-<a href="https://www.flaticon.com/free-icons/speed" title="speed icons">Speed icons created by Magnific - Flaticon</a>
+Interface icons: [Magnific](https://www.flaticon.com/free-icons/geometric), [Iconir](https://www.flaticon.com/free-icons/perspective), [Magnific](https://www.flaticon.com/free-icons/grid), and [Magnific](https://www.flaticon.com/free-icons/speed) via Flaticon.
