@@ -6,10 +6,15 @@ Unicode true
 !ifndef OUTPUT_FILE
   !error "OUTPUT_FILE must identify the setup executable to create."
 !endif
+!ifndef PRODUCT_VERSION
+  !define PRODUCT_VERSION "0.1.0"
+!endif
+!ifndef PRODUCT_FILE_VERSION
+  !define PRODUCT_FILE_VERSION "0.1.0.0"
+!endif
 
 !define PRODUCT_NAME "3D Preview"
 !define PRODUCT_PUBLISHER "Binbuf"
-!define PRODUCT_VERSION "0.1.0"
 !define PRODUCT_EXE "Preview3D.exe"
 !define PRODUCT_KEY "Software\Binbuf\Preview3D"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Binbuf.Preview3D"
@@ -38,7 +43,7 @@ ShowInstDetails show
 ShowUninstDetails show
 BrandingText "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 
-VIProductVersion "0.1.0.0"
+VIProductVersion "${PRODUCT_FILE_VERSION}"
 VIAddVersionKey /LANG=1033 "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey /LANG=1033 "CompanyName" "${PRODUCT_PUBLISHER}"
 VIAddVersionKey /LANG=1033 "FileDescription" "${PRODUCT_NAME} installer"

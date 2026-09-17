@@ -6,6 +6,7 @@
     <RepositoryRoot>$(MSBuildThisFileDirectory)..</RepositoryRoot>
     <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
     <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <ReleaseVersion Condition="'$(ReleaseVersion)' == ''">0.1.0</ReleaseVersion>
     <PortableTimestampUrl Condition="'$(PortableTimestampUrl)' == ''">https://timestamp.digicert.com</PortableTimestampUrl>
   </PropertyGroup>
 
@@ -31,6 +32,6 @@
           DependsOnTargets="BuildPortableReleaseInputs">
     <!-- This call is deliberately singular: the script cleans one staging
          directory, validates one allowlist, and creates one ZIP. -->
-    <Exec Command="powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)portable\Create-PortableRelease.ps1&quot; -RepositoryRoot &quot;$(RepositoryRoot)&quot; -CertificateThumbprint &quot;$(PortableSigningThumbprint)&quot; -TimestampUrl &quot;$(PortableTimestampUrl)&quot;" />
+    <Exec Command="powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)portable\Create-PortableRelease.ps1&quot; -RepositoryRoot &quot;$(RepositoryRoot)&quot; -CertificateThumbprint &quot;$(PortableSigningThumbprint)&quot; -TimestampUrl &quot;$(PortableTimestampUrl)&quot; -Version &quot;$(ReleaseVersion)&quot;" />
   </Target>
 </Project>

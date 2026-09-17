@@ -60,6 +60,24 @@ cache, compatibility-host/USD support, and broad Tier B formats remain excluded.
 Large-model performance failures recorded in
 [progress](.docs/PROGRESS.md) also remain release blockers.
 
+## Releases
+
+GitHub Actions builds and publishes a release only when a tag matching
+`vMAJOR.MINOR.PATCH` is pushed. SemVer prerelease and build suffixes are also
+accepted (for example, `v0.2.0-rc.1`). The tag version is embedded in the
+portable archive, installer metadata, SBOM, manifest, and artifact names.
+
+```powershell
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The release contains the portable ZIP, the NSIS installer, and a SHA-256 file
+for each. Builds are unsigned unless both `WINDOWS_CERTIFICATE_BASE64` (a
+base64-encoded PFX) and `WINDOWS_CERTIFICATE_PASSWORD` are configured as GitHub
+Actions repository secrets. When present, the workflow temporarily imports the
+certificate and signs both payloads and the installer.
+
 ## Performance
 
    Fixture        Previous complete coarse    New p95

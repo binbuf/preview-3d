@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
   <PropertyGroup>
+    <ReleaseVersion Condition="'$(ReleaseVersion)' == ''">0.1.0</ReleaseVersion>
     <PortableTimestampUrl Condition="'$(PortableTimestampUrl)' == ''">https://timestamp.digicert.com</PortableTimestampUrl>
     <InstallerTimestampUrl Condition="'$(InstallerTimestampUrl)' == ''">https://timestamp.digicert.com</InstallerTimestampUrl>
   </PropertyGroup>
@@ -13,7 +14,7 @@
   <Target Name="CreatePortableRelease">
     <MSBuild Projects="$(MSBuildThisFileDirectory)packaging\CreatePortableRelease.proj"
              Targets="CreatePortableRelease"
-             Properties="Configuration=$(Configuration);Platform=$(Platform);PortableSigningThumbprint=$(PortableSigningThumbprint);PortableTimestampUrl=$(PortableTimestampUrl)"
+             Properties="Configuration=$(Configuration);Platform=$(Platform);ReleaseVersion=$(ReleaseVersion);PortableSigningThumbprint=$(PortableSigningThumbprint);PortableTimestampUrl=$(PortableTimestampUrl)"
              BuildInParallel="false" />
   </Target>
 
@@ -22,7 +23,7 @@
   <Target Name="CreateInstaller">
     <MSBuild Projects="$(MSBuildThisFileDirectory)packaging\CreateInstaller.proj"
              Targets="CreateInstaller"
-             Properties="Configuration=$(Configuration);Platform=$(Platform);InstallerSigningThumbprint=$(InstallerSigningThumbprint);InstallerTimestampUrl=$(InstallerTimestampUrl);NsisPath=$(NsisPath)"
+             Properties="Configuration=$(Configuration);Platform=$(Platform);ReleaseVersion=$(ReleaseVersion);InstallerSigningThumbprint=$(InstallerSigningThumbprint);InstallerTimestampUrl=$(InstallerTimestampUrl);NsisPath=$(NsisPath)"
              BuildInParallel="false" />
   </Target>
 </Project>

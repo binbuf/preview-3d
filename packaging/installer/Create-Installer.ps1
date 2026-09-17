@@ -6,6 +6,9 @@ param(
 
     [string]$TimestampUrl = 'https://timestamp.digicert.com',
 
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')]
+    [string]$Version = '0.1.0',
+
     [string]$NsisPath = '',
 
     [switch]$SkipBuild
@@ -95,7 +98,7 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
 $repository = (Resolve-FullPath $RepositoryRoot).TrimEnd('\')
 $artifacts = Join-Path $repository 'artifacts\installer'
 $stage = Join-Path $artifacts 'stage'
-$installer = Join-Path $artifacts 'Preview3D-0.1.0-x64-setup.exe'
+$installer = Join-Path $artifacts "Preview3D-$Version-x64-setup.exe"
 $installerChecksum = "$installer.sha256"
 $payloadScript = Join-Path $repository 'packaging\portable\Create-PortableRelease.ps1'
 $nsisScript = Join-Path $repository 'packaging\installer\Preview3D.nsi'
@@ -117,14 +120,23 @@ if (-not $SkipBuild) {
 }
 
 & $payloadScript -RepositoryRoot $repository -CertificateThumbprint $CertificateThumbprint `
-    -TimestampUrl $TimestampUrl -Distribution Installer
+    -TimestampUrl $TimestampUrl -Version $Version -Distribution Installer
+
+$numericVersion = ($Version -split '[-+]')[0]
+$numericParts = @($numericVersion -split '\.' | ForEach-Object { [int]$_ })
+if ($numericParts | Where-Object { $_ -gt 65535 }) {
+    throw "Version '$Version' contains a component larger than NSIS supports (65535)."
+}
+$fileVersion = "$numericVersion.0"
 
 $makensis = Find-Nsis $NsisPath
 $nsisArguments = @(
     '/V3',
     '/WX',
     "/DSTAGE_DIR=$stage",
-    "/DOUTPUT_FILE=$installer"
+    "/DOUTPUT_FILE=$installer",
+    "/DPRODUCT_VERSION=$Version",
+    "/DPRODUCT_FILE_VERSION=$fileVersion"
 )
 $signTool = ''
 if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {

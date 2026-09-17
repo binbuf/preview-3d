@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, package, and release
+    runs-on: windows-2025
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release tag
+        id: version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $pattern = '^v(?<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$'
+          if ($env:RELEASE_TAG -notmatch $pattern) {
+            throw "Release tags must use vMAJOR.MINOR.PATCH SemVer syntax; received '$env:RELEASE_TAG'."
+          }
+
+          $version = $Matches.version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "prerelease=$($version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Locate build tools
+        id: tools
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $visualStudio = (& $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -property installationPath).Trim()
+          if ([string]::IsNullOrWhiteSpace($visualStudio)) {
+            throw 'Visual Studio with MSBuild was not found on the runner.'
+          }
+
+          $msbuild = Join-Path $visualStudio 'MSBuild\Current\Bin\MSBuild.exe'
+          if (-not (Test-Path -LiteralPath $msbuild -PathType Leaf)) {
+            throw "MSBuild was not found at '$msbuild'."
+          }
+
+          $nsis = Get-Command makensis.exe -ErrorAction SilentlyContinue
+          if ($null -eq $nsis) {
+            choco install nsis --yes --no-progress
+            if ($LASTEXITCODE -ne 0) {
+              throw "NSIS installation failed with exit code $LASTEXITCODE."
+            }
+            $nsis = Get-Command makensis.exe -ErrorAction Stop
+          }
+
+          "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
+          "nsis=$($nsis.Source)" >> $env:GITHUB_OUTPUT
+
+      - name: Import optional signing certificate
+        id: signing
+        shell: pwsh
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)
+          if ($hasCertificate -ne $hasPassword) {
+            throw 'Configure both WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD, or neither.'
+          }
+          if (-not $hasCertificate) {
+            'thumbprint=' >> $env:GITHUB_OUTPUT
+            Write-Warning 'No signing certificate is configured; release artifacts will be unsigned.'
+            exit 0
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'preview3d-release.pfx'
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
+          $password = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password |
+            Where-Object HasPrivateKey |
+            Select-Object -First 1
+          if ($null -eq $certificate) {
+            throw 'The PFX did not contain a certificate with a private key.'
+          }
+          "thumbprint=$($certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
+
+      - name: Create portable package
+        shell: pwsh
+        env:
+          MSBUILD_PATH: ${{ steps.tools.outputs.msbuild }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          SIGNING_THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
+        run: |
+          $arguments = @(
+            'Preview3D.slnx',
+            '/t:CreatePortableRelease',
+            '/p:Configuration=Release',
+            '/p:Platform=x64',
+            "/p:ReleaseVersion=$env:RELEASE_VERSION",
+            '/m:1',
+            '/v:minimal'
+          )
+          if (-not [string]::IsNullOrWhiteSpace($env:SIGNING_THUMBPRINT)) {
+            $arguments += "/p:PortableSigningThumbprint=$env:SIGNING_THUMBPRINT"
+          }
+          & $env:MSBUILD_PATH @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "Portable packaging failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Create installer
+        shell: pwsh
+        env:
+          MSBUILD_PATH: ${{ steps.tools.outputs.msbuild }}
+          NSIS_PATH: ${{ steps.tools.outputs.nsis }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          SIGNING_THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
+        run: |
+          $arguments = @(
+            'Preview3D.slnx',
+            '/t:CreateInstaller',
+            '/p:Configuration=Release',
+            '/p:Platform=x64',
+            "/p:ReleaseVersion=$env:RELEASE_VERSION",
+            "/p:NsisPath=$env:NSIS_PATH",
+            '/m:1',
+            '/v:minimal'
+          )
+          if (-not [string]::IsNullOrWhiteSpace($env:SIGNING_THUMBPRINT)) {
+            $arguments += "/p:InstallerSigningThumbprint=$env:SIGNING_THUMBPRINT"
+          }
+          & $env:MSBUILD_PATH @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installer packaging failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Remove signing certificate
+        if: always()
+        shell: pwsh
+        env:
+          SIGNING_THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:SIGNING_THUMBPRINT)) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:SIGNING_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'preview3d-release.pfx') -Force -ErrorAction SilentlyContinue
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          IS_PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          $assets = @(
+            "artifacts/portable/Preview3D-$env:RELEASE_VERSION-portable-x64.zip",
+            "artifacts/portable/Preview3D-$env:RELEASE_VERSION-portable-x64.zip.sha256",
+            "artifacts/installer/Preview3D-$env:RELEASE_VERSION-x64-setup.exe",
+            "artifacts/installer/Preview3D-$env:RELEASE_VERSION-x64-setup.exe.sha256"
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
+              throw "Expected release artifact is missing: $asset"
+            }
+          }
+
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG @assets --clobber --repo $env:GITHUB_REPOSITORY
+          } else {
+            $arguments = @(
+              'release', 'create', $env:RELEASE_TAG,
+              '--verify-tag',
+              '--generate-notes',
+              '--title', "3D Preview $env:RELEASE_VERSION",
+              '--repo', $env:GITHUB_REPOSITORY
+            )
+            if ($env:IS_PRERELEASE -eq 'true') {
+              $arguments += '--prerelease'
+            }
+            $arguments += $assets
+            & gh @arguments
+          }
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub release publishing failed with exit code $LASTEXITCODE."
+          }

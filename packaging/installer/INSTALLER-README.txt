@@ -1,4 +1,4 @@
-3D Preview 0.1.0 for Windows 11 x64
+3D Preview @VERSION@ for Windows 11 x64
 ========================================
 
 3D Preview is a local, read-only viewer for these direct-open types:

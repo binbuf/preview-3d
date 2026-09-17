@@ -1,4 +1,4 @@
-Preview3D 0.1.0 portable engineering package (Windows 11 x64)
+Preview3D @VERSION@ portable engineering package (Windows 11 x64)
 ================================================================
 
 Run Preview3D.exe and use Ctrl+O, or pass one local model path on the command

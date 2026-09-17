@@ -5,6 +5,7 @@
     <RepositoryRoot>$(MSBuildThisFileDirectory)..</RepositoryRoot>
     <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
     <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <ReleaseVersion Condition="'$(ReleaseVersion)' == ''">0.1.0</ReleaseVersion>
     <InstallerTimestampUrl Condition="'$(InstallerTimestampUrl)' == ''">https://timestamp.digicert.com</InstallerTimestampUrl>
   </PropertyGroup>
 
@@ -27,6 +28,6 @@
 
   <Target Name="CreateInstaller"
           DependsOnTargets="BuildInstallerInputs">
-    <Exec Command="powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)installer\Create-Installer.ps1&quot; -RepositoryRoot &quot;$(RepositoryRoot)&quot; -CertificateThumbprint &quot;$(InstallerSigningThumbprint)&quot; -TimestampUrl &quot;$(InstallerTimestampUrl)&quot; -NsisPath &quot;$(NsisPath)&quot; -SkipBuild" />
+    <Exec Command="powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)installer\Create-Installer.ps1&quot; -RepositoryRoot &quot;$(RepositoryRoot)&quot; -CertificateThumbprint &quot;$(InstallerSigningThumbprint)&quot; -TimestampUrl &quot;$(InstallerTimestampUrl)&quot; -Version &quot;$(ReleaseVersion)&quot; -NsisPath &quot;$(NsisPath)&quot; -SkipBuild" />
   </Target>
 </Project>

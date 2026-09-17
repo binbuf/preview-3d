@@ -7,6 +7,9 @@ param(
 
     [string]$TimestampUrl = 'https://timestamp.digicert.com',
 
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')]
+    [string]$Version = '0.1.0',
+
     [ValidateSet('Portable', 'Installer')]
     [string]$Distribution = 'Portable'
 )
@@ -151,7 +154,7 @@ $buildOutput = Join-Path $repository 'x64\Release'
 $distributionDirectory = $Distribution.ToLowerInvariant()
 $artifacts = Join-Path $repository "artifacts\$distributionDirectory"
 $stage = Join-Path $artifacts 'stage'
-$archive = Join-Path $artifacts 'Preview3D-0.1.0-portable-x64.zip'
+$archive = Join-Path $artifacts "Preview3D-$Version-portable-x64.zip"
 $archiveChecksum = "$archive.sha256"
 $workerStage = Join-Path $stage 'worker'
 $licensesStage = Join-Path $stage 'licenses'
@@ -215,6 +218,9 @@ if ($Distribution -eq 'Portable') {
     Copy-RequiredFile (Join-Path $repository 'packaging\portable\Remove-Preview3DProfile.ps1') (Join-Path $stage 'Remove-Preview3DProfile.ps1')
     Copy-RequiredFile (Join-Path $repository 'packaging\installer\Provision-Preview3DWorkerAcl.ps1') (Join-Path $stage 'Provision-Preview3DWorkerAcl.ps1')
 }
+$stagedReadme = Join-Path $stage 'README.txt'
+(Get-Content -LiteralPath $stagedReadme -Raw).Replace('@VERSION@', $Version) |
+    Set-Content -LiteralPath $stagedReadme -Encoding UTF8
 
 $signed = $false
 if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
@@ -307,7 +313,7 @@ $sbom = [ordered]@{
     version = 1
     metadata = [ordered]@{
         timestamp = (Get-Date).ToUniversalTime().ToString('o')
-        component = @{ type = 'application'; name = 'Preview3D'; version = '0.1.0' }
+        component = @{ type = 'application'; name = 'Preview3D'; version = $Version }
         properties = @(
             @{ name = 'preview3d:configuration'; value = 'Release' },
             @{ name = 'preview3d:platform'; value = 'x64' },
@@ -343,7 +349,7 @@ $manifestEntries = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Obj
 $manifest = [ordered]@{
     schema = 1
     product = 'Preview3D'
-    version = '0.1.0'
+    version = $Version
     configuration = 'Release'
     platform = 'x64'
     distribution = $distributionDirectory
