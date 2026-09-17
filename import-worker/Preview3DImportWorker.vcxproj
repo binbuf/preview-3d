@@ -91,6 +91,7 @@
     <ClCompile Include="src\PlyAdapter.cpp" />
     <ClCompile Include="src\ObjImportWorker.cpp" />
     <ClCompile Include="src\ObjAdapter.cpp" />
+    <ClCompile Include="src\UfbxMaterialConversion.cpp" />
     <ClCompile Include="src\FbxImportWorker.cpp" />
     <ClCompile Include="src\FbxAdapter.cpp" />
     <ClCompile Include="src\AsciiTokenizer.cpp" />
@@ -119,6 +120,7 @@
     <ClInclude Include="src\PlyAdapter.h" />
     <ClInclude Include="src\ObjImportWorker.h" />
     <ClInclude Include="src\ObjAdapter.h" />
+    <ClInclude Include="src\UfbxMaterialConversion.h" />
     <ClInclude Include="src\FbxImportWorker.h" />
     <ClInclude Include="src\FbxAdapter.h" />
     <ClInclude Include="src\AsciiTokenizer.h" />

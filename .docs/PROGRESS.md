@@ -4,6 +4,30 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **FBX-005 unified materials and texture dependencies (2026-09-17): in
+  progress.** The static FBX adapter now emits normalized material chunks from
+  ufbx unified PBR maps with FBX diffuse/transparency/emission fallbacks,
+  bounded non-finite clamping, alpha/double-sided/unlit state, and per-instance
+  material selection without duplicating shared geometry. The material-factor
+  conversion is a small common helper used by OBJ as well; the OBJ policy path
+  deliberately retains its previous payload behavior.
+
+  FBX enables ufbx embedded media and decodes embedded bytes directly in the
+  AppContainer. External image references do not enable ufbx file access:
+  they go through `RequestSidecarFile`, the existing pinned-replay client, the
+  host containment checks, byte/request caps, byte sniffing, explicit WIC or
+  WebP/KTX2 decode paths, and aggregate decoded-image budgets. Unsupported
+  layered/procedural/shader texture graphs only accept one unambiguous file
+  leaf (with a bounded approximation warning); otherwise the deterministic
+  optional texture fallback is emitted. Unsafe sidecar results stay terminal
+  and report the Sidecars phase. FBX remains disabled on viewer/Shell/product
+  surfaces until FBX-006.
+
+  Still open in this task: add the dedicated FBX embedded PNG/JPEG/WebP,
+  sidecar/path-attack, corruption/aggregate-pressure and differing-material
+  corpus cases; qualify the resulting pixels in Debug and Release before
+  marking FBX-005 complete.
+
 - **FBX-004 deterministic static deformation pose (2026-09-17): complete.**
   The AppContainer FBX adapter now evaluates the first authored animation
   stack at its authored start, or the default/rest animation at zero, and bakes

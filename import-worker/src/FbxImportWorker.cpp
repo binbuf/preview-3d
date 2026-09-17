@@ -2,6 +2,8 @@
 
 #include "ChunkBatchSink.h"
 #include "FbxAdapter.h"
+#include "SidecarFileClient.h"
+#include "TextureDecodePolicy.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/MappedFile.h"
 #include "model_core/TierALimits.h"
@@ -71,8 +73,14 @@ bool HandleFbxImportFileRequest(HANDLE stdIn, HANDLE stdOut,
                            model_core::ImportErrorCode::InternalImporterFailure);
 
     ChunkBatchSink sink(stdIn, stdOut, request.generationId, 0, cancellationEvent.get());
+    SidecarFileClient sidecars(stdIn, stdOut, request.generationId);
+    sidecars.EnablePinnedReplay();
+    TextureDecodeOptions textureOptions;
+    textureOptions.isCancelled = [&sink] { return sink.Cancelled(); };
     FbxImportOptions options;
     options.isCancelled = [&sink] { return sink.Cancelled(); };
+    options.sidecars = &sidecars;
+    options.textureOptions = &textureOptions;
     if (request.requestFlags & model_core::kImportRequestFbxTinyEvaluationLimitForTesting)
         options.evaluationAllocatorLimit = 1024;
     try {

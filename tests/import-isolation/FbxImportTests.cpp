@@ -4,6 +4,7 @@
 #include "model_core/MaterialPayload.h"
 #include "model_core/VertexLayouts.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -264,6 +265,7 @@ TEST_CASE("ASCII FBX preserves hierarchy and shares static mesh geometry across 
     CHECK(Count(result, model_core::ChunkTopology::Material) == 1);
 
     uint32_t firstGeometry = 0, matchingInstances = 0;
+    uint32_t authoredMaterial = 0, materialBoundInstances = 0;
     bool transformedNode = false;
     for (const auto& chunk : result.chunks) {
         CHECK(chunk.scene.format == model_core::SourceFormatId::Fbx);
@@ -275,6 +277,23 @@ TEST_CASE("ASCII FBX preserves hierarchy and shares static mesh geometry across 
             model_core::MeshInstancePayload instance{};
             std::memcpy(&instance, chunk.payload.data(), sizeof(instance));
             matchingInstances += instance.geometryChunkId == firstGeometry;
+            materialBoundInstances += instance.materialChunkId != 0;
+            if (authoredMaterial) CHECK(instance.materialChunkId == authoredMaterial);
+        }
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material) {
+            authoredMaterial = chunk.descriptor.chunkId;
+            model_core::MaterialPayload material{};
+            std::memcpy(&material, chunk.payload.data(), sizeof(material));
+            CHECK(material.baseColorFactor[0] == Catch::Approx(0.4f));
+            CHECK(material.baseColorFactor[1] == Catch::Approx(0.4f));
+            CHECK(material.baseColorFactor[2] == Catch::Approx(0.4f));
+            // This fixture's authored TransparencyFactor is one; ufbx's FBX
+            // fallback therefore normalizes to a transparent blend material.
+            CHECK(material.baseColorFactor[3] == Catch::Approx(0.0f));
+            CHECK(material.alphaMode == uint32_t(model_core::AlphaModeId::Blend));
+            CHECK(material.metallicFactor == Catch::Approx(0.0f));
+            CHECK(material.roughnessFactor == Catch::Approx(1.0f));
+            CHECK((material.flags & model_core::kMaterialFlagDoubleSided) != 0);
         }
         if (chunk.descriptor.topology == model_core::ChunkTopology::Node) {
             model_core::NodePayload node{};
@@ -285,6 +304,8 @@ TEST_CASE("ASCII FBX preserves hierarchy and shares static mesh geometry across 
     }
     CHECK(firstGeometry != 0);
     CHECK(matchingInstances >= 2);
+    CHECK(authoredMaterial != 0);
+    CHECK(materialBoundInstances >= 2);
     CHECK(transformedNode);
 }
 

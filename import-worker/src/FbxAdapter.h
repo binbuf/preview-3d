@@ -11,6 +11,8 @@
 namespace import_worker {
 
 class ChunkBatchSink;
+class SidecarFileClient;
+struct TextureDecodeOptions;
 
 struct FbxImportResult {
     uint32_t chunkCount = 0;
@@ -25,6 +27,8 @@ struct FbxImportFailure {
 struct FbxImportOptions {
     std::function<bool()> isCancelled;
     size_t evaluationAllocatorLimit = 0;
+    SidecarFileClient* sidecars = nullptr;
+    const TextureDecodeOptions* textureOptions = nullptr;
     bool Cancelled() const { return isCancelled && isCancelled(); }
 };
 

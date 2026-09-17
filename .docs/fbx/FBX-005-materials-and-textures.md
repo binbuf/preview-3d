@@ -1,6 +1,6 @@
 # FBX-005: unified materials and texture dependencies
 
-Status: blocked on FBX-004  
+Status: in progress
 Depends on: FBX-004  
 Unblocks: FBX-006
 
@@ -63,4 +63,3 @@ sidecars under the common decode budgets.
   required unsafe data never falls back permissively.
 - OBJ/MTL material and texture regression tests are byte/semantically unchanged.
 - Debug/Release Unit and full ImportIsolation suites pass.
-

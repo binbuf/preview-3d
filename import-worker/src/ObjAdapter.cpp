@@ -4,6 +4,7 @@
 #include "ImageFormatSniff.h"
 #include "SidecarFileClient.h"
 #include "TextureTranscodeAdapter.h"
+#include "UfbxMaterialConversion.h"
 #include "WebpDecodeAdapter.h"
 #include "WicImageDecodeAdapter.h"
 #include "model_core/MaterialPayload.h"
@@ -298,37 +299,6 @@ uint32_t ResolveImage(BoundedChunkWriter& writer, BrokerContext& context,
     return id;
 }
 
-MaterialPayload ConvertMaterial(const ufbx_material& material)
-{
-    MaterialPayload result{};
-    const auto base = material.pbr.base_color.value_vec4;
-    const double baseFactor = material.pbr.base_factor.has_value
-        ? material.pbr.base_factor.value_real : 1.0;
-    result.baseColorFactor[0] = Saturate(base.x * baseFactor);
-    result.baseColorFactor[1] = Saturate(base.y * baseFactor);
-    result.baseColorFactor[2] = Saturate(base.z * baseFactor);
-    const double opacity = material.pbr.opacity.has_value
-        ? material.pbr.opacity.value_real : (material.fbx.transparency_factor.has_value
-            ? 1.0 - material.fbx.transparency_factor.value_real : 1.0);
-    result.baseColorFactor[3] = Saturate(opacity);
-    result.metallicFactor = material.pbr.metalness.has_value
-        ? Saturate(material.pbr.metalness.value_real, 0.0f) : 0.0f;
-    result.roughnessFactor = material.pbr.roughness.has_value
-        ? Saturate(material.pbr.roughness.value_real) : 1.0f;
-    const auto emission = material.pbr.emission_color.value_vec3;
-    const double emissionFactor = material.pbr.emission_factor.has_value
-        ? material.pbr.emission_factor.value_real : 1.0;
-    result.emissiveFactor[0] = SafeFloat(emission.x * emissionFactor);
-    result.emissiveFactor[1] = SafeFloat(emission.y * emissionFactor);
-    result.emissiveFactor[2] = SafeFloat(emission.z * emissionFactor);
-    result.uvScale[0] = result.uvScale[1] = 1.0f;
-    result.alphaMode = uint32_t(result.baseColorFactor[3] < 0.999f
-        ? AlphaModeId::Blend : AlphaModeId::Opaque);
-    result.alphaCutoff = 0.5f;
-    result.flags = kMaterialFlagDoubleSided;
-    return result;
-}
-
 bool EmitMaterials(const ufbx_scene& scene, BoundedChunkWriter& writer, BrokerContext& context,
                    std::unordered_map<const ufbx_material*, uint32_t>& materialIds)
 {
@@ -336,7 +306,7 @@ bool EmitMaterials(const ufbx_scene& scene, BoundedChunkWriter& writer, BrokerCo
     for (size_t index = 0; index < scene.materials.count; ++index) {
         if (context.textureOptions->Cancelled()) { context.error = ImportErrorCode::Cancelled; return false; }
         const ufbx_material* material = scene.materials.data[index];
-        MaterialPayload payload = ConvertMaterial(*material);
+        MaterialPayload payload = ConvertUfbxMaterial(*material, false, context.optionalWarnings);
         const ufbx_texture* base = MapTexture(material->pbr.base_color, &material->fbx.diffuse_color);
         const ufbx_texture* normal = MapTexture(material->pbr.normal_map, &material->fbx.normal_map);
         if (!normal) normal = MapTexture(material->fbx.bump);

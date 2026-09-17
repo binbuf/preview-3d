@@ -1,6 +1,12 @@
 #include "FbxAdapter.h"
 
 #include "BoundedChunkWriter.h"
+#include "ImageFormatSniff.h"
+#include "SidecarFileClient.h"
+#include "TextureTranscodeAdapter.h"
+#include "UfbxMaterialConversion.h"
+#include "WebpDecodeAdapter.h"
+#include "WicImageDecodeAdapter.h"
 #include "model_core/GeometryBounds.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/TierALimits.h"
@@ -507,6 +513,239 @@ bool EmitVariant(BoundedChunkWriter& writer, MeshVariant& variant, uint32_t mesh
     return true;
 }
 
+struct DecodedImage {
+    PixelFormatId format = PixelFormatId::Unknown;
+    ColorSpaceId space = ColorSpaceId::Linear;
+    uint32_t width = 0, height = 0, levels = 0;
+    std::vector<std::byte> pixels;
+};
+
+struct MaterialContext {
+    SidecarFileClient* sidecars = nullptr;
+    const TextureDecodeOptions* options = nullptr;
+    ImportErrorCode error = ImportErrorCode::None;
+    uint32_t textureWarnings = 0;
+    uint32_t optionalWarnings = 0;
+    uint64_t encodedBytes = 0;
+    uint64_t decodedBytes = 0;
+    uint64_t decodedPixels = 0;
+};
+
+void Warn(uint32_t& warnings)
+{
+    warnings = (std::min)(64u, warnings + 1);
+}
+
+const ufbx_texture* FileTexture(const ufbx_texture* texture, MaterialContext& context)
+{
+    if (!texture) return nullptr;
+    if (texture->type == UFBX_TEXTURE_FILE) return texture;
+    // ufbx exposes shader-node leaves here. They are usable only when exactly
+    // one file leaf is semantically representative; layered/procedural input
+    // otherwise gets the deterministic optional-texture fallback.
+    if (texture->file_textures.count == 1 && texture->file_textures.data[0]
+        && texture->file_textures.data[0]->type == UFBX_TEXTURE_FILE) {
+        Warn(context.optionalWarnings);
+        return texture->file_textures.data[0];
+    }
+    Warn(context.optionalWarnings);
+    return nullptr;
+}
+
+const ufbx_texture* MapTexture(const ufbx_material_map& primary, MaterialContext& context,
+                               const ufbx_material_map* fallback = nullptr)
+{
+    if (primary.texture_enabled && primary.texture) return FileTexture(primary.texture, context);
+    if (fallback && fallback->texture_enabled && fallback->texture)
+        return FileTexture(fallback->texture, context);
+    return nullptr;
+}
+
+std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_texture* texture,
+                                          ColorSpaceId space, TextureSemantic semantic)
+{
+    std::optional<std::vector<std::byte>> owned;
+    std::span<const std::byte> encoded;
+    if (texture->content.data && texture->content.size) {
+        encoded = {static_cast<const std::byte*>(texture->content.data), texture->content.size};
+    } else {
+        const ufbx_string path = texture->relative_filename.length
+            ? texture->relative_filename : texture->filename;
+        if (!path.data || !path.length || !context.sidecars) {
+            Warn(context.textureWarnings);
+            return std::nullopt;
+        }
+        const uint64_t remaining = context.encodedBytes < context.options->maxEncodedBytes
+            ? context.options->maxEncodedBytes - context.encodedBytes : 0;
+        auto result = context.sidecars->RequestSidecarBytes(std::string(path.data, path.length), remaining);
+        if (!result.bytes) {
+            if (result.errorCode == ImportErrorCode::UnsafeReference
+                || result.errorCode == ImportErrorCode::FileChanged
+                || result.errorCode == ImportErrorCode::ImportProtocolViolation
+                || result.errorCode == ImportErrorCode::ResourceLimit
+                || result.errorCode == ImportErrorCode::AggregateSourceLimit)
+                context.error = result.errorCode;
+            else Warn(context.textureWarnings);
+            return std::nullopt;
+        }
+        owned = std::move(result.bytes);
+        encoded = *owned;
+    }
+    if (encoded.empty() || encoded.size() > context.options->maxEncodedBytes - context.encodedBytes) {
+        Warn(context.textureWarnings);
+        return std::nullopt;
+    }
+    context.encodedBytes += encoded.size();
+    TextureDecodeOptions options = *context.options;
+    options.semantic = semantic;
+    options.maxDecodedBytes = (std::min)(options.maxDecodedBytes,
+        kMaxAggregateTextureBytes - context.decodedBytes);
+    options.maxPixels = (std::min)(options.maxPixels,
+        kMaxAggregateTexturePixels - context.decodedPixels);
+    DecodedImage image;
+    image.space = space;
+    switch (SniffImageFormat(encoded)) {
+    case SniffedImageFormat::Ktx2:
+        if (auto decoded = TranscodeKtx2BasisImage(encoded, options)) {
+            image.format = decoded->pixelFormat; image.width = decoded->width;
+            image.height = decoded->height; image.levels = decoded->mipLevels;
+            image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::WebP:
+        if (auto decoded = DecodeWebpImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = decoded->colorSpace;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Png:
+    case SniffedImageFormat::Jpeg:
+    case SniffedImageFormat::Bmp:
+    case SniffedImageFormat::Tiff:
+        if (auto decoded = DecodeRasterImageWic(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = decoded->colorSpace;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    default: break;
+    }
+    if (context.options->Cancelled()) {
+        context.error = ImportErrorCode::Cancelled;
+        return std::nullopt;
+    }
+    if (image.pixels.empty()) {
+        Warn(context.textureWarnings);
+        return std::nullopt;
+    }
+    const uint64_t pixels = uint64_t(image.width) * image.height;
+    if (image.pixels.size() > kMaxAggregateTextureBytes - context.decodedBytes
+        || pixels > kMaxAggregateTexturePixels - context.decodedPixels) {
+        context.error = ImportErrorCode::ResourceLimit;
+        return std::nullopt;
+    }
+    context.decodedBytes += image.pixels.size();
+    context.decodedPixels += pixels;
+    return image;
+}
+
+uint32_t EmitImage(BoundedChunkWriter& writer, DecodedImage&& image)
+{
+    ImagePayloadHeader header{};
+    header.pixelFormat = uint32_t(image.format); header.width = image.width;
+    header.height = image.height; header.mipLevels = image.levels;
+    header.colorSpace = uint32_t(image.space); header.pixelDataByteSize = image.pixels.size();
+    ChunkDescriptor descriptor{};
+    descriptor.topology = ChunkTopology::Image; descriptor.chunkId = writer.NextId();
+    return writer.Add(descriptor, ChunkBytes(header), image.pixels) ? descriptor.chunkId : 0;
+}
+
+uint32_t ResolveImage(BoundedChunkWriter& writer, MaterialContext& context,
+                      const ufbx_texture* texture, ColorSpaceId space, TextureSemantic semantic,
+                      std::unordered_map<uint64_t, uint32_t>& cache)
+{
+    if (!texture) return 0;
+    const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(texture)) >> 3)
+        ^ (uint64_t(space) << 61) ^ (uint64_t(semantic) << 58);
+    if (const auto it = cache.find(key); it != cache.end()) return it->second;
+    auto image = DecodeTexture(context, texture, space, semantic);
+    if (!image) {
+        if (context.error != ImportErrorCode::None) return 0;
+        DecodedImage fallback;
+        fallback.format = PixelFormatId::RGBA8_UNORM; fallback.space = space;
+        fallback.width = fallback.height = semantic == TextureSemantic::Color ? 2u : 1u;
+        fallback.levels = 1;
+        fallback.pixels.resize(size_t(fallback.width) * fallback.height * 4, std::byte{255});
+        if (semantic == TextureSemantic::Color) {
+            for (unsigned i = 0; i < 4; ++i) for (unsigned c = 0; c < 3; ++c)
+                fallback.pixels[i * 4 + c] = std::byte((i == 0 || i == 3) ? 64 : 192);
+        } else if (semantic == TextureSemantic::Normal) {
+            fallback.pixels[0] = fallback.pixels[1] = std::byte{128};
+        } else if (semantic == TextureSemantic::Emissive) {
+            fallback.pixels[0] = fallback.pixels[1] = fallback.pixels[2] = std::byte{0};
+        }
+        image = std::move(fallback);
+    }
+    const uint32_t id = EmitImage(writer, std::move(*image));
+    if (id) cache.emplace(key, id);
+    return id;
+}
+
+bool EmitMaterials(const ufbx_scene& scene, BoundedChunkWriter& writer, MaterialContext& context,
+                   std::unordered_map<const ufbx_material*, uint32_t>& materialIds)
+{
+    std::unordered_map<uint64_t, uint32_t> imageIds;
+    for (const ufbx_material* material : scene.materials) {
+        if (!material || context.options->Cancelled()) {
+            context.error = ImportErrorCode::Cancelled;
+            return false;
+        }
+        MaterialPayload payload = ConvertUfbxMaterial(*material, true, context.optionalWarnings);
+        const ufbx_texture* base = MapTexture(material->pbr.base_color, context, &material->fbx.diffuse_color);
+        const ufbx_texture* normal = MapTexture(material->pbr.normal_map, context, &material->fbx.normal_map);
+        if (!normal) normal = MapTexture(material->fbx.bump, context);
+        const ufbx_texture* emissive = MapTexture(material->pbr.emission_color, context, &material->fbx.emission_color);
+        const ufbx_texture* roughness = MapTexture(material->pbr.roughness, context);
+        const ufbx_texture* metalness = MapTexture(material->pbr.metalness, context);
+        uint32_t images[4]{};
+        images[0] = ResolveImage(writer, context, base, ColorSpaceId::Srgb, TextureSemantic::Color, imageIds);
+        if (context.error != ImportErrorCode::None || (base && !images[0])) return false;
+        if (roughness && roughness == metalness) {
+            images[1] = ResolveImage(writer, context, roughness, ColorSpaceId::Linear, TextureSemantic::Data, imageIds);
+            if (context.error != ImportErrorCode::None || !images[1]) return false;
+        } else if (roughness || metalness) {
+            Warn(context.optionalWarnings);
+        }
+        images[2] = ResolveImage(writer, context, normal, ColorSpaceId::Linear, TextureSemantic::Normal, imageIds);
+        if (context.error != ImportErrorCode::None || (normal && !images[2])) return false;
+        images[3] = ResolveImage(writer, context, emissive, ColorSpaceId::Srgb, TextureSemantic::Emissive, imageIds);
+        if (context.error != ImportErrorCode::None || (emissive && !images[3])) return false;
+        if (base && base->has_uv_transform) {
+            payload.uvOffset[0] = ToFloat(base->uv_transform.translation.x, payload.uvOffset[0])
+                ? payload.uvOffset[0] : 0.0f;
+            payload.uvOffset[1] = ToFloat(base->uv_transform.translation.y, payload.uvOffset[1])
+                ? payload.uvOffset[1] : 0.0f;
+            payload.uvScale[0] = ToFloat(base->uv_transform.scale.x, payload.uvScale[0])
+                ? payload.uvScale[0] : 1.0f;
+            payload.uvScale[1] = ToFloat(base->uv_transform.scale.y, payload.uvScale[1])
+                ? payload.uvScale[1] : 1.0f;
+            const auto& q = base->uv_transform.rotation;
+            const double rotation = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                               1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+            if (!ToFloat(rotation, payload.uvRotation)) { payload.uvRotation = 0.0f; Warn(context.optionalWarnings); }
+        }
+        ChunkDescriptor descriptor{};
+        descriptor.topology = ChunkTopology::Material; descriptor.chunkId = writer.NextId();
+        for (unsigned slot = 0; slot < 4; ++slot) descriptor.dependencyIds[slot] = images[slot];
+        descriptor.dependencyCount = uint32_t(std::count_if(std::begin(images), std::end(images),
+            [](uint32_t id) { return id != 0; }));
+        if (!writer.Add(descriptor, ChunkBytes(payload))) return false;
+        materialIds.emplace(material, descriptor.chunkId);
+    }
+    return true;
+}
+
 bool TransformBounds(const ChunkDescriptor& geometry, const double world[16],
                      double minimum[3], double maximum[3])
 {
@@ -549,7 +788,9 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
     options.no_format_from_extension = true;
     options.filename = {"document.fbx", 12};
     options.ignore_animation = false;
-    options.ignore_embedded = true;
+    // Embedded image blobs are decoded below from their in-memory ufbx blobs;
+    // external images remain disabled during load and are brokered explicitly.
+    options.ignore_embedded = false;
     options.evaluate_skinning = true;
     options.evaluate_caches = false;
     options.load_external_files = false;
@@ -664,6 +905,20 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
         / triangleBytes));
     if (!chunkTriangleLimit) return Fail(ImportErrorCode::ResourceLimit);
 
+    TextureDecodeOptions defaultTextureOptions;
+    defaultTextureOptions.isCancelled = importOptions.isCancelled;
+    MaterialContext materialContext;
+    materialContext.sidecars = importOptions.sidecars;
+    materialContext.options = importOptions.textureOptions ? importOptions.textureOptions : &defaultTextureOptions;
+    std::unordered_map<const ufbx_material*, uint32_t> materialIds;
+    if (!EmitMaterials(*scene, writer, materialContext, materialIds)) {
+        const ImportErrorCode error = materialContext.error != ImportErrorCode::None
+            ? materialContext.error : writer.Error();
+        return Fail(error, ImportFailurePhase::Sidecars);
+    }
+
+    // Nodes may carry no material binding. Construct its deterministic fallback
+    // now, but publish it only if a visible geometry part actually needs it.
     MaterialPayload neutral{};
     neutral.baseColorFactor[0] = neutral.baseColorFactor[1] = neutral.baseColorFactor[2] = 0.8f;
     neutral.baseColorFactor[3] = 1.0f;
@@ -672,11 +927,7 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
     neutral.alphaMode = uint32_t(AlphaModeId::Opaque);
     neutral.alphaCutoff = 0.5f;
     neutral.flags = kMaterialFlagDoubleSided;
-    ChunkDescriptor materialDescriptor{};
-    materialDescriptor.topology = ChunkTopology::Material;
-    materialDescriptor.chunkId = writer.NextId();
-    if (!writer.Add(materialDescriptor, ChunkBytes(neutral))) return Fail(writer.Error());
-    const uint32_t neutralMaterialId = materialDescriptor.chunkId;
+    uint32_t neutralMaterialId = 0;
 
     std::vector<MeshVariant> variants;
     variants.reserve(scene->nodes.count);
@@ -731,6 +982,29 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
         return Fail(omittedGeometry ? ImportErrorCode::UnsupportedRequiredFeature
                                     : ImportErrorCode::EmptyGeometry);
 
+    bool needsNeutralMaterial = false;
+    for (const MeshVariant& variant : variants) {
+        for (const ufbx_node* node : variant.nodes) {
+            for (const ufbx_mesh_part& part : variant.mesh->material_parts) {
+                const ufbx_material* material = part.index < node->materials.count
+                    ? node->materials.data[part.index] : nullptr;
+                if (!materialIds.contains(material)) {
+                    needsNeutralMaterial = true;
+                    break;
+                }
+            }
+            if (needsNeutralMaterial) break;
+        }
+        if (needsNeutralMaterial) break;
+    }
+    if (needsNeutralMaterial) {
+        ChunkDescriptor materialDescriptor{};
+        materialDescriptor.topology = ChunkTopology::Material;
+        materialDescriptor.chunkId = writer.NextId();
+        if (!writer.Add(materialDescriptor, ChunkBytes(neutral))) return Fail(writer.Error());
+        neutralMaterialId = materialDescriptor.chunkId;
+    }
+
     uint64_t normalizedTriangles = 0, normalizedVertices = 0;
     ImportErrorCode emitError = ImportErrorCode::None;
     for (MeshVariant& variant : variants) {
@@ -783,7 +1057,12 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
                 payload.instanceId = writer.NextId();
                 payload.nodeId = nodeIds.at(node);
                 payload.geometryChunkId = geometry.chunkId;
-                payload.materialChunkId = neutralMaterialId;
+                const ufbx_material* material = geometry.partIndex < node->materials.count
+                    ? node->materials.data[geometry.partIndex] : nullptr;
+                if (const auto it = materialIds.find(material); it != materialIds.end())
+                    payload.materialChunkId = it->second;
+                else
+                    payload.materialChunkId = neutralMaterialId;
                 payload.flags = kSceneRecordVisible;
                 if (!TransformBounds(geometry.descriptor, world, payload.worldMin, payload.worldMax))
                     return Fail(ImportErrorCode::MalformedData);
@@ -795,11 +1074,12 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
 
     const size_t featureWarnings = size_t(hasCaches) + size_t(hasNurbs)
         + size_t(hasProcedural) + size_t(hasSubdivision) + size_t(hasConstraints);
-    const uint32_t optionalWarnings = static_cast<uint32_t>((std::min)(
-        size_t(64), loadedScene->metadata.warnings.count + featureWarnings));
-    if (optionalWarnings) {
+    const uint32_t optionalWarnings = static_cast<uint32_t>((std::min)(size_t(64),
+        loadedScene->metadata.warnings.count + featureWarnings + materialContext.optionalWarnings));
+    if (optionalWarnings || materialContext.textureWarnings) {
         ImportStatusPayload status{};
         status.optionalFeatureWarnings = optionalWarnings;
+        status.textureWarnings = materialContext.textureWarnings;
         ChunkDescriptor descriptor{};
         descriptor.topology = ChunkTopology::ImportStatus;
         descriptor.chunkId = writer.NextId();
