@@ -63,3 +63,24 @@ sidecars under the common decode budgets.
   required unsafe data never falls back permissively.
 - OBJ/MTL material and texture regression tests are byte/semantically unchanged.
 - Debug/Release Unit and full ImportIsolation suites pass.
+
+## Progress (2026-09-17)
+
+- Added the pinned upstream `synthetic_embedded_base64_7700_ascii.fbx` corpus
+  as `tests/fixtures/fbx-spike/embedded-png-ascii.fbx`, with provenance in the
+  fixture README. The sandbox integration test verifies its embedded 32x32 PNG
+  becomes a normalized RGBA8 sRGB image with the full mip chain, is linked from
+  the material dependency, and does not follow the fixture's absolute filename
+  metadata.
+- External-image qualification is blocked. A small no-embedded-content
+  derivative issues the FBX external-texture request but the one-shot worker
+  exits before a terminal reply for both an allowed local path and a traversal
+  path. The same broker/client machinery passes the existing glTF sidecar
+  suite. Reproduce against an untouched external-texture FBX first, then fix
+  the FBX-specific interaction without weakening broker containment or turning
+  unsafe paths into fallbacks. The failing candidate test is intentionally not
+  retained.
+- This slice's focused embedded-PNG test and the full tagged FBX
+  ImportIsolation subset pass in both Debug and Release (14 cases / 47,703
+  assertions per configuration). This is not the task's final full-suite
+  qualification.

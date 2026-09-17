@@ -2,6 +2,7 @@
 #include "import_broker/ImportSession.h"
 #include "import_broker/SharedSection.h"
 #include "model_core/MaterialPayload.h"
+#include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
 
 #include <catch2/catch_approx.hpp>
@@ -48,16 +49,8 @@ struct ScratchFbx {
     void Write(std::string_view bytes) { Write(std::as_bytes(std::span(bytes))); }
 };
 
-std::vector<std::byte> ReadFixture(std::string_view name)
+std::vector<std::byte> DecodeBase64(std::span<const char> raw)
 {
-    const auto path = std::filesystem::path(PREVIEW3D_FBX_FIXTURES_DIR) / name;
-    std::ifstream input(path, std::ios::binary);
-    REQUIRE(input.good());
-    std::vector<char> raw((std::istreambuf_iterator<char>(input)), {});
-    if (!name.ends_with(".base64")) {
-        const auto bytes = std::as_bytes(std::span(raw));
-        return {bytes.begin(), bytes.end()};
-    }
     auto digit = [](unsigned char c) -> int {
         if (c >= 'A' && c <= 'Z') return c - 'A';
         if (c >= 'a' && c <= 'z') return c - 'a' + 26;
@@ -79,6 +72,20 @@ std::vector<std::byte> ReadFixture(std::string_view name)
             decoded.push_back(std::byte((accumulator >> bits) & 0xffu));
         }
     }
+    return decoded;
+}
+
+std::vector<std::byte> ReadFixture(std::string_view name)
+{
+    const auto path = std::filesystem::path(PREVIEW3D_FBX_FIXTURES_DIR) / name;
+    std::ifstream input(path, std::ios::binary);
+    REQUIRE(input.good());
+    std::vector<char> raw((std::istreambuf_iterator<char>(input)), {});
+    if (!name.ends_with(".base64")) {
+        const auto bytes = std::as_bytes(std::span(raw));
+        return {bytes.begin(), bytes.end()};
+    }
+    const auto decoded = DecodeBase64(raw);
     REQUIRE_FALSE(decoded.empty());
     return decoded;
 }
@@ -307,6 +314,48 @@ TEST_CASE("ASCII FBX preserves hierarchy and shares static mesh geometry across 
     CHECK(authoredMaterial != 0);
     CHECK(materialBoundInstances >= 2);
     CHECK(transformedNode);
+}
+
+TEST_CASE("FBX decodes an embedded PNG without a filesystem sidecar", "[fbx][materials][embedded-image]")
+{
+    // Upstream's deliberately small base64-media fixture includes an absolute
+    // filename as metadata. Successful import here proves the worker consumes
+    // ufbx's embedded blob instead of following that filename.
+    ScratchFbx source;
+    source.Write(ReadFixture("embedded-png-ascii.fbx"));
+    const auto result = import_broker::RunImportSession(Request(source.path, 5011));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase, result.chunks.size());
+    REQUIRE(result.ok);
+
+    uint32_t baseColorImage = 0;
+    uint32_t decodedImage = 0;
+    bool statusWarning = false;
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material) {
+            REQUIRE(chunk.descriptor.dependencyCount == 1);
+            baseColorImage = chunk.descriptor.dependencyIds[0];
+            CHECK(baseColorImage != 0);
+            CHECK(chunk.descriptor.dependencyIds[1] == 0);
+            CHECK(chunk.descriptor.dependencyIds[2] == 0);
+            CHECK(chunk.descriptor.dependencyIds[3] == 0);
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::Image) {
+            decodedImage = chunk.descriptor.chunkId;
+            REQUIRE(chunk.payload.size() >= sizeof(model_core::ImagePayloadHeader));
+            model_core::ImagePayloadHeader header{};
+            std::memcpy(&header, chunk.payload.data(), sizeof(header));
+            CHECK(header.pixelFormat == uint32_t(model_core::PixelFormatId::RGBA8_UNORM));
+            CHECK(header.colorSpace == uint32_t(model_core::ColorSpaceId::Srgb));
+            CHECK(header.width == 32);
+            CHECK(header.height == 32);
+            CHECK(header.mipLevels == model_core::FullImageMipCount(32, 32));
+            CHECK(header.pixelDataByteSize == chunk.payload.size() - sizeof(header));
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus) {
+            statusWarning = true;
+        }
+    }
+    CHECK(baseColorImage != 0);
+    CHECK(decodedImage == baseColorImage);
+    CHECK_FALSE(statusWarning);
 }
 
 TEST_CASE("Binary FBX triangulates and emits generated normalized attributes",

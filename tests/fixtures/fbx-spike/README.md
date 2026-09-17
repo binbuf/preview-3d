@@ -26,6 +26,7 @@ this repository uses the MIT option. See `UFbx-LICENSE.txt` in this directory.
 | `nonuniform-scale-pivots-ascii.fbx` | `maya_split_pivot_7700_ascii.fbx` | Authored non-uniform scale with split pivots |
 | `z-up-binary.fbx.base64` | `blender_340_z_up_7400_binary.fbx` | Z-up source-axis conversion to the right-handed Y-up target |
 | `nurbs-only-ascii.fbx` | `maya_nurbs_curve_linear_6100_ascii.fbx` | Required unsupported-geometry failure policy |
+| `embedded-png-ascii.fbx` | `synthetic_embedded_base64_7700_ascii.fbx` | Embedded PNG decoding without worker filesystem access |
 
 The harness decodes `.fbx.base64` files in memory and passes the resulting
 bytes directly to `ufbx_load_memory()`. SHA-256 provenance values are recorded
