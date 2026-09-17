@@ -335,6 +335,9 @@ still open. lib3mf, TinyUSDZ and OpenUSD are not pinned, and
         cache-version evidence, and clean offline standard-user VM evidence.
 - [ ] **Slice 2** — FBX deterministic static start-pose evaluation through ufbx, including
       supported skin/blend deformation and unified PBR mapping.
+  - [ ] Execute the dependency-ordered FBX viewer plan in [`fbx/README.md`](fbx/README.md)
+        through FBX-007. FBX-008 is the later original-MVP thumbnail adapter and remains
+        blocked on the shared Gate 6 thumbnail-provider foundation.
 - [ ] **Slice 3** — 3MF Core/Materials/Production/Beam Lattice preview through lib3mf.
 - [ ] **Slice 4** — USDA/USDC/USD and USDZ common static subset through TinyUSDZ, inside the
       general import worker.
