@@ -1,6 +1,6 @@
 # FBX-002: normalized scene and instance contract
 
-Status: blocked on FBX-001  
+Status: complete (2026-09-17)
 Depends on: FBX-001  
 Unblocks: FBX-003
 
@@ -80,3 +80,25 @@ hierarchy/transforms and camera-relative precision.
 - Existing progressive batching, cancellation, coarse/fine handoff, and worker
   pool reuse tests remain green.
 
+## Completion record
+
+- Protocol v10 defines fixed 144-byte `NodePayload` and 80-byte
+  `MeshInstancePayload` records with closed dependency slots and no strings,
+  pointers, or importer-owned data.
+- The copy-then-validate host path enforces IDs, exact sizes, flags, affine
+  finite/nonsingular transforms, topology, hierarchy cycles/depth, Tier-A/B
+  catalog limits, inherited visibility, and recomputed transformed bounds.
+  Progressive references use the bounded generation catalog and v9 is rejected
+  without fallback.
+- The renderer uploads reusable geometry once and creates independent draw
+  records for each instance. Per-instance frustum bounds, inverse-transpose
+  normals, negative-determinant culling, camera-relative double subtraction,
+  material bindings, stable 32-bit pick IDs, and fence-safe shared-resource
+  retirement are retained across progressive batches.
+- Synthetic tests cover one geometry with 64 hierarchical instances at a
+  large origin, negative scale, cross-batch catalog resolution, one shared GPU
+  allocation, draw/ID stability, and post-copy mutation safety. The hostile
+  worker covers invalid parents, cycles, NaN/Inf matrices, illegal topology,
+  duplicates, oversized catalogs, unresolved IDs, and scene-record mutation.
+- Debug and Release `Tests.Unit` and `Tests.ImportIsolation` pass in full on
+  2026-09-17.

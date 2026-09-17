@@ -8,8 +8,10 @@
 #include <chrono>
 #include <cstring>
 #include <iterator>
+#include <functional>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 #include <unordered_set>
 
 using Microsoft::WRL::ComPtr;
@@ -21,6 +23,22 @@ constexpr DWORD kIdleWaitTimeoutMs = 5000;
 // and replaces an entry that repeats the pair, so mesh buffers and textures
 // must not share an id space. Meshes count up from 0; textures start here.
 constexpr uint32_t kTextureClusterIdBase = 1u << 20;
+
+struct DrawConstants {
+    DirectX::XMFLOAT4X4 localToCamera{};
+    DirectX::XMFLOAT4X4 normalToCamera{};
+    uint32_t pickId = 0;
+};
+
+DrawConstants BuildDrawConstants(const double instance[16], const double origin[3],
+                                 const double sceneOrigin[3], const double cameraTarget[3],
+                                 const DirectX::XMFLOAT4X4& axis)
+{
+    DrawConstants result{};
+    const auto transform=BuildCameraRelativeInstanceTransform(instance,origin,sceneOrigin,cameraTarget,axis);
+    result.localToCamera=transform.localToCamera;result.normalToCamera=transform.normalToCamera;
+    return result;
+}
 
 void TransformGridBounds(const DirectX::XMFLOAT3& minimum, const DirectX::XMFLOAT3& maximum,
                          DirectX::FXMMATRIX transform, DirectX::XMFLOAT3& outMinimum,
@@ -62,6 +80,8 @@ cbuffer FrameConstants : register(b0)
 cbuffer DrawConstants : register(b1)
 {
     row_major float4x4 gLocalToCamera;
+    row_major float4x4 gNormalToCamera;
+    uint gPickId;
 };
 struct VSInput
 {
@@ -75,6 +95,7 @@ struct PSInput
     float4 position : SV_POSITION;
     float3 worldPosition : TEXCOORD1;
     float3 normal : NORMAL;
+    nointerpolation uint pickId : TEXCOORD7;
 };
 
 PSInput VSMain(VSInput input)
@@ -83,7 +104,8 @@ PSInput VSMain(VSInput input)
     float4 relativePosition = mul(float4(input.position, 1.0f), gLocalToCamera);
     output.position = mul(relativePosition, gViewProjection);
     output.worldPosition = relativePosition.xyz;
-    output.normal = mul(input.normal, (float3x3)gLocalToCamera);
+    output.normal = mul(float4(input.normal, 0.0f), gNormalToCamera).xyz;
+    output.pickId = gPickId;
     return output;
 }
 )";
@@ -95,9 +117,10 @@ struct PSInput
     float4 position : SV_POSITION;
     float3 worldPosition : TEXCOORD1;
     float3 normal : NORMAL;
+    nointerpolation uint pickId : TEXCOORD7;
 };
 
-struct PixelOutput { float4 color : SV_TARGET0; float pick : SV_TARGET1; };
+struct PixelOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
 PixelOutput PSMain(PSInput input)
 {
     float3 n = normalize(input.normal);
@@ -109,7 +132,7 @@ PixelOutput PSMain(PSInput input)
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
-    PixelOutput output; output.color = float4(saturate(color), 1.0f); output.pick = 1.0f; return output;
+    PixelOutput output; output.color = float4(saturate(color), 1.0f); output.pick = input.pickId; return output;
 }
 )";
 
@@ -127,6 +150,8 @@ cbuffer FrameConstants : register(b0)
 cbuffer DrawConstants : register(b1)
 {
     row_major float4x4 gLocalToCamera;
+    row_major float4x4 gNormalToCamera;
+    uint gPickId;
 };
 cbuffer MaterialConstants : register(b2)
 {
@@ -153,6 +178,7 @@ struct PSInput
     float2 uv : TEXCOORD0;
     float4 tangent : TANGENT;
     float4 color : COLOR0;
+    nointerpolation uint pickId : TEXCOORD7;
 };
 
 PSInput VSMain(VSInput input)
@@ -161,12 +187,13 @@ PSInput VSMain(VSInput input)
     float4 relativePosition = mul(float4(input.position, 1.0f), gLocalToCamera);
     output.position = mul(relativePosition, gViewProjection);
     output.worldPosition = relativePosition.xyz;
-    output.normal = mul(input.normal, (float3x3)gLocalToCamera);
+    output.normal = mul(float4(input.normal, 0.0f), gNormalToCamera).xyz;
     float2 scaled=input.uv*gUvTransform.zw;
     output.uv=float2(scaled.x*gUvRotationAndMaps.x-scaled.y*gUvRotationAndMaps.y,
                      scaled.x*gUvRotationAndMaps.y+scaled.y*gUvRotationAndMaps.x)+gUvTransform.xy;
-    output.tangent=float4(normalize(mul(input.tangent.xyz,(float3x3)gLocalToCamera)),input.tangent.w);
+    output.tangent=float4(normalize(mul(float4(input.tangent.xyz,0.0f),gNormalToCamera).xyz),input.tangent.w);
     output.color=input.color;
+    output.pickId=gPickId;
     return output;
 }
 )";
@@ -195,9 +222,10 @@ struct PSInput
     float2 uv : TEXCOORD0;
     float4 tangent : TANGENT;
     float4 color : COLOR0;
+    nointerpolation uint pickId : TEXCOORD7;
 };
 
-struct PixelOutput { float4 color : SV_TARGET0; float pick : SV_TARGET1; };
+struct PixelOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
 PixelOutput PSMain(PSInput input)
 {
     uint flags=(uint)gMaterialFactors.w;
@@ -225,7 +253,7 @@ PixelOutput PSMain(PSInput input)
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
-    PixelOutput output; output.color = float4(saturate(color), base.a); output.pick = 1.0f; return output;
+    PixelOutput output; output.color = float4(saturate(color), base.a); output.pick = input.pickId; return output;
 }
 )";
 
@@ -266,7 +294,7 @@ GridOutput VSMain(uint vertexId : SV_VertexID)
 
 constexpr char kGridPixelShaderSource[] = R"(
 struct GridInput { float4 position : SV_POSITION; float4 color : COLOR0; };
-struct GridOutput { float4 color : SV_TARGET0; float pick : SV_TARGET1; };
+struct GridOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
 GridOutput PSMain(GridInput input)
 {
     GridOutput output;
@@ -278,28 +306,28 @@ GridOutput PSMain(GridInput input)
 
 constexpr char kPointVertexShaderSource[] = R"(
 cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;};
-cbuffer DrawConstants:register(b1){row_major float4x4 gLocalToCamera;};
-struct V{float3 p:POSITION;}; struct O{float4 p:SV_POSITION;float4 c:COLOR0;};
-O VSMain(V v){O o;o.p=mul(mul(float4(v.p,1),gLocalToCamera),gViewProjection);o.c=float4(.76,.78,.84,1);return o;}
+cbuffer DrawConstants:register(b1){row_major float4x4 gLocalToCamera;row_major float4x4 gNormalToCamera;uint gPickId;};
+struct V{float3 p:POSITION;}; struct O{float4 p:SV_POSITION;float4 c:COLOR0;nointerpolation uint id:TEXCOORD7;};
+O VSMain(V v){O o;o.p=mul(mul(float4(v.p,1),gLocalToCamera),gViewProjection);o.c=float4(.76,.78,.84,1);o.id=gPickId;return o;}
 )";
 constexpr char kColoredPointVertexShaderSource[] = R"(
 cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;};
-cbuffer DrawConstants:register(b1){row_major float4x4 gLocalToCamera;};
+cbuffer DrawConstants:register(b1){row_major float4x4 gLocalToCamera;row_major float4x4 gNormalToCamera;uint gPickId;};
 struct V{float3 p:POSITION;float3 n:NORMAL;float2 uv:TEXCOORD0;float4 t:TANGENT;float4 c:COLOR0;};
-struct O{float4 p:SV_POSITION;float4 c:COLOR0;};
-O VSMain(V v){O o;o.p=mul(mul(float4(v.p,1),gLocalToCamera),gViewProjection);o.c=v.c;return o;}
+struct O{float4 p:SV_POSITION;float4 c:COLOR0;nointerpolation uint id:TEXCOORD7;};
+O VSMain(V v){O o;o.p=mul(mul(float4(v.p,1),gLocalToCamera),gViewProjection);o.c=v.c;o.id=gPickId;return o;}
 )";
 constexpr char kPointGeometryShaderSource[] = R"(
 cbuffer FrameConstants:register(b0){row_major float4x4 gViewProjection;float4 gEyeSelection;float4 gViewport;};
-struct I{float4 p:SV_POSITION;float4 c:COLOR0;}; struct O{float4 p:SV_POSITION;float4 c:COLOR0;float2 q:TEXCOORD0;};
+struct I{float4 p:SV_POSITION;float4 c:COLOR0;nointerpolation uint id:TEXCOORD7;}; struct O{float4 p:SV_POSITION;float4 c:COLOR0;float2 q:TEXCOORD0;nointerpolation uint id:TEXCOORD7;};
 [maxvertexcount(4)] void GSMain(point I i[1],inout TriangleStream<O> s){
  float radius=clamp(7.0/sqrt(max(.25,abs(i[0].p.w))),2.0,12.0);float2 clip=2.0*radius/max(gViewport.xy,float2(1,1));
  float2 q[4]={float2(-1,-1),float2(-1,1),float2(1,-1),float2(1,1)};
- [unroll]for(uint k=0;k<4;k++){O o;o.p=i[0].p;o.p.xy+=q[k]*clip*i[0].p.w;o.c=i[0].c;o.q=q[k];s.Append(o);} }
+ [unroll]for(uint k=0;k<4;k++){O o;o.p=i[0].p;o.p.xy+=q[k]*clip*i[0].p.w;o.c=i[0].c;o.q=q[k];o.id=i[0].id;s.Append(o);} }
 )";
 constexpr char kPointPixelShaderSource[] = R"(
-struct I{float4 p:SV_POSITION;float4 c:COLOR0;float2 q:TEXCOORD0;};struct O{float4 c:SV_TARGET0;float pick:SV_TARGET1;};
-O PSMain(I i){if(dot(i.q,i.q)>1)discard;O o;o.c=i.c;o.pick=1;return o;}
+struct I{float4 p:SV_POSITION;float4 c:COLOR0;float2 q:TEXCOORD0;nointerpolation uint id:TEXCOORD7;};struct O{float4 c:SV_TARGET0;uint pick:SV_TARGET1;};
+O PSMain(I i){if(dot(i.q,i.q)>1)discard;O o;o.c=i.c;o.pick=i.id;return o;}
 )";
 
 bool CompileShader(const char* source, size_t sourceLength, const char* entryPoint, const char* target,
@@ -474,18 +502,18 @@ bool D3D12ViewerPath::CreateDepthBuffer(UINT width, UINT height, std::wstring& e
 
 bool D3D12ViewerPath::CreatePickTarget(UINT width, UINT height, std::wstring& error)
 {
-    // One byte per viewport pixel, plus one 256-byte readback slot. No CPU
+    // One stable uint id per viewport pixel, plus one 256-byte readback slot. No CPU
     // geometry catalog; picking uses exactly the depth-tested displayed pixels.
     D3D12_DESCRIPTOR_HEAP_DESC heap{};
     heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; heap.NumDescriptors = 1;
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; desc.Width = width; desc.Height = height;
-    desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.Format = DXGI_FORMAT_R8_UNORM;
+    desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.Format = DXGI_FORMAT_R32_UINT;
     desc.SampleDesc.Count = 1; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     D3D12_HEAP_PROPERTIES properties{}; properties.Type = D3D12_HEAP_TYPE_DEFAULT;
     D3D12_CLEAR_VALUE clear{}; clear.Format = desc.Format;
     pickTarget.Reset(); pickRtvHeap.Reset();
-    if (uint64_t(width) * height > 64ull * 1024 * 1024
+    if (uint64_t(width) * height > 16ull * 1024 * 1024
         || FAILED(device.Device()->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&pickRtvHeap)))
         || FAILED(device.Device()->CreateCommittedResource(&properties, D3D12_HEAP_FLAG_NONE, &desc,
             D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, IID_PPV_ARGS(&pickTarget)))) {
@@ -500,10 +528,11 @@ bool D3D12ViewerPath::CreatePickTarget(UINT width, UINT height, std::wstring& er
 bool D3D12ViewerPath::PollPick(bool& hit)
 {
     if (!pickInFlight || directQueue.CompletedValue() < pickFence) return false;
-    D3D12_RANGE range{0,1}; void* bytes = nullptr;
-    hit = false;
+    D3D12_RANGE range{0,sizeof(uint32_t)}; void* bytes = nullptr;
+    hit = false; lastPickedId = 0;
     if (SUCCEEDED(pickReadback->Map(0, &range, &bytes))) {
-        hit = *static_cast<unsigned char*>(bytes) != 0;
+        std::memcpy(&lastPickedId,bytes,sizeof(lastPickedId));
+        hit = lastPickedId != 0;
         D3D12_RANGE written{0,0}; pickReadback->Unmap(0, &written);
     }
     pickInFlight = false; return true;
@@ -520,7 +549,7 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     D3D12_ROOT_SIGNATURE_DESC rootSigDesc{};
     D3D12_ROOT_PARAMETER params[2] = {rootParam, {}};
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[1].Constants.ShaderRegister = 1; params[1].Constants.Num32BitValues = 16;
+    params[1].Constants.ShaderRegister = 1; params[1].Constants.Num32BitValues = 33;
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     rootSigDesc.NumParameters = 2;
     rootSigDesc.pParameters = params;
@@ -586,7 +615,7 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 2;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-    psoDesc.RTVFormats[1] = DXGI_FORMAT_R8_UNORM;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R32_UINT;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count = 1;
 
@@ -680,7 +709,7 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
         rootParams[1+i].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
     }
     rootParams[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[5].Constants.ShaderRegister = 1; rootParams[5].Constants.Num32BitValues = 16;
+    rootParams[5].Constants.ShaderRegister = 1; rootParams[5].Constants.Num32BitValues = 33;
     rootParams[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     rootParams[6].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[6].Constants.ShaderRegister=2;rootParams[6].Constants.Num32BitValues=20;
@@ -762,7 +791,7 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 2;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-    psoDesc.RTVFormats[1] = DXGI_FORMAT_R8_UNORM;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R32_UINT;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count = 1;
 
@@ -770,6 +799,11 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
         error = L"The textured D3D12 pipeline state could not be created.";
         return false;
     }
+    psoDesc.RasterizerState.FrontCounterClockwise=TRUE;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedMirroredPipelineState)))) {
+        error=L"The mirrored material pipeline state could not be created.";return false;
+    }
+    psoDesc.RasterizerState.FrontCounterClockwise=FALSE;
     psoDesc.RasterizerState.CullMode=D3D12_CULL_MODE_NONE;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedDoubleSidedPipelineState)))) {
         error=L"The double-sided material pipeline state could not be created.";return false;
@@ -788,6 +822,10 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     psoDesc.RasterizerState.CullMode=D3D12_CULL_MODE_BACK;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedBlendPipelineState)))) {
         error=L"The blended material pipeline state could not be created.";return false;
+    }
+    psoDesc.RasterizerState.FrontCounterClockwise=TRUE;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedBlendMirroredPipelineState)))) {
+        error=L"The mirrored blended material pipeline state could not be created.";return false;
     }
     return true;
 }
@@ -1035,13 +1073,18 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     const auto viewProjectionMatrix=DirectX::XMLoadFloat4x4(&viewProjection);
     for (auto& mesh:model.meshes) {
         if (!mesh.drawEnabled) continue;
-        mesh.viewPriority = DetailViewPriority(
-            mesh.sourceGeometry, sceneOrigin, cameraTarget, modelTransform, viewProjection);
+        mesh.viewPriority = mesh.instanceId
+            ? InstanceViewPriority(mesh.instanceBoundsMin, mesh.instanceBoundsMax, sceneOrigin,
+                                   cameraTarget, modelTransform, viewProjection)
+            : DetailViewPriority(mesh.sourceGeometry, sceneOrigin, cameraTarget, modelTransform, viewProjection);
         if (mesh.viewPriority == 0) continue;
         double center[3];
         for (unsigned axis=0;axis<3;++axis)
-            center[axis]=mesh.sourceGeometry.origin[axis]-sceneOrigin[axis]
-                +(double(mesh.sourceGeometry.localMin[axis])+double(mesh.sourceGeometry.localMax[axis]))*0.5;
+            center[axis]=(mesh.instanceId
+                ? (mesh.instanceBoundsMin[axis]+mesh.instanceBoundsMax[axis])*0.5
+                : mesh.sourceGeometry.origin[axis]
+                    +(double(mesh.sourceGeometry.localMin[axis])+double(mesh.sourceGeometry.localMax[axis]))*0.5)
+                - sceneOrigin[axis];
         const double transformedCenter[3] = {
             center[0]*modelTransform._11 + center[1]*modelTransform._21 + center[2]*modelTransform._31,
             center[0]*modelTransform._12 + center[1]*modelTransform._22 + center[2]*modelTransform._32,
@@ -1067,14 +1110,9 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     });
     for (GpuMesh* meshPtr:draws) {
         auto& mesh=*meshPtr;
-        DirectX::XMFLOAT4X4 local;
-        local = modelTransform;
-        const double native[3] = {mesh.origin[0]-sceneOrigin[0],mesh.origin[1]-sceneOrigin[1],mesh.origin[2]-sceneOrigin[2]};
-        // Rotation precedes subtraction in double; never cast the absolute
-        // source position or camera pivot to a shader float.
-        local._41 = float(native[0]*local._11 + native[1]*local._21 + native[2]*local._31 - cameraTarget[0]);
-        local._42 = float(native[0]*local._12 + native[1]*local._22 + native[2]*local._32 - cameraTarget[1]);
-        local._43 = float(native[0]*local._13 + native[1]*local._23 + native[2]*local._33 - cameraTarget[2]);
+        DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
+            sceneOrigin,cameraTarget,modelTransform);
+        drawConstants.pickId=mesh.instanceId ? mesh.instanceId : mesh.chunkId;
         commandList->IASetPrimitiveTopology(mesh.points ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         if (mesh.completeVertex && !mesh.points && mesh.textureHeap) {
             ID3D12DescriptorHeap* heaps[] = { mesh.textureHeap.Get() };
@@ -1082,8 +1120,11 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
             const bool blend=mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
             const bool twoSided=(mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
-            commandList->SetPipelineState(blend ? (twoSided?texturedBlendDoubleSidedPipelineState.Get():texturedBlendPipelineState.Get())
-                                                  : (twoSided?texturedDoubleSidedPipelineState.Get():texturedPipelineState.Get()));
+            commandList->SetPipelineState(blend
+                ? (twoSided?texturedBlendDoubleSidedPipelineState.Get()
+                    :(mesh.mirrored?texturedBlendMirroredPipelineState.Get():texturedBlendPipelineState.Get()))
+                : (twoSided?texturedDoubleSidedPipelineState.Get()
+                    :(mesh.mirrored?texturedMirroredPipelineState.Get():texturedPipelineState.Get())));
             commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
             uint32_t mapMask=0;
             for (UINT slot=0;slot<4;++slot) {
@@ -1093,7 +1134,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
                 commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
             }
-            commandList->SetGraphicsRoot32BitConstants(5, 16, &local, 0);
+            commandList->SetGraphicsRoot32BitConstants(5, 33, &drawConstants, 0);
             float material[20]{};
             std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
             material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
@@ -1111,7 +1152,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             commandList->SetPipelineState(mesh.points ? (mesh.completeVertex?coloredPointPipelineState.Get():pointPipelineState.Get())
                 : mesh.positionOnly ? positionOnlyPipelineState.Get() : pipelineState.Get());
             commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
-            commandList->SetGraphicsRoot32BitConstants(1, 16, &local, 0);
+            commandList->SetGraphicsRoot32BitConstants(1, 33, &drawConstants, 0);
         }
         commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         commandList->IASetIndexBuffer(mesh.points ? nullptr : &mesh.ibv);
@@ -1132,7 +1173,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
         D3D12_TEXTURE_COPY_LOCATION dest{}; dest.pResource = pickReadback.Get();
         dest.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        dest.PlacedFootprint.Footprint = {DXGI_FORMAT_R8_UNORM, 1, 1, 1, 256};
+        dest.PlacedFootprint.Footprint = {DXGI_FORMAT_R32_UINT, 1, 1, 1, 256};
         D3D12_BOX box{UINT(pickX),UINT(pickY),0,UINT(pickX+1),UINT(pickY+1),1};
         commandList->CopyTextureRegion(&dest,0,0,0,&source,&box);
         std::swap(barrier.Transition.StateBefore,barrier.Transition.StateAfter);
@@ -1280,9 +1321,11 @@ bool D3D12ViewerPath::CreateAndQueueTexture(const d3d12_import_bridge::ImportedI
 }
 
 bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
-                                        const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
-                                        const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
-                                        std::wstring& error)
+                                         const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
+                                         const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
+                                         std::wstring& error,
+                                         std::span<const d3d12_import_bridge::ImportedNode> importedNodes,
+                                         std::span<const d3d12_import_bridge::ImportedInstance> importedInstances)
 {
     uploadErrorCode = model_core::ImportErrorCode::UploadFailure;
     // Supersede anything already in flight. Advancing IS the cancellation
@@ -1296,7 +1339,7 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
     uploadInFlight = false;
 
     ModelResources staged;
-    staged.meshes.reserve(importedMeshes.size());
+    staged.meshes.reserve((std::max)(importedMeshes.size(), importedInstances.size()));
     retiredModels.reserve(retiredModels.size() + 2);
     const bool needsNeutralTextures=std::any_of(importedMeshes.begin(),importedMeshes.end(),[](const auto& mesh) {
         return mesh.geometry.lodLevel!=model_core::kScanLod
@@ -1377,6 +1420,51 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         }
         return nullptr;
     };
+    struct ResolvedNode { double world[16]{}; bool visible = false; bool resolving = false; };
+    std::unordered_map<uint32_t, const model_core::NodePayload*> sourceNodes;
+    std::unordered_map<uint32_t, ResolvedNode> resolvedNodes;
+    for (const auto& node : importedNodes) sourceNodes.emplace(node.data.nodeId, &node.data);
+    std::function<bool(uint32_t)> resolveNode = [&](uint32_t id) {
+        if (auto found = resolvedNodes.find(id); found != resolvedNodes.end() && !found->second.resolving)
+            return true;
+        const auto source = sourceNodes.find(id);
+        if (source == sourceNodes.end()) return false;
+        auto& resolved = resolvedNodes[id];
+        if (resolved.resolving) return false;
+        resolved.resolving = true;
+        const auto& payload = *source->second;
+        std::memcpy(resolved.world, payload.localTransform, sizeof(resolved.world));
+        resolved.visible = (payload.flags & model_core::kSceneRecordVisible) != 0;
+        if (payload.parentNodeId) {
+            if (!resolveNode(payload.parentNodeId)) return false;
+            double product[16]{};
+            const auto& parent = resolvedNodes.at(payload.parentNodeId);
+            for (uint32_t row=0; row<4; ++row) for (uint32_t column=0; column<4; ++column)
+                for (uint32_t k=0; k<4; ++k)
+                    product[row*4+column] += payload.localTransform[row*4+k] * parent.world[k*4+column];
+            std::memcpy(resolved.world, product, sizeof(product));
+            resolved.visible = resolved.visible && parent.visible;
+        }
+        resolved.resolving = false;
+        return true;
+    };
+    for (const auto& node : importedNodes) {
+        if (!resolveNode(node.data.nodeId)) {
+            error = L"The imported scene hierarchy could not be resolved.";
+            return false;
+        }
+    }
+    std::unordered_map<uint32_t, std::vector<const model_core::MeshInstancePayload*>> instancesByGeometry;
+    std::unordered_map<uint32_t, const d3d12_import_bridge::ImportedInstance*> importedInstanceById;
+    for (const auto& instance : importedInstances) {
+        const bool preResolved=instance.worldTransform[15]==1.0;
+        if (!preResolved && !resolveNode(instance.data.nodeId)) {
+            error = L"An imported instance references an unavailable node.";
+            return false;
+        }
+        instancesByGeometry[instance.data.geometryChunkId].push_back(&instance.data);
+        importedInstanceById.emplace(instance.data.instanceId,&instance);
+    }
 
     // Coarse regions share immutable buffers within a bounded publication.
     // Individual 108-byte samples must not each consume two 64-KiB heaps.
@@ -1432,6 +1520,7 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         gpuMesh.points = points; gpuMesh.vertexCount = mesh.vertexCount;
         gpuMesh.positionOnly = positionOnly;
         gpuMesh.completeVertex=completeVertex;
+        gpuMesh.drawEnabled=(mesh.geometry.geometryFlags&model_core::kGeometryReusableInstanceSource)==0;
         std::memcpy(gpuMesh.origin, mesh.geometry.origin, sizeof(gpuMesh.origin));
         gpuMesh.textureHeap = staged.srvHeap;
         gpuMesh.textureDescriptorSize = staged.srvDescriptorSize;
@@ -1468,19 +1557,59 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         gpuMesh.indexCount = mesh.indexCount;
         if (coarse) { coarseVertexOffset+=vertexBytes; coarseIndexOffset+=indexBytes; }
 
-        if (const auto* material = findMaterial(mesh.materialChunkId)) {
-            gpuMesh.textureIndex = findImageIndex(material->baseColorImageChunkId);
-            gpuMesh.textureIndices[0]=gpuMesh.textureIndex;
-            gpuMesh.textureIndices[1]=findImageIndex(material->metallicRoughnessImageChunkId);
-            gpuMesh.textureIndices[2]=findImageIndex(material->normalImageChunkId);
-            gpuMesh.textureIndices[3]=findImageIndex(material->emissiveImageChunkId);
-            gpuMesh.material=material->data;gpuMesh.hasMaterial=true;
+        const auto bindMaterial = [&](GpuMesh& draw, uint32_t materialId) {
+            draw.materialChunkId = materialId;
+            draw.textureIndex = -1;
+            std::fill(std::begin(draw.textureIndices), std::end(draw.textureIndices), -1);
+            draw.material = {};
+            draw.hasMaterial = false;
+            if (const auto* material = findMaterial(materialId)) {
+                draw.textureIndex = findImageIndex(material->baseColorImageChunkId);
+                draw.textureIndices[0]=draw.textureIndex;
+                draw.textureIndices[1]=findImageIndex(material->metallicRoughnessImageChunkId);
+                draw.textureIndices[2]=findImageIndex(material->normalImageChunkId);
+                draw.textureIndices[3]=findImageIndex(material->emissiveImageChunkId);
+                draw.material=material->data;draw.hasMaterial=true;
+            } else {
+                draw.material.baseColorFactor[0]=draw.material.baseColorFactor[1]
+                    =draw.material.baseColorFactor[2]=draw.material.baseColorFactor[3]=1;
+                draw.material.roughnessFactor=1;
+            }
+        };
+        const auto occurrences = instancesByGeometry.find(mesh.chunkId);
+        if (occurrences == instancesByGeometry.end()) {
+            bindMaterial(gpuMesh, mesh.materialChunkId);
+            staged.meshes.push_back(std::move(gpuMesh));
         } else {
-            gpuMesh.material.baseColorFactor[0]=gpuMesh.material.baseColorFactor[1]=gpuMesh.material.baseColorFactor[2]=gpuMesh.material.baseColorFactor[3]=1;
-            gpuMesh.material.roughnessFactor=1;
+            for (const auto* instance : occurrences->second) {
+                const auto importedInstance=importedInstanceById.at(instance->instanceId);
+                const bool preResolved=importedInstance->worldTransform[15]==1.0;
+                const auto* world=preResolved?importedInstance->worldTransform:resolvedNodes.at(instance->nodeId).world;
+                const bool visible=preResolved?importedInstance->resolvedVisible
+                    : ((instance->flags&model_core::kSceneRecordVisible)&&resolvedNodes.at(instance->nodeId).visible);
+                if (!visible) continue;
+                GpuMesh draw = gpuMesh; // ComPtr copies intentionally share the one geometry allocation.
+                draw.drawEnabled=true;
+                draw.instanceId = instance->instanceId;
+                draw.sourceNodeId = instance->nodeId;
+                std::memcpy(draw.instanceTransform, world, sizeof(draw.instanceTransform));
+                std::memcpy(draw.instanceBoundsMin, instance->worldMin, sizeof(draw.instanceBoundsMin));
+                std::memcpy(draw.instanceBoundsMax, instance->worldMax, sizeof(draw.instanceBoundsMax));
+                draw.mirrored = preResolved?importedInstance->mirrored:[&]{const auto* m=draw.instanceTransform;
+                    return m[0]*(m[5]*m[10]-m[6]*m[9])-m[1]*(m[4]*m[10]-m[6]*m[8])
+                        +m[2]*(m[4]*m[9]-m[5]*m[8])<0;}();
+                bindMaterial(draw, instance->materialChunkId);
+                staged.meshes.push_back(std::move(draw));
+            }
         }
+    }
 
-        staged.meshes.push_back(std::move(gpuMesh));
+    for (const auto& [geometryId, occurrences] : instancesByGeometry) {
+        if (std::none_of(importedMeshes.begin(), importedMeshes.end(),
+                         [&](const auto& mesh) { return mesh.chunkId == geometryId; })) {
+            error = L"An imported instance references geometry that is not available for upload.";
+            RetireStagedResources(std::move(staged)); pendingResourceCount = 0; return false;
+        }
     }
 
     // Submit whatever is still under the batch threshold, so the copies

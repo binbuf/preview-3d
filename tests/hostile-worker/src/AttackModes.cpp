@@ -20,6 +20,7 @@
 #include <optional>
 #include <span>
 #include <variant>
+#include <vector>
 #include <limits>
 
 namespace hostile_worker {
@@ -765,6 +766,61 @@ int RunMetadataAttack(int mode)
     header.sectionChecksum = WireChecksum64(view.bytes().subspan(kSectionHeaderSize,size_t(header.sectionLength-kSectionHeaderSize)));
     std::memcpy(view.bytes().data(),&header,sizeof(header));
     return SendChunksReady(request.generationId,header.chunkCount,header.sectionLength) ? 0 : 1;
+}
+
+int RunSceneInstanceAttack(int mode)
+{
+    using namespace model_core;
+    auto requestAndSection=ReadRequestAndMapSection();
+    if(!requestAndSection)return 1;
+    auto& [request,view]=*requestAndSection;
+    if(mode==6){
+        SectionHeader header{};header.magic=kSectionMagic;header.protocolVersion=kCurrentProtocolVersion;
+        header.generationId=request.generationId;header.scene.generationId=request.generationId;
+        header.chunkCount=request.maxChunkCount+1;header.sectionLength=kSectionHeaderSize+uint64_t(header.chunkCount)*kChunkDescriptorSize;
+        if(header.sectionLength>view.bytes().size())return 1;
+        std::fill(view.bytes().begin()+kSectionHeaderSize,view.bytes().begin()+header.sectionLength,std::byte{});
+        header.sectionChecksum=WireChecksum64(view.bytes().subspan(kSectionHeaderSize,size_t(header.sectionLength-kSectionHeaderSize)));
+        std::memcpy(view.bytes().data(),&header,sizeof(header));
+        return SendChunksReady(request.generationId,header.chunkCount,header.sectionLength)?0:1;
+    }
+    struct Spec{ChunkDescriptor d{};std::vector<std::byte> p;};
+    auto payload=[](const auto& value){auto b=std::as_bytes(std::span(&value,1));return std::vector<std::byte>(b.begin(),b.end());};
+    std::vector<Spec> specs;
+    VertexPositionOnlyF32 vertex{0,0,0};
+    Spec geometry;geometry.d.topology=ChunkTopology::PointList;geometry.d.chunkId=1;geometry.d.vertexCount=1;
+    geometry.d.vertexLayoutId=uint32_t(VertexLayoutId::PositionOnly_F32);geometry.d.boundsState=BoundsState::Verified;
+    geometry.d.meshId=1;geometry.p=payload(vertex);SetLocalBounds(geometry.d,geometry.p);specs.push_back(geometry);
+    NodePayload root{};root.nodeId=2;root.flags=kSceneRecordVisible;root.localTransform[0]=root.localTransform[5]=root.localTransform[10]=root.localTransform[15]=1;
+    NodePayload child=root;child.nodeId=3;child.parentNodeId=2;child.localTransform[12]=2;
+    if(mode==0)child.parentNodeId=1;
+    if(mode==1)root.parentNodeId=3;
+    if(mode==2)child.localTransform[0]=std::numeric_limits<double>::quiet_NaN();
+    if(mode==3)child.localTransform[12]=std::numeric_limits<double>::infinity();
+    auto nodeSpec=[&](const NodePayload& node){Spec s;s.d.topology=ChunkTopology::Node;s.d.chunkId=node.nodeId;
+        if(node.parentNodeId){s.d.dependencyIds[0]=node.parentNodeId;s.d.dependencyCount=1;}s.p=payload(node);return s;};
+    specs.push_back(nodeSpec(root));specs.push_back(nodeSpec(child));
+    MeshInstancePayload instance{};instance.instanceId=4;instance.nodeId=mode==7?999u:3u;
+    instance.geometryChunkId=mode==4?2u:1u;instance.flags=kSceneRecordVisible;
+    instance.worldMin[0]=instance.worldMax[0]=2;
+    Spec occurrence;occurrence.d.topology=ChunkTopology::MeshInstance;occurrence.d.chunkId=mode==5?3u:4u;
+    occurrence.d.dependencyIds[0]=instance.geometryChunkId;occurrence.d.dependencyIds[2]=instance.nodeId;
+    occurrence.d.dependencyCount=2;occurrence.p=payload(instance);specs.push_back(occurrence);
+    uint64_t offset=kSectionHeaderSize+specs.size()*kChunkDescriptorSize;
+    for(auto& spec:specs){spec.d.normalizedRangeOffset=offset;spec.d.normalizedRangeLength=spec.d.byteSize=spec.p.size();
+        spec.d.chunkChecksum=WireChecksum64(spec.p);offset+=spec.p.size();}
+    if(offset>view.bytes().size())return 1;
+    for(size_t i=0;i<specs.size();++i){std::memcpy(view.bytes().data()+kSectionHeaderSize+i*kChunkDescriptorSize,&specs[i].d,sizeof(specs[i].d));
+        std::memcpy(view.bytes().data()+specs[i].d.normalizedRangeOffset,specs[i].p.data(),specs[i].p.size());}
+    SectionHeader header{};header.magic=kSectionMagic;header.protocolVersion=kCurrentProtocolVersion;header.generationId=request.generationId;
+    header.scene.generationId=request.generationId;header.scene.meshCount=1;header.scene.nodeCount=2;
+    header.chunkCount=uint32_t(specs.size());header.sectionLength=offset;
+    header.sectionChecksum=WireChecksum64(view.bytes().subspan(kSectionHeaderSize,size_t(offset-kSectionHeaderSize)));
+    std::memcpy(view.bytes().data(),&header,sizeof(header));
+    if(!SendChunksReady(request.generationId,header.chunkCount,header.sectionLength))return 1;
+    if(mode==8){Sleep(kCorruptionDelayMs);double corrupt=99;
+        std::memcpy(view.bytes().data()+specs[2].d.normalizedRangeOffset+offsetof(NodePayload,localTransform)+12*sizeof(double),&corrupt,sizeof(corrupt));}
+    return 0;
 }
 
 } // namespace hostile_worker

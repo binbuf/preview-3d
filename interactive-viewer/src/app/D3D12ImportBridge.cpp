@@ -10,6 +10,8 @@
 
 #include <cstring>
 #include <cwctype>
+#include <functional>
+#include <unordered_map>
 
 namespace d3d12_import_bridge {
 
@@ -350,6 +352,9 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         sessionRequest.replyTimeoutMs = 500;
     }
     import_broker::KnownChunkCatalog catalog;
+    std::unordered_map<uint32_t, model_core::NodePayload> nodeCatalog;
+    struct ResolvedNode { double world[16]{}; bool visible=false; bool active=false; };
+    std::unordered_map<uint32_t,ResolvedNode> resolvedNodes;
     model_core::FileIdentity openedIdentity;
     bool initialComplete = false;
     if (sessionRequest.onInitialComplete) {
@@ -368,6 +373,19 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         for (const auto& chunk : chunks) catalog.emplace(chunk.descriptor.chunkId, chunk.descriptor.topology);
         for (auto& chunk : chunks) {
             switch (chunk.descriptor.topology) {
+            case model_core::ChunkTopology::Node: {
+                ImportedNode node;
+                std::memcpy(&node.data, chunk.payload.data(), sizeof(node.data));
+                nodeCatalog.emplace(node.data.nodeId,node.data);
+                result.nodes.push_back(node);
+                break;
+            }
+            case model_core::ChunkTopology::MeshInstance: {
+                ImportedInstance instance;
+                std::memcpy(&instance.data, chunk.payload.data(), sizeof(instance.data));
+                result.instances.push_back(instance);
+                break;
+            }
             case model_core::ChunkTopology::CoarseComplete:
                 result.coarseComplete = true;
                 break;
@@ -435,6 +453,24 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 break; // unrecognized topology already rejected by the validator; never reached
             }
         }
+        std::function<bool(uint32_t)> resolveNode=[&](uint32_t id) {
+            if(auto found=resolvedNodes.find(id);found!=resolvedNodes.end()&&!found->second.active)return true;
+            auto source=nodeCatalog.find(id);if(source==nodeCatalog.end())return false;
+            auto& resolved=resolvedNodes[id];if(resolved.active)return false;resolved.active=true;
+            std::memcpy(resolved.world,source->second.localTransform,sizeof(resolved.world));
+            resolved.visible=(source->second.flags&model_core::kSceneRecordVisible)!=0;
+            if(source->second.parentNodeId){if(!resolveNode(source->second.parentNodeId))return false;
+                double world[16]{};const auto& parent=resolvedNodes.at(source->second.parentNodeId);
+                for(uint32_t row=0;row<4;++row)for(uint32_t column=0;column<4;++column)for(uint32_t k=0;k<4;++k)
+                    world[row*4+column]+=source->second.localTransform[row*4+k]*parent.world[k*4+column];
+                std::memcpy(resolved.world,world,sizeof(world));resolved.visible=resolved.visible&&parent.visible;}
+            resolved.active=false;return true;
+        };
+        for(auto& instance:result.instances){if(resolveNode(instance.data.nodeId)){const auto& node=resolvedNodes.at(instance.data.nodeId);
+            std::memcpy(instance.worldTransform,node.world,sizeof(instance.worldTransform));
+            instance.resolvedVisible=node.visible&&(instance.data.flags&model_core::kSceneRecordVisible);
+            const auto* m=instance.worldTransform;const double determinant=m[0]*(m[5]*m[10]-m[6]*m[9])
+                -m[1]*(m[4]*m[10]-m[6]*m[8])+m[2]*(m[4]*m[9]-m[5]*m[8]);instance.mirrored=determinant<0;}}
         result.ok = true;
         return result;
     };

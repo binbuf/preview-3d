@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <new>
 #include <cstring>
+#include <unordered_set>
 #include <psapi.h>
 #include "DetailView.h"
 
@@ -223,7 +224,9 @@ std::function<void(d3d12_import_bridge::ImportResult)> RenderThread::BeginImport
         size_t bytes = sizeof(UploadTask) + path.size() * sizeof(wchar_t)
             + result.meshes.capacity() * sizeof(d3d12_import_bridge::ImportedMesh)
             + result.images.capacity() * sizeof(d3d12_import_bridge::ImportedImage)
-            + result.materials.capacity() * sizeof(d3d12_import_bridge::ImportedMaterial);
+            + result.materials.capacity() * sizeof(d3d12_import_bridge::ImportedMaterial)
+            + result.nodes.capacity() * sizeof(d3d12_import_bridge::ImportedNode)
+            + result.instances.capacity() * sizeof(d3d12_import_bridge::ImportedInstance);
         for (const auto& mesh : result.meshes) bytes += mesh.payload.capacity();
         for (const auto& image : result.images) bytes += image.pixelBytes.capacity();
 
@@ -369,7 +372,8 @@ void RenderThread::UploadMain()
                 std::wstring error = initialized ? L"" : L"The upload coordinator could not be initialized.";
                 uploader.uploadIsCancelled=[current] {return !current();};
                 const bool ok = current() && initialized && !pub.task.result.forceUploadFailureForTesting && uploader.BeginUploadModel(pub.task.result.meshes,
-                    pub.task.result.materials, pub.task.result.images, error);
+                    pub.task.result.materials, pub.task.result.images, error,
+                    pub.task.result.nodes, {});
                 pub.task.result.ok = ok;
                 if (!ok) pub.task.result.errorCode = pub.task.result.forceUploadFailureForTesting
                     ? model_core::ImportErrorCode::UploadFailure : uploader.uploadErrorCode;
@@ -801,13 +805,21 @@ void RenderThread::PumpUploads(HWND window)
         metadata.sourceUpAxis = metadata.source.upAxis == model_core::UpAxisId::Y ? SourceUpAxis::Y : SourceUpAxis::Unknown;
         DirectX::XMStoreFloat4x4(&metadata.upAxisCorrection, metadata.sourceUpAxis == SourceUpAxis::Y
             ? DirectX::XMMatrixSet(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1) : DirectX::XMMatrixIdentity());
+        std::unordered_set<uint32_t> instancedGeometry;
+        for (const auto& instance:pub.task.result.instances)
+            instancedGeometry.insert(instance.data.geometryChunkId);
+        if (!haveSceneOrigin_ && !pub.task.result.instances.empty()) {
+            std::memcpy(metadata.sceneOrigin,pub.task.result.instances.front().data.worldMin,sizeof(metadata.sceneOrigin));
+            haveSceneOrigin_=true;
+        }
         for (const auto& imported : pub.task.result.meshes) {
             const auto& geometry = imported.geometry;
             if (stagedProxyMode_ && geometry.lodLevel!=model_core::kScanLod
                 && !(stagedPreviewOnly_ && geometry.lodLevel==model_core::kPreviewLod)) continue;
-            if (!haveSceneOrigin_) {
+            if (!instancedGeometry.contains(imported.chunkId) && !haveSceneOrigin_) {
                 std::memcpy(metadata.sceneOrigin, geometry.origin, sizeof(metadata.sceneOrigin)); haveSceneOrigin_ = true;
             }
+            if (!instancedGeometry.contains(imported.chunkId)) {
             double minimum[3], maximum[3];
             for (unsigned axis=0; axis<3; ++axis) {
                 // Subtract origins before adding local extrema; tiny residuals
@@ -827,12 +839,24 @@ void RenderThread::PumpUploads(HWND window)
             }
             metadata.boundsMin = {float(metadata.relativeMin[0]),float(metadata.relativeMin[1]),float(metadata.relativeMin[2])};
             metadata.boundsMax = {float(metadata.relativeMax[0]),float(metadata.relativeMax[1]),float(metadata.relativeMax[2])};
+            }
             metadata.vertexCount += imported.vertexCount;
             metadata.triangleCount += imported.topology == model_core::ChunkTopology::TriangleList ? imported.indexCount/3 : 0;
             metadata.pointCount += imported.topology == model_core::ChunkTopology::PointList ? imported.vertexCount : 0;
             metadata.stats.hasUv0 |= (geometry.geometryFlags & model_core::kGeometryHasUv0) != 0;
             metadata.stats.hasUv1 |= (geometry.geometryFlags & model_core::kGeometryHasUv1) != 0;
             metadata.stats.hasVertexColors |= (geometry.geometryFlags & model_core::kGeometryHasColors) != 0;
+        }
+        for (const auto& imported:pub.task.result.instances) {
+            if (!imported.resolvedVisible) continue;
+            double minimum[3],maximum[3];
+            for(unsigned axis=0;axis<3;++axis){minimum[axis]=imported.data.worldMin[axis]-metadata.sceneOrigin[axis];
+                maximum[axis]=imported.data.worldMax[axis]-metadata.sceneOrigin[axis];}
+            if(!stagedHaveBounds_){std::memcpy(metadata.relativeMin,minimum,sizeof(minimum));std::memcpy(metadata.relativeMax,maximum,sizeof(maximum));stagedHaveBounds_=true;}
+            else for(unsigned axis=0;axis<3;++axis){metadata.relativeMin[axis]=std::min(metadata.relativeMin[axis],minimum[axis]);
+                metadata.relativeMax[axis]=std::max(metadata.relativeMax[axis],maximum[axis]);}
+            metadata.boundsMin={float(metadata.relativeMin[0]),float(metadata.relativeMin[1]),float(metadata.relativeMin[2])};
+            metadata.boundsMax={float(metadata.relativeMax[0]),float(metadata.relativeMax[1]),float(metadata.relativeMax[2])};
         }
         for (const auto& mat : pub.task.result.materials) {
             materials_.emplace(mat.chunkId, mat);
@@ -849,6 +873,18 @@ void RenderThread::PumpUploads(HWND window)
         destination.coarseAllocationBytes+=pub.resources.coarseAllocationBytes;
         destination.meshes.insert(destination.meshes.end(), std::make_move_iterator(pub.resources.meshes.begin()),
             std::make_move_iterator(pub.resources.meshes.end()));
+        for(const auto& instance:pub.task.result.instances){
+            if(std::any_of(destination.meshes.begin(),destination.meshes.end(),[&](const auto& draw){return draw.instanceId==instance.data.instanceId;}))continue;
+            auto geometry=std::find_if(destination.meshes.begin(),destination.meshes.end(),[&](const auto& draw){return draw.chunkId==instance.data.geometryChunkId;});
+            if(geometry==destination.meshes.end()){stagedFailed_=true;message->errorCode=model_core::ImportErrorCode::UploadFailure;
+                message->errorDetails=L"An instance's shared geometry was not available after upload.";continue;}
+            auto draw=*geometry;draw.instanceId=instance.data.instanceId;draw.sourceNodeId=instance.data.nodeId;
+            draw.materialChunkId=instance.data.materialChunkId;draw.drawEnabled=instance.resolvedVisible;
+            std::memcpy(draw.instanceTransform,instance.worldTransform,sizeof(draw.instanceTransform));
+            std::memcpy(draw.instanceBoundsMin,instance.data.worldMin,sizeof(draw.instanceBoundsMin));
+            std::memcpy(draw.instanceBoundsMax,instance.data.worldMax,sizeof(draw.instanceBoundsMax));
+            draw.mirrored=instance.mirrored;destination.meshes.push_back(std::move(draw));
+        }
         if (destination.neutralTextures.empty())
             destination.neutralTextures=std::move(pub.resources.neutralTextures);
         if (stagedProxyComplete_ && !destination.coarseComplete) path_.RetirePreviewChunks(destination);

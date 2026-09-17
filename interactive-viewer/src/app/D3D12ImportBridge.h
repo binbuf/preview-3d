@@ -76,6 +76,17 @@ struct ImportedImage {
     std::vector<std::byte> pixelBytes; // mip 0..N-1 tightly packed per PixelFormats.h's layout
 };
 
+struct ImportedNode {
+    model_core::NodePayload data{};
+};
+
+struct ImportedInstance {
+    model_core::MeshInstancePayload data{};
+    double worldTransform[16]{};
+    bool resolvedVisible = false;
+    bool mirrored = false;
+};
+
 struct ImportResult {
     bool detail = false;
     bool coarseComplete = false;
@@ -91,6 +102,8 @@ struct ImportResult {
     std::vector<ImportedMesh> meshes;
     std::vector<ImportedMaterial> materials;
     std::vector<ImportedImage> images;
+    std::vector<ImportedNode> nodes;
+    std::vector<ImportedInstance> instances;
     std::wstring errorSummary;
     std::wstring errorDetails;
 };

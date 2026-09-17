@@ -122,6 +122,28 @@ class BoundedChunkWriter
         }
         return AddRaw(descriptor,a,b);
     }
+    bool AddNode(const model_core::NodePayload& node)
+    {
+        model_core::ChunkDescriptor descriptor{};
+        descriptor.topology = model_core::ChunkTopology::Node;
+        descriptor.chunkId = node.nodeId;
+        if (node.parentNodeId) {
+            descriptor.dependencyIds[0] = node.parentNodeId;
+            descriptor.dependencyCount = 1;
+        }
+        return AddRaw(descriptor, std::as_bytes(std::span(&node, 1)));
+    }
+    bool AddInstance(const model_core::MeshInstancePayload& instance)
+    {
+        model_core::ChunkDescriptor descriptor{};
+        descriptor.topology = model_core::ChunkTopology::MeshInstance;
+        descriptor.chunkId = instance.instanceId;
+        descriptor.dependencyIds[0] = instance.geometryChunkId;
+        descriptor.dependencyIds[1] = instance.materialChunkId;
+        descriptor.dependencyIds[2] = instance.nodeId;
+        descriptor.dependencyCount = instance.materialChunkId ? 3u : 2u;
+        return AddRaw(descriptor, std::as_bytes(std::span(&instance, 1)));
+    }
     bool Complete() {
         using namespace model_core;
         if (sink_ && sink_->ProxyEnabled() && !sink_->Preview() && !sink_->Refinement()) {

@@ -88,6 +88,7 @@
     <ClCompile Include="CoarseProxyTests.cpp" />
     <ClCompile Include="CompressedFeatureTests.cpp" />
     <ClCompile Include="FbxSpikeTests.cpp" />
+    <ClCompile Include="SceneInstanceContractTests.cpp" />
     <ClCompile Include="DracoDecodeAdapterTests.cpp" />
     <ClCompile Include="TextureTranscodeAdapterTests.cpp" />
     <ClCompile Include="TexturePathTests.cpp" />

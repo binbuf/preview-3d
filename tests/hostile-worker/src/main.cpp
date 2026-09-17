@@ -93,6 +93,15 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--source-primitive-id")) return hostile_worker::RunMetadataAttack(14);
     if (ArgEquals(argv[1], "--source-accessor-range")) return hostile_worker::RunMetadataAttack(15);
     if (ArgEquals(argv[1], "--source-range-valid")) return hostile_worker::RunMetadataAttack(16);
+    if (ArgEquals(argv[1], "--scene-invalid-parent")) return hostile_worker::RunSceneInstanceAttack(0);
+    if (ArgEquals(argv[1], "--scene-cycle")) return hostile_worker::RunSceneInstanceAttack(1);
+    if (ArgEquals(argv[1], "--scene-nan")) return hostile_worker::RunSceneInstanceAttack(2);
+    if (ArgEquals(argv[1], "--scene-inf")) return hostile_worker::RunSceneInstanceAttack(3);
+    if (ArgEquals(argv[1], "--scene-illegal-topology")) return hostile_worker::RunSceneInstanceAttack(4);
+    if (ArgEquals(argv[1], "--scene-duplicate")) return hostile_worker::RunSceneInstanceAttack(5);
+    if (ArgEquals(argv[1], "--scene-oversized")) return hostile_worker::RunSceneInstanceAttack(6);
+    if (ArgEquals(argv[1], "--scene-unresolved")) return hostile_worker::RunSceneInstanceAttack(7);
+    if (ArgEquals(argv[1], "--scene-mutate")) return hostile_worker::RunSceneInstanceAttack(8);
 
     // Progressive-delivery attacks; see AttackModes.h.
     if (ArgEquals(argv[1], "--batches-honest")) {

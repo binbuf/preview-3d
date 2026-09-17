@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <cstring>
 #include <initializer_list>
+#include <functional>
+#include <limits>
 #include <unordered_map>
 
 namespace import_broker {
@@ -64,13 +66,73 @@ bool AllFinite(std::initializer_list<float> values)
     return true;
 }
 
+bool FiniteAffine(const double matrix[16])
+{
+    for (uint32_t i = 0; i < 16; ++i) {
+        if (!std::isfinite(matrix[i]) || std::abs(matrix[i]) > 1e30)
+            return false;
+    }
+    if (matrix[3] != 0.0 || matrix[7] != 0.0 || matrix[11] != 0.0 || matrix[15] != 1.0)
+        return false;
+    const double determinant =
+        matrix[0] * (matrix[5] * matrix[10] - matrix[6] * matrix[9])
+        - matrix[1] * (matrix[4] * matrix[10] - matrix[6] * matrix[8])
+        + matrix[2] * (matrix[4] * matrix[9] - matrix[5] * matrix[8]);
+    return std::isfinite(determinant) && std::abs(determinant) >= 1e-18;
+}
+
+bool MultiplyAffine(const double left[16], const double right[16], double out[16])
+{
+    for (uint32_t row = 0; row < 4; ++row) {
+        for (uint32_t column = 0; column < 4; ++column) {
+            double value = 0;
+            for (uint32_t k = 0; k < 4; ++k)
+                value += left[row * 4 + k] * right[k * 4 + column];
+            if (!std::isfinite(value) || std::abs(value) > 1e30)
+                return false;
+            out[row * 4 + column] = value;
+        }
+    }
+    return FiniteAffine(out);
+}
+
+bool BoundsEqual(double actual, double expected)
+{
+    const double tolerance = (std::max)(1e-8, std::abs(expected) * 1e-12);
+    return std::abs(actual - expected) <= tolerance;
+}
+
+bool TransformGeometryBounds(const model_core::ChunkDescriptor& geometry, const double world[16],
+                             double minimum[3], double maximum[3])
+{
+    minimum[0] = minimum[1] = minimum[2] = (std::numeric_limits<double>::max)();
+    maximum[0] = maximum[1] = maximum[2] = -(std::numeric_limits<double>::max)();
+    for (uint32_t corner = 0; corner < 8; ++corner) {
+        const double point[3] = {
+            geometry.origin[0] + (corner & 1 ? geometry.localMax[0] : geometry.localMin[0]),
+            geometry.origin[1] + (corner & 2 ? geometry.localMax[1] : geometry.localMin[1]),
+            geometry.origin[2] + (corner & 4 ? geometry.localMax[2] : geometry.localMin[2]),
+        };
+        for (uint32_t axis = 0; axis < 3; ++axis) {
+            const double value = point[0] * world[axis] + point[1] * world[4 + axis]
+                + point[2] * world[8 + axis] + world[12 + axis];
+            if (!std::isfinite(value) || std::abs(value) > 1e30)
+                return false;
+            minimum[axis] = (std::min)(minimum[axis], value);
+            maximum[axis] = (std::max)(maximum[axis], value);
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                                          uint64_t expectedGenerationId, uint32_t maxChunkCount,
                                          const KnownChunkCatalog* priorBatches, bool allowForwardReferences,
                                          const KnownImageCatalog* priorImages,
-                                         uint64_t priorTextureBytes, uint64_t priorTexturePixels)
+                                         uint64_t priorTextureBytes, uint64_t priorTexturePixels,
+                                         KnownSceneCatalog* sceneCatalog)
 {
     // 1. The section must be at least large enough to hold a header before
     // any field of it is read.
@@ -241,6 +303,9 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
     uint64_t aggregateImagePixels = priorTexturePixels;
     uint64_t aggregateImageBytes = priorTextureBytes;
     KnownImageCatalog images = priorImages ? *priorImages : KnownImageCatalog{};
+    KnownSceneCatalog scenes = sceneCatalog ? *sceneCatalog : KnownSceneCatalog{};
+    std::unordered_map<uint32_t, model_core::NodePayload> pendingNodes;
+    std::unordered_map<uint32_t, model_core::MeshInstancePayload> pendingInstances;
 
     for (uint32_t i = 0; i < header.chunkCount; ++i) {
         const ChunkDescriptor& descriptor = descriptors[i];
@@ -269,6 +334,69 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         // 12d. Pass B: topology-specific validation. Every branch either
         // Rejects or falls through to the common checksum/copy tail below.
         switch (descriptor.topology) {
+        case ChunkTopology::Node: {
+            if (descriptor.byteSize != sizeof(model_core::NodePayload) || descriptor.lodLevel
+                || descriptor.vertexCount || descriptor.indexCount || descriptor.vertexLayoutId
+                || descriptor.sourceRangeOffset || descriptor.sourceRangeLength)
+                return Reject(ImportErrorCode::MalformedData, "invalid node descriptor");
+            model_core::NodePayload node{};
+            std::memcpy(&node, section.data() + descriptor.normalizedRangeOffset, sizeof(node));
+            if (!node.nodeId || node.nodeId != descriptor.chunkId || node.reserved
+                || (node.flags & ~model_core::kSceneRecordFlagsKnownMask) || !FiniteAffine(node.localTransform))
+                return Reject(ImportErrorCode::MalformedData, "invalid node payload");
+            const uint32_t expectedDependencies = node.parentNodeId ? 1u : 0u;
+            if (descriptor.dependencyCount != expectedDependencies
+                || descriptor.dependencyIds[0] != node.parentNodeId)
+                return Reject(ImportErrorCode::MalformedData, "node parent slot mismatch");
+            for (uint32_t d = 1; d < model_core::kMaxDependencyIds; ++d)
+                if (descriptor.dependencyIds[d])
+                    return Reject(ImportErrorCode::MalformedData, "node declares an unexpected dependency");
+            if (node.parentNodeId) {
+                const auto* topology = resolveTopology(node.parentNodeId);
+                if (!topology || *topology != ChunkTopology::Node || node.parentNodeId == node.nodeId)
+                    return Reject(ImportErrorCode::MalformedData, "node parent is not a node");
+            }
+            if (scenes.nodes.contains(node.nodeId) || !pendingNodes.emplace(node.nodeId, node).second)
+                return Reject(ImportErrorCode::MalformedData, "duplicate node record");
+            break;
+        }
+        case ChunkTopology::MeshInstance: {
+            if (descriptor.byteSize != sizeof(model_core::MeshInstancePayload) || descriptor.lodLevel
+                || descriptor.vertexCount || descriptor.indexCount || descriptor.vertexLayoutId
+                || descriptor.sourceRangeOffset || descriptor.sourceRangeLength)
+                return Reject(ImportErrorCode::MalformedData, "invalid instance descriptor");
+            model_core::MeshInstancePayload instance{};
+            std::memcpy(&instance, section.data() + descriptor.normalizedRangeOffset, sizeof(instance));
+            if (!instance.instanceId || instance.instanceId != descriptor.chunkId || !instance.nodeId
+                || !instance.geometryChunkId || instance.reserved[0] || instance.reserved[1]
+                || instance.reserved[2] || (instance.flags & ~model_core::kSceneRecordFlagsKnownMask))
+                return Reject(ImportErrorCode::MalformedData, "invalid instance payload");
+            const uint32_t expectedCount = instance.materialChunkId ? 3u : 2u;
+            if (descriptor.dependencyCount != expectedCount
+                || descriptor.dependencyIds[0] != instance.geometryChunkId
+                || descriptor.dependencyIds[1] != instance.materialChunkId
+                || descriptor.dependencyIds[2] != instance.nodeId || descriptor.dependencyIds[3])
+                return Reject(ImportErrorCode::MalformedData, "instance dependency slots mismatch");
+            const auto* geometryTopology = resolveTopology(instance.geometryChunkId);
+            const auto* nodeTopology = resolveTopology(instance.nodeId);
+            const auto* materialTopology = instance.materialChunkId
+                ? resolveTopology(instance.materialChunkId) : nullptr;
+            if (!geometryTopology || (*geometryTopology != ChunkTopology::TriangleList
+                                      && *geometryTopology != ChunkTopology::PointList)
+                || !nodeTopology || *nodeTopology != ChunkTopology::Node
+                || (instance.materialChunkId && (!materialTopology || *materialTopology != ChunkTopology::Material)))
+                return Reject(ImportErrorCode::MalformedData, "instance dependency has the wrong topology");
+            for (uint32_t axis = 0; axis < 3; ++axis) {
+                if (!std::isfinite(instance.worldMin[axis]) || !std::isfinite(instance.worldMax[axis])
+                    || std::abs(instance.worldMin[axis]) > 1e30 || std::abs(instance.worldMax[axis]) > 1e30
+                    || instance.worldMin[axis] > instance.worldMax[axis])
+                    return Reject(ImportErrorCode::MalformedData, "invalid instance bounds");
+            }
+            if (scenes.instances.contains(instance.instanceId)
+                || !pendingInstances.emplace(instance.instanceId, instance).second)
+                return Reject(ImportErrorCode::MalformedData, "duplicate instance record");
+            break;
+        }
         case ChunkTopology::CoarseComplete: {
             if (descriptor.byteSize != sizeof(model_core::CoarseCompletePayload) || descriptor.lodLevel
                 || descriptor.chunkId != 0xf0000002u
@@ -402,6 +530,8 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                                   "mesh declares an id in an unpopulated dependency slot");
                 }
             }
+            if (!scanSummary)
+                scenes.geometry.emplace(descriptor.chunkId, descriptor);
             break;
         }
         case ChunkTopology::Material: {
@@ -592,6 +722,72 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         result.chunks.push_back(ValidatedChunk{ descriptor, std::move(payload), header.scene });
     }
 
+    // Resolve the current batch's hierarchy only after every fixed record has
+    // been copied and validated. Earlier-batch parents are immutable catalog
+    // entries, while current-batch forward parent references are handled by
+    // this bounded DFS. A cross-batch edge can only point backwards, so a
+    // cycle cannot be hidden across reused section windows.
+    std::unordered_map<uint32_t, uint8_t> nodeVisit;
+    std::function<bool(uint32_t)> resolveNode = [&](uint32_t id) -> bool {
+        if (scenes.nodes.contains(id))
+            return true;
+        const auto pending = pendingNodes.find(id);
+        if (pending == pendingNodes.end())
+            return false;
+        uint8_t& state = nodeVisit[id];
+        if (state == 1)
+            return false;
+        if (state == 2)
+            return true;
+        state = 1;
+        KnownNodeRecord record{};
+        record.payload = pending->second;
+        record.depth = 1;
+        record.visible = (record.payload.flags & model_core::kSceneRecordVisible) != 0;
+        std::memcpy(record.worldTransform, record.payload.localTransform, sizeof(record.worldTransform));
+        if (record.payload.parentNodeId) {
+            if (!resolveNode(record.payload.parentNodeId))
+                return false;
+            const auto& parent = scenes.nodes.at(record.payload.parentNodeId);
+            if (parent.depth >= model_core::kMaxSceneHierarchyDepth
+                || !MultiplyAffine(record.payload.localTransform, parent.worldTransform,
+                                   record.worldTransform))
+                return false;
+            record.depth = parent.depth + 1;
+            record.visible = record.visible && parent.visible;
+        }
+        scenes.nodes.emplace(id, record);
+        state = 2;
+        return true;
+    };
+    for (const auto& [id, node] : pendingNodes) {
+        (void)node;
+        if (!resolveNode(id))
+            return Reject(ImportErrorCode::MalformedData, "cyclic, unresolved, or over-depth node hierarchy");
+    }
+    if (scenes.nodes.size() > objectLimit || scenes.nodes.size() > header.scene.nodeCount)
+        return Reject(ImportErrorCode::ResourceLimit, "node catalog exceeds declared or product limit");
+
+    for (const auto& [id, instance] : pendingInstances) {
+        const auto geometry = scenes.geometry.find(instance.geometryChunkId);
+        const auto node = scenes.nodes.find(instance.nodeId);
+        if (geometry == scenes.geometry.end() || node == scenes.nodes.end()
+            || geometry->second.lodLevel == model_core::kScanLod)
+            return Reject(ImportErrorCode::MalformedData, "instance reference is unresolved");
+        double expectedMin[3]{}, expectedMax[3]{};
+        if (!TransformGeometryBounds(geometry->second, node->second.worldTransform,
+                                     expectedMin, expectedMax))
+            return Reject(ImportErrorCode::MalformedData, "instance transform produces invalid bounds");
+        for (uint32_t axis = 0; axis < 3; ++axis) {
+            if (!BoundsEqual(instance.worldMin[axis], expectedMin[axis])
+                || !BoundsEqual(instance.worldMax[axis], expectedMax[axis]))
+                return Reject(ImportErrorCode::MalformedData, "instance bounds do not match geometry and transform");
+        }
+        scenes.instances.emplace(id, instance);
+    }
+    if (scenes.instances.size() > objectLimit)
+        return Reject(ImportErrorCode::ResourceLimit, "instance catalog exceeds product limit");
+
     // 13. Aggregate decoded-texture-pixel budget (1 gigapixel, Tier A),
     // enforced across the whole batch after every chunk's own checks pass.
     if (aggregateImagePixels > kMaxAggregateDecodedTexturePixels) {
@@ -601,6 +797,8 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
     // 14. Every chunk passed.
     result.ok = true;
     result.errorCode = ImportErrorCode::None;
+    if (sceneCatalog)
+        *sceneCatalog = std::move(scenes);
     return result;
 }
 

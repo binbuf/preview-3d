@@ -204,6 +204,7 @@ struct BatchAcceptance {
     KnownChunkCatalog catalog;
     KnownChunkCatalog unresolved;
     KnownImageCatalog images;
+    KnownSceneCatalog sceneCatalog;
     uint64_t textureBytes=0,texturePixels=0;
     bool haveTextureWarning=false, haveStatus=false;
     std::optional<model_core::SceneMetadata> scene;
@@ -526,7 +527,8 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         const KnownChunkCatalog* prior = acceptance.nextBatchIndex > 0 ? &acceptance.catalog : nullptr;
         ValidationResult validation
             = ValidateAndCopySection(view.bytes(), request.generationId, request.maxChunkCount, prior, true,
-                &acceptance.images,acceptance.textureBytes,acceptance.texturePixels);
+                &acceptance.images,acceptance.textureBytes,acceptance.texturePixels,
+                &acceptance.sceneCatalog);
         if (!validation.ok) {
             failure = Fail(ImportStage::ValidateSection, validation.errorCode);
             return false;
@@ -1005,6 +1007,9 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         return *failure;
     }
     if (!acceptance.unresolved.empty())
+        return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+    if (!acceptance.sceneCatalog.nodes.empty()
+        && (!acceptance.scene || acceptance.sceneCatalog.nodes.size() != acceptance.scene->nodeCount))
         return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
     const bool tierBResult = acceptance.scene
         && (acceptance.scene->format == model_core::SourceFormatId::AsciiStl
