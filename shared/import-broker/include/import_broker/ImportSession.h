@@ -196,6 +196,9 @@ struct ImportSessionRequest {
     // FBX qualification seam: leaves load limits unchanged but constrains both
     // ufbx evaluation allocators to 1 KiB, proving typed exhaustion/recovery.
     bool fbxTinyEvaluationLimitForTesting = false;
+    // FBX qualification seam: constrains the aggregate decoded texture budget
+    // so pressure and same-worker recovery are practical to exercise.
+    bool fbxTinyTextureLimitForTesting = false;
 };
 
 struct SourceChunkRange

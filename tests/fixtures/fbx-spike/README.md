@@ -5,9 +5,10 @@ They do not enable `.fbx` in viewer, installer, or Shell surfaces.
 
 The authored FBX fixture content was copied from the `data/` directory of
 `ufbx` 0.23.0 (`ufbx` commit/tag `v0.23.0`), the exact version pinned by this
-repository's vcpkg baseline. Text fixtures have one terminal LF added by the
-repository patch format; binary fixtures decode byte-for-byte to the upstream
-files. The upstream repository offers
+repository's vcpkg baseline. Text fixtures normalize line endings and trailing
+whitespace and have one terminal LF added by the repository patch format;
+binary fixtures decode byte-for-byte to the upstream files. The upstream
+repository offers
 the software and its test data under either the MIT license or the Unlicense;
 this repository uses the MIT option. See `UFbx-LICENSE.txt` in this directory.
 
@@ -27,6 +28,8 @@ this repository uses the MIT option. See `UFbx-LICENSE.txt` in this directory.
 | `z-up-binary.fbx.base64` | `blender_340_z_up_7400_binary.fbx` | Z-up source-axis conversion to the right-handed Y-up target |
 | `nurbs-only-ascii.fbx` | `maya_nurbs_curve_linear_6100_ascii.fbx` | Required unsupported-geometry failure policy |
 | `embedded-png-ascii.fbx` | `synthetic_embedded_base64_7700_ascii.fbx` | Embedded PNG decoding without worker filesystem access |
+| `instanced-materials-ascii.fbx` | `max_instanced_material_7700_ascii.fbx` | One shared geometry bound to distinct per-instance materials |
+| `layered-textures-ascii.fbx` | `maya_texture_layers_7500_ascii.fbx` | Ambiguous layered-texture fallback and warning policy |
 
 The harness decodes `.fbx.base64` files in memory and passes the resulting
 bytes directly to `ufbx_load_memory()`. SHA-256 provenance values are recorded

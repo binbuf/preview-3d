@@ -1,6 +1,6 @@
 # FBX-006: viewer, activation, and installer integration
 
-Status: in progress — blocked on FBX-005 qualification
+Status: in progress — FBX-005 gate satisfied
 Depends on: FBX-003 through FBX-005  
 Unblocks: FBX-007
 
@@ -11,13 +11,12 @@ current NSIS/Open With integration, without claiming Explorer thumbnails.
 
 ## Start audit (2026-09-17)
 
-FBX-003 and FBX-004 already provide the sandboxed `ImportFormat::Fbx` route
-and the normalized node/instance/deformed-geometry payloads. FBX-005 has also
-landed its implementation path, but is not complete: its dedicated embedded
-PNG/JPEG/WebP, sidecar/path-attack, corrupt/aggregate-pressure, and
-different-per-instance-material corpus cases still need to be added and
-qualified in Debug and Release. This task must not expose `.fbx` until that
-work and its recovery/security evidence are green.
+FBX-003 and FBX-004 provide the sandboxed `ImportFormat::Fbx` route and the
+normalized node/instance/deformed-geometry payloads. FBX-005 is now complete:
+embedded PNG/JPEG/WebP, sidecar/path-attack, corrupt/aggregate-pressure,
+layered-texture, progressive-dependency, and different-per-instance-material
+coverage is green in full Debug and Release qualification. Product integration
+may proceed without changing the worker boundary.
 
 The following integration inventory was recorded now so the unblock is a
 single consistent change rather than a series of partially-visible routes:

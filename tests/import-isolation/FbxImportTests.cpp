@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -29,9 +30,10 @@ struct ScratchFbx {
 
     ScratchFbx()
     {
+        static std::atomic_uint64_t next{0};
         directory = std::filesystem::temp_directory_path() /
             (L"Preview3D-fbx-" + std::to_wstring(GetCurrentProcessId()) + L"-"
-             + std::to_wstring(GetTickCount64()));
+             + std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(next.fetch_add(1)));
         REQUIRE(std::filesystem::create_directory(directory));
         path = directory / L"model.fbx";
     }
@@ -47,6 +49,15 @@ struct ScratchFbx {
         REQUIRE(output.good());
     }
     void Write(std::string_view bytes) { Write(std::as_bytes(std::span(bytes))); }
+    void WriteSidecar(const std::filesystem::path& name, std::span<const std::byte> bytes)
+    {
+        const auto sidecar = directory / name;
+        REQUIRE((std::filesystem::create_directories(sidecar.parent_path())
+                 || std::filesystem::exists(sidecar.parent_path())));
+        std::ofstream output(sidecar, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+        REQUIRE(output.good());
+    }
 };
 
 std::vector<std::byte> DecodeBase64(std::span<const char> raw)
@@ -90,6 +101,34 @@ std::vector<std::byte> ReadFixture(std::string_view name)
     return decoded;
 }
 
+std::vector<std::byte> ReadAsset(const std::filesystem::path& name)
+{
+    std::ifstream input(std::filesystem::path(PREVIEW3D_TEST_ASSETS_DIR) / name, std::ios::binary);
+    REQUIRE(input.good());
+    std::vector<char> raw((std::istreambuf_iterator<char>(input)), {});
+    const auto bytes = std::as_bytes(std::span(raw));
+    return {bytes.begin(), bytes.end()};
+}
+
+std::string EncodeBase64(std::span<const std::byte> bytes)
+{
+    static constexpr char digits[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string encoded;
+    encoded.reserve(((bytes.size() + 2) / 3) * 4);
+    for (size_t offset = 0; offset < bytes.size(); offset += 3) {
+        const uint32_t a = std::to_integer<uint8_t>(bytes[offset]);
+        const uint32_t b = offset + 1 < bytes.size() ? std::to_integer<uint8_t>(bytes[offset + 1]) : 0;
+        const uint32_t c = offset + 2 < bytes.size() ? std::to_integer<uint8_t>(bytes[offset + 2]) : 0;
+        const uint32_t value = (a << 16) | (b << 8) | c;
+        encoded.push_back(digits[(value >> 18) & 63]);
+        encoded.push_back(digits[(value >> 12) & 63]);
+        encoded.push_back(offset + 1 < bytes.size() ? digits[(value >> 6) & 63] : '=');
+        encoded.push_back(offset + 2 < bytes.size() ? digits[value & 63] : '=');
+    }
+    return encoded;
+}
+
 std::string ReadAsciiFixture(std::string_view name)
 {
     const auto bytes = ReadFixture(name);
@@ -97,6 +136,58 @@ std::string ReadAsciiFixture(std::string_view name)
 }
 
 void ReplaceOnce(std::string& text, std::string_view needle, std::string_view replacement);
+
+void ReplaceAll(std::string& text, std::string_view needle, std::string_view replacement)
+{
+    REQUIRE_FALSE(needle.empty());
+    size_t offset = 0;
+    uint32_t replacements = 0;
+    while ((offset = text.find(needle, offset)) != std::string::npos) {
+        text.replace(offset, needle.size(), replacement);
+        offset += replacement.size();
+        ++replacements;
+    }
+    REQUIRE(replacements != 0);
+}
+
+std::string TextureFixture(std::span<const std::byte> embedded, std::string_view relativePath)
+{
+    std::string ascii = ReadAsciiFixture("embedded-png-ascii.fbx");
+    const size_t content = ascii.find("\t\tContent: ,");
+    REQUIRE(content != std::string::npos);
+    const size_t end = ascii.find("\n\t}", content);
+    REQUIRE(end != std::string::npos);
+    const std::string replacement = embedded.empty()
+        ? std::string{}
+        : "\t\tContent: ,\"" + EncodeBase64(embedded) + "\"";
+    ascii.replace(content, end - content, replacement);
+    ReplaceAll(ascii, "textures\\tiny_clouds.png", relativePath);
+    return ascii;
+}
+
+std::string MaterialTextureFixture(std::span<const std::byte> embedded)
+{
+    std::string ascii = TextureFixture(embedded, "material-texture.png");
+    ReplaceOnce(ascii, "P: \"DiffuseColor\", \"Color\", \"\", \"A\",1,1,1",
+                       "P: \"DiffuseColor\", \"Color\", \"\", \"A\",0.25,0.5,0.75");
+    ReplaceOnce(ascii, "P: \"TransparencyFactor\", \"Number\", \"\", \"A\",1",
+                       "P: \"TransparencyFactor\", \"Number\", \"\", \"A\",0.25");
+    ReplaceOnce(ascii, "P: \"Emissive\", \"Vector3D\", \"Vector\", \"\",0,0,0",
+                       "P: \"EmissiveColor\", \"Color\", \"\", \"A\",0.1,0.2,0.3\n"
+                       "\t\t\tP: \"EmissiveFactor\", \"Number\", \"\", \"A\",2\n"
+                       "\t\t\tP: \"3dsMax|main|alphaMode\", \"Integer\", \"\", \"A\",1\n"
+                       "\t\t\tP: \"3dsMax|main|alphaCutoff\", \"Float\", \"\", \"A\",0.3");
+    ReplaceOnce(ascii, "P: \"UseMaterial\", \"bool\", \"\", \"\",1",
+                       "P: \"UseMaterial\", \"bool\", \"\", \"\",1\n"
+                       "\t\t\tP: \"Translation\", \"Vector\", \"\", \"A\",0.25,0.5,0\n"
+                       "\t\t\tP: \"Rotation\", \"Vector\", \"\", \"A\",0,0,30\n"
+                       "\t\t\tP: \"Scaling\", \"Vector\", \"\", \"A\",2,3,1");
+    ReplaceOnce(ascii, "C: \"OP\",2483116064336,2483102580784, \"DiffuseColor\"",
+                       "C: \"OP\",2483116064336,2483102580784, \"DiffuseColor\"\n"
+                       "\tC: \"OP\",2483116064336,2483102580784, \"NormalMap\"\n"
+                       "\tC: \"OP\",2483116064336,2483102580784, \"EmissiveColor\"");
+    return ascii;
+}
 
 std::string MakeInstancedDualQuaternion(double translationX)
 {
@@ -151,6 +242,8 @@ import_broker::ImportSessionRequest Request(const std::filesystem::path& path,
     request.maxChunkCount = 1024;
     request.maxChunkBatchesPerGeneration = 256;
     request.maxChunksPerGeneration = 20'000;
+    request.maxSidecarRequestsPerGeneration = 64;
+    request.maxSidecarFileBytes = 256ull * 1024 * 1024;
     return request;
 }
 
@@ -356,6 +449,309 @@ TEST_CASE("FBX decodes an embedded PNG without a filesystem sidecar", "[fbx][mat
     CHECK(baseColorImage != 0);
     CHECK(decodedImage == baseColorImage);
     CHECK_FALSE(statusWarning);
+}
+
+TEST_CASE("FBX decodes embedded JPEG and WebP with normalized color semantics",
+          "[fbx][materials][embedded-image]")
+{
+    struct Case {
+        std::filesystem::path asset;
+        const char* relativePath;
+        uint32_t width;
+        uint32_t height;
+    } cases[]{
+        {L"textures/gray.jpg", "embedded.jpg", 8, 8},
+        {L"corpus/sample.webp", "embedded.webp", 1, 1},
+    };
+    uint64_t generation = 5012;
+    for (const auto& test : cases) {
+        const auto encoded = ReadAsset(test.asset);
+        ScratchFbx source;
+        source.Write(TextureFixture(encoded, test.relativePath));
+        const auto result = import_broker::RunImportSession(Request(source.path, generation++));
+        CAPTURE(test.relativePath, result.stage, result.errorCode, result.errorPhase);
+        REQUIRE(result.ok);
+        REQUIRE(Count(result, model_core::ChunkTopology::Image) == 1);
+        for (const auto& chunk : result.chunks) {
+            if (chunk.descriptor.topology != model_core::ChunkTopology::Image) continue;
+            model_core::ImagePayloadHeader header{};
+            std::memcpy(&header, chunk.payload.data(), sizeof(header));
+            CHECK(header.pixelFormat == uint32_t(model_core::PixelFormatId::RGBA8_UNORM));
+            CHECK(header.colorSpace == uint32_t(model_core::ColorSpaceId::Srgb));
+            CHECK(header.width == test.width);
+            CHECK(header.height == test.height);
+            CHECK(header.mipLevels == model_core::FullImageMipCount(test.width, test.height));
+            REQUIRE(chunk.payload.size() >= sizeof(header) + 4);
+            const auto* pixel = chunk.payload.data() + sizeof(header);
+            if (test.width == 8) {
+                for (uint32_t channel = 0; channel < 3; ++channel)
+                    CHECK(std::abs(int(std::to_integer<uint8_t>(pixel[channel])) - 128) <= 2);
+                CHECK(pixel[3] == std::byte{255});
+            } else {
+                CHECK(pixel[3] == std::byte{0});
+            }
+        }
+        CHECK(Count(result, model_core::ChunkTopology::ImportStatus) == 0);
+    }
+}
+
+TEST_CASE("FBX resolves local image sidecars only through the trusted broker",
+          "[fbx][materials][sidecar]")
+{
+    const auto jpeg = ReadAsset(L"textures/gray.jpg");
+    ScratchFbx source;
+    source.Write(TextureFixture({}, "sidecar.jpg"));
+    source.WriteSidecar(L"sidecar.jpg", jpeg);
+    const auto result = import_broker::RunImportSession(Request(source.path, 5014));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    REQUIRE(Count(result, model_core::ChunkTopology::Image) == 1);
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::Image) continue;
+        model_core::ImagePayloadHeader header{};
+        std::memcpy(&header, chunk.payload.data(), sizeof(header));
+        CHECK(header.width == 8);
+        CHECK(header.height == 8);
+        CHECK(header.colorSpace == uint32_t(model_core::ColorSpaceId::Srgb));
+    }
+    CHECK(Count(result, model_core::ChunkTopology::ImportStatus) == 0);
+}
+
+TEST_CASE("FBX sidecar byte caps preserve geometry through optional fallback",
+          "[fbx][materials][sidecar][limits]")
+{
+    const auto jpeg = ReadAsset(L"textures/gray.jpg");
+    ScratchFbx source;
+    source.Write(TextureFixture({}, "sidecar.jpg"));
+    source.WriteSidecar(L"sidecar.jpg", jpeg);
+    auto request = Request(source.path, 50145);
+    request.maxSidecarFileBytes = jpeg.size() - 1;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    REQUIRE(Count(result, model_core::ChunkTopology::Image) == 1);
+    REQUIRE(Count(result, model_core::ChunkTopology::ImportStatus) == 1);
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image) {
+            model_core::ImagePayloadHeader header{};
+            std::memcpy(&header, chunk.payload.data(), sizeof(header));
+            CHECK(header.width == 2);
+            CHECK(header.height == 2);
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus) {
+            model_core::ImportStatusPayload status{};
+            std::memcpy(&status, chunk.payload.data(), sizeof(status));
+            CHECK(status.textureWarnings == 1);
+        }
+    }
+}
+
+TEST_CASE("FBX missing and corrupt optional textures use a deterministic bounded fallback",
+          "[fbx][materials][recovery]")
+{
+    struct Case { const char* path; bool writeCorrupt; } cases[]{
+        {"missing.png", false},
+        {"corrupt.png", true},
+    };
+    uint64_t generation = 5015;
+    for (const auto& test : cases) {
+        ScratchFbx source;
+        source.Write(TextureFixture({}, test.path));
+        if (test.writeCorrupt) {
+            const std::array corrupt{std::byte{'B'}, std::byte{'A'}, std::byte{'D'}};
+            source.WriteSidecar(test.path, corrupt);
+        }
+        const auto result = import_broker::RunImportSession(Request(source.path, generation++));
+        CAPTURE(test.path, result.stage, result.errorCode, result.errorPhase);
+        REQUIRE(result.ok);
+        REQUIRE(Count(result, model_core::ChunkTopology::Image) == 1);
+        REQUIRE(Count(result, model_core::ChunkTopology::ImportStatus) == 1);
+        for (const auto& chunk : result.chunks) {
+            if (chunk.descriptor.topology == model_core::ChunkTopology::Image) {
+                model_core::ImagePayloadHeader header{};
+                std::memcpy(&header, chunk.payload.data(), sizeof(header));
+                CHECK(header.width == 2);
+                CHECK(header.height == 2);
+                CHECK(header.mipLevels == 1);
+            } else if (chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus) {
+                model_core::ImportStatusPayload status{};
+                std::memcpy(&status, chunk.payload.data(), sizeof(status));
+                CHECK(status.textureWarnings == 1);
+            }
+        }
+    }
+}
+
+TEST_CASE("FBX unsafe external texture references fail closed",
+          "[fbx][materials][sidecar][security]")
+{
+    const std::array<std::string_view, 5> attacks{
+        "../outside.png",
+        "C:/outside.png",
+        "//server/share/outside.png",
+        "https://example.invalid/outside.png",
+        "inside.png:stream",
+    };
+    uint64_t generation = 5017;
+    for (const auto attack : attacks) {
+        ScratchFbx source;
+        source.Write(TextureFixture({}, attack));
+        const auto result = import_broker::RunImportSession(Request(source.path, generation++));
+        CAPTURE(attack, result.stage, result.errorCode, result.errorPhase);
+        REQUIRE_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::UnsafeReference);
+        CHECK(result.errorPhase == model_core::ImportFailurePhase::Sidecars);
+    }
+}
+
+TEST_CASE("FBX maps factors alpha texture roles emissive and UV transform",
+          "[fbx][materials][pbr]")
+{
+    const auto jpeg = ReadAsset(L"textures/gray.jpg");
+    ScratchFbx source;
+    source.Write(MaterialTextureFixture(jpeg));
+    const auto result = import_broker::RunImportSession(Request(source.path, 5022));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    CHECK(Count(result, model_core::ChunkTopology::Image) == 3);
+    REQUIRE(Count(result, model_core::ChunkTopology::Material) == 1);
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::Material) continue;
+        model_core::MaterialPayload material{};
+        std::memcpy(&material, chunk.payload.data(), sizeof(material));
+        CHECK(material.baseColorFactor[0] == Catch::Approx(0.2f));
+        CHECK(material.baseColorFactor[1] == Catch::Approx(0.4f));
+        CHECK(material.baseColorFactor[2] == Catch::Approx(0.6f));
+        CHECK(material.baseColorFactor[3] == Catch::Approx(0.75f));
+        CHECK(material.emissiveFactor[0] == Catch::Approx(0.2f));
+        CHECK(material.emissiveFactor[1] == Catch::Approx(0.4f));
+        CHECK(material.emissiveFactor[2] == Catch::Approx(0.6f));
+        CHECK(material.alphaMode == uint32_t(model_core::AlphaModeId::Mask));
+        CHECK(material.alphaCutoff == Catch::Approx(0.3f));
+        CHECK(material.uvOffset[0] == Catch::Approx(0.25f));
+        CHECK(material.uvOffset[1] == Catch::Approx(0.5f));
+        CHECK(material.uvScale[0] == Catch::Approx(2.0f));
+        CHECK(material.uvScale[1] == Catch::Approx(3.0f));
+        CHECK(material.uvRotation == Catch::Approx(0.5235988f));
+        CHECK(chunk.descriptor.dependencyCount == 3);
+        CHECK(chunk.descriptor.dependencyIds[0] != 0);
+        CHECK(chunk.descriptor.dependencyIds[1] == 0);
+        CHECK(chunk.descriptor.dependencyIds[2] != 0);
+        CHECK(chunk.descriptor.dependencyIds[3] != 0);
+    }
+}
+
+TEST_CASE("FBX bump texture is the normal-map fallback", "[fbx][materials][pbr]")
+{
+    const auto webp = ReadAsset(L"corpus/sample.webp");
+    std::string ascii = MaterialTextureFixture(webp);
+    ReplaceOnce(ascii, "\"NormalMap\"", "\"Bump\"");
+    ScratchFbx source;
+    source.Write(ascii);
+    const auto result = import_broker::RunImportSession(Request(source.path, 5023));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::Material) continue;
+        CHECK(chunk.descriptor.dependencyIds[2] != 0);
+    }
+}
+
+TEST_CASE("FBX material and image dependencies remain valid across progressive batches",
+          "[fbx][materials][progressive]")
+{
+    const auto webp = ReadAsset(L"corpus/sample.webp");
+    ScratchFbx source;
+    source.Write(MaterialTextureFixture(webp));
+    auto request = Request(source.path, 5024);
+    request.sectionByteCapacity = 4096;
+    request.maxChunkCount = 4;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(result.stage, result.errorCode, result.errorPhase, result.batchCount);
+    REQUIRE(result.ok);
+    CHECK(result.batchCount > 1);
+    CHECK(Count(result, model_core::ChunkTopology::Material) == 1);
+    CHECK(Count(result, model_core::ChunkTopology::Image) == 3);
+}
+
+TEST_CASE("FBX instances select distinct materials without duplicating shared geometry",
+          "[fbx][materials][instances]")
+{
+    ScratchFbx source;
+    source.Write(ReadFixture("instanced-materials-ascii.fbx"));
+    const auto result = import_broker::RunImportSession(Request(source.path, 5025));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    REQUIRE(Count(result, model_core::ChunkTopology::TriangleList) == 1);
+    REQUIRE(Count(result, model_core::ChunkTopology::MeshInstance) == 3);
+    REQUIRE(Count(result, model_core::ChunkTopology::Material) == 3);
+
+    uint32_t geometryId = 0;
+    std::vector<uint32_t> materialIds;
+    std::vector<uint32_t> instanceMaterialIds;
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList) {
+            geometryId = chunk.descriptor.chunkId;
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::Material) {
+            materialIds.push_back(chunk.descriptor.chunkId);
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::MeshInstance) {
+            model_core::MeshInstancePayload instance{};
+            std::memcpy(&instance, chunk.payload.data(), sizeof(instance));
+            CHECK(instance.geometryChunkId == geometryId);
+            CHECK(instance.materialChunkId != 0);
+            instanceMaterialIds.push_back(instance.materialChunkId);
+        }
+    }
+    std::sort(materialIds.begin(), materialIds.end());
+    std::sort(instanceMaterialIds.begin(), instanceMaterialIds.end());
+    CHECK(instanceMaterialIds == materialIds);
+}
+
+TEST_CASE("FBX aggregate texture pressure is typed and pooled recovery remains usable",
+          "[fbx][materials][limits][recovery][pool]")
+{
+    import_broker::PrepareImportWorkerPoolAsync(sandbox_test_support::WorkerExePath());
+    const auto jpeg = ReadAsset(L"textures/gray.jpg");
+    ScratchFbx pressured;
+    pressured.Write(MaterialTextureFixture(jpeg));
+    auto request = Request(pressured.path, 5026);
+    request.useWorkerPool = true;
+    request.fbxTinyTextureLimitForTesting = true;
+    auto result = import_broker::RunImportSession(request);
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE_FALSE(result.ok);
+    CHECK(result.errorCode == model_core::ImportErrorCode::ResourceLimit);
+    CHECK(result.errorPhase == model_core::ImportFailurePhase::Sidecars);
+    const uint32_t worker = result.workerProcessId;
+
+    ScratchFbx valid;
+    valid.Write(ReadFixture("cube-binary.fbx.base64"));
+    auto recovery = Request(valid.path, 5027);
+    recovery.useWorkerPool = true;
+    result = import_broker::RunImportSession(recovery);
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    CHECK(result.workerProcessId == worker);
+}
+
+TEST_CASE("FBX ambiguous layered textures preserve visible geometry with bounded warnings",
+          "[fbx][materials][layered][recovery]")
+{
+    ScratchFbx source;
+    source.Write(ReadFixture("layered-textures-ascii.fbx"));
+    const auto result = import_broker::RunImportSession(Request(source.path, 5028));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) > 0);
+    CHECK(Count(result, model_core::ChunkTopology::Material) == 1);
+    REQUIRE(Count(result, model_core::ChunkTopology::ImportStatus) == 1);
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::ImportStatus) continue;
+        model_core::ImportStatusPayload status{};
+        std::memcpy(&status, chunk.payload.data(), sizeof(status));
+        CHECK(status.optionalFeatureWarnings > 0);
+        CHECK(status.optionalFeatureWarnings <= 64);
+        CHECK(status.textureWarnings <= 64);
+    }
 }
 
 TEST_CASE("Binary FBX triangulates and emits generated normalized attributes",

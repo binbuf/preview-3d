@@ -5,7 +5,7 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 ## Status
 
 - **FBX-006 viewer, activation, and installer integration (2026-09-17): in
-  progress, blocked on FBX-005 qualification.** The existing sandbox route and
+  progress, FBX-005 gate satisfied.** The existing sandbox route and
   generic progressive renderer already carry `ImportFormat::Fbx` normalized
   geometry, materials/images, nodes, instances, static-pose metadata, verified
   bounds, and fence-complete publications. The intentionally closed product
@@ -13,15 +13,11 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
   classifier/broker mapping, `ActiveInstance`, Open dialog, drag/drop and
   error/About strings, `ShellIntegration`'s bounded Open With catalog, NSIS
   ProgID/capabilities/OpenWith/uninstall registration, and product documents
-  each have their own extension list. Enable them atomically after FBX-005,
+  each have their own extension list. Enable them atomically,
   never by adding a viewer-side parser or a thumbnail handler.
 
-  The prerequisite is substantive, not a paperwork gate. FBX-005 still needs
-  dedicated JPEG/WebP, brokered-sidecar/path-attack,
-  corrupt/aggregate-pressure, and different-material-per-instance cases, then
-  Debug/Release pixel and recovery qualification. Do not make `.fbx`
-  discoverable while those are absent. When unblocked, replace the app-smoke
-  `unsupported.FBX` fixture with a real unsupported format such as `.3mf`, and
+  Replace the app-smoke `unsupported.FBX` fixture with a real unsupported
+  format such as `.3mf`, and
   exercise both binary and ASCII FBX through direct command line, secondary
   activation, picker, and drop, followed by malformed/cancel/replacement and a
   valid reopen. The association reset script's owned ProgID list currently
@@ -34,8 +30,8 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
   supported only after that gate, while still stating Explorer thumbnails are
   deferred to FBX-008.
 
-- **FBX-005 unified materials and texture dependencies (2026-09-17): in
-  progress.** The static FBX adapter now emits normalized material chunks from
+- **FBX-005 unified materials and texture dependencies (2026-09-17):
+  complete.** The static FBX adapter emits normalized material chunks from
   ufbx unified PBR maps with FBX diffuse/transparency/emission fallbacks,
   bounded non-finite clamping, alpha/double-sided/unlit state, and per-instance
   material selection without duplicating shared geometry. The material-factor
@@ -53,31 +49,37 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
   and report the Sidecars phase. FBX remains disabled on viewer/Shell/product
   surfaces until FBX-006.
 
-  A dedicated upstream `synthetic_embedded_base64_7700_ascii.fbx` fixture is
-  now checked in as `embedded-png-ascii.fbx`. Its sandbox integration test
-  proves that the embedded 32x32 PNG is decoded as RGBA8 sRGB with a complete
-  mip chain and that the absolute filename metadata is not followed. This
-  closes the embedded-PNG slice only; JPEG and WebP still need their own
-  format-specific corpus and assertions.
+  The reported external-texture worker crash was a test-harness limit, not a
+  worker/control-channel fault. `FbxImportTests` constructed requests with
+  `maxSidecarRequestsPerGeneration == 0` and `maxSidecarFileBytes == 0`; the
+  trusted broker therefore correctly stopped the first request at
+  `SidecarRequestLimit`, and the one-shot job then closed. Production's
+  `D3D12ImportBridge` already supplied nonzero limits. An untouched upstream
+  external-texture FBX reproduced the same limit before the helper was fixed.
+  Future format tests that expect sidecars must initialize both caps explicitly
+  rather than diagnosing the expected one-shot exit as a worker crash.
 
-  **Current FBX-005 blocker (do not paper over it):** a minimal no-`Content`
-  external-texture derivative of that valid upstream FBX reaches the FBX
-  sidecar request path, but the one-shot worker exits before the broker sees a
-  terminal reply for both an allowed `sidecar.png` and rejected `../outside.png`
-  reference (`AwaitReply` / `WorkerCrashed`). The generic broker/client path is
-  not broadly broken: the existing glTF sidecar suite passes in the same Debug
-  build. The candidate sidecar test is deliberately not checked in while red.
-  First reproduce with an untouched upstream external-texture FBX corpus, then
-  isolate the FBX-worker/client control-channel interaction; retain hard
-  `UnsafeReference` failures and never convert them to optional fallbacks.
-  After that, add the sidecar/path-attack, corruption/aggregate-pressure and
-  differing-material corpus cases, then qualify the resulting pixels in Debug
-  and Release before marking FBX-005 complete.
+  Embedded PNG/JPEG/WebP, approved local sidecars, sRGB/linear texture roles,
+  material factors, alpha, emissive, normal/bump, UV transforms, deterministic
+  missing/corrupt/byte-cap fallback, and hard path attacks are covered. The
+  pinned upstream instanced-material fixture proves distinct instance material
+  IDs keep one geometry resource; the layered-texture fixture proves ambiguous
+  graphs retain visible geometry with bounded warnings. A test-only aggregate
+  budget flag proves decoded texture pressure is a typed `ResourceLimit` and
+  that the same pooled worker recovers, without changing the production 128 MiB
+  limit. Progressive image/material dependency validation and cancellation /
+  recovery coverage remain green.
 
-  Verification for this slice: the focused embedded-PNG test passes in Debug
-  and Release (19 assertions each); the complete tagged FBX ImportIsolation
-  subset passes 14 cases / 47,703 assertions in each configuration. This is
-  not the task's required full-suite final qualification.
+  One additional harness lesson: the FBX scratch-directory name used only PID
+  plus `GetTickCount64()`, which could collide when multiple fixtures stayed
+  alive in one fast test. A monotonic process-local suffix now makes those
+  directories unique independent of clock resolution.
+
+  Debug and Release solution builds pass. Focused materials pass 12 cases / 284
+  assertions; all FBX passes 25 / 47,968; Unit passes 98 / 7,609 Debug and
+  7,521 Release; full ImportIsolation passes 249 / 100,693 in each
+  configuration. OBJ regression parity passes 7 / 82 in both configurations.
+  FBX-006 is unblocked; thumbnails remain separately deferred to FBX-008.
 
 - **FBX-004 deterministic static deformation pose (2026-09-17): complete.**
   The AppContainer FBX adapter now evaluates the first authored animation

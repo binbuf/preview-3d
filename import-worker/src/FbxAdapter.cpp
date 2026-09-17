@@ -529,6 +529,8 @@ struct MaterialContext {
     uint64_t encodedBytes = 0;
     uint64_t decodedBytes = 0;
     uint64_t decodedPixels = 0;
+    uint64_t maxDecodedBytes = kMaxAggregateTextureBytes;
+    uint64_t maxDecodedPixels = kMaxAggregateTexturePixels;
 };
 
 void Warn(uint32_t& warnings)
@@ -598,10 +600,15 @@ std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_t
     context.encodedBytes += encoded.size();
     TextureDecodeOptions options = *context.options;
     options.semantic = semantic;
-    options.maxDecodedBytes = (std::min)(options.maxDecodedBytes,
-        kMaxAggregateTextureBytes - context.decodedBytes);
-    options.maxPixels = (std::min)(options.maxPixels,
-        kMaxAggregateTexturePixels - context.decodedPixels);
+    const uint64_t remainingDecodedBytes = context.decodedBytes < context.maxDecodedBytes
+        ? context.maxDecodedBytes - context.decodedBytes : 0;
+    const uint64_t remainingDecodedPixels = context.decodedPixels < context.maxDecodedPixels
+        ? context.maxDecodedPixels - context.decodedPixels : 0;
+    const uint64_t maxDimensionPixels = uint64_t(options.maxDimension) * options.maxDimension;
+    const bool aggregateConstrained = remainingDecodedBytes < options.maxDecodedBytes
+        || remainingDecodedPixels < (std::min)(options.maxPixels, maxDimensionPixels);
+    options.maxDecodedBytes = (std::min)(options.maxDecodedBytes, remainingDecodedBytes);
+    options.maxPixels = (std::min)(options.maxPixels, remainingDecodedPixels);
     DecodedImage image;
     image.space = space;
     switch (SniffImageFormat(encoded)) {
@@ -636,12 +643,15 @@ std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_t
         return std::nullopt;
     }
     if (image.pixels.empty()) {
+        if (aggregateConstrained) {
+            context.error = ImportErrorCode::ResourceLimit;
+            return std::nullopt;
+        }
         Warn(context.textureWarnings);
         return std::nullopt;
     }
     const uint64_t pixels = uint64_t(image.width) * image.height;
-    if (image.pixels.size() > kMaxAggregateTextureBytes - context.decodedBytes
-        || pixels > kMaxAggregateTexturePixels - context.decodedPixels) {
+    if (image.pixels.size() > remainingDecodedBytes || pixels > remainingDecodedPixels) {
         context.error = ImportErrorCode::ResourceLimit;
         return std::nullopt;
     }
@@ -910,6 +920,8 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
     MaterialContext materialContext;
     materialContext.sidecars = importOptions.sidecars;
     materialContext.options = importOptions.textureOptions ? importOptions.textureOptions : &defaultTextureOptions;
+    materialContext.maxDecodedBytes = importOptions.maxAggregateTextureBytes;
+    materialContext.maxDecodedPixels = importOptions.maxAggregateTexturePixels;
     std::unordered_map<const ufbx_material*, uint32_t> materialIds;
     if (!EmitMaterials(*scene, writer, materialContext, materialIds)) {
         const ImportErrorCode error = materialContext.error != ImportErrorCode::None

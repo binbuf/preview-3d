@@ -123,7 +123,9 @@ Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFile
         | (session.workerArgumentsOverride == L"--parse-gltf-delayed-batches"
             ? model_core::kImportRequestDelayedBatchesForTesting : 0)
         | (session.fbxTinyEvaluationLimitForTesting
-            ? model_core::kImportRequestFbxTinyEvaluationLimitForTesting : 0);
+            ? model_core::kImportRequestFbxTinyEvaluationLimitForTesting : 0)
+        | (session.fbxTinyTextureLimitForTesting
+            ? model_core::kImportRequestFbxTinyTextureLimitForTesting : 0);
     request.cancellationEventHandleValue = cancellationEventHandle;
     return request;
 }

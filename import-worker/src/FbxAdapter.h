@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model_core/ImportError.h"
+#include "model_core/PixelFormats.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -29,6 +30,8 @@ struct FbxImportOptions {
     size_t evaluationAllocatorLimit = 0;
     SidecarFileClient* sidecars = nullptr;
     const TextureDecodeOptions* textureOptions = nullptr;
+    uint64_t maxAggregateTextureBytes = model_core::kMaxAggregateTextureBytes;
+    uint64_t maxAggregateTexturePixels = model_core::kMaxAggregateTexturePixels;
     bool Cancelled() const { return isCancelled && isCancelled(); }
 };
 

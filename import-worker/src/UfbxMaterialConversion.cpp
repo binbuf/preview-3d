@@ -73,6 +73,22 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
     result.flags = kMaterialFlagDoubleSided;
 
     if (fbxPolicy) {
+        if (const ufbx_prop* alphaMode = ufbx_find_prop(
+                &material.props, "3dsMax|main|alphaMode")) {
+            if (alphaMode->value_int >= int64_t(AlphaModeId::Opaque)
+                && alphaMode->value_int <= int64_t(AlphaModeId::Blend)) {
+                result.alphaMode = static_cast<uint32_t>(alphaMode->value_int);
+            } else {
+                Warn(optionalWarnings);
+            }
+        }
+        if (const ufbx_prop* alphaCutoff = ufbx_find_prop(
+                &material.props, "3dsMax|main|alphaCutoff")) {
+            if (!Finite(alphaCutoff->value_real)
+                || alphaCutoff->value_real < 0.0 || alphaCutoff->value_real > 1.0)
+                Warn(optionalWarnings);
+            result.alphaCutoff = Saturate(alphaCutoff->value_real, 0.5f);
+        }
         if (material.features.double_sided.is_explicit && !material.features.double_sided.enabled)
             result.flags &= ~kMaterialFlagDoubleSided;
         if (material.features.unlit.is_explicit && material.features.unlit.enabled)

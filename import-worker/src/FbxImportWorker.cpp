@@ -83,6 +83,10 @@ bool HandleFbxImportFileRequest(HANDLE stdIn, HANDLE stdOut,
     options.textureOptions = &textureOptions;
     if (request.requestFlags & model_core::kImportRequestFbxTinyEvaluationLimitForTesting)
         options.evaluationAllocatorLimit = 1024;
+    if (request.requestFlags & model_core::kImportRequestFbxTinyTextureLimitForTesting) {
+        options.maxAggregateTextureBytes = 16;
+        options.maxAggregateTexturePixels = 4;
+    }
     try {
         return ReportOutcome(stdOut, request.generationId,
             ImportFbx(source.Bytes(), output.bytes(), request.generationId,
