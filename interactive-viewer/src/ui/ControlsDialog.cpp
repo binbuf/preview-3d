@@ -10,7 +10,7 @@ namespace
 {
 constexpr wchar_t kControlsWindowClass[] = L"Preview3DControlsWindow";
 constexpr int kCloseButtonId = 1;
-constexpr int kDialogWidth = 960;
+constexpr int kDialogWidth = 1040;
 constexpr int kDialogHeight = 650;
 
 struct Palette
@@ -172,17 +172,23 @@ POINT RightCenter(const RECT& rect)
     return { rect.right, (rect.top + rect.bottom) / 2 };
 }
 
-void DrawConnector(HDC dc, const DialogState& state, POINT start, int labelY, COLORREF color)
+void DrawConnector(HDC dc, const DialogState& state, POINT start, int labelY, COLORREF color,
+    int verticalRouteX = 0)
 {
-    const int bendX = Scale(state, 625);
-    const int endX = Scale(state, 651);
+    const int bendX = Scale(state, 690);
+    const int endX = Scale(state, 716);
     const int endY = Scale(state, labelY + 13);
-    const std::array<POINT, 4> points{
-        start,
-        POINT{ bendX - Scale(state, 12), start.y },
-        POINT{ bendX, endY },
-        POINT{ endX, endY }
-    };
+    std::array<POINT, 4> points{};
+    if (verticalRouteX > 0)
+    {
+        const int routeX = Scale(state, verticalRouteX);
+        points = { start, POINT{ routeX, start.y }, POINT{ routeX, endY }, POINT{ endX, endY } };
+    }
+    else
+    {
+        points = { start, POINT{ bendX - Scale(state, 12), start.y },
+            POINT{ bendX, endY }, POINT{ endX, endY } };
+    }
     HPEN pen = CreatePen(PS_SOLID, Scale(state, 2), color);
     const HGDIOBJ previousPen = SelectObject(dc, pen);
     Polyline(dc, points.data(), static_cast<int>(points.size()));
@@ -203,9 +209,9 @@ void DrawConnector(HDC dc, const DialogState& state, POINT start, int labelY, CO
 void DrawCallout(HDC dc, const DialogState& state, int y, COLORREF accent,
     const wchar_t* title, const wchar_t* detail)
 {
-    RECT titleRect = ScaledRect(state, 666, y, 916, y + 20);
+    RECT titleRect = ScaledRect(state, 731, y, 996, y + 20);
     DrawTextLine(dc, state.sectionFont, accent, title, titleRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
-    RECT detailRect = ScaledRect(state, 666, y + 22, 916, y + 55);
+    RECT detailRect = ScaledRect(state, 731, y + 22, 996, y + 55);
     DrawTextLine(dc, state.smallFont, state.colors.secondary, detail, detailRect,
         DT_LEFT | DT_TOP | DT_WORDBREAK);
 }
@@ -268,16 +274,18 @@ void DrawKeyboard(HDC dc, const DialogState& state)
     DrawKey(dc, state, 480, 374, 34, L"→", colors.orbit, 28);
 
     DrawTextLine(dc, state.keyFont, colors.muted, L"NUMPAD",
-        ScaledRect(state, 518, 232, 596, 248), DT_CENTER | DT_SINGLELINE);
-    DrawKey(dc, state, 520, 251, 32, L"7", colors.views, 28);
-    DrawKey(dc, state, 556, 251, 32, L"/", CLR_INVALID, 28);
-    DrawKey(dc, state, 520, 283, 32, L"1", colors.views, 28);
-    DrawKey(dc, state, 556, 283, 32, L"3", colors.views, 28);
-    DrawKey(dc, state, 520, 315, 32, L"5", colors.views, 28);
-    const RECT viewAnchor = DrawKey(dc, state, 556, 315, 32, L".", colors.views, 28);
+        ScaledRect(state, 538, 323, 616, 339), DT_CENTER | DT_SINGLELINE);
+    DrawKey(dc, state, 540, 342, 32, L"7", colors.views, 28);
+    DrawKey(dc, state, 576, 342, 32, L"/", CLR_INVALID, 28);
+    DrawKey(dc, state, 540, 374, 32, L"1", colors.views, 28);
+    DrawKey(dc, state, 576, 374, 32, L"3", colors.views, 28);
+    DrawKey(dc, state, 540, 406, 32, L"5", colors.views, 28);
+    const RECT viewAnchor = DrawKey(dc, state, 576, 406, 32, L".", colors.views, 28);
 
     DrawConnector(dc, state, RightCenter(flightAnchor), 137, colors.flight);
-    DrawConnector(dc, state, RightCenter(up), 211, colors.orbit);
+    // Route upward through the gap between the arrows and numpad so the line
+    // does not cross either control group now that they share a baseline.
+    DrawConnector(dc, state, RightCenter(up), 211, colors.orbit, 524);
     DrawConnector(dc, state, RightCenter(actionAnchor), 285, colors.actions);
     DrawConnector(dc, state, RightCenter(viewAnchor), 359, colors.views);
 
@@ -287,7 +295,7 @@ void DrawKeyboard(HDC dc, const DialogState& state)
     DrawCallout(dc, state, 359, colors.views, L"VIEW SNAP", L"Num 1 / 3 / 7 · Ctrl reverses\nNum 5 toggles perspective · Num . frames");
     DrawTextLine(dc, state.smallFont, colors.muted,
         L"Gizmo: click an axis ball to snap\nToolbar: Ground axis cycles · Snap locks pan",
-        ScaledRect(state, 666, 417, 918, 451), DT_LEFT | DT_TOP | DT_WORDBREAK);
+        ScaledRect(state, 731, 417, 998, 451), DT_LEFT | DT_TOP | DT_WORDBREAK);
 }
 
 void DrawMouseCard(HDC dc, const DialogState& state)
@@ -333,7 +341,7 @@ void DrawShortcut(HDC dc, const DialogState& state, int x, int y, int keyWidth,
 
 void DrawAppCard(HDC dc, const DialogState& state)
 {
-    const RECT card = ScaledRect(state, 562, 470, 936, 591);
+    const RECT card = ScaledRect(state, 562, 470, 1016, 591);
     FillRoundedRect(dc, card, Scale(state, 12), state.colors.surface, state.colors.border);
     DrawSectionTitle(dc, state, L"VIEWER", 582, 486, state.colors.actions);
     DrawShortcut(dc, state, 582, 520, 60, L"Ctrl O", L"Open model");
@@ -359,9 +367,9 @@ void PaintDialog(DialogState& state, HDC target, const RECT& client)
         ScaledRect(state, 24, 58, 500, 82), DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     DrawTextLine(buffer, state.smallFont, state.colors.muted,
         L"Drag gestures wrap at the screen edge and glide to a smooth stop.",
-        ScaledRect(state, 540, 36, 936, 60), DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
+        ScaledRect(state, 540, 36, 1016, 60), DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
 
-    const RECT keyboardCard = ScaledRect(state, 24, 98, 936, 456);
+    const RECT keyboardCard = ScaledRect(state, 24, 98, 1016, 456);
     FillRoundedRect(buffer, keyboardCard, Scale(state, 12), state.colors.surface, state.colors.border);
     DrawKeyboard(buffer, state);
     DrawMouseCard(buffer, state);
@@ -379,7 +387,7 @@ void PaintDialog(DialogState& state, HDC target, const RECT& client)
 void LayoutCloseButton(DialogState& state)
 {
     if (!state.closeButton) return;
-    SetWindowPos(state.closeButton, nullptr, Scale(state, 846), Scale(state, 604),
+    SetWindowPos(state.closeButton, nullptr, Scale(state, 926), Scale(state, 604),
         Scale(state, 90), Scale(state, 32), SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
