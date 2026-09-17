@@ -1225,7 +1225,12 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             commandList->SetDescriptorHeaps(1, heaps);
             commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
             const bool blend=mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
-            const bool twoSided=(mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
+            // A mesh with no authored material has no culling policy either.
+            // Treat it as double-sided: CAD/Rhino OBJ exports commonly contain
+            // independently oriented surface patches, and back-face culling
+            // otherwise punches apparent holes through details such as faces.
+            const bool twoSided=!mesh.hasMaterial
+                || (mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
             commandList->SetPipelineState(blend
                 ? (twoSided?texturedBlendDoubleSidedPipelineState.Get()
                     :(mesh.mirrored?texturedBlendMirroredPipelineState.Get():texturedBlendPipelineState.Get()))
@@ -1726,9 +1731,15 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
                 draw.textureIndices[3]=findImageIndex(material->emissiveImageChunkId);
                 draw.material=material->data;draw.hasMaterial=true;
             } else {
-                draw.material.baseColorFactor[0]=draw.material.baseColorFactor[1]
-                    =draw.material.baseColorFactor[2]=draw.material.baseColorFactor[3]=1;
-                draw.material.roughnessFactor=1;
+                // Match the viewer's established untextured solid color. Pure
+                // white clips under studio lighting and makes fine form read as
+                // flat gray; this slightly cool neutral remains colorless in
+                // intent while preserving useful value separation.
+                draw.material.baseColorFactor[0]=0.72f;
+                draw.material.baseColorFactor[1]=0.72f;
+                draw.material.baseColorFactor[2]=0.76f;
+                draw.material.baseColorFactor[3]=1.0f;
+                draw.material.roughnessFactor=1.0f;
             }
         };
         const auto occurrences = instancesByGeometry.find(mesh.chunkId);
