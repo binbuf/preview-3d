@@ -55,17 +55,37 @@ jobs:
             throw "MSBuild was not found at '$msbuild'."
           }
 
-          $nsis = Get-Command makensis.exe -ErrorAction SilentlyContinue
-          if ($null -eq $nsis) {
-            choco install nsis --yes --no-progress
-            if ($LASTEXITCODE -ne 0) {
-              throw "NSIS installation failed with exit code $LASTEXITCODE."
-            }
-            $nsis = Get-Command makensis.exe -ErrorAction Stop
+          # Download the official portable distribution instead of depending on
+          # Chocolatey's community feed, which can intermittently return 5xx.
+          $nsisVersion = '3.12'
+          $nsisSha256 = '56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa67f2c4f'
+          $nsisArchive = Join-Path $env:RUNNER_TEMP "nsis-$nsisVersion.zip"
+          $nsisDirectory = Join-Path $env:RUNNER_TEMP 'nsis'
+          $nsisUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$nsisVersion/nsis-$nsisVersion.zip?download"
+
+          curl.exe --fail --location --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors `
+            --output $nsisArchive $nsisUrl
+          if ($LASTEXITCODE -ne 0) {
+            throw "NSIS download failed with exit code $LASTEXITCODE."
+          }
+
+          $downloadedSha256 = (Get-FileHash -LiteralPath $nsisArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($downloadedSha256 -ne $nsisSha256) {
+            throw "NSIS archive checksum mismatch. Expected $nsisSha256; received $downloadedSha256."
+          }
+
+          Expand-Archive -LiteralPath $nsisArchive -DestinationPath $nsisDirectory -Force
+          $nsis = Join-Path $nsisDirectory "nsis-$nsisVersion\makensis.exe"
+          if (-not (Test-Path -LiteralPath $nsis -PathType Leaf)) {
+            throw "makensis.exe was not found after extracting NSIS to '$nsisDirectory'."
+          }
+          $detectedNsisVersion = (& $nsis /VERSION).Trim()
+          if ($LASTEXITCODE -ne 0 -or $detectedNsisVersion -ne "v$nsisVersion") {
+            throw "Expected NSIS v$nsisVersion, but makensis reported '$detectedNsisVersion'."
           }
 
           "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
-          "nsis=$($nsis.Source)" >> $env:GITHUB_OUTPUT
+          "nsis=$nsis" >> $env:GITHUB_OUTPUT
 
       - name: Import optional signing certificate
         id: signing
