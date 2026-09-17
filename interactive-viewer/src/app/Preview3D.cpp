@@ -3,6 +3,7 @@
 #include "Accessibility.h"
 #include "ActiveInstance.h"
 #include "Chrome.h"
+#include "ControlsDialog.h"
 #include "D3D12ImportBridge.h"
 #include "RenderThread.h"
 #include "InfoPanel.h"
@@ -1768,33 +1769,6 @@ void ToggleSettingsPanel(ViewerApp& app)
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
-void ShowControls(HWND owner)
-{
-    MessageBoxW(owner,
-        L"Select\tClick a mesh; click the background to clear\n"
-        L"Orbit\tLeft drag, gizmo ball drag, or arrow keys\n"
-        L"Truck (pan)\tMiddle drag or Shift+arrow keys\n"
-        L"Ground axis\tClick the X/Y/Z axis button to cycle Z, Y, X\n"
-        L"Axis snap\tToggle the Snap button to lock truck moves to X/Y\n"
-        L"Zoom\tWheel, Ctrl+middle drag, +, or -\n"
-        L"Fly\tHold right mouse + W/A/S/D, Q/E; wheel or slider sets speed\n"
-        L"Fly faster\tHold Shift while flying (2x)\n"
-        L"Roll\tHold right mouse + Z/C\n"
-        L"Front / Right / Top\tNumpad 1 / 3 / 7 (Ctrl for reverse)\n"
-        L"Perspective / Ortho\tNumpad 5\n"
-        L"Gizmo views\tClick an axis ball in the corner\n"
-        L"Frame model / selection\tF, Numpad ., or double-click\n"
-        L"Ground grid\tG\n"
-        L"Reset view\tHome or R\n"
-        L"Open\tCtrl+O\n"
-        L"Fullscreen\tF11\n"
-        L"Cancel open\tEsc\n\n"
-        L"Left-drag orbit and middle-drag truck wrap at the viewport edge,\n"
-        L"and drags glide to a stop with exponential inertia. The cursor is\n"
-        L"hidden during mouse drags by default; change this in Settings.",
-        L"3D Preview controls", MB_OK | MB_ICONINFORMATION);
-}
-
 void DrawOwnerButton(ViewerApp& app, const DRAWITEMSTRUCT& item)
 {
     wchar_t text[64]{};
@@ -1884,7 +1858,7 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_RETRY: if (!app.failedPath.empty()) BeginOpen(app, app.failedPath); break;
     case ID_VIEW_COPY_DETAILS: CopyErrorDetails(app); break;
     case ID_VIEW_CANCEL: CancelOpen(app); break;
-    case ID_VIEW_CONTROLS: ShowControls(app.window); break;
+    case ID_VIEW_CONTROLS: ShowControlsDialog(app.window); break;
     case ID_VIEW_SETTINGS: ToggleSettingsPanel(app); break;
     case ID_VIEW_DIAGNOSTICS:
         MessageBoxW(app.window, app.warning.c_str(), L"Model warnings", MB_OK | MB_ICONWARNING);
@@ -3396,6 +3370,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         return DefWindowProcW(window, message, wParam, lParam);
     case WM_KEYDOWN:
+        if (wParam == VK_OEM_2 && GetKeyState(VK_SHIFT) < 0) { ShowControlsDialog(window); return 0; }
         if (wParam == VK_F11) { ToggleFullscreen(*app); return 0; }
         if (wParam == VK_ESCAPE)
         {
