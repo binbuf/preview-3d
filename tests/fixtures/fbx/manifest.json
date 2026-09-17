@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "ufbxVersion": "0.23.0",
+  "upstreamTag": "v0.23.0",
+  "license": "MIT OR Unlicense (redistributed here under MIT)",
+  "sourceDirectory": "../fbx-spike",
+  "entries": [
+    {"path":"hierarchy-instances-pivots-ascii.fbx","sha256":"5c5ee7d7bb4b39b23fec8a120ffa42cbe5856b5c5b12b23ee957d55eb81e6d22","bytes":15301,"class":"valid","expectation":"hierarchy, repeated instances, pivots, units and transforms"},
+    {"path":"cube-binary.fbx.base64","sha256":"bb78c7ee90fa811baa9a4400b613c845d3a5329f4bfa87ff5e20692ddb8bd2ae","bytes":11020,"class":"valid","expectation":"binary static polygon scene; 12 triangles; rest-pose normalized hash 0x7cc5b538fdd7df79"},
+    {"path":"linear-skin-binary.fbx.base64","sha256":"537700c737063bc9e96d3bb34dc7c7400f6327d7036fb24193e0028364337140","bytes":15740,"class":"valid","expectation":"linear skin; 2 triangles; normalized hash 0x398380dd84bbda31"},
+    {"path":"dual-quaternion-ascii.fbx","sha256":"2a3fe6dd3ae1345538cfd4a944b3327f1d0c993e04bdd3214fec2e7ac109cc1f","bytes":24691,"class":"valid","expectation":"non-zero animation start and dual-quaternion skin; 84 triangles; normalized hash 0x8c89d1367ba7bf59"},
+    {"path":"blended-skin-binary.fbx.base64","sha256":"bc2a6b22eb3ac80704e7484b853d24aa50cf5c1de8ab7e9a225a837290a6a5a4","bytes":49424,"class":"valid","expectation":"blended DQ/linear skin; 176 triangles; normalized hash 0xa60df3590d6b687a"},
+    {"path":"shape-animation-binary.fbx.base64","sha256":"f96f2d4888931414457a2020bd07e380ec9f4f47ec21c40e71a34f99ccc2dd99","bytes":27500,"class":"valid","expectation":"blend deformation; 12 triangles; normalized hash 0xf337a4a546728ecd"},
+    {"path":"combined-skin-blend-ascii.fbx","sha256":"c452fe966286de6ec22f9334a8ff4ffc03d79afe04f2d5181779a0d022b2bb4f","bytes":138332,"class":"performance","expectation":"bounded B-each feature scene: combined skin/blend, instances, caches omitted with warning; 176 triangles; normalized hash 0x9dad0b2ea1cba400"},
+    {"path":"multiple-stacks-ascii.fbx","sha256":"040312e87af89c32d5eae6015a7e0b8fe55cefe7e8b69f104f299c0e86035f2d","bytes":31263,"class":"valid","expectation":"three authored stacks; first stack selected; normalized hash 0xcb59db2242f2b906"},
+    {"path":"negative-scale-pivots-ascii.fbx","sha256":"0b17954c6113e9ce19fbbd51adbc9353161ea5ff2c1f6c048e9c8280df2a6fec","bytes":57957,"class":"valid","expectation":"mirrored transform and pivot preservation"},
+    {"path":"nonuniform-scale-pivots-ascii.fbx","sha256":"749ea04a78cb3c16a5a9e136c816046b3e550d9cbcc1686aff52909e343bd425","bytes":31075,"class":"valid","expectation":"non-uniform scale, centimetre units and pivots"},
+    {"path":"z-up-binary.fbx.base64","sha256":"6573c345bcf70dad2f5d7b4a2cc3b64123da93e5dea938c2223607f661ddaf34","bytes":28860,"class":"valid","expectation":"Z-up converted to right-handed Y-up metres"},
+    {"path":"embedded-png-ascii.fbx","sha256":"2868e47ef0e3c305cf3e1763904dc703b95a0645da3913977e474a98b7ad8cd6","bytes":19033,"class":"valid","expectation":"embedded 32x32 PNG decoded without filesystem access"},
+    {"path":"instanced-materials-ascii.fbx","sha256":"e64a389c49363c481585f6ba5ef2982dfb813655026dc3e03458b7a1b78ce7c5","bytes":24058,"class":"valid","expectation":"one geometry resource, three instances and three material bindings"},
+    {"path":"layered-textures-ascii.fbx","sha256":"356990911bba41ffba2c677f1a39daac47130064086c5f1c97e382ae748e08cc","bytes":27687,"class":"optional-unsupported","expectation":"visible geometry retained with bounded layered-texture warning"},
+    {"path":"nurbs-only-ascii.fbx","sha256":"dc96e1f3cdee106cdd812b87cb0c6438f787886d23aefddd4a474f96ac7d04fa","bytes":8844,"class":"required-unsupported","expectation":"UnsupportedRequiredFeature"},
+    {"path":"nested-hierarchy-binary.fbx.base64","sha256":"7adab361044b68170aaf3d460137ef004483ffd08c76ea73172cc449cb6348a9","bytes":16316,"class":"limit-seed","expectation":"node-depth option seed"}
+  ],
+  "derived": [
+    {"path":"empty.fbx","base":"cube-binary.fbx.base64","operation":"empty","sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","expectation":"EmptyGeometry"},
+    {"path":"truncated-binary.fbx","base":"cube-binary.fbx.base64","operation":"truncate-half","sha256":"114ee6e40def581f45988d261efc008e4587db8aac1312d43cff6cdc046b980b","expectation":"MalformedData"},
+    {"path":"malformed-header.fbx","base":"cube-binary.fbx.base64","operation":"malformed-header","sha256":"6e80d0a5e4a3906e48a7103dce5075439621d25dbab038277262d7b41df2d3be","expectation":"MalformedData"},
+    {"path":"nonfinite-position.fbx","base":"hierarchy-instances-pivots-ascii.fbx","operation":"nonfinite-position","sha256":"3d84d52df4ee2446f02ee415bbfc8c3888274b66f7884199e7b199a1451a1fec","expectation":"MalformedData"},
+    {"path":"adversarial-depth.fbx","base":"hierarchy-instances-pivots-ascii.fbx","operation":"adversarial-depth","sha256":"e2da11bd828feb49586f064b1e64fb9d339c8c5015b4d318b4ec3a0d3961879a","expectation":"ResourceLimit"},
+    {"path":"allocation-pressure.fbx","base":"multiple-stacks-ascii.fbx","operation":"allocation-pressure","sha256":"78b636219b6c2ac36cf319e70ad967bdccd3074224663f06500ae81cc3603e1a","expectation":"ScratchLimit or MalformedData before unbounded allocation"},
+    {"path":"approved-sidecar.fbx","base":"embedded-png-ascii.fbx","operation":"external-approved","sha256":"cbf7892552eb73b7b4e07b5340427b6008f3030f9f125a8f2c044bd75ff9611e","expectation":"geometry plus brokered textures/gray.png"},
+    {"path":"missing-sidecar.fbx","base":"embedded-png-ascii.fbx","operation":"external-missing","sha256":"b6def659b82f289b2a24a18c4d2a259411f9503532057e3aaf96b52f8fd5609b","expectation":"geometry with optional texture warning"},
+    {"path":"unsafe-sidecar.fbx","base":"embedded-png-ascii.fbx","operation":"external-unsafe","sha256":"1cf9f22b4a54444fa858c6d08a7869525f43d2ad72ce14e19e8e8b22e2554a27","expectation":"UnsafeReference"}
+  ]
+}
