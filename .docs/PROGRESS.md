@@ -4,6 +4,36 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **FBX-006 viewer, activation, and installer integration (2026-09-17): in
+  progress, blocked on FBX-005 qualification.** The existing sandbox route and
+  generic progressive renderer already carry `ImportFormat::Fbx` normalized
+  geometry, materials/images, nodes, instances, static-pose metadata, verified
+  bounds, and fence-complete publications. The intentionally closed product
+  surfaces are the only reason an FBX file is not yet openable: the bridge
+  classifier/broker mapping, `ActiveInstance`, Open dialog, drag/drop and
+  error/About strings, `ShellIntegration`'s bounded Open With catalog, NSIS
+  ProgID/capabilities/OpenWith/uninstall registration, and product documents
+  each have their own extension list. Enable them atomically after FBX-005,
+  never by adding a viewer-side parser or a thumbnail handler.
+
+  The prerequisite is substantive, not a paperwork gate. FBX-005 still needs
+  its dedicated embedded PNG/JPEG/WebP, brokered-sidecar/path-attack,
+  corrupt/aggregate-pressure, and different-material-per-instance cases, then
+  Debug/Release pixel and recovery qualification. Do not make `.fbx`
+  discoverable while those are absent. When unblocked, replace the app-smoke
+  `unsupported.FBX` fixture with a real unsupported format such as `.3mf`, and
+  exercise both binary and ASCII FBX through direct command line, secondary
+  activation, picker, and drop, followed by malformed/cancel/replacement and a
+  valid reopen. The association reset script's owned ProgID list currently
+  misses OBJ despite resetting `.obj`; fix that omission while adding
+  `Binbuf.Preview3D.FBX.1`. Bump the Shell Open With catalog revision when its
+  supported-extension array gains FBX so stale cache entries are rediscovered.
+  NSIS must keep the current quoted `--open "%1"` command, preserve user
+  defaults, refresh associations, and add no thumbnail CLSID/shellex key.
+  README/portable/installer wording and the `ufbx` notice must say FBX is
+  supported only after that gate, while still stating Explorer thumbnails are
+  deferred to FBX-008.
+
 - **FBX-005 unified materials and texture dependencies (2026-09-17): in
   progress.** The static FBX adapter now emits normalized material chunks from
   ufbx unified PBR maps with FBX diffuse/transparency/emission fallbacks,

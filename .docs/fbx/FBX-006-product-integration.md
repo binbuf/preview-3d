@@ -1,6 +1,6 @@
 # FBX-006: viewer, activation, and installer integration
 
-Status: blocked on FBX-005  
+Status: in progress — blocked on FBX-005 qualification
 Depends on: FBX-003 through FBX-005  
 Unblocks: FBX-007
 
@@ -8,6 +8,47 @@ Unblocks: FBX-007
 
 Expose the completed FBX adapter through every viewer activation route and the
 current NSIS/Open With integration, without claiming Explorer thumbnails.
+
+## Start audit (2026-09-17)
+
+FBX-003 and FBX-004 already provide the sandboxed `ImportFormat::Fbx` route
+and the normalized node/instance/deformed-geometry payloads. FBX-005 has also
+landed its implementation path, but is not complete: its dedicated embedded
+PNG/JPEG/WebP, sidecar/path-attack, corrupt/aggregate-pressure, and
+different-per-instance-material corpus cases still need to be added and
+qualified in Debug and Release. This task must not expose `.fbx` until that
+work and its recovery/security evidence are green.
+
+The following integration inventory was recorded now so the unblock is a
+single consistent change rather than a series of partially-visible routes:
+
+- `D3D12ImportBridge` needs `SourceFormat::Fbx`, case-insensitive `.fbx`
+  classification, broker mapping, and FBX-specific user wording. Its generic
+  format label already safely produces `FBX`, but that is not a substitute for
+  accepting the route.
+- `ActiveInstance`, the file dialog, unsupported-format/retry wording, drag
+  and drop wording, and the About text each have separate closed extension
+  lists. All must include `.fbx` together.
+- `ShellIntegration` has a five-element supported-extension array; increasing
+  it invalidates/sanitizes the bounded Open With cache through its catalog
+  revision. This is viewer Open With discovery only, not thumbnail registration.
+- The NSIS product needs `Binbuf.Preview3D.FBX.1` in its ProgID,
+  capabilities, `OpenWithProgids`, uninstall, and association refresh paths.
+  The test-association reset script also currently omits the existing OBJ
+  ProgID, so its owned ProgID list must be corrected while adding FBX.
+- Existing recovery smoke deliberately uses `unsupported.FBX` as its rejected
+  input. Once FBX is enabled it must instead use a genuinely unsupported
+  extension (for example `.3mf`), while binary and ASCII FBX fixtures exercise
+  direct, forwarded, picker, and drop paths plus a valid reopen after failure.
+- Product documentation, portable/installer support limits, and the `ufbx`
+  notice all still describe FBX as deferred or OBJ-only. They need simultaneous
+  updates that explicitly retain the separate “Explorer thumbnails unavailable”
+  statement.
+
+The existing generic upload path already consumes validated geometry,
+materials, images, nodes, and instances. FBX-006 therefore must prove those
+results through the real app (including bounds and metadata) rather than add a
+viewer-side FBX parser or a parallel rendering route.
 
 ## Context to load
 
