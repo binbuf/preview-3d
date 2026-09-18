@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model_core/ImportError.h"
+#include "model_core/PixelFormats.h"
 
 #include <cstdint>
 #include <functional>
@@ -28,6 +29,8 @@ using ThreeMfImportOutcome = std::variant<ThreeMfImportResult, ThreeMfImportFail
 
 struct ThreeMfImportOptions {
     std::function<bool()> isCancelled;
+    uint64_t maxAggregateTextureBytes = model_core::kMaxAggregateTextureBytes;
+    uint64_t maxAggregateTexturePixels = model_core::kMaxAggregateTexturePixels;
     bool Cancelled() const { return isCancelled && isCancelled(); }
 };
 

@@ -217,7 +217,8 @@ Texture2D gBaseColor : register(t0);
 Texture2D gMetallicRoughness : register(t1);
 Texture2D gNormal : register(t2);
 Texture2D gEmissive : register(t3);
-SamplerState gSampler : register(s0);
+SamplerState gLinearSampler : register(s0);
+SamplerState gNearestSampler : register(s1);
 cbuffer MaterialConstants : register(b2)
 {
     float4 gBaseColorFactor;
@@ -269,6 +270,12 @@ float3 DisplayMap(float3 color)
     color=color/(color+0.82f);
     return pow(saturate(color),1.0f/2.2f);
 }
+float3 SrgbToLinear(float3 color)
+{
+    float3 low=color/12.92f;
+    float3 high=pow((color+0.055f)/1.055f,2.4f);
+    return lerp(high,low,step(color,0.04045f));
+}
 PixelOutput PSMain(PSInput input)
 {
     if ((input.pickId&0x80000000u)!=0) {
@@ -276,20 +283,39 @@ PixelOutput PSMain(PSInput input)
     }
     uint flags=(uint)gMaterialFactors.w;
     uint maps=(uint)gUvRotationAndMaps.z;
+    uint addressU=(flags>>4)&3u, addressV=(flags>>6)&3u;
+    bool uvValid=(addressU!=3u || (input.uv.x>=0.0f && input.uv.x<=1.0f))
+        && (addressV!=3u || (input.uv.y>=0.0f && input.uv.y<=1.0f));
+    float2 sampleUv=input.uv;
+    sampleUv.x=addressU==0u?frac(sampleUv.x):addressU==1u?1.0f-abs(frac(sampleUv.x*.5f)*2.0f-1.0f):saturate(sampleUv.x);
+    sampleUv.y=addressV==0u?frac(sampleUv.y):addressV==1u?1.0f-abs(frac(sampleUv.y*.5f)*2.0f-1.0f):saturate(sampleUv.y);
+    bool nearest=(flags&256u)!=0;
+    bool textureLayer=(flags&512u)!=0;
+    bool textureMix=(flags&1024u)!=0;
     bool clay=gLighting.x>0.5f && gLighting.x<1.5f;
-    float4 base=clay ? float4(.58f,.58f,.58f,1.0f) : gBaseColorFactor*input.color;
-    if (!clay && (maps&1)) base*=gBaseColor.Sample(gSampler,input.uv);
+    float4 vertexColor=input.color;
+    if ((flags&2048u)!=0) vertexColor.rgb=SrgbToLinear(vertexColor.rgb);
+    float4 base=clay ? float4(.58f,.58f,.58f,1.0f) : gBaseColorFactor*vertexColor;
+    if (!clay && (maps&1)) {
+        float4 tex=nearest?gBaseColor.Sample(gNearestSampler,sampleUv):gBaseColor.Sample(gLinearSampler,sampleUv);
+        if (!textureLayer) tex.a=1.0f;
+        else if (!uvValid) tex.a=0.0f;
+        if (textureMix) {
+            base.rgb=tex.rgb*tex.a+base.rgb*(1.0f-tex.a);
+            base.a=tex.a+base.a*(1.0f-tex.a);
+        } else base*=tex;
+    }
     if ((flags&4)!=0 && base.a<gMaterialFactors.z) discard;
     float3 n=normalize(input.normal);
     if (!clay && (maps&4)) {
         float3 t=normalize(input.tangent.xyz);
         float3 b=normalize(cross(n,t))*input.tangent.w;
-        float3 sampled=gNormal.Sample(gSampler,input.uv).xyz*2-1;
+        float3 sampled=(nearest?gNormal.Sample(gNearestSampler,sampleUv):gNormal.Sample(gLinearSampler,sampleUv)).xyz*2-1;
         n=normalize(sampled.x*t+sampled.y*b+sampled.z*n);
     }
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
     float metallic=clay?0.0f:gMaterialFactors.x, roughness=clay?.82f:gMaterialFactors.y;
-    if (!clay && (maps&2)) { float4 mr=gMetallicRoughness.Sample(gSampler,input.uv); metallic*=mr.b; roughness*=mr.g; }
+    if (!clay && (maps&2) && uvValid) { float4 mr=nearest?gMetallicRoughness.Sample(gNearestSampler,sampleUv):gMetallicRoughness.Sample(gLinearSampler,sampleUv); metallic*=mr.b; roughness*=mr.g; }
     roughness=clamp(roughness,.045f,1.0f);
     float3 color;
     if (!clay && (flags&2)) {
@@ -315,7 +341,7 @@ PixelOutput PSMain(PSInput input)
     }
     if (!clay) {
         float3 emissive=gEmissiveFactor.rgb;
-        if (maps&8) emissive*=gEmissive.Sample(gSampler,input.uv).rgb;
+        if ((maps&8) && uvValid) emissive*=(nearest?gEmissive.Sample(gNearestSampler,sampleUv):gEmissive.Sample(gLinearSampler,sampleUv)).rgb;
         color+=emissive;
     }
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
@@ -802,8 +828,8 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     rootParams[6].ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
     sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
     sampler.MaxLOD = D3D12_FLOAT32_MAX;
@@ -814,8 +840,12 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     D3D12_ROOT_SIGNATURE_DESC rootSigDesc{};
     rootSigDesc.NumParameters = static_cast<UINT>(std::size(rootParams));
     rootSigDesc.pParameters = rootParams;
-    rootSigDesc.NumStaticSamplers = 1;
-    rootSigDesc.pStaticSamplers = &sampler;
+    D3D12_STATIC_SAMPLER_DESC samplers[2]{sampler, sampler};
+    samplers[0].ShaderRegister=0;
+    samplers[1].ShaderRegister=1;
+    samplers[1].Filter=D3D12_FILTER_MIN_MAG_MIP_POINT;
+    rootSigDesc.NumStaticSamplers = 2;
+    rootSigDesc.pStaticSamplers = samplers;
     rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     ComPtr<ID3DBlob> signatureBlob;
@@ -1253,7 +1283,11 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             material[6]=mesh.material.alphaCutoff;
             material[7]=float(((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
                 | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u)
-                | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u));
+                | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u)
+                | ((mesh.material.flags&model_core::kMaterialSamplerFlags)<<1)
+                | ((mesh.material.flags&model_core::kMaterialFlagTextureLayer)?512u:0u)
+                | ((mesh.material.flags&model_core::kMaterialFlagTextureMix)?1024u:0u)
+                | ((mesh.material.flags&model_core::kMaterialFlagVertexSrgb)?2048u:0u));
             std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
             material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
             material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
@@ -1305,7 +1339,11 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 material[6]=mesh.material.alphaCutoff;
                 material[7]=float(((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
                     | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u)
-                    | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u));
+                    | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u)
+                    | ((mesh.material.flags&model_core::kMaterialSamplerFlags)<<1)
+                    | ((mesh.material.flags&model_core::kMaterialFlagTextureLayer)?512u:0u)
+                    | ((mesh.material.flags&model_core::kMaterialFlagTextureMix)?1024u:0u)
+                    | ((mesh.material.flags&model_core::kMaterialFlagVertexSrgb)?2048u:0u));
                 std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
                 material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
                 material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];

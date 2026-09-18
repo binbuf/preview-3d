@@ -260,12 +260,24 @@ TEST_CASE("A Material chunk with an unrecognized flags bit set is rejected",
 {
     auto chunks = ValidTriple();
     MaterialPayload p = ValidMaterialPayload();
-    p.flags = 1u << 5;
+    p.flags = 1u << 11;
     chunks[1].payload = ToBytes(p);
     auto section = BuildSection(chunks, 1);
     auto result = import_broker::ValidateAndCopySection(section, 1, 8);
     CHECK_FALSE(result.ok);
     CHECK(result.errorCode == ImportErrorCode::MalformedData);
+}
+
+TEST_CASE("The closed material flag mask accepts the 3MF sampler and blending flags",
+          "[shared-section-validator][texture]")
+{
+    auto chunks = ValidTriple();
+    MaterialPayload p = ValidMaterialPayload();
+    p.flags = kMaterialFlagsKnownMask;
+    chunks[1].payload = ToBytes(p);
+    const auto section = BuildSection(chunks, 1);
+    const auto result = import_broker::ValidateAndCopySection(section, 1, 8);
+    CHECK(result.ok);
 }
 
 TEST_CASE("A Material chunk whose dependency resolves to a non-Image chunk is rejected",

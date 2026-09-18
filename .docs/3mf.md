@@ -331,6 +331,23 @@ preserving reuse and authored placement.
 
 ## 3MF-004 — Materials, properties, and contained textures
 
+Status: in progress (2026-09-18; first private worker slice landed)
+
+The first slice normalizes Core base materials, Materials color groups,
+composite display colors, the bounded representable multi-properties subset,
+and contained PNG/JPEG texture groups. It carries object and triangle/corner
+properties through deindexed vertex colors/UVs, preserves sRGB vertex
+interpolation and 3MF's lower-left UV convention explicitly, and emits bounded
+image/material dependencies before geometry. The viewer material contract now
+also represents independent tile modes, nearest filtering, and the alpha
+semantics needed by a non-base texture layer.
+
+Completion still requires product-owned extraction of realistic display
+properties (the pinned lib3mf 2.5 bindings do not expose those XML resources),
+metallic/specular conversion, unsupported translucent-property policy, and the
+remaining malformed/limit/cancellation and render-readback matrix below. The
+format therefore remains private and 3MF-006 is still blocked on this task.
+
 ### Objective
 
 Map the supported 3MF appearance model into the renderer's existing material,

@@ -4,6 +4,47 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **3MF-004 Materials/properties and contained textures (2026-09-18): in
+  progress; first private worker slice complete.** The adapter now resolves
+  Core base materials plus Materials Extension color, texture-coordinate,
+  composite, and bounded multi-property resources at object, triangle, and
+  per-corner scope. Geometry is deliberately deindexed at property seams and
+  split into material-homogeneous chunks; a 32,768-entry normalized-material
+  map prevents adversarial per-triangle combinations from growing without a
+  cap. Image and material chunks are emitted before any geometry that depends
+  on them, so the existing progressive catalog rules remain intact.
+
+  Two format details cannot be left implicit in the general renderer. 3MF
+  vertex colors interpolate in authored sRGB and become linear only after
+  interpolation, while multi-property arithmetic is linear; a material flag
+  now distinguishes those paths. 3MF UV `(0,0)` is lower-left, so texture
+  materials carry the existing V-flip flag. Independent wrap/mirror/clamp/none
+  and nearest intent are encoded in formerly reserved material flag bits and
+  consumed by two fixed clamp samplers plus explicit shader addressing. For
+  `none`, edge RGB with zero alpha is used only for a non-base multi-property
+  texture layer; a standalone/base texture behaves as clamp and ignores image
+  alpha, as required by the extension.
+
+  Contained PNG/JPEG attachments are size-checked before `WriteToBuffer`,
+  content-sniffed against the declared type, and decoded with the existing
+  worker-only WIC allowlist under per-image and aggregate byte/pixel caps.
+  Unknown/corrupt image bytes produce the bounded checker and warning; a
+  positive PNG/JPEG signature that contradicts the declared MIME is malformed
+  rather than silently decoded. The normalized image is tagged sRGB, allowing
+  the D3D12 SRV to linearize samples before lighting or multi-property
+  arithmetic.
+
+  The pinned lib3mf 2.5 public bindings expose classic material/property
+  groups but no realistic display-property resources or their
+  `displaypropertiesid` associations. Finishing 3MF-004 therefore needs a
+  bounded product-owned scan of already-preflighted model XML (including
+  Production model parts), keyed by package-part/resource identity, before PB
+  metallic/specular conversion can be implemented safely. Do not infer those
+  associations from globally unique local IDs. Translucent and display-texture
+  fallback policy, broader negative/limit fixtures, texture-layer blend
+  goldens, and render readback remain open. `.3mf` discovery and registration
+  remain disabled.
+
 - **3MF-003 Core and Production scene adapter (2026-09-18): complete;
   private only.** `Preview3DImportWorker.exe` now constructs lib3mf models
   through the same duplicated, read-only source handle used by the spike,

@@ -6,6 +6,9 @@
 #include "import_broker/ImportSession.h"
 #include "import_broker/WorkerPool.h"
 #include "model_core/ControlProtocol.h"
+#include "model_core/MaterialPayload.h"
+#include "model_core/PixelFormats.h"
+#include "model_core/VertexLayouts.h"
 #include "platform/MappedView.h"
 #include "platform/Sha256.h"
 #include "platform/Win32Handle.h"
@@ -297,6 +300,50 @@ std::vector<std::byte> DeepComponentPackage(uint32_t depth)
     return BuildStoredPackage({ { "[Content_Types].xml", contentTypes },
                                 { "_rels/.rels", relationships },
                                 { "3D/3dmodel.model", model } });
+}
+
+std::vector<std::byte> AppearancePackage()
+{
+    const std::string model = R"(<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
+<resources>
+<basematerials id="1"><base name="red" displaycolor="#FF0000FF"/><base name="blue" displaycolor="#0000FF80"/></basematerials>
+<m:colorgroup id="2"><m:color color="#00FF00FF"/><m:color color="#FFFFFF80"/><m:color color="#0000FFFF"/></m:colorgroup>
+<m:compositematerials id="3" matid="1" matindices="0 1"><m:composite values="0.25 0.75"/></m:compositematerials>
+<m:multiproperties id="4" pids="1 2" blendmethods="multiply"><m:multi pindices="0 0"/></m:multiproperties>
+<object id="5" type="model" pid="1" pindex="0"><mesh><vertices>
+<vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/>
+<vertex x="2" y="0" z="0"/><vertex x="3" y="0" z="0"/><vertex x="2" y="1" z="0"/>
+<vertex x="4" y="0" z="0"/><vertex x="5" y="0" z="0"/><vertex x="4" y="1" z="0"/>
+<vertex x="6" y="0" z="0"/><vertex x="7" y="0" z="0"/><vertex x="6" y="1" z="0"/>
+</vertices><triangles>
+<triangle v1="0" v2="1" v3="2"/>
+<triangle v1="3" v2="4" v3="5" pid="2" p1="0" p2="1" p3="2"/>
+<triangle v1="6" v2="7" v3="8" pid="3" p1="0"/>
+<triangle v1="9" v2="10" v3="11" pid="4" p1="0"/>
+</triangles></mesh></object></resources><build><item objectid="5"/></build></model>)";
+    const std::string contentTypes = R"(<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>)";
+    const std::string relationships = R"(<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>)";
+    return BuildStoredPackage({ { "[Content_Types].xml", contentTypes },
+                                { "_rels/.rels", relationships },
+                                { "3D/3dmodel.model", model } });
+}
+
+import_broker::ImportSessionResult ImportThreeMfBytes(std::span<const std::byte> bytes,
+                                                       uint64_t generation)
+{
+    TemporaryFile file(bytes);
+    file.Close();
+    import_broker::ImportSessionRequest request{};
+    request.workerExePath = sandbox_test_support::WorkerExePath();
+    request.sourcePath = file.path();
+    request.format = import_broker::ImportFormat::ThreeMf;
+    request.generationId = generation;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 2048;
+    request.maxChunkBatchesPerGeneration = 64;
+    request.maxChunksPerGeneration = 20'000;
+    return import_broker::RunImportSession(request);
 }
 
 struct Fixture {
@@ -781,4 +828,89 @@ TEST_CASE("3MF-003 normalizes only root-build Core and Production occurrences", 
             if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
                 CHECK((chunk.descriptor.geometryFlags & model_core::kGeometryReusableInstanceSource) != 0);
     }
+}
+
+TEST_CASE("3MF-004 normalizes object defaults, corner colors, composites, and multi-properties",
+          "[3mf-004][materials][properties]")
+{
+    const auto result = ImportThreeMfBytes(AppearancePackage(), 0x336d66060001ull);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode));
+    REQUIRE(result.ok);
+    const auto count = [&](model_core::ChunkTopology topology) {
+        return std::count_if(result.chunks.begin(), result.chunks.end(), [&](const auto& chunk) {
+            return chunk.descriptor.topology == topology;
+        });
+    };
+    CHECK(count(model_core::ChunkTopology::Material) >= 2);
+    CHECK(count(model_core::ChunkTopology::TriangleList) >= 2);
+    CHECK(count(model_core::ChunkTopology::MeshInstance) == count(model_core::ChunkTopology::TriangleList));
+    bool foundRed = false, foundGradient = false, foundBlend = false, foundSrgb = false;
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material) {
+            model_core::MaterialPayload material{};
+            REQUIRE(chunk.payload.size() == sizeof(material));
+            std::memcpy(&material, chunk.payload.data(), sizeof(material));
+            foundBlend |= material.alphaMode == uint32_t(model_core::AlphaModeId::Blend);
+            foundSrgb |= (material.flags & model_core::kMaterialFlagVertexSrgb) != 0;
+        }
+        if (chunk.descriptor.topology != model_core::ChunkTopology::TriangleList) continue;
+        CHECK(chunk.descriptor.vertexLayoutId == uint32_t(
+            model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32));
+        CHECK((chunk.descriptor.geometryFlags & model_core::kGeometryHasColors) != 0);
+        const auto* vertices = reinterpret_cast<const model_core::VertexPositionNormalUv0TangentColorF32*>(
+            chunk.payload.data());
+        const size_t vertexCount = chunk.descriptor.vertexCount;
+        for (size_t index = 0; index < vertexCount; ++index) {
+            foundRed |= vertices[index].r > 0.99f && vertices[index].g < 0.01f;
+        }
+        if (vertexCount >= 3) {
+            for (size_t first = 0; first + 2 < vertexCount; first += 3) {
+                const auto& a = vertices[first]; const auto& b = vertices[first + 1];
+                const auto& c = vertices[first + 2];
+                foundGradient |= a.g > 0.99f && b.r > 0.99f && b.a < 0.51f
+                    && c.b > 0.99f;
+            }
+        }
+    }
+    CHECK(foundRed);
+    CHECK(foundGradient);
+    CHECK(foundBlend);
+    CHECK(foundSrgb);
+}
+
+TEST_CASE("3MF-004 decodes contained texture groups before textured geometry",
+          "[3mf-004][texture][wic]")
+{
+    const auto result = ImportThreeMfBytes(DecodeBase64("materials-texture.3mf.base64"),
+                                            0x336d66060002ull);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode));
+    REQUIRE(result.ok);
+    size_t imagePosition = SIZE_MAX, materialPosition = SIZE_MAX, geometryPosition = SIZE_MAX;
+    bool foundUv = false;
+    for (size_t index = 0; index < result.chunks.size(); ++index) {
+        const auto& chunk = result.chunks[index];
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image) {
+            imagePosition = (std::min)(imagePosition, index);
+            model_core::ImagePayloadHeader header{};
+            REQUIRE(chunk.payload.size() >= sizeof(header));
+            std::memcpy(&header, chunk.payload.data(), sizeof(header));
+            CHECK(header.colorSpace == uint32_t(model_core::ColorSpaceId::Srgb));
+            CHECK(header.width > 0); CHECK(header.height > 0);
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::Material) {
+            materialPosition = (std::min)(materialPosition, index);
+            CHECK(chunk.descriptor.dependencyIds[0] != 0);
+            model_core::MaterialPayload material{};
+            REQUIRE(chunk.payload.size() == sizeof(material));
+            std::memcpy(&material, chunk.payload.data(), sizeof(material));
+            CHECK((material.flags & model_core::kMaterialFlagFlipV) != 0);
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList) {
+            geometryPosition = (std::min)(geometryPosition, index);
+            foundUv |= (chunk.descriptor.geometryFlags & model_core::kGeometryHasUv0) != 0;
+        }
+    }
+    REQUIRE(imagePosition != SIZE_MAX); REQUIRE(materialPosition != SIZE_MAX);
+    REQUIRE(geometryPosition != SIZE_MAX);
+    CHECK(imagePosition < materialPosition);
+    CHECK(materialPosition < geometryPosition);
+    CHECK(foundUv);
 }

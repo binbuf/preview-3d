@@ -22,9 +22,32 @@ constexpr uint32_t kMaterialFlagUnlit = 1u << 1;
 // USD defines (0,0) at an image's lower-left, while Direct3D samples (0,0)
 // at the upper-left. Flip after the authored UV transform for USD materials.
 constexpr uint32_t kMaterialFlagFlipV = 1u << 2;
-// Bits 3-31 reserved, must be 0 -- SharedSectionValidator rejects any set.
+// 3MF texture2d carries independent U/V addressing plus nearest/linear intent.
+// Zero remains the existing wrap/linear default, so older producers retain
+// their exact behavior. Texture-layer and mix distinguish the cases where
+// texture alpha participates in a 3MF multiproperties blend. Vertex-sRGB asks
+// the shader to interpolate an authored color in sRGB before linearization.
+constexpr uint32_t kMaterialAddressUShift = 3;
+constexpr uint32_t kMaterialAddressVShift = 5;
+constexpr uint32_t kMaterialAddressMask = 0x3u;
+enum class TextureAddressId : uint32_t { Wrap = 0, Mirror = 1, Clamp = 2, None = 3 };
+constexpr uint32_t kMaterialFlagNearest = 1u << 7;
+constexpr uint32_t kMaterialFlagTextureLayer = 1u << 8;
+constexpr uint32_t kMaterialFlagTextureMix = 1u << 9;
+constexpr uint32_t kMaterialFlagVertexSrgb = 1u << 10;
+constexpr uint32_t MaterialAddressFlags(TextureAddressId u, TextureAddressId v) noexcept
+{
+    return (uint32_t(u) << kMaterialAddressUShift)
+        | (uint32_t(v) << kMaterialAddressVShift);
+}
+constexpr uint32_t kMaterialSamplerFlags =
+    (kMaterialAddressMask << kMaterialAddressUShift)
+    | (kMaterialAddressMask << kMaterialAddressVShift) | kMaterialFlagNearest;
+// Bits 11-31 reserved, must be 0 -- SharedSectionValidator rejects any set.
 constexpr uint32_t kMaterialFlagsKnownMask =
-    kMaterialFlagDoubleSided | kMaterialFlagUnlit | kMaterialFlagFlipV;
+    kMaterialFlagDoubleSided | kMaterialFlagUnlit | kMaterialFlagFlipV
+    | kMaterialSamplerFlags | kMaterialFlagTextureLayer
+    | kMaterialFlagTextureMix | kMaterialFlagVertexSrgb;
 
 #pragma pack(push, 1)
 
