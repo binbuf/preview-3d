@@ -74,3 +74,9 @@ The first command writes the portable archive and checksum to `artifacts\portabl
 ## Credits
 
 Interface icons: [Magnific](https://www.flaticon.com/free-icons/geometric), [Iconir](https://www.flaticon.com/free-icons/perspective), [Magnific](https://www.flaticon.com/free-icons/grid), and [Magnific](https://www.flaticon.com/free-icons/speed) via Flaticon.
+
+## License
+
+Copyright 2026 Binbuf. Preview3D is licensed under the [Apache License 2.0](LICENSE).
+See [NOTICE](NOTICE) for required attribution notices and
+[third-party license information](THIRD-PARTY-LICENSES.md) for dependencies.
