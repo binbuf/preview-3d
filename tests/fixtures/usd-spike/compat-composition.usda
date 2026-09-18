@@ -1,0 +1,60 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 0.01
+    upAxis = "Z"
+    subLayers = [@compat-sub.usda@]
+)
+
+class Xform "_Base"
+{
+    def Mesh "InheritedMesh"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        uniform token subdivisionScheme = "none"
+    }
+}
+
+class Xform "_SpecialBase"
+{
+    def Mesh "SpecializedMesh"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (0, 1, 0), (0, 0, 1)]
+        uniform token subdivisionScheme = "none"
+    }
+}
+
+def Xform "Root"
+{
+    def Xform "Referenced" (prepend references = @compat-ref.usda@) {}
+    def Xform "PayloadSite" (prepend payload = @compat-payload.usda@) {}
+    def Xform "Inherited" (prepend inherits = </_Base>) {}
+    def Xform "Specialized" (prepend specializes = </_SpecialBase>) {}
+
+    def Xform "Variant"
+    (
+        variants = {
+            string model = "A"
+        }
+        prepend variantSets = "model"
+    )
+    {
+        variantSet "model" = {
+            "A" {
+                def Mesh "Chosen"
+                {
+                    int[] faceVertexCounts = [3]
+                    int[] faceVertexIndices = [0, 1, 2]
+                    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 0, 1)]
+                    uniform token subdivisionScheme = "none"
+                }
+            }
+            "B" {
+            }
+        }
+    }
+}

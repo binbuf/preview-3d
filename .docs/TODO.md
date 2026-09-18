@@ -69,8 +69,8 @@ did not, and each is still owed.
       deferred by the active scope; large/performance gates remain unqualified.
 - [x] **Compatibility-host protocol / shared-section schema** (`10-…:70`). USD-006 added the
       distinct lazy AppContainer host lifecycle and opcode while reusing the normalized section,
-      validation, resolver-service, cancellation and Job boundary. USD-007 still owes the
-      OpenUSD composition adapter that produces those normalized sections.
+      validation, resolver-service, cancellation and Job boundary. USD-007 now produces the same
+      bounded normalized sections from broker-only OpenUSD composition.
 - [ ] **Allocation-budget and clock interfaces** (`10-…:69`). Adapters enforce their own ad-hoc
       caps (`kMaxFacets`, `kMaxHeaderBytes`, `kMaxPolygonVerticesPerFace`, …) rather than sharing
       an interface, and there is no full Tier-A hard-limit table (`03-…:160-174`).
@@ -355,8 +355,8 @@ test-only fast and compatibility-platform work has reached USD-006. lib3mf remai
       enforcement, broker protocol, shared-section revalidation, host crash/timeout behaviour, and
       signed/hash-verified payload tests.
   - [x] USD-002 spike and USD-006 production platform/fallback lifecycle.
-  - [ ] USD-007 bounded OpenUSD composition/normalization, followed by USD-008/009 exposure and
-        qualification.
+  - [x] USD-007 bounded OpenUSD composition/normalization. USD-008/009 exposure, packaging, and
+        qualification remain open.
 
 Every slice carries the same bundle (`10-…:165`): adapter wrapper, dependency allocation/I/O/cancel
 callbacks and Job Object limits, normalized output, unsupported-feature diagnostics, golden scenes,
@@ -479,9 +479,6 @@ product, engineering, security and installer owners sign the same artifact manif
       only function returns 0. The shared "library" is in practice compiled per-consumer through
       relative-path `ClCompile`, which is an established and deliberate pattern here; the stub
       project is the leftover.
-- [ ] **`compatibility-host` composition adapter is incomplete** (Gate 4 slice 5). USD-006
-      completed the production sandbox/protocol/fallback/payload-audit lifecycle; USD-007 must
-      replace its closed failure placeholder with bounded OpenUSD normalized output.
 - [ ] **`thumbnail-provider` is a 21-line stub** (Gate 6).
 - [ ] **Validation spikes**: 1 done *with a caveat* — ADR-010's chrome-scale p95 ranges roughly
       7.2–9.0 ms across repeat runs and occasionally crosses NFR-04's 8.3 ms gate, and **must be

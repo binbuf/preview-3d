@@ -79,24 +79,24 @@ bool SendError(uint64_t generationId, model_core::ImportErrorCode code)
         &notice, sizeof(notice));
 }
 
-bool LoadAndAuditProductionPayload(const std::filesystem::path& directory)
+HMODULE LoadAndAuditProductionPayload(const std::filesystem::path& directory)
 {
     static HMODULE core = nullptr;
     static bool audited = false;
-    if (audited) return true;
+    if (audited) return core;
     if (!core) {
         const auto corePath = directory / L"Preview3DOpenUsdCore.dll";
         core = LoadLibraryExW(corePath.c_str(), nullptr,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32
                 | LOAD_LIBRARY_SEARCH_USER_DIRS);
     }
-    if (!core) return false;
+    if (!core) return nullptr;
     using AuditFunction = int (__cdecl*)(const wchar_t*);
     const auto audit = reinterpret_cast<AuditFunction>(
         GetProcAddress(core, "Preview3DAuditOpenUsdPayload"));
-    if (!audit || audit(directory.c_str()) != 0) return false;
+    if (!audit || audit(directory.c_str()) != 0) return nullptr;
     audited = true;
-    return true;
+    return core;
 }
 
 enum class PoolMode { Normal, Crash, Hang, ConsumeMemory, StaleReply, ReverseFallback };
@@ -175,17 +175,43 @@ int RunProductionPool(PoolMode mode, const std::filesystem::path& directory)
             if (!SendError(request.generationId, model_core::ImportErrorCode::Cancelled)) return 77;
             continue;
         }
-        if (!LoadAndAuditProductionPayload(directory)) {
+        const HMODULE core = LoadAndAuditProductionPayload(directory);
+        if (!core) {
             if (!SendError(request.generationId,
                            model_core::ImportErrorCode::CompatibilityHostFailure)) return 82;
             continue;
         }
 
-        // USD-006 owns the production process/protocol lifecycle. USD-007
-        // replaces this closed placeholder with the bounded OpenUSD adapter;
-        // until then no partial or spike-normalized data is publishable.
-        if (!SendError(request.generationId,
-                       model_core::ImportErrorCode::CompatibilityHostFailure)) return 78;
+        using RunFunction = int (__cdecl*)(
+            const model_core::ParseOpenUsdFileRequest*, std::byte*, std::size_t,
+            void*, void*, const wchar_t*, compatibility_host::OpenUsdImportResult*);
+        const auto run = reinterpret_cast<RunFunction>(
+            GetProcAddress(core, "Preview3DRunOpenUsdImport"));
+        compatibility_host::OpenUsdImportResult result{};
+        if (!run || run(&request, outputView.bytes().data(), outputView.bytes().size(),
+                        GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
+                        directory.c_str(), &result) != 0) {
+            if (!SendError(request.generationId,
+                           model_core::ImportErrorCode::CompatibilityHostFailure)) return 78;
+            continue;
+        }
+        if (result.errorCode != model_core::ImportErrorCode::None) {
+            model_core::GenerationErrorNotice notice{};
+            notice.generationId = request.generationId;
+            notice.errorCode = static_cast<std::uint32_t>(result.errorCode);
+            notice.reserved0 = static_cast<std::uint32_t>(result.phase);
+            if (!model_core::WriteControlMessage(
+                    GetStdHandle(STD_OUTPUT_HANDLE), model_core::ControlOpcode::GenerationError,
+                    &notice, sizeof(notice))) return 78;
+            continue;
+        }
+        model_core::ChunksReadyNotice notice{};
+        notice.generationId = request.generationId;
+        notice.chunkCount = result.chunkCount;
+        notice.sectionBytesWritten = result.sectionBytesWritten;
+        if (!model_core::WriteControlMessage(
+                GetStdHandle(STD_OUTPUT_HANDLE), model_core::ControlOpcode::ChunksReady,
+                &notice, sizeof(notice))) return 78;
     }
 }
 

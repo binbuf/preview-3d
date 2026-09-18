@@ -22,11 +22,11 @@
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\shared\platform\include;src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\import-worker\src;src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <DisableSpecificWarnings>4100;4201;4244;4305;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>usd_ms.lib;psapi.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>usd_ms.lib;psapi.lib;bcrypt.lib;windowscodecs.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
@@ -38,6 +38,16 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\OpenUsdHost.cpp" />
+    <ClCompile Include="..\import-worker\src\ChunkBatchSink.cpp" />
+    <ClCompile Include="..\import-worker\src\ImageFormatSniff.cpp" />
+    <ClCompile Include="..\import-worker\src\SidecarFileClient.cpp" />
+    <ClCompile Include="..\import-worker\src\TextureTranscodeAdapter.cpp" />
+    <ClCompile Include="..\import-worker\src\UsdZipPreflight.cpp" />
+    <ClCompile Include="..\import-worker\src\WebpDecodeAdapter.cpp" />
+    <ClCompile Include="..\import-worker\src\WicImageDecodeAdapter.cpp" />
+    <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
+    <ClCompile Include="..\shared\model-core\src\MappedFile.cpp" />
+    <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\shared\platform\src\Sha256.cpp" />
   </ItemGroup>
   <ItemGroup><ClInclude Include="src\OpenUsdHost.h" /><ClInclude Include="src\OpenUsdSpikeProtocol.h" /></ItemGroup>

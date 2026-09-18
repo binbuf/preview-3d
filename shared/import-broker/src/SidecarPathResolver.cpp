@@ -42,7 +42,8 @@ std::wstring LowerCopy(std::wstring s)
 bool HasAllowedSidecarExtension(const std::filesystem::path& path)
 {
     static const std::wstring kAllowed[] = { L".bin", L".mtl", L".png", L".jpg", L".jpeg",
-                                             L".bmp", L".tif", L".tiff", L".webp", L".ktx2" };
+                                             L".bmp", L".tif", L".tiff", L".webp", L".ktx2",
+                                             L".usd", L".usda", L".usdc" };
     std::wstring ext = LowerCopy(path.extension().wstring());
     for (const auto& allowed : kAllowed) {
         if (ext == allowed) {

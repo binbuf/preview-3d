@@ -4,6 +4,56 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **USD-007 bounded OpenUSD composition/normalization (2026-09-18): complete,
+  still test-only.** The production compatibility core now opens broker-backed
+  USDA/USDC/USDZ stages with `LoadNone`, loads payloads breadth-first, and
+  normalizes the approved static scene into the same bounded progressive wire
+  batches as the general worker. Composition covers sublayers, references,
+  payloads, inherits, specializes, default variants, native instances, and
+  point instancers. Geometry, transforms/bounds, material subsets, Preview
+  Surface factors, WIC/WebP/KTX textures, warnings, and static-policy metadata
+  all pass through the existing writer and trusted validator. No viewer,
+  activation, association, package, or thumbnail surface changed; USD-008 is
+  the next task and USD thumbnails remain USD-010.
+
+  Several details are worth carrying forward. OpenUSD may call the resolver
+  with an empty anchor for byte-backed composition arcs, so the private
+  `preview3d://` resolver must explicitly anchor those at its namespace root;
+  it must reject `..` before normalization or a traversal can disappear before
+  the trusted broker sees it. The broker sidecar extension allowlist also had
+  to admit `.usd`/`.usda`/`.usdc`—leaving it image-only made every legitimate
+  composed layer look like `UnsafeReference`; `.usdz` is intentionally still
+  absent so recursive packages remain closed. Identity-only xformables can
+  leave `UsdGeomXformable::GetLocalTransformation`'s boolean false while the
+  initialized identity matrix is valid, so matrix validity—not that boolean—is
+  the useful normalization gate. Finally, OpenUSD's USDA parser is stricter
+  than TinyUSDZ about metadata-block layout; multiline authored metadata in
+  fixtures prevents a fast-parser-only test from masking malformed fallback
+  input.
+
+  The overlap corpus caught two tiny but user-visible normalization drifts:
+  OpenUSD initially emitted a synthetic +X tangent where TinyUSDZ deliberately
+  emits a zero tangent, and it marked constant display color as per-vertex
+  color where the fast route does not. Aligning those rules now makes the full
+  canonical chunk fingerprint exact after removing only the exclusions named
+  in `.docs/usd.md` (generation/encoding/source offsets/checksums). Original
+  USD-007 fixtures record SHA-256 and independent expected facts. Focused
+  tests cover all approved arcs, USDZ composition, point-instance masking,
+  exact fast/compat overlap, materials/textures and missing fallback, malformed
+  and recursive layers, unsafe traversal, unsupported required content,
+  dependency pressure, cancel/replace, crash/hang/protocol/commit faults, and
+  later recovery. Adding WebP/KTX parity also means USD-008 must package and
+  dependency-audit `ktx`, `zstd`, `libwebp`, and `libsharpyuv` beside the
+  already-private OpenUSD host; they are not viewer/general-worker imports.
+  Debug/Release solution builds are clean. Focused USD-002 through USD-007
+  passes 25 cases / 705 assertions, including USD-007's 5 cases / 186
+  assertions. Unit remains green
+  at 98 cases (7,617 Debug / 7,529 Release assertions). Full Debug isolation
+  reaches 278/282 with only the four pre-existing FBX fixture-rewrite failures;
+  Release reaches 271/282 with those four plus seven already-documented
+  randomized sidecar scratch-directory collisions. No full-run failure enters
+  a USD route.
+
 - **USD-006 compatibility-host lifecycle (2026-09-17): complete, still
   test-only.** The broker now consumes only an exact pre-publication
   `UnsupportedComposition` from TinyUSDZ, discards the fast attempt, and
@@ -16,10 +66,11 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
   The bootstrap locks DLL/environment discovery before input and remains free
   of OpenUSD imports. Its first production request loads the core by absolute
-  private path and audits the 13-file resource inventory. USD-007 still owns
-  composed-stage normalization; the current production host deliberately
-  returns `CompatibilityHostFailure` after platform/payload validation rather
-  than exposing USD-002 spike data. Viewer format discovery remains disabled.
+  private path and audits the 13-file resource inventory. At USD-006
+  completion, composed-stage normalization was deliberately left to USD-007
+  and the production host returned `CompatibilityHostFailure` after
+  platform/payload validation rather than exposing USD-002 spike data. Viewer
+  format discovery remains disabled.
 
   Debug/Release solution builds pass. Focused USD-006 passes 2 cases / 64
   deterministic assertions in both configurations, and USD-002 through

@@ -656,10 +656,9 @@ The bootstrap remains free of OpenUSD imports. Before reading requests it
 locks DLL search and clears OpenUSD/plugin discovery variables. On the first
 production fallback it loads `Preview3DOpenUsdCore.dll` by absolute private
 path and hashes the closed 13-file resource inventory before any future stage
-open. USD-007 owns the actual bounded stage composition and normalized chunk
-emission; until that adapter lands, the production route returns the closed
-`CompatibilityHostFailure` fact rather than publishing spike output. This is
-why product extension discovery remains disabled.
+open. USD-007 now supplies bounded stage composition and normalized chunk
+emission behind that lifecycle. Product extension discovery remains disabled
+until USD-008 completes the viewer and distribution surfaces.
 
 Focused USD-006 tests pass in Debug and Release (2 cases / 64 assertions).
 They cover exact
@@ -676,7 +675,7 @@ viewer, general worker, thumbnail DLL, or bootstrap executable.
 
 ## USD-007: bounded OpenUSD static composition adapter
 
-Status: ready
+Status: complete (2026-09-18)
 Depends on: USD-005 and USD-006  
 Unblocks: USD-008
 
@@ -725,9 +724,51 @@ compatibility host and prove semantic overlap with the TinyUSDZ route.
 - Limits/cancellation/crash paths recover and preserve prior usable content in
   the viewer bridge tests.
 
+### Completion record
+
+- The audited `Preview3DOpenUsdCore.dll` now owns the production import entry
+  point. It opens USDA, USDC, and USDZ roots with `UsdStage::LoadNone` through
+  the USD-002 `preview3d://` memory resolver, loads payload sites in bounded
+  breadth-first order, and obtains every local layer or image through the
+  existing synchronous broker protocol. The broker allowlist now admits
+  `.usd`, `.usda`, and `.usdc` layer sidecars; recursive `.usdz` sidecars remain
+  closed. Absolute, URI, traversal, reparse-escape, missing required,
+  malformed, cyclic, over-depth, over-count, over-byte, timeout, and Job-limit
+  outcomes fail without granting the host filesystem or network authority.
+- OpenUSD composition covers sublayers, references, payloads, inherits,
+  specializes, authored default variants, native instances, and bounded point
+  instances. The adapter samples the USD-001 static policy time, applies
+  purpose/visibility and local/world transforms, validates axes and units,
+  triangulates meshes/material subsets, normalizes normals/UVs/display color,
+  emits transformed instance bounds, and converts Preview Surface factors,
+  texture slots, UV transforms, alpha and double-sided state. Optional texture
+  failures use the product WIC/WebP/KTX decoders and deterministic warning
+  fallback; unsupported required schemas or subdivision features fail closed.
+- Output uses the worker's `BoundedChunkWriter`, `ChunkBatchSink`, image decode,
+  USDZ preflight, wire schema, and trusted broker validator rather than a
+  second compatibility-only format. The overlap fixture now produces an exact
+  canonical semantic fingerprint across TinyUSDZ and OpenUSD after excluding
+  generation, encoding, source ranges, offsets, and checksums as specified
+  above. Compatibility USDZ composition is also exercised through the same
+  normalized route.
+- Original fixtures record provenance, independent expected facts, and
+  immutable SHA-256 values. Focused coverage includes every approved
+  composition arc, default variants, point-instance masking, materials and
+  textures, optional missing assets, malformed/recursive/unsafe/required
+  failures, dependency pressure, cancel/replace, crash/hang/protocol/commit
+  faults, and later fast/host recovery. Viewer discovery, extension
+  registration, packaging, and all thumbnail behavior remain unchanged for
+  USD-008/009/010.
+- Debug and Release focused USD-002 through USD-007 coverage passes 25 cases /
+  705 assertions; USD-007 contributes 5 cases / 186 assertions. Unit passes
+  98/98 in both configurations. Full Debug isolation reaches 278/282 with the
+  four known FBX fixture-rewrite failures; Release reaches 271/282 with those
+  four plus seven known randomized sidecar scratch-directory collisions. No
+  full-run failure enters a USD route.
+
 ## USD-008: viewer, activation, installer, and package integration
 
-Status: blocked  
+Status: ready
 Depends on: USD-007  
 Unblocks: USD-009
 

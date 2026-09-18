@@ -8,6 +8,8 @@
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/WireFormat.h"
+#include "model_core/VertexLayouts.h"
+#include "platform/Sha256.h"
 #include "platform/Win32Handle.h"
 #include "UsdZipPreflight.h"
 
@@ -69,6 +71,21 @@ std::vector<std::byte> ReadFixture(std::string_view name)
     if (name.ends_with(".base64")) return DecodeBase64(raw);
     const auto bytes = std::as_bytes(std::span(raw));
     return {bytes.begin(), bytes.end()};
+}
+
+std::string Sha256Hex(std::span<const std::byte> bytes)
+{
+    const auto digest = platform::ComputeSha256(bytes);
+    if (!digest) return {};
+    constexpr char digits[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(digest->size() * 2);
+    for (const std::byte byte : *digest) {
+        const auto value = std::to_integer<uint8_t>(byte);
+        result.push_back(digits[value >> 4]);
+        result.push_back(digits[value & 0x0f]);
+    }
+    return result;
 }
 
 size_t FindSignature(std::span<const std::byte> bytes, uint32_t signature)
@@ -225,6 +242,51 @@ uint64_t SemanticFingerprint(const import_broker::ImportSessionResult& result)
         add(chunk.payload);
     }
     return hash;
+}
+
+uint64_t CanonicalUsdFingerprint(const import_broker::ImportSessionResult& result)
+{
+    uint64_t hash = 14695981039346656037ULL;
+    auto add = [&](std::span<const std::byte> bytes) {
+        for (const std::byte byte : bytes) {
+            hash ^= std::to_integer<uint8_t>(byte);
+            hash *= 1099511628211ULL;
+        }
+    };
+    auto scene = result.chunks.front().scene;
+    scene.generationId = 0;
+    scene.format = model_core::SourceFormatId::Unknown;
+    add(std::as_bytes(std::span(&scene, 1)));
+    for (const auto& chunk : result.chunks) {
+        auto descriptor = chunk.descriptor;
+        descriptor.normalizedRangeOffset = 0;
+        descriptor.sourceRangeOffset = 0;
+        descriptor.sourceRangeLength = 0;
+        descriptor.chunkChecksum = 0;
+        add(std::as_bytes(std::span(&descriptor, 1)));
+        add(chunk.payload);
+    }
+    return hash;
+}
+
+std::vector<double> CanonicalGeometryPositions(const import_broker::ImportSessionResult& result)
+{
+    std::vector<double> positions;
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::TriangleList) continue;
+        const auto stride = model_core::VertexStrideForLayout(
+            static_cast<model_core::VertexLayoutId>(chunk.descriptor.vertexLayoutId));
+        REQUIRE(stride >= 12);
+        REQUIRE(chunk.payload.size() >= uint64_t(chunk.descriptor.vertexCount) * stride);
+        for (uint32_t vertex = 0; vertex < chunk.descriptor.vertexCount; ++vertex) {
+            float local[3]{};
+            std::memcpy(local, chunk.payload.data() + uint64_t(vertex) * stride, sizeof(local));
+            for (size_t axis = 0; axis < 3; ++axis)
+                positions.push_back(chunk.descriptor.origin[axis] + local[axis]);
+        }
+    }
+    std::sort(positions.begin(), positions.end());
+    return positions;
 }
 
 std::vector<std::byte> MetadataSection(model_core::UpAxisId axis, double metersPerUnit)
@@ -444,8 +506,8 @@ TEST_CASE("USD-005 keeps composition atomic and imports independently preflighte
     ScratchUsd composed(L"usda");
     const std::string source =
         "#usda 1.0\n( subLayers = [@child.usda@] )\n"
-        "def Mesh \"M\" { int[] faceVertexCounts=[3] int[] faceVertexIndices=[0,1,2] "
-        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] }";
+        "def Mesh \"M\" {\n int[] faceVertexCounts=[3]\n int[] faceVertexIndices=[0,1,2]\n "
+        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)]\n uniform token subdivisionScheme=\"none\"\n}\n";
     composed.Write(std::as_bytes(std::span(source)));
     const auto fallback = import_broker::RunImportSession(Request(composed.path, 170));
     CHECK_FALSE(fallback.ok);
@@ -765,8 +827,8 @@ TEST_CASE("USD-006 lazily launches an isolated compatibility producer and discar
     ScratchUsd composed(L"usda");
     const std::string source =
         "#usda 1.0\n( subLayers = [@child.usda@] )\n"
-        "def Mesh \"M\" { int[] faceVertexCounts=[3] int[] faceVertexIndices=[0,1,2] "
-        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] }";
+        "def Mesh \"M\" {\n int[] faceVertexCounts=[3]\n int[] faceVertexIndices=[0,1,2]\n "
+        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)]\n uniform token subdivisionScheme=\"none\"\n}\n";
     composed.Write(std::as_bytes(std::span(source)));
     const std::string child = "#usda 1.0\n";
     composed.WriteSidecar(L"child.usda", std::as_bytes(std::span(child)));
@@ -776,14 +838,14 @@ TEST_CASE("USD-006 lazily launches an isolated compatibility producer and discar
     const auto result = import_broker::RunImportSession(request);
     CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.workerProcessId,
             result.batchCount);
-    CHECK_FALSE(result.ok);
-    // USD-007 owns normalized OpenUSD output. Until then the production host
-    // returns a closed host-owned fact, never the discarded TinyUSDZ result.
-    CHECK(result.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+    CHECK(result.ok);
+    CHECK(result.errorCode == model_core::ImportErrorCode::None);
     CHECK(result.producer == import_broker::ImportProducer::CompatibilityHost);
     CHECK_FALSE(result.compatibilityFallbackRequired);
-    CHECK(result.batchCount == 0);
-    CHECK(result.chunks.empty());
+    CHECK(result.batchCount == 1);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 1);
+    CHECK(Count(result, model_core::ChunkTopology::Node) == 1);
+    CHECK(Count(result, model_core::ChunkTopology::MeshInstance) == 1);
     REQUIRE(result.workerProcessId != 0);
 
     // The strict bounded-idle policy exits at generation completion. If the
@@ -828,9 +890,17 @@ TEST_CASE("USD-006 compatibility crash timeout protocol and commit faults stay g
 {
     ScratchUsd composed(L"usda");
     const std::string source =
-        "#usda 1.0\n( subLayers = [@child.usda@] )\n"
-        "def Mesh \"M\" { int[] faceVertexCounts=[3] int[] faceVertexIndices=[0,1,2] "
-        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] }";
+        "#usda 1.0\n"
+        "(\n"
+        "    subLayers = [@child.usda@]\n"
+        ")\n"
+        "def Mesh \"M\"\n"
+        "{\n"
+        "    int[] faceVertexCounts = [3]\n"
+        "    int[] faceVertexIndices = [0, 1, 2]\n"
+        "    point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]\n"
+        "    uniform token subdivisionScheme = \"none\"\n"
+        "}\n";
     composed.Write(std::as_bytes(std::span(source)));
     const std::string child = "#usda 1.0\n";
     composed.WriteSidecar(L"child.usda", std::as_bytes(std::span(child)));
@@ -892,7 +962,8 @@ TEST_CASE("USD-006 compatibility crash timeout protocol and commit faults stay g
     const auto newResult = newFuture.get();
     CHECK(oldResult.errorCode == model_core::ImportErrorCode::Cancelled);
     CHECK(oldResult.producer == import_broker::ImportProducer::CompatibilityHost);
-    CHECK(newResult.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+    CHECK(newResult.ok);
+    CHECK(newResult.errorCode == model_core::ImportErrorCode::None);
     CHECK(newResult.producer == import_broker::ImportProducer::CompatibilityHost);
     CHECK(newResult.workerProcessId != 0);
 
@@ -908,12 +979,278 @@ TEST_CASE("USD-006 compatibility crash timeout protocol and commit faults stay g
     CHECK(limit.producer == import_broker::ImportProducer::CompatibilityHost);
 
     // A clean production-mode host can be launched again after every forced
-    // Job teardown and returns its current USD-006 closed placeholder fact.
+    // Job teardown and publishes a fresh normalized compatibility result.
     auto recoveredRequest = Request(composed.path, generation);
     recoveredRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
     const auto recovered = import_broker::RunImportSession(recoveredRequest);
-    CHECK_FALSE(recovered.ok);
-    CHECK(recovered.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+    CHECK(recovered.ok);
+    CHECK(recovered.errorCode == model_core::ImportErrorCode::None);
     CHECK(recovered.producer == import_broker::ImportProducer::CompatibilityHost);
     CHECK(recovered.workerProcessId != 0);
+}
+
+TEST_CASE("USD-007 compatibility fixtures retain their reviewed bytes", "[usd-007][fixtures]")
+{
+    const std::pair<std::string_view, std::string_view> fixtures[] = {
+        {"compat-composition.usda", "978d20fa211df079e1c58ec4b850371248157382ef419adf149328e20c10e7c3"},
+        {"compat-payload.usda", "d4f2d1588218de42eec1dbbc1258fa1ce418f57652ca22116f7acd05e41482db"},
+        {"compat-point-instancer.usda", "4f1b5ddcb318ec0e629d37c62bf7faff6ae341eaf07b483e34c0b2f403a2a70d"},
+        {"compat-ref.usda", "ccd77a3bb27608639b1a178766a00c5905c1c7a89718deb67c7033d85874129a"},
+        {"compat-sub.usda", "a11a3798ebabeeb81f7cbada0397bb7294e83ff71fa42173b48a405798884df4"},
+    };
+    for (const auto& [name, expected] : fixtures) {
+        CAPTURE(name);
+        CHECK(Sha256Hex(ReadFixture(name)) == expected);
+    }
+}
+
+TEST_CASE("USD-007 composes the bounded local arc set into normalized OpenUSD batches",
+          "[usd-007][openusd][composition][variants][payloads][inherits][specializes]")
+{
+    ScratchUsd scratch(L"usda");
+    scratch.Write(ReadFixture("compat-composition.usda"));
+    for (const char* name : {"compat-sub.usda", "compat-ref.usda", "compat-payload.usda"}) {
+        const std::string narrowName(name);
+        scratch.WriteSidecar(std::wstring(narrowName.begin(), narrowName.end()), ReadFixture(narrowName));
+    }
+    auto request = Request(scratch.path, 700);
+    request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.batchCount);
+    REQUIRE(result.ok);
+    CHECK(result.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(result.chunks.front().scene.format == model_core::SourceFormatId::Usda);
+    CHECK(result.chunks.front().scene.upAxis == model_core::UpAxisId::Z);
+    CHECK(std::abs(result.chunks.front().scene.metersPerUnit - 0.01) < 1e-12);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 6);
+    CHECK(Count(result, model_core::ChunkTopology::MeshInstance) == 6);
+    CHECK(Count(result, model_core::ChunkTopology::Node) >= 12);
+
+    const std::pair<std::string, std::vector<std::byte>> packageEntries[] = {
+        {"root.usda", ReadFixture("compat-composition.usda")},
+        {"compat-sub.usda", ReadFixture("compat-sub.usda")},
+        {"compat-ref.usda", ReadFixture("compat-ref.usda")},
+        {"compat-payload.usda", ReadFixture("compat-payload.usda")},
+    };
+    ScratchUsd package(L"usdz");
+    package.Write(StoredUsdz(packageEntries));
+    auto packageRequest = Request(package.path, 7001);
+    packageRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    packageRequest.sectionByteCapacity = import_broker::kImportSectionBytes;
+    packageRequest.maxChunkCount = 1024;
+    packageRequest.maxChunkBatchesPerGeneration = 64;
+    const auto packageResult = import_broker::RunImportSession(packageRequest);
+    CAPTURE(uint32_t(packageResult.stage), uint32_t(packageResult.errorCode));
+    REQUIRE(packageResult.ok);
+    CHECK(packageResult.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(packageResult.chunks.front().scene.format == model_core::SourceFormatId::Usdz);
+    CHECK(Count(packageResult, model_core::ChunkTopology::TriangleList) == 6);
+    CHECK(Count(packageResult, model_core::ChunkTopology::MeshInstance) == 6);
+}
+
+TEST_CASE("USD-007 expands bounded point instances and omits invisible ids",
+          "[usd-007][openusd][point-instancer][instances]")
+{
+    ScratchUsd scratch(L"usda");
+    std::string root = "#usda 1.0\ndef Xform \"Imported\" (prepend references = @scene.usda@) {}\n";
+    scratch.Write(std::as_bytes(std::span(root)));
+    scratch.WriteSidecar(L"scene.usda", ReadFixture("compat-point-instancer.usda"));
+    auto request = Request(scratch.path, 701);
+    request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.batchCount);
+    REQUIRE(result.ok);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 1);
+    CHECK(Count(result, model_core::ChunkTopology::MeshInstance) == 2);
+    std::vector<double> minimumX;
+    for (const auto& chunk : result.chunks) if (chunk.descriptor.topology == model_core::ChunkTopology::MeshInstance)
+        minimumX.push_back(Payload<model_core::MeshInstancePayload>(chunk).worldMin[0]);
+    std::sort(minimumX.begin(), minimumX.end());
+    REQUIRE(minimumX.size() == 2);
+    CHECK(minimumX[0] == 0.0);
+    CHECK(minimumX[1] == 4.0);
+}
+
+TEST_CASE("USD-007 preserves common fast-path geometry semantics and Preview Surface facts",
+          "[usd-007][openusd][equivalence][materials][textures]")
+{
+    ScratchUsd direct(L"usda");
+    direct.Write(ReadFixture("mesh.usda"));
+    const auto fast = import_broker::RunImportSession(Request(direct.path, 702));
+    REQUIRE(fast.ok);
+
+    ScratchUsd composed(L"usda");
+    const auto rootBytes = ReadFixture("mesh.usda");
+    std::string root(reinterpret_cast<const char*>(rootBytes.data()), rootBytes.size());
+    const auto metadata = root.find("(\n");
+    REQUIRE(metadata != std::string::npos);
+    root.insert(metadata + 2, "    subLayers = [@empty.usda@]\n");
+    composed.Write(std::as_bytes(std::span(root)));
+    const std::string emptyLayer = "#usda 1.0\n";
+    composed.WriteSidecar(L"empty.usda", std::as_bytes(std::span(emptyLayer)));
+    auto compatibilityRequest = Request(composed.path, 702);
+    compatibilityRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    const auto compatibility = import_broker::RunImportSession(compatibilityRequest);
+    CAPTURE(uint32_t(compatibility.stage), uint32_t(compatibility.errorCode));
+    REQUIRE(compatibility.ok);
+    CHECK(compatibility.chunks.front().scene.upAxis == fast.chunks.front().scene.upAxis);
+    CHECK(compatibility.chunks.front().scene.metersPerUnit == fast.chunks.front().scene.metersPerUnit);
+    CHECK(Count(compatibility, model_core::ChunkTopology::TriangleList)
+          == Count(fast, model_core::ChunkTopology::TriangleList));
+    CHECK(CanonicalGeometryPositions(compatibility) == CanonicalGeometryPositions(fast));
+    CHECK(CanonicalUsdFingerprint(compatibility) == CanonicalUsdFingerprint(fast));
+    CHECK(compatibility.chunks.front().scene.meshCount == fast.chunks.front().scene.meshCount);
+    CHECK(compatibility.chunks.front().scene.nodeCount == fast.chunks.front().scene.nodeCount);
+    REQUIRE(compatibility.chunks.size() == fast.chunks.size());
+    for (std::size_t index = 0; index < fast.chunks.size(); ++index) {
+        CAPTURE(index, fast.chunks[index].descriptor.topology,
+                compatibility.chunks[index].descriptor.topology);
+        CHECK(compatibility.chunks[index].descriptor.chunkId
+              == fast.chunks[index].descriptor.chunkId);
+        CHECK(compatibility.chunks[index].descriptor.meshId
+              == fast.chunks[index].descriptor.meshId);
+        CHECK(compatibility.chunks[index].descriptor.topology
+              == fast.chunks[index].descriptor.topology);
+        CHECK(compatibility.chunks[index].descriptor.vertexCount
+              == fast.chunks[index].descriptor.vertexCount);
+        CHECK(compatibility.chunks[index].descriptor.indexCount
+              == fast.chunks[index].descriptor.indexCount);
+        CHECK(compatibility.chunks[index].descriptor.vertexLayoutId
+              == fast.chunks[index].descriptor.vertexLayoutId);
+        CHECK(compatibility.chunks[index].descriptor.geometryFlags
+              == fast.chunks[index].descriptor.geometryFlags);
+        CHECK(compatibility.chunks[index].descriptor.dependencyCount
+              == fast.chunks[index].descriptor.dependencyCount);
+        CHECK(std::equal(std::begin(compatibility.chunks[index].descriptor.dependencyIds),
+                         std::end(compatibility.chunks[index].descriptor.dependencyIds),
+                         std::begin(fast.chunks[index].descriptor.dependencyIds)));
+        CHECK(std::equal(std::begin(compatibility.chunks[index].descriptor.origin),
+                         std::end(compatibility.chunks[index].descriptor.origin),
+                         std::begin(fast.chunks[index].descriptor.origin)));
+        CHECK(std::equal(std::begin(compatibility.chunks[index].descriptor.localMin),
+                         std::end(compatibility.chunks[index].descriptor.localMin),
+                         std::begin(fast.chunks[index].descriptor.localMin)));
+        CHECK(std::equal(std::begin(compatibility.chunks[index].descriptor.localMax),
+                         std::end(compatibility.chunks[index].descriptor.localMax),
+                         std::begin(fast.chunks[index].descriptor.localMax)));
+        CHECK(compatibility.chunks[index].payload == fast.chunks[index].payload);
+    }
+
+    ScratchUsd materials(L"usda");
+    const std::string materialRoot = "#usda 1.0\ndef Xform \"Imported\" (prepend references = @materials.usda@) {}\n";
+    materials.Write(std::as_bytes(std::span(materialRoot)));
+    materials.WriteSidecar(L"materials.usda", ReadFixture("materials.usda"));
+    const std::string pngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlF4iUAAAAASUVORK5CYII=";
+    materials.WriteSidecar(L"albedo.png", DecodeBase64(pngBase64));
+    auto materialRequest = Request(materials.path, 704);
+    materialRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    materialRequest.sectionByteCapacity = import_broker::kImportSectionBytes;
+    materialRequest.maxChunkCount = 1024;
+    materialRequest.maxChunkBatchesPerGeneration = 64;
+    const auto materialResult = import_broker::RunImportSession(materialRequest);
+    CAPTURE(uint32_t(materialResult.stage), uint32_t(materialResult.errorCode));
+    REQUIRE(materialResult.ok);
+    CHECK(Count(materialResult, model_core::ChunkTopology::Material) == 2);
+    CHECK(Count(materialResult, model_core::ChunkTopology::Image) >= 1);
+    CHECK(Count(materialResult, model_core::ChunkTopology::TriangleList) == 2);
+    CHECK(std::ranges::any_of(materialResult.chunks, [](const auto& chunk) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::Material) return false;
+        const auto material = Payload<model_core::MaterialPayload>(chunk);
+        return std::abs(material.metallicFactor - 0.25f) < 1e-6f
+            && std::abs(material.roughnessFactor - 0.75f) < 1e-6f
+            && std::abs(material.uvOffset[0] - 0.25f) < 1e-6f
+            && std::abs(material.uvScale[0] - 2.0f) < 1e-6f;
+    }));
+
+    ScratchUsd missingTexture(L"usda");
+    missingTexture.Write(std::as_bytes(std::span(materialRoot)));
+    missingTexture.WriteSidecar(L"materials.usda", ReadFixture("materials.usda"));
+    auto missingTextureRequest = Request(missingTexture.path, 705);
+    missingTextureRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    const auto missingTextureResult = import_broker::RunImportSession(missingTextureRequest);
+    REQUIRE(missingTextureResult.ok);
+    CHECK(Count(missingTextureResult, model_core::ChunkTopology::Image) >= 1);
+    CHECK(std::ranges::any_of(missingTextureResult.chunks, [](const auto& chunk) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::ImportStatus) return false;
+        return Payload<model_core::ImportStatusPayload>(chunk).textureWarnings > 0;
+    }));
+}
+
+TEST_CASE("USD-007 composition denial and dependency pressure recover on the next stage",
+          "[usd-007][openusd][negative][limits][recovery]")
+{
+    ScratchUsd missing(L"usda");
+    const std::string missingRoot =
+        "#usda 1.0\ndef Xform \"Root\" (prepend references = @missing.usda@) {}\n";
+    missing.Write(std::as_bytes(std::span(missingRoot)));
+    auto missingRequest = Request(missing.path, 706);
+    missingRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    const auto denied = import_broker::RunImportSession(missingRequest);
+    CHECK_FALSE(denied.ok);
+    CHECK(denied.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+    CHECK(denied.producer == import_broker::ImportProducer::CompatibilityHost);
+
+    const auto checkClosedCompositionFailure = [](std::string_view root,
+                                                   std::string_view sidecar,
+                                                   std::uint64_t generation) {
+        ScratchUsd scratch(L"usda");
+        scratch.Write(std::as_bytes(std::span(root)));
+        scratch.WriteSidecar(L"child.usda", std::as_bytes(std::span(sidecar)));
+        auto request = Request(scratch.path, generation);
+        request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+        const auto result = import_broker::RunImportSession(request);
+        CAPTURE(generation, uint32_t(result.stage), uint32_t(result.errorCode));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+        CHECK(result.producer == import_broker::ImportProducer::CompatibilityHost);
+    };
+    constexpr std::string_view composedRoot =
+        "#usda 1.0\n(\n subLayers = [@child.usda@]\n)\n"
+        "def Mesh \"M\" { int[] faceVertexCounts=[3] int[] faceVertexIndices=[0,1,2] "
+        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] uniform token subdivisionScheme=\"none\" }\n";
+    checkClosedCompositionFailure(composedRoot, "not a usd layer", 707);
+    checkClosedCompositionFailure(composedRoot,
+        "#usda 1.0\ndef Volume \"Required\" {}\n", 708);
+    checkClosedCompositionFailure(composedRoot,
+        "#usda 1.0\n(\n subLayers = [@child.usda@]\n)\n", 709);
+
+    ScratchUsd traversal(L"usda");
+    const std::string traversalRoot =
+        "#usda 1.0\n(\n subLayers = [@../escape.usda@]\n)\n"
+        "def Mesh \"M\" { int[] faceVertexCounts=[3] int[] faceVertexIndices=[0,1,2] "
+        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] uniform token subdivisionScheme=\"none\" }\n";
+    traversal.Write(std::as_bytes(std::span(traversalRoot)));
+    auto traversalRequest = Request(traversal.path, 710);
+    traversalRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    const auto traversalResult = import_broker::RunImportSession(traversalRequest);
+    CHECK_FALSE(traversalResult.ok);
+    CHECK(traversalResult.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+    CHECK(traversalResult.producer == import_broker::ImportProducer::CompatibilityHost);
+
+    ScratchUsd pressure(L"usda");
+    const std::string pressureRoot = "#usda 1.0\ndef Xform \"One\" (prepend references = @one.usda@) {}\n";
+    const std::string one = "#usda 1.0\n(defaultPrim=\"One\")\ndef Xform \"One\" (prepend references = @two.usda@) {}\n";
+    const std::string two = "#usda 1.0\n(defaultPrim=\"Two\")\ndef Xform \"Two\" {}\n";
+    pressure.Write(std::as_bytes(std::span(pressureRoot)));
+    pressure.WriteSidecar(L"one.usda", std::as_bytes(std::span(one)));
+    pressure.WriteSidecar(L"two.usda", std::as_bytes(std::span(two)));
+    auto pressureRequest = Request(pressure.path, 711);
+    pressureRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    pressureRequest.maxSidecarRequestsPerGeneration = 1;
+    const auto limited = import_broker::RunImportSession(pressureRequest);
+    CHECK_FALSE(limited.ok);
+    CHECK(limited.errorCode == model_core::ImportErrorCode::CompatibilityHostLimit);
+
+    ScratchUsd recovered(L"usda");
+    recovered.Write(ReadFixture("mesh.usda"));
+    const auto valid = import_broker::RunImportSession(Request(recovered.path, 712));
+    REQUIRE(valid.ok);
+    CHECK(valid.producer == import_broker::ImportProducer::FastWorker);
 }
