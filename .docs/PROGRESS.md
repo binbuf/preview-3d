@@ -4,6 +4,48 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **3MF-001 dependency and feasibility spike (2026-09-18): complete; private
+  only.** The existing vcpkg baseline now pins lib3mf `2.5.0#1` (upstream
+  2.5.0 commit `64bb454d1fcb53effa57d3cef752a10d740d41a2`) as an app-local
+  worker dependency. Its Release closure is `lib3mf.dll`, `zip.dll`, `z.dll`,
+  and `bz2.dll`; PE inspection confirms none enters `Preview3D.exe` or the
+  thumbnail provider. Upstream provides no reader-only/writer-off build switch,
+  so the product calls only reader APIs and depends on the sandbox and
+  preflight policy rather than maintaining a source fork. Package notices/SBOM
+  updates stay with 3MF-006, when the format actually ships.
+
+  A private worker-pool route proves strict callback loading through the real
+  AppContainer using only the duplicated source handle. Keep its exact-read
+  pattern: lib3mf callbacks cannot return a byte count or error, so short
+  reads, seek failures, and identity/size/last-write changes must be recorded
+  out-of-band, the destination made deterministic, and acceptance denied after
+  the call. A sparse valid package at 2 GiB minus 64 KiB read under 1 MiB.
+  Product-owned OPC preflight is still mandatory; lib3mf is not the authority
+  for ZIP64/streaming, relationships, paths, compression, expanded bytes, or
+  required extensions.
+
+  Progress callbacks cooperatively cancel package extraction, root/non-root
+  model load, resources, and texture attachments with lib3mf error 10. They do
+  not cover mesh getters, Beam Lattice access, or product normalization, so
+  those loops need explicit event checks and the existing 500 ms kill/replace
+  path remains the hard deadline. A 20 MiB Job pressure case surfaced only
+  lib3mf generic error 5; Job/broker evidence must classify the limit and the
+  process must be retired before reuse. Recovery passed after short read,
+  source change, malformed input, cancellation, pressure, and forced
+  replacement.
+
+  For Beam Lattice, prefer a validated authored `representationmesh`; otherwise
+  use bounded chunked product tessellation. Instance templates are exact only
+  for equal radii, no clipping, and spherical caps. The spike's 12-segment,
+  4,320-triangle fallback is intentionally approximate for hemisphere/clipping
+  behavior, so 3MF-005 must supply the exact semantics before shipping. Debug
+  and Release builds pass; `[3mf-spike]` passes 6 cases / 721 assertions in
+  both. Full measurements, dependency hashes, fixtures, error mapping, and the
+  3MF-002 go decision are in
+  [3MF-001-SPIKE-RESULTS.md](./3MF-001-SPIKE-RESULTS.md). No extension filter,
+  activation, installer, public protocol, viewer route, or thumbnail behavior
+  changed.
+
 - **USD-009 corpus and fuzz qualification slice (2026-09-18): complete;
   release qualification remains in progress.** A checked-in manifest now
   freezes 10 redistributable USDA/USDC/USDZ and composition sources plus 13

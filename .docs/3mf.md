@@ -152,6 +152,9 @@ the implementing task.
 
 ## 3MF-001 — dependency and feasibility spike
 
+Status: complete (2026-09-18). Proceed to 3MF-002 under the decisions and
+limits recorded in [3MF-001-SPIKE-RESULTS.md](3MF-001-SPIKE-RESULTS.md).
+
 ### Objective
 
 Resolve the unknowns called out by Gate 4 and ADR risk R-02 before a production

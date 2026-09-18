@@ -2,6 +2,7 @@
 #include "ChunkBatchSink.h"
 #include "GenerationWorker.h"
 #include "FbxSpikeWorker.h"
+#include "ThreeMfSpikeWorker.h"
 #include "UsdSpikeWorker.h"
 #include "UsdImportWorker.h"
 #include "FbxImportWorker.h"
@@ -141,6 +142,9 @@ int main(int argc, char* argv[])
     }
     if (ArgEquals(argv[1], "--usd-spike-pool")) {
         return import_worker::RunUsdSpikePoolMode();
+    }
+    if (ArgEquals(argv[1], "--3mf-spike-pool")) {
+        return import_worker::RunThreeMfSpikePoolMode();
     }
 
     if (ArgEquals(argv[1], "--probes")) {

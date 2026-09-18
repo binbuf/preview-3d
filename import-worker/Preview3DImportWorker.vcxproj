@@ -74,6 +74,7 @@
     <ClCompile Include="src\ContainmentProbes.cpp" />
     <ClCompile Include="src\GenerationWorker.cpp" />
     <ClCompile Include="src\FbxSpikeWorker.cpp" />
+    <ClCompile Include="src\ThreeMfSpikeWorker.cpp" />
     <ClCompile Include="src\UsdSpikeWorker.cpp" />
     <ClCompile Include="src\UsdAdapter.cpp">
       <!-- Instantiating TinyUSDZ 0.9.1 TypedTimeSamples for point-instancer
@@ -112,6 +113,7 @@
     <ClInclude Include="src\ContainmentProbes.h" />
     <ClInclude Include="src\GenerationWorker.h" />
     <ClInclude Include="src\FbxSpikeWorker.h" />
+    <ClInclude Include="src\ThreeMfSpikeWorker.h" />
     <ClInclude Include="src\UsdSpikeWorker.h" />
     <ClInclude Include="src\UsdAdapter.h" />
     <ClInclude Include="src\UsdImportWorker.h" />
