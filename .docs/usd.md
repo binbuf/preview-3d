@@ -1,6 +1,6 @@
 # USD post-MVP work plan
 
-Status: implementation in progress; USD-001 through USD-008 complete, viewer/distribution route exposed; USD-009 qualification pending
+Status: implementation in progress; USD-001 through USD-008 complete, viewer/distribution route exposed; USD-009 corpus/fuzz slice complete and environmental qualification pending
 
 Prepared: 2026-09-17  
 Design authority: [design/README.md](design/README.md)
@@ -861,7 +861,7 @@ viewer and distribution surface, without claiming Explorer thumbnails.
 
 ## USD-009: corpus, hardening, and release qualification
 
-Status: ready
+Status: in progress (2026-09-18); corpus and standalone fuzz-smoke lane complete, release-machine gates pending
 Depends on: USD-008  
 Unblocks: the viewer USD support claim and USD-010
 
@@ -918,6 +918,31 @@ implemented and rerun; this is not a documentation-only signoff.
   by a model, working directory, user environment, or adjacent unsigned file.
 - Full Debug/Release automated, package, fuzz-smoke, performance, and clean-VM
   evidence is recorded, or the support claim remains disabled.
+
+### Progress record
+
+- The immutable [USD-009 corpus manifest](../tests/fixtures/usd/manifest.json)
+  now records 10 redistributable sources and 13 reproducible malformed,
+  unsafe, unsupported, recursion, archive, and dependency-limit derivations.
+  Its verifier checks decoded USDC/USDZ bytes, not their base64 transport, and
+  the existing real worker/host tests remain the independent numeric oracle.
+- A standalone no-GPU `UsdFuzz` target covers TinyUSDZ USDA object graphs and
+  normalization, USDC classification, product USDZ preflight, trusted normalized-output
+  validation, the compatibility resolver's identifier policy, and OpenUSD
+  control frames. A 60-second Release
+  ASan/libFuzzer smoke completed 38,814 executions without a finding or timeout
+  from a clean 11-seed corpus. Mutated USDC allocation pressure is instead
+  contained and recovery-tested behind the real worker's Job limit.
+- Debug/Release solution targets and Unit pass; focused USD-002 through USD-009
+  passes 28 cases / 756 assertions in each configuration and the hostile-worker
+  lane passes 13 cases / 273 assertions. No USD
+  persistent-cache write exists; the reserved backend/options/schema tuple is
+  recorded in [USD-009-VERIFICATION.md](USD-009-VERIFICATION.md).
+- Repeated performance/heartbeat evidence, full-suite closure,
+  final package/tamper audit, clean-VM lifecycle and signed-candidate evidence
+  remain required. Exact commands, results, limits, and unverified gates are in
+  [USD-009-VERIFICATION.md](USD-009-VERIFICATION.md); Gate 4 is not yet marked
+  complete.
 
 ## USD-010: Explorer USD thumbnail adapter
 

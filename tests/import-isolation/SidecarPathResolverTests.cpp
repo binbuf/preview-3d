@@ -25,8 +25,10 @@ struct ScratchGltfDirectory {
     {
         wchar_t tempDir[MAX_PATH]{};
         REQUIRE(GetTempPathW(MAX_PATH, tempDir) != 0);
-        directory = std::wstring(tempDir) + L"p3d_sidecar_" + std::to_wstring(GetCurrentProcessId()) + L"_"
-            + std::to_wstring(reinterpret_cast<uintptr_t>(this));
+        wchar_t uniquePath[MAX_PATH]{};
+        REQUIRE(GetTempFileNameW(tempDir, L"p3d", 0, uniquePath) != 0);
+        REQUIRE(DeleteFileW(uniquePath));
+        directory = uniquePath;
         REQUIRE(CreateDirectoryW(directory.c_str(), nullptr));
 
         std::wstring primaryPath = directory + L"\\scene.gltf";

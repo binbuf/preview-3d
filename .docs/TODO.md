@@ -313,9 +313,9 @@ Both structural blockers are closed and none of these is the output window:
 
 ## Gate 4 — Tier B format breadth
 
-Five independent vertical slices (`10-…:155-174`). OBJ and FBX product paths are implemented;
-their release-qualification bundles remain open. TinyUSDZ and OpenUSD are pinned and their
-test-only fast and compatibility-platform work has reached USD-006. lib3mf remains unpinned.
+Five independent vertical slices (`10-…:155-174`). OBJ, FBX, and the dual-path USD viewer
+product paths are implemented; their release-qualification bundles remain open. TinyUSDZ and
+OpenUSD are pinned and USD-009 qualification is in progress. lib3mf remains unpinned.
 
 - [ ] **Slice 1** — OBJ plus MTL through ufbx, including local texture policy.
   - [x] Product path: direct `.obj` open through one-shot and pooled AppContainer workers;
@@ -348,15 +348,19 @@ test-only fast and compatibility-platform work has reached USD-006. lib3mf remai
       general import worker.
   - [x] USD-001 through USD-005: pinned fast dependency, protocol, static scene/instance
         normalization, USDZ, materials, textures and brokered image dependencies, test-only.
-  - [ ] USD-008 product/viewer/activation/registration surface and USD-009 qualification.
+  - [x] USD-008 product/viewer/activation/registration and package surface.
+  - [x] USD-009 immutable 10-source/13-derived corpus and standalone five-domain
+        ASan/libFuzzer smoke lane.
+  - [ ] USD-009 repeated performance/heartbeat, full hostile/full-suite, final
+        package/tamper, clean-VM lifecycle, soak, and signed-candidate qualification.
 - [ ] **Slice 5** — the AppContainer compatibility host, brokered resolver, and bounded local
       static composition through OpenUSD, started **only** on the worker's typed
       `UnsupportedComposition` result. Additionally requires AppContainer restrictions, Job Object
       enforcement, broker protocol, shared-section revalidation, host crash/timeout behaviour, and
       signed/hash-verified payload tests.
   - [x] USD-002 spike and USD-006 production platform/fallback lifecycle.
-  - [x] USD-007 bounded OpenUSD composition/normalization. USD-008/009 exposure, packaging, and
-        qualification remain open.
+  - [x] USD-007 bounded OpenUSD composition/normalization and USD-008 exposure/packaging.
+  - [ ] Finish the remaining USD-009 qualification gates listed under Slice 4.
 
 Every slice carries the same bundle (`10-…:165`): adapter wrapper, dependency allocation/I/O/cancel
 callbacks and Job Object limits, normalized output, unsupported-feature diagnostics, golden scenes,

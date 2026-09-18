@@ -1,6 +1,7 @@
 #define NOMINMAX
 
 #include "OpenUsdHost.h"
+#include "model_core/OpenUsdIdentifier.h"
 
 #include "BoundedChunkWriter.h"
 #include "ChunkBatchSink.h"
@@ -77,6 +78,8 @@ PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace compatibility_host {
 namespace {
+
+static_assert(kOpenUsdIdentifierCapacity == model_core::kMaxOpenUsdIdentifierBytes);
 
 using Clock = std::chrono::steady_clock;
 
@@ -155,57 +158,6 @@ bool AuditResources(const std::filesystem::path& payloadDirectory)
     return !error && found == expected.size();
 }
 
-bool Safe(std::string_view id)
-{
-    constexpr std::string_view prefix = "preview3d://";
-    if (!id.starts_with(prefix) || id.size() >= kOpenUsdIdentifierCapacity
-        || id.find('\\') != id.npos || id.find(':', prefix.size()) != id.npos
-        || id.ends_with('/')) return false;
-    for (std::size_t start = prefix.size(); start < id.size();) {
-        const auto slash = id.find('/', start);
-        const auto part = id.substr(start, slash == id.npos ? id.size() - start : slash - start);
-        if (part.empty() || part == "." || part == "..") return false;
-        start = slash == id.npos ? id.size() : slash + 1;
-    }
-    return true;
-}
-
-std::optional<std::string> Anchor(std::string_view asset, std::string_view anchor)
-{
-    if (asset.empty() || asset.find('\\') != asset.npos
-        || (!asset.starts_with("preview3d://") && asset.find(':') != asset.npos)
-        || asset.starts_with('/')) return std::nullopt;
-    std::string candidate;
-    if (asset.starts_with("preview3d://")) candidate.assign(asset);
-    else {
-        // OpenUSD supplies an empty anchor for composition arcs originating
-        // in a layer backed only by ArAsset bytes. Treat that as the brokered
-        // namespace root; a non-empty anchor remains directory-relative.
-        if (anchor.empty()) candidate = "preview3d://";
-        else {
-            if (!Safe(anchor)) return std::nullopt;
-            candidate.assign(anchor.substr(0, anchor.find_last_of('/') + 1));
-        }
-        candidate.append(asset);
-    }
-    std::vector<std::string> parts;
-    constexpr std::string_view prefix = "preview3d://";
-    for (std::size_t start = prefix.size(); start <= candidate.size();) {
-        const auto slash = candidate.find('/', start);
-        const auto part = candidate.substr(start, slash == candidate.npos ? candidate.size() - start : slash - start);
-        if (part == "..") return std::nullopt;
-        else if (!part.empty() && part != ".") parts.push_back(part);
-        if (slash == candidate.npos) break;
-        start = slash + 1;
-    }
-    std::string result(prefix);
-    for (const auto& part : parts) {
-        if (result.size() > prefix.size()) result += '/';
-        result += part;
-    }
-    return Safe(result) ? std::optional<std::string>(result) : std::nullopt;
-}
-
 class ByteStore {
 public:
     bool Initialize(OpenUsdSpikeSection& header, std::span<const std::byte> section)
@@ -219,7 +171,7 @@ public:
             const auto nameLength = strnlen_s(item.identifier, kOpenUsdIdentifierCapacity);
             if (!nameLength || nameLength == kOpenUsdIdentifierCapacity) return false;
             std::string name(item.identifier, nameLength);
-            if (!Safe(name) || assets_.contains(name) || item.byteOffset < sizeof(OpenUsdSpikeSection)
+            if (!model_core::IsSafeOpenUsdIdentifier(name) || assets_.contains(name) || item.byteOffset < sizeof(OpenUsdSpikeSection)
                 || item.byteOffset > section.size() || item.byteLength > section.size() - item.byteOffset
                 || item.byteLength > header.maxApprovedAssetBytes - total) return false;
             total += item.byteLength;
@@ -233,7 +185,7 @@ public:
     bool InitializeProduction(std::string rootIdentifier, std::span<const std::byte> rootBytes,
                               import_worker::SidecarFileClient* sidecars)
     {
-        if (!Safe(rootIdentifier) || rootBytes.empty()
+        if (!model_core::IsSafeOpenUsdIdentifier(rootIdentifier) || rootBytes.empty()
             || rootBytes.size() > model_core::kTierBPrimarySourceBytes) return false;
         auto bytes = std::make_shared<std::vector<char>>(rootBytes.size());
         std::memcpy(bytes->data(), rootBytes.data(), rootBytes.size());
@@ -247,7 +199,7 @@ public:
     {
         const std::string key(name);
         if (const auto found = assets_.find(key); found != assets_.end()) return found->second;
-        if (!sidecars_ || !Safe(key)) return nullptr;
+        if (!sidecars_ || !model_core::IsSafeOpenUsdIdentifier(key)) return nullptr;
         constexpr std::string_view prefix = "preview3d://";
         const std::string relative(key.substr(prefix.size()));
         if (relative.empty() || relative.size() > model_core::kMaxSidecarRelativePathBytes
@@ -330,10 +282,10 @@ public: BrokerResolver() = default;
 private:
     std::string _CreateIdentifier(const std::string& path, const ArResolvedPath& anchor) const final
     {
-        if (gStore && Safe(path) && gStore->Find(path)) {
+        if (gStore && model_core::IsSafeOpenUsdIdentifier(path) && gStore->Find(path)) {
             return path;
         }
-        const auto id = Anchor(path, anchor.GetPathString());
+        const auto id = model_core::AnchorOpenUsdIdentifier(path, anchor.GetPathString());
         if (!id && gStore) gStore->Deny(model_core::ImportErrorCode::UnsafeReference);
         return id.value_or(std::string());
     }
@@ -496,7 +448,8 @@ int RunOpenUsdSpike(OpenUsdSpikeSection& out, std::span<const std::byte> section
     if (!store.Initialize(out, section)) return 2;
     const auto rootLength = strnlen_s(out.rootIdentifier, kOpenUsdIdentifierCapacity);
     if (!rootLength || rootLength == kOpenUsdIdentifierCapacity
-        || !Safe(std::string_view(out.rootIdentifier, rootLength))) return 2;
+        || !model_core::IsSafeOpenUsdIdentifier(
+            std::string_view(out.rootIdentifier, rootLength))) return 2;
     gStore = &store;
     // The build has no ambient plug-in path. Register only the hash-verified
     // manifest that advertises the broker URI resolver.
@@ -867,7 +820,7 @@ struct MaterialEmitter {
         }
         std::string identifier = path.GetResolvedPath();
         if (identifier.empty()) {
-            const auto anchored = Anchor(path.GetAssetPath(),
+            const auto anchored = model_core::AnchorOpenUsdIdentifier(path.GetAssetPath(),
                 texture.GetPrim().GetStage()->GetRootLayer()->GetResolvedPath().GetPathString());
             if (!anchored) {
                 state.Fail(ImportErrorCode::UnsafeReference, ImportFailurePhase::Textures);

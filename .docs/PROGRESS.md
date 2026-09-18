@@ -4,6 +4,68 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **USD-009 corpus and fuzz qualification slice (2026-09-18): complete;
+  release qualification remains in progress.** A checked-in manifest now
+  freezes 10 redistributable USDA/USDC/USDZ and composition sources plus 13
+  deterministic malformed, unsafe, unsupported, recursion, archive and
+  dependency-pressure derivations. Hashes cover decoded USDC/USDZ payloads,
+  not base64 transport. The manifest records independent expected facts while
+  existing real worker/host tests remain the numeric oracle, preventing either
+  TinyUSDZ or OpenUSD from blessing its own output.
+
+  The new standalone `UsdFuzz` target has five bounded no-GPU domains:
+  TinyUSDZ USDA object graphs plus render-data normalization and USDC byte
+  classification, product USDZ
+  preflight, trusted normalized-output copy/validation, the host's exact pure
+  identifier/anchoring policy, and production control framing seeded with
+  OpenUSD-start and resolver-sidecar records. Its clean 11-seed Release
+  ASan/libFuzzer smoke completed 38,814 executions in 61 seconds with no
+  finding or timeout and 492 MiB peak reported RSS under a 1,024 MiB cap.
+  OpenUSD itself is an ordinary pinned private DLL and is not falsely claimed
+  as sanitizer-instrumented; real-host resolver/composition/Job/fault recovery
+  stays in ImportIsolation.
+
+  Two build details matter for the next fuzz target. MSVC ASan turns on STL
+  string/vector/optional annotations, which cannot link to the ordinary pinned
+  TinyUSDZ static library compiled without those ABI markers. Disable exactly
+  those three annotations in the harness (while retaining ASan on harness and
+  product boundary sources), or build TinyUSDZ with a dedicated sanitizer
+  triplet; never force-link the mismatch. Keep standalone fuzz output
+  project-private. An early draft pointed `UsdFuzz` at shared `x64/Release`;
+  its correct incremental-clean pass removed sibling `fastgltf.dll` and
+  `simdjson.dll`, making every Release worker request die before parsing until
+  the product closure was rebuilt. Finally, libFuzzer grows the directory
+  passed as its corpus, so always materialize seeds under ignored
+  `TestResults/`, never point it at immutable source fixtures.
+
+  TinyUSDZ's USDC memory option is advisory: a minimized mutated crate caused a
+  multi-gigabyte allocation before that option reacted. Arbitrary USDC mutation
+  therefore does not run in the long-lived in-process fuzz target. The input is
+  frozen as a deterministic derived corpus case and a new 128 MiB Job-contained
+  real-worker regression proves either controlled rejection or worker
+  replacement, followed by a successful valid USDC import. The seed preparer
+  now refuses non-empty destinations after a reused evolved corpus demonstrated
+  why reproducible fuzz-smoke evidence must start from exactly the 11 seeds.
+
+  A final sandbox/sidecar security selector exposed a test-only collision:
+  `SidecarPathResolverTests` named scratch directories with process ID plus a
+  stack address, which can repeat across processes and collide with stale test
+  output. It now asks Windows for a unique temporary name before converting it
+  to a directory. This did not change the production resolver, but keeps path
+  containment evidence repeatable across Debug/Release and interrupted runs.
+
+  Debug/Release solution targets and Unit pass (98 cases; 7,625 / 7,537
+  assertions). Focused USD-002 through USD-009 passes 28 cases / 756 assertions
+  in both configurations (the two new USD-009 regressions account for 45
+  assertions), and the hostile-worker lane passes 13 cases / 273 assertions in
+  both. There is no USD persistent-cache entry: the current cache is
+  an unwired opaque-payload prototype. The reserved policy/wire/TinyUSDZ/OpenUSD
+  tuple and exact commands are in
+  [USD-009-VERIFICATION.md](./USD-009-VERIFICATION.md). Repeated p50/p95 and UI
+  heartbeat evidence, full-suite closure, final package/tamper
+  reruns, clean-VM lifecycle/loaded-host replacement, soak, and signed-candidate
+  evidence remain open, so USD-009 and Gate 4 are not marked complete.
+
 - **USD-007 bounded OpenUSD composition/normalization (2026-09-18): complete,
   still test-only.** The production compatibility core now opens broker-backed
   USDA/USDC/USDZ stages with `LoadNone`, loads payloads breadth-first, and

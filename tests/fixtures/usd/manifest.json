@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "corpus": "USD-009",
+  "license": "Original Preview3D fixtures under repository license; TinyUSDZ binary fixtures under Apache-2.0",
+  "sourceDirectory": "../usd-spike",
+  "entries": [
+    {"path":"mesh.usda","sha256":"a56b200f47b0112078a3c01a37c66b94c24f7e5c82e853b873e41d40a646bdb3","bytes":842,"class":"valid-fast","expectation":"USDA; Z-up centimetres; hierarchy and transform; quad triangulates to two triangles; face-varying normals/UVs; constant display color; double-sided"},
+    {"path":"static-scene.usda","sha256":"187f9faebecad28877c7979cc88a3f51b59bf5757c5e4c172c09ec0f7384e226","bytes":1755,"class":"valid-fast","expectation":"USDA; X-up millimetres; large double origin; default-time policy; vertex normals/UV/color; one visible point instance; guide omitted"},
+    {"path":"materials.usda","sha256":"e0c660d7cdb8211a131527ada2fa5d6d233f7261d90281fd99968c2821f674ff","bytes":3116,"class":"valid-fast-with-sidecar","expectation":"two-face material partition; Preview Surface factors; UV reader/transform; brokered albedo.png; double-sided and alpha state"},
+    {"path":"cube.usdc.base64","decodedPath":"cube.usdc","sha256":"d4c3c527de10837036c602982e9d6733b14ad26ab17c2bca6d43f2fcfe7c97c3","bytes":3067,"class":"valid-fast","provenance":"TinyUSDZ v0.9.1 commit a04ee0bcbd1a930e30cc40938fcee3526a6fa8eb models/cube.usdc","expectation":"USDC/crate byte identity and static cube geometry"},
+    {"path":"cube.usdz.base64","decodedPath":"cube.usdz","sha256":"dbbfcc999d2abe55f0f1dd49e158d65739b87f002287c8b669a57dba5f33e52d","bytes":2931,"class":"valid-fast","provenance":"TinyUSDZ v0.9.1 commit a04ee0bcbd1a930e30cc40938fcee3526a6fa8eb models/cube.usdz","expectation":"stored 64-byte-aligned USDZ with cube.usdc root; static cube geometry"},
+    {"path":"compat-composition.usda","sha256":"978d20fa211df079e1c58ec4b850371248157382ef419adf149328e20c10e7c3","bytes":1499,"class":"valid-compatibility-root","expectation":"atomic fast fallback; sublayer, reference, payload, inherits, specializes, and authored default variant; six triangle geometries and six instances at Z-up / 0.01 metres per unit"},
+    {"path":"compat-sub.usda","sha256":"a11a3798ebabeeb81f7cbada0397bb7294e83ff71fa42173b48a405798884df4","bytes":263,"class":"composition-dependency","expectation":"one sublayer triangle"},
+    {"path":"compat-ref.usda","sha256":"ccd77a3bb27608639b1a178766a00c5905c1c7a89718deb67c7033d85874129a","bytes":296,"class":"composition-dependency","expectation":"one default-prim reference triangle"},
+    {"path":"compat-payload.usda","sha256":"d4f2d1588218de42eec1dbbc1258fa1ce418f57652ca22116f7acd05e41482db","bytes":290,"class":"composition-dependency","expectation":"one selectively loaded default-prim payload triangle"},
+    {"path":"compat-point-instancer.usda","sha256":"4f1b5ddcb318ec0e629d37c62bf7faff6ae341eaf07b483e34c0b2f403a2a70d","bytes":671,"class":"valid-compatibility","expectation":"one shared prototype and two visible instances at minimum X 0 and 4; authored ID 11 invisible"}
+  ],
+  "derived": [
+    {"path":"empty.usda","base":"mesh.usda","operation":"empty","sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","expectation":"MalformedData or EmptyGeometry; no fallback"},
+    {"path":"truncated.usda","base":"mesh.usda","operation":"truncate-half","sha256":"6c607a8d34009f8837a2be9fe940d88836b6d206785a635aa42d57a081f62cb1","expectation":"MalformedData; next valid open succeeds"},
+    {"path":"truncated.usdc","base":"cube.usdc.base64","operation":"truncate-half","sha256":"8f0324325d42203afdc77dfe799236e2ff306492c5110e8911ec76640aa647ce","expectation":"MalformedData; no fallback"},
+    {"path":"allocation-pressure.usdc","base":"cube.usdc.base64","operation":"usdc-allocation-pressure","sha256":"2320d9c87b7709a1f3ee23e777cee3781bfd04307639b376b9dc366e9e0f1978","expectation":"hard worker Job containment; worker replacement if killed; next valid USDC succeeds"},
+    {"path":"truncated.usdz","base":"cube.usdz.base64","operation":"truncate-tail","sha256":"acaada93cf5d7a563d6ff3c074e13288cf28fc7876ed6b835a5e7fa114d454fa","expectation":"ArchiveLimit; no fallback"},
+    {"path":"unsafe-path.usdz","base":"cube.usdz.base64","operation":"unsafe-archive-path","sha256":"3866388d8f5a6e2a9a24e5e92878865207c06ae073daf5445b8299b1cf1a2916","expectation":"ArchiveLimit before TinyUSDZ access"},
+    {"path":"invalid-axis.usda","base":"static-scene.usda","operation":"invalid-axis","sha256":"49660a30fea469c4cb7312143bd2b44d4f95a7c884a0e510184bb56201993668","expectation":"UnsupportedRequiredFeature"},
+    {"path":"nonfinite-point.usda","base":"mesh.usda","operation":"nonfinite-point","sha256":"621e28d4a087d228bf8d44074944d90cbf6d53de9b46d4564ecd3a5ea4ae6df7","expectation":"MalformedData"},
+    {"path":"unsupported-subdivision.usda","base":"mesh.usda","operation":"unsupported-subdivision","sha256":"3c9b0b39cff1bb8dc49f3684074f765840a7bb9b5b3e7b45d844aba7adde13b6","expectation":"UnsupportedRequiredFeature"},
+    {"path":"unsafe-reference.usda","base":"compat-composition.usda","operation":"unsafe-reference","sha256":"c2bd8d36e7d7436fe00ede30512cefa55d4cd6e19d1054dd013f186203512dfc","expectation":"UnsafeReference in compatibility host; next valid open succeeds"},
+    {"path":"remote-reference.usda","base":"compat-composition.usda","operation":"remote-reference","sha256":"d26a7e4d7fdec9cc021cf5f2a902a28febe15b4de5f6c286e95886c63bb0b4a1","expectation":"UnsafeReference without network access"},
+    {"path":"recursive-sublayer.usda","base":"compat-composition.usda","operation":"recursive-sublayer","sha256":"0d52c77d42a5b028b9f68305932c5199112f537cca6ba6497e50bdf212a7ba58","expectation":"UnsupportedComposition or CompatibilityHostFailure under bounded graph walk"},
+    {"path":"dependency-pressure.usda","base":"compat-composition.usda","operation":"dependency-pressure","sha256":"a750cefdb28779bb7903d0a10e8d55963ad50c7efb2148b4e21cbade2a2f87c0","expectation":"CompatibilityHostLimit after the 64-dependency product cap; next valid open succeeds"}
+  ]
+}

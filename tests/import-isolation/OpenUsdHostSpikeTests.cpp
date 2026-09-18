@@ -3,6 +3,7 @@
 #include "OpenUsdSpikeProtocol.h"
 #include "import_broker/SandboxLauncher.h"
 #include "import_broker/SharedSection.h"
+#include "model_core/OpenUsdIdentifier.h"
 #include "platform/AppContainerSid.h"
 #include "platform/MappedView.h"
 #include "platform/Win32Handle.h"
@@ -28,6 +29,33 @@
 #ifndef PREVIEW3D_IMPORT_HOST_EXE
 #error "PREVIEW3D_IMPORT_HOST_EXE must be defined"
 #endif
+
+TEST_CASE("USD-009 compatibility identifiers anchor locally and reject authority escapes",
+          "[usd-009][openusd][resolver][fuzz-regression]")
+{
+    using model_core::AnchorOpenUsdIdentifier;
+    using model_core::IsSafeOpenUsdIdentifier;
+    CHECK(IsSafeOpenUsdIdentifier("preview3d://root.usda"));
+    CHECK(IsSafeOpenUsdIdentifier("preview3d://layers/mesh.usdc"));
+    CHECK_FALSE(IsSafeOpenUsdIdentifier("preview3d://"));
+    CHECK_FALSE(IsSafeOpenUsdIdentifier("preview3d://layers/../outside.usda"));
+    CHECK_FALSE(IsSafeOpenUsdIdentifier("preview3d://layers\\outside.usda"));
+    CHECK_FALSE(IsSafeOpenUsdIdentifier("preview3d://https:outside.usda"));
+    const std::string embeddedNull = std::string("preview3d://layers/") + '\0' + "outside.usda";
+    CHECK_FALSE(IsSafeOpenUsdIdentifier(embeddedNull));
+    CHECK_FALSE(IsSafeOpenUsdIdentifier("preview3d://layers/outside\nusda"));
+
+    CHECK(AnchorOpenUsdIdentifier("mesh.usda", "")
+          == std::optional<std::string>("preview3d://mesh.usda"));
+    CHECK(AnchorOpenUsdIdentifier("mesh.usda", "preview3d://layers/root.usda")
+          == std::optional<std::string>("preview3d://layers/mesh.usda"));
+    CHECK(AnchorOpenUsdIdentifier("./mesh.usda", "preview3d://layers/root.usda")
+          == std::optional<std::string>("preview3d://layers/mesh.usda"));
+    CHECK_FALSE(AnchorOpenUsdIdentifier("../outside.usda", "preview3d://layers/root.usda"));
+    CHECK_FALSE(AnchorOpenUsdIdentifier("https://example.invalid/x.usda", ""));
+    CHECK_FALSE(AnchorOpenUsdIdentifier("C:/outside.usda", ""));
+    CHECK_FALSE(AnchorOpenUsdIdentifier("\\\\server\\share\\x.usda", ""));
+}
 
 namespace {
 

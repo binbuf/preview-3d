@@ -405,6 +405,53 @@ TEST_CASE("USD-001 low Job commit cap bounds parse pressure and the worker remai
     pool.Release(*worker);
 }
 
+TEST_CASE("USD-009 mutated USDC allocation pressure is Job-contained and recoverable",
+          "[usd-009][usdc][memory][job][recovery][fuzz-regression]")
+{
+    auto pressure = DecodeBase64("cube.usdc.base64");
+    struct Mutation { size_t offset; uint8_t expected; uint8_t replacement; };
+    constexpr Mutation mutations[] = {
+        {753, 27, 241}, {1198, 210, 186},
+        {1491, 58, 0}, {1492, 116, 0}, {1493, 114, 0}, {1494, 97, 0},
+        {2416, 0, 8}, {2570, 222, 206}, {2833, 54, 50},
+    };
+    for (const auto mutation : mutations) {
+        REQUIRE(mutation.offset < pressure.size());
+        REQUIRE(std::to_integer<uint8_t>(pressure[mutation.offset]) == mutation.expected);
+        pressure[mutation.offset] = std::byte{mutation.replacement};
+    }
+
+    sandbox_test_support::SandboxFixture fixture;
+    import_broker::WorkerPool pool;
+    import_broker::SandboxLimits limits{};
+    limits.processMemoryLimitBytes = 128u * 1024u * 1024u;
+    std::wstring error;
+    REQUIRE(pool.InitializeForTesting(sandbox_test_support::WorkerExePath(), std::move(fixture.sid),
+                                      limits, 1, L"--usd-spike-pool", error));
+    const auto worker = pool.AcquireIdle();
+    REQUIRE(worker);
+    const DWORD originalProcessId = pool.ProcessId(*worker);
+    const auto exhausted = RunSpike(pool, *worker, pressure,
+                                    import_worker::UsdSpikeMode::ParseAndConvert,
+                                    0x757364090001ull);
+    if (exhausted) {
+        CHECK(exhausted->succeeded == 0);
+        CHECK(pool.ProcessId(*worker) == originalProcessId);
+    } else {
+        REQUIRE(WaitForSingleObject(pool.ProcessHandle(*worker), 5'000) == WAIT_OBJECT_0);
+        REQUIRE(pool.TerminateAndReplace(*worker, error));
+        CHECK(pool.ProcessId(*worker) != originalProcessId);
+    }
+
+    const auto valid = DecodeBase64("cube.usdc.base64");
+    const auto recovered = RunSpike(pool, *worker, valid,
+                                    import_worker::UsdSpikeMode::ParseAndConvert,
+                                    0x757364090002ull);
+    REQUIRE(recovered);
+    CHECK(recovered->succeeded == 1);
+    pool.Release(*worker);
+}
+
 TEST_CASE("USD-001 noninterruptible TinyUSDZ phase is replaced after the cancellation grace",
           "[usd-spike][cancellation][worker-pool]")
 {

@@ -29,6 +29,12 @@ started OpenUSD host. Local relative sublayers, references, payloads, authored
 default variants, and texture dependencies are brokered by the viewer; remote
 assets and arbitrary resolvers/plugins are never allowed.
 
+The implemented USD viewer path has an immutable corpus and a standalone
+sanitizer fuzz-smoke lane. Final release qualification still requires the
+recorded clean-machine, repeated performance/heartbeat, soak, and signed-build
+gates; see [USD-009 verification](.docs/USD-009-VERIFICATION.md). Explorer USD
+thumbnails are a separate follow-up and are not installed.
+
 This is a static, read-only viewer. Animation playback, editing, 3MF/CAD
 formats, Explorer thumbnails (including for USD and FBX), network assets,
 skeletal USD data, MaterialX, procedural schemas, and interactive variant
