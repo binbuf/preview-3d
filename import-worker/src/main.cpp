@@ -5,6 +5,7 @@
 #include "ThreeMfSpikeWorker.h"
 #include "UsdSpikeWorker.h"
 #include "UsdImportWorker.h"
+#include "ThreeMfImportWorker.h"
 #include "FbxImportWorker.h"
 #include "GltfImportWorker.h"
 #include "PlyImportWorker.h"
@@ -129,6 +130,9 @@ int main(int argc, char* argv[])
     }
     if (ArgEquals(argv[1], "--parse-usd")) {
         return import_worker::RunUsdImport();
+    }
+    if (ArgEquals(argv[1], "--parse-3mf")) {
+        return import_worker::RunThreeMfImport();
     }
 
     // Backward-compatible aliases retained for older parser regression commands.

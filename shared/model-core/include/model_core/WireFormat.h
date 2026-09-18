@@ -130,6 +130,8 @@ enum class SourceFormatId : uint32_t {
     Usda = 9,
     Usdc = 10,
     Usdz = 11,
+    // Kept additive: protocol v10 SceneMetadata remains layout-compatible.
+    ThreeMf = 12,
 };
 // Preserve the protocol-v10 numeric identities of Unknown/Y/Z. USD is the
 // first supported family that can author X-up, so X is appended rather than

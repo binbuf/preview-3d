@@ -54,6 +54,8 @@ enum class ControlOpcode : uint32_t {
     // process (or a hostile test double) from silently changing producer
     // identity during one generation.
     StartOpenUsdImportFromFile = 18, // broker -> compatibility host
+    // Private 3MF route until 3MF-006 enables product discovery.
+    StartThreeMfImportFromFile = 19, // host -> worker
 };
 
 enum : uint32_t {
@@ -260,6 +262,21 @@ struct ParseOpenUsdFileRequest {
 };
 static_assert(sizeof(ParseOpenUsdFileRequest) == 48,
               "ParseOpenUsdFileRequest layout changed");
+
+// 3MF/OPC imports use the same brokered raw-file-handle contract.  Keeping a
+// named type makes the closed format/opcode pairing auditable even though the
+// fixed wire shape is deliberately shared with the other file adapters.
+struct ParseThreeMfFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue;
+    uint64_t sectionHandleValue;
+    uint64_t sectionByteCapacity;
+    uint32_t maxChunkCount;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
+};
+static_assert(sizeof(ParseThreeMfFileRequest) == 48,
+              "ParseThreeMfFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

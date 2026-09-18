@@ -203,11 +203,12 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         return Reject(ImportErrorCode::ImportProtocolViolation, "header changed during copy");
     if (header.reserved || header.scene.reserved || header.scene.generationId != expectedGenerationId)
         return Reject(ImportErrorCode::ImportProtocolViolation, "stale or malformed scene metadata");
-    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Usdz))
+    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::ThreeMf))
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
     const bool usdFormat = header.scene.format == model_core::SourceFormatId::Usda
         || header.scene.format == model_core::SourceFormatId::Usdc
-        || header.scene.format == model_core::SourceFormatId::Usdz;
+        || header.scene.format == model_core::SourceFormatId::Usdz
+        || header.scene.format == model_core::SourceFormatId::ThreeMf;
     const bool tierBFormat = header.scene.format == model_core::SourceFormatId::AsciiStl
         || header.scene.format == model_core::SourceFormatId::AsciiPly
         || header.scene.format == model_core::SourceFormatId::Obj

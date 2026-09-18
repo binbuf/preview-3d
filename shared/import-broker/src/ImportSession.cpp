@@ -101,6 +101,8 @@ const wchar_t* ParseFlagFor(ImportFormat format)
         return L"--parse-fbx";
     case ImportFormat::Usd:
         return L"--parse-usd";
+    case ImportFormat::ThreeMf:
+        return L"--parse-3mf";
     case ImportFormat::Gltf:
     default:
         return L"--parse-gltf";
@@ -233,6 +235,13 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         request.requestFlags |= *expected;
         return model_core::WriteControlMessage(
             controlInWrite, model_core::ControlOpcode::StartUsdImportFromFile,
+            &request, sizeof(request));
+    }
+    case ImportFormat::ThreeMf: {
+        auto request = MakeFileRequest<model_core::ParseThreeMfFileRequest>(
+            session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+        return model_core::WriteControlMessage(
+            controlInWrite, model_core::ControlOpcode::StartThreeMfImportFromFile,
             &request, sizeof(request));
     }
     }
@@ -776,6 +785,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                             ? chunk.scene.format == model_core::SourceFormatId::Obj
                             : request.format == ImportFormat::Fbx
                                 ? chunk.scene.format == model_core::SourceFormatId::Fbx
+                                : request.format == ImportFormat::ThreeMf
+                                    ? chunk.scene.format == model_core::SourceFormatId::ThreeMf
                                 : (chunk.scene.format == model_core::SourceFormatId::Usda
                                    || chunk.scene.format == model_core::SourceFormatId::Usdc
                                    || chunk.scene.format == model_core::SourceFormatId::Usdz);
@@ -796,7 +807,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 || acceptance.scene->format == model_core::SourceFormatId::Fbx
                 || acceptance.scene->format == model_core::SourceFormatId::Usda
                 || acceptance.scene->format == model_core::SourceFormatId::Usdc
-                || acceptance.scene->format == model_core::SourceFormatId::Usdz);
+                || acceptance.scene->format == model_core::SourceFormatId::Usdz
+                || acceptance.scene->format == model_core::SourceFormatId::ThreeMf);
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -920,7 +932,9 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 const bool usdSource = chunk.scene.format == model_core::SourceFormatId::Usda
                     || chunk.scene.format == model_core::SourceFormatId::Usdc
                     || chunk.scene.format == model_core::SourceFormatId::Usdz;
-                if (usdSource &&
+                const bool boundedPackageSource = usdSource
+                    || chunk.scene.format == model_core::SourceFormatId::ThreeMf;
+                if (boundedPackageSource &&
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
                      d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
@@ -1271,7 +1285,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             || acceptance.scene->format == model_core::SourceFormatId::Fbx
             || acceptance.scene->format == model_core::SourceFormatId::Usda
             || acceptance.scene->format == model_core::SourceFormatId::Usdc
-            || acceptance.scene->format == model_core::SourceFormatId::Usdz);
+            || acceptance.scene->format == model_core::SourceFormatId::Usdz
+            || acceptance.scene->format == model_core::SourceFormatId::ThreeMf);
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)

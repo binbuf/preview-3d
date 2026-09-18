@@ -44,6 +44,8 @@ enum class ImportFormat : uint32_t {
     // Test-only protocol route through USD-007. Product extension discovery
     // and activation deliberately remain disabled until USD-008.
     Usd,
+    // Test-only until 3MF-006. This must never be inferred from a path by UI.
+    ThreeMf,
 };
 
 enum class ImportProducer : uint32_t {

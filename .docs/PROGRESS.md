@@ -4,6 +4,25 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **3MF-002 OPC boundary and protocol route (2026-09-18): in progress.**
+  Protocol v10 can carry an additive `ThreeMf=12` source identity and a
+  dedicated 48-byte `ParseThreeMfFileRequest`/opcode without changing any
+  existing wire record. The route remains private: no viewer classifier,
+  dialog, activation, registration, installer, package, or thumbnail path is
+  allowed to discover `.3mf` before 3MF-003 through 3MF-005 have a complete
+  scene contract. The broker accepts a 3MF generation only when the worker
+  reports exactly `ThreeMf`, and treats it as Tier B.
+
+  The product archive boundary is intentionally a new OPC checker rather than
+  a renamed USDZ checker. USDZ's stored-only, 64-byte-aligned, no-ZIP64 policy
+  is correct for USDZ but would reject valid 3MF containers. The new checker
+  permits only stored/Deflate parts and begins enforcing central/local-header,
+  ZIP64, duplicate canonical name, traversal, encryption, multi-disk,
+  overlap, count, expanded-byte and expansion-ratio limits before any future
+  lib3mf construction. `kThreeMfImporterVersion` is reserved now for the
+  eventual viewer-owned derived-cache key; increase it for every normalization
+  or preflight semantic change.
+
 - **3MF-001 dependency and feasibility spike (2026-09-18): complete; private
   only.** The existing vcpkg baseline now pins lib3mf `2.5.0#1` (upstream
   2.5.0 commit `64bb454d1fcb53effa57d3cef752a10d740d41a2`) as an app-local

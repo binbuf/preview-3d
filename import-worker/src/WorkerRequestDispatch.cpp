@@ -7,6 +7,7 @@
 #include "ObjImportWorker.h"
 #include "StlImportWorker.h"
 #include "UsdImportWorker.h"
+#include "ThreeMfImportWorker.h"
 
 #include "model_core/ControlChannelIo.h"
 
@@ -86,6 +87,13 @@ DispatchOutcome DispatchOneRequest(HANDLE stdIn, HANDLE stdOut)
         model_core::ParseUsdFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
         HandleUsdImportFileRequest(stdIn, stdOut, request);
+        return DispatchOutcome::Continue;
+    }
+    if (received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartThreeMfImportFromFile)
+        && received->payload.size() == sizeof(model_core::ParseThreeMfFileRequest)) {
+        model_core::ParseThreeMfFileRequest request{};
+        std::memcpy(&request, received->payload.data(), sizeof(request));
+        HandleThreeMfImportFileRequest(stdOut, request);
         return DispatchOutcome::Continue;
     }
 
