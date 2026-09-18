@@ -6,6 +6,7 @@ vcpkg_from_github(
     HEAD_REF release
     PATCHES
         install-minimal-static-library.patch
+        register-usda-point-instancer.patch
 )
 
 vcpkg_cmake_configure(

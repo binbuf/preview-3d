@@ -1,0 +1,10 @@
+diff --git a/src/usda-reader.cc b/src/usda-reader.cc
+index 13e1dde..8dfd221 100644
+--- a/src/usda-reader.cc
++++ b/src/usda-reader.cc
+@@ -1669,4 +1669,5 @@ bool USDAReader::Impl::Init() {
+   RegisterReconstructCallback<GeomSubset>();
+   RegisterReconstructCallback<GeomBasisCurves>();
+   RegisterReconstructCallback<GeomNurbsCurves>();
++  RegisterReconstructCallback<PointInstancer>();
+   RegisterReconstructCallback<GeomCamera>();

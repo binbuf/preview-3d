@@ -1393,3 +1393,52 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
 - **Likely next slices for the D3D12-in-the-real-app effort**, in roughly dependency order: (a) a fixed-shader camera/orbit + a neutral triangle/cube/point-cloud draw (Gate 1's own next deliverable, needs a root signature/PSO/vertex buffer this slice deliberately didn't build); (b) the D3D11On12/Direct2D chrome overlay bridge (ADR-010's already-decided path) so the `--d3d12` window is self-closable and visually on par with the D3D11 default again; (c) wiring `D3D12UploadRing`/`DxgiBudgetMonitor`/the worker pool/`MappedFile`/`DerivedCache` together behind a real "open a file" flow, replacing `Model.cpp`'s insecure in-process parser; (d) device-loss/recovery (`DXGI_ERROR_DEVICE_REMOVED`/`RESET`), explicitly not attempted in slice 1. Only after some of (a)-(c) land does it make sense to flip `--d3d12` from opt-in to the default and start planning `Renderer.cpp`'s removal.
 - **The trusted-process-side file-open step (`import_broker::OpenAndCanonicalizeSourceFile`) is deliberately minimal, not the full Input-boundary policy engine** — no UNC/reparse-point rejection, no "file changed since open" re-verification. It only opens and canonicalizes. Whoever eventually wires real file-open into `Preview3D.cpp` itself needs to layer that broader policy (`03-file-formats-and-ingestion.md`'s "Input boundary" section) on top — don't mistake this function's current behavior for that policy being implemented. **Partial correction since this note was written**: sidecar-directory containment *is* now implemented, in `import_broker::ResolveSidecarPath` (`shared/import-broker/src/SidecarPathResolver.cpp`) — but only for sidecar references reached through the `RequestSidecarFile` protocol, not for the primary file itself, which is what the rest of this bullet still describes.
 - **Gate 0's "cancellation/generation primitive" is no longer missing** — `shared/platform/include/platform/Generation.h` (`GenerationSource`/`GenerationToken`), built in slice 3 once the upload ring's publication path needed a real "is this still current" check. Reuse it rather than inventing a second generation/cancellation mechanism anywhere else in the codebase (e.g. a future worker-pool generation-cancellation primitive, also still a Gate 0/ADR-002 debt item, should build on this, not duplicate it).
+
+### USD-004 TinyUSDZ static adapter findings
+
+- TinyUSDZ 0.9.1 commit `a04ee0bcbd1a930e30cc40938fcee3526a6fa8eb`
+  implements USDA `PointInstancer` reconstruction but does not register that
+  callback in `USDAReader::Impl::Init` (the USDC path does reconstruct it).
+  The parse therefore succeeds while silently materializing the prim as a
+  `Scope`, and Tydra drops its instance arrays. The overlay-port patch
+  `register-usda-point-instancer.patch` adds the missing registration and the
+  overlay is revisioned as `0.9.1#1` so existing manifest installs see the
+  changed package. Keep this patch, or verify the upstream equivalent before
+  advancing the pin.
+- TinyUSDZ `Prim::as<T>` uses role-aware, non-strict casts; it is not a safe
+  concrete-schema discriminator. `UsdAdapter` compares `Prim::type_id()` with
+  `TypeTraits<T>::type_id()` before every schema cast. Also do not use the
+  stage's `Prim::absolute_path()` strings as render-node keys: build canonical
+  `/Root/Child` paths during deterministic traversal so they match Tydra's
+  `Node::abs_path` and relationship targets.
+- Tydra triangulation plus `build_vertex_indices` converts supported constant,
+  uniform, vertex/varying, indexed, and face-varying normals/UV/color data to
+  one vertex index domain. The adapter then deliberately emits bounded
+  deindexed chunks; those chunks are shared by ordinary and point-instancer
+  `MeshInstance` records. Point-instancer prototype subtree transforms must be
+  composed with each instance placement—using only the prototype mesh ID loses
+  transforms and multi-mesh prototypes.
+- TinyUSDZ exposes no allocation or cooperative-cancellation callback. Keep
+  `max_memory_limit_in_mb` advisory only; the worker Job commit cap is the
+  authoritative memory boundary, and cancellation is checked between parse,
+  classification, conversion, mesh chunks, nodes, and instances. Instantiating
+  `TypedTimeSamples::get` for point-instancer arrays produces MSVC C4702 in the
+  pinned header, so warning 4702 is disabled only for `UsdAdapter.cpp` in the
+  worker project.
+- Composition classification must finish before `BoundedChunkWriter` exists.
+  This guarantees that a valid sublayer/reference/payload/variant/instanceable
+  stage returns `UnsupportedComposition` with zero candidate batches. Valid
+  USDZ similarly remains `UnsupportedEncoding` after archive preflight until
+  USD-005 owns archive assets/dependencies; malformed/unsafe archives remain
+  terminal `ArchiveLimit` and never request compatibility fallback.
+- Qualification: full Debug and Release solution builds passed. `[usd-004]`
+  passed 56 assertions and `[usd-003]` passed 123 assertions in both
+  configurations; Debug `Tests.Unit` passed 7,617 assertions and Release
+  `Tests.Unit` passed 7,529 assertions. The full Debug isolation run passed
+  267/271 cases (101,226 assertions); its four failures are pre-existing FBX
+  fixture-mutation tests whose `FindBytes` helper cannot locate the requested
+  byte pattern, before any USD route is entered. The Release isolation run
+  passed 264/271 cases (101,214 assertions): the same four FBX failures plus
+  three unrelated `SidecarPathResolverTests` scratch-directory name collisions
+  in that randomized full-suite order. All focused USD tests passed in both
+  runs.

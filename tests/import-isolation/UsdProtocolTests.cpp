@@ -1,5 +1,6 @@
 #include "SandboxTestSupport.h"
 #include "import_broker/ImportSession.h"
+#include "import_broker/SharedSection.h"
 #include "import_broker/SharedSectionValidator.h"
 #include "import_broker/UsdFallbackState.h"
 #include "model_core/Checksum.h"
@@ -8,6 +9,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -18,6 +20,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 #include <utility>
 
@@ -117,6 +120,39 @@ import_broker::ImportSessionRequest Request(const std::filesystem::path& path, u
     return request;
 }
 
+uint32_t Count(const import_broker::ImportSessionResult& result,
+               model_core::ChunkTopology topology)
+{
+    return static_cast<uint32_t>(std::count_if(result.chunks.begin(), result.chunks.end(),
+        [topology](const auto& chunk) { return chunk.descriptor.topology == topology; }));
+}
+
+template<class T>
+T Payload(const import_broker::ValidatedChunk& chunk)
+{
+    REQUIRE(chunk.payload.size() == sizeof(T));
+    T value{};
+    std::memcpy(&value, chunk.payload.data(), sizeof(value));
+    return value;
+}
+
+uint64_t SemanticFingerprint(const import_broker::ImportSessionResult& result)
+{
+    uint64_t hash = 14695981039346656037ULL;
+    auto add = [&](std::span<const std::byte> bytes) {
+        for (const std::byte byte : bytes) {
+            hash ^= std::to_integer<uint8_t>(byte);
+            hash *= 1099511628211ULL;
+        }
+    };
+    for (const auto& chunk : result.chunks) {
+        add(std::as_bytes(std::span(&chunk.scene, 1)));
+        add(std::as_bytes(std::span(&chunk.descriptor, 1)));
+        add(chunk.payload);
+    }
+    return hash;
+}
+
 std::vector<std::byte> MetadataSection(model_core::UpAxisId axis, double metersPerUnit)
 {
     using namespace model_core;
@@ -189,13 +225,18 @@ TEST_CASE("USD-003 validator accepts concrete X Y Z units and rejects illegal US
 TEST_CASE("USD-003 one-shot and pooled routes preserve byte-detected encoding",
           "[usd-003][worker][pool][formats]")
 {
-    struct Fixture { std::string_view name; std::wstring_view extension; model_core::SourceFormatId format; };
+    struct Fixture {
+        std::string_view name;
+        std::wstring_view extension;
+        model_core::SourceFormatId format;
+        model_core::UpAxisId axis;
+        double units;
+    };
     const Fixture fixtures[] = {
-        {"mesh.usda", L"usd", model_core::SourceFormatId::Usda},
-        {"cube.usdc.base64", L"usd", model_core::SourceFormatId::Usdc},
-        {"mesh.usda", L"usda", model_core::SourceFormatId::Usda},
-        {"cube.usdc.base64", L"usdc", model_core::SourceFormatId::Usdc},
-        {"cube.usdz.base64", L"usdz", model_core::SourceFormatId::Usdz},
+        {"mesh.usda", L"usd", model_core::SourceFormatId::Usda, model_core::UpAxisId::Z, 0.01},
+        {"cube.usdc.base64", L"usd", model_core::SourceFormatId::Usdc, model_core::UpAxisId::Z, 1.0},
+        {"mesh.usda", L"usda", model_core::SourceFormatId::Usda, model_core::UpAxisId::Z, 0.01},
+        {"cube.usdc.base64", L"usdc", model_core::SourceFormatId::Usdc, model_core::UpAxisId::Z, 1.0},
     };
     uint64_t generation = 100;
     import_broker::PrepareImportWorkerPoolAsync(sandbox_test_support::WorkerExePath());
@@ -208,12 +249,159 @@ TEST_CASE("USD-003 one-shot and pooled routes preserve byte-detected encoding",
             auto result = import_broker::RunImportSession(request);
             CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.batchCount);
             REQUIRE(result.ok);
-            REQUIRE(result.chunks.size() == 1);
+            REQUIRE_FALSE(result.chunks.empty());
             CHECK(result.chunks.front().scene.format == fixtures[index].format);
-            CHECK(result.chunks.front().scene.upAxis == model_core::UpAxisId::Y);
-            CHECK(result.chunks.front().scene.metersPerUnit == 0.01);
+            CHECK(result.chunks.front().scene.upAxis == fixtures[index].axis);
+            CHECK(result.chunks.front().scene.metersPerUnit == fixtures[index].units);
+            CHECK(Count(result, model_core::ChunkTopology::TriangleList) > 0);
+            CHECK(Count(result, model_core::ChunkTopology::Node) > 0);
+            CHECK(Count(result, model_core::ChunkTopology::MeshInstance) > 0);
         }
     }
+}
+
+TEST_CASE("USD-004 normalizes static scene geometry instances and policy metadata",
+          "[usd-004][worker][geometry][instances]")
+{
+    ScratchUsd scratch(L"usda");
+    scratch.Write(ReadFixture("static-scene.usda"));
+    auto request = Request(scratch.path, 150);
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto first = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(first.stage), uint32_t(first.errorCode), first.batchCount,
+            first.chunks.size());
+    REQUIRE(first.ok);
+    REQUIRE_FALSE(first.chunks.empty());
+    CHECK(first.chunks.front().scene.format == model_core::SourceFormatId::Usda);
+    CHECK(first.chunks.front().scene.upAxis == model_core::UpAxisId::X);
+    CHECK(first.chunks.front().scene.metersPerUnit == 0.001);
+    CHECK(Count(first, model_core::ChunkTopology::TriangleList) == 2);
+    CHECK(Count(first, model_core::ChunkTopology::Node) >= 7);
+    CHECK(Count(first, model_core::ChunkTopology::MeshInstance) >= 4);
+    CHECK(Count(first, model_core::ChunkTopology::ImportStatus) == 1);
+
+    struct ReferenceCounts { uint32_t visible = 0; uint32_t hidden = 0; };
+    std::unordered_map<uint32_t, ReferenceCounts> geometryReferences;
+    bool sawLargeOrigin = false;
+    bool sawPrototypeTransform = false;
+    bool sawAttributes = false;
+    for (const auto& chunk : first.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList) {
+            sawAttributes |= (chunk.descriptor.geometryFlags
+                & (model_core::kGeometryHasUv0 | model_core::kGeometryHasColors))
+                == (model_core::kGeometryHasUv0 | model_core::kGeometryHasColors);
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::MeshInstance) {
+            const auto instance = Payload<model_core::MeshInstancePayload>(chunk);
+            if (instance.worldMin[0] > 999'999'999.0) sawLargeOrigin = true;
+            if ((instance.flags & model_core::kSceneRecordVisible)
+                && instance.worldMin[1] >= 12.0) sawPrototypeTransform = true;
+            auto& references = geometryReferences[instance.geometryChunkId];
+            if (instance.flags & model_core::kSceneRecordVisible) ++references.visible;
+            else ++references.hidden;
+        }
+    }
+    const bool sawSharedPrototype = std::ranges::any_of(geometryReferences, [](const auto& item) {
+        return item.second.visible >= 1 && item.second.hidden >= 1
+            && item.second.visible + item.second.hidden >= 3;
+    });
+    CHECK(sawAttributes);
+    CHECK(sawLargeOrigin);
+    CHECK(sawPrototypeTransform);
+    CHECK(sawSharedPrototype);
+
+    const auto second = import_broker::RunImportSession(request);
+    REQUIRE(second.ok);
+    CHECK(SemanticFingerprint(second) == SemanticFingerprint(first));
+}
+
+TEST_CASE("USD-004 uses progressive bounded sections and reuses the worker after failure",
+          "[usd-004][worker][progressive][recovery]")
+{
+    import_broker::PrepareImportWorkerPoolAsync(sandbox_test_support::WorkerExePath());
+    ScratchUsd valid(L"usd");
+    valid.Write(ReadFixture("static-scene.usda"));
+    auto request = Request(valid.path, 160);
+    request.sectionByteCapacity = 4096;
+    request.maxChunkCount = 2;
+    request.maxChunkBatchesPerGeneration = 64;
+    request.maxChunksPerGeneration = 128;
+    request.useWorkerPool = true;
+    const auto progressive = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(progressive.stage), uint32_t(progressive.errorCode),
+            progressive.batchCount, progressive.chunks.size());
+    REQUIRE(progressive.ok);
+    CHECK(progressive.batchCount > 1);
+
+    std::atomic_bool cancelled = false;
+    auto cancelledRequest = request;
+    cancelledRequest.generationId = 161;
+    cancelledRequest.isCancelled = [&] { return cancelled.load(); };
+    cancelledRequest.onBatch = [&](std::vector<import_broker::ValidatedChunk>&& chunks) {
+        REQUIRE_FALSE(chunks.empty());
+        cancelled.store(true);
+    };
+    const auto cancelledResult = import_broker::RunImportSession(cancelledRequest);
+    CHECK_FALSE(cancelledResult.ok);
+    CHECK(cancelledResult.errorCode == model_core::ImportErrorCode::Cancelled);
+    CHECK(cancelledResult.workerProcessId == progressive.workerProcessId);
+
+    ScratchUsd malformed(L"usd");
+    const std::string hostile =
+        "#usda 1.0\n(def Mesh \"Bad\" { int[] faceVertexCounts = [3] "
+        "int[] faceVertexIndices = [0, 1, 99] point3f[] points = [(0,0,0)] })";
+    malformed.Write(std::as_bytes(std::span(hostile)));
+    auto badRequest = Request(malformed.path, 162);
+    badRequest.useWorkerPool = true;
+    const auto bad = import_broker::RunImportSession(badRequest);
+    CHECK_FALSE(bad.ok);
+    CHECK(bad.errorCode == model_core::ImportErrorCode::MalformedData);
+
+    request.generationId = 163;
+    const auto recovered = import_broker::RunImportSession(request);
+    REQUIRE(recovered.ok);
+    CHECK(recovered.workerProcessId == bad.workerProcessId);
+}
+
+TEST_CASE("USD-004 classifies composition before publication and leaves USDZ to USD-005",
+          "[usd-004][worker][fallback]")
+{
+    ScratchUsd composed(L"usda");
+    const std::string source =
+        "#usda 1.0\n( subLayers = [@child.usda@] )\n"
+        "def Mesh \"M\" { int[] faceVertexCounts=[3] int[] faceVertexIndices=[0,1,2] "
+        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] }";
+    composed.Write(std::as_bytes(std::span(source)));
+    const auto fallback = import_broker::RunImportSession(Request(composed.path, 170));
+    CHECK_FALSE(fallback.ok);
+    CHECK(fallback.errorCode == model_core::ImportErrorCode::UnsupportedComposition);
+    CHECK(fallback.compatibilityFallbackRequired);
+    CHECK(fallback.batchCount == 0);
+    CHECK(fallback.chunks.empty());
+
+    ScratchUsd movingInstances(L"usda");
+    const std::string unsupportedMotion =
+        "#usda 1.0\ndef Xform \"Root\" {\n"
+        " def Mesh \"Prototype\" { int[] faceVertexCounts=[3] "
+        "int[] faceVertexIndices=[0,1,2] point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] }\n"
+        " def PointInstancer \"Instances\" { rel prototypes=[</Root/Prototype>] "
+        "int[] protoIndices=[0] point3f[] positions=[(0,0,0)] "
+        "vector3f[] velocities=[(1,0,0)] }\n}";
+    movingInstances.Write(std::as_bytes(std::span(unsupportedMotion)));
+    const auto unsupported = import_broker::RunImportSession(
+        Request(movingInstances.path, 171));
+    CHECK_FALSE(unsupported.ok);
+    CHECK(unsupported.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+    CHECK_FALSE(unsupported.compatibilityFallbackRequired);
+    CHECK(unsupported.batchCount == 0);
+
+    ScratchUsd archive(L"usdz");
+    archive.Write(ReadFixture("cube.usdz.base64"));
+    const auto deferred = import_broker::RunImportSession(Request(archive.path, 172));
+    CHECK_FALSE(deferred.ok);
+    CHECK(deferred.errorCode == model_core::ImportErrorCode::UnsupportedEncoding);
+    CHECK_FALSE(deferred.compatibilityFallbackRequired);
 }
 
 TEST_CASE("USD-003 explicit suffix mismatch and malformed bytes are terminal typed failures",

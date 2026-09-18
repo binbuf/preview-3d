@@ -7,20 +7,19 @@
 
 #include "UsdImportWorker.h"
 
+#include "ChunkBatchSink.h"
+#include "UsdAdapter.h"
 #include "UsdZipPreflight.h"
-#include "model_core/Checksum.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/MappedFile.h"
 #include "model_core/TierALimits.h"
-#include "model_core/GeometryBounds.h"
-#include "model_core/VertexLayouts.h"
-#include "model_core/WireFormat.h"
 #include "platform/MappedView.h"
 #include "platform/Win32Handle.h"
 
 #include "tinyusdz.hh"
 
 #include <cstring>
+#include <new>
 #include <span>
 
 namespace import_worker {
@@ -48,71 +47,35 @@ bool EncodingMatchesRequest(SourceFormatId detected, uint32_t flags)
         || (expected == model_core::kImportRequestUsdExpectedUsdz && detected == SourceFormatId::Usdz);
 }
 
-bool ReportError(HANDLE stdOut, uint64_t generationId, ImportErrorCode code)
+bool ReportError(HANDLE stdOut, uint64_t generationId, ImportErrorCode code,
+                 model_core::ImportFailurePhase phase = model_core::ImportFailurePhase::Geometry)
 {
     model_core::GenerationErrorNotice notice{};
     notice.generationId = generationId;
     notice.errorCode = uint32_t(code);
-    notice.reserved0 = uint32_t(model_core::ImportFailurePhase::Geometry);
+    notice.reserved0 = uint32_t(phase);
     model_core::WriteControlMessage(stdOut, model_core::ControlOpcode::GenerationError,
                                     &notice, sizeof(notice));
     return false;
 }
 
-bool WriteContractResult(std::span<std::byte> output, uint64_t generationId,
-                         uint32_t maxChunkCount, SourceFormatId format,
-                         model_core::ChunksReadyNotice& notice)
+bool ReportOutcome(HANDLE stdOut, uint64_t generationId, const UsdImportOutcome& outcome)
 {
-    using namespace model_core;
-    constexpr uint64_t payloadOffset = kSectionHeaderSize + kChunkDescriptorSize;
-    constexpr uint64_t sectionLength = payloadOffset + sizeof(VertexPositionOnlyF32);
-    if (maxChunkCount < 1 || sectionLength > output.size()) return false;
-
-    // Metadata-only sections are rejected by the product broker as empty.
-    // This one-point contract marker keeps the USD-003 route end-to-end
-    // testable without pretending to normalize source geometry before USD-004.
-    const VertexPositionOnlyF32 marker{};
-    std::memcpy(output.data() + payloadOffset, &marker, sizeof(marker));
-
-    ChunkDescriptor descriptor{};
-    descriptor.normalizedRangeOffset = payloadOffset;
-    descriptor.sourceRangeLength = 1;
-    descriptor.normalizedRangeLength = sizeof(marker);
-    descriptor.topology = ChunkTopology::PointList;
-    descriptor.vertexCount = 1;
-    descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionOnly_F32);
-    descriptor.chunkId = 1;
-    descriptor.byteSize = sizeof(marker);
-    SetLocalBounds(descriptor, output.subspan(payloadOffset, sizeof(marker)));
-    descriptor.chunkChecksum = WireChecksum64(output.subspan(payloadOffset, sizeof(marker)));
-    std::memcpy(output.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
-
-    SectionHeader header{};
-    header.magic = kSectionMagic;
-    header.protocolVersion = kCurrentProtocolVersion;
-    header.generationId = generationId;
-    header.sectionLength = sectionLength;
-    header.chunkCount = 1;
-    header.scene.generationId = generationId;
-    header.scene.format = format;
-    // USD's authored/fallback values are always concrete. The contract route
-    // uses the USD defaults; USD-004 will report the parsed X/Y/Z and units.
-    header.scene.upAxis = UpAxisId::Y;
-    header.scene.metersPerUnit = 0.01;
-    header.scene.meshCount = 1;
-    header.sectionChecksum = WireChecksum64(
-        output.subspan(kSectionHeaderSize, sectionLength - kSectionHeaderSize));
-    std::memcpy(output.data(), &header, sizeof(header));
-
+    if (const auto* failure = std::get_if<UsdImportFailure>(&outcome))
+        return ReportError(stdOut, generationId, failure->code, failure->phase);
+    const auto& result = std::get<UsdImportResult>(outcome);
+    model_core::ChunksReadyNotice notice{};
     notice.generationId = generationId;
-    notice.chunkCount = 1;
-    notice.sectionBytesWritten = sectionLength;
+    notice.chunkCount = result.chunkCount;
+    notice.sectionBytesWritten = result.sectionBytesWritten;
+    model_core::WriteControlMessage(stdOut, model_core::ControlOpcode::ChunksReady,
+                                    &notice, sizeof(notice));
     return true;
 }
 
 } // namespace
 
-bool HandleUsdImportFileRequest(HANDLE, HANDLE stdOut,
+bool HandleUsdImportFileRequest(HANDLE stdIn, HANDLE stdOut,
                                 const model_core::ParseUsdFileRequest& request)
 {
     const uint32_t allowedFlags = model_core::kImportRequestUsdExpectedMask;
@@ -141,8 +104,12 @@ bool HandleUsdImportFileRequest(HANDLE, HANDLE stdOut,
         return ReportError(stdOut, request.generationId, ImportErrorCode::MalformedData);
     if (!EncodingMatchesRequest(format, request.requestFlags))
         return ReportError(stdOut, request.generationId, ImportErrorCode::UnsupportedEncoding);
-    if (format == SourceFormatId::Usdz && PreflightUsdz(source.Bytes()) != UsdzPreflightError::None)
-        return ReportError(stdOut, request.generationId, ImportErrorCode::ArchiveLimit);
+    if (format == SourceFormatId::Usdz) {
+        if (PreflightUsdz(source.Bytes()) != UsdzPreflightError::None)
+            return ReportError(stdOut, request.generationId, ImportErrorCode::ArchiveLimit);
+        // Archive asset/dependency handling is deliberately gated on USD-005.
+        return ReportError(stdOut, request.generationId, ImportErrorCode::UnsupportedEncoding);
+    }
 
     platform::Win32Handle outputSection(reinterpret_cast<HANDLE>(
         static_cast<uintptr_t>(request.sectionHandleValue)));
@@ -151,13 +118,23 @@ bool HandleUsdImportFileRequest(HANDLE, HANDLE stdOut,
     if (!output)
         return ReportError(stdOut, request.generationId, ImportErrorCode::InternalImporterFailure);
 
-    model_core::ChunksReadyNotice notice{};
-    if (!WriteContractResult(output.bytes(), request.generationId, request.maxChunkCount,
-                             format, notice))
-        return ReportError(stdOut, request.generationId, ImportErrorCode::ResourceLimit);
-    model_core::WriteControlMessage(stdOut, model_core::ControlOpcode::ChunksReady,
-                                    &notice, sizeof(notice));
-    return true;
+    platform::Win32Handle cancellationEvent(reinterpret_cast<HANDLE>(
+        static_cast<uintptr_t>(request.cancellationEventHandleValue)));
+    ChunkBatchSink sink(stdIn, stdOut, request.generationId, request.requestFlags,
+                        cancellationEvent.get());
+    UsdImportOptions options;
+    options.format = format;
+    options.isCancelled = [&sink] { return sink.Cancelled(); };
+    try {
+        return ReportOutcome(stdOut, request.generationId,
+            ImportUsd(source.Bytes(), output.bytes(), request.generationId,
+                      request.maxChunkCount, &sink, options));
+    } catch (const std::bad_alloc&) {
+        return ReportError(stdOut, request.generationId, ImportErrorCode::OutOfMemory);
+    } catch (...) {
+        return ReportError(stdOut, request.generationId,
+                           ImportErrorCode::InternalImporterFailure);
+    }
 }
 
 int RunUsdImport()

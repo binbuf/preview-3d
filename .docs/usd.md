@@ -365,15 +365,15 @@ the protocol's final stored scalar precision. Thus a digest mismatch denotes a
 semantic normalization mismatch rather than a packaging or scheduling change.
 
 The worker now has pooled and one-shot `--parse-usd` dispatch, but the route is
-test-only. It byte-detects all three fixture encodings, preflights USDZ, and
-returns a one-point contract marker because the current broker intentionally
-rejects metadata-only results. USD-004 must replace that marker with parsed
-scene geometry before any product exposure. No viewer extension classifier,
-picker, activation, registration, packaging, or thumbnail surface changed.
+test-only. USD-004 replaced the one-point contract marker with normalized
+USDA/USDC geometry, hierarchy, and instances. Valid USDZ remains deliberately
+deferred to USD-005 after product-owned archive preflight. No viewer extension
+classifier, picker, activation, registration, packaging, or thumbnail surface
+changed.
 
 ## USD-004: sandboxed TinyUSDZ static scene adapter
 
-Status: ready
+Status: complete (2026-09-17)
 Depends on: USD-003  
 Unblocks: USD-005
 
@@ -420,9 +420,49 @@ existing AppContainer worker, behind test-only routing.
 - No parser object, string, pointer, source mapping, or unvalidated section is
   retained by viewer/render code.
 
+### Completion record
+
+- `UsdAdapter` now consumes only the already-brokered mapped primary bytes,
+  byte-detected as USDA or USDC, and keeps TinyUSDZ asset/composition loading
+  disabled. The worker boundary catches allocation/library failures, observes
+  cancellation throughout conversion/publication, and returns only typed
+  phase/error facts.
+- The adapter classifies sublayers, references, payloads, inherits,
+  specializes, variants, clips, and instanceable composition before creating
+  a chunk writer. Only `UnsupportedComposition` requests compatibility retry;
+  malformed data, unsupported required geometry, limits, and archive policy
+  remain terminal and publish no candidate batches.
+- Tydra output is normalized into bounded deindexed triangle chunks with
+  normals, UV0, display color/opacity, orientation, deterministic provenance,
+  float-local positions plus double origins, nodes, reusable mesh instances,
+  and independently transformed double world bounds. Purpose and inherited
+  visibility are evaluated at authored `startTimeCode` (otherwise zero), X/Y/Z
+  and finite positive units are preserved, and optional omissions produce one
+  bounded host-owned status record.
+- Point instancers evaluate prototype indices, IDs, positions, orientations,
+  scales, and invisible IDs at the selected time. Prototype subtrees may
+  contain multiple transformed meshes; emitted instances reuse their geometry
+  chunks and remain bounded by the Tier-B object cap. Velocity/acceleration
+  semantics that this static adapter cannot reproduce fail explicitly as
+  `UnsupportedRequiredFeature`.
+- TinyUSDZ 0.9.1's USDA reader had a reconstruction implementation for
+  `PointInstancer` but omitted its registration in `USDAReader::Impl::Init`.
+  The pinned overlay port carries a one-line patch; without it a valid USDA
+  point instancer silently became a `Scope`. Exact type-ID checks remain in the
+  adapter because TinyUSDZ's role-aware `Prim::as<T>` is intentionally looser
+  than a concrete schema check.
+- Focused real-AppContainer tests cover USDA/USDC and `.usd` byte detection,
+  topology/UV/color normalization, large and prototype transforms, selected
+  time, X-up/millimetre metadata, guide omission, visible/hidden shared point
+  instances, deterministic output, progressive 4 KiB sections, cancellation,
+  malformed recovery on a pooled worker, pre-publication composition fallback,
+  unsupported point motion, and the USDZ handoff to USD-005. They pass in
+  Debug and Release (56 USD-004 assertions; the adjacent USD-003 suite passes
+  123 assertions in both configurations).
+
 ## USD-005: USDZ, materials, textures, and fast-path dependencies
 
-Status: blocked  
+Status: ready
 Depends on: USD-004  
 Unblocks: USD-007 and USD-008
 
