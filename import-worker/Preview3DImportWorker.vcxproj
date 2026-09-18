@@ -84,6 +84,7 @@
     <ClCompile Include="src\UsdImportWorker.cpp" />
     <ClCompile Include="src\UsdZipPreflight.cpp" />
     <ClCompile Include="src\ThreeMfOpcPreflight.cpp" />
+    <ClCompile Include="src\ThreeMfAdapter.cpp" />
     <ClCompile Include="src\ThreeMfImportWorker.cpp" />
     <ClCompile Include="src\SyntheticSceneGenerator.cpp" />
     <ClCompile Include="src\GltfImportWorker.cpp" />
@@ -121,6 +122,7 @@
     <ClInclude Include="src\UsdImportWorker.h" />
     <ClInclude Include="src\UsdZipPreflight.h" />
     <ClInclude Include="src\ThreeMfOpcPreflight.h" />
+    <ClInclude Include="src\ThreeMfAdapter.h" />
     <ClInclude Include="src\ThreeMfImportWorker.h" />
     <ClInclude Include="src\ThreeMfImporterVersion.h" />
     <ClInclude Include="src\SyntheticSceneGenerator.h" />

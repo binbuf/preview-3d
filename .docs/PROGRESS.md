@@ -4,6 +4,37 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **3MF-003 Core and Production scene adapter (2026-09-18): complete;
+  private only.** `Preview3DImportWorker.exe` now constructs lib3mf models
+  through the same duplicated, read-only source handle used by the spike,
+  with strict mode and a progress callback for cooperative read-time
+  cancellation. Because lib3mf's callback ABI cannot report short reads or
+  seek errors, the adapter records those facts out-of-band, zero-fills any
+  unread callback destination, and rejects the generation after construction.
+  The product OPC preflight still happens first; neither route uses a filename
+  API or extracts package contents.
+
+  The normalized scene contains only occurrences reachable from the root
+  model's `<build>`: root build transforms and component transforms compose in
+  double precision; a checked recursion stack enforces the shared 256-level
+  cap; only `model`, `support`, `solidsupport`, and `surface` resources are
+  accepted; and `other`/non-mesh resources fail instead of quietly appearing.
+  Mesh resources are emitted once as deindexed, reusable geometry chunks and
+  all occurrences reference them through normal node/instance records. This
+  is important for Production packages: lib3mf resolves cross-part resource
+  references, while the product deliberately does not enumerate child-model
+  builds as extra plates. Units map to the six Core values and metadata is
+  fixed at +Z up.
+
+  The focused real-worker regression exercises Core, nested components, and
+  Production multi-part fixtures through `ImportSession`; it asserts the
+  `ThreeMf` scene identity, shared reusable geometry, Z-up metadata, and
+  root-build occurrence counts. The route remains undiscoverable until
+  3MF-004/005 implement appearance and lattice behavior, then 3MF-006 owns
+  every viewer, activation, registration, package, and installer surface.
+  OPC ZIP directory records are valid zero-byte structure: preflight validates
+  their headers and ranges, but does not mistake them for package parts.
+
 - **3MF-002 OPC boundary and protocol route (2026-09-18): in progress.**
   Protocol v10 can carry an additive `ThreeMf=12` source identity and a
   dedicated 48-byte `ParseThreeMfFileRequest`/opcode without changing any

@@ -93,7 +93,7 @@ DispatchOutcome DispatchOneRequest(HANDLE stdIn, HANDLE stdOut)
         && received->payload.size() == sizeof(model_core::ParseThreeMfFileRequest)) {
         model_core::ParseThreeMfFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
-        HandleThreeMfImportFileRequest(stdOut, request);
+        HandleThreeMfImportFileRequest(stdIn, stdOut, request);
         return DispatchOutcome::Continue;
     }
 

@@ -273,6 +273,8 @@ real adapter will use, without yet enabling `.3mf` to users.
 
 ## 3MF-003 — Core and Production scene adapter
 
+Status: complete (2026-09-18; private worker route only)
+
 ### Objective
 
 Normalize the standard root build into the existing scene/instance contract,

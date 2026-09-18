@@ -3,6 +3,7 @@
 #include "SandboxTestSupport.h"
 #include "ThreeMfSpikeWorker.h"
 #include "import_broker/SharedSection.h"
+#include "import_broker/ImportSession.h"
 #include "import_broker/WorkerPool.h"
 #include "model_core/ControlProtocol.h"
 #include "platform/MappedView.h"
@@ -133,6 +134,8 @@ public:
     TemporaryFile(const TemporaryFile&) = delete;
     TemporaryFile& operator=(const TemporaryFile&) = delete;
     HANDLE get() const { return handle_.get(); }
+    const std::wstring& path() const { return path_; }
+    void Close() { handle_.reset(); }
 
 private:
     std::wstring path_;
@@ -735,4 +738,47 @@ TEST_CASE("3MF-001 noncooperative post-load work is replaced after the cancellat
     CHECK(recovered->status == static_cast<uint32_t>(
         import_worker::ThreeMfSpikeStatus::Success));
     pool.Release(*replacement);
+}
+
+TEST_CASE("3MF-003 normalizes only root-build Core and Production occurrences", "[3mf-003][scene][production]")
+{
+    struct Expected { const char* fixture; uint32_t meshes; uint32_t occurrences; };
+    constexpr Expected fixtures[] = {
+        { "core-box.3mf.base64", 1, 1 },
+        { "nested-components.3mf.base64", 1, 1 },
+        { "production-boxes.3mf.base64", 2, 2 },
+    };
+    uint64_t generation = 0x336d66050000ull;
+    for (const auto& fixture : fixtures) {
+        CAPTURE(fixture.fixture);
+        const auto bytes = DecodeBase64(fixture.fixture);
+        TemporaryFile file(bytes);
+        file.Close(); // The trusted broker deliberately takes an exclusive-write source lease.
+        import_broker::ImportSessionRequest request{};
+        request.workerExePath = sandbox_test_support::WorkerExePath();
+        request.sourcePath = file.path();
+        request.format = import_broker::ImportFormat::ThreeMf;
+        request.generationId = ++generation;
+        request.sectionByteCapacity = import_broker::kImportSectionBytes;
+        request.maxChunkCount = 1024;
+        request.maxChunkBatchesPerGeneration = 64;
+        request.maxChunksPerGeneration = 20'000;
+        const auto result = import_broker::RunImportSession(request);
+        REQUIRE(result.ok);
+        REQUIRE_FALSE(result.chunks.empty());
+        CHECK(result.chunks.front().scene.format == model_core::SourceFormatId::ThreeMf);
+        CHECK(result.chunks.front().scene.upAxis == model_core::UpAxisId::Z);
+        CHECK(result.chunks.front().scene.metersPerUnit > 0.0);
+        const auto count = [&](model_core::ChunkTopology topology) {
+            return std::count_if(result.chunks.begin(), result.chunks.end(), [&](const auto& chunk) {
+                return chunk.descriptor.topology == topology;
+            });
+        };
+        CHECK(count(model_core::ChunkTopology::TriangleList) >= fixture.meshes);
+        CHECK(count(model_core::ChunkTopology::Node) == fixture.occurrences);
+        CHECK(count(model_core::ChunkTopology::MeshInstance) >= fixture.occurrences);
+        for (const auto& chunk : result.chunks)
+            if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+                CHECK((chunk.descriptor.geometryFlags & model_core::kGeometryReusableInstanceSource) != 0);
+    }
 }
