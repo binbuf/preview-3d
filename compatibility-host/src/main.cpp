@@ -7,6 +7,7 @@
 #include "platform/Win32Handle.h"
 
 #include <windows.h>
+#include <objbase.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -220,6 +221,10 @@ int RunProductionPool(PoolMode mode, const std::filesystem::path& directory)
 int wmain(int argc, wchar_t** argv)
 {
     using namespace compatibility_host;
+    // Texture decoding uses WIC in this headless process. The compatibility
+    // host is a separate executable from the fast worker, so it needs its own
+    // COM apartment before Preview3DOpenUsdCore invokes the shared decoder.
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const auto directory = ExecutableDirectory();
     if (directory.empty() || !HardenProcessDiscovery(directory)) return 65;
     if (argc == 2) {

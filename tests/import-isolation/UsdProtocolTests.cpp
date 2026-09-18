@@ -452,6 +452,51 @@ TEST_CASE("USD-004 normalizes static scene geometry instances and policy metadat
     CHECK(SemanticFingerprint(second) == SemanticFingerprint(first));
 }
 
+TEST_CASE("USD-004 honors resetXformStack when publishing the node hierarchy",
+          "[usd-004][worker][geometry][transforms]")
+{
+    ScratchUsd scratch(L"usda");
+    const std::string source = R"USD(#usda 1.0
+(
+    defaultPrim = "Parent"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+def Xform "Parent" {
+    double3 xformOp:translate = (100, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    def Mesh "ResetMesh" {
+        double3 xformOp:translate = (2, 0, 0)
+        uniform token[] xformOpOrder = ["!resetXformStack!", "xformOp:translate"]
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0,0,0), (1,0,0), (0,1,0)]
+        uniform token subdivisionScheme = "none"
+    }
+}
+)USD";
+    scratch.Write(std::as_bytes(std::span(source)));
+    auto request = Request(scratch.path, 159);
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto result = import_broker::RunImportSession(request);
+    REQUIRE(result.ok);
+    const auto instance = std::find_if(result.chunks.begin(), result.chunks.end(), [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::MeshInstance;
+    });
+    REQUIRE(instance != result.chunks.end());
+    const auto occurrence = Payload<model_core::MeshInstancePayload>(*instance);
+    CHECK(occurrence.worldMin[0] == 2.0);
+    CHECK(occurrence.worldMax[0] == 3.0);
+    const auto node = std::find_if(result.chunks.begin(), result.chunks.end(), [&](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::Node
+            && Payload<model_core::NodePayload>(chunk).nodeId == occurrence.nodeId;
+    });
+    REQUIRE(node != result.chunks.end());
+    CHECK(Payload<model_core::NodePayload>(*node).parentNodeId == 0);
+}
+
 TEST_CASE("USD-004 uses progressive bounded sections and reuses the worker after failure",
           "[usd-004][worker][progressive][recovery]")
 {
@@ -566,11 +611,24 @@ TEST_CASE("USD-005 maps Preview Surface textures and material subsets through th
     std::unordered_map<uint32_t, model_core::MaterialPayload> materials;
     std::unordered_set<uint32_t> instanceMaterials;
     bool sawTexture = false;
+    bool sawNeutralTextureFactor = false;
+    bool sawNeutralBoundVertexColor = false;
     for (const auto& chunk : result.chunks) {
         if (chunk.descriptor.topology == model_core::ChunkTopology::Material) {
             const auto material = Payload<model_core::MaterialPayload>(chunk);
             materials.emplace(chunk.descriptor.chunkId, material);
             sawTexture |= chunk.descriptor.dependencyIds[0] != 0;
+            if (chunk.descriptor.dependencyIds[0] != 0)
+                sawNeutralTextureFactor = material.baseColorFactor[0] == 1.0f
+                    && material.baseColorFactor[1] == 1.0f
+                    && material.baseColorFactor[2] == 1.0f;
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList) {
+            REQUIRE(chunk.payload.size()
+                >= sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+            model_core::VertexPositionNormalUv0TangentColorF32 vertex{};
+            std::memcpy(&vertex, chunk.payload.data(), sizeof(vertex));
+            sawNeutralBoundVertexColor |= vertex.r == 1.0f && vertex.g == 1.0f
+                && vertex.b == 1.0f && vertex.a == 1.0f;
         } else if (chunk.descriptor.topology == model_core::ChunkTopology::MeshInstance) {
             instanceMaterials.insert(Payload<model_core::MeshInstancePayload>(chunk).materialChunkId);
         } else if (chunk.descriptor.topology == model_core::ChunkTopology::Image) {
@@ -581,6 +639,8 @@ TEST_CASE("USD-005 maps Preview Surface textures and material subsets through th
         }
     }
     CHECK(sawTexture);
+    CHECK(sawNeutralTextureFactor);
+    CHECK(sawNeutralBoundVertexColor);
     CHECK(instanceMaterials.size() == 2);
     CHECK(std::ranges::all_of(materials, [](const auto& item) {
         return (item.second.flags & model_core::kMaterialFlagDoubleSided) != 0;
@@ -595,6 +655,83 @@ TEST_CASE("USD-005 maps Preview Surface textures and material subsets through th
             && std::abs(item.second.uvScale[1] - 3.0f) < 1e-6f
             && std::abs(item.second.uvRotation - 0.5235988f) < 1e-6f;
     }));
+}
+
+TEST_CASE("USD-005 recovers an emissive-only material's authored st0 coordinates",
+          "[usd-005][worker][materials][textures][primvars]")
+{
+    ScratchUsd scratch(L"usda");
+    const std::string source = R"USD(#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+def Xform "Root" {
+    def Mesh "Triangle" {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0,0,0), (1,0,0), (0,1,0)]
+        texCoord2f[] primvars:st0 = [(0.25,0.5), (0.75,0.5), (0.25,1)] (
+            interpolation = "faceVarying"
+        )
+        rel material:binding = </Root/Material>
+        uniform token subdivisionScheme = "none"
+    }
+    def Material "Material" {
+        token outputs:surface.connect = </Root/Material/Surface.outputs:surface>
+        def Shader "Surface" {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0,0,0)
+            color3f inputs:emissiveColor.connect = </Root/Material/Texture.outputs:rgb>
+            token outputs:surface
+        }
+        def Shader "Texture" {
+            uniform token info:id = "UsdUVTexture"
+            asset inputs:file = @emissive.png@
+            float2 inputs:st.connect = </Root/Material/Primvar.outputs:result>
+            color3f outputs:rgb
+        }
+        def Shader "Primvar" {
+            uniform token info:id = "UsdPrimvarReader_float2"
+            token inputs:varname = "st0"
+            float2 outputs:result
+        }
+    }
+}
+)USD";
+    scratch.Write(std::as_bytes(std::span(source)));
+    const std::string pngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlF4iUAAAAASUVORK5CYII=";
+    scratch.WriteSidecar(L"emissive.png", DecodeBase64(pngBase64));
+    auto request = Request(scratch.path, 182);
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.batchCount);
+    REQUIRE(result.ok);
+    const auto geometry = std::find_if(result.chunks.begin(), result.chunks.end(), [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::TriangleList;
+    });
+    REQUIRE(geometry != result.chunks.end());
+    CHECK((geometry->descriptor.geometryFlags & model_core::kGeometryHasUv0) != 0);
+    REQUIRE(geometry->payload.size()
+        >= sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    model_core::VertexPositionNormalUv0TangentColorF32 vertex{};
+    std::memcpy(&vertex, geometry->payload.data(), sizeof(vertex));
+    CHECK(vertex.u == 0.25f);
+    CHECK(vertex.v == 0.5f);
+    const auto material = std::find_if(result.chunks.begin(), result.chunks.end(), [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::Material;
+    });
+    REQUIRE(material != result.chunks.end());
+    CHECK(material->descriptor.dependencyIds[0] == 0);
+    CHECK(material->descriptor.dependencyIds[3] != 0);
+    const auto payload = Payload<model_core::MaterialPayload>(*material);
+    CHECK(payload.emissiveFactor[0] == 1.0f);
+    CHECK(payload.emissiveFactor[1] == 1.0f);
+    CHECK(payload.emissiveFactor[2] == 1.0f);
 }
 
 TEST_CASE("USD-005 resolves contained USDZ textures without extraction",
@@ -1166,7 +1303,34 @@ TEST_CASE("USD-007 preserves common fast-path geometry semantics and Preview Sur
         return std::abs(material.metallicFactor - 0.25f) < 1e-6f
             && std::abs(material.roughnessFactor - 0.75f) < 1e-6f
             && std::abs(material.uvOffset[0] - 0.25f) < 1e-6f
-            && std::abs(material.uvScale[0] - 2.0f) < 1e-6f;
+            && std::abs(material.uvScale[0] - 2.0f) < 1e-6f
+            && material.baseColorFactor[0] == 1.0f
+            && chunk.descriptor.dependencyIds[0] != 0;
+    }));
+
+    const std::pair<std::string, std::vector<std::byte>> materialEntries[] = {
+        {"root.usda", std::vector<std::byte>(std::as_bytes(std::span(materialRoot)).begin(),
+                                               std::as_bytes(std::span(materialRoot)).end())},
+        {"materials.usda", ReadFixture("materials.usda")},
+        {"albedo.png", DecodeBase64(pngBase64)},
+    };
+    ScratchUsd materialPackage(L"usdz");
+    materialPackage.Write(StoredUsdz(materialEntries));
+    auto packageRequest = Request(materialPackage.path, 7041);
+    packageRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    packageRequest.sectionByteCapacity = import_broker::kImportSectionBytes;
+    packageRequest.maxChunkCount = 1024;
+    packageRequest.maxChunkBatchesPerGeneration = 64;
+    const auto packageResult = import_broker::RunImportSession(packageRequest);
+    CAPTURE(uint32_t(packageResult.stage), uint32_t(packageResult.errorCode));
+    REQUIRE(packageResult.ok);
+    CHECK(packageResult.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(std::ranges::any_of(packageResult.chunks, [](const auto& chunk) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::Image
+            || chunk.payload.size() < sizeof(model_core::ImagePayloadHeader)) return false;
+        model_core::ImagePayloadHeader image{};
+        std::memcpy(&image, chunk.payload.data(), sizeof(image));
+        return image.width == 1 && image.height == 1;
     }));
 
     ScratchUsd missingTexture(L"usda");

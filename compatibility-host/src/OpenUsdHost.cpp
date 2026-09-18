@@ -528,6 +528,8 @@ struct ProductionState {
     HANDLE cancellation{};
     Clock::time_point deadline;
     ByteStore* store{};
+    std::span<const std::byte> source;
+    const import_worker::UsdzArchiveView* archive{};
     std::uint32_t optionalWarnings{};
     std::uint32_t textureWarnings{};
     ImportErrorCode error = ImportErrorCode::None;
@@ -726,10 +728,12 @@ std::vector<NodeRecord> CollectNodes(const UsdStageRefPtr& stage, const UsdTimeC
         }
         record.visible = IsVisible(prim, time, state);
         record.acceptedPurpose = IsAcceptedPurpose(prim, state);
-        for (SdfPath parent = prim.GetPath().GetParentPath(); !parent.IsEmpty();
-             parent = parent.GetParentPath()) {
-            if (const auto found = byPath.find(parent.GetString()); found != byPath.end()) {
-                record.parent = found->second; break;
+        if (!resets) {
+            for (SdfPath parent = prim.GetPath().GetParentPath(); !parent.IsEmpty();
+                 parent = parent.GetParentPath()) {
+                if (const auto found = byPath.find(parent.GetString()); found != byPath.end()) {
+                    record.parent = found->second; break;
+                }
             }
         }
         const auto index = static_cast<std::uint32_t>(nodes.size());
@@ -819,6 +823,7 @@ struct MaterialEmitter {
             state.TextureWarn(); return EmitFallback(colorSpace, semantic);
         }
         std::string identifier = path.GetResolvedPath();
+        const bool wasResolved = !identifier.empty();
         if (identifier.empty()) {
             const auto anchored = model_core::AnchorOpenUsdIdentifier(path.GetAssetPath(),
                 texture.GetPrim().GetStage()->GetRootLayer()->GetResolvedPath().GetPathString());
@@ -831,17 +836,52 @@ struct MaterialEmitter {
         const std::string cacheKey = identifier + "#" + std::to_string(static_cast<unsigned>(colorSpace))
             + "#" + std::to_string(static_cast<unsigned>(semantic));
         if (const auto found = images.find(cacheKey); found != images.end()) return found->second;
-        const auto resolved = identifier.empty() ? ArResolvedPath() : ArGetResolver().Resolve(identifier);
-        const auto asset = resolved.empty() ? nullptr : ArGetResolver().OpenAsset(resolved);
-        if (!asset || asset->GetSize() > 256ull * 1024 * 1024) {
-            state.store->ClearOptionalError(); state.TextureWarn();
-            return EmitFallback(colorSpace, semantic);
+        const auto resolved = identifier.empty() ? ArResolvedPath()
+            : wasResolved ? ArResolvedPath(identifier) : ArGetResolver().Resolve(identifier);
+        std::span<const std::byte> encoded;
+        std::shared_ptr<ArAsset> asset;
+        std::shared_ptr<const char> buffer;
+        if (state.archive) {
+            std::string entryName = path.GetAssetPath();
+            const auto packageEntry = [](std::string_view value) {
+                const auto bracket = value.rfind('[');
+                return bracket != std::string_view::npos && value.ends_with(']')
+                    ? std::string(value.substr(bracket + 1, value.size() - bracket - 2))
+                    : std::string(value);
+            };
+            entryName = packageEntry(entryName);
+            if (std::ranges::none_of(state.archive->entries,
+                    [&](const import_worker::UsdzEntryView& candidate) {
+                        return candidate.name == entryName;
+                    }))
+                entryName = packageEntry(identifier);
+            while (entryName.starts_with("./")) entryName.erase(0, 2);
+            const import_worker::UsdzEntryView* matched = nullptr;
+            for (const auto& candidate : state.archive->entries) {
+                const std::string packageSuffix = "[" + candidate.name + "]";
+                const bool match = candidate.name == entryName
+                    || std::string_view(identifier).ends_with(packageSuffix);
+                if (!match) continue;
+                if (matched) { matched = nullptr; break; }
+                matched = &candidate;
+            }
+            if (matched && matched->dataOffset <= state.source.size()
+                && matched->byteSize <= state.source.size() - matched->dataOffset)
+                encoded = state.source.subspan(static_cast<std::size_t>(matched->dataOffset),
+                                               static_cast<std::size_t>(matched->byteSize));
         }
-        auto buffer = asset->GetBuffer();
-        if (!buffer && asset->GetSize()) {
-            state.TextureWarn(); return EmitFallback(colorSpace, semantic);
+        if (encoded.empty()) {
+            asset = resolved.empty() ? nullptr : ArGetResolver().OpenAsset(resolved);
+            if (!asset || asset->GetSize() > 256ull * 1024 * 1024) {
+                state.store->ClearOptionalError(); state.TextureWarn();
+                return EmitFallback(colorSpace, semantic);
+            }
+            buffer = asset->GetBuffer();
+            if (!buffer && asset->GetSize()) {
+                state.TextureWarn(); return EmitFallback(colorSpace, semantic);
+            }
+            encoded = std::span(reinterpret_cast<const std::byte*>(buffer.get()), asset->GetSize());
         }
-        const auto encoded = std::span(reinterpret_cast<const std::byte*>(buffer.get()), asset->GetSize());
         const auto imageFormat = import_worker::SniffImageFormat(encoded);
         if (!ImageExtensionMatches(path.GetAssetPath(), imageFormat)) {
             state.Fail(ImportErrorCode::UnsafeReference, ImportFailurePhase::Textures); return 0;
@@ -991,13 +1031,25 @@ struct MaterialEmitter {
         if (shader) {
             const auto diffuse = shader.GetInput(TfToken("diffuseColor"));
             textureIds[0] = EmitImage(diffuse, ColorSpaceId::Srgb, import_worker::TextureSemantic::Color);
+            if (textureIds[0])
+                payload.baseColorFactor[0] = payload.baseColorFactor[1]
+                    = payload.baseColorFactor[2] = 1.0f;
             ApplyUvTransform(diffuse, payload);
             const auto metallic = shader.GetInput(TfToken("metallic"));
             const auto roughness = shader.GetInput(TfToken("roughness"));
             textureIds[1] = EmitImage(roughness, ColorSpaceId::Linear, import_worker::TextureSemantic::Data);
-            if (!textureIds[1]) textureIds[1] = EmitImage(metallic, ColorSpaceId::Linear, import_worker::TextureSemantic::Data);
+            if (textureIds[1]) {
+                payload.roughnessFactor = 1.0f;
+            } else {
+                textureIds[1] = EmitImage(metallic, ColorSpaceId::Linear,
+                                          import_worker::TextureSemantic::Data);
+                if (textureIds[1]) payload.metallicFactor = 1.0f;
+            }
             textureIds[2] = EmitImage(shader.GetInput(TfToken("normal")), ColorSpaceId::Linear, import_worker::TextureSemantic::Normal);
             textureIds[3] = EmitImage(shader.GetInput(TfToken("emissiveColor")), ColorSpaceId::Srgb, import_worker::TextureSemantic::Emissive);
+            if (textureIds[3])
+                payload.emissiveFactor[0] = payload.emissiveFactor[1]
+                    = payload.emissiveFactor[2] = 1.0f;
             if (state.error != ImportErrorCode::None) return 0;
         }
         const float uvValues[]{payload.uvOffset[0], payload.uvOffset[1], payload.uvScale[0],
@@ -1144,8 +1196,26 @@ std::optional<MeshGeometry> EmitMeshGeometry(import_worker::BoundedChunkWriter& 
     VtFloatArray opacities;
     TfToken normalsInterpolation = mesh.GetNormalsInterpolation();
     mesh.GetNormalsAttr().Get(&normals, time);
-    const auto st = UsdGeomPrimvarsAPI(mesh.GetPrim()).GetPrimvar(TfToken("st"));
-    VtVec2fArray uvs; if (st) st.ComputeFlattened(&uvs, time);
+    const UsdGeomPrimvarsAPI primvars(mesh.GetPrim());
+    UsdGeomPrimvar st;
+    VtVec2fArray uvs;
+    for (const char* preferred : {"st", "st0"}) {
+        const auto candidate = primvars.GetPrimvar(TfToken(preferred));
+        VtVec2fArray values;
+        if (candidate && candidate.ComputeFlattened(&values, time) && !values.empty()) {
+            st = candidate; uvs = std::move(values); break;
+        }
+    }
+    if (!st) {
+        for (const auto& candidate : primvars.GetPrimvarsWithAuthoredValues()) {
+            const TfToken name = candidate.GetPrimvarName();
+            if (name == TfToken("displayColor") || name == TfToken("displayOpacity")) continue;
+            VtVec2fArray values;
+            if (candidate.ComputeFlattened(&values, time) && !values.empty()) {
+                st = candidate; uvs = std::move(values); break;
+            }
+        }
+    }
     const auto displayColor = UsdGeomGprim(mesh.GetPrim()).GetDisplayColorPrimvar();
     if (displayColor) displayColor.ComputeFlattened(&colors, time);
     const auto displayOpacity = UsdGeomGprim(mesh.GetPrim()).GetDisplayOpacityPrimvar();
@@ -1153,9 +1223,9 @@ std::optional<MeshGeometry> EmitMeshGeometry(import_worker::BoundedChunkWriter& 
     const TfToken uvInterpolation = st ? st.GetInterpolation() : TfToken();
     const TfToken colorInterpolation = displayColor ? displayColor.GetInterpolation() : TfToken();
     const TfToken opacityInterpolation = displayOpacity ? displayOpacity.GetInterpolation() : TfToken();
-    for (const auto& primvar : UsdGeomPrimvarsAPI(mesh.GetPrim()).GetPrimvarsWithAuthoredValues()) {
+    for (const auto& primvar : primvars.GetPrimvarsWithAuthoredValues()) {
         const TfToken name = primvar.GetPrimvarName();
-        if (name != TfToken("st") && name != TfToken("displayColor")
+        if ((!st || name != st.GetPrimvarName()) && name != TfToken("displayColor")
             && name != TfToken("displayOpacity")) state.Warn();
     }
     if (Animated(mesh.GetPointsAttr()) || Animated(mesh.GetNormalsAttr())) state.Warn();
@@ -1403,9 +1473,10 @@ bool NormalizeProduction(const UsdStageRefPtr& stage, SourceFormatId format,
         nodes[index].id = firstNodeId + static_cast<std::uint32_t>(index);
     for (std::size_t index = 0; index < nodes.size(); ++index) {
         NodePayload payload{}; payload.nodeId = nodes[index].id;
-        if (nodes[index].parent != UINT32_MAX) payload.parentNodeId = nodes[nodes[index].parent].id;
         payload.flags = nodes[index].visible && nodes[index].acceptedPurpose
             ? model_core::kSceneRecordVisible : 0;
+        if (nodes[index].parent != UINT32_MAX)
+            payload.parentNodeId = nodes[nodes[index].parent].id;
         CopyMatrix(nodes[index].local, payload.localTransform);
         if (!writer.AddNode(payload)) return state.Fail(writer.Error());
     }
@@ -1479,8 +1550,8 @@ int RunOpenUsdProduction(const model_core::ParseOpenUsdFileRequest& request,
     const auto format = DetectEncoding(source.Bytes());
     if (format == SourceFormatId::Unknown) return fail(ImportErrorCode::MalformedData);
     if (!EncodingMatches(format, request.requestFlags)) return fail(ImportErrorCode::UnsupportedEncoding);
+    import_worker::UsdzArchiveView archive;
     if (format == SourceFormatId::Usdz) {
-        import_worker::UsdzArchiveView archive;
         const auto preflight = import_worker::InspectUsdz(source.Bytes(), &archive, {}, [&] {
             return WaitForSingleObject(reinterpret_cast<HANDLE>(
                 static_cast<std::uintptr_t>(request.cancellationEventHandleValue)), 0) == WAIT_OBJECT_0;
@@ -1517,7 +1588,8 @@ int RunOpenUsdProduction(const model_core::ParseOpenUsdFileRequest& request,
     }
     ProductionState state{request,
         reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(request.cancellationEventHandleValue)),
-        Clock::now() + kCompositionDeadline, &store};
+        Clock::now() + kCompositionDeadline, &store, source.Bytes(),
+        format == SourceFormatId::Usdz ? &archive : nullptr};
     if (!LoadProductionPayloads(stage, state)) return fail(state.error, state.phase);
     if (!stage->GetCompositionErrors().empty()) {
         const auto resolver = store.ProductionError();

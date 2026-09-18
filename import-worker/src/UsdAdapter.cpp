@@ -24,6 +24,7 @@
 
 #include "tinyusdz.hh"
 #include "tydra/render-data.hh"
+#include "tydra/scene-access.hh"
 
 #include <algorithm>
 #include <array>
@@ -443,15 +444,20 @@ bool ReadFloatComponents(const VertexAttribute& attribute, size_t index,
     return true;
 }
 
-size_t AttributeIndex(const VertexAttribute& attribute, size_t vertexIndex)
+size_t AttributeIndex(const VertexAttribute& attribute, size_t vertexIndex,
+                      size_t faceVertexIndex)
 {
     if (attribute.variability == tinyusdz::tydra::VertexVariability::Constant) return 0;
-    if (attribute.is_indexed() && vertexIndex < attribute.indices.size())
-        return attribute.indices[vertexIndex];
-    return vertexIndex;
+    const size_t interpolationIndex =
+        attribute.variability == tinyusdz::tydra::VertexVariability::FaceVarying
+        ? faceVertexIndex : vertexIndex;
+    if (attribute.is_indexed() && interpolationIndex < attribute.indices.size())
+        return attribute.indices[interpolationIndex];
+    return interpolationIndex;
 }
 
-bool MakeVertex(const RenderMesh& mesh, uint32_t sourceIndex,
+bool MakeVertex(const RenderMesh& mesh, uint32_t sourceIndex, size_t faceVertexIndex,
+                bool hasBoundMaterial,
                 const std::array<double, 3>& origin,
                 VertexPositionNormalUv0TangentColorF32& vertex,
                 bool& hasUv, bool& hasColor)
@@ -468,7 +474,9 @@ bool MakeVertex(const RenderMesh& mesh, uint32_t sourceIndex,
 
     float normal[3]{0.0f, 0.0f, 1.0f};
     if (!mesh.normals.empty()
-        && !ReadFloatComponents(mesh.normals, AttributeIndex(mesh.normals, sourceIndex), normal, 3))
+        && !ReadFloatComponents(mesh.normals,
+                                AttributeIndex(mesh.normals, sourceIndex, faceVertexIndex),
+                                normal, 3))
         return false;
     const double length = std::sqrt(double(normal[0]) * normal[0]
         + double(normal[1]) * normal[1] + double(normal[2]) * normal[2]);
@@ -480,30 +488,173 @@ bool MakeVertex(const RenderMesh& mesh, uint32_t sourceIndex,
     vertex.u = vertex.v = 0.0f;
     if (const auto uv = mesh.texcoords.find(0); uv != mesh.texcoords.end() && !uv->second.empty()) {
         float values[2]{};
-        if (!ReadFloatComponents(uv->second, AttributeIndex(uv->second, sourceIndex), values, 2))
+        if (!ReadFloatComponents(uv->second,
+                                 AttributeIndex(uv->second, sourceIndex, faceVertexIndex),
+                                 values, 2))
             return false;
         vertex.u = values[0]; vertex.v = values[1]; hasUv = true;
     }
 
     vertex.tx = vertex.ty = vertex.tz = 0.0f;
     vertex.tw = mesh.is_rightHanded ? 1.0f : -1.0f;
-    float color[3]{mesh.displayColor[0], mesh.displayColor[1], mesh.displayColor[2]};
+    float color[3]{1.0f, 1.0f, 1.0f};
+    if (!hasBoundMaterial) {
+        color[0] = mesh.displayColor[0];
+        color[1] = mesh.displayColor[1];
+        color[2] = mesh.displayColor[2];
+    }
     if (!mesh.vertex_colors.empty()) {
         if (!ReadFloatComponents(mesh.vertex_colors,
-                                 AttributeIndex(mesh.vertex_colors, sourceIndex), color, 3))
+                                 AttributeIndex(mesh.vertex_colors, sourceIndex, faceVertexIndex),
+                                 color, 3))
             return false;
         hasColor = true;
     }
-    float opacity = mesh.displayOpacity;
+    float opacity = hasBoundMaterial ? 1.0f : mesh.displayOpacity;
     if (!mesh.vertex_opacities.empty()) {
         if (!ReadFloatComponents(mesh.vertex_opacities,
-                                 AttributeIndex(mesh.vertex_opacities, sourceIndex), &opacity, 1))
+                                 AttributeIndex(mesh.vertex_opacities, sourceIndex,
+                                                faceVertexIndex), &opacity, 1))
             return false;
         hasColor = true;
     }
     for (float value : color) if (!std::isfinite(value)) return false;
     if (!std::isfinite(opacity)) return false;
     vertex.r = color[0]; vertex.g = color[1]; vertex.b = color[2]; vertex.a = opacity;
+    return true;
+}
+
+std::optional<std::string> MeshTexcoordName(const RenderScene& scene,
+                                            const RenderMesh& mesh)
+{
+    std::vector<int> materialIndices;
+    if (mesh.material_id >= 0) materialIndices.push_back(mesh.material_id);
+    for (const auto& [name, subset] : mesh.material_subsetMap) {
+        (void)name;
+        if (subset.material_id >= 0) materialIndices.push_back(subset.material_id);
+    }
+    for (const int materialIndex : materialIndices) {
+        if (size_t(materialIndex) >= scene.materials.size()) continue;
+        const auto& shader = scene.materials[size_t(materialIndex)].surfaceShader;
+        const int textureIndices[]{
+            shader.diffuseColor.texture_id, shader.emissiveColor.texture_id,
+            shader.normal.texture_id, shader.metallic.texture_id,
+            shader.roughness.texture_id, shader.opacity.texture_id};
+        for (const int textureIndex : textureIndices) {
+            if (textureIndex < 0 || size_t(textureIndex) >= scene.textures.size()) continue;
+            const std::string& name = scene.textures[size_t(textureIndex)].varname_uv;
+            if (!name.empty()) return name;
+        }
+    }
+    return std::nullopt;
+}
+
+bool ExpandPrimvarForTriangulatedMesh(const RenderMesh& mesh,
+                                      VertexAttribute& attribute)
+{
+    const auto& triangleIndices = mesh.faceVertexIndices();
+    if (triangleIndices.empty()) return false;
+    std::vector<size_t> sourceFaces(mesh.usdFaceVertexIndices.size());
+    size_t offset = 0;
+    for (size_t face = 0; face < mesh.usdFaceVertexCounts.size(); ++face) {
+        const size_t count = mesh.usdFaceVertexCounts[face];
+        if (count > sourceFaces.size() - offset) return false;
+        std::fill_n(sourceFaces.begin() + offset, count, face);
+        offset += count;
+    }
+    if (offset != sourceFaces.size()) return false;
+
+    const size_t stride = attribute.stride_bytes();
+    if (!stride || attribute.data.size() % stride) return false;
+    std::vector<uint8_t> expanded;
+    expanded.reserve(triangleIndices.size() * stride);
+    for (size_t corner = 0; corner < triangleIndices.size(); ++corner) {
+        const size_t originalCorner = mesh.is_triangulated()
+            ? (corner < mesh.triangulatedToOrigFaceVertexIndexMap.size()
+                ? mesh.triangulatedToOrigFaceVertexIndexMap[corner] : SIZE_MAX)
+            : corner;
+        if (originalCorner >= mesh.usdFaceVertexIndices.size()) return false;
+        size_t item = 0;
+        switch (attribute.variability) {
+        case tinyusdz::tydra::VertexVariability::Constant:
+            break;
+        case tinyusdz::tydra::VertexVariability::Uniform:
+            item = sourceFaces[originalCorner];
+            break;
+        case tinyusdz::tydra::VertexVariability::FaceVarying:
+            item = originalCorner;
+            break;
+        case tinyusdz::tydra::VertexVariability::Vertex:
+        case tinyusdz::tydra::VertexVariability::Varying:
+            item = mesh.usdFaceVertexIndices[originalCorner];
+            break;
+        default:
+            return false;
+        }
+        if (item >= attribute.vertex_count()) return false;
+        const uint8_t* value = attribute.data.data() + item * stride;
+        expanded.insert(expanded.end(), value, value + stride);
+    }
+    attribute.data = std::move(expanded);
+    attribute.indices.clear();
+    attribute.variability = tinyusdz::tydra::VertexVariability::FaceVarying;
+    return true;
+}
+
+bool ReadTexcoordPrimvar(const tinyusdz::GeomPrimvar& primvar, double time,
+                         VertexAttribute& attribute, std::string& error)
+{
+    std::vector<tinyusdz::value::float2> values;
+    if (!primvar.flatten_with_indices(
+            time, &values, tinyusdz::value::TimeSampleInterpolationType::Linear, &error))
+        return false;
+    attribute.name = primvar.name();
+    attribute.format = VertexAttributeFormat::Vec2;
+    attribute.elementSize = 1;
+    attribute.data.resize(values.size() * sizeof(values.front()));
+    if (!values.empty())
+        std::memcpy(attribute.data.data(), values.data(), attribute.data.size());
+    switch (primvar.get_interpolation()) {
+    case tinyusdz::Interpolation::Constant:
+        attribute.variability = tinyusdz::tydra::VertexVariability::Constant; break;
+    case tinyusdz::Interpolation::Uniform:
+        attribute.variability = tinyusdz::tydra::VertexVariability::Uniform; break;
+    case tinyusdz::Interpolation::Varying:
+        attribute.variability = tinyusdz::tydra::VertexVariability::Varying; break;
+    case tinyusdz::Interpolation::Vertex:
+        attribute.variability = tinyusdz::tydra::VertexVariability::Vertex; break;
+    case tinyusdz::Interpolation::FaceVarying:
+        attribute.variability = tinyusdz::tydra::VertexVariability::FaceVarying; break;
+    default:
+        return false;
+    }
+    return true;
+}
+
+bool RecoverMissingTexcoords(const tinyusdz::Stage& stage, double time,
+                             RenderScene& scene, uint32_t& warnings)
+{
+    for (RenderMesh& mesh : scene.meshes) {
+        if (mesh.texcoords.contains(0)) continue;
+        const auto name = MeshTexcoordName(scene, mesh);
+        if (!name) continue;
+        const Prim* prim = nullptr;
+        std::string error;
+        if (!stage.find_prim_at_path(tinyusdz::Path(mesh.abs_path, ""), prim, &error)
+            || !prim) return false;
+        const GeomMesh* sourceMesh = AsExact<GeomMesh>(*prim);
+        if (!sourceMesh) return false;
+        tinyusdz::GeomPrimvar primvar;
+        if (!tinyusdz::tydra::GetGeomPrimvar(stage, sourceMesh, *name, &primvar, &error)) {
+            warnings = (std::min)(64u, warnings + 1);
+            continue;
+        }
+        VertexAttribute attribute;
+        if (!ReadTexcoordPrimvar(primvar, time, attribute, error)
+            || !ExpandPrimvarForTriangulatedMesh(mesh, attribute)) return false;
+        mesh.texcoords.emplace(0, std::move(attribute));
+        mesh.texcoordSlotIdMap.add(*name, 0);
+    }
     return true;
 }
 
@@ -743,15 +894,16 @@ bool EmitMaterials(BoundedChunkWriter& writer, const RenderScene& scene,
             Warn(context.optionalWarnings);
         }
         MaterialPayload payload{};
-        payload.baseColorFactor[0] = shader.diffuseColor.value[0];
-        payload.baseColorFactor[1] = shader.diffuseColor.value[1];
-        payload.baseColorFactor[2] = shader.diffuseColor.value[2];
-        payload.baseColorFactor[3] = shader.opacity.value;
-        payload.metallicFactor = shader.metallic.value;
-        payload.roughnessFactor = shader.roughness.value;
-        payload.emissiveFactor[0] = shader.emissiveColor.value[0];
-        payload.emissiveFactor[1] = shader.emissiveColor.value[1];
-        payload.emissiveFactor[2] = shader.emissiveColor.value[2];
+        for (size_t channel = 0; channel < 3; ++channel) {
+            payload.baseColorFactor[channel] = shader.diffuseColor.is_texture()
+                ? 1.0f : shader.diffuseColor.value[channel];
+            payload.emissiveFactor[channel] = shader.emissiveColor.is_texture()
+                ? 1.0f : shader.emissiveColor.value[channel];
+        }
+        payload.baseColorFactor[3] = shader.opacity.is_texture()
+            ? 1.0f : shader.opacity.value;
+        payload.metallicFactor = shader.metallic.is_texture() ? 1.0f : shader.metallic.value;
+        payload.roughnessFactor = shader.roughness.is_texture() ? 1.0f : shader.roughness.value;
         payload.uvScale[0] = payload.uvScale[1] = 1.0f;
         payload.alphaCutoff = shader.opacityThreshold.value > 0.0f
             ? shader.opacityThreshold.value : 0.5f;
@@ -903,12 +1055,15 @@ bool EmitMesh(BoundedChunkWriter& writer, const RenderMesh& mesh, uint32_t meshO
         std::array<double, 3> origin{double(firstPoint[0]), double(firstPoint[1]),
                                      double(firstPoint[2])};
         bool hasUv = false, hasColor = false;
+        const bool hasBoundMaterial = triangleMaterials[size_t(firstTriangle)] >= 0;
         for (uint32_t triangle = 0; triangle < count; ++triangle) {
             for (uint32_t corner = 0; corner < 3; ++corner) {
                 const uint32_t destinationCorner = mesh.is_rightHanded ? corner : 2 - corner;
                 const size_t destinationIndex = size_t(triangle) * 3 + destinationCorner;
                 const uint32_t sourceIndex = indices[(size_t(firstTriangle) + triangle) * 3 + corner];
-                if (!MakeVertex(mesh, sourceIndex, origin, vertices[destinationIndex], hasUv, hasColor)) {
+                const size_t sourceCorner = (size_t(firstTriangle) + triangle) * 3 + corner;
+                if (!MakeVertex(mesh, sourceIndex, sourceCorner, hasBoundMaterial, origin,
+                                vertices[destinationIndex], hasUv, hasColor)) {
                     error = ImportErrorCode::MalformedData;
                     return false;
                 }
@@ -948,6 +1103,7 @@ bool EmitMesh(BoundedChunkWriter& writer, const RenderMesh& mesh, uint32_t meshO
 struct FlatNode {
     const Node* node = nullptr;
     uint32_t parentIndex = UINT32_MAX;
+    uint32_t transformParentIndex = UINT32_MAX;
     bool visible = true;
 };
 
@@ -974,7 +1130,8 @@ void FlattenNodes(const Node& node, uint32_t parentIndex,
         }
     }
     const uint32_t index = static_cast<uint32_t>(nodes.size());
-    nodes.push_back(FlatNode{&node, parentIndex, visible});
+    nodes.push_back(FlatNode{
+        &node, parentIndex, node.has_resetXform ? UINT32_MAX : parentIndex, visible});
     for (const Node& child : node.children) FlattenNodes(child, index, policy, nodes);
 }
 
@@ -1151,7 +1308,9 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
     environment.scene_config.load_texture_assets = false;
     environment.mesh_config.triangulate = true;
     environment.mesh_config.validate_geomsubset = true;
-    environment.mesh_config.build_vertex_indices = true;
+    // The wire format is deindexed, so rebuilding a synthetic single index is
+    // unnecessary and loses interpolation information needed by some USD UV sets.
+    environment.mesh_config.build_vertex_indices = false;
     environment.mesh_config.compute_normals = true;
     environment.mesh_config.compute_tangents_and_binormals = false;
     environment.material_config.texture_image_loader_function = nullptr;
@@ -1181,6 +1340,8 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
         return Fail(assets.error, ImportFailurePhase::Sidecars);
     if (options.Cancelled()) return Fail(ImportErrorCode::Cancelled);
     if (scene.meshes.empty()) return Fail(ImportErrorCode::EmptyGeometry);
+    if (!RecoverMissingTexcoords(stage, time, scene, policy.optionalWarnings))
+        return Fail(ImportErrorCode::MalformedData, ImportFailurePhase::Geometry);
     if (scene.meshes.size() > kTierBObjectLimit)
         return Fail(ImportErrorCode::ResourceLimit);
     if (scene.materials.size() > kTierBMaterialLimit
@@ -1207,6 +1368,13 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
     if (flatNodes.empty() || flatNodes.size() > kTierBObjectLimit)
         return Fail(flatNodes.empty() ? ImportErrorCode::EmptyGeometry
                                       : ImportErrorCode::ResourceLimit);
+    // TinyUSDZ's render-scene normalization is the bounded fast path. Deep,
+    // highly articulated exports can require OpenUSD's full xform evaluator;
+    // hand those scenes to the compatibility host before publishing chunks.
+    constexpr size_t kFastUsdNodeLimit = 512;
+    if (flatNodes.size() > kFastUsdNodeLimit)
+        return Fail(ImportErrorCode::UnsupportedComposition,
+                    ImportFailurePhase::Geometry);
 
     std::vector<PointInstanceRecord> pointInstances;
     for (const auto& [path, instancer] : policy.pointInstancers) {
@@ -1334,7 +1502,8 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
         if (!ValidMatrix(source.node->local_matrix)) return Fail(ImportErrorCode::MalformedData);
         NodePayload payload{};
         payload.nodeId = nodeIds[index];
-        if (source.parentIndex != UINT32_MAX) payload.parentNodeId = nodeIds[source.parentIndex];
+        if (source.transformParentIndex != UINT32_MAX)
+            payload.parentNodeId = nodeIds[source.transformParentIndex];
         payload.flags = source.visible ? kSceneRecordVisible : 0;
         CopyMatrix(source.node->local_matrix, payload.localTransform);
         if (!writer.AddNode(payload)) return Fail(writer.Error());
