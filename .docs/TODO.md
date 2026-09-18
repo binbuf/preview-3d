@@ -67,9 +67,10 @@ did not, and each is still owed.
       corpus, pinned full A-small manifest, deterministic medium/large recipes and
       qualification artifact commands now exist. Tier B/cache/Explorer corpus is
       deferred by the active scope; large/performance gates remain unqualified.
-- [ ] **Compatibility-host protocol / shared-section schema** (`10-…:70`). The derived-cache half
-      of that line exists as a prototype; the compatibility-host half does not, and
-      `compatibility-host/src/main.cpp` is a four-line `return 0;`. Gate 4 slice 5 depends on it.
+- [x] **Compatibility-host protocol / shared-section schema** (`10-…:70`). USD-006 added the
+      distinct lazy AppContainer host lifecycle and opcode while reusing the normalized section,
+      validation, resolver-service, cancellation and Job boundary. USD-007 now produces the same
+      bounded normalized sections from broker-only OpenUSD composition.
 - [ ] **Allocation-budget and clock interfaces** (`10-…:69`). Adapters enforce their own ad-hoc
       caps (`kMaxFacets`, `kMaxHeaderBytes`, `kMaxPolygonVerticesPerFace`, …) rather than sharing
       an interface, and there is no full Tier-A hard-limit table (`03-…:160-174`).
@@ -312,10 +313,9 @@ Both structural blockers are closed and none of these is the output window:
 
 ## Gate 4 — Tier B format breadth
 
-Five independent vertical slices (`10-…:155-174`). The first product path is implemented and
-ufbx 0.23.0 is pinned through the repository vcpkg overlay. Its release-qualification bundle is
-still open. lib3mf, TinyUSDZ and OpenUSD are not pinned, and
-`compatibility-host/src/main.cpp` remains a four-line `return 0;`.
+Five independent vertical slices (`10-…:155-174`). OBJ, FBX, and the dual-path USD viewer
+product paths are implemented; their release-qualification bundles remain open. TinyUSDZ and
+OpenUSD are pinned and USD-009 qualification is in progress. lib3mf remains unpinned.
 
 - [ ] **Slice 1** — OBJ plus MTL through ufbx, including local texture policy.
   - [x] Product path: direct `.obj` open through one-shot and pooled AppContainer workers;
@@ -346,11 +346,21 @@ still open. lib3mf, TinyUSDZ and OpenUSD are not pinned, and
 - [ ] **Slice 3** — 3MF Core/Materials/Production/Beam Lattice preview through lib3mf.
 - [ ] **Slice 4** — USDA/USDC/USD and USDZ common static subset through TinyUSDZ, inside the
       general import worker.
+  - [x] USD-001 through USD-005: pinned fast dependency, protocol, static scene/instance
+        normalization, USDZ, materials, textures and brokered image dependencies, test-only.
+  - [x] USD-008 product/viewer/activation/registration and package surface.
+  - [x] USD-009 immutable 10-source/13-derived corpus and standalone five-domain
+        ASan/libFuzzer smoke lane.
+  - [ ] USD-009 repeated performance/heartbeat, full hostile/full-suite, final
+        package/tamper, clean-VM lifecycle, soak, and signed-candidate qualification.
 - [ ] **Slice 5** — the AppContainer compatibility host, brokered resolver, and bounded local
       static composition through OpenUSD, started **only** on the worker's typed
       `UnsupportedComposition` result. Additionally requires AppContainer restrictions, Job Object
       enforcement, broker protocol, shared-section revalidation, host crash/timeout behaviour, and
       signed/hash-verified payload tests.
+  - [x] USD-002 spike and USD-006 production platform/fallback lifecycle.
+  - [x] USD-007 bounded OpenUSD composition/normalization and USD-008 exposure/packaging.
+  - [ ] Finish the remaining USD-009 qualification gates listed under Slice 4.
 
 Every slice carries the same bundle (`10-…:165`): adapter wrapper, dependency allocation/I/O/cancel
 callbacks and Job Object limits, normalized output, unsupported-feature diagnostics, golden scenes,
@@ -359,7 +369,8 @@ against the newly wired adapter.
 
 - [ ] **Spike 5** (`11-…:247`) gates the start: capped-memory/cancellation spikes for ufbx static
       skin/blend evaluation, lib3mf Beam Lattice tessellation, and TinyUSDZ.
-- [ ] **Spike 6** (`11-…:248`) gates the OpenUSD slice.
+- [x] **Spike 6** (`11-…:248`) gates the OpenUSD slice. USD-002 completed it; USD-006 converted
+      its launch/payload boundary into the production compatibility lifecycle.
 
 Exit (`10-…:167-174`): every direct extension opens from command line, dialog, drop and secondary
 activation — **which needs Gate 5's activation work**; conformance fixtures preserve
@@ -472,12 +483,11 @@ product, engineering, security and installer owners sign the same artifact manif
       only function returns 0. The shared "library" is in practice compiled per-consumer through
       relative-path `ClCompile`, which is an established and deliberate pattern here; the stub
       project is the leftover.
-- [ ] **`compatibility-host` is a four-line stub** (Gate 4 slice 5).
 - [ ] **`thumbnail-provider` is a 21-line stub** (Gate 6).
 - [ ] **Validation spikes**: 1 done *with a caveat* — ADR-010's chrome-scale p95 ranges roughly
       7.2–9.0 ms across repeat runs and occasionally crosses NFR-04's 8.3 ms gate, and **must be
       re-measured against the real ported chrome**, with dirty-tracking as the first remedy; 2 done;
-      3 partial; **4, 5, 6, 7, 8, 9 open**.
+      3 partial; 5 and 6 done for USD; **4, 7, 8, 9 open**.
 - [ ] **Broken tooling**: `interactive-viewer/tools/build-test-loader.ps1:14` references a
       `test-loader.cpp` that does not exist, and hardcodes an MSVC version path.
       `interactive-viewer/scripts/smoke-test.ps1` hardcodes the *project-level* Release path, which

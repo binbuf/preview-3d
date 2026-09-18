@@ -1,0 +1,96 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "Root"
+{
+    def Mesh "Plane"
+    {
+        uniform bool doubleSided = 1
+        int[] faceVertexCounts = [3, 3]
+        int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)] (
+            interpolation = "faceVarying"
+        )
+        uniform token subsetFamily:materialBind:familyType = "partition"
+
+        def GeomSubset "TexturedFace"
+        {
+            uniform token elementType = "face"
+            uniform token familyName = "materialBind"
+            int[] indices = [0]
+            rel material:binding = </Root/Looks/Textured>
+        }
+
+        def GeomSubset "FlatFace"
+        {
+            uniform token elementType = "face"
+            uniform token familyName = "materialBind"
+            int[] indices = [1]
+            rel material:binding = </Root/Looks/Flat>
+        }
+    }
+
+    def Scope "Looks"
+    {
+        def Material "Textured"
+        {
+            token outputs:surface.connect = </Root/Looks/Textured/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor.connect = </Root/Looks/Textured/Texture.outputs:rgb>
+                color3f inputs:emissiveColor = (0.1, 0.2, 0.3)
+                float inputs:metallic = 0.25
+                float inputs:opacity = 0.5
+                float inputs:opacityThreshold = 0.4
+                float inputs:roughness = 0.75
+                token outputs:surface
+            }
+
+            def Shader "Texture"
+            {
+                uniform token info:id = "UsdUVTexture"
+                asset inputs:file = @albedo.png@
+                token inputs:sourceColorSpace = "sRGB"
+                float2 inputs:st.connect = </Root/Looks/Textured/Transform.outputs:result>
+                float3 outputs:rgb
+            }
+
+            def Shader "Transform"
+            {
+                uniform token info:id = "UsdTransform2d"
+                float2 inputs:in.connect = </Root/Looks/Textured/Primvar.outputs:result>
+                float inputs:rotation = 30
+                float2 inputs:scale = (2, 3)
+                float2 inputs:translation = (0.25, 0.5)
+                float2 outputs:result
+            }
+
+            def Shader "Primvar"
+            {
+                uniform token info:id = "UsdPrimvarReader_float2"
+                token inputs:varname = "st"
+                float2 outputs:result
+            }
+        }
+
+        def Material "Flat"
+        {
+            token outputs:surface.connect = </Root/Looks/Flat/Surface.outputs:surface>
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.2, 0.8, 0.3)
+                float inputs:metallic = 0
+                float inputs:roughness = 0.35
+                token outputs:surface
+            }
+        }
+    }
+}

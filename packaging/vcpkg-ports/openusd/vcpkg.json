@@ -1,0 +1,21 @@
+{
+  "name": "openusd",
+  "version-semver": "26.8.0",
+  "description": "Minimal monolithic OpenUSD core for the sandboxed compatibility host",
+  "homepage": "https://github.com/PixarAnimationStudios/OpenUSD",
+  "license": "Apache-2.0",
+  "dependencies": [
+    {
+      "name": "tbb",
+      "default-features": false
+    },
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

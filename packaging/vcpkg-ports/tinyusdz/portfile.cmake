@@ -1,0 +1,70 @@
+vcpkg_from_github(
+    OUT_SOURCE_PATH SOURCE_PATH
+    REPO lighttransport/tinyusdz
+    REF a04ee0bcbd1a930e30cc40938fcee3526a6fa8eb
+    SHA512 350a6a3bce13348c42ef1ee475ffa01c54401ccbfd413eaeea8b79521dbe7ec84a24be42fadb4353638b5efffc53135593a1da5ca7901782658b2380c10b4233
+    HEAD_REF release
+    PATCHES
+        install-minimal-static-library.patch
+        register-usda-point-instancer.patch
+)
+
+vcpkg_cmake_configure(
+    SOURCE_PATH "${SOURCE_PATH}"
+    OPTIONS
+        -DTINYUSDZ_PRODUCTION_BUILD=ON
+        -DTINYUSDZ_BUILD_SHARED_LIBS=OFF
+        -DTINYUSDZ_BUILD_TESTS=OFF
+        -DTINYUSDZ_BUILD_BENCHMARKS=OFF
+        -DTINYUSDZ_BUILD_EXAMPLES=OFF
+        -DTINYUSDZ_WITH_C_API=OFF
+        -DTINYUSDZ_WITH_PYTHON=OFF
+        -DTINYUSDZ_WITH_PXR_COMPAT_API=OFF
+        -DTINYUSDZ_WITH_TYDRA=ON
+        -DTINYUSDZ_WITH_BUILTIN_IMAGE_LOADER=OFF
+        -DTINYUSDZ_WITH_USDMTLX=OFF
+        -DTINYUSDZ_WITH_JSON=OFF
+        -DTINYUSDZ_WITH_USD_TO_GLTF=OFF
+        -DTINYUSDZ_WITH_USDOBJ=OFF
+        -DTINYUSDZ_WITH_USDFBX=OFF
+        -DTINYUSDZ_WITH_USDVOX=OFF
+        -DTINYUSDZ_WITH_OPENSUBDIV=OFF
+        -DTINYUSDZ_WITH_AUDIO=OFF
+        -DTINYUSDZ_WITH_ALAC_AUDIO=OFF
+        -DTINYUSDZ_WITH_TIFF=OFF
+        -DTINYUSDZ_WITH_EXR=OFF
+        -DTINYUSDZ_WITH_COLORIO=OFF
+        -DTINYUSDZ_WITH_MODULE_USDA_READER=ON
+        -DTINYUSDZ_WITH_MODULE_USDA_WRITER=OFF
+        -DTINYUSDZ_WITH_MODULE_USDC_READER=ON
+        -DTINYUSDZ_WITH_MODULE_USDC_WRITER=OFF
+        -DTINYUSDZ_WITH_TOOL_USDA_PARSER=OFF
+        -DTINYUSDZ_WITH_TOOL_USDC_PARSER=OFF
+        -DTINYUSDZ_ENABLE_THREAD=OFF
+        -DTINYUSDZ_USE_CCACHE=OFF
+        -DTINYUSDZ_CXX_MP_FLAG=OFF
+)
+
+vcpkg_cmake_install()
+vcpkg_copy_pdbs()
+file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
+file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/share")
+set(VCPKG_POLICY_ALLOW_EMPTY_FOLDERS enabled)
+vcpkg_install_copyright(FILE_LIST
+    "${SOURCE_PATH}/LICENSE"
+    "${CMAKE_CURRENT_LIST_DIR}/VENDORED-NOTICES.txt"
+    "${SOURCE_PATH}/src/lz4/LICENSE"
+    "${SOURCE_PATH}/src/external/fast_float/LICENSE-APACHE"
+    "${SOURCE_PATH}/src/external/fast_float/LICENSE-BOOST"
+    "${SOURCE_PATH}/src/external/fast_float/LICENSE-MIT"
+    "${SOURCE_PATH}/src/external/floaxie/LICENSE"
+    "${SOURCE_PATH}/src/external/jsteemann/LICENSE"
+    "${SOURCE_PATH}/src/external/filesystem/LICENSE"
+    "${SOURCE_PATH}/src/external/glob/LICENSE"
+    "${SOURCE_PATH}/src/external/mapbox/earcut/LICENSE"
+    "${SOURCE_PATH}/src/external/mapbox/eternal/LICENSE.md"
+    "${SOURCE_PATH}/src/external/linalg.UNLICENSE"
+    "${SOURCE_PATH}/src/external/string_id/LICENSE"
+    "${SOURCE_PATH}/src/external/dtoa_milo.LICENSE"
+    "${SOURCE_PATH}/src/external/jeaiii_to_text.LICENSE"
+)

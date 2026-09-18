@@ -12,6 +12,8 @@
     "ktx",
     "meshoptimizer",
     "libwebp",
-    "ufbx"
+    "ufbx",
+    "tinyusdz",
+    "openusd"
   ]
 }

@@ -21,6 +21,7 @@ enum class GroundAxis : std::uint8_t
 inline GroundAxis ResolveGroundAxis(GroundAxis selected, model_core::UpAxisId sourceUpAxis)
 {
     if (selected != GroundAxis::Automatic) return selected;
+    if (sourceUpAxis == model_core::UpAxisId::X) return GroundAxis::X;
     return sourceUpAxis == model_core::UpAxisId::Y ? GroundAxis::Y : GroundAxis::Z;
 }
 

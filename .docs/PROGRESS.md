@@ -4,6 +4,272 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **USD-009 corpus and fuzz qualification slice (2026-09-18): complete;
+  release qualification remains in progress.** A checked-in manifest now
+  freezes 10 redistributable USDA/USDC/USDZ and composition sources plus 13
+  deterministic malformed, unsafe, unsupported, recursion, archive and
+  dependency-pressure derivations. Hashes cover decoded USDC/USDZ payloads,
+  not base64 transport. The manifest records independent expected facts while
+  existing real worker/host tests remain the numeric oracle, preventing either
+  TinyUSDZ or OpenUSD from blessing its own output.
+
+  The new standalone `UsdFuzz` target has five bounded no-GPU domains:
+  TinyUSDZ USDA object graphs plus render-data normalization and USDC byte
+  classification, product USDZ
+  preflight, trusted normalized-output copy/validation, the host's exact pure
+  identifier/anchoring policy, and production control framing seeded with
+  OpenUSD-start and resolver-sidecar records. Its clean 11-seed Release
+  ASan/libFuzzer smoke completed 38,814 executions in 61 seconds with no
+  finding or timeout and 492 MiB peak reported RSS under a 1,024 MiB cap.
+  OpenUSD itself is an ordinary pinned private DLL and is not falsely claimed
+  as sanitizer-instrumented; real-host resolver/composition/Job/fault recovery
+  stays in ImportIsolation.
+
+  Two build details matter for the next fuzz target. MSVC ASan turns on STL
+  string/vector/optional annotations, which cannot link to the ordinary pinned
+  TinyUSDZ static library compiled without those ABI markers. Disable exactly
+  those three annotations in the harness (while retaining ASan on harness and
+  product boundary sources), or build TinyUSDZ with a dedicated sanitizer
+  triplet; never force-link the mismatch. Keep standalone fuzz output
+  project-private. An early draft pointed `UsdFuzz` at shared `x64/Release`;
+  its correct incremental-clean pass removed sibling `fastgltf.dll` and
+  `simdjson.dll`, making every Release worker request die before parsing until
+  the product closure was rebuilt. Finally, libFuzzer grows the directory
+  passed as its corpus, so always materialize seeds under ignored
+  `TestResults/`, never point it at immutable source fixtures.
+
+  TinyUSDZ's USDC memory option is advisory: a minimized mutated crate caused a
+  multi-gigabyte allocation before that option reacted. Arbitrary USDC mutation
+  therefore does not run in the long-lived in-process fuzz target. The input is
+  frozen as a deterministic derived corpus case and a new 128 MiB Job-contained
+  real-worker regression proves either controlled rejection or worker
+  replacement, followed by a successful valid USDC import. The seed preparer
+  now refuses non-empty destinations after a reused evolved corpus demonstrated
+  why reproducible fuzz-smoke evidence must start from exactly the 11 seeds.
+
+  A final sandbox/sidecar security selector exposed a test-only collision:
+  `SidecarPathResolverTests` named scratch directories with process ID plus a
+  stack address, which can repeat across processes and collide with stale test
+  output. It now asks Windows for a unique temporary name before converting it
+  to a directory. This did not change the production resolver, but keeps path
+  containment evidence repeatable across Debug/Release and interrupted runs.
+
+  Debug/Release solution targets and Unit pass (98 cases; 7,625 / 7,537
+  assertions). Focused USD-002 through USD-009 passes 28 cases / 756 assertions
+  in both configurations (the two new USD-009 regressions account for 45
+  assertions), and the hostile-worker lane passes 13 cases / 273 assertions in
+  both. There is no USD persistent-cache entry: the current cache is
+  an unwired opaque-payload prototype. The reserved policy/wire/TinyUSDZ/OpenUSD
+  tuple and exact commands are in
+  [USD-009-VERIFICATION.md](./USD-009-VERIFICATION.md). Repeated p50/p95 and UI
+  heartbeat evidence, full-suite closure, final package/tamper
+  reruns, clean-VM lifecycle/loaded-host replacement, soak, and signed-candidate
+  evidence remain open, so USD-009 and Gate 4 are not marked complete.
+
+- **USD-007 bounded OpenUSD composition/normalization (2026-09-18): complete,
+  still test-only.** The production compatibility core now opens broker-backed
+  USDA/USDC/USDZ stages with `LoadNone`, loads payloads breadth-first, and
+  normalizes the approved static scene into the same bounded progressive wire
+  batches as the general worker. Composition covers sublayers, references,
+  payloads, inherits, specializes, default variants, native instances, and
+  point instancers. Geometry, transforms/bounds, material subsets, Preview
+  Surface factors, WIC/WebP/KTX textures, warnings, and static-policy metadata
+  all pass through the existing writer and trusted validator. No viewer,
+  activation, association, package, or thumbnail surface changed; USD-008 is
+  the next task and USD thumbnails remain USD-010.
+
+  Several details are worth carrying forward. OpenUSD may call the resolver
+  with an empty anchor for byte-backed composition arcs, so the private
+  `preview3d://` resolver must explicitly anchor those at its namespace root;
+  it must reject `..` before normalization or a traversal can disappear before
+  the trusted broker sees it. The broker sidecar extension allowlist also had
+  to admit `.usd`/`.usda`/`.usdc`—leaving it image-only made every legitimate
+  composed layer look like `UnsafeReference`; `.usdz` is intentionally still
+  absent so recursive packages remain closed. Identity-only xformables can
+  leave `UsdGeomXformable::GetLocalTransformation`'s boolean false while the
+  initialized identity matrix is valid, so matrix validity—not that boolean—is
+  the useful normalization gate. Finally, OpenUSD's USDA parser is stricter
+  than TinyUSDZ about metadata-block layout; multiline authored metadata in
+  fixtures prevents a fast-parser-only test from masking malformed fallback
+  input.
+
+  The overlap corpus caught two tiny but user-visible normalization drifts:
+  OpenUSD initially emitted a synthetic +X tangent where TinyUSDZ deliberately
+  emits a zero tangent, and it marked constant display color as per-vertex
+  color where the fast route does not. Aligning those rules now makes the full
+  canonical chunk fingerprint exact after removing only the exclusions named
+  in `.docs/usd.md` (generation/encoding/source offsets/checksums). Original
+  USD-007 fixtures record SHA-256 and independent expected facts. Focused
+  tests cover all approved arcs, USDZ composition, point-instance masking,
+  exact fast/compat overlap, materials/textures and missing fallback, malformed
+  and recursive layers, unsafe traversal, unsupported required content,
+  dependency pressure, cancel/replace, crash/hang/protocol/commit faults, and
+  later recovery. Adding WebP/KTX parity also means USD-008 must package and
+  dependency-audit `ktx`, `zstd`, `libwebp`, and `libsharpyuv` beside the
+  already-private OpenUSD host; they are not viewer/general-worker imports.
+  Debug/Release solution builds are clean. Focused USD-002 through USD-007
+  passes 25 cases / 705 assertions, including USD-007's 5 cases / 186
+  assertions. Unit remains green
+  at 98 cases (7,617 Debug / 7,529 Release assertions). Full Debug isolation
+  reaches 278/282 with only the four pre-existing FBX fixture-rewrite failures;
+  Release reaches 271/282 with those four plus seven already-documented
+  randomized sidecar scratch-directory collisions. No full-run failure enters
+  a USD route.
+
+- **USD-006 compatibility-host lifecycle (2026-09-17): complete, still
+  test-only.** The broker now consumes only an exact pre-publication
+  `UnsupportedComposition` from TinyUSDZ, discards the fast attempt, and
+  starts a fresh normalized session through the distinct
+  `Binbuf.Preview3D.ImportHost` AppContainer. The host has its own additive
+  opcode/request and closed producer identity while reusing the existing
+  bounded framing, dependency servicing, output window, copy-then-validate,
+  cancellation, and Job enforcement. It exits after its one generation; bad
+  hosts are killed, not replaced/retried within that generation.
+
+  The bootstrap locks DLL/environment discovery before input and remains free
+  of OpenUSD imports. Its first production request loads the core by absolute
+  private path and audits the 13-file resource inventory. At USD-006
+  completion, composed-stage normalization was deliberately left to USD-007
+  and the production host returned `CompatibilityHostFailure` after
+  platform/payload validation rather than exposing USD-002 spike data. Viewer
+  format discovery remains disabled.
+
+  Debug/Release solution builds pass. Focused USD-006 passes 2 cases / 64
+  deterministic assertions in both configurations, and USD-002 through
+  USD-006 focused coverage is green. Unit passes 98/98 (7,617 Debug / 7,529
+  Release assertions). Full Debug isolation reaches 273/277 with only the
+  four known FBX fixture-rewrite failures; Release reaches 271/277 with those
+  four plus two known sidecar scratch-directory collisions. PE dependency
+  inspection confirms OpenUSD is absent from the viewer, general worker,
+  thumbnail DLL, and bootstrap. USD-007 is now ready; USD remains undiscoverable
+  until USD-008 and thumbnails remain USD-010.
+
+- **USD-005 USDZ/material/texture fast path (2026-09-17): complete, still
+  test-only.** The TinyUSDZ route now imports independently preflighted USDZ,
+  brokered local or archive-contained image assets, USD Preview Surface
+  materials, material subsets, and product-decoded WIC/WebP/KTX textures. The
+  accepted fast boundary is unchanged: one self-contained root layer plus
+  images; every composition arc remains an atomic `UnsupportedComposition`
+  handoff for USD-006/007. No viewer, registration, activation, installer
+  extension, or thumbnail behavior advertises USD yet.
+
+  Debug and Release clean worker/test builds pass with warnings-as-errors;
+  `[usd-005]` passes 5 cases / 91 assertions in each configuration, including
+  contained USDZ assets, brokered PNG, subset bindings, archive cancellation,
+  optional missing/corrupt fallbacks, extension/content mismatch, and unsafe
+  traversal. TinyUSDZ's overlay is now `0.9.1#2`, the installed/portable
+  copyright includes its enabled vendored components, and the Release worker
+  is 5,413,376 B (27,136 B over USD-004; no new DLL). USD-006 is the next
+  independently ready task; thumbnails remain USD-010.
+
+  Unit passes 98/98 in both configurations (7,617 Debug / 7,529 Release
+  assertions). Full Debug isolation passes 271/275 with only the four known
+  FBX fixture-string rewrite failures. Full Release passes 263/275 with those
+  four plus eight already documented randomized sidecar scratch-directory
+  collisions; all focused USD cases are green in both runs. The unsigned
+  engineering portable-package check passes dependency closure, stages the
+  50,356-byte combined TinyUSDZ notice, and lists TinyUSDZ `0.9.1#2` in SBOM.
+
+- **USD-003 USD-family protocol and normalized contract (2026-09-17):
+  complete.** Protocol v10 remains byte-compatible. Closed source identities
+  `USDA=9`, `USDC=10`, and `USDZ=11` and `UpAxisId::X=3` were appended without
+  moving the existing Y/Z values or changing a wire record. The existing
+  normalized node/geometry/instance/material/image catalogs can represent the
+  approved subset: point instancers expand into bounded instances and
+  per-face material subsets become ordinary geometry sections. The shared
+  fast/OpenUSD canonical digest is now specified in `.docs/usd.md` over the
+  deterministic post-triangulation semantic stream; encoding, producer,
+  offsets, batch boundaries, and diagnostics are deliberately excluded.
+
+  `ImportFormat::Usd`, a dedicated 48-byte request/opcode, pooled dispatch, and
+  one-shot `--parse-usd` now form a test-only end-to-end route. `.usd` is
+  byte-authoritative; explicit suffixes carry exactly one expected-encoding
+  flag and mismatches are terminal. The worker independently preflights USDZ
+  and maps archive-policy failures to the new terminal `ArchiveLimit` code.
+  It emits a one-point contract marker because `ImportSession` correctly
+  rejects metadata-only successful imports; USD-004 must replace that marker
+  with real TinyUSDZ-normalized geometry. No viewer format classifier,
+  activation, registration, package, or thumbnail surface advertises USD.
+
+  USD validation is Tier B, requires an actual USDA/USDC/USDZ identity, accepts
+  X/Y/Z only, and requires finite positive USD units. Geometry provenance packs
+  the source prim/object ordinal into the high 32 bits of `sourceRangeOffset`
+  and the normalized point/index start into the low 32 bits. Define
+  `NOMINMAX`/`WIN32_LEAN_AND_MEAN` before TinyUSDZ headers: defining them after
+  a project header that transitively includes Windows headers still permits
+  `min`/`max` macro collisions.
+
+  The new typed failures are `UnsupportedComposition`,
+  `CompatibilityHostFailure`, `CompatibilityHostLimit`, and `ArchiveLimit`,
+  with host-owned redacted messages. Only exact, pre-publication
+  `UnsupportedComposition` sets `compatibilityFallbackRequired`; every other
+  failure is terminal. A pure generation-scoped state machine begins with no
+  producer and rejects late/reverse fallback, loops, or mixed producers while
+  ignoring stale generations. USD-006 can now wire that contract to the lazy
+  OpenUSD host without redefining its authority or publication semantics.
+
+  Debug and Release focused USD-003 tests pass (6 cases / 119 assertions each)
+  across pooled/one-shot format detection, suffix spoofing, archive policy,
+  axes/units, hostile fallback, and state transitions. Unit passes 98 cases in
+  both configurations (7,617
+  Debug assertions; 7,529 Release assertions, with three existing unavailable
+  debug-layer warnings in Release). Full Debug ImportIsolation reached 268
+  cases / 101,139 assertions with only the four already documented FBX
+  fixture-string rewrite failures. The first full Release run reached the same
+  USD coverage; its unrelated failures were inherited FBX rewrites plus a
+  stale sidecar scratch-directory collision from the existing PID/address
+  naming scheme. USD-004 and USD-006 are unblocked; USD-010 remains the
+  separate thumbnail task.
+
+- **USD-001 TinyUSDZ feasibility and policy spike (2026-09-17): complete with
+  a revised fast-path boundary.** The repository now pins TinyUSDZ v0.9.1 at
+  commit `a04ee0bcbd1a930e30cc40938fcee3526a6fa8eb` through a checked-in static
+  overlay. USDA, USDC, and stored/aligned USDZ load from broker-supplied memory
+  and produce identical normalized hashes in Debug and Release inside the real
+  zero-capability AppContainer worker. This is a test-only
+  `--usd-spike-pool` route; no product opcode, extension, viewer route, or
+  thumbnail behavior is exposed.
+
+  TinyUSDZ has a usable whole-asset resolver callback but no ranged asset,
+  allocator, progress, or cancellation callback. Its
+  `max_memory_limit_in_mb` option is advisory: a roughly 4 MiB USDA load
+  succeeded with a 1 MiB setting. A 16 MiB Job limit instead produced a
+  controlled allocation failure and the same worker handled the next valid
+  request. Noninterruptible work is contained by the existing 500 ms grace,
+  terminate/replace path (515 ms Debug, 514 ms Release). Future adapters must
+  preflight/account everything they own and treat the worker Job limit as the
+  hard in-call allocation backstop; do not describe the library option as a
+  budget. Define `NOMINMAX` before the installed TinyUSDZ headers on Windows.
+
+  The exact fast policy is now deliberately a self-contained root layer. Any
+  USD composition arc returns `UnsupportedComposition` before publication and
+  is eligible for the OpenUSD host; image asset dependencies remain brokered
+  bytes, not composition. Malformed, unsafe, archive-limit,
+  unsupported-required-schema, and resource-limit failures never get a more
+  permissive retry. Product code independently preflights USDZ EOCD,
+  central/local agreement, normalized paths, case collisions, ZIP64,
+  encryption, stored-only method/size, 64-byte alignment, entries, aggregate
+  expansion, and ratio before TinyUSDZ access.
+
+  The Release worker grew from 779,264 B to 5,304,320 B (4,525,056 B delta);
+  no DLL was added. The upstream static archive is monolithic and includes
+  vendored code even though codecs/bridges are disabled, so USD-005 must audit
+  actual linked members and embedded third-party notices instead of shipping
+  only the top-level Apache-2.0 file. The Visual Studio-bundled vcpkg
+  `2026-07-27` is required for this repository baseline; the older standalone
+  `2025-06` client fails in current helper scripts with unsupported CMake list
+  operations.
+
+  Focused USD passes 7 cases / 180 assertions in both configurations. MSVC
+  14.51 LTCG ICEs after the TinyUSDZ archive is added to the already-large
+  Release ImportIsolation harness, so WPO is disabled only for that test
+  executable; product Release LTCG remains enabled. A full Debug isolation run
+  reached 257 cases / 100,850 assertions with four independently reproducible
+  pre-existing FBX fixture-string rewrite failures; the USD cases remain
+  green. Full dependency, API, feature-policy, measurement, fixture, and
+  follow-on details are in `.docs/USD-001-SPIKE-RESULTS.md`. USD-002 and
+  USD-003 are unblocked; thumbnails remain a separate USD-010 task.
+
 - **FBX-006 viewer, activation, and installer integration (2026-09-17):
   complete.** `.fbx` now routes case-insensitively through the existing
   AppContainer import bridge and normalized progressive renderer. Direct and
@@ -1230,6 +1496,57 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
 
 ## Notes for whoever picks up the next chunk
 
+### USD-002 OpenUSD compatibility-host findings
+
+- OpenUSD 26.08 is pinned at commit `ee47c679abde5b467a7b6a41f3b2285564a4222e`
+  through `packaging/vcpkg-ports/openusd`. The selected build is monolithic and
+  disables Python, imaging/Hydra, tools, tests, validation, MaterialX, optional
+  format/renderer plugins, and graphics APIs. The shared comparison produced
+  33 DLLs / 21,945,856 bytes and 70 resource files; monolithic is one
+  18,053,120-byte OpenUSD DLL and the reviewed subset is 13 resource files.
+- A bootstrap executable cannot use `/DELAYLOAD:usd_ms.dll`: OpenUSD imports
+  data symbols and MSVC rejects that with `LNK1194`. Keep the small bootstrap
+  free of OpenUSD imports, lock DLL/environment discovery there, then
+  `LoadLibraryExW` the core DLL by absolute path. The compatibility payload now
+  has its own `x64/<Config>/OpenUsdHost/` tree; keep that separation in the
+  installer and ACL only that tree to its distinct AppContainer SID.
+- A custom OpenUSD resolver must be advertised by an explicitly registered
+  `plugInfo.json`; a runtime-only `TfType::Define` has no associated plugin and
+  OpenUSD falls back to `ArDefaultResolver`. Register the hash-pinned manifest
+  first. Model assets use a URI resolver (`preview3d://`), not a replacement
+  primary resolver: this gives Pcp stable absolute identities and causes
+  relative arcs to dispatch through the URI anchor while installed schema
+  resources continue through the default resolver.
+- `ArResolvedPath` values that merely look like relative synthetic paths can be
+  opened but do not form a usable Pcp layer stack. Use a registered URI scheme.
+  Reject all other schemes, absolute paths, drives, backslashes, and namespace
+  escape before lookup; never fall through to the default resolver for a model
+  dependency.
+- OpenUSD runtime resources are part of the security payload, not incidental
+  data. Hash exact files, recursively reject missing/modified/unlisted files,
+  explicitly register only the audited root manifest, and reject registry
+  plugin/resource paths outside the private payload. Use
+  `lexically_relative`, not `std::filesystem::relative`, inside AppContainer;
+  the latter canonicalizes through inaccessible parent directories and can
+  falsely fail a valid inventory.
+- Open stages with `UsdStage::LoadNone`; `TraverseAll` is required to discover
+  unloaded payload sites. Sort each breadth and enforce payload-count, byte,
+  resolver-open, graph-depth, wall-clock, and Job-memory bounds. Treat
+  `GetCompositionErrors()` as fatal even if root geometry is otherwise usable.
+- The brokered OpenUSD `ArAsset` can have no `FILE*`; `GetBuffer`/`Read` over a
+  bounded copied section is sufficient for USDA, references/sublayers,
+  payloads, textures, and USDZ package reads. OpenUSD has no useful
+  cooperative cancellation hook for this operation, so retain bounded Job
+  termination and fresh-host replacement.
+- The common `mesh.usda` facts agree between TinyUSDZ and OpenUSD (hierarchy,
+  transform, one mesh/four points/one quad, units/up axis, bounds), but their
+  spike hashes intentionally cover different representations. USD-003 must
+  define one post-triangulation, format-neutral canonical digest rather than
+  reusing either temporary hash.
+- Build the solution, not an individual test project: the USD host path macro
+  and vcpkg layout depend on `$(SolutionDir)`. The focused USD-002 suite is
+  `[usd-002]`; it passed 201 assertions in both Debug and Release.
+
 - The `#pragma pack(1)` + `static_assert(sizeof(...) == N, ...)` pattern on every wire-format struct (`shared/model-core/include/model_core/WireFormat.h`, `ControlProtocol.h`) is deliberate and worth keeping for any new struct added to the wire format or control protocol — it turns layout mistakes into compile errors.
 - `SandboxTestSupport.h` (`tests/import-isolation/`) holds the reusable AppContainer test fixture (`SandboxFixture`, unique per-run profile name, ACL grant, profile cleanup in the destructor) plus both worker exe path accessors (`WorkerExePath()`, `HostileWorkerExePath()`). `GenerationLaunchSupport.h` holds the reusable control-channel launch helper (`LaunchWorkerWithControlChannel`, generalized over exe path/args). Both are shared across `SandboxLaunchTests.cpp`, `ImportPipelineTests.cpp`, and `HostileWorkerTests.cpp` — reuse them rather than re-deriving the pattern.
 - The checksum (`model_core::Fnv1a64`) is explicitly non-cryptographic and known to be defeatable by a worker that computes its own checksum over its own lies. It only guards the honest path against incidental corruption. The real defense against a *lying* worker is the copy-then-validate bounds/arithmetic checks in `SharedSectionValidator` — now proven adversarially by the hostile-worker suite (part 3).
@@ -1242,3 +1559,196 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
 - **Likely next slices for the D3D12-in-the-real-app effort**, in roughly dependency order: (a) a fixed-shader camera/orbit + a neutral triangle/cube/point-cloud draw (Gate 1's own next deliverable, needs a root signature/PSO/vertex buffer this slice deliberately didn't build); (b) the D3D11On12/Direct2D chrome overlay bridge (ADR-010's already-decided path) so the `--d3d12` window is self-closable and visually on par with the D3D11 default again; (c) wiring `D3D12UploadRing`/`DxgiBudgetMonitor`/the worker pool/`MappedFile`/`DerivedCache` together behind a real "open a file" flow, replacing `Model.cpp`'s insecure in-process parser; (d) device-loss/recovery (`DXGI_ERROR_DEVICE_REMOVED`/`RESET`), explicitly not attempted in slice 1. Only after some of (a)-(c) land does it make sense to flip `--d3d12` from opt-in to the default and start planning `Renderer.cpp`'s removal.
 - **The trusted-process-side file-open step (`import_broker::OpenAndCanonicalizeSourceFile`) is deliberately minimal, not the full Input-boundary policy engine** — no UNC/reparse-point rejection, no "file changed since open" re-verification. It only opens and canonicalizes. Whoever eventually wires real file-open into `Preview3D.cpp` itself needs to layer that broader policy (`03-file-formats-and-ingestion.md`'s "Input boundary" section) on top — don't mistake this function's current behavior for that policy being implemented. **Partial correction since this note was written**: sidecar-directory containment *is* now implemented, in `import_broker::ResolveSidecarPath` (`shared/import-broker/src/SidecarPathResolver.cpp`) — but only for sidecar references reached through the `RequestSidecarFile` protocol, not for the primary file itself, which is what the rest of this bullet still describes.
 - **Gate 0's "cancellation/generation primitive" is no longer missing** — `shared/platform/include/platform/Generation.h` (`GenerationSource`/`GenerationToken`), built in slice 3 once the upload ring's publication path needed a real "is this still current" check. Reuse it rather than inventing a second generation/cancellation mechanism anywhere else in the codebase (e.g. a future worker-pool generation-cancellation primitive, also still a Gate 0/ADR-002 debt item, should build on this, not duplicate it).
+
+### USD-004 TinyUSDZ static adapter findings
+
+- TinyUSDZ 0.9.1 commit `a04ee0bcbd1a930e30cc40938fcee3526a6fa8eb`
+  implements USDA `PointInstancer` reconstruction but does not register that
+  callback in `USDAReader::Impl::Init` (the USDC path does reconstruct it).
+  The parse therefore succeeds while silently materializing the prim as a
+  `Scope`, and Tydra drops its instance arrays. The overlay-port patch
+  `register-usda-point-instancer.patch` adds the missing registration and the
+  overlay is revisioned as `0.9.1#1` so existing manifest installs see the
+  changed package. Keep this patch, or verify the upstream equivalent before
+  advancing the pin.
+- TinyUSDZ `Prim::as<T>` uses role-aware, non-strict casts; it is not a safe
+  concrete-schema discriminator. `UsdAdapter` compares `Prim::type_id()` with
+  `TypeTraits<T>::type_id()` before every schema cast. Also do not use the
+  stage's `Prim::absolute_path()` strings as render-node keys: build canonical
+  `/Root/Child` paths during deterministic traversal so they match Tydra's
+  `Node::abs_path` and relationship targets.
+- Tydra triangulation plus `build_vertex_indices` converts supported constant,
+  uniform, vertex/varying, indexed, and face-varying normals/UV/color data to
+  one vertex index domain. The adapter then deliberately emits bounded
+  deindexed chunks; those chunks are shared by ordinary and point-instancer
+  `MeshInstance` records. Point-instancer prototype subtree transforms must be
+  composed with each instance placement—using only the prototype mesh ID loses
+  transforms and multi-mesh prototypes.
+- TinyUSDZ exposes no allocation or cooperative-cancellation callback. Keep
+  `max_memory_limit_in_mb` advisory only; the worker Job commit cap is the
+  authoritative memory boundary, and cancellation is checked between parse,
+  classification, conversion, mesh chunks, nodes, and instances. Instantiating
+  `TypedTimeSamples::get` for point-instancer arrays produces MSVC C4702 in the
+  pinned header, so warning 4702 is disabled only for `UsdAdapter.cpp` in the
+  worker project.
+- Composition classification must finish before `BoundedChunkWriter` exists.
+  This guarantees that a valid sublayer/reference/payload/variant/instanceable
+  stage returns `UnsupportedComposition` with zero candidate batches. At
+  USD-004 completion valid USDZ still returned `UnsupportedEncoding`; USD-005
+  superseded that handoff with archive-backed import. Malformed/unsafe archives
+  remain terminal `ArchiveLimit` and never request compatibility fallback.
+- Qualification: full Debug and Release solution builds passed. `[usd-004]`
+  passed 56 assertions and `[usd-003]` passed 123 assertions in both
+  configurations; Debug `Tests.Unit` passed 7,617 assertions and Release
+  `Tests.Unit` passed 7,529 assertions. The full Debug isolation run passed
+  267/271 cases (101,226 assertions); its four failures are pre-existing FBX
+  fixture-mutation tests whose `FindBytes` helper cannot locate the requested
+  byte pattern, before any USD route is entered. The Release isolation run
+  passed 264/271 cases (101,214 assertions): the same four FBX failures plus
+  three unrelated `SidecarPathResolverTests` scratch-directory name collisions
+  in that randomized full-suite order. All focused USD tests passed in both
+  runs.
+
+### USD-005 USDZ, resolver, material, and packaging findings
+
+- Product-owned archive inspection now does more than structure preflight: it
+  verifies each stored entry's CRC32 with cancellation checks, rejects local
+  entry overlaps, and returns offset/length views into the original brokered
+  mapping. Keep this map as the sole USDZ asset authority; extracting files or
+  letting parser-generated paths reach Win32 would undo the boundary.
+- With `RenderSceneConverterEnv.scene_config.load_texture_assets=false`,
+  TinyUSDZ 0.9.1 still uses `AssetResolutionHandler` to obtain encoded texture
+  bytes and fills `RenderScene::images`/`buffers`. Register a wildcard handler
+  with resolve, size, and read callbacks—otherwise the library can fall back
+  to its own filesystem behavior. Product code, not TinyUSDZ, then owns
+  sniffing and WIC/WebP/KTX decode.
+- The wildcard resolver intentionally approves image extensions only. Under
+  the USD-001 policy, local sublayers/references/payloads are composition, not
+  “fast dependencies”; they must stay `UnsupportedComposition` until the
+  broker-only OpenUSD path exists. USD-006/007 must not reuse the image-only
+  sidecar rule as a composition resolver policy.
+- For USDZ only, pinned TinyUSDZ/Tydra fails conversion of the canonical static
+  cube when `RenderSceneConverterEnv.timecode` is numeric zero, while
+  `TimeCode::Default()` succeeds; the same contained crate converts at zero.
+  The adapter therefore uses Default only for Tydra's USDZ conversion while
+  retaining the separately classified deterministic stage time. Re-test this
+  workaround on every TinyUSDZ pin change.
+- Tydra's material-subset indices refer to its triangulated face domain for
+  the supported conversion. Validate every index and reject overlaps before
+  writing; then split consecutive equal-material runs. This preserves bounded
+  chunking and lets all ordinary/point instances reuse geometry with the
+  correct normalized material ID.
+- Treat a positively sniffed image whose extension disagrees as terminal
+  `UnsafeReference`; treat bytes that cannot be sniffed/decoded as a corrupt
+  optional texture and publish the deterministic warning/fallback image. This
+  distinction prevents type spoofing without making ordinary texture damage a
+  permissive compatibility retry.
+- The minimal TinyUSDZ static archive still contains enabled vendored source.
+  The overlay's combined copyright must include expected-lite, optional-lite,
+  LZ4, fast_float, floaxie, jsteemann, ghc filesystem, glob, stb resize,
+  tinymeshutils, Project Nayuki's sRGB routines, mapbox earcut/eternal, linalg,
+  string_id, dtoa_milo, jeaiii, and the OpenUSD-derived
+  crate/integer/compression/transform notices.
+  `Create-PortableRelease.ps1` now stages `tinyusdz.txt`; preserve that entry
+  when packaging changes. The port revision is `0.9.1#2` so existing local
+  installs do not retain the prior incomplete copyright.
+
+### USD-006 compatibility-host lifecycle findings
+
+- Keep producer identity in the control plane even though both adapters emit
+  the same normalized wire records. `StartOpenUsdImportFromFile=18` and
+  `ParseOpenUsdFileRequest` deliberately match the fast request's 48-byte
+  layout but have a distinct type/opcode. This prevents a child or test double
+  from changing producer identity without the broker noticing and avoids a
+  protocol-version bump.
+- Atomic fallback is simplest and strongest when the second attempt calls the
+  same single-producer session engine from scratch. It naturally gets a new
+  output section, validation catalogs, handle duplications, cancellation
+  event, and process lease. Do not pass a fast section/catalog into USD-007;
+  the only shared state should be the generation and the trusted broker's path
+  authority.
+- A compatibility process must never report `UnsupportedComposition`: that is
+  a fast-classifier transition, not a general importer error. Treat it as
+  reverse fallback/protocol failure. Once the compatibility transition is
+  accepted, every non-cancel failure is mapped to a redacted host-owned fact
+  and `compatibilityFallbackRequired` is cleared.
+- The host's allowed “bounded idle grace” can be zero. Exiting immediately
+  after the current generation preserves the strongest isolation from the
+  USD-002 spike (OpenUSD has process-global initialization) and makes restart
+  behavior deterministic. A typed result receives a graceful `Shutdown`; a
+  crash, hang, missed cancellation grace, or malformed reply drops the
+  kill-on-close Job and is never replaced for that generation.
+- `WorkerPool` is process-agnostic once its executable, arguments, SID, and
+  limits are inputs. Reuse it for the compatibility host, but do not reuse the
+  worker coordinator/profile: the host is lazy, size one, immediate-exit, and
+  ACLed only to `OpenUsdHost/`; the general pool remains prewarmed, size two,
+  and session-reused.
+- Keep the bootstrap free of OpenUSD imports. The production `--pool` mode can
+  use the shared framed control protocol without loading OpenUSD; only the
+  first accepted compatibility request calls `LoadLibraryExW` on the absolute
+  private core path and invokes the exported resource audit. USD-007 should
+  extend that already-loaded core entry point rather than linking OpenUSD into
+  the bootstrap or broker.
+- On this Windows build, a Job memory kill does not always leave
+  `JobObjectLimitViolationInformation.ViolationLimitFlags` observable after
+  the process disappears. Check the closed NT memory-exhaustion exit statuses
+  too. The explicit small compatibility limit is a test-only qualification
+  seam and maps an EOF under that cap to `CompatibilityHostLimit`; production
+  uses the derived `min(4 GiB, 35% physical RAM)` cap plus Job/exit evidence.
+- Build the solution rather than `Tests.ImportIsolation.vcxproj` directly.
+  Direct project builds redefine `$(SolutionDir)` to the project directory and
+  put worker/host test dependencies under per-project `x64/`, while the
+  compiled path macros intentionally target the solution-level output tree.
+- Current qualification is 277 isolation cases. Debug passes 273 with the
+  four pre-existing FBX fixture-pattern failures. Release passes 271 with the
+  same four plus two existing randomized `SidecarPathResolverTests` directory
+  collisions. All USD-002..006 filters pass; none of those six full-run
+  failures enters a USD route.
+
+### USD-008 viewer and distribution findings
+
+- The generic viewer bridge's `nextDetail` callback is not merely a host-side
+  scheduling hint: `MakeFileRequest` turns it into
+  `kImportRequestDetailService`. The USD request's allowed flag mask contains
+  only the expected-encoding bits, so passing the Tier-A detail callback makes
+  an otherwise valid USD request fail as `ImportProtocolViolation`. Keep both
+  `enableCoarseProxy` and `nextDetail` unset for USD; its Tier-B adapters still
+  stream bounded normalized batches through the ordinary `onBatch` path.
+- Product `RunImport` must prepare the general worker pool itself even though
+  normal window startup prewarms it. Direct bridge tests exposed the stale
+  assumption: acquiring an uninitialized coordinator returns `LaunchWorker`.
+  `EnsureImportSandboxPrepared()` is idempotent and now runs at the bridge
+  boundary, so retry/direct callers do not depend on window-startup timing.
+- Product builds and packaging must build the viewer project, not only copy an
+  already-present host tree. `Preview3D.vcxproj` now has a build-order-only
+  reference to `Preview3DImportHost.vcxproj`; that project already references
+  the OpenUSD core and materializes its 13 audited resources under
+  `x64/<Config>/OpenUsdHost/`.
+- The release host allowlist is 26 files: 8 host/runtime binaries, 13 audited
+  OpenUSD resources, and 5 app-local CRT DLLs. Copy the tree from its private build
+  output by explicit relative path, then compare the staged recursive
+  inventory in both directions. Do not recursively copy the build directory:
+  it also contains PDB/import-library/export artifacts. `usd_ms.dll` imports
+  Windows system `dbghelp.dll` and `shlwapi.dll`; both belong in the PE system
+  allowlist, not in the private payload.
+- Installer ACL provisioning must derive both deterministic SIDs before
+  changing either directory. On each tree, remove broad application-package
+  grants and both product SIDs, add only the owning SID, and verify that the
+  other SID has no remaining ACE. Cleanup symmetrically removes both SIDs from
+  both trees and deletes both current-user profiles.
+- The actual distribution surface is one USD family ProgID, not one per
+  encoding. Keep `.usd`, `.usda`, `.usdc`, and `.usdz` mapped to
+  `Binbuf.Preview3D.USD.1` through capabilities, OpenWithProgids, SupportedTypes,
+  reset, and uninstall. USD-008 intentionally adds no CLSID/shellex/thumbnail
+  registration; Explorer thumbnails remain USD-010.
+- Qualification: Debug/Release solution builds and the 98-case Unit suite
+  pass (7,625 / 7,537 assertions). Focused USD-002..008 passes 26 cases / 711
+  assertions in both configurations, and the real-app USD smoke passes eleven
+  activation/fallback/warning/failure-retention/replacement checks in both.
+  Full isolation is 279/283 Debug and 271/283 Release; the only failures are
+  the four established FBX
+  fixture-pattern misses plus eight Release randomized sidecar scratch-name
+  collisions. Portable staging passes PE/closed-inventory validation with 63
+  files and opens a composed USD stage from the staged layout; NSIS builds a
+  64-file unsigned engineering payload. Release hashes are recorded in
+  `.docs/usd.md` and `.docs/INSTALLER_VERIFICATION.md`.

@@ -24,6 +24,7 @@ Unicode true
 !define PROGID_PLY "Binbuf.Preview3D.PLY.1"
 !define PROGID_OBJ "Binbuf.Preview3D.OBJ.1"
 !define PROGID_FBX "Binbuf.Preview3D.FBX.1"
+!define PROGID_USD "Binbuf.Preview3D.USD.1"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -150,14 +151,15 @@ Section "3D Preview" SEC_MAIN
   File "${STAGE_DIR}\Provision-Preview3DWorkerAcl.ps1"
   File /r "${STAGE_DIR}\licenses"
   File /r "${STAGE_DIR}\worker"
+  File /r "${STAGE_DIR}\OpenUsdHost"
 
-  DetailPrint "Provisioning the import-worker sandbox ACL..."
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\Provision-Preview3DWorkerAcl.ps1" -WorkerDirectory "$INSTDIR\worker"'
+  DetailPrint "Provisioning the isolated importer payload ACLs..."
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\Provision-Preview3DWorkerAcl.ps1" -WorkerDirectory "$INSTDIR\worker" -OpenUsdHostDirectory "$INSTDIR\OpenUsdHost"'
   Pop $0
   Pop $1
   ${If} $0 != 0
     DetailPrint "$1"
-    MessageBox MB_OK|MB_ICONSTOP "The import-worker sandbox could not be provisioned. Setup cannot continue."
+    MessageBox MB_OK|MB_ICONSTOP "The importer sandboxes could not be provisioned. Setup cannot continue."
     Abort
   ${EndIf}
 
@@ -175,6 +177,7 @@ Section "3D Preview" SEC_MAIN
   !insertmacro RegisterProgId "${PROGID_PLY}" "3D model (PLY)"
   !insertmacro RegisterProgId "${PROGID_OBJ}" "3D model (Wavefront OBJ)"
   !insertmacro RegisterProgId "${PROGID_FBX}" "3D model (FBX)"
+  !insertmacro RegisterProgId "${PROGID_USD}" "3D model (Universal Scene Description)"
 
   WriteRegStr HKLM "Software\Classes\Applications\${PRODUCT_EXE}" "FriendlyAppName" "${PRODUCT_NAME}"
   WriteRegStr HKLM "Software\Classes\Applications\${PRODUCT_EXE}" "ApplicationCompany" "${PRODUCT_PUBLISHER}"
@@ -190,6 +193,10 @@ Section "3D Preview" SEC_MAIN
   !insertmacro RegisterExtension ".ply" "${PROGID_PLY}"
   !insertmacro RegisterExtension ".obj" "${PROGID_OBJ}"
   !insertmacro RegisterExtension ".fbx" "${PROGID_FBX}"
+  !insertmacro RegisterExtension ".usd" "${PROGID_USD}"
+  !insertmacro RegisterExtension ".usda" "${PROGID_USD}"
+  !insertmacro RegisterExtension ".usdc" "${PROGID_USD}"
+  !insertmacro RegisterExtension ".usdz" "${PROGID_USD}"
   WriteRegStr HKLM "Software\RegisteredApplications" "${PRODUCT_NAME}" "${PRODUCT_KEY}\Capabilities"
 
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\${PRODUCT_EXE}" "" "$INSTDIR\${PRODUCT_EXE}"
@@ -231,11 +238,16 @@ profile_cleanup_done:
   !insertmacro UnregisterExtension ".ply" "${PROGID_PLY}"
   !insertmacro UnregisterExtension ".obj" "${PROGID_OBJ}"
   !insertmacro UnregisterExtension ".fbx" "${PROGID_FBX}"
+  !insertmacro UnregisterExtension ".usd" "${PROGID_USD}"
+  !insertmacro UnregisterExtension ".usda" "${PROGID_USD}"
+  !insertmacro UnregisterExtension ".usdc" "${PROGID_USD}"
+  !insertmacro UnregisterExtension ".usdz" "${PROGID_USD}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_GLTF}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_STL}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_PLY}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_OBJ}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_FBX}"
+  DeleteRegKey HKLM "Software\Classes\${PROGID_USD}"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
   DeleteRegKey HKLM "${PRODUCT_KEY}"
   DeleteRegKey /IfEmpty HKLM "Software\Binbuf"
@@ -260,13 +272,18 @@ profile_cleanup_done:
   Delete "$INSTDIR\worker\vcruntime140_1.dll"
   RMDir "$INSTDIR\worker"
 
+  RMDir /r "$INSTDIR\OpenUsdHost"
+
   Delete "$INSTDIR\licenses\basisu.txt"
   Delete "$INSTDIR\licenses\draco.txt"
   Delete "$INSTDIR\licenses\fastgltf.txt"
   Delete "$INSTDIR\licenses\ktx.txt"
   Delete "$INSTDIR\licenses\libwebp.txt"
   Delete "$INSTDIR\licenses\meshoptimizer.txt"
+  Delete "$INSTDIR\licenses\openusd.txt"
   Delete "$INSTDIR\licenses\simdjson.txt"
+  Delete "$INSTDIR\licenses\tbb.txt"
+  Delete "$INSTDIR\licenses\tinyusdz.txt"
   Delete "$INSTDIR\licenses\ufbx.txt"
   Delete "$INSTDIR\licenses\zstd.txt"
   RMDir "$INSTDIR\licenses"

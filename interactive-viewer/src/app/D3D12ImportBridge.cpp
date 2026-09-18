@@ -54,18 +54,42 @@ std::wstring ResolveWorkerExePath()
     return directory + L"\\Preview3DImportWorker.exe";
 }
 
+std::wstring ResolveCompatibilityHostExePath()
+{
+    wchar_t modulePath[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+    const std::wstring path(modulePath, length);
+    const auto lastSlash = path.find_last_of(L"\\/");
+    const std::wstring directory = (lastSlash == std::wstring::npos) ? L"." : path.substr(0, lastSlash);
+    // Both packaged and solution builds keep OpenUSD's executable, DLLs, and
+    // hash-verified resources in this private sibling directory.
+    return directory + L"\\OpenUsdHost\\Preview3DImportHost.exe";
+}
+
 void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary, std::wstring& details)
 {
     switch (code) {
     case model_core::ImportErrorCode::UnsupportedEncoding:
         summary = L"This encoding is not supported.";
-        details = L"Use glTF 2.0, ASCII/binary STL or PLY, OBJ, or ASCII/binary FBX."; return;
+        details = L"Use a supported glTF, STL, PLY, OBJ, FBX, USDA, USDC, or USDZ encoding."; return;
     case model_core::ImportErrorCode::WorkerCrashed:
         summary = L"The sandboxed importer stopped unexpectedly.";
         details = L"The worker exited before completing this model. Retry or open another model."; return;
     case model_core::ImportErrorCode::UnsupportedRequiredFeature:
         summary = L"This model requires an unsupported feature.";
-        details = L"Export a static glTF model using the supported extensions."; return;
+        details = L"Export a static model using the documented supported subset."; return;
+    case model_core::ImportErrorCode::UnsupportedComposition:
+        summary = L"This USD stage requires compatibility import.";
+        details = L"The fast importer requested the isolated compatibility host."; return;
+    case model_core::ImportErrorCode::CompatibilityHostFailure:
+        summary = L"The USD compatibility importer stopped unexpectedly.";
+        details = L"The isolated compatibility host could not complete this model."; return;
+    case model_core::ImportErrorCode::CompatibilityHostLimit:
+        summary = L"This USD stage is too large or complex to preview.";
+        details = L"The compatibility host reached a bounded resource limit."; return;
+    case model_core::ImportErrorCode::ArchiveLimit:
+        summary = L"This model archive is not supported.";
+        details = L"The archive violates a path, structure, compression, or expansion limit."; return;
     case model_core::ImportErrorCode::EmptyGeometry:
         summary = L"This model has no displayable geometry.";
         details = L"No valid triangles or points remain in the selected scene."; return;
@@ -211,6 +235,8 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
         return import_broker::ImportFormat::Obj;
     case SourceFormat::Fbx:
         return import_broker::ImportFormat::Fbx;
+    case SourceFormat::Usd:
+        return import_broker::ImportFormat::Usd;
     case SourceFormat::Glb:
     default:
         return import_broker::ImportFormat::Gltf;
@@ -238,7 +264,7 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
         session.errorCode == model_core::ImportErrorCode::WorkerCrashed ||
         session.errorCode == model_core::ImportErrorCode::ResourceLimit ||
         (session.errorCode >= model_core::ImportErrorCode::PrimarySourceLimit &&
-         session.errorCode <= model_core::ImportErrorCode::DracoPrimitiveLimit))
+         session.errorCode <= model_core::ImportErrorCode::ArchiveLimit))
         DescribeImportError(session.errorCode, summary, details);
 }
 
@@ -251,6 +277,8 @@ std::wstring SourceFormatLabel(const std::wstring& path)
     if (ext == L"ply") return L"PLY";
     if (ext == L"obj") return L"OBJ";
     if (ext == L"fbx") return L"FBX";
+    if (ext == L"usd" || ext == L"usda" || ext == L"usdc") return L"USD";
+    if (ext == L"usdz") return L"USDZ";
     // Extension only, capped and restricted to printable alphanumerics.
     if (ext.empty() || ext.size() > 16) return L"Unknown";
     std::wstring label;
@@ -308,6 +336,8 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     if (ext == L"ply") return SourceFormat::Ply;
     if (ext == L"obj") return SourceFormat::Obj;
     if (ext == L"fbx") return SourceFormat::Fbx;
+    if (ext == L"usd" || ext == L"usda" || ext == L"usdc" || ext == L"usdz")
+        return SourceFormat::Usd;
     return std::nullopt;
 }
 
@@ -322,18 +352,23 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows)
 {
     ImportResult result;
+    // Startup normally prewarms this pool, but direct/retry callers must not
+    // depend on that timing. The coordinator makes repeated preparation cheap.
+    EnsureImportSandboxPrepared();
 
     import_broker::ImportSessionRequest sessionRequest;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
-        && format != SourceFormat::Fbx;
+        && format != SourceFormat::Fbx && format != SourceFormat::Usd;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
-    if (!delayBatchesForTesting && !faultForTesting) {
+    if (!delayBatchesForTesting && !faultForTesting && format != SourceFormat::Usd) {
         sessionRequest.nextDetail = std::move(nextDetail);
         sessionRequest.onInitialComplete = std::move(onInitialComplete);
     }
     sessionRequest.isCancelled = std::move(isCancelled);
     sessionRequest.workerExePath = ResolveWorkerExePath();
+    if (format == SourceFormat::Usd)
+        sessionRequest.compatibilityHostExePath = ResolveCompatibilityHostExePath();
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
     sessionRequest.generationId = generationId;
@@ -496,6 +531,16 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.errorDetails = L"FBX files are limited to the bounded Tier B source size.";
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
                 result.errorDetails = L"FBX parsing or static-pose evaluation exceeded the bounded importer scratch budget.";
+            }
+        } else if (format == SourceFormat::Usd) {
+            if (session.errorCode == model_core::ImportErrorCode::UnsupportedEncoding) {
+                result.errorDetails = L"Use USDA, USDC, or USDZ content whose encoding matches the explicit suffix; .usd is detected by bytes.";
+            } else if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
+                result.errorDetails = L"Export a static USD stage using supported meshes, primvars, instances, and USD Preview Surface materials.";
+            } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
+                result.errorDetails = L"USD files are limited to the bounded Tier B primary-source size.";
+            } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
+                result.errorDetails = L"USD parsing, composition, or normalization exceeded the bounded Tier B scratch budget.";
             }
         }
         return result;

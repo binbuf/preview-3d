@@ -1,0 +1,61 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 0.001
+    startTimeCode = 2
+    upAxis = "X"
+)
+
+def Xform "Root"
+{
+    double3 xformOp:translate = (1000000000, 2, 3)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Xform "Prototype"
+    {
+        double3 xformOp:translate = (0, 10, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Mesh "Triangle"
+        {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+                interpolation = "vertex"
+            )
+            point3f[] points = [(0, 0, 0), (2, 0, 0), (0, 1, 0)]
+            texCoord2f[] primvars:st = [(0, 0), (1, 0), (0, 1)] (
+                interpolation = "vertex"
+            )
+            color3f[] primvars:displayColor = [(1, 0, 0), (0, 1, 0), (0, 0, 1)] (
+                interpolation = "vertex"
+            )
+            uniform token subdivisionScheme = "none"
+        }
+    }
+
+    def PointInstancer "Instances"
+    {
+        rel prototypes = [</Root/Prototype>]
+        int[] protoIndices = [0, 0]
+        int64[] ids = [10, 20]
+        int64[] invisibleIds = [20]
+        point3f[] positions.timeSamples = {
+            0: [(1, 0, 0), (5, 0, 0)],
+            2: [(3, 0, 0), (7, 0, 0)]
+        }
+        quath[] orientations = [(1, 0, 0, 0), (1, 0, 0, 0)]
+        float3[] scales = [(2, 2, 2), (1, 1, 1)]
+    }
+
+    def Mesh "GuideMesh" (
+        hidden = false
+    )
+    {
+        uniform token purpose = "guide"
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        uniform token subdivisionScheme = "none"
+    }
+}

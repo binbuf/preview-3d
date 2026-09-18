@@ -6,7 +6,7 @@ A fast optimized 3D viewer for Windows 11.
 
 ## Highlights
 
-- Open local GLB/glTF, OBJ/MTL, FBX, STL, and PLY files.
+- Open local GLB/glTF, OBJ/MTL, FBX, STL, PLY, and USD-family files.
 - Navigate with familiar orbit, pan, fly, frame, and orthographic-view controls.
 - Drag and drop files, use **Open**, or pass a path on the command line.
 - Run parsing and decoding in a zero-capability AppContainer worker; models stay local and are never modified.
@@ -21,15 +21,32 @@ A fast optimized 3D viewer for Windows 11.
 | FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose |
 | STL | ASCII and binary |
 | PLY | ASCII and binary triangle meshes and point clouds |
+| Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`; static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
 
-This is a static, read-only viewer. Animation playback, editing, USD/3MF/CAD
-formats, Explorer thumbnails (including for FBX), and network assets are not
-currently included.
+USD files first use TinyUSDZ in the general isolated importer. Stages requiring
+supported composition are retried atomically in a separately isolated, lazily
+started OpenUSD host. Local relative sublayers, references, payloads, authored
+default variants, and texture dependencies are brokered by the viewer; remote
+assets and arbitrary resolvers/plugins are never allowed.
+
+The implemented USD viewer path has an immutable corpus and a standalone
+sanitizer fuzz-smoke lane. Final release qualification still requires the
+recorded clean-machine, repeated performance/heartbeat, soak, and signed-build
+gates; see [USD-009 verification](.docs/USD-009-VERIFICATION.md). Explorer USD
+thumbnails are a separate follow-up and are not installed.
+
+This is a static, read-only viewer. Animation playback, editing, 3MF/CAD
+formats, Explorer thumbnails (including for USD and FBX), network assets,
+skeletal USD data, MaterialX, procedural schemas, and interactive variant
+selection are not currently included. USD is a bounded Tier B path: among its
+ceilings are 2 GiB per primary source, 4 GiB aggregate local source/archive
+expansion, 20 million triangles or points, and a compatibility-host commit cap
+of the lower of 4 GiB or 35% of physical memory.
 
 ## Install and use
 
 1. Download the installer or portable ZIP from [Releases](https://github.com/binbuf/preview-3d/releases/latest).
-2. For the portable ZIP, extract it and keep `worker` beside `Preview3D.exe`.
+2. For the portable ZIP, extract it and keep both `worker` and `OpenUsdHost` beside `Preview3D.exe`.
 3. Open a model with `Ctrl+O`, drag a supported file onto the window, or run `Preview3D.exe <path-to-model>`.
 
 The installer adds 3D Preview to **Open with** and **Default apps** for the supported extensions. Windows keeps existing default-app choices; confirm any changes in Default apps after installation.

@@ -18,8 +18,8 @@
 
   <Target Name="BuildInstallerInputs"
           DependsOnTargets="ValidateInstallerProperties">
-    <!-- The viewer reference builds and deploys the worker first. Tests,
-         thumbnail provider, and compatibility host are intentionally absent. -->
+    <!-- The viewer references build and deploy the worker and USD compatibility
+         host first. Tests and the thumbnail provider remain outside this payload. -->
     <MSBuild Projects="$(RepositoryRoot)\interactive-viewer\Preview3D.vcxproj"
              Targets="Build"
              Properties="Configuration=Release;Platform=x64;SolutionDir=$(RepositoryRoot)\"

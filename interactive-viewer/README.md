@@ -1,7 +1,7 @@
 # Interactive viewer
 
-This project is the native Windows 11 scope-limited viewer. It intentionally leaves the thumbnail provider,
-file registration, persistent caching, intermediate LOD construction, and broader format support for later work.
+This project is the native Windows 11 scope-limited viewer. The thumbnail provider,
+persistent caching, and intermediate LOD construction remain separate work.
 
 ## Included
 
@@ -45,19 +45,35 @@ chunks. The old `--d3d12` argument is accepted as a deprecated no-op.
 
 The sandboxed importer accepts `.glb`, `.gltf` (including external `.bin`/image siblings fetched
 through the brokered sidecar protocol), `.obj` with optional local `.mtl` and texture sidecars,
-binary/ASCII `.fbx`, ASCII/binary `.stl`, and ASCII/binary `.ply`. Its static glTF path supports bounded
+binary/ASCII `.fbx`, ASCII/binary `.stl`, ASCII/binary `.ply`, and `.usd`/`.usda`/`.usdc`/`.usdz`. Its static glTF path supports bounded
 Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP, material texture slots and
 texture transforms. The OBJ path uses ufbx for polygon triangulation, smoothing/generated normals,
 UVs, vertex colors, object/group meshes, and MTL material factors, with broker-approved base-color,
 normal/bump, and emissive maps. The Open dialog, command line, and drag/drop accept all six direct
-formats; `.mtl` remains a sidecar and is never a primary open type. The FBX path preserves
+formats plus the four USD extensions; `.mtl` remains a sidecar and is never a primary open type. The FBX path preserves
 static hierarchy and instances, evaluates its deterministic first-stack start/rest pose, bakes
 supported skin and blend deformation, and maps supported embedded or broker-approved texture data.
+
+USD is a bounded Tier B static-preview path. Self-contained meshes, hierarchy,
+instances/point instances, transforms, common UV/color/normal primvars, display
+color, material subsets, and the supported USD Preview Surface factors/textures
+use TinyUSDZ in the general worker. A stage with supported local composition is
+discarded before publication and restarted atomically in the separate
+zero-capability `Preview3DImportHost.exe`, which loads the pinned private OpenUSD
+payload only for that generation. The compatibility subset includes bounded
+sublayers, references, inherits/specializes, authored default variants, and
+selectively loaded payloads. All dependencies are local, relative, and supplied
+through the trusted broker; remote/custom resolvers and unrestricted plugins
+are rejected. The UI reports the detected USDA, USDC, or USDZ encoding rather
+than inferring it from `.usd`.
 
 Portable packaging keeps `Preview3D.exe` at the package root and the sandbox
 executable plus its private DLL closure under `worker\`. The viewer prefers that
 layout and grants the AppContainer read/execute only on `worker\`; same-directory
 worker lookup remains as a developer/test-build fallback.
+The separate OpenUSD bootstrap, core DLL, monolithic OpenUSD runtime, oneTBB,
+codec dependencies, and hash-audited schema/plugin resources live only under
+`OpenUsdHost\`; its distinct AppContainer is granted access only to that tree.
 
 ## Current limitations and deferred work
 
@@ -69,7 +85,13 @@ its D3D11 renderer is never instantiated.
 Still deferred: TGA/DDS/HDR, animation playback, advanced material lobes, meshoptimizer-built
 LOD/hierarchies, persistent derived cache, and the remaining Tier B formats. FBX geometry caches,
 dynamic constraints, NURBS/subdivision tessellation, cameras, and lights are outside the supported
-static subset. Explorer thumbnails, including FBX thumbnails, remain a separate deliverable.
+static subset. USD skeletal data, MaterialX, procedural schemas, remote assets,
+arbitrary renderer/file-format plugins, interactive variants, and animation are
+also outside the supported subset. Tier B USD ceilings include 2 GiB primary,
+4 GiB aggregate local source/archive expansion, 20 million triangles or points,
+50,000 nodes, and a compatibility-host commit cap of min(4 GiB, 35% physical
+memory). Explorer thumbnails, including USD and FBX thumbnails, remain a
+separate deliverable.
 
 ## Controls
 

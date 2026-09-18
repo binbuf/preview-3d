@@ -2,6 +2,8 @@
 #include "ChunkBatchSink.h"
 #include "GenerationWorker.h"
 #include "FbxSpikeWorker.h"
+#include "UsdSpikeWorker.h"
+#include "UsdImportWorker.h"
 #include "FbxImportWorker.h"
 #include "GltfImportWorker.h"
 #include "PlyImportWorker.h"
@@ -124,6 +126,9 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--parse-fbx")) {
         return import_worker::RunFbxImport();
     }
+    if (ArgEquals(argv[1], "--parse-usd")) {
+        return import_worker::RunUsdImport();
+    }
 
     // Backward-compatible aliases retained for older parser regression commands.
     if (ArgEquals(argv[1], "--test-parse-stl-ascii")) return import_worker::RunStlImport(true);
@@ -133,6 +138,9 @@ int main(int argc, char* argv[])
     }
     if (ArgEquals(argv[1], "--fbx-spike-pool")) {
         return import_worker::RunFbxSpikePoolMode();
+    }
+    if (ArgEquals(argv[1], "--usd-spike-pool")) {
+        return import_worker::RunUsdSpikePoolMode();
     }
 
     if (ArgEquals(argv[1], "--probes")) {

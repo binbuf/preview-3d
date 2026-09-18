@@ -1719,7 +1719,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
         SetFailure(app, L"This model format is not supported.",
-            L"Open a .glb, .gltf, .stl, .ply, .obj, or .fbx file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
+            L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .usd, .usda, .usdc, or .usdz file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
         return;
     }
 
@@ -1817,12 +1817,13 @@ void OpenDialog(ViewerApp& app)
         return;
     }
     const COMDLG_FILTERSPEC filters[] = {
-        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx" },
+        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx;*.usd;*.usda;*.usdc;*.usdz" },
         { L"glTF models (*.glb; *.gltf)", L"*.glb;*.gltf" },
         { L"STL (*.stl)", L"*.stl" },
         { L"PLY meshes and points (*.ply)", L"*.ply" },
         { L"Wavefront OBJ with MTL (*.obj)", L"*.obj" },
         { L"Autodesk FBX (*.fbx)", L"*.fbx" },
+        { L"Universal Scene Description (*.usd; *.usda; *.usdc; *.usdz)", L"*.usd;*.usda;*.usdc;*.usdz" },
         { L"All files (*.*)", L"*.*" }
     };
     dialog->SetFileTypes(ARRAYSIZE(filters), filters);
@@ -1832,7 +1833,7 @@ void OpenDialog(ViewerApp& app)
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
     if (FAILED(shown))
     {
-        SetFailure(app, L"The Open dialog stopped unexpectedly.", L"Try dropping a local .glb, .gltf, .stl, .ply, .obj, or .fbx file into the window.");
+        SetFailure(app, L"The Open dialog stopped unexpectedly.", L"Try dropping a supported local 3D model into the window.");
         return;
     }
     ComPtr<IShellItem> item;
@@ -1992,7 +1993,7 @@ void HandleCommand(ViewerApp& app, int id)
         MessageBoxW(app.window, app.warning.c_str(), L"Model warnings", MB_OK | MB_ICONWARNING);
         break;
     case IDM_ABOUT:
-        MessageBoxW(app.window, L"A native static viewer for GLB, glTF and OBJ with local sidecars, ASCII/binary STL and PLY, and binary/ASCII FBX with a deterministic static pose.\n\nImports are bounded and isolated. No cloud, animation playback, editing, file modification, Explorer thumbnails, or persistent model cache.",
+        MessageBoxW(app.window, L"A native static viewer for glTF, OBJ, FBX, STL, PLY, and USD-family models. USD uses a fast isolated importer with a separate isolated OpenUSD compatibility host for bounded local composition.\n\nImports are bounded and local-only. No cloud, animation playback, editing, file modification, Explorer thumbnails, or persistent model cache.",
             L"About 3D Preview", MB_OK | MB_ICONINFORMATION);
         break;
     case IDM_EXIT: DestroyWindow(app.window); break;
@@ -3002,7 +3003,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (count != 1)
         {
             DragFinish(drop);
-            SetFailure(*app, L"Open one model at a time.", L"Drop exactly one local .glb, .gltf, .stl, .ply, .obj, or .fbx file into the viewer.");
+            SetFailure(*app, L"Open one model at a time.", L"Drop exactly one supported local 3D model into the viewer.");
             return 0;
         }
         const UINT length = DragQueryFileW(drop, 0, nullptr, 0);
@@ -3717,6 +3718,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (app->cancellation) app->cancellation->store(true, std::memory_order_relaxed);
         app->importThreads.clear();
         import_broker::ShutdownImportWorkerPool();
+        import_broker::ShutdownCompatibilityHost();
         app->renderThread.CancelUploads();
         SetFailure(*app, L"Graphics could not be started.",
                    failure ? failure->details : L"The render thread stopped during initialization.");
@@ -4114,6 +4116,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         MsgWaitForMultipleObjectsEx(0, nullptr, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 
+    // The window/render lane is already gone. Join loader lanes before
+    // shutting down their process managers so no lease can outlive its pool;
+    // both shutdowns are bounded and kill-on-close remains the hard backstop.
+    app.importThreads.clear();
+    import_broker::ShutdownCompatibilityHost();
+    import_broker::ShutdownImportWorkerPool();
     ShutdownOpenWithCatalog();
     if (gBackgroundBrush) DeleteObject(gBackgroundBrush);
     if (SUCCEEDED(comResult)) CoUninitialize();

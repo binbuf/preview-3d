@@ -802,9 +802,11 @@ void RenderThread::PumpUploads(HWND window)
         metadata.stats.animationCount = int(metadata.source.animationCount);
         metadata.stats.skinCount = int(metadata.source.skinCount);
         metadata.stats.boneCount = int(metadata.source.boneCount);
-        metadata.sourceUpAxis = metadata.source.upAxis == model_core::UpAxisId::Y ? SourceUpAxis::Y : SourceUpAxis::Unknown;
-        DirectX::XMStoreFloat4x4(&metadata.upAxisCorrection, metadata.sourceUpAxis == SourceUpAxis::Y
-            ? DirectX::XMMatrixSet(1,0,0,0, 0,0,1,0, 0,-1,0,0, 0,0,0,1) : DirectX::XMMatrixIdentity());
+        metadata.sourceUpAxis = metadata.source.upAxis == model_core::UpAxisId::X ? SourceUpAxis::X
+            : metadata.source.upAxis == model_core::UpAxisId::Y ? SourceUpAxis::Y
+            : metadata.source.upAxis == model_core::UpAxisId::Z ? SourceUpAxis::Z : SourceUpAxis::Unknown;
+        DirectX::XMStoreFloat4x4(&metadata.upAxisCorrection,
+            GroundAxisTransform(GroundAxis::Automatic, metadata.source.upAxis, false));
         std::unordered_set<uint32_t> instancedGeometry;
         for (const auto& instance:pub.task.result.instances)
             instancedGeometry.insert(instance.data.geometryChunkId);
@@ -816,10 +818,12 @@ void RenderThread::PumpUploads(HWND window)
             const auto& geometry = imported.geometry;
             if (stagedProxyMode_ && geometry.lodLevel!=model_core::kScanLod
                 && !(stagedPreviewOnly_ && geometry.lodLevel==model_core::kPreviewLod)) continue;
-            if (!instancedGeometry.contains(imported.chunkId) && !haveSceneOrigin_) {
+            const bool standaloneGeometry = !instancedGeometry.contains(imported.chunkId)
+                && (geometry.geometryFlags & model_core::kGeometryReusableInstanceSource) == 0;
+            if (standaloneGeometry && !haveSceneOrigin_) {
                 std::memcpy(metadata.sceneOrigin, geometry.origin, sizeof(metadata.sceneOrigin)); haveSceneOrigin_ = true;
             }
-            if (!instancedGeometry.contains(imported.chunkId)) {
+            if (standaloneGeometry) {
             double minimum[3], maximum[3];
             for (unsigned axis=0; axis<3; ++axis) {
                 // Subtract origins before adding local extrema; tiny residuals

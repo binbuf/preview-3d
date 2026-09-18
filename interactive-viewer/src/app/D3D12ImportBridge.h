@@ -31,6 +31,7 @@ enum class SourceFormat {
     Ply,
     Obj,
     Fbx,
+    Usd,
 };
 
 // nullopt for any extension this slice doesn't recognize.

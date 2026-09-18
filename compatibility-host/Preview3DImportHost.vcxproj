@@ -16,6 +16,10 @@
     <ProjectGuid>{87ceca17-a6bd-45fb-84a9-9a5e9f4a793c}</ProjectGuid>
     <RootNamespace>Preview3DImportHost</RootNamespace>
   </PropertyGroup>
+  <PropertyGroup Label="Vcpkg">
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+    <VcpkgInstalledDir>$(MSBuildThisFileDirectory)..\vcpkg_installed\$(Platform)\</VcpkgInstalledDir>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
@@ -27,6 +31,7 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup><OutDir>$(MSBuildThisFileDirectory)..\$(Platform)\$(Configuration)\OpenUsdHost\</OutDir><IntDir>$(MSBuildThisFileDirectory)obj\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir></PropertyGroup>
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
   <ImportGroup Label="Shared">
@@ -41,6 +46,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -52,6 +58,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -60,8 +67,44 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
+    <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="Preview3DOpenUsdCore.vcxproj">
+      <Project>{c1bf3f29-9e2b-4fd5-b45a-73f75d3c0120}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\OpenUsdHost.h" />
+    <ClInclude Include="src\OpenUsdSpikeProtocol.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\ControlChannelIo.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\ControlProtocol.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\ImportError.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\plugInfo.json"><TargetPath>usd\plugInfo.json</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\ar\resources\plugInfo.json"><TargetPath>usd\ar\resources\plugInfo.json</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\sdf\resources\plugInfo.json"><TargetPath>usd\sdf\resources\plugInfo.json</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\usd\resources\plugInfo.json"><TargetPath>usd\usd\resources\plugInfo.json</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\usd\resources\generatedSchema.usda"><TargetPath>usd\usd\resources\generatedSchema.usda</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\usd\resources\usd\schema.usda"><TargetPath>usd\usd\resources\usd\schema.usda</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\usdGeom\resources\plugInfo.json"><TargetPath>usd\usdGeom\resources\plugInfo.json</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\usdGeom\resources\generatedSchema.usda"><TargetPath>usd\usdGeom\resources\generatedSchema.usda</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\usdGeom\resources\usdGeom\schema.usda"><TargetPath>usd\usdGeom\resources\usdGeom\schema.usda</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\usdShade\resources\plugInfo.json"><TargetPath>usd\usdShade\resources\plugInfo.json</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\usdShade\resources\generatedSchema.usda"><TargetPath>usd\usdShade\resources\generatedSchema.usda</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\usd\usdShade\resources\usdShade\schema.usda"><TargetPath>usd\usdShade\resources\usdShade\schema.usda</TargetPath></OpenUsdPayloadResource>
+    <OpenUsdPayloadResource Include="resources\Preview3DResolverPlugInfo.json"><TargetPath>usd\preview3d\resources\plugInfo.json</TargetPath></OpenUsdPayloadResource>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <Target Name="CopyOpenUsdPayloadResources" AfterTargets="Build">
+    <Copy SourceFiles="@(OpenUsdPayloadResource)"
+          DestinationFiles="@(OpenUsdPayloadResource->'$(OutDir)%(TargetPath)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

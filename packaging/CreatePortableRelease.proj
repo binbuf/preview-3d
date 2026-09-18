@@ -19,9 +19,8 @@
 
   <Target Name="BuildPortableReleaseInputs"
           DependsOnTargets="ValidatePortableReleaseProperties">
-    <!-- Preview3D's project reference builds the worker first. This is the
-         complete product build for the limited portable scope: tests,
-         thumbnail provider, and compatibility host are intentionally absent. -->
+    <!-- Preview3D's project references build both isolated import executables
+         first. Tests and the thumbnail provider remain outside this payload. -->
     <MSBuild Projects="$(RepositoryRoot)\interactive-viewer\Preview3D.vcxproj"
              Targets="Build"
              Properties="Configuration=Release;Platform=x64;SolutionDir=$(RepositoryRoot)\"

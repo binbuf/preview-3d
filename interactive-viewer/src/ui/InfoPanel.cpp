@@ -108,7 +108,10 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
                 : format == model_core::SourceFormatId::Ply ? L"PLY (binary)"
                 : format == model_core::SourceFormatId::AsciiPly ? L"PLY (ASCII)"
                 : format == model_core::SourceFormatId::Obj ? L"OBJ"
-                : format == model_core::SourceFormatId::Fbx ? L"FBX" : L"Unknown" },
+                : format == model_core::SourceFormatId::Fbx ? L"FBX"
+                : format == model_core::SourceFormatId::Usda ? L"USD (ASCII)"
+                : format == model_core::SourceFormatId::Usdc ? L"USD (crate)"
+                : format == model_core::SourceFormatId::Usdz ? L"USDZ" : L"Unknown" },
             { L"Units", metersPerUnit > 0 ? L"Metres" : L"Unspecified" },
         } });
 

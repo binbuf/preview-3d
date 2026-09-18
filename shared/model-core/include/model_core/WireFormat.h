@@ -127,8 +127,14 @@ enum class SourceFormatId : uint32_t {
     AsciiPly = 6,
     Obj = 7,
     Fbx = 8,
+    Usda = 9,
+    Usdc = 10,
+    Usdz = 11,
 };
-enum class UpAxisId : uint32_t { Unknown = 0, Y = 1, Z = 2 };
+// Preserve the protocol-v10 numeric identities of Unknown/Y/Z. USD is the
+// first supported family that can author X-up, so X is appended rather than
+// inserted and the fixed SceneMetadata layout remains byte-compatible.
+enum class UpAxisId : uint32_t { Unknown = 0, Y = 1, Z = 2, X = 3 };
 enum class BoundsState : uint32_t { Unknown = 0, Provisional = 1, Verified = 2 };
 constexpr uint32_t kGeometryHasUv0 = 1;
 constexpr uint32_t kGeometryHasColors = 2;

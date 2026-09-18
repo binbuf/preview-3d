@@ -57,6 +57,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="include\ModelCore.h" />
+    <ClInclude Include="include\model_core\OpenUsdIdentifier.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\ModelCore.cpp" />

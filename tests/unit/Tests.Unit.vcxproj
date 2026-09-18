@@ -106,6 +106,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\model-core\include\model_core\WireFormat.h" />
+    <ClInclude Include="..\..\shared\import-broker\include\import_broker\UsdFallbackState.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\MappedFile.h" />

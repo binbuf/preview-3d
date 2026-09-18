@@ -41,6 +41,15 @@ enum class ImportFormat : uint32_t {
     Ply,
     Obj,
     Fbx,
+    // Test-only protocol route through USD-007. Product extension discovery
+    // and activation deliberately remain disabled until USD-008.
+    Usd,
+};
+
+enum class ImportProducer : uint32_t {
+    None = 0,
+    FastWorker = 1,
+    CompatibilityHost = 2,
 };
 
 // How far the session got. model_core::ImportErrorCode is not sufficient on
@@ -120,6 +129,14 @@ struct ImportSessionRequest {
     // Trusted handle-derived identity, available before preview/coarse handoff.
     std::function<void(const model_core::FileIdentity&)> onSourceOpened;
     std::wstring workerExePath;
+    // Empty keeps the USD fast path test-only and returns the exact
+    // UnsupportedComposition classification. A non-empty path enables the
+    // USD-006 atomic fallback: only that classification can lazily launch the
+    // separately sandboxed compatibility host for this same generation.
+    std::wstring compatibilityHostExePath;
+    // Test-only compatibility-host pool mode. Production leaves this empty
+    // and the manager forces --pool.
+    std::wstring compatibilityHostArgumentsOverride;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;
     uint64_t generationId = 0;
@@ -135,6 +152,9 @@ struct ImportSessionRequest {
     // small, fast cap -- the same seam DxgiBudgetMonitor's QueryFn already
     // established for budget policy.
     uint64_t commitLimitBytes = kImportWorkerCommitLimitBytes;
+    // Zero derives the design limit at launch: min(4 GiB, 35% of visible
+    // physical memory). Non-zero is a qualification seam for Job-limit tests.
+    uint64_t compatibilityHostCommitLimitBytes = 0;
     uint32_t replyTimeoutMs = kWorkerReplyTimeoutMs;
     // Polled while waiting on the worker. Return true to signal the request's
     // duplicated cancellation event. The worker acknowledges cooperatively;
@@ -230,6 +250,15 @@ struct ImportSessionResult {
     // Test/qualification evidence only; no handle authority crosses this
     // boundary. Sequential pooled imports can prove reuse by stable PID.
     uint32_t workerProcessId = 0;
+    // Closed producer identity for USD atomic-fallback evidence. Non-USD
+    // successful imports use FastWorker. A failed compatibility attempt also
+    // reports CompatibilityHost so callers never mistake a discarded fast
+    // candidate for the result owner.
+    ImportProducer producer = ImportProducer::None;
+    // True only for an exact, first-result UnsupportedComposition from the
+    // USD fast worker. USD-006 consumes this without reinterpreting generic
+    // parser/resource failures as permission to launch OpenUSD.
+    bool compatibilityFallbackRequired = false;
 };
 
 // Creates (or opens) the single AppContainer profile every import runs
@@ -251,6 +280,10 @@ bool PrepareImportSandbox(const std::wstring& workerExePath);
 void PrepareImportWorkerPoolAsync(const std::wstring& workerExePath,
                                   uint64_t commitLimitBytes = kImportWorkerCommitLimitBytes);
 void ShutdownImportWorkerPool();
+// Idempotent close-path hook. The host normally exits immediately after its
+// one current generation; this also tears down an in-flight/lazy manager when
+// the viewer's loader lanes have stopped.
+void ShutdownCompatibilityHost();
 
 // Synchronous, and blocking for as long as the worker takes to reply. Call
 // from a background thread. Never throws for an ordinary import failure --

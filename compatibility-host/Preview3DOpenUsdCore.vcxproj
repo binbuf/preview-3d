@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion><Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{c1bf3f29-9e2b-4fd5-b45a-73f75d3c0120}</ProjectGuid>
+    <RootNamespace>Preview3DOpenUsdCore</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg"><VcpkgEnableManifest>true</VcpkgEnableManifest><VcpkgInstalledDir>$(MSBuildThisFileDirectory)..\vcpkg_installed\$(Platform)\</VcpkgInstalledDir></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType><UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup><OutDir>$(MSBuildThisFileDirectory)..\$(Platform)\$(Configuration)\OpenUsdHost\</OutDir><IntDir>$(MSBuildThisFileDirectory)obj\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir></PropertyGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\import-worker\src;src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>4100;4201;4244;4305;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>usd_ms.lib;psapi.lib;bcrypt.lib;windowscodecs.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile><PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile><PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions><FunctionLevelLinking>true</FunctionLevelLinking><IntrinsicFunctions>true</IntrinsicFunctions></ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\OpenUsdHost.cpp" />
+    <ClCompile Include="..\import-worker\src\ChunkBatchSink.cpp" />
+    <ClCompile Include="..\import-worker\src\ImageFormatSniff.cpp" />
+    <ClCompile Include="..\import-worker\src\SidecarFileClient.cpp" />
+    <ClCompile Include="..\import-worker\src\TextureTranscodeAdapter.cpp" />
+    <ClCompile Include="..\import-worker\src\UsdZipPreflight.cpp" />
+    <ClCompile Include="..\import-worker\src\WebpDecodeAdapter.cpp" />
+    <ClCompile Include="..\import-worker\src\WicImageDecodeAdapter.cpp" />
+    <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
+    <ClCompile Include="..\shared\model-core\src\MappedFile.cpp" />
+    <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
+    <ClCompile Include="..\shared\platform\src\Sha256.cpp" />
+  </ItemGroup>
+  <ItemGroup><ClInclude Include="src\OpenUsdHost.h" /><ClInclude Include="src\OpenUsdSpikeProtocol.h" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

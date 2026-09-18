@@ -7,6 +7,7 @@
 #include "import_broker/SharedSection.h"
 #include "import_broker/SidecarRequestServicer.h"
 #include "import_broker/SourceFileAccess.h"
+#include "import_broker/UsdFallbackState.h"
 #include "import_broker/WorkerPool.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
@@ -21,6 +22,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cwctype>
 #include <cstring>
 #include <exception>
 #include <iterator>
@@ -42,6 +44,7 @@ namespace {
 // identities"). Until then it is created on first use and reused for the
 // rest of the session.
 constexpr const wchar_t* kWorkerContainerName = L"Binbuf.Preview3D.ImportWorker";
+constexpr const wchar_t* kCompatibilityContainerName = L"Binbuf.Preview3D.ImportHost";
 
 std::wstring DirectoryOf(const std::wstring& filePath)
 {
@@ -96,10 +99,59 @@ const wchar_t* ParseFlagFor(ImportFormat format)
         return L"--parse-obj";
     case ImportFormat::Fbx:
         return L"--parse-fbx";
+    case ImportFormat::Usd:
+        return L"--parse-usd";
     case ImportFormat::Gltf:
     default:
         return L"--parse-gltf";
     }
+}
+
+const WorkerContainer& AcquireCompatibilityContainer(const std::wstring& hostExePath)
+{
+    static WorkerContainer container = [&hostExePath] {
+        WorkerContainer created;
+        try {
+            created.sid = platform::AppContainerSid::CreateOrOpen(
+                kCompatibilityContainerName, L"Preview3D Import Host",
+                L"Zero-capability sandbox identity for Preview3DImportHost.exe");
+        } catch (const std::exception&) {
+            return created;
+        }
+        if (!created.sid) return created;
+        // Deliberately grant only the private OpenUsdHost directory. The
+        // general worker profile is never used for this payload (or vice
+        // versa), so neither identity gains execute access to the other.
+        created.ready = platform::GrantDirectoryReadExecute(DirectoryOf(hostExePath), created.sid.get());
+        return created;
+    }();
+    return container;
+}
+
+uint64_t CompatibilityCommitLimitBytes()
+{
+    MEMORYSTATUSEX memory{};
+    memory.dwLength = sizeof(memory);
+    const uint64_t fourGiB = 4ull * 1024ull * 1024ull * 1024ull;
+    if (!GlobalMemoryStatusEx(&memory)) return fourGiB;
+    const uint64_t thirtyFivePercent = memory.ullTotalPhys / 100ull * 35ull;
+    return (std::min)(fourGiB, thirtyFivePercent);
+}
+
+std::optional<uint32_t> UsdExpectedEncodingFlags(const std::wstring& path)
+{
+    const auto slash = path.find_last_of(L"\\/");
+    const auto dot = path.find_last_of(L'.');
+    if (dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash))
+        return std::nullopt;
+    std::wstring extension = path.substr(dot + 1);
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](wchar_t value) { return wchar_t(std::towlower(value)); });
+    if (extension == L"usd") return 0;
+    if (extension == L"usda") return model_core::kImportRequestUsdExpectedUsda;
+    if (extension == L"usdc") return model_core::kImportRequestUsdExpectedUsdc;
+    if (extension == L"usdz") return model_core::kImportRequestUsdExpectedUsdz;
+    return std::nullopt;
 }
 
 // Every real-file request struct (ParseGltfFileRequest/ParseStlFileRequest/
@@ -130,8 +182,9 @@ Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFile
     return request;
 }
 
-bool SendStartRequest(const ImportSessionRequest& session, HANDLE controlInWrite, uint64_t sourceFileHandle,
-                       uint64_t sectionHandle, uint64_t cancellationEventHandle)
+bool SendStartRequest(const ImportSessionRequest& session, ImportProducer producer,
+                      HANDLE controlInWrite, uint64_t sourceFileHandle,
+                      uint64_t sectionHandle, uint64_t cancellationEventHandle)
 {
     switch (session.format) {
     case ImportFormat::Gltf: {
@@ -163,6 +216,24 @@ bool SendStartRequest(const ImportSessionRequest& session, HANDLE controlInWrite
                                                                         cancellationEventHandle);
         return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartFbxImportFromFile,
                                                 &request, sizeof(request));
+    }
+    case ImportFormat::Usd: {
+        auto expected = UsdExpectedEncodingFlags(session.sourcePath);
+        if (!expected) return false;
+        if (producer == ImportProducer::CompatibilityHost) {
+            auto request = MakeFileRequest<model_core::ParseOpenUsdFileRequest>(
+                session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+            request.requestFlags |= *expected;
+            return model_core::WriteControlMessage(
+                controlInWrite, model_core::ControlOpcode::StartOpenUsdImportFromFile,
+                &request, sizeof(request));
+        }
+        auto request = MakeFileRequest<model_core::ParseUsdFileRequest>(
+            session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+        request.requestFlags |= *expected;
+        return model_core::WriteControlMessage(
+            controlInWrite, model_core::ControlOpcode::StartUsdImportFromFile,
+            &request, sizeof(request));
     }
     }
     return false;
@@ -250,9 +321,14 @@ struct BatchAcceptance {
     }
 };
 
-class ProductWorkerCoordinator {
+enum class ProcessIdentity { Worker, CompatibilityHost };
+
+class ProcessCoordinator {
 public:
-    ~ProductWorkerCoordinator()
+    ProcessCoordinator(ProcessIdentity identity, size_t poolSize, bool exitAfterUse)
+        : identity_(identity), poolSize_(poolSize), exitAfterUse_(exitAfterUse) {}
+
+    ~ProcessCoordinator()
     {
         Shutdown();
     }
@@ -269,7 +345,8 @@ public:
             SandboxLimits limits{};
             limits.processMemoryLimitBytes = static_cast<SIZE_T>(commitLimitBytes);
             const bool ok = container.ready
-                && candidate->InitializeBorrowed(workerExePath, container.sid.get(), limits, 2, error);
+                && candidate->InitializeBorrowed(workerExePath, container.sid.get(), limits,
+                                                 poolSize_, error);
             std::lock_guard lock(mutex_);
             if (ok && !stopping_) {
                 pool_ = std::move(candidate);
@@ -280,10 +357,48 @@ public:
         });
     }
 
+    // Compatibility hosts are intentionally not prewarmed. This is called
+    // only after UsdFallbackState accepts the exact fast-path
+    // UnsupportedComposition transition, on the loader/broker lane.
+    bool PrepareNow(const std::wstring& exePath, uint64_t commitLimitBytes,
+                    const std::wstring& arguments,
+                    const std::function<bool()>& cancelled)
+    {
+        {
+            std::unique_lock lock(mutex_);
+            while (initializing_ && !stopping_) {
+                if (cancelled && cancelled()) return false;
+                changed_.wait_for(lock, std::chrono::milliseconds(5));
+            }
+            if (ready_) return true;
+            if (stopping_) return false;
+            initializing_ = true;
+        }
+
+        auto candidate = std::make_unique<WorkerPool>();
+        std::wstring error;
+        const auto& container = identity_ == ProcessIdentity::CompatibilityHost
+            ? AcquireCompatibilityContainer(exePath) : AcquireWorkerContainer(exePath);
+        SandboxLimits limits{};
+        limits.processMemoryLimitBytes = static_cast<SIZE_T>(commitLimitBytes);
+        const bool ok = container.ready
+            && candidate->InitializeBorrowedForTesting(
+                exePath, container.sid.get(), limits, poolSize_, arguments, error);
+
+        std::lock_guard lock(mutex_);
+        if (ok && !stopping_) {
+            pool_ = std::move(candidate);
+            ready_ = true;
+        }
+        initializing_ = false;
+        changed_.notify_all();
+        return ready_;
+    }
+
     struct Lease {
-        Lease(ProductWorkerCoordinator* ownerValue, WorkerPool* poolValue, size_t indexValue)
+        Lease(ProcessCoordinator* ownerValue, WorkerPool* poolValue, size_t indexValue)
             : owner(ownerValue), pool(poolValue), index(indexValue) {}
-        ProductWorkerCoordinator* owner = nullptr;
+        ProcessCoordinator* owner = nullptr;
         WorkerPool* pool = nullptr;
         size_t index = 0;
         bool reusable = false;
@@ -325,6 +440,21 @@ public:
 private:
     void Release(Lease& lease)
     {
+        if (exitAfterUse_) {
+            std::unique_ptr<WorkerPool> finished;
+            {
+                std::lock_guard lock(mutex_);
+                finished = std::move(pool_);
+                ready_ = false;
+                changed_.notify_all();
+            }
+            // A well-behaved host receives a bounded graceful Shutdown. A
+            // crashed/hung/protocol-invalid host is killed immediately by
+            // dropping the pool and its kill-on-close Job handle; it is never
+            // replaced for the same generation.
+            if (finished && lease.reusable) finished->Shutdown();
+            return;
+        }
         std::wstring error;
         const bool available = lease.reusable || lease.pool->TerminateAndReplace(lease.index, error);
         std::lock_guard lock(mutex_);
@@ -339,11 +469,23 @@ private:
     bool initializing_ = false;
     bool ready_ = false;
     bool stopping_ = false;
+    ProcessIdentity identity_;
+    size_t poolSize_ = 1;
+    bool exitAfterUse_ = false;
 };
 
-ProductWorkerCoordinator& WorkerCoordinator()
+ProcessCoordinator& WorkerCoordinator()
 {
-    static ProductWorkerCoordinator coordinator;
+    static ProcessCoordinator coordinator(ProcessIdentity::Worker, 2, false);
+    return coordinator;
+}
+
+ProcessCoordinator& CompatibilityCoordinator()
+{
+    // Size one means at most the current compatibility generation can own
+    // the host. exitAfterUse is the strictest allowed bounded-idle policy:
+    // the process exits as soon as that generation finishes.
+    static ProcessCoordinator coordinator(ProcessIdentity::CompatibilityHost, 1, true);
     return coordinator;
 }
 
@@ -364,8 +506,16 @@ void ShutdownImportWorkerPool()
     WorkerCoordinator().Shutdown();
 }
 
-ImportSessionResult RunImportSession(const ImportSessionRequest& request)
+void ShutdownCompatibilityHost()
 {
+    CompatibilityCoordinator().Shutdown();
+}
+
+ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& request,
+                                                ImportProducer producer)
+{
+    if (producer == ImportProducer::CompatibilityHost && request.format != ImportFormat::Usd)
+        return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
     // Cheapest possible cancellation: a generation already superseded before
     // it started launches no worker and touches no file at all.
     if (request.isCancelled && request.isCancelled()) {
@@ -404,7 +554,11 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         return Fail(ImportStage::CreateOutputSection);
     }
 
-    const WorkerContainer& container = AcquireWorkerContainer(request.workerExePath);
+    const bool compatibility = producer == ImportProducer::CompatibilityHost;
+    const std::wstring& childExePath = compatibility
+        ? request.compatibilityHostExePath : request.workerExePath;
+    const WorkerContainer& container = compatibility
+        ? AcquireCompatibilityContainer(childExePath) : AcquireWorkerContainer(childExePath);
     if (!container.ready) {
         return Fail(ImportStage::CreateSandboxProfile);
     }
@@ -412,15 +566,41 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     platform::Win32Handle cancellationEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     if (!cancellationEvent) return Fail(ImportStage::CreateControlChannel);
 
-    std::unique_ptr<ProductWorkerCoordinator::Lease> pooledLease;
+    std::unique_ptr<ProcessCoordinator::Lease> pooledLease;
     std::optional<SandboxProcess> proc;
     platform::Win32Handle controlInRead, controlInWrite, controlOutRead, controlOutWrite;
     platform::Win32Handle duplicatedFile, duplicatedCancellation;
     HANDLE workerProcess = nullptr, workerJob = nullptr, controlInput = nullptr, controlOutput = nullptr;
     uint64_t workerSource = 0, workerOutput = 0, workerCancellation = 0;
 
-    if (request.useWorkerPool && request.workerArgumentsOverride.empty()) {
-        pooledLease = WorkerCoordinator().Acquire(request.isCancelled);
+    if (compatibility || (request.useWorkerPool && request.workerArgumentsOverride.empty())) {
+        ProcessCoordinator& coordinator = compatibility
+            ? CompatibilityCoordinator() : WorkerCoordinator();
+        if (compatibility) {
+            const uint64_t limit = request.compatibilityHostCommitLimitBytes != 0
+                ? request.compatibilityHostCommitLimitBytes : CompatibilityCommitLimitBytes();
+            const std::wstring hostArguments = request.compatibilityHostArgumentsOverride.empty()
+                ? L"--pool" : request.compatibilityHostArgumentsOverride;
+            if (!coordinator.PrepareNow(childExePath, limit, hostArguments,
+                                        request.isCancelled))
+                return Fail(request.isCancelled && request.isCancelled() ? ImportStage::Cancelled
+                                                                          : ImportStage::LaunchWorker);
+        }
+        pooledLease = coordinator.Acquire(request.isCancelled);
+        // A replacement generation may have waited behind the previous
+        // compatibility lease. That lease intentionally tears its host down
+        // on release, so prepare/acquire once more rather than treating the
+        // bounded-idle exit as a launch failure for the newer generation.
+        if (!pooledLease && compatibility
+            && !(request.isCancelled && request.isCancelled())) {
+            const uint64_t limit = request.compatibilityHostCommitLimitBytes != 0
+                ? request.compatibilityHostCommitLimitBytes : CompatibilityCommitLimitBytes();
+            const std::wstring hostArguments = request.compatibilityHostArgumentsOverride.empty()
+                ? L"--pool" : request.compatibilityHostArgumentsOverride;
+            if (coordinator.PrepareNow(childExePath, limit, hostArguments,
+                                       request.isCancelled))
+                pooledLease = coordinator.Acquire(request.isCancelled);
+        }
         if (!pooledLease)
             return Fail(request.isCancelled && request.isCancelled() ? ImportStage::Cancelled
                                                                       : ImportStage::LaunchWorker);
@@ -458,12 +638,15 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             ? std::wstring(ParseFlagFor(request.format)) : request.workerArgumentsOverride;
         if (request.enableCoarseProxy && request.workerArgumentsOverride.empty()) workerArgs += L"-proxy";
         if (request.nextDetail && request.workerArgumentsOverride.empty()) workerArgs += L"-detail";
-        std::wstring cmdLine = L"\"" + request.workerExePath + L"\" " + workerArgs;
+        std::wstring cmdLine = L"\"" + childExePath + L"\" " + workerArgs;
         HANDLE inherited[] = { controlInRead.get(), controlOutWrite.get(), duplicatedFile.get(),
                                outputSection.get(), duplicatedCancellation.get() };
         SandboxLimits limits{};
-        limits.processMemoryLimitBytes = static_cast<SIZE_T>(request.commitLimitBytes);
-        proc = LaunchSuspendedSandboxed(request.workerExePath, cmdLine, inherited, controlOutWrite.get(), limits,
+        limits.processMemoryLimitBytes = static_cast<SIZE_T>(compatibility
+            ? (request.compatibilityHostCommitLimitBytes != 0
+                ? request.compatibilityHostCommitLimitBytes : CompatibilityCommitLimitBytes())
+            : request.commitLimitBytes);
+        proc = LaunchSuspendedSandboxed(childExePath, cmdLine, inherited, controlOutWrite.get(), limits,
                                          container.sid, controlInRead.get());
         controlInRead.reset(); controlOutWrite.reset();
         if (!proc) return Fail(ImportStage::LaunchWorker);
@@ -482,7 +665,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         return K32GetProcessMemoryInfo(workerProcess,reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))
             && request.cpuBudgetAllows(memory.PrivateUsage);
     };
-    if (!SendStartRequest(request, controlInput, workerSource, workerOutput, workerCancellation)) {
+    if (!SendStartRequest(request, producer, controlInput, workerSource, workerOutput, workerCancellation)) {
         return Fail(ImportStage::SendRequest);
     }
 
@@ -591,8 +774,17 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                            || chunk.scene.format == model_core::SourceFormatId::AsciiPly)
                         : request.format == ImportFormat::Obj
                             ? chunk.scene.format == model_core::SourceFormatId::Obj
-                            : chunk.scene.format == model_core::SourceFormatId::Fbx;
-            if (request.workerArgumentsOverride.empty() && !expectedFormat) {
+                            : request.format == ImportFormat::Fbx
+                                ? chunk.scene.format == model_core::SourceFormatId::Fbx
+                                : (chunk.scene.format == model_core::SourceFormatId::Usda
+                                   || chunk.scene.format == model_core::SourceFormatId::Usdc
+                                   || chunk.scene.format == model_core::SourceFormatId::Usdz);
+            // USD's detected encoding is security/dispatch state for the
+            // fallback decision, so even hostile-worker test overrides must
+            // not bypass its family check. Older format attack fixtures keep
+            // their established override seam.
+            if ((request.workerArgumentsOverride.empty() || request.format == ImportFormat::Usd)
+                && !expectedFormat) {
                 failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ImportProtocolViolation);
                 return false;
             }
@@ -601,7 +793,10 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             && (acceptance.scene->format == model_core::SourceFormatId::AsciiStl
                 || acceptance.scene->format == model_core::SourceFormatId::AsciiPly
                 || acceptance.scene->format == model_core::SourceFormatId::Obj
-                || acceptance.scene->format == model_core::SourceFormatId::Fbx);
+                || acceptance.scene->format == model_core::SourceFormatId::Fbx
+                || acceptance.scene->format == model_core::SourceFormatId::Usda
+                || acceptance.scene->format == model_core::SourceFormatId::Usdc
+                || acceptance.scene->format == model_core::SourceFormatId::Usdz);
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -718,6 +913,19 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                      uint32_t(d.sourceRangeOffset) > 300000000 ||
                      d.sourceRangeLength > 300000000 - uint32_t(d.sourceRangeOffset) ||
                      (d.lodLevel != model_core::kCoarseLod && d.sourceRangeLength != d.indexCount)))
+                {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+                    return false;
+                }
+                const bool usdSource = chunk.scene.format == model_core::SourceFormatId::Usda
+                    || chunk.scene.format == model_core::SourceFormatId::Usdc
+                    || chunk.scene.format == model_core::SourceFormatId::Usdz;
+                if (usdSource &&
+                    ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
+                     uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
+                     d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
+                     d.sourceRangeLength != (d.topology == model_core::ChunkTopology::PointList
+                         ? d.vertexCount : d.indexCount)))
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
@@ -983,6 +1191,23 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         if (QueryInformationJobObject(workerJob, JobObjectLimitViolationInformation, &violation, sizeof(violation), nullptr)
             && (violation.ViolationLimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY))
             return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::ResourceLimit);
+        // Some Windows builds reap the process before the Job violation flag
+        // becomes observable. Preserve the same typed mapping for the closed
+        // NT memory-exhaustion statuses; fail-fast/access faults remain an
+        // ordinary crash and cannot masquerade as a limit.
+        DWORD exitCode = STILL_ACTIVE;
+        if (GetExitCodeProcess(workerProcess, &exitCode)
+            && (exitCode == 0xC0000017u  // STATUS_NO_MEMORY
+                || exitCode == 0xC000012Du // STATUS_COMMITMENT_LIMIT
+                || exitCode == 0xC00000A1u)) // STATUS_WORKING_SET_QUOTA
+            return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::ResourceLimit);
+        // A non-default compatibility limit is exposed solely as a
+        // qualification seam. If that capped host disappears without a
+        // frame, report the cap rather than an indistinguishable generic
+        // crash; production's derived multi-GiB limit stays on the Job/NT-
+        // status evidence paths above.
+        if (compatibility && request.compatibilityHostCommitLimitBytes != 0)
+            return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::ResourceLimit);
         return fail(ImportStage::AwaitReply);
     }
 
@@ -999,9 +1224,21 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             if (pooledLease) pooledLease->reusable = true;
             return fail(ImportStage::Cancelled);
         }
+        // UnsupportedComposition is a pre-publication classification, not a
+        // late parser failure. Once any fast-path batch has been accepted the
+        // producer is committed; treating a later fallback signal as eligible
+        // would let one generation mix TinyUSDZ and OpenUSD output.
+        if (notice.errorCode == uint32_t(model_core::ImportErrorCode::UnsupportedComposition)
+            && (producer != ImportProducer::FastWorker
+                || request.format != ImportFormat::Usd || acceptance.nextBatchIndex != 0))
+            return fail(ImportStage::UnexpectedReply,
+                        model_core::ImportErrorCode::ImportProtocolViolation);
         if (pooledLease) pooledLease->reusable = true;
         auto result = fail(ImportStage::WorkerReportedError, static_cast<model_core::ImportErrorCode>(notice.errorCode));
         result.errorPhase = static_cast<model_core::ImportFailurePhase>(notice.reserved0);
+        result.compatibilityFallbackRequired =
+            producer == ImportProducer::FastWorker
+            && notice.errorCode == uint32_t(model_core::ImportErrorCode::UnsupportedComposition);
         return result;
     }
 
@@ -1031,7 +1268,10 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         && (acceptance.scene->format == model_core::SourceFormatId::AsciiStl
             || acceptance.scene->format == model_core::SourceFormatId::AsciiPly
             || acceptance.scene->format == model_core::SourceFormatId::Obj
-            || acceptance.scene->format == model_core::SourceFormatId::Fbx);
+            || acceptance.scene->format == model_core::SourceFormatId::Fbx
+            || acceptance.scene->format == model_core::SourceFormatId::Usda
+            || acceptance.scene->format == model_core::SourceFormatId::Usdc
+            || acceptance.scene->format == model_core::SourceFormatId::Usdz);
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)
@@ -1134,6 +1374,87 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
     }
     if (pooledLease) pooledLease->reusable = true;
     return result;
+}
+
+namespace {
+
+ImportSessionResult MapCompatibilityFailure(ImportSessionResult result)
+{
+    result.producer = ImportProducer::CompatibilityHost;
+    result.compatibilityFallbackRequired = false;
+    if (result.ok || result.errorCode == model_core::ImportErrorCode::Cancelled)
+        return result;
+
+    using E = model_core::ImportErrorCode;
+    switch (result.errorCode) {
+    case E::ResourceLimit:
+    case E::OutOfMemory:
+    case E::PrimarySourceLimit:
+    case E::AggregateSourceLimit:
+    case E::ScratchLimit:
+    case E::ChunkCatalogLimit:
+    case E::ArchiveLimit:
+    case E::CompatibilityHostLimit:
+        result.errorCode = E::CompatibilityHostLimit;
+        break;
+    default:
+        // Child-provided text/status is never surfaced. Launch, payload
+        // integrity, resolver, crash, timeout, protocol and importer faults
+        // collapse to the closed host-owned fact required by the UI contract.
+        result.errorCode = E::CompatibilityHostFailure;
+        break;
+    }
+    return result;
+}
+
+} // namespace
+
+ImportSessionResult RunImportSession(const ImportSessionRequest& request)
+{
+    ImportSessionResult fast = RunImportSessionForProducer(request, ImportProducer::FastWorker);
+    fast.producer = ImportProducer::FastWorker;
+
+    if (request.format != ImportFormat::Usd || !fast.compatibilityFallbackRequired
+        || request.compatibilityHostExePath.empty()) {
+        return fast;
+    }
+
+    UsdFallbackState fallback(request.generationId);
+    if (fast.ok || fast.batchCount != 0 || !fast.chunks.empty()
+        || fallback.ObserveError(request.generationId, UsdProducer::TinyUsdz,
+                                 fast.errorCode)
+            != UsdFallbackObservation::StartCompatibility) {
+        fast.ok = false;
+        fast.stage = ImportStage::UnexpectedReply;
+        fast.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
+        fast.compatibilityFallbackRequired = false;
+        return fast;
+    }
+
+    // RunImportSessionForProducer creates a fresh section, catalog, source
+    // handle duplication and process lease. Nothing from the discarded fast
+    // attempt is passed to the compatibility producer except the immutable
+    // request/generation and broker path authority.
+    ImportSessionResult compatibility = MapCompatibilityFailure(
+        RunImportSessionForProducer(request, ImportProducer::CompatibilityHost));
+
+    if (compatibility.ok) {
+        if (fallback.ObserveComplete(request.generationId, UsdProducer::OpenUsd)
+            != UsdFallbackObservation::Accepted) {
+            compatibility.ok = false;
+            compatibility.stage = ImportStage::UnexpectedReply;
+            compatibility.errorCode = model_core::ImportErrorCode::CompatibilityHostFailure;
+        }
+    } else if (compatibility.errorCode != model_core::ImportErrorCode::Cancelled) {
+        // Feed a non-fallback error through the closed state machine. The
+        // mapped host fact can never request another or reverse fallback.
+        if (fallback.ObserveError(request.generationId, UsdProducer::OpenUsd,
+                                  compatibility.errorCode)
+            == UsdFallbackObservation::ProtocolViolation) {
+            compatibility.errorCode = model_core::ImportErrorCode::CompatibilityHostFailure;
+        }
+    }
+    return compatibility;
 }
 
 } // namespace import_broker
