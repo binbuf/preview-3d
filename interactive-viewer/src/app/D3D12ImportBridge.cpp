@@ -66,6 +66,18 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     case model_core::ImportErrorCode::UnsupportedRequiredFeature:
         summary = L"This model requires an unsupported feature.";
         details = L"Export a static glTF model using the supported extensions."; return;
+    case model_core::ImportErrorCode::UnsupportedComposition:
+        summary = L"This USD stage requires compatibility import.";
+        details = L"The fast importer requested the isolated compatibility host."; return;
+    case model_core::ImportErrorCode::CompatibilityHostFailure:
+        summary = L"The USD compatibility importer stopped unexpectedly.";
+        details = L"The isolated compatibility host could not complete this model."; return;
+    case model_core::ImportErrorCode::CompatibilityHostLimit:
+        summary = L"This USD stage is too large or complex to preview.";
+        details = L"The compatibility host reached a bounded resource limit."; return;
+    case model_core::ImportErrorCode::ArchiveLimit:
+        summary = L"This model archive is not supported.";
+        details = L"The archive violates a path, structure, compression, or expansion limit."; return;
     case model_core::ImportErrorCode::EmptyGeometry:
         summary = L"This model has no displayable geometry.";
         details = L"No valid triangles or points remain in the selected scene."; return;
@@ -238,7 +250,7 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
         session.errorCode == model_core::ImportErrorCode::WorkerCrashed ||
         session.errorCode == model_core::ImportErrorCode::ResourceLimit ||
         (session.errorCode >= model_core::ImportErrorCode::PrimarySourceLimit &&
-         session.errorCode <= model_core::ImportErrorCode::DracoPrimitiveLimit))
+         session.errorCode <= model_core::ImportErrorCode::ArchiveLimit))
         DescribeImportError(session.errorCode, summary, details);
 }
 

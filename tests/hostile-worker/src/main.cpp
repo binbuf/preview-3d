@@ -41,6 +41,8 @@ int main(int argc, char* argv[])
         if (ArgEquals(argv[1], "--error-none")) notice.errorCode = 0;
         if (ArgEquals(argv[1], "--error-phase")) notice.reserved0 = 4;
         if (ArgEquals(argv[1], "--error-cancel")) notice.errorCode = uint32_t(model_core::ImportErrorCode::Cancelled);
+        if (ArgEquals(argv[1], "--error-unsupported-composition"))
+            notice.errorCode = uint32_t(model_core::ImportErrorCode::UnsupportedComposition);
         model_core::WriteControlMessage(GetStdHandle(STD_OUTPUT_HANDLE), model_core::ControlOpcode::GenerationError,
             &notice, ArgEquals(argv[1], "--error-short") ? 8 : sizeof(notice));
         return 0;
@@ -130,6 +132,12 @@ int main(int argc, char* argv[])
 
     if (ArgEquals(argv[1], "--batches-after-terminal")) {
         return hostile_worker::RunBatchAfterTerminal();
+    }
+    if (ArgEquals(argv[1], "--usd-fallback-after-batch")) {
+        return hostile_worker::RunUsdFallbackAfterBatch();
+    }
+    if (ArgEquals(argv[1], "--usd-spoofed-format")) {
+        return hostile_worker::RunUsdSpoofedFormat();
     }
 
     return 1;

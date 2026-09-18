@@ -21,6 +21,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cwctype>
 #include <cstring>
 #include <exception>
 #include <iterator>
@@ -96,10 +97,28 @@ const wchar_t* ParseFlagFor(ImportFormat format)
         return L"--parse-obj";
     case ImportFormat::Fbx:
         return L"--parse-fbx";
+    case ImportFormat::Usd:
+        return L"--parse-usd";
     case ImportFormat::Gltf:
     default:
         return L"--parse-gltf";
     }
+}
+
+std::optional<uint32_t> UsdExpectedEncodingFlags(const std::wstring& path)
+{
+    const auto slash = path.find_last_of(L"\\/");
+    const auto dot = path.find_last_of(L'.');
+    if (dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash))
+        return std::nullopt;
+    std::wstring extension = path.substr(dot + 1);
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](wchar_t value) { return wchar_t(std::towlower(value)); });
+    if (extension == L"usd") return 0;
+    if (extension == L"usda") return model_core::kImportRequestUsdExpectedUsda;
+    if (extension == L"usdc") return model_core::kImportRequestUsdExpectedUsdc;
+    if (extension == L"usdz") return model_core::kImportRequestUsdExpectedUsdz;
+    return std::nullopt;
 }
 
 // Every real-file request struct (ParseGltfFileRequest/ParseStlFileRequest/
@@ -162,6 +181,15 @@ bool SendStartRequest(const ImportSessionRequest& session, HANDLE controlInWrite
         auto request = MakeFileRequest<model_core::ParseFbxFileRequest>(session, sourceFileHandle, sectionHandle,
                                                                         cancellationEventHandle);
         return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartFbxImportFromFile,
+                                                &request, sizeof(request));
+    }
+    case ImportFormat::Usd: {
+        auto expected = UsdExpectedEncodingFlags(session.sourcePath);
+        if (!expected) return false;
+        auto request = MakeFileRequest<model_core::ParseUsdFileRequest>(session, sourceFileHandle, sectionHandle,
+                                                                        cancellationEventHandle);
+        request.requestFlags |= *expected;
+        return model_core::WriteControlMessage(controlInWrite, model_core::ControlOpcode::StartUsdImportFromFile,
                                                 &request, sizeof(request));
     }
     }
@@ -591,8 +619,17 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                            || chunk.scene.format == model_core::SourceFormatId::AsciiPly)
                         : request.format == ImportFormat::Obj
                             ? chunk.scene.format == model_core::SourceFormatId::Obj
-                            : chunk.scene.format == model_core::SourceFormatId::Fbx;
-            if (request.workerArgumentsOverride.empty() && !expectedFormat) {
+                            : request.format == ImportFormat::Fbx
+                                ? chunk.scene.format == model_core::SourceFormatId::Fbx
+                                : (chunk.scene.format == model_core::SourceFormatId::Usda
+                                   || chunk.scene.format == model_core::SourceFormatId::Usdc
+                                   || chunk.scene.format == model_core::SourceFormatId::Usdz);
+            // USD's detected encoding is security/dispatch state for the
+            // fallback decision, so even hostile-worker test overrides must
+            // not bypass its family check. Older format attack fixtures keep
+            // their established override seam.
+            if ((request.workerArgumentsOverride.empty() || request.format == ImportFormat::Usd)
+                && !expectedFormat) {
                 failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ImportProtocolViolation);
                 return false;
             }
@@ -601,7 +638,10 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             && (acceptance.scene->format == model_core::SourceFormatId::AsciiStl
                 || acceptance.scene->format == model_core::SourceFormatId::AsciiPly
                 || acceptance.scene->format == model_core::SourceFormatId::Obj
-                || acceptance.scene->format == model_core::SourceFormatId::Fbx);
+                || acceptance.scene->format == model_core::SourceFormatId::Fbx
+                || acceptance.scene->format == model_core::SourceFormatId::Usda
+                || acceptance.scene->format == model_core::SourceFormatId::Usdc
+                || acceptance.scene->format == model_core::SourceFormatId::Usdz);
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -718,6 +758,19 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
                      uint32_t(d.sourceRangeOffset) > 300000000 ||
                      d.sourceRangeLength > 300000000 - uint32_t(d.sourceRangeOffset) ||
                      (d.lodLevel != model_core::kCoarseLod && d.sourceRangeLength != d.indexCount)))
+                {
+                    failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+                    return false;
+                }
+                const bool usdSource = chunk.scene.format == model_core::SourceFormatId::Usda
+                    || chunk.scene.format == model_core::SourceFormatId::Usdc
+                    || chunk.scene.format == model_core::SourceFormatId::Usdz;
+                if (usdSource &&
+                    ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
+                     uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
+                     d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
+                     d.sourceRangeLength != (d.topology == model_core::ChunkTopology::PointList
+                         ? d.vertexCount : d.indexCount)))
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
@@ -999,9 +1052,19 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             if (pooledLease) pooledLease->reusable = true;
             return fail(ImportStage::Cancelled);
         }
+        // UnsupportedComposition is a pre-publication classification, not a
+        // late parser failure. Once any fast-path batch has been accepted the
+        // producer is committed; treating a later fallback signal as eligible
+        // would let one generation mix TinyUSDZ and OpenUSD output.
+        if (notice.errorCode == uint32_t(model_core::ImportErrorCode::UnsupportedComposition)
+            && (request.format != ImportFormat::Usd || acceptance.nextBatchIndex != 0))
+            return fail(ImportStage::UnexpectedReply,
+                        model_core::ImportErrorCode::ImportProtocolViolation);
         if (pooledLease) pooledLease->reusable = true;
         auto result = fail(ImportStage::WorkerReportedError, static_cast<model_core::ImportErrorCode>(notice.errorCode));
         result.errorPhase = static_cast<model_core::ImportFailurePhase>(notice.reserved0);
+        result.compatibilityFallbackRequired =
+            notice.errorCode == uint32_t(model_core::ImportErrorCode::UnsupportedComposition);
         return result;
     }
 
@@ -1031,7 +1094,10 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         && (acceptance.scene->format == model_core::SourceFormatId::AsciiStl
             || acceptance.scene->format == model_core::SourceFormatId::AsciiPly
             || acceptance.scene->format == model_core::SourceFormatId::Obj
-            || acceptance.scene->format == model_core::SourceFormatId::Fbx);
+            || acceptance.scene->format == model_core::SourceFormatId::Fbx
+            || acceptance.scene->format == model_core::SourceFormatId::Usda
+            || acceptance.scene->format == model_core::SourceFormatId::Usdc
+            || acceptance.scene->format == model_core::SourceFormatId::Usdz);
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)

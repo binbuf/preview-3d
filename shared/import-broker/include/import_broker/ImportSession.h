@@ -41,6 +41,9 @@ enum class ImportFormat : uint32_t {
     Ply,
     Obj,
     Fbx,
+    // Test-only protocol route through USD-007. Product extension discovery
+    // and activation deliberately remain disabled until USD-008.
+    Usd,
 };
 
 // How far the session got. model_core::ImportErrorCode is not sufficient on
@@ -230,6 +233,10 @@ struct ImportSessionResult {
     // Test/qualification evidence only; no handle authority crosses this
     // boundary. Sequential pooled imports can prove reuse by stable PID.
     uint32_t workerProcessId = 0;
+    // True only for an exact, first-result UnsupportedComposition from the
+    // USD fast worker. USD-006 consumes this without reinterpreting generic
+    // parser/resource failures as permission to launch OpenUSD.
+    bool compatibilityFallbackRequired = false;
 };
 
 // Creates (or opens) the single AppContainer profile every import runs

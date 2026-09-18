@@ -3,6 +3,7 @@
 #include "GenerationWorker.h"
 #include "FbxSpikeWorker.h"
 #include "UsdSpikeWorker.h"
+#include "UsdImportWorker.h"
 #include "FbxImportWorker.h"
 #include "GltfImportWorker.h"
 #include "PlyImportWorker.h"
@@ -124,6 +125,9 @@ int main(int argc, char* argv[])
     }
     if (ArgEquals(argv[1], "--parse-fbx")) {
         return import_worker::RunFbxImport();
+    }
+    if (ArgEquals(argv[1], "--parse-usd")) {
+        return import_worker::RunUsdImport();
     }
 
     // Backward-compatible aliases retained for older parser regression commands.

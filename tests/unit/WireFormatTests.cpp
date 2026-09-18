@@ -95,12 +95,20 @@ TEST_CASE("Info uses real counts units exact axis dimensions and provisional bou
     CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"OBJ");
     metadata.source.format = model_core::SourceFormatId::Fbx;
     CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"FBX");
+    metadata.source.format = model_core::SourceFormatId::Usda;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"USD (ASCII)");
+    metadata.source.format = model_core::SourceFormatId::Usdc;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"USD (crate)");
+    metadata.source.format = model_core::SourceFormatId::Usdz;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"USDZ");
     CHECK(metadata.vertices.empty()); CHECK(metadata.indices.empty());
 }
 
 TEST_CASE("Ground-axis selection cycles and applies exact axis permutations", "[bounds][metadata][ground-axis]")
 {
     CHECK(ResolveGroundAxis(GroundAxis::Automatic, model_core::UpAxisId::Y) == GroundAxis::Y);
+    CHECK(ResolveGroundAxis(GroundAxis::Automatic, model_core::UpAxisId::X) == GroundAxis::X);
+    CHECK(ResolveGroundAxis(GroundAxis::Automatic, model_core::UpAxisId::Z) == GroundAxis::Z);
     CHECK(ResolveGroundAxis(GroundAxis::Automatic, model_core::UpAxisId::Unknown) == GroundAxis::Z);
     CHECK(NextGroundAxis(GroundAxis::Z, model_core::UpAxisId::Unknown) == GroundAxis::Y);
     CHECK(NextGroundAxis(GroundAxis::Y, model_core::UpAxisId::Unknown) == GroundAxis::X);

@@ -75,6 +75,7 @@
     <ClCompile Include="src\GenerationWorker.cpp" />
     <ClCompile Include="src\FbxSpikeWorker.cpp" />
     <ClCompile Include="src\UsdSpikeWorker.cpp" />
+    <ClCompile Include="src\UsdImportWorker.cpp" />
     <ClCompile Include="src\UsdZipPreflight.cpp" />
     <ClCompile Include="src\SyntheticSceneGenerator.cpp" />
     <ClCompile Include="src\GltfImportWorker.cpp" />
@@ -107,6 +108,7 @@
     <ClInclude Include="src\GenerationWorker.h" />
     <ClInclude Include="src\FbxSpikeWorker.h" />
     <ClInclude Include="src\UsdSpikeWorker.h" />
+    <ClInclude Include="src\UsdImportWorker.h" />
     <ClInclude Include="src\UsdZipPreflight.h" />
     <ClInclude Include="src\SyntheticSceneGenerator.h" />
     <ClInclude Include="src\GltfImportWorker.h" />

@@ -34,12 +34,22 @@ enum class ImportErrorCode : uint32_t {
     ScratchLimit = 19,
     ChunkCatalogLimit = 20,
     DracoPrimitiveLimit = 21,
+    // A valid USD layer requires composition outside the TinyUSDZ fast
+    // subset. This is the only fast-worker result eligible for OpenUSD retry.
+    UnsupportedComposition = 22,
+    // Compatibility-host failures stay distinct from general-worker faults:
+    // the broker owns both mappings and never accepts child-provided text.
+    CompatibilityHostFailure = 23,
+    CompatibilityHostLimit = 24,
+    // Archive structure/expansion policy is terminal and must never be
+    // mistaken for UnsupportedComposition by fallback orchestration.
+    ArchiveLimit = 25,
 };
 
 constexpr bool IsKnownImportErrorCode(uint32_t code)
 {
     return code >= uint32_t(ImportErrorCode::MalformedData) &&
-           code <= uint32_t(ImportErrorCode::DracoPrimitiveLimit);
+           code <= uint32_t(ImportErrorCode::ArchiveLimit);
 }
 
 } // namespace model_core

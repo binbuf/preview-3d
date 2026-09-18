@@ -105,4 +105,10 @@ int RunWriteBeforeAck();
 // Proves the terminal reply really does end the generation.
 int RunBatchAfterTerminal();
 
+// Publishes one otherwise-valid fast-path batch, receives its ack, and only
+// then asks for compatibility fallback. The broker must classify this as a
+// protocol violation, never as permission to mix a second producer.
+int RunUsdFallbackAfterBatch();
+int RunUsdSpoofedFormat();
+
 } // namespace hostile_worker

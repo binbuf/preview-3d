@@ -65,6 +65,7 @@ struct ModelStats
 enum class SourceUpAxis
 {
     Unknown,
+    X,
     Y,   // glTF/GLB's mandated up axis.
     Z,   // The ecosystem-norm up axis for STL/3MF/etc. (no importer yet).
 };

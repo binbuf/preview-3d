@@ -6,6 +6,7 @@
 #include "PlyImportWorker.h"
 #include "ObjImportWorker.h"
 #include "StlImportWorker.h"
+#include "UsdImportWorker.h"
 
 #include "model_core/ControlChannelIo.h"
 
@@ -77,6 +78,14 @@ DispatchOutcome DispatchOneRequest(HANDLE stdIn, HANDLE stdOut)
         model_core::ParseFbxFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
         HandleFbxImportFileRequest(stdIn, stdOut, request);
+        return DispatchOutcome::Continue;
+    }
+
+    if (received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartUsdImportFromFile)
+        && received->payload.size() == sizeof(model_core::ParseUsdFileRequest)) {
+        model_core::ParseUsdFileRequest request{};
+        std::memcpy(&request, received->payload.data(), sizeof(request));
+        HandleUsdImportFileRequest(stdIn, stdOut, request);
         return DispatchOutcome::Continue;
     }
 

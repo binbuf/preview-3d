@@ -1,6 +1,6 @@
 # USD post-MVP work plan
 
-Status: implementation in progress; USD-001 and USD-002 spikes complete, no USD product route is implemented
+Status: implementation in progress; USD-001 through USD-003 complete, no USD product route is exposed
 
 Prepared: 2026-09-17  
 Design authority: [design/README.md](design/README.md)
@@ -269,7 +269,7 @@ payload.
 
 ## USD-003: USD-family protocol and normalized contract
 
-Status: ready
+Status: complete (2026-09-17)
 Depends on: successful USD-001 and USD-002 decisions (complete)
 Unblocks: USD-004 and USD-006
 
@@ -318,9 +318,62 @@ without yet exposing a USD extension to the viewer.
 - One generation can choose exactly one committed producer—TinyUSDZ or
   OpenUSD—and can never publish a mixture.
 
+### Completion record
+
+Protocol v10 remains the active wire version. Its node, geometry, instance,
+material, image, and scene-metadata records already represent the approved USD
+subset: point instancers expand to ordinary bounded node/instance records, and
+face-material subsets split into ordinary geometry sections that retain one
+logical mesh identity. No USD-specific variable structure crosses IPC. For USD
+geometry provenance, `sourceRangeOffset` packs the source object/prim ordinal in
+the high 32 bits and the normalized point/index start in the low 32 bits;
+`sourceRangeLength` is the point count for point lists and index count for
+triangles. These rules are format-neutral after adapter normalization and fit
+the existing Tier-B catalogs, so no layout or version bump was warranted.
+
+The closed additive identities are `USDA`, `USDC`, and `USDZ`, with X appended
+to `UpAxisId` so the existing numeric Y/Z identities do not move. USD results
+must report X, Y, or Z and a finite positive `metersPerUnit`; zero remains legal
+for non-USD formats whose units are genuinely unspecified. `.usd` trusts byte
+sniffing, while `.usda`, `.usdc`, and `.usdz` put exactly one expected-encoding
+bit in the dedicated 48-byte request. A suffix mismatch is terminal. USD uses
+Tier-B validation and cannot return another family's source identity.
+
+`UnsupportedComposition` is the sole fast-worker result that can select the
+compatibility producer, and only before a fast batch has been accepted.
+Malformed data, unsafe references, archive limits, unsupported encodings,
+resource limits, cancellation, and importer failures are terminal. The
+generation-scoped fallback state starts with no committed producer; stale
+observations are ignored, while late/reverse fallback, producer mixing, and
+fallback loops are protocol violations. USD-006 will connect this state to the
+compatibility process lifecycle. Until then, `ImportSession` reports the exact
+pre-publication decision through `compatibilityFallbackRequired` but never
+starts a second producer.
+
+Fast/compat equivalence uses one post-triangulation, format-neutral canonical
+digest. USD-004 and USD-007 must serialize the same validated normalized scene
+in this order: scene axis/units/counts and typed warnings; nodes by normalized
+node ID with parent, local transform, visibility, and purpose result; geometry
+by logical mesh ID and section/material slot with topology, vertex layout,
+normalized vertex/index payload, and local bounds; instances by node and mesh
+IDs; then materials, images, and their dependency IDs. Generation IDs, source
+encoding (`USDA`/`USDC`/`USDZ`), section/chunk offsets, batch boundaries,
+checksums, producer identity, and source-range diagnostics are excluded. Both
+adapters must use the shared normalization rules before hashing: deterministic
+triangulation/order, canonical positive zero, rejected non-finite values, and
+the protocol's final stored scalar precision. Thus a digest mismatch denotes a
+semantic normalization mismatch rather than a packaging or scheduling change.
+
+The worker now has pooled and one-shot `--parse-usd` dispatch, but the route is
+test-only. It byte-detects all three fixture encodings, preflights USDZ, and
+returns a one-point contract marker because the current broker intentionally
+rejects metadata-only results. USD-004 must replace that marker with parsed
+scene geometry before any product exposure. No viewer extension classifier,
+picker, activation, registration, packaging, or thumbnail surface changed.
+
 ## USD-004: sandboxed TinyUSDZ static scene adapter
 
-Status: blocked  
+Status: ready
 Depends on: USD-003  
 Unblocks: USD-005
 
@@ -420,7 +473,7 @@ dependency subset.
 
 ## USD-006: compatibility-host platform and fallback lifecycle
 
-Status: blocked  
+Status: ready
 Depends on: USD-002 and USD-003  
 Unblocks: USD-007
 

@@ -4,6 +4,57 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **USD-003 USD-family protocol and normalized contract (2026-09-17):
+  complete.** Protocol v10 remains byte-compatible. Closed source identities
+  `USDA=9`, `USDC=10`, and `USDZ=11` and `UpAxisId::X=3` were appended without
+  moving the existing Y/Z values or changing a wire record. The existing
+  normalized node/geometry/instance/material/image catalogs can represent the
+  approved subset: point instancers expand into bounded instances and
+  per-face material subsets become ordinary geometry sections. The shared
+  fast/OpenUSD canonical digest is now specified in `.docs/usd.md` over the
+  deterministic post-triangulation semantic stream; encoding, producer,
+  offsets, batch boundaries, and diagnostics are deliberately excluded.
+
+  `ImportFormat::Usd`, a dedicated 48-byte request/opcode, pooled dispatch, and
+  one-shot `--parse-usd` now form a test-only end-to-end route. `.usd` is
+  byte-authoritative; explicit suffixes carry exactly one expected-encoding
+  flag and mismatches are terminal. The worker independently preflights USDZ
+  and maps archive-policy failures to the new terminal `ArchiveLimit` code.
+  It emits a one-point contract marker because `ImportSession` correctly
+  rejects metadata-only successful imports; USD-004 must replace that marker
+  with real TinyUSDZ-normalized geometry. No viewer format classifier,
+  activation, registration, package, or thumbnail surface advertises USD.
+
+  USD validation is Tier B, requires an actual USDA/USDC/USDZ identity, accepts
+  X/Y/Z only, and requires finite positive USD units. Geometry provenance packs
+  the source prim/object ordinal into the high 32 bits of `sourceRangeOffset`
+  and the normalized point/index start into the low 32 bits. Define
+  `NOMINMAX`/`WIN32_LEAN_AND_MEAN` before TinyUSDZ headers: defining them after
+  a project header that transitively includes Windows headers still permits
+  `min`/`max` macro collisions.
+
+  The new typed failures are `UnsupportedComposition`,
+  `CompatibilityHostFailure`, `CompatibilityHostLimit`, and `ArchiveLimit`,
+  with host-owned redacted messages. Only exact, pre-publication
+  `UnsupportedComposition` sets `compatibilityFallbackRequired`; every other
+  failure is terminal. A pure generation-scoped state machine begins with no
+  producer and rejects late/reverse fallback, loops, or mixed producers while
+  ignoring stale generations. USD-006 can now wire that contract to the lazy
+  OpenUSD host without redefining its authority or publication semantics.
+
+  Debug and Release focused USD-003 tests pass (6 cases / 119 assertions each)
+  across pooled/one-shot format detection, suffix spoofing, archive policy,
+  axes/units, hostile fallback, and state transitions. Unit passes 98 cases in
+  both configurations (7,617
+  Debug assertions; 7,529 Release assertions, with three existing unavailable
+  debug-layer warnings in Release). Full Debug ImportIsolation reached 268
+  cases / 101,139 assertions with only the four already documented FBX
+  fixture-string rewrite failures. The first full Release run reached the same
+  USD coverage; its unrelated failures were inherited FBX rewrites plus a
+  stale sidecar scratch-directory collision from the existing PID/address
+  naming scheme. USD-004 and USD-006 are unblocked; USD-010 remains the
+  separate thumbnail task.
+
 - **USD-001 TinyUSDZ feasibility and policy spike (2026-09-17): complete with
   a revised fast-path boundary.** The repository now pins TinyUSDZ v0.9.1 at
   commit `a04ee0bcbd1a930e30cc40938fcee3526a6fa8eb` through a checked-in static

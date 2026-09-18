@@ -280,7 +280,8 @@ bool IsFileImportOpcode(uint32_t opcode)
         || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartStlImportFromFile)
         || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartPlyImportFromFile)
         || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartObjImportFromFile)
-        || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartFbxImportFromFile);
+        || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartFbxImportFromFile)
+        || opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartUsdImportFromFile);
 }
 
 struct BatchSession {
@@ -713,6 +714,68 @@ int RunBatchAfterTerminal()
     uint64_t extra = BuildOneChunkSection(view.bytes(), request.generationId, 2, 20.0f);
     SendBatchReady(request.generationId, 1, 1, extra);
     return 0;
+}
+
+int RunUsdFallbackAfterBatch()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) return 1;
+    auto& [request, view] = *session;
+    const uint64_t length = BuildOneChunkSection(view.bytes(), request.generationId, 1, 10.0f);
+    model_core::SectionHeader header{};
+    model_core::ChunkDescriptor descriptor{};
+    std::memcpy(&header, view.bytes().data(), sizeof(header));
+    std::memcpy(&descriptor, view.bytes().data() + model_core::kSectionHeaderSize, sizeof(descriptor));
+    descriptor.sourceRangeLength = 1;
+    std::memcpy(view.bytes().data() + model_core::kSectionHeaderSize, &descriptor, sizeof(descriptor));
+    header.scene.format = model_core::SourceFormatId::Usda;
+    header.scene.upAxis = model_core::UpAxisId::Y;
+    header.scene.metersPerUnit = 0.01;
+    header.scene.meshCount = 1;
+    header.sectionChecksum = model_core::WireChecksum64(
+        view.bytes().subspan(model_core::kSectionHeaderSize,
+                             size_t(header.sectionLength - model_core::kSectionHeaderSize)));
+    std::memcpy(view.bytes().data(), &header, sizeof(header));
+    if (!SendBatchReady(request.generationId, 0, 1, length) || !AwaitBatchConsumed()) return 1;
+    model_core::GenerationErrorNotice notice{};
+    notice.generationId = request.generationId;
+    notice.errorCode = uint32_t(model_core::ImportErrorCode::UnsupportedComposition);
+    notice.reserved0 = uint32_t(model_core::ImportFailurePhase::Geometry);
+    return model_core::WriteControlMessage(GetStdHandle(STD_OUTPUT_HANDLE),
+        model_core::ControlOpcode::GenerationError, &notice, sizeof(notice)) ? 0 : 1;
+}
+
+int RunUsdSpoofedFormat()
+{
+    using namespace model_core;
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) return 1;
+    auto& [request, view] = *session;
+    constexpr uint64_t payloadOffset = kSectionHeaderSize + kChunkDescriptorSize;
+    constexpr uint64_t length = payloadOffset + sizeof(ImportStatusPayload);
+    if (length > view.bytes().size()) return 1;
+    ImportStatusPayload status{};
+    std::memcpy(view.bytes().data() + payloadOffset, &status, sizeof(status));
+    ChunkDescriptor descriptor{};
+    descriptor.topology = ChunkTopology::ImportStatus;
+    descriptor.chunkId = 1;
+    descriptor.normalizedRangeOffset = payloadOffset;
+    descriptor.normalizedRangeLength = descriptor.byteSize = sizeof(status);
+    descriptor.chunkChecksum = WireChecksum64(view.bytes().subspan(payloadOffset, sizeof(status)));
+    std::memcpy(view.bytes().data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
+    SectionHeader header{};
+    header.magic = kSectionMagic;
+    header.protocolVersion = kCurrentProtocolVersion;
+    header.generationId = header.scene.generationId = request.generationId;
+    header.scene.format = SourceFormatId::Fbx;
+    header.scene.upAxis = UpAxisId::Y;
+    header.scene.metersPerUnit = 1.0;
+    header.chunkCount = 1;
+    header.sectionLength = length;
+    header.sectionChecksum = WireChecksum64(
+        view.bytes().subspan(kSectionHeaderSize, length - kSectionHeaderSize));
+    std::memcpy(view.bytes().data(), &header, sizeof(header));
+    return SendChunksReady(request.generationId, 1, length) ? 0 : 1;
 }
 
 int RunMetadataAttack(int mode)

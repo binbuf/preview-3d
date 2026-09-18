@@ -93,6 +93,7 @@
     <ClCompile Include="FbxSpikeTests.cpp" />
     <ClCompile Include="UsdSpikeTests.cpp" />
     <ClCompile Include="OpenUsdHostSpikeTests.cpp" />
+    <ClCompile Include="UsdProtocolTests.cpp" />
     <ClCompile Include="..\..\import-worker\src\UsdZipPreflight.cpp" />
     <ClCompile Include="SceneInstanceContractTests.cpp" />
     <ClCompile Include="DracoDecodeAdapterTests.cpp" />
@@ -141,6 +142,7 @@
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\SidecarPathResolver.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\SidecarRequestServicer.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\WorkerPool.h" />
+    <ClInclude Include="..\..\shared\import-broker\include\import_broker\UsdFallbackState.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\WireFormat.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\Checksum.h" />

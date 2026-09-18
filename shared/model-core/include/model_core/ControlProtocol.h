@@ -48,6 +48,7 @@ enum class ControlOpcode : uint32_t {
     RequestDetail = 14,           // host -> worker; one validated source region
     StartObjImportFromFile = 15,  // host -> worker
     StartFbxImportFromFile = 16,  // host -> worker
+    StartUsdImportFromFile = 17,  // host -> worker; test-only until USD-008
 };
 
 enum : uint32_t {
@@ -58,6 +59,13 @@ enum : uint32_t {
     kImportRequestFbxTinyEvaluationLimitForTesting = 1u << 3,
     // Test-only FBX aggregate decoded-texture limit. Product callers never set it.
     kImportRequestFbxTinyTextureLimitForTesting = 1u << 4,
+    // USD's family extension is byte-sniffed (no bit); explicit extensions
+    // carry exactly one expected encoding so a suffix cannot override bytes.
+    kImportRequestUsdExpectedUsda = 1u << 5,
+    kImportRequestUsdExpectedUsdc = 1u << 6,
+    kImportRequestUsdExpectedUsdz = 1u << 7,
+    kImportRequestUsdExpectedMask = kImportRequestUsdExpectedUsda
+        | kImportRequestUsdExpectedUsdc | kImportRequestUsdExpectedUsdz,
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -215,6 +223,21 @@ struct ParseFbxFileRequest {
     uint64_t cancellationEventHandleValue;
 };
 static_assert(sizeof(ParseFbxFileRequest) == 48, "ParseFbxFileRequest layout changed");
+
+// USD-family fast-path request. The fixed layout intentionally matches the
+// other file requests so pooled/one-shot handle transfer and hostile-worker
+// framing stay common. requestFlags carries the closed expected-encoding mask:
+// no bit for `.usd`, or exactly one USDA/USDC/USDZ bit for an explicit suffix.
+struct ParseUsdFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue;
+    uint64_t sectionHandleValue;
+    uint64_t sectionByteCapacity;
+    uint32_t maxChunkCount;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
+};
+static_assert(sizeof(ParseUsdFileRequest) == 48, "ParseUsdFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;
