@@ -12,6 +12,9 @@
 namespace import_worker {
 
 class ChunkBatchSink;
+class SidecarFileClient;
+struct TextureDecodeOptions;
+struct UsdzArchiveView;
 
 struct UsdImportResult {
     uint32_t chunkCount = 0;
@@ -28,6 +31,11 @@ using UsdImportOutcome = std::variant<UsdImportResult, UsdImportFailure>;
 struct UsdImportOptions {
     model_core::SourceFormatId format = model_core::SourceFormatId::Unknown;
     std::function<bool()> isCancelled;
+    SidecarFileClient* sidecars = nullptr;
+    const TextureDecodeOptions* textureOptions = nullptr;
+    const UsdzArchiveView* archive = nullptr;
+    uint64_t maxAggregateDependencyBytes = 512ull * 1024 * 1024;
+    uint32_t maxDependencyCount = 64;
 
     bool Cancelled() const { return isCancelled && isCancelled(); }
 };

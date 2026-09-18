@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <unordered_set>
+#include <vector>
 
 namespace import_worker {
 namespace {
@@ -40,6 +43,19 @@ bool Read32(std::span<const std::byte> bytes, size_t offset, uint32_t& value)
     return true;
 }
 
+bool CheckCrc32(std::span<const std::byte> bytes, uint32_t expected,
+                const std::function<bool()>& isCancelled)
+{
+    uint32_t crc = 0xffffffffu;
+    for (size_t index = 0; index < bytes.size(); ++index) {
+        if ((index & 0xffffu) == 0 && isCancelled && isCancelled()) return false;
+        crc ^= std::to_integer<uint8_t>(bytes[index]);
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc == expected;
+}
+
 bool SafeName(std::span<const std::byte> name, uint32_t maxDepth, std::string& folded)
 {
     if (name.empty() || name.size() > 1024) return false;
@@ -49,7 +65,8 @@ bool SafeName(std::span<const std::byte> name, uint32_t maxDepth, std::string& f
     size_t componentStart = 0;
     for (size_t index = 0; index < name.size(); ++index) {
         const unsigned char ch = std::to_integer<unsigned char>(name[index]);
-        if (ch == 0 || ch == '\\' || ch == ':' || (index == 0 && ch == '/')) return false;
+        if (ch < 0x20 || ch == 0x7f || ch == '\\' || ch == ':'
+            || (index == 0 && ch == '/')) return false;
         if (ch == '/') {
             if (index == componentStart) return false;
             const size_t length = index - componentStart;
@@ -69,17 +86,34 @@ bool SafeName(std::span<const std::byte> name, uint32_t maxDepth, std::string& f
     return true;
 }
 
+bool IsLayerName(std::string_view name)
+{
+    const size_t dot = name.find_last_of('.');
+    if (dot == std::string_view::npos) return false;
+    std::string extension(name.substr(dot + 1));
+    std::ranges::transform(extension, extension.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return extension == "usd" || extension == "usda" || extension == "usdc";
+}
+
 } // namespace
 
-UsdzPreflightError PreflightUsdz(std::span<const std::byte> bytes,
-                                 const UsdzPreflightLimits& limits)
+UsdzPreflightError InspectUsdz(std::span<const std::byte> bytes,
+                               UsdzArchiveView* archive,
+                               const UsdzPreflightLimits& limits,
+                               const std::function<bool()>& isCancelled)
 {
+    if (archive) *archive = {};
+    if (isCancelled && isCancelled()) return UsdzPreflightError::Cancelled;
     if (bytes.size() < kEocdBytes) return UsdzPreflightError::NotZip;
     const size_t earliest = bytes.size() > kEocdBytes + kMaxCommentBytes
         ? bytes.size() - kEocdBytes - kMaxCommentBytes : 0;
     size_t eocd = bytes.size() - kEocdBytes;
     uint32_t signature = 0;
     for (;;) {
+        if (isCancelled && ((bytes.size() - eocd) & 0xfffu) == 0 && isCancelled())
+            return UsdzPreflightError::Cancelled;
         if (Read32(bytes, eocd, signature) && signature == kEndOfCentralDirectory) break;
         if (eocd == earliest) return UsdzPreflightError::NotZip;
         --eocd;
@@ -103,14 +137,18 @@ UsdzPreflightError PreflightUsdz(std::span<const std::byte> bytes,
         return UsdzPreflightError::InvalidDirectory;
 
     std::unordered_set<std::string> names;
+    std::vector<std::pair<size_t, size_t>> localRanges;
+    localRanges.reserve(entries);
     uint64_t expanded = 0;
     size_t cursor = centralOffset;
     for (uint32_t entry = 0; entry < entries; ++entry) {
+        if (isCancelled && isCancelled()) return UsdzPreflightError::Cancelled;
         uint16_t flags = 0, method = 0, nameLength = 0, extraLength = 0, entryComment = 0,
                  startDisk = 0;
-        uint32_t compressed = 0, uncompressed = 0, localOffset = 0;
+        uint32_t crc = 0, compressed = 0, uncompressed = 0, localOffset = 0;
         if (!Read32(bytes, cursor, signature) || signature != kCentralHeader
             || !Read16(bytes, cursor + 8, flags) || !Read16(bytes, cursor + 10, method)
+            || !Read32(bytes, cursor + 16, crc)
             || !Read32(bytes, cursor + 20, compressed) || !Read32(bytes, cursor + 24, uncompressed)
             || !Read16(bytes, cursor + 28, nameLength) || !Read16(bytes, cursor + 30, extraLength)
             || !Read16(bytes, cursor + 32, entryComment) || !Read16(bytes, cursor + 34, startDisk)
@@ -138,17 +176,19 @@ UsdzPreflightError PreflightUsdz(std::span<const std::byte> bytes,
         std::string folded;
         if (!SafeName(bytes.subspan(nameOffset, nameLength), limits.maxPathDepth, folded))
             return UsdzPreflightError::UnsafePath;
-        if (!names.insert(std::move(folded)).second) return UsdzPreflightError::DuplicatePath;
+        if (!names.insert(folded).second) return UsdzPreflightError::DuplicatePath;
 
         uint16_t localFlags = 0, localMethod = 0, localNameLength = 0, localExtraLength = 0;
-        uint32_t localCompressed = 0, localUncompressed = 0;
+        uint32_t localCrc = 0, localCompressed = 0, localUncompressed = 0;
         if (!Read32(bytes, localOffset, signature) || signature != kLocalHeader
             || !Read16(bytes, localOffset + 6, localFlags) || !Read16(bytes, localOffset + 8, localMethod)
+            || !Read32(bytes, localOffset + 14, localCrc)
             || !Read32(bytes, localOffset + 18, localCompressed)
             || !Read32(bytes, localOffset + 22, localUncompressed)
             || !Read16(bytes, localOffset + 26, localNameLength)
             || !Read16(bytes, localOffset + 28, localExtraLength)) return UsdzPreflightError::Truncated;
-        if (localFlags != flags || localMethod != method || localCompressed != compressed
+        if (localFlags != flags || localMethod != method || localCrc != crc
+            || localCompressed != compressed
             || localUncompressed != uncompressed || localNameLength != nameLength)
             return UsdzPreflightError::InvalidDirectory;
         size_t localNameOffset = 0, dataOffset = 0, dataEnd = 0;
@@ -160,10 +200,38 @@ UsdzPreflightError PreflightUsdz(std::span<const std::byte> bytes,
                         bytes.begin() + static_cast<ptrdiff_t>(localNameOffset)))
             return UsdzPreflightError::InvalidDirectory;
         if ((dataOffset & 63u) != 0) return UsdzPreflightError::Misaligned;
+        if (!CheckCrc32(bytes.subspan(dataOffset, compressed), crc, isCancelled))
+            return isCancelled && isCancelled() ? UsdzPreflightError::Cancelled
+                                                : UsdzPreflightError::InvalidDirectory;
+        localRanges.emplace_back(size_t(localOffset), dataEnd);
+        if (archive) {
+            std::string name;
+            name.resize(nameLength);
+            std::memcpy(name.data(), bytes.data() + nameOffset, nameLength);
+            archive->entries.push_back(UsdzEntryView{
+                std::move(name), std::move(folded), uint64_t(dataOffset), uint64_t(uncompressed)});
+        }
         cursor = entryEnd;
     }
-    return cursor == centralEnd ? UsdzPreflightError::None
-                                : UsdzPreflightError::InvalidDirectory;
+    if (cursor != centralEnd) return UsdzPreflightError::InvalidDirectory;
+    std::ranges::sort(localRanges);
+    for (size_t index = 1; index < localRanges.size(); ++index)
+        if (localRanges[index].first < localRanges[index - 1].second)
+            return UsdzPreflightError::InvalidDirectory;
+    if (archive) {
+        if (archive->entries.empty() || !IsLayerName(archive->entries.front().name)) {
+            *archive = {};
+            return UsdzPreflightError::InvalidDirectory;
+        }
+        archive->rootLayerName = archive->entries.front().name;
+    }
+    return UsdzPreflightError::None;
+}
+
+UsdzPreflightError PreflightUsdz(std::span<const std::byte> bytes,
+                                 const UsdzPreflightLimits& limits)
+{
+    return InspectUsdz(bytes, nullptr, limits);
 }
 
 } // namespace import_worker

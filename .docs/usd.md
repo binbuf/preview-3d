@@ -1,6 +1,6 @@
 # USD post-MVP work plan
 
-Status: implementation in progress; USD-001 through USD-003 complete, no USD product route is exposed
+Status: implementation in progress; USD-001 through USD-005 complete, no USD product route is exposed
 
 Prepared: 2026-09-17  
 Design authority: [design/README.md](design/README.md)
@@ -462,7 +462,7 @@ existing AppContainer worker, behind test-only routing.
 
 ## USD-005: USDZ, materials, textures, and fast-path dependencies
 
-Status: ready
+Status: complete (2026-09-17)
 Depends on: USD-004  
 Unblocks: USD-007 and USD-008
 
@@ -510,6 +510,67 @@ dependency subset.
   path reaches worker filesystem APIs.
 - Unsafe, malformed, and over-limit cases cannot become a permissive OpenUSD
   retry, and the next valid import succeeds.
+
+### Completion record
+
+- The product-owned USDZ inspector now validates EOCD and central/local-header
+  agreement, stored-only entries, encryption/data-descriptor/ZIP64 rejection,
+  normalized case-folded paths, duplicates, 64-byte data alignment, checked
+  ranges with no overlap, per-entry and 4 GiB aggregate limits, CRC32, and
+  cancellation. It returns bounded entry views backed by the brokered primary
+  mapping; nothing is extracted, and every archive-policy failure is terminal
+  `ArchiveLimit` before TinyUSDZ runs.
+- TinyUSDZ's wildcard asset resolver is closed over that entry map and the
+  existing synchronous `RequestSidecarFile` protocol. Relative image assets
+  are normalized and budgeted (64 unique requests, 512 MiB retained encoded
+  bytes); absolute, UNC, URL, ADS, traversal, package/layer, and unapproved
+  extension requests fail as `UnsafeReference`. Case collisions and content
+  type/extension mismatches are terminal, while missing or corrupt optional
+  images receive a bounded warning and deterministic fallback image.
+- The USD-001 boundary remains authoritative: the fast path accepts one
+  self-contained root layer and image assets only. Sublayers, references,
+  payloads, variants, and other composition still return pre-publication
+  `UnsupportedComposition` for USD-006/007; USD-005 did not broaden local
+  sidecars into a second layer loader.
+- USD Preview Surface values now populate the normalized base color/opacity,
+  metallic/roughness, emissive, normal, UV transform, alpha, and double-sided
+  fields. Tydra material subsets are range/overlap validated and split into
+  material-homogeneous geometry runs, so ordinary and point-instancer records
+  bind the correct material chunk. Unsupported optional shader inputs and UV
+  sets become bounded status warnings.
+- Texture bytes remain encoded through TinyUSDZ. Product code sniffs them and
+  uses the existing WIC, WebP, and KTX/Basis adapters with semantic sRGB/linear
+  selection, per-image and aggregate decoded limits, cancellation, and small
+  tail-mip-first publication where a mip chain exists. TinyUSDZ's built-in
+  image loader and runtime-installed codecs remain disabled.
+- Resolver/path/type/composition classification completes before a chunk
+  writer exists. A terminal late decode/write failure still invalidates the
+  generation in the broker; it can never request the more permissive OpenUSD
+  retry. The next pooled import is independently classified.
+- TinyUSDZ 0.9.1 requires `TimeCode::Default()` specifically for Tydra
+  conversion of the canonical static USDZ fixture; numeric time zero makes
+  that wrapper fail even though its contained crate converts directly. Stage
+  policy/classification still uses the deterministic selected static time.
+  Re-test this quirk when advancing the pin.
+- Focused real-AppContainer tests cover brokered PNG materials, material
+  subsets, contained USDZ textures with no extraction, missing/corrupt
+  fallback, extension/content mismatch, unsafe traversal, bounded archive
+  views, CRC-backed preflight, and cancellation. Debug and Release pass all
+  five USD-005 cases (the final suite has 91 assertions after transform and
+  negative type-mismatch coverage); existing USD-003/004 cases remain green.
+  Unit tests pass 98/98 in both configurations. Full Debug isolation passes
+  271/275 with only the four previously documented FBX fixture-rewrite
+  failures; full Release passes 263/275 with those four plus eight known
+  randomized sidecar
+  scratch-directory collisions. No full-run failure enters a USD route.
+- The TinyUSDZ overlay is revision `0.9.1#2`. Its installed copyright now
+  combines the upstream license with notices for every vendored component
+  used by the minimal static library, and portable-package notice generation
+  includes TinyUSDZ. The clean Release worker is 5,413,376 bytes, 27,136 bytes
+  over USD-004 and 109,056 bytes over the post-USD-001 worker; TinyUSDZ still
+  adds no runtime DLL. An unsigned engineering portable package passes
+  dependency closure and stages `licenses/tinyusdz.txt` plus TinyUSDZ in its
+  SBOM.
 
 ## USD-006: compatibility-host platform and fallback lifecycle
 

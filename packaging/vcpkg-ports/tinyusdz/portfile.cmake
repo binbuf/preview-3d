@@ -50,4 +50,21 @@ vcpkg_copy_pdbs()
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
 file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/share")
 set(VCPKG_POLICY_ALLOW_EMPTY_FOLDERS enabled)
-vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")
+vcpkg_install_copyright(FILE_LIST
+    "${SOURCE_PATH}/LICENSE"
+    "${CMAKE_CURRENT_LIST_DIR}/VENDORED-NOTICES.txt"
+    "${SOURCE_PATH}/src/lz4/LICENSE"
+    "${SOURCE_PATH}/src/external/fast_float/LICENSE-APACHE"
+    "${SOURCE_PATH}/src/external/fast_float/LICENSE-BOOST"
+    "${SOURCE_PATH}/src/external/fast_float/LICENSE-MIT"
+    "${SOURCE_PATH}/src/external/floaxie/LICENSE"
+    "${SOURCE_PATH}/src/external/jsteemann/LICENSE"
+    "${SOURCE_PATH}/src/external/filesystem/LICENSE"
+    "${SOURCE_PATH}/src/external/glob/LICENSE"
+    "${SOURCE_PATH}/src/external/mapbox/earcut/LICENSE"
+    "${SOURCE_PATH}/src/external/mapbox/eternal/LICENSE.md"
+    "${SOURCE_PATH}/src/external/linalg.UNLICENSE"
+    "${SOURCE_PATH}/src/external/string_id/LICENSE"
+    "${SOURCE_PATH}/src/external/dtoa_milo.LICENSE"
+    "${SOURCE_PATH}/src/external/jeaiii_to_text.LICENSE"
+)

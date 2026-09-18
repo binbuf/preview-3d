@@ -202,7 +202,7 @@ std::vector<std::byte> BuildStoredZip(std::span<const std::string_view> names)
     for (const auto name : names) {
         entries.push_back({ static_cast<uint32_t>(zip.size()), name });
         Write32(zip, 0x04034b50u); Write16(zip, 20); Write16(zip, 0); Write16(zip, 0);
-        Write16(zip, 0); Write16(zip, 0); Write32(zip, 0); Write32(zip, 1); Write32(zip, 1);
+        Write16(zip, 0); Write16(zip, 0); Write32(zip, 0xd202ef8du); Write32(zip, 1); Write32(zip, 1);
         Write16(zip, static_cast<uint16_t>(name.size()));
         const size_t extraLength = (64 - ((zip.size() + 2 + name.size()) & 63u)) & 63u;
         Write16(zip, static_cast<uint16_t>(extraLength));
@@ -213,7 +213,7 @@ std::vector<std::byte> BuildStoredZip(std::span<const std::string_view> names)
     const uint32_t centralOffset = static_cast<uint32_t>(zip.size());
     for (const auto& entry : entries) {
         Write32(zip, 0x02014b50u); Write16(zip, 20); Write16(zip, 20); Write16(zip, 0);
-        Write16(zip, 0); Write16(zip, 0); Write16(zip, 0); Write32(zip, 0); Write32(zip, 1);
+        Write16(zip, 0); Write16(zip, 0); Write16(zip, 0); Write32(zip, 0xd202ef8du); Write32(zip, 1);
         Write32(zip, 1); Write16(zip, static_cast<uint16_t>(entry.name.size())); Write16(zip, 0);
         Write16(zip, 0); Write16(zip, 0); Write16(zip, 0); Write32(zip, 0);
         Write32(zip, entry.localOffset);

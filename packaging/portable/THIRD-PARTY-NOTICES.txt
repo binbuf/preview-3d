@@ -12,6 +12,7 @@ installed by those pinned ports are preserved in licenses\:
   libwebp.txt      WebP codec and libsharpyuv
   meshoptimizer.txt meshoptimizer
   simdjson.txt     simdjson
+  tinyusdz.txt     TinyUSDZ and its enabled vendored reader/render-data code
   ufbx.txt         ufbx FBX and OBJ/MTL loader
   zstd.txt         Zstandard
 

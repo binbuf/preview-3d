@@ -8,7 +8,17 @@
 #include "UsdAdapter.h"
 
 #include "BoundedChunkWriter.h"
+#include "ImageFormatSniff.h"
+#include "SidecarFileClient.h"
+#include "TextureDecodePolicy.h"
+#include "TextureTranscodeAdapter.h"
+#include "UsdZipPreflight.h"
+#include "WebpDecodeAdapter.h"
+#include "WicImageDecodeAdapter.h"
 #include "model_core/GeometryBounds.h"
+#include "model_core/ControlProtocol.h"
+#include "model_core/MaterialPayload.h"
+#include "model_core/PixelFormats.h"
 #include "model_core/TierALimits.h"
 #include "model_core/VertexLayouts.h"
 
@@ -17,9 +27,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <numbers>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -41,6 +55,176 @@ using tinyusdz::tydra::RenderMesh;
 using tinyusdz::tydra::RenderScene;
 using tinyusdz::tydra::VertexAttribute;
 using tinyusdz::tydra::VertexAttributeFormat;
+
+constexpr uint64_t kUsdMaxEncodedTextureBytes = 256ull * 1024 * 1024;
+
+std::string FoldAscii(std::string_view value)
+{
+    std::string folded(value);
+    std::ranges::transform(folded, folded.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return folded;
+}
+
+std::optional<std::string> NormalizeAssetPath(std::string_view input)
+{
+    if (input.empty() || input.size() > model_core::kMaxSidecarRelativePathBytes
+        || input.front() == '/' || input.find('\\') != std::string_view::npos
+        || input.find(':') != std::string_view::npos) return std::nullopt;
+    if (std::ranges::any_of(input, [](unsigned char ch) {
+            return ch < 0x20 || ch == 0x7f;
+        })) return std::nullopt;
+    std::string result;
+    size_t start = 0;
+    uint32_t depth = 0;
+    while (start <= input.size()) {
+        const size_t end = input.find('/', start);
+        const std::string_view component = input.substr(
+            start, end == std::string_view::npos ? input.size() - start : end - start);
+        if (component.empty() || component == "..") return std::nullopt;
+        if (component != ".") {
+            if (++depth > 32) return std::nullopt;
+            if (!result.empty()) result.push_back('/');
+            result.append(component);
+        }
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    if (result.empty()) return std::nullopt;
+    const auto dot = result.find_last_of('.');
+    if (dot == std::string::npos) return std::nullopt;
+    const std::string extension = FoldAscii(std::string_view(result).substr(dot));
+    if (extension != ".png" && extension != ".jpg" && extension != ".jpeg"
+        && extension != ".bmp" && extension != ".tif" && extension != ".tiff"
+        && extension != ".webp" && extension != ".ktx2") return std::nullopt;
+    return result;
+}
+
+struct AssetContext {
+    std::span<const std::byte> source;
+    const UsdzArchiveView* archive = nullptr;
+    SidecarFileClient* sidecars = nullptr;
+    uint64_t maxBytes = 0;
+    uint32_t maxCount = 0;
+    uint64_t retainedBytes = 0;
+    uint32_t retainedCount = 0;
+    uint32_t warnings = 0;
+    ImportErrorCode error = ImportErrorCode::None;
+    std::unordered_map<std::string, std::vector<std::byte>> local;
+    std::unordered_set<std::string> missing;
+    std::unordered_set<std::string> chargedArchive;
+
+    const UsdzEntryView* FindArchive(std::string_view normalized) const
+    {
+        if (!archive) return nullptr;
+        std::string candidate(normalized);
+        const size_t slash = archive->rootLayerName.find_last_of('/');
+        if (slash != std::string::npos) candidate = archive->rootLayerName.substr(0, slash + 1) + candidate;
+        const std::string folded = FoldAscii(candidate);
+        const auto found = std::ranges::find_if(archive->entries, [&](const UsdzEntryView& entry) {
+            return entry.foldedName == folded;
+        });
+        return found == archive->entries.end() ? nullptr : &*found;
+    }
+
+    bool Charge(std::string_view key, uint64_t bytes, bool archiveAsset)
+    {
+        if (archiveAsset && chargedArchive.contains(std::string(key))) return true;
+        if (retainedCount >= maxCount || bytes > maxBytes - retainedBytes) {
+            error = ImportErrorCode::AggregateSourceLimit;
+            return false;
+        }
+        ++retainedCount;
+        retainedBytes += bytes;
+        if (archiveAsset) chargedArchive.emplace(key);
+        return true;
+    }
+};
+
+int ResolveAsset(const char* assetName, const std::vector<std::string>&,
+                 std::string* resolved, std::string*, void* userdata)
+{
+    auto& context = *static_cast<AssetContext*>(userdata);
+    const auto normalized = NormalizeAssetPath(assetName ? std::string_view(assetName) : std::string_view{});
+    if (!normalized) {
+        context.error = ImportErrorCode::UnsafeReference;
+        return -2;
+    }
+    *resolved = *normalized;
+    return 0;
+}
+
+bool EnsureLocalAsset(AssetContext& context, const std::string& path)
+{
+    if (context.local.contains(path)) return true;
+    if (context.missing.contains(path)) return false;
+    if (!context.sidecars) {
+        context.missing.insert(path);
+        context.warnings = (std::min)(64u, context.warnings + 1);
+        return false;
+    }
+    const uint64_t remaining = context.retainedBytes < context.maxBytes
+        ? context.maxBytes - context.retainedBytes : 0;
+    auto result = context.sidecars->RequestSidecarBytes(path,
+        (std::min)(remaining, kUsdMaxEncodedTextureBytes));
+    if (!result.bytes) {
+        if (result.errorCode == ImportErrorCode::UnsafeReference
+            || result.errorCode == ImportErrorCode::FileChanged
+            || result.errorCode == ImportErrorCode::ImportProtocolViolation
+            || result.errorCode == ImportErrorCode::ResourceLimit
+            || result.errorCode == ImportErrorCode::AggregateSourceLimit) {
+            context.error = result.errorCode;
+        } else {
+            context.warnings = (std::min)(64u, context.warnings + 1);
+        }
+        context.missing.insert(path);
+        return false;
+    }
+    if (!context.Charge(path, result.bytes->size(), false)) return false;
+    context.local.emplace(path, std::move(*result.bytes));
+    return true;
+}
+
+int SizeAsset(const char* resolvedName, uint64_t* bytes, std::string*, void* userdata)
+{
+    auto& context = *static_cast<AssetContext*>(userdata);
+    const std::string path = resolvedName ? resolvedName : "";
+    if (const UsdzEntryView* entry = context.FindArchive(path)) {
+        if (!context.Charge(path, entry->byteSize, true)) return -2;
+        *bytes = entry->byteSize;
+        return entry->byteSize ? 0 : -1;
+    }
+    if (!EnsureLocalAsset(context, path)) return -1;
+    *bytes = context.local.at(path).size();
+    return *bytes ? 0 : -1;
+}
+
+int ReadAsset(const char* resolvedName, uint64_t requested, uint8_t* output,
+              uint64_t* bytes, std::string*, void* userdata)
+{
+    auto& context = *static_cast<AssetContext*>(userdata);
+    const std::string path = resolvedName ? resolvedName : "";
+    std::span<const std::byte> source;
+    if (const UsdzEntryView* entry = context.FindArchive(path)) {
+        if (entry->dataOffset > context.source.size()
+            || entry->byteSize > context.source.size() - entry->dataOffset) {
+            context.error = ImportErrorCode::ArchiveLimit;
+            return -2;
+        }
+        source = context.source.subspan(size_t(entry->dataOffset), size_t(entry->byteSize));
+    } else {
+        if (!EnsureLocalAsset(context, path)) return -1;
+        source = context.local.at(path);
+    }
+    if (requested < source.size()) {
+        context.error = ImportErrorCode::ResourceLimit;
+        return -2;
+    }
+    if (!source.empty()) std::memcpy(output, source.data(), source.size());
+    *bytes = source.size();
+    return 0;
+}
 
 UsdImportOutcome Fail(ImportErrorCode code,
                       ImportFailurePhase phase = ImportFailurePhase::Geometry)
@@ -326,7 +510,320 @@ bool MakeVertex(const RenderMesh& mesh, uint32_t sourceIndex,
 struct GeometryRecord {
     uint32_t chunkId = 0;
     ChunkDescriptor descriptor{};
+    int materialIndex = -1;
 };
+
+struct DecodedUsdImage {
+    PixelFormatId format = PixelFormatId::Unknown;
+    ColorSpaceId space = ColorSpaceId::Linear;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t levels = 0;
+    std::vector<std::byte> pixels;
+};
+
+struct MaterialContext {
+    const RenderScene* scene = nullptr;
+    const TextureDecodeOptions* options = nullptr;
+    ImportErrorCode error = ImportErrorCode::None;
+    uint32_t optionalWarnings = 0;
+    uint32_t textureWarnings = 0;
+    uint64_t decodedBytes = 0;
+    uint64_t decodedPixels = 0;
+    std::unordered_map<uint64_t, uint32_t> imageIds;
+};
+
+void Warn(uint32_t& warnings) { warnings = (std::min)(64u, warnings + 1); }
+
+bool ImageExtensionMatches(std::string_view path, SniffedImageFormat format)
+{
+    const size_t dot = path.find_last_of('.');
+    if (dot == std::string_view::npos) return false;
+    const std::string extension = FoldAscii(path.substr(dot));
+    switch (format) {
+    case SniffedImageFormat::Png: return extension == ".png";
+    case SniffedImageFormat::Jpeg: return extension == ".jpg" || extension == ".jpeg";
+    case SniffedImageFormat::Bmp: return extension == ".bmp";
+    case SniffedImageFormat::Tiff: return extension == ".tif" || extension == ".tiff";
+    case SniffedImageFormat::WebP: return extension == ".webp";
+    case SniffedImageFormat::Ktx2: return extension == ".ktx2";
+    // An unrecognized/corrupt payload is an optional-texture decode failure.
+    // Only a positively identified format that disagrees with the authored
+    // extension is a terminal type-mismatch classification.
+    case SniffedImageFormat::Unknown: return true;
+    default: return false;
+    }
+}
+
+std::optional<DecodedUsdImage> DecodeImage(MaterialContext& context, int64_t imageIndex,
+                                           ColorSpaceId space, TextureSemantic semantic)
+{
+    if (!context.scene || imageIndex < 0 || size_t(imageIndex) >= context.scene->images.size()) {
+        Warn(context.textureWarnings);
+        return std::nullopt;
+    }
+    const auto& source = context.scene->images[size_t(imageIndex)];
+    if (source.buffer_id < 0 || size_t(source.buffer_id) >= context.scene->buffers.size()) {
+        Warn(context.textureWarnings);
+        return std::nullopt;
+    }
+    const auto& raw = context.scene->buffers[size_t(source.buffer_id)].data;
+    const std::span encoded(reinterpret_cast<const std::byte*>(raw.data()), raw.size());
+    if (encoded.empty() || encoded.size() > kUsdMaxEncodedTextureBytes) {
+        Warn(context.textureWarnings);
+        return std::nullopt;
+    }
+    const SniffedImageFormat sniffed = SniffImageFormat(encoded);
+    if (!ImageExtensionMatches(source.asset_identifier, sniffed)) {
+        context.error = ImportErrorCode::UnsafeReference;
+        return std::nullopt;
+    }
+    TextureDecodeOptions options = context.options ? *context.options : TextureDecodeOptions{};
+    options.semantic = semantic;
+    const uint64_t remainingBytes = context.decodedBytes < kMaxAggregateTextureBytes
+        ? kMaxAggregateTextureBytes - context.decodedBytes : 0;
+    const uint64_t remainingPixels = context.decodedPixels < kMaxAggregateTexturePixels
+        ? kMaxAggregateTexturePixels - context.decodedPixels : 0;
+    options.maxDecodedBytes = (std::min)(options.maxDecodedBytes, remainingBytes);
+    options.maxPixels = (std::min)(options.maxPixels, remainingPixels);
+
+    DecodedUsdImage image;
+    image.space = space;
+    switch (sniffed) {
+    case SniffedImageFormat::Ktx2:
+        if (auto decoded = TranscodeKtx2BasisImage(encoded, options)) {
+            image.format = decoded->pixelFormat;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::WebP:
+        if (auto decoded = DecodeWebpImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = decoded->colorSpace;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Png:
+    case SniffedImageFormat::Jpeg:
+    case SniffedImageFormat::Bmp:
+    case SniffedImageFormat::Tiff:
+        if (auto decoded = DecodeRasterImageWic(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = decoded->colorSpace;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    default: break;
+    }
+    if (options.Cancelled()) {
+        context.error = ImportErrorCode::Cancelled;
+        return std::nullopt;
+    }
+    if (image.pixels.empty()) {
+        Warn(context.textureWarnings);
+        return std::nullopt;
+    }
+    const uint64_t pixels = uint64_t(image.width) * image.height;
+    if (image.pixels.size() > remainingBytes || pixels > remainingPixels) {
+        context.error = ImportErrorCode::ResourceLimit;
+        return std::nullopt;
+    }
+    context.decodedBytes += image.pixels.size();
+    context.decodedPixels += pixels;
+    return image;
+}
+
+uint32_t EmitImage(BoundedChunkWriter& writer, const DecodedUsdImage& image,
+                   uint32_t firstMip, uint32_t refines)
+{
+    if (firstMip >= image.levels) return 0;
+    const auto prefix = firstMip
+        ? ComputeImagePixelBytes(image.format, image.width, image.height, firstMip)
+        : std::optional<uint64_t>{0};
+    if (!prefix || *prefix > image.pixels.size()) return 0;
+    ImagePayloadHeader header{};
+    header.pixelFormat = uint32_t(image.format);
+    header.width = (std::max)(1u, image.width >> firstMip);
+    header.height = (std::max)(1u, image.height >> firstMip);
+    header.mipLevels = image.levels - firstMip;
+    header.colorSpace = uint32_t(image.space);
+    header.reserved0 = refines;
+    header.pixelDataByteSize = image.pixels.size() - *prefix;
+    ChunkDescriptor descriptor{};
+    descriptor.topology = ChunkTopology::Image;
+    descriptor.chunkId = writer.NextId();
+    if (!writer.Add(descriptor, ChunkBytes(header),
+                    std::span(image.pixels).subspan(size_t(*prefix)))) return 0;
+    return descriptor.chunkId;
+}
+
+uint32_t ResolveTexture(BoundedChunkWriter& writer, MaterialContext& context,
+                        int textureIndex, ColorSpaceId space, TextureSemantic semantic)
+{
+    if (textureIndex < 0 || !context.scene || size_t(textureIndex) >= context.scene->textures.size())
+        return 0;
+    const auto& texture = context.scene->textures[size_t(textureIndex)];
+    const uint64_t key = uint64_t(uint32_t(texture.texture_image_id))
+        | (uint64_t(space) << 32) | (uint64_t(semantic) << 40);
+    if (const auto found = context.imageIds.find(key); found != context.imageIds.end())
+        return found->second;
+    auto image = DecodeImage(context, texture.texture_image_id, space, semantic);
+    if (!image) {
+        if (context.error != ImportErrorCode::None) return 0;
+        DecodedUsdImage fallback;
+        fallback.format = PixelFormatId::RGBA8_UNORM;
+        fallback.space = space;
+        fallback.width = fallback.height = semantic == TextureSemantic::Color ? 2u : 1u;
+        fallback.levels = 1;
+        fallback.pixels.resize(size_t(fallback.width) * fallback.height * 4, std::byte{255});
+        if (semantic == TextureSemantic::Color) {
+            for (unsigned pixel = 0; pixel < 4; ++pixel)
+                for (unsigned channel = 0; channel < 3; ++channel)
+                    fallback.pixels[pixel * 4 + channel]
+                        = std::byte((pixel == 0 || pixel == 3) ? 64 : 192);
+        } else if (semantic == TextureSemantic::Normal) {
+            fallback.pixels[0] = fallback.pixels[1] = std::byte{128};
+        } else if (semantic == TextureSemantic::Emissive) {
+            fallback.pixels[0] = fallback.pixels[1] = fallback.pixels[2] = std::byte{0};
+        }
+        image = std::move(fallback);
+    }
+
+    uint32_t firstMip = 0;
+    while (firstMip + 1 < image->levels) {
+        const auto prefix = ComputeImagePixelBytes(
+            image->format, image->width, image->height, firstMip + 1);
+        if (!prefix || image->pixels.size() - *prefix <= 64 * 1024) {
+            ++firstMip;
+            break;
+        }
+        ++firstMip;
+    }
+    const uint32_t initial = EmitImage(writer, *image, firstMip, 0);
+    if (!initial) { context.error = writer.Error(); return 0; }
+    if (firstMip && !EmitImage(writer, *image, 0, initial)) {
+        context.error = writer.Error();
+        return 0;
+    }
+    context.imageIds.emplace(key, initial);
+    return initial;
+}
+
+bool EmitMaterials(BoundedChunkWriter& writer, const RenderScene& scene,
+                   MaterialContext& context, std::vector<uint32_t>& materialIds)
+{
+    if (scene.materials.size() > kTierBMaterialLimit) {
+        context.error = ImportErrorCode::ResourceLimit;
+        return false;
+    }
+    materialIds.resize(scene.materials.size());
+    std::vector<bool> doubleSided(scene.materials.size());
+    for (const RenderMesh& mesh : scene.meshes) {
+        if (mesh.doubleSided && mesh.material_id >= 0
+            && size_t(mesh.material_id) < doubleSided.size()) doubleSided[size_t(mesh.material_id)] = true;
+        if (mesh.doubleSided) for (const auto& [name, subset] : mesh.material_subsetMap) {
+            (void)name;
+            if (subset.material_id >= 0 && size_t(subset.material_id) < doubleSided.size())
+                doubleSided[size_t(subset.material_id)] = true;
+        }
+    }
+    for (size_t index = 0; index < scene.materials.size(); ++index) {
+        if (context.options && context.options->Cancelled()) {
+            context.error = ImportErrorCode::Cancelled;
+            return false;
+        }
+        const auto& material = scene.materials[index];
+        const auto& shader = material.surfaceShader;
+        if (shader.useSpecularWorkflow || shader.specularColor.is_texture()
+            || shader.clearcoat.is_texture() || shader.clearcoat.value != 0.0f
+            || shader.clearcoatRoughness.is_texture()
+            || shader.displacement.is_texture() || shader.displacement.value != 0.0f
+            || shader.occlusion.is_texture() || shader.occlusion.value != 0.0f) {
+            Warn(context.optionalWarnings);
+        }
+        MaterialPayload payload{};
+        payload.baseColorFactor[0] = shader.diffuseColor.value[0];
+        payload.baseColorFactor[1] = shader.diffuseColor.value[1];
+        payload.baseColorFactor[2] = shader.diffuseColor.value[2];
+        payload.baseColorFactor[3] = shader.opacity.value;
+        payload.metallicFactor = shader.metallic.value;
+        payload.roughnessFactor = shader.roughness.value;
+        payload.emissiveFactor[0] = shader.emissiveColor.value[0];
+        payload.emissiveFactor[1] = shader.emissiveColor.value[1];
+        payload.emissiveFactor[2] = shader.emissiveColor.value[2];
+        payload.uvScale[0] = payload.uvScale[1] = 1.0f;
+        payload.alphaCutoff = shader.opacityThreshold.value > 0.0f
+            ? shader.opacityThreshold.value : 0.5f;
+        payload.alphaMode = uint32_t(shader.opacityThreshold.value > 0.0f
+            ? AlphaModeId::Mask : shader.opacity.is_texture() || shader.opacity.value < 1.0f
+                ? AlphaModeId::Blend : AlphaModeId::Opaque);
+        payload.flags = doubleSided[index] ? kMaterialFlagDoubleSided : 0;
+        for (float value : payload.baseColorFactor) if (!std::isfinite(value)) {
+            context.error = ImportErrorCode::MalformedData; return false;
+        }
+        if (!std::isfinite(payload.metallicFactor) || !std::isfinite(payload.roughnessFactor)
+            || !std::isfinite(payload.alphaCutoff)) {
+            context.error = ImportErrorCode::MalformedData; return false;
+        }
+        for (float value : payload.emissiveFactor) if (!std::isfinite(value)) {
+            context.error = ImportErrorCode::MalformedData; return false;
+        }
+
+        uint32_t images[4]{};
+        images[0] = ResolveTexture(writer, context, shader.diffuseColor.texture_id,
+                                   ColorSpaceId::Srgb, TextureSemantic::Color);
+        if (context.error != ImportErrorCode::None) return false;
+        if (shader.opacity.is_texture()
+            && shader.opacity.texture_id != shader.diffuseColor.texture_id) {
+            Warn(context.optionalWarnings);
+        }
+        if (shader.metallic.is_texture() && shader.roughness.is_texture()
+            && shader.metallic.texture_id == shader.roughness.texture_id) {
+            images[1] = ResolveTexture(writer, context, shader.roughness.texture_id,
+                                       ColorSpaceId::Linear, TextureSemantic::Data);
+        } else if (shader.metallic.is_texture() || shader.roughness.is_texture()) {
+            Warn(context.optionalWarnings);
+        }
+        if (context.error != ImportErrorCode::None) return false;
+        images[2] = ResolveTexture(writer, context, shader.normal.texture_id,
+                                   ColorSpaceId::Linear, TextureSemantic::Normal);
+        if (context.error != ImportErrorCode::None) return false;
+        images[3] = ResolveTexture(writer, context, shader.emissiveColor.texture_id,
+                                   ColorSpaceId::Srgb, TextureSemantic::Emissive);
+        if (context.error != ImportErrorCode::None) return false;
+
+        if (shader.diffuseColor.is_texture()
+            && size_t(shader.diffuseColor.texture_id) < scene.textures.size()) {
+            const auto& texture = scene.textures[size_t(shader.diffuseColor.texture_id)];
+            if (texture.has_transform2d) {
+                payload.uvOffset[0] = texture.tx_translation[0];
+                payload.uvOffset[1] = texture.tx_translation[1];
+                payload.uvScale[0] = texture.tx_scale[0];
+                payload.uvScale[1] = texture.tx_scale[1];
+                payload.uvRotation = texture.tx_rotation * (std::numbers::pi_v<float> / 180.0f);
+                if (!std::isfinite(payload.uvOffset[0]) || !std::isfinite(payload.uvOffset[1])
+                    || !std::isfinite(payload.uvScale[0]) || !std::isfinite(payload.uvScale[1])
+                    || !std::isfinite(payload.uvRotation)) {
+                    context.error = ImportErrorCode::MalformedData; return false;
+                }
+            }
+            if (!texture.varname_uv.empty() && texture.varname_uv != "st")
+                Warn(context.optionalWarnings);
+        }
+        ChunkDescriptor descriptor{};
+        descriptor.topology = ChunkTopology::Material;
+        descriptor.chunkId = writer.NextId();
+        for (size_t slot = 0; slot < 4; ++slot) descriptor.dependencyIds[slot] = images[slot];
+        descriptor.dependencyCount = uint32_t(std::ranges::count_if(images,
+            [](uint32_t value) { return value != 0; }));
+        if (!writer.Add(descriptor, ChunkBytes(payload))) {
+            context.error = writer.Error(); return false;
+        }
+        materialIds[index] = descriptor.chunkId;
+    }
+    return true;
+}
 
 bool TransformBounds(const ChunkDescriptor& geometry,
                      const tinyusdz::value::matrix4d& world,
@@ -373,11 +870,28 @@ bool EmitMesh(BoundedChunkWriter& writer, const RenderMesh& mesh, uint32_t meshO
         return false;
     }
 
-    for (uint64_t firstTriangle = 0; firstTriangle < meshTriangles;
-         firstTriangle += chunkTriangleLimit) {
+    std::vector<int> triangleMaterials(size_t(meshTriangles), mesh.material_id);
+    std::vector<bool> assigned(static_cast<size_t>(meshTriangles), false);
+    for (const auto& [name, subset] : mesh.material_subsetMap) {
+        (void)name;
+        for (const int face : subset.indices()) {
+            if (face < 0 || uint64_t(face) >= meshTriangles || assigned[size_t(face)]) {
+                error = ImportErrorCode::MalformedData;
+                return false;
+            }
+            assigned[size_t(face)] = true;
+            triangleMaterials[size_t(face)] = subset.material_id;
+        }
+    }
+
+    for (uint64_t firstTriangle = 0; firstTriangle < meshTriangles;) {
         if (options.Cancelled()) { error = ImportErrorCode::Cancelled; return false; }
+        uint64_t runEnd = firstTriangle + 1;
+        while (runEnd < meshTriangles
+               && triangleMaterials[size_t(runEnd)] == triangleMaterials[size_t(firstTriangle)])
+            ++runEnd;
         const uint32_t count = static_cast<uint32_t>((std::min<uint64_t>)(
-            chunkTriangleLimit, meshTriangles - firstTriangle));
+            chunkTriangleLimit, runEnd - firstTriangle));
         std::vector<VertexPositionNormalUv0TangentColorF32> vertices(size_t(count) * 3);
         std::vector<uint32_t> normalizedIndices(size_t(count) * 3);
         const uint32_t firstSourceIndex = indices[size_t(firstTriangle) * 3];
@@ -422,7 +936,9 @@ bool EmitMesh(BoundedChunkWriter& writer, const RenderMesh& mesh, uint32_t meshO
             error = writer.Error();
             return false;
         }
-        records.push_back(GeometryRecord{descriptor.chunkId, descriptor});
+        records.push_back(GeometryRecord{
+            descriptor.chunkId, descriptor, triangleMaterials[size_t(firstTriangle)]});
+        firstTriangle += count;
     }
     triangleCount += meshTriangles;
     vertexCount += meshTriangles * 3;
@@ -577,14 +1093,18 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
     if (sourceBytes.empty()) return Fail(ImportErrorCode::EmptyGeometry);
     if (sourceBytes.size() > kTierBPrimarySourceBytes)
         return Fail(ImportErrorCode::PrimarySourceLimit);
-    if (options.format != SourceFormatId::Usda && options.format != SourceFormatId::Usdc)
+    if (options.format != SourceFormatId::Usda && options.format != SourceFormatId::Usdc
+        && options.format != SourceFormatId::Usdz)
         return Fail(ImportErrorCode::UnsupportedEncoding);
+    if (options.format == SourceFormatId::Usdz && !options.archive)
+        return Fail(ImportErrorCode::ArchiveLimit);
     if (options.Cancelled()) return Fail(ImportErrorCode::Cancelled);
     if (!TierBScratchLimit()) return Fail(ImportErrorCode::ScratchLimit);
 
     tinyusdz::USDLoadOptions loadOptions{};
     loadOptions.num_threads = 1;
     loadOptions.max_memory_limit_in_mb = 1536; // advisory; Job commit is authoritative
+    loadOptions.max_allowed_asset_size_in_mb = 256;
     loadOptions.load_assets = false;
     loadOptions.do_composition = false;
     loadOptions.load_sublayers = false;
@@ -596,7 +1116,8 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
     tinyusdz::Stage stage;
     std::string warning, parseError;
     const char* syntheticName = options.format == SourceFormatId::Usda
-        ? "broker-primary.usda" : "broker-primary.usdc";
+        ? "broker-primary.usda" : options.format == SourceFormatId::Usdc
+            ? "broker-primary.usdc" : "broker-primary.usd";
     if (!tinyusdz::LoadUSDFromMemory(
             reinterpret_cast<const uint8_t*>(sourceBytes.data()), sourceBytes.size(),
             syntheticName, &stage, &warning, &parseError, loadOptions))
@@ -622,8 +1143,10 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
     if (options.Cancelled()) return Fail(ImportErrorCode::Cancelled);
 
     tinyusdz::tydra::RenderSceneConverterEnv environment(stage);
-    environment.usd_filename = syntheticName;
-    environment.timecode = time;
+    environment.usd_filename = options.format == SourceFormatId::Usdz
+        ? options.archive->rootLayerName : syntheticName;
+    environment.timecode = options.format == SourceFormatId::Usdz
+        ? tinyusdz::value::TimeCode::Default() : time;
     environment.tinterp = tinyusdz::value::TimeSampleInterpolationType::Linear;
     environment.scene_config.load_texture_assets = false;
     environment.mesh_config.triangulate = true;
@@ -634,16 +1157,49 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
     environment.material_config.texture_image_loader_function = nullptr;
     environment.material_config.allow_missing_asset = true;
     environment.material_config.allow_texture_load_failure = true;
+    AssetContext assets;
+    assets.source = sourceBytes;
+    assets.archive = options.archive;
+    assets.sidecars = options.sidecars;
+    assets.maxBytes = options.maxAggregateDependencyBytes;
+    assets.maxCount = options.maxDependencyCount;
+    tinyusdz::AssetResolutionHandler assetHandler{};
+    assetHandler.resolve_fun = ResolveAsset;
+    assetHandler.size_fun = SizeAsset;
+    assetHandler.read_fun = ReadAsset;
+    assetHandler.userdata = &assets;
+    environment.asset_resolver.register_wildcard_asset_resolution_handler(assetHandler);
 
     RenderScene scene;
     tinyusdz::tydra::RenderSceneConverter converter;
     if (!converter.ConvertToRenderScene(environment, &scene))
-        return Fail(ImportErrorCode::MalformedData, ImportFailurePhase::Geometry);
+        return Fail(assets.error != ImportErrorCode::None ? assets.error
+                                                          : ImportErrorCode::MalformedData,
+                    assets.error != ImportErrorCode::None
+                        ? ImportFailurePhase::Sidecars : ImportFailurePhase::Geometry);
+    if (assets.error != ImportErrorCode::None)
+        return Fail(assets.error, ImportFailurePhase::Sidecars);
     if (options.Cancelled()) return Fail(ImportErrorCode::Cancelled);
     if (scene.meshes.empty()) return Fail(ImportErrorCode::EmptyGeometry);
     if (scene.meshes.size() > kTierBObjectLimit)
         return Fail(ImportErrorCode::ResourceLimit);
-    if (!scene.materials.empty() || !scene.images.empty()) SaturatingWarn(policy);
+    if (scene.materials.size() > kTierBMaterialLimit
+        || scene.images.size() > uint64_t(kTierBMaterialLimit) * 4
+        || scene.textures.size() > uint64_t(kTierBMaterialLimit) * 4)
+        return Fail(ImportErrorCode::ResourceLimit, ImportFailurePhase::Textures);
+    // Resolver/path/type classification is complete before a writer exists,
+    // so an unsafe late texture cannot follow candidate publication.
+    for (const auto& image : scene.images) {
+        if (image.buffer_id < 0) continue; // optional missing asset; deterministic fallback later
+        if (size_t(image.buffer_id) >= scene.buffers.size())
+            return Fail(ImportErrorCode::MalformedData, ImportFailurePhase::Textures);
+        const auto& raw = scene.buffers[size_t(image.buffer_id)].data;
+        const std::span encoded(reinterpret_cast<const std::byte*>(raw.data()), raw.size());
+        if (encoded.empty() || encoded.size() > kUsdMaxEncodedTextureBytes)
+            return Fail(ImportErrorCode::ResourceLimit, ImportFailurePhase::Textures);
+        if (!ImageExtensionMatches(image.asset_identifier, SniffImageFormat(encoded)))
+            return Fail(ImportErrorCode::UnsafeReference, ImportFailurePhase::Sidecars);
+    }
 
     std::vector<FlatNode> flatNodes;
     flatNodes.reserve(policy.primCount);
@@ -738,6 +1294,15 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
     metadata.nodeCount = static_cast<uint32_t>(flatNodes.size() + pointInstances.size());
     BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
 
+    MaterialContext materialContext;
+    materialContext.scene = &scene;
+    materialContext.options = options.textureOptions;
+    std::vector<uint32_t> materialIds;
+    if (!EmitMaterials(writer, scene, materialContext, materialIds))
+        return Fail(materialContext.error == ImportErrorCode::None
+                        ? writer.Error() : materialContext.error,
+                    ImportFailurePhase::Textures);
+
     if (destination.size() <= kSectionHeaderSize + kChunkDescriptorSize)
         return Fail(ImportErrorCode::ResourceLimit);
     constexpr uint64_t triangleBytes = 3 * sizeof(VertexPositionNormalUv0TangentColorF32)
@@ -803,6 +1368,11 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
             payload.instanceId = writer.NextId();
             payload.nodeId = nodeIds[index];
             payload.geometryChunkId = record.chunkId;
+            if (record.materialIndex >= 0) {
+                if (size_t(record.materialIndex) >= materialIds.size())
+                    return Fail(ImportErrorCode::MalformedData);
+                payload.materialChunkId = materialIds[size_t(record.materialIndex)];
+            }
             payload.flags = source.visible ? kSceneRecordVisible : 0;
             if (!TransformBounds(record.descriptor, source.node->global_matrix,
                                  payload.worldMin, payload.worldMax))
@@ -818,6 +1388,11 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
             payload.instanceId = writer.NextId();
             payload.nodeId = pointNodeIds[index];
             payload.geometryChunkId = record.chunkId;
+            if (record.materialIndex >= 0) {
+                if (size_t(record.materialIndex) >= materialIds.size())
+                    return Fail(ImportErrorCode::MalformedData);
+                payload.materialChunkId = materialIds[size_t(record.materialIndex)];
+            }
             payload.flags = source.visible ? kSceneRecordVisible : 0;
             if (!TransformBounds(record.descriptor, source.worldMatrix,
                                  payload.worldMin, payload.worldMax))
@@ -827,10 +1402,13 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
     }
     if (!instanceCount) return Fail(ImportErrorCode::EmptyGeometry);
 
-    if (policy.optionalWarnings || !warning.empty() || !converter.GetWarning().empty()) {
+    if (policy.optionalWarnings || materialContext.optionalWarnings || assets.warnings
+        || materialContext.textureWarnings || !warning.empty() || !converter.GetWarning().empty()) {
         ImportStatusPayload status{};
         status.optionalFeatureWarnings = (std::min)(64u, policy.optionalWarnings
+            + materialContext.optionalWarnings + assets.warnings
             + uint32_t(!warning.empty()) + uint32_t(!converter.GetWarning().empty()));
+        status.textureWarnings = materialContext.textureWarnings;
         ChunkDescriptor descriptor{};
         descriptor.topology = ChunkTopology::ImportStatus;
         descriptor.chunkId = writer.NextId();

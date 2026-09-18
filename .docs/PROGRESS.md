@@ -4,6 +4,32 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **USD-005 USDZ/material/texture fast path (2026-09-17): complete, still
+  test-only.** The TinyUSDZ route now imports independently preflighted USDZ,
+  brokered local or archive-contained image assets, USD Preview Surface
+  materials, material subsets, and product-decoded WIC/WebP/KTX textures. The
+  accepted fast boundary is unchanged: one self-contained root layer plus
+  images; every composition arc remains an atomic `UnsupportedComposition`
+  handoff for USD-006/007. No viewer, registration, activation, installer
+  extension, or thumbnail behavior advertises USD yet.
+
+  Debug and Release clean worker/test builds pass with warnings-as-errors;
+  `[usd-005]` passes 5 cases / 91 assertions in each configuration, including
+  contained USDZ assets, brokered PNG, subset bindings, archive cancellation,
+  optional missing/corrupt fallbacks, extension/content mismatch, and unsafe
+  traversal. TinyUSDZ's overlay is now `0.9.1#2`, the installed/portable
+  copyright includes its enabled vendored components, and the Release worker
+  is 5,413,376 B (27,136 B over USD-004; no new DLL). USD-006 is the next
+  independently ready task; thumbnails remain USD-010.
+
+  Unit passes 98/98 in both configurations (7,617 Debug / 7,529 Release
+  assertions). Full Debug isolation passes 271/275 with only the four known
+  FBX fixture-string rewrite failures. Full Release passes 263/275 with those
+  four plus eight already documented randomized sidecar scratch-directory
+  collisions; all focused USD cases are green in both runs. The unsigned
+  engineering portable-package check passes dependency closure, stages the
+  50,356-byte combined TinyUSDZ notice, and lists TinyUSDZ `0.9.1#2` in SBOM.
+
 - **USD-003 USD-family protocol and normalized contract (2026-09-17):
   complete.** Protocol v10 remains byte-compatible. Closed source identities
   `USDA=9`, `USDC=10`, and `USDZ=11` and `UpAxisId::X=3` were appended without
@@ -1427,10 +1453,10 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
   worker project.
 - Composition classification must finish before `BoundedChunkWriter` exists.
   This guarantees that a valid sublayer/reference/payload/variant/instanceable
-  stage returns `UnsupportedComposition` with zero candidate batches. Valid
-  USDZ similarly remains `UnsupportedEncoding` after archive preflight until
-  USD-005 owns archive assets/dependencies; malformed/unsafe archives remain
-  terminal `ArchiveLimit` and never request compatibility fallback.
+  stage returns `UnsupportedComposition` with zero candidate batches. At
+  USD-004 completion valid USDZ still returned `UnsupportedEncoding`; USD-005
+  superseded that handoff with archive-backed import. Malformed/unsafe archives
+  remain terminal `ArchiveLimit` and never request compatibility fallback.
 - Qualification: full Debug and Release solution builds passed. `[usd-004]`
   passed 56 assertions and `[usd-003]` passed 123 assertions in both
   configurations; Debug `Tests.Unit` passed 7,617 assertions and Release
@@ -1442,3 +1468,47 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
   three unrelated `SidecarPathResolverTests` scratch-directory name collisions
   in that randomized full-suite order. All focused USD tests passed in both
   runs.
+
+### USD-005 USDZ, resolver, material, and packaging findings
+
+- Product-owned archive inspection now does more than structure preflight: it
+  verifies each stored entry's CRC32 with cancellation checks, rejects local
+  entry overlaps, and returns offset/length views into the original brokered
+  mapping. Keep this map as the sole USDZ asset authority; extracting files or
+  letting parser-generated paths reach Win32 would undo the boundary.
+- With `RenderSceneConverterEnv.scene_config.load_texture_assets=false`,
+  TinyUSDZ 0.9.1 still uses `AssetResolutionHandler` to obtain encoded texture
+  bytes and fills `RenderScene::images`/`buffers`. Register a wildcard handler
+  with resolve, size, and read callbacks—otherwise the library can fall back
+  to its own filesystem behavior. Product code, not TinyUSDZ, then owns
+  sniffing and WIC/WebP/KTX decode.
+- The wildcard resolver intentionally approves image extensions only. Under
+  the USD-001 policy, local sublayers/references/payloads are composition, not
+  “fast dependencies”; they must stay `UnsupportedComposition` until the
+  broker-only OpenUSD path exists. USD-006/007 must not reuse the image-only
+  sidecar rule as a composition resolver policy.
+- For USDZ only, pinned TinyUSDZ/Tydra fails conversion of the canonical static
+  cube when `RenderSceneConverterEnv.timecode` is numeric zero, while
+  `TimeCode::Default()` succeeds; the same contained crate converts at zero.
+  The adapter therefore uses Default only for Tydra's USDZ conversion while
+  retaining the separately classified deterministic stage time. Re-test this
+  workaround on every TinyUSDZ pin change.
+- Tydra's material-subset indices refer to its triangulated face domain for
+  the supported conversion. Validate every index and reject overlaps before
+  writing; then split consecutive equal-material runs. This preserves bounded
+  chunking and lets all ordinary/point instances reuse geometry with the
+  correct normalized material ID.
+- Treat a positively sniffed image whose extension disagrees as terminal
+  `UnsafeReference`; treat bytes that cannot be sniffed/decoded as a corrupt
+  optional texture and publish the deterministic warning/fallback image. This
+  distinction prevents type spoofing without making ordinary texture damage a
+  permissive compatibility retry.
+- The minimal TinyUSDZ static archive still contains enabled vendored source.
+  The overlay's combined copyright must include expected-lite, optional-lite,
+  LZ4, fast_float, floaxie, jsteemann, ghc filesystem, glob, stb resize,
+  tinymeshutils, Project Nayuki's sRGB routines, mapbox earcut/eternal, linalg,
+  string_id, dtoa_milo, jeaiii, and the OpenUSD-derived
+  crate/integer/compression/transform notices.
+  `Create-PortableRelease.ps1` now stages `tinyusdz.txt`; preserve that entry
+  when packaging changes. The port revision is `0.9.1#2` so existing local
+  installs do not retain the prior incomplete copyright.

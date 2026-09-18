@@ -5,7 +5,10 @@
 #include "import_broker/UsdFallbackState.h"
 #include "model_core/Checksum.h"
 #include "model_core/ControlProtocol.h"
+#include "model_core/MaterialPayload.h"
+#include "model_core/PixelFormats.h"
 #include "model_core/WireFormat.h"
+#include "UsdZipPreflight.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -21,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <utility>
 
@@ -79,6 +83,66 @@ void Put16(std::span<std::byte> bytes, size_t offset, uint16_t value)
     std::memcpy(bytes.data() + offset, &value, sizeof(value));
 }
 
+uint32_t Crc32(std::span<const std::byte> bytes)
+{
+    uint32_t crc = 0xffffffffu;
+    for (const std::byte byte : bytes) {
+        crc ^= std::to_integer<uint8_t>(byte);
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
+void Append16(std::vector<std::byte>& bytes, uint16_t value)
+{
+    const auto encoded = std::as_bytes(std::span(&value, 1));
+    bytes.insert(bytes.end(), encoded.begin(), encoded.end());
+}
+
+void Append32(std::vector<std::byte>& bytes, uint32_t value)
+{
+    const auto encoded = std::as_bytes(std::span(&value, 1));
+    bytes.insert(bytes.end(), encoded.begin(), encoded.end());
+}
+
+std::vector<std::byte> StoredUsdz(
+    std::span<const std::pair<std::string, std::vector<std::byte>>> entries)
+{
+    struct Central { std::string name; uint32_t crc = 0, size = 0, offset = 0; };
+    std::vector<std::byte> result;
+    std::vector<Central> central;
+    for (const auto& [name, payload] : entries) {
+        Central record{name, Crc32(payload), uint32_t(payload.size()), uint32_t(result.size())};
+        const uint16_t extra = uint16_t((64 - ((result.size() + 30 + name.size()) & 63)) & 63);
+        Append32(result, 0x04034b50u); Append16(result, 20); Append16(result, 0);
+        Append16(result, 0); Append16(result, 0); Append16(result, 0);
+        Append32(result, record.crc); Append32(result, record.size); Append32(result, record.size);
+        Append16(result, uint16_t(name.size())); Append16(result, extra);
+        const auto nameBytes = std::as_bytes(std::span(name));
+        result.insert(result.end(), nameBytes.begin(), nameBytes.end());
+        result.resize(result.size() + extra);
+        REQUIRE((result.size() & 63) == 0);
+        result.insert(result.end(), payload.begin(), payload.end());
+        central.push_back(std::move(record));
+    }
+    const uint32_t centralOffset = uint32_t(result.size());
+    for (const Central& record : central) {
+        Append32(result, 0x02014b50u); Append16(result, 20); Append16(result, 20);
+        Append16(result, 0); Append16(result, 0); Append16(result, 0); Append16(result, 0);
+        Append32(result, record.crc); Append32(result, record.size); Append32(result, record.size);
+        Append16(result, uint16_t(record.name.size())); Append16(result, 0); Append16(result, 0);
+        Append16(result, 0); Append16(result, 0); Append32(result, 0); Append32(result, record.offset);
+        const auto nameBytes = std::as_bytes(std::span(record.name));
+        result.insert(result.end(), nameBytes.begin(), nameBytes.end());
+    }
+    const uint32_t centralSize = uint32_t(result.size()) - centralOffset;
+    Append32(result, 0x06054b50u); Append16(result, 0); Append16(result, 0);
+    Append16(result, uint16_t(central.size())); Append16(result, uint16_t(central.size()));
+    Append32(result, centralSize); Append32(result, centralOffset); Append16(result, 0);
+    return result;
+}
+
 struct ScratchUsd {
     std::filesystem::path directory;
     std::filesystem::path path;
@@ -100,6 +164,12 @@ struct ScratchUsd {
     void Write(std::span<const std::byte> bytes)
     {
         std::ofstream output(path, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+        REQUIRE(output.good());
+    }
+    void WriteSidecar(std::wstring_view name, std::span<const std::byte> bytes)
+    {
+        std::ofstream output(directory / std::wstring(name), std::ios::binary);
         output.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
         REQUIRE(output.good());
     }
@@ -364,8 +434,8 @@ TEST_CASE("USD-004 uses progressive bounded sections and reuses the worker after
     CHECK(recovered.workerProcessId == bad.workerProcessId);
 }
 
-TEST_CASE("USD-004 classifies composition before publication and leaves USDZ to USD-005",
-          "[usd-004][worker][fallback]")
+TEST_CASE("USD-005 keeps composition atomic and imports independently preflighted USDZ",
+          "[usd-004][usd-005][worker][fallback][usdz]")
 {
     ScratchUsd composed(L"usda");
     const std::string source =
@@ -398,10 +468,169 @@ TEST_CASE("USD-004 classifies composition before publication and leaves USDZ to 
 
     ScratchUsd archive(L"usdz");
     archive.Write(ReadFixture("cube.usdz.base64"));
-    const auto deferred = import_broker::RunImportSession(Request(archive.path, 172));
-    CHECK_FALSE(deferred.ok);
-    CHECK(deferred.errorCode == model_core::ImportErrorCode::UnsupportedEncoding);
-    CHECK_FALSE(deferred.compatibilityFallbackRequired);
+    const auto imported = import_broker::RunImportSession(Request(archive.path, 172));
+    CAPTURE(uint32_t(imported.errorPhase), uint32_t(imported.stage), imported.batchCount);
+    REQUIRE(imported.ok);
+    REQUIRE_FALSE(imported.chunks.empty());
+    CHECK(imported.chunks.front().scene.format == model_core::SourceFormatId::Usdz);
+    CHECK(Count(imported, model_core::ChunkTopology::TriangleList) > 0);
+    CHECK(Count(imported, model_core::ChunkTopology::MeshInstance) > 0);
+}
+
+TEST_CASE("USD-005 maps Preview Surface textures and material subsets through the broker",
+          "[usd-005][worker][materials][textures][sidecars]")
+{
+    ScratchUsd scratch(L"usda");
+    scratch.Write(ReadFixture("materials.usda"));
+    const std::string pngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlF4iUAAAAASUVORK5CYII=";
+    scratch.WriteSidecar(L"albedo.png", DecodeBase64(pngBase64));
+    auto request = Request(scratch.path, 180);
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode),
+            uint32_t(result.errorPhase), result.batchCount);
+    REQUIRE(result.ok);
+    CHECK(Count(result, model_core::ChunkTopology::Material) == 2);
+    CHECK(Count(result, model_core::ChunkTopology::Image) >= 1);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 2);
+
+    std::unordered_map<uint32_t, model_core::MaterialPayload> materials;
+    std::unordered_set<uint32_t> instanceMaterials;
+    bool sawTexture = false;
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material) {
+            const auto material = Payload<model_core::MaterialPayload>(chunk);
+            materials.emplace(chunk.descriptor.chunkId, material);
+            sawTexture |= chunk.descriptor.dependencyIds[0] != 0;
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::MeshInstance) {
+            instanceMaterials.insert(Payload<model_core::MeshInstancePayload>(chunk).materialChunkId);
+        } else if (chunk.descriptor.topology == model_core::ChunkTopology::Image) {
+            REQUIRE(chunk.payload.size() >= sizeof(model_core::ImagePayloadHeader));
+            model_core::ImagePayloadHeader image{};
+            std::memcpy(&image, chunk.payload.data(), sizeof(image));
+            CHECK(image.colorSpace == uint32_t(model_core::ColorSpaceId::Srgb));
+        }
+    }
+    CHECK(sawTexture);
+    CHECK(instanceMaterials.size() == 2);
+    CHECK(std::ranges::all_of(materials, [](const auto& item) {
+        return (item.second.flags & model_core::kMaterialFlagDoubleSided) != 0;
+    }));
+    CHECK(std::ranges::any_of(materials, [](const auto& item) {
+        return item.second.alphaMode == uint32_t(model_core::AlphaModeId::Mask)
+            && std::abs(item.second.metallicFactor - 0.25f) < 1e-6f
+            && std::abs(item.second.roughnessFactor - 0.75f) < 1e-6f
+            && std::abs(item.second.uvOffset[0] - 0.25f) < 1e-6f
+            && std::abs(item.second.uvOffset[1] - 0.5f) < 1e-6f
+            && std::abs(item.second.uvScale[0] - 2.0f) < 1e-6f
+            && std::abs(item.second.uvScale[1] - 3.0f) < 1e-6f
+            && std::abs(item.second.uvRotation - 0.5235988f) < 1e-6f;
+    }));
+}
+
+TEST_CASE("USD-005 resolves contained USDZ textures without extraction",
+          "[usd-005][worker][usdz][textures][archive]")
+{
+    const auto layer = ReadFixture("materials.usda");
+    const std::string pngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlF4iUAAAAASUVORK5CYII=";
+    const auto png = DecodeBase64(pngBase64);
+    const std::pair<std::string, std::vector<std::byte>> entries[] = {
+        {"root.usda", layer}, {"albedo.png", png},
+    };
+    ScratchUsd archive(L"usdz");
+    archive.Write(StoredUsdz(entries));
+    auto request = Request(archive.path, 183);
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode),
+            uint32_t(result.errorPhase), result.batchCount);
+    REQUIRE(result.ok);
+    REQUIRE_FALSE(result.chunks.empty());
+    CHECK(result.chunks.front().scene.format == model_core::SourceFormatId::Usdz);
+    CHECK(Count(result, model_core::ChunkTopology::Material) == 2);
+    CHECK(Count(result, model_core::ChunkTopology::Image) >= 1);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 2);
+}
+
+TEST_CASE("USD-005 archive inspection returns bounded entry views and observes cancellation",
+          "[usd-005][usdz][archive][cancellation]")
+{
+    const auto layer = ReadFixture("materials.usda");
+    const std::pair<std::string, std::vector<std::byte>> entries[] = {
+        {"root.usda", layer}, {"albedo.png", std::vector<std::byte>(32, std::byte{0x5a})},
+    };
+    const auto bytes = StoredUsdz(entries);
+    import_worker::UsdzArchiveView archive;
+    REQUIRE(import_worker::InspectUsdz(bytes, &archive) == import_worker::UsdzPreflightError::None);
+    REQUIRE(archive.entries.size() == 2);
+    CHECK(archive.rootLayerName == "root.usda");
+    for (const auto& entry : archive.entries) {
+        CHECK((entry.dataOffset & 63) == 0);
+        REQUIRE(entry.dataOffset <= bytes.size());
+        CHECK(entry.byteSize <= bytes.size() - entry.dataOffset);
+    }
+
+    unsigned polls = 0;
+    CHECK(import_worker::InspectUsdz(bytes, &archive, {}, [&] { return ++polls >= 1; })
+          == import_worker::UsdzPreflightError::Cancelled);
+    CHECK(archive.entries.empty());
+}
+
+TEST_CASE("USD-005 uses bounded optional texture fallback and rejects unsafe assets atomically",
+          "[usd-005][worker][textures][security][fallback]")
+{
+    ScratchUsd missing(L"usda");
+    auto source = ReadFixture("materials.usda");
+    missing.Write(source);
+    const auto fallback = import_broker::RunImportSession(Request(missing.path, 181));
+    CAPTURE(uint32_t(fallback.stage), uint32_t(fallback.errorCode), fallback.batchCount);
+    REQUIRE(fallback.ok);
+    CHECK(Count(fallback, model_core::ChunkTopology::Image) >= 1);
+    CHECK(Count(fallback, model_core::ChunkTopology::ImportStatus) == 1);
+
+    ScratchUsd corrupt(L"usda");
+    corrupt.Write(source);
+    const std::string invalidPng = "not a PNG payload";
+    corrupt.WriteSidecar(L"albedo.png", std::as_bytes(std::span(invalidPng)));
+    const auto corruptFallback = import_broker::RunImportSession(Request(corrupt.path, 184));
+    CAPTURE(uint32_t(corruptFallback.stage), uint32_t(corruptFallback.errorCode),
+            corruptFallback.batchCount);
+    REQUIRE(corruptFallback.ok);
+    CHECK(Count(corruptFallback, model_core::ChunkTopology::Image) >= 1);
+    CHECK(Count(corruptFallback, model_core::ChunkTopology::ImportStatus) == 1);
+
+    std::string unsafe(reinterpret_cast<const char*>(source.data()), source.size());
+    const std::string needle = "albedo.png";
+    const size_t offset = unsafe.find(needle);
+    REQUIRE(offset != std::string::npos);
+    std::string mismatched = unsafe;
+    mismatched.replace(offset, needle.size(), "albedo.jpg");
+    ScratchUsd typeMismatch(L"usda");
+    typeMismatch.Write(std::as_bytes(std::span(mismatched)));
+    const std::string pngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlF4iUAAAAASUVORK5CYII=";
+    typeMismatch.WriteSidecar(L"albedo.jpg", DecodeBase64(pngBase64));
+    const auto mismatchedResult = import_broker::RunImportSession(Request(typeMismatch.path, 185));
+    CHECK_FALSE(mismatchedResult.ok);
+    CHECK(mismatchedResult.errorCode == model_core::ImportErrorCode::UnsafeReference);
+    CHECK(mismatchedResult.batchCount == 0);
+    CHECK(mismatchedResult.chunks.empty());
+
+    unsafe.replace(offset, needle.size(), "../bad.png");
+    ScratchUsd traversal(L"usda");
+    traversal.Write(std::as_bytes(std::span(unsafe)));
+    const auto rejected = import_broker::RunImportSession(Request(traversal.path, 182));
+    CHECK_FALSE(rejected.ok);
+    CHECK(rejected.errorCode == model_core::ImportErrorCode::UnsafeReference);
+    CHECK_FALSE(rejected.compatibilityFallbackRequired);
+    CHECK(rejected.batchCount == 0);
+    CHECK(rejected.chunks.empty());
 }
 
 TEST_CASE("USD-003 explicit suffix mismatch and malformed bytes are terminal typed failures",

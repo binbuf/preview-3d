@@ -8,6 +8,8 @@
 #include "UsdImportWorker.h"
 
 #include "ChunkBatchSink.h"
+#include "SidecarFileClient.h"
+#include "TextureDecodePolicy.h"
 #include "UsdAdapter.h"
 #include "UsdZipPreflight.h"
 #include "model_core/ControlChannelIo.h"
@@ -104,11 +106,17 @@ bool HandleUsdImportFileRequest(HANDLE stdIn, HANDLE stdOut,
         return ReportError(stdOut, request.generationId, ImportErrorCode::MalformedData);
     if (!EncodingMatchesRequest(format, request.requestFlags))
         return ReportError(stdOut, request.generationId, ImportErrorCode::UnsupportedEncoding);
+    UsdzArchiveView archive;
     if (format == SourceFormatId::Usdz) {
-        if (PreflightUsdz(source.Bytes()) != UsdzPreflightError::None)
+        HANDLE cancellation = reinterpret_cast<HANDLE>(
+            static_cast<uintptr_t>(request.cancellationEventHandleValue));
+        const auto preflight = InspectUsdz(source.Bytes(), &archive, {}, [cancellation] {
+            return cancellation && WaitForSingleObject(cancellation, 0) == WAIT_OBJECT_0;
+        });
+        if (preflight == UsdzPreflightError::Cancelled)
+            return ReportError(stdOut, request.generationId, ImportErrorCode::Cancelled);
+        if (preflight != UsdzPreflightError::None)
             return ReportError(stdOut, request.generationId, ImportErrorCode::ArchiveLimit);
-        // Archive asset/dependency handling is deliberately gated on USD-005.
-        return ReportError(stdOut, request.generationId, ImportErrorCode::UnsupportedEncoding);
     }
 
     platform::Win32Handle outputSection(reinterpret_cast<HANDLE>(
@@ -122,9 +130,16 @@ bool HandleUsdImportFileRequest(HANDLE stdIn, HANDLE stdOut,
         static_cast<uintptr_t>(request.cancellationEventHandleValue)));
     ChunkBatchSink sink(stdIn, stdOut, request.generationId, request.requestFlags,
                         cancellationEvent.get());
+    SidecarFileClient sidecars(stdIn, stdOut, request.generationId);
+    sidecars.EnablePinnedReplay();
+    TextureDecodeOptions textureOptions;
+    textureOptions.isCancelled = [&sink] { return sink.Cancelled(); };
     UsdImportOptions options;
     options.format = format;
     options.isCancelled = [&sink] { return sink.Cancelled(); };
+    options.sidecars = &sidecars;
+    options.textureOptions = &textureOptions;
+    options.archive = format == SourceFormatId::Usdz ? &archive : nullptr;
     try {
         return ReportOutcome(stdOut, request.generationId,
             ImportUsd(source.Bytes(), output.bytes(), request.generationId,
