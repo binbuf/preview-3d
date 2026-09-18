@@ -990,6 +990,7 @@ struct MaterialEmitter {
         payload.baseColorFactor[0] = payload.baseColorFactor[1] = payload.baseColorFactor[2] = 0.18f;
         payload.baseColorFactor[3] = 1.0f; payload.roughnessFactor = 0.5f;
         payload.uvScale[0] = payload.uvScale[1] = 1.0f; payload.alphaCutoff = 0.5f;
+        payload.flags = model_core::kMaterialFlagFlipV;
         if (doubleSided) payload.flags |= model_core::kMaterialFlagDoubleSided;
         const UsdShadeShader shader = material.ComputeSurfaceSource();
         TfToken shaderId;

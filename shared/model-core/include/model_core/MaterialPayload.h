@@ -19,8 +19,12 @@ enum class AlphaModeId : uint32_t {
 
 constexpr uint32_t kMaterialFlagDoubleSided = 1u << 0;
 constexpr uint32_t kMaterialFlagUnlit = 1u << 1;
-// Bits 2-31 reserved, must be 0 -- SharedSectionValidator rejects any set.
-constexpr uint32_t kMaterialFlagsKnownMask = kMaterialFlagDoubleSided | kMaterialFlagUnlit;
+// USD defines (0,0) at an image's lower-left, while Direct3D samples (0,0)
+// at the upper-left. Flip after the authored UV transform for USD materials.
+constexpr uint32_t kMaterialFlagFlipV = 1u << 2;
+// Bits 3-31 reserved, must be 0 -- SharedSectionValidator rejects any set.
+constexpr uint32_t kMaterialFlagsKnownMask =
+    kMaterialFlagDoubleSided | kMaterialFlagUnlit | kMaterialFlagFlipV;
 
 #pragma pack(push, 1)
 

@@ -203,6 +203,7 @@ PSInput VSMain(VSInput input)
     float2 scaled=input.uv*gUvTransform.zw;
     output.uv=float2(scaled.x*gUvRotationAndMaps.x-scaled.y*gUvRotationAndMaps.y,
                      scaled.x*gUvRotationAndMaps.y+scaled.y*gUvRotationAndMaps.x)+gUvTransform.xy;
+    if (((uint)gMaterialFactors.w&8u)!=0) output.uv.y=1.0f-output.uv.y;
     output.tangent=float4(normalize(mul(float4(input.tangent.xyz,0.0f),gNormalToCamera).xyz),input.tangent.w);
     output.color=input.color;
     output.pickId=gPickId;
@@ -1251,7 +1252,8 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
             material[6]=mesh.material.alphaCutoff;
             material[7]=float(((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
-                | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u));
+                | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u)
+                | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u));
             std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
             material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
             material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
@@ -1302,7 +1304,8 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
                 material[6]=mesh.material.alphaCutoff;
                 material[7]=float(((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
-                    | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u));
+                    | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u)
+                    | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u));
                 std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
                 material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
                 material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
@@ -1934,7 +1937,10 @@ void D3D12ViewerPath::UpdateCoarseVisibility(ModelResources& resources)
         if (mesh.sourceGeometry.lodLevel==model_core::kFineLod) fine.insert(mesh.chunkId);
         else if (mesh.sourceGeometry.lodLevel==model_core::kPreviewLod) preview=true;
     for (auto& mesh:resources.meshes)
-        mesh.drawEnabled = !(mesh.sourceGeometry.lodLevel==model_core::kPreviewLod && resources.coarseComplete)
+        mesh.drawEnabled = (mesh.instanceId != 0
+            || (mesh.sourceGeometry.geometryFlags
+                & model_core::kGeometryReusableInstanceSource)==0)
+            && !(mesh.sourceGeometry.lodLevel==model_core::kPreviewLod && resources.coarseComplete)
             && !(mesh.sourceGeometry.lodLevel==model_core::kCoarseLod && preview && !resources.coarseComplete)
             && !(mesh.sourceGeometry.lodLevel==model_core::kCoarseLod
             && (mesh.chunkId & model_core::kCoarseIdentity)

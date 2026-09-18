@@ -910,7 +910,8 @@ bool EmitMaterials(BoundedChunkWriter& writer, const RenderScene& scene,
         payload.alphaMode = uint32_t(shader.opacityThreshold.value > 0.0f
             ? AlphaModeId::Mask : shader.opacity.is_texture() || shader.opacity.value < 1.0f
                 ? AlphaModeId::Blend : AlphaModeId::Opaque);
-        payload.flags = doubleSided[index] ? kMaterialFlagDoubleSided : 0;
+        payload.flags = kMaterialFlagFlipV
+            | (doubleSided[index] ? kMaterialFlagDoubleSided : 0);
         for (float value : payload.baseColorFactor) if (!std::isfinite(value)) {
             context.error = ImportErrorCode::MalformedData; return false;
         }

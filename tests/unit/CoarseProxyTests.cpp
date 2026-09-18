@@ -49,3 +49,19 @@ TEST_CASE("A fine publication hides exactly its coarse parent and restores it on
     D3D12ViewerPath::UpdateCoarseVisibility(path.model); CHECK_FALSE(path.model.meshes[0].drawEnabled);
     CHECK(path.model.meshes[1].drawEnabled);
 }
+
+TEST_CASE("Visibility refresh keeps reusable geometry sources hidden", "[coarse-proxy][instances]") {
+    using namespace model_core;
+    D3D12ViewerPath::ModelResources resources;
+    D3D12ViewerPath::GpuMesh source;
+    source.sourceGeometry.geometryFlags = kGeometryReusableInstanceSource;
+    resources.meshes.push_back(source);
+    auto instance = source;
+    instance.instanceId = 42;
+    resources.meshes.push_back(instance);
+
+    D3D12ViewerPath::UpdateCoarseVisibility(resources);
+
+    CHECK_FALSE(resources.meshes[0].drawEnabled);
+    CHECK(resources.meshes[1].drawEnabled);
+}

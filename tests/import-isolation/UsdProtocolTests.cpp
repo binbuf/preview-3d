@@ -729,6 +729,7 @@ def Xform "Root" {
     CHECK(material->descriptor.dependencyIds[0] == 0);
     CHECK(material->descriptor.dependencyIds[3] != 0);
     const auto payload = Payload<model_core::MaterialPayload>(*material);
+    CHECK((payload.flags & model_core::kMaterialFlagFlipV) != 0);
     CHECK(payload.emissiveFactor[0] == 1.0f);
     CHECK(payload.emissiveFactor[1] == 1.0f);
     CHECK(payload.emissiveFactor[2] == 1.0f);
@@ -1304,6 +1305,7 @@ TEST_CASE("USD-007 preserves common fast-path geometry semantics and Preview Sur
             && std::abs(material.roughnessFactor - 0.75f) < 1e-6f
             && std::abs(material.uvOffset[0] - 0.25f) < 1e-6f
             && std::abs(material.uvScale[0] - 2.0f) < 1e-6f
+            && (material.flags & model_core::kMaterialFlagFlipV) != 0
             && material.baseColorFactor[0] == 1.0f
             && chunk.descriptor.dependencyIds[0] != 0;
     }));
