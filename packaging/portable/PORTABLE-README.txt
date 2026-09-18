@@ -4,6 +4,8 @@ Preview3D @VERSION@ portable engineering package (Windows 11 x64)
 Run Preview3D.exe and use Ctrl+O, or pass one local model path on the command
 line. Keep the worker directory beside Preview3D.exe. The app does not require
 administrator rights, write file associations, or modify the opened model.
+Keep the OpenUsdHost directory beside Preview3D.exe as well; it is the private
+compatibility payload for composed USD stages.
 
 Supported content
 -----------------
@@ -14,6 +16,11 @@ Supported content
   textures, and a deterministic baked start pose for supported skin/blend data.
 * ASCII and binary STL.
 * ASCII and binary little- or big-endian PLY triangle meshes and point clouds.
+* .usd, .usda, .usdc, and .usdz static stages. The supported subset includes
+  meshes, hierarchy, instances/point instances, transforms, common primvars,
+  display color, material subsets, USD Preview Surface factors/textures, and
+  bounded local sublayers, references, inherits/specializes, authored default
+  variants, and payloads.
 * The bounded glTF subset includes static meshes/instances, vertex colors,
   metallic/roughness materials, normal/emissive textures, unlit materials,
   alpha modes, KHR_texture_transform, KHR_draco_mesh_compression,
@@ -24,7 +31,7 @@ Important limits
 ----------------
 
 This is a local, read-only static viewer. Animation playback, editing, network
-assets, USD, 3MF, CAD, thumbnails (including FBX Explorer thumbnails), file associations, and a
+assets, 3MF, CAD, thumbnails (including USD/FBX Explorer thumbnails), file associations, and a
 persistent derived cache are outside this limited MVP. Optional unsupported
 glTF material/image features may fall back with a warning; required unsupported
 extensions fail. OBJ supports faces, triangulation, smoothing/generated normals,
@@ -34,6 +41,12 @@ roughness/metalness texture maps are not rendered. Imports and decoded data are
 bounded; over-limit or malformed models fail instead of rendering partially.
 FBX geometry caches, dynamic constraints, NURBS/subdivision tessellation,
 cameras, and lights are not rendered.
+USD animation, skeletal data, MaterialX, procedural schemas, arbitrary plugins,
+remote assets, and interactive variant selection are not supported. USD uses
+Tier B ceilings including 2 GiB primary source, 4 GiB aggregate local bytes and
+USDZ expansion, 20 million triangles or points, 50,000 nodes, and bounded
+counts for materials/textures/dependencies. The OpenUSD host is additionally
+limited to the lower of 4 GiB or 35% of physical memory.
 
 The worker runs in a zero-capability AppContainer. On first import, Preview3D
 creates the current-user profile Binbuf.Preview3D.ImportWorker and grants that
@@ -41,6 +54,10 @@ profile read/execute access only to this package's worker directory. Model and
 sidecar data are supplied as read-only handles by the viewer; the worker is not
 granted access to the model directory. The profile creation and ACL update need
 no elevation. Deleting the extracted directory removes the granted payload.
+Composed USD stages use a second zero-capability profile,
+Binbuf.Preview3D.ImportHost. It can read/execute only OpenUsdHost, starts lazily,
+exits after the generation, and receives local relative dependencies only as
+brokered bytes. Neither importer can read the other's private directory.
 
 Cleanup
 -------
@@ -56,8 +73,9 @@ installed by this package.
 Runtime and support
 -------------------
 
-The archive contains the required app-local MSVC runtime and worker dependency
-closure. Direct3D 12, DXGI, Direct2D, DirectWrite, WIC, and D3DCompiler 47 are
+The archive contains the required app-local MSVC runtime, worker dependency
+closure, and exact private OpenUSD host/resource tree. Direct3D 12, DXGI,
+Direct2D, DirectWrite, WIC, and D3DCompiler 47 are
 Windows 11 system components and are not redistributed. A Direct3D feature
 level 11-capable adapter/driver is required. Coarse/full rendering intentionally
 uses bounded representative geometry and view-driven refinement; it is not an

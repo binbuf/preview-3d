@@ -4,8 +4,8 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
-if (Get-Process -Name Preview3D, Preview3DImportWorker -ErrorAction SilentlyContinue) {
-    throw 'Close Preview3D and Preview3DImportWorker before cleanup.'
+if (Get-Process -Name Preview3D, Preview3DImportWorker, Preview3DImportHost -ErrorAction SilentlyContinue) {
+    throw 'Close Preview3D and both import processes before cleanup.'
 }
 
 $nativeSource = @'
@@ -31,38 +31,43 @@ public static class Preview3DProfileNative {
 '@
 
 Add-Type -TypeDefinition $nativeSource
-$profileName = 'Binbuf.Preview3D.ImportWorker'
-$sid = [IntPtr]::Zero
-$hr = [Preview3DProfileNative]::DeriveAppContainerSidFromAppContainerName($profileName, [ref]$sid)
-if ($hr -lt 0 -or $sid -eq [IntPtr]::Zero) {
-    throw ('Could not derive the Preview3D AppContainer SID (HRESULT 0x{0:x8}).' -f $hr)
+
+function Get-ProfileSid([string]$ProfileName) {
+    $sid = [IntPtr]::Zero
+    $hr = [Preview3DProfileNative]::DeriveAppContainerSidFromAppContainerName($ProfileName, [ref]$sid)
+    if ($hr -lt 0 -or $sid -eq [IntPtr]::Zero) {
+        throw ("Could not derive the $ProfileName AppContainer SID (HRESULT 0x{0:x8})." -f $hr)
+    }
+    $textSidPointer = [IntPtr]::Zero
+    try {
+        if (-not [Preview3DProfileNative]::ConvertSidToStringSid($sid, [ref]$textSidPointer)) {
+            throw "Could not format the $ProfileName AppContainer SID."
+        }
+        return [System.Security.Principal.SecurityIdentifier]::new(
+            [Runtime.InteropServices.Marshal]::PtrToStringUni($textSidPointer))
+    } finally {
+        if ($textSidPointer -ne [IntPtr]::Zero) { [void][Preview3DProfileNative]::LocalFree($textSidPointer) }
+        [void][Preview3DProfileNative]::FreeSid($sid)
+    }
 }
 
-try {
-    $textSidPointer = [IntPtr]::Zero
-    if (-not [Preview3DProfileNative]::ConvertSidToStringSid($sid, [ref]$textSidPointer)) {
-        throw 'Could not format the Preview3D AppContainer SID.'
+function Remove-Profile([string]$ProfileName, $Identity) {
+    foreach ($directory in @((Join-Path $PSScriptRoot 'worker'), (Join-Path $PSScriptRoot 'OpenUsdHost'))) {
+        if (Test-Path -LiteralPath $directory -PathType Container) {
+            $acl = Get-Acl -LiteralPath $directory
+            $acl.PurgeAccessRules($Identity)
+            Set-Acl -LiteralPath $directory -AclObject $acl
+        }
     }
-    try {
-        $textSid = [Runtime.InteropServices.Marshal]::PtrToStringUni($textSidPointer)
-    } finally {
-        [void][Preview3DProfileNative]::LocalFree($textSidPointer)
-    }
-
-    $workerDirectory = Join-Path $PSScriptRoot 'worker'
-    if (Test-Path -LiteralPath $workerDirectory -PathType Container) {
-        $acl = Get-Acl -LiteralPath $workerDirectory
-        $identity = New-Object System.Security.Principal.SecurityIdentifier($textSid)
-        $acl.PurgeAccessRules($identity)
-        Set-Acl -LiteralPath $workerDirectory -AclObject $acl
-    }
-
-    $deleteHr = [Preview3DProfileNative]::DeleteAppContainerProfile($profileName)
+    $deleteHr = [Preview3DProfileNative]::DeleteAppContainerProfile($ProfileName)
     # HRESULT_FROM_WIN32(ERROR_NOT_FOUND) means cleanup was already complete.
     if ($deleteHr -lt 0 -and $deleteHr -ne [int]0x80070490) {
-        throw ('Could not delete the Preview3D AppContainer profile (HRESULT 0x{0:x8}).' -f $deleteHr)
+        throw ("Could not delete the $ProfileName AppContainer profile (HRESULT 0x{0:x8})." -f $deleteHr)
     }
-    Write-Host 'Preview3D AppContainer profile cleanup is complete.'
-} finally {
-    [void][Preview3DProfileNative]::FreeSid($sid)
 }
+
+$workerSid = Get-ProfileSid 'Binbuf.Preview3D.ImportWorker'
+$hostSid = Get-ProfileSid 'Binbuf.Preview3D.ImportHost'
+Remove-Profile 'Binbuf.Preview3D.ImportWorker' $workerSid
+Remove-Profile 'Binbuf.Preview3D.ImportHost' $hostSid
+Write-Host 'Preview3D worker and OpenUSD-host AppContainer profile cleanup is complete.'

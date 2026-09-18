@@ -1,6 +1,6 @@
 # USD post-MVP work plan
 
-Status: implementation in progress; USD-001 through USD-006 complete, no USD product route is exposed
+Status: implementation in progress; USD-001 through USD-008 complete, viewer/distribution route exposed; USD-009 qualification pending
 
 Prepared: 2026-09-17  
 Design authority: [design/README.md](design/README.md)
@@ -768,7 +768,7 @@ compatibility host and prove semantic overlap with the TinyUSDZ route.
 
 ## USD-008: viewer, activation, installer, and package integration
 
-Status: ready
+Status: complete (2026-09-18)
 Depends on: USD-007  
 Unblocks: USD-009
 
@@ -814,9 +814,54 @@ viewer and distribution surface, without claiming Explorer thumbnails.
 - Install/uninstall exposes one USD family ProgID without taking defaults and
   installs no thumbnail handler.
 
+### Completion record
+
+- The viewer now classifies `.usd`, `.usda`, `.usdc`, and `.usdz`
+  case-insensitively across direct/secondary command-line activation, the
+  picker, drop, retry/open-another, diagnostics, About text, and Open With.
+  All four route to `ImportFormat::Usd`. `.usd` remains byte-sniffed, while the
+  information panel reports the validated USDA, USDC, or USDZ source identity.
+  The app supplies the private compatibility-host path only for USD and keeps
+  rendering through the existing validated mesh/material/image/node/instance
+  contract. USD deliberately does not set the Tier-A coarse/detail-service
+  request flags; its adapters publish their own bounded normalized batches.
+- The real-app USD smoke passes eleven checks in both Debug and Release:
+  uppercase USDA direct launch, Unicode/space paths, `.usd` sniffing through
+  secondary activation, USDC picker, USDZ drop, OpenUSD composition fallback,
+  an optional-texture warning, prior-content retention after fast and
+  compatibility-host failures, replacement in both producer directions, and
+  immediate compatibility relaunch. The product bridge test opens one fast
+  and one compatibility stage in both configurations. Focused USD-002 through
+  USD-008 coverage passes 26 cases / 711 assertions in Debug and Release.
+- ShellIntegration's ten-extension catalog is revision 5. NSIS registers the
+  four extensions through the one stable `Binbuf.Preview3D.USD.1` ProgID in
+  capabilities, `OpenWithProgids`, and `SupportedTypes`, with symmetric reset
+  and uninstall cleanup. It does not write `UserChoice`, a CLSID, `shellex`, or
+  any thumbnail registration.
+- Portable and installer stages now contain a closed 26-file `OpenUsdHost/`
+  tree: the bootstrap/core, required runtime DLLs/app-local CRT, and exactly 13
+  audited OpenUSD resources. Packaging rejects missing/unlisted host files,
+  validates every PE dependency, hashes the complete tree in `MANIFEST.json`,
+  and records OpenUSD/oneTBB licenses and SBOM components. Installer ACL
+  provisioning removes broad package grants and gives the worker and host SIDs
+  read/execute only on their respective private trees; cross-grants are
+  rejected. A staged portable composed stage opened successfully.
+- Debug and Release solution builds pass. Unit passes 98/98 (7,625 Debug /
+  7,537 Release assertions). Full Debug isolation reaches 279/283 with the
+  four known FBX fixture-rewrite failures; Release reaches 271/283 with those
+  four plus eight known randomized sidecar scratch-directory collisions. No
+  full-run failure enters a USD route. The portable engineering payload has 63
+  staged files and SHA-256
+  `eaba718e74b2681fa6d9d14aa76d66f9a0496b511ea9818d9a46da5df27c484d`;
+  the 64-file NSIS stage builds warning-free and the unsigned installer SHA-256
+  is `b8a25b44f2d0d2e0daeac5ae59492862e8c38deaa1d2ad790f8ce0de4248f4f8`.
+  Clean-VM registration/upgrade/uninstall, signed-candidate, fuzz, performance,
+  and broader corpus qualification remain USD-009; Explorer thumbnails remain
+  exclusively USD-010.
+
 ## USD-009: corpus, hardening, and release qualification
 
-Status: blocked  
+Status: ready
 Depends on: USD-008  
 Unblocks: the viewer USD support claim and USD-010
 

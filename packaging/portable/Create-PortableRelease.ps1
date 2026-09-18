@@ -157,6 +157,7 @@ $stage = Join-Path $artifacts 'stage'
 $archive = Join-Path $artifacts "Preview3D-$Version-portable-x64.zip"
 $archiveChecksum = "$archive.sha256"
 $workerStage = Join-Path $stage 'worker'
+$openUsdHostStage = Join-Path $stage 'OpenUsdHost'
 $licensesStage = Join-Path $stage 'licenses'
 
 Assert-ChildPath $repository $artifacts
@@ -165,6 +166,7 @@ if (Test-Path -LiteralPath $stage) {
     Remove-Item -LiteralPath $stage -Recurse -Force
 }
 New-Item -ItemType Directory -Path $workerStage -Force | Out-Null
+New-Item -ItemType Directory -Path $openUsdHostStage -Force | Out-Null
 New-Item -ItemType Directory -Path $licensesStage -Force | Out-Null
 if ($Distribution -eq 'Portable' -and (Test-Path -LiteralPath $archive)) {
     Remove-Item -LiteralPath $archive -Force
@@ -192,18 +194,50 @@ foreach ($name in $workerFiles) {
     Copy-RequiredFile (Join-Path $buildOutput $name) (Join-Path $workerStage $name)
 }
 
+$openUsdHostSource = Join-Path $buildOutput 'OpenUsdHost'
+$openUsdHostFiles = @(
+    'Preview3DImportHost.exe',
+    'Preview3DOpenUsdCore.dll',
+    'ktx.dll',
+    'libsharpyuv.dll',
+    'libwebp.dll',
+    'tbb12.dll',
+    'usd_ms.dll',
+    'zstd.dll',
+    'usd\plugInfo.json',
+    'usd\ar\resources\plugInfo.json',
+    'usd\preview3d\resources\plugInfo.json',
+    'usd\sdf\resources\plugInfo.json',
+    'usd\usd\resources\generatedSchema.usda',
+    'usd\usd\resources\plugInfo.json',
+    'usd\usd\resources\usd\schema.usda',
+    'usd\usdGeom\resources\generatedSchema.usda',
+    'usd\usdGeom\resources\plugInfo.json',
+    'usd\usdGeom\resources\usdGeom\schema.usda',
+    'usd\usdShade\resources\generatedSchema.usda',
+    'usd\usdShade\resources\plugInfo.json',
+    'usd\usdShade\resources\usdShade\schema.usda'
+)
+foreach ($relativePath in $openUsdHostFiles) {
+    Copy-RequiredFile (Join-Path $openUsdHostSource $relativePath) (Join-Path $openUsdHostStage $relativePath)
+}
+
 $visualStudioRoot = Find-VisualStudioInstallation
 $crtDirectory = Find-CrtDirectory $visualStudioRoot
 $viewerCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 $workerCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+$openUsdHostCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 foreach ($name in $viewerCrt) {
     Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $stage $name)
 }
 foreach ($name in $workerCrt) {
     Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $workerStage $name)
 }
+foreach ($name in $openUsdHostCrt) {
+    Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $openUsdHostStage $name)
+}
 
-$thirdParty = @('basisu', 'draco', 'fastgltf', 'ktx', 'libwebp', 'meshoptimizer', 'simdjson', 'tinyusdz', 'ufbx', 'zstd')
+$thirdParty = @('basisu', 'draco', 'fastgltf', 'ktx', 'libwebp', 'meshoptimizer', 'openusd', 'simdjson', 'tbb', 'tinyusdz', 'ufbx', 'zstd')
 $vcpkgTripletRoot = Join-Path $repository 'vcpkg_installed\x64-windows\x64-windows'
 $vcpkgStatusPath = Join-Path $repository 'vcpkg_installed\x64-windows\vcpkg\status'
 foreach ($name in $thirdParty) {
@@ -236,7 +270,12 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
     if ([string]::IsNullOrWhiteSpace($signTool)) {
         throw 'A signing thumbprint was supplied, but signtool.exe could not be found.'
     }
-    foreach ($binary in @((Join-Path $stage 'Preview3D.exe'), (Join-Path $workerStage 'Preview3DImportWorker.exe'))) {
+    foreach ($binary in @(
+        (Join-Path $stage 'Preview3D.exe'),
+        (Join-Path $workerStage 'Preview3DImportWorker.exe'),
+        (Join-Path $openUsdHostStage 'Preview3DImportHost.exe'),
+        (Join-Path $openUsdHostStage 'Preview3DOpenUsdCore.dll')
+    )) {
         & $signTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $binary
         if ($LASTEXITCODE -ne 0) { throw "Signing failed for '$binary'." }
         & $signTool verify /pa /all $binary
@@ -249,10 +288,10 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
 
 $dumpbin = Find-Dumpbin $visualStudioRoot
 $systemDlls = @(
-    'advapi32.dll', 'bcrypt.dll', 'comctl32.dll', 'd2d1.dll', 'd3d11.dll', 'd3d12.dll',
+    'advapi32.dll', 'bcrypt.dll', 'comctl32.dll', 'd2d1.dll', 'd3d11.dll', 'd3d12.dll', 'dbghelp.dll',
     'd3dcompiler_47.dll', 'dwrite.dll', 'dwmapi.dll', 'dxgi.dll', 'gdi32.dll',
     'kernel32.dll', 'ole32.dll', 'oleacc.dll', 'oleaut32.dll', 'runtimeobject.dll',
-    'shell32.dll', 'uiautomationcore.dll', 'user32.dll', 'userenv.dll',
+    'shell32.dll', 'shlwapi.dll', 'uiautomationcore.dll', 'user32.dll', 'userenv.dll',
     'windowscodecs.dll', 'ws2_32.dll'
 )
 $peFiles = Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.Extension -in @('.exe', '.dll') }
@@ -327,12 +366,20 @@ $sbom = [ordered]@{
 $sbom | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $stage 'SBOM.cdx.json') -Encoding UTF8
 
 $forbiddenNames = @(
-    'Preview3DImportHost.exe', 'Preview3DThumbnailProvider.dll',
+    'Preview3DThumbnailProvider.dll',
     'Preview3DHostileWorker.exe', 'Tests.Unit.exe', 'Tests.ImportIsolation.exe'
 )
 $stagedNames = @(Get-ChildItem -LiteralPath $stage -File -Recurse | ForEach-Object { $_.Name })
 foreach ($forbidden in $forbiddenNames) {
     if ($forbidden -in $stagedNames) { throw "Excluded payload '$forbidden' entered the stage." }
+}
+$allowedOpenUsdHostPaths = @($openUsdHostFiles + $openUsdHostCrt | ForEach-Object { $_.Replace('\', '/').ToLowerInvariant() })
+$stagedOpenUsdHostPaths = @(Get-ChildItem -LiteralPath $openUsdHostStage -File -Recurse | ForEach-Object {
+    $_.FullName.Substring($openUsdHostStage.Length + 1).Replace('\', '/').ToLowerInvariant()
+})
+if (@($allowedOpenUsdHostPaths | Where-Object { $_ -notin $stagedOpenUsdHostPaths }).Count -ne 0 -or
+    @($stagedOpenUsdHostPaths | Where-Object { $_ -notin $allowedOpenUsdHostPaths }).Count -ne 0) {
+    throw 'The private OpenUsdHost payload does not match its closed release allowlist.'
 }
 $debugRuntimePattern = '^(?:msvcp140d(?:_atomic_wait|_codecvt_ids)?|msvcp140_[12]d|vcruntime140d|vcruntime140_1d|concrt140d|ucrtbased)\.dll$'
 if (Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.Name -match $debugRuntimePattern -or $_.Extension -in @('.pdb', '.lib') }) {

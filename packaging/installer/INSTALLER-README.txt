@@ -8,18 +8,23 @@
 * binary or ASCII .fbx with static hierarchy/instances, supported materials and
   textures, and a deterministic baked start pose;
 * ASCII or binary .stl; and
-* ASCII or binary little- or big-endian .ply triangle meshes and point clouds.
+* ASCII or binary little- or big-endian .ply triangle meshes and point clouds;
+* .usd, .usda, .usdc, and .usdz static stages with meshes, hierarchy,
+  instances/point instances, common primvars, display color, supported USD
+  Preview Surface materials/textures, and bounded local composition.
 
-3MF, USD, CAD formats, Explorer thumbnails (including for FBX), editing,
+3MF and CAD formats, Explorer thumbnails (including for USD and FBX), editing,
 animation playback, network assets, and a persistent model-derived cache are
 not part of this release. FBX geometry caches, dynamic constraints,
 NURBS/subdivision tessellation, cameras, and lights are outside its static subset.
+USD skeletal data, MaterialX, procedural schemas, arbitrary plugins, remote
+assets, and interactive variant selection are also outside the supported subset.
 
 File associations
 -----------------
 
 Setup registers 3D Preview with Windows Default Apps and Open With for .glb,
-.gltf, .obj, .fbx, .stl, and .ply. Windows 11 requires the signed-in user to confirm default
+.gltf, .obj, .fbx, .stl, .ply, .usd, .usda, .usdc, and .usdz. Windows 11 requires the signed-in user to confirm default
 app choices. Setup offers to open 3D Preview's Default Apps page after install;
 select 3D Preview for each listed extension there. Existing user choices are
 never overwritten by setup.
@@ -33,6 +38,14 @@ only to its private worker payload: setup provisions that exact deterministic
 package SID on the protected worker directory, and each user creates or opens
 the corresponding profile on first import. Model and sidecar bytes are supplied
 through the viewer's bounded broker. The product does not upload or modify models.
+USD first runs through TinyUSDZ in that worker. Supported local composition
+falls back atomically to Binbuf.Preview3D.ImportHost, a separate zero-capability
+AppContainer that can read/execute only the private OpenUsdHost payload and exits
+after the generation. Local relative stage/image dependencies are supplied as
+brokered bytes; remote assets and model-selected resolvers/plugins are rejected.
+USD follows Tier B ceilings (including 2 GiB primary, 4 GiB aggregate local
+bytes/USDZ expansion, and 20 million triangles or points); the compatibility
+host's commit cap is min(4 GiB, 35% of physical memory).
 
 3D Preview stores small UI preferences under
 %LOCALAPPDATA%\Binbuf\3D Preview. Uninstall leaves those preferences in place
@@ -43,7 +56,8 @@ are not touched.
 Runtime and release metadata
 ----------------------------
 
-The installation contains its app-local MSVC runtime and worker dependencies.
+The installation contains its app-local MSVC runtime, worker dependencies, and
+the exact private OpenUSD DLL/resource tree.
 Direct3D 12 feature level 11_0 or later is required. MANIFEST.json records
 payload SHA-256 values; SBOM.cdx.json, THIRD-PARTY-NOTICES.txt, and licenses\
 record dependency provenance and redistribution notices.

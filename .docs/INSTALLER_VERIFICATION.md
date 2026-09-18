@@ -93,3 +93,29 @@ uninstall removes product-owned registration without changing unrelated
 defaults. Also verify signed-file trust and hashes when a release certificate is
 available. No clean-VM lifecycle or signed-candidate claim is made by this
 engineering build.
+
+## USD-008 addendum (2026-09-18)
+
+The installer now owns one stable `Binbuf.Preview3D.USD.1` ProgID for `.usd`,
+`.usda`, `.usdc`, and `.usdz`, wired through capabilities, OpenWithProgids,
+SupportedTypes, reset, and uninstall. No USD CLSID, `shellex`, thumbnail
+handler, or `UserChoice` mutation is present.
+
+The product stage contains the separate 26-file `OpenUsdHost` closure with the
+bootstrap/core, exact runtime DLLs and app-local CRT, and the 13 hash-audited
+OpenUSD resources. The packaging script compares that recursive inventory with
+an explicit allowlist, validates PE closure (including OpenUSD's Windows-system
+`dbghelp.dll` and `shlwapi.dll` imports), hashes it in the release manifest,
+and adds OpenUSD/oneTBB license and SBOM entries. The installer ACL helper was
+exercised against isolated directories and verified mutually exclusive
+read/execute grants for `Binbuf.Preview3D.ImportWorker` and
+`Binbuf.Preview3D.ImportHost`.
+
+The portable engineering stage contains 63 files; its archive SHA-256 is
+`eaba718e74b2681fa6d9d14aa76d66f9a0496b511ea9818d9a46da5df27c484d`.
+A composed USD fixture opened successfully from that staged layout. The NSIS
+stage contains 64 files, `makensis /WX` completed without warnings, and the
+unsigned engineering installer SHA-256 is
+`b8a25b44f2d0d2e0daeac5ae59492862e8c38deaa1d2ad790f8ce0de4248f4f8`.
+Clean-VM association/ACL lifecycle and signed-candidate verification remain
+USD-009 release gates.

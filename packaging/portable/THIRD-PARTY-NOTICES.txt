@@ -11,7 +11,9 @@ installed by those pinned ports are preserved in licenses\:
   ktx.txt          Khronos KTX-Software
   libwebp.txt      WebP codec and libsharpyuv
   meshoptimizer.txt meshoptimizer
+  openusd.txt       Pixar OpenUSD
   simdjson.txt     simdjson
+  tbb.txt          Intel oneAPI Threading Building Blocks
   tinyusdz.txt     TinyUSDZ and its enabled vendored reader/render-data code
   ufbx.txt         ufbx FBX and OBJ/MTL loader
   zstd.txt         Zstandard

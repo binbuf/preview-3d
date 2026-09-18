@@ -92,8 +92,26 @@ TEST_CASE("Copied diagnostics name source format and phase without source paths"
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.FBX")==L"FBX");
     CHECK(d3d12_import_bridge::ClassifyByExtension(L"C:\\private\\model.FBX")
         == d3d12_import_bridge::SourceFormat::Fbx);
+    for (const auto* path : {L"C:\\private\\model.USD", L"C:\\private\\model.usda",
+                             L"C:\\private\\model.USDC", L"C:\\private\\model.usdz"})
+        CHECK(d3d12_import_bridge::ClassifyByExtension(path) == d3d12_import_bridge::SourceFormat::Usd);
+    CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.usda") == L"USD");
+    CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.USDZ") == L"USDZ");
     CHECK_FALSE(d3d12_import_bridge::ClassifyByExtension(L"C:\\private\\model.3mf"));
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.bad\npath")==L"Unknown");
+}
+
+TEST_CASE("Shipping viewer bridge opens fast and compatibility USD stages", "[recovery][usd-008]") {
+    const std::filesystem::path fixtures(PREVIEW3D_USD_FIXTURES_DIR);
+    uint64_t generation = 800;
+    for (const auto* name : {L"mesh.usda", L"compat-composition.usda"}) {
+        auto result = d3d12_import_bridge::RunImport(d3d12_import_bridge::SourceFormat::Usd,
+            (fixtures / name).wstring(), ++generation);
+        CAPTURE(name, result.errorStage, result.errorCode, result.errorSummary, result.errorDetails);
+        REQUIRE(result.ok);
+        CHECK(result.scene.format == model_core::SourceFormatId::Usda);
+        CHECK_FALSE(result.meshes.empty());
+    }
 }
 
 TEST_CASE("ASCII STL and PLY import through the shipping pooled coarse-request path", "[recovery][ascii]") {

@@ -112,6 +112,8 @@ foreach ($path in @($installer, $installerChecksum)) {
 
 if (-not $SkipBuild) {
     $msbuild = Find-MSBuild
+    # The viewer project has build-order references to both isolated import
+    # executables and the OpenUSD host's private core payload.
     $viewerProject = Join-Path $repository 'interactive-viewer\Preview3D.vcxproj'
     & $msbuild $viewerProject /t:Build /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=$repository\" /m:1 /v:minimal
     if ($LASTEXITCODE -ne 0) {

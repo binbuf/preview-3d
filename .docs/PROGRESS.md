@@ -1642,3 +1642,51 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
   same four plus two existing randomized `SidecarPathResolverTests` directory
   collisions. All USD-002..006 filters pass; none of those six full-run
   failures enters a USD route.
+
+### USD-008 viewer and distribution findings
+
+- The generic viewer bridge's `nextDetail` callback is not merely a host-side
+  scheduling hint: `MakeFileRequest` turns it into
+  `kImportRequestDetailService`. The USD request's allowed flag mask contains
+  only the expected-encoding bits, so passing the Tier-A detail callback makes
+  an otherwise valid USD request fail as `ImportProtocolViolation`. Keep both
+  `enableCoarseProxy` and `nextDetail` unset for USD; its Tier-B adapters still
+  stream bounded normalized batches through the ordinary `onBatch` path.
+- Product `RunImport` must prepare the general worker pool itself even though
+  normal window startup prewarms it. Direct bridge tests exposed the stale
+  assumption: acquiring an uninitialized coordinator returns `LaunchWorker`.
+  `EnsureImportSandboxPrepared()` is idempotent and now runs at the bridge
+  boundary, so retry/direct callers do not depend on window-startup timing.
+- Product builds and packaging must build the viewer project, not only copy an
+  already-present host tree. `Preview3D.vcxproj` now has a build-order-only
+  reference to `Preview3DImportHost.vcxproj`; that project already references
+  the OpenUSD core and materializes its 13 audited resources under
+  `x64/<Config>/OpenUsdHost/`.
+- The release host allowlist is 26 files: 8 host/runtime binaries, 13 audited
+  OpenUSD resources, and 5 app-local CRT DLLs. Copy the tree from its private build
+  output by explicit relative path, then compare the staged recursive
+  inventory in both directions. Do not recursively copy the build directory:
+  it also contains PDB/import-library/export artifacts. `usd_ms.dll` imports
+  Windows system `dbghelp.dll` and `shlwapi.dll`; both belong in the PE system
+  allowlist, not in the private payload.
+- Installer ACL provisioning must derive both deterministic SIDs before
+  changing either directory. On each tree, remove broad application-package
+  grants and both product SIDs, add only the owning SID, and verify that the
+  other SID has no remaining ACE. Cleanup symmetrically removes both SIDs from
+  both trees and deletes both current-user profiles.
+- The actual distribution surface is one USD family ProgID, not one per
+  encoding. Keep `.usd`, `.usda`, `.usdc`, and `.usdz` mapped to
+  `Binbuf.Preview3D.USD.1` through capabilities, OpenWithProgids, SupportedTypes,
+  reset, and uninstall. USD-008 intentionally adds no CLSID/shellex/thumbnail
+  registration; Explorer thumbnails remain USD-010.
+- Qualification: Debug/Release solution builds and the 98-case Unit suite
+  pass (7,625 / 7,537 assertions). Focused USD-002..008 passes 26 cases / 711
+  assertions in both configurations, and the real-app USD smoke passes eleven
+  activation/fallback/warning/failure-retention/replacement checks in both.
+  Full isolation is 279/283 Debug and 271/283 Release; the only failures are
+  the four established FBX
+  fixture-pattern misses plus eight Release randomized sidecar scratch-name
+  collisions. Portable staging passes PE/closed-inventory validation with 63
+  files and opens a composed USD stage from the staged layout; NSIS builds a
+  64-file unsigned engineering payload. Release hashes are recorded in
+  `.docs/usd.md` and `.docs/INSTALLER_VERIFICATION.md`.

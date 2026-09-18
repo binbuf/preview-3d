@@ -168,6 +168,10 @@
       <Project>{499d3a16-e218-49e5-accd-caf92709f242}</Project>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
+    <ProjectReference Include="..\compatibility-host\Preview3DImportHost.vcxproj">
+      <Project>{87ceca17-a6bd-45fb-84a9-9a5e9f4a793c}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
