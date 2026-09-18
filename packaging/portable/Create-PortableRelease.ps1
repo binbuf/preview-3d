@@ -243,6 +243,8 @@ $vcpkgStatusPath = Join-Path $repository 'vcpkg_installed\x64-windows\vcpkg\stat
 foreach ($name in $thirdParty) {
     Copy-RequiredFile (Join-Path $vcpkgTripletRoot "share\$name\copyright") (Join-Path $licensesStage "$name.txt")
 }
+Copy-RequiredFile (Join-Path $repository 'LICENSE') (Join-Path $stage 'LICENSE')
+Copy-RequiredFile (Join-Path $repository 'NOTICE') (Join-Path $stage 'NOTICE')
 Copy-RequiredFile (Join-Path $repository 'packaging\portable\THIRD-PARTY-NOTICES.txt') (Join-Path $stage 'THIRD-PARTY-NOTICES.txt')
 if ($Distribution -eq 'Portable') {
     Copy-RequiredFile (Join-Path $repository 'packaging\portable\PORTABLE-README.txt') (Join-Path $stage 'README.txt')
