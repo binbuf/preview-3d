@@ -1,0 +1,19 @@
+{
+    "Plugins": [
+        {
+            "Type": "library",
+            "Name": "Preview3DOpenUsdCore",
+            "Root": "../../..",
+            "LibraryPath": "Preview3DOpenUsdCore.dll",
+            "ResourcePath": "usd/preview3d/resources",
+            "Info": {
+                "Types": {
+                    "compatibility_host::BrokerResolver": {
+                        "bases": ["ArResolver"],
+                        "uriSchemes": ["preview3d"]
+                    }
+                }
+            }
+        }
+    ]
+}

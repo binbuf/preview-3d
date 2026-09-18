@@ -1,6 +1,6 @@
 # USD post-MVP work plan
 
-Status: implementation in progress; USD-001 spike complete, no USD product route is implemented
+Status: implementation in progress; USD-001 and USD-002 spikes complete, no USD product route is implemented
 
 Prepared: 2026-09-17  
 Design authority: [design/README.md](design/README.md)
@@ -207,7 +207,7 @@ opcode.
 
 ## USD-002: OpenUSD host and resolver spike
 
-Status: ready; USD-001 feature matrix complete
+Status: complete; proceed with the isolated monolithic compatibility payload
 
 Depends on: USD-001  
 Unblocks: USD-003, USD-006, and USD-007
@@ -269,8 +269,8 @@ payload.
 
 ## USD-003: USD-family protocol and normalized contract
 
-Status: blocked  
-Depends on: successful USD-001 and USD-002 decisions  
+Status: ready
+Depends on: successful USD-001 and USD-002 decisions (complete)
 Unblocks: USD-004 and USD-006
 
 ### Objective

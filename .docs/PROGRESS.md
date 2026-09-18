@@ -1279,6 +1279,57 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
 
 ## Notes for whoever picks up the next chunk
 
+### USD-002 OpenUSD compatibility-host findings
+
+- OpenUSD 26.08 is pinned at commit `ee47c679abde5b467a7b6a41f3b2285564a4222e`
+  through `packaging/vcpkg-ports/openusd`. The selected build is monolithic and
+  disables Python, imaging/Hydra, tools, tests, validation, MaterialX, optional
+  format/renderer plugins, and graphics APIs. The shared comparison produced
+  33 DLLs / 21,945,856 bytes and 70 resource files; monolithic is one
+  18,053,120-byte OpenUSD DLL and the reviewed subset is 13 resource files.
+- A bootstrap executable cannot use `/DELAYLOAD:usd_ms.dll`: OpenUSD imports
+  data symbols and MSVC rejects that with `LNK1194`. Keep the small bootstrap
+  free of OpenUSD imports, lock DLL/environment discovery there, then
+  `LoadLibraryExW` the core DLL by absolute path. The compatibility payload now
+  has its own `x64/<Config>/OpenUsdHost/` tree; keep that separation in the
+  installer and ACL only that tree to its distinct AppContainer SID.
+- A custom OpenUSD resolver must be advertised by an explicitly registered
+  `plugInfo.json`; a runtime-only `TfType::Define` has no associated plugin and
+  OpenUSD falls back to `ArDefaultResolver`. Register the hash-pinned manifest
+  first. Model assets use a URI resolver (`preview3d://`), not a replacement
+  primary resolver: this gives Pcp stable absolute identities and causes
+  relative arcs to dispatch through the URI anchor while installed schema
+  resources continue through the default resolver.
+- `ArResolvedPath` values that merely look like relative synthetic paths can be
+  opened but do not form a usable Pcp layer stack. Use a registered URI scheme.
+  Reject all other schemes, absolute paths, drives, backslashes, and namespace
+  escape before lookup; never fall through to the default resolver for a model
+  dependency.
+- OpenUSD runtime resources are part of the security payload, not incidental
+  data. Hash exact files, recursively reject missing/modified/unlisted files,
+  explicitly register only the audited root manifest, and reject registry
+  plugin/resource paths outside the private payload. Use
+  `lexically_relative`, not `std::filesystem::relative`, inside AppContainer;
+  the latter canonicalizes through inaccessible parent directories and can
+  falsely fail a valid inventory.
+- Open stages with `UsdStage::LoadNone`; `TraverseAll` is required to discover
+  unloaded payload sites. Sort each breadth and enforce payload-count, byte,
+  resolver-open, graph-depth, wall-clock, and Job-memory bounds. Treat
+  `GetCompositionErrors()` as fatal even if root geometry is otherwise usable.
+- The brokered OpenUSD `ArAsset` can have no `FILE*`; `GetBuffer`/`Read` over a
+  bounded copied section is sufficient for USDA, references/sublayers,
+  payloads, textures, and USDZ package reads. OpenUSD has no useful
+  cooperative cancellation hook for this operation, so retain bounded Job
+  termination and fresh-host replacement.
+- The common `mesh.usda` facts agree between TinyUSDZ and OpenUSD (hierarchy,
+  transform, one mesh/four points/one quad, units/up axis, bounds), but their
+  spike hashes intentionally cover different representations. USD-003 must
+  define one post-triangulation, format-neutral canonical digest rather than
+  reusing either temporary hash.
+- Build the solution, not an individual test project: the USD host path macro
+  and vcpkg layout depend on `$(SolutionDir)`. The focused USD-002 suite is
+  `[usd-002]`; it passed 201 assertions in both Debug and Release.
+
 - The `#pragma pack(1)` + `static_assert(sizeof(...) == N, ...)` pattern on every wire-format struct (`shared/model-core/include/model_core/WireFormat.h`, `ControlProtocol.h`) is deliberate and worth keeping for any new struct added to the wire format or control protocol — it turns layout mistakes into compile errors.
 - `SandboxTestSupport.h` (`tests/import-isolation/`) holds the reusable AppContainer test fixture (`SandboxFixture`, unique per-run profile name, ACL grant, profile cleanup in the destructor) plus both worker exe path accessors (`WorkerExePath()`, `HostileWorkerExePath()`). `GenerationLaunchSupport.h` holds the reusable control-channel launch helper (`LaunchWorkerWithControlChannel`, generalized over exe path/args). Both are shared across `SandboxLaunchTests.cpp`, `ImportPipelineTests.cpp`, and `HostileWorkerTests.cpp` — reuse them rather than re-deriving the pattern.
 - The checksum (`model_core::Fnv1a64`) is explicitly non-cryptographic and known to be defeatable by a worker that computes its own checksum over its own lies. It only guards the honest path against incidental corruption. The real defense against a *lying* worker is the copy-then-validate bounds/arithmetic checks in `SharedSectionValidator` — now proven adversarially by the hostile-worker suite (part 3).
