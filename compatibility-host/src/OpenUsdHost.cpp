@@ -469,3 +469,10 @@ extern "C" __declspec(dllexport) int __cdecl Preview3DRunOpenUsdSpike(
     return compatibility_host::RunOpenUsdSpike(
         *output, std::span<const std::byte>(section, sectionSize), payloadDirectory);
 }
+
+extern "C" __declspec(dllexport) int __cdecl Preview3DAuditOpenUsdPayload(
+    const wchar_t* payloadDirectory)
+{
+    if (!payloadDirectory) return 1;
+    return compatibility_host::AuditResources(payloadDirectory) ? 0 : 2;
+}

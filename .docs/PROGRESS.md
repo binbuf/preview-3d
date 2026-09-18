@@ -4,6 +4,33 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **USD-006 compatibility-host lifecycle (2026-09-17): complete, still
+  test-only.** The broker now consumes only an exact pre-publication
+  `UnsupportedComposition` from TinyUSDZ, discards the fast attempt, and
+  starts a fresh normalized session through the distinct
+  `Binbuf.Preview3D.ImportHost` AppContainer. The host has its own additive
+  opcode/request and closed producer identity while reusing the existing
+  bounded framing, dependency servicing, output window, copy-then-validate,
+  cancellation, and Job enforcement. It exits after its one generation; bad
+  hosts are killed, not replaced/retried within that generation.
+
+  The bootstrap locks DLL/environment discovery before input and remains free
+  of OpenUSD imports. Its first production request loads the core by absolute
+  private path and audits the 13-file resource inventory. USD-007 still owns
+  composed-stage normalization; the current production host deliberately
+  returns `CompatibilityHostFailure` after platform/payload validation rather
+  than exposing USD-002 spike data. Viewer format discovery remains disabled.
+
+  Debug/Release solution builds pass. Focused USD-006 passes 2 cases / 64
+  deterministic assertions in both configurations, and USD-002 through
+  USD-006 focused coverage is green. Unit passes 98/98 (7,617 Debug / 7,529
+  Release assertions). Full Debug isolation reaches 273/277 with only the
+  four known FBX fixture-rewrite failures; Release reaches 271/277 with those
+  four plus two known sidecar scratch-directory collisions. PE dependency
+  inspection confirms OpenUSD is absent from the viewer, general worker,
+  thumbnail DLL, and bootstrap. USD-007 is now ready; USD remains undiscoverable
+  until USD-008 and thumbnails remain USD-010.
+
 - **USD-005 USDZ/material/texture fast path (2026-09-17): complete, still
   test-only.** The TinyUSDZ route now imports independently preflighted USDZ,
   brokered local or archive-contained image assets, USD Preview Surface
@@ -1512,3 +1539,55 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
   `Create-PortableRelease.ps1` now stages `tinyusdz.txt`; preserve that entry
   when packaging changes. The port revision is `0.9.1#2` so existing local
   installs do not retain the prior incomplete copyright.
+
+### USD-006 compatibility-host lifecycle findings
+
+- Keep producer identity in the control plane even though both adapters emit
+  the same normalized wire records. `StartOpenUsdImportFromFile=18` and
+  `ParseOpenUsdFileRequest` deliberately match the fast request's 48-byte
+  layout but have a distinct type/opcode. This prevents a child or test double
+  from changing producer identity without the broker noticing and avoids a
+  protocol-version bump.
+- Atomic fallback is simplest and strongest when the second attempt calls the
+  same single-producer session engine from scratch. It naturally gets a new
+  output section, validation catalogs, handle duplications, cancellation
+  event, and process lease. Do not pass a fast section/catalog into USD-007;
+  the only shared state should be the generation and the trusted broker's path
+  authority.
+- A compatibility process must never report `UnsupportedComposition`: that is
+  a fast-classifier transition, not a general importer error. Treat it as
+  reverse fallback/protocol failure. Once the compatibility transition is
+  accepted, every non-cancel failure is mapped to a redacted host-owned fact
+  and `compatibilityFallbackRequired` is cleared.
+- The host's allowed “bounded idle grace” can be zero. Exiting immediately
+  after the current generation preserves the strongest isolation from the
+  USD-002 spike (OpenUSD has process-global initialization) and makes restart
+  behavior deterministic. A typed result receives a graceful `Shutdown`; a
+  crash, hang, missed cancellation grace, or malformed reply drops the
+  kill-on-close Job and is never replaced for that generation.
+- `WorkerPool` is process-agnostic once its executable, arguments, SID, and
+  limits are inputs. Reuse it for the compatibility host, but do not reuse the
+  worker coordinator/profile: the host is lazy, size one, immediate-exit, and
+  ACLed only to `OpenUsdHost/`; the general pool remains prewarmed, size two,
+  and session-reused.
+- Keep the bootstrap free of OpenUSD imports. The production `--pool` mode can
+  use the shared framed control protocol without loading OpenUSD; only the
+  first accepted compatibility request calls `LoadLibraryExW` on the absolute
+  private core path and invokes the exported resource audit. USD-007 should
+  extend that already-loaded core entry point rather than linking OpenUSD into
+  the bootstrap or broker.
+- On this Windows build, a Job memory kill does not always leave
+  `JobObjectLimitViolationInformation.ViolationLimitFlags` observable after
+  the process disappears. Check the closed NT memory-exhaustion exit statuses
+  too. The explicit small compatibility limit is a test-only qualification
+  seam and maps an EOF under that cap to `CompatibilityHostLimit`; production
+  uses the derived `min(4 GiB, 35% physical RAM)` cap plus Job/exit evidence.
+- Build the solution rather than `Tests.ImportIsolation.vcxproj` directly.
+  Direct project builds redefine `$(SolutionDir)` to the project directory and
+  put worker/host test dependencies under per-project `x64/`, while the
+  compiled path macros intentionally target the solution-level output tree.
+- Current qualification is 277 isolation cases. Debug passes 273 with the
+  four pre-existing FBX fixture-pattern failures. Release passes 271 with the
+  same four plus two existing randomized `SidecarPathResolverTests` directory
+  collisions. All USD-002..006 filters pass; none of those six full-run
+  failures enters a USD route.

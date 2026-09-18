@@ -53,6 +53,13 @@ public:
     bool InitializeBorrowed(std::wstring exePath, PSID sid, SandboxLimits limits,
                             size_t size, std::wstring& error);
 
+    // Same borrowed-profile lifetime as InitializeBorrowed, with an explicit
+    // pool-mode argument for compatibility-host hostile lifecycle tests.
+    bool InitializeBorrowedForTesting(std::wstring exePath, PSID sid,
+                                      SandboxLimits limits, size_t size,
+                                      std::wstring workerArguments,
+                                      std::wstring& error);
+
     // Non-product validation seam: launch the same AppContainer/Job/pipes pool
     // with an explicit worker mode. Used by FBX-001 to hold a worker inside
     // ufbx_evaluate_scene() and exercise the real terminate-and-replace path.

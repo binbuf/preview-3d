@@ -98,8 +98,21 @@ bool WorkerPool::Initialize(std::wstring exePath, platform::AppContainerSid sid,
 bool WorkerPool::InitializeBorrowed(std::wstring exePath, PSID sid, SandboxLimits limits,
                                     size_t size, std::wstring& error)
 {
+    return InitializeBorrowedForTesting(std::move(exePath), sid, limits, size,
+                                        L"--pool", error);
+}
+
+bool WorkerPool::InitializeBorrowedForTesting(std::wstring exePath, PSID sid,
+                                              SandboxLimits limits, size_t size,
+                                              std::wstring workerArguments,
+                                              std::wstring& error)
+{
+    if (workerArguments.empty()) {
+        error = L"The borrowed pool arguments are empty.";
+        return false;
+    }
     exePath_ = std::move(exePath);
-    workerArguments_ = L"--pool";
+    workerArguments_ = std::move(workerArguments);
     borrowedSid_ = sid;
     limits_ = limits;
     workers_.reserve(size);

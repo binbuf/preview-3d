@@ -8,6 +8,7 @@
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/WireFormat.h"
+#include "platform/Win32Handle.h"
 #include "UsdZipPreflight.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -15,14 +16,17 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <limits>
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -750,4 +754,166 @@ TEST_CASE("USD-003 broker accepts only pre-publication composition fallback",
     CHECK_FALSE(lateResult.compatibilityFallbackRequired);
     CHECK(lateResult.batchCount == 1);
     CHECK(published == 1);
+}
+
+TEST_CASE("USD-006 lazily launches an isolated compatibility producer and discards fast state",
+          "[usd-006][fallback][openusd][sandbox][recovery]")
+{
+    CHECK(uint32_t(model_core::ControlOpcode::StartOpenUsdImportFromFile) == 18);
+    CHECK(sizeof(model_core::ParseOpenUsdFileRequest) == 48);
+
+    ScratchUsd composed(L"usda");
+    const std::string source =
+        "#usda 1.0\n( subLayers = [@child.usda@] )\n"
+        "def Mesh \"M\" { int[] faceVertexCounts=[3] int[] faceVertexIndices=[0,1,2] "
+        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] }";
+    composed.Write(std::as_bytes(std::span(source)));
+    const std::string child = "#usda 1.0\n";
+    composed.WriteSidecar(L"child.usda", std::as_bytes(std::span(child)));
+
+    auto request = Request(composed.path, 600);
+    request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.workerProcessId,
+            result.batchCount);
+    CHECK_FALSE(result.ok);
+    // USD-007 owns normalized OpenUSD output. Until then the production host
+    // returns a closed host-owned fact, never the discarded TinyUSDZ result.
+    CHECK(result.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+    CHECK(result.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK_FALSE(result.compatibilityFallbackRequired);
+    CHECK(result.batchCount == 0);
+    CHECK(result.chunks.empty());
+    REQUIRE(result.workerProcessId != 0);
+
+    // The strict bounded-idle policy exits at generation completion. If the
+    // process object still exists, it must already be signaled.
+    HANDLE raw = OpenProcess(SYNCHRONIZE, FALSE, result.workerProcessId);
+    if (raw) {
+        platform::Win32Handle process(raw);
+        CHECK(WaitForSingleObject(process.get(), 2000) == WAIT_OBJECT_0);
+    } else {
+        CHECK(raw == nullptr); // process object already reaped
+    }
+
+    // A terminal non-composition failure never changes producer or asks the
+    // host for a more permissive retry.
+    ScratchUsd motion(L"usda");
+    const std::string unsupported =
+        "#usda 1.0\ndef Xform \"Root\" { def Mesh \"P\" { "
+        "int[] faceVertexCounts=[3] int[] faceVertexIndices=[0,1,2] "
+        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] } "
+        "def PointInstancer \"I\" { rel prototypes=[</Root/P>] int[] protoIndices=[0] "
+        "point3f[] positions=[(0,0,0)] vector3f[] velocities=[(1,0,0)] } }";
+    motion.Write(std::as_bytes(std::span(unsupported)));
+    auto terminalRequest = Request(motion.path, 601);
+    terminalRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    const auto terminal = import_broker::RunImportSession(terminalRequest);
+    CHECK_FALSE(terminal.ok);
+    CHECK(terminal.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+    CHECK(terminal.producer == import_broker::ImportProducer::FastWorker);
+    CHECK_FALSE(terminal.compatibilityFallbackRequired);
+
+    // A later fast generation remains usable after compatibility-host exit.
+    ScratchUsd valid(L"usda");
+    valid.Write(ReadFixture("mesh.usda"));
+    const auto recovered = import_broker::RunImportSession(Request(valid.path, 602));
+    REQUIRE(recovered.ok);
+    CHECK(recovered.producer == import_broker::ImportProducer::FastWorker);
+    CHECK(Count(recovered, model_core::ChunkTopology::TriangleList) == 1);
+}
+
+TEST_CASE("USD-006 compatibility crash timeout protocol and commit faults stay generation-local",
+          "[usd-006][fallback][hostile][limits][recovery]")
+{
+    ScratchUsd composed(L"usda");
+    const std::string source =
+        "#usda 1.0\n( subLayers = [@child.usda@] )\n"
+        "def Mesh \"M\" { int[] faceVertexCounts=[3] int[] faceVertexIndices=[0,1,2] "
+        "point3f[] points=[(0,0,0),(1,0,0),(0,1,0)] }";
+    composed.Write(std::as_bytes(std::span(source)));
+    const std::string child = "#usda 1.0\n";
+    composed.WriteSidecar(L"child.usda", std::as_bytes(std::span(child)));
+
+    uint64_t generation = 610;
+    for (const wchar_t* mode : {L"--pool-crash", L"--pool-hang", L"--pool-stale",
+                                L"--pool-reverse-fallback"}) {
+        auto request = Request(composed.path, generation++);
+        request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+        request.compatibilityHostArgumentsOverride = mode;
+        request.replyTimeoutMs = 2000;
+        const auto result = import_broker::RunImportSession(request);
+        CAPTURE(mode, uint32_t(result.stage), uint32_t(result.errorCode));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+        CHECK(result.producer == import_broker::ImportProducer::CompatibilityHost);
+        CHECK_FALSE(result.compatibilityFallbackRequired);
+        CHECK(result.chunks.empty());
+    }
+
+    std::atomic_uint32_t cancellationProbes{0};
+    auto cancelledRequest = Request(composed.path, generation++);
+    cancelledRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    cancelledRequest.compatibilityHostArgumentsOverride = L"--pool-hang";
+    cancelledRequest.replyTimeoutMs = 5000;
+    cancelledRequest.isCancelled = [&] {
+        // The fast classifier observes only a handful of probes for this tiny
+        // layer. The hung host's bounded wait supplies the later probes.
+        return cancellationProbes.fetch_add(1) >= 50;
+    };
+    const auto cancelled = import_broker::RunImportSession(cancelledRequest);
+    CHECK_FALSE(cancelled.ok);
+    CHECK(cancelled.errorCode == model_core::ImportErrorCode::Cancelled);
+    CHECK(cancelled.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(cancelled.chunks.empty());
+
+    // A replacement generation may arrive while the old host still owns the
+    // single compatibility lease. Cancelling the old generation tears down
+    // that Job; the waiter must lazily launch a fresh host instead of failing
+    // because the old pool intentionally exited.
+    std::atomic_bool replaceOld{false};
+    auto oldRequest = Request(composed.path, generation++);
+    oldRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    oldRequest.compatibilityHostArgumentsOverride = L"--pool-hang";
+    oldRequest.replyTimeoutMs = 5000;
+    oldRequest.isCancelled = [&] { return replaceOld.load(); };
+    auto oldFuture = std::async(std::launch::async, [&] {
+        return import_broker::RunImportSession(oldRequest);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    auto newRequest = Request(composed.path, generation++);
+    newRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    auto newFuture = std::async(std::launch::async, [&] {
+        return import_broker::RunImportSession(newRequest);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    replaceOld.store(true);
+    const auto oldResult = oldFuture.get();
+    const auto newResult = newFuture.get();
+    CHECK(oldResult.errorCode == model_core::ImportErrorCode::Cancelled);
+    CHECK(oldResult.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(newResult.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+    CHECK(newResult.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(newResult.workerProcessId != 0);
+
+    auto limited = Request(composed.path, generation++);
+    limited.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    limited.compatibilityHostArgumentsOverride = L"--pool-overallocate";
+    limited.compatibilityHostCommitLimitBytes = 32ull * 1024ull * 1024ull;
+    limited.replyTimeoutMs = 2000;
+    const auto limit = import_broker::RunImportSession(limited);
+    CAPTURE(uint32_t(limit.stage), uint32_t(limit.errorCode));
+    CHECK_FALSE(limit.ok);
+    CHECK(limit.errorCode == model_core::ImportErrorCode::CompatibilityHostLimit);
+    CHECK(limit.producer == import_broker::ImportProducer::CompatibilityHost);
+
+    // A clean production-mode host can be launched again after every forced
+    // Job teardown and returns its current USD-006 closed placeholder fact.
+    auto recoveredRequest = Request(composed.path, generation);
+    recoveredRequest.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    const auto recovered = import_broker::RunImportSession(recoveredRequest);
+    CHECK_FALSE(recovered.ok);
+    CHECK(recovered.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+    CHECK(recovered.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(recovered.workerProcessId != 0);
 }

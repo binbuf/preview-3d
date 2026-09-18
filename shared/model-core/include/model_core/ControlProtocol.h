@@ -49,6 +49,11 @@ enum class ControlOpcode : uint32_t {
     StartObjImportFromFile = 15,  // host -> worker
     StartFbxImportFromFile = 16,  // host -> worker
     StartUsdImportFromFile = 17,  // host -> worker; test-only until USD-008
+    // Same normalized result protocol as StartUsdImportFromFile, but accepted
+    // only by Preview3DImportHost.exe. Keeping a distinct opcode prevents a
+    // process (or a hostile test double) from silently changing producer
+    // identity during one generation.
+    StartOpenUsdImportFromFile = 18, // broker -> compatibility host
 };
 
 enum : uint32_t {
@@ -238,6 +243,23 @@ struct ParseUsdFileRequest {
     uint64_t cancellationEventHandleValue;
 };
 static_assert(sizeof(ParseUsdFileRequest) == 48, "ParseUsdFileRequest layout changed");
+
+// USD compatibility-host request. The layout remains deliberately identical
+// to the fast request so the broker can reuse its handle-transfer and bounded
+// control framing. The distinct type/opcode is the producer boundary: this
+// request is never accepted by Preview3DImportWorker.exe, and the fast request
+// is never accepted by Preview3DImportHost.exe.
+struct ParseOpenUsdFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue;
+    uint64_t sectionHandleValue;
+    uint64_t sectionByteCapacity;
+    uint32_t maxChunkCount;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
+};
+static_assert(sizeof(ParseOpenUsdFileRequest) == 48,
+              "ParseOpenUsdFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

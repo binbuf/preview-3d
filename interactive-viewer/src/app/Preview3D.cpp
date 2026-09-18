@@ -3717,6 +3717,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (app->cancellation) app->cancellation->store(true, std::memory_order_relaxed);
         app->importThreads.clear();
         import_broker::ShutdownImportWorkerPool();
+        import_broker::ShutdownCompatibilityHost();
         app->renderThread.CancelUploads();
         SetFailure(*app, L"Graphics could not be started.",
                    failure ? failure->details : L"The render thread stopped during initialization.");
@@ -4114,6 +4115,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         MsgWaitForMultipleObjectsEx(0, nullptr, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 
+    // The window/render lane is already gone. Join loader lanes before
+    // shutting down their process managers so no lease can outlive its pool;
+    // both shutdowns are bounded and kill-on-close remains the hard backstop.
+    app.importThreads.clear();
+    import_broker::ShutdownCompatibilityHost();
+    import_broker::ShutdownImportWorkerPool();
     ShutdownOpenWithCatalog();
     if (gBackgroundBrush) DeleteObject(gBackgroundBrush);
     if (SUCCEEDED(comResult)) CoUninitialize();

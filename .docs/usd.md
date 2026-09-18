@@ -1,6 +1,6 @@
 # USD post-MVP work plan
 
-Status: implementation in progress; USD-001 through USD-005 complete, no USD product route is exposed
+Status: implementation in progress; USD-001 through USD-006 complete, no USD product route is exposed
 
 Prepared: 2026-09-17  
 Design authority: [design/README.md](design/README.md)
@@ -574,7 +574,7 @@ dependency subset.
 
 ## USD-006: compatibility-host platform and fallback lifecycle
 
-Status: ready
+Status: complete (2026-09-17)
 Depends on: USD-002 and USD-003  
 Unblocks: USD-007
 
@@ -622,9 +622,61 @@ duplicating a weaker broker path.
 - Host failure affects only the document generation and never silently returns
   the TinyUSDZ candidate it replaced.
 
+### Completion record
+
+Protocol v10 remains unchanged. `StartOpenUsdImportFromFile=18` and its
+separate 48-byte `ParseOpenUsdFileRequest` are additive control identities;
+the host and fast worker cannot accept each other's start opcode. Both
+producers use the existing bounded control frames, brokered raw source and
+dependency handles, cancellation event, reused output-section window,
+copy-then-validate catalog, and normalized wire schema.
+
+`RunImportSession` now owns the atomic orchestration. It starts OpenUSD only
+for a USD fast result whose exact first error is `UnsupportedComposition`,
+whose accepted batch count and candidate chunk list are both zero, and for
+which a compatibility executable was explicitly configured. The second
+attempt gets a new section, catalog, handle duplication, and process lease for
+the same generation. Its result carries a closed producer identity; host
+failure clears the fallback marker and can never reveal or restore the
+discarded TinyUSDZ candidate. Reverse fallback is a protocol failure.
+
+The compatibility manager creates the distinct
+`Binbuf.Preview3D.ImportHost` zero-capability profile lazily, grants it
+read/execute only on the private `OpenUsdHost` payload directory, launches one
+`--pool` host suspended and Job-assigned, and permits only the current
+generation to lease it. The selected bounded-idle policy is deliberately the
+strict endpoint of the design: a successful/typed-error host receives
+`Shutdown` immediately after the generation; a crash, hang, cancellation, or
+protocol fault drops the kill-on-close Job without replacement. A later
+generation launches a fresh host. The commit ceiling is the lower of 4 GiB
+and 35% of visible physical RAM; a non-default ceiling exists only for
+qualification.
+
+The bootstrap remains free of OpenUSD imports. Before reading requests it
+locks DLL search and clears OpenUSD/plugin discovery variables. On the first
+production fallback it loads `Preview3DOpenUsdCore.dll` by absolute private
+path and hashes the closed 13-file resource inventory before any future stage
+open. USD-007 owns the actual bounded stage composition and normalized chunk
+emission; until that adapter lands, the production route returns the closed
+`CompatibilityHostFailure` fact rather than publishing spike output. This is
+why product extension discovery remains disabled.
+
+Focused USD-006 tests pass in Debug and Release (2 cases / 64 assertions).
+They cover exact
+lazy fallback, zero fast publication, separate producer identity, immediate
+host exit, cancellation, crash, hang, stale replies, reverse fallback,
+commit-limit mapping, terminal fast failures that never launch compatibility,
+and later fast/host recovery. USD-002 through USD-006 focused coverage passes
+in both configurations. Unit passes 98/98 (7,617 Debug / 7,529 Release
+assertions). Full Debug isolation reaches 273/277 with only the four known FBX
+fixture-rewrite failures; full Release reaches 271/277 with those four plus
+two known randomized sidecar scratch-directory collisions. No full-run failure
+enters a USD route. PE inspection confirms no OpenUSD dependency in the
+viewer, general worker, thumbnail DLL, or bootstrap executable.
+
 ## USD-007: bounded OpenUSD static composition adapter
 
-Status: blocked  
+Status: ready
 Depends on: USD-005 and USD-006  
 Unblocks: USD-008
 
