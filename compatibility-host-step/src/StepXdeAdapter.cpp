@@ -709,13 +709,15 @@ class SceneEmitter {
 public:
     SceneEmitter(std::span<std::byte> section, std::uint64_t generationId, double metersPerUnit,
                  std::uint32_t meshes, std::uint32_t nodes, std::uint32_t warningCount,
-                 StepBatchPublisher publish, std::function<bool()> cancelled)
+                 std::uint32_t maxChunkCount, StepBatchPublisher publish,
+                 std::function<bool()> cancelled)
         : section_(section)
         , generationId_(generationId)
         , metersPerUnit_(metersPerUnit)
         , meshCount_(meshes)
         , nodeCount_(nodes)
         , warningCount_(warningCount)
+        , maxChunkCount_(maxChunkCount)
         , publish_(std::move(publish))
         , cancelled_(std::move(cancelled))
     {
@@ -882,6 +884,19 @@ private:
             error_ = model_core::ImportErrorCode::Cancelled;
             return false;
         }
+        // The broker enforces maxChunkCount per section, so the emitter must
+        // never hand it a batch with more descriptors than that, not just a
+        // batch that fits the byte window. A large many-definition assembly
+        // whose geometry is small would otherwise accumulate thousands of
+        // chunks in one window and be rejected as ResourceLimit instead of
+        // being delivered progressively.
+        if (pending_.size() + 1 > maxChunkCount_) {
+            if (pending_.empty() || !publish_) {
+                error_ = model_core::ImportErrorCode::ResourceLimit;
+                return false;
+            }
+            if (!FlushAndPublish()) return false;
+        }
         const std::uint64_t needed = kSectionHeaderSize
             + static_cast<std::uint64_t>(pending_.size() + 1) * kChunkDescriptorSize
             + pendingBytes_ + payload.size();
@@ -978,6 +993,7 @@ private:
     std::uint32_t meshCount_;
     std::uint32_t nodeCount_;
     std::uint32_t warningCount_;
+    std::uint32_t maxChunkCount_;
     StepBatchPublisher publish_;
     std::function<bool()> cancelled_;
     std::vector<PendingChunk> pending_;
@@ -1345,7 +1361,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         const auto emitStart = SteadyClock::now();
         SceneEmitter emitter(section, request.generationId, metersPerUnit, planner.definitionCount(),
                              static_cast<std::uint32_t>(planner.nodes().size()),
-                             planner.warningCount(), publish,
+                             planner.warningCount(), request.maxChunkCount, publish,
                              [cancellationEvent] { return IsCancelled(cancellationEvent); });
         DefinitionMesher mesher(limits.profile, limits);
         mesher.SetCancellationProbe([cancellationEvent] { return IsCancelled(cancellationEvent); });

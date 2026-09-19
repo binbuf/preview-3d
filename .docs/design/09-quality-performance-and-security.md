@@ -88,6 +88,8 @@ Frame intervals are classified using ETW present events. Occlusion, monitor mode
 
 For Tier B, publish per-format and per-importer-path median/p95 import throughput and peak memory. Release gates are the hard limits, responsiveness, no crash/hang, and the medium-file ≤2 s goal where the representative fixture is within the medium workload—not a multi-gigabyte promise. Cache-hit measurements include lookup and validation and are reported separately from OS file-cache warmth.
 
+**STEP Tier B budget (STEP-008).** A genuine self-contained 230 MiB AP214 assembly (Voron 2.4r2, 4.06 M triangles, 12.17 M vertices, 1,314 reusable definitions) was measured through the real AppContainer/Job `Preview3DStepHost.exe` route on the compatibility reference. The where-time-goes split is parse/transfer-bound: Part-21 admission 3.2 s, `ReadStream` 12.2 s, `Transfer` 50.8 s, per-definition mesh 24.3 s, and progressive emission 26.0 s. Time-to-first-coarse was 66 s and Ready 95 s, with 2.07 GiB peak host private commit. The published budget for a self-contained STEP file of this class (≤256 MiB and ≤5 M triangles) is **time-to-first-coarse ≤120 s and Ready ≤180 s**, with host private commit inside the STEP-host Job ceiling (min(4 GiB, 35% of physical RAM)). Over-cap files must fail typed: the lexical entity/source caps abort before any OCCT work, while the node/instance/triangle caps are enforced during planning and section validation. A separate ~20 M-triangle-class fixture and multi-run p95 evidence remain open, so this is the measured class budget, not a multi-gigabyte promise.
+
 ## Test layers
 
 ### Unit and property tests

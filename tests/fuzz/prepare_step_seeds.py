@@ -53,6 +53,34 @@ def main() -> None:
             envelope(DECLARATION_DISCOVERY, text, flags=1))
         count += 1
 
+    # STEP-008 frozen adversarial families (see
+    # tests/fixtures/step/manifest.json). Each is a deterministic derivation
+    # of a committed source that must reach a closed product status, never a
+    # resolver, allocation, or hang.
+    valid = (b'ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n'
+             b'#1=CARTESIAN_POINT(\'\',(0.,0.,0.));\nENDSEC;\nEND-ISO-10303-21;\n')
+    step008_cases = {
+        'truncate-terminator': valid[:valid.rfind(b'END-ISO-10303-21;')],
+        'nul-append': valid + b'\x00',
+        'utf16-bom': b'\xff\xfe' + valid,
+        'zip-signature': b'PK\x03\x04' + valid,
+        'not-part21': valid.replace(b'ISO-10303-21;', b'ISO-10303-22;', 1),
+        'duplicate-entity': valid.replace(
+            b'#1=CARTESIAN_POINT', b'#1=CARTESIAN_POINT(\'\',(0.,0.,0.));\n#1=CARTESIAN_POINT', 1),
+        'unterminated-string': valid.replace(
+            b'ENDSEC;\nEND-ISO-10303-21;', b"#9=PRODUCT('oops;\nENDSEC;\nEND-ISO-10303-21;", 1),
+        'unterminated-comment': valid.replace(
+            b'ENDSEC;\nEND-ISO-10303-21;', b'/* oops\nENDSEC;\nEND-ISO-10303-21;', 1),
+        'deep-nesting': (b'ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1=A'
+                         + b'(' * 300 + b')' * 300 + b';\nENDSEC;\nEND-ISO-10303-21;\n'),
+        'oversized-record': (b'ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1='
+                             + b'A' * 2048 + b';\nENDSEC;\nEND-ISO-10303-21;\n'),
+    }
+    for name, payload in step008_cases.items():
+        (args.output / f'step-008-{name}.admission.seed').write_bytes(
+            envelope(PART21_ADMISSION, payload))
+        count += 1
+
     # Mutated production control frames enter the exact framed decoder without a
     # GPU or child process.
     step_request = struct.pack('<IIQQQQIIQ', 20, 48, 1, 0, 0, 4096, 0, 0, 0)

@@ -9,9 +9,11 @@ decision, and the recorded self-contained scope acceptance, and STEP-007
 complete for viewer/activation/package/documentation integration (see
 [STEP-007-VERIFICATION.md](STEP-007-VERIFICATION.md),
 [STEP-006-VERIFICATION.md](STEP-006-VERIFICATION.md), and
-[STEP-006-INTEROP-MATRIX.md](STEP-006-INTEROP-MATRIX.md)); the genuine large-file
-corpus and published Tier-B budgets remain for STEP-008 (see
-[STEP-005-VERIFICATION.md](STEP-005-VERIFICATION.md)). This file supersedes
+[STEP-006-INTEROP-MATRIX.md](STEP-006-INTEROP-MATRIX.md)); and STEP-008 is an
+implemented qualification slice, including the genuine large-file corpus and
+published Tier-B budgets, with static analysis, the 8-hour soak, clean-VM
+lifecycle, and signed-artifact inspection still open (see
+[STEP-008-VERIFICATION.md](STEP-008-VERIFICATION.md)). This file supersedes
 the remaining execution order in [stp.md](stp.md) from STEP-004 onward.
 Prepared: 2026-09-19
 Design authority: [design/README.md](design/README.md)
@@ -343,6 +345,13 @@ distribution surfaces.
   extensions without changing an existing user default.
 
 ## STEP-008 — qualification and hardening
+
+Status: implemented slice (2026-09-19). Evidence in
+[STEP-008-VERIFICATION.md](STEP-008-VERIFICATION.md). The corpus manifest,
+typed-outcome oracle, STEP-008 fuzz seeds, genuine 100 MB+ measurement, and
+Tier-B STEP budget are done; static analysis, the ~20 M-triangle fixture, an
+instrumented OCCT-boundary fuzzer, the 8-hour soak, clean-VM lifecycle, and
+signed-artifact inspection remain open.
 
 ### Objective
 
