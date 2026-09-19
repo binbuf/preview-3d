@@ -404,10 +404,27 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
         `NoSupportedGeometry`/`MalformedData`/`ResourceLimit` typing. Eight
         immutable AP203/AP214/AP242 fixtures are checked in. See
         [`STEP-003-VERIFICATION.md`](STEP-003-VERIFICATION.md).
-  - [ ] STEP-004 through STEP-007: bounded progressive/display tessellation,
-        brokered external documents, product/packaging integration, and
-        qualification. STEP-008 (Explorer thumbnail) stays blocked on the
-        Gate 6 provider foundation.
+  - [x] STEP-004: bounded, deterministic per-definition B-rep tessellation
+        under the versioned `StepTessellationProfile` (v2) with cluster-local
+        float positions and double per-chunk origins, progressive multi-window
+        delivery through `ChunkBatchSink`/`ChunkBatchReady` so a scene larger
+        than the output window never needs to be held whole, authored
+        triangulation preferred over regeneration, per-definition
+        face/edge/triangle/time budgets, and a new typed
+        `ImportErrorCode::TessellationFailed` (28) with fixed viewer text.
+        `kStepImporterVersion` is folded into the profile version. The pinned
+        constrained port builds `USE_TBB=OFF`, so the profile records a truthful
+        serial meshing decision for STEP-005 to revisit. Coarse-catalog
+        replacement (stp2.md STEP-004 work item 3) remains open: the Tier-B
+        broker/bridge deliberately do not enable the coarse/detail protocol for
+        STEP, so the two-pass-versus-single-pass choice is STEP-005's.
+        See [`STEP-004-VERIFICATION.md`](STEP-004-VERIFICATION.md).
+  - [ ] STEP-005 through STEP-009 per the revised execution order in
+        [`stp2.md`](stp2.md): STEP-005 render-time performance and first-frame
+        latency, STEP-006 interoperability closure and self-contained scope
+        acceptance, STEP-007 product/packaging integration, STEP-008
+        qualification/hardening, and STEP-009 Explorer thumbnail. STEP-009
+        stays blocked on the Gate 6 provider foundation.
 
 Every slice carries the same bundle (`10-…:165`): adapter wrapper, dependency allocation/I/O/cancel
 callbacks and Job Object limits, normalized output, unsupported-feature diagnostics, golden scenes,

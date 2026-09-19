@@ -51,12 +51,18 @@ enum class ImportErrorCode : uint32_t {
     // protocol, and CAD-kernel faults.
     StepHostFailure = 26,
     StepHostLimit = 27,
+    // The accepted STEP shape could not be turned into bounded, finite
+    // rendering geometry: meshing failed/timed out, the definition exceeded a
+    // CAD-specific face/edge/triangle budget, or extraction produced no
+    // credible triangles. This is distinct from a generic resource limit and
+    // from malformed Part-21 syntax.
+    TessellationFailed = 28,
 };
 
 constexpr bool IsKnownImportErrorCode(uint32_t code)
 {
     return code >= uint32_t(ImportErrorCode::MalformedData) &&
-           code <= uint32_t(ImportErrorCode::StepHostLimit);
+           code <= uint32_t(ImportErrorCode::TessellationFailed);
 }
 
 } // namespace model_core

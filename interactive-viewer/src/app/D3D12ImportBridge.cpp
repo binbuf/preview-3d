@@ -106,6 +106,9 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     case model_core::ImportErrorCode::StepHostLimit:
         summary = L"This STEP model is too large or complex to preview.";
         details = L"The STEP host reached a bounded resource limit."; return;
+    case model_core::ImportErrorCode::TessellationFailed:
+        summary = L"This STEP model could not be tessellated.";
+        details = L"One or more shapes exceeded the supported CAD tessellation budget. Export a simpler solid or assembly."; return;
     case model_core::ImportErrorCode::ArchiveLimit:
         summary = L"This model archive is not supported.";
         details = L"The archive violates a path, structure, compression, or expansion limit."; return;
@@ -288,6 +291,7 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
         session.errorCode == model_core::ImportErrorCode::ResourceLimit ||
         session.errorCode == model_core::ImportErrorCode::StepHostFailure ||
         session.errorCode == model_core::ImportErrorCode::StepHostLimit ||
+        session.errorCode == model_core::ImportErrorCode::TessellationFailed ||
         (session.errorCode >= model_core::ImportErrorCode::PrimarySourceLimit &&
          session.errorCode <= model_core::ImportErrorCode::ArchiveLimit))
         DescribeImportError(session.errorCode, summary, details);

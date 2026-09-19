@@ -1,9 +1,19 @@
 #define NOMINMAX
 
-// STEP-003 XDE scene adapter. See StepXdeAdapter.h for the contract and
-// .docs/stp.md (STEP-003) for the design. No path, directory, URL, registry
-// key, or child process is ever opened: every source byte arrives through the
-// inherited read-only handle via the product-owned streambuf below.
+// STEP-003/004 XDE scene adapter. See StepXdeAdapter.h for the contract and
+// .docs/stp.md (STEP-003, STEP-004) for the design. No path, directory, URL,
+// registry key, or child process is ever opened: every source byte arrives
+// through the inherited read-only handle via the product-owned streambuf below.
+//
+// STEP-004 structure:
+//   * phase A (ScenePlanner) walks the XDE document without meshing and builds
+//     the node tree, reusable definitions, resolved materials, and occurrence
+//     list;
+//   * phase B (SceneEmitter) tessellates one definition at a time under the
+//     versioned quality profile, writes cluster-local geometry with double
+//     origins, and hands each full output window off through the progressive
+//     batch publisher. Vertex data is discarded as soon as it is written, so
+//     the host never retains the whole normalized scene to deduplicate it.
 
 #include "StepXdeAdapter.h"
 
@@ -15,8 +25,11 @@
 #include <windows.h>
 
 #pragma warning(push, 0)
+#include <BRepBndLib.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
+#include <IMeshTools_Parameters.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Quantity_Color.hxx>
 #include <Quantity_ColorRGBA.hxx>
@@ -56,7 +69,6 @@
 #include <cstring>
 #include <deque>
 #include <functional>
-#include <istream>
 #include <limits>
 #include <map>
 #include <optional>
@@ -80,6 +92,11 @@ constexpr std::uint32_t kGeometryIdBase = 0x0100'0000;
 constexpr std::uint32_t kMaterialIdBase = 0x0200'0000;
 constexpr std::uint32_t kInstanceIdBase = 0x0300'0000;
 constexpr std::uint32_t kStatusChunkId = 0x0400'0000;
+
+// Cancellation is polled between bounded face blocks, never only once per
+// definition, so a definition with many faces cannot hide a cancelled
+// generation behind a long uninterrupted extraction loop.
+constexpr std::uint32_t kDefinitionCancelCheckInterval = 4096;
 
 // Product-owned seekable stream over the inherited read-only handle. The host
 // has no path; every byte arrives through ReadFile. Mirrors the STEP-001
@@ -254,10 +271,6 @@ std::uint32_t FloatBits(float value)
 
 struct Rgba {
     float r = 0.8f, g = 0.8f, b = 0.8f, a = 1.0f;
-    bool operator==(const Rgba& other) const
-    {
-        return r == other.r && g == other.g && b == other.b && a == other.a;
-    }
 };
 
 Rgba ToRgba(const Quantity_ColorRGBA& color)
@@ -292,10 +305,14 @@ struct MaterialKeyHash {
 
 using Vertex = VertexPositionNormalUv0F32;
 
-struct GeometryRecord {
+// A geometry chunk already written for a definition, retained only as identity
+// and bounds so occurrences can reference it without keeping its vertices.
+// Positions become cluster-local floats at emission time; `origin` restores
+// the transferred double coordinates exactly as the broker recomputes them.
+struct EmittedGeometryRef {
     std::uint32_t chunkId = 0;
-    std::uint32_t meshId = 0;
-    std::vector<Vertex> vertices;
+    std::uint32_t materialId = 0;
+    double origin[3] = {0, 0, 0};
     float localMin[3] = {0, 0, 0};
     float localMax[3] = {0, 0, 0};
 };
@@ -311,40 +328,27 @@ struct NodeRecord {
     double transform[16]{};
 };
 
-struct InstanceRecord {
-    std::uint32_t instanceId = 0;
+struct PlannedOccurrence {
     std::uint32_t nodeId = 0;
-    std::uint32_t geometryId = 0;
-    std::uint32_t materialId = 0;
-    double worldMin[3]{};
-    double worldMax[3]{};
+    double world[16]{};
+    bool hasOverride = false;
+    std::uint32_t overrideMaterialId = 0;
 };
 
-struct StepScene {
-    std::vector<GeometryRecord> geometry;
-    std::vector<MaterialRecord> materials;
-    std::vector<NodeRecord> nodes;
-    std::vector<InstanceRecord> instances;
-    std::uint32_t definitionCount = 0;
-    std::uint32_t warningCount = 0;
-};
-
-struct SubmeshRef {
-    std::uint32_t geometryId = 0;
-    std::uint32_t materialId = 0;
-};
-
-struct Definition {
+struct PlannedDefinition {
     std::uint32_t meshId = 0;
-    std::vector<SubmeshRef> groups;       // per definition color group
-    std::vector<std::uint32_t> allGeometryIds;
+    TopoDS_Shape shape;
+    bool hasShapeColor = false;
+    std::uint32_t shapeMaterialId = 0;
+    std::vector<std::pair<TopoDS_Shape, std::uint32_t>> faceColors;
+    std::vector<PlannedOccurrence> occurrences;
 };
 
-// --- builder ------------------------------------------------------------------
+// --- phase A: bounded planning without tessellation --------------------------
 
-class SceneBuilder {
+class ScenePlanner {
 public:
-    SceneBuilder(const Handle(TDocStd_Document)& document, const StepXdeLimits& limits)
+    ScenePlanner(const Handle(TDocStd_Document)& document, const StepXdeLimits& limits)
         : document_(document), limits_(limits)
     {
         shapeTool_ = XCAFDoc_DocumentTool::ShapeTool(document_->Main());
@@ -353,9 +357,6 @@ public:
 
     bool shapeToolValid() const { return !shapeTool_.IsNull(); }
 
-    StepScene Take() { return std::move(scene_); }
-    std::uint32_t skippedDefinitions() const { return skippedDefinitions_; }
-
     model_core::ImportErrorCode Build()
     {
         TDF_LabelSequence roots;
@@ -363,17 +364,23 @@ public:
         if (roots.Length() == 0) return model_core::ImportErrorCode::EmptyGeometry;
 
         for (Standard_Integer index = 1; index <= roots.Length(); ++index) {
-            if (cancelled_) return model_core::ImportErrorCode::Cancelled;
+            if (Cancelled()) return model_core::ImportErrorCode::Cancelled;
             double identity[16];
             IdentityAffine(identity);
             VisitDefinition(roots.Value(index), roots.Value(index), 0, identity, false, 1);
             if (error_ != model_core::ImportErrorCode::None) return error_;
         }
-        if (scene_.instances.empty()) return model_core::ImportErrorCode::EmptyGeometry;
+        if (!hasOccurrence_) return model_core::ImportErrorCode::EmptyGeometry;
         return model_core::ImportErrorCode::None;
     }
 
     void SetCancellationProbe(std::function<bool()> probe) { cancelledProbe_ = std::move(probe); }
+
+    const std::vector<NodeRecord>& nodes() const { return nodes_; }
+    const std::vector<MaterialRecord>& materials() const { return materials_; }
+    const std::deque<PlannedDefinition>& definitions() const { return definitions_; }
+    std::uint32_t definitionCount() const { return static_cast<std::uint32_t>(definitions_.size()); }
+    std::uint32_t warningCount() const { return warningCount_; }
 
 private:
     bool Cancelled()
@@ -390,12 +397,12 @@ private:
             FloatBits(SrgbToLinear(color.b)), FloatBits((std::max)(0.0f, (std::min)(1.0f, color.a)))};
         const auto existing = materialByKey_.find(key);
         if (existing != materialByKey_.end()) return existing->second;
-        if (scene_.materials.size() >= limits_.maxMaterials) {
+        if (materials_.size() >= limits_.maxMaterials) {
             error_ = model_core::ImportErrorCode::ResourceLimit;
             return 0;
         }
         MaterialRecord record;
-        record.chunkId = kMaterialIdBase + static_cast<std::uint32_t>(scene_.materials.size());
+        record.chunkId = kMaterialIdBase + static_cast<std::uint32_t>(materials_.size());
         record.payload.baseColorFactor[0] = SrgbToLinear(color.r);
         record.payload.baseColorFactor[1] = SrgbToLinear(color.g);
         record.payload.baseColorFactor[2] = SrgbToLinear(color.b);
@@ -413,7 +420,7 @@ private:
         record.payload.flags = 0;
         record.payload.reserved0 = 0;
         materialByKey_.emplace(key, record.chunkId);
-        scene_.materials.push_back(record);
+        materials_.push_back(record);
         return record.chunkId;
     }
 
@@ -423,64 +430,6 @@ private:
         return colorTool_->GetColor(label, XCAFDoc_ColorSurf, color)
             || colorTool_->GetColor(label, XCAFDoc_ColorGen, color)
             || colorTool_->GetColor(label, XCAFDoc_ColorCurv, color);
-    }
-
-    // Builds (once) the reusable geometry for a simple-shape definition. Face
-    // appearance follows the documented instance/shape/subshape precedence:
-    // the shape-level color (if any) wins; otherwise per-face subshape colors
-    // split the geometry into bounded seam groups; otherwise the neutral
-    // material (id 0) is used. Instance color overrides are applied later, at
-    // occurrence time, without duplicating geometry.
-    const Definition* BuildDefinition(const TDF_Label& label)
-    {
-        TCollection_AsciiString entry;
-        TDF_Tool::Entry(label, entry);
-        const std::string key(entry.ToCString());
-        const auto existing = definitions_.find(key);
-        if (existing != definitions_.end()) return &existing->second;
-        // A definition that cannot be transferred/tessellated is remembered so
-        // a repeated occurrence does not re-mesh or re-warn on every instance.
-        if (unsupportedDefinitions_.find(key) != unsupportedDefinitions_.end()) return nullptr;
-
-        const TopoDS_Shape shape = XCAFDoc_ShapeTool::GetShape(label);
-        if (shape.IsNull()) {
-            unsupportedDefinitions_.insert(key);
-            ++skippedDefinitions_;
-            return nullptr;
-        }
-        if (scene_.definitionCount >= limits_.maxDefinitions) {
-            error_ = model_core::ImportErrorCode::ResourceLimit;
-            return nullptr;
-        }
-
-        Definition definition;
-        definition.meshId = ++scene_.definitionCount;
-
-        // Per-face subshape colors, only consulted when the shape-level color
-        // is absent (shape color wins under the documented precedence).
-        Quantity_ColorRGBA shapeColor;
-        const bool hasShapeColor = LeafHasColor(label, shapeColor);
-        std::vector<std::pair<TopoDS_Shape, std::uint32_t>> faceColors;
-        if (!hasShapeColor) CollectFaceColors(label, faceColors);
-        if (error_ != model_core::ImportErrorCode::None) {
-            unsupportedDefinitions_.insert(key);
-            return nullptr;
-        }
-
-        MeshIntoGroups(shape, definition, hasShapeColor ? std::optional<Rgba>(ToRgba(shapeColor)) : std::nullopt,
-                       faceColors);
-        if (error_ != model_core::ImportErrorCode::None) return nullptr;
-        if (definition.allGeometryIds.empty()) {
-            // A visible definition that cannot be tessellated is not silently
-            // published; it is counted and only fatal if nothing else exists.
-            --scene_.definitionCount;
-            unsupportedDefinitions_.insert(key);
-            ++skippedDefinitions_;
-            return nullptr;
-        }
-        const auto [it, inserted] = definitions_.emplace(key, std::move(definition));
-        (void)inserted;
-        return &it->second;
     }
 
     void CollectFaceColors(const TDF_Label& label,
@@ -504,116 +453,75 @@ private:
         }
     }
 
-    void MeshIntoGroups(const TopoDS_Shape& shape, Definition& definition,
-                        const std::optional<Rgba>& shapeColor,
-                        const std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors)
+    // Plans (once) the reusable geometry identity for a simple-shape definition.
+    // Face appearance follows the documented instance/shape/subshape precedence:
+    // the shape-level color (if any) wins; otherwise per-face subshape colors
+    // split the geometry into bounded seam groups; otherwise the neutral
+    // material (id 0) is used. Instance color overrides are applied later, at
+    // occurrence time, without duplicating geometry.
+    bool PlanDefinition(const TDF_Label& label, PlannedDefinition** out)
     {
-        if (error_ != model_core::ImportErrorCode::None) return;
-        BRepMesh_IncrementalMesh mesher(shape, limits_.linearDeflection, Standard_True,
-                                        limits_.angularDeflection, Standard_True);
-        mesher.Perform();
-
-        std::map<std::uint32_t, std::vector<Vertex>> groups;
-        for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
-            if (Cancelled()) return;
-            const TopoDS_Face face = TopoDS::Face(explorer.Current());
-            const std::uint32_t materialId = shapeColor
-                ? ResolveMaterial(*shapeColor)
-                : FaceMaterial(face, faceColors);
-            if (error_ != model_core::ImportErrorCode::None) return;
-
-            TopLoc_Location location;
-            const Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(face, location);
-            if (triangulation.IsNull()) continue;
-            const bool reversed = face.Orientation() == TopAbs_REVERSED;
-            const gp_Trsf& transform = location.Transformation();
-
-            for (Standard_Integer index = 1; index <= triangulation->NbTriangles(); ++index) {
-                Standard_Integer n1 = 0, n2 = 0, n3 = 0;
-                triangulation->Triangle(index).Get(n1, n2, n3);
-                if (reversed) std::swap(n2, n3);
-                const gp_Pnt p1 = triangulation->Node(n1).Transformed(transform);
-                const gp_Pnt p2 = triangulation->Node(n2).Transformed(transform);
-                const gp_Pnt p3 = triangulation->Node(n3).Transformed(transform);
-                const double ax = p2.X() - p1.X(), ay = p2.Y() - p1.Y(), az = p2.Z() - p1.Z();
-                const double bx = p3.X() - p1.X(), by = p3.Y() - p1.Y(), bz = p3.Z() - p1.Z();
-                double nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
-                const double length = std::sqrt(nx * nx + ny * ny + nz * nz);
-                if (!(length > 1e-30) || !std::isfinite(length)) continue; // degenerate/invalid
-                nx /= length; ny /= length; nz /= length;
-
-                auto& vertices = groups[materialId];
-                AppendVertex(vertices, p1, nx, ny, nz);
-                AppendVertex(vertices, p2, nx, ny, nz);
-                AppendVertex(vertices, p3, nx, ny, nz);
-
-                if (vertices.size() / 3 >= limits_.chunkTriangles) FlushGroup(materialId, vertices, definition);
-                if (error_ != model_core::ImportErrorCode::None) return;
-            }
+        TCollection_AsciiString entry;
+        TDF_Tool::Entry(label, entry);
+        const std::string key(entry.ToCString());
+        const auto existing = definitionsByKey_.find(key);
+        if (existing != definitionsByKey_.end()) {
+            *out = existing->second;
+            return true;
         }
-        for (auto& [materialId, vertices] : groups) {
-            if (error_ != model_core::ImportErrorCode::None) return;
-            FlushGroup(materialId, vertices, definition);
+        if (unsupportedDefinitions_.find(key) != unsupportedDefinitions_.end()) {
+            *out = nullptr;
+            return true;
         }
-    }
 
-    std::uint32_t FaceMaterial(const TopoDS_Face& face,
-                               const std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors) const
-    {
-        for (const auto& [subShape, materialId] : faceColors) {
-            if (subShape.IsSame(face)) return materialId;
+        const TopoDS_Shape shape = XCAFDoc_ShapeTool::GetShape(label);
+        if (shape.IsNull()) {
+            unsupportedDefinitions_.insert(key);
+            ++warningCount_;
+            *out = nullptr;
+            return true;
         }
-        return 0;
-    }
-
-    void AppendVertex(std::vector<Vertex>& vertices, const gp_Pnt& point, double nx, double ny, double nz)
-    {
-        Vertex vertex{};
-        vertex.px = static_cast<float>(point.X());
-        vertex.py = static_cast<float>(point.Y());
-        vertex.pz = static_cast<float>(point.Z());
-        vertex.nx = static_cast<float>(nx);
-        vertex.ny = static_cast<float>(ny);
-        vertex.nz = static_cast<float>(nz);
-        vertex.u = 0.0f;
-        vertex.v = 0.0f;
-        vertices.push_back(vertex);
-    }
-
-    void FlushGroup(std::uint32_t materialId, std::vector<Vertex>& vertices, Definition& definition)
-    {
-        if (vertices.empty()) return;
-        takenTriangles_ += static_cast<std::uint64_t>(vertices.size() / 3);
-        takenVertices_ += static_cast<std::uint64_t>(vertices.size());
-        if (takenTriangles_ > limits_.maxTriangles || takenVertices_ > limits_.maxVertices) {
+        if (definitions_.size() >= limits_.maxDefinitions) {
             error_ = model_core::ImportErrorCode::ResourceLimit;
-            vertices.clear();
-            return;
+            *out = nullptr;
+            return false;
         }
-        GeometryRecord geometry;
-        geometry.chunkId = kGeometryIdBase + static_cast<std::uint32_t>(scene_.geometry.size());
-        geometry.meshId = definition.meshId;
-        geometry.vertices = std::move(vertices);
-        vertices.clear();
 
-        const Vertex& first = geometry.vertices.front();
-        const float firstPosition[3]{first.px, first.py, first.pz};
-        for (int axis = 0; axis < 3; ++axis)
-            geometry.localMin[axis] = geometry.localMax[axis] = firstPosition[axis];
-        for (const auto& vertex : geometry.vertices) {
-            const float position[3]{vertex.px, vertex.py, vertex.pz};
-            for (int axis = 0; axis < 3; ++axis) {
-                if (!std::isfinite(position[axis])) {
-                    error_ = model_core::ImportErrorCode::MalformedData;
-                    return;
-                }
-                geometry.localMin[axis] = (std::min)(geometry.localMin[axis], position[axis]);
-                geometry.localMax[axis] = (std::max)(geometry.localMax[axis], position[axis]);
-            }
+        PlannedDefinition definition;
+        definition.meshId = static_cast<std::uint32_t>(definitions_.size()) + 1;
+        definition.shape = shape;
+
+        Quantity_ColorRGBA shapeColor;
+        definition.hasShapeColor = LeafHasColor(label, shapeColor);
+        if (definition.hasShapeColor) {
+            definition.shapeMaterialId = ResolveMaterial(ToRgba(shapeColor));
+        } else {
+            CollectFaceColors(label, definition.faceColors);
         }
-        definition.groups.push_back(SubmeshRef{geometry.chunkId, materialId});
-        definition.allGeometryIds.push_back(geometry.chunkId);
-        scene_.geometry.push_back(std::move(geometry));
+        if (error_ != model_core::ImportErrorCode::None) {
+            unsupportedDefinitions_.insert(key);
+            *out = nullptr;
+            return false;
+        }
+
+        definitions_.push_back(std::move(definition));
+        definitionsByKey_.emplace(key, &definitions_.back());
+        *out = &definitions_.back();
+        return true;
+    }
+
+    std::uint32_t AddNode(std::uint32_t parentNodeId, const double transform[16])
+    {
+        if (nodes_.size() >= limits_.maxNodes) {
+            error_ = model_core::ImportErrorCode::ResourceLimit;
+            return 0;
+        }
+        NodeRecord node;
+        node.nodeId = kNodeIdBase + static_cast<std::uint32_t>(nodes_.size());
+        node.parentId = parentNodeId;
+        std::memcpy(node.transform, transform, sizeof(node.transform));
+        nodes_.push_back(node);
+        return node.nodeId;
     }
 
     bool InstanceColor(const TDF_Label& occurrence, Quantity_ColorRGBA& color) const
@@ -623,37 +531,6 @@ private:
         if (occurrenceShape.IsNull()) return false;
         return colorTool_->GetInstanceColor(occurrenceShape, XCAFDoc_ColorGen, color)
             || colorTool_->GetInstanceColor(occurrenceShape, XCAFDoc_ColorSurf, color);
-    }
-
-    std::uint32_t AddNode(std::uint32_t parentNodeId, const double transform[16])
-    {
-        if (scene_.nodes.size() >= limits_.maxNodes) {
-            error_ = model_core::ImportErrorCode::ResourceLimit;
-            return 0;
-        }
-        NodeRecord node;
-        node.nodeId = kNodeIdBase + static_cast<std::uint32_t>(scene_.nodes.size());
-        node.parentId = parentNodeId;
-        std::memcpy(node.transform, transform, sizeof(node.transform));
-        scene_.nodes.push_back(node);
-        return node.nodeId;
-    }
-
-    void AddInstance(std::uint32_t nodeId, const GeometryRecord& geometry, std::uint32_t materialId,
-                     const double world[16])
-    {
-        InstanceRecord instance;
-        instance.instanceId = kInstanceIdBase + static_cast<std::uint32_t>(scene_.instances.size());
-        instance.nodeId = nodeId;
-        instance.geometryId = geometry.chunkId;
-        instance.materialId = materialId;
-        const double origin[3] = {0.0, 0.0, 0.0};
-        if (!TransformBounds(origin, geometry.localMin, geometry.localMax, world,
-                             instance.worldMin, instance.worldMax)) {
-            error_ = model_core::ImportErrorCode::MalformedData;
-            return;
-        }
-        scene_.instances.push_back(instance);
     }
 
     void VisitDefinition(const TDF_Label& occurrence, const TDF_Label& definition,
@@ -713,12 +590,12 @@ private:
         }
 
         if (XCAFDoc_ShapeTool::IsSimpleShape(definition) || XCAFDoc_ShapeTool::IsReference(definition)) {
-            const Definition* built = BuildDefinition(definition);
-            if (error_ != model_core::ImportErrorCode::None) {
+            PlannedDefinition* planned = nullptr;
+            if (!PlanDefinition(definition, &planned)) {
                 path_.erase(pathKey);
                 return;
             }
-            if (!built) {
+            if (!planned) {
                 path_.erase(pathKey);
                 return; // unsupported/unmeshed definition; counted, not drawn
             }
@@ -736,17 +613,13 @@ private:
                 path_.erase(pathKey);
                 return;
             }
-            if (hasInstanceColor) {
-                for (const std::uint32_t geometryId : built->allGeometryIds) {
-                    const GeometryRecord& geometry = GeometryById(geometryId);
-                    AddInstance(nodeId, geometry, overrideMaterial, world);
-                }
-            } else {
-                for (const SubmeshRef& group : built->groups) {
-                    const GeometryRecord& geometry = GeometryById(group.geometryId);
-                    AddInstance(nodeId, geometry, group.materialId, world);
-                }
-            }
+            PlannedOccurrence plannedOccurrence;
+            plannedOccurrence.nodeId = nodeId;
+            std::memcpy(plannedOccurrence.world, world, sizeof(plannedOccurrence.world));
+            plannedOccurrence.hasOverride = hasInstanceColor;
+            plannedOccurrence.overrideMaterialId = overrideMaterial;
+            planned->occurrences.push_back(plannedOccurrence);
+            hasOccurrence_ = true;
             path_.erase(pathKey);
             return;
         }
@@ -754,65 +627,59 @@ private:
         path_.erase(pathKey); // neither assembly nor shape: not drawn
     }
 
-    const GeometryRecord& GeometryById(std::uint32_t chunkId) const
-    {
-        return scene_.geometry[chunkId - kGeometryIdBase];
-    }
-
     Handle(TDocStd_Document) document_;
     Handle(XCAFDoc_ShapeTool) shapeTool_;
     Handle(XCAFDoc_ColorTool) colorTool_;
     StepXdeLimits limits_;
-    StepScene scene_;
-    std::unordered_map<std::string, Definition> definitions_;
+    std::vector<NodeRecord> nodes_;
+    std::vector<MaterialRecord> materials_;
+    std::deque<PlannedDefinition> definitions_;
+    std::unordered_map<std::string, PlannedDefinition*> definitionsByKey_;
     std::unordered_set<std::string> unsupportedDefinitions_;
     std::unordered_map<MaterialKey, std::uint32_t, MaterialKeyHash> materialByKey_;
     std::unordered_set<std::string> path_;
-    std::uint64_t takenTriangles_ = 0;
-    std::uint64_t takenVertices_ = 0;
-    std::uint32_t skippedDefinitions_ = 0;
+    std::uint32_t warningCount_ = 0;
+    bool hasOccurrence_ = false;
     model_core::ImportErrorCode error_ = model_core::ImportErrorCode::None;
     bool cancelled_ = false;
     std::function<bool()> cancelledProbe_;
 };
 
-// --- section serialization ----------------------------------------------------
+// --- phase B: bounded tessellation and progressive emission -------------------
 
-std::optional<std::pair<std::uint32_t, std::uint64_t>> WriteScene(
-    std::span<std::byte> destination, const StepScene& scene, std::uint64_t generationId,
-    double metersPerUnit, std::uint32_t maxChunkCount)
-{
-    const bool haveStatus = scene.warningCount != 0;
-    const std::uint64_t chunkCount64 = scene.nodes.size() + scene.materials.size()
-        + scene.geometry.size() + scene.instances.size() + (haveStatus ? 1 : 0);
-    if (chunkCount64 == 0 || chunkCount64 > maxChunkCount
-        || chunkCount64 > (std::numeric_limits<std::uint32_t>::max)())
-        return std::nullopt;
-    const std::uint32_t chunkCount = static_cast<std::uint32_t>(chunkCount64);
+struct GeometryRecord {
+    std::uint32_t chunkId = 0;
+    std::uint32_t meshId = 0;
+    std::uint32_t materialId = 0;
+    std::vector<Vertex> vertices;
+};
 
-    std::uint64_t offset = kSectionHeaderSize
-        + static_cast<std::uint64_t>(chunkCount) * kChunkDescriptorSize;
-    // Stable addresses: a deque never invalidates the byte buffers already
-    // pushed, so the payload spans below stay valid while descriptors are
-    // assembled from fixed records and generated geometry.
-    std::deque<std::vector<std::byte>> ownedPayloads;
-    std::vector<std::pair<ChunkDescriptor, std::span<const std::byte>>> chunks;
-    chunks.reserve(chunkCount);
+// Owns exactly one output window. Chunks accumulate until the next one would
+// not fit; the window is then handed to the batch publisher and reused. The
+// terminal window is finalized in place. Descriptor/payload layout and checksum
+// semantics are byte-compatible with the STEP-003 single-window writer.
+class SceneEmitter {
+public:
+    SceneEmitter(std::span<std::byte> section, std::uint64_t generationId, double metersPerUnit,
+                 std::uint32_t meshes, std::uint32_t nodes, std::uint32_t warningCount,
+                 StepBatchPublisher publish, std::function<bool()> cancelled)
+        : section_(section)
+        , generationId_(generationId)
+        , metersPerUnit_(metersPerUnit)
+        , meshCount_(meshes)
+        , nodeCount_(nodes)
+        , warningCount_(warningCount)
+        , publish_(std::move(publish))
+        , cancelled_(std::move(cancelled))
+    {
+    }
 
-    auto place = [&](const ChunkDescriptor& base, std::span<const std::byte> payload) -> bool {
-        ChunkDescriptor descriptor = base;
-        descriptor.normalizedRangeOffset = offset;
-        descriptor.normalizedRangeLength = payload.size();
-        descriptor.byteSize = payload.size();
-        descriptor.chunkChecksum = WireChecksum64(payload);
-        offset += payload.size();
-        if (offset > destination.size()) return false;
-        ownedPayloads.emplace_back(payload.begin(), payload.end());
-        chunks.emplace_back(descriptor, std::span<const std::byte>(ownedPayloads.back()));
-        return true;
-    };
+    model_core::ImportErrorCode error() const { return error_; }
+    std::uint32_t batchesPublished() const { return batchesPublished_; }
+    std::uint32_t nextInstanceSerial() const { return nextInstanceSerial_; }
 
-    for (const NodeRecord& node : scene.nodes) {
+    bool AddNode(const NodeRecord& node)
+    {
         NodePayload payload{};
         payload.nodeId = node.nodeId;
         payload.parentNodeId = node.parentId;
@@ -825,105 +692,430 @@ std::optional<std::pair<std::uint32_t, std::uint64_t>> WriteScene(
             descriptor.dependencyIds[0] = node.parentId;
             descriptor.dependencyCount = 1;
         }
-        if (!place(descriptor, std::as_bytes(std::span(&payload, 1)))) return std::nullopt;
+        return Add(descriptor, std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(&payload), sizeof(payload)));
     }
-    for (const MaterialRecord& material : scene.materials) {
+
+    bool AddMaterial(const MaterialRecord& material)
+    {
         ChunkDescriptor descriptor{};
         descriptor.topology = ChunkTopology::Material;
         descriptor.chunkId = material.chunkId;
-        if (!place(descriptor, std::as_bytes(std::span(&material.payload, 1)))) return std::nullopt;
+        return Add(descriptor, std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(&material.payload), sizeof(material.payload)));
     }
-    for (const GeometryRecord& geometry : scene.geometry) {
+
+    // Takes ownership of `chunk.vertices`. Computes the cluster-local float
+    // positions and the double origin, writes the geometry chunk, and returns
+    // the identity/bounds an occurrence needs to reference it.
+    std::optional<EmittedGeometryRef> AddGeometry(GeometryRecord& chunk)
+    {
+        if (chunk.vertices.empty()) return std::nullopt;
+        double origin[3] = {std::numeric_limits<double>::max(), std::numeric_limits<double>::max(),
+                            std::numeric_limits<double>::max()};
+        for (const Vertex& vertex : chunk.vertices) {
+            if (!std::isfinite(vertex.px) || !std::isfinite(vertex.py) || !std::isfinite(vertex.pz)) {
+                error_ = model_core::ImportErrorCode::MalformedData;
+                return std::nullopt;
+            }
+            origin[0] = (std::min)(origin[0], static_cast<double>(vertex.px));
+            origin[1] = (std::min)(origin[1], static_cast<double>(vertex.py));
+            origin[2] = (std::min)(origin[2], static_cast<double>(vertex.pz));
+        }
+        float localMin[3] = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                             std::numeric_limits<float>::max()};
+        float localMax[3] = {-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(),
+                             -std::numeric_limits<float>::max()};
+        for (Vertex& vertex : chunk.vertices) {
+            vertex.px = static_cast<float>(static_cast<double>(vertex.px) - origin[0]);
+            vertex.py = static_cast<float>(static_cast<double>(vertex.py) - origin[1]);
+            vertex.pz = static_cast<float>(static_cast<double>(vertex.pz) - origin[2]);
+            const float position[3] = {vertex.px, vertex.py, vertex.pz};
+            for (int axis = 0; axis < 3; ++axis) {
+                localMin[axis] = (std::min)(localMin[axis], position[axis]);
+                localMax[axis] = (std::max)(localMax[axis], position[axis]);
+            }
+        }
+
+        const std::uint64_t vertexBytes = static_cast<std::uint64_t>(chunk.vertices.size()) * sizeof(Vertex);
+        const std::uint64_t indexBytes = static_cast<std::uint64_t>(chunk.vertices.size()) * sizeof(std::uint32_t);
+        std::vector<std::byte> payload(static_cast<std::size_t>(vertexBytes + indexBytes));
+        std::memcpy(payload.data(), chunk.vertices.data(), static_cast<std::size_t>(vertexBytes));
+        for (std::uint32_t i = 0; i < chunk.vertices.size(); ++i) {
+            std::memcpy(payload.data() + vertexBytes + static_cast<std::size_t>(i) * sizeof(i), &i, sizeof(i));
+        }
+
         ChunkDescriptor descriptor{};
         descriptor.topology = ChunkTopology::TriangleList;
-        descriptor.chunkId = geometry.chunkId;
+        descriptor.chunkId = chunk.chunkId;
         descriptor.vertexLayoutId = static_cast<std::uint32_t>(VertexLayoutId::PositionNormalUv0_F32);
         descriptor.lodLevel = kFineLod;
-        descriptor.meshId = geometry.meshId;
-        descriptor.vertexCount = static_cast<std::uint32_t>(geometry.vertices.size());
-        descriptor.indexCount = static_cast<std::uint32_t>(geometry.vertices.size());
-        // STEP has no decodable source byte range per face, but the broker
-        // requires a nonzero range on every geometry chunk; index count is the
-        // same convention glTF uses for its source-range disambiguator.
+        descriptor.meshId = chunk.meshId;
+        descriptor.vertexCount = static_cast<std::uint32_t>(chunk.vertices.size());
+        descriptor.indexCount = static_cast<std::uint32_t>(chunk.vertices.size());
         descriptor.sourceRangeOffset = 0;
         descriptor.sourceRangeLength = descriptor.indexCount;
         descriptor.boundsState = BoundsState::Verified;
         for (int axis = 0; axis < 3; ++axis) {
-            descriptor.localMin[axis] = geometry.localMin[axis];
-            descriptor.localMax[axis] = geometry.localMax[axis];
+            descriptor.origin[axis] = origin[axis];
+            descriptor.localMin[axis] = localMin[axis];
+            descriptor.localMax[axis] = localMax[axis];
         }
-        const std::uint64_t vertexBytes = descriptor.vertexCount * sizeof(Vertex);
-        const std::uint64_t indexBytes = descriptor.indexCount * sizeof(std::uint32_t);
-        std::vector<std::byte> payload(static_cast<std::size_t>(vertexBytes + indexBytes));
-        std::memcpy(payload.data(), geometry.vertices.data(), static_cast<std::size_t>(vertexBytes));
-        for (std::uint32_t i = 0; i < descriptor.indexCount; ++i) {
-            std::memcpy(payload.data() + vertexBytes + static_cast<std::size_t>(i) * sizeof(i), &i, sizeof(i));
-        }
-        if (!place(descriptor, payload)) return std::nullopt;
-    }
-    for (const InstanceRecord& instance : scene.instances) {
-        MeshInstancePayload payload{};
-        payload.instanceId = instance.instanceId;
-        payload.nodeId = instance.nodeId;
-        payload.geometryChunkId = instance.geometryId;
-        payload.materialChunkId = instance.materialId;
-        payload.flags = kSceneRecordVisible;
+        if (!Add(descriptor, payload)) return std::nullopt;
+
+        EmittedGeometryRef reference;
+        reference.chunkId = chunk.chunkId;
+        reference.materialId = chunk.materialId;
         for (int axis = 0; axis < 3; ++axis) {
-            payload.worldMin[axis] = instance.worldMin[axis];
-            payload.worldMax[axis] = instance.worldMax[axis];
+            reference.origin[axis] = origin[axis];
+            reference.localMin[axis] = localMin[axis];
+            reference.localMax[axis] = localMax[axis];
+        }
+        return reference;
+    }
+
+    bool EmitInstance(const EmittedGeometryRef& geometry, std::uint32_t materialId,
+                      std::uint32_t nodeId, const double world[16])
+    {
+        MeshInstancePayload payload{};
+        payload.instanceId = kInstanceIdBase + nextInstanceSerial_++;
+        payload.nodeId = nodeId;
+        payload.geometryChunkId = geometry.chunkId;
+        payload.materialChunkId = materialId;
+        payload.flags = kSceneRecordVisible;
+        if (!TransformBounds(geometry.origin, geometry.localMin, geometry.localMax, world,
+                             payload.worldMin, payload.worldMax)) {
+            error_ = model_core::ImportErrorCode::MalformedData;
+            return false;
         }
         ChunkDescriptor descriptor{};
         descriptor.topology = ChunkTopology::MeshInstance;
-        descriptor.chunkId = instance.instanceId;
-        descriptor.dependencyIds[0] = instance.geometryId;
-        descriptor.dependencyIds[1] = instance.materialId;
-        descriptor.dependencyIds[2] = instance.nodeId;
-        descriptor.dependencyCount = instance.materialId ? 3u : 2u;
-        if (!place(descriptor, std::as_bytes(std::span(&payload, 1)))) return std::nullopt;
+        descriptor.chunkId = payload.instanceId;
+        descriptor.dependencyIds[0] = payload.geometryChunkId;
+        descriptor.dependencyIds[1] = payload.materialChunkId;
+        descriptor.dependencyIds[2] = payload.nodeId;
+        descriptor.dependencyCount = payload.materialChunkId ? 3u : 2u;
+        return Add(descriptor, std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(&payload), sizeof(payload)));
     }
-    if (haveStatus) {
+
+    bool AddStatus()
+    {
+        if (warningCount_ == 0) return true;
         ImportStatusPayload status{};
-        status.optionalFeatureWarnings = (std::min)(scene.warningCount, 64u);
+        status.optionalFeatureWarnings = (std::min)(warningCount_, 64u);
         ChunkDescriptor descriptor{};
         descriptor.topology = ChunkTopology::ImportStatus;
         descriptor.chunkId = kStatusChunkId;
-        if (!place(descriptor, std::as_bytes(std::span(&status, 1)))) return std::nullopt;
+        return Add(descriptor, std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(&status), sizeof(status)));
     }
 
-    for (std::uint32_t i = 0; i < chunkCount; ++i) {
-        std::memcpy(destination.data() + kSectionHeaderSize
-                        + static_cast<std::size_t>(i) * kChunkDescriptorSize,
-                    &chunks[i].first, sizeof(ChunkDescriptor));
-        std::memcpy(destination.data() + chunks[i].first.normalizedRangeOffset,
-                    chunks[i].second.data(), chunks[i].second.size());
+    // Finalizes the terminal window into the section.
+    bool Finalize(std::uint32_t& chunkCount, std::uint64_t& sectionBytesWritten)
+    {
+        if (!FlushToSection()) {
+            error_ = model_core::ImportErrorCode::ResourceLimit;
+            return false;
+        }
+        chunkCount = lastChunkCount_;
+        sectionBytesWritten = lastSectionBytes_;
+        return true;
     }
 
-    SectionHeader header{};
-    header.magic = kSectionMagic;
-    header.protocolVersion = kCurrentProtocolVersion;
-    header.generationId = generationId;
-    header.sectionLength = offset;
-    header.chunkCount = chunkCount;
-    header.scene.generationId = generationId;
-    header.scene.format = SourceFormatId::Step;
-    header.scene.upAxis = UpAxisId::Unknown;
-    header.scene.metersPerUnit = metersPerUnit;
-    header.scene.meshCount = scene.definitionCount;
-    header.scene.nodeCount = static_cast<std::uint32_t>(scene.nodes.size());
-    header.scene.animationCount = 0;
-    header.scene.skinCount = 0;
-    header.scene.boneCount = 0;
-    header.sectionChecksum = WireChecksum64(
-        destination.subspan(kSectionHeaderSize, static_cast<std::size_t>(offset - kSectionHeaderSize)));
-    std::memcpy(destination.data(), &header, sizeof(header));
-    return std::make_pair(chunkCount, offset);
-}
+private:
+    struct PendingChunk {
+        ChunkDescriptor descriptor;
+        std::vector<std::byte> payload;
+    };
+
+    bool Add(const ChunkDescriptor& base, std::span<const std::byte> payload)
+    {
+        if (cancelled_ && cancelled_()) {
+            error_ = model_core::ImportErrorCode::Cancelled;
+            return false;
+        }
+        const std::uint64_t needed = kSectionHeaderSize
+            + static_cast<std::uint64_t>(pending_.size() + 1) * kChunkDescriptorSize
+            + pendingBytes_ + payload.size();
+        if (needed > section_.size()) {
+            if (pending_.empty() || !publish_) {
+                error_ = model_core::ImportErrorCode::ResourceLimit;
+                return false;
+            }
+            if (!FlushAndPublish()) return false;
+            const std::uint64_t recheck = kSectionHeaderSize + kChunkDescriptorSize + payload.size();
+            if (recheck > section_.size()) {
+                error_ = model_core::ImportErrorCode::ResourceLimit;
+                return false;
+            }
+        }
+        PendingChunk pending;
+        pending.descriptor = base;
+        pending.payload.assign(payload.begin(), payload.end());
+        pendingBytes_ += pending.payload.size();
+        pending_.push_back(std::move(pending));
+        return true;
+    }
+
+    // Writes the pending chunks into the caller's section, computes the header
+    // and checksums, and leaves the window self-consistent.
+    bool FlushToSection()
+    {
+        if (pending_.empty()) {
+            lastChunkCount_ = 0;
+            lastSectionBytes_ = kSectionHeaderSize;
+            return true;
+        }
+        std::uint64_t offset = kSectionHeaderSize
+            + static_cast<std::uint64_t>(pending_.size()) * kChunkDescriptorSize;
+        for (PendingChunk& pending : pending_) {
+            pending.descriptor.normalizedRangeOffset = offset;
+            pending.descriptor.normalizedRangeLength = pending.payload.size();
+            pending.descriptor.byteSize = pending.payload.size();
+            pending.descriptor.chunkChecksum = WireChecksum64(
+                std::span<const std::byte>(pending.payload.data(), pending.payload.size()));
+            offset += pending.payload.size();
+            if (offset > section_.size()) return false;
+        }
+        for (std::size_t i = 0; i < pending_.size(); ++i) {
+            std::memcpy(section_.data() + kSectionHeaderSize + i * kChunkDescriptorSize,
+                        &pending_[i].descriptor, sizeof(ChunkDescriptor));
+            std::memcpy(section_.data() + pending_[i].descriptor.normalizedRangeOffset,
+                        pending_[i].payload.data(), pending_[i].payload.size());
+        }
+        SectionHeader header{};
+        header.magic = kSectionMagic;
+        header.protocolVersion = kCurrentProtocolVersion;
+        header.generationId = generationId_;
+        header.sectionLength = offset;
+        header.chunkCount = static_cast<std::uint32_t>(pending_.size());
+        header.scene.generationId = generationId_;
+        header.scene.format = SourceFormatId::Step;
+        header.scene.upAxis = UpAxisId::Unknown;
+        header.scene.metersPerUnit = metersPerUnit_;
+        header.scene.meshCount = meshCount_;
+        header.scene.nodeCount = nodeCount_;
+        header.scene.animationCount = 0;
+        header.scene.skinCount = 0;
+        header.scene.boneCount = 0;
+        header.sectionChecksum = WireChecksum64(
+            section_.subspan(kSectionHeaderSize, static_cast<std::size_t>(offset - kSectionHeaderSize)));
+        std::memcpy(section_.data(), &header, sizeof(header));
+        lastChunkCount_ = header.chunkCount;
+        lastSectionBytes_ = offset;
+        return true;
+    }
+
+    bool FlushAndPublish()
+    {
+        if (!FlushToSection()) {
+            error_ = model_core::ImportErrorCode::ResourceLimit;
+            return false;
+        }
+        const std::uint32_t chunkCount = lastChunkCount_;
+        const std::uint64_t bytes = lastSectionBytes_;
+        pending_.clear();
+        pendingBytes_ = 0;
+        if (!publish_(chunkCount, bytes)) {
+            error_ = model_core::ImportErrorCode::Cancelled;
+            return false;
+        }
+        ++batchesPublished_;
+        return true;
+    }
+
+    std::span<std::byte> section_;
+    std::uint64_t generationId_;
+    double metersPerUnit_;
+    std::uint32_t meshCount_;
+    std::uint32_t nodeCount_;
+    std::uint32_t warningCount_;
+    StepBatchPublisher publish_;
+    std::function<bool()> cancelled_;
+    std::vector<PendingChunk> pending_;
+    std::uint64_t pendingBytes_ = 0;
+    std::uint32_t lastChunkCount_ = 0;
+    std::uint64_t lastSectionBytes_ = kSectionHeaderSize;
+    std::uint32_t batchesPublished_ = 0;
+    std::uint32_t nextInstanceSerial_ = 0;
+    model_core::ImportErrorCode error_ = model_core::ImportErrorCode::None;
+};
+
+class DefinitionMesher {
+public:
+    DefinitionMesher(const StepTessellationProfile& profile, const StepXdeLimits& limits)
+        : profile_(profile), limits_(limits)
+    {
+    }
+
+    void SetCancellationProbe(std::function<bool()> probe) { cancelledProbe_ = std::move(probe); }
+
+    // STEP-004 work item 7: bounded per-definition mesh-cost accumulator for
+    // STEP-005's two-pass-versus-single-pass decision.
+    double meshMilliseconds() const { return meshMilliseconds_; }
+
+    // Tessellates `shape` at the display profile and appends bounded,
+    // de-indexed, material-homogeneous geometry chunks (each <= the profile's
+    // chunkTriangles) to `chunks`.
+    model_core::ImportErrorCode Mesh(
+        const TopoDS_Shape& shape,
+        const std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors,
+        bool hasShapeColor, std::uint32_t shapeMaterialId, std::uint32_t meshId,
+        std::uint32_t& nextGeometryId, std::vector<GeometryRecord>& chunks)
+    {
+        double diagonal = 0.0;
+        {
+            Bnd_Box box;
+            BRepBndLib::Add(shape, box);
+            if (!box.IsVoid()) {
+                const gp_Pnt low = box.CornerMin();
+                const gp_Pnt high = box.CornerMax();
+                const double dx = high.X() - low.X();
+                const double dy = high.Y() - low.Y();
+                const double dz = high.Z() - low.Z();
+                diagonal = std::sqrt(dx * dx + dy * dy + dz * dz);
+            }
+        }
+
+        IMeshTools_Parameters parameters;
+        parameters.Deflection = StepDeriveLinearDeflection(
+            diagonal, profile_.displayRelativeDeflection, profile_.minAbsoluteDeflection,
+            profile_.maxAbsoluteDeflection);
+        parameters.Angle = profile_.displayAngularDeflection;
+        parameters.MinSize = StepDeriveMinEdge(diagonal, profile_.relativeMinEdge,
+                                               profile_.minAbsoluteEdgeLength);
+        parameters.Relative = Standard_False;
+        parameters.InParallel = profile_.parallel ? Standard_True : Standard_False;
+        // Prefer an authored triangulation (e.g. an AP242 tessellated
+        // representation) over regenerating one; the pinned reader attaches it
+        // to the transferred faces, and BRepMesh keeps it when lowering quality
+        // is forbidden.
+        parameters.AllowQualityDecrease = Standard_False;
+
+        const auto start = std::chrono::steady_clock::now();
+        BRepMesh_IncrementalMesh mesher(shape, parameters);
+        mesher.Perform();
+        meshMilliseconds_ += ElapsedMilliseconds(start);
+        if (!StepWithinDefinitionTime(ElapsedMilliseconds(start), profile_.maxDefinitionMilliseconds))
+            return model_core::ImportErrorCode::TessellationFailed;
+
+        std::uint32_t faces = 0, edges = 0;
+        for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
+            if (++faces > limits_.maxSubshapes) return model_core::ImportErrorCode::TessellationFailed;
+        }
+        for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+            if (++edges > limits_.maxSubshapes) return model_core::ImportErrorCode::TessellationFailed;
+        }
+        if (faces > profile_.maxFacesPerDefinition || edges > profile_.maxEdgesPerDefinition)
+            return model_core::ImportErrorCode::TessellationFailed;
+
+        // Materials group the definition's triangles. std::map keeps the group
+        // ordering deterministic (neutral/0 first) independent of face order.
+        std::map<std::uint32_t, std::vector<Vertex>> groups;
+        std::uint64_t definitionTriangles = 0;
+        std::uint32_t checkedFaces = 0;
+        for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
+            if ((++checkedFaces % kDefinitionCancelCheckInterval) == 0 && Cancelled())
+                return model_core::ImportErrorCode::Cancelled;
+            const TopoDS_Face face = TopoDS::Face(explorer.Current());
+            const std::uint32_t materialId = hasShapeColor
+                ? shapeMaterialId
+                : FaceMaterial(face, faceColors);
+
+            TopLoc_Location location;
+            const Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(face, location);
+            if (triangulation.IsNull()) continue;
+            const bool reversed = face.Orientation() == TopAbs_REVERSED;
+            const gp_Trsf& transform = location.Transformation();
+
+            for (Standard_Integer index = 1; index <= triangulation->NbTriangles(); ++index) {
+                Standard_Integer n1 = 0, n2 = 0, n3 = 0;
+                triangulation->Triangle(index).Get(n1, n2, n3);
+                if (reversed) std::swap(n2, n3);
+                const gp_Pnt p1 = triangulation->Node(n1).Transformed(transform);
+                const gp_Pnt p2 = triangulation->Node(n2).Transformed(transform);
+                const gp_Pnt p3 = triangulation->Node(n3).Transformed(transform);
+                const double ax = p2.X() - p1.X(), ay = p2.Y() - p1.Y(), az = p2.Z() - p1.Z();
+                const double bx = p3.X() - p1.X(), by = p3.Y() - p1.Y(), bz = p3.Z() - p1.Z();
+                double nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+                const double length = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (!(length > 1e-30) || !std::isfinite(length)) continue; // degenerate/invalid
+                nx /= length; ny /= length; nz /= length;
+
+                AppendVertex(groups[materialId], p1, nx, ny, nz);
+                AppendVertex(groups[materialId], p2, nx, ny, nz);
+                AppendVertex(groups[materialId], p3, nx, ny, nz);
+                if (++definitionTriangles > profile_.maxTrianglesPerDefinition)
+                    return model_core::ImportErrorCode::TessellationFailed;
+            }
+        }
+        if (definitionTriangles == 0) return model_core::ImportErrorCode::None; // nothing visible
+
+        for (auto& [materialId, vertices] : groups) {
+            if (Cancelled()) return model_core::ImportErrorCode::Cancelled;
+            std::size_t begin = 0;
+            while (begin < vertices.size()) {
+                const std::size_t remainingTriangles = (vertices.size() - begin) / 3;
+                const std::size_t takeTriangles = (std::min)(
+                    remainingTriangles, static_cast<std::size_t>(profile_.chunkTriangles));
+                const std::size_t takeVertices = takeTriangles * 3;
+                GeometryRecord chunk;
+                chunk.chunkId = nextGeometryId++;
+                chunk.meshId = meshId;
+                chunk.materialId = materialId;
+                chunk.vertices.assign(vertices.begin() + static_cast<std::ptrdiff_t>(begin),
+                                      vertices.begin() + static_cast<std::ptrdiff_t>(begin + takeVertices));
+                chunks.push_back(std::move(chunk));
+                begin += takeVertices;
+            }
+        }
+        return model_core::ImportErrorCode::None;
+    }
+
+private:
+    bool Cancelled() const { return cancelledProbe_ && cancelledProbe_(); }
+
+    static double ElapsedMilliseconds(const std::chrono::steady_clock::time_point& start)
+    {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    }
+
+    static std::uint32_t FaceMaterial(const TopoDS_Face& face,
+                                      const std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors)
+    {
+        for (const auto& [subShape, materialId] : faceColors) {
+            if (subShape.IsSame(face)) return materialId;
+        }
+        return 0;
+    }
+
+    static void AppendVertex(std::vector<Vertex>& vertices, const gp_Pnt& point, double nx, double ny, double nz)
+    {
+        Vertex vertex{};
+        vertex.px = static_cast<float>(point.X());
+        vertex.py = static_cast<float>(point.Y());
+        vertex.pz = static_cast<float>(point.Z());
+        vertex.nx = static_cast<float>(nx);
+        vertex.ny = static_cast<float>(ny);
+        vertex.nz = static_cast<float>(nz);
+        vertex.u = 0.0f;
+        vertex.v = 0.0f;
+        vertices.push_back(vertex);
+    }
+
+    const StepTessellationProfile& profile_;
+    const StepXdeLimits& limits_;
+    std::function<bool()> cancelledProbe_;
+    double meshMilliseconds_ = 0.0;
+};
 
 } // namespace
 
 StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                 std::span<std::byte> section, HANDLE sourceHandle,
-                                HANDLE cancellationEvent, const StepXdeLimits& limits)
+                                HANDLE cancellationEvent, const StepXdeLimits& limits,
+                                const StepBatchPublisher& publish)
 {
     StepXdeResult result;
     if (!request.generationId || !request.sourceFileHandleValue || !request.sectionHandleValue
@@ -945,6 +1137,10 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
     }
 
     Handle(TDocStd_Document) document;
+    auto closeDocument = [&] {
+        if (!document.IsNull()) XCAFApp_Application::GetApplication()->Close(document);
+    };
+
     try {
         XCAFApp_Application::GetApplication()->NewDocument("MDTV-XCAF", document);
         if (document.IsNull()) {
@@ -964,17 +1160,17 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         std::istream stream(&buffer);
         if (reader.ReadStream("preview3d.step", stream) != IFSelect_RetDone) {
             result.errorCode = model_core::ImportErrorCode::MalformedData;
-            XCAFApp_Application::GetApplication()->Close(document);
+            closeDocument();
             return result;
         }
         if (IsCancelled(cancellationEvent)) {
             result.errorCode = model_core::ImportErrorCode::Cancelled;
-            XCAFApp_Application::GetApplication()->Close(document);
+            closeDocument();
             return result;
         }
         if (!reader.Transfer(document)) {
             result.errorCode = model_core::ImportErrorCode::MalformedData;
-            XCAFApp_Application::GetApplication()->Close(document);
+            closeDocument();
             return result;
         }
 
@@ -987,7 +1183,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         reader.ChangeReader().FileUnits(lengthUnits, angleUnits, solidAngleUnits);
         if (lengthUnits.Length() == 0) {
             result.errorCode = model_core::ImportErrorCode::UnsupportedRequiredFeature;
-            XCAFApp_Application::GetApplication()->Close(document);
+            closeDocument();
             return result;
         }
         // More than one distinct authored length unit is contradictory under
@@ -996,7 +1192,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             if (std::strcmp(lengthUnits.Value(index).ToCString(),
                             lengthUnits.Value(1).ToCString()) != 0) {
                 result.errorCode = model_core::ImportErrorCode::UnsupportedRequiredFeature;
-                XCAFApp_Application::GetApplication()->Close(document);
+                closeDocument();
                 return result;
             }
         }
@@ -1004,53 +1200,118 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         if (!XCAFDoc_DocumentTool::GetLengthUnit(document, metersPerUnit)
             || !std::isfinite(metersPerUnit) || metersPerUnit <= 0.0 || metersPerUnit > 1e12) {
             result.errorCode = model_core::ImportErrorCode::UnsupportedRequiredFeature;
-            XCAFApp_Application::GetApplication()->Close(document);
+            closeDocument();
             return result;
         }
 
-        SceneBuilder builder(document, limits);
-        builder.SetCancellationProbe([cancellationEvent] { return IsCancelled(cancellationEvent); });
-        if (!builder.shapeToolValid()) {
+        // Phase A: bounded planning, no tessellation and no normalized bytes.
+        ScenePlanner planner(document, limits);
+        planner.SetCancellationProbe([cancellationEvent] { return IsCancelled(cancellationEvent); });
+        if (!planner.shapeToolValid()) {
             result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
-            XCAFApp_Application::GetApplication()->Close(document);
+            closeDocument();
             return result;
         }
-        const model_core::ImportErrorCode built = builder.Build();
-        if (built != model_core::ImportErrorCode::None) {
-            result.errorCode = built;
-            XCAFApp_Application::GetApplication()->Close(document);
+        const model_core::ImportErrorCode planned = planner.Build();
+        if (planned != model_core::ImportErrorCode::None) {
+            result.errorCode = planned;
+            closeDocument();
+            return result;
+        }
+
+        // Phase B: one bounded window at a time. meshCount/nodeCount are known
+        // after planning so every progressive batch carries identical
+        // generation-wide metadata.
+        SceneEmitter emitter(section, request.generationId, metersPerUnit, planner.definitionCount(),
+                             static_cast<std::uint32_t>(planner.nodes().size()),
+                             planner.warningCount(), publish,
+                             [cancellationEvent] { return IsCancelled(cancellationEvent); });
+        DefinitionMesher mesher(limits.profile, limits);
+        mesher.SetCancellationProbe([cancellationEvent] { return IsCancelled(cancellationEvent); });
+
+        for (const NodeRecord& node : planner.nodes()) {
+            if (!emitter.AddNode(node)) break;
+        }
+        for (const MaterialRecord& material : planner.materials()) {
+            if (!emitter.AddMaterial(material)) break;
+        }
+
+        std::uint32_t nextGeometryId = kGeometryIdBase;
+        for (const PlannedDefinition& definition : planner.definitions()) {
+            if (emitter.error() != model_core::ImportErrorCode::None) break;
+            std::vector<GeometryRecord> chunks;
+            const model_core::ImportErrorCode meshed = mesher.Mesh(
+                definition.shape, definition.faceColors, definition.hasShapeColor,
+                definition.shapeMaterialId, definition.meshId, nextGeometryId, chunks);
+            if (meshed != model_core::ImportErrorCode::None) {
+                result.errorCode = meshed;
+                closeDocument();
+                return result;
+            }
+            if (chunks.empty()) continue; // unsupported/unmeshed definition
+
+            std::vector<EmittedGeometryRef> emitted;
+            emitted.reserve(chunks.size());
+            for (GeometryRecord& chunk : chunks) {
+                const auto reference = emitter.AddGeometry(chunk);
+                if (!reference) break;
+                emitted.push_back(*reference);
+            }
+            if (emitter.error() != model_core::ImportErrorCode::None) break;
+
+            for (const PlannedOccurrence& occurrence : definition.occurrences) {
+                for (const EmittedGeometryRef& reference : emitted) {
+                    const std::uint32_t materialId = occurrence.hasOverride
+                        ? occurrence.overrideMaterialId : reference.materialId;
+                    if (!emitter.EmitInstance(reference, materialId, occurrence.nodeId, occurrence.world))
+                        break;
+                }
+                if (emitter.error() != model_core::ImportErrorCode::None) break;
+            }
+            if (emitter.error() != model_core::ImportErrorCode::None) break;
+        }
+
+        if (emitter.error() != model_core::ImportErrorCode::None) {
+            result.errorCode = emitter.error();
+            closeDocument();
+            return result;
+        }
+        if (!emitter.AddStatus()) {
+            result.errorCode = emitter.error();
+            closeDocument();
             return result;
         }
         if (IsCancelled(cancellationEvent)) {
             result.errorCode = model_core::ImportErrorCode::Cancelled;
-            XCAFApp_Application::GetApplication()->Close(document);
+            closeDocument();
             return result;
         }
 
-        StepScene scene = builder.Take();
-        scene.warningCount = builder.skippedDefinitions();
-        const auto written = WriteScene(section, scene, request.generationId, metersPerUnit,
-                                        request.maxChunkCount);
-        if (!written) {
+        std::uint32_t chunkCount = 0;
+        std::uint64_t sectionBytesWritten = 0;
+        if (!emitter.Finalize(chunkCount, sectionBytesWritten)) {
             result.errorCode = model_core::ImportErrorCode::ResourceLimit;
-            XCAFApp_Application::GetApplication()->Close(document);
+            closeDocument();
             return result;
         }
-        result.chunkCount = written->first;
-        result.sectionBytesWritten = written->second;
-        result.definitionCount = scene.definitionCount;
-        result.nodeCount = static_cast<std::uint32_t>(scene.nodes.size());
-        result.instanceCount = static_cast<std::uint32_t>(scene.instances.size());
-        result.materialCount = static_cast<std::uint32_t>(scene.materials.size());
-        result.warningCount = scene.warningCount;
-        XCAFApp_Application::GetApplication()->Close(document);
+
+        result.chunkCount = chunkCount;
+        result.sectionBytesWritten = sectionBytesWritten;
+        result.batchCount = emitter.batchesPublished();
+        result.definitionCount = planner.definitionCount();
+        result.nodeCount = static_cast<std::uint32_t>(planner.nodes().size());
+        result.instanceCount = emitter.nextInstanceSerial();
+        result.materialCount = static_cast<std::uint32_t>(planner.materials().size());
+        result.warningCount = planner.warningCount();
+        result.meshMilliseconds = static_cast<std::uint64_t>(mesher.meshMilliseconds());
+        closeDocument();
         return result;
     } catch (const std::exception&) {
-        if (!document.IsNull()) XCAFApp_Application::GetApplication()->Close(document);
+        closeDocument();
         result.errorCode = model_core::ImportErrorCode::InternalImporterFailure;
         return result;
     } catch (...) {
-        if (!document.IsNull()) XCAFApp_Application::GetApplication()->Close(document);
+        closeDocument();
         result.errorCode = model_core::ImportErrorCode::InternalImporterFailure;
         return result;
     }

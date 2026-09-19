@@ -82,14 +82,17 @@
     <ClCompile Include="src\StepPart21Preflight.cpp" />
     <ClCompile Include="src\StepXdeAdapter.cpp" />
     <ClCompile Include="src\StepXdeSpike.cpp" />
+    <ClCompile Include="..\import-worker\src\ChunkBatchSink.cpp" />
     <ClCompile Include="..\import-worker\src\ContainmentProbes.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\StepHostImport.h" />
+    <ClInclude Include="src\StepImporterVersion.h" />
     <ClInclude Include="src\StepPart21Preflight.h" />
     <ClInclude Include="src\StepSpikeProtocol.h" />
+    <ClInclude Include="src\StepTessellationProfile.h" />
     <ClInclude Include="src\StepXdeAdapter.h" />
     <ClInclude Include="src\StepXdeSpike.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\Checksum.h" />
