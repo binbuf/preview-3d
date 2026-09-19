@@ -1,6 +1,6 @@
 #pragma once
 
-// STEP-003 production XDE scene adapter. It runs behind the STEP-002
+// STEP-003/004 production XDE scene adapter. It runs behind the STEP-002
 // `StartStepImportFromFile` route after `StepPart21Preflight` has accepted the
 // ISO 10303-21 physical file, reads the accepted bytes exclusively through a
 // product-owned seekable stream over the inherited read-only source handle,
@@ -8,22 +8,32 @@
 // normalized protocol-v10 node / reusable-geometry / mesh-instance / material
 // contract.
 //
-// Design authority: .docs/stp.md (STEP-003). The trusted viewer and the general
-// import worker never link or load this adapter or its OCCT closure.
+// STEP-004 adds the versioned tessellation-quality profile, per-definition
+// bounded extraction with cluster-local positions and double origins, and
+// progressive multi-window delivery: geometry that does not fit one output
+// window is handed off through the existing ChunkBatchReady/ChunkBatchConsumed
+// protocol instead of requiring the whole normalized scene in memory at once.
+//
+// Design authority: .docs/stp.md (STEP-003, STEP-004). The trusted viewer and
+// the general import worker never link or load this adapter or its OCCT
+// closure.
 
 #include "model_core/ControlProtocol.h"
 #include "model_core/ImportError.h"
 
+#include "StepTessellationProfile.h"
+
 #include <windows.h>
 
 #include <cstdint>
+#include <functional>
 #include <span>
 
 namespace step_host {
 
-// Bounded, documented STEP-003 scene ceilings. They are admission/emission
-// bounds, not a promise that an OCCT translation of every limit-sized file
-// fits; the broker's Tier-B source/triangle/vertex/object/material caps remain
+// Bounded, documented STEP scene ceilings. They are admission/emission bounds,
+// not a promise that an OCCT translation of every limit-sized file fits; the
+// broker's Tier-B source/triangle/vertex/object/material caps remain
 // independently enforced by SharedSectionValidator.
 struct StepXdeLimits {
     std::uint32_t maxNodes = 50'000;        // Tier-B object limit
@@ -33,20 +43,32 @@ struct StepXdeLimits {
     std::uint32_t maxHierarchyDepth = 256;  // protocol scene hierarchy depth
     std::uint32_t maxTriangles = 20'000'000; // Tier-B triangle limit
     std::uint32_t maxVertices = 60'000'000;  // Tier-B vertex limit
-    std::uint32_t chunkTriangles = 65'536;   // split geometry to bounded chunks
-    double linearDeflection = 0.1;           // mm; STEP-004 owns the quality profile
-    double angularDeflection = 0.5;          // radians
+    StepTessellationProfile profile{};
 };
+
+// Hands one complete non-terminal output window to the host control channel.
+// Returns false when the batch could not be accepted (host gone, cancellation,
+// or an out-of-order refusal), in which case the adapter abandons the
+// generation rather than writing into the window again. A default-constructed
+// publisher keeps the pre-STEP-004 single-window behavior: a scene that does
+// not fit the section fails as `ResourceLimit`.
+using StepBatchPublisher =
+    std::function<bool(std::uint32_t chunkCount, std::uint64_t sectionBytesWritten)>;
 
 struct StepXdeResult {
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
-    std::uint32_t chunkCount = 0;
+    std::uint32_t chunkCount = 0;        // terminal window only
+    std::uint32_t batchCount = 0;        // non-terminal windows already handed off
     std::uint64_t sectionBytesWritten = 0;
     std::uint32_t definitionCount = 0;
     std::uint32_t nodeCount = 0;
     std::uint32_t instanceCount = 0;
     std::uint32_t materialCount = 0;
     std::uint32_t warningCount = 0;
+    // STEP-004 work item 7: total time spent inside per-definition
+    // BRepMesh_IncrementalMesh. Reported so STEP-005 can choose two-pass versus
+    // single-pass delivery from measured data.
+    std::uint64_t meshMilliseconds = 0;
 };
 
 // Runs the accepted XDE traversal into `section`. `section` must be exactly
@@ -56,6 +78,7 @@ struct StepXdeResult {
 // never cross this boundary.
 StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                 std::span<std::byte> section, HANDLE sourceHandle,
-                                HANDLE cancellationEvent, const StepXdeLimits& limits = {});
+                                HANDLE cancellationEvent, const StepXdeLimits& limits = {},
+                                const StepBatchPublisher& publish = {});
 
 } // namespace step_host

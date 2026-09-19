@@ -11,6 +11,7 @@
 #include "StepXdeSpike.h"
 
 #include "ContainmentProbes.h"
+#include "ChunkBatchSink.h"
 #include "model_core/Checksum.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
@@ -180,8 +181,14 @@ int RunProductionPool(PoolMode mode)
             continue;
         }
 
+        import_worker::ChunkBatchSink batchSink(
+            GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
+            request.generationId, request.requestFlags, cancellation.get());
         const auto result = step_host::RunStepHostImport(
-            request, outputView.bytes(), source.get(), cancellation.get());
+            request, outputView.bytes(), source.get(), cancellation.get(),
+            [&batchSink](std::uint32_t chunkCount, std::uint64_t sectionBytesWritten) {
+                return batchSink.PublishBatch(chunkCount, sectionBytesWritten);
+            });
         if (result.errorCode != model_core::ImportErrorCode::None) {
             if (!SendError(request.generationId, result.errorCode)) return 78;
             continue;

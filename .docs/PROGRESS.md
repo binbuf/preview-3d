@@ -4,6 +4,56 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **STEP-004 bounded tessellation and progressive CAD delivery (2026-09-19):
+  complete for the single-pass display slice; coarse catalog delegated to
+  STEP-005.** `StepXdeAdapter` is now two-phase: `ScenePlanner` walks the XDE
+  document without meshing and builds nodes/definitions/materials/occurrences,
+  then `SceneEmitter`+`DefinitionMesher` tessellate one reusable definition at a
+  time under the new versioned `StepTessellationProfile` (v2) and write
+  cluster-local float positions with exact double per-chunk origins. Geometry is
+  no longer retained after it is written, and a window that fills is handed off
+  through `ChunkBatchReady`/`ChunkBatchConsumed` via the existing
+  `import_worker::ChunkBatchSink`, so a scene larger than the output window no
+  longer needs one giant section. Authored AP242 tessellation is preferred by
+  meshing with `AllowQualityDecrease = false`. A new typed
+  `ImportErrorCode::TessellationFailed` (28) carries meshing/timeout/budget
+  failures to fixed viewer text. `[step-002],[step-003],[step-004]` pass 26
+  cases / 423 assertions in Debug and Release; STEP-003 golden counts are
+  unchanged. Details in [STEP-004-VERIFICATION.md](./STEP-004-VERIFICATION.md).
+
+  Five things constrain the later STEP work:
+  1. The pinned constrained OCCT port builds with `USE_TBB=OFF`, so
+     `BRepMesh_IncrementalMesh::InParallel` has no parallel backend. The profile
+     now records `parallel = false` truthfully; STEP-005 must prove product-level
+     per-definition parallelism or document serial throughput.
+  2. The Tier-B broker computes `coarseProtocol = enableCoarseProxy &&
+     !tierBFormat`, and `D3D12ImportBridge` deliberately leaves `enableCoarseProxy`
+     and `nextDetail` unset for STEP. A `CoarseComplete` record is rejected and a
+     `kCoarseLod` chunk would render *alongside* fine geometry, not replace it.
+     The stp2.md two-pass coarse catalog therefore needs the scan/detail protocol
+     enabled for STEP (a cross-cutting broker/bridge change) and is owned by
+     STEP-005 item 5; STEP-004 ships single-pass progressive display.
+  3. A single geometry chunk deliberately fails as `ResourceLimit` if it cannot
+     fit one output window even after flushing; choosing a test window smaller
+     than the largest chunk is not a progressive test. For the current fixtures
+     the largest chunk is ~21.6 KiB and the whole nested scene ~27 KiB, so a
+     24 KiB window exercises the batch path.
+  4. `ImportStage::WorkerReportedError` is numeric value **16**, not
+     `ValidateSection` (15); a host `GenerationError` therefore reads as stage 16
+     and can be misread as a broker validation failure. The broker maps
+     host-reported `ResourceLimit` to `StepHostLimit` (27).
+  5. `StepXdeResult::meshMilliseconds` now accumulates per-definition
+     `BRepMesh_IncrementalMesh` time for STEP-005's two-pass-versus-single-pass
+     decision; it is not yet surfaced.
+
+  Build note: after editing a source, MSBuild occasionally reported the affected
+  project up to date and reused a stale `.obj` (the STEP host and the
+  ImportIsolation test project both showed this). Deleting the specific `.obj`
+  and rebuilding, or building through `Preview3D.slnx`, is required before
+  trusting a test run. Building `Tests.ImportIsolation.vcxproj` directly without
+  `/p:SolutionDir=<repo root>` bakes `$(SolutionDir)`-relative fixture/host paths
+  into the test binary and makes every STEP import fail at `OpenSource`.
+
 - **STEP-001 spike complete (2026-09-18); go for STEP-002 with a constrained
   OCCT port.** See [STEP-001-SPIKE-RESULTS.md](./STEP-001-SPIKE-RESULTS.md).
   OCCT 7.8.1 imported a self-contained AP214 assembly through

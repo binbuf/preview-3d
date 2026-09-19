@@ -334,7 +334,7 @@ TEST_CASE("USD-003 extends protocol-v10 with closed additive identities", "[usd-
          code <= uint32_t(model_core::ImportErrorCode::ArchiveLimit); ++code)
         CHECK(model_core::IsKnownImportErrorCode(code));
     CHECK_FALSE(model_core::IsKnownImportErrorCode(
-        uint32_t(model_core::ImportErrorCode::StepHostLimit) + 1));
+        uint32_t(model_core::ImportErrorCode::TessellationFailed) + 1));
 }
 
 TEST_CASE("USD-003 validator accepts concrete X Y Z units and rejects illegal USD metadata",

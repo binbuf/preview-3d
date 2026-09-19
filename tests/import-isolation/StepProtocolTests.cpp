@@ -85,12 +85,15 @@ TEST_CASE("STEP-002 extends protocol-v10 with closed additive identities", "[ste
     CHECK(sizeof(model_core::ParseStepFileRequest) == 48);
     CHECK(uint32_t(model_core::ImportErrorCode::StepHostFailure) == 26);
     CHECK(uint32_t(model_core::ImportErrorCode::StepHostLimit) == 27);
+    CHECK(uint32_t(model_core::ImportErrorCode::TessellationFailed) == 28);
     CHECK(model_core::IsKnownImportErrorCode(
         uint32_t(model_core::ImportErrorCode::StepHostFailure)));
     CHECK(model_core::IsKnownImportErrorCode(
         uint32_t(model_core::ImportErrorCode::StepHostLimit)));
+    CHECK(model_core::IsKnownImportErrorCode(
+        uint32_t(model_core::ImportErrorCode::TessellationFailed)));
     CHECK_FALSE(model_core::IsKnownImportErrorCode(
-        uint32_t(model_core::ImportErrorCode::StepHostLimit) + 1));
+        uint32_t(model_core::ImportErrorCode::TessellationFailed) + 1));
 }
 
 TEST_CASE("STEP-002 Part-21 admission accepts the clear-text envelope", "[step-002][preflight]")

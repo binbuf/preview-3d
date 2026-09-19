@@ -35,7 +35,7 @@ model_core::ImportErrorCode MapPreflightStatus(std::uint32_t status)
 
 StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& request,
                                    std::span<std::byte> section, HANDLE sourceHandle,
-                                   HANDLE cancellationEvent)
+                                   HANDLE cancellationEvent, const StepBatchPublisher& publish)
 {
     StepImportResult result;
     if (!request.generationId || !request.sourceFileHandleValue || !request.sectionHandleValue
@@ -72,9 +72,10 @@ StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& reque
     }
 
     const StepXdeResult scene
-        = RunStepXdeAdapter(request, section, sourceHandle, cancellationEvent);
+        = RunStepXdeAdapter(request, section, sourceHandle, cancellationEvent, {}, publish);
     result.errorCode = scene.errorCode;
     result.chunkCount = scene.chunkCount;
+    result.batchCount = scene.batchCount;
     result.sectionBytesWritten = scene.sectionBytesWritten;
     return result;
 }
