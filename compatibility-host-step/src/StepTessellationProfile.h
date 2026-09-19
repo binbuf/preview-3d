@@ -25,7 +25,10 @@ namespace step_host {
 //
 // v2: corrected the thread-policy member to match the pinned constrained build
 // (see below); no output changed, but the recorded policy is now truthful.
-constexpr std::uint32_t kStepTessellationProfileVersion = 2;
+// v3 (STEP-005): re-enabled multi-threaded OCCT meshing after proving the
+// pinned `USE_TBB=OFF` port still has a parallel backend (OSD_Parallel's
+// built-in OSD_ThreadPool). See the `parallel` member comment.
+constexpr std::uint32_t kStepTessellationProfileVersion = 3;
 
 enum class StepTessellationQuality : std::uint32_t {
     Coarse = 0,
@@ -51,13 +54,18 @@ struct StepTessellationProfile {
     // so distorted surfaces cannot amplify into unbounded tessellation.
     double relativeMinEdge = 0.001;
     double minAbsoluteEdgeLength = 0.001;
-    // One fixed thread policy. The pinned constrained OCCT port builds with
-    // `USE_TBB=OFF`, so `BRepMesh_IncrementalMesh::InParallel` has no parallel
-    // `OSD_Parallel` backend and meshing is serial. STEP-004 records that
-    // truthful serial decision; STEP-005 resolves product-level per-definition
-    // parallelism (or keeps serial with measured throughput). This flag is part
-    // of the versioned profile, not a host-ambient setting.
-    bool parallel = false;
+    // One fixed thread policy. STEP-004 assumed `USE_TBB=OFF` meant no parallel
+    // `OSD_Parallel` backend and recorded `false`. STEP-005 disproved that:
+    // OCCT 7.8's `OSD_Parallel::For` falls back to its own `OSD_ThreadPool`
+    // when no external library (TBB) is enabled, and
+    // `IMeshTools_Parameters::InParallel` is documented as "switches on/off
+    // multi-thread computation". Multi-threaded meshing is therefore available
+    // on the pinned port and is enabled here. Per-face triangulation is
+    // independent and extraction order is deterministic, so the emitted chunk
+    // ids/sizes/checksums are unchanged by thread scheduling; the force-serial
+    // test seam proves that identity. This flag is part of the versioned
+    // profile, not a host-ambient setting.
+    bool parallel = true;
     // Per-definition work budgets. Enforced by the adapter before publishing a
     // definition; exceeding one is a typed TessellationFailed/CadKernelLimit,
     // never a silently partial assembly.
@@ -81,6 +89,27 @@ struct StepTessellationProfile {
                                                           : displayAngularDeflection;
     }
 };
+
+// STEP-005 delivery-strategy decision, recorded as a versioned product
+// constant rather than a per-file heuristic.
+//
+// Single-pass progressive display is retained. Two-pass coarse-then-display
+// was evaluated and rejected for this slice: STEP is parse/transfer-bound, so a
+// second coarse pass cannot make the first geometry appear sooner (nothing is
+// emitted until ReadStream/Transfer complete), and the Tier-B broker/bridge do
+// not enable the coarse/detail replacement protocol for STEP. The single-pass
+// path already streams one bounded window at a time through
+// ChunkBatchReady/ChunkBatchConsumed, so time-to-first-usable-frame is the time
+// to mesh and emit the first definition, not the whole scene.
+enum class StepDeliveryStrategy : std::uint32_t {
+    SinglePassProgressiveDisplay = 0,
+};
+constexpr StepDeliveryStrategy kStepDeliveryStrategy =
+    StepDeliveryStrategy::SinglePassProgressiveDisplay;
+// Bump only if the chosen strategy changes normalized output. The strategy does
+// not participate in kStepImporterVersion while it stays single-pass, because
+// declaring the existing behavior does not change any emitted byte.
+constexpr std::uint32_t kStepDeliveryStrategyVersion = 1;
 
 // Derives the absolute linear deflection for a definition whose local
 // bounding diagonal is `diagonal` in transferred units. Non-finite or

@@ -82,6 +82,8 @@ TEST_CASE("STEP-002 extends protocol-v10 with closed additive identities", "[ste
     CHECK(model_core::kCurrentProtocolVersion == 10);
     CHECK(uint32_t(model_core::SourceFormatId::Step) == 13);
     CHECK(uint32_t(model_core::ControlOpcode::StartStepImportFromFile) == 20);
+    CHECK(uint32_t(model_core::ControlOpcode::StepProgress) == 21);
+    CHECK(sizeof(model_core::StepProgressNotice) == 48);
     CHECK(sizeof(model_core::ParseStepFileRequest) == 48);
     CHECK(uint32_t(model_core::ImportErrorCode::StepHostFailure) == 26);
     CHECK(uint32_t(model_core::ImportErrorCode::StepHostLimit) == 27);

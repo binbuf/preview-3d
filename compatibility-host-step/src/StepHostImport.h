@@ -23,6 +23,9 @@ struct StepImportResult {
     std::uint32_t chunkCount = 0;
     std::uint32_t batchCount = 0;
     std::uint64_t sectionBytesWritten = 0;
+    // STEP-005 phase-cost evidence, including the host-owned preflight phase
+    // that the adapter cannot see.
+    StepPhaseTimings timings{};
 };
 
 // Maps a preflight outcome into the closed product error taxonomy. Exposed so
@@ -33,10 +36,12 @@ model_core::ImportErrorCode MapPreflightStatus(std::uint32_t status);
 // output section and must be exactly `request.sectionByteCapacity` bytes. When
 // `publish` is supplied, geometry that does not fit one output window is handed
 // off through the existing ChunkBatchReady/ChunkBatchConsumed protocol; when it
-// is empty the pre-STEP-004 single-window behavior is preserved.
+// is empty the pre-STEP-004 single-window behavior is preserved. `progress`
+// receives bounded phase events for the control channel.
 StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& request,
                                    std::span<std::byte> section, HANDLE sourceHandle,
                                    HANDLE cancellationEvent,
-                                   const StepBatchPublisher& publish = {});
+                                   const StepBatchPublisher& publish = {},
+                                   const StepProgressSink& progress = {});
 
 } // namespace step_host

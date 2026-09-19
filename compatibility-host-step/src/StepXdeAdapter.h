@@ -55,6 +55,36 @@ struct StepXdeLimits {
 using StepBatchPublisher =
     std::function<bool(std::uint32_t chunkCount, std::uint64_t sectionBytesWritten)>;
 
+// STEP-005 bounded phase/progress event. `phase` is one of the closed
+// model_core::kStepPhase* identities; every other field is a product-owned
+// counter. The host turns one of these into a control-channel StepProgress
+// message, so no OCCT string, label, or path can cross the boundary.
+struct StepProgressEvent {
+    std::uint32_t phase = 0;
+    std::uint32_t definitionsMeshed = 0;
+    std::uint32_t definitionTotal = 0;
+    std::uint64_t preflightBytes = 0;
+    std::uint64_t phaseMilliseconds = 0;
+    std::uint64_t totalMilliseconds = 0;
+};
+using StepProgressSink = std::function<void(const StepProgressEvent&)>;
+
+// STEP-005 where-the-time-goes evidence. Each value is wall-clock elapsed
+// milliseconds for one pipeline phase; `totalMilliseconds` covers the whole
+// adapter call. They are recorded on the result (and published through
+// StepProgress) so STEP-005/STEP-008 can report the parse/transfer/mesh split
+// instead of assuming the advisor's model applies to this constrained build.
+struct StepPhaseTimings {
+    std::uint64_t preflightMilliseconds = 0;
+    std::uint64_t readMilliseconds = 0;
+    std::uint64_t transferMilliseconds = 0;
+    std::uint64_t planMilliseconds = 0;
+    std::uint64_t meshMilliseconds = 0;
+    std::uint64_t extractMilliseconds = 0;
+    std::uint64_t emitMilliseconds = 0;
+    std::uint64_t totalMilliseconds = 0;
+};
+
 struct StepXdeResult {
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
     std::uint32_t chunkCount = 0;        // terminal window only
@@ -65,10 +95,8 @@ struct StepXdeResult {
     std::uint32_t instanceCount = 0;
     std::uint32_t materialCount = 0;
     std::uint32_t warningCount = 0;
-    // STEP-004 work item 7: total time spent inside per-definition
-    // BRepMesh_IncrementalMesh. Reported so STEP-005 can choose two-pass versus
-    // single-pass delivery from measured data.
-    std::uint64_t meshMilliseconds = 0;
+    // STEP-004 work item 7 / STEP-005 work item 2: per-phase cost evidence.
+    StepPhaseTimings timings{};
 };
 
 // Runs the accepted XDE traversal into `section`. `section` must be exactly
@@ -76,9 +104,18 @@ struct StepXdeResult {
 // self-consistent protocol-v10 header, descriptor table, and payloads ready
 // for the broker's copy-then-validate acceptance rule. OCCT/label/path strings
 // never cross this boundary.
+//
+// STEP-005: when `mappedSource` is non-empty the reader consumes a product-owned
+// stream over that already-mapped read-only view of the inherited handle
+// (single read for preflight plus transfer); otherwise it falls back to the
+// proven `HandleStreamBuf` over `sourceHandle`. `progress` receives bounded
+// phase events; it is optional.
 StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                 std::span<std::byte> section, HANDLE sourceHandle,
-                                HANDLE cancellationEvent, const StepXdeLimits& limits = {},
-                                const StepBatchPublisher& publish = {});
+                                HANDLE cancellationEvent,
+                                std::span<const std::byte> mappedSource = {},
+                                const StepXdeLimits& limits = {},
+                                const StepBatchPublisher& publish = {},
+                                const StepProgressSink& progress = {});
 
 } // namespace step_host

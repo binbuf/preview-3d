@@ -23,6 +23,7 @@
 // user-facing string. This layer returns typed results only.
 
 #include "import_broker/SharedSectionValidator.h"
+#include "model_core/ControlProtocol.h"
 #include "model_core/ImportError.h"
 
 #include <cstdint>
@@ -91,6 +92,7 @@ enum class ImportStage : uint32_t {
     ChunkBatchOutOfOrder, // a replayed, skipped, or wrong-generation batchIndex
     ChunkCountLimit,      // more chunks across the generation than the cap allows
     ChunkBatchAckFailed,  // the ack could not be written (worker gone mid-batch)
+    StepProgressLimit,    // a STEP host sent more bounded progress events than the cap allows
     Upload,
 };
 
@@ -153,6 +155,9 @@ struct ImportSessionRequest {
     // Test-only STEP-host pool mode. Production leaves this empty and the
     // manager forces --pool.
     std::wstring stepHostArgumentsOverride;
+    // STEP-005 test-only seam: forces the STEP host's mesher serial so a test
+    // can compare parallel and serial normalized output byte-for-byte.
+    bool stepForceSerialForTesting = false;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;
     uint64_t generationId = 0;
@@ -220,6 +225,16 @@ struct ImportSessionRequest {
     // batch's validation and its ack. Keep it short: the worker is blocked
     // waiting for that ack.
     std::function<void(std::vector<ValidatedChunk>&&)> onBatch;
+    // STEP-005: receives each bounded StepProgressNotice the dedicated STEP
+    // host publishes while a generation is in progress, in order. It is
+    // optional; when empty the events are still counted and the last one is
+    // recorded on ImportSessionResult so qualification can assert progress
+    // without a callback. Never invoked for any other producer.
+    std::function<void(const model_core::StepProgressNotice&)> onStepProgress;
+    // Bounds how many StepProgress messages one STEP generation may send, the
+    // same "never trust worker self-restraint" rule the sidecar and batch caps
+    // apply. Exceeding it abandons the host rather than servicing a flood.
+    uint32_t maxStepProgressPerGeneration = 8192;
     // Replaces the format's own worker CLI flag when non-empty.
     //
     // A test seam, and the same kind commitLimitBytes already is: the reply
@@ -275,6 +290,10 @@ struct ImportSessionResult {
     // compatibility or STEP attempt also reports its host producer so callers
     // never mistake a discarded fast candidate for the result owner.
     ImportProducer producer = ImportProducer::None;
+    // STEP-005 evidence: how many bounded progress events the host sent and
+    // the last one received. Zero/empty for every non-STEP producer.
+    uint32_t stepProgressCount = 0;
+    model_core::StepProgressNotice lastStepProgress{};
     // True only for an exact, first-result UnsupportedComposition from the
     // USD fast worker. USD-006 consumes this without reinterpreting generic
     // parser/resource failures as permission to launch OpenUSD.

@@ -105,6 +105,23 @@ bool SendChunksReady(uint64_t generationId, uint32_t chunkCount, uint64_t sectio
         &notice, sizeof(notice));
 }
 
+// STEP-005: bounded phase/progress signal. Best-effort -- a failed write means
+// the broker has gone away, and the terminal reply path reports that anyway.
+void SendStepProgress(uint64_t generationId, const step_host::StepProgressEvent& event)
+{
+    model_core::StepProgressNotice notice{};
+    notice.generationId = generationId;
+    notice.phase = event.phase;
+    notice.definitionsMeshed = event.definitionsMeshed;
+    notice.definitionTotal = event.definitionTotal;
+    notice.preflightBytes = event.preflightBytes;
+    notice.phaseMilliseconds = event.phaseMilliseconds;
+    notice.totalMilliseconds = event.totalMilliseconds;
+    model_core::WriteControlMessage(GetStdHandle(STD_OUTPUT_HANDLE),
+                                    model_core::ControlOpcode::StepProgress,
+                                    &notice, sizeof(notice));
+}
+
 enum class PoolMode { Normal, Crash, Hang, ConsumeMemory, StaleReply, WrongFormat, UnknownError };
 
 // Test-only fault: rewrite the validated synthetic scene's source format so
@@ -158,8 +175,9 @@ int RunProductionPool(PoolMode mode)
             || !request.sectionHandleValue || !request.cancellationEventHandleValue
             || request.sectionByteCapacity < sizeof(model_core::SectionHeader)
             || !request.maxChunkCount
-            || (request.requestFlags & ~model_core::kImportRequestDetailService
-                & ~model_core::kImportRequestCoarseProxy);
+            || (request.requestFlags & ~(model_core::kImportRequestDetailService
+                | model_core::kImportRequestCoarseProxy
+                | model_core::kImportRequestStepForceSerialForTesting));
         if (malformedRequest) {
             if (!SendError(request.generationId, model_core::ImportErrorCode::ImportProtocolViolation))
                 return 75;
@@ -188,6 +206,9 @@ int RunProductionPool(PoolMode mode)
             request, outputView.bytes(), source.get(), cancellation.get(),
             [&batchSink](std::uint32_t chunkCount, std::uint64_t sectionBytesWritten) {
                 return batchSink.PublishBatch(chunkCount, sectionBytesWritten);
+            },
+            [&request](const step_host::StepProgressEvent& event) {
+                SendStepProgress(request.generationId, event);
             });
         if (result.errorCode != model_core::ImportErrorCode::None) {
             if (!SendError(request.generationId, result.errorCode)) return 78;

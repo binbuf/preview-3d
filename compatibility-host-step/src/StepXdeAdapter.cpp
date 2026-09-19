@@ -71,6 +71,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <streambuf>
 #include <string>
@@ -175,6 +176,51 @@ private:
     std::uint64_t bufferStart_{};
     std::array<char, 64 * 1024> buffer_{};
 };
+
+// STEP-005 product-owned stream over an already-mapped read-only view of the
+// inherited source handle. It performs no I/O and opens no path: the host
+// created the file mapping from the duplicated handle, so both the Part-21
+// preflight and OCCT's ReadStream consume the same single read. The view is
+// read-only; the const_cast is only to satisfy std::streambuf's mutable get
+// area and no byte is ever written through it.
+class MappedStreamBuf final : public std::streambuf {
+public:
+    MappedStreamBuf(const std::byte* base, std::uint64_t size)
+        : base_(reinterpret_cast<char*>(const_cast<std::byte*>(base)))
+        , size_(size)
+    {
+        setg(base_, base_, base_ + size_);
+    }
+
+protected:
+    pos_type seekoff(off_type offset, std::ios_base::seekdir direction, std::ios_base::openmode) override
+    {
+        const auto current = static_cast<std::int64_t>(gptr() - base_);
+        std::int64_t target = 0;
+        if (direction == std::ios_base::cur) target = current + offset;
+        else if (direction == std::ios_base::end) target = static_cast<std::int64_t>(size_) + offset;
+        else target = offset;
+        target = (std::max)(std::int64_t{0}, (std::min)(target, static_cast<std::int64_t>(size_)));
+        setg(base_, base_ + target, base_ + size_);
+        return pos_type(target);
+    }
+
+    pos_type seekpos(pos_type position, std::ios_base::openmode mode) override
+    {
+        return seekoff(off_type(position), std::ios_base::beg, mode);
+    }
+
+private:
+    char* base_ = nullptr;
+    std::uint64_t size_ = 0;
+};
+
+using SteadyClock = std::chrono::steady_clock;
+
+double ElapsedMilliseconds(const SteadyClock::time_point& start)
+{
+    return std::chrono::duration<double, std::milli>(SteadyClock::now() - start).count();
+}
 
 bool IsCancelled(HANDLE event)
 {
@@ -951,9 +997,15 @@ public:
 
     void SetCancellationProbe(std::function<bool()> probe) { cancelledProbe_ = std::move(probe); }
 
-    // STEP-004 work item 7: bounded per-definition mesh-cost accumulator for
-    // STEP-005's two-pass-versus-single-pass decision.
+    // STEP-005 test-only seam: force `IMeshTools_Parameters::InParallel = false`
+    // so the parallel and serial paths can be compared byte-for-byte.
+    void SetForceSerial(bool value) { forceSerial_ = value; }
+
+    // STEP-004 work item 7 / STEP-005 work item 2: bounded per-definition
+    // mesh/extract cost accumulators for the delivery-strategy and
+    // where-the-time-goes evidence.
     double meshMilliseconds() const { return meshMilliseconds_; }
+    double extractMilliseconds() const { return extractMilliseconds_; }
 
     // Tessellates `shape` at the display profile and appends bounded,
     // de-indexed, material-homogeneous geometry chunks (each <= the profile's
@@ -986,19 +1038,21 @@ public:
         parameters.MinSize = StepDeriveMinEdge(diagonal, profile_.relativeMinEdge,
                                                profile_.minAbsoluteEdgeLength);
         parameters.Relative = Standard_False;
-        parameters.InParallel = profile_.parallel ? Standard_True : Standard_False;
+        parameters.InParallel = (profile_.parallel && !forceSerial_) ? Standard_True : Standard_False;
         // Prefer an authored triangulation (e.g. an AP242 tessellated
         // representation) over regenerating one; the pinned reader attaches it
         // to the transferred faces, and BRepMesh keeps it when lowering quality
         // is forbidden.
         parameters.AllowQualityDecrease = Standard_False;
 
-        const auto start = std::chrono::steady_clock::now();
+        const auto meshStart = SteadyClock::now();
         BRepMesh_IncrementalMesh mesher(shape, parameters);
         mesher.Perform();
-        meshMilliseconds_ += ElapsedMilliseconds(start);
-        if (!StepWithinDefinitionTime(ElapsedMilliseconds(start), profile_.maxDefinitionMilliseconds))
+        meshMilliseconds_ += ElapsedMilliseconds(meshStart);
+        if (!StepWithinDefinitionTime(ElapsedMilliseconds(meshStart), profile_.maxDefinitionMilliseconds))
             return model_core::ImportErrorCode::TessellationFailed;
+
+        const auto extractStart = SteadyClock::now();
 
         std::uint32_t faces = 0, edges = 0;
         for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
@@ -1050,7 +1104,10 @@ public:
                     return model_core::ImportErrorCode::TessellationFailed;
             }
         }
-        if (definitionTriangles == 0) return model_core::ImportErrorCode::None; // nothing visible
+        if (definitionTriangles == 0) {
+            extractMilliseconds_ += ElapsedMilliseconds(extractStart);
+            return model_core::ImportErrorCode::None; // nothing visible
+        }
 
         for (auto& [materialId, vertices] : groups) {
             if (Cancelled()) return model_core::ImportErrorCode::Cancelled;
@@ -1070,16 +1127,12 @@ public:
                 begin += takeVertices;
             }
         }
+        extractMilliseconds_ += ElapsedMilliseconds(extractStart);
         return model_core::ImportErrorCode::None;
     }
 
 private:
     bool Cancelled() const { return cancelledProbe_ && cancelledProbe_(); }
-
-    static double ElapsedMilliseconds(const std::chrono::steady_clock::time_point& start)
-    {
-        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    }
 
     static std::uint32_t FaceMaterial(const TopoDS_Face& face,
                                       const std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors)
@@ -1107,17 +1160,33 @@ private:
     const StepTessellationProfile& profile_;
     const StepXdeLimits& limits_;
     std::function<bool()> cancelledProbe_;
+    bool forceSerial_ = false;
     double meshMilliseconds_ = 0.0;
+    double extractMilliseconds_ = 0.0;
 };
 
 } // namespace
 
 StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                 std::span<std::byte> section, HANDLE sourceHandle,
-                                HANDLE cancellationEvent, const StepXdeLimits& limits,
-                                const StepBatchPublisher& publish)
+                                HANDLE cancellationEvent, std::span<const std::byte> mappedSource,
+                                const StepXdeLimits& limits, const StepBatchPublisher& publish,
+                                const StepProgressSink& progress)
 {
     StepXdeResult result;
+    const auto totalStart = SteadyClock::now();
+    auto emitProgress = [&](std::uint32_t phase, std::uint32_t meshed, std::uint32_t total,
+                            std::uint64_t preflightBytes, std::uint64_t phaseMs) {
+        if (!progress) return;
+        StepProgressEvent event;
+        event.phase = phase;
+        event.definitionsMeshed = meshed;
+        event.definitionTotal = total;
+        event.preflightBytes = preflightBytes;
+        event.phaseMilliseconds = phaseMs;
+        event.totalMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(totalStart));
+        progress(event);
+    };
     if (!request.generationId || !request.sourceFileHandleValue || !request.sectionHandleValue
         || request.sectionByteCapacity < sizeof(SectionHeader)
         || section.size() < static_cast<std::size_t>(request.sectionByteCapacity)
@@ -1156,9 +1225,21 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         reader.SetGDTMode(Standard_False);
         reader.SetViewMode(Standard_False);
 
-        HandleStreamBuf buffer(sourceHandle, static_cast<std::uint64_t>(size.QuadPart));
-        std::istream stream(&buffer);
-        if (reader.ReadStream("preview3d.step", stream) != IFSelect_RetDone) {
+        // STEP-005: consume the single read-only mapping created by the host
+        // when available, so preflight and OCCT transfer do not each read the
+        // whole file; otherwise fall back to the proven handle stream.
+        std::unique_ptr<std::streambuf> source;
+        if (!mappedSource.empty())
+            source = std::make_unique<MappedStreamBuf>(mappedSource.data(), mappedSource.size());
+        else
+            source = std::make_unique<HandleStreamBuf>(sourceHandle,
+                                                       static_cast<std::uint64_t>(size.QuadPart));
+        std::istream stream(source.get());
+        const auto readStart = SteadyClock::now();
+        const IFSelect_ReturnStatus readStatus = reader.ReadStream("preview3d.step", stream);
+        result.timings.readMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
+        emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
+        if (readStatus != IFSelect_RetDone) {
             result.errorCode = model_core::ImportErrorCode::MalformedData;
             closeDocument();
             return result;
@@ -1168,7 +1249,11 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             closeDocument();
             return result;
         }
-        if (!reader.Transfer(document)) {
+        const auto transferStart = SteadyClock::now();
+        const bool transferred = reader.Transfer(document);
+        result.timings.transferMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(transferStart));
+        emitProgress(model_core::kStepPhaseTransfer, 0, 0, 0, result.timings.transferMilliseconds);
+        if (!transferred) {
             result.errorCode = model_core::ImportErrorCode::MalformedData;
             closeDocument();
             return result;
@@ -1205,6 +1290,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         }
 
         // Phase A: bounded planning, no tessellation and no normalized bytes.
+        const auto planStart = SteadyClock::now();
         ScenePlanner planner(document, limits);
         planner.SetCancellationProbe([cancellationEvent] { return IsCancelled(cancellationEvent); });
         if (!planner.shapeToolValid()) {
@@ -1213,6 +1299,9 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             return result;
         }
         const model_core::ImportErrorCode planned = planner.Build();
+        result.timings.planMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(planStart));
+        emitProgress(model_core::kStepPhasePlan, 0, planner.definitionCount(), 0,
+                     result.timings.planMilliseconds);
         if (planned != model_core::ImportErrorCode::None) {
             result.errorCode = planned;
             closeDocument();
@@ -1222,12 +1311,14 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         // Phase B: one bounded window at a time. meshCount/nodeCount are known
         // after planning so every progressive batch carries identical
         // generation-wide metadata.
+        const auto emitStart = SteadyClock::now();
         SceneEmitter emitter(section, request.generationId, metersPerUnit, planner.definitionCount(),
                              static_cast<std::uint32_t>(planner.nodes().size()),
                              planner.warningCount(), publish,
                              [cancellationEvent] { return IsCancelled(cancellationEvent); });
         DefinitionMesher mesher(limits.profile, limits);
         mesher.SetCancellationProbe([cancellationEvent] { return IsCancelled(cancellationEvent); });
+        mesher.SetForceSerial((request.requestFlags & model_core::kImportRequestStepForceSerialForTesting) != 0);
 
         for (const NodeRecord& node : planner.nodes()) {
             if (!emitter.AddNode(node)) break;
@@ -1236,6 +1327,13 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             if (!emitter.AddMaterial(material)) break;
         }
 
+        // Progress is bounded to at most ~256 mesh events regardless of how
+        // many definitions a document has, so a hostile or merely huge scene
+        // cannot flood the control channel.
+        const std::uint32_t definitionTotal = planner.definitionCount();
+        const std::uint32_t progressStride = definitionTotal > 256 ? (definitionTotal + 255) / 256 : 1;
+        std::uint32_t definitionsDone = 0;
+        double reportedMeshMs = 0.0;
         std::uint32_t nextGeometryId = kGeometryIdBase;
         for (const PlannedDefinition& definition : planner.definitions()) {
             if (emitter.error() != model_core::ImportErrorCode::None) break;
@@ -1243,6 +1341,13 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             const model_core::ImportErrorCode meshed = mesher.Mesh(
                 definition.shape, definition.faceColors, definition.hasShapeColor,
                 definition.shapeMaterialId, definition.meshId, nextGeometryId, chunks);
+            ++definitionsDone;
+            if ((definitionsDone % progressStride) == 0 || definitionsDone == definitionTotal) {
+                const double totalMeshMs = mesher.meshMilliseconds();
+                emitProgress(model_core::kStepPhaseMesh, definitionsDone, definitionTotal, 0,
+                             static_cast<std::uint64_t>((std::max)(0.0, totalMeshMs - reportedMeshMs)));
+                reportedMeshMs = totalMeshMs;
+            }
             if (meshed != model_core::ImportErrorCode::None) {
                 result.errorCode = meshed;
                 closeDocument();
@@ -1303,7 +1408,12 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         result.instanceCount = emitter.nextInstanceSerial();
         result.materialCount = static_cast<std::uint32_t>(planner.materials().size());
         result.warningCount = planner.warningCount();
-        result.meshMilliseconds = static_cast<std::uint64_t>(mesher.meshMilliseconds());
+        result.timings.meshMilliseconds = static_cast<std::uint64_t>(mesher.meshMilliseconds());
+        result.timings.extractMilliseconds = static_cast<std::uint64_t>(mesher.extractMilliseconds());
+        result.timings.emitMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(emitStart));
+        result.timings.totalMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(totalStart));
+        emitProgress(model_core::kStepPhaseEmit, definitionsDone, definitionTotal, 0,
+                     result.timings.emitMilliseconds);
         closeDocument();
         return result;
     } catch (const std::exception&) {

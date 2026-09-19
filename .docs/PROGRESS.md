@@ -4,6 +4,53 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **STEP-005 render-time performance and first-frame latency (2026-09-19):
+  implemented slice; large-file corpus and published budgets remain STEP-008.**
+  The dedicated STEP host now measures and publishes every real phase
+  (Part-21 lexical admission, `ReadStream` parse, `Transfer`, mesh-free
+  planning, per-definition meshing, face/triangle extraction, window emission)
+  through `StepPhaseTimings`, and emits a bounded `StepProgress` control message
+  (opcode 21, `StepProgressNotice`, closed `kStepPhase*` Preflight/Read/
+  Transfer/Plan/Mesh/Emit) that the broker validates, caps, forwards to an
+  optional `onStepProgress`, and records on `ImportSessionResult`. Admission and
+  OCCT transfer now consume one read-only mapping of the inherited handle
+  (`CreateFileMappingW` + `MapViewOfFile`, no path), removing the former double
+  full read. `StepTessellationProfile` v3 records
+  `StepDeliveryStrategy::SinglePassProgressiveDisplay` and re-enables parallel
+  meshing. `[step-002],[step-003],[step-004],[step-005]` pass 30 cases / 530
+  assertions in Debug and Release. Details and the measured phase table are in
+  [STEP-005-VERIFICATION.md](./STEP-005-VERIFICATION.md).
+
+  Four things the next STEP task should not relearn:
+  1. **STEP-004's `parallel = false` premise was wrong.** The pinned
+     `USE_TBB=OFF` OCCT 7.8 port still parallelizes through
+     `OSD_Parallel`'s built-in `OSD_ThreadPool` (`ToUseOcctThreads()` defaults
+     true when no external library is enabled), and
+     `IMeshTools_Parameters::InParallel` is documented as multi-thread on/off.
+     The profile now sets `parallel = true` and
+     `kImportRequestStepForceSerialForTesting` (bit 8) proves parallel and
+     forced-serial output byte-identical. Do not repeat the TBB-only reading.
+  2. **Map exactly the file size.** Mapping the source to end-of-file (or
+     `MappedView::Map(..., 0)`) exposes the zero-filled tail of the final
+     allocation granule; the Part-21 scanner correctly rejects NUL as a
+     non-clear-text control byte, so every import failed `UnsupportedEncoding`
+     until the view length was pinned to `GetFileSizeEx`. `CreateFileMappingW`
+     works on the broker's `GENERIC_READ` duplicated handle.
+  3. **The STEP host's request-flag mask had a latent precedence bug**:
+     `flags & ~detail & ~coarse` is not `flags & ~(detail | coarse)`. It only
+     tolerated the two original bits; any new test seam was rejected as
+     malformed. The mask is now an explicit allowlist.
+  4. **`StepProgress` is producer-bound.** The broker accepts it only from
+     `ImportProducer::StepHost` and rejects it from any other producer; the
+     per-generation cap (8192) maps to `ImportStage::StepProgressLimit` ->
+     `ResourceLimit`. Progress is bounded to ~256 mesh events regardless of
+     definition count, so a huge scene cannot flood the control channel.
+
+  Open for STEP-008: the genuine 100 MB+ assembly and high-triangle fixture,
+  the resulting Tier-B time-to-first-coarse/Ready budgets, measured thread-pool
+  width against peak commit, progress UI wiring (STEP-006/STEP-007), and the
+  two-pass-versus-single-pass recheck if a real benefit appears.
+
 - **STEP-004 bounded tessellation and progressive CAD delivery (2026-09-19):
   complete for the single-pass display slice; coarse catalog delegated to
   STEP-005.** `StepXdeAdapter` is now two-phase: `ScenePlanner` walks the XDE
