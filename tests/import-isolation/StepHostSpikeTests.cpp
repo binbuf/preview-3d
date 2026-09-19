@@ -24,6 +24,9 @@
 #ifndef PREVIEW3D_STEP_HOST_EXE
 #error "PREVIEW3D_STEP_HOST_EXE must be defined by Tests.ImportIsolation.vcxproj"
 #endif
+#ifndef PREVIEW3D_STP_FIXTURES_DIR
+#error "PREVIEW3D_STP_FIXTURES_DIR must be defined by Tests.ImportIsolation.vcxproj"
+#endif
 
 namespace {
 
@@ -41,6 +44,14 @@ constexpr std::string_view kMinimalPart21 =
     "END-ISO-10303-21;\n";
 
 std::wstring StepHostPath() { return PREVIEW3D_STEP_HOST_EXE; }
+
+// Committed STEP-003 fixtures. The broker opens the path itself and duplicates
+// an already-open read-only handle to the sandboxed host; the test never hands
+// a path into the container.
+std::wstring StpFixture(const wchar_t* name)
+{
+    return std::wstring(PREVIEW3D_STP_FIXTURES_DIR) + name;
+}
 
 std::wstring StepHostDirectory()
 {
@@ -75,9 +86,12 @@ import_broker::ImportSessionRequest BaseRequest(const std::wstring& sourcePath,
     request.sourcePath = sourcePath;
     request.stepHostExePath = StepHostPath();
     request.generationId = generationId;
-    request.sectionByteCapacity = 1ull * 1024 * 1024;
-    request.maxChunkCount = 8;
-    request.maxChunksPerGeneration = 8;
+    // The product transfer window and chunk catalog caps (import_broker::
+    // kImportSectionBytes / kImportMaxChunkCount). A real STEP assembly scene
+    // emits nodes, reusable geometry, materials, and instances in one section.
+    request.sectionByteCapacity = 64ull * 1024 * 1024;
+    request.maxChunkCount = 1024;
+    request.maxChunksPerGeneration = 1024;
     request.maxChunkBatchesPerGeneration = 1;
     request.replyTimeoutMs = 15'000;
     return request;
@@ -150,8 +164,8 @@ std::string RunAuthorityProbe(const HostProfile& profile, const std::wstring& ca
 TEST_CASE("STEP-002 host imports a valid Part-21 file through the dedicated route",
           "[step-002][step-host][sandbox]")
 {
-    TempFileGuard source{WriteTempSource(kMinimalPart21, L".stp")};
-    auto request = BaseRequest(source.path, 0x5701);
+    const std::wstring source = StpFixture(L"part_ap214.stp");
+    auto request = BaseRequest(source, 0x5701);
     const auto result = import_broker::RunImportSession(request);
     INFO("stage " << uint32_t(result.stage) << " code " << uint32_t(result.errorCode)
                   << " openErrorBytes " << result.openError.size());
@@ -177,9 +191,9 @@ TEST_CASE("STEP-002 viewer bridge routes an explicit Step format while discovery
     CHECK_FALSE(d3d12_import_bridge::ClassifyByExtension(L"part.step").has_value());
     CHECK_FALSE(d3d12_import_bridge::ClassifyByExtension(L"part.stp").has_value());
 
-    TempFileGuard source{WriteTempSource(kMinimalPart21, L".stp")};
+    const std::wstring source = StpFixture(L"part_ap214.stp");
     const auto result = d3d12_import_bridge::RunImport(
-        d3d12_import_bridge::SourceFormat::Step, source.path, 0x5720);
+        d3d12_import_bridge::SourceFormat::Step, source, 0x5720);
     INFO("stage " << uint32_t(result.errorStage) << " code " << uint32_t(result.errorCode));
     REQUIRE(result.ok);
     CHECK(result.scene.format == model_core::SourceFormatId::Step);
@@ -234,8 +248,8 @@ TEST_CASE("STEP-002 host faults are typed and a later import recovers",
     };
     uint64_t generation = 0x5710;
     for (const auto& fault : faults) {
-        TempFileGuard source{WriteTempSource(kMinimalPart21, L".stp")};
-        auto request = BaseRequest(source.path, generation++);
+        const std::wstring source = StpFixture(L"assembly_ap214.stp");
+        auto request = BaseRequest(source, generation++);
         request.stepHostArgumentsOverride = fault.flag;
         if (std::wstring_view(fault.flag) == L"--pool-overallocate")
             request.stepHostCommitLimitBytes = 64ull * 1024 * 1024;
@@ -250,8 +264,8 @@ TEST_CASE("STEP-002 host faults are typed and a later import recovers",
 
         // Same-process recovery: the next valid generation must succeed without
         // any viewer restart.
-        TempFileGuard recovered{WriteTempSource(kMinimalPart21, L".stp")};
-        const auto after = import_broker::RunImportSession(BaseRequest(recovered.path, generation++));
+        const std::wstring recovered = StpFixture(L"part_ap214.stp");
+        const auto after = import_broker::RunImportSession(BaseRequest(recovered, generation++));
         CHECK(after.ok);
     }
 }

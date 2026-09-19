@@ -2118,3 +2118,40 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
   and the legacy `--usd-002-spike` host route) that fail identically on the
   STEP-002 baseline with these changes stashed. See
   [`STEP-002-VERIFICATION.md`](STEP-002-VERIFICATION.md).
+
+### STEP-003 self-contained XDE assembly scene adapter
+
+- `StepXdeAdapter` now replaces the STEP-002 synthetic placeholder behind the
+  existing `StartStepImportFromFile` route. It reads accepted bytes exclusively
+  through the inherited read-only handle, transfers them with
+  `STEPCAFControl_Reader::ReadStream`, and walks the XDE document into protocol
+  v10 nodes, reusable geometry, materials, and mesh instances.
+- Enumeration is product-owned and bounded: one node per occurrence, one
+  reusable geometry record per definition/color seam, recursive composition of
+  nested `TopLoc_Location` transforms in double precision, cycle detection on
+  the definition ancestry, hierarchy-depth/node/definition/material/triangle/
+  vertex caps, and exact double world bounds recomputed exactly as
+  `SharedSectionValidator` does. Orphan definitions are never drawn; an empty
+  document returns `EmptyGeometry`.
+- Units: on the pinned OCCT 7.8.1 build the reader normalizes transferred
+  coordinates to the Cascade system unit and `GetLengthUnit` reports that
+  unit's verified metre factor; `FileUnits` is name-only and is required to
+  prove a length unit was authored. The STEP-001 handoff's suggestion to
+  re-derive an authored factor and rescale is therefore unnecessary for
+  physical correctness and would risk a factor/geometry mismatch; STEP-003
+  reports the factor describing the stored geometry, keeps `UpAxisId::Unknown`,
+  and fails absent/contradictory/zero/non-finite units.
+- Materials use instance/shape/subshape precedence: a component instance color
+  overrides the whole occurrence without duplicating geometry; otherwise the
+  shape-level color wins and the neutral material (id 0) is the fallback.
+  Per-face subshape colors split reusable geometry into bounded seam groups,
+  and sRGB is converted to the linear `baseColorFactor` with opacity mapped to
+  `AlphaModeId::Blend`.
+- Eight immutable fixtures are checked in under `tests/fixtures/stp-spike/`
+  (AP203/AP214/AP242 parts, a reused-definition assembly, a nested assembly,
+  an instance-color assembly, a face-color part, and an inch-authored part);
+  the generator gained the nested/instance/face-color cases.
+- Evidence: `[step-003]` passes 9 cases / 191 assertions in Debug and Release,
+  and `[step-002]` remains green. The known pre-existing USD/FBX failures in
+  the full suite are unrelated and unchanged. See
+  [`STEP-003-VERIFICATION.md`](STEP-003-VERIFICATION.md).

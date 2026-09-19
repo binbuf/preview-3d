@@ -80,6 +80,7 @@
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\StepHostImport.cpp" />
     <ClCompile Include="src\StepPart21Preflight.cpp" />
+    <ClCompile Include="src\StepXdeAdapter.cpp" />
     <ClCompile Include="src\StepXdeSpike.cpp" />
     <ClCompile Include="..\import-worker\src\ContainmentProbes.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
@@ -89,11 +90,14 @@
     <ClInclude Include="src\StepHostImport.h" />
     <ClInclude Include="src\StepPart21Preflight.h" />
     <ClInclude Include="src\StepSpikeProtocol.h" />
+    <ClInclude Include="src\StepXdeAdapter.h" />
     <ClInclude Include="src\StepXdeSpike.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ControlChannelIo.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ControlProtocol.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ImportError.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\MaterialPayload.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

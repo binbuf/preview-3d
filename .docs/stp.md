@@ -1,10 +1,11 @@
 # STEP/STP post-MVP work plan
 
-Status: STEP-002 complete — proceed to STEP-003 with the private host route
+Status: STEP-003 complete — proceed to STEP-004 with the self-contained XDE scene adapter
 Prepared: 2026-09-18
 Design authority: [design/README.md](design/README.md)
 Spike results: [STEP-001-SPIKE-RESULTS.md](STEP-001-SPIKE-RESULTS.md)
 STEP-002 evidence: [STEP-002-VERIFICATION.md](STEP-002-VERIFICATION.md)
+STEP-003 evidence: [STEP-003-VERIFICATION.md](STEP-003-VERIFICATION.md)
 
 ## Decision
 
@@ -428,6 +429,8 @@ extension or claiming a CAD scene adapter.
   processes.
 
 ## STEP-003 — self-contained XDE assembly scene adapter
+
+Status: complete (2026-09-19; private host route only, no extension enabled)
 
 ### Objective
 
