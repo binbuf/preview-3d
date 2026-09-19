@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "preview3d-step-host",
+  "version": "0.1.0",
+  "description": "Dedicated STEP/STP compatibility host dependency manifest. OCCT is deliberately isolated from vcpkg.json at the repository root so Preview3D.exe, Preview3DImportWorker.exe, and the thumbnail provider can never link or deploy it. See .docs/stp.md and .docs/STEP-001-SPIKE-RESULTS.md.",
+  "dependencies": [
+    {
+      "name": "opencascade",
+      "default-features": false
+    }
+  ]
+}

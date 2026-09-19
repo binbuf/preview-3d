@@ -4,6 +4,29 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **STEP-001 spike complete (2026-09-18); go for STEP-002 with a constrained
+  OCCT port.** See [STEP-001-SPIKE-RESULTS.md](./STEP-001-SPIKE-RESULTS.md).
+  OCCT 7.8.1 imported a self-contained AP214 assembly through
+  `STEPCAFControl_Reader::ReadStream` over a product-owned seekable
+  `std::streambuf` on the inherited read-only handle, inside the real
+  zero-capability AppContainer and kill-on-close Job Object. XDE retained five
+  instances, two reused definitions, nested transforms, three colors (two
+  transparent), and the authored unit name; `BRepMesh_IncrementalMesh`
+  produced 596 bounded triangles. Malformed bytes failed before OCCT, a
+  pre-signalled cancellation was observed, a 4 MiB Job ceiling terminated the
+  host without a false success and a replacement import recovered, and an
+  authority probe under the same container was denied path, network, and child
+  process. The registry `opencascade` port builds 48 DLLs / ~51.3 MB including
+  visualization and every non-STEP exchange format; a constrained overlay port
+  (`packaging/vcpkg-ports/opencascade`) and isolated
+  `compatibility-host-step/vcpkg.json` are checked in. Two findings constrain
+  later tasks: OCCT normalizes geometry to its system unit so the authored
+  `metersPerUnit` must be derived from `FileUnits`, and OCCT's external
+  resolver is path-based with no stream hook, so STEP-005 external references
+  are a no-go without a product-owner scope change. No public opcode,
+  `SourceFormatId`, extension filter, registration, or thumbnail behavior was
+  added.
+
 - **3MF-007 qualification started (2026-09-18); release gate remains open.**
   `tests/fixtures/3mf/manifest.json` freezes seven decoded sources and seven
   deterministic derived cases with independent hashes and expected outcomes.

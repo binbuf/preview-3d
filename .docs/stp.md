@@ -1,8 +1,9 @@
 # STEP/STP post-MVP work plan
 
-Status: proposal
+Status: STEP-001 complete — go for STEP-002 with a constrained OCCT port
 Prepared: 2026-09-18
 Design authority: [design/README.md](design/README.md)
+Spike results: [STEP-001-SPIKE-RESULTS.md](STEP-001-SPIKE-RESULTS.md)
 
 ## Decision
 

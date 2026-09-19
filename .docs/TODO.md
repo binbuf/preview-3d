@@ -373,6 +373,21 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
   - [x] USD-002 spike and USD-006 production platform/fallback lifecycle.
   - [x] USD-007 bounded OpenUSD composition/normalization and USD-008 exposure/packaging.
   - [ ] Finish the remaining USD-009 qualification gates listed under Slice 4.
+- [ ] **Slice 6** — STEP/STP static CAD preview through a dedicated OCCT AppContainer host.
+      The full plan, deliberate exclusions, and execution order live in [`stp.md`](stp.md).
+  - [x] STEP-001: OCCT 7.8.1 pinned, stream-only `STEPCAFControl_Reader::ReadStream`
+        over an inherited handle proven in the real zero-capability AppContainer,
+        XDE assembly/reuse/color/transparency/unit facts and bounded
+        `BRepMesh_IncrementalMesh` tessellation measured, malformed/cancellation/Job
+        recovery and path/network/child-process denial proven. A constrained
+        overlay port isolates OCCT from the viewer/worker closure. See
+        [`STEP-001-SPIKE-RESULTS.md`](STEP-001-SPIKE-RESULTS.md). Two findings:
+        authored units need explicit `FileUnits` handling, and OCCT external
+        references are path-based, so STEP-005 is a no-go without a scope change.
+  - [ ] STEP-002 through STEP-007: dedicated `Preview3DStepHost.exe`, Part-21
+        admission, self-contained XDE scene adapter, bounded progressive
+        tessellation, product/packaging integration, and qualification. STEP-008
+        (Explorer thumbnail) stays blocked on the Gate 6 provider foundation.
 
 Every slice carries the same bundle (`10-…:165`): adapter wrapper, dependency allocation/I/O/cancel
 callbacks and Job Object limits, normalized output, unsupported-feature diagnostics, golden scenes,
