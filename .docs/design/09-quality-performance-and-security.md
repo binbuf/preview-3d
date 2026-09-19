@@ -120,13 +120,13 @@ Property tests generate counts and ranges near 0, alignment boundaries, 32-bit/6
 - cancellation/reopen at every published pipeline checkpoint;
 - Shell provider hosted in an isolated COM test process and actual Explorer surrogate, with a post-install check that its CLSIDs load into the Shell thumbnail surrogate rather than `explorer.exe` and that no registered value sets `DisableProcessIsolation`;
 - primary/secondary IPC under concurrent launches;
-- zero-capability AppContainer creation, payload-only ACLs, brokered handle/section access, direct file/network denial, Job Object termination, and restart, run against **both** `Preview3DImportWorker.exe` and `Preview3DImportHost.exe` — every format adapter is covered by the same restriction suite the OpenUSD host already required, not a lighter check because it "only" runs a fast-path parser;
+- zero-capability AppContainer creation, payload-only ACLs, brokered handle/section access, direct file/network denial, Job Object termination, and restart, run against **every** import process — `Preview3DImportWorker.exe`, `Preview3DImportHost.exe`, and `Preview3DStepHost.exe` — every format adapter is covered by the same restriction suite the OpenUSD host already required, not a lighter check because it "only" runs a fast-path parser;
 - a synthetic hostile-worker build for each import process that mutates shared-section bytes after the host's first read, replays a stale generation, or lies about a chunk's declared layout/offset, proving the host's copy-then-validate rule actually rejects the mutation rather than merely trusting a well-behaved worker;
 - MSI clean/repair/upgrade/rollback/uninstall virtual-machine matrix.
 
 ### End-to-end soak
 
-An 8-hour scenario repeatedly opens mixed valid/malformed files through cold/cache/worker/compatibility paths, orbits, resizes, minimizes, changes DPI/monitor, cancels, clears/rebuilds the cache, crashes/restarts the import worker and the compatibility host, lowers memory budget, and closes/reopens. It fails on:
+An 8-hour scenario repeatedly opens mixed valid/malformed files through cold/cache/worker/compatibility/STEP paths, orbits, resizes, minimizes, changes DPI/monitor, cancels, clears/rebuilds the cache, crashes/restarts the import worker, the compatibility host, and the STEP host, lowers memory budget, and closes/reopens. It fails on:
 
 - process/worker/surrogate crash or hang;
 - D3D debug-layer error/corruption warning;
@@ -134,7 +134,7 @@ An 8-hour scenario repeatedly opens mixed valid/malformed files through cold/cac
 - monotonic private-commit or descriptor/resource growth;
 - stale generation becoming visible;
 - a stale/corrupt cache entry or invalid worker/host section becoming visible;
-- an import worker, compatibility host, temporary cache write, or broker handle surviving its generation;
+- an import worker, compatibility host, STEP host, temporary cache write, or broker handle surviving its generation;
 - UI heartbeat or shutdown deadline violation.
 
 ## Graphics validation
@@ -210,7 +210,7 @@ Windows, the signed installed payload, and the graphics driver are trust depende
 
 - DEP/NX, ASLR/high entropy VA, CFG, CET compatibility, SDL checks, and stack protection enabled.
 - Safe DLL search established before optional loads; current directory and model directory never enter DLL search.
-- The viewer loads no third-party format parser or decoder and no runtime plug-ins, scripts, shader compiler, environment-selected codecs, or product network stack; every such library loads only inside `Preview3DImportWorker.exe` (general formats) or `Preview3DImportHost.exe` (OpenUSD). The thumbnail provider loads its own bounded copies under Shell's process isolation, per [05-thumbnail-provider.md](./05-thumbnail-provider.md). Both import processes load only release-manifest-listed, signed app-local modules and hash-verified resources by absolute path after DLL search and plug-in discovery are locked down.
+- The viewer loads no third-party format parser or decoder and no runtime plug-ins, scripts, shader compiler, environment-selected codecs, or product network stack; every such library loads only inside `Preview3DImportWorker.exe` (general formats), `Preview3DImportHost.exe` (OpenUSD), or `Preview3DStepHost.exe` (OCCT/STEP). The thumbnail provider loads its own bounded copies under Shell's process isolation, per [05-thumbnail-provider.md](./05-thumbnail-provider.md). Every import process loads only release-manifest-listed, signed app-local modules and hash-verified resources by absolute path after DLL search and plug-in discovery are locked down.
 - Release loads only system components through documented mechanisms and product binaries by absolute installed path.
 - Authenticode and dependency/SBOM controls follow [08-installation-and-registration.md](./08-installation-and-registration.md).
 
@@ -236,7 +236,7 @@ Windows, the signed installed payload, and the graphics driver are trust depende
 - The thumbnail provider observes the stricter policy in [05-thumbnail-provider.md](./05-thumbnail-provider.md), including no path/sidecar/network access, and depends on Shell's default surrogate-process isolation rather than any in-process mitigation; `DisableProcessIsolation` MUST NOT be set for its CLSIDs. That surrogate isolation is crash containment for Explorer, not the zero-capability AppContainer security boundary the import processes below provide — the provider's safety against a hostile file rests on its own bounded reads and checked parsing, not on the surrogate process.
 - Named objects use explicit current-user/session ACLs; clients are authenticated and payloads bounded.
 - The receiver never invokes a shell with model-derived text.
-- Both `Preview3DImportWorker.exe` and `Preview3DImportHost.exe` are launched with a zero-capability AppContainer token and assigned to a kill-on-close Job Object *before* they process any input — the broker launches suspended or assigns the job at process-creation time so no import code ever runs under a less-restricted intermediate state. Neither can access the network/model directory directly or create child processes, and each receives model dependencies only through the parent broker via an explicit `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, not broad handle inheritance. The parent rejects unexpected request order, unknown message/section versions, stale generations, and invalid ranges/checksums, and — because a shared section stays writable by the child for as long as it is mapped — never treats a chunk as trusted until it has copied the chunk's descriptor and bytes into its own memory and independently re-validated them; the shared section itself is never re-read afterward.
+- `Preview3DImportWorker.exe`, `Preview3DImportHost.exe`, and `Preview3DStepHost.exe` are launched with a zero-capability AppContainer token and assigned to a kill-on-close Job Object *before* they process any input — the broker launches suspended or assigns the job at process-creation time so no import code ever runs under a less-restricted intermediate state. None can access the network/model directory directly or create child processes, and each receives model dependencies only through the parent broker via an explicit `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, not broad handle inheritance. The parent rejects unexpected request order, unknown message/section versions, stale generations, and invalid ranges/checksums, and — because a shared section stays writable by the child for as long as it is mapped — never treats a chunk as trusted until it has copied the chunk's descriptor and bytes into its own memory and independently re-validated them; the shared section itself is never re-read afterward.
 
 ### Privacy
 

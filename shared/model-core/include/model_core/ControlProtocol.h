@@ -56,6 +56,12 @@ enum class ControlOpcode : uint32_t {
     StartOpenUsdImportFromFile = 18, // broker -> compatibility host
     // Private 3MF route until 3MF-006 enables product discovery.
     StartThreeMfImportFromFile = 19, // host -> worker
+    // Dedicated STEP/STP route, accepted only by Preview3DStepHost.exe. The
+    // distinct opcode is the producer boundary: the general worker never
+    // accepts it, and the STEP host accepts nothing else. The trusted broker
+    // opens and canonicalizes the source, then duplicates a raw read-only FILE
+    // handle; the host never receives a path, directory, or URL.
+    StartStepImportFromFile = 20, // broker -> STEP host
 };
 
 enum : uint32_t {
@@ -277,6 +283,23 @@ struct ParseThreeMfFileRequest {
 };
 static_assert(sizeof(ParseThreeMfFileRequest) == 48,
               "ParseThreeMfFileRequest layout changed");
+
+// Dedicated STEP host request. The fixed layout intentionally matches the
+// other file requests so pooled/one-shot handle transfer and hostile-host
+// framing stay common, but the distinct type/opcode is the producer
+// boundary. requestFlags is a closed kImportRequest* mask with no format bits
+// in STEP-002; STEP is admitted by bytes inside the host, never by extension.
+struct ParseStepFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue; // inherited raw FILE handle (read-only), numeric value
+    uint64_t sectionHandleValue;    // inherited OUTPUT-section HANDLE, numeric value
+    uint64_t sectionByteCapacity;   // output section capacity
+    uint32_t maxChunkCount;         // sanity cap on chunk count the host may emit
+    uint32_t requestFlags;          // closed kImportRequest* mask
+    uint64_t cancellationEventHandleValue; // duplicated manual-reset event
+};
+static_assert(sizeof(ParseStepFileRequest) == 48,
+              "ParseStepFileRequest layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

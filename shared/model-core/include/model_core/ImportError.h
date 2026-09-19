@@ -44,12 +44,19 @@ enum class ImportErrorCode : uint32_t {
     // Archive structure/expansion policy is terminal and must never be
     // mistaken for UnsupportedComposition by fallback orchestration.
     ArchiveLimit = 25,
+    // Dedicated STEP host failures stay distinct from general-worker and USD
+    // compatibility-host faults. The broker owns both mappings and never
+    // surfaces child-provided text; StepHostLimit is the bounded resource
+    // family and StepHostFailure covers launch, payload, crash, timeout,
+    // protocol, and CAD-kernel faults.
+    StepHostFailure = 26,
+    StepHostLimit = 27,
 };
 
 constexpr bool IsKnownImportErrorCode(uint32_t code)
 {
     return code >= uint32_t(ImportErrorCode::MalformedData) &&
-           code <= uint32_t(ImportErrorCode::ArchiveLimit);
+           code <= uint32_t(ImportErrorCode::StepHostLimit);
 }
 
 } // namespace model_core

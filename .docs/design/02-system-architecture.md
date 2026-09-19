@@ -37,9 +37,15 @@ Preview3D.exe -- brokered read-only handles + shared sections --> Preview3DImpor
                                                                    pinned OpenUSD, broader
                                                                    local composition
                                                                    bounded normalized chunks
+
+Preview3D.exe -- brokered read-only handles + shared sections --> Preview3DStepHost.exe
+                                                                   zero-capability AppContainer
+                                                                   pinned OCCT, ISO 10303-21
+                                                                   admission + XDE traversal
+                                                                   bounded normalized chunks
 ```
 
-There is no runtime IPC between the thumbnail DLL and any of the three executables. The provider never loads or launches the viewer, the import worker, or the compatibility host. The viewer contains no COM thumbnail object. `Preview3DImportWorker.exe` starts at the first Open of a session and is reused, under a fresh job/sandbox, across later generations; `Preview3DImportHost.exe` starts only for a USD generation that exceeds the TinyUSDZ fast subset and exits after that generation or an idle grace period. Neither import process is ever a daemon, a Shell child, or has UI, a GPU device, or path/network authority.
+There is no runtime IPC between the thumbnail DLL and any of the product executables. The provider never loads or launches the viewer, the import worker, either import host, or the STEP host. The viewer contains no COM thumbnail object. `Preview3DImportWorker.exe` starts at the first Open of a session and is reused, under a fresh job/sandbox, across later generations; `Preview3DImportHost.exe` starts only for a USD generation that exceeds the TinyUSDZ fast subset and exits after that generation or an idle grace period; `Preview3DStepHost.exe` starts only for a STEP/STP generation and exits after that generation (or a short measured idle grace), discarding OCCT global state and peak B-rep memory deterministically. No import process is ever a daemon, a Shell child, or has UI, a GPU device, or path/network authority. The STEP host and its OCCT payload are not in the viewer, general worker, or thumbnail closure.
 
 Background worker threads inside `Preview3D.exe` (the loader pool, upload coordinator, cache coordinator) are a **scheduling boundary**: they keep parsing and I/O off the UI/render threads so the app stays responsive. They are not a **security boundary** — a memory-corruption bug in a parser running on a background thread still compromises the trusted process that owns the window, the D3D12 device, and the user's other open documents. The AppContainer import processes are the security boundary; see [ADR-014](./11-decisions-and-risks.md#adr-014-appcontainer-import-processes-are-the-parser-security-boundary-not-threads).
 
@@ -95,6 +101,12 @@ The host's OpenUSD asset resolver requests dependencies from the broker the same
 
 The host is not on the window-startup path. It starts only for the current USD generation and exits after that generation or an idle grace period; it is never a daemon. A crash, timeout, protocol violation, or limit terminates only the host, invalidates its shared sections, and produces a recoverable typed import error. The viewer may create a fresh host for a later generation but does not retry the same failing stage in a loop.
 
+### STEP host
+
+`Preview3DStepHost.exe` handles the bounded static STEP/STP preview subset through pinned Open CASCADE Technology. It is a fifth runtime component and reuses the same broker protocol, wire schema, shared-section validation rule, AppContainer/Job Object launch sequence, and handle-inheritance policy as the other import processes. It is separate because OCCT is materially larger and more stateful than the fast-path adapters and its transfer/tessellation phases do not offer the fine-grained cancellation of the product-owned parsers. A product-owned `StepPart21Preflight` verifies the ISO 10303-21 physical envelope, bounded structure, and lexical/entity/reference/depth/byte ceilings before the OCCT reader is reachable; only normalized chunk descriptors and their validated bytes cross the boundary. No OCCT object, path, or diagnostic string does.
+
+The host receives an already-open read-only handle, never a path, and can load no model-selected plug-in, codec, resource, or child process. It starts only for the current STEP generation and exits after that generation; it is never a daemon. A crash, timeout, protocol violation, or limit terminates only the host, invalidates its shared sections, and produces a recoverable typed import error. Product extension discovery, packaging, and registration remain disabled until STEP-003 through STEP-006 land.
+
 ### Upload coordinator
 
 One dedicated thread is the sole owner of copy-queue submission and upload-ring suballocation. Workers enqueue immutable `UploadBatch` descriptions plus CPU spans whose lifetime is explicit. The coordinator:
@@ -116,8 +128,8 @@ Command allocators/lists are never reset until their fence is complete and are n
 | Input/window snapshot | UI → render | double-buffered atomic index | render reads immutable copy |
 | Load request/cancel | UI → loader coordinator | bounded MPSC queue + stop token | generation owns job graph |
 | Bounds/progress/error | workers → UI | bounded queue + one coalescing `PostMessage` | small value objects only |
-| Import request | loader broker → import worker or compatibility host | private authenticated pipe + duplicated read-only handles, launched suspended/job-assigned before input processing | one current generation; no path authority in the child; same protocol for both processes |
-| Import normalized chunk | import worker or compatibility host → loader broker | bounded shared section + control message | parent copies descriptor and bytes to private memory and validates header/ranges/checksum/generation before accepting them; the shared section is never trusted or re-read afterward |
+| Import request | loader broker → import worker / compatibility host / STEP host | private authenticated pipe + duplicated read-only handles, launched suspended/job-assigned before input processing | one current generation; no path authority in the child; same protocol for every process |
+| Import normalized chunk | import worker / compatibility host / STEP host → loader broker | bounded shared section + control message | parent copies descriptor and bytes to private memory and validates header/ranges/checksum/generation before accepting them; the shared section is never trusted or re-read afterward |
 | Derived cache lookup/write | loader → cache coordinator | background file I/O + atomic manifest replacement | cache data is untrusted, GPU-independent, and generation/version bound |
 | Normalized upload batch | workers → upload | bounded MPSC queue | CPU backing through ring memcpy; ring range through copy fence |
 | Fence-complete chunk | upload → render | bounded SPSC queue | render assumes GPU copy complete |
@@ -132,10 +144,11 @@ No queue stores references into a remappable file view beyond the mapping lease 
 | --- | --- |
 | `platform` | RAII handles/mappings, checked math, paths, clocks, thread naming, errors |
 | `app` | startup, state machine, command routing, active-instance IPC, cancellation |
-| `model-core` | normalized scene/chunk schema and wire-format contracts shared by the viewer and both import processes; the format-sniffing magic-number table used by the viewer's dispatch sniff; the actual parser adapters and resource resolver, which link only into `import-worker`/`import-host` |
+| `model-core` | normalized scene/chunk schema and wire-format contracts shared by the viewer and every import process; the format-sniffing magic-number table used by the viewer's dispatch sniff; the actual parser adapters and resource resolver, which link only into `import-worker`/`import-host`/`step-host` |
 | `streaming` | source leases, persistent derived cache, chunk-descriptor validation/copy, view-priority residency requests |
 | `import-worker` | AppContainer general-format (glTF/STL/PLY/OBJ/FBX/3MF/TinyUSDZ) parsing, decode/transcode, and normalized shared-section production |
 | `import-host` | AppContainer OpenUSD stage composition and normalized shared-section production |
+| `step-host` | AppContainer ISO 10303-21 admission, OCCT XDE traversal, and bounded tessellation into normalized shared-section production |
 | `graphics` | adapter/device, queues/fences, D3D12MA, upload ring, descriptors, renderer, DRED |
 | `ui` | custom window chrome, DirectWrite text/glyphs, overlays, accessibility providers |
 | `thumbnail` | COM class factory/provider, stream adapter, bounded import, CPU rasterizer |
@@ -155,6 +168,7 @@ All versions/revisions are exact-pinned in Gate 0 and may change only through de
 | lib3mf | 3MF package/Core model | AppContainer import-worker adapter; package/expanded limits applied before/through reader |
 | TinyUSDZ | USDA/USDC/USDZ common static subset | AppContainer import-worker fast adapter with production build and memory budget |
 | OpenUSD | broader local static USD composition | AppContainer compatibility host only; custom brokered resolver and pinned signed payload |
+| Open CASCADE Technology (OCCT) | ISO 10303-21 STEP/STP transfer, XDE traversal, and B-rep tessellation | AppContainer STEP host only; constrained module closure and pinned signed payload; never the viewer, general worker, or thumbnail provider |
 | meshoptimizer | vertex-cache optimization, chunk meshlets/clusters, simplification/proxy LODs | AppContainer import-worker only, over bounded normalized chunks; experimental APIs excluded unless separately gated |
 | D3D12 Memory Allocator | placed-resource/default-heap allocation and budget statistics | graphics module only, inside the trusted viewer |
 | DirectXTex/WIC | PNG/JPEG/BMP/TIFF/HDR/TGA/DDS decode, resize, mip generation, supported GPU formats | AppContainer import-worker; inbox WIC codecs only, no runtime-installed codec discovery |

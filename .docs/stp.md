@@ -1,9 +1,10 @@
 # STEP/STP post-MVP work plan
 
-Status: STEP-001 complete — go for STEP-002 with a constrained OCCT port
+Status: STEP-002 complete — proceed to STEP-003 with the private host route
 Prepared: 2026-09-18
 Design authority: [design/README.md](design/README.md)
 Spike results: [STEP-001-SPIKE-RESULTS.md](STEP-001-SPIKE-RESULTS.md)
+STEP-002 evidence: [STEP-002-VERIFICATION.md](STEP-002-VERIFICATION.md)
 
 ## Decision
 
@@ -372,6 +373,8 @@ claim, or a source-path exception reaches production.
   AppContainer, Job Object, copy-before-trust, or path/network restrictions.
 
 ## STEP-002 — host, Part-21 admission, and closed protocol route
+
+Status: complete (2026-09-19; private host route only, no extension enabled)
 
 ### Objective
 

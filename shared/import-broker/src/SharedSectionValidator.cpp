@@ -203,7 +203,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         return Reject(ImportErrorCode::ImportProtocolViolation, "header changed during copy");
     if (header.reserved || header.scene.reserved || header.scene.generationId != expectedGenerationId)
         return Reject(ImportErrorCode::ImportProtocolViolation, "stale or malformed scene metadata");
-    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::ThreeMf))
+    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Step))
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
     const bool usdFormat = header.scene.format == model_core::SourceFormatId::Usda
         || header.scene.format == model_core::SourceFormatId::Usdc
@@ -213,6 +213,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         || header.scene.format == model_core::SourceFormatId::AsciiPly
         || header.scene.format == model_core::SourceFormatId::Obj
         || header.scene.format == model_core::SourceFormatId::Fbx
+        || header.scene.format == model_core::SourceFormatId::Step
         || usdFormat;
     const uint32_t objectLimit = tierBFormat ? model_core::kTierBObjectLimit
                                              : model_core::kTierAObjectLimit;
@@ -239,6 +240,14 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         && (header.scene.upAxis == model_core::UpAxisId::Unknown
             || header.scene.metersPerUnit <= 0.0))
         return Reject(ImportErrorCode::MalformedData, "USD units/up axis must be specified");
+    // STEP declares no universal display-up axis, so Unknown is required, but
+    // the authored length unit must convert to a verified positive metre
+    // factor -- an absent/zero unit is a typed failure, never an assumed
+    // millimetre.
+    if (header.scene.format == model_core::SourceFormatId::Step
+        && (header.scene.upAxis != model_core::UpAxisId::Unknown
+            || header.scene.metersPerUnit <= 0.0))
+        return Reject(ImportErrorCode::MalformedData, "STEP requires unknown up axis and a positive metre factor");
 
     // 10. Recompute the section checksum over [header, sectionLength).
     auto payloadRegion

@@ -132,6 +132,11 @@ enum class SourceFormatId : uint32_t {
     Usdz = 11,
     // Kept additive: protocol v10 SceneMetadata remains layout-compatible.
     ThreeMf = 12,
+    // STEP/STP bounded static CAD-preview family, emitted only by
+    // Preview3DStepHost.exe. Its verified metres-per-unit is positive while
+    // UpAxisId stays Unknown: ISO 10303-21 defines no universal display-up
+    // axis, so the existing ground-axis control remains a viewer choice.
+    Step = 13,
 };
 // Preserve the protocol-v10 numeric identities of Unknown/Y/Z. USD is the
 // first supported family that can author X-up, so X is appended rather than
