@@ -2,6 +2,8 @@
 
 #include "SandboxTestSupport.h"
 #include "ThreeMfSpikeWorker.h"
+#include "ThreeMfDisplayProperties.h"
+#include "ThreeMfOpcPreflight.h"
 #include "import_broker/SharedSection.h"
 #include "import_broker/ImportSession.h"
 #include "import_broker/WorkerPool.h"
@@ -311,17 +313,46 @@ std::vector<std::byte> AppearancePackage()
 <m:colorgroup id="2"><m:color color="#00FF00FF"/><m:color color="#FFFFFF80"/><m:color color="#0000FFFF"/></m:colorgroup>
 <m:compositematerials id="3" matid="1" matindices="0 1"><m:composite values="0.25 0.75"/></m:compositematerials>
 <m:multiproperties id="4" pids="1 2" blendmethods="multiply"><m:multi pindices="0 0"/></m:multiproperties>
+<m:pbmetallicdisplayproperties id="10"><m:pbmetallic name="brushed" metallicness="0.8" roughness="0.2"/></m:pbmetallicdisplayproperties>
+<m:pbspeculardisplayproperties id="11"><m:pbspecular name="polished" specularcolor="#808080" glossiness="0.75"/></m:pbspeculardisplayproperties>
+<basematerials id="6" displaypropertiesid="10"><base name="metal" displaycolor="#B0A090FF"/></basematerials>
+<basematerials id="7" displaypropertiesid="11"><base name="specular" displaycolor="#606060FF"/></basematerials>
 <object id="5" type="model" pid="1" pindex="0"><mesh><vertices>
 <vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/>
 <vertex x="2" y="0" z="0"/><vertex x="3" y="0" z="0"/><vertex x="2" y="1" z="0"/>
 <vertex x="4" y="0" z="0"/><vertex x="5" y="0" z="0"/><vertex x="4" y="1" z="0"/>
 <vertex x="6" y="0" z="0"/><vertex x="7" y="0" z="0"/><vertex x="6" y="1" z="0"/>
+<vertex x="8" y="0" z="0"/><vertex x="9" y="0" z="0"/><vertex x="8" y="1" z="0"/>
+<vertex x="10" y="0" z="0"/><vertex x="11" y="0" z="0"/><vertex x="10" y="1" z="0"/>
 </vertices><triangles>
 <triangle v1="0" v2="1" v3="2"/>
 <triangle v1="3" v2="4" v3="5" pid="2" p1="0" p2="1" p3="2"/>
 <triangle v1="6" v2="7" v3="8" pid="3" p1="0"/>
 <triangle v1="9" v2="10" v3="11" pid="4" p1="0"/>
+<triangle v1="12" v2="13" v3="14" pid="6" p1="0"/>
+<triangle v1="15" v2="16" v3="17" pid="7" p1="0"/>
 </triangles></mesh></object></resources><build><item objectid="5"/></build></model>)";
+    const std::string contentTypes = R"(<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>)";
+    const std::string relationships = R"(<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>)";
+    return BuildStoredPackage({ { "[Content_Types].xml", contentTypes },
+                                { "_rels/.rels", relationships },
+                                { "3D/3dmodel.model", model } });
+}
+
+std::vector<std::byte> DisplayPropertyPackage(std::string_view displayGroup,
+                                               std::string_view bases)
+{
+    std::string model = R"(<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
+<resources>)";
+    model += displayGroup;
+    model += R"(<basematerials id="1" displaypropertiesid="10">)";
+    model += bases;
+    model += R"(</basematerials>
+<object id="2" type="model"><mesh><vertices>
+<vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/>
+</vertices><triangles><triangle v1="0" v2="1" v3="2" pid="1" p1="0"/></triangles></mesh></object>
+</resources><build><item objectid="2"/></build></model>)";
     const std::string contentTypes = R"(<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>)";
     const std::string relationships = R"(<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>)";
     return BuildStoredPackage({ { "[Content_Types].xml", contentTypes },
@@ -343,6 +374,22 @@ import_broker::ImportSessionResult ImportThreeMfBytes(std::span<const std::byte>
     request.maxChunkCount = 2048;
     request.maxChunkBatchesPerGeneration = 64;
     request.maxChunksPerGeneration = 20'000;
+    return import_broker::RunImportSession(request);
+}
+
+import_broker::ImportSessionResult ImportThreeMfPath(const std::filesystem::path& path,
+                                                      uint64_t generation)
+{
+    import_broker::ImportSessionRequest request{};
+    request.workerExePath = sandbox_test_support::WorkerExePath();
+    request.sourcePath = path.wstring();
+    request.format = import_broker::ImportFormat::ThreeMf;
+    request.generationId = generation;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 2048;
+    request.maxChunkBatchesPerGeneration = 64;
+    request.maxChunksPerGeneration = 20'000;
+    request.onBatch = [](std::vector<import_broker::ValidatedChunk>&&) {};
     return import_broker::RunImportSession(request);
 }
 
@@ -833,7 +880,16 @@ TEST_CASE("3MF-003 normalizes only root-build Core and Production occurrences", 
 TEST_CASE("3MF-004 normalizes object defaults, corner colors, composites, and multi-properties",
           "[3mf-004][materials][properties]")
 {
-    const auto result = ImportThreeMfBytes(AppearancePackage(), 0x336d66060001ull);
+    const auto packageBytes = AppearancePackage();
+    import_worker::ThreeMfOpcPackage package;
+    REQUIRE(import_worker::InspectThreeMfOpc(packageBytes, &package)
+            == import_worker::ThreeMfOpcError::None);
+    import_worker::ThreeMfDisplayCatalog displayCatalog;
+    REQUIRE(import_worker::ScanThreeMfDisplayProperties(packageBytes, package, displayCatalog)
+            == model_core::ImportErrorCode::None);
+    CHECK(displayCatalog.associations.size() == 2);
+    CHECK(displayCatalog.groups.size() == 2);
+    const auto result = ImportThreeMfBytes(packageBytes, 0x336d66060001ull);
     CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode));
     REQUIRE(result.ok);
     const auto count = [&](model_core::ChunkTopology topology) {
@@ -845,6 +901,7 @@ TEST_CASE("3MF-004 normalizes object defaults, corner colors, composites, and mu
     CHECK(count(model_core::ChunkTopology::TriangleList) >= 2);
     CHECK(count(model_core::ChunkTopology::MeshInstance) == count(model_core::ChunkTopology::TriangleList));
     bool foundRed = false, foundGradient = false, foundBlend = false, foundSrgb = false;
+    bool foundMetallic = false, foundSpecular = false;
     for (const auto& chunk : result.chunks) {
         if (chunk.descriptor.topology == model_core::ChunkTopology::Material) {
             model_core::MaterialPayload material{};
@@ -852,6 +909,10 @@ TEST_CASE("3MF-004 normalizes object defaults, corner colors, composites, and mu
             std::memcpy(&material, chunk.payload.data(), sizeof(material));
             foundBlend |= material.alphaMode == uint32_t(model_core::AlphaModeId::Blend);
             foundSrgb |= (material.flags & model_core::kMaterialFlagVertexSrgb) != 0;
+            foundMetallic |= material.metallicFactor > 0.79f && material.metallicFactor < 0.81f
+                && material.roughnessFactor > 0.19f && material.roughnessFactor < 0.21f;
+            foundSpecular |= material.metallicFactor > 0.17f && material.metallicFactor < 0.20f
+                && material.roughnessFactor > 0.24f && material.roughnessFactor < 0.26f;
         }
         if (chunk.descriptor.topology != model_core::ChunkTopology::TriangleList) continue;
         CHECK(chunk.descriptor.vertexLayoutId == uint32_t(
@@ -876,6 +937,8 @@ TEST_CASE("3MF-004 normalizes object defaults, corner colors, composites, and mu
     CHECK(foundGradient);
     CHECK(foundBlend);
     CHECK(foundSrgb);
+    CHECK(foundMetallic);
+    CHECK(foundSpecular);
 }
 
 TEST_CASE("3MF-004 decodes contained texture groups before textured geometry",
@@ -913,4 +976,97 @@ TEST_CASE("3MF-004 decodes contained texture groups before textured geometry",
     CHECK(imagePosition < materialPosition);
     CHECK(materialPosition < geometryPosition);
     CHECK(foundUv);
+}
+
+TEST_CASE("3MF-004 display-property validation is bounded, typed, and recoverable",
+          "[3mf-004][display-properties][validation][recovery]")
+{
+    const auto malformedNumber = DisplayPropertyPackage(
+        R"(<m:pbmetallicdisplayproperties id="10"><m:pbmetallic name="bad" metallicness="nan"/></m:pbmetallicdisplayproperties>)",
+        R"(<base name="one" displaycolor="#FFFFFFFF"/>)");
+    import_worker::ThreeMfOpcPackage package;
+    REQUIRE(import_worker::InspectThreeMfOpc(malformedNumber, &package)
+            == import_worker::ThreeMfOpcError::None);
+    import_worker::ThreeMfDisplayCatalog catalog;
+    CHECK(import_worker::ScanThreeMfDisplayProperties(malformedNumber, package, catalog)
+          == model_core::ImportErrorCode::MalformedData);
+
+    const auto valid = AppearancePackage();
+    REQUIRE(import_worker::InspectThreeMfOpc(valid, &package)
+            == import_worker::ThreeMfOpcError::None);
+    CHECK(import_worker::ScanThreeMfDisplayProperties(valid, package, catalog,
+        [] { return true; }) == model_core::ImportErrorCode::Cancelled);
+
+    const auto cardinalityMismatch = DisplayPropertyPackage(
+        R"(<m:pbmetallicdisplayproperties id="10"><m:pbmetallic name="only"/></m:pbmetallicdisplayproperties>)",
+        R"(<base name="one" displaycolor="#FFFFFFFF"/><base name="two" displaycolor="#000000FF"/>)");
+    const auto rejected = ImportThreeMfBytes(cardinalityMismatch, 0x336d66060003ull);
+    CHECK_FALSE(rejected.ok);
+    CHECK(rejected.errorCode == model_core::ImportErrorCode::MalformedData);
+
+    const auto recovered = ImportThreeMfBytes(valid, 0x336d66060004ull);
+    CHECK(recovered.ok);
+}
+
+TEST_CASE("3MF-004 unsupported translucent display properties warn and preserve geometry",
+          "[3mf-004][display-properties][warning]")
+{
+    const auto translucent = DisplayPropertyPackage(
+        R"(<m:translucentdisplayproperties id="10"><m:translucent name="glass" attenuation="0.5" refractiveindex="1.5" roughness="0.1"/></m:translucentdisplayproperties>)",
+        R"(<base name="glass" displaycolor="#80A0C080"/>)");
+    const auto result = ImportThreeMfBytes(translucent, 0x336d66060005ull);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode));
+    REQUIRE(result.ok);
+    const auto warnings = std::count_if(result.chunks.begin(), result.chunks.end(),
+        [](const auto& chunk) {
+            return chunk.descriptor.topology == model_core::ChunkTopology::TextureWarning;
+        });
+    CHECK(warnings == 1);
+    CHECK(std::any_of(result.chunks.begin(), result.chunks.end(), [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::TriangleList;
+    }));
+}
+
+TEST_CASE("manually supplied 3MF corpus imports through the production worker",
+          "[.manual-3mf]")
+{
+    constexpr wchar_t variable[] = L"PREVIEW3D_MANUAL_3MF_DIR";
+    const DWORD required = GetEnvironmentVariableW(variable, nullptr, 0);
+    if (!required) SKIP("set PREVIEW3D_MANUAL_3MF_DIR to a directory of local .3mf files");
+    std::wstring directory(required, L'\0');
+    const DWORD written = GetEnvironmentVariableW(variable, directory.data(), required);
+    REQUIRE(written > 0);
+    directory.resize(written);
+
+    uint64_t generation = 0x336d66ff0000ull;
+    size_t files = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+        if (!entry.is_regular_file() || entry.path().extension() != L".3mf") continue;
+        ++files;
+        const auto bytes = [&] {
+            std::ifstream input(entry.path(), std::ios::binary | std::ios::ate);
+            REQUIRE(input);
+            const auto length = input.tellg();
+            REQUIRE(length >= 0);
+            std::vector<std::byte> value(static_cast<size_t>(length));
+            input.seekg(0);
+            if (!value.empty()) input.read(reinterpret_cast<char*>(value.data()), length);
+            return value;
+        }();
+        import_worker::ThreeMfOpcPackage package;
+        const auto opc = import_worker::InspectThreeMfOpc(bytes, &package);
+        import_worker::ThreeMfDisplayCatalog catalog;
+        const auto display = opc == import_worker::ThreeMfOpcError::None
+            ? import_worker::ScanThreeMfDisplayProperties(bytes, package, catalog)
+            : model_core::ImportErrorCode::ArchiveLimit;
+        const auto result = ImportThreeMfPath(entry.path(), ++generation);
+        CAPTURE(entry.path().filename().string(), uint32_t(result.stage),
+                uint32_t(result.errorCode), result.batchCount, uint32_t(opc),
+                uint32_t(display), package.parts.size(), catalog.groups.size());
+        CHECK(opc == import_worker::ThreeMfOpcError::None);
+        CHECK(display == model_core::ImportErrorCode::None);
+        CHECK((result.ok
+               || result.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature));
+    }
+    REQUIRE(files > 0);
 }

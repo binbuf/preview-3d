@@ -4,8 +4,8 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
-- **3MF-004 Materials/properties and contained textures (2026-09-18): in
-  progress; first private worker slice complete.** The adapter now resolves
+- **3MF-004 Materials/properties and contained textures (2026-09-18):
+  complete; private until 3MF-006.** The adapter resolves
   Core base materials plus Materials Extension color, texture-coordinate,
   composite, and bounded multi-property resources at object, triangle, and
   per-corner scope. Geometry is deliberately deindexed at property seams and
@@ -36,22 +36,51 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
   The pinned lib3mf 2.5 public bindings expose classic material/property
   groups but no realistic display-property resources or their
-  `displaypropertiesid` associations. Finishing 3MF-004 therefore needs a
-  bounded product-owned scan of already-preflighted model XML (including
-  Production model parts), keyed by package-part/resource identity, before PB
-  metallic/specular conversion can be implemented safely. Do not infer those
-  associations from globally unique local IDs. Translucent and display-texture
-  fallback policy, broader negative/limit fixtures, texture-layer blend
-  goldens, and render readback remain open. `.3mf` discovery and registration
-  remain disabled.
+  `displaypropertiesid` associations. `ThreeMfDisplayProperties` therefore
+  extracts already-preflighted `.model` parts in memory, verifies Deflate or
+  stored bytes and CRC32, parses with XmlLite under 256 MiB/part, 512 MiB
+  aggregate, depth, count, numeric, and cancellation bounds, and keys every
+  association by canonical package part plus model-local resource ID. Never
+  infer an association from a globally unique local ID: Production parts can
+  reuse the same XML resource IDs.
+
+  lib3mf property IDs returned by mesh/property APIs are opaque handles, not
+  XML zero-based indices. PB display vectors must be indexed by the ordinal in
+  each group's `GetAllPropertyIDs` result; treating the opaque value as the
+  ordinal made valid property zero appear out of range. The adapter caches a
+  bounded handle-to-ordinal map and independently checks display/property
+  cardinality before normalization. PB metallic maps directly. PB specular
+  converts its linear specular color and glossiness deterministically to the
+  renderer's metallic/roughness model; unsupported translucent and display-
+  texture groups preserve the ordinary base appearance and emit one fixed,
+  bounded warning per group.
+
+  lib3mf 2.5 strict mode rejects both valid Materials display-property XML and
+  common current-slicer packages even though compatible mode constructs their
+  standard scene. Production import therefore uses compatible mode only behind
+  the product-owned OPC/XML boundary and still validates every value that can
+  affect normalized output in the adapter. The older 3MF-001 strict spike stays
+  strict so dependency behavior remains visible. Importer/cache version is 3.
+
+  The opt-in `[.manual-3mf]` test reads `PREVIEW3D_MANUAL_3MF_DIR`. Of the three
+  locally supplied Bambu files, `Ghosts.3mf` and the 948,263-triangle
+  `leone-bambu.3mf` complete through the production worker (the latter via
+  progressive batches). `Orbit Revolver Bambu Print File.3mf` is rejected as
+  `UnsupportedRequiredFeature`: its printable model components recursively
+  reference a Core `type="other"` mesh, while Core forbids `other` objects from
+  entering the build recursively or directly. That is a deliberate Core policy
+  result, not a material or archive failure. The three local files remain
+  untracked. `.3mf` discovery and registration remain disabled; 3MF-005 is the
+  next task.
 
 - **3MF-003 Core and Production scene adapter (2026-09-18): complete;
   private only.** `Preview3DImportWorker.exe` now constructs lib3mf models
   through the same duplicated, read-only source handle used by the spike,
-  with strict mode and a progress callback for cooperative read-time
-  cancellation. Because lib3mf's callback ABI cannot report short reads or
-  seek errors, the adapter records those facts out-of-band, zero-fills any
-  unread callback destination, and rejects the generation after construction.
+  with a progress callback for cooperative read-time cancellation. The strict
+  reader claim from this slice is superseded by 3MF-004's documented
+  compatible-mode boundary. Because lib3mf's callback ABI cannot report short
+  reads or seek errors, the adapter records those facts out-of-band, zero-fills
+  any unread callback destination, and rejects the generation after construction.
   The product OPC preflight still happens first; neither route uses a filename
   API or extracts package contents.
 

@@ -13,6 +13,8 @@ namespace Lib3MF { class CModel; using PModel = std::shared_ptr<CModel>; }
 
 namespace import_worker {
 
+struct ThreeMfDisplayCatalog;
+
 class ChunkBatchSink;
 
 struct ThreeMfImportResult {
@@ -29,6 +31,7 @@ using ThreeMfImportOutcome = std::variant<ThreeMfImportResult, ThreeMfImportFail
 
 struct ThreeMfImportOptions {
     std::function<bool()> isCancelled;
+    const ThreeMfDisplayCatalog* displayCatalog = nullptr;
     uint64_t maxAggregateTextureBytes = model_core::kMaxAggregateTextureBytes;
     uint64_t maxAggregateTexturePixels = model_core::kMaxAggregateTexturePixels;
     bool Cancelled() const { return isCancelled && isCancelled(); }

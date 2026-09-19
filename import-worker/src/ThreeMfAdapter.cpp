@@ -8,6 +8,7 @@
 #include "ChunkBatchSink.h"
 #include "ImageFormatSniff.h"
 #include "TextureDecodePolicy.h"
+#include "ThreeMfDisplayProperties.h"
 #include "WicImageDecodeAdapter.h"
 #include "model_core/GeometryBounds.h"
 #include "model_core/MaterialPayload.h"
@@ -267,33 +268,69 @@ public:
     ImportErrorCode Error() const { return error_; }
     uint32_t WarningCount() const { return warnings_; }
 
+    bool ValidateDisplayProperties()
+    {
+        if (!options_.displayCatalog) return true;
+        std::unordered_set<std::string> seen;
+        auto resources = model_->GetResources();
+        if (!resources) { error_ = ImportErrorCode::MalformedData; return false; }
+        while (resources->MoveNext()) {
+            if (options_.Cancelled()) { error_ = ImportErrorCode::Cancelled; return false; }
+            const auto resource = resources->GetCurrent();
+            std::string key;
+            if (!ResourceKey(resource, key)) continue;
+            const auto association = options_.displayCatalog->associations.find(key);
+            if (association == options_.displayCatalog->associations.end()) continue;
+            seen.insert(key);
+            const auto group = options_.displayCatalog->groups.find(association->second);
+            if (group == options_.displayCatalog->groups.end()) {
+                error_ = ImportErrorCode::MalformedData; return false;
+            }
+            if (group->second.kind == ThreeMfDisplayKind::Unsupported) continue;
+            std::vector<uint32_t> ids;
+            if (!PropertyIds(resource, ids)) return false;
+            if (ids.size() != group->second.properties.size()) {
+                error_ = ImportErrorCode::MalformedData; return false;
+            }
+        }
+        if (seen.size() != options_.displayCatalog->associations.size()) {
+            error_ = ImportErrorCode::MalformedData; return false;
+        }
+        return true;
+    }
+
     bool Resolve(uint32_t resourceId, uint32_t propertyId, PropertySample& sample)
     {
         std::unordered_set<uint64_t> recursion;
         return ResolveInner(resourceId, propertyId, sample, recursion, 0);
     }
 
-    uint32_t MaterialFor(const PropertySample samples[3])
+    uint32_t MaterialFor(PropertySample samples[3])
     {
         if (error_ != ImportErrorCode::None) return 0;
         const uint32_t texture = samples[0].textureId;
-        const float metallic = samples[0].metallic, roughness = samples[0].roughness;
+        float metallic = 0.0f, roughness = 0.0f;
+        for (unsigned corner = 0; corner < 3; ++corner) {
+            metallic += samples[corner].metallic / 3.0f;
+            roughness += samples[corner].roughness / 3.0f;
+        }
         uint32_t sampler = samples[0].samplerFlags;
         const bool textureLayer = samples[0].textureLayer;
         const bool textureMix = samples[0].textureMix;
-        const bool vertexSrgb = samples[0].colorSrgb;
+        bool vertexSrgb = samples[0].colorSrgb;
+        for (unsigned corner = 1; corner < 3; ++corner)
+            if (samples[corner].colorSrgb != vertexSrgb) {
+                for (auto& sample : std::span<PropertySample, 3>(samples, 3)) Linearize(sample);
+                vertexSrgb = false;
+                break;
+            }
         bool blend = false;
         for (unsigned corner = 0; corner < 3; ++corner) {
             blend |= samples[corner].color[3] < 0.99999f || samples[corner].textureLayer;
             if (samples[corner].textureId != texture
                 || samples[corner].samplerFlags != sampler
                 || samples[corner].textureLayer != textureLayer
-                || samples[corner].textureMix != textureMix
-                || samples[corner].colorSrgb != vertexSrgb
-                || samples[corner].hasPbr != samples[0].hasPbr
-                || (samples[corner].hasPbr
-                    && (std::abs(samples[corner].metallic - metallic) > 1e-6f
-                        || std::abs(samples[corner].roughness - roughness) > 1e-6f))) {
+                || samples[corner].textureMix != textureMix) {
                 error_ = ImportErrorCode::UnsupportedRequiredFeature;
                 return 0;
             }
@@ -332,6 +369,136 @@ public:
     }
 
 private:
+    bool ResourceKey(const Lib3MF::PResource& resource, std::string& key)
+    {
+        if (!resource) return false;
+        const auto part = resource->PackagePart();
+        if (!part || !resource->GetModelResourceID()) return false;
+        key = ThreeMfResourceKey(part->GetPath(), resource->GetModelResourceID());
+        return true;
+    }
+
+    bool PropertyIds(const Lib3MF::PResource& resource, std::vector<uint32_t>& ids)
+    {
+        ids.clear();
+        if (!resource) { error_ = ImportErrorCode::MalformedData; return false; }
+        const uint32_t resourceId = resource->GetUniqueResourceID();
+        switch (model_->GetPropertyTypeByID(resourceId)) {
+        case Lib3MF::ePropertyType::BaseMaterial: {
+            const auto group = model_->GetBaseMaterialGroupByID(resourceId);
+            if (!group) { error_ = ImportErrorCode::MalformedData; return false; }
+            group->GetAllPropertyIDs(ids); break;
+        }
+        case Lib3MF::ePropertyType::Colors: {
+            const auto group = model_->GetColorGroupByID(resourceId);
+            if (!group) { error_ = ImportErrorCode::MalformedData; return false; }
+            group->GetAllPropertyIDs(ids); break;
+        }
+        case Lib3MF::ePropertyType::TexCoord: {
+            const auto group = model_->GetTexture2DGroupByID(resourceId);
+            if (!group) { error_ = ImportErrorCode::MalformedData; return false; }
+            group->GetAllPropertyIDs(ids); break;
+        }
+        case Lib3MF::ePropertyType::Composite: {
+            const auto group = model_->GetCompositeMaterialsByID(resourceId);
+            if (!group) { error_ = ImportErrorCode::MalformedData; return false; }
+            group->GetAllPropertyIDs(ids); break;
+        }
+        case Lib3MF::ePropertyType::Multi: {
+            const auto group = model_->GetMultiPropertyGroupByID(resourceId);
+            if (!group) { error_ = ImportErrorCode::MalformedData; return false; }
+            group->GetAllPropertyIDs(ids); break;
+        }
+        default: error_ = ImportErrorCode::MalformedData; return false;
+        }
+        if (ids.size() > kTierBMaterialLimit) {
+            error_ = ImportErrorCode::ResourceLimit; return false;
+        }
+        return true;
+    }
+
+    bool PropertyIndex(const Lib3MF::PResource& resource, uint32_t propertyId,
+                       uint32_t& index)
+    {
+        if (!resource) { error_ = ImportErrorCode::MalformedData; return false; }
+        const uint32_t resourceId = resource->GetUniqueResourceID();
+        auto found = propertyIndices_.find(resourceId);
+        if (found == propertyIndices_.end()) {
+            std::vector<uint32_t> ids;
+            if (!PropertyIds(resource, ids)) return false;
+            std::unordered_map<uint32_t, uint32_t> indices;
+            indices.reserve(ids.size());
+            for (uint32_t ordinal = 0; ordinal < ids.size(); ++ordinal)
+                if (!indices.emplace(ids[ordinal], ordinal).second) {
+                    error_ = ImportErrorCode::MalformedData; return false;
+                }
+            found = propertyIndices_.emplace(resourceId, std::move(indices)).first;
+        }
+        const auto property = found->second.find(propertyId);
+        if (property == found->second.end()) {
+            error_ = ImportErrorCode::MalformedData; return false;
+        }
+        index = property->second;
+        return true;
+    }
+
+    void Linearize(PropertySample& sample)
+    {
+        if (!sample.colorSrgb) return;
+        for (unsigned channel = 0; channel < 3; ++channel)
+            sample.color[channel] = SrgbToLinear(uint8_t(std::lround(sample.color[channel] * 255.0f)));
+        sample.colorSrgb = false;
+    }
+
+    bool ApplyDisplay(const Lib3MF::PResource& resource, uint32_t propertyId,
+                      PropertySample& sample)
+    {
+        if (!options_.displayCatalog) return true;
+        std::string key;
+        if (!ResourceKey(resource, key)) { error_ = ImportErrorCode::MalformedData; return false; }
+        const auto association = options_.displayCatalog->associations.find(key);
+        if (association == options_.displayCatalog->associations.end()) return true;
+        const auto group = options_.displayCatalog->groups.find(association->second);
+        if (group == options_.displayCatalog->groups.end()) {
+            error_ = ImportErrorCode::MalformedData; return false;
+        }
+        if (group->second.kind == ThreeMfDisplayKind::Unsupported) {
+            if (warnedDisplayGroups_.insert(association->second).second) Warn(warnings_);
+            return true;
+        }
+        uint32_t propertyIndex = 0;
+        if (!PropertyIndex(resource, propertyId, propertyIndex)) return false;
+        if (propertyIndex >= group->second.properties.size()) {
+            error_ = ImportErrorCode::MalformedData; return false;
+        }
+        const auto& display = group->second.properties[propertyIndex];
+        Linearize(sample);
+        if (group->second.kind == ThreeMfDisplayKind::Metallic) {
+            sample.metallic = display.metallic;
+            sample.roughness = display.roughness;
+        } else {
+            constexpr float dielectric = 0.04f;
+            const float specularStrength = (std::max)({display.specular[0], display.specular[1],
+                                                       display.specular[2]});
+            const float metallic = std::clamp((specularStrength - dielectric)
+                                               / (1.0f - dielectric), 0.0f, 1.0f);
+            float diffuseBase[3]{};
+            float specularBase[3]{};
+            for (unsigned channel = 0; channel < 3; ++channel) {
+                diffuseBase[channel] = sample.color[channel]
+                    / (std::max)((1.0f - metallic) * (1.0f - dielectric), 1.0e-6f);
+                specularBase[channel] = display.specular[channel] / (std::max)(metallic, 1.0e-6f);
+                sample.color[channel] = std::clamp(
+                    diffuseBase[channel] * (1.0f - metallic)
+                    + specularBase[channel] * metallic, 0.0f, 1.0f);
+            }
+            sample.metallic = metallic;
+            sample.roughness = display.roughness;
+        }
+        sample.hasPbr = true;
+        return true;
+    }
+
     bool Color(const Lib3MF::sColor& source, PropertySample& sample)
     {
         sample.color[0] = float(source.m_Red) / 255.0f;
@@ -354,12 +521,14 @@ private:
         case Lib3MF::ePropertyType::BaseMaterial: {
             const auto group = model_->GetBaseMaterialGroupByID(resourceId);
             if (!group) return finish(false);
-            return finish(Color(group->GetDisplayColor(propertyId), sample));
+            if (!Color(group->GetDisplayColor(propertyId), sample)) return finish(false);
+            return finish(ApplyDisplay(group, propertyId, sample));
         }
         case Lib3MF::ePropertyType::Colors: {
             const auto group = model_->GetColorGroupByID(resourceId);
             if (!group) return finish(false);
-            return finish(Color(group->GetColor(propertyId), sample));
+            if (!Color(group->GetColor(propertyId), sample)) return finish(false);
+            return finish(ApplyDisplay(group, propertyId, sample));
         }
         case Lib3MF::ePropertyType::TexCoord: {
             const auto group = model_->GetTexture2DGroupByID(resourceId);
@@ -376,7 +545,7 @@ private:
                 | kMaterialFlagFlipV;
             if (texture->GetFilter() == Lib3MF::eTextureFilter::Nearest)
                 sample.samplerFlags |= kMaterialFlagNearest;
-            return finish(sample.textureId != 0);
+            return finish(sample.textureId != 0 && ApplyDisplay(group, propertyId, sample));
         }
         case Lib3MF::ePropertyType::Composite: {
             const auto composite = model_->GetCompositeMaterialsByID(resourceId);
@@ -404,7 +573,7 @@ private:
             }
             for (unsigned channel = 0; channel < 4; ++channel) sample.color[channel] = mixed[channel] / float(sum);
             sample.colorSrgb = false;
-            return finish(true);
+            return finish(ApplyDisplay(composite, propertyId, sample));
         }
         case Lib3MF::ePropertyType::Multi: {
             const auto group = model_->GetMultiPropertyGroupByID(resourceId);
@@ -465,7 +634,7 @@ private:
                 } else if (current.hasPbr) Warn(warnings_);
             }
             sample = accumulated;
-            return finish(initialized);
+            return finish(initialized && ApplyDisplay(group, propertyId, sample));
         }
         default: error_ = ImportErrorCode::UnsupportedRequiredFeature; return finish(false);
         }
@@ -550,6 +719,8 @@ private:
     const ThreeMfImportOptions& options_;
     std::unordered_map<MaterialKey, uint32_t, MaterialKeyHash> materials_;
     std::unordered_map<uint32_t, uint32_t> images_;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> propertyIndices_;
+    std::unordered_set<std::string> warnedDisplayGroups_;
     ImportErrorCode error_ = ImportErrorCode::None;
     uint32_t warnings_ = 0;
     uint64_t decodedBytes_ = 0, decodedPixels_ = 0;
@@ -713,6 +884,7 @@ ThreeMfImportOutcome ImportThreeMf(const Lib3MF::PModel& model, std::span<std::b
     metadata.nodeCount = uint32_t(traversal.occurrences.size());
     BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
     PropertyCatalog properties(model, writer, options);
+    if (!properties.ValidateDisplayProperties()) return Fail(properties.Error());
     std::unordered_map<uint32_t, std::vector<GeometryRecord>> geometry;
     uint64_t triangles = 0, vertices = 0;
     uint32_t meshOrdinal = 0;

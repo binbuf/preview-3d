@@ -29,10 +29,26 @@ struct ThreeMfOpcLimits {
     uint32_t maxExpansionRatio = 200;
 };
 
-struct ThreeMfOpcPart { std::string name; uint64_t dataOffset; uint64_t compressedBytes; uint64_t expandedBytes; uint16_t method; };
+struct ThreeMfOpcPart {
+    std::string name;
+    uint64_t dataOffset;
+    uint64_t compressedBytes;
+    uint64_t expandedBytes;
+    uint32_t crc32;
+    uint16_t method;
+};
 struct ThreeMfOpcPackage { std::vector<ThreeMfOpcPart> parts; std::string startPart; };
 
 ThreeMfOpcError InspectThreeMfOpc(std::span<const std::byte> bytes, ThreeMfOpcPackage* package = nullptr,
                                   const ThreeMfOpcLimits& limits = {},
                                   const std::function<bool()>& isCancelled = {});
+
+// Extracts one already-preflighted stored/Deflate part into bounded memory and
+// verifies its central-directory CRC. No path lookup or filesystem access is
+// performed here; callers select an exact part from ThreeMfOpcPackage.
+ThreeMfOpcError ExtractThreeMfOpcPart(std::span<const std::byte> bytes,
+                                      const ThreeMfOpcPart& part,
+                                      std::vector<std::byte>& output,
+                                      uint64_t maxExpandedBytes,
+                                      const std::function<bool()>& isCancelled = {});
 }

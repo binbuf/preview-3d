@@ -48,6 +48,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>zd.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -59,6 +60,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>z.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup>
@@ -66,7 +68,7 @@
       <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>ws2_32.lib;windowscodecs.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;windowscodecs.lib;psapi.lib;xmllite.lib;shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -84,6 +86,7 @@
     <ClCompile Include="src\UsdImportWorker.cpp" />
     <ClCompile Include="src\UsdZipPreflight.cpp" />
     <ClCompile Include="src\ThreeMfOpcPreflight.cpp" />
+    <ClCompile Include="src\ThreeMfDisplayProperties.cpp" />
     <ClCompile Include="src\ThreeMfAdapter.cpp" />
     <ClCompile Include="src\ThreeMfImportWorker.cpp" />
     <ClCompile Include="src\SyntheticSceneGenerator.cpp" />
@@ -122,6 +125,7 @@
     <ClInclude Include="src\UsdImportWorker.h" />
     <ClInclude Include="src\UsdZipPreflight.h" />
     <ClInclude Include="src\ThreeMfOpcPreflight.h" />
+    <ClInclude Include="src\ThreeMfDisplayProperties.h" />
     <ClInclude Include="src\ThreeMfAdapter.h" />
     <ClInclude Include="src\ThreeMfImportWorker.h" />
     <ClInclude Include="src\ThreeMfImporterVersion.h" />

@@ -6,6 +6,7 @@
 
 #include "ChunkBatchSink.h"
 #include "ThreeMfAdapter.h"
+#include "ThreeMfDisplayProperties.h"
 #include "ThreeMfOpcPreflight.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/MappedFile.h"
@@ -111,13 +112,22 @@ bool HandleThreeMfImportFileRequest(HANDLE in, HANDLE out, const model_core::Par
         return ReportError(out, request.generationId, ImportErrorCode::PrimarySourceLimit);
     std::wstring mapError; auto source = opened.file->MapWhole(mapError);
     if (!source) return ReportError(out, request.generationId, ImportErrorCode::InternalImporterFailure);
-    const auto preflight = InspectThreeMfOpc(source.Bytes(), nullptr, {}, [cancellation] {
+    ThreeMfOpcPackage package;
+    const auto preflight = InspectThreeMfOpc(source.Bytes(), &package, {}, [cancellation] {
         return cancellation && WaitForSingleObject(cancellation, 0) == WAIT_OBJECT_0;
     });
     if (preflight == ThreeMfOpcError::Cancelled) return ReportError(out, request.generationId, ImportErrorCode::Cancelled);
     if (preflight == ThreeMfOpcError::UnsupportedRequiredFeature)
         return ReportError(out, request.generationId, ImportErrorCode::UnsupportedRequiredFeature);
     if (preflight != ThreeMfOpcError::None) return ReportError(out, request.generationId, ImportErrorCode::ArchiveLimit);
+
+    ThreeMfDisplayCatalog displayCatalog;
+    const auto displayScan = ScanThreeMfDisplayProperties(
+        source.Bytes(), package, displayCatalog, [cancellation] {
+            return cancellation && WaitForSingleObject(cancellation, 0) == WAIT_OBJECT_0;
+        });
+    if (displayScan != ImportErrorCode::None)
+        return ReportError(out, request.generationId, displayScan);
 
     platform::Win32Handle outputSection(reinterpret_cast<HANDLE>(static_cast<uintptr_t>(request.sectionHandleValue)));
     auto output = platform::MappedView::Map(outputSection.get(), FILE_MAP_WRITE | FILE_MAP_READ,
@@ -130,12 +140,19 @@ bool HandleThreeMfImportFileRequest(HANDLE in, HANDLE out, const model_core::Par
     if (size != opened.file->SizeBytes()) return ReportError(out, request.generationId, ImportErrorCode::FileChanged);
 
     ChunkBatchSink sink(in, out, request.generationId, request.requestFlags, cancellation);
-    ThreeMfImportOptions options; options.isCancelled = [&sink] { return sink.Cancelled(); };
+    ThreeMfImportOptions options;
+    options.isCancelled = [&sink] { return sink.Cancelled(); };
+    options.displayCatalog = &displayCatalog;
     try {
         auto wrapper = Lib3MF::CWrapper::loadLibrary();
         auto model = wrapper->CreateModel();
         auto reader = model->QueryReader("3mf");
-        reader->SetStrictModeActive(true);
+        // lib3mf 2.5 strict mode rejects both standardized display-property
+        // resources and ordinary packages emitted by current slicers. The
+        // product-owned OPC/XML boundary and the adapter validate every value
+        // that can affect normalized output, so use the library's compatible
+        // reader mode and continue to fail closed at those owned boundaries.
+        reader->SetStrictModeActive(false);
         reader->SetProgressCallback(ProgressCallback, &callback);
         reader->ReadFromCallback(ReadCallback, size, SeekCallback, &callback);
         if (callback.ioFailure) return ReportError(out, request.generationId,

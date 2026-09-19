@@ -55,13 +55,14 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>userenv.lib;ws2_32.lib;windowscodecs.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>userenv.lib;ws2_32.lib;windowscodecs.lib;ole32.lib;xmllite.lib;shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <Link><AdditionalDependencies>zd.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -69,6 +70,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <Link><AdditionalDependencies>z.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="HarnessSmokeTests.cpp" />
@@ -96,6 +98,8 @@
     <ClCompile Include="OpenUsdHostSpikeTests.cpp" />
     <ClCompile Include="UsdProtocolTests.cpp" />
     <ClCompile Include="..\..\import-worker\src\UsdZipPreflight.cpp" />
+    <ClCompile Include="..\..\import-worker\src\ThreeMfOpcPreflight.cpp" />
+    <ClCompile Include="..\..\import-worker\src\ThreeMfDisplayProperties.cpp" />
     <ClCompile Include="SceneInstanceContractTests.cpp" />
     <ClCompile Include="DracoDecodeAdapterTests.cpp" />
     <ClCompile Include="TextureTranscodeAdapterTests.cpp" />

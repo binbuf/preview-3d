@@ -331,22 +331,34 @@ preserving reuse and authored placement.
 
 ## 3MF-004 — Materials, properties, and contained textures
 
-Status: in progress (2026-09-18; first private worker slice landed)
+Status: complete (2026-09-18). Proceed to 3MF-005; the format remains private
+until 3MF-006.
 
-The first slice normalizes Core base materials, Materials color groups,
-composite display colors, the bounded representable multi-properties subset,
-and contained PNG/JPEG texture groups. It carries object and triangle/corner
+The worker normalizes Core base materials, Materials color groups, composite
+display colors, the bounded representable multi-properties subset, and
+contained PNG/JPEG texture groups. It carries object and triangle/corner
 properties through deindexed vertex colors/UVs, preserves sRGB vertex
 interpolation and 3MF's lower-left UV convention explicitly, and emits bounded
-image/material dependencies before geometry. The viewer material contract now
-also represents independent tile modes, nearest filtering, and the alpha
-semantics needed by a non-base texture layer.
+image/material dependencies before geometry. The viewer material contract
+represents independent tile modes, nearest filtering, and the alpha semantics
+needed by a non-base texture layer.
 
-Completion still requires product-owned extraction of realistic display
-properties (the pinned lib3mf 2.5 bindings do not expose those XML resources),
-metallic/specular conversion, unsupported translucent-property policy, and the
-remaining malformed/limit/cancellation and render-readback matrix below. The
-format therefore remains private and 3MF-006 is still blocked on this task.
+Because pinned lib3mf 2.5 does not expose realistic display-property resources,
+a product-owned, bounded, cancellable XML scan now extracts their associations
+from every preflighted model part without creating filesystem authority.
+Representable PB metallic values map directly; PB specular uses the documented
+deterministic metallic/roughness preview conversion. Display-texture and
+translucent groups retain their base appearance and emit one bounded warning.
+The scan validates finite ranges, group/resource identity, cardinality, CRC,
+expanded bytes, and cancellation before the adapter consumes an association.
+
+Focused Debug/Release tests cover object and triangle defaults, per-corner
+color/alpha, composites, multi-properties, texture decode/order/UV convention,
+metallic and specular conversion, malformed numeric input, display cardinality,
+unsupported translucent fallback, cancellation, and same-worker recovery. An
+opt-in local-corpus test accepts `PREVIEW3D_MANUAL_3MF_DIR`; it was also run
+against the three slicer files supplied under `test-models/` without adding
+those local files to the repository.
 
 ### Objective
 
