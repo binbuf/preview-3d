@@ -25,6 +25,8 @@ The current package may include components from these projects:
 | libwebp | BSD-style |
 | ufbx | MIT (the project also offers Unlicense) |
 | lib3mf | BSD-2-Clause, with bundled dependency notices as applicable |
+| libzip | BSD-3-Clause |
+| bzip2 | BSD-style |
 | TinyUSDZ | Apache-2.0, with enabled vendored-code notices |
 | OpenUSD and oneTBB | Apache-2.0 |
 | zlib and Zstandard | zlib and BSD-3-Clause, respectively |

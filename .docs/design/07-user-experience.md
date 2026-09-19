@@ -71,10 +71,10 @@ Each open runs a broker session on a detached background thread with a zero-capa
 Open is available through:
 
 - the initial command-line path, if one was passed to the process;
-- Ctrl+O or the (currently overflow-only, chrome-driven) Open action using `IFileOpenDialog`, filtered to supported models (`*.glb;*.gltf;*.obj;*.fbx;*.stl;*.ply;*.usd;*.usda;*.usdc;*.usdz`), glTF, OBJ, FBX, STL, PLY meshes/points, USD, and All files, with `FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST`;
+- Ctrl+O or the (currently overflow-only, chrome-driven) Open action using `IFileOpenDialog`, filtered to supported models (`*.glb;*.gltf;*.obj;*.fbx;*.stl;*.ply;*.3mf;*.usd;*.usda;*.usdc;*.usdz`), glTF, OBJ, FBX, STL, PLY meshes/points, 3MF, USD, and All files, with `FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST`;
 - drag/drop, implemented as `WM_DROPFILES` via `DragAcceptFiles` (a plain OLE drag-accept, not a custom `IDropTarget`).
 
-`.glb`, `.gltf` with broker-approved local sidecars, `.obj` with optional broker-approved local `.mtl` and texture sidecars, binary/ASCII `.fbx`, ASCII/binary STL, ASCII/binary little/big-endian PLY meshes and points, and `.usd`/`.usda`/`.usdc`/`.usdz` are accepted case-insensitively. MTL is sidecar-only and is never a primary open type. OBJ, FBX, ASCII STL/PLY, and USD use bounded Tier B paths and have lower source, geometry, and scratch limits than the binary Tier A paths; unsupported extensions fail before parsing. `.usd` is identified by bytes, and successful metadata reports USDA, USDC, or USDZ rather than echoing the suffix. Malformed data receives a separate typed error. Remote/UNC, mapped network drives, device paths, and escaping sidecar references are rejected; local regular files and Unicode paths are supported. Dropping multiple files reports "Open one model at a time." Single-instance forwarding accepts the same extension set, replaces an in-flight load, and accepts a later valid activation after failure without relaunch.
+`.glb`, `.gltf` with broker-approved local sidecars, `.obj` with optional broker-approved local `.mtl` and texture sidecars, binary/ASCII `.fbx`, ASCII/binary STL, ASCII/binary little/big-endian PLY meshes and points, `.3mf`, and `.usd`/`.usda`/`.usdc`/`.usdz` are accepted case-insensitively. MTL is sidecar-only and is never a primary open type. OBJ, FBX, 3MF, ASCII STL/PLY, and USD use bounded Tier B paths and have lower source, geometry, and scratch limits than the binary Tier A paths; unsupported extensions fail before parsing. Standard 3MF root-build items display together in authored coordinates; no slicer-private plate selector or offset is inferred. `.usd` is identified by bytes, and successful metadata reports USDA, USDC, or USDZ rather than echoing the suffix. Malformed data receives a separate typed error. Remote/UNC, mapped network drives, device paths, and escaping sidecar references are rejected; local regular files and Unicode paths are supported. Dropping multiple files reports "Open one model at a time." Single-instance forwarding accepts the same extension set, replaces an in-flight load, and accepts a later valid activation after failure without relaunch.
 
 
 ## Camera and input
@@ -145,7 +145,10 @@ Two on-demand, title-bar-triggered integrations exist, both invoked by the user 
   as "Choose another app…".
 - **Share**: shares the current file as a `StorageFile` through `IDataTransferManagerInterop`/`DataTransferManager`.
 
-No thumbnail provider, no `IInitializeWithStream`/`IThumbnailProvider` implementation, and no installer/COM registration exist in this codebase yet; [05-thumbnail-provider.md](./05-thumbnail-provider.md) and [08-installation-and-registration.md](./08-installation-and-registration.md) describe work not yet started.
+The NSIS installer registers only interactive Open With/Default Apps entries for
+the supported extensions. No thumbnail provider or thumbnail COM registration is
+installed yet; [05-thumbnail-provider.md](./05-thumbnail-provider.md) remains a
+separate delivery path.
 
 ## UX acceptance scenarios (current slice)
 

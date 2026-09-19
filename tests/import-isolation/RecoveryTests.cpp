@@ -97,7 +97,9 @@ TEST_CASE("Copied diagnostics name source format and phase without source paths"
         CHECK(d3d12_import_bridge::ClassifyByExtension(path) == d3d12_import_bridge::SourceFormat::Usd);
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.usda") == L"USD");
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.USDZ") == L"USDZ");
-    CHECK_FALSE(d3d12_import_bridge::ClassifyByExtension(L"C:\\private\\model.3mf"));
+    CHECK(d3d12_import_bridge::ClassifyByExtension(L"C:\\private\\model.3MF")
+        == d3d12_import_bridge::SourceFormat::ThreeMf);
+    CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.3mf") == L"3MF");
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.bad\npath")==L"Unknown");
 }
 

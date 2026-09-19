@@ -4,6 +4,49 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **3MF-006 product/viewer integration (2026-09-18): implemented; 3MF-007
+  qualification remains.** `.3mf` now reaches the existing `ThreeMf` broker
+  opcode through case-insensitive command-line, dialog, drop, secondary
+  activation, Retry, and Open With paths. The D3D12 bridge leaves both coarse
+  proxy and detail-service request flags unset: the 3MF worker deliberately
+  accepts no flags, so treating it like Tier A produces
+  `ImportProtocolViolation` before parsing. Existing scene metadata reports
+  3MF format, +Z source up, units, verified bounds, geometry/material/texture
+  and node facts; all root-build occurrences retain authored transforms and
+  document-wide Fit/selection. No private plate metadata or protocol layout
+  change was needed.
+
+  `Preview3D.exe` imports no 3MF/ZIP parser DLL. The Release worker closure
+  observed with `dumpbin` is `lib3mf.dll` -> `zip.dll`/`z.dll`, and
+  `zip.dll` -> `bz2.dll`/`z.dll`. `Create-PortableRelease.ps1` stages exactly
+  those additional runtime DLLs under `worker/`, plus `bzip2`, `lib3mf`,
+  `libzip`, and `zlib` license files and SBOM entries. Its PE dependency
+  allowlist also needed the Windows system `xmllite.dll`, already linked by
+  the worker for bounded XML scanning; omitting it caused package validation
+  to fail despite a successful product build. NSIS uses the closed staged
+  worker tree, grants the worker profile access through the existing ACL
+  provisioning, registers `Binbuf.Preview3D.ThreeMF.1` for `.3mf`, and
+  removes that entry plus exact payload/license files on uninstall. No
+  thumbnail registration is installed.
+
+  Debug and Release solution builds, focused 3MF-003..006 tests (10 cases /
+  391 assertions in each), and full Unit suites (99 cases, 7,629 Debug /
+  7,541 Release assertions) pass. The real-app 3MF smoke passes 12 checks
+  in Debug and from the Release portable stage: command-line/picker/drop/
+  forwarded opens, Production occurrences, Materials, Beam Lattice,
+  ground-axis/Info/fullscreen/Fit/Reset controls, malformed/crash/timeout/
+  cancellation recovery, replacement, and relaunch. Engineering portable and
+  NSIS staging pass dependency closure with 73 and 74 files respectively;
+  a separate package-contract check verifies every manifest hash, required
+  worker DLL/license/SBOM entry, and symmetric `.3mf` registration/removal.
+  These were unsigned builds, not signed release candidates. The upstream
+  `beam-lattice.3mf.base64` fixture is an API/spike sample, not a production
+  viewer golden: it reaches a typed failure in the shipping route that needs
+  specific triage in 3MF-007. The app smoke instead builds a deterministic,
+  supported parametric lattice package. 3MF-007 must freeze a provenance-
+  and-hash-qualified lattice corpus and examine this upstream case, plus
+  complete actual clean-VM install/repair/upgrade/uninstall and signing.
+
 - **3MF-005 bounded Beam Lattice preview (2026-09-18): complete; private
   until 3MF-006.** The production adapter now recognizes lattice-only as well
   as mesh-plus-lattice objects, validates compact beam/ball/set input before

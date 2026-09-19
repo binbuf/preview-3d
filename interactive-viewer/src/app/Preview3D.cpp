@@ -1719,7 +1719,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
         SetFailure(app, L"This model format is not supported.",
-            L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .usd, .usda, .usdc, or .usdz file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
+            L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, or .usdz file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
         return;
     }
 
@@ -1817,12 +1817,13 @@ void OpenDialog(ViewerApp& app)
         return;
     }
     const COMDLG_FILTERSPEC filters[] = {
-        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx;*.usd;*.usda;*.usdc;*.usdz" },
+        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx;*.3mf;*.usd;*.usda;*.usdc;*.usdz" },
         { L"glTF models (*.glb; *.gltf)", L"*.glb;*.gltf" },
         { L"STL (*.stl)", L"*.stl" },
         { L"PLY meshes and points (*.ply)", L"*.ply" },
         { L"Wavefront OBJ with MTL (*.obj)", L"*.obj" },
         { L"Autodesk FBX (*.fbx)", L"*.fbx" },
+        { L"3D Manufacturing Format (*.3mf)", L"*.3mf" },
         { L"Universal Scene Description (*.usd; *.usda; *.usdc; *.usdz)", L"*.usd;*.usda;*.usdc;*.usdz" },
         { L"All files (*.*)", L"*.*" }
     };
@@ -1993,7 +1994,7 @@ void HandleCommand(ViewerApp& app, int id)
         MessageBoxW(app.window, app.warning.c_str(), L"Model warnings", MB_OK | MB_ICONWARNING);
         break;
     case IDM_ABOUT:
-        MessageBoxW(app.window, L"A native static viewer for glTF, OBJ, FBX, STL, PLY, and USD-family models. USD uses a fast isolated importer with a separate isolated OpenUSD compatibility host for bounded local composition.\n\nImports are bounded and local-only. No cloud, animation playback, editing, file modification, Explorer thumbnails, or persistent model cache.",
+        MessageBoxW(app.window, L"A native static viewer for glTF, OBJ, FBX, STL, PLY, the supported static 3MF preview subset, and USD-family models. 3MF includes Core, Materials, Production, and bounded Beam Lattice content. USD uses a fast isolated importer with a separate isolated OpenUSD compatibility host for bounded local composition.\n\nImports are bounded and local-only. No cloud, animation playback, editing, file modification, slicer-private multi-plate grouping, Explorer thumbnails, or persistent model cache.",
             L"About 3D Preview", MB_OK | MB_ICONINFORMATION);
         break;
     case IDM_EXIT: DestroyWindow(app.window); break;

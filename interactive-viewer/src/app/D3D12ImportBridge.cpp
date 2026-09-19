@@ -235,6 +235,8 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
         return import_broker::ImportFormat::Obj;
     case SourceFormat::Fbx:
         return import_broker::ImportFormat::Fbx;
+    case SourceFormat::ThreeMf:
+        return import_broker::ImportFormat::ThreeMf;
     case SourceFormat::Usd:
         return import_broker::ImportFormat::Usd;
     case SourceFormat::Glb:
@@ -277,6 +279,7 @@ std::wstring SourceFormatLabel(const std::wstring& path)
     if (ext == L"ply") return L"PLY";
     if (ext == L"obj") return L"OBJ";
     if (ext == L"fbx") return L"FBX";
+    if (ext == L"3mf") return L"3MF";
     if (ext == L"usd" || ext == L"usda" || ext == L"usdc") return L"USD";
     if (ext == L"usdz") return L"USDZ";
     // Extension only, capped and restricted to printable alphanumerics.
@@ -336,6 +339,7 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     if (ext == L"ply") return SourceFormat::Ply;
     if (ext == L"obj") return SourceFormat::Obj;
     if (ext == L"fbx") return SourceFormat::Fbx;
+    if (ext == L"3mf") return SourceFormat::ThreeMf;
     if (ext == L"usd" || ext == L"usda" || ext == L"usdc" || ext == L"usdz")
         return SourceFormat::Usd;
     return std::nullopt;
@@ -358,10 +362,12 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
 
     import_broker::ImportSessionRequest sessionRequest;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
-        && format != SourceFormat::Fbx && format != SourceFormat::Usd;
+        && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf
+        && format != SourceFormat::Usd;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
-    if (!delayBatchesForTesting && !faultForTesting && format != SourceFormat::Usd) {
+    if (!delayBatchesForTesting && !faultForTesting && format != SourceFormat::ThreeMf
+        && format != SourceFormat::Usd) {
         sessionRequest.nextDetail = std::move(nextDetail);
         sessionRequest.onInitialComplete = std::move(onInitialComplete);
     }
@@ -531,6 +537,16 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.errorDetails = L"FBX files are limited to the bounded Tier B source size.";
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
                 result.errorDetails = L"FBX parsing or static-pose evaluation exceeded the bounded importer scratch budget.";
+            }
+        } else if (format == SourceFormat::ThreeMf) {
+            if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
+                result.errorDetails = L"Export the standard static 3MF build using supported Core, Materials, Production, and Beam Lattice features.";
+            } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
+                result.errorDetails = L"3MF files are limited to the bounded Tier B primary-source size.";
+            } else if (session.errorCode == model_core::ImportErrorCode::ArchiveLimit) {
+                result.errorDetails = L"The 3MF package exceeded a bounded archive, relationship, or expansion limit.";
+            } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
+                result.errorDetails = L"3MF package parsing or normalization exceeded the bounded Tier B scratch budget.";
             }
         } else if (format == SourceFormat::Usd) {
             if (session.errorCode == model_core::ImportErrorCode::UnsupportedEncoding) {

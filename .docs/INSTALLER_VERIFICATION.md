@@ -87,7 +87,8 @@ Clean-VM association lifecycle and signed-candidate checks remain below.
 
 Run clean Windows 11 x64 VM install/upgrade/uninstall tests as both an
 interactive administrator and a standard user supplying elevation. Confirm all
-six extensions appear on the app-specific Default Apps page, select them,
+all supported extensions appear on the app-specific Default Apps page, select
+them,
 open adversarial quoted/Unicode paths, verify worker isolation, and confirm
 uninstall removes product-owned registration without changing unrelated
 defaults. Also verify signed-file trust and hashes when a release certificate is
@@ -119,3 +120,23 @@ unsigned engineering installer SHA-256 is
 `b8a25b44f2d0d2e0daeac5ae59492862e8c38deaa1d2ad790f8ce0de4248f4f8`.
 Clean-VM association/ACL lifecycle and signed-candidate verification remain
 USD-009 release gates.
+
+## 3MF-006 addendum (2026-09-18)
+
+The installer now owns `Binbuf.Preview3D.ThreeMF.1` for `.3mf` through
+capabilities, OpenWithProgids, and SupportedTypes. Uninstall and the
+association-reset helper remove only product-owned entries; neither changes
+`UserChoice` or registers a 3MF thumbnail/shell extension.
+
+The worker-only 3MF runtime closure is `lib3mf.dll`, `zip.dll`, `z.dll`, and
+`bz2.dll`; the viewer has no 3MF/ZIP parser dependency. Portable and NSIS
+stages include those four DLLs, corresponding license and SBOM entries, and
+hashes in `MANIFEST.json`. A static package-contract check verifies all staged
+file hashes and symmetric registration/removal. The portable engineering stage
+contains 73 files (archive SHA-256
+`40a19df6e935b8608e94fa1c22e583e95cfddec6406722f07bc66013239e7311`);
+the NSIS stage contains 74 files (`makensis /WX` succeeded; unsigned setup
+SHA-256 `d74433c2313c16719c914b0eaa6781a663d2138314d74f1991ec6aef7d88dbae`).
+The real viewer opened and recovered from 3MF in the staged portable layout.
+Actual clean-VM install/repair/upgrade/uninstall, association lifecycle, and
+signed-candidate verification remain 3MF-007 release gates.

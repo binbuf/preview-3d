@@ -6,16 +6,20 @@ in SBOM.cdx.json and MANIFEST.json. The complete upstream notices/license texts
 installed by those pinned ports are preserved in licenses\:
 
   basisu.txt       Basis Universal transcoder code used by KTX-Software
+  bzip2.txt        bzip2 compression library used by libzip
   draco.txt        Google Draco
   fastgltf.txt     fastgltf
   ktx.txt          Khronos KTX-Software
+  lib3mf.txt       lib3mf 3MF reader and bundled dependency notices
   libwebp.txt      WebP codec and libsharpyuv
+  libzip.txt       libzip archive reader used by lib3mf
   meshoptimizer.txt meshoptimizer
   openusd.txt       Pixar OpenUSD
   simdjson.txt     simdjson
   tbb.txt          Intel oneAPI Threading Building Blocks
   tinyusdz.txt     TinyUSDZ and its enabled vendored reader/render-data code
   ufbx.txt         ufbx FBX and OBJ/MTL loader
+  zlib.txt         zlib compression library used by the worker and libzip
   zstd.txt         Zstandard
 
 The app-local Microsoft Visual C++ Runtime files are Microsoft distributable

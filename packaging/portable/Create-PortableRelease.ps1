@@ -178,13 +178,17 @@ if ($Distribution -eq 'Portable' -and (Test-Path -LiteralPath $archiveChecksum))
 $viewerFiles = @('Preview3D.exe')
 $workerFiles = @(
     'Preview3DImportWorker.exe',
+    'bz2.dll',
     'draco.dll',
     'fastgltf.dll',
     'ktx.dll',
+    'lib3mf.dll',
     'libsharpyuv.dll',
     'libwebp.dll',
     'meshoptimizer.dll',
     'simdjson.dll',
+    'z.dll',
+    'zip.dll',
     'zstd.dll'
 )
 foreach ($name in $viewerFiles) {
@@ -237,7 +241,7 @@ foreach ($name in $openUsdHostCrt) {
     Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $openUsdHostStage $name)
 }
 
-$thirdParty = @('basisu', 'draco', 'fastgltf', 'ktx', 'libwebp', 'meshoptimizer', 'openusd', 'simdjson', 'tbb', 'tinyusdz', 'ufbx', 'zstd')
+$thirdParty = @('basisu', 'bzip2', 'draco', 'fastgltf', 'ktx', 'lib3mf', 'libwebp', 'libzip', 'meshoptimizer', 'openusd', 'simdjson', 'tbb', 'tinyusdz', 'ufbx', 'zlib', 'zstd')
 $vcpkgTripletRoot = Join-Path $repository 'vcpkg_installed\x64-windows\x64-windows'
 $vcpkgStatusPath = Join-Path $repository 'vcpkg_installed\x64-windows\vcpkg\status'
 foreach ($name in $thirdParty) {
@@ -294,7 +298,7 @@ $systemDlls = @(
     'd3dcompiler_47.dll', 'dwrite.dll', 'dwmapi.dll', 'dxgi.dll', 'gdi32.dll',
     'kernel32.dll', 'ole32.dll', 'oleacc.dll', 'oleaut32.dll', 'runtimeobject.dll',
     'shell32.dll', 'shlwapi.dll', 'uiautomationcore.dll', 'user32.dll', 'userenv.dll',
-    'windowscodecs.dll', 'ws2_32.dll'
+    'windowscodecs.dll', 'ws2_32.dll', 'xmllite.dll'
 )
 $peFiles = Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.Extension -in @('.exe', '.dll') }
 foreach ($pe in $peFiles) {

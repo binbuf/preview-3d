@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "SandboxTestSupport.h"
+#include "../../interactive-viewer/src/app/D3D12ImportBridge.h"
 #include "ThreeMfSpikeWorker.h"
 #include "ThreeMfDisplayProperties.h"
 #include "ThreeMfOpcPreflight.h"
@@ -889,6 +890,21 @@ TEST_CASE("3MF-003 normalizes only root-build Core and Production occurrences", 
             if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
                 CHECK((chunk.descriptor.geometryFlags & model_core::kGeometryReusableInstanceSource) != 0);
     }
+}
+
+TEST_CASE("3MF-006 shipping viewer bridge routes 3MF without Tier-A request flags",
+          "[3mf-006][viewer-bridge]")
+{
+    TemporaryFile source(DecodeBase64("production-boxes.3mf.base64"));
+    source.Close();
+    const auto result = d3d12_import_bridge::RunImport(
+        d3d12_import_bridge::SourceFormat::ThreeMf, source.path(), 6001);
+    CAPTURE(result.errorStage, result.errorCode, result.errorSummary, result.errorDetails);
+    REQUIRE(result.ok);
+    CHECK(result.scene.format == model_core::SourceFormatId::ThreeMf);
+    CHECK(result.scene.upAxis == model_core::UpAxisId::Z);
+    CHECK(result.instances.size() == 2);
+    CHECK_FALSE(result.meshes.empty());
 }
 
 TEST_CASE("3MF-004 normalizes object defaults, corner colors, composites, and multi-properties",

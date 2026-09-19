@@ -1,5 +1,13 @@
 # Installation and registration
 
+Current implementation note (2026-09-18): the shipping engineering package
+is NSIS-based, not the proposed MSI/WiX package below. It currently registers
+interactive Open With/Default Apps for all direct formats, including `.3mf`,
+and stages the exact worker-only `lib3mf`/libzip/zlib/bzip2 runtime closure.
+It does not register any Explorer thumbnail handler. The MSI/thumbnail,
+transactional repair, and signed clean-machine lifecycle sections below remain
+design targets, not claims about the current NSIS installer.
+
 ## Package contract
 
 3D Preview ships as a signed, per-machine x64 MSI for Windows 11. The initial package identity is:

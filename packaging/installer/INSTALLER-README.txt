@@ -7,15 +7,21 @@
 * .obj polygon meshes with optional local .mtl and texture sidecars;
 * binary or ASCII .fbx with static hierarchy/instances, supported materials and
   textures, and a deterministic baked start pose;
-* ASCII or binary .stl; and
+* ASCII or binary .stl;
 * ASCII or binary little- or big-endian .ply triangle meshes and point clouds;
+* the supported static .3mf preview subset: Core geometry, components, all root
+  build items, Materials and Properties colors/textures, Production model
+  parts, and bounded Beam Lattice previews; and
 * .usd, .usda, .usdc, and .usdz static stages with meshes, hierarchy,
   instances/point instances, common primvars, display color, supported USD
   Preview Surface materials/textures, and bounded local composition.
 
-3MF and CAD formats, Explorer thumbnails (including for USD and FBX), editing,
+CAD formats, Explorer thumbnails (including for 3MF, USD, and FBX), editing,
 animation playback, network assets, and a persistent model-derived cache are
-not part of this release. FBX geometry caches, dynamic constraints,
+not part of this release. 3MF slicer-private multi-plate grouping/settings,
+Slice, Secure Content, Volumetric, Implicit, toolpath, repair, slicing, and
+export features are not supported; standard root-build items are displayed
+together in authored coordinates. FBX geometry caches, dynamic constraints,
 NURBS/subdivision tessellation, cameras, and lights are outside its static subset.
 USD skeletal data, MaterialX, procedural schemas, arbitrary plugins, remote
 assets, and interactive variant selection are also outside the supported subset.
@@ -24,8 +30,9 @@ File associations
 -----------------
 
 Setup registers 3D Preview with Windows Default Apps and Open With for .glb,
-.gltf, .obj, .fbx, .stl, .ply, .usd, .usda, .usdc, and .usdz. Windows 11 requires the signed-in user to confirm default
-app choices. Setup offers to open 3D Preview's Default Apps page after install;
+.gltf, .obj, .fbx, .stl, .ply, .3mf, .usd, .usda, .usdc, and .usdz. Windows 11
+requires the signed-in user to confirm default app choices. Setup offers to
+open 3D Preview's Default Apps page after install;
 select 3D Preview for each listed extension there. Existing user choices are
 never overwritten by setup.
 

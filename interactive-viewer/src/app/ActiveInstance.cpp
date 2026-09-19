@@ -209,7 +209,7 @@ bool IsSupportedExtension(const std::wstring& path)
     std::transform(extension.begin(), extension.end(), extension.begin(), std::towlower);
     return extension == L".glb" || extension == L".gltf" || extension == L".stl" ||
         extension == L".ply" || extension == L".obj" || extension == L".fbx" ||
-        extension == L".usd" || extension == L".usda" || extension == L".usdc" ||
+        extension == L".3mf" || extension == L".usd" || extension == L".usda" || extension == L".usdc" ||
         extension == L".usdz";
 }
 
@@ -338,7 +338,7 @@ bool NormalizeForwardPath(const std::wstring& input, std::wstring& absolutePath,
         && std::iswalpha(resolved[4]) && resolved[5] == L':' && resolved[6] == L'\\';
     if (!drivePath && !extendedDrive) { error = L"Only local drive paths can be activated."; return false; }
     if (!IsSupportedExtension(resolved)) {
-        error = L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .usd, .usda, .usdc, or .usdz file.";
+        error = L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, or .usdz file.";
         return false;
     }
     absolutePath = std::move(resolved);

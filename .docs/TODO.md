@@ -313,9 +313,9 @@ Both structural blockers are closed and none of these is the output window:
 
 ## Gate 4 — Tier B format breadth
 
-Five independent vertical slices (`10-…:155-174`). OBJ, FBX, and the dual-path USD viewer
-product paths are implemented; their release-qualification bundles remain open. TinyUSDZ and
-OpenUSD are pinned and USD-009 qualification is in progress. lib3mf remains unpinned.
+Five independent vertical slices (`10-…:155-174`). OBJ, FBX, 3MF, and the dual-path USD viewer
+product paths are implemented; their release-qualification bundles remain open. TinyUSDZ,
+OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
 
 - [ ] **Slice 1** — OBJ plus MTL through ufbx, including local texture policy.
   - [x] Product path: direct `.obj` open through one-shot and pooled AppContainer workers;
@@ -344,6 +344,15 @@ OpenUSD are pinned and USD-009 qualification is in progress. lib3mf remains unpi
   - [ ] FBX-007 corpus, fuzz, security, performance, clean-VM, and signed release
         qualification. Viewer support is implemented; Gate 4 evidence is not yet complete.
 - [ ] **Slice 3** — 3MF Core/Materials/Production/Beam Lattice preview through lib3mf.
+  - [x] 3MF-001 through 3MF-005: pinned lib3mf, bounded OPC preflight and
+        worker route, Core/Production root-build scene, Materials/Properties,
+        contained textures, and bounded Beam Lattice preview.
+  - [x] 3MF-006: viewer/activation/Open With, NSIS ProgID, portable and installer
+        worker-only dependency closure, licenses/SBOM, public limits, and
+        Debug/Release focused and real-app smoke verification.
+  - [ ] 3MF-007: immutable conformance/vendor corpus, fuzz/security/performance,
+        clean-machine installer lifecycle, soak, and signed-release evidence.
+  - [ ] 3MF-008: Explorer thumbnail adapter after the shared provider foundation.
 - [ ] **Slice 4** — USDA/USDC/USD and USDZ common static subset through TinyUSDZ, inside the
       general import worker.
   - [x] USD-001 through USD-005: pinned fast dependency, protocol, static scene/instance

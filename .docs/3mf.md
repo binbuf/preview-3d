@@ -1,6 +1,7 @@
 # 3MF post-MVP work plan
 
-Status: proposal  
+Status: 3MF-001 through 3MF-006 implemented; 3MF-007 qualification and
+3MF-008 thumbnails remain (2026-09-18)
 Prepared: 2026-09-18  
 Design authority: [design/README.md](design/README.md)
 
@@ -483,6 +484,37 @@ to expand into unbounded CPU or GPU geometry.
   first-N/source-order bias.
 
 ## 3MF-006 — product and viewer integration
+
+Status: implementation complete (2026-09-18). The supported static 3MF
+preview subset is now exposed by the viewer and NSIS/portable distribution;
+3MF-007 owns corpus, clean-machine install lifecycle, sustained performance,
+security/fuzz, and signed-release qualification. Explorer thumbnails remain
+separate 3MF-008 work.
+
+The viewer classifies `.3mf` case-insensitively across direct and forwarded
+opens, dialog, drop, Retry, and Open With discovery. It uses the existing
+instance scene and document-level selection/Fit semantics; no plate field,
+selector, or synthetic spacing was added. Info uses the existing 3MF source
+identity, verified document bounds, units, geometry/material/texture/node
+facts. The protocol layout remains v10.
+
+The worker-only release DLL closure is `lib3mf.dll`, `zip.dll`, `z.dll`, and
+`bz2.dll`. Portable/installer staging now includes that closure, corresponding
+license texts and SBOM entries, and hashes in `MANIFEST.json`; the NSIS
+installer maps `.3mf` to `Binbuf.Preview3D.ThreeMF.1` in capabilities,
+OpenWithProgids, and SupportedTypes without changing UserChoice. Uninstall and
+the test-association reset path remove the product-owned 3MF entries. No
+thumbnail CLSID or shell extension is registered.
+
+Debug/Release solution builds, focused 3MF-003..006 real-worker tests (10
+cases / 391 assertions in each), and the full Unit suites (99 cases each)
+pass. The broader 3MF/spike/hostile-worker selection passes 29 cases / 1,385
+assertions in each configuration. The real-app 3MF smoke passes 12 activation,
+viewer-control, replacement, cancellation, crash/timeout recovery, and
+relaunch checks in Debug and from the staged portable Release layout. Unsigned engineering
+portable and NSIS packages build with closed PE-dependency validation (73 and
+74 staged files respectively); Release signing and clean-VM install/repair/
+upgrade/uninstall verification remain 3MF-007 release gates.
 
 ### Objective
 

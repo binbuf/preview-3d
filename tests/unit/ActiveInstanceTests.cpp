@@ -75,11 +75,13 @@ TEST_CASE("Forward paths are absolute local supported-model paths", "[activation
     CHECK_FALSE(NormalizeForwardPath(L"\\\\server\\share\\model.glb",path,error));
     REQUIRE(NormalizeForwardPath(L"model.FBX",path,error));
     CHECK(std::filesystem::path(path).is_absolute());
+    REQUIRE(NormalizeForwardPath(L"model.3MF",path,error));
+    CHECK(std::filesystem::path(path).is_absolute());
     for (const auto* usd : {L"model.USD", L"model.usda", L"model.USDC", L"model.usdz"}) {
         REQUIRE(NormalizeForwardPath(usd,path,error));
         CHECK(std::filesystem::path(path).is_absolute());
     }
-    CHECK_FALSE(NormalizeForwardPath(L"model.3mf",path,error));
+    CHECK_FALSE(NormalizeForwardPath(L"model.step",path,error));
 }
 
 TEST_CASE("Session coordinator forwards and survives a close relaunch race", "[activation]")

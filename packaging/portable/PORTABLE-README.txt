@@ -16,6 +16,9 @@ Supported content
   textures, and a deterministic baked start pose for supported skin/blend data.
 * ASCII and binary STL.
 * ASCII and binary little- or big-endian PLY triangle meshes and point clouds.
+* The supported static .3mf preview subset: Core geometry, components, all root
+  build items, Materials and Properties colors/textures, Production model
+  parts, and bounded Beam Lattice previews.
 * .usd, .usda, .usdc, and .usdz static stages. The supported subset includes
   meshes, hierarchy, instances/point instances, transforms, common primvars,
   display color, material subsets, USD Preview Surface factors/textures, and
@@ -31,7 +34,7 @@ Important limits
 ----------------
 
 This is a local, read-only static viewer. Animation playback, editing, network
-assets, 3MF, CAD, thumbnails (including USD/FBX Explorer thumbnails), file associations, and a
+assets, CAD, thumbnails (including 3MF/USD/FBX Explorer thumbnails), file associations, and a
 persistent derived cache are outside this limited MVP. Optional unsupported
 glTF material/image features may fall back with a warning; required unsupported
 extensions fail. OBJ supports faces, triangulation, smoothing/generated normals,
@@ -41,6 +44,11 @@ roughness/metalness texture maps are not rendered. Imports and decoded data are
 bounded; over-limit or malformed models fail instead of rendering partially.
 FBX geometry caches, dynamic constraints, NURBS/subdivision tessellation,
 cameras, and lights are not rendered.
+3MF slicer-private multi-plate grouping and settings are ignored; all standard
+root-build items are shown together in authored coordinates. Slice, Secure
+Content, Volumetric, Implicit, toolpath, repair, slicing, and export features
+are not supported. Unsupported required extensions fail rather than presenting
+an unfaithful preview.
 USD animation, skeletal data, MaterialX, procedural schemas, arbitrary plugins,
 remote assets, and interactive variant selection are not supported. USD uses
 Tier B ceilings including 2 GiB primary source, 4 GiB aggregate local bytes and

@@ -31,6 +31,7 @@ enum class SourceFormat {
     Ply,
     Obj,
     Fbx,
+    ThreeMf,
     Usd,
 };
 

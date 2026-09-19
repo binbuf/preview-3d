@@ -45,14 +45,22 @@ chunks. The old `--d3d12` argument is accepted as a deprecated no-op.
 
 The sandboxed importer accepts `.glb`, `.gltf` (including external `.bin`/image siblings fetched
 through the brokered sidecar protocol), `.obj` with optional local `.mtl` and texture sidecars,
-binary/ASCII `.fbx`, ASCII/binary `.stl`, ASCII/binary `.ply`, and `.usd`/`.usda`/`.usdc`/`.usdz`. Its static glTF path supports bounded
+binary/ASCII `.fbx`, ASCII/binary `.stl`, ASCII/binary `.ply`, `.3mf`, and
+`.usd`/`.usda`/`.usdc`/`.usdz`. Its static glTF path supports bounded
 Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP, material texture slots and
 texture transforms. The OBJ path uses ufbx for polygon triangulation, smoothing/generated normals,
 UVs, vertex colors, object/group meshes, and MTL material factors, with broker-approved base-color,
-normal/bump, and emissive maps. The Open dialog, command line, and drag/drop accept all six direct
-formats plus the four USD extensions; `.mtl` remains a sidecar and is never a primary open type. The FBX path preserves
+normal/bump, and emissive maps. The Open dialog, command line, and drag/drop accept
+all supported direct formats; `.mtl` remains a sidecar and is never a primary open type. The FBX path preserves
 static hierarchy and instances, evaluates its deterministic first-stack start/rest pose, bakes
 supported skin and blend deformation, and maps supported embedded or broker-approved texture data.
+
+3MF is a bounded Tier B static-preview path for Core geometry, components, all
+root-build items, Materials and Properties colors/textures, Production model
+parts, and bounded Beam Lattice previews. Every standard build occurrence is
+shown together in authored coordinates. Slicer-private multi-plate grouping and
+settings are ignored, and Slice, Secure Content, Volumetric, Implicit, toolpath,
+repair, slicing, and export features are outside the supported subset.
 
 USD is a bounded Tier B static-preview path. Self-contained meshes, hierarchy,
 instances/point instances, transforms, common UV/color/normal primvars, display
@@ -90,7 +98,7 @@ arbitrary renderer/file-format plugins, interactive variants, and animation are
 also outside the supported subset. Tier B USD ceilings include 2 GiB primary,
 4 GiB aggregate local source/archive expansion, 20 million triangles or points,
 50,000 nodes, and a compatibility-host commit cap of min(4 GiB, 35% physical
-memory). Explorer thumbnails, including USD and FBX thumbnails, remain a
+memory). Explorer thumbnails, including 3MF, USD, and FBX thumbnails, remain a
 separate deliverable.
 
 ## Controls
