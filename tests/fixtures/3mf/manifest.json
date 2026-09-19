@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "corpus": "3MF-007",
+  "sourceDirectory": "../3mf-spike",
+  "sourceRevision": "lib3mf 2.5.0, 64bb454d1fcb53effa57d3cef752a10d740d41a2; see ../3mf-spike/README.md and LIB3MF-LICENSE.txt",
+  "entries": [
+    {"path":"core-box.3mf.base64","bytes":1680,"sha256":"e2633a8c2e014d5f8c612f13f64f48d4e722972c0fb0923795fa83de5aee24f6","family":"Core","expectation":"one box mesh, one root build item"},
+    {"path":"nested-components.3mf.base64","bytes":1398,"sha256":"b5fa98899b990c6bcfb615992d8a21739f6b722a05b4070ec08d591bd277b965","family":"Core/Production","expectation":"nested component occurrence, one root build item"},
+    {"path":"production-boxes.3mf.base64","bytes":16568,"sha256":"cc479831e02d01f4696719773b2f4baeb61bd9f2d3ac3b37cdd9f9fd2078dd97","family":"Production/Slice","expectation":"upstream sample requires unsupported Slice; typed UnsupportedRequiredFeature"},
+    {"path":"static-production.3mf.base64","bytes":16164,"sha256":"2efcd56f2d5cd3bb09b66cf902b401a9dd17ada4396b65658ada531a4637044e","family":"Production","provenance":"product-authored deterministic repackage of production-boxes: change requiredextensions from 's p' to 'p' in all three model parts; Slice data becomes optional","expectation":"cross-part resources, two root build items; optional Slice data ignored"},
+    {"path":"materials-texture.3mf.base64","bytes":24582,"sha256":"52f787357062da8bfbb14c1b5258a11513717b4beb072b00aa0161aa76a34b36","family":"Materials","expectation":"contained texture and material resource"},
+    {"path":"beam-lattice.3mf.base64","bytes":1730,"sha256":"6814ef817d4845b76717bb33f56e06168758f34a5f0b6af94dc76f5cdce0e045","family":"Beam Lattice","expectation":"upstream API sample; production viewer outcome under investigation"},
+    {"path":"beam-representation.3mf.base64","bytes":1566,"sha256":"28248e56b8590ea7e2c33cc375cfa9cdda89eb98b31ae22ee5072e19d058c8bf","family":"Beam Lattice","expectation":"authored representation mesh"}
+  ],
+  "derived": [
+    {"path":"empty.3mf","base":"core-box.3mf.base64","operation":"empty","bytes":0,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","expectation":"typed archive rejection and valid reopen"},
+    {"path":"truncated.3mf","base":"core-box.3mf.base64","operation":"truncate-tail","bytes":1669,"sha256":"0e31b37d0d3122d9dba6c54fe2cfdd876ac2e5bb5c1863cb4d98515faa31ff96","expectation":"typed archive rejection and valid reopen"},
+    {"path":"bad-local-signature.3mf","base":"core-box.3mf.base64","operation":"bad-local-signature","bytes":1680,"sha256":"5f7a8f8cea245046f4584e63ec5a711a21f880c693856e5aaf5980b8bbc8102a","expectation":"invalid local header rejected before model load"},
+    {"path":"bad-central-offset.3mf","base":"core-box.3mf.base64","operation":"bad-central-offset","bytes":1680,"sha256":"c61928772fc2bf9edda3579259dd3bcdc4f4816616ed65839ad94171f491e4b4","expectation":"invalid central directory offset rejected before model load"},
+    {"path":"unsafe-central-path.3mf","base":"core-box.3mf.base64","operation":"unsafe-central-path","bytes":1680,"sha256":"27f29b06f61d25931317d5199c608ec74be7d45395fcb32eb99a4e0e57ec8035","expectation":"traversal part name rejected before model load"},
+    {"path":"private-metadata.3mf","base":"core-box.3mf.base64","operation":"private-metadata","bytes":1687,"sha256":"d4a7b2647ad93fb71c72ce4154e262760fa5000e900e5e99d4ed737f26120d62","expectation":"product-authored Bambu-style optional metadata does not alter standard build"},
+    {"path":"unknown-required.3mf","base":"core-box.3mf.base64","operation":"unknown-required","bytes":1549,"sha256":"1cea11c33fd70e1327f333b96ce108f95cf7e3e8e423f7e04d55e93ab4c79e55","expectation":"UnsupportedRequiredFeature"}
+  ]
+}

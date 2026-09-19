@@ -419,10 +419,44 @@ constexpr Fixture kFixtures[] = {
     { "core-box.3mf.base64", "E2633A8C2E014D5F8C612F13F64F48D4E722972C0FB0923795FA83DE5AEE24F6", 1, 1 },
     { "nested-components.3mf.base64", "B5FA98899B990C6BCFB615992D8A21739F6B722A05B4070EC08D591BD277B965", 1, 1 },
     { "production-boxes.3mf.base64", "CC479831E02D01F4696719773B2F4BAEB61BD9F2D3AC3B37CDD9F9FD2078DD97", 2, 2 },
+    { "static-production.3mf.base64", "2EFCD56F2D5CD3BB09B66CF902B401A9DD17ADA4396B65658ADA531A4637044E", 2, 2 },
     { "materials-texture.3mf.base64", "52F787357062DA8BFBB14C1B5258A11513717B4BEB072B00AA0161AA76A34B36", 1, 1 },
     { "beam-lattice.3mf.base64", "6814EF817D4845B76717BB33F56E06168758F34A5F0B6AF94DC76F5CDCE0E045", 2, 1 },
     { "beam-representation.3mf.base64", "28248E56B8590EA7E2C33CC375CFA9CDDA89EB98B31AE22EE5072E19D058C8BF", 2, 1 },
 };
+
+std::vector<std::byte> CoreBoxVariant(bool unknownRequired, bool privateMetadata)
+{
+    const auto source = DecodeBase64("core-box.3mf.base64");
+    import_worker::ThreeMfOpcPackage package;
+    REQUIRE(import_worker::InspectThreeMfOpc(source, &package)
+            == import_worker::ThreeMfOpcError::None);
+    std::string model;
+    for (const auto& part : package.parts) {
+        if (part.name != "3d/3dmodel.model") continue;
+        std::vector<std::byte> expanded;
+        REQUIRE(import_worker::ExtractThreeMfOpcPart(source, part, expanded, 1024 * 1024)
+                == import_worker::ThreeMfOpcError::None);
+        model.assign(reinterpret_cast<const char*>(expanded.data()), expanded.size());
+    }
+    REQUIRE_FALSE(model.empty());
+    if (unknownRequired) {
+        const auto marker = model.find("<model ");
+        REQUIRE(marker != std::string::npos);
+        model.insert(marker + 7,
+            "requiredextensions=\"evil\" xmlns:evil=\"http://example.invalid/3mf/evil\" ");
+    }
+    const std::string contentTypes = R"(<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/><Default Extension="config" ContentType="application/xml"/></Types>)";
+    const std::string relationships = R"(<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>)";
+    std::vector<std::pair<std::string, std::string>> entries{
+        { "[Content_Types].xml", contentTypes }, { "_rels/.rels", relationships },
+        { "3D/3dmodel.model", model },
+    };
+    if (privateMetadata)
+        entries.emplace_back("Metadata/model_settings.config",
+            "<config><plate><plater_id>1</plater_id></plate></config>");
+    return BuildStoredPackage(entries);
+}
 
 std::optional<import_worker::ThreeMfSpikePayloadHeader> RunSpike(
     import_broker::WorkerPool& pool, size_t worker, HANDLE file, uint64_t sourceLength,
@@ -855,7 +889,7 @@ TEST_CASE("3MF-003 normalizes only root-build Core and Production occurrences", 
     constexpr Expected fixtures[] = {
         { "core-box.3mf.base64", 1, 1 },
         { "nested-components.3mf.base64", 1, 1 },
-        { "production-boxes.3mf.base64", 2, 2 },
+        { "static-production.3mf.base64", 2, 2 },
     };
     uint64_t generation = 0x336d66050000ull;
     for (const auto& fixture : fixtures) {
@@ -895,7 +929,7 @@ TEST_CASE("3MF-003 normalizes only root-build Core and Production occurrences", 
 TEST_CASE("3MF-006 shipping viewer bridge routes 3MF without Tier-A request flags",
           "[3mf-006][viewer-bridge]")
 {
-    TemporaryFile source(DecodeBase64("production-boxes.3mf.base64"));
+    TemporaryFile source(DecodeBase64("static-production.3mf.base64"));
     source.Close();
     const auto result = d3d12_import_bridge::RunImport(
         d3d12_import_bridge::SourceFormat::ThreeMf, source.path(), 6001);
@@ -1237,6 +1271,73 @@ TEST_CASE("3MF-005 validates compact lattice data before tessellation",
     import_worker::ThreeMfDisplayCatalog catalog;
     CHECK(import_worker::ScanThreeMfDisplayProperties(packageBytes, package, catalog,
         [] { return true; }) == model_core::ImportErrorCode::Cancelled);
+}
+
+TEST_CASE("3MF-007 malformed OPC inputs and unknown requirements recover in the real worker",
+          "[3mf-007][archive][recovery]")
+{
+    const auto valid = DecodeBase64("core-box.3mf.base64");
+    auto brokenLocal = valid;
+    REQUIRE(brokenLocal.size() > 4);
+    brokenLocal[0] = std::byte{'B'};
+    auto brokenCentral = valid;
+    const auto end = brokenCentral.size() - 22;
+    REQUIRE(Read32(brokenCentral, end) == 0x06054b50u);
+    Put32(brokenCentral, end + 16, 0xfffffff0u);
+    auto unsafePath = valid;
+    size_t central = 0;
+    while (central + 49 < unsafePath.size()
+           && Read32(unsafePath, central) != 0x02014b50u) ++central;
+    REQUIRE(central + 49 < unsafePath.size());
+    REQUIRE(unsafePath[central + 46] == std::byte{'3'});
+    unsafePath[central + 46] = std::byte{'.'};
+    unsafePath[central + 47] = std::byte{'.'};
+    unsafePath[central + 48] = std::byte{'/'};
+
+    struct InvalidCase {
+        std::vector<std::byte> bytes;
+        import_worker::ThreeMfOpcError preflight;
+        model_core::ImportErrorCode broker;
+    };
+    const std::vector<InvalidCase> cases{
+        { {}, import_worker::ThreeMfOpcError::NotZip,
+          model_core::ImportErrorCode::EmptyGeometry },
+        { std::vector<std::byte>(valid.begin(), valid.end() - 11),
+          import_worker::ThreeMfOpcError::NotZip, model_core::ImportErrorCode::ArchiveLimit },
+        { brokenLocal, import_worker::ThreeMfOpcError::InvalidDirectory,
+          model_core::ImportErrorCode::ArchiveLimit },
+        { brokenCentral, import_worker::ThreeMfOpcError::InvalidDirectory,
+          model_core::ImportErrorCode::ArchiveLimit },
+        { unsafePath, import_worker::ThreeMfOpcError::UnsafePath,
+          model_core::ImportErrorCode::ArchiveLimit },
+    };
+    uint64_t generation = 0x336d66080000ull;
+    for (const auto& input : cases) {
+        CAPTURE(generation, uint32_t(input.preflight));
+        CHECK(import_worker::InspectThreeMfOpc(input.bytes) == input.preflight);
+        const auto rejected = ImportThreeMfBytes(input.bytes, ++generation);
+        CHECK_FALSE(rejected.ok);
+        CHECK(rejected.errorCode == input.broker);
+        const auto recovered = ImportThreeMfBytes(valid, ++generation);
+        CHECK(recovered.ok);
+    }
+
+    const auto privateMetadata = ImportThreeMfBytes(CoreBoxVariant(false, true), ++generation);
+    CHECK(privateMetadata.ok);
+    const auto unknownRequired = ImportThreeMfBytes(CoreBoxVariant(true, false), ++generation);
+    CHECK_FALSE(unknownRequired.ok);
+    CHECK(unknownRequired.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+    const auto requiredSlice = ImportThreeMfBytes(
+        DecodeBase64("production-boxes.3mf.base64"), ++generation);
+    CHECK_FALSE(requiredSlice.ok);
+    CHECK(requiredSlice.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+    const auto optionalBytes = DecodeBase64("static-production.3mf.base64");
+    const auto optionalPreflight = import_worker::InspectThreeMfOpc(optionalBytes);
+    CAPTURE(uint32_t(optionalPreflight));
+    const auto optionalSlice = ImportThreeMfBytes(optionalBytes, ++generation);
+    CHECK(optionalSlice.ok);
+    const auto recovered = ImportThreeMfBytes(valid, ++generation);
+    CHECK(recovered.ok);
 }
 
 TEST_CASE("manually supplied 3MF corpus imports through the production worker",

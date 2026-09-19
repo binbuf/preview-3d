@@ -26,6 +26,8 @@ constexpr wchar_t kCoreNamespace[] = L"http://schemas.microsoft.com/3dmanufactur
 constexpr wchar_t kMaterialNamespace[] = L"http://schemas.microsoft.com/3dmanufacturing/material/2015/02";
 constexpr wchar_t kBeamNamespace[] = L"http://schemas.microsoft.com/3dmanufacturing/beamlattice/2017/02";
 constexpr wchar_t kBallNamespace[] = L"http://schemas.microsoft.com/3dmanufacturing/beamlattice/balls/2020/07";
+constexpr wchar_t kProductionNamespace[] = L"http://schemas.microsoft.com/3dmanufacturing/production/2015/06";
+constexpr wchar_t kXmlnsNamespace[] = L"http://www.w3.org/2000/xmlns/";
 constexpr uint64_t kMaxModelXmlBytes = 256ull * 1024 * 1024;
 constexpr uint64_t kMaxAggregateModelXmlBytes = 512ull * 1024 * 1024;
 
@@ -63,6 +65,36 @@ bool AttributeNamespace(IXmlReader* reader, const wchar_t* name, const wchar_t* 
     if (ok) value.assign(raw, length);
     reader->MoveToElement();
     return ok;
+}
+
+model_core::ImportErrorCode CheckRequiredExtensions(IXmlReader* reader)
+{
+    std::wstring required;
+    if (!Attribute(reader, L"requiredextensions", required))
+        return model_core::ImportErrorCode::None;
+    if (required.size() > 4096) return model_core::ImportErrorCode::ResourceLimit;
+    size_t offset = 0;
+    uint32_t count = 0;
+    while (offset < required.size()) {
+        while (offset < required.size() && (required[offset] == L' '
+               || required[offset] == L'\t' || required[offset] == L'\r'
+               || required[offset] == L'\n')) ++offset;
+        if (offset == required.size()) break;
+        const size_t start = offset;
+        while (offset < required.size() && required[offset] != L' '
+               && required[offset] != L'\t' && required[offset] != L'\r'
+               && required[offset] != L'\n') ++offset;
+        if (++count > 32 || offset - start > 128)
+            return model_core::ImportErrorCode::ResourceLimit;
+        const std::wstring prefix = required.substr(start, offset - start);
+        std::wstring uri;
+        if (!AttributeNamespace(reader, prefix.c_str(), kXmlnsNamespace, uri)
+            || !(uri == kCoreNamespace || uri == kMaterialNamespace
+                 || uri == kProductionNamespace || uri == kBeamNamespace
+                 || uri == kBallNamespace))
+            return model_core::ImportErrorCode::UnsupportedRequiredFeature;
+    }
+    return model_core::ImportErrorCode::None;
 }
 
 bool Unsigned(const std::wstring& value, uint32_t& result)
@@ -230,6 +262,12 @@ model_core::ImportErrorCode ParseModelPart(std::span<const std::byte> bytes,
         const wchar_t* uri = nullptr;
         if (FAILED(reader->GetLocalName(&local, nullptr)) || FAILED(reader->GetNamespaceUri(&uri, nullptr)))
             return model_core::ImportErrorCode::MalformedData;
+
+        if (depth == 0 && Equals(uri, kCoreNamespace) && Equals(local, L"model")) {
+            const auto required = CheckRequiredExtensions(reader.Get());
+            if (required != model_core::ImportErrorCode::None) return required;
+            continue;
+        }
 
         if (Equals(uri, kCoreNamespace) && Equals(local, L"object")) {
             std::wstring idText;

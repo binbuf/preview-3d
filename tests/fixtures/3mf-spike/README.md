@@ -5,9 +5,10 @@ text makes the small feasibility corpus reviewable by the repository tooling;
 tests decode to temporary files and pass only inherited handles to the real
 AppContainer worker.
 
-All source packages came from the lib3mf 2.5.0 test corpus at upstream commit
-`64bb454d1fcb53effa57d3cef752a10d740d41a2` and are covered by
-[`LIB3MF-LICENSE.txt`](LIB3MF-LICENSE.txt).
+The original six source packages came from the lib3mf 2.5.0 test corpus at
+upstream commit `64bb454d1fcb53effa57d3cef752a10d740d41a2` and are covered
+by [`LIB3MF-LICENSE.txt`](LIB3MF-LICENSE.txt). The static Production derivative
+described below is product-authored from that source.
 
 | Fixture | Upstream path | Decoded bytes | SHA-256 |
 | --- | --- | ---: | --- |
@@ -23,3 +24,14 @@ lib3mf strict mode reject the upstream package, then repacks it deterministicall
 its Core/Production geometry and component relationships are unchanged. The
 test also builds a deterministic 128-level Core component package at runtime so
 the checked-in corpus stays small.
+
+`production-boxes` declares Slice as required in every model part. The shipping
+viewer does not support Slice, so 3MF-007 retains it as a rejection sample.
+`static-production.3mf.base64` is a deterministic product-authored repackage
+of that source with `requiredextensions="s p"` changed to `"p"` in all three
+model parts. Its Slice payloads are optional and the standard Production build
+remains unchanged. The decoded file is 16,164 bytes with SHA-256
+`2efcd56f2d5cd3bb09b66cf902b401a9dd17ada4396b65658ada531a4637044e`.
+The transformation is reproducible with `make_slice_optional` and
+`rewrite_package` in `../3mf/verify.py`; the committed base64 is the frozen
+test input and verification never rewrites it.

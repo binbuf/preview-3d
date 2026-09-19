@@ -1,5 +1,26 @@
 # No-GPU format fuzz targets
 
+## 3MF
+
+`ThreeMfFuzz` instruments the product-owned OPC/ZIP preflight, bounded Deflate
+and CRC extraction, and the worker's XML display/lattice scan. It takes no
+model path, sidecar, network, window, or GPU. The standalone envelope can also
+force cancellation. The 1 MiB input, 4 MiB expansion, 128-entry, and 32:1
+limits keep an in-process fuzz run bounded; the production AppContainer and Job
+limits are separately exercised by ImportIsolation.
+
+```powershell
+python tests/fixtures/3mf/verify.py
+python tests/fuzz/prepare_3mf_seeds.py TestResults/3mf-007/fuzz-seeds-fresh
+msbuild tests/fuzz/ThreeMfFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 /m:1
+tests/fuzz/x64/Release/ThreeMfFuzz.exe TestResults/3mf-007/fuzz-seeds-fresh -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 -print_final_stats=1 -verbosity=0
+```
+
+The seed preparer refuses a non-empty directory because libFuzzer evolves the
+corpus it receives. `lib3mf` itself is a separately built app-local DLL and is
+not sanitizer-instrumented by this target; model construction, full adapter
+normalization, process containment, and recovery remain real-worker tests.
+
 ## USD
 
 `UsdFuzz` is an explicitly built multi-domain sanitizer target for USD-009. It

@@ -96,7 +96,7 @@ def prepare_fixtures():
     target.mkdir(parents=True, exist_ok=True)
     names = {
         'core-box.3mf.base64': 'core-uppercase.3MF',
-        'production-boxes.3mf.base64': 'production-boxes.3mf',
+        'static-production.3mf.base64': 'production-boxes.3mf',
         'materials-texture.3mf.base64': 'materials-texture.3mf',
     }
     for encoded_name, decoded_name in names.items():

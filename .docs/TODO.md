@@ -350,8 +350,11 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
   - [x] 3MF-006: viewer/activation/Open With, NSIS ProgID, portable and installer
         worker-only dependency closure, licenses/SBOM, public limits, and
         Debug/Release focused and real-app smoke verification.
-  - [ ] 3MF-007: immutable conformance/vendor corpus, fuzz/security/performance,
-        clean-machine installer lifecycle, soak, and signed-release evidence.
+  - [ ] 3MF-007: initial hash-frozen lib3mf/product corpus, real-worker recovery,
+        required-extension policy, and standalone fuzz smoke landed. Still needs
+        official and licensed vendor corpus, OPC relationship validation,
+        full security/performance, clean-machine installer lifecycle, soak,
+        and signed-release evidence. See `3MF-007-VERIFICATION.md`.
   - [ ] 3MF-008: Explorer thumbnail adapter after the shared provider foundation.
 - [ ] **Slice 4** — USDA/USDC/USD and USDZ common static subset through TinyUSDZ, inside the
       general import worker.

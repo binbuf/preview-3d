@@ -560,6 +560,13 @@ distribution path, without inventing plate semantics.
 
 ## 3MF-007 — qualification and hardening
 
+Status: in progress (2026-09-18). The first corpus, real-worker rejection and
+recovery regressions, required-extension policy fix, and standalone fuzz smoke
+are recorded in [3MF-007-VERIFICATION.md](3MF-007-VERIFICATION.md). Official and
+licensed vendor corpus, relationship-policy closure, sustained performance,
+clean-VM lifecycle, soak, and signed-release evidence remain open. Do not mark
+Gate 4's viewer slice complete yet.
+
 ### Objective
 
 Produce the evidence required to call the Gate 4 3MF viewer slice complete.

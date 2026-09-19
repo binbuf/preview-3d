@@ -4,6 +4,49 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **3MF-007 qualification started (2026-09-18); release gate remains open.**
+  `tests/fixtures/3mf/manifest.json` freezes seven decoded sources and seven
+  deterministic derived cases with independent hashes and expected outcomes.
+  `verify.py` checks the hashes and proves the new static Production source is
+  exactly the upstream required-Slice sample with `requiredextensions="s p"`
+  changed to `"p"` in its three model parts. The upstream source must fail the
+  shipping reader as `UnsupportedRequiredFeature`: Slice is outside the static
+  viewer subset even though lib3mf's compatibility mode can load it. The
+  optional-Slice derivative preserves two standard build occurrences and is
+  now the Production viewer/app-smoke golden. Keep the upstream file only in
+  the callback/API spike and negative tests; otherwise a test can silently
+  bless an unsupported required extension.
+
+  A real-worker regression exposed that the product XML scan did not enforce
+  `requiredextensions` at all. It now resolves each declared root-model prefix
+  against a closed Core/Materials/Production/Beam namespace allowlist before
+  lib3mf model construction. Unknown and unsupported required extensions fail
+  with the typed result; malformed OPC inputs still leave the next valid open
+  usable. The ZIP64 expansion-ratio comparison now avoids untrusted 64-bit
+  multiplication overflow. `ThreeMfFuzz` instruments product OPC/Deflate/XML
+  boundaries with fresh immutable seeds; the final 11-second Release ASan
+  smoke ran 145,971 executions without a finding (440 MiB peak RSS). It does not
+  instrument the separately built lib3mf DLL or full adapter.
+
+  Final Debug/Release focused real-worker tests pass 11 cases / 1,757 assertions
+  each. Release 3MF spike plus hostile-worker tests pass 19 cases / 1,058
+  assertions; Debug Unit passes 99 cases / 7,629 assertions; Release real-app
+  smoke passes 12 checks using the new Production source. Three local slicer
+  files pass the optional manual-corpus test but remain untracked. A broad
+  Release security selector failed outside the 3MF route in OpenUSD/fixture
+  tests, and a serial Release Unit rerun failed GPU device/queue creation after
+  the app smoke; those runs cannot be claimed as green. A final Debug rebuild
+  then hit `C1041` because Visual Studio's IDE build was concurrently compiling
+  the same worker into `import-worker/x64/Debug/vc145.pdb`. Once that IDE build
+  finished, a serial Debug rebuild and focused rerun passed; the test command
+  that followed the failed build used an older binary and is excluded from
+  final-source evidence. The product-owned OPC
+  preflight still does not parse Content Types or relationship XML/targets,
+  despite the design's stated requirement. Finish that boundary, official and
+  licensed vendor corpus, numeric goldens, performance/soak, clean VM, and
+  signing before marking 3MF-007 or Gate 4 complete. Exact commands and results
+  are in [3MF-007-VERIFICATION.md](./3MF-007-VERIFICATION.md).
+
 - **3MF-006 product/viewer integration (2026-09-18): implemented; 3MF-007
   qualification remains.** `.3mf` now reaches the existing `ThreeMf` broker
   opcode through case-insensitive command-line, dialog, drop, secondary
