@@ -1,0 +1,11 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));
+ENDSEC;
+DATA;
+#1=APPLICATION_CONTEXT('core data');
+#9=DOCUMENT_FILE('sub/other.stp',('AUTOMOTIVE_DESIGN'),'relative external part',#1);
+ENDSEC;
+END-ISO-10303-21;

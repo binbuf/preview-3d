@@ -1,5 +1,33 @@
 # No-GPU format fuzz targets
 
+## STEP
+
+`StepFuzz` is an explicitly built sanitizer target for the bounded static
+STEP/STP admission boundary. It creates no window, GPU device, file mapping,
+resolver, or child process, and it never links the pinned OCCT kernel. Its
+bounded envelope selects one of four production surfaces:
+
+- the product-owned `StepPart21Preflight` lexical admission scanner, including
+  the `FILE_POPULATION`/`DOCUMENT_FILE` external-declaration discovery, in both
+  its pure byte form and the handle-streaming form;
+- declaration discovery with the external-document ceiling raised, so the
+  scanner keeps lexing instead of failing closed at the first declaration;
+- the production framed control decoder with mutated
+  `StartStepImportFromFile` request-flag masks and `StepProgress` records; and
+- the trusted normalized-output copy-and-validate decoder.
+
+```powershell
+python tests/fuzz/prepare_step_seeds.py TestResults/step-006/fuzz-seeds
+msbuild tests/fuzz/StepFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 /m:1
+tests/fuzz/x64/Release/StepFuzz.exe TestResults/step-006/fuzz-seeds -max_total_time=45 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 -print_final_stats=1 -verbosity=0
+```
+
+The 1 MiB standalone input cap is deliberately smaller than the product's
+Tier-B primary-source cap, and the scanner limits are reduced so an in-process
+run is bounded. The pinned OCCT transfer/tessellation containment stays in the
+real AppContainer/Job ImportIsolation tests. The seed preparer refuses a
+non-empty output directory because libFuzzer evolves the corpus it receives.
+
 ## 3MF
 
 `ThreeMfFuzz` instruments the product-owned OPC/ZIP preflight, bounded Deflate

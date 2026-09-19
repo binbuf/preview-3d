@@ -1,14 +1,15 @@
 # STEP-001 spike harness and STEP-003 fixtures
 
 Test-only sources and the immutable STEP/STP fixtures used by the
-[STEP-001 spike](../STEP-001-SPIKE-RESULTS.md) and
-[STEP-003 scene adapter](../STEP-003-VERIFICATION.md). None of the harness
-sources is linked into product code, and `Preview3D.exe`,
+[STEP-001 spike](../STEP-001-SPIKE-RESULTS.md),
+[STEP-003 scene adapter](../STEP-003-VERIFICATION.md), and the
+[STEP-006 interoperability matrix](../STEP-006-INTEROP-MATRIX.md). None of the
+harness sources is linked into product code, and `Preview3D.exe`,
 `Preview3DImportWorker.exe`, and the thumbnail provider never see them.
 
 ## Fixtures
 
-The `.stp` files are the frozen STEP-003 test inputs. They were generated with
+The `.stp` files are the frozen STEP test inputs. They were generated with
 OCCT's XDE writer by `GenerateStepFixtures.cpp`; the product host never links
 the writer. They are committed as clear-text ISO 10303-21 files and the tests
 open them by path through the broker, which duplicates an already-open
@@ -26,15 +27,24 @@ the committed files are the durable artifact.
 | `instance_color_ap214.stp` | One definition placed three times; middle instance color overrides the definition color |
 | `face_color_ap214.stp` | Per-face subshape colors with no shape-level color (material seam split) |
 | `inch_part_ap214.stp` | `CONVERSION_BASED_UNIT('INCH')` authored length unit |
+| `tessellated_ap242.stp` | AP242 B-rep plus an authored `TESSELLATED_SHAPE_REPRESENTATION` (`write.step.tessellated=On`) |
+| `tessellated_only_ap242.stp` | AP242 tessellated-only representation (`TRIANGULATED_SURFACE_SET`), no B-rep fallback |
+| `faceted_invalid_ap242.stp` | Derived from `tessellated_only_ap242.stp` with two out-of-range triangle indices (must fail `MalformedData`) |
+| `no_geometry_ap242.stp` | Valid AP242 product metadata with no visual geometry (must fail `EmptyGeometry`) |
+| `unsupported_schema.stp` | Geometry-free unknown `FILE_SCHEMA` (schema is classification only) |
+| `external_document_ap214.stp` | `FILE_POPULATION` required external document (must fail `UnsupportedRequiredFeature`) |
+| `external_document_relative_ap214.stp` | Relative `DOCUMENT_FILE` reference |
+| `external_document_absolute_ap214.stp` | Absolute, UNC, and URL `DOCUMENT_FILE` references |
 
 Sizes and SHA-256 hashes are recorded in
-[`../../.docs/STEP-003-VERIFICATION.md`](../../.docs/STEP-003-VERIFICATION.md).
+[`../../.docs/STEP-003-VERIFICATION.md`](../../.docs/STEP-003-VERIFICATION.md)
+and [`../../.docs/STEP-006-INTEROP-MATRIX.md`](../../.docs/STEP-006-INTEROP-MATRIX.md).
 
 ## Harness sources
 
 | File | Purpose |
 | --- | --- |
-| `GenerateStepFixtures.cpp` | Writes the AP203/AP214/AP242 parts and assembly/instance/face-color fixtures with the XDE writer. |
+| `GenerateStepFixtures.cpp` | Writes the AP203/AP214/AP242 parts, assembly/instance/face-color fixtures, and the AP242 tessellated fixture with the XDE writer. It constructs one throwaway writer first so the `write.step.*` `Interface_Static` values are applied instead of being overwritten by defaults. |
 | `StepSpikeLocalDriver.cpp` | Runs `RunStepSpike` in-process against a fixture for measurement. |
 | `StepSpikeSandboxHarness.cpp` | Launches the real `Preview3DStepSpike.exe` through the product AppContainer/Job launcher and asserts success, preflight rejection, cancellation, Job termination/recovery, and authority denial. |
 | `StepAuthorityProbe.cpp` | Separate executable launched under the same container to prove path, network, and child-process denial. |

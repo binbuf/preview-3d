@@ -34,6 +34,7 @@
 #include <Quantity_Color.hxx>
 #include <Quantity_ColorRGBA.hxx>
 #include <STEPCAFControl_Reader.hxx>
+#include <Standard_Failure.hxx>
 #include <Standard_Version.hxx>
 #include <StepData_StepModel.hxx>
 #include <TCollection_AsciiString.hxx>
@@ -1236,7 +1237,18 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                                        static_cast<std::uint64_t>(size.QuadPart));
         std::istream stream(source.get());
         const auto readStart = SteadyClock::now();
-        const IFSelect_ReturnStatus readStatus = reader.ReadStream("preview3d.step", stream);
+        IFSelect_ReturnStatus readStatus = IFSelect_RetFail;
+        try {
+            readStatus = reader.ReadStream("preview3d.step", stream);
+        } catch (...) {
+            // A malformed or adversarial Part-21 topology can make OCCT throw
+            // while building its in-memory model. That is bad input, not a
+            // product defect, so classify it as MalformedData rather than
+            // letting the generic boundary handler report an internal failure.
+            result.errorCode = model_core::ImportErrorCode::MalformedData;
+            closeDocument();
+            return result;
+        }
         result.timings.readMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
         emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
         if (readStatus != IFSelect_RetDone) {
@@ -1249,8 +1261,27 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             closeDocument();
             return result;
         }
+        // A syntactically valid Part-21 file can carry product/layer metadata
+        // but no transferable shape representation. `Transfer` reports that as
+        // a generic failure, which would otherwise be indistinguishable from a
+        // malformed file; classify the geometry-free family explicitly so the
+        // viewer shows the fixed "no supported geometry" result instead.
+        if (reader.ChangeReader().NbRootsForTransfer() <= 0) {
+            result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
+            closeDocument();
+            return result;
+        }
         const auto transferStart = SteadyClock::now();
-        const bool transferred = reader.Transfer(document);
+        bool transferred = false;
+        try {
+            transferred = reader.Transfer(document);
+        } catch (...) {
+            // Same reasoning as ReadStream: invalid shape/tessellation data is
+            // rejected as malformed rather than surfacing a kernel exception.
+            result.errorCode = model_core::ImportErrorCode::MalformedData;
+            closeDocument();
+            return result;
+        }
         result.timings.transferMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(transferStart));
         emitProgress(model_core::kStepPhaseTransfer, 0, 0, 0, result.timings.transferMilliseconds);
         if (!transferred) {
@@ -1415,6 +1446,14 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         emitProgress(model_core::kStepPhaseEmit, definitionsDone, definitionTotal, 0,
                      result.timings.emitMilliseconds);
         closeDocument();
+        return result;
+    } catch (const Standard_Failure&) {
+        // OCCT reports invalid input topology and out-of-range tessellation
+        // references by throwing Standard_Failure. That is malformed data, not
+        // a product defect, so it must not reach the viewer as an internal
+        // failure. No kernel message is copied.
+        closeDocument();
+        result.errorCode = model_core::ImportErrorCode::MalformedData;
         return result;
     } catch (const std::exception&) {
         closeDocument();

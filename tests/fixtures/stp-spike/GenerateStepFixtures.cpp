@@ -4,9 +4,11 @@
 #pragma warning(push, 0)
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRep_Builder.hxx>
+#include <IMeshTools_Parameters.hxx>
 #include <Interface_Static.hxx>
 #include <STEPCAFControl_Writer.hxx>
 #include <TDF_LabelSequence.hxx>
@@ -50,9 +52,10 @@ Handle(TDocStd_Document) NewDocument()
 }
 
 bool WriteDocument(const Handle(TDocStd_Document)& document, const std::filesystem::path& path,
-                   const char* schema)
+                   const char* schema, const char* tessellated = nullptr)
 {
     Interface_Static::SetCVal("write.step.schema", schema);
+    if (tessellated != nullptr) Interface_Static::SetCVal("write.step.tessellated", tessellated);
     STEPCAFControl_Writer writer;
     writer.SetColorMode(Standard_True);
     writer.SetNameMode(Standard_True);
@@ -228,6 +231,33 @@ bool WriteFaceColorPart(const std::filesystem::path& path)
     return WriteDocument(document, path, "AP214IS");
 }
 
+// STEP-006: an AP242 part carrying both an authored B-rep and a
+// TESSELLATED_SHAPE_REPRESENTATION (TRIANGULATED_FACE + COORDINATES_LIST).
+// `write.step.tessellated=On` forces the tessellated representation to be
+// written alongside the B-rep; the default `OnNoBRep` would suppress it because
+// this shape has a B-rep. The pinned reader translates the tessellated
+// representation by default (`read.step.tessellated=On`), and the adapter
+// prefers the authored triangulation over regenerating one.
+bool WriteTessellatedPart(const std::filesystem::path& path)
+{
+    const Handle(TDocStd_Document) document = NewDocument();
+    const Handle(XCAFDoc_ShapeTool) shapes = XCAFDoc_DocumentTool::ShapeTool(document->Main());
+    const Handle(XCAFDoc_ColorTool) colors = XCAFDoc_DocumentTool::ColorTool(document->Main());
+
+    TopoDS_Shape box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
+    IMeshTools_Parameters parameters;
+    parameters.Deflection = 0.5;
+    parameters.Angle = 0.2;
+    parameters.Relative = Standard_False;
+    parameters.InParallel = Standard_False;
+    BRepMesh_IncrementalMesh mesher(box, parameters);
+    mesher.Perform();
+
+    const TDF_Label label = shapes->AddShape(box, Standard_False);
+    colors->SetColor(label, Quantity_Color(0.2, 0.7, 0.3, Quantity_TOC_RGB), XCAFDoc_ColorGen);
+    return WriteDocument(document, path, "AP242DIS", "On");
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv)
@@ -237,6 +267,11 @@ int wmain(int argc, wchar_t** argv)
     std::filesystem::create_directories(output, error);
     XCAFApp_Application::GetApplication();
     Interface_Static::SetCVal("write.step.unit", "MM");
+    // The Interface_Static entries are created with their defaults the first
+    // time a writer initializes the STEP resource. Construct one throwaway
+    // writer so every SetCVal below is applied instead of being overwritten by
+    // the defaults.
+    { STEPCAFControl_Writer warmup; (void)warmup; }
 
     struct Case { const wchar_t* name; bool (*write)(const std::filesystem::path&); };
     const Case cases[] = {
@@ -248,6 +283,7 @@ int wmain(int argc, wchar_t** argv)
         {L"assembly_nested_ap214.stp", WriteNestedAssembly},
         {L"instance_color_ap214.stp", WriteInstanceColorAssembly},
         {L"face_color_ap214.stp", WriteFaceColorPart},
+        {L"tessellated_ap242.stp", WriteTessellatedPart},
     };
     for (const auto& item : cases) {
         const auto path = output / item.name;

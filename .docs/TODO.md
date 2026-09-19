@@ -430,9 +430,21 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
         `design/09-quality-performance-and-security.md`, thread-pool width
         bounded by measured commit, and progress UI wiring (STEP-006/007).
         See [`STEP-005-VERIFICATION.md`](STEP-005-VERIFICATION.md).
-  - [ ] STEP-006 interoperability closure and self-contained scope
-        acceptance, STEP-007 product/packaging integration, STEP-008
-        qualification/hardening, and STEP-009 Explorer thumbnail per the
+  - [x] STEP-006: checked-in interoperability matrix (AP203/AP214/AP242
+        B-rep, AP242 tessellated B-rep+authored and tessellated-only, assembly/
+        reuse, colors, units, geometry-free, unknown schema, invalid faceted,
+        and external declarations), AP242 tessellated acceptance plus
+        geometry-free `EmptyGeometry` and kernel-exception `MalformedData`
+        classification, the explicit no-healing product decision, the recorded
+        external-document no-go in the support matrix/ADR-017/public
+        limitations, and a standalone `StepFuzz` admission/declaration target.
+        `[step-002]` through `[step-006]` pass 35 cases / 706 assertions in
+        Debug and Release. See
+        [`STEP-006-VERIFICATION.md`](STEP-006-VERIFICATION.md) and
+        [`STEP-006-INTEROP-MATRIX.md`](STEP-006-INTEROP-MATRIX.md).
+  - [ ] STEP-007 product/packaging integration, STEP-008
+        qualification/hardening (including the genuine 100 MB+ corpus and
+        published Tier-B budgets), and STEP-009 Explorer thumbnail per the
         revised execution order in [`stp2.md`](stp2.md). STEP-009 stays
         blocked on the Gate 6 provider foundation.
 

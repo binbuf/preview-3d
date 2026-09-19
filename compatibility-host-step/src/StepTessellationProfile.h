@@ -137,4 +137,27 @@ inline bool StepWithinDefinitionTime(double elapsedMilliseconds, double limitMil
     return elapsedMilliseconds <= limitMilliseconds;
 }
 
+// STEP-006 healing decision, recorded as a versioned product constant.
+//
+// The STEP-001 spike used OCCT defaults with no `ShapeFix`/`XSAlgo` sequence.
+// STEP-006 compared three options:
+//   * no healing (adopted): invalid geometry fails typed instead of being
+//     mutated, so the accepted subset is exactly the authored geometry and the
+//     visual result is deterministic and producer-independent;
+//   * a narrowly pinned validation/healing sequence (rejected for this slice):
+//     no measured deterministic visual benefit on the accepted corpus, and it
+//     adds a second OCCT algorithm surface with its own failure modes;
+//   * broad automatic healing (rejected): silently mutates geometry, makes the
+//     result depend on unmeasured OCCT heuristics, and can turn a typed
+//     unsupported result into an apparently faithful but altered model.
+//
+// This does not participate in `kStepImporterVersion`: choosing the existing
+// behavior does not change any emitted byte. If a future task adopts a pinned
+// healing sequence, it must bump the profile/importer version because output
+// could change.
+enum class StepHealingPolicy : std::uint32_t {
+    None = 0,
+};
+constexpr StepHealingPolicy kStepHealingPolicy = StepHealingPolicy::None;
+
 } // namespace step_host
