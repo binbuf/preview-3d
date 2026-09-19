@@ -67,3 +67,5 @@ TestResults/
 # Python smoke/fixture tooling
 __pycache__/
 *.pyc
+
+test-models/

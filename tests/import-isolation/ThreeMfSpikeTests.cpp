@@ -425,7 +425,8 @@ constexpr Fixture kFixtures[] = {
     { "beam-representation.3mf.base64", "28248E56B8590EA7E2C33CC375CFA9CDDA89EB98B31AE22EE5072E19D058C8BF", 2, 1 },
 };
 
-std::vector<std::byte> CoreBoxVariant(bool unknownRequired, bool privateMetadata)
+std::vector<std::byte> CoreBoxVariant(bool unknownRequired, bool privateMetadata,
+                                      bool buildReferencesOther = false)
 {
     const auto source = DecodeBase64("core-box.3mf.base64");
     import_worker::ThreeMfOpcPackage package;
@@ -445,6 +446,21 @@ std::vector<std::byte> CoreBoxVariant(bool unknownRequired, bool privateMetadata
         REQUIRE(marker != std::string::npos);
         model.insert(marker + 7,
             "requiredextensions=\"evil\" xmlns:evil=\"http://example.invalid/3mf/evil\" ");
+    }
+    if (buildReferencesOther) {
+        const auto mesh = model.find("<object id=\"1\">");
+        REQUIRE(mesh != std::string::npos);
+        model.replace(mesh, sizeof("<object id=\"1\">") - 1,
+                      "<object id=\"1\" type=\"other\">");
+        const auto resourcesEnd = model.find("</resources>");
+        REQUIRE(resourcesEnd != std::string::npos);
+        model.insert(resourcesEnd, "<object id=\"2\" type=\"model\"><components>"
+            "<component objectid=\"1\" transform=\"0 1 0 -1 0 0 0 0 1 5 0 0\"/>"
+            "</components></object>");
+        const auto buildItem = model.find("<item objectid=\"1\"");
+        REQUIRE(buildItem != std::string::npos);
+        model.replace(buildItem, sizeof("<item objectid=\"1\"") - 1,
+                      "<item objectid=\"2\" transform=\"1 0 0 0 1 0 0 0 1 100 0 0\"");
     }
     const std::string contentTypes = R"(<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/><Default Extension="config" ContentType="application/xml"/></Types>)";
     const std::string relationships = R"(<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>)";
@@ -939,6 +955,23 @@ TEST_CASE("3MF-006 shipping viewer bridge routes 3MF without Tier-A request flag
     CHECK(result.scene.upAxis == model_core::UpAxisId::Z);
     CHECK(result.instances.size() == 2);
     CHECK_FALSE(result.meshes.empty());
+}
+
+TEST_CASE("3MF preview composes slicer component and build transforms in source order",
+          "[3mf][compatibility][scene]")
+{
+    TemporaryFile source(CoreBoxVariant(false, true, true));
+    source.Close();
+    const auto result = d3d12_import_bridge::RunImport(
+        d3d12_import_bridge::SourceFormat::ThreeMf, source.path(), 0x336d66050010ull);
+    REQUIRE(result.ok);
+    CHECK(result.scene.meshCount == 1);
+    CHECK(result.scene.nodeCount == 1);
+    CHECK(result.instances.size() == 1);
+    CHECK(result.instances.front().worldTransform[12] == 105.0);
+    CHECK(result.instances.front().worldTransform[13] == 0.0);
+    CHECK(result.instances.front().data.worldMin[0] == 5.0);
+    CHECK(result.instances.front().data.worldMax[0] == 105.0);
 }
 
 TEST_CASE("3MF-004 normalizes object defaults, corner colors, composites, and multi-properties",

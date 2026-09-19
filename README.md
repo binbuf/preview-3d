@@ -47,6 +47,14 @@ aggregate local source/archive expansion, and 20 million triangles or points.
 The separate USD compatibility host has a commit cap of the lower of 4 GiB or
 35% of physical memory.
 
+For preview compatibility, a mesh labeled Core object type `other` is shown if
+it is referenced by the build, as some slicers produce this even though the 3MF
+Core specification disallows it. Slicer plate grouping and print settings do
+not affect the preview; a multi-plate project may show all root-build objects
+together. The 3MF build placement is preserved, including models positioned
+head-down for printing. To view one upright on the grid, select ground axis Z
+and use the ground direction button to make negative Z point up.
+
 ## Install and use
 
 1. Download the installer or portable ZIP from [Releases](https://github.com/binbuf/preview-3d/releases/latest).

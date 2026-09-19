@@ -950,7 +950,10 @@ void RenderThread::PumpUploads(HWND window)
                 break;
             }
         }
-        if (descriptorsReady && !destination.meshes.empty() && (!stagedProxyMode_ || stagedProxyComplete_ || !path_.hasModel)) {
+        const bool hasVisibleDraw = std::any_of(destination.meshes.begin(), destination.meshes.end(),
+            [](const auto& draw) { return draw.drawEnabled; });
+        if (descriptorsReady && stagedHaveBounds_ && hasVisibleDraw
+            && (!stagedProxyMode_ || stagedProxyComplete_ || !path_.hasModel)) {
             if (modelGeneration_ != pub.task.generation) {
                 uint64_t fence = 0;
                 for (const auto& frame : path_.frames) fence = std::max(fence,frame.fenceValue);
@@ -979,6 +982,10 @@ void RenderThread::PumpUploads(HWND window)
         }
         metadata.stats.drawCallCount = int(displayedChunks_.load());
         if (stagedHaveBounds_ && modelGeneration_ == pub.task.generation) {
+            // A progressive scene can establish its first instance origin after
+            // geometry has uploaded. Keep drawing in the same relative space as
+            // the bounds used for the camera and grid.
+            std::memcpy(path_.sceneOrigin, metadata.sceneOrigin, sizeof(path_.sceneOrigin));
             path_.modelBoundsMin = metadata.boundsMin;
             path_.modelBoundsMax = metadata.boundsMax;
             path_.haveModelBounds = true;

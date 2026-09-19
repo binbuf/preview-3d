@@ -126,7 +126,10 @@ double MetersPerUnit(Lib3MF::eModelUnit unit)
 bool AllowedType(Lib3MF::eObjectType type)
 {
     return type == Lib3MF::eObjectType::Model || type == Lib3MF::eObjectType::Support
-        || type == Lib3MF::eObjectType::SolidSupport || type == Lib3MF::eObjectType::Surface;
+        || type == Lib3MF::eObjectType::SolidSupport || type == Lib3MF::eObjectType::Surface
+        // Some slicers reference a mesh marked "other" from a model component.
+        // Core forbids that in a build, but the mesh is still valid for preview.
+        || type == Lib3MF::eObjectType::Other;
 }
 
 struct Occurrence {
@@ -182,7 +185,9 @@ struct Traversal {
                 }
             } else Identity(local);
             double world[16]{};
-            if (!Multiply(parent, local, world)
+            // 3MF uses row vectors: a component is transformed into its
+            // containing object before the build item's placement is applied.
+            if (!Multiply(local, parent, world)
                 || !Visit(component->GetObjectResource(), world, depth + 1)) { recursion.erase(key); return false; }
         }
         recursion.erase(key);

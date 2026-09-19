@@ -540,7 +540,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
             }
         } else if (format == SourceFormat::ThreeMf) {
             if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
-                result.errorDetails = L"Export the standard static 3MF build using supported Core, Materials, Production, and Beam Lattice features.";
+                result.errorDetails = L"This viewer supports static 3MF Core, Materials and Properties, Production, and bounded Beam Lattice content. Other required extensions or features cannot be previewed.";
             } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
                 result.errorDetails = L"3MF files are limited to the bounded Tier B primary-source size.";
             } else if (session.errorCode == model_core::ImportErrorCode::ArchiveLimit) {
