@@ -1,9 +1,9 @@
 #pragma once
 
-// STEP-002 production host route. It performs bounded Part-21 admission on the
-// inherited read-only source handle and, until STEP-003 wires the real XDE
-// scene adapter, returns a bounded synthetic normalized scene. The OCCT reader
-// is never reached before admission succeeds.
+// STEP-002/STEP-003 production host route. It performs bounded Part-21
+// admission on the inherited read-only source handle and, on success, runs the
+// STEP-003 `StepXdeAdapter` XDE traversal into the normalized protocol-v10
+// scene. The OCCT reader is never reached before admission succeeds.
 
 #include "model_core/ControlProtocol.h"
 #include "model_core/ImportError.h"

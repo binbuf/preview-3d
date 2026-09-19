@@ -393,8 +393,19 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
         malformed/cancellation/host-fault/replacement/containment tests. No
         public picker/drag-drop/registration path recognizes STEP yet. See
         [`STEP-002-VERIFICATION.md`](STEP-002-VERIFICATION.md).
-  - [ ] STEP-003 through STEP-007: self-contained XDE scene adapter, bounded
-        progressive tessellation, product/packaging integration, and
+  - [x] STEP-003: `StepXdeAdapter` maps accepted self-contained STEP product
+        structure into the existing normalized node/reusable-geometry/
+        mesh-instance/material contract: recursive occurrence enumeration and
+        nested transforms, reusable definitions shared across instances,
+        deterministic bounded coarse `BRepMesh_IncrementalMesh` tessellation,
+        instance/shape/subshape color precedence with sRGB/opacity conversion
+        and seam splitting, verified positive metre factor with
+        `UpAxisId::Unknown`, cycle/depth/finite-transform validation, and
+        `NoSupportedGeometry`/`MalformedData`/`ResourceLimit` typing. Eight
+        immutable AP203/AP214/AP242 fixtures are checked in. See
+        [`STEP-003-VERIFICATION.md`](STEP-003-VERIFICATION.md).
+  - [ ] STEP-004 through STEP-007: bounded progressive/display tessellation,
+        brokered external documents, product/packaging integration, and
         qualification. STEP-008 (Explorer thumbnail) stays blocked on the
         Gate 6 provider foundation.
 
