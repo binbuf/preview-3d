@@ -39,7 +39,9 @@ thumbnails are a separate follow-up and are not installed.
 This is a static, read-only viewer. Animation playback, editing, CAD
 formats, Explorer thumbnails (including for 3MF, USD, and FBX), network assets,
 skeletal USD data, MaterialX, procedural schemas, and interactive variant
-selection are not currently included. 3MF slicer-private multi-plate grouping,
+selection are not currently included. The planned STEP/STP support is a bounded
+static preview subset that is self-contained only: external STEP documents are
+out of scope, and there is no PMI/GD&T, editing, or exact-kernel operation. 3MF slicer-private multi-plate grouping,
 printer/process settings, Slice, Secure Content, Volumetric, Implicit, toolpath,
 repair, slicing, and export features are not supported. 3MF and USD are bounded
 Tier B paths: among their ceilings are 2 GiB per primary source, 4 GiB

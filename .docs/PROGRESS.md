@@ -4,6 +4,63 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **STEP-006 interoperability closure and self-contained scope acceptance
+  (2026-09-19): complete.** A checked-in interoperability matrix now names the
+  exact typed outcome for every supported and excluded family and runs through
+  the real host: AP203/AP214/AP242 B-rep, an AP242 B-rep-plus-authored-
+  tessellation fixture, an AP242 tessellated-only fixture, assembly/reuse,
+  instance/face colors, inch units, geometry-free product metadata, an unknown
+  geometry-free schema, `FILE_POPULATION`, relative `DOCUMENT_FILE`,
+  absolute/UNC/URL `DOCUMENT_FILE`, and invalid authored faceted topology. The
+  external-document no-go is recorded in the support matrix, ADR-017, product
+  scope, design README, and public limitations; the healing comparison adopted
+  no healing as `step_host::kStepHealingPolicy`. A standalone `StepFuzz`
+  (ASan/libFuzzer, no GPU) fuzzes admission and declaration discovery; a
+  45-second Release smoke ran 53,244 executions with no finding. The route
+  stays private to the broker; viewer/package exposure is STEP-007.
+  `[step-002]`..`[step-006]` pass 35 cases / 706 assertions in Debug and
+  Release. See [STEP-006-VERIFICATION.md](./STEP-006-VERIFICATION.md) and
+  [STEP-006-INTEROP-MATRIX.md](./STEP-006-INTEROP-MATRIX.md).
+
+  Things the next STP/STEP task should not relearn:
+  1. **`Interface_Static` values are created with their defaults on the first
+     STEP writer construction, overwriting any `SetCVal` made before that.**
+     `GenerateStepFixtures.cpp` now constructs one throwaway
+     `STEPCAFControl_Writer` before setting `write.step.schema` /
+     `write.step.unit` / `write.step.tessellated`. Without it, the first case
+     silently wrote AP214/OnNoBRep instead of the requested AP242/On.
+  2. **`write.step.tessellated` is the writer switch, and the default is
+     `OnNoBRep`, not `On`.** A shape that has a B-rep writes *no* tessellated
+     representation unless it is set to `On`; a mesh-only shape (no surface)
+     writes one with `OnNoBRep`. The AP242 B-rep+tessellated fixture uses `On`;
+     the tessellated-only fixture is a `TopoDS_Compound` of
+     `BRep_Builder::MakeFace(face, Poly_Triangulation)` mesh-only faces.
+     Tessellated output requires the AP242 schema.
+  3. **A valid geometry-free Part-21 file used to report `MalformedData`.**
+     OCCT's `Transfer` returns a generic failure when there is no shape, so the
+     adapter now checks `reader.ChangeReader().NbRootsForTransfer()` right
+     after `ReadStream` and returns `EmptyGeometry`. Keep that ordering: the
+     `FileUnits` check would otherwise run first and report
+     `UnsupportedRequiredFeature`.
+  4. **OCCT throws `Standard_Failure`, which derives from `Standard_Transient`,
+     not `std::exception`.** A `catch (...)` therefore reported invalid faceted
+     topology (out-of-range `TRIANGULATED_SURFACE_SET` indices) as
+     `InternalImporterFailure`. `StepXdeAdapter` now wraps `ReadStream` and
+     `Transfer` and adds a boundary `catch (const Standard_Failure&)` mapping
+     to `MalformedData`. When adding OCCT code, catch `Standard_Failure`
+     explicitly rather than assuming `std::exception`.
+  5. **Declaration discovery is lexical and conservative.** The preflight scans
+     each record's text for `FILE_POPULATION`/`DOCUMENT_FILE` case-
+     insensitively, so case, whitespace, path shape, and even a keyword inside
+     a quoted string all flag. That is intentional fail-closed behavior; do not
+     "improve" it into parsing declarations without also proving no resolver
+     can be reached.
+  6. **A fuzz target that writes a pipe before reading it deadlocks above the
+     pipe buffer.** `StepFuzz`'s handle-admission domain caps the payload below
+     the 4 KiB pipe buffer (and passes the actual `written` count). The first
+     draft used a 0-sized pipe and hung on a 26 KB fixture, which the fuzzer
+     reported as a timeout — a harness bug, not a product finding.
+
 - **STEP-005 render-time performance and first-frame latency (2026-09-19):
   implemented slice; large-file corpus and published budgets remain STEP-008.**
   The dedicated STEP host now measures and publishes every real phase

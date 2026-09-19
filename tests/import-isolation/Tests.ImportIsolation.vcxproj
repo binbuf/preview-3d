@@ -121,6 +121,7 @@
     <ClCompile Include="StepXdeTests.cpp" />
     <ClCompile Include="StepTessellationTests.cpp" />
     <ClCompile Include="StepPerformanceTests.cpp" />
+    <ClCompile Include="StepInteropTests.cpp" />
     <ClCompile Include="..\..\compatibility-host-step\src\StepPart21Preflight.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\app\D3D12ImportBridge.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\ControlChannelWait.cpp" />
