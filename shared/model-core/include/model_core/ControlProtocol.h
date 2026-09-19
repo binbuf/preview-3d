@@ -62,6 +62,14 @@ enum class ControlOpcode : uint32_t {
     // opens and canonicalizes the source, then duplicates a raw read-only FILE
     // handle; the host never receives a path, directory, or URL.
     StartStepImportFromFile = 20, // broker -> STEP host
+    // STEP-005 non-terminal phase/progress signal. Sent only by
+    // Preview3DStepHost.exe while a generation is in progress, zero or more
+    // times before the terminal ChunksReady/GenerationError reply. It carries
+    // only bounded product-owned facts (phase, N-of-M definitions, byte and
+    // millisecond counters), never raw kernel text, names, or paths. The
+    // broker records the last event and enforces a per-generation cap so a
+    // hostile host cannot flood the control channel.
+    StepProgress = 21, // STEP host -> broker, non-terminal
 };
 
 enum : uint32_t {
@@ -79,6 +87,11 @@ enum : uint32_t {
     kImportRequestUsdExpectedUsdz = 1u << 7,
     kImportRequestUsdExpectedMask = kImportRequestUsdExpectedUsda
         | kImportRequestUsdExpectedUsdc | kImportRequestUsdExpectedUsdz,
+    // STEP-005 test-only seam: forces the STEP host's mesher to serial
+    // (`IMeshTools_Parameters::InParallel = false`) so a test can prove the
+    // parallel and serial paths emit byte-identical normalized output. Product
+    // callers never set it.
+    kImportRequestStepForceSerialForTesting = 1u << 8,
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -300,6 +313,36 @@ struct ParseStepFileRequest {
 };
 static_assert(sizeof(ParseStepFileRequest) == 48,
               "ParseStepFileRequest layout changed");
+
+// Closed STEP phase identities for StepProgressNotice::phase. They name the
+// product's own pipeline stages, not OCCT internals, so the viewer can render
+// bounded provisional status while the host is CPU-bound.
+enum : uint32_t {
+    kStepPhasePreflight = 1, // lexical admission over the mapped source
+    kStepPhaseRead = 2,      // STEPCAFControl_Reader::ReadStream
+    kStepPhaseTransfer = 3,  // STEPCAFControl_Reader::Transfer (XDE build)
+    kStepPhasePlan = 4,      // mesh-free ScenePlanner traversal
+    kStepPhaseMesh = 5,      // per-definition BRepMesh_IncrementalMesh
+    kStepPhaseEmit = 6,      // window serialization / batch handoff
+};
+
+// One bounded STEP phase/progress event. `definitionsMeshed`/`definitionTotal`
+// are meaningful for kStepPhaseMesh (total is 0 until planning completes);
+// `preflightBytes` is the lexed source size once preflight has finished;
+// `phaseMilliseconds` is the elapsed time of the phase that just completed and
+// `totalMilliseconds` is the elapsed time since the import began. Every field
+// is a product-owned counter, never file-derived text.
+struct StepProgressNotice {
+    uint64_t generationId;
+    uint32_t phase;             // closed kStepPhase* value
+    uint32_t definitionsMeshed;
+    uint32_t definitionTotal;
+    uint32_t reserved0;         // zero
+    uint64_t preflightBytes;
+    uint64_t phaseMilliseconds;
+    uint64_t totalMilliseconds;
+};
+static_assert(sizeof(StepProgressNotice) == 48, "StepProgressNotice layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

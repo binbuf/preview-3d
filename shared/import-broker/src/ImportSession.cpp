@@ -206,7 +206,9 @@ Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFile
         | (session.fbxTinyEvaluationLimitForTesting
             ? model_core::kImportRequestFbxTinyEvaluationLimitForTesting : 0)
         | (session.fbxTinyTextureLimitForTesting
-            ? model_core::kImportRequestFbxTinyTextureLimitForTesting : 0);
+            ? model_core::kImportRequestFbxTinyTextureLimitForTesting : 0)
+        | (session.stepForceSerialForTesting
+            ? model_core::kImportRequestStepForceSerialForTesting : 0);
     request.cancellationEventHandleValue = cancellationEventHandle;
     return request;
 }
@@ -299,6 +301,7 @@ ImportSessionResult Fail(ImportStage stage, model_core::ImportErrorCode code = m
         case ImportStage::ReplyTimedOut: code = E::WorkerTimedOut; break;
         case ImportStage::SendRequest: case ImportStage::AwaitReply: case ImportStage::ChunkBatchAckFailed: code = E::WorkerCrashed; break;
         case ImportStage::SidecarRequestLimit: case ImportStage::ChunkBatchLimit: case ImportStage::ChunkCountLimit: code = E::ResourceLimit; break;
+        case ImportStage::StepProgressLimit: code = E::ResourceLimit; break;
         case ImportStage::UnexpectedReply: case ImportStage::ChunkBatchOutOfOrder: code = E::ImportProtocolViolation; break;
         case ImportStage::CreateOutputSection: case ImportStage::MapOutputSection: code = E::OutOfMemory; break;
         default: code = E::InternalImporterFailure; break;
@@ -770,6 +773,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         return cancelled;
     };
     uint32_t sidecarRequestCount = 0;
+    uint32_t stepProgressCount = 0;
+    model_core::StepProgressNotice lastStepProgress{};
     BatchAcceptance acceptance;
     std::vector<ValidatedChunk> accumulated;
     std::optional<ImportSessionResult> failure;
@@ -1215,6 +1220,34 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             continue;
         }
 
+        if (opcode == model_core::ControlOpcode::StepProgress
+            && received.payload.size() == sizeof(model_core::StepProgressNotice)) {
+            // STEP-005: only the dedicated STEP host may publish progress. Any
+            // other producer sending it is a protocol violation, not a
+            // tolerated extra.
+            if (!stepHost) {
+                failure = Fail(ImportStage::UnexpectedReply, model_core::ImportErrorCode::ImportProtocolViolation);
+                break;
+            }
+            model_core::StepProgressNotice notice{};
+            std::memcpy(&notice, received.payload.data(), sizeof(notice));
+            const bool knownPhase = notice.phase >= model_core::kStepPhasePreflight
+                && notice.phase <= model_core::kStepPhaseEmit;
+            if (notice.generationId != request.generationId || !knownPhase || notice.reserved0
+                || notice.definitionsMeshed > notice.definitionTotal) {
+                failure = Fail(ImportStage::UnexpectedReply, model_core::ImportErrorCode::ImportProtocolViolation);
+                break;
+            }
+            if (++stepProgressCount > request.maxStepProgressPerGeneration) {
+                failure = Fail(ImportStage::StepProgressLimit, model_core::ImportErrorCode::ResourceLimit);
+                break;
+            }
+            lastStepProgress = notice;
+            if (request.onStepProgress) request.onStepProgress(notice);
+            outcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
+            continue;
+        }
+
         break; // terminal reply, or something this loop does not service
     }
 
@@ -1234,6 +1267,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         ImportSessionResult result = Fail(stage, code);
         result.batchCount = acceptance.nextBatchIndex;
         result.workerProcessId = GetProcessId(workerProcess);
+        result.stepProgressCount = stepProgressCount;
+        result.lastStepProgress = lastStepProgress;
         return result;
     };
 
@@ -1254,6 +1289,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     if (failure) {
         failure->batchCount = acceptance.nextBatchIndex;
         failure->workerProcessId = GetProcessId(workerProcess);
+        failure->stepProgressCount = stepProgressCount;
+        failure->lastStepProgress = lastStepProgress;
         if (failure->stage == ImportStage::Cancelled) acknowledgeCancellation();
         return *failure;
     }
@@ -1388,6 +1425,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     result.sourceCatalog = std::move(sourceCatalog);
     result.sourceIdentity = sourceIdentity;
     result.workerProcessId = GetProcessId(workerProcess);
+    result.stepProgressCount = stepProgressCount;
+    result.lastStepProgress = lastStepProgress;
     if (request.nextDetail && !tierBResult) {
         if (!request.enableCoarseProxy || !request.onBatch || !request.onInitialComplete)
             return fail(ImportStage::UnexpectedReply);

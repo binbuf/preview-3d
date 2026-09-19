@@ -419,12 +419,22 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
         broker/bridge deliberately do not enable the coarse/detail protocol for
         STEP, so the two-pass-versus-single-pass choice is STEP-005's.
         See [`STEP-004-VERIFICATION.md`](STEP-004-VERIFICATION.md).
-  - [ ] STEP-005 through STEP-009 per the revised execution order in
-        [`stp2.md`](stp2.md): STEP-005 render-time performance and first-frame
-        latency, STEP-006 interoperability closure and self-contained scope
+  - [ ] STEP-005 render-time performance and first-frame latency. Implemented:
+        per-phase `StepPhaseTimings` evidence, the bounded `StepProgress`
+        control message (opcode 21) with broker cap/record, a single mapped
+        read for admission plus OCCT transfer, the corrected OCCT thread-pool
+        finding (`parallel = true`, profile v3) with a forced-serial
+        byte-identity test, and the versioned single-pass delivery-strategy
+        constant. Open: a genuine 100 MB+ assembly and high-triangle fixture,
+        the resulting Tier-B time-to-first-coarse/Ready budgets in
+        `design/09-quality-performance-and-security.md`, thread-pool width
+        bounded by measured commit, and progress UI wiring (STEP-006/007).
+        See [`STEP-005-VERIFICATION.md`](STEP-005-VERIFICATION.md).
+  - [ ] STEP-006 interoperability closure and self-contained scope
         acceptance, STEP-007 product/packaging integration, STEP-008
-        qualification/hardening, and STEP-009 Explorer thumbnail. STEP-009
-        stays blocked on the Gate 6 provider foundation.
+        qualification/hardening, and STEP-009 Explorer thumbnail per the
+        revised execution order in [`stp2.md`](stp2.md). STEP-009 stays
+        blocked on the Gate 6 provider foundation.
 
 Every slice carries the same bundle (`10-…:165`): adapter wrapper, dependency allocation/I/O/cancel
 callbacks and Job Object limits, normalized output, unsupported-feature diagnostics, golden scenes,

@@ -1,7 +1,11 @@
 # STEP/STP post-MVP work plan — revision 2 (render-time focused)
 
 Status: STEP-003 complete, STEP-004 complete for the single-pass display slice
-(coarse-catalog replacement delegated to STEP-005 item 5). This file supersedes
+(coarse-catalog replacement delegated to STEP-005 item 5), STEP-005 implemented
+for measurement, progress, input I/O, the corrected thread-pool decision, and
+the versioned single-pass delivery-strategy choice; the genuine large-file
+corpus and published Tier-B budgets remain for STEP-008 (see
+[STEP-005-VERIFICATION.md](STEP-005-VERIFICATION.md)). This file supersedes
 the remaining execution order in [stp.md](stp.md) from STEP-004 onward.
 Prepared: 2026-09-19
 Design authority: [design/README.md](design/README.md)
