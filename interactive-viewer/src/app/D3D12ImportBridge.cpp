@@ -66,6 +66,19 @@ std::wstring ResolveCompatibilityHostExePath()
     return directory + L"\\OpenUsdHost\\Preview3DImportHost.exe";
 }
 
+std::wstring ResolveStepHostExePath()
+{
+    wchar_t modulePath[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+    const std::wstring path(modulePath, length);
+    const auto lastSlash = path.find_last_of(L"\\/");
+    const std::wstring directory = (lastSlash == std::wstring::npos) ? L"." : path.substr(0, lastSlash);
+    // The dedicated OCCT STEP host and its signed payload closure live in
+    // their own sibling directory, separate from the viewer, the general
+    // worker, and the USD compatibility host.
+    return directory + L"\\StepHost\\Preview3DStepHost.exe";
+}
+
 void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary, std::wstring& details)
 {
     switch (code) {
@@ -87,6 +100,12 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     case model_core::ImportErrorCode::CompatibilityHostLimit:
         summary = L"This USD stage is too large or complex to preview.";
         details = L"The compatibility host reached a bounded resource limit."; return;
+    case model_core::ImportErrorCode::StepHostFailure:
+        summary = L"The STEP importer stopped unexpectedly.";
+        details = L"The isolated STEP host could not complete this model."; return;
+    case model_core::ImportErrorCode::StepHostLimit:
+        summary = L"This STEP model is too large or complex to preview.";
+        details = L"The STEP host reached a bounded resource limit."; return;
     case model_core::ImportErrorCode::ArchiveLimit:
         summary = L"This model archive is not supported.";
         details = L"The archive violates a path, structure, compression, or expansion limit."; return;
@@ -239,6 +258,8 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
         return import_broker::ImportFormat::ThreeMf;
     case SourceFormat::Usd:
         return import_broker::ImportFormat::Usd;
+    case SourceFormat::Step:
+        return import_broker::ImportFormat::Step;
     case SourceFormat::Glb:
     default:
         return import_broker::ImportFormat::Gltf;
@@ -265,6 +286,8 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
         session.errorCode == model_core::ImportErrorCode::OutOfMemory ||
         session.errorCode == model_core::ImportErrorCode::WorkerCrashed ||
         session.errorCode == model_core::ImportErrorCode::ResourceLimit ||
+        session.errorCode == model_core::ImportErrorCode::StepHostFailure ||
+        session.errorCode == model_core::ImportErrorCode::StepHostLimit ||
         (session.errorCode >= model_core::ImportErrorCode::PrimarySourceLimit &&
          session.errorCode <= model_core::ImportErrorCode::ArchiveLimit))
         DescribeImportError(session.errorCode, summary, details);
@@ -280,6 +303,7 @@ std::wstring SourceFormatLabel(const std::wstring& path)
     if (ext == L"obj") return L"OBJ";
     if (ext == L"fbx") return L"FBX";
     if (ext == L"3mf") return L"3MF";
+    if (ext == L"step" || ext == L"stp") return L"STEP";
     if (ext == L"usd" || ext == L"usda" || ext == L"usdc") return L"USD";
     if (ext == L"usdz") return L"USDZ";
     // Extension only, capped and restricted to printable alphanumerics.
@@ -342,6 +366,9 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     if (ext == L"3mf") return SourceFormat::ThreeMf;
     if (ext == L"usd" || ext == L"usda" || ext == L"usdc" || ext == L"usdz")
         return SourceFormat::Usd;
+    // `.step`/`.stp` are deliberately absent until STEP-006: no public
+    // picker, drag/drop, or activation path may recognize STEP yet, and an
+    // extension alone must never bypass STEP-002 byte admission.
     return std::nullopt;
 }
 
@@ -363,11 +390,11 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     import_broker::ImportSessionRequest sessionRequest;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
         && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd;
+        && format != SourceFormat::Usd && format != SourceFormat::Step;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
     if (!delayBatchesForTesting && !faultForTesting && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd) {
+        && format != SourceFormat::Usd && format != SourceFormat::Step) {
         sessionRequest.nextDetail = std::move(nextDetail);
         sessionRequest.onInitialComplete = std::move(onInitialComplete);
     }
@@ -375,6 +402,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.workerExePath = ResolveWorkerExePath();
     if (format == SourceFormat::Usd)
         sessionRequest.compatibilityHostExePath = ResolveCompatibilityHostExePath();
+    if (format == SourceFormat::Step)
+        sessionRequest.stepHostExePath = ResolveStepHostExePath();
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
     sessionRequest.generationId = generationId;
@@ -557,6 +586,14 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.errorDetails = L"USD files are limited to the bounded Tier B primary-source size.";
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
                 result.errorDetails = L"USD parsing, composition, or normalization exceeded the bounded Tier B scratch budget.";
+            }
+        } else if (format == SourceFormat::Step) {
+            if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
+                result.errorDetails = L"Export a self-contained ISO 10303-21 STEP file. Required external STEP documents are not supported yet.";
+            } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
+                result.errorDetails = L"STEP files are limited to the bounded Tier B primary-source size.";
+            } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
+                result.errorDetails = L"STEP parsing or tessellation exceeded the bounded Tier B scratch budget.";
             }
         }
         return result;

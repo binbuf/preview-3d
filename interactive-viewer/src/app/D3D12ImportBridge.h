@@ -33,6 +33,10 @@ enum class SourceFormat {
     Fbx,
     ThreeMf,
     Usd,
+    // Dedicated STEP/STP host route. Intentionally NOT returned by
+    // ClassifyByExtension until STEP-006 enables product discovery, so no
+    // public picker, drag/drop, or activation path recognizes STEP yet.
+    Step,
 };
 
 // nullopt for any extension this slice doesn't recognize.

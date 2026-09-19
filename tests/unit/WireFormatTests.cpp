@@ -101,6 +101,10 @@ TEST_CASE("Info uses real counts units exact axis dimensions and provisional bou
     CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"USD (crate)");
     metadata.source.format = model_core::SourceFormatId::Usdz;
     CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"USDZ");
+    metadata.source.format = model_core::SourceFormatId::ThreeMf;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"3MF");
+    metadata.source.format = model_core::SourceFormatId::Step;
+    CHECK(BuildInfoPanelSections(metadata, false)[5].rows[2].value == L"STEP");
     CHECK(metadata.vertices.empty()); CHECK(metadata.indices.empty());
 }
 

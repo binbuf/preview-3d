@@ -384,10 +384,19 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
         [`STEP-001-SPIKE-RESULTS.md`](STEP-001-SPIKE-RESULTS.md). Two findings:
         authored units need explicit `FileUnits` handling, and OCCT external
         references are path-based, so STEP-005 is a no-go without a scope change.
-  - [ ] STEP-002 through STEP-007: dedicated `Preview3DStepHost.exe`, Part-21
-        admission, self-contained XDE scene adapter, bounded progressive
-        tessellation, product/packaging integration, and qualification. STEP-008
-        (Explorer thumbnail) stays blocked on the Gate 6 provider foundation.
+  - [x] STEP-002: dedicated `Preview3DStepHost.exe` with the constrained OCCT
+        closure, zero-capability AppContainer identity `Binbuf.Preview3D.StepHost`,
+        kill-on-close Job Object, closed `SourceFormatId::Step` /
+        `ImportFormat::Step` / `StartStepImportFromFile` / `ParseStepFileRequest`
+        protocol route, full bounded `StepPart21Preflight` lexical admission
+        ahead of the reader, a bounded synthetic scene placeholder, and
+        malformed/cancellation/host-fault/replacement/containment tests. No
+        public picker/drag-drop/registration path recognizes STEP yet. See
+        [`STEP-002-VERIFICATION.md`](STEP-002-VERIFICATION.md).
+  - [ ] STEP-003 through STEP-007: self-contained XDE scene adapter, bounded
+        progressive tessellation, product/packaging integration, and
+        qualification. STEP-008 (Explorer thumbnail) stays blocked on the
+        Gate 6 provider foundation.
 
 Every slice carries the same bundle (`10-…:165`): adapter wrapper, dependency allocation/I/O/cancel
 callbacks and Job Object limits, normalized output, unsupported-feature diagnostics, golden scenes,

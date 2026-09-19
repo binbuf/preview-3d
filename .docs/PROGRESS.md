@@ -2083,3 +2083,38 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
   files and opens a composed USD stage from the staged layout; NSIS builds a
   64-file unsigned engineering payload. Release hashes are recorded in
   `.docs/usd.md` and `.docs/INSTALLER_VERIFICATION.md`.
+
+### STEP-002 host, Part-21 admission, and closed protocol route
+
+- `Preview3DStepHost.exe` is a fifth runtime component with its own
+  zero-capability AppContainer identity (`Binbuf.Preview3D.StepHost`),
+  kill-on-close Job Object, and private `StepHost` payload directory. The
+  constrained OCCT closure stays isolated from the viewer, general worker, and
+  thumbnail provider; `dumpbin /dependents` reports zero OCCT imports for
+  `Preview3D.exe` and `Preview3DImportWorker.exe`.
+- Protocol v10 gained only additive identities:
+  `SourceFormatId::Step` (13), `ImportFormat::Step`,
+  `StartStepImportFromFile` (20), the 48-byte `ParseStepFileRequest`, and the
+  `StepHostFailure`/`StepHostLimit` error codes. No existing layout, fixture,
+  or hostile-worker case changed meaning.
+- `StepPart21Preflight` is a bounded streaming lexical scanner over the
+  inherited handle. It verifies the physical envelope, counts entities/
+  references/sections/nesting/lexed bytes with checked arithmetic, rejects
+  duplicate/zero identifiers, binary/XML/compressed/UTF-16 encodings,
+  unterminated strings/comments, and flags `FILE_POPULATION`/`DOCUMENT_FILE`
+  external declarations as `UnsupportedRequiredFeature` (STEP-005 is a no-go).
+  The OCCT reader is unreachable until admission succeeds; STEP-003 replaces
+  the bounded synthetic placeholder with the real XDE traversal.
+- Two implementation traps worth keeping: a 1 MiB `std::array` on the stack
+  overflowed the host (use heap scratch), and a non-default host commit limit
+  must be reported as `ResourceLimit` for both compatibility and STEP hosts,
+  not only the USD compatibility host.
+- Evidence: `[step-002]` passes 13 cases / 155 assertions in Debug and
+  Release, covering valid admission through the dedicated route, malformed/
+  external rejection before transfer, cancellation, crash/hang/stale/
+  wrong-format/unknown-error/over-allocation recovery, path/network/child-
+  process denial, and the private viewer-bridge route. The full
+  import-isolation suite has pre-existing USD failures (fixture SHA-256 review
+  and the legacy `--usd-002-spike` host route) that fail identically on the
+  STEP-002 baseline with these changes stashed. See
+  [`STEP-002-VERIFICATION.md`](STEP-002-VERIFICATION.md).

@@ -112,7 +112,8 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
                 : format == model_core::SourceFormatId::Usda ? L"USD (ASCII)"
                 : format == model_core::SourceFormatId::Usdc ? L"USD (crate)"
                 : format == model_core::SourceFormatId::Usdz ? L"USDZ"
-                : format == model_core::SourceFormatId::ThreeMf ? L"3MF" : L"Unknown" },
+                : format == model_core::SourceFormatId::ThreeMf ? L"3MF"
+                : format == model_core::SourceFormatId::Step ? L"STEP" : L"Unknown" },
             { L"Units", metersPerUnit > 0 ? L"Metres" : L"Unspecified" },
         } });
 
