@@ -4,6 +4,57 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **STEP-007 product, package, and documentation integration (2026-09-19):
+  complete.** `.step`/`.stp` now reach the existing dedicated
+  `Preview3DStepHost.exe` route through every viewer activation surface:
+  `ClassifyByExtension`, command-line validation, the Open dialog filters,
+  drag/drop, secondary activation, Retry, supported-format errors, and the
+  title-bar Open With catalog (revision 7). The bridge forwards the bounded
+  `StepProgress` events, and the loading overlay shows product-owned phase text
+  and N-of-M definition counts; `--app-smoke` fields 84/85/86 expose the phase
+  and counts. The portable/NSIS payload stages the exact signed `StepHost\`
+  OCCT closure, its license/SBOM entry, a closed payload allowlist, and the
+  third `Binbuf.Preview3D.StepHost` AppContainer ACL; `Binbuf.Preview3D.STEP.1`
+  registers both extensions without touching the user's default. `step.py`
+  passes 11 checks in Debug and Release (including crash/timeout recovery and
+  the Emit phase); `step_package.py` passes against both stages;
+  `[step-002]`..`[step-006]` still pass 35 cases / 706 assertions. Thumbnails
+  remain STEP-009. See [STEP-007-VERIFICATION.md](./STEP-007-VERIFICATION.md).
+
+  Things the next STP/STEP task should not relearn:
+  1. **The viewer groundwork for STEP already existed from STEP-005/006.**
+     `SourceFormat::Step`, `ToBrokerFormat`, `ResolveStepHostExePath`,
+     `SourceFormatLabel`, and the STEP-specific error text were all present;
+     discovery was deliberately gated only in `ClassifyByExtension` and the
+     extension allowlists. Enabling STEP-007 was four small list edits plus the
+     Shell catalog revision bump. Do not rebuild the bridge route.
+  2. **`StepProgressNotice`'s mesh counter is `definitionsMeshed`, not
+     `definitionIndex`.** The callback runs on the import thread, so the viewer
+     stores phase/done/total in `std::atomic<uint32_t>` and reads them on the UI
+     thread; the completion message is always posted after the last progress
+     event, so the Emit phase (6) is observable once the document is Ready.
+  3. **The STEP host ignores `workerArgumentsOverride`.** Viewer fault injection
+     for STEP must use `stepHostArgumentsOverride` with the host's own
+     `--pool-crash`/`--pool-hang`/`--pool-overallocate` modes (and
+     `stepHostCommitLimitBytes` for the memory case). The general-worker
+     `--child-noop`/`--test-hang-import` overrides are inert for STEP and would
+     make a fault test silently import normally.
+  4. **OCCT has no root `vcpkg_installed` status entry.** It is installed only
+     by `compatibility-host-step/vcpkg.json`, so the packaging script must copy
+     `licenses/opencascade.txt` from
+     `compatibility-host-step/vcpkg_installed/x64-windows/share/opencascade/copyright`
+     and read its version/ABI from that tree's `vcpkg.spdx.json`. The root
+     `Read-VcpkgStatus` path will not contain `opencascade`.
+  5. **OCCT's `TKernel.dll` imports `WSOCK32.dll` and `TKService.dll` imports
+     `WINMM.dll`.** Both are Windows system DLLs that the packaging PE-closure
+     allowlist must list (alongside `ws2_32.dll`), or portable/installer staging
+     fails with an unresolved-dependency error.
+  6. **NSIS license removal is easy to forget.** Adding
+     `licenses/opencascade.txt` to the stage requires a matching
+     `Delete "$INSTDIR\licenses\opencascade.txt"` in the uninstall section; the
+     `step_package.py` registration check catches the omission, and `makensis`
+     is run with `/WX`.
+
 - **STEP-006 interoperability closure and self-contained scope acceptance
   (2026-09-19): complete.** A checked-in interoperability matrix now names the
   exact typed outcome for every supported and excluded family and runs through

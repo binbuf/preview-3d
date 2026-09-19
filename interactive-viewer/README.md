@@ -46,7 +46,9 @@ chunks. The old `--d3d12` argument is accepted as a deprecated no-op.
 The sandboxed importer accepts `.glb`, `.gltf` (including external `.bin`/image siblings fetched
 through the brokered sidecar protocol), `.obj` with optional local `.mtl` and texture sidecars,
 binary/ASCII `.fbx`, ASCII/binary `.stl`, ASCII/binary `.ply`, `.3mf`, and
-`.usd`/`.usda`/`.usdc`/`.usdz`. Its static glTF path supports bounded
+`.usd`/`.usda`/`.usdc`/`.usdz`. STEP/STP (`.step`/`.stp`) is served by the
+separate zero-capability `Preview3DStepHost.exe`, which owns the pinned OCCT
+closure and returns only normalized chunks. Its static glTF path supports bounded
 Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP, material texture slots and
 texture transforms. The OBJ path uses ufbx for polygon triangulation, smoothing/generated normals,
 UVs, vertex colors, object/group meshes, and MTL material factors, with broker-approved base-color,
@@ -75,6 +77,15 @@ through the trusted broker; remote/custom resolvers and unrestricted plugins
 are rejected. The UI reports the detected USDA, USDC, or USDZ encoding rather
 than inferring it from `.usd`.
 
+STEP is a bounded Tier B static-preview path for self-contained ISO 10303-21
+AP203/AP214/AP242 files: B-rep or authored AP242 tessellated geometry,
+assemblies and reused definitions, instance/shape/face colors, and authored
+length units. The dedicated zero-capability `Preview3DStepHost.exe` receives an
+inherited read-only handle (never a path), verifies the Part-21 byte envelope
+before the CAD kernel runs, and exits after the generation. External STEP
+documents are out of scope and fail typed; PMI/GD&T, editing, saved views,
+exact measurement, and shape healing are not supported.
+
 Portable packaging keeps `Preview3D.exe` at the package root and the sandbox
 executable plus its private DLL closure under `worker\`. The viewer prefers that
 layout and grants the AppContainer read/execute only on `worker\`; same-directory
@@ -82,6 +93,8 @@ worker lookup remains as a developer/test-build fallback.
 The separate OpenUSD bootstrap, core DLL, monolithic OpenUSD runtime, oneTBB,
 codec dependencies, and hash-audited schema/plugin resources live only under
 `OpenUsdHost\`; its distinct AppContainer is granted access only to that tree.
+The constrained OCCT closure and `Preview3DStepHost.exe` live only under
+`StepHost\`, with a third distinct AppContainer granted access only to that tree.
 
 ## Current limitations and deferred work
 
@@ -98,7 +111,7 @@ arbitrary renderer/file-format plugins, interactive variants, and animation are
 also outside the supported subset. Tier B USD ceilings include 2 GiB primary,
 4 GiB aggregate local source/archive expansion, 20 million triangles or points,
 50,000 nodes, and a compatibility-host commit cap of min(4 GiB, 35% physical
-memory). Explorer thumbnails, including 3MF, USD, and FBX thumbnails, remain a
+memory). Explorer thumbnails, including 3MF, USD, FBX, and STEP thumbnails, remain a
 separate deliverable.
 
 ## Controls

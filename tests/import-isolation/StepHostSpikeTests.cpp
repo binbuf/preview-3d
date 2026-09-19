@@ -184,12 +184,15 @@ TEST_CASE("STEP-002 host imports a valid Part-21 file through the dedicated rout
     CHECK(haveGeometry);
 }
 
-TEST_CASE("STEP-002 viewer bridge routes an explicit Step format while discovery stays private",
+TEST_CASE("STEP-002 viewer bridge routes an explicit Step format and extension discovery",
           "[step-002][viewer-bridge]")
 {
-    // No public picker, drag/drop, or activation path may recognize STEP yet.
-    CHECK_FALSE(d3d12_import_bridge::ClassifyByExtension(L"part.step").has_value());
-    CHECK_FALSE(d3d12_import_bridge::ClassifyByExtension(L"part.stp").has_value());
+    // STEP-007 exposes the extension, but the byte admission below still runs
+    // in the dedicated host before any CAD-kernel work.
+    CHECK(d3d12_import_bridge::ClassifyByExtension(L"part.step")
+          == d3d12_import_bridge::SourceFormat::Step);
+    CHECK(d3d12_import_bridge::ClassifyByExtension(L"part.stp")
+          == d3d12_import_bridge::SourceFormat::Step);
 
     const std::wstring source = StpFixture(L"part_ap214.stp");
     const auto result = d3d12_import_bridge::RunImport(

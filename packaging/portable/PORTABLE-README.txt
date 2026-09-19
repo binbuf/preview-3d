@@ -5,7 +5,8 @@ Run Preview3D.exe and use Ctrl+O, or pass one local model path on the command
 line. Keep the worker directory beside Preview3D.exe. The app does not require
 administrator rights, write file associations, or modify the opened model.
 Keep the OpenUsdHost directory beside Preview3D.exe as well; it is the private
-compatibility payload for composed USD stages.
+compatibility payload for composed USD stages. Keep the StepHost directory
+beside Preview3D.exe too; it is the private CAD kernel payload for STEP/STP.
 
 Supported content
 -----------------
@@ -24,6 +25,10 @@ Supported content
   display color, material subsets, USD Preview Surface factors/textures, and
   bounded local sublayers, references, inherits/specializes, authored default
   variants, and payloads.
+* Self-contained .step and .stp ISO 10303-21 files (AP203/AP214/AP242) with
+  bounded B-rep or authored AP242 tessellated geometry, assemblies and reused
+  definitions, instance/shape/face colors, and authored length units. External
+  STEP documents are not supported.
 * The bounded glTF subset includes static meshes/instances, vertex colors,
   metallic/roughness materials, normal/emissive textures, unlit materials,
   alpha modes, KHR_texture_transform, KHR_draco_mesh_compression,
@@ -34,7 +39,8 @@ Important limits
 ----------------
 
 This is a local, read-only static viewer. Animation playback, editing, network
-assets, CAD, thumbnails (including 3MF/USD/FBX Explorer thumbnails), file associations, and a
+assets, other CAD formats (IGES/IFC/JT/native CAD), thumbnails (including
+3MF/USD/FBX/STEP Explorer thumbnails), file associations, and a
 persistent derived cache are outside this limited MVP. Optional unsupported
 glTF material/image features may fall back with a warning; required unsupported
 extensions fail. OBJ supports faces, triangulation, smoothing/generated normals,
@@ -55,6 +61,10 @@ Tier B ceilings including 2 GiB primary source, 4 GiB aggregate local bytes and
 USDZ expansion, 20 million triangles or points, 50,000 nodes, and bounded
 counts for materials/textures/dependencies. The OpenUSD host is additionally
 limited to the lower of 4 GiB or 35% of physical memory.
+STEP files are limited to self-contained ISO 10303-21 content: required
+external documents, PMI/GD&T, saved views, editing, and exact measurement are
+not supported, and tessellation uses a fixed bounded quality policy. The STEP
+host is additionally limited to the lower of 4 GiB or 35% of physical memory.
 
 The worker runs in a zero-capability AppContainer. On first import, Preview3D
 creates the current-user profile Binbuf.Preview3D.ImportWorker and grants that
@@ -65,7 +75,10 @@ no elevation. Deleting the extracted directory removes the granted payload.
 Composed USD stages use a second zero-capability profile,
 Binbuf.Preview3D.ImportHost. It can read/execute only OpenUsdHost, starts lazily,
 exits after the generation, and receives local relative dependencies only as
-brokered bytes. Neither importer can read the other's private directory.
+brokered bytes. STEP/STP uses a third zero-capability profile,
+Binbuf.Preview3D.StepHost. It can read/execute only StepHost, receives the
+source as a read-only inherited handle (never a path), and exits after the
+generation. None of the importers can read another's private directory.
 
 Cleanup
 -------

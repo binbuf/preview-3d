@@ -14,6 +14,8 @@ installed by those pinned ports are preserved in licenses\:
   libwebp.txt      WebP codec and libsharpyuv
   libzip.txt       libzip archive reader used by lib3mf
   meshoptimizer.txt meshoptimizer
+  opencascade.txt   Open CASCADE Technology (OCCT) CAD kernel used only by the
+                    isolated STEP host
   openusd.txt       Pixar OpenUSD
   simdjson.txt     simdjson
   tbb.txt          Intel oneAPI Threading Building Blocks

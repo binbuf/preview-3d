@@ -14,9 +14,13 @@
   parts, and bounded Beam Lattice previews; and
 * .usd, .usda, .usdc, and .usdz static stages with meshes, hierarchy,
   instances/point instances, common primvars, display color, supported USD
-  Preview Surface materials/textures, and bounded local composition.
+  Preview Surface materials/textures, and bounded local composition; and
+* self-contained .step and .stp ISO 10303-21 files (AP203/AP214/AP242) with
+  bounded B-rep or authored AP242 tessellated geometry, assemblies and reused
+  definitions, colors, and authored length units.
 
-CAD formats, Explorer thumbnails (including for 3MF, USD, and FBX), editing,
+Other CAD formats (IGES/IFC/JT/native CAD), Explorer thumbnails (including for
+3MF, USD, FBX, and STEP), editing,
 animation playback, network assets, and a persistent model-derived cache are
 not part of this release. 3MF slicer-private multi-plate grouping/settings,
 Slice, Secure Content, Volumetric, Implicit, toolpath, repair, slicing, and
@@ -30,7 +34,8 @@ File associations
 -----------------
 
 Setup registers 3D Preview with Windows Default Apps and Open With for .glb,
-.gltf, .obj, .fbx, .stl, .ply, .3mf, .usd, .usda, .usdc, and .usdz. Windows 11
+.gltf, .obj, .fbx, .stl, .ply, .3mf, .usd, .usda, .usdc, .usdz, .step, and .stp.
+Windows 11
 requires the signed-in user to confirm default app choices. Setup offers to
 open 3D Preview's Default Apps page after install;
 select 3D Preview for each listed extension there. Existing user choices are
@@ -52,7 +57,12 @@ after the generation. Local relative stage/image dependencies are supplied as
 brokered bytes; remote assets and model-selected resolvers/plugins are rejected.
 USD follows Tier B ceilings (including 2 GiB primary, 4 GiB aggregate local
 bytes/USDZ expansion, and 20 million triangles or points); the compatibility
-host's commit cap is min(4 GiB, 35% of physical memory).
+host's commit cap is min(4 GiB, 35% of physical memory). STEP/STP runs in
+Binbuf.Preview3D.StepHost, a third zero-capability AppContainer that can
+read/execute only the private StepHost CAD-kernel payload, receives the source
+as an inherited read-only handle rather than a path, and exits after the
+generation. Its commit cap is also min(4 GiB, 35% of physical memory). No
+importer can read another's private payload directory.
 
 3D Preview stores small UI preferences under
 %LOCALAPPDATA%\Binbuf\3D Preview. Uninstall leaves those preferences in place
@@ -64,7 +74,7 @@ Runtime and release metadata
 ----------------------------
 
 The installation contains its app-local MSVC runtime, worker dependencies, and
-the exact private OpenUSD DLL/resource tree.
+the exact private OpenUSD DLL/resource tree and OCCT STEP-host DLL tree.
 Direct3D 12 feature level 11_0 or later is required. MANIFEST.json records
 payload SHA-256 values; SBOM.cdx.json, THIRD-PARTY-NOTICES.txt, and licenses\
 record dependency provenance and redistribution notices.
