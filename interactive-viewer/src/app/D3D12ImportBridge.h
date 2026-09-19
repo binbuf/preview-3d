@@ -33,9 +33,9 @@ enum class SourceFormat {
     Fbx,
     ThreeMf,
     Usd,
-    // Dedicated STEP/STP host route. Intentionally NOT returned by
-    // ClassifyByExtension until STEP-006 enables product discovery, so no
-    // public picker, drag/drop, or activation path recognizes STEP yet.
+    // Dedicated STEP/STP host route. ClassifyByExtension selects it for
+    // `.step`/`.stp`; the STEP host's Part-21 admission still verifies the
+    // ISO 10303-21 byte envelope before any OCCT work.
     Step,
 };
 
@@ -135,7 +135,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         bool delayBatchesForTesting = false, uint32_t faultForTesting = 0,
                         std::function<uint32_t()> nextDetail = {},
                         std::function<void(const model_core::FileIdentity&)> onInitialComplete = {},
-                        std::function<bool(uint64_t)> cpuBudgetAllows = {});
+                        std::function<bool(uint64_t)> cpuBudgetAllows = {},
+                        std::function<void(const model_core::StepProgressNotice&)> onStepProgress = {});
 
 // Creates the import worker's AppContainer profile and grants it
 // read+execute on the worker's own directory -- without this the sandboxed

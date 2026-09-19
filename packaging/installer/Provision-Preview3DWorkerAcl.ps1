@@ -4,7 +4,10 @@ param(
     [string]$WorkerDirectory,
 
     [Parameter(Mandatory = $true)]
-    [string]$OpenUsdHostDirectory
+    [string]$OpenUsdHostDirectory,
+
+    [Parameter(Mandatory = $true)]
+    [string]$StepHostDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,11 +15,15 @@ Set-StrictMode -Version 3.0
 
 $worker = [System.IO.Path]::GetFullPath($WorkerDirectory).TrimEnd('\')
 $openUsdHost = [System.IO.Path]::GetFullPath($OpenUsdHostDirectory).TrimEnd('\')
+$stepHost = [System.IO.Path]::GetFullPath($StepHostDirectory).TrimEnd('\')
 if (-not (Test-Path -LiteralPath $worker -PathType Container)) {
     throw "The Preview3D worker directory does not exist: $worker"
 }
 if (-not (Test-Path -LiteralPath $openUsdHost -PathType Container)) {
     throw "The Preview3D OpenUSD host directory does not exist: $openUsdHost"
+}
+if (-not (Test-Path -LiteralPath $stepHost -PathType Container)) {
+    throw "The Preview3D STEP host directory does not exist: $stepHost"
 }
 
 $nativeSource = @'
@@ -59,18 +66,19 @@ function Get-ProfileSid([string]$ProfileName) {
     }
 }
 
-function Set-PrivatePayloadAcl([string]$Directory, $AllowedSid, $OtherSid) {
+function Set-PrivatePayloadAcl([string]$Directory, $AllowedSid, [object[]]$OtherSids) {
     $allApplicationPackages = New-Object System.Security.Principal.SecurityIdentifier('S-1-15-2-1')
     $allRestrictedApplicationPackages = New-Object System.Security.Principal.SecurityIdentifier('S-1-15-2-2')
     $acl = Get-Acl -LiteralPath $Directory
 
     # Preserve ordinary system/admin/user entries, but remove broad package
-    # grants and both product package SIDs before adding exactly one identity.
+    # grants and every other product package SID before adding exactly one
+    # identity, so no import sandbox can read a sibling payload.
     $acl.SetAccessRuleProtection($true, $true)
     $acl.PurgeAccessRules($allApplicationPackages)
     $acl.PurgeAccessRules($allRestrictedApplicationPackages)
     $acl.PurgeAccessRules($AllowedSid)
-    $acl.PurgeAccessRules($OtherSid)
+    foreach ($sid in $OtherSids) { $acl.PurgeAccessRules($sid) }
 
     $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
         $AllowedSid,
@@ -95,15 +103,19 @@ function Set-PrivatePayloadAcl([string]$Directory, $AllowedSid, $OtherSid) {
     if ($exactGrant.Count -eq 0) {
         throw "The Preview3D private payload ACL could not be verified on '$Directory'."
     }
-    $otherGrant = @($verified.Access | Where-Object {
-        try { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $OtherSid.Value }
-        catch { $false }
-    })
-    if ($otherGrant.Count -ne 0) { throw "The other importer SID retained access to '$Directory'." }
+    foreach ($sid in $OtherSids) {
+        $otherGrant = @($verified.Access | Where-Object {
+            try { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sid.Value }
+            catch { $false }
+        })
+        if ($otherGrant.Count -ne 0) { throw "Another importer SID retained access to '$Directory'." }
+    }
 }
 
 $workerSid = Get-ProfileSid 'Binbuf.Preview3D.ImportWorker'
 $hostSid = Get-ProfileSid 'Binbuf.Preview3D.ImportHost'
-Set-PrivatePayloadAcl $worker $workerSid $hostSid
-Set-PrivatePayloadAcl $openUsdHost $hostSid $workerSid
-Write-Host "Provisioned isolated Preview3D payload ACLs for worker $($workerSid.Value) and host $($hostSid.Value)."
+$stepSid = Get-ProfileSid 'Binbuf.Preview3D.StepHost'
+Set-PrivatePayloadAcl $worker $workerSid @($hostSid, $stepSid)
+Set-PrivatePayloadAcl $openUsdHost $hostSid @($workerSid, $stepSid)
+Set-PrivatePayloadAcl $stepHost $stepSid @($workerSid, $hostSid)
+Write-Host "Provisioned isolated Preview3D payload ACLs for worker $($workerSid.Value), host $($hostSid.Value), and STEP host $($stepSid.Value)."

@@ -427,9 +427,9 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
         byte-identity test, and the versioned single-pass delivery-strategy
         constant. Open: a genuine 100 MB+ assembly and high-triangle fixture,
         the resulting Tier-B time-to-first-coarse/Ready budgets in
-        `design/09-quality-performance-and-security.md`, thread-pool width
-        bounded by measured commit, and progress UI wiring (STEP-006/007).
-        See [`STEP-005-VERIFICATION.md`](STEP-005-VERIFICATION.md).
+        `design/09-quality-performance-and-security.md`, and thread-pool width
+        bounded by measured commit. Progress is now wired to the viewer
+        (STEP-007). See [`STEP-005-VERIFICATION.md`](STEP-005-VERIFICATION.md).
   - [x] STEP-006: checked-in interoperability matrix (AP203/AP214/AP242
         B-rep, AP242 tessellated B-rep+authored and tessellated-only, assembly/
         reuse, colors, units, geometry-free, unknown schema, invalid faceted,
@@ -442,9 +442,18 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
         Debug and Release. See
         [`STEP-006-VERIFICATION.md`](STEP-006-VERIFICATION.md) and
         [`STEP-006-INTEROP-MATRIX.md`](STEP-006-INTEROP-MATRIX.md).
-  - [ ] STEP-007 product/packaging integration, STEP-008
-        qualification/hardening (including the genuine 100 MB+ corpus and
-        published Tier-B budgets), and STEP-009 Explorer thumbnail per the
+  - [x] STEP-007 product/packaging integration: `.step`/`.stp` are recognized
+        case-insensitively by command line, Open dialog, drag/drop, secondary
+        activation, Retry, supported-format errors, and the title-bar Open With
+        catalog; the D3D12 bridge routes STEP through the dedicated host and
+        presents format/phase-progress/dimensions/units/counts; the signed OCCT
+        StepHost payload, its closed dependency closure, ACL provisioning,
+        SBOM/notices, manifest hashes, and uninstall are staged for portable and
+        NSIS; and `Binbuf.Preview3D.STEP.1` registers `.step`/`.stp` without
+        touching the user's default. Thumbnails remain STEP-009. See
+        [`STEP-007-VERIFICATION.md`](STEP-007-VERIFICATION.md).
+  - [ ] STEP-008 qualification/hardening (including the genuine 100 MB+ corpus
+        and published Tier-B budgets) and STEP-009 Explorer thumbnail per the
         revised execution order in [`stp2.md`](stp2.md). STEP-009 stays
         blocked on the Gate 6 provider foundation.
 

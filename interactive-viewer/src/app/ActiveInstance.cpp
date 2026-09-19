@@ -210,7 +210,7 @@ bool IsSupportedExtension(const std::wstring& path)
     return extension == L".glb" || extension == L".gltf" || extension == L".stl" ||
         extension == L".ply" || extension == L".obj" || extension == L".fbx" ||
         extension == L".3mf" || extension == L".usd" || extension == L".usda" || extension == L".usdc" ||
-        extension == L".usdz";
+        extension == L".usdz" || extension == L".step" || extension == L".stp";
 }
 
 bool WaitOverlapped(HANDLE object, OVERLAPPED& operation, HANDLE stopEvent, DWORD timeout, DWORD& transferred,
@@ -338,7 +338,7 @@ bool NormalizeForwardPath(const std::wstring& input, std::wstring& absolutePath,
         && std::iswalpha(resolved[4]) && resolved[5] == L':' && resolved[6] == L'\\';
     if (!drivePath && !extendedDrive) { error = L"Only local drive paths can be activated."; return false; }
     if (!IsSupportedExtension(resolved)) {
-        error = L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, or .usdz file.";
+        error = L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, .usdz, .step, or .stp file.";
         return false;
     }
     absolutePath = std::move(resolved);

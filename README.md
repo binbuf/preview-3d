@@ -6,7 +6,7 @@ A fast optimized 3D viewer for Windows 11.
 
 ## Highlights
 
-- Open local GLB/glTF, OBJ/MTL, FBX, STL, PLY, 3MF, and USD-family files.
+- Open local GLB/glTF, OBJ/MTL, FBX, STL, PLY, 3MF, USD-family, and STEP/STP files.
 - Navigate with familiar orbit, pan, fly, frame, and orthographic-view controls.
 - Drag and drop files, use **Open**, or pass a path on the command line.
 - Run parsing and decoding in a zero-capability AppContainer worker; models stay local and are never modified.
@@ -23,6 +23,7 @@ A fast optimized 3D viewer for Windows 11.
 | PLY | ASCII and binary triangle meshes and point clouds |
 | 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews |
 | Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`; static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
+| STEP | `.step` and `.stp` self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, and authored length units through a dedicated isolated OCCT host |
 
 USD files first use TinyUSDZ in the general isolated importer. Stages requiring
 supported composition are retried atomically in a separately isolated, lazily
@@ -30,18 +31,25 @@ started OpenUSD host. Local relative sublayers, references, payloads, authored
 default variants, and texture dependencies are brokered by the viewer; remote
 assets and arbitrary resolvers/plugins are never allowed.
 
+STEP/STP uses a third, dedicated zero-capability host with a pinned constrained
+OCCT closure. It receives only an inherited read-only handle (never a path),
+performs product-owned Part-21 admission before the CAD kernel runs, and emits
+only normalized wire records. The route is case-insensitive on command line,
+dialog, drag/drop, single-instance activation, Retry, and Open With.
+
 The implemented USD viewer path has an immutable corpus and a standalone
 sanitizer fuzz-smoke lane. Final release qualification still requires the
 recorded clean-machine, repeated performance/heartbeat, soak, and signed-build
 gates; see [USD-009 verification](.docs/USD-009-VERIFICATION.md). Explorer USD
 thumbnails are a separate follow-up and are not installed.
 
-This is a static, read-only viewer. Animation playback, editing, CAD
-formats, Explorer thumbnails (including for 3MF, USD, and FBX), network assets,
+This is a static, read-only viewer. Animation playback, editing, other CAD
+formats (IGES/IFC/JT/native CAD), Explorer thumbnails (including for 3MF, USD,
+FBX, and STEP), network assets,
 skeletal USD data, MaterialX, procedural schemas, and interactive variant
-selection are not currently included. The planned STEP/STP support is a bounded
-static preview subset that is self-contained only: external STEP documents are
-out of scope, and there is no PMI/GD&T, editing, or exact-kernel operation. 3MF slicer-private multi-plate grouping,
+selection are not currently included. The supported STEP/STP subset is bounded
+and self-contained only: external STEP documents are out of scope, and there is
+no PMI/GD&T, editing, saved views, exact measurement, or shape healing. 3MF slicer-private multi-plate grouping,
 printer/process settings, Slice, Secure Content, Volumetric, Implicit, toolpath,
 repair, slicing, and export features are not supported. 3MF and USD are bounded
 Tier B paths: among their ceilings are 2 GiB per primary source, 4 GiB
@@ -60,7 +68,7 @@ and use the ground direction button to make negative Z point up.
 ## Install and use
 
 1. Download the installer or portable ZIP from [Releases](https://github.com/binbuf/preview-3d/releases/latest).
-2. For the portable ZIP, extract it and keep both `worker` and `OpenUsdHost` beside `Preview3D.exe`.
+2. For the portable ZIP, extract it and keep `worker`, `OpenUsdHost`, and `StepHost` beside `Preview3D.exe`.
 3. Open a model with `Ctrl+O`, drag a supported file onto the window, or run `Preview3D.exe <path-to-model>`.
 
 The installer adds 3D Preview to **Open with** and **Default apps** for the supported extensions. Windows keeps existing default-app choices; confirm any changes in Default apps after installation.

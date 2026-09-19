@@ -317,8 +317,9 @@ subset, not general STEP/CAD authoring support, and must state the
 external-reference exclusion, the Tier-B limits, and the lack of PMI/editing/
 Explorer thumbnails. IGES/IFC/JT/native CAD formats, a CAD tree/property
 browser, saved views, exact measurement, and export remain separate future
-plans. The extension is not exposed to the viewer, activation, or installer
-until STEP-007.
+plans. STEP-007 exposes the extension to the viewer, activation, and installer
+(`Binbuf.Preview3D.STEP.1` for `.step`/`.stp`); Explorer thumbnails remain
+STEP-009 and are deliberately not registered yet.
 
 ## TSK-209 compressed glTF dependency decisions
 

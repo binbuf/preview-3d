@@ -84,7 +84,7 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     switch (code) {
     case model_core::ImportErrorCode::UnsupportedEncoding:
         summary = L"This encoding is not supported.";
-        details = L"Use a supported glTF, STL, PLY, OBJ, FBX, USDA, USDC, or USDZ encoding."; return;
+        details = L"Use a supported glTF, STL, PLY, OBJ, FBX, 3MF, USD, or clear-text STEP encoding."; return;
     case model_core::ImportErrorCode::WorkerCrashed:
         summary = L"The sandboxed importer stopped unexpectedly.";
         details = L"The worker exited before completing this model. Retry or open another model."; return;
@@ -368,11 +368,12 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     if (ext == L"obj") return SourceFormat::Obj;
     if (ext == L"fbx") return SourceFormat::Fbx;
     if (ext == L"3mf") return SourceFormat::ThreeMf;
+    // `.step`/`.stp` select the dedicated STEP host, but the extension alone
+    // never bypasses STEP-002 admission: StepPart21Preflight verifies the
+    // ISO 10303-21 byte envelope on the inherited handle before OCCT runs.
+    if (ext == L"step" || ext == L"stp") return SourceFormat::Step;
     if (ext == L"usd" || ext == L"usda" || ext == L"usdc" || ext == L"usdz")
         return SourceFormat::Usd;
-    // `.step`/`.stp` are deliberately absent until STEP-006: no public
-    // picker, drag/drop, or activation path may recognize STEP yet, and an
-    // extension alone must never bypass STEP-002 byte admission.
     return std::nullopt;
 }
 
@@ -384,7 +385,8 @@ void EnsureImportSandboxPrepared()
 ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
                         std::function<bool()> isCancelled, std::function<void(ImportResult)> onBatch, uint64_t sectionBytes, bool delayBatchesForTesting, uint32_t faultForTesting,
                         std::function<uint32_t()> nextDetail,
-                        std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows)
+                        std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows,
+                        std::function<void(const model_core::StepProgressNotice&)> onStepProgress)
 {
     ImportResult result;
     // Startup normally prewarms this pool, but direct/retry callers must not
@@ -406,8 +408,10 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.workerExePath = ResolveWorkerExePath();
     if (format == SourceFormat::Usd)
         sessionRequest.compatibilityHostExePath = ResolveCompatibilityHostExePath();
-    if (format == SourceFormat::Step)
+    if (format == SourceFormat::Step) {
         sessionRequest.stepHostExePath = ResolveStepHostExePath();
+        sessionRequest.onStepProgress = std::move(onStepProgress);
+    }
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
     sessionRequest.generationId = generationId;
@@ -429,6 +433,20 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     if (faultForTesting == 6) {
         sessionRequest.commitLimitBytes = 1ull * 1024 * 1024;
         sessionRequest.replyTimeoutMs = 500;
+    }
+    // The dedicated STEP host owns its own attack-mode flags; the general
+    // worker override above never reaches it.
+    if (format == SourceFormat::Step) {
+        if (faultForTesting == 1) sessionRequest.stepHostArgumentsOverride = L"--pool-crash";
+        if (faultForTesting == 2) {
+            sessionRequest.stepHostArgumentsOverride = L"--pool-hang";
+            sessionRequest.replyTimeoutMs = 500;
+        }
+        if (faultForTesting == 6) {
+            sessionRequest.stepHostArgumentsOverride = L"--pool-overallocate";
+            sessionRequest.stepHostCommitLimitBytes = 1ull * 1024 * 1024;
+            sessionRequest.replyTimeoutMs = 500;
+        }
     }
     import_broker::KnownChunkCatalog catalog;
     std::unordered_map<uint32_t, model_core::NodePayload> nodeCatalog;

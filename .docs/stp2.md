@@ -3,10 +3,12 @@
 Status: STEP-003 complete, STEP-004 complete for the single-pass display slice
 (coarse-catalog replacement delegated to STEP-005 item 5), STEP-005 implemented
 for measurement, progress, input I/O, the corrected thread-pool decision, and
-the versioned single-pass delivery-strategy choice, and STEP-006 complete for
+the versioned single-pass delivery-strategy choice, STEP-006 complete for
 the interoperability matrix, AP242 tessellated acceptance, the no-healing
-decision, and the recorded self-contained scope acceptance (see
-[STEP-006-VERIFICATION.md](STEP-006-VERIFICATION.md) and
+decision, and the recorded self-contained scope acceptance, and STEP-007
+complete for viewer/activation/package/documentation integration (see
+[STEP-007-VERIFICATION.md](STEP-007-VERIFICATION.md),
+[STEP-006-VERIFICATION.md](STEP-006-VERIFICATION.md), and
 [STEP-006-INTEROP-MATRIX.md](STEP-006-INTEROP-MATRIX.md)); the genuine large-file
 corpus and published Tier-B budgets remain for STEP-008 (see
 [STEP-005-VERIFICATION.md](STEP-005-VERIFICATION.md)). This file supersedes
@@ -291,6 +293,9 @@ no-go.
   documentation.
 
 ## STEP-007 — product, package, and documentation integration
+
+Status: complete (2026-09-19). Evidence in
+[STEP-007-VERIFICATION.md](STEP-007-VERIFICATION.md).
 
 ### Objective
 
