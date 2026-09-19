@@ -4,6 +4,56 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **STEP-008 post-slice viewer regression (2026-09-19): the genuine corpus
+  fails through the real viewer as `StepHostFailure`.** Opening
+  `test-models/Voron_2.4r2_Assembly.step` in `Preview3D.exe` loads for several
+  minutes and then reports "The STEP importer stopped unexpectedly." / "The
+  isolated STEP host could not complete this model." It is a broker-side
+  timeout, not a host crash: the D3D12 bridge never raises `replyTimeoutMs` for
+  STEP, so the dedicated host runs under the shared
+  `kWorkerReplyTimeoutMs = 120'000` backstop, and the host only sends control
+  messages at phase boundaries (`StepHostImport` preflight; `StepXdeAdapter`
+  Read/Transfer/Plan/Mesh/Emit). The long `ReadStream` and `Transfer` phases
+  emit nothing, so the broker sees a >120 s silence, reports
+  `ImportStage::ReplyTimedOut`, and `MapStepFailure` collapses that to
+  `StepHostFailure` (26) — the same user text as a crash. The opt-in
+  `[.][step-008-measure]` sets `replyTimeoutMs = 1'800'000` plus a 20-minute
+  deadline, which is exactly why the qualification slice never saw this.
+
+  Things the next STP/STEP task should not relearn:
+  1. **The viewer needs a STEP-specific reply timeout, or the host needs a
+     phase heartbeat.** A 120 s hang backstop is far below the genuine
+     corpus's single-phase cost. Prefer a bounded heartbeat progress event
+     during `ReadStream`/`Transfer` over a blanket longer timeout so a wedged
+     host is still caught; either way, add a real-viewer regression for the
+     large corpus, not just a `RunImportSession` measurement.
+  2. **The Debug STEP host links the vcpkg Debug OCCT closure.** On the same
+     241,522,213-byte assembly: Release broker Ready ~111 s with a largest
+     phase gap of ~64 s (`Transfer`) and 2.28 GiB peak host commit; Debug
+     broker Ready ~994 s (~16.5 min) with `Transfer` 445 s and 3.89 GiB peak.
+     `x64/Debug/StepHost/TKernel.dll` is 2,964,992 B against Release's
+     1,601,024 B. Debug is ~9x slower and ~1.7x the commit, so a Debug viewer
+     run will always trip the 120 s backstop and is not performance evidence;
+     the published Tier-B budget is Release-only.
+  3. **`StepHostFailure` is overloaded.** `ReplyTimedOut`, a launch/payload
+     fault, a host crash, and a broker validation failure all collapse to the
+     same `StepHostFailure` text, so "stopped unexpectedly" must not be read as
+     "crashed". Check `ImportSessionResult.stage`/`errorCode` (the bridge has
+     them; the UI does not) before choosing a fix.
+  4. **The STEP host commit ceiling is `min(4 GiB, 35% of physical RAM)`**
+     (`CompatibilityCommitLimitBytes`), not the 4 GiB general-worker default.
+     The Debug peak (3.89 GiB) already sits at that ceiling, so a lower-RAM
+     machine's 35% branch can Job-kill the host; when the Job violation flag
+     and the NT memory statuses are both missed that also surfaces as
+     `StepHostFailure`, not `StepHostLimit`. Distinguish a genuine host defect
+     from a machine-size limit before blaming the code.
+  5. **Do not chase the per-generation caps for this failure.** The measurement
+     uses `maxChunkBatchesPerGeneration = 4096` and `maxChunksPerGeneration = 0`
+     (derive); the viewer uses `kTierACatalogLimit` (899,074) and
+     `kTierABatchLimit`. The corpus delivers 4,589 chunks in 8 batches, so
+     neither cap is binding and the STEP-008 `maxChunkCount` fix is not
+     implicated.
+
 - **STEP-008 qualification slice (2026-09-19): implemented; release
   qualification remains open.** A checked-in corpus manifest
   (`tests/fixtures/step/manifest.json`) freezes provenance, size, SHA-256,
