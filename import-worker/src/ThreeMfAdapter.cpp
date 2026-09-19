@@ -24,6 +24,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <numbers>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -266,11 +267,11 @@ public:
         : model_(model), writer_(writer), options_(options) {}
 
     ImportErrorCode Error() const { return error_; }
+    void SetError(ImportErrorCode error) { if (error_ == ImportErrorCode::None) error_ = error; }
     uint32_t WarningCount() const { return warnings_; }
 
     bool ValidateDisplayProperties()
     {
-        if (!options_.displayCatalog) return true;
         std::unordered_set<std::string> seen;
         auto resources = model_->GetResources();
         if (!resources) { error_ = ImportErrorCode::MalformedData; return false; }
@@ -279,6 +280,10 @@ public:
             const auto resource = resources->GetCurrent();
             std::string key;
             if (!ResourceKey(resource, key)) continue;
+            if (!resourcesByKey_.emplace(key, resource).second) {
+                error_ = ImportErrorCode::MalformedData; return false;
+            }
+            if (!options_.displayCatalog) continue;
             const auto association = options_.displayCatalog->associations.find(key);
             if (association == options_.displayCatalog->associations.end()) continue;
             seen.insert(key);
@@ -293,7 +298,8 @@ public:
                 error_ = ImportErrorCode::MalformedData; return false;
             }
         }
-        if (seen.size() != options_.displayCatalog->associations.size()) {
+        if (options_.displayCatalog
+            && seen.size() != options_.displayCatalog->associations.size()) {
             error_ = ImportErrorCode::MalformedData; return false;
         }
         return true;
@@ -303,6 +309,49 @@ public:
     {
         std::unordered_set<uint64_t> recursion;
         return ResolveInner(resourceId, propertyId, sample, recursion, 0);
+    }
+
+    bool ResolveLatticeProperty(std::string_view packagePart,
+                                const ThreeMfLatticePropertyRef& latticeDefault,
+                                const ThreeMfLatticePropertyRef& element,
+                                uint32_t objectResource, uint32_t objectProperty,
+                                PropertySample& sample)
+    {
+        uint32_t uniqueResource = objectResource;
+        uint32_t propertyIndex = 0;
+        bool hasProperty = objectResource != 0;
+        if (hasProperty) {
+            const auto resource = model_->GetResourceByID(objectResource);
+            if (!PropertyIndex(resource, objectProperty, propertyIndex)) return false;
+        }
+
+        auto apply = [&](const ThreeMfLatticePropertyRef& reference) -> bool {
+            if (reference.hasResource) {
+                const auto found = resourcesByKey_.find(
+                    ThreeMfResourceKey(packagePart, reference.resourceId));
+                if (found == resourcesByKey_.end()) {
+                    error_ = ImportErrorCode::MalformedData; return false;
+                }
+                uniqueResource = found->second->GetUniqueResourceID();
+                hasProperty = true;
+            }
+            if (reference.hasProperty) {
+                propertyIndex = reference.propertyIndex;
+                hasProperty = true;
+            }
+            return true;
+        };
+        if (!apply(latticeDefault) || !apply(element)) return false;
+        if (!hasProperty) {
+            sample.color[0] = sample.color[1] = sample.color[2] = 0.8f;
+            return true;
+        }
+        if (!uniqueResource) { error_ = ImportErrorCode::MalformedData; return false; }
+        const auto resource = model_->GetResourceByID(uniqueResource);
+        std::vector<uint32_t> ids;
+        if (!PropertyIds(resource, ids)) return false;
+        if (propertyIndex >= ids.size()) { error_ = ImportErrorCode::MalformedData; return false; }
+        return Resolve(uniqueResource, ids[propertyIndex], sample);
     }
 
     uint32_t MaterialFor(PropertySample samples[3])
@@ -720,6 +769,7 @@ private:
     std::unordered_map<MaterialKey, uint32_t, MaterialKeyHash> materials_;
     std::unordered_map<uint32_t, uint32_t> images_;
     std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> propertyIndices_;
+    std::unordered_map<std::string, Lib3MF::PResource> resourcesByKey_;
     std::unordered_set<std::string> warnedDisplayGroups_;
     ImportErrorCode error_ = ImportErrorCode::None;
     uint32_t warnings_ = 0;
@@ -730,6 +780,362 @@ struct TriangleAppearance {
     PropertySample corners[3];
     uint32_t materialId = 0;
 };
+
+struct Vec3d { double x = 0.0, y = 0.0, z = 0.0; };
+
+Vec3d operator+(Vec3d a, Vec3d b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+Vec3d operator-(Vec3d a, Vec3d b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+Vec3d operator*(Vec3d a, double value) { return {a.x * value, a.y * value, a.z * value}; }
+double Dot(Vec3d a, Vec3d b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+Vec3d Cross(Vec3d a, Vec3d b) {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x};
+}
+double Length(Vec3d value) { return std::sqrt(Dot(value, value)); }
+Vec3d Normalize(Vec3d value) {
+    const double length = Length(value);
+    return length > 1.0e-20 && Finite(length) ? value * (1.0 / length) : Vec3d{0, 0, 1};
+}
+
+struct GeneratedVertex {
+    Vec3d position;
+    Vec3d normal;
+    PropertySample property;
+};
+
+struct GeneratedTriangle { GeneratedVertex vertex[3]; };
+
+PropertySample Interpolate(const PropertySample& a, const PropertySample& b, double t)
+{
+    PropertySample result = a;
+    for (uint32_t channel = 0; channel < 4; ++channel)
+        result.color[channel] = float(double(a.color[channel])
+            + (double(b.color[channel]) - a.color[channel]) * t);
+    for (uint32_t axis = 0; axis < 2; ++axis)
+        result.uv[axis] = float(double(a.uv[axis]) + (double(b.uv[axis]) - a.uv[axis]) * t);
+    result.metallic = float(double(a.metallic) + (double(b.metallic) - a.metallic) * t);
+    result.roughness = float(double(a.roughness) + (double(b.roughness) - a.roughness) * t);
+    result.hasUv = a.hasUv || b.hasUv;
+    result.hasPbr = a.hasPbr || b.hasPbr;
+    result.colorSrgb = a.colorSrgb && b.colorSrgb;
+    return result;
+}
+
+GeneratedVertex Interpolate(const GeneratedVertex& a, const GeneratedVertex& b, double t)
+{
+    return {a.position + (b.position - a.position) * t,
+            Normalize(a.normal + (b.normal - a.normal) * t),
+            Interpolate(a.property, b.property, t)};
+}
+
+void AddTriangle(std::vector<GeneratedTriangle>& output, const GeneratedVertex& a,
+                 const GeneratedVertex& b, const GeneratedVertex& c)
+{
+    output.push_back({a, b, c});
+}
+
+void Basis(Vec3d axis, Vec3d& first, Vec3d& second)
+{
+    const Vec3d reference = std::abs(axis.z) < 0.8 ? Vec3d{0, 0, 1} : Vec3d{0, 1, 0};
+    first = Normalize(Cross(reference, axis));
+    second = Normalize(Cross(axis, first));
+}
+
+void AddSphere(std::vector<GeneratedTriangle>& output, Vec3d center, double radius,
+               Vec3d axis, uint32_t radial, uint32_t latitude,
+               const PropertySample& property, double angularLimit)
+{
+    Vec3d u{}, v{};
+    axis = Normalize(axis); Basis(axis, u, v);
+    const bool fullSphere = angularLimit >= std::numbers::pi_v<double> - 1.0e-12;
+    std::vector<std::vector<GeneratedVertex>> rings;
+    for (uint32_t row = 1; row < latitude + (fullSphere ? 0u : 1u); ++row) {
+        const double theta = angularLimit * double(row) / double(latitude);
+        std::vector<GeneratedVertex> ring;
+        ring.reserve(radial);
+        for (uint32_t column = 0; column < radial; ++column) {
+            const double angle = 2.0 * std::numbers::pi_v<double> * column / radial;
+            const Vec3d normal = axis * std::cos(theta)
+                + (u * std::cos(angle) + v * std::sin(angle)) * std::sin(theta);
+            ring.push_back({center + normal * radius, normal, property});
+        }
+        rings.push_back(std::move(ring));
+    }
+    GeneratedVertex top{center + axis * radius, axis, property};
+    if (rings.empty()) return;
+    for (uint32_t column = 0; column < radial; ++column)
+        AddTriangle(output, top, rings.front()[column], rings.front()[(column + 1) % radial]);
+    for (size_t row = 1; row < rings.size(); ++row)
+        for (uint32_t column = 0; column < radial; ++column) {
+            const uint32_t next = (column + 1) % radial;
+            AddTriangle(output, rings[row - 1][column], rings[row][column], rings[row][next]);
+            AddTriangle(output, rings[row - 1][column], rings[row][next], rings[row - 1][next]);
+        }
+    if (fullSphere) {
+        GeneratedVertex bottom{center - axis * radius, axis * -1.0, property};
+        for (uint32_t column = 0; column < radial; ++column)
+            AddTriangle(output, rings.back()[column], bottom,
+                        rings.back()[(column + 1) % radial]);
+    }
+}
+
+void AddBeam(std::vector<GeneratedTriangle>& output, Vec3d begin, Vec3d end,
+             double radius0, double radius1, ThreeMfLatticeCapMode cap0,
+             ThreeMfLatticeCapMode cap1, const PropertySample& property0,
+             const PropertySample& property1, uint32_t radial)
+{
+    const Vec3d delta = end - begin;
+    const double length = Length(delta);
+    const Vec3d axis = delta * (1.0 / length);
+    const double slope = (radius1 - radius0) / length;
+    double trim0 = 0.0, trim1 = 0.0;
+    double sphereAngle0 = std::numbers::pi_v<double> * 0.5;
+    double sphereAngle1 = std::numbers::pi_v<double> * 0.5;
+    if (cap0 == ThreeMfLatticeCapMode::Sphere && slope < 0.0) {
+        trim0 = -2.0 * radius0 * slope / (1.0 + slope * slope);
+        sphereAngle0 = std::acos((std::clamp)(2.0 * slope / (1.0 + slope * slope), -1.0, 1.0));
+    }
+    const double reverseSlope = -slope;
+    if (cap1 == ThreeMfLatticeCapMode::Sphere && reverseSlope < 0.0) {
+        trim1 = -2.0 * radius1 * reverseSlope / (1.0 + reverseSlope * reverseSlope);
+        sphereAngle1 = std::acos((std::clamp)(2.0 * reverseSlope
+            / (1.0 + reverseSlope * reverseSlope), -1.0, 1.0));
+    }
+    if (trim0 + trim1 >= length) { trim0 = trim1 = 0.0; sphereAngle0 = sphereAngle1 = std::numbers::pi_v<double>; }
+    const Vec3d sideBegin = begin + axis * trim0;
+    const Vec3d sideEnd = end - axis * trim1;
+    const double sideRadius0 = radius0 + slope * trim0;
+    const double sideRadius1 = radius1 - slope * trim1;
+    const PropertySample sideProperty0 = Interpolate(property0, property1, trim0 / length);
+    const PropertySample sideProperty1 = Interpolate(property0, property1, 1.0 - trim1 / length);
+    Vec3d u{}, v{}; Basis(axis, u, v);
+    std::vector<GeneratedVertex> ring0, ring1;
+    ring0.reserve(radial); ring1.reserve(radial);
+    for (uint32_t column = 0; column < radial; ++column) {
+        const double angle = 2.0 * std::numbers::pi_v<double> * column / radial;
+        const Vec3d radialNormal = u * std::cos(angle) + v * std::sin(angle);
+        const Vec3d normal = Normalize(radialNormal - axis * slope);
+        ring0.push_back({sideBegin + radialNormal * sideRadius0, normal, sideProperty0});
+        ring1.push_back({sideEnd + radialNormal * sideRadius1, normal, sideProperty1});
+    }
+    for (uint32_t column = 0; column < radial; ++column) {
+        const uint32_t next = (column + 1) % radial;
+        AddTriangle(output, ring0[column], ring0[next], ring1[next]);
+        AddTriangle(output, ring0[column], ring1[next], ring1[column]);
+    }
+    const auto addCap = [&](bool endCap, ThreeMfLatticeCapMode cap, double radius,
+                            const PropertySample& property) {
+        const Vec3d center = endCap ? end : begin;
+        const Vec3d direction = endCap ? axis : axis * -1.0;
+        const auto& ring = endCap ? ring1 : ring0;
+        if (cap == ThreeMfLatticeCapMode::Butt) {
+            GeneratedVertex middle{center, direction, property};
+            for (uint32_t column = 0; column < radial; ++column) {
+                const uint32_t next = (column + 1) % radial;
+                if (endCap) AddTriangle(output, middle, ring[column], ring[next]);
+                else AddTriangle(output, middle, ring[next], ring[column]);
+            }
+        } else {
+            const double angle = cap == ThreeMfLatticeCapMode::Hemisphere
+                ? std::numbers::pi_v<double> * 0.5 : (endCap ? sphereAngle1 : sphereAngle0);
+            const uint32_t rows = (std::max)(1u, uint32_t(std::ceil(
+                double(radial) * angle / (2.0 * std::numbers::pi_v<double>))));
+            AddSphere(output, center, radius, direction, radial, rows, property, angle);
+        }
+    };
+    addCap(false, cap0, radius0, property0);
+    addCap(true, cap1, radius1, property1);
+}
+
+uint64_t SphereTriangles(uint32_t radial, bool hemisphere)
+{
+    const uint32_t latitude = hemisphere ? (std::max)(1u, radial / 4)
+                                         : (std::max)(2u, radial / 2);
+    return hemisphere ? uint64_t(radial) * (2 * latitude - 1)
+                      : uint64_t(2) * radial * (latitude - 1);
+}
+
+uint64_t BeamTriangles(const ThreeMfLatticeBeam& beam, uint32_t radial)
+{
+    uint64_t count = uint64_t(2) * radial;
+    for (const auto cap : beam.cap)
+        count += cap == ThreeMfLatticeCapMode::Butt ? radial
+            : SphereTriangles(radial, cap == ThreeMfLatticeCapMode::Hemisphere);
+    return count;
+}
+
+struct Aabb { Vec3d minimum, maximum; };
+
+bool Inside(const Vec3d& point, uint32_t plane, const Aabb& box)
+{
+    const uint32_t axis = plane / 2;
+    const double value = axis == 0 ? point.x : axis == 1 ? point.y : point.z;
+    const double limit = (plane & 1) == 0
+        ? (axis == 0 ? box.minimum.x : axis == 1 ? box.minimum.y : box.minimum.z)
+        : (axis == 0 ? box.maximum.x : axis == 1 ? box.maximum.y : box.maximum.z);
+    return (plane & 1) == 0 ? value >= limit : value <= limit;
+}
+
+double Coordinate(const Vec3d& point, uint32_t axis)
+{
+    return axis == 0 ? point.x : axis == 1 ? point.y : point.z;
+}
+
+struct PointKey {
+    int64_t value[3]{};
+    bool operator==(const PointKey&) const = default;
+};
+
+struct PointKeyHash {
+    size_t operator()(const PointKey& key) const noexcept {
+        size_t hash = 1469598103934665603ull;
+        for (const int64_t value : key.value) {
+            hash ^= size_t(value); hash *= 1099511628211ull;
+        }
+        return hash;
+    }
+};
+
+struct EdgeKey {
+    PointKey first, second;
+    bool operator==(const EdgeKey&) const = default;
+};
+
+struct EdgeKeyHash {
+    size_t operator()(const EdgeKey& key) const noexcept {
+        PointKeyHash hash;
+        return hash(key.first) ^ (hash(key.second) * 0x9e3779b97f4a7c15ull);
+    }
+};
+
+bool Less(const PointKey& a, const PointKey& b)
+{
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        if (a.value[axis] < b.value[axis]) return true;
+        if (a.value[axis] > b.value[axis]) return false;
+    }
+    return false;
+}
+
+PointKey Quantize(Vec3d point, double scale)
+{
+    return {{int64_t(std::llround(point.x / scale)), int64_t(std::llround(point.y / scale)),
+             int64_t(std::llround(point.z / scale))}};
+}
+
+void AddClippingCaps(std::vector<GeneratedTriangle>& triangles, const Aabb& box,
+                     const PropertySample& property)
+{
+    const double extent = (std::max)({box.maximum.x - box.minimum.x,
+                                      box.maximum.y - box.minimum.y,
+                                      box.maximum.z - box.minimum.z});
+    const double magnitude = (std::max)({std::abs(box.minimum.x), std::abs(box.minimum.y),
+                                         std::abs(box.minimum.z), std::abs(box.maximum.x),
+                                         std::abs(box.maximum.y), std::abs(box.maximum.z)});
+    const double epsilon = (std::max)(1.0e-9, (std::max)(extent, magnitude) * 1.0e-8);
+    for (uint32_t plane = 0; plane < 6; ++plane) {
+        const uint32_t axis = plane / 2;
+        const double limit = (plane & 1) == 0 ? Coordinate(box.minimum, axis)
+                                              : Coordinate(box.maximum, axis);
+        std::unordered_map<EdgeKey, uint32_t, EdgeKeyHash> counts;
+        std::unordered_map<PointKey, Vec3d, PointKeyHash> points;
+        for (const auto& triangle : triangles)
+            for (uint32_t edge = 0; edge < 3; ++edge) {
+                const Vec3d a = triangle.vertex[edge].position;
+                const Vec3d b = triangle.vertex[(edge + 1) % 3].position;
+                if (std::abs(Coordinate(a, axis) - limit) > epsilon
+                    || std::abs(Coordinate(b, axis) - limit) > epsilon) continue;
+                PointKey ka = Quantize(a, epsilon), kb = Quantize(b, epsilon);
+                if (ka == kb) continue;
+                points.emplace(ka, a); points.emplace(kb, b);
+                if (Less(kb, ka)) std::swap(ka, kb);
+                ++counts[{ka, kb}];
+            }
+        std::unordered_map<PointKey, std::vector<PointKey>, PointKeyHash> adjacent;
+        std::unordered_set<EdgeKey, EdgeKeyHash> remaining;
+        for (const auto& [edge, count] : counts) {
+            if ((count & 1u) == 0) continue;
+            adjacent[edge.first].push_back(edge.second);
+            adjacent[edge.second].push_back(edge.first);
+            remaining.insert(edge);
+        }
+        while (!remaining.empty()) {
+            const EdgeKey seed = *remaining.begin();
+            std::vector<PointKey> loop{seed.first, seed.second};
+            remaining.erase(seed);
+            PointKey previous = seed.first, current = seed.second;
+            while (!(current == loop.front())) {
+                const auto found = adjacent.find(current);
+                if (found == adjacent.end() || found->second.size() < 2) { loop.clear(); break; }
+                PointKey next = found->second[0] == previous && found->second.size() > 1
+                    ? found->second[1] : found->second[0];
+                PointKey a = current, b = next;
+                if (Less(b, a)) std::swap(a, b);
+                if (!remaining.erase({a, b})) { loop.clear(); break; }
+                previous = current; current = next;
+                if (!(current == loop.front())) loop.push_back(current);
+                if (loop.size() > counts.size() + 1) { loop.clear(); break; }
+            }
+            if (loop.size() < 3) continue;
+            std::vector<Vec3d> polygon;
+            polygon.reserve(loop.size());
+            for (const auto& key : loop) polygon.push_back(points.at(key));
+            Vec3d normal{};
+            for (size_t index = 0; index < polygon.size(); ++index)
+                normal = normal + Cross(polygon[index], polygon[(index + 1) % polygon.size()]);
+            Vec3d desired{};
+            if (axis == 0) desired.x = (plane & 1) ? 1.0 : -1.0;
+            else if (axis == 1) desired.y = (plane & 1) ? 1.0 : -1.0;
+            else desired.z = (plane & 1) ? 1.0 : -1.0;
+            if (Dot(normal, desired) < 0.0) std::reverse(polygon.begin(), polygon.end());
+            Vec3d center{};
+            for (const auto point : polygon) center = center + point;
+            center = center * (1.0 / polygon.size());
+            GeneratedVertex middle{center, desired, property};
+            for (size_t index = 0; index < polygon.size(); ++index) {
+                GeneratedVertex a{polygon[index], desired, property};
+                GeneratedVertex b{polygon[(index + 1) % polygon.size()], desired, property};
+                AddTriangle(triangles, middle, a, b);
+            }
+        }
+    }
+}
+
+void ClipInside(std::vector<GeneratedTriangle>& triangles, const Aabb& box,
+                const PropertySample& clippingProperty)
+{
+    for (uint32_t plane = 0; plane < 6; ++plane) {
+        std::vector<GeneratedTriangle> clipped;
+        for (const auto& triangle : triangles) {
+            std::vector<GeneratedVertex> polygon(std::begin(triangle.vertex),
+                                                 std::end(triangle.vertex));
+            std::vector<GeneratedVertex> next;
+            for (size_t index = 0; index < polygon.size(); ++index) {
+                const auto& a = polygon[index];
+                const auto& b = polygon[(index + 1) % polygon.size()];
+                const bool inA = Inside(a.position, plane, box);
+                const bool inB = Inside(b.position, plane, box);
+                if (inA) next.push_back(a);
+                if (inA != inB) {
+                    const uint32_t axis = plane / 2;
+                    const double limit = (plane & 1) == 0
+                        ? Coordinate(box.minimum, axis) : Coordinate(box.maximum, axis);
+                    const double denominator = Coordinate(b.position, axis)
+                        - Coordinate(a.position, axis);
+                    if (std::abs(denominator) > 1.0e-30) {
+                        const double t = (limit - Coordinate(a.position, axis)) / denominator;
+                        next.push_back(Interpolate(a, b, (std::clamp)(t, 0.0, 1.0)));
+                    }
+                }
+            }
+            for (size_t index = 1; index + 1 < next.size(); ++index)
+                AddTriangle(clipped, next[0], next[index], next[index + 1]);
+        }
+        triangles.swap(clipped);
+        if (triangles.empty()) return;
+    }
+    AddClippingCaps(triangles, box, clippingProperty);
+}
 
 bool ResolveTriangleAppearance(const Lib3MF::PMeshObject& mesh, uint32_t triangleIndex,
                                PropertyCatalog& catalog, TriangleAppearance& appearance)
@@ -754,6 +1160,125 @@ bool ResolveTriangleAppearance(const Lib3MF::PMeshObject& mesh, uint32_t triangl
     return appearance.materialId != 0;
 }
 
+bool SourceKey(const Lib3MF::PResource& resource, std::string& key)
+{
+    if (!resource || !resource->GetModelResourceID()) return false;
+    const auto part = resource->PackagePart();
+    if (!part) return false;
+    key = ThreeMfResourceKey(part->GetPath(), resource->GetModelResourceID());
+    return true;
+}
+
+bool ClippingBox(const Lib3MF::PMeshObject& mesh, const ThreeMfDisplayCatalog* catalog,
+                 Aabb& box)
+{
+    if (!mesh || mesh->GetType() != Lib3MF::eObjectType::Model
+        || mesh->GetVertexCount() != 8 || mesh->GetTriangleCount() != 12)
+        return false;
+    std::string key;
+    if (!SourceKey(mesh, key) || (catalog && catalog->lattices.contains(key))) return false;
+    std::vector<Lib3MF::sPosition> positions;
+    std::vector<Lib3MF::sTriangle> triangles;
+    mesh->GetVertices(positions); mesh->GetTriangleIndices(triangles);
+    if (positions.size() != 8 || triangles.size() != 12) return false;
+    box.minimum = {(std::numeric_limits<double>::max)(), (std::numeric_limits<double>::max)(),
+                   (std::numeric_limits<double>::max)()};
+    box.maximum = {-box.minimum.x, -box.minimum.y, -box.minimum.z};
+    for (const auto& position : positions) {
+        const Vec3d point{position.m_Coordinates[0], position.m_Coordinates[1],
+                          position.m_Coordinates[2]};
+        if (!Finite(point.x) || !Finite(point.y) || !Finite(point.z)) return false;
+        box.minimum.x = (std::min)(box.minimum.x, point.x);
+        box.minimum.y = (std::min)(box.minimum.y, point.y);
+        box.minimum.z = (std::min)(box.minimum.z, point.z);
+        box.maximum.x = (std::max)(box.maximum.x, point.x);
+        box.maximum.y = (std::max)(box.maximum.y, point.y);
+        box.maximum.z = (std::max)(box.maximum.z, point.z);
+    }
+    if (!(box.maximum.x > box.minimum.x && box.maximum.y > box.minimum.y
+          && box.maximum.z > box.minimum.z)) return false;
+    for (const auto& position : positions) {
+        for (uint32_t axis = 0; axis < 3; ++axis) {
+            const double value = position.m_Coordinates[axis];
+            if (value != Coordinate(box.minimum, axis) && value != Coordinate(box.maximum, axis))
+                return false;
+        }
+    }
+    for (const auto& triangle : triangles) {
+        for (uint32_t index : triangle.m_Indices) if (index >= positions.size()) return false;
+        bool face = false;
+        for (uint32_t axis = 0; axis < 3; ++axis) {
+            const double a = positions[triangle.m_Indices[0]].m_Coordinates[axis];
+            const double b = positions[triangle.m_Indices[1]].m_Coordinates[axis];
+            const double c = positions[triangle.m_Indices[2]].m_Coordinates[axis];
+            face |= a == b && b == c
+                && (a == Coordinate(box.minimum, axis) || a == Coordinate(box.maximum, axis));
+        }
+        if (!face) return false;
+    }
+    return true;
+}
+
+bool EmitGenerated(BoundedChunkWriter& writer, PropertyCatalog& catalog,
+                   std::span<const GeneratedTriangle> triangles,
+                   uint32_t meshKey, uint32_t meshOrdinal,
+                   std::vector<GeometryRecord>& output,
+                   uint64_t& totalTriangles, uint64_t& totalVertices)
+{
+    if (triangles.empty()) return true;
+    if (triangles.size() > kTierBTriangleLimit - totalTriangles
+        || triangles.size() * 3 > kTierBVertexLimit - totalVertices)
+        return false;
+    std::vector<uint32_t> materials;
+    materials.reserve(triangles.size());
+    for (const auto& triangle : triangles) {
+        PropertySample samples[3]{triangle.vertex[0].property, triangle.vertex[1].property,
+                                  triangle.vertex[2].property};
+        const uint32_t material = catalog.MaterialFor(samples);
+        if (!material) return false;
+        materials.push_back(material);
+    }
+    size_t start = 0;
+    while (start < triangles.size()) {
+        size_t count = 1;
+        while (count < kChunkTriangles && start + count < triangles.size()
+               && materials[start + count] == materials[start]) ++count;
+        std::vector<VertexPositionNormalUv0TangentColorF32> vertices(count * 3);
+        std::vector<uint32_t> indices(count * 3);
+        bool hasUv = false;
+        for (size_t triangleIndex = 0; triangleIndex < count; ++triangleIndex)
+            for (uint32_t corner = 0; corner < 3; ++corner) {
+                const auto& source = triangles[start + triangleIndex].vertex[corner];
+                auto& target = vertices[triangleIndex * 3 + corner];
+                target.px = float(source.position.x); target.py = float(source.position.y);
+                target.pz = float(source.position.z); target.nx = float(source.normal.x);
+                target.ny = float(source.normal.y); target.nz = float(source.normal.z);
+                target.u = source.property.uv[0]; target.v = source.property.uv[1];
+                target.tx = 1.0f; target.tw = 1.0f;
+                target.r = source.property.color[0]; target.g = source.property.color[1];
+                target.b = source.property.color[2]; target.a = source.property.color[3];
+                indices[triangleIndex * 3 + corner] = uint32_t(triangleIndex * 3 + corner);
+                hasUv |= source.property.textureId != 0;
+            }
+        ChunkDescriptor descriptor{};
+        descriptor.topology = ChunkTopology::TriangleList;
+        descriptor.chunkId = writer.NextId(); descriptor.vertexCount = uint32_t(count * 3);
+        descriptor.indexCount = uint32_t(count * 3);
+        descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
+        descriptor.meshId = meshOrdinal;
+        descriptor.sourceRangeOffset = (uint64_t(meshKey) << 32) | (uint64_t(start) * 3);
+        descriptor.sourceRangeLength = uint64_t(count) * 3;
+        descriptor.geometryFlags = kGeometryDeindexed | kGeometryReusableInstanceSource
+            | kGeometryHasColors | (hasUv ? kGeometryHasUv0 : 0);
+        if (!SetLocalBounds(descriptor, ChunkBytes(vertices))
+            || !writer.Add(descriptor, ChunkBytes(vertices), ChunkBytes(indices))) return false;
+        output.push_back({descriptor.chunkId, descriptor, materials[start]});
+        start += count;
+    }
+    totalTriangles += triangles.size(); totalVertices += triangles.size() * 3;
+    return true;
+}
+
 bool EmitMesh(BoundedChunkWriter& writer, PropertyCatalog& catalog,
               const Lib3MF::PMeshObject& mesh, uint32_t meshKey,
               uint32_t meshOrdinal,
@@ -763,8 +1288,9 @@ bool EmitMesh(BoundedChunkWriter& writer, PropertyCatalog& catalog,
     if (options.Cancelled()) return false;
     const uint32_t vertexCount = mesh->GetVertexCount();
     const uint32_t triangleCount = mesh->GetTriangleCount();
-    if (!vertexCount || !triangleCount || vertexCount > kTierBVertexLimit
+    if (!vertexCount || vertexCount > kTierBVertexLimit
         || triangleCount > kTierBTriangleLimit) return false;
+    if (!triangleCount) return true;
     std::vector<Lib3MF::sPosition> positions;
     std::vector<Lib3MF::sTriangle> triangles;
     mesh->GetVertices(positions); mesh->GetTriangleIndices(triangles);
@@ -850,6 +1376,249 @@ bool EmitMesh(BoundedChunkWriter& writer, PropertyCatalog& catalog,
     return true;
 }
 
+bool SameDisplayProperty(const PropertySample& a, const PropertySample& b)
+{
+    if (a.hasPbr != b.hasPbr) return false;
+    if (!a.hasPbr && !b.hasPbr) return true;
+    constexpr float epsilon = 1.0e-6f;
+    if (std::abs(a.metallic - b.metallic) > epsilon
+        || std::abs(a.roughness - b.roughness) > epsilon) return false;
+    for (uint32_t channel = 0; channel < 4; ++channel)
+        if (std::abs(a.color[channel] - b.color[channel]) > epsilon) return false;
+    return true;
+}
+
+bool SameProperty(const PropertySample& a, const PropertySample& b)
+{
+    if (a.textureId != b.textureId || a.samplerFlags != b.samplerFlags
+        || a.hasUv != b.hasUv || a.hasPbr != b.hasPbr
+        || a.textureLayer != b.textureLayer || a.textureMix != b.textureMix
+        || a.colorSrgb != b.colorSrgb) return false;
+    constexpr float epsilon = 1.0e-6f;
+    for (uint32_t channel = 0; channel < 4; ++channel)
+        if (std::abs(a.color[channel] - b.color[channel]) > epsilon) return false;
+    for (uint32_t axis = 0; axis < 2; ++axis)
+        if (std::abs(a.uv[axis] - b.uv[axis]) > epsilon) return false;
+    return std::abs(a.metallic - b.metallic) <= epsilon
+        && std::abs(a.roughness - b.roughness) <= epsilon;
+}
+
+bool EmitLattice(BoundedChunkWriter& writer, PropertyCatalog& catalog,
+                 const Lib3MF::PMeshObject& mesh,
+                 uint32_t meshKey, uint32_t meshOrdinal,
+                 const ThreeMfLatticeDefinition& lattice,
+                 const std::unordered_map<std::string, Lib3MF::PMeshObject>& sourceMeshes,
+                 const ThreeMfDisplayCatalog* xmlCatalog,
+                 const ThreeMfImportOptions& options,
+                 std::vector<GeometryRecord>& output,
+                 uint64_t& totalTriangles, uint64_t& totalVertices)
+{
+    if (options.Cancelled()) return false;
+    std::string sourceKey;
+    if (!SourceKey(mesh, sourceKey) || sourceKey != ThreeMfResourceKey(
+            lattice.packagePart, lattice.objectId)) return false;
+    const auto findReferencedMesh = [&](uint32_t localId) -> Lib3MF::PMeshObject {
+        if (!localId) return {};
+        const auto found = sourceMeshes.find(ThreeMfResourceKey(lattice.packagePart, localId));
+        return found == sourceMeshes.end() ? Lib3MF::PMeshObject{} : found->second;
+    };
+    const auto representation = findReferencedMesh(lattice.representationMeshId);
+    const auto clipping = findReferencedMesh(lattice.clippingMeshId);
+    if (lattice.representationMeshId) {
+        std::string key;
+        if (!representation || representation == mesh
+            || representation->GetType() != Lib3MF::eObjectType::Model
+            || !representation->GetTriangleCount() || !SourceKey(representation, key)
+            || (xmlCatalog && xmlCatalog->lattices.contains(key))) return false;
+    }
+    if (lattice.clipMode != ThreeMfLatticeClipMode::None) {
+        std::string key;
+        if (!clipping || clipping == mesh || clipping->GetType() != Lib3MF::eObjectType::Model
+            || !SourceKey(clipping, key) || (xmlCatalog && xmlCatalog->lattices.contains(key)))
+            return false;
+    }
+    if (!representation && lattice.clipMode == ThreeMfLatticeClipMode::Outside) {
+        catalog.SetError(ImportErrorCode::UnsupportedRequiredFeature);
+        return false;
+    }
+
+    Aabb clippingBounds{};
+    const bool clipped = !representation && lattice.clipMode == ThreeMfLatticeClipMode::Inside;
+    if (clipped && !ClippingBox(clipping, xmlCatalog, clippingBounds)) {
+        catalog.SetError(ImportErrorCode::UnsupportedRequiredFeature);
+        return false;
+    }
+    PropertySample clippingProperty;
+    if (clipped) {
+        bool initialized = false;
+        for (uint32_t triangle = 0; triangle < clipping->GetTriangleCount(); ++triangle) {
+            TriangleAppearance appearance;
+            if (!ResolveTriangleAppearance(clipping, triangle, catalog, appearance)) return false;
+            for (const auto& sample : appearance.corners) {
+                if (!initialized) { clippingProperty = sample; initialized = true; }
+                else if (!SameProperty(clippingProperty, sample)) {
+                    catalog.SetError(ImportErrorCode::UnsupportedRequiredFeature);
+                    return false;
+                }
+            }
+        }
+        if (!initialized) return false;
+    }
+
+    const uint32_t vertexCount = mesh->GetVertexCount();
+    if (!vertexCount || vertexCount > kTierBVertexLimit) return false;
+    std::vector<Lib3MF::sPosition> rawPositions;
+    mesh->GetVertices(rawPositions);
+    if (rawPositions.size() != vertexCount) return false;
+    std::vector<Vec3d> positions;
+    positions.reserve(rawPositions.size());
+    for (const auto& position : rawPositions) {
+        Vec3d value{position.m_Coordinates[0], position.m_Coordinates[1],
+                    position.m_Coordinates[2]};
+        if (!Finite(value.x) || !Finite(value.y) || !Finite(value.z)) return false;
+        positions.push_back(value);
+    }
+
+    uint32_t objectResource = 0, objectProperty = 0;
+    const bool objectHasProperty = mesh->GetObjectLevelProperty(objectResource, objectProperty);
+    bool hasElementProperty = false;
+    for (const auto& beam : lattice.beams)
+        for (const auto& property : beam.property)
+            hasElementProperty |= property.hasResource || property.hasProperty;
+    for (const auto& ball : lattice.balls)
+        hasElementProperty |= ball.property.hasResource || ball.property.hasProperty;
+    if (hasElementProperty && !lattice.defaultProperty.hasResource && !objectHasProperty)
+        return false;
+
+    struct ActiveBeam {
+        const ThreeMfLatticeBeam* source = nullptr;
+        Vec3d begin, end;
+        double radius[2]{};
+        PropertySample property[2];
+    };
+    std::vector<ActiveBeam> beams;
+    beams.reserve(lattice.beams.size());
+    for (const auto& beam : lattice.beams) {
+        if (options.Cancelled()) return false;
+        if (beam.vertex[0] >= positions.size() || beam.vertex[1] >= positions.size()) return false;
+        const double radius0 = beam.hasRadius[0] ? beam.radius[0] : lattice.defaultRadius;
+        const double radius1 = beam.hasRadius[1] ? beam.radius[1] : radius0;
+        if (!Finite(radius0) || !Finite(radius1) || radius0 <= 0.0 || radius1 <= 0.0)
+            return false;
+        const double length = Length(positions[beam.vertex[1]] - positions[beam.vertex[0]]);
+        if (!Finite(length)) return false;
+        ActiveBeam active;
+        active.source = &beam; active.begin = positions[beam.vertex[0]];
+        active.end = positions[beam.vertex[1]]; active.radius[0] = radius0;
+        active.radius[1] = radius1;
+        for (uint32_t endpoint = 0; endpoint < 2; ++endpoint)
+            if (!catalog.ResolveLatticeProperty(lattice.packagePart, lattice.defaultProperty,
+                    beam.property[endpoint], objectHasProperty ? objectResource : 0,
+                    objectProperty, active.property[endpoint])) return false;
+        if (!SameDisplayProperty(active.property[0], active.property[1])) {
+            catalog.SetError(ImportErrorCode::UnsupportedRequiredFeature);
+            return false;
+        }
+        if (length < lattice.minimumLength) continue;
+        beams.push_back(std::move(active));
+    }
+
+    std::unordered_map<uint32_t, const ThreeMfLatticeBall*> explicitBalls;
+    for (const auto& ball : lattice.balls) {
+        if (ball.vertex >= positions.size() || !explicitBalls.emplace(ball.vertex, &ball).second)
+            return false;
+        const double radius = ball.hasRadius ? ball.radius : lattice.defaultBallRadius;
+        if (!Finite(radius) || radius <= 0.0) return false;
+        PropertySample ignored;
+        if (!catalog.ResolveLatticeProperty(lattice.packagePart, lattice.defaultProperty,
+                ball.property, objectHasProperty ? objectResource : 0, objectProperty, ignored))
+            return false;
+    }
+    if (representation) {
+        return EmitMesh(writer, catalog, representation, representation->GetUniqueResourceID(),
+                        meshOrdinal, options, output, totalTriangles, totalVertices);
+    }
+    std::vector<uint32_t> ballVertices;
+    if (lattice.ballMode == ThreeMfLatticeBallMode::Mixed) {
+        ballVertices.reserve(explicitBalls.size());
+        for (const auto& ball : lattice.balls) ballVertices.push_back(ball.vertex);
+    } else if (lattice.ballMode == ThreeMfLatticeBallMode::All) {
+        std::unordered_set<uint32_t> unique;
+        for (const auto& beam : lattice.beams) {
+            unique.insert(beam.vertex[0]); unique.insert(beam.vertex[1]);
+        }
+        ballVertices.assign(unique.begin(), unique.end());
+        std::sort(ballVertices.begin(), ballVertices.end());
+    }
+
+    constexpr std::array<uint32_t, 6> radialCandidates{16, 12, 8, 6, 4, 3};
+    uint32_t radial = 0;
+    for (const uint32_t candidate : radialCandidates) {
+        uint64_t estimate = uint64_t(ballVertices.size()) * SphereTriangles(candidate, false);
+        for (const auto& beam : beams) {
+            if (estimate > UINT64_MAX - BeamTriangles(*beam.source, candidate)) {
+                estimate = UINT64_MAX; break;
+            }
+            estimate += BeamTriangles(*beam.source, candidate);
+        }
+        // Plane clipping can split each source triangle into at most a bounded
+        // fan. Reserve a conservative factor rather than allowing a clipped
+        // lattice to exceed the same product-owned preview ceiling.
+        const uint64_t budgeted = clipped && estimate <= UINT64_MAX / 2 ? estimate * 2 : estimate;
+        const uint64_t remaining = totalTriangles < kTierBTriangleLimit
+            ? kTierBTriangleLimit - totalTriangles : 0;
+        if (budgeted <= options.maxLatticeTriangles && budgeted <= remaining) {
+            radial = candidate; break;
+        }
+    }
+    if (!radial) {
+        catalog.SetError(ImportErrorCode::ResourceLimit);
+        return false;
+    }
+
+    std::vector<GeneratedTriangle> generated;
+    generated.reserve(options.maxLatticeTriangles);
+    for (const auto& beam : beams) {
+        if (options.Cancelled()) return false;
+        std::vector<GeneratedTriangle> primitive;
+        AddBeam(primitive, beam.begin, beam.end, beam.radius[0], beam.radius[1],
+                beam.source->cap[0], beam.source->cap[1], beam.property[0],
+                beam.property[1], radial);
+        if (clipped) ClipInside(primitive, clippingBounds, clippingProperty);
+        if (primitive.size() > options.maxLatticeTriangles
+            || generated.size() > options.maxLatticeTriangles - primitive.size()) {
+            catalog.SetError(ImportErrorCode::ResourceLimit); return false;
+        }
+        generated.insert(generated.end(), primitive.begin(), primitive.end());
+    }
+    for (const uint32_t vertex : ballVertices) {
+        if (options.Cancelled()) return false;
+        const auto explicitBall = explicitBalls.find(vertex);
+        const ThreeMfLatticeBall* source = explicitBall == explicitBalls.end()
+            ? nullptr : explicitBall->second;
+        const double radius = source && source->hasRadius ? source->radius
+                                                          : lattice.defaultBallRadius;
+        if (!Finite(radius) || radius <= 0.0) return false;
+        PropertySample property;
+        const ThreeMfLatticePropertyRef empty;
+        if (!catalog.ResolveLatticeProperty(lattice.packagePart, lattice.defaultProperty,
+                source ? source->property : empty, objectHasProperty ? objectResource : 0,
+                objectProperty, property)) return false;
+        std::vector<GeneratedTriangle> primitive;
+        AddSphere(primitive, positions[vertex], radius, Vec3d{0, 0, 1}, radial,
+                  (std::max)(2u, radial / 2), property, std::numbers::pi_v<double>);
+        if (clipped) ClipInside(primitive, clippingBounds, clippingProperty);
+        if (primitive.size() > options.maxLatticeTriangles
+            || generated.size() > options.maxLatticeTriangles - primitive.size()) {
+            catalog.SetError(ImportErrorCode::ResourceLimit); return false;
+        }
+        generated.insert(generated.end(), primitive.begin(), primitive.end());
+    }
+    if (generated.empty() && mesh->GetTriangleCount() == 0) return false;
+    return EmitGenerated(writer, catalog, generated, meshKey, meshOrdinal,
+                         output, totalTriangles, totalVertices);
+}
+
 } // namespace
 
 ThreeMfImportOutcome ImportThreeMf(const Lib3MF::PModel& model, std::span<std::byte> destination,
@@ -885,6 +1654,18 @@ ThreeMfImportOutcome ImportThreeMf(const Lib3MF::PModel& model, std::span<std::b
     BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
     PropertyCatalog properties(model, writer, options);
     if (!properties.ValidateDisplayProperties()) return Fail(properties.Error());
+    std::unordered_map<std::string, Lib3MF::PMeshObject> sourceMeshes;
+    auto resources = model->GetResources();
+    if (!resources) return Fail(ImportErrorCode::MalformedData);
+    while (resources->MoveNext()) {
+        if (options.Cancelled()) return Fail(ImportErrorCode::Cancelled);
+        const auto resource = resources->GetCurrent();
+        const auto mesh = std::dynamic_pointer_cast<Lib3MF::CMeshObject>(resource);
+        if (!mesh) continue;
+        std::string key;
+        if (!SourceKey(mesh, key) || !sourceMeshes.emplace(key, mesh).second)
+            return Fail(ImportErrorCode::MalformedData);
+    }
     std::unordered_map<uint32_t, std::vector<GeometryRecord>> geometry;
     uint64_t triangles = 0, vertices = 0;
     uint32_t meshOrdinal = 0;
@@ -893,6 +1674,26 @@ ThreeMfImportOutcome ImportThreeMf(const Lib3MF::PModel& model, std::span<std::b
         auto& records = geometry[key];
         if (!EmitMesh(writer, properties, mesh, key, ++meshOrdinal, options,
                       records, triangles, vertices)) {
+            const ImportErrorCode code = options.Cancelled() ? ImportErrorCode::Cancelled
+                : properties.Error() != ImportErrorCode::None ? properties.Error()
+                : writer.Error() == ImportErrorCode::None ? ImportErrorCode::MalformedData
+                                                          : writer.Error();
+            return Fail(code);
+        }
+        std::string sourceKey;
+        if (!SourceKey(mesh, sourceKey)) return Fail(ImportErrorCode::MalformedData);
+        const ThreeMfLatticeDefinition* lattice = nullptr;
+        if (options.displayCatalog) {
+            const auto found = options.displayCatalog->lattices.find(sourceKey);
+            if (found != options.displayCatalog->lattices.end()) lattice = &found->second;
+        }
+        const auto libLattice = mesh->BeamLattice();
+        const bool libHasLattice = libLattice
+            && (libLattice->GetBeamCount() || libLattice->GetBallCount());
+        if (libHasLattice != (lattice != nullptr)) return Fail(ImportErrorCode::MalformedData);
+        if (lattice && !EmitLattice(writer, properties, mesh, key, meshOrdinal,
+                *lattice, sourceMeshes, options.displayCatalog, options,
+                records, triangles, vertices)) {
             const ImportErrorCode code = options.Cancelled() ? ImportErrorCode::Cancelled
                 : properties.Error() != ImportErrorCode::None ? properties.Error()
                 : writer.Error() == ImportErrorCode::None ? ImportErrorCode::MalformedData

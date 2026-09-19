@@ -34,6 +34,7 @@ struct ThreeMfImportOptions {
     const ThreeMfDisplayCatalog* displayCatalog = nullptr;
     uint64_t maxAggregateTextureBytes = model_core::kMaxAggregateTextureBytes;
     uint64_t maxAggregateTexturePixels = model_core::kMaxAggregateTexturePixels;
+    uint32_t maxLatticeTriangles = 262'144;
     bool Cancelled() const { return isCancelled && isCancelled(); }
 };
 

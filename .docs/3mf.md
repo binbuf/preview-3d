@@ -412,6 +412,30 @@ the design permits them.
 
 ## 3MF-005 — bounded Beam Lattice preview
 
+Status: complete (2026-09-18). Proceed to 3MF-006; the format remains private
+until that task enables every product and distribution surface.
+
+The worker now preserves Beam Lattice XML semantics that lib3mf 2.5 does not
+expose (including lattice/beam/ball property references and beam sets), prefers
+a validated authored representation mesh, and otherwise emits bounded tapered
+frusta with exact butt/hemisphere/sphere end profiles plus explicit or inferred
+balls. The normal high-quality radial policy has 1.92% maximum circle chord
+error and degrades the complete lattice uniformly through fixed deterministic
+levels to a 262,144-triangle per-lattice cap; it never keeps a source prefix.
+
+The supported clipping subset is `inside` clipping by a closed, axis-aligned
+8-vertex/12-triangle box with one uniform normalized appearance. Generated
+surfaces are clipped and the cut loops are closed using that clipping-mesh
+appearance. General/nonuniform `inside` clipping and all parametric `outside`
+clipping require a valid authored `representationmesh`; otherwise they return
+`UnsupportedRequiredFeature`. A representation or clipping mesh must be a
+different, plain `model` mesh in the same model part and cannot itself contain
+a lattice. The current normalized scene contract has only document-occurrence
+instances, not nested reusable sub-mesh instances, so the narrow cylinder/ball
+template shortcut cannot preserve both lattice-local and document-occurrence
+transforms without multiplying instances. The bounded tessellation remains a
+single reusable geometry definition per source mesh instead.
+
 ### Objective
 
 Make beam/ball lattices recognizable without allowing compact parametric input

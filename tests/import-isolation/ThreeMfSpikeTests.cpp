@@ -360,6 +360,20 @@ std::vector<std::byte> DisplayPropertyPackage(std::string_view displayGroup,
                                 { "3D/3dmodel.model", model } });
 }
 
+std::vector<std::byte> LatticePackage(std::string_view resources, uint32_t buildObject)
+{
+    std::string model = R"(<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:b="http://schemas.microsoft.com/3dmanufacturing/beamlattice/2017/02"><resources>)";
+    model += resources;
+    model += "</resources><build><item objectid=\"" + std::to_string(buildObject)
+        + "\"/></build></model>";
+    const std::string contentTypes = R"(<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>)";
+    const std::string relationships = R"(<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>)";
+    return BuildStoredPackage({ { "[Content_Types].xml", contentTypes },
+                                { "_rels/.rels", relationships },
+                                { "3D/3dmodel.model", model } });
+}
+
 import_broker::ImportSessionResult ImportThreeMfBytes(std::span<const std::byte> bytes,
                                                        uint64_t generation)
 {
@@ -1025,6 +1039,188 @@ TEST_CASE("3MF-004 unsupported translucent display properties warn and preserve 
     CHECK(std::any_of(result.chunks.begin(), result.chunks.end(), [](const auto& chunk) {
         return chunk.descriptor.topology == model_core::ChunkTopology::TriangleList;
     }));
+}
+
+TEST_CASE("3MF-005 tessellates tapered beams, cap modes, balls, sets, and properties",
+          "[3mf-005][beam-lattice][materials]")
+{
+    const auto package = LatticePackage(R"(
+<basematerials id="1"><base name="red" displaycolor="#FF0000FF"/><base name="blue" displaycolor="#0000FFFF"/></basematerials>
+<object id="2" type="model" pid="1" pindex="0"><mesh><vertices>
+<vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/>
+<vertex x="0" y="10" z="0"/><vertex x="5" y="5" z="5"/>
+</vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles>
+<b:beamlattice minlength="0.01" radius="0.5" cap="sphere" ballmode="mixed" ballradius="1" pid="1" pindex="0">
+<b:beams><b:beam v1="0" v2="1" r1="1" r2="2" p1="0" p2="1" cap1="butt" cap2="hemisphere"/>
+<b:beam v1="1" v2="3" cap1="sphere" cap2="sphere"/></b:beams>
+<b:balls><b:ball vindex="3" r="1.5" p="1"/></b:balls>
+<b:beamsets><b:beamset identifier="main"><b:ref index="0"/><b:ref index="1"/><b:ballref index="0"/></b:beamset></b:beamsets>
+</b:beamlattice></mesh></object>)", 2);
+    import_worker::ThreeMfOpcPackage opc;
+    REQUIRE(import_worker::InspectThreeMfOpc(package, &opc) == import_worker::ThreeMfOpcError::None);
+    import_worker::ThreeMfDisplayCatalog catalog;
+    REQUIRE(import_worker::ScanThreeMfDisplayProperties(package, opc, catalog)
+            == model_core::ImportErrorCode::None);
+    REQUIRE(catalog.lattices.size() == 1);
+    const auto& lattice = catalog.lattices.begin()->second;
+    CHECK(lattice.beams.size() == 2);
+    CHECK(lattice.balls.size() == 1);
+    CHECK(lattice.beamSetCount == 1);
+
+    const auto first = ImportThreeMfBytes(package, 0x336d66070001ull);
+    const auto second = ImportThreeMfBytes(package, 0x336d66070002ull);
+    CAPTURE(uint32_t(first.stage), uint32_t(first.errorCode));
+    REQUIRE(first.ok); REQUIRE(second.ok);
+    uint64_t triangleCount = 0;
+    bool red = false, blue = false, gradient = false;
+    std::vector<std::byte> firstGeometry, secondGeometry;
+    const auto inspect = [&](const auto& result, std::vector<std::byte>& geometry) {
+        for (const auto& chunk : result.chunks) {
+            if (chunk.descriptor.topology != model_core::ChunkTopology::TriangleList) continue;
+            triangleCount += chunk.descriptor.indexCount / 3;
+            geometry.insert(geometry.end(), chunk.payload.begin(), chunk.payload.end());
+            const auto* vertices = reinterpret_cast<const model_core::VertexPositionNormalUv0TangentColorF32*>(
+                chunk.payload.data());
+            for (uint32_t index = 0; index < chunk.descriptor.vertexCount; ++index) {
+                red |= vertices[index].r > 0.99f && vertices[index].b < 0.01f;
+                blue |= vertices[index].b > 0.99f && vertices[index].r < 0.01f;
+            }
+            for (uint32_t index = 0; index + 2 < chunk.descriptor.vertexCount; index += 3) {
+                bool triangleRed = false, triangleBlue = false;
+                for (uint32_t corner = 0; corner < 3; ++corner) {
+                    triangleRed |= vertices[index + corner].r > 0.99f
+                        && vertices[index + corner].b < 0.01f;
+                    triangleBlue |= vertices[index + corner].b > 0.99f
+                        && vertices[index + corner].r < 0.01f;
+                }
+                gradient |= triangleRed && triangleBlue;
+            }
+        }
+    };
+    inspect(first, firstGeometry);
+    const uint64_t firstTriangleCount = triangleCount;
+    triangleCount = 0;
+    inspect(second, secondGeometry);
+    CHECK(firstTriangleCount > 100);
+    CHECK(triangleCount == firstTriangleCount);
+    CHECK(firstGeometry == secondGeometry);
+    CHECK(red); CHECK(blue); CHECK(gradient);
+}
+
+TEST_CASE("3MF-005 prefers an authored representation mesh and supports box clipping",
+          "[3mf-005][beam-lattice][representation][clipping]")
+{
+    const auto represented = LatticePackage(R"(
+<object id="1" type="model"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></object>
+<object id="2" type="model"><mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="100" y="0" z="0"/><vertex x="0" y="1" z="0"/></vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles>
+<b:beamlattice minlength="0.01" radius="10" representationmesh="1"><b:beams><b:beam v1="0" v2="1"/></b:beams></b:beamlattice></mesh></object>)", 2);
+    const auto representationResult = ImportThreeMfBytes(represented, 0x336d66070003ull);
+    REQUIRE(representationResult.ok);
+    uint64_t representedTriangles = 0;
+    for (const auto& chunk : representationResult.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            representedTriangles += chunk.descriptor.indexCount / 3;
+    CHECK(representedTriangles == 2); // source surface plus the one-triangle authored preview
+
+    const auto clippedPackage = LatticePackage(R"(
+<object id="1" type="model"><mesh><vertices>
+<vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/><vertex x="10" y="10" z="0"/><vertex x="0" y="10" z="0"/>
+<vertex x="0" y="0" z="10"/><vertex x="10" y="0" z="10"/><vertex x="10" y="10" z="10"/><vertex x="0" y="10" z="10"/>
+</vertices><triangles>
+<triangle v1="3" v2="2" v3="1"/><triangle v1="1" v2="0" v3="3"/><triangle v1="4" v2="5" v3="6"/><triangle v1="6" v2="7" v3="4"/>
+<triangle v1="0" v2="1" v3="5"/><triangle v1="5" v2="4" v3="0"/><triangle v1="1" v2="2" v3="6"/><triangle v1="6" v2="5" v3="1"/>
+<triangle v1="2" v2="3" v3="7"/><triangle v1="7" v2="6" v3="2"/><triangle v1="3" v2="0" v3="4"/><triangle v1="4" v2="7" v3="3"/>
+</triangles></mesh></object>
+<object id="2" type="model"><mesh><vertices><vertex x="-5" y="5" z="5"/><vertex x="15" y="5" z="5"/><vertex x="0" y="6" z="5"/></vertices>
+<triangles><triangle v1="0" v2="1" v3="2"/></triangles>
+<b:beamlattice minlength="0.01" radius="2" clippingmode="inside" clippingmesh="1"><b:beams><b:beam v1="0" v2="1"/></b:beams></b:beamlattice>
+</mesh></object>)", 2);
+    const auto clipped = ImportThreeMfBytes(clippedPackage, 0x336d66070004ull);
+    CAPTURE(uint32_t(clipped.stage), uint32_t(clipped.errorCode));
+    REQUIRE(clipped.ok);
+    bool foundClippedLattice = false;
+    for (const auto& chunk : clipped.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::TriangleList
+            || chunk.descriptor.vertexCount <= 36) continue;
+        foundClippedLattice = true;
+        CHECK(chunk.descriptor.origin[0] + chunk.descriptor.localMin[0] >= -1.0e-5);
+        CHECK(chunk.descriptor.origin[1] + chunk.descriptor.localMin[1] >= -1.0e-5);
+        CHECK(chunk.descriptor.origin[2] + chunk.descriptor.localMin[2] >= -1.0e-5);
+        CHECK(chunk.descriptor.origin[0] + chunk.descriptor.localMax[0] <= 100.00001);
+        CHECK(chunk.descriptor.origin[1] + chunk.descriptor.localMax[1] <= 100.00001);
+        CHECK(chunk.descriptor.origin[2] + chunk.descriptor.localMax[2] <= 100.00001);
+    }
+    CHECK(foundClippedLattice);
+}
+
+TEST_CASE("3MF-005 rejects unsupported clipping and over-budget compact lattices recoverably",
+          "[3mf-005][beam-lattice][limits][recovery]")
+{
+    const auto outside = ImportThreeMfBytes(DecodeBase64("beam-representation.3mf.base64"),
+                                             0x336d66070005ull);
+    CHECK_FALSE(outside.ok);
+    CHECK(outside.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+
+    std::string beams;
+    beams.reserve(900'000);
+    for (uint32_t index = 0; index < 15'000; ++index)
+        beams += "<b:beam v1=\"0\" v2=\"1\"/>";
+    std::string resources = R"(<object id="1" type="model"><mesh><vertices>
+<vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/><vertex x="0" y="1" z="0"/>
+</vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles>
+<b:beamlattice minlength="0.01" radius="1"><b:beams>)";
+    resources += beams;
+    resources += "</b:beams></b:beamlattice></mesh></object>";
+    const auto pressure = ImportThreeMfBytes(LatticePackage(resources, 1), 0x336d66070006ull);
+    CHECK_FALSE(pressure.ok);
+    CHECK(pressure.errorCode == model_core::ImportErrorCode::ResourceLimit);
+
+    const auto recovered = ImportThreeMfBytes(AppearancePackage(), 0x336d66070007ull);
+    CHECK(recovered.ok);
+}
+
+TEST_CASE("3MF-005 validates compact lattice data before tessellation",
+          "[3mf-005][beam-lattice][validation][cancellation]")
+{
+    const auto make = [](std::string_view lattice) {
+        std::string resources = R"(<object id="1" type="model"><mesh><vertices>
+<vertex x="0" y="0" z="0"/><vertex x="10" y="0" z="0"/><vertex x="0" y="1" z="0"/>
+</vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles>)";
+        resources += lattice;
+        resources += "</mesh></object>";
+        return LatticePackage(resources, 1);
+    };
+    const std::string_view invalid[] = {
+        R"(<b:beamlattice minlength="0.01" radius="nan"><b:beams><b:beam v1="0" v2="1"/></b:beams></b:beamlattice>)",
+        R"(<b:beamlattice minlength="0.01" radius="1"><b:beams><b:beam v1="0" v2="99"/></b:beams></b:beamlattice>)",
+        R"(<b:beamlattice minlength="0.01" radius="1"><b:beams><b:beam v1="0" v2="1" r1="0"/></b:beams></b:beamlattice>)",
+        R"(<b:beamlattice minlength="0.01" radius="1"><b:beams><b:beam v1="0" v2="1"/></b:beams><b:beamsets><b:beamset identifier="bad"><b:ref index="2"/></b:beamset></b:beamsets></b:beamlattice>)",
+    };
+    uint64_t generation = 0x336d66070010ull;
+    for (const auto xml : invalid) {
+        const auto result = ImportThreeMfBytes(make(xml), ++generation);
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    }
+
+    const auto shortBeam = ImportThreeMfBytes(make(
+        R"(<b:beamlattice minlength="2" radius="1"><b:beams><b:beam v1="0" v2="2"/></b:beams></b:beamlattice>)"),
+        ++generation);
+    REQUIRE(shortBeam.ok);
+    uint64_t triangles = 0;
+    for (const auto& chunk : shortBeam.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            triangles += chunk.descriptor.indexCount / 3;
+    CHECK(triangles == 1); // the sub-minimum beam is ignored by specification
+
+    const auto packageBytes = make(
+        R"(<b:beamlattice minlength="0.01" radius="1"><b:beams><b:beam v1="0" v2="1"/></b:beams></b:beamlattice>)");
+    import_worker::ThreeMfOpcPackage package;
+    REQUIRE(import_worker::InspectThreeMfOpc(packageBytes, &package)
+            == import_worker::ThreeMfOpcError::None);
+    import_worker::ThreeMfDisplayCatalog catalog;
+    CHECK(import_worker::ScanThreeMfDisplayProperties(packageBytes, package, catalog,
+        [] { return true; }) == model_core::ImportErrorCode::Cancelled);
 }
 
 TEST_CASE("manually supplied 3MF corpus imports through the production worker",

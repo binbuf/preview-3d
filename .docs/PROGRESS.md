@@ -4,6 +4,66 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **3MF-005 bounded Beam Lattice preview (2026-09-18): complete; private
+  until 3MF-006.** The production adapter now recognizes lattice-only as well
+  as mesh-plus-lattice objects, validates compact beam/ball/set input before
+  output sizing, prefers a valid authored `representationmesh`, and otherwise
+  tessellates every retained beam and ball in cancellable batches. The normal
+  16-sided circle policy has a 1.92% relative chord error; fixed levels
+  `16/12/8/6/4/3` degrade the whole lattice deterministically under a 262,144
+  triangle per-lattice ceiling and the shared 20-million-triangle Tier-B scene
+  ceiling. Sub-`minlength` beams are ignored as the specification requires;
+  no source-prefix truncation is used. Importer/cache version is 4.
+
+  A dependency limitation discovered here matters for future format work:
+  lib3mf 2.5 exposes beam indices, radii, caps, balls, sets, clipping, and
+  representation IDs, but its public Beam Lattice structs do not expose the
+  standardized `pid`/`pindex`, beam `p1`/`p2`, or ball `p` associations. Its
+  compatible reader also discards those attributes. The existing bounded
+  XmlLite model-part scan therefore now retains the complete lattice source
+  definition, keyed by canonical package part plus model-local object ID, and
+  the adapter maps property ordinals back to lib3mf's opaque property handles.
+  Keep that part-qualified key: Production parts may reuse local IDs.
+
+  Butt disks and hemispheres are generated explicitly. A full-sphere cap on a
+  tapered beam is not implemented as the spike's overlapping sphere shortcut:
+  the frustum is trimmed at the analytic sphere/cone intersection and only the
+  exposed spherical patch is emitted. Equal-radius sphere and hemisphere caps
+  consequently produce the same exterior profile. Explicit balls and `all`
+  mode endpoint balls share the same bounded sphere builder. Display-property
+  gradients on beams fail as unsupported, per the extension; ordinary color
+  and texture-coordinate endpoint properties flow through 3MF-004's material
+  resolver and preserve authored interpolation.
+
+  The bounded clipping subset is deliberately narrow and testable: `inside`
+  against a closed axis-aligned box with exactly 8 corner vertices, 12 face
+  triangles, no lattice, and one uniform normalized appearance. Triangle
+  surfaces are clipped plane-by-plane; quantized boundary-edge loops close the
+  cuts with the clipping mesh's appearance. General/nonuniform inside clips
+  and parametric outside clips require a valid authored representation mesh or
+  return `UnsupportedRequiredFeature`, never an unclipped preview. Referenced
+  clipping/representation resources must be distinct plain `model` meshes in
+  the same part and cannot recursively contain lattices.
+
+  The scene contract can reuse the completed lattice geometry across normal
+  object/build occurrences, but it cannot express a lattice-local cylinder
+  transform nested beneath each document occurrence without multiplying the
+  node/instance graph. The spike's template shortcut is therefore not exact in
+  the current contract and was not used. Focused Debug tests pass 4 cases / 194
+  assertions: tapered and uniform beams, all three cap modes, mixed balls,
+  endpoint properties, sets, deterministic byte-identical output, authored
+  representation preference, supported clipping bounds/caps, malformed
+  values/indices/set references, sub-minimum beams, cancellation, unsupported
+  clipping, budget pressure, and recovery. The combined 3MF regression set
+  passes 15 cases / 1,097 assertions in Release; the earlier 3MF-001 worker
+  tests continue to cover lattice cancellation plus Job-limit
+  kill/replacement. Both full solutions build with zero warnings, and the full
+  Unit suites pass (Debug 99/99, 7,627 assertions; Release 99/99, 7,539). The
+  full Debug ImportIsolation run remains 285/303: all 18 failures are the
+  already-recorded OpenUSD host/changed-USD-fixture and FBX fixture-rewrite
+  failures, while every 3MF case passes. The locally supplied Bambu files
+  remain untracked and were not added.
+
 - **3MF-004 Materials/properties and contained textures (2026-09-18):
   complete; private until 3MF-006.** The adapter resolves
   Core base materials plus Materials Extension color, texture-coordinate,
