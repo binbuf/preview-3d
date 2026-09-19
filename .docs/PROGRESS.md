@@ -4,6 +4,59 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **STEP-008 qualification slice (2026-09-19): implemented; release
+  qualification remains open.** A checked-in corpus manifest
+  (`tests/fixtures/step/manifest.json`) freezes provenance, size, SHA-256,
+  class, and expected outcome for the 16 committed fixtures plus 12 derived
+  adversarial cases, and `tests/fixtures/step/verify.py` re-derives and checks
+  them. A new `StepQualificationTests.cpp` gives every malformed/unsupported/
+  over-limit admission family an asserted typed status, proves each cap exactly
+  at its boundary, and adds a progressive-batch regression. `prepare_step_seeds.py`
+  now emits the STEP-008 families as `StepFuzz` seeds (45-second Release ASan
+  smoke: 64,569 executions, 456 MiB peak RSS, no finding).
+  `[step-002]`..`[step-006]` plus `[step-008]` pass **38 cases / 746 assertions
+  in Debug and Release**. The genuine 100 MB+ obligation is met: the real host
+  imported a 241,522,213-byte AP214 assembly (4.06 M triangles, 1,314
+  definitions) with time-to-first-coarse 66 s and Ready 95 s, peak host commit
+  2.07 GiB, and the budget is published in
+  [design/09-quality-performance-and-security.md](./design/09-quality-performance-and-security.md).
+  See [STEP-008-VERIFICATION.md](./STEP-008-VERIFICATION.md). Still open: static
+  analysis/license review, multi-run p95, the ~20 M-triangle fixture, an
+  instrumented OCCT-boundary fuzzer, the 8-hour soak, clean-VM lifecycle, and
+  signed-artifact/SBOM inspection.
+
+  Things the next STP/STEP task should not relearn:
+  1. **The STEP emitter must flush on the broker's `maxChunkCount`, not just on
+     byte capacity.** `SceneEmitter::Add` only flushed when the next chunk
+     exceeded the section byte window, so a large many-definition assembly whose
+     geometry was small accumulated more descriptors than
+     `request.maxChunkCount` and was rejected by the broker as
+     `ResourceLimit`/`StepHostLimit` before a single batch was delivered. It now
+     flushes-and-publishes at the chunk cap too (same pattern as the byte cap),
+     with `[step-008][chunk-cap]` as the regression. If a future adapter grows a
+     progressive emitter, honor every per-section cap the broker enforces, not
+     only the byte one.
+  2. **The genuine 100 MB+ corpus is `test-models/Voron_2.4r2_Assembly.step`**
+     (241,522,213 bytes, AP214, self-contained, SHA-256 in the manifest). It is
+     git-ignored and supplied locally; the opt-in measurement reads
+     `PREVIEW3D_MANUAL_STEP_FILE` and is tagged `[.][step-008-measure]`. It is
+     parse/transfer-bound: admission 3.2 s, `ReadStream` 12.2 s, `Transfer`
+     50.8 s, mesh 24.3 s, emit 26.0 s. Do not expect a coarse second pass to
+     beat the transfer.
+  3. **The Part-21 scanner treats the newline after `DATA;` as the first byte of
+     the next record.** Record-length boundary tests must build the record with
+     no leading whitespace (`DATA;#1=...`) or they are off by one; a body of
+     exactly `maxRecordBytes` is accepted and `maxRecordBytes + 1` is rejected.
+     String-length counts only bytes inside quotes and is not affected.
+  4. **The broker caps nodes and instances at the same Tier-B object limit
+     (50,000).** The host planner caps nodes but not instances; a file with more
+     than 50,000 occurrences fails during section validation, not planning.
+     Treat the two as one envelope when publishing limits.
+  5. **`_wgetenv` is banned under the test project's `/WX`.** Use
+     `_wdupenv_s` and free the buffer. Also include
+     `import_broker/SharedSection.h` for `kImportSectionBytes` /
+     `kImportMaxChunkCount`; they are not in `ImportSession.h`.
+
 - **STEP-007 product, package, and documentation integration (2026-09-19):
   complete.** `.step`/`.stp` now reach the existing dedicated
   `Preview3DStepHost.exe` route through every viewer activation surface:

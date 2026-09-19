@@ -16,10 +16,18 @@ bounded envelope selects one of four production surfaces:
   `StartStepImportFromFile` request-flag masks and `StepProgress` records; and
 - the trusted normalized-output copy-and-validate decoder.
 
+The seed preparer also materializes the STEP-008 frozen adversarial families
+(truncated terminator, embedded NUL, UTF-16 BOM, ZIP signature, wrong physical
+envelope, duplicate entity, unterminated string/comment, deep nesting, and an
+oversized record) from `tests/fixtures/step/manifest.json`. The pinned OCCT
+transfer/tessellation boundary is not sanitizer-instrumented by this target; it
+stays covered by the real AppContainer/Job ImportIsolation cases, including the
+derived malformed families in `StepQualificationTests.cpp`.
+
 ```powershell
-python tests/fuzz/prepare_step_seeds.py TestResults/step-006/fuzz-seeds
+python tests/fuzz/prepare_step_seeds.py TestResults/step-008/fuzz-seeds
 msbuild tests/fuzz/StepFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 /m:1
-tests/fuzz/x64/Release/StepFuzz.exe TestResults/step-006/fuzz-seeds -max_total_time=45 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 -print_final_stats=1 -verbosity=0
+tests/fuzz/x64/Release/StepFuzz.exe TestResults/step-008/fuzz-seeds -max_total_time=45 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 -print_final_stats=1 -verbosity=0
 ```
 
 The 1 MiB standalone input cap is deliberately smaller than the product's

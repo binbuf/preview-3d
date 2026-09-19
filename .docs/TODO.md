@@ -452,9 +452,17 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
         NSIS; and `Binbuf.Preview3D.STEP.1` registers `.step`/`.stp` without
         touching the user's default. Thumbnails remain STEP-009. See
         [`STEP-007-VERIFICATION.md`](STEP-007-VERIFICATION.md).
-  - [ ] STEP-008 qualification/hardening (including the genuine 100 MB+ corpus
-        and published Tier-B budgets) and STEP-009 Explorer thumbnail per the
-        revised execution order in [`stp2.md`](stp2.md). STEP-009 stays
+  - [ ] STEP-008 qualification/hardening: implemented slice. A checked-in
+        corpus manifest with provenance/SHA-256 (`tests/fixtures/step/manifest.json`,
+        `verify.py`), a typed-outcome and cap-boundary oracle, STEP-008
+        `StepFuzz` seeds, and a published Tier-B STEP budget backed by a genuine
+        230 MiB / 4.06 M-triangle AP214 assembly (time-to-first-coarse 66 s,
+        Ready 95 s, 2.07 GiB peak host commit). Hardening fixed the emitter to
+        honor the broker's per-section `maxChunkCount`. Still open: static
+        analysis/license review, multi-run p95, the ~20 M-triangle fixture, an
+        instrumented OCCT-boundary fuzzer, the 8-hour soak, clean-VM lifecycle,
+        and signed-artifact/SBOM inspection. See
+        [`STEP-008-VERIFICATION.md`](STEP-008-VERIFICATION.md). STEP-009 stays
         blocked on the Gate 6 provider foundation.
 
 Every slice carries the same bundle (`10-…:165`): adapter wrapper, dependency allocation/I/O/cancel
