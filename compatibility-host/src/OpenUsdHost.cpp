@@ -83,18 +83,25 @@ static_assert(kOpenUsdIdentifierCapacity == model_core::kMaxOpenUsdIdentifierByt
 
 using Clock = std::chrono::steady_clock;
 
+// Digests are computed over the line-ending-normalized (LF) resource text.
+// The checked-in manifest is stored as LF, but Windows checkouts with
+// core.autocrlf=true materialize it (and the build's copy) as CRLF, so
+// hashing raw bytes made the audit depend on the developer's git config and
+// rejected an otherwise pristine payload. Normalizing to LF makes the
+// integrity check deterministic on every checkout and platform while still
+// detecting any content change.
 struct ExpectedResource { const wchar_t* path; const char* sha256; };
 constexpr ExpectedResource kResources[] = {
-    {L"plugInfo.json", "c285a05d159154e3ae201fa383c61766bc57c58aae6d5a70b7463b49e2dcbb2d"},
-    {L"ar/resources/plugInfo.json", "b37fc05c907b7756bec87a500893a325731b9c39ef0ad0f73c4d9b6351183ba2"},
-    {L"sdf/resources/plugInfo.json", "73d500266d66794ebdd1ee9a486cd75adca2665e61f436d0f448900ca7dacd2b"},
-    {L"usd/resources/plugInfo.json", "dbfc3fc05484155e5a552e5a002ea57f4407be1ed379a8fc165c4c5d49231721"},
+    {L"plugInfo.json", "c42a8b0c30e7cc9f85349184a2273ad6f5b0f7e283b090f5497dc4668c1f1e40"},
+    {L"ar/resources/plugInfo.json", "9e1f7de1980772441033787853be0dd5b7a6619c3abc86285ac242b8589e326c"},
+    {L"sdf/resources/plugInfo.json", "39fbcb5a53d124d01454154d7097c15971adb6c8cd6fed17c6db17e56331f84f"},
+    {L"usd/resources/plugInfo.json", "269f6837927dc9257cf25f25dce38721fac5e0ecfa19aa245668373f74ea0d89"},
     {L"usd/resources/generatedSchema.usda", "a09ceab63ab5491e33054cb2a9394af35c391cba2633fa60c3ef373addddaa4c"},
     {L"usd/resources/usd/schema.usda", "53706dd717cad34c05a567c320c1ecbc99acf327f65fcf703b5409e4c07c8e63"},
-    {L"usdGeom/resources/plugInfo.json", "ecf2ce5596a544af2bfe3628eac1f9233947b42091f80e271aff51844e98ac4c"},
+    {L"usdGeom/resources/plugInfo.json", "2b2752839f23c12cfdfac59ab5507a3c8758fba01beed1ed37900ef7470577cc"},
     {L"usdGeom/resources/generatedSchema.usda", "f5732dad7c7128bae308383820fea109e08affb6abd2a65fa7d4bde8fa09ca94"},
     {L"usdGeom/resources/usdGeom/schema.usda", "cf1f4615b7196d59a78f49b490a15bfe0c49c78d96f7bc5620075341263ca251"},
-    {L"usdShade/resources/plugInfo.json", "76e44cccb791be06ef6de8967d11cbdfd9538ef0dde0e43dfacd72f39faf9747"},
+    {L"usdShade/resources/plugInfo.json", "12c232fba07cc967bec28ef275ab0200923d2f5f200b1f83d701b3e574698aef"},
     {L"usdShade/resources/generatedSchema.usda", "aef8c58040043e586bcf7f3b8dec116d0b5c0e5e224abc058235f33b6d77bbda"},
     {L"usdShade/resources/usdShade/schema.usda", "7f8ec41517c2f1bba669ca0fcd50f0435071a8bae18ba8af80e1d2ce1d428039"},
     {L"preview3d/resources/plugInfo.json", "06c9138c6376571196fa50f5e5d9c7a4fc800a6c94981e8a4d5eda917f10de53"},
@@ -109,6 +116,20 @@ std::string Hex(std::span<const std::byte> bytes)
         text.push_back(digits[value >> 4]); text.push_back(digits[value & 15]);
     }
     return text;
+}
+
+// Collapses CRLF to LF so the payload audit is independent of the checkout's
+// git line-ending policy. A lone CR is preserved.
+std::vector<std::byte> NormalizeLineEndings(std::span<const std::byte> bytes)
+{
+    std::vector<std::byte> normalized;
+    normalized.reserve(bytes.size());
+    for (std::size_t index = 0; index < bytes.size(); ++index) {
+        if (bytes[index] == std::byte{'\r'} && index + 1 < bytes.size()
+            && bytes[index + 1] == std::byte{'\n'}) continue;
+        normalized.push_back(bytes[index]);
+    }
+    return normalized;
 }
 
 std::optional<std::vector<std::byte>> ReadSmallFile(const std::filesystem::path& path)
@@ -137,7 +158,7 @@ bool AuditResources(const std::filesystem::path& payloadDirectory)
             expectedDirectories.insert(parent.generic_wstring());
         const auto bytes = ReadSmallFile(root / relative);
         if (!bytes) return false;
-        const auto digest = platform::ComputeSha256(*bytes);
+        const auto digest = platform::ComputeSha256(NormalizeLineEndings(*bytes));
         if (!digest || Hex(*digest) != resource.sha256) return false;
     }
     std::error_code error;
@@ -836,8 +857,6 @@ struct MaterialEmitter {
         const std::string cacheKey = identifier + "#" + std::to_string(static_cast<unsigned>(colorSpace))
             + "#" + std::to_string(static_cast<unsigned>(semantic));
         if (const auto found = images.find(cacheKey); found != images.end()) return found->second;
-        const auto resolved = identifier.empty() ? ArResolvedPath()
-            : wasResolved ? ArResolvedPath(identifier) : ArGetResolver().Resolve(identifier);
         std::span<const std::byte> encoded;
         std::shared_ptr<ArAsset> asset;
         std::shared_ptr<const char> buffer;
@@ -871,6 +890,12 @@ struct MaterialEmitter {
                                                static_cast<std::size_t>(matched->byteSize));
         }
         if (encoded.empty()) {
+            // Only reach the resolver when the archive did not supply the
+            // bytes. Resolving a USDZ-internal asset up front would emit a
+            // broker sidecar request for every texture even though the entry
+            // is already in the package, burning the bounded request budget.
+            const auto resolved = identifier.empty() ? ArResolvedPath()
+                : wasResolved ? ArResolvedPath(identifier) : ArGetResolver().Resolve(identifier);
             asset = resolved.empty() ? nullptr : ArGetResolver().OpenAsset(resolved);
             if (!asset || asset->GetSize() > 256ull * 1024 * 1024) {
                 state.store->ClearOptionalError(); state.TextureWarn();

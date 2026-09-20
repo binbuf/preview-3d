@@ -125,6 +125,8 @@ must match the list exactly, so missing, modified, or unlisted files fail with
 `PayloadIntegrityFailure`. The product resolver manifest is
 `06c9138c6376571196fa50f5e5d9c7a4fc800a6c94981e8a4d5eda917f10de53`;
 the other 12 hashes are recorded directly beside their paths in the source.
+Resource digests are computed over line-ending-normalized (LF) text so the
+audit does not depend on the checkout's git EOL policy.
 
 This layout is relocatable only as one directory tree: bootstrap, core,
 `usd_ms.dll`, `tbb12.dll`, and `usd/`. Moving individual files or adding a
