@@ -526,3 +526,70 @@ TEST_CASE("Loading and failure cards release the wrapped buffer and keep caption
         }
     }
 }
+
+TEST_CASE("The four lighting-mode buttons paint distinct glyphs", "[graphics][chrome]")
+{
+    OverlayHarness harness;
+    REQUIRE(harness.overlay.Initialize(SharedDevice(), harness.directQueue, harness.swapChain, harness.error));
+
+    const int width = static_cast<int>(harness.swapChain.Width());
+    const int height = static_cast<int>(harness.swapChain.Height());
+    OverlayFrame frame;
+    frame.info.state = ViewerState::Ready;
+    frame.info.hasModel = true;
+    frame.info.barToolbarHeight = 40;
+    frame.info.barBottomBarHeight = 40;
+    frame.info.infoButtonRect = { 8, height - 36, 40, height - 4 };
+    frame.info.fullscreenButtonRect = { width - 40, height - 36, width - 8, height - 4 };
+    frame.info.zoomTrackRect = { width - 250, height - 21, width - 120, height - 19 };
+
+    // Four equal square mode buttons, mirroring ComputeLightingToolbarLayout
+    // in the app at 100% DPI.
+    const int size = 34;
+    const int gap = 3;
+    const int top = height - 34;
+    const int bottom = height - 4;
+    int left = width / 2 - (4 * size + 3 * gap) / 2;
+    frame.info.lightingToolbarRect = { left - 5, height - 40, left + 4 * size + 3 * gap + 5, height };
+    frame.info.studioButtonRect = { left, top, left + size, bottom }; left += size + gap;
+    frame.info.clayButtonRect = { left, top, left + size, bottom }; left += size + gap;
+    frame.info.directionalButtonRect = { left, top, left + size, bottom }; left += size + gap;
+    frame.info.wireframeButtonRect = { left, top, left + size, bottom };
+    frame.info.lightingMode = LightingMode::Studio;
+    frame.chrome.UpdateLayout(width, frame.info.barToolbarHeight, 1.0f, true, false, false);
+    frame.gizmo.UpdateLayout(width - 200, height, frame.info.barToolbarHeight, frame.info.barBottomBarHeight, 1.0f);
+
+    const auto pixels = harness.DrawChromeAndReadback(frame);
+
+    struct Glyph { int bright; std::uint64_t hash; };
+    auto glyph = [&](const RECT& rect) {
+        Glyph result{ 0, 1469598103934665603ull };
+        for (int y = rect.top; y < rect.bottom; ++y) {
+            for (int x = rect.left; x < rect.right; ++x) {
+                const auto& p = pixels[static_cast<std::size_t>(y) * width + x];
+                if (p[0] > 190 && p[1] > 190 && p[2] > 190) {
+                    ++result.bright;
+                    result.hash = (result.hash ^ static_cast<std::uint64_t>(x * 131 + y)) * 1099511628211ull;
+                }
+            }
+        }
+        return result;
+    };
+
+    const Glyph studio = glyph(frame.info.studioButtonRect);
+    const Glyph clay = glyph(frame.info.clayButtonRect);
+    const Glyph directional = glyph(frame.info.directionalButtonRect);
+    const Glyph wireframe = glyph(frame.info.wireframeButtonRect);
+
+    // Every button actually paints something, and no two modes share a glyph.
+    CHECK(studio.bright > 0);
+    CHECK(clay.bright > 0);
+    CHECK(directional.bright > 0);
+    CHECK(wireframe.bright > 0);
+    CHECK(studio.hash != clay.hash);
+    CHECK(studio.hash != directional.hash);
+    CHECK(studio.hash != wireframe.hash);
+    CHECK(clay.hash != directional.hash);
+    CHECK(clay.hash != wireframe.hash);
+    CHECK(directional.hash != wireframe.hash);
+}

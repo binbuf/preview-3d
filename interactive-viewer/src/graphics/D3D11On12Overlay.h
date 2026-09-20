@@ -111,6 +111,11 @@ public:
 
 private:
     bool CreateTextFormats(float scale);
+    // Builds the cached, device-independent geometry the shaded-sphere
+    // lighting glyphs (Studio) need. Best-effort: DrawIcon falls back to a
+    // plain elliptical fill if this fails, so a missing geometry never takes
+    // the whole overlay down.
+    bool CreateIconGeometries();
     void SetBrush(D2D1_COLOR_F color);
     void DrawText(const std::wstring& text, IDWriteTextFormat* format, D2D1_RECT_F rectangle,
         D2D1_COLOR_F color, DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING);
@@ -136,6 +141,10 @@ private:
     // back-buffer bitmaps and retained across ResizeBuffers.
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> overlayBrush;
     Microsoft::WRL::ComPtr<ID2D1StrokeStyle> dashedStroke, spinnerStroke;
+    // Unit-space (centre at the origin, radius 1) intersection of the sphere
+    // disc and the offset "lit" disc used by the Studio glyph, so the shaded
+    // region is transformed per draw instead of rebuilt every frame.
+    Microsoft::WRL::ComPtr<ID2D1PathGeometry> studioLitGeometry;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> headingFormat, bodyFormat, smallFormat, filenameFormat, gizmoFormat;
     float textScale = 0.0f;
 

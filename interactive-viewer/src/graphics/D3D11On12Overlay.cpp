@@ -31,6 +31,10 @@ enum class OverlayIconKind
     FullscreenEnter,
     FullscreenExit,
     Wireframe,
+    Clay,
+    Studio,
+    Directional,
+    XRay,
 };
 
 namespace {
@@ -65,7 +69,37 @@ void DrawCornerBrackets(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush, 
     }
 }
 
-void DrawIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush, OverlayIconKind kind, D2D1_RECT_F rect, float scale)
+// Parallel 45-degree hatch chords clipped analytically to the circle of
+// radius `r` at (cx, cy) — the "shadow" convention the Blender-style lighting
+// glyphs use. Each line is x - y = k, so the perpendicular distance from the
+// centre is (cx - cy - k)/sqrt(2); lines further than r away are skipped and
+// the rest are trimmed to their chord. The caller owns the brush colour and
+// sets the alpha it wants afterwards.
+void DrawHatch(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush,
+    float cx, float cy, float r, float alpha, float scale)
+{
+    D2D1_COLOR_F color = brush->GetColor();
+    color.a = alpha;
+    brush->SetColor(color);
+    constexpr float invSqrt2 = 0.70710678f;
+    const float step = Scale(3.6f, scale) * 1.41421356f;
+    for (float k = -2.0f * r; k <= 2.0f * r + step; k += step)
+    {
+        const float distance = (cx - cy - k) * invSqrt2;
+        if (distance <= -r || distance >= r) continue;
+        const float halfChord = std::sqrt(r * r - distance * distance);
+        const float footX = cx - distance * invSqrt2;
+        const float footY = cy + distance * invSqrt2;
+        target->DrawLine(
+            D2D1::Point2F(footX - halfChord * invSqrt2, footY - halfChord * invSqrt2),
+            D2D1::Point2F(footX + halfChord * invSqrt2, footY + halfChord * invSqrt2),
+            brush, Scale(1.15f, scale));
+    }
+}
+
+void DrawIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush,
+    ID2D1PathGeometry* studioLitGeometry, ID2D1StrokeStyle* dashedStroke,
+    OverlayIconKind kind, D2D1_RECT_F rect, float scale)
 {
     const float cx = (rect.left + rect.right) * 0.5f;
     const float cy = (rect.top + rect.bottom) * 0.5f;
@@ -107,16 +141,80 @@ void DrawIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush, OverlayIco
     }
     case OverlayIconKind::Wireframe:
     {
-        const float half=Scale(7.0f,scale);
-        const D2D1_POINT_2F top{cx,cy-half};
-        const D2D1_POINT_2F left{cx-half,cy+half*0.72f};
-        const D2D1_POINT_2F right{cx+half,cy+half*0.72f};
-        target->DrawLine(top,left,brush,stroke);
-        target->DrawLine(left,right,brush,stroke);
-        target->DrawLine(right,top,brush,stroke);
-        target->DrawLine(top,D2D1::Point2F(cx,cy+half*0.72f),brush,stroke);
-        target->DrawLine(left,D2D1::Point2F(cx+half*0.5f,cy),brush,stroke);
-        target->DrawLine(right,D2D1::Point2F(cx-half*0.5f,cy),brush,stroke);
+        // Wire-globe: a meridian and an equator ellipse plus two latitude
+        // chords read as a wire sphere rather than a flat grid.
+        const float radius = Scale(8.0f, scale);
+        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius), brush, stroke);
+        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius * 0.45f, radius), brush, stroke);
+        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius * 0.45f), brush, stroke);
+        for (float latitude : { -0.55f, 0.55f })
+        {
+            const float y = cy + latitude * radius;
+            const float halfWidth = radius * std::sqrt(std::max(0.0f, 1.0f - latitude * latitude));
+            target->DrawLine(D2D1::Point2F(cx - halfWidth, y), D2D1::Point2F(cx + halfWidth, y), brush, stroke);
+        }
+        break;
+    }
+    case OverlayIconKind::Clay:
+    {
+        // Untextured matte ball: a single solid disc.
+        const float radius = Scale(8.0f, scale);
+        target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius), brush);
+        break;
+    }
+    case OverlayIconKind::Studio:
+    {
+        // Studio environment: a ball lit from the upper left, with the shaded
+        // lower-right crescent hatched. The lit lens is the cached
+        // intersection of the disc with an equal disc offset up-left.
+        const float radius = Scale(8.0f, scale);
+        DrawHatch(target, brush, cx, cy, radius, 0.48f, scale);
+        D2D1_COLOR_F color = brush->GetColor();
+        color.a = 0.92f;
+        brush->SetColor(color);
+        if (studioLitGeometry != nullptr)
+        {
+            D2D1_MATRIX_3X2_F previous{};
+            target->GetTransform(&previous);
+            target->SetTransform(D2D1::Matrix3x2F::Scale(radius, radius) * D2D1::Matrix3x2F::Translation(cx, cy));
+            target->FillGeometry(studioLitGeometry, brush);
+            target->SetTransform(previous);
+        }
+        else
+        {
+            target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx - 0.22f * radius, cy - 0.22f * radius),
+                radius * 0.72f, radius * 0.72f), brush);
+        }
+        color.a = 1.0f;
+        brush->SetColor(color);
+        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius), brush, stroke);
+        break;
+    }
+    case OverlayIconKind::Directional:
+    {
+        // Single raking light: the same ball, but only a specular highlight
+        // is solid while the rest of the surface stays hatched.
+        const float radius = Scale(8.0f, scale);
+        DrawHatch(target, brush, cx, cy, radius, 0.48f, scale);
+        D2D1_COLOR_F color = brush->GetColor();
+        color.a = 0.95f;
+        brush->SetColor(color);
+        target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx - 0.30f * radius, cy - 0.30f * radius),
+            radius * 0.52f, radius * 0.52f), brush);
+        color.a = 1.0f;
+        brush->SetColor(color);
+        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius), brush, stroke);
+        break;
+    }
+    case OverlayIconKind::XRay:
+    {
+        // Outlined frame with a dashed inner frame: "see through the shell".
+        const float half = Scale(7.5f, scale);
+        target->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(cx - half, cy - half, cx + half, cy + half),
+            Scale(1.5f, scale), Scale(1.5f, scale)), brush, stroke);
+        const float inner = Scale(4.6f, scale);
+        target->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(cx - inner, cy - inner, cx + inner, cy + inner),
+            Scale(1.0f, scale), Scale(1.0f, scale)), brush, stroke, dashedStroke);
         break;
     }
     case OverlayIconKind::AxisSnap:
@@ -312,6 +410,10 @@ bool D3D11On12Overlay::Initialize(D3D12Device& device, D3D12CommandQueue& direct
         return false;
     }
 
+    // Best-effort: the shaded-sphere glyphs fall back to a plain fill if the
+    // cached geometry cannot be built, so this never fails initialization.
+    CreateIconGeometries();
+
     // The D2D device rides on the same underlying DXGI device as the 11on12
     // device, which is what lets one context target every back buffer.
     ComPtr<IDXGIDevice> dxgiDevice;
@@ -485,6 +587,7 @@ void D3D11On12Overlay::Shutdown()
     overlayBrush.Reset();
     dashedStroke.Reset();
     spinnerStroke.Reset();
+    studioLitGeometry.Reset();
     headingFormat.Reset(); bodyFormat.Reset(); smallFormat.Reset(); filenameFormat.Reset(); gizmoFormat.Reset();
     textScale = 0.0f;
     targetsRecreated_ = false;
@@ -505,6 +608,26 @@ RECT CalculateErrorCardRect(int width, int height, int toolbarHeight, float dpiS
     const int left = (width - cardWidth) / 2;
     const int top = toolbarHeight + std::max(0, (height - toolbarHeight - cardHeight) / 2);
     return RECT{ left, top, left + cardWidth, top + cardHeight };
+}
+
+bool D3D11On12Overlay::CreateIconGeometries()
+{
+    if (!d2dFactory_) return false;
+    ComPtr<ID2D1EllipseGeometry> sphere;
+    ComPtr<ID2D1EllipseGeometry> terminator;
+    if (FAILED(d2dFactory_->CreateEllipseGeometry(D2D1::Ellipse(D2D1::Point2F(0.0f, 0.0f), 1.0f, 1.0f), &sphere)) ||
+        FAILED(d2dFactory_->CreateEllipseGeometry(D2D1::Ellipse(D2D1::Point2F(-0.38f, -0.38f), 1.0f, 1.0f), &terminator)))
+    {
+        return false;
+    }
+    ComPtr<ID2D1PathGeometry> path;
+    ComPtr<ID2D1GeometrySink> sink;
+    if (FAILED(d2dFactory_->CreatePathGeometry(&path)) || FAILED(path->Open(&sink))) return false;
+    sink->SetFillMode(D2D1_FILL_MODE_WINDING);
+    const HRESULT combine = sphere->CombineWithGeometry(terminator.Get(), D2D1_COMBINE_MODE_INTERSECT, nullptr, sink.Get());
+    if (FAILED(combine) || FAILED(sink->Close())) return false;
+    studioLitGeometry = path;
+    return true;
 }
 
 bool D3D11On12Overlay::CreateTextFormats(float scale)
@@ -701,7 +824,7 @@ void D3D11On12Overlay::DrawBottomBar(const OverlayInfo& overlay, float clientWid
         SetBrush(D2D1::ColorF(0x48484C));
         d2dContext_->DrawRoundedRectangle(D2D1::RoundedRect(lightingBounds,Scale(9,scale),Scale(9,scale)),overlayBrush.Get(),1.0f);
 
-    auto drawModeButton=[&](const RECT& rect,const wchar_t* label,bool active,bool hovered,bool pressed) {
+    auto drawModeButton=[&](const RECT& rect,OverlayIconKind icon,bool active,bool hovered,bool pressed) {
         const D2D1_RECT_F button=ToRectF(rect);
         D2D1_COLOR_F fill=D2D1::ColorF(0x000000,0.0f);
         if (active) fill=D2D1::ColorF(0x0A84FF,0.34f);
@@ -709,17 +832,17 @@ void D3D11On12Overlay::DrawBottomBar(const OverlayInfo& overlay, float clientWid
         if (pressed) fill=active?D2D1::ColorF(0x0A84FF,0.62f):D2D1::ColorF(0x5A5A60,0.72f);
         SetBrush(fill);
         d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(button,Scale(6,scale),Scale(6,scale)),overlayBrush.Get());
-        DrawText(label,smallFormat.Get(),button,active?D2D1::ColorF(0xFFFFFF):D2D1::ColorF(0xD1D1D6),DWRITE_TEXT_ALIGNMENT_CENTER);
+        SetBrush(active?D2D1::ColorF(0xFFFFFF):D2D1::ColorF(0xD1D1D6));
+        DrawIcon(d2dContext_.Get(),overlayBrush.Get(),studioLitGeometry.Get(),dashedStroke.Get(),icon,button,scale);
     };
-    drawModeButton(overlay.studioButtonRect,L"Studio",overlay.lightingMode==LightingMode::Studio,
+    drawModeButton(overlay.studioButtonRect,OverlayIconKind::Studio,overlay.lightingMode==LightingMode::Studio,
         overlay.studioButtonHover,overlay.studioButtonPressed);
-    drawModeButton(overlay.clayButtonRect,L"Clay",overlay.lightingMode==LightingMode::Clay,
+    drawModeButton(overlay.clayButtonRect,OverlayIconKind::Clay,overlay.lightingMode==LightingMode::Clay,
         overlay.clayButtonHover,overlay.clayButtonPressed);
-    drawModeButton(overlay.directionalButtonRect,L"Directional",overlay.lightingMode==LightingMode::Directional,
+    drawModeButton(overlay.directionalButtonRect,OverlayIconKind::Directional,overlay.lightingMode==LightingMode::Directional,
         overlay.directionalButtonHover,overlay.directionalButtonPressed);
-    DrawIconButton(overlay.wireframeButtonRect,OverlayIconKind::Wireframe,true,true,
-        overlay.lightingMode==LightingMode::Wireframe,
-        overlay.wireframeButtonHover,overlay.wireframeButtonPressed,scale);
+    drawModeButton(overlay.wireframeButtonRect,OverlayIconKind::Wireframe,overlay.lightingMode==LightingMode::Wireframe,
+        overlay.wireframeButtonHover,overlay.wireframeButtonPressed);
         if (overlay.lightingMode==LightingMode::Directional) {
             const D2D1_RECT_F lightTrack=ToRectF(overlay.directionalTrackRect);
             const float y=(lightTrack.top+lightTrack.bottom)*.5f;
@@ -772,7 +895,7 @@ void D3D11On12Overlay::DrawIconButton(const RECT& rectI, OverlayIconKind icon, b
     SetBrush(fill);
     d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(rect, Scale(6, scale), Scale(6, scale)), overlayBrush.Get());
     SetBrush(iconColor);
-    DrawIcon(d2dContext_.Get(), overlayBrush.Get(), icon, rect, scale);
+    DrawIcon(d2dContext_.Get(), overlayBrush.Get(), studioLitGeometry.Get(), dashedStroke.Get(), icon, rect, scale);
 }
 
 // Right-docked, read-only "Stats & Shading" panel — see InfoPanel.h for

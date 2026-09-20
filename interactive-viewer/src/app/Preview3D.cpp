@@ -1191,10 +1191,14 @@ LightingToolbarLayout ComputeLightingToolbarLayout(const ViewerApp& app)
     const int buttonHeight=Scale(app,30);
     const int padding=Scale(app,5);
     const int gap=Scale(app,3);
-    const int studioWidth=Scale(app,70);
-    const int clayWidth=Scale(app,54);
-    const int directionalWidth=Scale(app,92);
-    const int wireWidth=Scale(app,34);
+    // Icon-only segmented control: every shading mode is the same square
+    // button, so the glyphs read as one Blender-style strip instead of
+    // leaving empty space where a text label used to sit.
+    const int buttonWidth=Scale(app,34);
+    const int studioWidth=buttonWidth;
+    const int clayWidth=buttonWidth;
+    const int directionalWidth=buttonWidth;
+    const int wireWidth=buttonWidth;
     const int trackWidth=app.lightingMode==LightingMode::Directional ? Scale(app,94) : 0;
     const int divider=trackWidth ? Scale(app,9) : 0;
     const int width=padding*2+studioWidth+clayWidth+directionalWidth+wireWidth+gap*3+trackWidth+divider;
