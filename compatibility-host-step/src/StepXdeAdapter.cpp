@@ -26,6 +26,7 @@
 
 #pragma warning(push, 0)
 #include <BRepBndLib.hxx>
+#include <BRepLib_ToolTriangulatedShape.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
@@ -49,6 +50,7 @@
 #include <TopAbs_Orientation.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
+#include <TopTools_DataMapOfShapeInteger.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
@@ -56,6 +58,7 @@
 #include <XCAFDoc_ColorTool.hxx>
 #include <XCAFDoc_ColorType.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
+#include <XCAFDoc_LayerTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
@@ -107,7 +110,8 @@ constexpr std::uint32_t kDefinitionCancelCheckInterval = 4096;
 // proven HandleStreamBuf; kept local so the test-only spike stays independent.
 class HandleStreamBuf final : public std::streambuf {
 public:
-    HandleStreamBuf(HANDLE handle, std::uint64_t size) : handle_(handle), size_(size)
+    HandleStreamBuf(HANDLE handle, std::uint64_t size, std::uint64_t baseOffset = 0)
+        : handle_(handle), size_(size), baseOffset_(baseOffset)
     {
         setg(buffer_.data(), buffer_.data(), buffer_.data());
     }
@@ -157,7 +161,7 @@ protected:
 private:
     std::uint64_t CurrentOffset() const
     {
-        return bufferStart_ + static_cast<std::uint64_t>(egptr() - buffer_.data());
+        return bufferStart_ + static_cast<std::uint64_t>(gptr() - buffer_.data());
     }
 
     bool Fill(std::uint64_t offset)
@@ -165,7 +169,7 @@ private:
         if (offset >= size_) return false;
         const auto want = static_cast<DWORD>((std::min)(static_cast<std::uint64_t>(buffer_.size()), size_ - offset));
         LARGE_INTEGER position{};
-        position.QuadPart = static_cast<LONGLONG>(offset);
+        position.QuadPart = static_cast<LONGLONG>(baseOffset_ + offset);
         if (!SetFilePointerEx(handle_, position, nullptr, FILE_BEGIN)) return false;
         DWORD read = 0;
         if (!ReadFile(handle_, buffer_.data(), want, &read, nullptr) || read == 0) return false;
@@ -176,6 +180,7 @@ private:
 
     HANDLE handle_{};
     std::uint64_t size_{};
+    std::uint64_t baseOffset_{};
     std::uint64_t bufferStart_{};
     std::array<char, 64 * 1024> buffer_{};
 };
@@ -402,8 +407,8 @@ using Vertex = VertexPositionNormalUv0F32;
 
 // A geometry chunk already written for a definition, retained only as identity
 // and bounds so occurrences can reference it without keeping its vertices.
-// Positions become cluster-local floats at emission time; `origin` restores
-// the transferred double coordinates exactly as the broker recomputes them.
+// Positions are made local to a double-precision anchor before narrowing to
+// float; `origin` restores the transferred coordinates at display time.
 struct EmittedGeometryRef {
     std::uint32_t chunkId = 0;
     std::uint32_t materialId = 0;
@@ -436,6 +441,7 @@ struct PlannedDefinition {
     bool hasShapeColor = false;
     std::uint32_t shapeMaterialId = 0;
     std::vector<std::pair<TopoDS_Shape, std::uint32_t>> faceColors;
+    std::vector<TopoDS_Shape> hiddenFaces;
     std::vector<PlannedOccurrence> occurrences;
 };
 
@@ -448,6 +454,7 @@ public:
     {
         shapeTool_ = XCAFDoc_DocumentTool::ShapeTool(document_->Main());
         colorTool_ = XCAFDoc_DocumentTool::ColorTool(document_->Main());
+        layerTool_ = XCAFDoc_DocumentTool::LayerTool(document_->Main());
     }
 
     bool shapeToolValid() const { return !shapeTool_.IsNull(); }
@@ -527,33 +534,50 @@ private:
             || colorTool_->GetColor(label, XCAFDoc_ColorCurv, color);
     }
 
-    void CollectFaceColors(const TDF_Label& label,
-                           std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors)
+    void CollectSubshapeStyles(const TDF_Label& label,
+        std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors,
+        std::vector<TopoDS_Shape>& hiddenFaces)
     {
-        if (colorTool_.IsNull() || !shapeTool_) return;
+        if (!shapeTool_) return;
         TDF_LabelSequence subLabels;
         if (!XCAFDoc_ShapeTool::GetSubShapes(label, subLabels)) return;
         for (Standard_Integer index = 1; index <= subLabels.Length(); ++index) {
-            if (faceColors.size() >= limits_.maxSubshapes) break;
+            if (faceColors.size() + hiddenFaces.size() >= limits_.maxSubshapes) {
+                error_ = model_core::ImportErrorCode::ResourceLimit;
+                return;
+            }
             const TDF_Label sub = subLabels.Value(index);
             if (!XCAFDoc_ShapeTool::IsSubShape(sub)) continue;
+            const TopoDS_Shape subShape = XCAFDoc_ShapeTool::GetShape(sub);
+            if (subShape.IsNull()) continue;
+            if (!VisibleLabel(sub)) {
+                bool foundFace = false;
+                for (TopExp_Explorer explorer(subShape, TopAbs_FACE); explorer.More(); explorer.Next()) {
+                    if (hiddenFaces.size() >= limits_.maxSubshapes) {
+                        error_ = model_core::ImportErrorCode::ResourceLimit;
+                        return;
+                    }
+                    hiddenFaces.push_back(explorer.Current());
+                    foundFace = true;
+                }
+                if (!foundFace && subShape.ShapeType() == TopAbs_FACE)
+                    hiddenFaces.push_back(subShape);
+                continue;
+            }
+            if (subShape.ShapeType() != TopAbs_FACE || colorTool_.IsNull()) continue;
             Quantity_ColorRGBA color;
             if (!colorTool_->GetColor(sub, XCAFDoc_ColorSurf, color)
                 && !colorTool_->GetColor(sub, XCAFDoc_ColorGen, color)) {
                 continue;
             }
-            const TopoDS_Shape subShape = XCAFDoc_ShapeTool::GetShape(sub);
-            if (subShape.IsNull() || subShape.ShapeType() != TopAbs_FACE) continue;
             faceColors.emplace_back(subShape, ResolveMaterial(ToRgba(color)));
         }
     }
 
     // Plans (once) the reusable geometry identity for a simple-shape definition.
-    // Face appearance follows the documented instance/shape/subshape precedence:
-    // the shape-level color (if any) wins; otherwise per-face subshape colors
-    // split the geometry into bounded seam groups; otherwise the neutral
-    // material (id 0) is used. Instance color overrides are applied later, at
-    // occurrence time, without duplicating geometry.
+    // A face style overrides its definition style; the definition style is a
+    // fallback for faces without their own style. An occurrence style overrides
+    // both at instance emission, without duplicating geometry.
     bool PlanDefinition(const TDF_Label& label, PlannedDefinition** out)
     {
         TCollection_AsciiString entry;
@@ -588,11 +612,9 @@ private:
 
         Quantity_ColorRGBA shapeColor;
         definition.hasShapeColor = LeafHasColor(label, shapeColor);
-        if (definition.hasShapeColor) {
+        if (definition.hasShapeColor)
             definition.shapeMaterialId = ResolveMaterial(ToRgba(shapeColor));
-        } else {
-            CollectFaceColors(label, definition.faceColors);
-        }
+        CollectSubshapeStyles(label, definition.faceColors, definition.hiddenFaces);
         if (error_ != model_core::ImportErrorCode::None) {
             unsupportedDefinitions_.insert(key);
             *out = nullptr;
@@ -628,11 +650,23 @@ private:
             || colorTool_->GetInstanceColor(occurrenceShape, XCAFDoc_ColorSurf, color);
     }
 
+    bool VisibleLabel(const TDF_Label& label) const
+    {
+        if (!XCAFDoc_ColorTool::IsVisible(label)) return false;
+        if (layerTool_.IsNull()) return true;
+        TDF_LabelSequence layers;
+        if (!layerTool_->GetLayers(label, layers) || layers.Length() == 0) return true;
+        for (Standard_Integer index = 1; index <= layers.Length(); ++index)
+            if (layerTool_->IsVisible(layers.Value(index))) return true;
+        return false;
+    }
+
     void VisitDefinition(const TDF_Label& occurrence, const TDF_Label& definition,
                          std::uint32_t parentNodeId, const double parentWorld[16], bool hasLocation,
                          std::uint32_t depth)
     {
         if (error_ != model_core::ImportErrorCode::None || Cancelled()) return;
+        if (!VisibleLabel(occurrence) || !VisibleLabel(definition)) return;
         if (depth > limits_.maxHierarchyDepth) {
             error_ = model_core::ImportErrorCode::ResourceLimit;
             return;
@@ -725,6 +759,7 @@ private:
     Handle(TDocStd_Document) document_;
     Handle(XCAFDoc_ShapeTool) shapeTool_;
     Handle(XCAFDoc_ColorTool) colorTool_;
+    Handle(XCAFDoc_LayerTool) layerTool_;
     StepXdeLimits limits_;
     std::vector<NodeRecord> nodes_;
     std::vector<MaterialRecord> materials_;
@@ -746,6 +781,7 @@ struct GeometryRecord {
     std::uint32_t chunkId = 0;
     std::uint32_t meshId = 0;
     std::uint32_t materialId = 0;
+    double origin[3] = {0, 0, 0};
     std::vector<Vertex> vertices;
 };
 
@@ -774,6 +810,10 @@ public:
     model_core::ImportErrorCode error() const { return error_; }
     std::uint32_t batchesPublished() const { return batchesPublished_; }
     std::uint32_t nextInstanceSerial() const { return nextInstanceSerial_; }
+    void AddWarnings(std::uint32_t count)
+    {
+        warningCount_ = (std::min)(64u, warningCount_ + (std::min)(count, 64u));
+    }
 
     bool AddNode(const NodeRecord& node)
     {
@@ -802,31 +842,31 @@ public:
             reinterpret_cast<const std::byte*>(&material.payload), sizeof(material.payload)));
     }
 
-    // Takes ownership of `chunk.vertices`. Computes the cluster-local float
-    // positions and the double origin, writes the geometry chunk, and returns
-    // the identity/bounds an occurrence needs to reference it.
+    // Writes the already-localized vertices and their double origin, and
+    // returns the identity/bounds an occurrence needs to reference it.
     std::optional<EmittedGeometryRef> AddGeometry(GeometryRecord& chunk)
     {
         if (chunk.vertices.empty()) return std::nullopt;
-        double origin[3] = {std::numeric_limits<double>::max(), std::numeric_limits<double>::max(),
-                            std::numeric_limits<double>::max()};
+        float offset[3] = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::max()};
         for (const Vertex& vertex : chunk.vertices) {
             if (!std::isfinite(vertex.px) || !std::isfinite(vertex.py) || !std::isfinite(vertex.pz)) {
                 error_ = model_core::ImportErrorCode::MalformedData;
                 return std::nullopt;
             }
-            origin[0] = (std::min)(origin[0], static_cast<double>(vertex.px));
-            origin[1] = (std::min)(origin[1], static_cast<double>(vertex.py));
-            origin[2] = (std::min)(origin[2], static_cast<double>(vertex.pz));
+            offset[0] = (std::min)(offset[0], vertex.px);
+            offset[1] = (std::min)(offset[1], vertex.py);
+            offset[2] = (std::min)(offset[2], vertex.pz);
         }
+        for (int axis = 0; axis < 3; ++axis) chunk.origin[axis] += static_cast<double>(offset[axis]);
         float localMin[3] = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
                              std::numeric_limits<float>::max()};
         float localMax[3] = {-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(),
                              -std::numeric_limits<float>::max()};
         for (Vertex& vertex : chunk.vertices) {
-            vertex.px = static_cast<float>(static_cast<double>(vertex.px) - origin[0]);
-            vertex.py = static_cast<float>(static_cast<double>(vertex.py) - origin[1]);
-            vertex.pz = static_cast<float>(static_cast<double>(vertex.pz) - origin[2]);
+            vertex.px = static_cast<float>(static_cast<double>(vertex.px) - offset[0]);
+            vertex.py = static_cast<float>(static_cast<double>(vertex.py) - offset[1]);
+            vertex.pz = static_cast<float>(static_cast<double>(vertex.pz) - offset[2]);
             const float position[3] = {vertex.px, vertex.py, vertex.pz};
             for (int axis = 0; axis < 3; ++axis) {
                 localMin[axis] = (std::min)(localMin[axis], position[axis]);
@@ -853,18 +893,19 @@ public:
         descriptor.sourceRangeOffset = 0;
         descriptor.sourceRangeLength = descriptor.indexCount;
         descriptor.boundsState = BoundsState::Verified;
+        descriptor.geometryFlags = kGeometryDeindexed | kGeometryReusableInstanceSource;
         for (int axis = 0; axis < 3; ++axis) {
-            descriptor.origin[axis] = origin[axis];
+            descriptor.origin[axis] = chunk.origin[axis];
             descriptor.localMin[axis] = localMin[axis];
             descriptor.localMax[axis] = localMax[axis];
         }
-        if (!Add(descriptor, payload)) return std::nullopt;
+        if (!AddOwned(descriptor, std::move(payload))) return std::nullopt;
 
         EmittedGeometryRef reference;
         reference.chunkId = chunk.chunkId;
         reference.materialId = chunk.materialId;
         for (int axis = 0; axis < 3; ++axis) {
-            reference.origin[axis] = origin[axis];
+            reference.origin[axis] = chunk.origin[axis];
             reference.localMin[axis] = localMin[axis];
             reference.localMax[axis] = localMax[axis];
         }
@@ -928,6 +969,11 @@ private:
 
     bool Add(const ChunkDescriptor& base, std::span<const std::byte> payload)
     {
+        return AddOwned(base, std::vector<std::byte>(payload.begin(), payload.end()));
+    }
+
+    bool AddOwned(const ChunkDescriptor& base, std::vector<std::byte> payload)
+    {
         if (cancelled_ && cancelled_()) {
             error_ = model_core::ImportErrorCode::Cancelled;
             return false;
@@ -962,7 +1008,7 @@ private:
         }
         PendingChunk pending;
         pending.descriptor = base;
-        pending.payload.assign(payload.begin(), payload.end());
+        pending.payload = std::move(payload);
         pendingBytes_ += pending.payload.size();
         pending_.push_back(std::move(pending));
         return true;
@@ -1071,6 +1117,7 @@ public:
     // where-the-time-goes evidence.
     double meshMilliseconds() const { return meshMilliseconds_; }
     double extractMilliseconds() const { return extractMilliseconds_; }
+    std::uint32_t unmeshedFaces() const { return unmeshedFaces_; }
 
     // Tessellates `shape` at the display profile and appends bounded,
     // de-indexed, material-homogeneous geometry chunks (each <= the profile's
@@ -1078,6 +1125,7 @@ public:
     model_core::ImportErrorCode Mesh(
         const TopoDS_Shape& shape,
         const std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors,
+        const std::vector<TopoDS_Shape>& hiddenFaces,
         bool hasShapeColor, std::uint32_t shapeMaterialId, std::uint32_t meshId,
         std::uint32_t& nextGeometryId, std::vector<GeometryRecord>& chunks)
     {
@@ -1112,7 +1160,6 @@ public:
 
         const auto meshStart = SteadyClock::now();
         BRepMesh_IncrementalMesh mesher(shape, parameters);
-        mesher.Perform();
         meshMilliseconds_ += ElapsedMilliseconds(meshStart);
         if (!StepWithinDefinitionTime(ElapsedMilliseconds(meshStart), profile_.maxDefinitionMilliseconds))
             return model_core::ImportErrorCode::TessellationFailed;
@@ -1129,22 +1176,44 @@ public:
         if (faces > profile_.maxFacesPerDefinition || edges > profile_.maxEdgesPerDefinition)
             return model_core::ImportErrorCode::TessellationFailed;
 
+        // OCCT's shape hasher uses the same TShape/location identity as IsSame.
+        // Build this once per definition; a linear search for every face is
+        // quadratic on heavily styled production parts.
+        TopTools_DataMapOfShapeInteger faceMaterialByShape;
+        for (const auto& [face, material] : faceColors)
+            if (!faceMaterialByShape.IsBound(face)) faceMaterialByShape.Bind(face, static_cast<Standard_Integer>(material));
+        TopTools_DataMapOfShapeInteger hiddenFaceSet;
+        for (const auto& face : hiddenFaces)
+            if (!hiddenFaceSet.IsBound(face)) hiddenFaceSet.Bind(face, 1);
+
         // Materials group the definition's triangles. std::map keeps the group
         // ordering deterministic (neutral/0 first) independent of face order.
-        std::map<std::uint32_t, std::vector<Vertex>> groups;
+        std::map<std::uint32_t, VertexGroup> groups;
         std::uint64_t definitionTriangles = 0;
         std::uint32_t checkedFaces = 0;
         for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
             if ((++checkedFaces % kDefinitionCancelCheckInterval) == 0 && Cancelled())
                 return model_core::ImportErrorCode::Cancelled;
             const TopoDS_Face face = TopoDS::Face(explorer.Current());
-            const std::uint32_t materialId = hasShapeColor
-                ? shapeMaterialId
-                : FaceMaterial(face, faceColors);
+            if (hiddenFaceSet.IsBound(face)) continue;
+            const std::uint32_t materialId = faceMaterialByShape.IsBound(face)
+                ? static_cast<std::uint32_t>(faceMaterialByShape.Find(face))
+                : (hasShapeColor ? shapeMaterialId : 0u);
 
             TopLoc_Location location;
             const Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(face, location);
-            if (triangulation.IsNull()) continue;
+            if (triangulation.IsNull() || triangulation->NbTriangles() == 0) {
+                if (unmeshedFaces_ < 64) ++unmeshedFaces_;
+                continue;
+            }
+            // OCCT can supply analytic surface normals through the face's UV
+            // coordinates. Reuse authored normals when present; fall back to
+            // triangle normals if a surface cannot provide them.
+            if (!triangulation->HasNormals()) {
+                try { BRepLib_ToolTriangulatedShape::ComputeNormals(face, triangulation); }
+                catch (const Standard_Failure&) { /* triangle fallback */ }
+            }
+            const bool smooth = triangulation->HasNormals();
             const bool reversed = face.Orientation() == TopAbs_REVERSED;
             const gp_Trsf& transform = location.Transformation();
 
@@ -1162,9 +1231,31 @@ public:
                 if (!(length > 1e-30) || !std::isfinite(length)) continue; // degenerate/invalid
                 nx /= length; ny /= length; nz /= length;
 
-                AppendVertex(groups[materialId], p1, nx, ny, nz);
-                AppendVertex(groups[materialId], p2, nx, ny, nz);
-                AppendVertex(groups[materialId], p3, nx, ny, nz);
+                auto append = [&](Standard_Integer node, const gp_Pnt& point) {
+                    double vx = nx, vy = ny, vz = nz;
+                    if (smooth) {
+                        gp_Vec3f localNormal;
+                        triangulation->Normal(node, localNormal);
+                        gp_Vec worldNormal(localNormal.x(), localNormal.y(), localNormal.z());
+                        worldNormal.Transform(transform);
+                        const double magnitude = worldNormal.Magnitude();
+                        if (std::isfinite(magnitude) && magnitude > 1e-30) {
+                            vx = worldNormal.X() / magnitude;
+                            vy = worldNormal.Y() / magnitude;
+                            vz = worldNormal.Z() / magnitude;
+                            // Imported face orientation and mirrored locations
+                            // differ between STEP exporters. Match the actual
+                            // emitted winding, which is the viewer's authority.
+                            if (vx * nx + vy * ny + vz * nz < 0) {
+                                vx = -vx; vy = -vy; vz = -vz;
+                            }
+                        }
+                    }
+                    AppendVertex(groups[materialId], point, vx, vy, vz);
+                };
+                append(n1, p1);
+                append(n2, p2);
+                append(n3, p3);
                 if (++definitionTriangles > profile_.maxTrianglesPerDefinition)
                     return model_core::ImportErrorCode::TessellationFailed;
             }
@@ -1174,11 +1265,11 @@ public:
             return model_core::ImportErrorCode::None; // nothing visible
         }
 
-        for (auto& [materialId, vertices] : groups) {
+        for (auto& [materialId, group] : groups) {
             if (Cancelled()) return model_core::ImportErrorCode::Cancelled;
             std::size_t begin = 0;
-            while (begin < vertices.size()) {
-                const std::size_t remainingTriangles = (vertices.size() - begin) / 3;
+            while (begin < group.vertices.size()) {
+                const std::size_t remainingTriangles = (group.vertices.size() - begin) / 3;
                 const std::size_t takeTriangles = (std::min)(
                     remainingTriangles, static_cast<std::size_t>(profile_.chunkTriangles));
                 const std::size_t takeVertices = takeTriangles * 3;
@@ -1186,8 +1277,9 @@ public:
                 chunk.chunkId = nextGeometryId++;
                 chunk.meshId = meshId;
                 chunk.materialId = materialId;
-                chunk.vertices.assign(vertices.begin() + static_cast<std::ptrdiff_t>(begin),
-                                      vertices.begin() + static_cast<std::ptrdiff_t>(begin + takeVertices));
+                std::memcpy(chunk.origin, group.origin, sizeof(chunk.origin));
+                chunk.vertices.assign(group.vertices.begin() + static_cast<std::ptrdiff_t>(begin),
+                                      group.vertices.begin() + static_cast<std::ptrdiff_t>(begin + takeVertices));
                 chunks.push_back(std::move(chunk));
                 begin += takeVertices;
             }
@@ -1199,27 +1291,30 @@ public:
 private:
     bool Cancelled() const { return cancelledProbe_ && cancelledProbe_(); }
 
-    static std::uint32_t FaceMaterial(const TopoDS_Face& face,
-                                      const std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors)
-    {
-        for (const auto& [subShape, materialId] : faceColors) {
-            if (subShape.IsSame(face)) return materialId;
-        }
-        return 0;
-    }
+    struct VertexGroup {
+        double origin[3] = {0, 0, 0};
+        bool hasOrigin = false;
+        std::vector<Vertex> vertices;
+    };
 
-    static void AppendVertex(std::vector<Vertex>& vertices, const gp_Pnt& point, double nx, double ny, double nz)
+    static void AppendVertex(VertexGroup& group, const gp_Pnt& point, double nx, double ny, double nz)
     {
+        if (!group.hasOrigin) {
+            group.origin[0] = point.X();
+            group.origin[1] = point.Y();
+            group.origin[2] = point.Z();
+            group.hasOrigin = true;
+        }
         Vertex vertex{};
-        vertex.px = static_cast<float>(point.X());
-        vertex.py = static_cast<float>(point.Y());
-        vertex.pz = static_cast<float>(point.Z());
+        vertex.px = static_cast<float>(point.X() - group.origin[0]);
+        vertex.py = static_cast<float>(point.Y() - group.origin[1]);
+        vertex.pz = static_cast<float>(point.Z() - group.origin[2]);
         vertex.nx = static_cast<float>(nx);
         vertex.ny = static_cast<float>(ny);
         vertex.nz = static_cast<float>(nz);
         vertex.u = 0.0f;
         vertex.v = 0.0f;
-        vertices.push_back(vertex);
+        group.vertices.push_back(vertex);
     }
 
     const StepTessellationProfile& profile_;
@@ -1228,6 +1323,7 @@ private:
     bool forceSerial_ = false;
     double meshMilliseconds_ = 0.0;
     double extractMilliseconds_ = 0.0;
+    std::uint32_t unmeshedFaces_ = 0;
 };
 
 } // namespace
@@ -1294,11 +1390,25 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         // when available, so preflight and OCCT transfer do not each read the
         // whole file; otherwise fall back to the proven handle stream.
         std::unique_ptr<std::streambuf> source;
-        if (!mappedSource.empty())
-            source = std::make_unique<MappedStreamBuf>(mappedSource.data(), mappedSource.size());
-        else
+        std::uint64_t bomBytes = 0;
+        if (!mappedSource.empty()) {
+            if (mappedSource.size() >= 3 && mappedSource[0] == std::byte{0xef}
+                && mappedSource[1] == std::byte{0xbb} && mappedSource[2] == std::byte{0xbf})
+                bomBytes = 3;
+            source = std::make_unique<MappedStreamBuf>(mappedSource.data() + bomBytes,
+                                                       mappedSource.size() - bomBytes);
+        } else {
+            std::array<std::byte, 3> prefix{};
+            LARGE_INTEGER beginning{};
+            DWORD read = 0;
+            if (SetFilePointerEx(sourceHandle, beginning, nullptr, FILE_BEGIN)
+                && ReadFile(sourceHandle, prefix.data(), 3, &read, nullptr) && read == 3
+                && prefix[0] == std::byte{0xef} && prefix[1] == std::byte{0xbb}
+                && prefix[2] == std::byte{0xbf})
+                bomBytes = 3;
             source = std::make_unique<HandleStreamBuf>(sourceHandle,
-                                                       static_cast<std::uint64_t>(size.QuadPart));
+                static_cast<std::uint64_t>(size.QuadPart) - bomBytes, bomBytes);
+        }
         std::istream stream(source.get());
         const auto readStart = SteadyClock::now();
         IFSelect_ReturnStatus readStatus = IFSelect_RetFail;
@@ -1442,7 +1552,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             if (emitter.error() != model_core::ImportErrorCode::None) break;
             std::vector<GeometryRecord> chunks;
             const model_core::ImportErrorCode meshed = mesher.Mesh(
-                definition.shape, definition.faceColors, definition.hasShapeColor,
+                definition.shape, definition.faceColors, definition.hiddenFaces, definition.hasShapeColor,
                 definition.shapeMaterialId, definition.meshId, nextGeometryId, chunks);
             ++definitionsDone;
             if ((definitionsDone % progressStride) == 0 || definitionsDone == definitionTotal) {
@@ -1484,6 +1594,12 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             closeDocument();
             return result;
         }
+        if (emitter.nextInstanceSerial() == 0) {
+            result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
+            closeDocument();
+            return result;
+        }
+        emitter.AddWarnings(mesher.unmeshedFaces());
         if (!emitter.AddStatus()) {
             result.errorCode = emitter.error();
             closeDocument();
@@ -1510,7 +1626,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         result.nodeCount = static_cast<std::uint32_t>(planner.nodes().size());
         result.instanceCount = emitter.nextInstanceSerial();
         result.materialCount = static_cast<std::uint32_t>(planner.materials().size());
-        result.warningCount = planner.warningCount();
+        result.warningCount = (std::min)(64u, planner.warningCount() + mesher.unmeshedFaces());
         result.timings.meshMilliseconds = static_cast<std::uint64_t>(mesher.meshMilliseconds());
         result.timings.extractMilliseconds = static_cast<std::uint64_t>(mesher.extractMilliseconds());
         result.timings.emitMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(emitStart));

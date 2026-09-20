@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
@@ -74,6 +75,8 @@ SceneCounts Tally(const import_broker::ImportSessionResult& result)
             ++counts.geometry;
             CHECK(chunk.descriptor.boundsState == model_core::BoundsState::Verified);
             CHECK(chunk.descriptor.vertexCount > 0);
+            CHECK((chunk.descriptor.geometryFlags
+                   & model_core::kGeometryReusableInstanceSource) != 0);
             break;
         case model_core::ChunkTopology::Material: {
             ++counts.materials;
@@ -179,6 +182,20 @@ TEST_CASE("STEP-003 imports AP203 AP214 and AP242 analytic parts", "[step-003][a
         CHECK(counts.instances == 1);
         CHECK(counts.materials == 1);
     }
+}
+
+TEST_CASE("STEP accepts UTF-8 BOM through admission and XDE transfer", "[step][bom]")
+{
+    std::ifstream input(StpFixture(L"part_ap214.stp"), std::ios::binary);
+    REQUIRE(input.good());
+    const std::string source((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    TempFileGuard file{WriteTempPart21(std::string("\xef\xbb\xbf", 3) + source)};
+    auto request = Request(L"", 0x6309);
+    request.sourcePath = file.path;
+    const auto result = import_broker::RunImportSession(request);
+    INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
+    REQUIRE(result.ok);
+    CHECK(Tally(result).instances == 1);
 }
 
 TEST_CASE("STEP-003 preserves assembly occurrences and reusable definitions",

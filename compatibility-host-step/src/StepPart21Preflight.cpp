@@ -85,9 +85,9 @@ bool StepPart21Scanner::Feed(std::span<const std::byte> chunk)
 {
     if (phase_ == Phase::Failed) return false;
 
+    std::size_t start = 0;
     if (!leadingChecked_ && !chunk.empty()) {
         leadingChecked_ = true;
-        std::size_t start = 0;
         // UTF-8 BOM is transparent; UTF-16 BOM and compressed/XML signatures
         // are not ISO 10303-21 clear text and fail before any lexing.
         if (chunk.size() >= 3 && chunk[0] == std::byte{0xEF} && chunk[1] == std::byte{0xBB}
@@ -112,15 +112,15 @@ bool StepPart21Scanner::Feed(std::span<const std::byte> chunk)
             Fail(StepPreflightStatus::UnsupportedEncoding);
             return false;
         }
-        // Consume the BOM bytes as whitespace so the signature record trims
-        // cleanly.
+        // Count the optional UTF-8 BOM once, but do not pass its bytes to the
+        // Part-21 lexer: they are neither whitespace nor part of the signature.
         for (std::size_t i = 0; i < start; ++i) {
             if (totalBytes_ >= limits_.maxLexedBytes) { Fail(StepPreflightStatus::SourceLimit); return false; }
             ++totalBytes_;
         }
     }
 
-    for (const std::byte value : chunk) {
+    for (const std::byte value : chunk.subspan(start)) {
         if (phase_ == Phase::Failed) return false;
         if (totalBytes_ >= limits_.maxLexedBytes) { Fail(StepPreflightStatus::SourceLimit); return false; }
         ++totalBytes_;

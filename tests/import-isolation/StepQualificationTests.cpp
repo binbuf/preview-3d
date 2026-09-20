@@ -119,6 +119,8 @@ TEST_CASE("STEP-008 admission gives every malformed or unsupported family a type
     using step_host::StepPreflightStatus;
     const std::vector<TypedCase> cases{
         {"valid", Part21("#1=CARTESIAN_POINT('',(0.,0.,0.));"), StepPreflightStatus::Ok},
+        {"utf8-bom", std::string("\xef\xbb\xbf", 3) + Part21("#1=CARTESIAN_POINT('',(0.,0.,0.));"),
+         StepPreflightStatus::Ok},
         {"empty", "", StepPreflightStatus::NotPart21},
         {"not-part21", "ISO-10303-22;\nHEADER;\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-22;\n",
          StepPreflightStatus::NotPart21},
@@ -253,6 +255,12 @@ TEST_CASE("STEP-008 bounds every progressive batch by maxChunkCount",
         ++batches;
         chunks += static_cast<std::uint32_t>(batch.size());
         CHECK(batch.size() <= 4);
+        for (const auto& chunk : batch) {
+            if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList) {
+                CHECK((chunk.descriptor.geometryFlags
+                       & model_core::kGeometryReusableInstanceSource) != 0);
+            }
+        }
     };
     const auto result = import_broker::RunImportSession(request);
     INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage)
@@ -307,6 +315,7 @@ TEST_CASE("STEP-008 measures the genuine large-file corpus when supplied",
         return true;
     };
     std::uint64_t batches = 0, chunks = 0, triangles = 0, vertices = 0;
+    std::uint32_t warnings = 0;
     const auto start = std::chrono::steady_clock::now();
     double firstBatchMs = -1.0;
     request.onBatch = [&](std::vector<import_broker::ValidatedChunk>&& batch) {
@@ -319,6 +328,12 @@ TEST_CASE("STEP-008 measures the genuine large-file corpus when supplied",
             ++chunks;
             triangles += chunk.descriptor.indexCount / 3;
             vertices += chunk.descriptor.vertexCount;
+            if (chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus
+                && chunk.payload.size() >= sizeof(model_core::ImportStatusPayload)) {
+                model_core::ImportStatusPayload status{};
+                std::memcpy(&status, chunk.payload.data(), sizeof(status));
+                warnings = status.optionalFeatureWarnings;
+            }
         }
     };
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(20);
@@ -349,7 +364,7 @@ TEST_CASE("STEP-008 measures the genuine large-file corpus when supplied",
                 "transfer=%llu plan=%llu mesh=%llu emit=%llu hostTotal=%llu "
                 "firstCoarse=%.0f brokerReady=%.0f "
                 "definitions=%u batches=%llu chunks=%llu triangles=%llu vertices=%llu "
-                "peakHostCommitBytes=%llu progressEvents=%zu\n",
+                "peakHostCommitBytes=%llu progressEvents=%zu warnings=%u\n",
                 result.ok ? 1 : 0, uint32_t(result.errorCode),
                 static_cast<unsigned long long>(preflight),
                 static_cast<unsigned long long>(read),
@@ -362,7 +377,7 @@ TEST_CASE("STEP-008 measures the genuine large-file corpus when supplied",
                 static_cast<unsigned long long>(chunks),
                 static_cast<unsigned long long>(triangles),
                 static_cast<unsigned long long>(vertices),
-                static_cast<unsigned long long>(peakHostCommit), events.size());
+                static_cast<unsigned long long>(peakHostCommit), events.size(), warnings);
     INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
     CHECK(result.ok);
 }
@@ -480,7 +495,7 @@ TEST_CASE("STEP planner scene diagnostic for a manual corpus item",
     const auto result = import_broker::RunImportSession(request);
     REQUIRE(result.ok);
 
-    std::uint32_t geometry = 0, materials = 0, nodes = 0, instances = 0;
+    std::uint32_t geometry = 0, materials = 0, nodes = 0, instances = 0, warnings = 0;
     std::uint32_t roots = 0;
     std::vector<std::uint64_t> geometryChecksums;
     std::map<std::uint32_t, std::uint32_t> meshIdByChunk;
@@ -522,6 +537,14 @@ TEST_CASE("STEP planner scene diagnostic for a manual corpus item",
                          {payload.worldMin[0], payload.worldMin[1], payload.worldMin[2]},
                          {payload.worldMax[0], payload.worldMax[1], payload.worldMax[2]}};
                 placed.push_back(p);
+            }
+            break;
+        }
+        case model_core::ChunkTopology::ImportStatus: {
+            model_core::ImportStatusPayload status{};
+            if (chunk.payload.size() >= sizeof(status)) {
+                std::memcpy(&status, chunk.payload.data(), sizeof(status));
+                warnings = status.optionalFeatureWarnings;
             }
             break;
         }
@@ -593,10 +616,10 @@ TEST_CASE("STEP planner scene diagnostic for a manual corpus item",
     }
 
     std::printf("[step-scene-diag] geometry=%u materials=%u nodes=%u roots=%u instances=%u "
-                "meshCount=%u duplicateGeometryChecksums=%u overlappingSameDefinitionPairs=%u\n",
+                "meshCount=%u duplicateGeometryChecksums=%u overlappingSameDefinitionPairs=%u warnings=%u\n",
                 geometry, materials, nodes, roots, instances,
                 chunks.empty() ? 0u : chunks.front().scene.meshCount,
-                duplicateChecksums, overlapping);
+                duplicateChecksums, overlapping, warnings);
     {
         std::map<std::uint32_t, std::uint32_t> instancesByMesh;
         for (const auto& p : placed) {
