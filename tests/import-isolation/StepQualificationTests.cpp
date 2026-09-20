@@ -365,3 +365,65 @@ TEST_CASE("STEP-008 measures the genuine large-file corpus when supplied",
     INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
     CHECK(result.ok);
 }
+
+// Opt-in regression for the post-STEP-008 viewer failure: the broker's default
+// reply timeout is 120 s, but the host emits progress only at phase boundaries,
+// so the genuine assembly's long XDE `Transfer` left the broker with no message
+// long enough to declare the host wedged, surfacing as StepHostFailure. The
+// host now emits a progress-driven Transfer heartbeat. This case runs the real
+// corpus with a deliberately short reply timeout (below the phase-boundary gap
+// but comfortably above the heartbeat interval) and asserts the session still
+// completes.
+//
+//   set PREVIEW3D_MANUAL_STEP_FILE=<abs path to Voron_2.4r2_Assembly.step>
+//   x64/Release/Tests.ImportIsolation.exe "[.][step-008-heartbeat]"
+TEST_CASE("STEP-008 transfer heartbeat keeps a short broker reply timeout alive",
+          "[.][step-008-heartbeat]")
+{
+    wchar_t* rawPath = nullptr;
+    std::size_t rawLength = 0;
+    if (_wdupenv_s(&rawPath, &rawLength, L"PREVIEW3D_MANUAL_STEP_FILE") != 0 || !rawPath
+        || !*rawPath) {
+        std::free(rawPath);
+        WARN("PREVIEW3D_MANUAL_STEP_FILE is not set; skipping heartbeat regression");
+        return;
+    }
+    const std::wstring sourcePath(rawPath);
+    std::free(rawPath);
+
+    import_broker::ImportSessionRequest request;
+    request.format = import_broker::ImportFormat::Step;
+    request.sourcePath = sourcePath;
+    request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;
+    request.generationId = 0x6810;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = import_broker::kImportMaxChunkCount;
+    request.maxChunkBatchesPerGeneration = 4096;
+    request.maxChunksPerGeneration = 0;
+    // Short enough that the pre-heartbeat Transfer gap (~64 s Release / ~445 s
+    // Debug) would fail, but well above the 5 s heartbeat interval.
+    request.replyTimeoutMs = 30'000;
+
+    std::uint64_t transferEvents = 0;
+    request.onStepProgress = [&transferEvents](const model_core::StepProgressNotice& notice) {
+        if (notice.phase == model_core::kStepPhaseTransfer) ++transferEvents;
+    };
+    // The viewer always streams batches. Without this callback the broker
+    // accumulates every payload against its 128 MiB no-callback cap and fails
+    // the genuine assembly at ValidateSection for an unrelated reason.
+    std::uint64_t chunks = 0;
+    request.onBatch = [&chunks](std::vector<import_broker::ValidatedChunk>&& batch) {
+        chunks += batch.size();
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(20);
+    request.isCancelled = [&deadline] {
+        return std::chrono::steady_clock::now() > deadline;
+    };
+
+    const auto result = import_broker::RunImportSession(request);
+    INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage)
+                 << " transferEvents " << transferEvents);
+    CHECK(result.ok);
+    // The phase-boundary event plus at least one throttled heartbeat.
+    CHECK(transferEvents > 1);
+}
