@@ -4,6 +4,77 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **STEP-008 follow-up real-viewer testing (2026-09-19): the Transfer heartbeat
+  moved the genuine corpus past the timeout, which now fails on the viewer's
+  own CPU budget guard as `StepHostLimit`; a second corpus item exposed a
+  planner duplicate.** Two Release viewer runs were taken.
+  `test-models/OQD_isolated_blade_trap_assembly.stp` (56,371,605 B) renders
+  almost correctly but draws one extra, overlapping piece.
+  `test-models/Voron_2.4r2_Assembly.step` (241,522,213 B) now reports "This STEP
+  model is too large or complex to preview." / "The STEP host reached a bounded
+  resource limit." instead of the earlier `StepHostFailure` timeout, so the
+  STEP-008 follow-up Transfer heartbeat appears to have closed the 120 s
+  broker-timeout gap. The remaining blocker is neither the Job ceiling nor a
+  broker/adapter cap.
+
+  Things the next STP/STEP task should not relearn:
+  1. **The real viewer rejects the genuine assembly at the CPU budget guard,
+     not at the STEP host Job ceiling.** `RenderThread::CpuBudgetGuard`
+     (`RenderThread.h:132`) caps the import process's private commit at
+     `min(1536 MiB, physical RAM/4)` (`RenderThread.h:162`) and
+     `ImportSession`'s `acceptBatch` fails `ValidateSection`/`ResourceLimit`
+     the moment the host's `PrivateUsage` exceeds it (`ImportSession.cpp:743`
+     and `:794`). The measured Release peak for this exact file is
+     `2,226,372,608 B` (2.07 GiB), far above 1.5 GiB, so the first accepted
+     batch is rejected. The STEP host Job ceiling is `min(4 GiB, 35% of RAM)`,
+     so the process was allowed to use that memory — the viewer simply refuses
+     it. `MapStepFailure` normalizes the `ResourceLimit` to `StepHostLimit`
+     (`ImportSession.cpp:1567`), which is the "bounded resource limit" text.
+     The guard is machine-independent for RAM ≥ 6 GiB, so it fails on every
+     normal developer/QA machine.
+  2. **The STEP-008 measurement could never have caught this.** The
+     `[.][step-008-measure]` request installs a `cpuBudgetAllows` that records
+     the peak and always returns `true` (`StepQualificationTests.cpp:304`).
+     `RunImportSession` has no memory policy of its own, so a passing
+     measurement is not evidence that the real viewer's CPU policy accepts the
+     file. A large-corpus regression that is meant to protect the viewer must
+     run the real `CpuBudgetGuard` (or the real viewer), not an always-true
+     stub.
+  3. **`StepHostLimit` is as overloaded as `StepHostFailure`.** It is produced
+     by the viewer's CPU guard, by every broker section/scene validation cap,
+     and by the adapter's own `ResourceLimit`s (node/definition/material,
+     preflight entity/reference/record, and emitter window/chunk caps), not
+     only by the Job commit ceiling. Read `ImportSessionResult.stage` and
+     `errorCode` before choosing a fix; the UI text alone cannot distinguish
+     "the machine is too small" from "the viewer's budget is too small".
+  4. **Admission is not the Voron failure.** A direct scan of the 241 MB file
+     gives 3,645,182 records / 2,911,998 entity records / 7,960,335 `#refs` /
+     94-byte maximum record, all far under `StepPart21PreflightLimits`
+     (`StepPart21Preflight.h:43`: 5 M entities, 100 M refs, 1 MiB records). Do
+     not spend time re-checking preflight caps for this file.
+  5. **The OQD duplicate is most likely a root-reference / mapped-item planner
+     double emission.** That file is an AP242 assembly with 111
+     `PRODUCT_DEFINITION`, 400 `NEXT_ASSEMBLY_USAGE_OCCURRENCE`, 427
+     `MAPPED_ITEM`/`REPRESENTATION_MAP`, and 400
+     `CONTEXT_DEPENDENT_SHAPE_REPRESENTATION`. `ScenePlanner::Build`
+     (`StepXdeAdapter.cpp:455`) visits every `GetFreeShapes` root and passes the
+     root label as both the occurrence and the definition without resolving
+     `GetReferredShape`; `VisitDefinition` resolves a reference only for a
+     *component* (`:678`), not for its top-level `definition` argument. A root
+     that is itself a reference (or an extra free shape created by a mapped
+     item) is therefore planned through its own label and can be emitted in
+     addition to its proper occurrence. `PlanDefinition` dedupes only by the
+     raw `TDF_Tool::Entry(label)` string (`:557`), so one underlying shape
+     reached through two labels becomes two definitions. Next step: log
+     `GetFreeShapes` length plus `IsAssembly`/`IsSimpleShape`/`IsReference` per
+     root and compare planned definitions/instances against the source's 111
+     products / 400 usages; resolve roots through `GetReferredShape` and/or
+     dedupe by `TopoDS_Shape::IsSame`.
+  6. **OQD is the better working reference for the planner.** It exercises
+     colors, instance transforms, `MAPPED_ITEM`s, and a deep assembly in 56 MB
+     and completes quickly, so it is the right fixture to pin the duplicate
+     regression against; Voron stays the throughput/commit fixture.
+
 - **STEP-008 post-slice viewer regression (2026-09-19): the genuine corpus
   fails through the real viewer as `StepHostFailure`.** Opening
   `test-models/Voron_2.4r2_Assembly.step` in `Preview3D.exe` loads for several
