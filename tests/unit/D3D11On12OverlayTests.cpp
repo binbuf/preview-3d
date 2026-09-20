@@ -23,6 +23,7 @@
 
 #include <cstddef>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -592,4 +593,65 @@ TEST_CASE("The four lighting-mode buttons paint distinct glyphs", "[graphics][ch
     CHECK(clay.hash != directional.hash);
     CHECK(clay.hash != wireframe.hash);
     CHECK(directional.hash != wireframe.hash);
+}
+
+TEST_CASE("The nav gizmo rides the directional-light sun marker on its outer ring", "[graphics][gizmo]")
+{
+    NavGizmo gizmo;
+    gizmo.UpdateLayout(800, 600, 40, 40, 1.0f);
+    const auto geometry = gizmo.ComputeDraw(DirectX::XMQuaternionIdentity());
+    const float ring = geometry.outerRadius;
+    REQUIRE(ring > 0.0f);
+
+    const auto first = gizmo.ComputeSun(DirectX::XMQuaternionIdentity(), 0.25f);
+    const auto second = gizmo.ComputeSun(DirectX::XMQuaternionIdentity(), 0.75f);
+    CHECK(first.visible);
+    CHECK(second.visible);
+    // Projected by azimuth only, so the marker always sits on the ring.
+    CHECK(std::abs(std::sqrt(first.x * first.x + first.y * first.y) - ring) < 0.01f);
+    CHECK(std::abs(std::sqrt(second.x * second.x + second.y * second.y) - ring) < 0.01f);
+    // The horizontal rotation moves the marker around the ring.
+    CHECK((first.x != second.x || first.y != second.y));
+    // Depth stays a normalized view-space coordinate either way.
+    CHECK(std::abs(first.depth) <= 1.0f);
+    CHECK(std::abs(second.depth) <= 1.0f);
+}
+
+TEST_CASE("The nav gizmo carves the light ring out of the orbit ball only when asked", "[graphics][gizmo]")
+{
+    NavGizmo gizmo;
+    gizmo.UpdateLayout(800, 600, 40, 40, 1.0f);
+    const auto geometry = gizmo.ComputeDraw(DirectX::XMQuaternionIdentity());
+    const float ring = geometry.outerRadius;
+    const float cx = geometry.centerX;
+    const float cy = geometry.centerY;
+    REQUIRE(ring > 0.0f);
+
+    // The white outline is the light-rotation target in Directional mode...
+    CHECK(gizmo.HitTest(DirectX::XMQuaternionIdentity(), cx + ring, cy, true) == NavGizmo::Part::Light);
+    // ...and not in the other modes, where the whole disc still orbits.
+    CHECK(gizmo.HitTest(DirectX::XMQuaternionIdentity(), cx + ring, cy, false) != NavGizmo::Part::Light);
+    // Well inside the disc stays the camera-orbit ball. (Off-axis so the
+    // sample does not land on a stem or an axis node.)
+    CHECK(gizmo.HitTest(DirectX::XMQuaternionIdentity(), cx + ring * 0.3f, cy + ring * 0.3f, true) == NavGizmo::Part::Ball);
+}
+
+TEST_CASE("Dragging the light ring recovers the angle the sun was drawn at", "[graphics][gizmo]")
+{
+    NavGizmo gizmo;
+    gizmo.UpdateLayout(800, 600, 40, 40, 1.0f);
+    const auto identity = DirectX::XMQuaternionIdentity();
+    const auto geometry = gizmo.ComputeDraw(identity);
+
+    for (const float expected : { 0.0f, 0.15f, 0.4f, 0.75f, 0.9f })
+    {
+        const auto sun = gizmo.ComputeSun(identity, expected);
+        REQUIRE(sun.visible);
+        float recovered = -1.0f;
+        REQUIRE(gizmo.LightAngleForPoint(identity, geometry.centerX + sun.x, geometry.centerY + sun.y,
+            expected, recovered));
+        // Dragging the sun itself must not jump the light to the far side.
+        const float gap = std::abs(std::remainder(recovered - expected, 1.0f));
+        CHECK(gap < 0.01f);
+    }
 }

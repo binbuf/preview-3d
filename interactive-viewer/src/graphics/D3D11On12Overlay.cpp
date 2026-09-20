@@ -696,7 +696,7 @@ void D3D11On12Overlay::DrawSpinner(D2D1_POINT_2F center, float animationPhase, f
     }
 }
 
-void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const NavGizmo& gizmo, float scale)
+void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const NavGizmo& gizmo, const OverlayInfo& overlay, float scale)
 {
     if (!gizmoFormat) return;
     const NavGizmo::DrawGeometry g = gizmo.ComputeDraw(XMLoadFloat4(&orientation));
@@ -707,12 +707,16 @@ void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const Nav
         D2D1::ColorF(0.24f, 0.57f, 1.00f, 1.0f) }; // Z blue
     const wchar_t axisLetters[3] = { L'X', L'Y', L'Z' };
 
-    // Ball: a quiet disc that brightens when the orbit-drag target.
+    // Ball: a quiet disc that brightens when the orbit-drag target. The white
+    // outer ring brightens independently when it is the light-rotation target.
     const bool ballHover = g.hover == NavGizmo::Part::Ball;
+    const bool lightHover = g.hover == NavGizmo::Part::Light;
     SetBrush(D2D1::ColorF(0x11141A, ballHover ? 0.32f : 0.16f));
     d2dContext_->FillEllipse(D2D1::Ellipse(center, g.outerRadius, g.outerRadius), overlayBrush.Get());
-    SetBrush(D2D1::ColorF(0xB9B9C2, ballHover ? 0.95f : 0.40f));
-    d2dContext_->DrawEllipse(D2D1::Ellipse(center, g.outerRadius, g.outerRadius), overlayBrush.Get(), Scale(1.1f, scale));
+    SetBrush(D2D1::ColorF(lightHover ? 0xFFFFFF : 0xB9B9C2,
+        lightHover ? 1.0f : (ballHover ? 0.95f : 0.40f)));
+    d2dContext_->DrawEllipse(D2D1::Ellipse(center, g.outerRadius, g.outerRadius), overlayBrush.Get(),
+        Scale(lightHover ? 2.0f : 1.1f, scale));
 
     // Stems, dimmed when their axis points away from the viewer.
     for (int axis = 0; axis < 3; ++axis)
@@ -772,6 +776,35 @@ void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const Nav
             d2dContext_->DrawTextW(letter.c_str(), static_cast<UINT32>(letter.size()), gizmoFormat.Get(),
                 D2D1::RectF(position.x - radius, position.y - radius, position.x + radius, position.y + radius),
                 overlayBrush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        }
+    }
+
+    // Directional-light sun marker: a small sun riding the white outer ring at
+    // the azimuth the key light comes from, dimmed when the light is behind
+    // the model relative to the camera.
+    if (overlay.lightingMode == LightingMode::Directional)
+    {
+        const NavGizmo::SunGeometry sun = gizmo.ComputeSun(XMLoadFloat4(&orientation), overlay.directionalLightAngle);
+        if (sun.visible)
+        {
+            const D2D1_POINT_2F position{ center.x + sun.x, center.y + sun.y };
+            const float alpha = sun.depth < 0.0f ? 0.42f : 1.0f;
+            const float core = Scale(3.0f, scale);
+            const float rayInner = Scale(4.5f, scale);
+            const float rayOuter = Scale(7.3f, scale);
+            const float sunStroke = Scale(1.5f, scale);
+            SetBrush(D2D1::ColorF(1.0f, 0.80f, 0.26f, alpha));
+            d2dContext_->DrawEllipse(D2D1::Ellipse(position, core, core), overlayBrush.Get(), sunStroke);
+            for (int ray = 0; ray < 8; ++ray)
+            {
+                const float angle = static_cast<float>(ray) * XM_PIDIV4;
+                const float ca = std::cos(angle);
+                const float sa = std::sin(angle);
+                d2dContext_->DrawLine(
+                    D2D1::Point2F(position.x + ca * rayInner, position.y + sa * rayInner),
+                    D2D1::Point2F(position.x + ca * rayOuter, position.y + sa * rayOuter),
+                    overlayBrush.Get(), sunStroke);
+            }
         }
     }
 }
@@ -843,17 +876,6 @@ void D3D11On12Overlay::DrawBottomBar(const OverlayInfo& overlay, float clientWid
         overlay.directionalButtonHover,overlay.directionalButtonPressed);
     drawModeButton(overlay.wireframeButtonRect,OverlayIconKind::Wireframe,overlay.lightingMode==LightingMode::Wireframe,
         overlay.wireframeButtonHover,overlay.wireframeButtonPressed);
-        if (overlay.lightingMode==LightingMode::Directional) {
-            const D2D1_RECT_F lightTrack=ToRectF(overlay.directionalTrackRect);
-            const float y=(lightTrack.top+lightTrack.bottom)*.5f;
-            SetBrush(D2D1::ColorF(0x57575D));
-            d2dContext_->DrawLine(D2D1::Point2F(lightTrack.left,y),D2D1::Point2F(lightTrack.right,y),overlayBrush.Get(),Scale(3,scale));
-            const float x=lightTrack.left+(lightTrack.right-lightTrack.left)*std::clamp(overlay.directionalLightAngle,0.0f,1.0f);
-            SetBrush(D2D1::ColorF(0xFFD60A));
-            d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x,y),Scale(6,scale),Scale(6,scale)),overlayBrush.Get());
-            SetBrush(D2D1::ColorF(0xFFFFFF));
-            d2dContext_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(x,y),Scale(6,scale),Scale(6,scale)),overlayBrush.Get(),1.0f);
-        }
     }
 
     const std::wstring percentText = std::to_wstring(static_cast<int>(std::lround(overlay.zoomPercent))) + L"%";
@@ -1342,7 +1364,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     // flyout (Speed, Settings), which floats above even that.
     if ((overlay.state == ViewerState::Ready || overlay.state == ViewerState::Partial) && overlay.hasModel)
     {
-        DrawGizmo(orientation, gizmo, scale);
+        DrawGizmo(orientation, gizmo, overlay, scale);
     }
     DrawSpeedFlyout(overlay, scale);
     DrawSettingsPanel(overlay, scale);

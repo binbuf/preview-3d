@@ -43,7 +43,10 @@ public:
         PosZ,
         NegX,
         NegY,
-        NegZ
+        NegZ,
+        // The outer light ring (Directional mode only). Kept after the axis
+        // parts so PartIndex's PosX-relative arithmetic is unaffected.
+        Light
     };
 
     struct NodeGeometry
@@ -66,6 +69,19 @@ public:
         Part hover = Part::None;
     };
 
+    // Screen-space placement of the directional-light sun marker. While the
+    // Directional lighting mode is active the renderer draws a small sun on
+    // the gizmo's outer ring here, showing the azimuth the key light comes
+    // from. `depth` is the view-space z of the light direction: positive
+    // means the light is on the viewer's side of the model.
+    struct SunGeometry
+    {
+        bool visible = false;
+        float x = 0.0f;      // screen-space offset from the gizmo center, pixels
+        float y = 0.0f;
+        float depth = 0.0f;
+    };
+
     // Repositions and resizes the gizmo for the current viewport. Coordinates
     // are client pixels; the top-right placement sits below the title bar and
     // clear of the bottom bar. `viewportWidth` is already narrowed by the
@@ -77,11 +93,42 @@ public:
     // six axis-node spheres and the center ball; the intersection nearest to
     // the viewer wins, which reproduces the occlusion the painter's-algorithm
     // drawing shows. Axis stems are tested as 2D segments as a fallback.
-    Part HitTest(DirectX::XMVECTOR cameraOrientation, float pointerX, float pointerY) const;
+    //
+    // `lightRing` is set by the caller while Directional lighting is active.
+    // It carves an annulus around the outer radius out of the ball as
+    // Part::Light (the drag target for rotating the light) so grabbing the
+    // white outline never starts a camera orbit; the inner disc stays Ball.
+    // When false the whole disc behaves exactly as before.
+    Part HitTest(DirectX::XMVECTOR cameraOrientation, float pointerX, float pointerY,
+        bool lightRing = false) const;
 
     // Projects the world axes through the inverse camera rotation into
     // gizmo-local screen space for this frame's drawing.
     DrawGeometry ComputeDraw(DirectX::XMVECTOR cameraOrientation) const;
+
+    // Places the directional-light sun marker on the outer ring for the
+    // current camera. `directionalLightAngle` is the app's normalized 0..1
+    // horizontal rotation; the resulting world direction matches the
+    // directional light in D3D12ViewerPath.cpp's shader. The direction is
+    // projected by azimuth only, so the sun stays on the ring even when the
+    // light points toward or away from the viewer (that case is reported
+    // through `depth` so the renderer can dim it).
+    SunGeometry ComputeSun(DirectX::XMVECTOR cameraOrientation, float directionalLightAngle) const;
+
+    // Inverts ComputeSun: given a pointer on the light ring, returns (via
+    // `angle`) the normalized 0..1 directional-light angle whose sun marker
+    // lands under that pointer, so dragging the ring makes the sun follow the
+    // cursor. `currentAngle` only breaks ties when the current view makes the
+    // light's projected path edge-on. Returns false when the pointer is at the
+    // ring's center or the mapping is otherwise undefined, in which case the
+    // caller should leave the light angle unchanged.
+    bool LightAngleForPoint(DirectX::XMVECTOR cameraOrientation, float pointerX, float pointerY,
+        float currentAngle, float& angle) const;
+
+    // The outer ring's client-pixel center and radius, so the light-angle
+    // accessibility fragment can anchor to the control the user sees rather
+    // than to the removed bottom-bar slider.
+    void RingBounds(float& centerX, float& centerY, float& radius) const;
 
     // The orthographic view the camera should animate to when `part` is used.
     ViewDir ViewFor(Part part) const;
@@ -97,4 +144,5 @@ private:
     float dot_ = 0.0f;
     float stemWidth_ = 0.0f;
     float hitSlop_ = 0.0f;
+    float ringBand_ = 0.0f;
 };

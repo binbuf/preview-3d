@@ -99,7 +99,6 @@ struct OverlayInfo
     RECT clayButtonRect{};
     RECT directionalButtonRect{};
     RECT wireframeButtonRect{};
-    RECT directionalTrackRect{};
     bool studioButtonHover = false;
     bool clayButtonHover = false;
     bool directionalButtonHover = false;
