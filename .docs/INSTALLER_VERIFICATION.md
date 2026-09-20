@@ -6,7 +6,7 @@ Installer: NSIS 3.11
 
 ## Implemented surface
 
-- Per-machine Windows 11 x64 install under `Program Files\Binbuf\3D Preview`.
+- Per-machine Windows 11 x64 install under `Program Files\Binbuf\Preview 3D`.
 - Allowlisted viewer, isolated worker, app-local CRT/dependencies, notices,
   licenses, SBOM, and per-file manifest. The thumbnail provider,
   compatibility host, tests, PDBs, and debug runtime are rejected from staging.

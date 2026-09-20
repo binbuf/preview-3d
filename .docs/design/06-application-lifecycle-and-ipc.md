@@ -51,7 +51,7 @@ The SID hash is a stable, non-secret SHA-256-derived short name component; autho
 
 The pipe server records the client's process ID with GetNamedPipeClientProcessId, then authenticates the connection by temporarily calling ImpersonateNamedPipeClient, reading the thread token's user SID and session, and immediately calling RevertToSelf. It accepts commands only from the expected SID/session. A failed verification closes the instance without parsing its payload.
 
-The mutex is acquired first. The primary creates the pipe before publishing a small Ready event with the same security scope. A secondary that sees the mutex waits up to one second for Ready and retries pipe connection with a bounded backoff. If the owner is alive but unresponsive, it shows “3D Preview is not responding” and exits; it does not silently create two normal primaries. If the mutex becomes abandoned, the new process recreates all IPC objects and becomes primary.
+The mutex is acquired first. The primary creates the pipe before publishing a small Ready event with the same security scope. A secondary that sees the mutex waits up to one second for Ready and retries pipe connection with a bounded backoff. If the owner is alive but unresponsive, it shows “Preview 3D is not responding” and exits; it does not silently create two normal primaries. If the mutex becomes abandoned, the new process recreates all IPC objects and becomes primary.
 
 ## Pipe protocol
 

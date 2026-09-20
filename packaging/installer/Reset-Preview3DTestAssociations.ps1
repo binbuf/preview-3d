@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
 $applicationExe = 'Preview3D.exe'
-$applicationName = '3D Preview'
+$applicationName = 'Preview 3D'
 $extensions = @('.glb', '.gltf', '.stl', '.ply', '.obj', '.fbx', '.3mf', '.usd', '.usda', '.usdc', '.usdz', '.step', '.stp')
 $progIds = @(
     'Binbuf.Preview3D.glTF.1',
@@ -142,4 +142,4 @@ if ($WhatIfPreference) {
     Write-Host 'Preview3D per-user association cleanup complete.'
 }
 Write-Host "Effective Applications command: $effectiveCommand"
-Write-Host 'Windows UserChoice values were preserved. Select 3D Preview in Default Apps after installing.'
+Write-Host 'Windows UserChoice values were preserved. Select Preview 3D in Default Apps after installing.'

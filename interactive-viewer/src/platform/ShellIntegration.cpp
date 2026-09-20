@@ -142,7 +142,7 @@ bool CachePath(std::wstring& path)
     }
     path = localAppData;
     CoTaskMemFree(localAppData);
-    path += L"\\Binbuf\\3D Preview";
+    path += L"\\Binbuf\\Preview 3D";
     CreateDirectoryW((path.substr(0, path.find_last_of(L'\\'))).c_str(), nullptr);
     CreateDirectoryW(path.c_str(), nullptr);
     path += L"\\";

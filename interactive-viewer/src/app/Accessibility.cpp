@@ -45,7 +45,7 @@ public:
     HRESULT STDMETHODCALLTYPE get_accName(VARIANT child, BSTR* name) override
     {
         if (!name) return E_POINTER; *name = nullptr;
-        const std::wstring value = IsSelf(child) ? L"3D Preview" : Info(child).name;
+        const std::wstring value = IsSelf(child) ? L"Preview 3D" : Info(child).name;
         if (value.empty()) return S_FALSE; *name = SysAllocString(value.c_str()); return *name ? S_OK : E_OUTOFMEMORY;
     }
     HRESULT STDMETHODCALLTYPE get_accValue(VARIANT child, BSTR* value) override
@@ -220,7 +220,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetPropertyValue(PROPERTYID id,VARIANT* value) override
     {
         if(!value)return E_POINTER;VariantInit(value);
-        if(id==UIA_NamePropertyId){value->vt=VT_BSTR;value->bstrVal=SysAllocString(L"3D Preview");}
+        if(id==UIA_NamePropertyId){value->vt=VT_BSTR;value->bstrVal=SysAllocString(L"Preview 3D");}
         else if(id==UIA_ControlTypePropertyId){value->vt=VT_I4;value->lVal=UIA_WindowControlTypeId;}
         else if(id==UIA_NativeWindowHandlePropertyId){value->vt=VT_I4;value->lVal=static_cast<LONG>(reinterpret_cast<LONG_PTR>(window));}
         else if(id==UIA_IsKeyboardFocusablePropertyId){value->vt=VT_BOOL;value->boolVal=VARIANT_TRUE;}

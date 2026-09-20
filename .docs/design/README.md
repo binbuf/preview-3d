@@ -1,10 +1,10 @@
-# 3D Preview native MVP design
+# Preview 3D native MVP design
 
 Status: implementation design baseline  
 Last reviewed: 2026-09-06  
 Source brief: [`.docs/Start.md`](../Start.md)
 
-This directory specifies a native Windows 11 MVP for **3D Preview**: Explorer thumbnails plus a fast, standalone Win32/C++ Direct3D 12 viewer. The viewer is intentionally not Flutter-based. Its loading system uses memory-mapped source files, bounded background parsing, progressive mesh chunks, a fenced upload ring on a D3D12 copy queue, video-memory-budget-aware detail residency, and a bounded persistent derived-data cache for fast repeat opens. Complex USD composition is handled by a lazily started, zero-capability AppContainer compatibility host so the main viewer remains lean and failure-isolated.
+This directory specifies a native Windows 11 MVP for **Preview 3D**: Explorer thumbnails plus a fast, standalone Win32/C++ Direct3D 12 viewer. The viewer is intentionally not Flutter-based. Its loading system uses memory-mapped source files, bounded background parsing, progressive mesh chunks, a fenced upload ring on a D3D12 copy queue, video-memory-budget-aware detail residency, and a bounded persistent derived-data cache for fast repeat opens. Complex USD composition is handled by a lazily started, zero-capability AppContainer compatibility host so the main viewer remains lean and failure-isolated.
 
 The supported input families are GLB/glTF, STL, PLY, OBJ with MTL, FBX, 3MF, USD/USDZ, and a bounded static STEP/STP subset through a dedicated OCCT host. Support means the static preview subset in `03-file-formats-and-ingestion.md`, not complete authoring-tool fidelity. The glTF subset includes Draco geometry and KTX2/Basis textures; the broader USD path uses OpenUSD only in the compatibility host; the STEP/STP subset is self-contained only, because external STEP documents are out of scope by recorded product decision (ADR-017), and the OCCT host is exposed through the viewer and package (STEP-007).
 

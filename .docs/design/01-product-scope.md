@@ -2,7 +2,7 @@
 
 ## Product statement
 
-3D Preview helps artists, 3D-printing users, and developers identify local model assets in Explorer and inspect one without opening a full DCC/CAD application. The product prioritizes immediate window/input response, progressive visual feedback, bounded memory, and safe failure over editing features or exact authoring-renderer parity.
+Preview 3D helps artists, 3D-printing users, and developers identify local model assets in Explorer and inspect one without opening a full DCC/CAD application. The product prioritizes immediate window/input response, progressive visual feedback, bounded memory, and safe failure over editing features or exact authoring-renderer parity.
 
 The two capabilities are:
 
@@ -41,7 +41,7 @@ Windows 10, ARM64/x86, Store/MSIX packaging, server/headless sessions, and UNC/d
 | FR-09 | A visible instance MUST accept a later supported activation and cancel/replace older work safely. When no instance is running, startup is cold and native; closing the window terminates the process. |
 | FR-10 | Loading failure MUST produce an actionable in-window error without hanging the message pump. A subsequent valid activation MUST recover without relaunch when the window remains open. |
 | FR-11 | The viewer MUST render static geometry with depth, generated or source normals, studio lighting, vertex color, and the documented material/texture subset. The glTF path MUST decode supported Draco meshes and KTX2/Basis textures. FBX MUST evaluate its documented static deformation pose. STL uses a neutral material. |
-| FR-12 | The installer MUST register 3D Preview as an available handler for every direct extension without overwriting the user's current default-app choices. |
+| FR-12 | The installer MUST register Preview 3D as an available handler for every direct extension without overwriting the user's current default-app choices. |
 | FR-13 | Install, repair, upgrade, and uninstall MUST leave Explorer and existing file associations usable and MUST not normally require a reboot. |
 | FR-14 | The viewer MUST maintain an optional, bounded per-user derived-data cache containing verified coarse proxies and reusable normalized resources. It MUST provide a keyboard-accessible Clear cached previews command and MUST behave correctly when the cache is absent, stale, corrupt, full, or disabled. |
 | FR-15 | USD files outside the TinyUSDZ fast subset MUST be retried through a lazily started native compatibility host using the same static-scene contract and local-resource policy. Host failure MUST become a recoverable document error and MUST not terminate or stall the viewer. |

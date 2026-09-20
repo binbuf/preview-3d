@@ -26,7 +26,7 @@ All chrome except three error-state buttons is drawn with Direct2D/DirectWrite o
 
 Left to right, present while a model is loaded: **Grid**, **Ground axis** (shows the effective X/Y/Z model-up axis and cycles Z → Y → X), **Ground direction** (flips whether the positive or negative side of that axis is up), **Snap** (axis snap for the truck/pan tool), **Speed** (opens the speed flyout), **Fit**, **Reset**, **Share**, and an overflow **"…"** button — each a 40-logical-pixel icon button (overflow 34px). Choosing a ground axis or direction maps that signed model axis to the viewer's fixed Z-up world, disables native-orientation display so the choice takes effect, immediately captures the resulting framing as Home/Reset, and persists the explicit choice. Automatic behavior before the first explicit choice remains source +Y-up for glTF and +Z-up for formats without declared axes. A draggable empty strip follows, then the centered filename, then another drag strip. On the right, **Open With** (72px, hidden with no model loaded or while fullscreen) precedes the system **Minimize / Maximize-Restore / Close** buttons (46px each), which remain visible even in fullscreen.
 
-The overflow menu is a native popup `HMENU` (the one non-D2D menu surface) containing, conditionally, "Model warnings…" and a separator, then "Controls", a separator, and "About 3D Preview". It does **not** contain cache commands — there is no derived-data cache in this slice — or a recent-files list.
+The overflow menu is a native popup `HMENU` (the one non-D2D menu surface) containing, conditionally, "Model warnings…" and a separator, then "Controls", a separator, and "About Preview 3D". It does **not** contain cache commands — there is no derived-data cache in this slice — or a recent-files list.
 
 ### Bottom bar (44 logical px)
 
@@ -120,7 +120,7 @@ Per-monitor-v2 DPI relayout remains active. Windows high-contrast changes remap 
 
 ## Settings and persistence
 
-Native-orientation display and an explicit model ground-axis and signed-direction choice persist in `%LOCALAPPDATA%\Binbuf\3D Preview\settings.json`; a missing, corrupt, or older settings file restores automatic axis selection and normalized orientation. Grid visibility, axis-snap state, and window placement (the latter tracked only in memory to support fullscreen restore) reset on the next run. No settings are written to the registry. AppContainer provisioning is separate, and no derived-data cache — the cache-enabled preference, `%LOCALAPPDATA%` cache directory, and Clear cached previews command described in [04-rendering-and-streaming.md](./04-rendering-and-streaming.md) are forward targets, not current behavior.
+Native-orientation display and an explicit model ground-axis and signed-direction choice persist in `%LOCALAPPDATA%\Binbuf\Preview 3D\settings.json`; a missing, corrupt, or older settings file restores automatic axis selection and normalized orientation. Grid visibility, axis-snap state, and window placement (the latter tracked only in memory to support fullscreen restore) reset on the next run. No settings are written to the registry. AppContainer provisioning is separate, and no derived-data cache — the cache-enabled preference, `%LOCALAPPDATA%` cache directory, and Clear cached previews command described in [04-rendering-and-streaming.md](./04-rendering-and-streaming.md) are forward targets, not current behavior.
 
 ## Shell integration
 
@@ -137,7 +137,7 @@ Two on-demand, title-bar-triggered integrations exist, both invoked by the user 
   vendor command lines. Discovery uses `SHAssocEnumHandlers` off the UI thread,
   adds newly found handlers no more than once every seven days, and caches only
   extension/handler/display/catalog metadata in
-  `%LOCALAPPDATA%\Binbuf\3D Preview\open-with-apps-v1.dat`—never model paths or
+  `%LOCALAPPDATA%\Binbuf\Preview 3D\open-with-apps-v1.dat`—never model paths or
   launch history. Selection queues registered-handler resolution and invocation
   on the discovery thread; failure removes the stale entry, notifies the UI, and
   requests an immediate background rescan. A session keeps a

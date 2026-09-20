@@ -1,4 +1,4 @@
-# 3D Preview: Scope-Limited MVP Task Manifest
+# Preview 3D: Scope-Limited MVP Task Manifest
 
 > Post-MVP delivery amendment (2026-09-16): the product owner approved ASCII
 > STL and ASCII PLY as the first two Tier B inputs. They ship through the same

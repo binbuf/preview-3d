@@ -25,6 +25,13 @@
              Targets="Build"
              Properties="Configuration=Release;Platform=x64;SolutionDir=$(RepositoryRoot)\"
              BuildInParallel="false" />
+    <!-- The dedicated STEP host owns its isolated OCCT manifest and is
+         deliberately not a project reference of the viewer, so it must be
+         built explicitly before the payload script stages its closed closure. -->
+    <MSBuild Projects="$(RepositoryRoot)\compatibility-host-step\Preview3DStepHost.vcxproj"
+             Targets="Build"
+             Properties="Configuration=Release;Platform=x64;SolutionDir=$(RepositoryRoot)\"
+             BuildInParallel="false" />
   </Target>
 
   <Target Name="CreatePortableRelease"

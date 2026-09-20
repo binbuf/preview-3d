@@ -23,7 +23,7 @@ bool SettingsDirectory(std::wstring& outDirectory)
     outDirectory = localAppData;
     CoTaskMemFree(localAppData);
     // Sibling of the future DerivedCache\v1 folder (04-rendering-and-streaming.md).
-    outDirectory += L"\\Binbuf\\3D Preview";
+    outDirectory += L"\\Binbuf\\Preview 3D";
     return true;
 }
 

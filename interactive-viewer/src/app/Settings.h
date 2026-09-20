@@ -2,7 +2,7 @@
 
 #include "GroundAxis.h"
 
-// Tiny persisted-preference store: %LOCALAPPDATA%\Binbuf\3D Preview\settings.json,
+// Tiny persisted-preference store: %LOCALAPPDATA%\Binbuf\Preview 3D\settings.json,
 // a sibling of (not inside) the future DerivedCache\v1 folder described in the
 // design docs' rendering/streaming spec. Every field is optional and defaulted:
 // a missing, corrupt, or unreadable file silently restores every default,

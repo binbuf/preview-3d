@@ -24,6 +24,12 @@
              Targets="Build"
              Properties="Configuration=Release;Platform=x64;SolutionDir=$(RepositoryRoot)\"
              BuildInParallel="false" />
+    <!-- The dedicated STEP host is not a viewer project reference; build it
+         explicitly so the installer payload includes its closed OCCT closure. -->
+    <MSBuild Projects="$(RepositoryRoot)\compatibility-host-step\Preview3DStepHost.vcxproj"
+             Targets="Build"
+             Properties="Configuration=Release;Platform=x64;SolutionDir=$(RepositoryRoot)\"
+             BuildInParallel="false" />
   </Target>
 
   <Target Name="CreateInstaller"

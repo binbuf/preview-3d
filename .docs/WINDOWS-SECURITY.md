@@ -1,6 +1,6 @@
 # Windows download and protection guidance
 
-3D Preview is distributed through this repository’s [GitHub Releases](https://github.com/binbuf/preview-3d/releases). Until code-signing and reputation work is complete, Windows may warn about a new or unsigned build. A warning does not establish that a file is unsafe, but it does mean you should verify it before running it.
+Preview 3D is distributed through this repository’s [GitHub Releases](https://github.com/binbuf/preview-3d/releases). Until code-signing and reputation work is complete, Windows may warn about a new or unsigned build. A warning does not establish that a file is unsafe, but it does mean you should verify it before running it.
 
 ## Verify the download first
 
@@ -39,7 +39,7 @@ If you have verified this release and still choose to run it, the available user
 3. Open **Smart App Control settings**.
 4. Set **Smart App Control** to **Off**.
 
-Turning off SAC lowers protection for all apps, not just 3D Preview. Do this only for a release you trust, and do not change it on a managed device without approval. On current Windows 11 releases, Microsoft says SAC can be re-enabled from Windows Security when it is available on the device.
+Turning off SAC lowers protection for all apps, not just Preview 3D. Do this only for a release you trust, and do not change it on a managed device without approval. On current Windows 11 releases, Microsoft says SAC can be re-enabled from Windows Security when it is available on the device.
 
 ## What we are doing
 

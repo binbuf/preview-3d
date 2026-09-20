@@ -16,7 +16,16 @@ jobs:
   release:
     name: Build, package, and release
     runs-on: windows-2025
-    timeout-minutes: 90
+    # The root manifest (OpenUSD) and the isolated STEP manifest (OCCT) both
+    # build from source on a cold runner; the binary cache below keeps repeat
+    # releases fast, but the first cold build needs more than the old 90 min.
+    timeout-minutes: 360
+
+    env:
+      # Persist vcpkg's compiled package archives across runs so a release does
+      # not rebuild OpenUSD/OCCT from source every time.
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\.vcpkg-binary-cache,readwrite'
 
     steps:
       - name: Check out source
@@ -24,6 +33,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'packaging/vcpkg-ports/**') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-
 
       - name: Validate release tag
         id: version
@@ -113,6 +130,9 @@ jobs:
             throw "vcpkg MSBuild integration failed with exit code $LASTEXITCODE."
           }
 
+          # Root manifest: the viewer/worker and the OpenUSD compatibility host.
+          # The default project layout resolves to
+          # vcpkg_installed\x64-windows\x64-windows, matching VcpkgInstalledDir.
           $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows'
           & $env:VCPKG_EXE install `
             --triplet x64-windows `
@@ -121,7 +141,24 @@ jobs:
             "--vcpkg-root=$env:VCPKG_ROOT" `
             --x-wait-for-lock
           if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg dependency restore failed with exit code $LASTEXITCODE."
+            throw "vcpkg root-manifest restore failed with exit code $LASTEXITCODE."
+          }
+
+          # Isolated STEP manifest: OCCT only. Preview3DStepHost sets
+          # VcpkgInstalledDir=compatibility-host-step\vcpkg_installed, so its
+          # triplet tree must land directly under that directory (single
+          # x64-windows segment), which is also where the packaging script reads
+          # the OCCT license and SPDX record from.
+          $stepManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'compatibility-host-step'
+          $stepInstallRoot = Join-Path $stepManifestRoot 'vcpkg_installed'
+          & $env:VCPKG_EXE install `
+            --triplet x64-windows `
+            "--x-manifest-root=$stepManifestRoot" `
+            "--x-install-root=$stepInstallRoot" `
+            "--vcpkg-root=$env:VCPKG_ROOT" `
+            --x-wait-for-lock
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg STEP-manifest restore failed with exit code $LASTEXITCODE."
           }
 
       - name: Import optional signing certificate
@@ -248,7 +285,7 @@ jobs:
               'release', 'create', $env:RELEASE_TAG,
               '--verify-tag',
               '--generate-notes',
-              '--title', "3D Preview $env:RELEASE_VERSION",
+              '--title', "Preview 3D $env:RELEASE_VERSION",
               '--repo', $env:GITHUB_REPOSITORY
             )
             if ($env:IS_PRERELEASE -eq 'true') {

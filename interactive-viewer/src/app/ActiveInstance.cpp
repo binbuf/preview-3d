@@ -462,12 +462,12 @@ bool Coordinator::Forward(const Command& command, std::wstring& error)
     if (role_ != Role::Secondary) { error = L"There is no existing viewer instance to activate."; return false; }
     HANDLE ready = OpenEventW(SYNCHRONIZE, FALSE, readyName_.c_str());
     if (!ready || WaitForSingleObject(ready, kActivationTimeoutMs) != WAIT_OBJECT_0) {
-        if (ready) CloseHandle(ready); error = L"3D Preview is not responding."; return false;
+        if (ready) CloseHandle(ready); error = L"Preview 3D is not responding."; return false;
     }
     CloseHandle(ready);
-    if (!WaitNamedPipeW(pipeName_.c_str(), kActivationTimeoutMs)) { error = L"3D Preview is not responding."; return false; }
+    if (!WaitNamedPipeW(pipeName_.c_str(), kActivationTimeoutMs)) { error = L"Preview 3D is not responding."; return false; }
     HANDLE pipe = CreateFileW(pipeName_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
-    if (pipe == INVALID_HANDLE_VALUE) { error = L"3D Preview could not accept the activation request."; return false; }
+    if (pipe == INVALID_HANDLE_VALUE) { error = L"Preview 3D could not accept the activation request."; return false; }
     DWORD mode = PIPE_READMODE_MESSAGE; SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
     std::vector<std::uint8_t> payload;
     if (!EncodePayload(command, payload, error)) { CloseHandle(pipe); return false; }
@@ -493,7 +493,7 @@ bool Coordinator::Forward(const Command& command, std::wstring& error)
             && body.find("\"accepted\":true") != std::string_view::npos;
     }
     if (!ok) {
-        error = L"3D Preview rejected the activation request.";
+        error = L"Preview 3D rejected the activation request.";
         if (!writeOk) error += L" (write)";
         else if (read < sizeof(FrameHeader)) error += L" (response)";
         if (read > sizeof(FrameHeader)) {

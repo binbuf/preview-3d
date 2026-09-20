@@ -541,7 +541,7 @@ void ShowControlsDialog(HWND owner)
     y = std::clamp(y, static_cast<int>(monitorInfo.rcWork.top),
         std::max(static_cast<int>(monitorInfo.rcWork.top), static_cast<int>(monitorInfo.rcWork.bottom) - height));
 
-    HWND dialog = CreateWindowExW(extendedStyle, kControlsWindowClass, L"3D Preview controls",
+    HWND dialog = CreateWindowExW(extendedStyle, kControlsWindowClass, L"Preview 3D controls",
         style, x, y, width, height, owner, nullptr, instance, &state);
     if (!dialog) return;
 

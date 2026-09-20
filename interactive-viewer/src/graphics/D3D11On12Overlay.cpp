@@ -1028,7 +1028,7 @@ void D3D11On12Overlay::DrawTitleBar(const OverlayInfo& overlay, const Chrome& ch
         d2dContext_->FillRectangle(D2D1::RectF(0, barHeight - 1, clientWidth, barHeight), overlayBrush.Get());
     }
 
-    const std::wstring filename = overlay.filename.empty() ? L"3D Preview" : overlay.filename;
+    const std::wstring filename = overlay.filename.empty() ? L"Preview 3D" : overlay.filename;
     DrawText(filename, filenameFormat.Get(), ToRectF(chrome.FilenameRect()), D2D1::ColorF(0xF5F5F7),
         DWRITE_TEXT_ALIGNMENT_CENTER);
 

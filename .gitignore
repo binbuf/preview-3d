@@ -20,6 +20,9 @@ x86/
 # vcpkg manifest-mode local package restore (see vcpkg.json)
 vcpkg_installed/
 
+# vcpkg binary cache used by the release workflow (see .github/workflows/release.yml)
+.vcpkg-binary-cache/
+
 # Test-fixture generator artifacts. interactive-viewer/tools/*.ps1 build these
 # standalone with cl.exe next to their own sources, outside MSBuild, so the
 # rules above (which key off x64/ and obj/) do not catch them. The .dll entry

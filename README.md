@@ -71,7 +71,7 @@ and use the ground direction button to make negative Z point up.
 2. For the portable ZIP, extract it and keep `worker`, `OpenUsdHost`, and `StepHost` beside `Preview3D.exe`.
 3. Open a model with `Ctrl+O`, drag a supported file onto the window, or run `Preview3D.exe <path-to-model>`.
 
-The installer adds 3D Preview to **Open with** and **Default apps** for the supported extensions. Windows keeps existing default-app choices; confirm any changes in Default apps after installation.
+The installer adds Preview 3D to **Open with** and **Default apps** for the supported extensions. Windows keeps existing default-app choices; confirm any changes in Default apps after installation.
 
 > [!IMPORTANT]
 > Windows may flag a new or unsigned release while code-signing and reputation work is in progress. Only download from this repository’s Releases page and verify the supplied SHA-256 checksum. See [Windows security help](.docs/WINDOWS-SECURITY.md) for safe, specific steps—including the difference between a file’s **Unblock** checkbox and Smart App Control.

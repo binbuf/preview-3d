@@ -10,15 +10,15 @@ design targets, not claims about the current NSIS installer.
 
 ## Package contract
 
-3D Preview ships as a signed, per-machine x64 MSI for Windows 11. The initial package identity is:
+Preview 3D ships as a signed, per-machine x64 MSI for Windows 11. The initial package identity is:
 
 | Field | Value |
 | --- | --- |
-| Product name | 3D Preview |
+| Product name | Preview 3D |
 | Manufacturer | Binbuf |
 | UpgradeCode | {DEA1E9AA-95AA-4722-ADD1-3D2ABCE22617} |
 | Install scope | perMachine, elevated |
-| Default directory | ProgramFiles64Folder\Binbuf\3D Preview |
+| Default directory | ProgramFiles64Folder\Binbuf\Preview 3D |
 | Platform | x64 only |
 | Reboot | Not required in normal install/upgrade/uninstall |
 
@@ -87,7 +87,7 @@ Each ProgID declares:
 
       "[INSTALLFOLDER]Preview3D.exe" --open "%1"
 
-- FriendlyAppName “3D Preview”.
+- FriendlyAppName “Preview 3D”.
 
 The MSI also adds each ProgID under the extension's OpenWithProgids and lists extensions under Applications\Preview3D.exe\SupportedTypes.
 
@@ -95,7 +95,7 @@ Capabilities are registered under:
 
     HKLM\Software\Binbuf\Preview3D\Capabilities
 
-with ApplicationName, ApplicationDescription, ApplicationIcon, and FileAssociations values. HKLM\Software\RegisteredApplications maps “3D Preview” to that capabilities path. App Paths registers Preview3D.exe for discovery without adding the install directory to PATH.
+with ApplicationName, ApplicationDescription, ApplicationIcon, and FileAssociations values. HKLM\Software\RegisteredApplications maps “Preview 3D” to that capabilities path. App Paths registers Preview3D.exe for discovery without adding the install directory to PATH.
 
 The registration is visible in Windows Settings > Apps > Default apps. Setup may offer a final-page button that opens the Windows Default Apps UI; it must not simulate user input or claim defaults were assigned.
 
@@ -104,7 +104,7 @@ The registration is visible in Windows Settings > Apps > Default apps. Setup may
 The CLSIDs and family mapping in [05-thumbnail-provider.md](./05-thumbnail-provider.md) are registered under the native 64-bit HKLM\Software\Classes\CLSID view:
 
     CLSID\{family-clsid}\
-      (Default) = "3D Preview <family> Thumbnail Provider"
+      (Default) = "Preview 3D <family> Thumbnail Provider"
       InprocServer32\
         (Default) = "[INSTALLFOLDER]Preview3DThumbnailProvider.dll"
         ThreadingModel = "Apartment"
@@ -164,9 +164,9 @@ Uninstall cancels if the user declines a Restart Manager close request for a run
 - only extension handler values still equal to this product's assigned CLSID;
 - ProgIDs, OpenWithProgids values, capabilities, RegisteredApplications, App Paths, and ARP entry owned by the package.
 
-It leaves source models, Windows thumbnail cache data, per-user derived-cache entries/preferences, user default choices pointing to other products, and unrelated keys intact. MSI does not traverse every user profile. The app's Clear cached previews command removes the current user's entries before uninstall, and support documentation identifies `%LOCALAPPDATA%\Binbuf\3D Preview` for manual post-uninstall removal. After removal MSI sends the same association notification. There is no service, task, tray startup item, firewall rule, or protocol handler to remove.
+It leaves source models, Windows thumbnail cache data, per-user derived-cache entries/preferences, user default choices pointing to other products, and unrelated keys intact. MSI does not traverse every user profile. The app's Clear cached previews command removes the current user's entries before uninstall, and support documentation identifies `%LOCALAPPDATA%\Binbuf\Preview 3D` for manual post-uninstall removal. After removal MSI sends the same association notification. There is no service, task, tray startup item, firewall rule, or protocol handler to remove.
 
-If a user had selected 3D Preview as default, Windows may show no current default after uninstall; setup must not select a replacement on the user's behalf.
+If a user had selected Preview 3D as default, Windows may show no current default after uninstall; setup must not select a replacement on the user's behalf.
 
 ## Signing and supply chain
 
@@ -188,7 +188,7 @@ Clean install, repair, same-version repair, major upgrade, blocked downgrade, un
 
 For each extension, tests verify:
 
-- 3D Preview appears in Open With and Default Apps;
+- Preview 3D appears in Open With and Default Apps;
 - existing user default remains unchanged;
 - command quoting preserves adversarial valid paths;
 - correct thumbnail CLSID is selected;
