@@ -26,6 +26,7 @@ Unicode true
 !define PROGID_FBX "Binbuf.Preview3D.FBX.1"
 !define PROGID_3MF "Binbuf.Preview3D.ThreeMF.1"
 !define PROGID_USD "Binbuf.Preview3D.USD.1"
+!define PROGID_STEP "Binbuf.Preview3D.STEP.1"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -155,9 +156,10 @@ Section "3D Preview" SEC_MAIN
   File /r "${STAGE_DIR}\licenses"
   File /r "${STAGE_DIR}\worker"
   File /r "${STAGE_DIR}\OpenUsdHost"
+  File /r "${STAGE_DIR}\StepHost"
 
   DetailPrint "Provisioning the isolated importer payload ACLs..."
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\Provision-Preview3DWorkerAcl.ps1" -WorkerDirectory "$INSTDIR\worker" -OpenUsdHostDirectory "$INSTDIR\OpenUsdHost"'
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\Provision-Preview3DWorkerAcl.ps1" -WorkerDirectory "$INSTDIR\worker" -OpenUsdHostDirectory "$INSTDIR\OpenUsdHost" -StepHostDirectory "$INSTDIR\StepHost"'
   Pop $0
   Pop $1
   ${If} $0 != 0
@@ -182,6 +184,7 @@ Section "3D Preview" SEC_MAIN
   !insertmacro RegisterProgId "${PROGID_FBX}" "3D model (FBX)"
   !insertmacro RegisterProgId "${PROGID_3MF}" "3D model (3MF)"
   !insertmacro RegisterProgId "${PROGID_USD}" "3D model (Universal Scene Description)"
+  !insertmacro RegisterProgId "${PROGID_STEP}" "3D model (STEP)"
 
   WriteRegStr HKLM "Software\Classes\Applications\${PRODUCT_EXE}" "FriendlyAppName" "${PRODUCT_NAME}"
   WriteRegStr HKLM "Software\Classes\Applications\${PRODUCT_EXE}" "ApplicationCompany" "${PRODUCT_PUBLISHER}"
@@ -202,6 +205,8 @@ Section "3D Preview" SEC_MAIN
   !insertmacro RegisterExtension ".usda" "${PROGID_USD}"
   !insertmacro RegisterExtension ".usdc" "${PROGID_USD}"
   !insertmacro RegisterExtension ".usdz" "${PROGID_USD}"
+  !insertmacro RegisterExtension ".step" "${PROGID_STEP}"
+  !insertmacro RegisterExtension ".stp" "${PROGID_STEP}"
   WriteRegStr HKLM "Software\RegisteredApplications" "${PRODUCT_NAME}" "${PRODUCT_KEY}\Capabilities"
 
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\App Paths\${PRODUCT_EXE}" "" "$INSTDIR\${PRODUCT_EXE}"
@@ -248,6 +253,8 @@ profile_cleanup_done:
   !insertmacro UnregisterExtension ".usda" "${PROGID_USD}"
   !insertmacro UnregisterExtension ".usdc" "${PROGID_USD}"
   !insertmacro UnregisterExtension ".usdz" "${PROGID_USD}"
+  !insertmacro UnregisterExtension ".step" "${PROGID_STEP}"
+  !insertmacro UnregisterExtension ".stp" "${PROGID_STEP}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_GLTF}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_STL}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_PLY}"
@@ -255,6 +262,7 @@ profile_cleanup_done:
   DeleteRegKey HKLM "Software\Classes\${PROGID_FBX}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_3MF}"
   DeleteRegKey HKLM "Software\Classes\${PROGID_USD}"
+  DeleteRegKey HKLM "Software\Classes\${PROGID_STEP}"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
   DeleteRegKey HKLM "${PRODUCT_KEY}"
   DeleteRegKey /IfEmpty HKLM "Software\Binbuf"
@@ -284,6 +292,7 @@ profile_cleanup_done:
   RMDir "$INSTDIR\worker"
 
   RMDir /r "$INSTDIR\OpenUsdHost"
+  RMDir /r "$INSTDIR\StepHost"
 
   Delete "$INSTDIR\licenses\basisu.txt"
   Delete "$INSTDIR\licenses\bzip2.txt"
@@ -294,6 +303,7 @@ profile_cleanup_done:
   Delete "$INSTDIR\licenses\libwebp.txt"
   Delete "$INSTDIR\licenses\libzip.txt"
   Delete "$INSTDIR\licenses\meshoptimizer.txt"
+  Delete "$INSTDIR\licenses\opencascade.txt"
   Delete "$INSTDIR\licenses\openusd.txt"
   Delete "$INSTDIR\licenses\simdjson.txt"
   Delete "$INSTDIR\licenses\tbb.txt"

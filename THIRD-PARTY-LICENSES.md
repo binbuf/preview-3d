@@ -29,6 +29,7 @@ The current package may include components from these projects:
 | bzip2 | BSD-style |
 | TinyUSDZ | Apache-2.0, with enabled vendored-code notices |
 | OpenUSD and oneTBB | Apache-2.0 |
+| Open CASCADE Technology (OCCT) | LGPL-2.1; see the release package's `licenses/opencascade.txt` |
 | zlib and Zstandard | zlib and BSD-3-Clause, respectively |
 
 This table is a navigation aid, not a replacement for the complete license

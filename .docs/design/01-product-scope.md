@@ -78,7 +78,7 @@ Performance values are controlled-hardware service objectives, not claims for ev
 | Pressure | medium asset while external apps reduce DXGI budget | variable | residency shedding/recovery |
 | Over-limit | exceeds a format hard limit | any | fast controlled rejection |
 
-Tier A is GLB, glTF with binary sidecars, binary STL, and supported binary PLY layouts: these have offset-oriented data suitable for mapped, chunked access. Tier B is ASCII STL/PLY, OBJ/MTL, FBX, 3MF, and USD-family data: they are supported within their lower limits, remain off the UI/render threads, and load progressively after their parser can emit normalized batches, but multi-gigabyte performance is not promised for them. OpenUSD-backed USD remains Tier B even though it runs out of process.
+Tier A is GLB, glTF with binary sidecars, binary STL, and supported binary PLY layouts: these have offset-oriented data suitable for mapped, chunked access. Tier B is ASCII STL/PLY, OBJ/MTL, FBX, 3MF, USD-family data, and the bounded static STEP/STP subset: they are supported within their lower limits, remain off the UI/render threads, and load progressively after their parser can emit normalized batches, but multi-gigabyte performance is not promised for them. OpenUSD-backed USD and STEP/STP remain Tier B even though they run out of process.
 
 ## Explicit exclusions
 
@@ -86,7 +86,7 @@ The MVP does not include:
 
 - editing, repair, slicing, export/conversion, measurement, annotation, picking, or selection;
 - animation playback, simulation, skeletal posing, morph controls, material variants UI, scene/camera/light selection;
-- CAD kernels or unlisted formats such as STEP, IGES, IFC, AMF, DAE, and native Blender files;
+- CAD kernels or unlisted formats such as IGES, IFC, AMF, DAE, and native Blender files. A bounded static STEP/STP preview subset through the dedicated OCCT host is designed separately and is not a general CAD kernel; it is self-contained only, because external STEP documents are out of scope by recorded product decision (see ADR-017);
 - ray tracing, mesh-shader-only rendering, GPU decompression, DirectStorage, virtual-texture reserved resources, or multi-GPU rendering;
 - perfect/full-resolution simultaneous residency for a scene larger than the safe GPU budget;
 - online/UNC resource resolution, recent-files history, crash upload, automatic update, localization, background daemon, tray icon, or start-at-login;

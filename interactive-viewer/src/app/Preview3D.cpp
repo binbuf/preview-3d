@@ -23,6 +23,7 @@
 #include <iomanip>
 #include <sstream>
 #include <bit>
+#include <atomic>
 #include <string_view>
 
 using Microsoft::WRL::ComPtr;
@@ -247,6 +248,12 @@ struct ViewerApp
     int lastToggleId = 0;
     double lastToggleSeconds = 0.0;
     std::uint64_t generation = 0;
+    // Last bounded STEP host phase/progress, written by the import thread and
+    // read by the UI thread to keep a long CAD load legible. Zero phase means
+    // no STEP progress has arrived (or the current open is not STEP).
+    std::atomic<std::uint32_t> stepProgressPhase{0};
+    std::atomic<std::uint32_t> stepProgressDone{0};
+    std::atomic<std::uint32_t> stepProgressTotal{0};
     std::shared_ptr<std::atomic_bool> cancellation;
     std::shared_ptr<std::atomic_bool> alive = std::make_shared<std::atomic_bool>(true);
     // Joinable background imports: cancellation is bounded by the broker's
@@ -1648,6 +1655,9 @@ void SyncDisplayedModel(ViewerApp& app)
         app.loadedModel = displayed->metadata;
         app.currentPath = displayed->path;
         app.warning = displayed->metadata->warning;
+        if (displayed->metadata->source.format == model_core::SourceFormatId::Step
+            && displayed->metadata->importStatus.optionalFeatureWarnings)
+            app.warning = L"Some STEP surfaces or assembly items could not be displayed.";
     }
 }
 
@@ -1719,7 +1729,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
         SetFailure(app, L"This model format is not supported.",
-            L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, or .usdz file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
+            L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, .usdz, .step, or .stp file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
         return;
     }
 
@@ -1728,6 +1738,9 @@ void BeginOpen(ViewerApp& app, std::wstring path)
     const HWND window = app.window;
 
     app.diagnosticPath = path;
+    app.stepProgressPhase.store(0, std::memory_order_relaxed);
+    app.stepProgressDone.store(0, std::memory_order_relaxed);
+    app.stepProgressTotal.store(0, std::memory_order_relaxed);
     app.state = ViewerState::Loading;
     app.renderStartedMicroseconds = NowMicroseconds();
     app.renderPresentationPending = false;
@@ -1757,8 +1770,17 @@ void BeginOpen(ViewerApp& app, std::wstring path)
     const bool delayBatches = app.renderThread.DelayBatches();
     const uint32_t faultForTesting = app.appSmoke ? app.faultForTesting : 0;
     auto detailSource = app.renderThread.DetailSource(generation);
-    auto cpuGuard = app.renderThread.CpuBudgetGuard();
-    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting]()
+    // The STEP host is a dedicated OCCT payload whose Job allows
+    // min(4 GiB, 35% of RAM); the general Tier-B scratch cap would reject a
+    // legitimate large transfer as a resource limit. The host Job remains the
+    // hard bound.
+    const uint64_t hostCommitCap = format == d3d12_import_bridge::SourceFormat::Step
+        ? import_broker::DedicatedHostCommitLimitBytes() : 0;
+    auto cpuGuard = app.renderThread.CpuBudgetGuard(hostCommitCap);
+    auto* stepPhase = &app.stepProgressPhase;
+    auto* stepDone = &app.stepProgressDone;
+    auto* stepTotal = &app.stepProgressTotal;
+    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting, stepPhase, stepDone, stepTotal]()
     {
         d3d12_import_bridge::ImportResult result;
         bool initialComplete = false;
@@ -1769,12 +1791,19 @@ void BeginOpen(ViewerApp& app, std::wstring path)
             auto* message = new (std::nothrow) D3D12CompleteMessage{generation,path,std::move(terminal)};
             if (message && !PostMessageW(window,kD3D12ImportCompleteMessage,0,reinterpret_cast<LPARAM>(message))) delete message;
         };
+        auto stepProgress = [stepPhase, stepDone, stepTotal](const model_core::StepProgressNotice& notice) {
+            // Publish the bounded phase/counts; the UI thread reads them to keep
+            // a long CAD parse/tessellation legible instead of an apparent hang.
+            stepTotal->store(notice.definitionTotal, std::memory_order_relaxed);
+            stepDone->store(notice.definitionsMeshed, std::memory_order_relaxed);
+            stepPhase->store(notice.phase, std::memory_order_relaxed);
+        };
         try
         {
             result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
             {
                 return cancellation->load(std::memory_order_relaxed);
-            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard);
+            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard, stepProgress);
         }
         catch (const std::length_error&)
         {
@@ -1817,7 +1846,7 @@ void OpenDialog(ViewerApp& app)
         return;
     }
     const COMDLG_FILTERSPEC filters[] = {
-        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx;*.3mf;*.usd;*.usda;*.usdc;*.usdz" },
+        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx;*.3mf;*.usd;*.usda;*.usdc;*.usdz;*.step;*.stp" },
         { L"glTF models (*.glb; *.gltf)", L"*.glb;*.gltf" },
         { L"STL (*.stl)", L"*.stl" },
         { L"PLY meshes and points (*.ply)", L"*.ply" },
@@ -1825,6 +1854,7 @@ void OpenDialog(ViewerApp& app)
         { L"Autodesk FBX (*.fbx)", L"*.fbx" },
         { L"3D Manufacturing Format (*.3mf)", L"*.3mf" },
         { L"Universal Scene Description (*.usd; *.usda; *.usdc; *.usdz)", L"*.usd;*.usda;*.usdc;*.usdz" },
+        { L"STEP CAD models (*.step; *.stp)", L"*.step;*.stp" },
         { L"All files (*.*)", L"*.*" }
     };
     dialog->SetFileTypes(ARRAYSIZE(filters), filters);
@@ -2400,6 +2430,25 @@ void FinishRenderTimerIfPresented(ViewerApp& app)
     app.renderPresentationPending = false;
 }
 
+// Bounded, product-owned description of the STEP host's current phase. Never
+// kernel text; counts are the host's N-of-M definition progress.
+std::wstring StepProgressText(std::uint32_t phase, std::uint32_t done, std::uint32_t total)
+{
+    switch (phase) {
+    case model_core::kStepPhasePreflight: return L" • checking STEP text";
+    case model_core::kStepPhaseRead: return L" • reading STEP entities";
+    case model_core::kStepPhaseTransfer: return L" • building CAD model";
+    case model_core::kStepPhasePlan: return L" • planning definitions";
+    case model_core::kStepPhaseMesh:
+        return total ? L" • tessellating " + std::to_wstring(done) + L" of " + std::to_wstring(total)
+                     : L" • tessellating shapes";
+    case model_core::kStepPhaseEmit:
+        return total ? L" • preparing geometry " + std::to_wstring(done) + L" of " + std::to_wstring(total)
+                     : L" • preparing geometry";
+    default: return {};
+    }
+}
+
 // Builds the UI snapshot for the render thread's Direct2D chrome pass.
 OverlayInfo BuildOverlayInfo(ViewerApp& app)
 {
@@ -2409,6 +2458,13 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     d3d12_import_bridge::ImportResult failure; failure.errorStage = app.errorStage; failure.errorPhase = app.errorPhase;
     overlay.failureContext = d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath) + L"  •  " + d3d12_import_bridge::FailurePhaseLabel(failure);
     overlay.loadingStatus = L"Loading " + d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath);
+    if (app.state == ViewerState::Loading) {
+        const auto stepPhase = app.stepProgressPhase.load(std::memory_order_relaxed);
+        if (stepPhase != 0)
+            overlay.loadingStatus += StepProgressText(stepPhase,
+                app.stepProgressDone.load(std::memory_order_relaxed),
+                app.stepProgressTotal.load(std::memory_order_relaxed));
+    }
     if (app.state == ViewerState::Partial) overlay.loadingStatus = L"Preview cancelled • incomplete geometry";
     if (app.loadedModel && app.loadedModel->source.generationId == app.generation) {
         const auto flags = app.loadedModel->importStatus.flags;
@@ -2581,7 +2637,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return LresultFromObject(IID_IAccessible, wParam, app->accessible);
         break;
     case WM_APP + 104:
-        if (!app->appSmoke || wParam > 83) return 0;
+        if (!app->appSmoke || wParam > 86) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -2672,6 +2728,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (wParam==63) { app->renderThread.SetSmokeUma(lParam!=0); return 1; }
         if (wParam==65) { app->renderThread.InjectDeviceRemovalForTesting(); return 1; }
         if (wParam==40) return static_cast<LRESULT>(app->warning.size());
+        // STEP-007 evidence: last bounded STEP host phase (closed kStepPhase*)
+        // and its N-of-M definition counts. Zero phase means no STEP event yet.
+        if (wParam == 84) return static_cast<LRESULT>(app->stepProgressPhase.load(std::memory_order_relaxed));
+        if (wParam == 85) return static_cast<LRESULT>(app->stepProgressDone.load(std::memory_order_relaxed));
+        if (wParam == 86) return static_cast<LRESULT>(app->stepProgressTotal.load(std::memory_order_relaxed));
         if (wParam >= 80 && wParam <= 83) {
             if (!app->loadedModel) return 0;
             const auto& stats = app->loadedModel->stats;

@@ -44,12 +44,25 @@ enum class ImportErrorCode : uint32_t {
     // Archive structure/expansion policy is terminal and must never be
     // mistaken for UnsupportedComposition by fallback orchestration.
     ArchiveLimit = 25,
+    // Dedicated STEP host failures stay distinct from general-worker and USD
+    // compatibility-host faults. The broker owns both mappings and never
+    // surfaces child-provided text; StepHostLimit is the bounded resource
+    // family and StepHostFailure covers launch, payload, crash, timeout,
+    // protocol, and CAD-kernel faults.
+    StepHostFailure = 26,
+    StepHostLimit = 27,
+    // The accepted STEP shape could not be turned into bounded, finite
+    // rendering geometry: meshing failed/timed out, the definition exceeded a
+    // CAD-specific face/edge/triangle budget, or extraction produced no
+    // credible triangles. This is distinct from a generic resource limit and
+    // from malformed Part-21 syntax.
+    TessellationFailed = 28,
 };
 
 constexpr bool IsKnownImportErrorCode(uint32_t code)
 {
     return code >= uint32_t(ImportErrorCode::MalformedData) &&
-           code <= uint32_t(ImportErrorCode::ArchiveLimit);
+           code <= uint32_t(ImportErrorCode::TessellationFailed);
 }
 
 } // namespace model_core

@@ -1,8 +1,14 @@
 # STEP/STP post-MVP work plan
 
-Status: proposal
+Status: STEP-003 complete — proceed to STEP-004 with the self-contained XDE scene adapter.
+The execution order from STEP-004 onward is superseded by [stp2.md](stp2.md); the
+external-document resolver described below is a recorded no-go (STEP-006 / ADR-017)
+and STEP/STP ships as the self-contained static preview subset only.
 Prepared: 2026-09-18
 Design authority: [design/README.md](design/README.md)
+Spike results: [STEP-001-SPIKE-RESULTS.md](STEP-001-SPIKE-RESULTS.md)
+STEP-002 evidence: [STEP-002-VERIFICATION.md](STEP-002-VERIFICATION.md)
+STEP-003 evidence: [STEP-003-VERIFICATION.md](STEP-003-VERIFICATION.md)
 
 ## Decision
 
@@ -372,6 +378,8 @@ claim, or a source-path exception reaches production.
 
 ## STEP-002 — host, Part-21 admission, and closed protocol route
 
+Status: complete (2026-09-19; private host route only, no extension enabled)
+
 ### Objective
 
 Create the production containment and dispatch boundary without enabling the
@@ -424,6 +432,8 @@ extension or claiming a CAD scene adapter.
   processes.
 
 ## STEP-003 — self-contained XDE assembly scene adapter
+
+Status: complete (2026-09-19; private host route only, no extension enabled)
 
 ### Objective
 

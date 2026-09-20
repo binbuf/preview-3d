@@ -75,6 +75,7 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> blendPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gridPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> coloredPointPipelineState;
