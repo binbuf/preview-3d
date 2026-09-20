@@ -7,6 +7,7 @@
   <Project Path="import-worker/Preview3DImportWorker.vcxproj" Id="499d3a16-e218-49e5-accd-caf92709f242" />
   <Project Path="compatibility-host/Preview3DImportHost.vcxproj" Id="87ceca17-a6bd-45fb-84a9-9a5e9f4a793c" />
   <Project Path="compatibility-host/Preview3DOpenUsdCore.vcxproj" Id="c1bf3f29-9e2b-4fd5-b45a-73f75d3c0120" />
+  <Project Path="compatibility-host-step/Preview3DStepHost.vcxproj" Id="b1bc51d2-d429-4f4b-91ed-91af1846bedb" />
   <Project Path="shared/model-core/ModelCore.vcxproj" Id="a1edc11c-012d-46db-ad8c-763723bfd340" />
   <Project Path="tests/unit/Tests.Unit.vcxproj" Id="286cbb0d-2cac-45fe-88bb-55383e3632d3" />
   <Project Path="tests/hostile-worker/Preview3DHostileWorker.vcxproj" Id="41213d60-a737-46f9-8251-2e54234ed2b1" />

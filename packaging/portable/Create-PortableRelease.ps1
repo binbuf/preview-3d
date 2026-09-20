@@ -158,6 +158,7 @@ $archive = Join-Path $artifacts "Preview3D-$Version-portable-x64.zip"
 $archiveChecksum = "$archive.sha256"
 $workerStage = Join-Path $stage 'worker'
 $openUsdHostStage = Join-Path $stage 'OpenUsdHost'
+$stepHostStage = Join-Path $stage 'StepHost'
 $licensesStage = Join-Path $stage 'licenses'
 
 Assert-ChildPath $repository $artifacts
@@ -167,6 +168,7 @@ if (Test-Path -LiteralPath $stage) {
 }
 New-Item -ItemType Directory -Path $workerStage -Force | Out-Null
 New-Item -ItemType Directory -Path $openUsdHostStage -Force | Out-Null
+New-Item -ItemType Directory -Path $stepHostStage -Force | Out-Null
 New-Item -ItemType Directory -Path $licensesStage -Force | Out-Null
 if ($Distribution -eq 'Portable' -and (Test-Path -LiteralPath $archive)) {
     Remove-Item -LiteralPath $archive -Force
@@ -226,11 +228,47 @@ foreach ($relativePath in $openUsdHostFiles) {
     Copy-RequiredFile (Join-Path $openUsdHostSource $relativePath) (Join-Path $openUsdHostStage $relativePath)
 }
 
+$stepHostSource = Join-Path $buildOutput 'StepHost'
+# Closed OCCT closure for the dedicated STEP host: only the modeling/data-
+# exchange/foundation toolkits the constrained port links, plus the host
+# executable. Visualization, Draw, DETools, and non-STEP exchange toolkits are
+# deliberately absent.
+$stepHostFiles = @(
+    'Preview3DStepHost.exe',
+    'TKBO.dll',
+    'TKBRep.dll',
+    'TKCAF.dll',
+    'TKCDF.dll',
+    'TKDE.dll',
+    'TKDESTEP.dll',
+    'TKernel.dll',
+    'TKG2d.dll',
+    'TKG3d.dll',
+    'TKGeomAlgo.dll',
+    'TKGeomBase.dll',
+    'TKHLR.dll',
+    'TKLCAF.dll',
+    'TKMath.dll',
+    'TKMesh.dll',
+    'TKPrim.dll',
+    'TKService.dll',
+    'TKShHealing.dll',
+    'TKTopAlgo.dll',
+    'TKV3d.dll',
+    'TKVCAF.dll',
+    'TKXCAF.dll',
+    'TKXSBase.dll'
+)
+foreach ($name in $stepHostFiles) {
+    Copy-RequiredFile (Join-Path $stepHostSource $name) (Join-Path $stepHostStage $name)
+}
+
 $visualStudioRoot = Find-VisualStudioInstallation
 $crtDirectory = Find-CrtDirectory $visualStudioRoot
 $viewerCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 $workerCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 $openUsdHostCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+$stepHostCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 foreach ($name in $viewerCrt) {
     Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $stage $name)
 }
@@ -240,12 +278,22 @@ foreach ($name in $workerCrt) {
 foreach ($name in $openUsdHostCrt) {
     Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $openUsdHostStage $name)
 }
+foreach ($name in $stepHostCrt) {
+    Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $stepHostStage $name)
+}
 
-$thirdParty = @('basisu', 'bzip2', 'draco', 'fastgltf', 'ktx', 'lib3mf', 'libwebp', 'libzip', 'meshoptimizer', 'openusd', 'simdjson', 'tbb', 'tinyusdz', 'ufbx', 'zlib', 'zstd')
+$thirdParty = @('basisu', 'bzip2', 'draco', 'fastgltf', 'ktx', 'lib3mf', 'libwebp', 'libzip', 'meshoptimizer', 'opencascade', 'openusd', 'simdjson', 'tbb', 'tinyusdz', 'ufbx', 'zlib', 'zstd')
 $vcpkgTripletRoot = Join-Path $repository 'vcpkg_installed\x64-windows\x64-windows'
 $vcpkgStatusPath = Join-Path $repository 'vcpkg_installed\x64-windows\vcpkg\status'
+# OCCT is deliberately installed only for the dedicated STEP host, so its
+# license and metadata come from that manifest's separate vcpkg tree.
+$stepVcpkgRoot = Join-Path $repository 'compatibility-host-step\vcpkg_installed\x64-windows'
 foreach ($name in $thirdParty) {
-    Copy-RequiredFile (Join-Path $vcpkgTripletRoot "share\$name\copyright") (Join-Path $licensesStage "$name.txt")
+    if ($name -eq 'opencascade') {
+        Copy-RequiredFile (Join-Path $stepVcpkgRoot 'share\opencascade\copyright') (Join-Path $licensesStage "$name.txt")
+    } else {
+        Copy-RequiredFile (Join-Path $vcpkgTripletRoot "share\$name\copyright") (Join-Path $licensesStage "$name.txt")
+    }
 }
 Copy-RequiredFile (Join-Path $repository 'LICENSE') (Join-Path $stage 'LICENSE')
 Copy-RequiredFile (Join-Path $repository 'NOTICE') (Join-Path $stage 'NOTICE')
@@ -280,7 +328,8 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
         (Join-Path $stage 'Preview3D.exe'),
         (Join-Path $workerStage 'Preview3DImportWorker.exe'),
         (Join-Path $openUsdHostStage 'Preview3DImportHost.exe'),
-        (Join-Path $openUsdHostStage 'Preview3DOpenUsdCore.dll')
+        (Join-Path $openUsdHostStage 'Preview3DOpenUsdCore.dll'),
+        (Join-Path $stepHostStage 'Preview3DStepHost.exe')
     )) {
         & $signTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $binary
         if ($LASTEXITCODE -ne 0) { throw "Signing failed for '$binary'." }
@@ -298,7 +347,7 @@ $systemDlls = @(
     'd3dcompiler_47.dll', 'dwrite.dll', 'dwmapi.dll', 'dxgi.dll', 'gdi32.dll',
     'kernel32.dll', 'ole32.dll', 'oleacc.dll', 'oleaut32.dll', 'runtimeobject.dll',
     'shell32.dll', 'shlwapi.dll', 'uiautomationcore.dll', 'user32.dll', 'userenv.dll',
-    'windowscodecs.dll', 'ws2_32.dll', 'xmllite.dll'
+    'windowscodecs.dll', 'winmm.dll', 'ws2_32.dll', 'wsock32.dll', 'xmllite.dll'
 )
 $peFiles = Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.Extension -in @('.exe', '.dll') }
 foreach ($pe in $peFiles) {
@@ -318,12 +367,26 @@ foreach ($pe in $peFiles) {
 
 $baseline = (Get-Content -LiteralPath (Join-Path $repository 'vcpkg-configuration.json') -Raw | ConvertFrom-Json).'default-registry'.baseline
 $status = Read-VcpkgStatus $vcpkgStatusPath
+# OCCT is absent from the root status because only the dedicated STEP host
+# manifest installs it; take its version/ABI from that tree's SPDX record.
+$stepSpdx = Get-Content -LiteralPath (Join-Path $stepVcpkgRoot 'share\opencascade\vcpkg.spdx.json') -Raw | ConvertFrom-Json
+$occtPackage = $stepSpdx.packages | Where-Object { $_.name -eq 'opencascade' } | Select-Object -First 1
+$occtAbiPackage = $stepSpdx.packages | Where-Object { $_.name -eq 'opencascade:x64-windows' } | Select-Object -First 1
+if ($null -eq $occtPackage) { throw 'The STEP-host OCCT SPDX record has no opencascade package.' }
 $components = @()
 foreach ($name in $thirdParty) {
-    if (-not $status.ContainsKey($name)) { throw "vcpkg status has no entry for '$name'." }
-    $entry = $status[$name]
-    $packageVersion = if ($entry.ContainsKey('Version')) { $entry.Version } elseif ($entry.ContainsKey('Version-Semver')) { $entry.'Version-Semver' } else { 'unknown' }
-    if ($entry.ContainsKey('Port-Version') -and $entry.'Port-Version' -ne '0') { $packageVersion = "$packageVersion#$($entry.'Port-Version')" }
+    $entry = $null
+    $abi = $null
+    if ($name -eq 'opencascade') {
+        $packageVersion = $occtPackage.versionInfo
+        if ($null -ne $occtAbiPackage) { $abi = $occtAbiPackage.versionInfo }
+    } else {
+        if (-not $status.ContainsKey($name)) { throw "vcpkg status has no entry for '$name'." }
+        $entry = $status[$name]
+        $packageVersion = if ($entry.ContainsKey('Version')) { $entry.Version } elseif ($entry.ContainsKey('Version-Semver')) { $entry.'Version-Semver' } else { 'unknown' }
+        if ($entry.ContainsKey('Port-Version') -and $entry.'Port-Version' -ne '0') { $packageVersion = "$packageVersion#$($entry.'Port-Version')" }
+        if ($entry.ContainsKey('Abi')) { $abi = $entry.Abi }
+    }
     $component = [ordered]@{
         type = 'library'
         name = $name
@@ -335,8 +398,8 @@ foreach ($name in $thirdParty) {
             @{ name = 'preview3d:architecture'; value = 'x64-windows' }
         )
     }
-    if ($entry.ContainsKey('Abi')) {
-        $component.properties += @{ name = 'preview3d:vcpkg-abi'; value = $entry.Abi }
+    if ($abi) {
+        $component.properties += @{ name = 'preview3d:vcpkg-abi'; value = $abi }
     }
     $components += $component
 }
@@ -386,6 +449,14 @@ $stagedOpenUsdHostPaths = @(Get-ChildItem -LiteralPath $openUsdHostStage -File -
 if (@($allowedOpenUsdHostPaths | Where-Object { $_ -notin $stagedOpenUsdHostPaths }).Count -ne 0 -or
     @($stagedOpenUsdHostPaths | Where-Object { $_ -notin $allowedOpenUsdHostPaths }).Count -ne 0) {
     throw 'The private OpenUsdHost payload does not match its closed release allowlist.'
+}
+$allowedStepHostPaths = @($stepHostFiles + $stepHostCrt | ForEach-Object { $_.Replace('\', '/').ToLowerInvariant() })
+$stagedStepHostPaths = @(Get-ChildItem -LiteralPath $stepHostStage -File -Recurse | ForEach-Object {
+    $_.FullName.Substring($stepHostStage.Length + 1).Replace('\', '/').ToLowerInvariant()
+})
+if (@($allowedStepHostPaths | Where-Object { $_ -notin $stagedStepHostPaths }).Count -ne 0 -or
+    @($stagedStepHostPaths | Where-Object { $_ -notin $allowedStepHostPaths }).Count -ne 0) {
+    throw 'The private StepHost payload does not match its closed release allowlist.'
 }
 $debugRuntimePattern = '^(?:msvcp140d(?:_atomic_wait|_codecvt_ids)?|msvcp140_[12]d|vcruntime140d|vcruntime140_1d|concrt140d|ucrtbased)\.dll$'
 if (Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.Name -match $debugRuntimePattern -or $_.Extension -in @('.pdb', '.lib') }) {

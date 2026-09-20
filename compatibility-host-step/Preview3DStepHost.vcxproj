@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{b1bc51d2-d429-4f4b-91ed-91af1846bedb}</ProjectGuid>
+    <RootNamespace>Preview3DStepHost</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg">
+    <!-- The dedicated STEP host owns the constrained OCCT closure. It is
+         deliberately isolated from the repository-root manifest so the
+         viewer, general worker, and thumbnail provider can never link or
+         deploy OCCT. STEP-001 already installed this closure; the manifest
+         install is disabled so an ordinary solution build never rebuilds a
+         multi-hour CAD kernel, and STEP-003 re-enables the repository
+         baseline pin when the toolchain matches. -->
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+    <VcpkgManifestRoot>$(MSBuildThisFileDirectory)</VcpkgManifestRoot>
+    <VcpkgManifestInstall>false</VcpkgManifestInstall>
+    <VcpkgInstalledDir>$(MSBuildThisFileDirectory)vcpkg_installed\</VcpkgInstalledDir>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup><OutDir>$(MSBuildThisFileDirectory)..\$(Platform)\$(Configuration)\StepHost\</OutDir><IntDir>$(MSBuildThisFileDirectory)obj\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir></PropertyGroup>
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\import-worker\src;src;$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>psapi.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\import-worker\src;src;$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>psapi.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\StepHostImport.cpp" />
+    <ClCompile Include="src\StepPart21Preflight.cpp" />
+    <ClCompile Include="src\StepXdeAdapter.cpp" />
+    <ClCompile Include="src\StepXdeSpike.cpp" />
+    <ClCompile Include="..\import-worker\src\ChunkBatchSink.cpp" />
+    <ClCompile Include="..\import-worker\src\ContainmentProbes.cpp" />
+    <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
+    <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\StepHostImport.h" />
+    <ClInclude Include="src\StepImporterVersion.h" />
+    <ClInclude Include="src\StepPart21Preflight.h" />
+    <ClInclude Include="src\StepSpikeProtocol.h" />
+    <ClInclude Include="src\StepTessellationProfile.h" />
+    <ClInclude Include="src\StepXdeAdapter.h" />
+    <ClInclude Include="src\StepXdeSpike.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\Checksum.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\ControlChannelIo.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\ControlProtocol.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\ImportError.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\MaterialPayload.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

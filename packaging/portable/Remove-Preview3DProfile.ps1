@@ -4,8 +4,8 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
-if (Get-Process -Name Preview3D, Preview3DImportWorker, Preview3DImportHost -ErrorAction SilentlyContinue) {
-    throw 'Close Preview3D and both import processes before cleanup.'
+if (Get-Process -Name Preview3D, Preview3DImportWorker, Preview3DImportHost, Preview3DStepHost -ErrorAction SilentlyContinue) {
+    throw 'Close Preview3D and all import processes before cleanup.'
 }
 
 $nativeSource = @'
@@ -52,7 +52,7 @@ function Get-ProfileSid([string]$ProfileName) {
 }
 
 function Remove-Profile([string]$ProfileName, $Identity) {
-    foreach ($directory in @((Join-Path $PSScriptRoot 'worker'), (Join-Path $PSScriptRoot 'OpenUsdHost'))) {
+    foreach ($directory in @((Join-Path $PSScriptRoot 'worker'), (Join-Path $PSScriptRoot 'OpenUsdHost'), (Join-Path $PSScriptRoot 'StepHost'))) {
         if (Test-Path -LiteralPath $directory -PathType Container) {
             $acl = Get-Acl -LiteralPath $directory
             $acl.PurgeAccessRules($Identity)
@@ -68,6 +68,8 @@ function Remove-Profile([string]$ProfileName, $Identity) {
 
 $workerSid = Get-ProfileSid 'Binbuf.Preview3D.ImportWorker'
 $hostSid = Get-ProfileSid 'Binbuf.Preview3D.ImportHost'
+$stepSid = Get-ProfileSid 'Binbuf.Preview3D.StepHost'
 Remove-Profile 'Binbuf.Preview3D.ImportWorker' $workerSid
 Remove-Profile 'Binbuf.Preview3D.ImportHost' $hostSid
-Write-Host 'Preview3D worker and OpenUSD-host AppContainer profile cleanup is complete.'
+Remove-Profile 'Binbuf.Preview3D.StepHost' $stepSid
+Write-Host 'Preview3D worker, OpenUSD-host, and STEP-host AppContainer profile cleanup is complete.'

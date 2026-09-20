@@ -56,6 +56,20 @@ enum class ControlOpcode : uint32_t {
     StartOpenUsdImportFromFile = 18, // broker -> compatibility host
     // Private 3MF route until 3MF-006 enables product discovery.
     StartThreeMfImportFromFile = 19, // host -> worker
+    // Dedicated STEP/STP route, accepted only by Preview3DStepHost.exe. The
+    // distinct opcode is the producer boundary: the general worker never
+    // accepts it, and the STEP host accepts nothing else. The trusted broker
+    // opens and canonicalizes the source, then duplicates a raw read-only FILE
+    // handle; the host never receives a path, directory, or URL.
+    StartStepImportFromFile = 20, // broker -> STEP host
+    // STEP-005 non-terminal phase/progress signal. Sent only by
+    // Preview3DStepHost.exe while a generation is in progress, zero or more
+    // times before the terminal ChunksReady/GenerationError reply. It carries
+    // only bounded product-owned facts (phase, N-of-M definitions, byte and
+    // millisecond counters), never raw kernel text, names, or paths. The
+    // broker records the last event and enforces a per-generation cap so a
+    // hostile host cannot flood the control channel.
+    StepProgress = 21, // STEP host -> broker, non-terminal
 };
 
 enum : uint32_t {
@@ -73,6 +87,11 @@ enum : uint32_t {
     kImportRequestUsdExpectedUsdz = 1u << 7,
     kImportRequestUsdExpectedMask = kImportRequestUsdExpectedUsda
         | kImportRequestUsdExpectedUsdc | kImportRequestUsdExpectedUsdz,
+    // STEP-005 test-only seam: forces the STEP host's mesher to serial
+    // (`IMeshTools_Parameters::InParallel = false`) so a test can prove the
+    // parallel and serial paths emit byte-identical normalized output. Product
+    // callers never set it.
+    kImportRequestStepForceSerialForTesting = 1u << 8,
 };
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
@@ -277,6 +296,53 @@ struct ParseThreeMfFileRequest {
 };
 static_assert(sizeof(ParseThreeMfFileRequest) == 48,
               "ParseThreeMfFileRequest layout changed");
+
+// Dedicated STEP host request. The fixed layout intentionally matches the
+// other file requests so pooled/one-shot handle transfer and hostile-host
+// framing stay common, but the distinct type/opcode is the producer
+// boundary. requestFlags is a closed kImportRequest* mask with no format bits
+// in STEP-002; STEP is admitted by bytes inside the host, never by extension.
+struct ParseStepFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue; // inherited raw FILE handle (read-only), numeric value
+    uint64_t sectionHandleValue;    // inherited OUTPUT-section HANDLE, numeric value
+    uint64_t sectionByteCapacity;   // output section capacity
+    uint32_t maxChunkCount;         // sanity cap on chunk count the host may emit
+    uint32_t requestFlags;          // closed kImportRequest* mask
+    uint64_t cancellationEventHandleValue; // duplicated manual-reset event
+};
+static_assert(sizeof(ParseStepFileRequest) == 48,
+              "ParseStepFileRequest layout changed");
+
+// Closed STEP phase identities for StepProgressNotice::phase. They name the
+// product's own pipeline stages, not OCCT internals, so the viewer can render
+// bounded provisional status while the host is CPU-bound.
+enum : uint32_t {
+    kStepPhasePreflight = 1, // lexical admission over the mapped source
+    kStepPhaseRead = 2,      // STEPCAFControl_Reader::ReadStream
+    kStepPhaseTransfer = 3,  // STEPCAFControl_Reader::Transfer (XDE build)
+    kStepPhasePlan = 4,      // mesh-free ScenePlanner traversal
+    kStepPhaseMesh = 5,      // per-definition BRepMesh_IncrementalMesh
+    kStepPhaseEmit = 6,      // window serialization / batch handoff
+};
+
+// One bounded STEP phase/progress event. `definitionsMeshed`/`definitionTotal`
+// are meaningful for kStepPhaseMesh (total is 0 until planning completes);
+// `preflightBytes` is the lexed source size once preflight has finished;
+// `phaseMilliseconds` is the elapsed time of the phase that just completed and
+// `totalMilliseconds` is the elapsed time since the import began. Every field
+// is a product-owned counter, never file-derived text.
+struct StepProgressNotice {
+    uint64_t generationId;
+    uint32_t phase;             // closed kStepPhase* value
+    uint32_t definitionsMeshed;
+    uint32_t definitionTotal;
+    uint32_t reserved0;         // zero
+    uint64_t preflightBytes;
+    uint64_t phaseMilliseconds;
+    uint64_t totalMilliseconds;
+};
+static_assert(sizeof(StepProgressNotice) == 48, "StepProgressNotice layout changed");
 
 struct GenerationErrorNotice {
     uint64_t generationId;

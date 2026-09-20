@@ -1,0 +1,19 @@
+{
+  "name": "opencascade",
+  "version": "7.8.1",
+  "port-version": 1,
+  "description": "Open CASCADE Technology (OCCT) constrained to the STEP/XDE/B-rep/meshing module closure used by Preview3DStepHost. Visualization, Draw, DETools, sample tools, Tcl, optional plug-in discovery, and non-STEP data-exchange toolkits are disabled. See .docs/STEP-001-SPIKE-RESULTS.md.",
+  "homepage": "https://github.com/Open-Cascade-SAS/OCCT",
+  "license": "LGPL-2.1-only",
+  "supports": "!xbox",
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

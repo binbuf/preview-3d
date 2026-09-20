@@ -67,8 +67,9 @@ void TransformGridBounds(const DirectX::XMFLOAT3& minimum, const DirectX::XMFLOA
 
 // Embedded HLSL, compiled at runtime via D3DCompile -- same convention
 // Renderer.cpp's D3D11 shader strings already use; no .hlsl files on disk.
-// The legacy shader remains for position-only geometry. Complete vertices
-// use the material shader below, while points use the splat shaders.
+// The compact shader handles position-only and position/normal STEP geometry;
+// complete vertices use the textured material shader below, while points use
+// the splat shaders.
 constexpr char kVertexShaderSource[] = R"(
 cbuffer FrameConstants : register(b0)
 {
@@ -113,6 +114,7 @@ PSInput VSMain(VSInput input)
 
 constexpr char kPixelShaderSource[] = R"(
 cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; float4 gViewport; float4 gLighting; };
+cbuffer MaterialConstants : register(b2) { float4 gBaseColorFactor; };
 struct PSInput
 {
     float4 position : SV_POSITION;
@@ -129,7 +131,7 @@ PixelOutput PSMain(PSInput input)
     }
     float3 n = normalize(input.normal);
     float3 albedo = gLighting.x>0.5f && gLighting.x<1.5f
-        ? float3(.58f,.58f,.58f) : float3(0.72f, 0.72f, 0.76f);
+        ? float3(.58f,.58f,.58f) : gBaseColorFactor.rgb;
     float3 color;
     if (gLighting.x > 1.5f) {
         float3 lightDir=normalize(float3(cos(gLighting.y),sin(gLighting.y),0.24f));
@@ -143,7 +145,9 @@ PixelOutput PSMain(PSInput input)
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
-    PixelOutput output; output.color = float4(saturate(color), 1.0f); output.pick = input.pickId; return output;
+    PixelOutput output; output.color = float4(saturate(color),
+        gLighting.x>0.5f && gLighting.x<1.5f ? 1.0f : gBaseColorFactor.a);
+    output.pick = input.pickId; return output;
 }
 )";
 
@@ -640,11 +644,17 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSigDesc{};
-    D3D12_ROOT_PARAMETER params[2] = {rootParam, {}};
+    D3D12_ROOT_PARAMETER params[3] = {rootParam, {}, {}};
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[1].Constants.ShaderRegister = 1; params[1].Constants.Num32BitValues = 33;
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-    rootSigDesc.NumParameters = 2;
+    // The compact STEP vertex format still carries an authored material per
+    // draw. Keep its color in root constants rather than expanding millions
+    // of vertices to the full textured layout.
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[2].Constants.ShaderRegister = 2; params[2].Constants.Num32BitValues = 4;
+    params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    rootSigDesc.NumParameters = 3;
     rootSigDesc.pParameters = params;
     rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
@@ -718,6 +728,20 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
 
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState)))) {
         error = L"The D3D12 pipeline state could not be created.";
+        return false;
+    }
+    auto blendPsoDesc = psoDesc;
+    auto& colorBlend = blendPsoDesc.BlendState.RenderTarget[0];
+    colorBlend.BlendEnable = TRUE;
+    colorBlend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    colorBlend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    colorBlend.BlendOp = D3D12_BLEND_OP_ADD;
+    colorBlend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    colorBlend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    colorBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    blendPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&blendPsoDesc, IID_PPV_ARGS(&blendPipelineState)))) {
+        error = L"The compact-material blend pipeline state could not be created.";
         return false;
     }
     auto wirePsoDesc = psoDesc;
@@ -1297,9 +1321,12 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
             commandList->SetPipelineState(mesh.points ? (mesh.completeVertex?coloredPointPipelineState.Get():pointPipelineState.Get())
-                : mesh.positionOnly ? positionOnlyPipelineState.Get() : pipelineState.Get());
+                : mesh.positionOnly ? positionOnlyPipelineState.Get()
+                : mesh.material.alphaMode == uint32_t(model_core::AlphaModeId::Blend)
+                    ? blendPipelineState.Get() : pipelineState.Get());
             commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
             commandList->SetGraphicsRoot32BitConstants(1, 33, &drawConstants, 0);
+            commandList->SetGraphicsRoot32BitConstants(2, 4, mesh.material.baseColorFactor, 0);
         }
         commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         commandList->IASetIndexBuffer(mesh.points ? nullptr : &mesh.ibv);

@@ -66,12 +66,25 @@ std::wstring ResolveCompatibilityHostExePath()
     return directory + L"\\OpenUsdHost\\Preview3DImportHost.exe";
 }
 
+std::wstring ResolveStepHostExePath()
+{
+    wchar_t modulePath[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
+    const std::wstring path(modulePath, length);
+    const auto lastSlash = path.find_last_of(L"\\/");
+    const std::wstring directory = (lastSlash == std::wstring::npos) ? L"." : path.substr(0, lastSlash);
+    // The dedicated OCCT STEP host and its signed payload closure live in
+    // their own sibling directory, separate from the viewer, the general
+    // worker, and the USD compatibility host.
+    return directory + L"\\StepHost\\Preview3DStepHost.exe";
+}
+
 void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary, std::wstring& details)
 {
     switch (code) {
     case model_core::ImportErrorCode::UnsupportedEncoding:
         summary = L"This encoding is not supported.";
-        details = L"Use a supported glTF, STL, PLY, OBJ, FBX, USDA, USDC, or USDZ encoding."; return;
+        details = L"Use a supported glTF, STL, PLY, OBJ, FBX, 3MF, USD, or clear-text STEP encoding."; return;
     case model_core::ImportErrorCode::WorkerCrashed:
         summary = L"The sandboxed importer stopped unexpectedly.";
         details = L"The worker exited before completing this model. Retry or open another model."; return;
@@ -87,6 +100,15 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
     case model_core::ImportErrorCode::CompatibilityHostLimit:
         summary = L"This USD stage is too large or complex to preview.";
         details = L"The compatibility host reached a bounded resource limit."; return;
+    case model_core::ImportErrorCode::StepHostFailure:
+        summary = L"The STEP importer stopped unexpectedly.";
+        details = L"The isolated STEP host could not complete this model."; return;
+    case model_core::ImportErrorCode::StepHostLimit:
+        summary = L"This STEP model is too large or complex to preview.";
+        details = L"The STEP host reached a bounded resource limit."; return;
+    case model_core::ImportErrorCode::TessellationFailed:
+        summary = L"This STEP model could not be tessellated.";
+        details = L"One or more shapes exceeded the supported CAD tessellation budget. Export a simpler solid or assembly."; return;
     case model_core::ImportErrorCode::ArchiveLimit:
         summary = L"This model archive is not supported.";
         details = L"The archive violates a path, structure, compression, or expansion limit."; return;
@@ -239,6 +261,8 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
         return import_broker::ImportFormat::ThreeMf;
     case SourceFormat::Usd:
         return import_broker::ImportFormat::Usd;
+    case SourceFormat::Step:
+        return import_broker::ImportFormat::Step;
     case SourceFormat::Glb:
     default:
         return import_broker::ImportFormat::Gltf;
@@ -265,6 +289,9 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
         session.errorCode == model_core::ImportErrorCode::OutOfMemory ||
         session.errorCode == model_core::ImportErrorCode::WorkerCrashed ||
         session.errorCode == model_core::ImportErrorCode::ResourceLimit ||
+        session.errorCode == model_core::ImportErrorCode::StepHostFailure ||
+        session.errorCode == model_core::ImportErrorCode::StepHostLimit ||
+        session.errorCode == model_core::ImportErrorCode::TessellationFailed ||
         (session.errorCode >= model_core::ImportErrorCode::PrimarySourceLimit &&
          session.errorCode <= model_core::ImportErrorCode::ArchiveLimit))
         DescribeImportError(session.errorCode, summary, details);
@@ -280,6 +307,7 @@ std::wstring SourceFormatLabel(const std::wstring& path)
     if (ext == L"obj") return L"OBJ";
     if (ext == L"fbx") return L"FBX";
     if (ext == L"3mf") return L"3MF";
+    if (ext == L"step" || ext == L"stp") return L"STEP";
     if (ext == L"usd" || ext == L"usda" || ext == L"usdc") return L"USD";
     if (ext == L"usdz") return L"USDZ";
     // Extension only, capped and restricted to printable alphanumerics.
@@ -340,6 +368,10 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     if (ext == L"obj") return SourceFormat::Obj;
     if (ext == L"fbx") return SourceFormat::Fbx;
     if (ext == L"3mf") return SourceFormat::ThreeMf;
+    // `.step`/`.stp` select the dedicated STEP host, but the extension alone
+    // never bypasses STEP-002 admission: StepPart21Preflight verifies the
+    // ISO 10303-21 byte envelope on the inherited handle before OCCT runs.
+    if (ext == L"step" || ext == L"stp") return SourceFormat::Step;
     if (ext == L"usd" || ext == L"usda" || ext == L"usdc" || ext == L"usdz")
         return SourceFormat::Usd;
     return std::nullopt;
@@ -353,7 +385,8 @@ void EnsureImportSandboxPrepared()
 ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t generationId,
                         std::function<bool()> isCancelled, std::function<void(ImportResult)> onBatch, uint64_t sectionBytes, bool delayBatchesForTesting, uint32_t faultForTesting,
                         std::function<uint32_t()> nextDetail,
-                        std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows)
+                        std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows,
+                        std::function<void(const model_core::StepProgressNotice&)> onStepProgress)
 {
     ImportResult result;
     // Startup normally prewarms this pool, but direct/retry callers must not
@@ -363,11 +396,11 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     import_broker::ImportSessionRequest sessionRequest;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
         && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd;
+        && format != SourceFormat::Usd && format != SourceFormat::Step;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
     if (!delayBatchesForTesting && !faultForTesting && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd) {
+        && format != SourceFormat::Usd && format != SourceFormat::Step) {
         sessionRequest.nextDetail = std::move(nextDetail);
         sessionRequest.onInitialComplete = std::move(onInitialComplete);
     }
@@ -375,6 +408,10 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.workerExePath = ResolveWorkerExePath();
     if (format == SourceFormat::Usd)
         sessionRequest.compatibilityHostExePath = ResolveCompatibilityHostExePath();
+    if (format == SourceFormat::Step) {
+        sessionRequest.stepHostExePath = ResolveStepHostExePath();
+        sessionRequest.onStepProgress = std::move(onStepProgress);
+    }
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
     sessionRequest.generationId = generationId;
@@ -396,6 +433,20 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     if (faultForTesting == 6) {
         sessionRequest.commitLimitBytes = 1ull * 1024 * 1024;
         sessionRequest.replyTimeoutMs = 500;
+    }
+    // The dedicated STEP host owns its own attack-mode flags; the general
+    // worker override above never reaches it.
+    if (format == SourceFormat::Step) {
+        if (faultForTesting == 1) sessionRequest.stepHostArgumentsOverride = L"--pool-crash";
+        if (faultForTesting == 2) {
+            sessionRequest.stepHostArgumentsOverride = L"--pool-hang";
+            sessionRequest.replyTimeoutMs = 500;
+        }
+        if (faultForTesting == 6) {
+            sessionRequest.stepHostArgumentsOverride = L"--pool-overallocate";
+            sessionRequest.stepHostCommitLimitBytes = 1ull * 1024 * 1024;
+            sessionRequest.replyTimeoutMs = 500;
+        }
     }
     import_broker::KnownChunkCatalog catalog;
     std::unordered_map<uint32_t, model_core::NodePayload> nodeCatalog;
@@ -557,6 +608,14 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.errorDetails = L"USD files are limited to the bounded Tier B primary-source size.";
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
                 result.errorDetails = L"USD parsing, composition, or normalization exceeded the bounded Tier B scratch budget.";
+            }
+        } else if (format == SourceFormat::Step) {
+            if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
+                result.errorDetails = L"Export a self-contained ISO 10303-21 STEP file. Required external STEP documents are not supported yet.";
+            } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
+                result.errorDetails = L"STEP files are limited to the bounded Tier B primary-source size.";
+            } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
+                result.errorDetails = L"STEP parsing or tessellation exceeded the bounded Tier B scratch budget.";
             }
         }
         return result;

@@ -282,6 +282,45 @@ Rejected for this scope: shipping the stub MSI/shell projects; granting the
 AppContainer the archive root or source tree; copying every DLL from the shared
 build output; packaging as an ordinary build side effect.
 
+## ADR-017 - STEP/STP is a bounded, self-contained static preview
+
+**Status:** Accepted for the STEP viewer slice (STEP-006).
+
+Decision: `.step`/`.stp` support is the **bounded static STEP preview subset**
+implemented by the dedicated, zero-capability `Preview3DStepHost.exe` over the
+pinned constrained OCCT 7.8.1 closure. It accepts clear-text ISO 10303-21
+AP203/AP214/AP242 product/assembly structure, B-rep geometry, supported AP242
+tessellated representations, occurrence transforms, representable
+colors/transparency, and a verified metre factor with `UpAxisId::Unknown`.
+Geometry is tessellated in the host under the versioned
+`StepTessellationProfile`; only normalized wire records reach the trusted
+viewer.
+
+The slice is **self-contained only**. External STEP documents are explicitly
+**out of scope**: STEP-001 established that OCCT's external-document resolver is
+path-based and protected with no stream/callback hook, so supporting them would
+require a new brokered-resolver design and product-owner approval. Any
+`FILE_POPULATION`/`DOCUMENT_FILE` declaration returns
+`UnsupportedRequiredFeature` from the product-owned `StepPart21Preflight` before
+OCCT sees it; the AppContainer/handle-only boundary is not weakened to gain it.
+`StepFuzz` fuzzes declaration discovery so the no-go cannot be bypassed into a
+filesystem or network access.
+
+Shape healing is **off**. STEP-006 compared no healing, a narrowly pinned
+`ShapeFix`/`XSAlgo` sequence, and broad automatic healing. Only no healing has a
+deterministic, producer-independent result: invalid geometry fails typed rather
+than being mutated. A future pinned-healing decision must bump the
+profile/importer version because output could change.
+
+Consequence: public text must call this the supported static STEP preview
+subset, not general STEP/CAD authoring support, and must state the
+external-reference exclusion, the Tier-B limits, and the lack of PMI/editing/
+Explorer thumbnails. IGES/IFC/JT/native CAD formats, a CAD tree/property
+browser, saved views, exact measurement, and export remain separate future
+plans. STEP-007 exposes the extension to the viewer, activation, and installer
+(`Binbuf.Preview3D.STEP.1` for `.step`/`.stp`); Explorer thumbnails remain
+STEP-009 and are deliberately not registered yet.
+
 ## TSK-209 compressed glTF dependency decisions
 
 TSK-209 completes the R-22 checklist for the two compressed glTF dependencies

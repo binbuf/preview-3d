@@ -1,0 +1,10 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('SOME_UNKNOWN_SCHEMA { 9 9 9999 9 9 9 9 }'));
+ENDSEC;
+DATA;
+#1=APPLICATION_CONTEXT('unknown schema, no visual geometry');
+ENDSEC;
+END-ISO-10303-21;

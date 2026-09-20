@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "corpus": "STEP-008",
+  "license": "Original Preview3D fixtures under repository license; generated with the pinned OCCT XDE writer (see ../stp-spike/GenerateStepFixtures.cpp)",
+  "sourceDirectory": "../stp-spike",
+  "notes": [
+    "The committed .stp files are the durable artifact: the XDE writer embeds a creation timestamp, so regenerating does not reproduce the committed bytes. Never regenerate golden output implicitly; verify.py only hashes and derives in memory.",
+    "Every committed fixture also has a named expected outcome in the STEP-006 interoperability matrix (.docs/STEP-006-INTEROP-MATRIX.md) and is exercised through the real AppContainer host by tests/import-isolation/StepInteropTests.cpp.",
+    "The derived adversarial cases are deterministic mutations of committed sources. verify.py recomputes them and checks the pinned SHA-256; tests/import-isolation/StepQualificationTests.cpp asserts the typed admission outcome for the same families without the OCCT kernel."
+  ],
+  "entries": [
+    {"path":"part_ap203.stp","sha256":"eb53a75d416826582ae497fa2ca5e0ac1dae14346d3d6a378afe4c023a82c13a","bytes":21168,"class":"valid-brep","provenance":"GenerateStepFixtures.cpp","expectation":"AP203 CONFIG_CONTROL_DESIGN analytic solid with through-hole, shape color, millimetre"},
+    {"path":"part_ap214.stp","sha256":"5a200f99284dbdd96471c4357b940cf7bc7bf69fd7985363b5d2ea3a498de338","bytes":19632,"class":"valid-brep","provenance":"GenerateStepFixtures.cpp","expectation":"AP214 AUTOMOTIVE_DESIGN analytic solid, shape color"},
+    {"path":"part_ap242.stp","sha256":"fc8e09cc6fd3a583808d75864821f0518fa2aee9c34025045efaa9a031bb5697","bytes":19664,"class":"valid-brep","provenance":"GenerateStepFixtures.cpp","expectation":"AP242 managed model based 3D engineering B-rep"},
+    {"path":"assembly_ap214.stp","sha256":"71ff7bc7cc514235e42f0619f9193ceba54306fff2eb2a2b7c8503f906b7e7eb","bytes":24428,"class":"valid-assembly","provenance":"GenerateStepFixtures.cpp","expectation":"shared box definition reused twice plus cylinder, translated occurrence, transparent color"},
+    {"path":"assembly_nested_ap214.stp","sha256":"24ee7d3f47c73e49c1ade45449f6cc9e8274b3980bd862ab9fc581cc73a590b5","bytes":26404,"class":"valid-assembly","provenance":"GenerateStepFixtures.cpp","expectation":"nested sub-assembly reused twice over shared box/cylinder definitions"},
+    {"path":"instance_color_ap214.stp","sha256":"7d7ec2b6da83832fc67851ab6083c61718832dfde8ce899b5b553a35d01a5079","bytes":19794,"class":"valid-assembly","provenance":"GenerateStepFixtures.cpp","expectation":"one definition placed three times; middle instance color overrides the definition color"},
+    {"path":"face_color_ap214.stp","sha256":"e79cadd677a9c2f1fceb7004b240937e91abbe16bdae643dae26028a33ff152d","bytes":17274,"class":"valid-brep","provenance":"GenerateStepFixtures.cpp","expectation":"per-face subshape colors with no shape-level color (material seam split)"},
+    {"path":"inch_part_ap214.stp","sha256":"24fd6bdc553ffcf5be0df036a7d963a7f81165d60749981be1c4bc98f3ff4210","bytes":19809,"class":"valid-brep","provenance":"GenerateStepFixtures.cpp","expectation":"CONVERSION_BASED_UNIT('INCH') authored length unit"},
+    {"path":"tessellated_ap242.stp","sha256":"27b80ae303917a45465c4cb0648ddcb6d0eb9b2e374afa9eaf7266f6b1ac7b2b","bytes":18018,"class":"valid-tessellated","provenance":"GenerateStepFixtures.cpp","expectation":"AP242 B-rep plus authored TESSELLATED_SHAPE_REPRESENTATION (write.step.tessellated=On)"},
+    {"path":"tessellated_only_ap242.stp","sha256":"4dd565e1135624c5bf8a85aac22eeefc0b17e80fece07ac2a46a41b34635f365","bytes":3614,"class":"valid-tessellated","provenance":"GenerateStepFixtures.cpp","expectation":"AP242 tessellated-only TRIANGULATED_SURFACE_SET with no B-rep fallback"},
+    {"path":"faceted_invalid_ap242.stp","sha256":"c43dcdd616d3693d1813e1e2e63be127506d6dfbf93bc1f15e4dc8e228f8439b","bytes":3616,"class":"malformed-faceted","provenance":"derived from tessellated_only_ap242.stp with two out-of-range triangle indices","expectation":"MalformedData from the OCCT transfer boundary"},
+    {"path":"no_geometry_ap242.stp","sha256":"d7551bd363a6a80987fa61f1a72ada8ee1914ab526892c113ace1e54895b3f23","bytes":1285,"class":"empty-geometry","provenance":"GenerateStepFixtures.cpp","expectation":"valid AP242 product metadata with no visual geometry; EmptyGeometry"},
+    {"path":"unsupported_schema.stp","sha256":"c9b137546cd0529b62826fd3dedf0deb0d565105b51440ee411aa6d12b5f503e","bytes":250,"class":"empty-geometry","provenance":"GenerateStepFixtures.cpp","expectation":"geometry-free unknown FILE_SCHEMA; schema is classification only; EmptyGeometry"},
+    {"path":"external_document_ap214.stp","sha256":"21b26806b662598c67b300bbb3ca6ae0c27482256a75c146c5af29f99170ffeb","bytes":322,"class":"unsupported-external","provenance":"GenerateStepFixtures.cpp","expectation":"FILE_POPULATION required external document; UnsupportedRequiredFeature before OCCT"},
+    {"path":"external_document_relative_ap214.stp","sha256":"7954fb073a9e735069db8f75eaf157b2a18f92c8325c1c46ba8c69808ce90081","bytes":287,"class":"unsupported-external","provenance":"GenerateStepFixtures.cpp","expectation":"relative DOCUMENT_FILE reference; UnsupportedRequiredFeature before OCCT"},
+    {"path":"external_document_absolute_ap214.stp","sha256":"fbbea3b9c79d84b4543601997c6a96ba574175afd342f459f6da50d538c24816","bytes":489,"class":"unsupported-external","provenance":"GenerateStepFixtures.cpp","expectation":"absolute/UNC/URL DOCUMENT_FILE references; UnsupportedRequiredFeature before OCCT"}
+  ],
+  "derived": [
+    {"path":"empty.stp","base":"part_ap214.stp","operation":"empty","sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","expectation":"NotPart21"},
+    {"path":"truncate-half.stp","base":"part_ap214.stp","operation":"truncate-half","sha256":"727d9c0bccfe99db7d473ba54f755fac48918bf25f59539b172796483db8dda7","expectation":"MalformedSyntax"},
+    {"path":"truncate-terminator.stp","base":"part_ap214.stp","operation":"truncate-terminator","sha256":"d6e06d190ecd1c273ed1b038c2a5d2da97f915a833122c88d39676590fe2af9a","expectation":"MalformedSyntax"},
+    {"path":"nul-append.stp","base":"part_ap214.stp","operation":"nul-append","sha256":"898ebf214d71f5d9a2d826e19efa648814d273094c8beb6adbc6cb430bc9f380","expectation":"UnsupportedEncoding"},
+    {"path":"utf16-bom.stp","base":"part_ap214.stp","operation":"utf16-bom","sha256":"3e3cc76f6eecc71fd19e8f7a39d76c8a29560ab8f51bdc7795b0b8f9dec747a9","expectation":"UnsupportedEncoding"},
+    {"path":"zip-signature.stp","base":"part_ap214.stp","operation":"zip-signature","sha256":"15a7b28156270be3cfa7f0811eb54cec7646ec2ce88f6bd5e0b69ccf968c5009","expectation":"UnsupportedEncoding"},
+    {"path":"not-part21.stp","base":"part_ap214.stp","operation":"not-part21","sha256":"6d41b98cb2cec8e529930cdf1ad1f69b9e63e686fce1b04daf0a2f5b64107922","expectation":"NotPart21"},
+    {"path":"external-file-population.stp","base":"part_ap214.stp","operation":"external-file-population","sha256":"095931ac565239291e4ec42c27dd01a28bb1ec3d0af11cbce13efee45bab43f2","expectation":"ExternalDocument"},
+    {"path":"external-document-relative.stp","base":"part_ap214.stp","operation":"external-document-relative","sha256":"d4ada67cbb07df33026ea22e9f5134874ba9863f787952324fecf232a82d18db","expectation":"ExternalDocument"},
+    {"path":"duplicate-entity.stp","base":"part_ap214.stp","operation":"duplicate-entity","sha256":"ca70748dc94ac6a01fb9b6f61216091e193cb59ebe994e725ddb86c6e3285d5d","expectation":"DuplicateEntity"},
+    {"path":"unterminated-string.stp","base":"part_ap214.stp","operation":"unterminated-string","sha256":"35e2ccbf701c7e0c377e01ef180e22a35bfbaed8dc14591607b65508c7538a3b","expectation":"MalformedSyntax"},
+    {"path":"unterminated-comment.stp","base":"part_ap214.stp","operation":"unterminated-comment","sha256":"241cf325d6f3dfdd8b7571ddd6cc5c1017c578c2cdc04588c3f82ffd9d4eff9a","expectation":"MalformedSyntax"}
+  ],
+  "manualCorpus": [
+    {"path":"test-models/Voron_2.4r2_Assembly.step","sha256":"06b372e40217caa1a7d1f516cb74887247f809e41e1e389f740f290e98441b55","bytes":241522213,"class":"valid-large-assembly","provenance":"Voron 2.4r2 assembly, Autodesk Translation Framework v12.9.0.99 / ST-DEVELOPER v20, 2023-09-03; AP214 AUTOMOTIVE_DESIGN plus INTEGRATED_CNC_SCHEMA; self-contained (no FILE_POPULATION/DOCUMENT_FILE)","redistribution":"Not redistributed: the file is untracked under the git-ignored test-models/ directory and is supplied locally. verify.py records its size and SHA-256 but does not require it to exist.","expectation":"genuine 100 MB+ assembly used for the STEP-005/STEP-008 time-to-first-coarse/Ready budget evidence"}
+  ]
+}

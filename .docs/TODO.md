@@ -373,6 +373,97 @@ OpenUSD, and lib3mf are pinned; USD-009 and 3MF-007 qualification remain open.
   - [x] USD-002 spike and USD-006 production platform/fallback lifecycle.
   - [x] USD-007 bounded OpenUSD composition/normalization and USD-008 exposure/packaging.
   - [ ] Finish the remaining USD-009 qualification gates listed under Slice 4.
+- [ ] **Slice 6** — STEP/STP static CAD preview through a dedicated OCCT AppContainer host.
+      The full plan, deliberate exclusions, and execution order live in [`stp.md`](stp.md).
+  - [x] STEP-001: OCCT 7.8.1 pinned, stream-only `STEPCAFControl_Reader::ReadStream`
+        over an inherited handle proven in the real zero-capability AppContainer,
+        XDE assembly/reuse/color/transparency/unit facts and bounded
+        `BRepMesh_IncrementalMesh` tessellation measured, malformed/cancellation/Job
+        recovery and path/network/child-process denial proven. A constrained
+        overlay port isolates OCCT from the viewer/worker closure. See
+        [`STEP-001-SPIKE-RESULTS.md`](STEP-001-SPIKE-RESULTS.md). Two findings:
+        authored units need explicit `FileUnits` handling, and OCCT external
+        references are path-based, so STEP-005 is a no-go without a scope change.
+  - [x] STEP-002: dedicated `Preview3DStepHost.exe` with the constrained OCCT
+        closure, zero-capability AppContainer identity `Binbuf.Preview3D.StepHost`,
+        kill-on-close Job Object, closed `SourceFormatId::Step` /
+        `ImportFormat::Step` / `StartStepImportFromFile` / `ParseStepFileRequest`
+        protocol route, full bounded `StepPart21Preflight` lexical admission
+        ahead of the reader, a bounded synthetic scene placeholder, and
+        malformed/cancellation/host-fault/replacement/containment tests. No
+        public picker/drag-drop/registration path recognizes STEP yet. See
+        [`STEP-002-VERIFICATION.md`](STEP-002-VERIFICATION.md).
+  - [x] STEP-003: `StepXdeAdapter` maps accepted self-contained STEP product
+        structure into the existing normalized node/reusable-geometry/
+        mesh-instance/material contract: recursive occurrence enumeration and
+        nested transforms, reusable definitions shared across instances,
+        deterministic bounded coarse `BRepMesh_IncrementalMesh` tessellation,
+        instance/shape/subshape color precedence with sRGB/opacity conversion
+        and seam splitting, verified positive metre factor with
+        `UpAxisId::Unknown`, cycle/depth/finite-transform validation, and
+        `NoSupportedGeometry`/`MalformedData`/`ResourceLimit` typing. Eight
+        immutable AP203/AP214/AP242 fixtures are checked in. See
+        [`STEP-003-VERIFICATION.md`](STEP-003-VERIFICATION.md).
+  - [x] STEP-004: bounded, deterministic per-definition B-rep tessellation
+        under the versioned `StepTessellationProfile` (v2) with cluster-local
+        float positions and double per-chunk origins, progressive multi-window
+        delivery through `ChunkBatchSink`/`ChunkBatchReady` so a scene larger
+        than the output window never needs to be held whole, authored
+        triangulation preferred over regeneration, per-definition
+        face/edge/triangle/time budgets, and a new typed
+        `ImportErrorCode::TessellationFailed` (28) with fixed viewer text.
+        `kStepImporterVersion` is folded into the profile version. The pinned
+        constrained port builds `USE_TBB=OFF`, so the profile records a truthful
+        serial meshing decision for STEP-005 to revisit. Coarse-catalog
+        replacement (stp2.md STEP-004 work item 3) remains open: the Tier-B
+        broker/bridge deliberately do not enable the coarse/detail protocol for
+        STEP, so the two-pass-versus-single-pass choice is STEP-005's.
+        See [`STEP-004-VERIFICATION.md`](STEP-004-VERIFICATION.md).
+  - [ ] STEP-005 render-time performance and first-frame latency. Implemented:
+        per-phase `StepPhaseTimings` evidence, the bounded `StepProgress`
+        control message (opcode 21) with broker cap/record, a single mapped
+        read for admission plus OCCT transfer, the corrected OCCT thread-pool
+        finding (`parallel = true`, profile v3) with a forced-serial
+        byte-identity test, and the versioned single-pass delivery-strategy
+        constant. Open: a genuine 100 MB+ assembly and high-triangle fixture,
+        the resulting Tier-B time-to-first-coarse/Ready budgets in
+        `design/09-quality-performance-and-security.md`, and thread-pool width
+        bounded by measured commit. Progress is now wired to the viewer
+        (STEP-007). See [`STEP-005-VERIFICATION.md`](STEP-005-VERIFICATION.md).
+  - [x] STEP-006: checked-in interoperability matrix (AP203/AP214/AP242
+        B-rep, AP242 tessellated B-rep+authored and tessellated-only, assembly/
+        reuse, colors, units, geometry-free, unknown schema, invalid faceted,
+        and external declarations), AP242 tessellated acceptance plus
+        geometry-free `EmptyGeometry` and kernel-exception `MalformedData`
+        classification, the explicit no-healing product decision, the recorded
+        external-document no-go in the support matrix/ADR-017/public
+        limitations, and a standalone `StepFuzz` admission/declaration target.
+        `[step-002]` through `[step-006]` pass 35 cases / 706 assertions in
+        Debug and Release. See
+        [`STEP-006-VERIFICATION.md`](STEP-006-VERIFICATION.md) and
+        [`STEP-006-INTEROP-MATRIX.md`](STEP-006-INTEROP-MATRIX.md).
+  - [x] STEP-007 product/packaging integration: `.step`/`.stp` are recognized
+        case-insensitively by command line, Open dialog, drag/drop, secondary
+        activation, Retry, supported-format errors, and the title-bar Open With
+        catalog; the D3D12 bridge routes STEP through the dedicated host and
+        presents format/phase-progress/dimensions/units/counts; the signed OCCT
+        StepHost payload, its closed dependency closure, ACL provisioning,
+        SBOM/notices, manifest hashes, and uninstall are staged for portable and
+        NSIS; and `Binbuf.Preview3D.STEP.1` registers `.step`/`.stp` without
+        touching the user's default. Thumbnails remain STEP-009. See
+        [`STEP-007-VERIFICATION.md`](STEP-007-VERIFICATION.md).
+  - [ ] STEP-008 qualification/hardening: implemented slice. A checked-in
+        corpus manifest with provenance/SHA-256 (`tests/fixtures/step/manifest.json`,
+        `verify.py`), a typed-outcome and cap-boundary oracle, STEP-008
+        `StepFuzz` seeds, and a published Tier-B STEP budget backed by a genuine
+        230 MiB / 4.06 M-triangle AP214 assembly (time-to-first-coarse 66 s,
+        Ready 95 s, 2.07 GiB peak host commit). Hardening fixed the emitter to
+        honor the broker's per-section `maxChunkCount`. Still open: static
+        analysis/license review, multi-run p95, the ~20 M-triangle fixture, an
+        instrumented OCCT-boundary fuzzer, the 8-hour soak, clean-VM lifecycle,
+        and signed-artifact/SBOM inspection. See
+        [`STEP-008-VERIFICATION.md`](STEP-008-VERIFICATION.md). STEP-009 stays
+        blocked on the Gate 6 provider foundation.
 
 Every slice carries the same bundle (`10-…:165`): adapter wrapper, dependency allocation/I/O/cancel
 callbacks and Job Object limits, normalized output, unsupported-feature diagnostics, golden scenes,

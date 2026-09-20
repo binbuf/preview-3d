@@ -45,6 +45,7 @@ namespace {
 // rest of the session.
 constexpr const wchar_t* kWorkerContainerName = L"Binbuf.Preview3D.ImportWorker";
 constexpr const wchar_t* kCompatibilityContainerName = L"Binbuf.Preview3D.ImportHost";
+constexpr const wchar_t* kStepContainerName = L"Binbuf.Preview3D.StepHost";
 
 std::wstring DirectoryOf(const std::wstring& filePath)
 {
@@ -103,6 +104,11 @@ const wchar_t* ParseFlagFor(ImportFormat format)
         return L"--parse-usd";
     case ImportFormat::ThreeMf:
         return L"--parse-3mf";
+    case ImportFormat::Step:
+        // Unreachable: STEP always runs in the pooled dedicated host, never
+        // the one-shot fast-worker path. Kept explicit so the closed format
+        // set is auditable next to its opcode/request mapping.
+        return L"--parse-step";
     case ImportFormat::Gltf:
     default:
         return L"--parse-gltf";
@@ -132,12 +138,28 @@ const WorkerContainer& AcquireCompatibilityContainer(const std::wstring& hostExe
 
 uint64_t CompatibilityCommitLimitBytes()
 {
-    MEMORYSTATUSEX memory{};
-    memory.dwLength = sizeof(memory);
-    const uint64_t fourGiB = 4ull * 1024ull * 1024ull * 1024ull;
-    if (!GlobalMemoryStatusEx(&memory)) return fourGiB;
-    const uint64_t thirtyFivePercent = memory.ullTotalPhys / 100ull * 35ull;
-    return (std::min)(fourGiB, thirtyFivePercent);
+    return DedicatedHostCommitLimitBytes();
+}
+
+// Dedicated STEP host identity. Like the USD compatibility host it is granted
+// read+execute on its own private payload directory only, so the general
+// worker and either compatibility payload never share an identity or an ACL.
+const WorkerContainer& AcquireStepContainer(const std::wstring& hostExePath)
+{
+    static WorkerContainer container = [&hostExePath] {
+        WorkerContainer created;
+        try {
+            created.sid = platform::AppContainerSid::CreateOrOpen(
+                kStepContainerName, L"Preview3D STEP Host",
+                L"Zero-capability sandbox identity for Preview3DStepHost.exe");
+        } catch (const std::exception&) {
+            return created;
+        }
+        if (!created.sid) return created;
+        created.ready = platform::GrantDirectoryReadExecute(DirectoryOf(hostExePath), created.sid.get());
+        return created;
+    }();
+    return container;
 }
 
 std::optional<uint32_t> UsdExpectedEncodingFlags(const std::wstring& path)
@@ -179,7 +201,9 @@ Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFile
         | (session.fbxTinyEvaluationLimitForTesting
             ? model_core::kImportRequestFbxTinyEvaluationLimitForTesting : 0)
         | (session.fbxTinyTextureLimitForTesting
-            ? model_core::kImportRequestFbxTinyTextureLimitForTesting : 0);
+            ? model_core::kImportRequestFbxTinyTextureLimitForTesting : 0)
+        | (session.stepForceSerialForTesting
+            ? model_core::kImportRequestStepForceSerialForTesting : 0);
     request.cancellationEventHandleValue = cancellationEventHandle;
     return request;
 }
@@ -244,6 +268,17 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
             controlInWrite, model_core::ControlOpcode::StartThreeMfImportFromFile,
             &request, sizeof(request));
     }
+    case ImportFormat::Step: {
+        // Only the dedicated STEP host may receive this opcode; the caller
+        // (RunImportSessionForProducer) has already enforced producer/format
+        // pairing. No expected-encoding bits exist: the host admits ISO
+        // 10303-21 by bytes, never by extension.
+        auto request = MakeFileRequest<model_core::ParseStepFileRequest>(
+            session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+        return model_core::WriteControlMessage(
+            controlInWrite, model_core::ControlOpcode::StartStepImportFromFile,
+            &request, sizeof(request));
+    }
     }
     return false;
 }
@@ -261,6 +296,7 @@ ImportSessionResult Fail(ImportStage stage, model_core::ImportErrorCode code = m
         case ImportStage::ReplyTimedOut: code = E::WorkerTimedOut; break;
         case ImportStage::SendRequest: case ImportStage::AwaitReply: case ImportStage::ChunkBatchAckFailed: code = E::WorkerCrashed; break;
         case ImportStage::SidecarRequestLimit: case ImportStage::ChunkBatchLimit: case ImportStage::ChunkCountLimit: code = E::ResourceLimit; break;
+        case ImportStage::StepProgressLimit: code = E::ResourceLimit; break;
         case ImportStage::UnexpectedReply: case ImportStage::ChunkBatchOutOfOrder: code = E::ImportProtocolViolation; break;
         case ImportStage::CreateOutputSection: case ImportStage::MapOutputSection: code = E::OutOfMemory; break;
         default: code = E::InternalImporterFailure; break;
@@ -330,7 +366,7 @@ struct BatchAcceptance {
     }
 };
 
-enum class ProcessIdentity { Worker, CompatibilityHost };
+enum class ProcessIdentity { Worker, CompatibilityHost, StepHost };
 
 class ProcessCoordinator {
 public:
@@ -386,8 +422,11 @@ public:
 
         auto candidate = std::make_unique<WorkerPool>();
         std::wstring error;
-        const auto& container = identity_ == ProcessIdentity::CompatibilityHost
-            ? AcquireCompatibilityContainer(exePath) : AcquireWorkerContainer(exePath);
+        const WorkerContainer& container = identity_ == ProcessIdentity::CompatibilityHost
+            ? AcquireCompatibilityContainer(exePath)
+            : identity_ == ProcessIdentity::StepHost
+                ? AcquireStepContainer(exePath)
+                : AcquireWorkerContainer(exePath);
         SandboxLimits limits{};
         limits.processMemoryLimitBytes = static_cast<SIZE_T>(commitLimitBytes);
         const bool ok = container.ready
@@ -498,7 +537,26 @@ ProcessCoordinator& CompatibilityCoordinator()
     return coordinator;
 }
 
+ProcessCoordinator& StepHostCoordinator()
+{
+    // OCCT global state and peak B-rep memory are discarded deterministically:
+    // one generation owns the host and it exits as soon as that generation
+    // finishes, exactly like the USD compatibility host.
+    static ProcessCoordinator coordinator(ProcessIdentity::StepHost, 1, true);
+    return coordinator;
+}
+
 } // namespace
+
+uint64_t DedicatedHostCommitLimitBytes()
+{
+    MEMORYSTATUSEX memory{};
+    memory.dwLength = sizeof(memory);
+    const uint64_t fourGiB = 4ull * 1024ull * 1024ull * 1024ull;
+    if (!GlobalMemoryStatusEx(&memory)) return fourGiB;
+    const uint64_t thirtyFivePercent = memory.ullTotalPhys / 100ull * 35ull;
+    return (std::min)(fourGiB, thirtyFivePercent);
+}
 
 bool PrepareImportSandbox(const std::wstring& workerExePath)
 {
@@ -523,7 +581,15 @@ void ShutdownCompatibilityHost()
 ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& request,
                                                 ImportProducer producer)
 {
+    // Producer/format pairing is a closed contract: the USD compatibility host
+    // only ever serves USD and the dedicated STEP host only ever serves STEP.
+    // A mismatch is a protocol violation, never a reason to fall through to
+    // the general worker.
     if (producer == ImportProducer::CompatibilityHost && request.format != ImportFormat::Usd)
+        return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
+    if (producer == ImportProducer::StepHost && request.format != ImportFormat::Step)
+        return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
+    if (producer == ImportProducer::FastWorker && request.format == ImportFormat::Step)
         return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
     // Cheapest possible cancellation: a generation already superseded before
     // it started launches no worker and touches no file at all.
@@ -564,10 +630,14 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     }
 
     const bool compatibility = producer == ImportProducer::CompatibilityHost;
+    const bool stepHost = producer == ImportProducer::StepHost;
+    const bool hostRoute = compatibility || stepHost;
     const std::wstring& childExePath = compatibility
-        ? request.compatibilityHostExePath : request.workerExePath;
+        ? request.compatibilityHostExePath
+        : stepHost ? request.stepHostExePath : request.workerExePath;
     const WorkerContainer& container = compatibility
-        ? AcquireCompatibilityContainer(childExePath) : AcquireWorkerContainer(childExePath);
+        ? AcquireCompatibilityContainer(childExePath)
+        : stepHost ? AcquireStepContainer(childExePath) : AcquireWorkerContainer(childExePath);
     if (!container.ready) {
         return Fail(ImportStage::CreateSandboxProfile);
     }
@@ -582,31 +652,39 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     HANDLE workerProcess = nullptr, workerJob = nullptr, controlInput = nullptr, controlOutput = nullptr;
     uint64_t workerSource = 0, workerOutput = 0, workerCancellation = 0;
 
-    if (compatibility || (request.useWorkerPool && request.workerArgumentsOverride.empty())) {
+    if (hostRoute || (request.useWorkerPool && request.workerArgumentsOverride.empty())) {
         ProcessCoordinator& coordinator = compatibility
-            ? CompatibilityCoordinator() : WorkerCoordinator();
-        if (compatibility) {
-            const uint64_t limit = request.compatibilityHostCommitLimitBytes != 0
+            ? CompatibilityCoordinator() : stepHost ? StepHostCoordinator() : WorkerCoordinator();
+        const auto hostLimit = [&] {
+            if (stepHost) {
+                return request.stepHostCommitLimitBytes != 0
+                    ? request.stepHostCommitLimitBytes : CompatibilityCommitLimitBytes();
+            }
+            return request.compatibilityHostCommitLimitBytes != 0
                 ? request.compatibilityHostCommitLimitBytes : CompatibilityCommitLimitBytes();
-            const std::wstring hostArguments = request.compatibilityHostArgumentsOverride.empty()
+        };
+        const auto hostArguments = [&]() -> std::wstring {
+            if (stepHost) {
+                return request.stepHostArgumentsOverride.empty()
+                    ? L"--pool" : request.stepHostArgumentsOverride;
+            }
+            return request.compatibilityHostArgumentsOverride.empty()
                 ? L"--pool" : request.compatibilityHostArgumentsOverride;
-            if (!coordinator.PrepareNow(childExePath, limit, hostArguments,
+        };
+        if (hostRoute) {
+            if (!coordinator.PrepareNow(childExePath, hostLimit(), hostArguments(),
                                         request.isCancelled))
                 return Fail(request.isCancelled && request.isCancelled() ? ImportStage::Cancelled
                                                                           : ImportStage::LaunchWorker);
         }
         pooledLease = coordinator.Acquire(request.isCancelled);
-        // A replacement generation may have waited behind the previous
-        // compatibility lease. That lease intentionally tears its host down
-        // on release, so prepare/acquire once more rather than treating the
-        // bounded-idle exit as a launch failure for the newer generation.
-        if (!pooledLease && compatibility
+        // A replacement generation may have waited behind the previous host
+        // lease. That lease intentionally tears its host down on release, so
+        // prepare/acquire once more rather than treating the bounded-idle exit
+        // as a launch failure for the newer generation.
+        if (!pooledLease && hostRoute
             && !(request.isCancelled && request.isCancelled())) {
-            const uint64_t limit = request.compatibilityHostCommitLimitBytes != 0
-                ? request.compatibilityHostCommitLimitBytes : CompatibilityCommitLimitBytes();
-            const std::wstring hostArguments = request.compatibilityHostArgumentsOverride.empty()
-                ? L"--pool" : request.compatibilityHostArgumentsOverride;
-            if (coordinator.PrepareNow(childExePath, limit, hostArguments,
+            if (coordinator.PrepareNow(childExePath, hostLimit(), hostArguments(),
                                        request.isCancelled))
                 pooledLease = coordinator.Acquire(request.isCancelled);
         }
@@ -700,6 +778,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         return cancelled;
     };
     uint32_t sidecarRequestCount = 0;
+    uint32_t stepProgressCount = 0;
+    model_core::StepProgressNotice lastStepProgress{};
     BatchAcceptance acceptance;
     std::vector<ValidatedChunk> accumulated;
     std::optional<ImportSessionResult> failure;
@@ -787,6 +867,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                 ? chunk.scene.format == model_core::SourceFormatId::Fbx
                                 : request.format == ImportFormat::ThreeMf
                                     ? chunk.scene.format == model_core::SourceFormatId::ThreeMf
+                                : request.format == ImportFormat::Step
+                                    ? chunk.scene.format == model_core::SourceFormatId::Step
                                 : (chunk.scene.format == model_core::SourceFormatId::Usda
                                    || chunk.scene.format == model_core::SourceFormatId::Usdc
                                    || chunk.scene.format == model_core::SourceFormatId::Usdz);
@@ -808,7 +890,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 || acceptance.scene->format == model_core::SourceFormatId::Usda
                 || acceptance.scene->format == model_core::SourceFormatId::Usdc
                 || acceptance.scene->format == model_core::SourceFormatId::Usdz
-                || acceptance.scene->format == model_core::SourceFormatId::ThreeMf);
+                || acceptance.scene->format == model_core::SourceFormatId::ThreeMf
+                || acceptance.scene->format == model_core::SourceFormatId::Step);
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -1142,6 +1225,34 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             continue;
         }
 
+        if (opcode == model_core::ControlOpcode::StepProgress
+            && received.payload.size() == sizeof(model_core::StepProgressNotice)) {
+            // STEP-005: only the dedicated STEP host may publish progress. Any
+            // other producer sending it is a protocol violation, not a
+            // tolerated extra.
+            if (!stepHost) {
+                failure = Fail(ImportStage::UnexpectedReply, model_core::ImportErrorCode::ImportProtocolViolation);
+                break;
+            }
+            model_core::StepProgressNotice notice{};
+            std::memcpy(&notice, received.payload.data(), sizeof(notice));
+            const bool knownPhase = notice.phase >= model_core::kStepPhasePreflight
+                && notice.phase <= model_core::kStepPhaseEmit;
+            if (notice.generationId != request.generationId || !knownPhase || notice.reserved0
+                || notice.definitionsMeshed > notice.definitionTotal) {
+                failure = Fail(ImportStage::UnexpectedReply, model_core::ImportErrorCode::ImportProtocolViolation);
+                break;
+            }
+            if (++stepProgressCount > request.maxStepProgressPerGeneration) {
+                failure = Fail(ImportStage::StepProgressLimit, model_core::ImportErrorCode::ResourceLimit);
+                break;
+            }
+            lastStepProgress = notice;
+            if (request.onStepProgress) request.onStepProgress(notice);
+            outcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
+            continue;
+        }
+
         break; // terminal reply, or something this loop does not service
     }
 
@@ -1161,6 +1272,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         ImportSessionResult result = Fail(stage, code);
         result.batchCount = acceptance.nextBatchIndex;
         result.workerProcessId = GetProcessId(workerProcess);
+        result.stepProgressCount = stepProgressCount;
+        result.lastStepProgress = lastStepProgress;
         return result;
     };
 
@@ -1181,6 +1294,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     if (failure) {
         failure->batchCount = acceptance.nextBatchIndex;
         failure->workerProcessId = GetProcessId(workerProcess);
+        failure->stepProgressCount = stepProgressCount;
+        failure->lastStepProgress = lastStepProgress;
         if (failure->stage == ImportStage::Cancelled) acknowledgeCancellation();
         return *failure;
     }
@@ -1215,12 +1330,13 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 || exitCode == 0xC000012Du // STATUS_COMMITMENT_LIMIT
                 || exitCode == 0xC00000A1u)) // STATUS_WORKING_SET_QUOTA
             return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::ResourceLimit);
-        // A non-default compatibility limit is exposed solely as a
+        // A non-default host commit limit is exposed solely as a
         // qualification seam. If that capped host disappears without a
         // frame, report the cap rather than an indistinguishable generic
         // crash; production's derived multi-GiB limit stays on the Job/NT-
         // status evidence paths above.
-        if (compatibility && request.compatibilityHostCommitLimitBytes != 0)
+        if ((compatibility && request.compatibilityHostCommitLimitBytes != 0)
+            || (stepHost && request.stepHostCommitLimitBytes != 0))
             return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::ResourceLimit);
         return fail(ImportStage::AwaitReply);
     }
@@ -1286,7 +1402,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             || acceptance.scene->format == model_core::SourceFormatId::Usda
             || acceptance.scene->format == model_core::SourceFormatId::Usdc
             || acceptance.scene->format == model_core::SourceFormatId::Usdz
-            || acceptance.scene->format == model_core::SourceFormatId::ThreeMf);
+            || acceptance.scene->format == model_core::SourceFormatId::ThreeMf
+            || acceptance.scene->format == model_core::SourceFormatId::Step);
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)
@@ -1313,6 +1430,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     result.sourceCatalog = std::move(sourceCatalog);
     result.sourceIdentity = sourceIdentity;
     result.workerProcessId = GetProcessId(workerProcess);
+    result.stepProgressCount = stepProgressCount;
+    result.lastStepProgress = lastStepProgress;
     if (request.nextDetail && !tierBResult) {
         if (!request.enableCoarseProxy || !request.onBatch || !request.onInitialComplete)
             return fail(ImportStage::UnexpectedReply);
@@ -1422,10 +1541,68 @@ ImportSessionResult MapCompatibilityFailure(ImportSessionResult result)
     return result;
 }
 
+ImportSessionResult MapStepFailure(ImportSessionResult result)
+{
+    result.producer = ImportProducer::StepHost;
+    result.compatibilityFallbackRequired = false;
+    if (result.ok || result.errorCode == model_core::ImportErrorCode::Cancelled)
+        return result;
+
+    using E = model_core::ImportErrorCode;
+    // A host-reported classification is a bounded product fact (admission
+    // syntax, unsupported external content, empty geometry, ...) and is
+    // preserved. Only its resource family is normalized to StepHostLimit.
+    if (result.stage == ImportStage::WorkerReportedError) {
+        switch (result.errorCode) {
+        case E::ResourceLimit:
+        case E::OutOfMemory:
+        case E::PrimarySourceLimit:
+        case E::AggregateSourceLimit:
+        case E::ScratchLimit:
+        case E::ChunkCatalogLimit:
+        case E::ArchiveLimit:
+            result.errorCode = E::StepHostLimit;
+            break;
+        default:
+            break;
+        }
+        return result;
+    }
+
+    switch (result.errorCode) {
+    case E::ResourceLimit:
+    case E::OutOfMemory:
+    case E::PrimarySourceLimit:
+    case E::AggregateSourceLimit:
+    case E::ScratchLimit:
+    case E::ChunkCatalogLimit:
+    case E::ArchiveLimit:
+    case E::CompatibilityHostLimit:
+    case E::StepHostLimit:
+        result.errorCode = E::StepHostLimit;
+        break;
+    default:
+        // Child-provided text/status is never surfaced. Launch, payload
+        // integrity, crash, timeout and broker-validation faults collapse to
+        // the closed host-owned fact required by the UI contract.
+        result.errorCode = E::StepHostFailure;
+        break;
+    }
+    return result;
+}
+
 } // namespace
 
 ImportSessionResult RunImportSession(const ImportSessionRequest& request)
 {
+    // STEP has no fast-worker candidate and no fallback: the dedicated host is
+    // the only producer allowed to emit SourceFormatId::Step.
+    if (request.format == ImportFormat::Step) {
+        if (request.stepHostExePath.empty())
+            return Fail(ImportStage::LaunchWorker, model_core::ImportErrorCode::StepHostFailure);
+        return MapStepFailure(RunImportSessionForProducer(request, ImportProducer::StepHost));
+    }
+
     ImportSessionResult fast = RunImportSessionForProducer(request, ImportProducer::FastWorker);
     fast.producer = ImportProducer::FastWorker;
 

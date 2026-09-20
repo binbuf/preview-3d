@@ -81,7 +81,11 @@ TEST_CASE("Forward paths are absolute local supported-model paths", "[activation
         REQUIRE(NormalizeForwardPath(usd,path,error));
         CHECK(std::filesystem::path(path).is_absolute());
     }
-    CHECK_FALSE(NormalizeForwardPath(L"model.step",path,error));
+    for (const auto* step : {L"model.STEP", L"model.stp"}) {
+        REQUIRE(NormalizeForwardPath(step,path,error));
+        CHECK(std::filesystem::path(path).is_absolute());
+    }
+    CHECK_FALSE(NormalizeForwardPath(L"model.iges",path,error));
 }
 
 TEST_CASE("Session coordinator forwards and survives a close relaunch race", "[activation]")

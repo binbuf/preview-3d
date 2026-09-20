@@ -21,7 +21,7 @@ Set-StrictMode -Version 3.0
 
 $applicationExe = 'Preview3D.exe'
 $applicationName = '3D Preview'
-$extensions = @('.glb', '.gltf', '.stl', '.ply', '.obj', '.fbx', '.3mf', '.usd', '.usda', '.usdc', '.usdz')
+$extensions = @('.glb', '.gltf', '.stl', '.ply', '.obj', '.fbx', '.3mf', '.usd', '.usda', '.usdc', '.usdz', '.step', '.stp')
 $progIds = @(
     'Binbuf.Preview3D.glTF.1',
     'Binbuf.Preview3D.STL.1',
@@ -29,11 +29,12 @@ $progIds = @(
     'Binbuf.Preview3D.OBJ.1',
     'Binbuf.Preview3D.FBX.1',
     'Binbuf.Preview3D.ThreeMF.1',
-    'Binbuf.Preview3D.USD.1'
+    'Binbuf.Preview3D.USD.1',
+    'Binbuf.Preview3D.STEP.1'
 )
 
-if (Get-Process -Name Preview3D, Preview3DImportWorker, Preview3DImportHost -ErrorAction SilentlyContinue) {
-    throw 'Close Preview3D and both import processes before resetting association test state.'
+if (Get-Process -Name Preview3D, Preview3DImportWorker, Preview3DImportHost, Preview3DStepHost -ErrorAction SilentlyContinue) {
+    throw 'Close Preview3D and all import processes before resetting association test state.'
 }
 
 function Remove-RegistryKey([string]$Path) {

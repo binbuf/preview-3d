@@ -4,6 +4,413 @@ Running log of what's been built against `.docs/design/`, plus the Win32/MSBuild
 
 ## Status
 
+- **STEP-008 follow-up real-viewer testing (2026-09-19): the viewer's CPU
+  budget guard was rejecting the genuine assembly, and it is now fixed; the
+  second corpus item's duplicate was investigated and is not a planner
+  duplicate.** Two Release viewer runs were taken.
+  `test-models/Voron_2.4r2_Assembly.step` (241,522,213 B) failed with "The STEP
+  host reached a bounded resource limit." (`StepHostLimit`), and
+  `test-models/OQD_isolated_blade_trap_assembly.stp` (56,371,605 B) renders
+  almost correctly but draws one extra, overlapping piece.
+
+  Fixed in this change:
+  1. **The real viewer rejected the genuine assembly at its CPU budget guard,
+     not at the STEP host Job ceiling.** `RenderThread::CpuBudgetGuard`
+     (`RenderThread.h:132`) capped the import process's private commit at
+     `min(1536 MiB, physical RAM/4)` (`RenderThread.h:162`), and
+     `ImportSession`'s `acceptBatch` fails `ValidateSection`/`ResourceLimit`
+     the moment the host's `PrivateUsage` exceeds it (`ImportSession.cpp:743`,
+     `:794`). The measured Release peak for this file is `2,226,372,608 B`
+     (2.07 GiB), far above 1.5 GiB, so the first accepted batch was rejected
+     even though the STEP host Job ceiling is `min(4 GiB, 35% of RAM)`.
+     `MapStepFailure` normalizes that `ResourceLimit` to `StepHostLimit`
+     (`ImportSession.cpp:1567`). The guard is machine-independent for RAM ≥
+     6 GiB, so it failed on every normal developer/QA machine. The fix exposes
+     `import_broker::DedicatedHostCommitLimitBytes()` (the same derived
+     `min(4 GiB, 35%)` the host Job uses), lets `CpuBudgetGuard` take a
+     `capOverride`, and has `Preview3D.cpp` pass the dedicated-host ceiling for
+     `SourceFormat::Step`. Verified end-to-end: the real viewer now reaches
+     Ready on Voron with 4,056,614 triangles and `errorCode == 0`; the 11-check
+     `tests/app-smoke/step.py` Release run and the 749-assertion focused
+     `[step-002]..[step-008]` suites pass in Debug and Release.
+  2. **The STEP-008 measurement could never have caught this.** Its
+     `cpuBudgetAllows` records the peak and always returns `true`
+     (`StepQualificationTests.cpp:304`), and `RunImportSession` has no memory
+     policy of its own, so a passing measurement is not evidence that the real
+     viewer's CPU policy accepts the file. A large-corpus regression meant to
+     protect the viewer must run the real `CpuBudgetGuard` (or the real viewer),
+     not an always-true stub.
+  3. **`StepHostLimit` is as overloaded as `StepHostFailure`.** It is produced
+     by the viewer's CPU guard, by every broker section/scene validation cap,
+     and by the adapter's own `ResourceLimit`s, not only by the Job commit
+     ceiling. Read `ImportSessionResult.stage`/`errorCode` before choosing a
+     fix; the UI text alone cannot distinguish "the machine is too small" from
+     "the viewer's budget is too small".
+
+  What the OQD investigation found (no code change):
+  4. **The host scene is a faithful expansion of the OCCT XDE graph, not a
+     duplicate emitter.** `OQD` is an AP242 assembly with 111
+     `PRODUCT_DEFINITION`, 400 `NEXT_ASSEMBLY_USAGE_OCCURRENCE`, and 427
+     `MAPPED_ITEM`/`REPRESENTATION_MAP`. The real host scene has 795 nodes /
+     765 instance chunks / 85 definitions, `duplicateGeometryChecksums == 0`,
+     and 729 distinct instance nodes. An independent OCCT XDE walk of the same
+     file produces exactly 795 node visits and zero exact-duplicate siblings
+     (same `TopoDS_TShape` pointer and same location), so the DAG expansion
+     (shared sub-assemblies visited once per parent) fully explains the counts.
+     The three same-definition instance pairs whose world AABBs overlap by
+     >50% are distinct placements with different rotations, not copies; the
+     model is also not X-symmetric (426 instances have no same-definition
+     mirror), so the extra piece is not a planner double emission. It is either
+     an OCCT transfer artifact or inherent to the source. Pin it down with a
+     screenshot or the specific part before changing the planner.
+  5. **`[.][step-scene-diag]` is the triage tool for this class.** With
+     `PREVIEW3D_MANUAL_STEP_FILE` set it streams the real host scene and prints
+     the totals above, duplicate geometry checksums, overlapping same-definition
+     pairs with node ancestry, and per-mesh instance counts. Use it (or an
+     equivalent standalone OCCT XDE walk) before touching `ScenePlanner`.
+  6. **Admission is not the Voron failure.** A direct scan of the 241 MB file
+     gives 3,645,182 records / 2,911,998 entity records / 7,960,335 `#refs` /
+     94-byte maximum record, all far under `StepPart21PreflightLimits`
+     (`StepPart21Preflight.h:43`: 5 M entities, 100 M refs, 1 MiB records).
+  7. **A standalone OCCT XDE inspector is cheap and worth keeping in the
+     toolbox.** Building one outside the repo against
+     `compatibility-host-step/vcpkg_installed` (v143 toolset, same manifest
+     root) reproduces the host's traversal and lets you dump `GetFreeShapes` /
+     `GetComponents` / `GetReferredShape` / locations and even export a
+     triangle soup for a rasterized sanity render, without adding OCCT to the
+     viewer or the test tree.
+
+- **STEP-008 post-slice viewer regression (2026-09-19): the genuine corpus
+  fails through the real viewer as `StepHostFailure`.** Opening
+  `test-models/Voron_2.4r2_Assembly.step` in `Preview3D.exe` loads for several
+  minutes and then reports "The STEP importer stopped unexpectedly." / "The
+  isolated STEP host could not complete this model." It is a broker-side
+  timeout, not a host crash: the D3D12 bridge never raises `replyTimeoutMs` for
+  STEP, so the dedicated host runs under the shared
+  `kWorkerReplyTimeoutMs = 120'000` backstop, and the host only sends control
+  messages at phase boundaries (`StepHostImport` preflight; `StepXdeAdapter`
+  Read/Transfer/Plan/Mesh/Emit). The long `ReadStream` and `Transfer` phases
+  emit nothing, so the broker sees a >120 s silence, reports
+  `ImportStage::ReplyTimedOut`, and `MapStepFailure` collapses that to
+  `StepHostFailure` (26) — the same user text as a crash. The opt-in
+  `[.][step-008-measure]` sets `replyTimeoutMs = 1'800'000` plus a 20-minute
+  deadline, which is exactly why the qualification slice never saw this.
+
+  Things the next STP/STEP task should not relearn:
+  1. **The viewer needs a STEP-specific reply timeout, or the host needs a
+     phase heartbeat.** A 120 s hang backstop is far below the genuine
+     corpus's single-phase cost. Prefer a bounded heartbeat progress event
+     during `ReadStream`/`Transfer` over a blanket longer timeout so a wedged
+     host is still caught; either way, add a real-viewer regression for the
+     large corpus, not just a `RunImportSession` measurement.
+  2. **The Debug STEP host links the vcpkg Debug OCCT closure.** On the same
+     241,522,213-byte assembly: Release broker Ready ~111 s with a largest
+     phase gap of ~64 s (`Transfer`) and 2.28 GiB peak host commit; Debug
+     broker Ready ~994 s (~16.5 min) with `Transfer` 445 s and 3.89 GiB peak.
+     `x64/Debug/StepHost/TKernel.dll` is 2,964,992 B against Release's
+     1,601,024 B. Debug is ~9x slower and ~1.7x the commit, so a Debug viewer
+     run will always trip the 120 s backstop and is not performance evidence;
+     the published Tier-B budget is Release-only.
+  3. **`StepHostFailure` is overloaded.** `ReplyTimedOut`, a launch/payload
+     fault, a host crash, and a broker validation failure all collapse to the
+     same `StepHostFailure` text, so "stopped unexpectedly" must not be read as
+     "crashed". Check `ImportSessionResult.stage`/`errorCode` (the bridge has
+     them; the UI does not) before choosing a fix.
+  4. **The STEP host commit ceiling is `min(4 GiB, 35% of physical RAM)`**
+     (`CompatibilityCommitLimitBytes`), not the 4 GiB general-worker default.
+     The Debug peak (3.89 GiB) already sits at that ceiling, so a lower-RAM
+     machine's 35% branch can Job-kill the host; when the Job violation flag
+     and the NT memory statuses are both missed that also surfaces as
+     `StepHostFailure`, not `StepHostLimit`. Distinguish a genuine host defect
+     from a machine-size limit before blaming the code.
+  5. **Do not chase the per-generation caps for this failure.** The measurement
+     uses `maxChunkBatchesPerGeneration = 4096` and `maxChunksPerGeneration = 0`
+     (derive); the viewer uses `kTierACatalogLimit` (899,074) and
+     `kTierABatchLimit`. The corpus delivers 4,589 chunks in 8 batches, so
+     neither cap is binding and the STEP-008 `maxChunkCount` fix is not
+     implicated.
+
+- **STEP-008 qualification slice (2026-09-19): implemented; release
+  qualification remains open.** A checked-in corpus manifest
+  (`tests/fixtures/step/manifest.json`) freezes provenance, size, SHA-256,
+  class, and expected outcome for the 16 committed fixtures plus 12 derived
+  adversarial cases, and `tests/fixtures/step/verify.py` re-derives and checks
+  them. A new `StepQualificationTests.cpp` gives every malformed/unsupported/
+  over-limit admission family an asserted typed status, proves each cap exactly
+  at its boundary, and adds a progressive-batch regression. `prepare_step_seeds.py`
+  now emits the STEP-008 families as `StepFuzz` seeds (45-second Release ASan
+  smoke: 64,569 executions, 456 MiB peak RSS, no finding).
+  `[step-002]`..`[step-006]` plus `[step-008]` pass **38 cases / 746 assertions
+  in Debug and Release**. The genuine 100 MB+ obligation is met: the real host
+  imported a 241,522,213-byte AP214 assembly (4.06 M triangles, 1,314
+  definitions) with time-to-first-coarse 66 s and Ready 95 s, peak host commit
+  2.07 GiB, and the budget is published in
+  [design/09-quality-performance-and-security.md](./design/09-quality-performance-and-security.md).
+  See [STEP-008-VERIFICATION.md](./STEP-008-VERIFICATION.md). Still open: static
+  analysis/license review, multi-run p95, the ~20 M-triangle fixture, an
+  instrumented OCCT-boundary fuzzer, the 8-hour soak, clean-VM lifecycle, and
+  signed-artifact/SBOM inspection.
+
+  Things the next STP/STEP task should not relearn:
+  1. **The STEP emitter must flush on the broker's `maxChunkCount`, not just on
+     byte capacity.** `SceneEmitter::Add` only flushed when the next chunk
+     exceeded the section byte window, so a large many-definition assembly whose
+     geometry was small accumulated more descriptors than
+     `request.maxChunkCount` and was rejected by the broker as
+     `ResourceLimit`/`StepHostLimit` before a single batch was delivered. It now
+     flushes-and-publishes at the chunk cap too (same pattern as the byte cap),
+     with `[step-008][chunk-cap]` as the regression. If a future adapter grows a
+     progressive emitter, honor every per-section cap the broker enforces, not
+     only the byte one.
+  2. **The genuine 100 MB+ corpus is `test-models/Voron_2.4r2_Assembly.step`**
+     (241,522,213 bytes, AP214, self-contained, SHA-256 in the manifest). It is
+     git-ignored and supplied locally; the opt-in measurement reads
+     `PREVIEW3D_MANUAL_STEP_FILE` and is tagged `[.][step-008-measure]`. It is
+     parse/transfer-bound: admission 3.2 s, `ReadStream` 12.2 s, `Transfer`
+     50.8 s, mesh 24.3 s, emit 26.0 s. Do not expect a coarse second pass to
+     beat the transfer.
+  3. **The Part-21 scanner treats the newline after `DATA;` as the first byte of
+     the next record.** Record-length boundary tests must build the record with
+     no leading whitespace (`DATA;#1=...`) or they are off by one; a body of
+     exactly `maxRecordBytes` is accepted and `maxRecordBytes + 1` is rejected.
+     String-length counts only bytes inside quotes and is not affected.
+  4. **The broker caps nodes and instances at the same Tier-B object limit
+     (50,000).** The host planner caps nodes but not instances; a file with more
+     than 50,000 occurrences fails during section validation, not planning.
+     Treat the two as one envelope when publishing limits.
+  5. **`_wgetenv` is banned under the test project's `/WX`.** Use
+     `_wdupenv_s` and free the buffer. Also include
+     `import_broker/SharedSection.h` for `kImportSectionBytes` /
+     `kImportMaxChunkCount`; they are not in `ImportSession.h`.
+
+- **STEP-007 product, package, and documentation integration (2026-09-19):
+  complete.** `.step`/`.stp` now reach the existing dedicated
+  `Preview3DStepHost.exe` route through every viewer activation surface:
+  `ClassifyByExtension`, command-line validation, the Open dialog filters,
+  drag/drop, secondary activation, Retry, supported-format errors, and the
+  title-bar Open With catalog (revision 7). The bridge forwards the bounded
+  `StepProgress` events, and the loading overlay shows product-owned phase text
+  and N-of-M definition counts; `--app-smoke` fields 84/85/86 expose the phase
+  and counts. The portable/NSIS payload stages the exact signed `StepHost\`
+  OCCT closure, its license/SBOM entry, a closed payload allowlist, and the
+  third `Binbuf.Preview3D.StepHost` AppContainer ACL; `Binbuf.Preview3D.STEP.1`
+  registers both extensions without touching the user's default. `step.py`
+  passes 11 checks in Debug and Release (including crash/timeout recovery and
+  the Emit phase); `step_package.py` passes against both stages;
+  `[step-002]`..`[step-006]` still pass 35 cases / 706 assertions. Thumbnails
+  remain STEP-009. See [STEP-007-VERIFICATION.md](./STEP-007-VERIFICATION.md).
+
+  Things the next STP/STEP task should not relearn:
+  1. **The viewer groundwork for STEP already existed from STEP-005/006.**
+     `SourceFormat::Step`, `ToBrokerFormat`, `ResolveStepHostExePath`,
+     `SourceFormatLabel`, and the STEP-specific error text were all present;
+     discovery was deliberately gated only in `ClassifyByExtension` and the
+     extension allowlists. Enabling STEP-007 was four small list edits plus the
+     Shell catalog revision bump. Do not rebuild the bridge route.
+  2. **`StepProgressNotice`'s mesh counter is `definitionsMeshed`, not
+     `definitionIndex`.** The callback runs on the import thread, so the viewer
+     stores phase/done/total in `std::atomic<uint32_t>` and reads them on the UI
+     thread; the completion message is always posted after the last progress
+     event, so the Emit phase (6) is observable once the document is Ready.
+  3. **The STEP host ignores `workerArgumentsOverride`.** Viewer fault injection
+     for STEP must use `stepHostArgumentsOverride` with the host's own
+     `--pool-crash`/`--pool-hang`/`--pool-overallocate` modes (and
+     `stepHostCommitLimitBytes` for the memory case). The general-worker
+     `--child-noop`/`--test-hang-import` overrides are inert for STEP and would
+     make a fault test silently import normally.
+  4. **OCCT has no root `vcpkg_installed` status entry.** It is installed only
+     by `compatibility-host-step/vcpkg.json`, so the packaging script must copy
+     `licenses/opencascade.txt` from
+     `compatibility-host-step/vcpkg_installed/x64-windows/share/opencascade/copyright`
+     and read its version/ABI from that tree's `vcpkg.spdx.json`. The root
+     `Read-VcpkgStatus` path will not contain `opencascade`.
+  5. **OCCT's `TKernel.dll` imports `WSOCK32.dll` and `TKService.dll` imports
+     `WINMM.dll`.** Both are Windows system DLLs that the packaging PE-closure
+     allowlist must list (alongside `ws2_32.dll`), or portable/installer staging
+     fails with an unresolved-dependency error.
+  6. **NSIS license removal is easy to forget.** Adding
+     `licenses/opencascade.txt` to the stage requires a matching
+     `Delete "$INSTDIR\licenses\opencascade.txt"` in the uninstall section; the
+     `step_package.py` registration check catches the omission, and `makensis`
+     is run with `/WX`.
+
+- **STEP-006 interoperability closure and self-contained scope acceptance
+  (2026-09-19): complete.** A checked-in interoperability matrix now names the
+  exact typed outcome for every supported and excluded family and runs through
+  the real host: AP203/AP214/AP242 B-rep, an AP242 B-rep-plus-authored-
+  tessellation fixture, an AP242 tessellated-only fixture, assembly/reuse,
+  instance/face colors, inch units, geometry-free product metadata, an unknown
+  geometry-free schema, `FILE_POPULATION`, relative `DOCUMENT_FILE`,
+  absolute/UNC/URL `DOCUMENT_FILE`, and invalid authored faceted topology. The
+  external-document no-go is recorded in the support matrix, ADR-017, product
+  scope, design README, and public limitations; the healing comparison adopted
+  no healing as `step_host::kStepHealingPolicy`. A standalone `StepFuzz`
+  (ASan/libFuzzer, no GPU) fuzzes admission and declaration discovery; a
+  45-second Release smoke ran 53,244 executions with no finding. The route
+  stays private to the broker; viewer/package exposure is STEP-007.
+  `[step-002]`..`[step-006]` pass 35 cases / 706 assertions in Debug and
+  Release. See [STEP-006-VERIFICATION.md](./STEP-006-VERIFICATION.md) and
+  [STEP-006-INTEROP-MATRIX.md](./STEP-006-INTEROP-MATRIX.md).
+
+  Things the next STP/STEP task should not relearn:
+  1. **`Interface_Static` values are created with their defaults on the first
+     STEP writer construction, overwriting any `SetCVal` made before that.**
+     `GenerateStepFixtures.cpp` now constructs one throwaway
+     `STEPCAFControl_Writer` before setting `write.step.schema` /
+     `write.step.unit` / `write.step.tessellated`. Without it, the first case
+     silently wrote AP214/OnNoBRep instead of the requested AP242/On.
+  2. **`write.step.tessellated` is the writer switch, and the default is
+     `OnNoBRep`, not `On`.** A shape that has a B-rep writes *no* tessellated
+     representation unless it is set to `On`; a mesh-only shape (no surface)
+     writes one with `OnNoBRep`. The AP242 B-rep+tessellated fixture uses `On`;
+     the tessellated-only fixture is a `TopoDS_Compound` of
+     `BRep_Builder::MakeFace(face, Poly_Triangulation)` mesh-only faces.
+     Tessellated output requires the AP242 schema.
+  3. **A valid geometry-free Part-21 file used to report `MalformedData`.**
+     OCCT's `Transfer` returns a generic failure when there is no shape, so the
+     adapter now checks `reader.ChangeReader().NbRootsForTransfer()` right
+     after `ReadStream` and returns `EmptyGeometry`. Keep that ordering: the
+     `FileUnits` check would otherwise run first and report
+     `UnsupportedRequiredFeature`.
+  4. **OCCT throws `Standard_Failure`, which derives from `Standard_Transient`,
+     not `std::exception`.** A `catch (...)` therefore reported invalid faceted
+     topology (out-of-range `TRIANGULATED_SURFACE_SET` indices) as
+     `InternalImporterFailure`. `StepXdeAdapter` now wraps `ReadStream` and
+     `Transfer` and adds a boundary `catch (const Standard_Failure&)` mapping
+     to `MalformedData`. When adding OCCT code, catch `Standard_Failure`
+     explicitly rather than assuming `std::exception`.
+  5. **Declaration discovery is lexical and conservative.** The preflight scans
+     each record's text for `FILE_POPULATION`/`DOCUMENT_FILE` case-
+     insensitively, so case, whitespace, path shape, and even a keyword inside
+     a quoted string all flag. That is intentional fail-closed behavior; do not
+     "improve" it into parsing declarations without also proving no resolver
+     can be reached.
+  6. **A fuzz target that writes a pipe before reading it deadlocks above the
+     pipe buffer.** `StepFuzz`'s handle-admission domain caps the payload below
+     the 4 KiB pipe buffer (and passes the actual `written` count). The first
+     draft used a 0-sized pipe and hung on a 26 KB fixture, which the fuzzer
+     reported as a timeout — a harness bug, not a product finding.
+
+- **STEP-005 render-time performance and first-frame latency (2026-09-19):
+  implemented slice; large-file corpus and published budgets remain STEP-008.**
+  The dedicated STEP host now measures and publishes every real phase
+  (Part-21 lexical admission, `ReadStream` parse, `Transfer`, mesh-free
+  planning, per-definition meshing, face/triangle extraction, window emission)
+  through `StepPhaseTimings`, and emits a bounded `StepProgress` control message
+  (opcode 21, `StepProgressNotice`, closed `kStepPhase*` Preflight/Read/
+  Transfer/Plan/Mesh/Emit) that the broker validates, caps, forwards to an
+  optional `onStepProgress`, and records on `ImportSessionResult`. Admission and
+  OCCT transfer now consume one read-only mapping of the inherited handle
+  (`CreateFileMappingW` + `MapViewOfFile`, no path), removing the former double
+  full read. `StepTessellationProfile` v3 records
+  `StepDeliveryStrategy::SinglePassProgressiveDisplay` and re-enables parallel
+  meshing. `[step-002],[step-003],[step-004],[step-005]` pass 30 cases / 530
+  assertions in Debug and Release. Details and the measured phase table are in
+  [STEP-005-VERIFICATION.md](./STEP-005-VERIFICATION.md).
+
+  Four things the next STEP task should not relearn:
+  1. **STEP-004's `parallel = false` premise was wrong.** The pinned
+     `USE_TBB=OFF` OCCT 7.8 port still parallelizes through
+     `OSD_Parallel`'s built-in `OSD_ThreadPool` (`ToUseOcctThreads()` defaults
+     true when no external library is enabled), and
+     `IMeshTools_Parameters::InParallel` is documented as multi-thread on/off.
+     The profile now sets `parallel = true` and
+     `kImportRequestStepForceSerialForTesting` (bit 8) proves parallel and
+     forced-serial output byte-identical. Do not repeat the TBB-only reading.
+  2. **Map exactly the file size.** Mapping the source to end-of-file (or
+     `MappedView::Map(..., 0)`) exposes the zero-filled tail of the final
+     allocation granule; the Part-21 scanner correctly rejects NUL as a
+     non-clear-text control byte, so every import failed `UnsupportedEncoding`
+     until the view length was pinned to `GetFileSizeEx`. `CreateFileMappingW`
+     works on the broker's `GENERIC_READ` duplicated handle.
+  3. **The STEP host's request-flag mask had a latent precedence bug**:
+     `flags & ~detail & ~coarse` is not `flags & ~(detail | coarse)`. It only
+     tolerated the two original bits; any new test seam was rejected as
+     malformed. The mask is now an explicit allowlist.
+  4. **`StepProgress` is producer-bound.** The broker accepts it only from
+     `ImportProducer::StepHost` and rejects it from any other producer; the
+     per-generation cap (8192) maps to `ImportStage::StepProgressLimit` ->
+     `ResourceLimit`. Progress is bounded to ~256 mesh events regardless of
+     definition count, so a huge scene cannot flood the control channel.
+
+  Open for STEP-008: the genuine 100 MB+ assembly and high-triangle fixture,
+  the resulting Tier-B time-to-first-coarse/Ready budgets, measured thread-pool
+  width against peak commit, progress UI wiring (STEP-006/STEP-007), and the
+  two-pass-versus-single-pass recheck if a real benefit appears.
+
+- **STEP-004 bounded tessellation and progressive CAD delivery (2026-09-19):
+  complete for the single-pass display slice; coarse catalog delegated to
+  STEP-005.** `StepXdeAdapter` is now two-phase: `ScenePlanner` walks the XDE
+  document without meshing and builds nodes/definitions/materials/occurrences,
+  then `SceneEmitter`+`DefinitionMesher` tessellate one reusable definition at a
+  time under the new versioned `StepTessellationProfile` (v2) and write
+  cluster-local float positions with exact double per-chunk origins. Geometry is
+  no longer retained after it is written, and a window that fills is handed off
+  through `ChunkBatchReady`/`ChunkBatchConsumed` via the existing
+  `import_worker::ChunkBatchSink`, so a scene larger than the output window no
+  longer needs one giant section. Authored AP242 tessellation is preferred by
+  meshing with `AllowQualityDecrease = false`. A new typed
+  `ImportErrorCode::TessellationFailed` (28) carries meshing/timeout/budget
+  failures to fixed viewer text. `[step-002],[step-003],[step-004]` pass 26
+  cases / 423 assertions in Debug and Release; STEP-003 golden counts are
+  unchanged. Details in [STEP-004-VERIFICATION.md](./STEP-004-VERIFICATION.md).
+
+  Five things constrain the later STEP work:
+  1. The pinned constrained OCCT port builds with `USE_TBB=OFF`, so
+     `BRepMesh_IncrementalMesh::InParallel` has no parallel backend. The profile
+     now records `parallel = false` truthfully; STEP-005 must prove product-level
+     per-definition parallelism or document serial throughput.
+  2. The Tier-B broker computes `coarseProtocol = enableCoarseProxy &&
+     !tierBFormat`, and `D3D12ImportBridge` deliberately leaves `enableCoarseProxy`
+     and `nextDetail` unset for STEP. A `CoarseComplete` record is rejected and a
+     `kCoarseLod` chunk would render *alongside* fine geometry, not replace it.
+     The stp2.md two-pass coarse catalog therefore needs the scan/detail protocol
+     enabled for STEP (a cross-cutting broker/bridge change) and is owned by
+     STEP-005 item 5; STEP-004 ships single-pass progressive display.
+  3. A single geometry chunk deliberately fails as `ResourceLimit` if it cannot
+     fit one output window even after flushing; choosing a test window smaller
+     than the largest chunk is not a progressive test. For the current fixtures
+     the largest chunk is ~21.6 KiB and the whole nested scene ~27 KiB, so a
+     24 KiB window exercises the batch path.
+  4. `ImportStage::WorkerReportedError` is numeric value **16**, not
+     `ValidateSection` (15); a host `GenerationError` therefore reads as stage 16
+     and can be misread as a broker validation failure. The broker maps
+     host-reported `ResourceLimit` to `StepHostLimit` (27).
+  5. `StepXdeResult::meshMilliseconds` now accumulates per-definition
+     `BRepMesh_IncrementalMesh` time for STEP-005's two-pass-versus-single-pass
+     decision; it is not yet surfaced.
+
+  Build note: after editing a source, MSBuild occasionally reported the affected
+  project up to date and reused a stale `.obj` (the STEP host and the
+  ImportIsolation test project both showed this). Deleting the specific `.obj`
+  and rebuilding, or building through `Preview3D.slnx`, is required before
+  trusting a test run. Building `Tests.ImportIsolation.vcxproj` directly without
+  `/p:SolutionDir=<repo root>` bakes `$(SolutionDir)`-relative fixture/host paths
+  into the test binary and makes every STEP import fail at `OpenSource`.
+
+- **STEP-001 spike complete (2026-09-18); go for STEP-002 with a constrained
+  OCCT port.** See [STEP-001-SPIKE-RESULTS.md](./STEP-001-SPIKE-RESULTS.md).
+  OCCT 7.8.1 imported a self-contained AP214 assembly through
+  `STEPCAFControl_Reader::ReadStream` over a product-owned seekable
+  `std::streambuf` on the inherited read-only handle, inside the real
+  zero-capability AppContainer and kill-on-close Job Object. XDE retained five
+  instances, two reused definitions, nested transforms, three colors (two
+  transparent), and the authored unit name; `BRepMesh_IncrementalMesh`
+  produced 596 bounded triangles. Malformed bytes failed before OCCT, a
+  pre-signalled cancellation was observed, a 4 MiB Job ceiling terminated the
+  host without a false success and a replacement import recovered, and an
+  authority probe under the same container was denied path, network, and child
+  process. The registry `opencascade` port builds 48 DLLs / ~51.3 MB including
+  visualization and every non-STEP exchange format; a constrained overlay port
+  (`packaging/vcpkg-ports/opencascade`) and isolated
+  `compatibility-host-step/vcpkg.json` are checked in. Two findings constrain
+  later tasks: OCCT normalizes geometry to its system unit so the authored
+  `metersPerUnit` must be derived from `FileUnits`, and OCCT's external
+  resolver is path-based with no stream hook, so STEP-005 external references
+  are a no-go without a product-owner scope change. No public opcode,
+  `SourceFormatId`, extension filter, registration, or thumbnail behavior was
+  added.
+
 - **3MF-007 qualification started (2026-09-18); release gate remains open.**
   `tests/fixtures/3mf/manifest.json` freezes seven decoded sources and seven
   deterministic derived cases with independent hashes and expected outcomes.
@@ -2060,3 +2467,75 @@ The new `StartGltfImportFromFile`/`ParseGltfFileRequest` path deliberately does 
   files and opens a composed USD stage from the staged layout; NSIS builds a
   64-file unsigned engineering payload. Release hashes are recorded in
   `.docs/usd.md` and `.docs/INSTALLER_VERIFICATION.md`.
+
+### STEP-002 host, Part-21 admission, and closed protocol route
+
+- `Preview3DStepHost.exe` is a fifth runtime component with its own
+  zero-capability AppContainer identity (`Binbuf.Preview3D.StepHost`),
+  kill-on-close Job Object, and private `StepHost` payload directory. The
+  constrained OCCT closure stays isolated from the viewer, general worker, and
+  thumbnail provider; `dumpbin /dependents` reports zero OCCT imports for
+  `Preview3D.exe` and `Preview3DImportWorker.exe`.
+- Protocol v10 gained only additive identities:
+  `SourceFormatId::Step` (13), `ImportFormat::Step`,
+  `StartStepImportFromFile` (20), the 48-byte `ParseStepFileRequest`, and the
+  `StepHostFailure`/`StepHostLimit` error codes. No existing layout, fixture,
+  or hostile-worker case changed meaning.
+- `StepPart21Preflight` is a bounded streaming lexical scanner over the
+  inherited handle. It verifies the physical envelope, counts entities/
+  references/sections/nesting/lexed bytes with checked arithmetic, rejects
+  duplicate/zero identifiers, binary/XML/compressed/UTF-16 encodings,
+  unterminated strings/comments, and flags `FILE_POPULATION`/`DOCUMENT_FILE`
+  external declarations as `UnsupportedRequiredFeature` (STEP-005 is a no-go).
+  The OCCT reader is unreachable until admission succeeds; STEP-003 replaces
+  the bounded synthetic placeholder with the real XDE traversal.
+- Two implementation traps worth keeping: a 1 MiB `std::array` on the stack
+  overflowed the host (use heap scratch), and a non-default host commit limit
+  must be reported as `ResourceLimit` for both compatibility and STEP hosts,
+  not only the USD compatibility host.
+- Evidence: `[step-002]` passes 13 cases / 155 assertions in Debug and
+  Release, covering valid admission through the dedicated route, malformed/
+  external rejection before transfer, cancellation, crash/hang/stale/
+  wrong-format/unknown-error/over-allocation recovery, path/network/child-
+  process denial, and the private viewer-bridge route. The full
+  import-isolation suite has pre-existing USD failures (fixture SHA-256 review
+  and the legacy `--usd-002-spike` host route) that fail identically on the
+  STEP-002 baseline with these changes stashed. See
+  [`STEP-002-VERIFICATION.md`](STEP-002-VERIFICATION.md).
+
+### STEP-003 self-contained XDE assembly scene adapter
+
+- `StepXdeAdapter` now replaces the STEP-002 synthetic placeholder behind the
+  existing `StartStepImportFromFile` route. It reads accepted bytes exclusively
+  through the inherited read-only handle, transfers them with
+  `STEPCAFControl_Reader::ReadStream`, and walks the XDE document into protocol
+  v10 nodes, reusable geometry, materials, and mesh instances.
+- Enumeration is product-owned and bounded: one node per occurrence, one
+  reusable geometry record per definition/color seam, recursive composition of
+  nested `TopLoc_Location` transforms in double precision, cycle detection on
+  the definition ancestry, hierarchy-depth/node/definition/material/triangle/
+  vertex caps, and exact double world bounds recomputed exactly as
+  `SharedSectionValidator` does. Orphan definitions are never drawn; an empty
+  document returns `EmptyGeometry`.
+- Units: on the pinned OCCT 7.8.1 build the reader normalizes transferred
+  coordinates to the Cascade system unit and `GetLengthUnit` reports that
+  unit's verified metre factor; `FileUnits` is name-only and is required to
+  prove a length unit was authored. The STEP-001 handoff's suggestion to
+  re-derive an authored factor and rescale is therefore unnecessary for
+  physical correctness and would risk a factor/geometry mismatch; STEP-003
+  reports the factor describing the stored geometry, keeps `UpAxisId::Unknown`,
+  and fails absent/contradictory/zero/non-finite units.
+- Materials use instance/shape/subshape precedence: a component instance color
+  overrides the whole occurrence without duplicating geometry; otherwise the
+  shape-level color wins and the neutral material (id 0) is the fallback.
+  Per-face subshape colors split reusable geometry into bounded seam groups,
+  and sRGB is converted to the linear `baseColorFactor` with opacity mapped to
+  `AlphaModeId::Blend`.
+- Eight immutable fixtures are checked in under `tests/fixtures/stp-spike/`
+  (AP203/AP214/AP242 parts, a reused-definition assembly, a nested assembly,
+  an instance-color assembly, a face-color part, and an inch-authored part);
+  the generator gained the nested/instance/face-color cases.
+- Evidence: `[step-003]` passes 9 cases / 191 assertions in Debug and Release,
+  and `[step-002]` remains green. The known pre-existing USD/FBX failures in
+  the full suite are unrelated and unchanged. See
+  [`STEP-003-VERIFICATION.md`](STEP-003-VERIFICATION.md).

@@ -23,6 +23,7 @@
 // user-facing string. This layer returns typed results only.
 
 #include "import_broker/SharedSectionValidator.h"
+#include "model_core/ControlProtocol.h"
 #include "model_core/ImportError.h"
 
 #include <cstdint>
@@ -46,12 +47,19 @@ enum class ImportFormat : uint32_t {
     Usd,
     // Bounded 3MF Core/Materials/Production/Beam Lattice viewer route.
     ThreeMf,
+    // Bounded STEP/STP static CAD-preview route. Runs only in the dedicated
+    // zero-capability Preview3DStepHost.exe; the general worker never accepts
+    // this format. Product extension discovery stays disabled until STEP-006.
+    Step,
 };
 
 enum class ImportProducer : uint32_t {
     None = 0,
     FastWorker = 1,
     CompatibilityHost = 2,
+    // Dedicated OCCT STEP host. A STEP generation may only ever be produced
+    // by this identity; the broker rejects any other producer/format pairing.
+    StepHost = 3,
 };
 
 // How far the session got. model_core::ImportErrorCode is not sufficient on
@@ -84,6 +92,7 @@ enum class ImportStage : uint32_t {
     ChunkBatchOutOfOrder, // a replayed, skipped, or wrong-generation batchIndex
     ChunkCountLimit,      // more chunks across the generation than the cap allows
     ChunkBatchAckFailed,  // the ack could not be written (worker gone mid-batch)
+    StepProgressLimit,    // a STEP host sent more bounded progress events than the cap allows
     Upload,
 };
 
@@ -139,6 +148,16 @@ struct ImportSessionRequest {
     // Test-only compatibility-host pool mode. Production leaves this empty
     // and the manager forces --pool.
     std::wstring compatibilityHostArgumentsOverride;
+    // Dedicated STEP host executable. Like the USD compatibility host, it is
+    // a private AppContainer payload in its own directory; the general worker
+    // and this host never share an identity.
+    std::wstring stepHostExePath;
+    // Test-only STEP-host pool mode. Production leaves this empty and the
+    // manager forces --pool.
+    std::wstring stepHostArgumentsOverride;
+    // STEP-005 test-only seam: forces the STEP host's mesher serial so a test
+    // can compare parallel and serial normalized output byte-for-byte.
+    bool stepForceSerialForTesting = false;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;
     uint64_t generationId = 0;
@@ -157,6 +176,10 @@ struct ImportSessionRequest {
     // Zero derives the design limit at launch: min(4 GiB, 35% of visible
     // physical memory). Non-zero is a qualification seam for Job-limit tests.
     uint64_t compatibilityHostCommitLimitBytes = 0;
+    // Dedicated STEP host Job commit ceiling. Zero derives the same bounded
+    // design limit as the compatibility host; STEP-001 measured peak commit
+    // far below it for the accepted corpus and STEP-004 may lower it.
+    uint64_t stepHostCommitLimitBytes = 0;
     uint32_t replyTimeoutMs = kWorkerReplyTimeoutMs;
     // Polled while waiting on the worker. Return true to signal the request's
     // duplicated cancellation event. The worker acknowledges cooperatively;
@@ -202,6 +225,16 @@ struct ImportSessionRequest {
     // batch's validation and its ack. Keep it short: the worker is blocked
     // waiting for that ack.
     std::function<void(std::vector<ValidatedChunk>&&)> onBatch;
+    // STEP-005: receives each bounded StepProgressNotice the dedicated STEP
+    // host publishes while a generation is in progress, in order. It is
+    // optional; when empty the events are still counted and the last one is
+    // recorded on ImportSessionResult so qualification can assert progress
+    // without a callback. Never invoked for any other producer.
+    std::function<void(const model_core::StepProgressNotice&)> onStepProgress;
+    // Bounds how many StepProgress messages one STEP generation may send, the
+    // same "never trust worker self-restraint" rule the sidecar and batch caps
+    // apply. Exceeding it abandons the host rather than servicing a flood.
+    uint32_t maxStepProgressPerGeneration = 8192;
     // Replaces the format's own worker CLI flag when non-empty.
     //
     // A test seam, and the same kind commitLimitBytes already is: the reply
@@ -252,11 +285,15 @@ struct ImportSessionResult {
     // Test/qualification evidence only; no handle authority crosses this
     // boundary. Sequential pooled imports can prove reuse by stable PID.
     uint32_t workerProcessId = 0;
-    // Closed producer identity for USD atomic-fallback evidence. Non-USD
-    // successful imports use FastWorker. A failed compatibility attempt also
-    // reports CompatibilityHost so callers never mistake a discarded fast
-    // candidate for the result owner.
+    // Closed producer identity for USD atomic-fallback and STEP containment
+    // evidence. Non-USD/STEP successful imports use FastWorker. A failed
+    // compatibility or STEP attempt also reports its host producer so callers
+    // never mistake a discarded fast candidate for the result owner.
     ImportProducer producer = ImportProducer::None;
+    // STEP-005 evidence: how many bounded progress events the host sent and
+    // the last one received. Zero/empty for every non-STEP producer.
+    uint32_t stepProgressCount = 0;
+    model_core::StepProgressNotice lastStepProgress{};
     // True only for an exact, first-result UnsupportedComposition from the
     // USD fast worker. USD-006 consumes this without reinterpreting generic
     // parser/resource failures as permission to launch OpenUSD.
@@ -286,6 +323,15 @@ void ShutdownImportWorkerPool();
 // one current generation; this also tears down an in-flight/lazy manager when
 // the viewer's loader lanes have stopped.
 void ShutdownCompatibilityHost();
+
+// Derived Job private-commit ceiling for a dedicated import host (the USD
+// compatibility host and the STEP host): min(4 GiB, 35% of visible physical
+// memory), the same limit RunImportSession assigns when the request's
+// per-host override is zero. The viewer's CPU policy must use this rather
+// than its general Tier-B parser/normalizer scratch cap, or a legitimate
+// large STEP/OCCT transfer is rejected at ValidateSection as `StepHostLimit`
+// before its first batch even though the host Job allowed the memory.
+uint64_t DedicatedHostCommitLimitBytes();
 
 // Synchronous, and blocking for as long as the worker takes to reply. Call
 // from a background thread. Never throws for an ordinary import failure --
