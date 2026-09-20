@@ -125,6 +125,10 @@ jobs:
           VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
           VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
         run: |
+          # actions/cache only materializes the directory on a cache hit, so a
+          # cold run leaves it missing and vcpkg rejects the binary cache path.
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+
           & $env:VCPKG_EXE integrate install
           if ($LASTEXITCODE -ne 0) {
             throw "vcpkg MSBuild integration failed with exit code $LASTEXITCODE."
