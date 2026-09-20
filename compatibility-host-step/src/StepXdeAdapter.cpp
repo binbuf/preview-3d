@@ -30,6 +30,8 @@
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <IMeshTools_Parameters.hxx>
+#include <Message_ProgressIndicator.hxx>
+#include <Message_ProgressRange.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Quantity_Color.hxx>
 #include <Quantity_ColorRGBA.hxx>
@@ -222,6 +224,52 @@ double ElapsedMilliseconds(const SteadyClock::time_point& start)
 {
     return std::chrono::duration<double, std::milli>(SteadyClock::now() - start).count();
 }
+
+// STEP-008 follow-up: bounded transfer heartbeat.
+//
+// `ReadStream` and `Transfer` are the only long, uninterruptible OCCT calls.
+// The host otherwise emits a StepProgress control message only at phase
+// boundaries, so a genuine large assembly can leave the broker's reply-timeout
+// backstop with no message for far longer than its 120 s window (the 241 MB
+// reference assembly spends ~64 s in Transfer in Release and ~445 s in Debug).
+// OCCT's XDE transfer accepts a Message_ProgressRange, so this indicator turns
+// real transfer progress into a throttled heartbeat: at most one message per
+// interval, and none at all while the transfer stops advancing, so a genuinely
+// wedged host is still caught by the broker rather than kept alive forever.
+constexpr std::uint64_t kStepTransferHeartbeatIntervalMs = 5'000;
+
+class StepTransferHeartbeat final : public Message_ProgressIndicator
+{
+public:
+    StepTransferHeartbeat(StepProgressSink sink, SteadyClock::time_point totalStart,
+                          SteadyClock::time_point transferStart)
+        : sink_(std::move(sink)), totalStart_(totalStart), transferStart_(transferStart)
+    {
+    }
+
+    void Show(const Message_ProgressScope&, const Standard_Boolean) override
+    {
+        if (!sink_) return;
+        const auto now = SteadyClock::now();
+        if (lastEmit_ != SteadyClock::time_point{}
+            && std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEmit_).count()
+                   < static_cast<long long>(kStepTransferHeartbeatIntervalMs)) {
+            return;
+        }
+        lastEmit_ = now;
+        StepProgressEvent event;
+        event.phase = kStepPhaseTransfer;
+        event.phaseMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(transferStart_));
+        event.totalMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(totalStart_));
+        sink_(event);
+    }
+
+private:
+    StepProgressSink sink_;
+    SteadyClock::time_point totalStart_;
+    SteadyClock::time_point transferStart_;
+    SteadyClock::time_point lastEmit_{};
+};
 
 bool IsCancelled(HANDLE event)
 {
@@ -1290,7 +1338,15 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         const auto transferStart = SteadyClock::now();
         bool transferred = false;
         try {
-            transferred = reader.Transfer(document);
+            if (progress) {
+                // STEP-008 follow-up: bound the broker reply-timeout gap during
+                // the long XDE build with a progress-driven heartbeat. The
+                // indicator is stack-owned and outlives the Transfer call.
+                StepTransferHeartbeat heartbeat(progress, totalStart, transferStart);
+                transferred = reader.Transfer(document, heartbeat.Start());
+            } else {
+                transferred = reader.Transfer(document);
+            }
         } catch (...) {
             // Same reasoning as ReadStream: invalid shape/tessellation data is
             // rejected as malformed rather than surfacing a kernel exception.
