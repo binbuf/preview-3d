@@ -78,6 +78,10 @@ constexpr UINT kTooltipDelayMs = 1500;
 //   GizmoOrbit  LMB held on the gizmo ball: wrapped orbit drag (same math as
 //               Orbit, kept distinct only because it started on the gizmo).
 //   (Axis nodes/stems snap on press, so they never enter a drag mode.)
+//   LightDrag   LMB held on the gizmo's outer light ring (Directional mode
+//               only): drags the sun around the ring to rotate the light.
+//               Deliberately separate from GizmoOrbit so grabbing the ring
+//               never orbits the camera.
 //   FlyLook     RMB held: Unreal-style raw-input capture; WASD/Q/E fly and
 //               the wheel adjusts speed. The cursor returns on release.
 //   Truck       MMB held: trucks along the world ground plane (flattened
@@ -87,6 +91,7 @@ enum class PointerMode
 {
     None,
     GizmoOrbit,
+    LightDrag,
     FlyLook,
     Orbit,
     Truck,
@@ -128,7 +133,6 @@ struct ViewerApp
     float directionalLightAngle = 0.875f;
     int lightingButtonPressed = -1; // 0 Studio, 1 Clay, 2 Directional, 3 Wireframe
     int lightingButtonHover = -1;
-    bool directionalSliderDragging = false;
     bool isFullscreen = false;
     // Hover-delay tooltip (see ComputeTooltipInfo/UpdateTooltipTracking):
     // tooltipTargetId identifies the hovered button (0 == none) so tracking
@@ -1178,12 +1182,14 @@ struct LightingToolbarLayout
     RECT clay{};
     RECT directional{};
     RECT wireframe{};
-    RECT directionalTrack{};
 };
 
 // Centered segmented lighting control. It floats within the bottom chrome
 // independently of the left information and right zoom groups, matching the
-// compact transient toolbars used by Windows Photos editing surfaces.
+// compact transient toolbars used by Windows Photos editing surfaces. The
+// Directional light has no slider here: its rotation lives on the navigation
+// gizmo's outer ring (drag the sun), so the strip stays four equal buttons in
+// every mode.
 LightingToolbarLayout ComputeLightingToolbarLayout(const ViewerApp& app)
 {
     RECT client{};
@@ -1199,9 +1205,7 @@ LightingToolbarLayout ComputeLightingToolbarLayout(const ViewerApp& app)
     const int clayWidth=buttonWidth;
     const int directionalWidth=buttonWidth;
     const int wireWidth=buttonWidth;
-    const int trackWidth=app.lightingMode==LightingMode::Directional ? Scale(app,94) : 0;
-    const int divider=trackWidth ? Scale(app,9) : 0;
-    const int width=padding*2+studioWidth+clayWidth+directionalWidth+wireWidth+gap*3+trackWidth+divider;
+    const int width=padding*2+studioWidth+clayWidth+directionalWidth+wireWidth+gap*3;
     const int centerY=client.bottom-app.bottomBarHeight/2;
     int left=(client.right-width)/2;
     const int safeLeft=InfoButtonRect(app).right+Scale(app,110);
@@ -1214,10 +1218,6 @@ LightingToolbarLayout ComputeLightingToolbarLayout(const ViewerApp& app)
     layout.clay={x,centerY-buttonHeight/2,x+clayWidth,centerY+buttonHeight/2};x+=clayWidth+gap;
     layout.directional={x,centerY-buttonHeight/2,x+directionalWidth,centerY+buttonHeight/2};x+=directionalWidth+gap;
     layout.wireframe={x,centerY-buttonHeight/2,x+wireWidth,centerY+buttonHeight/2};x+=wireWidth;
-    if (trackWidth) {
-        x+=divider;
-        layout.directionalTrack={x,centerY-Scale(app,8),x+trackWidth,centerY+Scale(app,8)};
-    }
     return layout;
 }
 
@@ -1231,15 +1231,24 @@ int HitLightingButton(const ViewerApp& app,POINT point)
     return -1;
 }
 
-void SetDirectionalLightFromTrackX(ViewerApp& app,int x)
+// Rotates the directional light so its gizmo sun lands under the pointer.
+// Returns false when the pointer is at the ring's center or the current view
+// makes the light's projected path degenerate, in which case the caller keeps
+// the existing angle.
+bool SetDirectionalLightFromGizmoPoint(ViewerApp& app, POINT point)
 {
-    const RECT track=ComputeLightingToolbarLayout(app).directionalTrack;
-    if (track.right<=track.left) return;
-    app.directionalLightAngle=std::clamp(
-        static_cast<float>(x-track.left)/static_cast<float>(track.right-track.left),0.0f,1.0f);
+    float angle = app.directionalLightAngle;
+    if (!app.gizmo.LightAngleForPoint(app.renderThread.LockCamera()->Orientation(),
+            static_cast<float>(point.x), static_cast<float>(point.y), app.directionalLightAngle, angle))
+    {
+        return false;
+    }
+    app.directionalLightAngle=angle;
     app.modeHudText=L"Directional light  "
-        +std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle*360.0f)))+L"°";
+        +std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle*360.0f)))+L"\u00B0";
     app.modeHudUntil=NowSeconds()+kHudVisibleSeconds;
+    InvalidateRect(app.window,nullptr,FALSE);
+    return true;
 }
 
 void SetLightingMode(ViewerApp& app,LightingMode mode)
@@ -1272,7 +1281,7 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     // never appears over something the user is actively using.
     if (app.chrome.pressed != Chrome::Part::None || app.infoButtonPressed || app.infoPanelCloseButtonPressed ||
         app.fullscreenButtonPressed || app.speedSliderDragging || app.zoomSliderDragging ||
-        app.lightingButtonPressed>=0 || app.directionalSliderDragging ||
+        app.lightingButtonPressed>=0 ||
         app.speedFlyoutOpen || app.settingsPanelOpen)
     {
         return {};
@@ -2197,10 +2206,19 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.rect=ComputeLightingToolbarLayout(app).directional;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
         info.checked=app.lightingMode==LightingMode::Directional;break;
     case Control::DirectionalLightAngle:
-        info.name=L"Directional light angle";info.description=L"Rotate the inspection light horizontally";
-        info.rect=ComputeLightingToolbarLayout(app).directionalTrack;
+    {
+        // The visual slider is gone; the fragment anchors to the navigation
+        // gizmo's outer ring, where the light is now rotated by dragging the
+        // sun. Arrow keys still nudge it for keyboard users.
+        float centerX=0.0f,centerY=0.0f,radius=0.0f;
+        app.gizmo.RingBounds(centerX,centerY,radius);
+        info.name=L"Directional light angle";
+        info.description=L"Rotate the inspection light by dragging its sun around the navigation gizmo";
+        info.rect=RECT{static_cast<LONG>(centerX-radius),static_cast<LONG>(centerY-radius),
+            static_cast<LONG>(centerX+radius),static_cast<LONG>(centerY+radius)};
         info.visible=model&&app.lightingMode==LightingMode::Directional;info.role=ROLE_SYSTEM_SLIDER;
         info.value=std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle*360.0f)))+L" degrees";break;
+    }
     case Control::Wireframe:
         info.name=L"Wireframe";info.description=L"Show only mesh edges with all triangle surfaces hidden";
         info.rect=ComputeLightingToolbarLayout(app).wireframe;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
@@ -2517,7 +2535,6 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.clayButtonRect=lighting.clay;
         overlay.directionalButtonRect=lighting.directional;
         overlay.wireframeButtonRect=lighting.wireframe;
-        overlay.directionalTrackRect=lighting.directionalTrack;
         overlay.studioButtonHover=app.lightingButtonHover==0;
         overlay.clayButtonHover=app.lightingButtonHover==1;
         overlay.directionalButtonHover=app.lightingButtonHover==2;
@@ -3159,7 +3176,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 return TRUE;
             }
             if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover
-                || app->lightingButtonHover>=0 || app->directionalSliderDragging)
+                || app->lightingButtonHover>=0)
             {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
@@ -3266,21 +3283,6 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (CanNavigate(*app))
         {
-            const auto lighting=ComputeLightingToolbarLayout(*app);
-            if (app->lightingMode==LightingMode::Directional)
-            {
-                RECT hitTrack=lighting.directionalTrack;
-                InflateRect(&hitTrack,0,Scale(*app,8));
-                if (PtInRect(&hitTrack,downPoint))
-                {
-                    SetCapture(window);
-                    app->directionalSliderDragging=true;
-                    SetDirectionalLightFromTrackX(*app,downPoint.x);
-                    InvalidateRect(window,nullptr,FALSE);
-                    UpdateTooltipTracking(*app);
-                    return 0;
-                }
-            }
             const int lightingButton=HitLightingButton(*app,downPoint);
             if (lightingButton>=0)
             {
@@ -3324,9 +3326,19 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             SetFocus(window);
             const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            const bool lightRing = app->lightingMode == LightingMode::Directional;
             const NavGizmo::Part part = app->gizmo.HitTest(app->renderThread.LockCamera()->Orientation(),
-                static_cast<float>(point.x), static_cast<float>(point.y));
-            if (part == NavGizmo::Part::Ball)
+                static_cast<float>(point.x), static_cast<float>(point.y), lightRing);
+            if (part == NavGizmo::Part::Light)
+            {
+                // Outer light ring: drag the sun to rotate the directional
+                // light. Never orbits the camera.
+                SetCapture(window);
+                app->pointerMode = PointerMode::LightDrag;
+                app->renderThread.LockCamera()->CancelInertia();
+                SetDirectionalLightFromGizmoPoint(*app, point);
+            }
+            else if (part == NavGizmo::Part::Ball)
             {
                 SetCapture(window);
                 app->pointerMode = PointerMode::GizmoOrbit;
@@ -3401,12 +3413,6 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             if (GetCapture() == window) SetFlySpeedFromFlyoutX(*app, movePoint.x);
             InvalidateRect(window, nullptr, FALSE);
-            return 0;
-        }
-        if (app->directionalSliderDragging)
-        {
-            if (GetCapture()==window) SetDirectionalLightFromTrackX(*app,movePoint.x);
-            InvalidateRect(window,nullptr,FALSE);
             return 0;
         }
         if (app->zoomSliderDragging)
@@ -3501,7 +3507,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (CanNavigate(*app) && PointInViewport(*app, movePoint))
             {
                 const NavGizmo::Part part = app->gizmo.HitTest(app->renderThread.LockCamera()->Orientation(),
-                    static_cast<float>(movePoint.x), static_cast<float>(movePoint.y));
+                    static_cast<float>(movePoint.x), static_cast<float>(movePoint.y),
+                    app->lightingMode == LightingMode::Directional);
                 if (part != app->gizmo.hover)
                 {
                     app->gizmo.hover = part;
@@ -3550,6 +3557,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 app->renderThread.LockCamera()->DollyDrag(deltaY);
                 WrapCursorIfNeeded(*app);
                 break;
+            case PointerMode::LightDrag:
+                SetDirectionalLightFromGizmoPoint(*app, pointer);
+                break;
             default: break;
             }
             // A plain-LMB orbit gesture also owns click-select: track whether
@@ -3570,13 +3580,6 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             app->speedSliderDragging = false;
             if (GetCapture() == window) ReleaseCapture();
-            UpdateTooltipTracking(*app);
-            return 0;
-        }
-        if (app->directionalSliderDragging)
-        {
-            app->directionalSliderDragging=false;
-            if (GetCapture()==window) ReleaseCapture();
             UpdateTooltipTracking(*app);
             return 0;
         }
@@ -3675,7 +3678,6 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     case WM_CAPTURECHANGED:
     case WM_CANCELMODE:
-        app->directionalSliderDragging=false;
         app->lightingButtonPressed=-1;
         EndPointer(*app);
         return 0;

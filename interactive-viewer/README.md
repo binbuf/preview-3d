@@ -133,7 +133,7 @@ separate deliverable.
 | Axis-snap truck | The title bar's Snap button |
 | Model information | The bottom bar's Info button (opens the Stats & Shading side panel) |
 | Studio / Clay / Directional lighting | The centered bottom lighting toolbar |
-| Rotate directional light | The angle slider shown in Directional mode |
+| Rotate directional light | Drag the sun around the navigation gizmo's outer ring in Directional mode |
 | Wireframe | The mesh icon beside the lighting modes; hides all triangle surfaces |
 | Share the open file | The title bar's Share button (Windows Share) |
 | Open the file in another app | The title bar's Open With dropdown |

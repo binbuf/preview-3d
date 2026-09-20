@@ -10,13 +10,20 @@ namespace
 {
 // Logical (96-DPI) geometry in pixels. The ball is the whole clickable disc;
 // stems and nodes are sized so their tips stay inside it.
-constexpr float kOuterLogical = 44.0f;
+constexpr float kOuterLogical = 48.0f;
 constexpr float kStemLogical = 30.0f;
 constexpr float kNodeLogical = 11.5f;
 constexpr float kDotLogical = 5.5f;
 constexpr float kStemWidthLogical = 2.4f;
 constexpr float kCornerMarginLogical = 14.0f;
 constexpr float kHitSlopLogical = 3.0f;
+// Half-width of the Part::Light annulus straddling the outer ring. Wide
+// enough to grab comfortably, narrow enough that the inner disc still reads
+// as the orbit target.
+constexpr float kLightRingBandLogical = 7.0f;
+// Fixed world +Z elevation of the directional light, matching the shader in
+// D3D12ViewerPath.cpp (normalize(float3(cos(azimuth), sin(azimuth), 0.24))).
+constexpr float kLightElevation = 0.24f;
 
 void AxisDirections(XMVECTOR cameraOrientation, XMVECTOR (&axes)[3])
 {
@@ -85,6 +92,7 @@ void NavGizmo::UpdateLayout(int viewportWidth, int viewportHeight, int topInset,
     dot_ = kDotLogical * scale;
     stemWidth_ = kStemWidthLogical * scale;
     hitSlop_ = kHitSlopLogical * scale;
+    ringBand_ = kLightRingBandLogical * scale;
     const float margin = kCornerMarginLogical * scale;
     const float width = std::max(1.0f, static_cast<float>(viewportWidth));
     const float top = static_cast<float>(topInset);
@@ -99,12 +107,13 @@ void NavGizmo::UpdateLayout(int viewportWidth, int viewportHeight, int topInset,
     hover = Part::None;
 }
 
-NavGizmo::Part NavGizmo::HitTest(XMVECTOR cameraOrientation, float pointerX, float pointerY) const
+NavGizmo::Part NavGizmo::HitTest(XMVECTOR cameraOrientation, float pointerX, float pointerY, bool lightRing) const
 {
     const float gx = pointerX - centerX_;
     const float gy = pointerY - centerY_;
-    const float reach = outer_ + hitSlop_;
-    if (gx * gx + gy * gy > reach * reach) return Part::None;
+    const float distanceSq = gx * gx + gy * gy;
+    const float reach = outer_ + (lightRing ? std::max(hitSlop_, ringBand_) : hitSlop_);
+    if (distanceSq > reach * reach) return Part::None;
 
     XMVECTOR axes[3]{};
     AxisDirections(cameraOrientation, axes);
@@ -154,9 +163,15 @@ NavGizmo::Part NavGizmo::HitTest(XMVECTOR cameraOrientation, float pointerX, flo
     // current view) silently grab the ball instead of snapping the view.
     if (best != Part::None) return best;
 
+    const float radialDistance = std::sqrt(distanceSq);
+    // The outer light ring owns an annulus straddling the white outline, so
+    // grabbing the outline rotates the light instead of orbiting the camera.
+    // The inner disc below stays the orbit target.
+    if (lightRing && std::abs(radialDistance - outer_) <= ringBand_) return Part::Light;
+
     // The ball: drag anywhere else on the disc to orbit.
     {
-        const float radius = outer_ - 2.0f * hitSlop_;
+        const float radius = lightRing ? outer_ - ringBand_ : outer_ - 2.0f * hitSlop_;
         const float squared = radius * radius - gx * gx - gy * gy;
         if (squared >= 0.0f) return Part::Ball;
     }
@@ -208,6 +223,97 @@ NavGizmo::DrawGeometry NavGizmo::ComputeDraw(XMVECTOR cameraOrientation) const
         geometry.negative[axis] = { -ax * stemLength_, ay * stemLength_, -az * stemLength_ };
     }
     return geometry;
+}
+
+NavGizmo::SunGeometry NavGizmo::ComputeSun(XMVECTOR cameraOrientation, float directionalLightAngle) const
+{
+    SunGeometry sun;
+    const float azimuth = directionalLightAngle * XM_2PI;
+    // Same direction the Directional shader uses in D3D12ViewerPath.cpp:
+    // normalize(float3(cos(azimuth), sin(azimuth), 0.24)). The fixed 0.24
+    // elevation (world +Z) keeps the projected direction well-defined for
+    // every camera, since the light is never exactly horizontal.
+    XMVECTOR lightDir = XMVectorSet(std::cos(azimuth), std::sin(azimuth), 0.24f, 0.0f);
+    lightDir = XMVector3Normalize(lightDir);
+    const XMVECTOR inverse = XMQuaternionConjugate(XMQuaternionNormalize(cameraOrientation));
+    const XMVECTOR view = XMVector3Rotate(lightDir, inverse);
+    const float vx = XMVectorGetX(view);
+    const float vy = XMVectorGetY(view);
+    const float horizontal = std::sqrt(vx * vx + vy * vy);
+    if (horizontal < 1e-4f) return sun;
+
+    // Project by azimuth only, so the marker rides the outer ring rather than
+    // collapsing toward the center as the light turns edge-on. Screen y grows
+    // downward, so the view-space y component flips.
+    sun.x = (vx / horizontal) * outer_;
+    sun.y = (-vy / horizontal) * outer_;
+    sun.depth = XMVectorGetZ(view);
+    sun.visible = true;
+    return sun;
+}
+
+bool NavGizmo::LightAngleForPoint(XMVECTOR cameraOrientation, float pointerX, float pointerY,
+    float currentAngle, float& angle) const
+{
+    const float gx = pointerX - centerX_;
+    const float gy = pointerY - centerY_;
+    if (gx * gx + gy * gy < 1.0f) return false;
+
+    XMVECTOR axes[3]{};
+    AxisDirections(cameraOrientation, axes);
+    // The light direction is normalize(cos a, sin a, elevation) in world
+    // space, so its view-space projection is s(a) = cos(a) A + sin(a) B + C,
+    // with screen y flipped (screen y grows downward).
+    const float ax = XMVectorGetX(axes[0]);
+    const float ay = -XMVectorGetY(axes[0]);
+    const float bx = XMVectorGetX(axes[1]);
+    const float by = -XMVectorGetY(axes[1]);
+    const float cx = kLightElevation * XMVectorGetX(axes[2]);
+    const float cy = -kLightElevation * XMVectorGetY(axes[2]);
+
+    // The pointer p is on the ring when s(a) is parallel to it, i.e.
+    // cross(s(a), p) = 0, which expands to alpha cos a + beta sin a + gamma = 0.
+    const float alpha = ax * gy - ay * gx;
+    const float beta = bx * gy - by * gx;
+    const float gamma = cx * gy - cy * gx;
+    const float magnitude = std::sqrt(alpha * alpha + beta * beta);
+    if (magnitude < 1e-5f) return false;
+    const float cosine = std::clamp(-gamma / magnitude, -1.0f, 1.0f);
+    const float base = std::atan2(beta, alpha);
+    const float spread = std::acos(cosine);
+    const float candidates[2] = { base + spread, base - spread };
+
+    auto alignment = [&](float candidate)
+    {
+        const float c = std::cos(candidate);
+        const float s = std::sin(candidate);
+        return (c * ax + s * bx + cx) * gx + (c * ay + s * by + cy) * gy;
+    };
+
+    const float firstAlignment = alignment(candidates[0]);
+    const float secondAlignment = alignment(candidates[1]);
+    float chosen = firstAlignment >= secondAlignment ? candidates[0] : candidates[1];
+    if (std::abs(firstAlignment - secondAlignment) < 1e-4f)
+    {
+        // Edge-on view: both solutions project onto the pointer, so keep the
+        // one nearest the current angle rather than flipping the light.
+        const float current = currentAngle * XM_2PI;
+        const float firstGap = std::abs(std::remainder(candidates[0] - current, XM_2PI));
+        const float secondGap = std::abs(std::remainder(candidates[1] - current, XM_2PI));
+        chosen = secondGap < firstGap ? candidates[1] : candidates[0];
+    }
+
+    float normalized = chosen / XM_2PI;
+    normalized -= std::floor(normalized);
+    angle = normalized;
+    return true;
+}
+
+void NavGizmo::RingBounds(float& centerX, float& centerY, float& radius) const
+{
+    centerX = centerX_;
+    centerY = centerY_;
+    radius = outer_;
 }
 
 ViewDir NavGizmo::ViewFor(Part part) const
