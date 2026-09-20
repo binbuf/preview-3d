@@ -1655,6 +1655,9 @@ void SyncDisplayedModel(ViewerApp& app)
         app.loadedModel = displayed->metadata;
         app.currentPath = displayed->path;
         app.warning = displayed->metadata->warning;
+        if (displayed->metadata->source.format == model_core::SourceFormatId::Step
+            && displayed->metadata->importStatus.optionalFeatureWarnings)
+            app.warning = L"Some STEP surfaces or assembly items could not be displayed.";
     }
 }
 

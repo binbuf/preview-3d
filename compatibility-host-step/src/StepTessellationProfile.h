@@ -28,7 +28,11 @@ namespace step_host {
 // v3 (STEP-005): re-enabled multi-threaded OCCT meshing after proving the
 // pinned `USE_TBB=OFF` port still has a parallel backend (OSD_Parallel's
 // built-in OSD_ThreadPool). See the `parallel` member comment.
-constexpr std::uint32_t kStepTessellationProfileVersion = 3;
+// v4: preserve double-precision placement before float normalization, emit
+// curved-face normals, honor XDE visibility/face colors, and mark reusable
+// geometry as instance-only sources.
+// v5: lower the minimum meshing edge to preserve small valid STEP features.
+constexpr std::uint32_t kStepTessellationProfileVersion = 5;
 
 enum class StepTessellationQuality : std::uint32_t {
     Coarse = 0,
@@ -52,7 +56,7 @@ struct StepTessellationProfile {
     double displayAngularDeflection = 0.25;
     // Minimum triangle edge as a fraction of the diagonal, clamped absolutely
     // so distorted surfaces cannot amplify into unbounded tessellation.
-    double relativeMinEdge = 0.001;
+    double relativeMinEdge = 0.0001;
     double minAbsoluteEdgeLength = 0.001;
     // One fixed thread policy. STEP-004 assumed `USE_TBB=OFF` meant no parallel
     // `OSD_Parallel` backend and recorded `false`. STEP-005 disproved that:
