@@ -31,7 +31,7 @@ using Microsoft::WRL::ComPtr;
 namespace
 {
 constexpr wchar_t kWindowClass[] = L"Preview3DWindow";
-constexpr wchar_t kApplicationName[] = L"3D Preview";
+constexpr wchar_t kApplicationName[] = L"Preview 3D";
 // Sandboxed import completion is separate from render-thread upload completion.
 constexpr UINT kD3D12ImportCompleteMessage = WM_APP + 3;
 constexpr UINT kActivationMessage = WM_APP + 8;
@@ -1926,7 +1926,7 @@ void ShowMoreMenu(ViewerApp& app)
     AppendMenuW(menu, MF_STRING, ID_VIEW_CONTROLS, L"Controls\t?");
     AppendMenuW(menu, MF_STRING, ID_VIEW_SETTINGS, L"Settings…");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, IDM_ABOUT, L"About 3D Preview");
+    AppendMenuW(menu, MF_STRING, IDM_ABOUT, L"About Preview 3D");
     RECT button = app.chrome.Button(Chrome::Part::Overflow).rect;
     POINT anchor{ button.right, button.bottom };
     ClientToScreen(app.window, &anchor);
@@ -2038,7 +2038,7 @@ void HandleCommand(ViewerApp& app, int id)
         break;
     case IDM_ABOUT:
         MessageBoxW(app.window, L"A native static viewer for glTF, OBJ, FBX, STL, PLY, the supported static 3MF preview subset, and USD-family models. 3MF includes Core, Materials, Production, and bounded Beam Lattice content. USD uses a fast isolated importer with a separate isolated OpenUSD compatibility host for bounded local composition.\n\nImports are bounded and local-only. No cloud, animation playback, editing, file modification, slicer-private multi-plate grouping, Explorer thumbnails, or persistent model cache.",
-            L"About 3D Preview", MB_OK | MB_ICONINFORMATION);
+            L"About Preview 3D", MB_OK | MB_ICONINFORMATION);
         break;
     case IDM_EXIT: DestroyWindow(app.window); break;
     }

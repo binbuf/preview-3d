@@ -13,7 +13,7 @@ Unicode true
   !define PRODUCT_FILE_VERSION "0.1.0.0"
 !endif
 
-!define PRODUCT_NAME "3D Preview"
+!define PRODUCT_NAME "Preview 3D"
 !define PRODUCT_PUBLISHER "Binbuf"
 !define PRODUCT_EXE "Preview3D.exe"
 !define PRODUCT_KEY "Software\Binbuf\Preview3D"
@@ -37,7 +37,7 @@ Unicode true
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT_FILE}"
-InstallDir "$PROGRAMFILES64\Binbuf\3D Preview"
+InstallDir "$PROGRAMFILES64\Binbuf\Preview 3D"
 InstallDirRegKey HKLM "${PRODUCT_KEY}" "InstallLocation"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
@@ -64,7 +64,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright (c) 2026 Binbuf"
 !define MUI_ICON "..\..\interactive-viewer\resources\App.ico"
 !define MUI_UNICON "..\..\interactive-viewer\resources\App.ico"
 !define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_TEXT "Review default apps for 3D Preview"
+!define MUI_FINISHPAGE_RUN_TEXT "Review default apps for Preview 3D"
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchDefaultApps
 
 !insertmacro MUI_PAGE_WELCOME
@@ -92,7 +92,7 @@ Function .onInit
 check_viewer_closed:
   FindWindow $0 "Preview3DWindow"
   StrCmp $0 0 viewer_closed
-  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Close 3D Preview before installing or upgrading, then choose Retry." IDRETRY check_viewer_closed
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Close Preview 3D before installing or upgrading, then choose Retry." IDRETRY check_viewer_closed
   Abort
 viewer_closed:
 FunctionEnd
@@ -103,13 +103,13 @@ Function un.onInit
 check_viewer_closed:
   FindWindow $0 "Preview3DWindow"
   StrCmp $0 0 viewer_closed
-  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Close 3D Preview before uninstalling, then choose Retry." IDRETRY check_viewer_closed
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Close Preview 3D before uninstalling, then choose Retry." IDRETRY check_viewer_closed
   Abort
 viewer_closed:
 FunctionEnd
 
 Function LaunchDefaultApps
-  ExecShell "open" "ms-settings:defaultapps?registeredAppMachine=3D%20Preview"
+  ExecShell "open" "ms-settings:defaultapps?registeredAppMachine=Preview%203D"
 FunctionEnd
 
 !macro RegisterProgId PROGID FRIENDLY_NAME
@@ -132,7 +132,7 @@ FunctionEnd
   DeleteRegKey /IfEmpty HKLM "Software\Classes\${EXT}"
 !macroend
 
-Section "3D Preview" SEC_MAIN
+Section "Preview 3D" SEC_MAIN
   SectionIn RO
   SetRegView 64
   SetShellVarContext all
@@ -170,9 +170,9 @@ Section "3D Preview" SEC_MAIN
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
-  CreateDirectory "$SMPROGRAMS\3D Preview"
-  CreateShortcut "$SMPROGRAMS\3D Preview\3D Preview.lnk" "$INSTDIR\${PRODUCT_EXE}"
-  CreateShortcut "$SMPROGRAMS\3D Preview\Uninstall 3D Preview.lnk" "$INSTDIR\Uninstall.exe"
+  CreateDirectory "$SMPROGRAMS\Preview 3D"
+  CreateShortcut "$SMPROGRAMS\Preview 3D\Preview 3D.lnk" "$INSTDIR\${PRODUCT_EXE}"
+  CreateShortcut "$SMPROGRAMS\Preview 3D\Uninstall Preview 3D.lnk" "$INSTDIR\Uninstall.exe"
 
   WriteRegStr HKLM "${PRODUCT_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${PRODUCT_KEY}" "Version" "${PRODUCT_VERSION}"
@@ -267,9 +267,9 @@ profile_cleanup_done:
   DeleteRegKey HKLM "${PRODUCT_KEY}"
   DeleteRegKey /IfEmpty HKLM "Software\Binbuf"
 
-  Delete "$SMPROGRAMS\3D Preview\3D Preview.lnk"
-  Delete "$SMPROGRAMS\3D Preview\Uninstall 3D Preview.lnk"
-  RMDir "$SMPROGRAMS\3D Preview"
+  Delete "$SMPROGRAMS\Preview 3D\Preview 3D.lnk"
+  Delete "$SMPROGRAMS\Preview 3D\Uninstall Preview 3D.lnk"
+  RMDir "$SMPROGRAMS\Preview 3D"
 
   Delete "$INSTDIR\worker\Preview3DImportWorker.exe"
   Delete "$INSTDIR\worker\bz2.dll"

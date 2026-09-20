@@ -9,7 +9,7 @@
     <ProjectGuid>{c1bf3f29-9e2b-4fd5-b45a-73f75d3c0120}</ProjectGuid>
     <RootNamespace>Preview3DOpenUsdCore</RootNamespace>
   </PropertyGroup>
-  <PropertyGroup Label="Vcpkg"><VcpkgEnableManifest>true</VcpkgEnableManifest><VcpkgInstalledDir>$(MSBuildThisFileDirectory)..\vcpkg_installed\$(Platform)\</VcpkgInstalledDir></PropertyGroup>
+  <PropertyGroup Label="Vcpkg"><VcpkgEnableManifest>true</VcpkgEnableManifest><VcpkgInstalledDir>$(MSBuildThisFileDirectory)..\vcpkg_installed\x64-windows\</VcpkgInstalledDir></PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType><UseDebugLibraries>true</UseDebugLibraries>

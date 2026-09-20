@@ -1,7 +1,7 @@
-3D Preview @VERSION@ for Windows 11 x64
+Preview 3D @VERSION@ for Windows 11 x64
 ========================================
 
-3D Preview is a local, read-only viewer for these direct-open types:
+Preview 3D is a local, read-only viewer for these direct-open types:
 
 * .glb and .gltf 2.0, including broker-approved local relative sidecars;
 * .obj polygon meshes with optional local .mtl and texture sidecars;
@@ -33,12 +33,12 @@ assets, and interactive variant selection are also outside the supported subset.
 File associations
 -----------------
 
-Setup registers 3D Preview with Windows Default Apps and Open With for .glb,
+Setup registers Preview 3D with Windows Default Apps and Open With for .glb,
 .gltf, .obj, .fbx, .stl, .ply, .3mf, .usd, .usda, .usdc, .usdz, .step, and .stp.
 Windows 11
 requires the signed-in user to confirm default app choices. Setup offers to
-open 3D Preview's Default Apps page after install;
-select 3D Preview for each listed extension there. Existing user choices are
+open Preview 3D's Default Apps page after install;
+select Preview 3D for each listed extension there. Existing user choices are
 never overwritten by setup.
 
 Isolation and data
@@ -64,8 +64,8 @@ as an inherited read-only handle rather than a path, and exits after the
 generation. Its commit cap is also min(4 GiB, 35% of physical memory). No
 importer can read another's private payload directory.
 
-3D Preview stores small UI preferences under
-%LOCALAPPDATA%\Binbuf\3D Preview. Uninstall leaves those preferences in place
+Preview 3D stores small UI preferences under
+%LOCALAPPDATA%\Binbuf\Preview 3D. Uninstall leaves those preferences in place
 and attempts to remove the uninstalling user's AppContainer profile. It removes
 only product-owned registration; source models and unrelated file associations
 are not touched.
