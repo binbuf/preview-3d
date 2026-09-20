@@ -707,12 +707,14 @@ void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const Nav
         D2D1::ColorF(0.24f, 0.57f, 1.00f, 1.0f) }; // Z blue
     const wchar_t axisLetters[3] = { L'X', L'Y', L'Z' };
 
-    // Ball: a quiet disc that brightens when the orbit-drag target. The white
-    // outer ring brightens independently when it is the light-rotation target.
+    // Ball: a quiet disc that brightens when the orbit-drag target. It is
+    // sized independently of the white ring so growing the ring leaves the
+    // interior untouched. The ring brightens when it is the light-rotation
+    // target.
     const bool ballHover = g.hover == NavGizmo::Part::Ball;
     const bool lightHover = g.hover == NavGizmo::Part::Light;
     SetBrush(D2D1::ColorF(0x11141A, ballHover ? 0.32f : 0.16f));
-    d2dContext_->FillEllipse(D2D1::Ellipse(center, g.outerRadius, g.outerRadius), overlayBrush.Get());
+    d2dContext_->FillEllipse(D2D1::Ellipse(center, g.ballRadius, g.ballRadius), overlayBrush.Get());
     SetBrush(D2D1::ColorF(lightHover ? 0xFFFFFF : 0xB9B9C2,
         lightHover ? 1.0f : (ballHover ? 0.95f : 0.40f)));
     d2dContext_->DrawEllipse(D2D1::Ellipse(center, g.outerRadius, g.outerRadius), overlayBrush.Get(),
@@ -780,20 +782,19 @@ void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const Nav
     }
 
     // Directional-light sun marker: a small sun riding the white outer ring at
-    // the azimuth the key light comes from, dimmed when the light is behind
-    // the model relative to the camera.
+    // the compass bearing of the key light. Always full opacity so it stays
+    // easy to see and grab.
     if (overlay.lightingMode == LightingMode::Directional)
     {
         const NavGizmo::SunGeometry sun = gizmo.ComputeSun(XMLoadFloat4(&orientation), overlay.directionalLightAngle);
         if (sun.visible)
         {
             const D2D1_POINT_2F position{ center.x + sun.x, center.y + sun.y };
-            const float alpha = sun.depth < 0.0f ? 0.42f : 1.0f;
             const float core = Scale(3.0f, scale);
             const float rayInner = Scale(4.5f, scale);
             const float rayOuter = Scale(7.3f, scale);
             const float sunStroke = Scale(1.5f, scale);
-            SetBrush(D2D1::ColorF(1.0f, 0.80f, 0.26f, alpha));
+            SetBrush(D2D1::ColorF(1.0f, 0.80f, 0.26f, 1.0f));
             d2dContext_->DrawEllipse(D2D1::Ellipse(position, core, core), overlayBrush.Get(), sunStroke);
             for (int ray = 0; ray < 8; ++ray)
             {

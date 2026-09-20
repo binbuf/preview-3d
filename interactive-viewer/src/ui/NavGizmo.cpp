@@ -8,9 +8,12 @@ using namespace DirectX;
 
 namespace
 {
-// Logical (96-DPI) geometry in pixels. The ball is the whole clickable disc;
-// stems and nodes are sized so their tips stay inside it.
-constexpr float kOuterLogical = 48.0f;
+// Logical (96-DPI) geometry in pixels. The dark ball disc and the white light
+// ring are sized independently: the ring is the drag target for the light and
+// floats a few pixels outside the disc, so growing it never changes the size
+// or centering of the ball, stems, and nodes inside.
+constexpr float kBallLogical = 48.0f;
+constexpr float kOuterLogical = 52.0f;
 constexpr float kStemLogical = 30.0f;
 constexpr float kNodeLogical = 11.5f;
 constexpr float kDotLogical = 5.5f;
@@ -20,10 +23,7 @@ constexpr float kHitSlopLogical = 3.0f;
 // Half-width of the Part::Light annulus straddling the outer ring. Wide
 // enough to grab comfortably, narrow enough that the inner disc still reads
 // as the orbit target.
-constexpr float kLightRingBandLogical = 7.0f;
-// Fixed world +Z elevation of the directional light, matching the shader in
-// D3D12ViewerPath.cpp (normalize(float3(cos(azimuth), sin(azimuth), 0.24))).
-constexpr float kLightElevation = 0.24f;
+constexpr float kLightRingBandLogical = 6.0f;
 
 void AxisDirections(XMVECTOR cameraOrientation, XMVECTOR (&axes)[3])
 {
@@ -33,6 +33,33 @@ void AxisDirections(XMVECTOR cameraOrientation, XMVECTOR (&axes)[3])
     axes[0] = XMVector3Rotate(XMVectorSet(1, 0, 0, 0), inverse);
     axes[1] = XMVector3Rotate(XMVectorSet(0, 1, 0, 0), inverse);
     axes[2] = XMVector3Rotate(XMVectorSet(0, 0, 1, 0), inverse);
+}
+
+// The camera's heading as two orthonormal world-space ground directions:
+// `right` (screen-right) and `forward` (where the camera faces, flattened to
+// the ground plane). Picking whichever of the camera's forward/right axes is
+// more horizontal keeps the frame defined when the view looks straight down
+// or the camera is rolled.
+void HorizontalCameraFrame(XMVECTOR cameraOrientation, XMVECTOR& right, XMVECTOR& forward)
+{
+    const XMVECTOR up = XMVectorSet(0, 0, 1, 0);
+    const XMVECTOR q = XMQuaternionNormalize(cameraOrientation);
+    const XMVECTOR cameraForward = XMVector3Rotate(XMVectorSet(0, 0, -1, 0), q);
+    const XMVECTOR cameraRight = XMVector3Rotate(XMVectorSet(1, 0, 0, 0), q);
+    const XMVECTOR forwardFlat = XMVectorSubtract(cameraForward,
+        XMVectorMultiply(up, XMVectorSplatZ(cameraForward)));
+    const XMVECTOR rightFlat = XMVectorSubtract(cameraRight,
+        XMVectorMultiply(up, XMVectorSplatZ(cameraRight)));
+    if (XMVectorGetX(XMVector3LengthSq(forwardFlat)) >= XMVectorGetX(XMVector3LengthSq(rightFlat)))
+    {
+        forward = XMVector3Normalize(forwardFlat);
+        right = XMVector3Normalize(XMVector3Cross(forward, up));
+    }
+    else
+    {
+        right = XMVector3Normalize(rightFlat);
+        forward = XMVector3Normalize(XMVector3Cross(up, right));
+    }
 }
 
 int PartIndex(int axis, bool positive)
@@ -86,6 +113,7 @@ XMVECTOR CanonicalViewOrientation(ViewDir view)
 void NavGizmo::UpdateLayout(int viewportWidth, int viewportHeight, int topInset, int bottomInset, float dpiScale)
 {
     const float scale = std::max(0.75f, dpiScale);
+    ball_ = kBallLogical * scale;
     outer_ = kOuterLogical * scale;
     stemLength_ = kStemLogical * scale;
     node_ = kNodeLogical * scale;
@@ -171,7 +199,7 @@ NavGizmo::Part NavGizmo::HitTest(XMVECTOR cameraOrientation, float pointerX, flo
 
     // The ball: drag anywhere else on the disc to orbit.
     {
-        const float radius = lightRing ? outer_ - ringBand_ : outer_ - 2.0f * hitSlop_;
+        const float radius = ball_;
         const float squared = radius * radius - gx * gx - gy * gy;
         if (squared >= 0.0f) return Part::Ball;
     }
@@ -207,6 +235,7 @@ NavGizmo::DrawGeometry NavGizmo::ComputeDraw(XMVECTOR cameraOrientation) const
     geometry.centerX = centerX_;
     geometry.centerY = centerY_;
     geometry.outerRadius = outer_;
+    geometry.ballRadius = ball_;
     geometry.nodeRadius = node_;
     geometry.dotRadius = dot_;
     geometry.stemWidth = stemWidth_;
@@ -229,81 +258,55 @@ NavGizmo::SunGeometry NavGizmo::ComputeSun(XMVECTOR cameraOrientation, float dir
 {
     SunGeometry sun;
     const float azimuth = directionalLightAngle * XM_2PI;
-    // Same direction the Directional shader uses in D3D12ViewerPath.cpp:
-    // normalize(float3(cos(azimuth), sin(azimuth), 0.24)). The fixed 0.24
-    // elevation (world +Z) keeps the projected direction well-defined for
-    // every camera, since the light is never exactly horizontal.
-    XMVECTOR lightDir = XMVectorSet(std::cos(azimuth), std::sin(azimuth), 0.24f, 0.0f);
-    lightDir = XMVector3Normalize(lightDir);
-    const XMVECTOR inverse = XMQuaternionConjugate(XMQuaternionNormalize(cameraOrientation));
-    const XMVECTOR view = XMVector3Rotate(lightDir, inverse);
-    const float vx = XMVectorGetX(view);
-    const float vy = XMVectorGetY(view);
-    const float horizontal = std::sqrt(vx * vx + vy * vy);
-    if (horizontal < 1e-4f) return sun;
+    const float cosine = std::cos(azimuth);
+    const float sine = std::sin(azimuth);
 
-    // Project by azimuth only, so the marker rides the outer ring rather than
-    // collapsing toward the center as the light turns edge-on. Screen y grows
-    // downward, so the view-space y component flips.
-    sun.x = (vx / horizontal) * outer_;
-    sun.y = (-vy / horizontal) * outer_;
-    sun.depth = XMVectorGetZ(view);
+    // Compass bearing: measure the light's horizontal direction against the
+    // camera's own ground-plane heading rather than projecting the 3D vector.
+    // The projection collapses to a line whenever the view is roughly level
+    // with the light's rotation plane (which is the common side-on view), and
+    // then the sun could never reach every angle. A yaw-only frame always
+    // spans the full ring for any camera pitch or roll.
+    XMVECTOR right = XMVectorZero();
+    XMVECTOR forward = XMVectorZero();
+    HorizontalCameraFrame(cameraOrientation, right, forward);
+    const XMVECTOR light = XMVectorSet(cosine, sine, 0.0f, 0.0f);
+    const float along = XMVectorGetX(XMVector3Dot(light, right));   // screen +x
+    const float ahead = XMVectorGetX(XMVector3Dot(light, forward)); // screen -y
+
+    // (along, ahead) is the unit light direction in the camera's ground frame,
+    // so the marker lands exactly on the ring.
+    sun.x = along * outer_;
+    sun.y = -ahead * outer_;
+
+    // Keep a true 3D depth so the renderer can tell when the light is on the
+    // far side of the model.
+    const XMVECTOR light3D = XMVector3Normalize(XMVectorSet(cosine, sine, 0.24f, 0.0f));
+    const XMVECTOR inverse = XMQuaternionConjugate(XMQuaternionNormalize(cameraOrientation));
+    sun.depth = XMVectorGetZ(XMVector3Rotate(light3D, inverse));
     sun.visible = true;
     return sun;
 }
 
 bool NavGizmo::LightAngleForPoint(XMVECTOR cameraOrientation, float pointerX, float pointerY,
-    float currentAngle, float& angle) const
+    float /*currentAngle*/, float& angle) const
 {
     const float gx = pointerX - centerX_;
     const float gy = pointerY - centerY_;
-    if (gx * gx + gy * gy < 1.0f) return false;
+    const float length = std::sqrt(gx * gx + gy * gy);
+    if (length < 1e-3f) return false;
 
-    XMVECTOR axes[3]{};
-    AxisDirections(cameraOrientation, axes);
-    // The light direction is normalize(cos a, sin a, elevation) in world
-    // space, so its view-space projection is s(a) = cos(a) A + sin(a) B + C,
-    // with screen y flipped (screen y grows downward).
-    const float ax = XMVectorGetX(axes[0]);
-    const float ay = -XMVectorGetY(axes[0]);
-    const float bx = XMVectorGetX(axes[1]);
-    const float by = -XMVectorGetY(axes[1]);
-    const float cx = kLightElevation * XMVectorGetX(axes[2]);
-    const float cy = -kLightElevation * XMVectorGetY(axes[2]);
+    XMVECTOR right = XMVectorZero();
+    XMVECTOR forward = XMVectorZero();
+    HorizontalCameraFrame(cameraOrientation, right, forward);
 
-    // The pointer p is on the ring when s(a) is parallel to it, i.e.
-    // cross(s(a), p) = 0, which expands to alpha cos a + beta sin a + gamma = 0.
-    const float alpha = ax * gy - ay * gx;
-    const float beta = bx * gy - by * gx;
-    const float gamma = cx * gy - cy * gx;
-    const float magnitude = std::sqrt(alpha * alpha + beta * beta);
-    if (magnitude < 1e-5f) return false;
-    const float cosine = std::clamp(-gamma / magnitude, -1.0f, 1.0f);
-    const float base = std::atan2(beta, alpha);
-    const float spread = std::acos(cosine);
-    const float candidates[2] = { base + spread, base - spread };
+    // Undo ComputeSun's screen mapping (screen +x is `right`, screen -y is
+    // `ahead`) and read the light's world azimuth back off the ground frame.
+    const float along = gx / length;
+    const float ahead = -gy / length;
+    const XMVECTOR light = XMVectorAdd(XMVectorScale(right, along), XMVectorScale(forward, ahead));
 
-    auto alignment = [&](float candidate)
-    {
-        const float c = std::cos(candidate);
-        const float s = std::sin(candidate);
-        return (c * ax + s * bx + cx) * gx + (c * ay + s * by + cy) * gy;
-    };
-
-    const float firstAlignment = alignment(candidates[0]);
-    const float secondAlignment = alignment(candidates[1]);
-    float chosen = firstAlignment >= secondAlignment ? candidates[0] : candidates[1];
-    if (std::abs(firstAlignment - secondAlignment) < 1e-4f)
-    {
-        // Edge-on view: both solutions project onto the pointer, so keep the
-        // one nearest the current angle rather than flipping the light.
-        const float current = currentAngle * XM_2PI;
-        const float firstGap = std::abs(std::remainder(candidates[0] - current, XM_2PI));
-        const float secondGap = std::abs(std::remainder(candidates[1] - current, XM_2PI));
-        chosen = secondGap < firstGap ? candidates[1] : candidates[0];
-    }
-
-    float normalized = chosen / XM_2PI;
+    float normalized = std::atan2(XMVectorGetY(light), XMVectorGetX(light)) / XM_2PI;
     normalized -= std::floor(normalized);
     angle = normalized;
     return true;
