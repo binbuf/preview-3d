@@ -1147,7 +1147,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
         // DrawText(L"or choose Open to browse", bodyFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
         //     centerY + Scale(40, scale), centerX + cardWidth * 0.45f, centerY + Scale(68, scale)), secondaryText,
         //     DWRITE_TEXT_ALIGNMENT_CENTER);
-        DrawText(L"Supported formats: GLB, GLTF, STL, PLY, OBJ/MTL, FBX, USD, 3MF", smallFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
+        DrawText(L"Supported formats: GLB/GLTF, STL, PLY, OBJ/MTL, FBX, USD/Z, 3MF, STEP/STP", smallFormat.Get(), D2D1::RectF(centerX - cardWidth * 0.45f,
             centerY + Scale(74, scale), centerX + cardWidth * 0.45f, centerY + Scale(100, scale)),
             D2D1::ColorF(0x747B86), DWRITE_TEXT_ALIGNMENT_CENTER);
     }
