@@ -129,12 +129,19 @@ public:
     void SetSmokeBudget(uint64_t bytes) { smokeBudgetBytes_.store(bytes); Invalidate(); }
     void SetSmokeUma(bool enabled) { smokeUma_.store(enabled); Invalidate(); }
     void SetSmokeUmaDevice() { path_.deviceOptions.preferUma=true; } // before Start only
-    std::function<bool(uint64_t)> CpuBudgetGuard() {
+    // Bounds the import process's private commit together with viewer growth
+    // and pending GPU destinations. `capOverride` is for a dedicated host
+    // (STEP/OCCT or USD compatibility) whose own Job ceiling is
+    // min(4 GiB, 35% of RAM) rather than the general Tier-B scratch cap; a
+    // legitimate large OCCT transfer must not be rejected as a resource limit
+    // while the host Job still allows it. Zero keeps the general policy cap.
+    std::function<bool(uint64_t)> CpuBudgetGuard(uint64_t capOverride = 0) {
         auto inbox=uploads_;
-        return [this,inbox](uint64_t workerBytes) {
+        return [this,inbox,capOverride](uint64_t workerBytes) {
             PROCESS_MEMORY_COUNTERS_EX memory{}; memory.cb=sizeof(memory);
             if (!K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory),sizeof(memory))) return false;
-            const auto baseline=baselineCpuBytes_, cap=cpuPolicyCap_; const bool uma=isUma_;
+            const auto baseline=baselineCpuBytes_, cap=capOverride ? capOverride : cpuPolicyCap_;
+            const bool uma=isUma_;
             const uint64_t growth=memory.PrivateUsage>baseline ? memory.PrivateUsage-baseline : 0;
             std::lock_guard<std::mutex> lock(inbox->mutex); inbox->workerPrivateBytes=workerBytes;
             const uint64_t destinations=(uma || inbox->simulateUma) ? inbox->gpuBaseBytes+inbox->gpuPendingBytes : 0;

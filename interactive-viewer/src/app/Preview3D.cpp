@@ -1767,7 +1767,13 @@ void BeginOpen(ViewerApp& app, std::wstring path)
     const bool delayBatches = app.renderThread.DelayBatches();
     const uint32_t faultForTesting = app.appSmoke ? app.faultForTesting : 0;
     auto detailSource = app.renderThread.DetailSource(generation);
-    auto cpuGuard = app.renderThread.CpuBudgetGuard();
+    // The STEP host is a dedicated OCCT payload whose Job allows
+    // min(4 GiB, 35% of RAM); the general Tier-B scratch cap would reject a
+    // legitimate large transfer as a resource limit. The host Job remains the
+    // hard bound.
+    const uint64_t hostCommitCap = format == d3d12_import_bridge::SourceFormat::Step
+        ? import_broker::DedicatedHostCommitLimitBytes() : 0;
+    auto cpuGuard = app.renderThread.CpuBudgetGuard(hostCommitCap);
     auto* stepPhase = &app.stepProgressPhase;
     auto* stepDone = &app.stepProgressDone;
     auto* stepTotal = &app.stepProgressTotal;
