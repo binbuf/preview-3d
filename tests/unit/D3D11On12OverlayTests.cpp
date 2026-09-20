@@ -655,3 +655,40 @@ TEST_CASE("Dragging the light ring recovers the angle the sun was drawn at", "[g
         CHECK(gap < 0.01f);
     }
 }
+
+TEST_CASE("The light ring reaches every angle from a level camera", "[graphics][gizmo]")
+{
+    NavGizmo gizmo;
+    gizmo.UpdateLayout(800, 600, 40, 40, 1.0f);
+    const auto geometry = gizmo.ComputeDraw(DirectX::XMQuaternionIdentity());
+    // Front and Right are the level views that used to collapse the light's
+    // projected path to a line, leaving half the ring unreachable.
+    const DirectX::XMVECTOR cameras[3] = {
+        DirectX::XMQuaternionIdentity(),
+        CanonicalViewOrientation(ViewDir::Front),
+        CanonicalViewOrientation(ViewDir::Right) };
+
+    for (const DirectX::XMVECTOR& camera : cameras)
+    {
+        bool positiveX = false, negativeX = false, positiveY = false, negativeY = false;
+        for (int step = 0; step < 72; ++step)
+        {
+            const float expected = static_cast<float>(step) / 72.0f;
+            const auto sun = gizmo.ComputeSun(camera, expected);
+            REQUIRE(sun.visible);
+            positiveX = positiveX || sun.x > 1.0f;
+            negativeX = negativeX || sun.x < -1.0f;
+            positiveY = positiveY || sun.y > 1.0f;
+            negativeY = negativeY || sun.y < -1.0f;
+            float recovered = -1.0f;
+            REQUIRE(gizmo.LightAngleForPoint(camera, geometry.centerX + sun.x, geometry.centerY + sun.y,
+                expected, recovered));
+            CHECK(std::abs(std::remainder(recovered - expected, 1.0f)) < 0.01f);
+        }
+        // All four quadrants of the ring are reachable.
+        CHECK(positiveX);
+        CHECK(negativeX);
+        CHECK(positiveY);
+        CHECK(negativeY);
+    }
+}

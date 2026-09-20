@@ -60,7 +60,8 @@ public:
     {
         float centerX = 0.0f;
         float centerY = 0.0f;
-        float outerRadius = 0.0f;
+        float outerRadius = 0.0f;  // white light ring
+        float ballRadius = 0.0f;   // dark disc inside it
         float nodeRadius = 0.0f;
         float dotRadius = 0.0f;
         float stemWidth = 0.0f;
@@ -71,9 +72,12 @@ public:
 
     // Screen-space placement of the directional-light sun marker. While the
     // Directional lighting mode is active the renderer draws a small sun on
-    // the gizmo's outer ring here, showing the azimuth the key light comes
-    // from. `depth` is the view-space z of the light direction: positive
-    // means the light is on the viewer's side of the model.
+    // the gizmo's outer ring here. The position is a camera-relative compass
+    // bearing: the light's horizontal direction is measured against the
+    // camera's own ground-plane heading, so the marker always sweeps the full
+    // circle as the light rotates, no matter how the view is tilted. `depth`
+    // is the view-space z of the true 3D light direction (positive means the
+    // light is on the viewer's side of the model).
     struct SunGeometry
     {
         bool visible = false;
@@ -108,20 +112,18 @@ public:
 
     // Places the directional-light sun marker on the outer ring for the
     // current camera. `directionalLightAngle` is the app's normalized 0..1
-    // horizontal rotation; the resulting world direction matches the
-    // directional light in D3D12ViewerPath.cpp's shader. The direction is
-    // projected by azimuth only, so the sun stays on the ring even when the
-    // light points toward or away from the viewer (that case is reported
-    // through `depth` so the renderer can dim it).
+    // horizontal rotation. The marker is a compass bearing relative to the
+    // camera's own ground-plane heading, so it can always sweep the full ring
+    // (the true 3D light direction's view depth is still reported through
+    // `depth`).
     SunGeometry ComputeSun(DirectX::XMVECTOR cameraOrientation, float directionalLightAngle) const;
 
     // Inverts ComputeSun: given a pointer on the light ring, returns (via
     // `angle`) the normalized 0..1 directional-light angle whose sun marker
     // lands under that pointer, so dragging the ring makes the sun follow the
-    // cursor. `currentAngle` only breaks ties when the current view makes the
-    // light's projected path edge-on. Returns false when the pointer is at the
-    // ring's center or the mapping is otherwise undefined, in which case the
-    // caller should leave the light angle unchanged.
+    // cursor. `currentAngle` is unused by the compass mapping but kept for
+    // symmetry with ComputeSun. Returns false only when the pointer is at the
+    // ring's center, in which case the caller should leave the angle unchanged.
     bool LightAngleForPoint(DirectX::XMVECTOR cameraOrientation, float pointerX, float pointerY,
         float currentAngle, float& angle) const;
 
@@ -139,6 +141,7 @@ private:
     float centerX_ = 0.0f;
     float centerY_ = 0.0f;
     float outer_ = 0.0f;
+    float ball_ = 0.0f;
     float stemLength_ = 0.0f;
     float node_ = 0.0f;
     float dot_ = 0.0f;
