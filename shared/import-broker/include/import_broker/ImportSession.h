@@ -324,6 +324,15 @@ void ShutdownImportWorkerPool();
 // the viewer's loader lanes have stopped.
 void ShutdownCompatibilityHost();
 
+// Derived Job private-commit ceiling for a dedicated import host (the USD
+// compatibility host and the STEP host): min(4 GiB, 35% of visible physical
+// memory), the same limit RunImportSession assigns when the request's
+// per-host override is zero. The viewer's CPU policy must use this rather
+// than its general Tier-B parser/normalizer scratch cap, or a legitimate
+// large STEP/OCCT transfer is rejected at ValidateSection as `StepHostLimit`
+// before its first batch even though the host Job allowed the memory.
+uint64_t DedicatedHostCommitLimitBytes();
+
 // Synchronous, and blocking for as long as the worker takes to reply. Call
 // from a background thread. Never throws for an ordinary import failure --
 // every expected fault is reported through ImportSessionResult::stage.

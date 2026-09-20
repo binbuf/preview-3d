@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -426,4 +427,186 @@ TEST_CASE("STEP-008 transfer heartbeat keeps a short broker reply timeout alive"
     CHECK(result.ok);
     // The phase-boundary event plus at least one throttled heartbeat.
     CHECK(transferEvents > 1);
+}
+
+// Opt-in planner diagnostic for a locally supplied assembly. It streams the
+// real host scene and reports node/instance/geometry totals, the number of
+// distinct instance nodes, any two distinct geometry chunks carrying identical
+// bytes (a duplicated definition), and any two same-definition instances whose
+// world AABBs overlap by more than half the smaller volume (a duplicated or
+// interfering placement), with the node ancestry of each overlapping pair.
+// This is the tool used to triage the OQD_isolated_blade_trap_assembly.stp
+// duplicate piece: that scene has no duplicate checksums and its overlapping
+// pairs are distinct placements, so the host faithfully expands the OCCT XDE
+// graph rather than duplicating an occurrence.
+//
+//   set PREVIEW3D_MANUAL_STEP_FILE=<abs path to a .stp/.step>
+//   x64/Release/Tests.ImportIsolation.exe "[.][step-scene-diag]"
+TEST_CASE("STEP planner scene diagnostic for a manual corpus item",
+          "[.][step-scene-diag]")
+{
+    wchar_t* rawPath = nullptr;
+    std::size_t rawLength = 0;
+    if (_wdupenv_s(&rawPath, &rawLength, L"PREVIEW3D_MANUAL_STEP_FILE") != 0 || !rawPath
+        || !*rawPath) {
+        std::free(rawPath);
+        WARN("PREVIEW3D_MANUAL_STEP_FILE is not set; skipping scene diagnostic");
+        return;
+    }
+    const std::wstring sourcePath(rawPath);
+    std::free(rawPath);
+
+    import_broker::ImportSessionRequest request;
+    request.format = import_broker::ImportFormat::Step;
+    request.sourcePath = sourcePath;
+    request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;
+    request.generationId = 0x6820;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = import_broker::kImportMaxChunkCount;
+    request.maxChunkBatchesPerGeneration = 4096;
+    request.maxChunksPerGeneration = 0;
+    request.replyTimeoutMs = 1'800'000;
+    request.cpuBudgetAllows = [](std::uint64_t) { return true; };
+
+    std::vector<import_broker::ValidatedChunk> chunks;
+    request.onBatch = [&chunks](std::vector<import_broker::ValidatedChunk>&& batch) {
+        for (auto& chunk : batch) chunks.push_back(std::move(chunk));
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(20);
+    request.isCancelled = [&deadline] {
+        return std::chrono::steady_clock::now() > deadline;
+    };
+
+    const auto result = import_broker::RunImportSession(request);
+    REQUIRE(result.ok);
+
+    std::uint32_t geometry = 0, materials = 0, nodes = 0, instances = 0;
+    std::uint32_t roots = 0;
+    std::vector<std::uint64_t> geometryChecksums;
+    std::map<std::uint32_t, std::uint32_t> meshIdByChunk;
+    std::map<std::uint32_t, std::uint32_t> vertexByChunk;
+    struct Placed {
+        std::uint32_t geometryChunkId;
+        std::uint32_t nodeId;
+        double worldMin[3];
+        double worldMax[3];
+    };
+    std::vector<Placed> placed;
+    std::map<std::uint32_t, model_core::NodePayload> nodeById;
+    for (const auto& chunk : chunks) {
+        switch (chunk.descriptor.topology) {
+        case model_core::ChunkTopology::TriangleList:
+        case model_core::ChunkTopology::PointList:
+            ++geometry;
+            geometryChecksums.push_back(chunk.descriptor.chunkChecksum);
+            meshIdByChunk[chunk.descriptor.chunkId] = chunk.descriptor.meshId;
+            vertexByChunk[chunk.descriptor.chunkId] = chunk.descriptor.vertexCount;
+            break;
+        case model_core::ChunkTopology::Material: ++materials; break;
+        case model_core::ChunkTopology::Node: {
+            ++nodes;
+            model_core::NodePayload payload{};
+            if (chunk.payload.size() >= sizeof(payload)) {
+                std::memcpy(&payload, chunk.payload.data(), sizeof(payload));
+                nodeById[payload.nodeId] = payload;
+                if (payload.parentNodeId == 0) ++roots;
+            }
+            break;
+        }
+        case model_core::ChunkTopology::MeshInstance: {
+            ++instances;
+            model_core::MeshInstancePayload payload{};
+            if (chunk.payload.size() >= sizeof(payload)) {
+                std::memcpy(&payload, chunk.payload.data(), sizeof(payload));
+                Placed p{payload.geometryChunkId, payload.nodeId,
+                         {payload.worldMin[0], payload.worldMin[1], payload.worldMin[2]},
+                         {payload.worldMax[0], payload.worldMax[1], payload.worldMax[2]}};
+                placed.push_back(p);
+            }
+            break;
+        }
+        default: break;
+        }
+    }
+
+    std::sort(geometryChecksums.begin(), geometryChecksums.end());
+    std::uint32_t duplicateChecksums = 0;
+    for (std::size_t i = 1; i < geometryChecksums.size(); ++i)
+        if (geometryChecksums[i] == geometryChecksums[i - 1]) ++duplicateChecksums;
+
+    {
+        std::vector<std::uint32_t> instanceNodes;
+        instanceNodes.reserve(placed.size());
+        for (const auto& p : placed) instanceNodes.push_back(p.nodeId);
+        std::sort(instanceNodes.begin(), instanceNodes.end());
+        const auto uniqueEnd = std::unique(instanceNodes.begin(), instanceNodes.end());
+        std::printf("[step-scene-diag] distinctInstanceNodes=%zu\n",
+                    static_cast<std::size_t>(uniqueEnd - instanceNodes.begin()));
+    }
+
+    // Two instances of the same definition whose world AABBs overlap by more
+    // than half the smaller volume are a duplicate placement, not an assembly
+    // of adjacent parts.
+    const auto printChain = [&](const Placed& p) {
+        std::uint32_t id = p.nodeId;
+        int guard = 0;
+        while (id != 0 && guard++ < 64) {
+            const auto it = nodeById.find(id);
+            if (it == nodeById.end()) break;
+            std::printf("[step-scene-diag-chain] geom=%u node=%u parent=%u "
+                        "t=(%.3f,%.3f,%.3f)\n",
+                        p.geometryChunkId, id, it->second.parentNodeId,
+                        it->second.localTransform[12], it->second.localTransform[13],
+                        it->second.localTransform[14]);
+            id = it->second.parentNodeId;
+        }
+    };
+    std::uint32_t overlapping = 0;
+    for (std::size_t i = 0; i < placed.size(); ++i) {
+        for (std::size_t j = i + 1; j < placed.size(); ++j) {
+            if (placed[i].geometryChunkId != placed[j].geometryChunkId) continue;
+            double overlapVolume = 1.0, volumeI = 1.0, volumeJ = 1.0;
+            for (int axis = 0; axis < 3; ++axis) {
+                const double low = (std::max)(placed[i].worldMin[axis], placed[j].worldMin[axis]);
+                const double high = (std::min)(placed[i].worldMax[axis], placed[j].worldMax[axis]);
+                overlapVolume *= (std::max)(0.0, high - low);
+                volumeI *= placed[i].worldMax[axis] - placed[i].worldMin[axis];
+                volumeJ *= placed[j].worldMax[axis] - placed[j].worldMin[axis];
+            }
+            if (overlapVolume > 0.5 * (std::min)(volumeI, volumeJ)) {
+                ++overlapping;
+                std::printf("[step-scene-diag-overlap] geom=%u mesh=%u verts=%u "
+                            "a=(%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) "
+                            "b=(%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f) overlap=%.2f\n",
+                            placed[i].geometryChunkId,
+                            meshIdByChunk[placed[i].geometryChunkId],
+                            vertexByChunk[placed[i].geometryChunkId],
+                            placed[i].worldMin[0], placed[i].worldMin[1], placed[i].worldMin[2],
+                            placed[i].worldMax[0], placed[i].worldMax[1], placed[i].worldMax[2],
+                            placed[j].worldMin[0], placed[j].worldMin[1], placed[j].worldMin[2],
+                            placed[j].worldMax[0], placed[j].worldMax[1], placed[j].worldMax[2],
+                            overlapVolume);
+                printChain(placed[i]);
+                printChain(placed[j]);
+            }
+        }
+    }
+
+    std::printf("[step-scene-diag] geometry=%u materials=%u nodes=%u roots=%u instances=%u "
+                "meshCount=%u duplicateGeometryChecksums=%u overlappingSameDefinitionPairs=%u\n",
+                geometry, materials, nodes, roots, instances,
+                chunks.empty() ? 0u : chunks.front().scene.meshCount,
+                duplicateChecksums, overlapping);
+    {
+        std::map<std::uint32_t, std::uint32_t> instancesByMesh;
+        for (const auto& p : placed) {
+            const auto it = meshIdByChunk.find(p.geometryChunkId);
+            if (it != meshIdByChunk.end()) ++instancesByMesh[it->second];
+        }
+        for (const auto& [mesh, count] : instancesByMesh) {
+            if (count > 1)
+                std::printf("[step-scene-diag-mesh] mesh=%u instances=%u\n", mesh, count);
+        }
+    }
+    CHECK(result.ok);
 }

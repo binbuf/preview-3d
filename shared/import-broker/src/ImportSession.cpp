@@ -138,12 +138,7 @@ const WorkerContainer& AcquireCompatibilityContainer(const std::wstring& hostExe
 
 uint64_t CompatibilityCommitLimitBytes()
 {
-    MEMORYSTATUSEX memory{};
-    memory.dwLength = sizeof(memory);
-    const uint64_t fourGiB = 4ull * 1024ull * 1024ull * 1024ull;
-    if (!GlobalMemoryStatusEx(&memory)) return fourGiB;
-    const uint64_t thirtyFivePercent = memory.ullTotalPhys / 100ull * 35ull;
-    return (std::min)(fourGiB, thirtyFivePercent);
+    return DedicatedHostCommitLimitBytes();
 }
 
 // Dedicated STEP host identity. Like the USD compatibility host it is granted
@@ -552,6 +547,16 @@ ProcessCoordinator& StepHostCoordinator()
 }
 
 } // namespace
+
+uint64_t DedicatedHostCommitLimitBytes()
+{
+    MEMORYSTATUSEX memory{};
+    memory.dwLength = sizeof(memory);
+    const uint64_t fourGiB = 4ull * 1024ull * 1024ull * 1024ull;
+    if (!GlobalMemoryStatusEx(&memory)) return fourGiB;
+    const uint64_t thirtyFivePercent = memory.ullTotalPhys / 100ull * 35ull;
+    return (std::min)(fourGiB, thirtyFivePercent);
+}
 
 bool PrepareImportSandbox(const std::wstring& workerExePath)
 {
