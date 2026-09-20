@@ -105,7 +105,7 @@ index f869e8f..538d5b9 100644
 +++ b/src/Image/Image_AlienPixMap.cxx
 @@ -21,7 +21,6 @@
    #include <FreeImage.h>
-
+ 
    #ifdef _MSC_VER
 -    #pragma comment( lib, "FreeImage.lib" )
    #endif
