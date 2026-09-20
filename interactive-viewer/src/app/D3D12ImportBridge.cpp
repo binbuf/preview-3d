@@ -295,6 +295,48 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
         (session.errorCode >= model_core::ImportErrorCode::PrimarySourceLimit &&
          session.errorCode <= model_core::ImportErrorCode::ArchiveLimit))
         DescribeImportError(session.errorCode, summary, details);
+    // Every non-resource compatibility-host fault collapses to one closed code
+    // by design, so the product-owned stage/phase is the only remaining detail.
+    // Surface it rather than the generic one-liner.
+    if (session.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure) {
+        using import_broker::ImportStage;
+        switch (session.stage) {
+        case ImportStage::WorkerReportedError:
+            summary = L"The USD compatibility importer could not complete this stage.";
+            switch (session.errorPhase) {
+            case model_core::ImportFailurePhase::Geometry:
+                details = L"The compatibility host stopped while parsing or normalizing the stage geometry."; break;
+            case model_core::ImportFailurePhase::Sidecars:
+                details = L"The compatibility host stopped while resolving the stage's referenced layers or sidecars."; break;
+            case model_core::ImportFailurePhase::Textures:
+                details = L"The compatibility host stopped while decoding the stage's textures."; break;
+            default:
+                details = L"The compatibility host stopped before producing preview geometry."; break;
+            }
+            break;
+        case ImportStage::ValidateSection:
+        case ImportStage::UnexpectedReply:
+            summary = L"The USD compatibility importer returned invalid data.";
+            details = L"The compatibility host response failed validation and was discarded.";
+            break;
+        case ImportStage::AwaitReply:
+        case ImportStage::ReplyTimedOut:
+            summary = L"The USD compatibility importer stopped responding.";
+            details = L"The compatibility host was shut down before it completed this stage.";
+            break;
+        case ImportStage::CreateOutputSection:
+        case ImportStage::CreateSandboxProfile:
+        case ImportStage::CreateControlChannel:
+        case ImportStage::LaunchWorker:
+        case ImportStage::ResumeWorker:
+        case ImportStage::SendRequest:
+            summary = L"The USD compatibility importer could not be started.";
+            details = L"The isolated compatibility host process or its shared resources could not be prepared.";
+            break;
+        default:
+            break;
+        }
+    }
 }
 
 std::wstring SourceFormatLabel(const std::wstring& path)
