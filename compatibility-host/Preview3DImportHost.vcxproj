@@ -18,7 +18,7 @@
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
-    <VcpkgInstalledDir>$(MSBuildThisFileDirectory)..\vcpkg_installed\x64-windows\</VcpkgInstalledDir>
+    <VcpkgInstalledDir>$(MSBuildThisFileDirectory)..\vcpkg_installed\x64-windows-static-md\</VcpkgInstalledDir>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">

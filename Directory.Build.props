@@ -54,12 +54,46 @@
   <PropertyGroup>
     <VcpkgEnabled Condition="'$(VcpkgEnabled)'=='' and '$(VcpkgEnableManifest)'!='true'">false</VcpkgEnabled>
   </PropertyGroup>
+
+  <!--
+    Static dependency closure.
+
+    The release payload must not contain upstream DLLs. Windows Smart App
+    Control evaluates every executable image separately, and SignPath
+    Foundation's free certificate may only sign this project's own binaries, so
+    an unsigned zstd.dll/draco.dll/usd_ms.dll/TK*.dll would still be blocked
+    even after the app itself is signed. VcpkgUseStatic + VcpkgUseMD select the
+    x64-windows-static-md triplet (static vcpkg libraries, dynamic
+    Microsoft-signed CRT), leaving only Preview3D.exe, Preview3DImportWorker.exe,
+    Preview3DImportHost.exe, Preview3DOpenUsdCore.dll, and
+    Preview3DStepHost.exe as executable images.
+
+    The projects that consume vcpkg hardcode the matching
+    vcpkg_installed\x64-windows-static-md directory in VcpkgInstalledDir,
+    because that property is evaluated before this file is imported.
+  -->
+  <PropertyGroup>
+    <VcpkgUseStatic Condition="'$(VcpkgUseStatic)'==''">true</VcpkgUseStatic>
+    <VcpkgUseMD Condition="'$(VcpkgUseMD)'==''">true</VcpkgUseMD>
+  </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <WarningLevel>Level4</WarningLevel>
       <SDLCheck>true</SDLCheck>
+      <!--
+        Consumer-side defines for the statically linked dependency closure.
+        vcpkg's CMake configs normally publish these through
+        INTERFACE_COMPILE_DEFINITIONS, but MSBuild consumes vcpkg through
+        autolink only, so the static variants have to be set here:
+          PXR_STATIC      OpenUSD's single global (see pxr/base/arch/export.h)
+          KHRONOS_STATIC  ktx/KHRONOS public API
+          KTX_FEATURE_*   features the ktx static lib was built with
+          SIMDJSON_THREADS_ENABLED=1, ZIP_STATIC  as in the vcpkg static configs
+        They are inert for projects that do not include those headers.
+      -->
+      <PreprocessorDefinitions>PXR_STATIC;KHRONOS_STATIC;BASISU_NO_ITERATOR_DEBUG_LEVEL;KTX_FEATURE_KTX1;KTX_FEATURE_KTX2;KTX_FEATURE_WRITE;SIMDJSON_THREADS_ENABLED=1;ZIP_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/permissive- /utf-8 %(AdditionalOptions)</AdditionalOptions>
       <!-- TreatWarningAsError (not the .NET-SDK-style "TreatWarningsAsErrors"
            property, which has no effect on VC++ ClCompile) is the actual

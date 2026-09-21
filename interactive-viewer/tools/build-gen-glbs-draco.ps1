@@ -7,7 +7,7 @@ $sdkVer = $sdkDir.Name
 $toolsDir = $PSScriptRoot
 $repoRoot = Split-Path -Parent $PSScriptRoot           # interactive-viewer/
 $gitRoot = Split-Path -Parent $repoRoot                # repo root -- vcpkg_installed/ lives here
-$vcpkgInstalled = "$gitRoot\vcpkg_installed\x64-windows\x64-windows"
+$vcpkgInstalled = "$gitRoot\vcpkg_installed\x64-windows-static-md\x64-windows-static-md"
 $objDir = "$repoRoot\obj_test"
 New-Item -ItemType Directory -Force -Path $objDir | Out-Null
 
@@ -24,8 +24,6 @@ New-Item -ItemType Directory -Force -Path $objDir | Out-Null
     draco.lib
 if ($LASTEXITCODE -ne 0) { throw 'compile failed' }
 
-# draco.dll must be next to the generator .exe (or on PATH) to actually run it.
-Copy-Item "$vcpkgInstalled\bin\draco.dll" "$toolsDir\draco.dll" -Force
-
+# The release triplet links draco statically, so there is no draco.dll to stage.
 & "$toolsDir\gen-test-glbs-draco.exe"
 if ($LASTEXITCODE -ne 0) { throw 'generation failed' }

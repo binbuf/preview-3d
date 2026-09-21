@@ -3911,6 +3911,22 @@ bool CreateMainWindow(ViewerApp& app, int showCommand)
     UpdateWindow(gMainWindow);
     return true;
 }
+
+// Smart App Control evaluates every executable image separately and has no
+// per-app exception, so an unsigned engineering build can be blocked even when
+// the main executable is allowed. Detect it up front so the user gets an
+// explanation instead of a Bad Image dialog from a bundled DLL. The policy
+// value is 0 when Smart App Control is off; any other value means it is active.
+bool IsSmartAppControlActive()
+{
+    DWORD state = 0;
+    DWORD stateSize = sizeof(state);
+    const LSTATUS status = RegGetValueW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\CI\\Policy",
+        L"VerifiedAndReputablePolicyState",
+        RRF_RT_REG_DWORD, nullptr, &state, &stateSize);
+    return status == ERROR_SUCCESS && state != 0;
+}
 }
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
@@ -4067,6 +4083,19 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         if (app.activeInstance.Forward(command, instanceError)) return 0;
         MessageBoxW(nullptr, instanceError.c_str(), kApplicationName, MB_OK | MB_ICONERROR);
         return 3;
+    }
+
+    // Explain an unsigned engineering build up front on Smart App Control
+    // machines. It cannot be bypassed per app, and it may later refuse a bundled
+    // dependency (for example worker\zstd.dll with status 0xC0E90002). Skipped
+    // for smoke/benchmark runs so automation is never interrupted by a dialog.
+    if (!app.appSmoke && !app.benchmarkMode && app.benchFrames == 0 && IsSmartAppControlActive())
+    {
+        MessageBoxW(nullptr,
+            L"Smart App Control is active on this PC, and this Preview 3D build is unsigned.\n\n"
+            L"Smart App Control has no per-app exception, so Windows may block the app or one of the DLLs bundled beside it (for example worker\\zstd.dll, error status 0xC0E90002).\n\n"
+            L"If Preview 3D is blocked, turn off Smart App Control under Windows Security > App & browser control > Smart App Control settings.",
+            kApplicationName, MB_OK | MB_ICONWARNING);
     }
 
     comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);

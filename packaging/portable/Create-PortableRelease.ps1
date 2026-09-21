@@ -178,20 +178,12 @@ if ($Distribution -eq 'Portable' -and (Test-Path -LiteralPath $archiveChecksum))
 }
 
 $viewerFiles = @('Preview3D.exe')
+# The release triplet statically links the worker's dependency closure, so no
+# upstream DLLs (draco, fastgltf, ktx, lib3mf, libwebp, meshoptimizer, simdjson,
+# zlib, libzip, bzip2, zstd) are deployed or shipped. Only the app's own images
+# remain, which keeps Smart App Control and code-signing coverage tractable.
 $workerFiles = @(
-    'Preview3DImportWorker.exe',
-    'bz2.dll',
-    'draco.dll',
-    'fastgltf.dll',
-    'ktx.dll',
-    'lib3mf.dll',
-    'libsharpyuv.dll',
-    'libwebp.dll',
-    'meshoptimizer.dll',
-    'simdjson.dll',
-    'z.dll',
-    'zip.dll',
-    'zstd.dll'
+    'Preview3DImportWorker.exe'
 )
 foreach ($name in $viewerFiles) {
     Copy-RequiredFile (Join-Path $buildOutput $name) (Join-Path $stage $name)
@@ -201,15 +193,12 @@ foreach ($name in $workerFiles) {
 }
 
 $openUsdHostSource = Join-Path $buildOutput 'OpenUsdHost'
+# OpenUSD, TBB, KTX, libwebp, and zstd are statically linked into
+# Preview3DOpenUsdCore.dll by the release triplet. Only the host executable, the
+# app's own core DLL, and OpenUSD's generated schema/plugin resources ship.
 $openUsdHostFiles = @(
     'Preview3DImportHost.exe',
     'Preview3DOpenUsdCore.dll',
-    'ktx.dll',
-    'libsharpyuv.dll',
-    'libwebp.dll',
-    'tbb12.dll',
-    'usd_ms.dll',
-    'zstd.dll',
     'usd\plugInfo.json',
     'usd\ar\resources\plugInfo.json',
     'usd\preview3d\resources\plugInfo.json',
@@ -229,35 +218,12 @@ foreach ($relativePath in $openUsdHostFiles) {
 }
 
 $stepHostSource = Join-Path $buildOutput 'StepHost'
-# Closed OCCT closure for the dedicated STEP host: only the modeling/data-
-# exchange/foundation toolkits the constrained port links, plus the host
-# executable. Visualization, Draw, DETools, and non-STEP exchange toolkits are
-# deliberately absent.
+# The release triplet statically links the constrained OCCT closure into the
+# dedicated STEP host, so the modeling/data-exchange/foundation toolkits are
+# not shipped as separate DLLs. Visualization, Draw, DETools, and non-STEP
+# exchange toolkits remain deliberately absent from the port.
 $stepHostFiles = @(
-    'Preview3DStepHost.exe',
-    'TKBO.dll',
-    'TKBRep.dll',
-    'TKCAF.dll',
-    'TKCDF.dll',
-    'TKDE.dll',
-    'TKDESTEP.dll',
-    'TKernel.dll',
-    'TKG2d.dll',
-    'TKG3d.dll',
-    'TKGeomAlgo.dll',
-    'TKGeomBase.dll',
-    'TKHLR.dll',
-    'TKLCAF.dll',
-    'TKMath.dll',
-    'TKMesh.dll',
-    'TKPrim.dll',
-    'TKService.dll',
-    'TKShHealing.dll',
-    'TKTopAlgo.dll',
-    'TKV3d.dll',
-    'TKVCAF.dll',
-    'TKXCAF.dll',
-    'TKXSBase.dll'
+    'Preview3DStepHost.exe'
 )
 foreach ($name in $stepHostFiles) {
     Copy-RequiredFile (Join-Path $stepHostSource $name) (Join-Path $stepHostStage $name)
@@ -283,11 +249,11 @@ foreach ($name in $stepHostCrt) {
 }
 
 $thirdParty = @('basisu', 'bzip2', 'draco', 'fastgltf', 'ktx', 'lib3mf', 'libwebp', 'libzip', 'meshoptimizer', 'opencascade', 'openusd', 'simdjson', 'tbb', 'tinyusdz', 'ufbx', 'zlib', 'zstd')
-$vcpkgTripletRoot = Join-Path $repository 'vcpkg_installed\x64-windows\x64-windows'
-$vcpkgStatusPath = Join-Path $repository 'vcpkg_installed\x64-windows\vcpkg\status'
+$vcpkgTripletRoot = Join-Path $repository 'vcpkg_installed\x64-windows-static-md\x64-windows-static-md'
+$vcpkgStatusPath = Join-Path $repository 'vcpkg_installed\x64-windows-static-md\vcpkg\status'
 # OCCT is deliberately installed only for the dedicated STEP host, so its
 # license and metadata come from that manifest's separate vcpkg tree.
-$stepVcpkgRoot = Join-Path $repository 'compatibility-host-step\vcpkg_installed\x64-windows'
+$stepVcpkgRoot = Join-Path $repository 'compatibility-host-step\vcpkg_installed\x64-windows-static-md'
 foreach ($name in $thirdParty) {
     if ($name -eq 'opencascade') {
         Copy-RequiredFile (Join-Path $stepVcpkgRoot 'share\opencascade\copyright') (Join-Path $licensesStage "$name.txt")
@@ -324,17 +290,21 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
     if ([string]::IsNullOrWhiteSpace($signTool)) {
         throw 'A signing thumbprint was supplied, but signtool.exe could not be found.'
     }
-    foreach ($binary in @(
-        (Join-Path $stage 'Preview3D.exe'),
-        (Join-Path $workerStage 'Preview3DImportWorker.exe'),
-        (Join-Path $openUsdHostStage 'Preview3DImportHost.exe'),
-        (Join-Path $openUsdHostStage 'Preview3DOpenUsdCore.dll'),
-        (Join-Path $stepHostStage 'Preview3DStepHost.exe')
-    )) {
-        & $signTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $binary
-        if ($LASTEXITCODE -ne 0) { throw "Signing failed for '$binary'." }
-        & $signTool verify /pa /all $binary
-        if ($LASTEXITCODE -ne 0) { throw "Signature verification failed for '$binary'." }
+    # Sign every executable and DLL in the payload, not just the product
+    # binaries. Windows Smart App Control and WDAC evaluate each image
+    # individually: an unsigned third-party dependency (zstd.dll, draco.dll,
+    # usd_ms.dll, the OCCT TK*.dll closure) is refused with the Bad Image status
+    # 0xC0E90002 even when the viewer/worker that load it are signed. Images
+    # that already carry a trusted signature (the Microsoft CRT) are skipped.
+    $payloadBinaries = @(Get-ChildItem -LiteralPath $stage -File -Recurse |
+        Where-Object { $_.Extension -in @('.exe', '.dll') })
+    foreach ($binary in $payloadBinaries) {
+        & $signTool verify /pa /q $binary.FullName 2>$null
+        if ($LASTEXITCODE -eq 0) { continue }
+        & $signTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $binary.FullName
+        if ($LASTEXITCODE -ne 0) { throw "Signing failed for '$($binary.FullName)'." }
+        & $signTool verify /pa /all $binary.FullName
+        if ($LASTEXITCODE -ne 0) { throw "Signature verification failed for '$($binary.FullName)'." }
     }
     $signed = $true
 } else {
@@ -371,7 +341,7 @@ $status = Read-VcpkgStatus $vcpkgStatusPath
 # manifest installs it; take its version/ABI from that tree's SPDX record.
 $stepSpdx = Get-Content -LiteralPath (Join-Path $stepVcpkgRoot 'share\opencascade\vcpkg.spdx.json') -Raw | ConvertFrom-Json
 $occtPackage = $stepSpdx.packages | Where-Object { $_.name -eq 'opencascade' } | Select-Object -First 1
-$occtAbiPackage = $stepSpdx.packages | Where-Object { $_.name -eq 'opencascade:x64-windows' } | Select-Object -First 1
+$occtAbiPackage = $stepSpdx.packages | Where-Object { $_.name -eq 'opencascade:x64-windows-static-md' } | Select-Object -First 1
 if ($null -eq $occtPackage) { throw 'The STEP-host OCCT SPDX record has no opencascade package.' }
 $components = @()
 foreach ($name in $thirdParty) {
@@ -391,11 +361,11 @@ foreach ($name in $thirdParty) {
         type = 'library'
         name = $name
         version = $packageVersion
-        'bom-ref' = "pkg:vcpkg/$name@${packageVersion}?triplet=x64-windows"
+        'bom-ref' = "pkg:vcpkg/$name@${packageVersion}?triplet=x64-windows-static-md"
         licenses = @(@{ license = @{ name = "See licenses/$name.txt" } })
         properties = @(
             @{ name = 'preview3d:vcpkg-baseline'; value = $baseline },
-            @{ name = 'preview3d:architecture'; value = 'x64-windows' }
+            @{ name = 'preview3d:architecture'; value = 'x64-windows-static-md' }
         )
     }
     if ($abi) {

@@ -80,6 +80,24 @@ Binbuf.Preview3D.StepHost. It can read/execute only StepHost, receives the
 source as a read-only inherited handle (never a path), and exits after the
 generation. None of the importers can read another's private directory.
 
+Windows may block this build
+----------------------------
+
+This engineering build is unsigned, so Windows can refuse to start Preview3D.exe
+or one of the DLLs beside it with a Bad Image error (for example
+worker\zstd.dll, status 0xC0E90002).
+
+* Before extracting the ZIP, right-click it, choose Properties, and select
+  Unblock, so the extracted files do not inherit the downloaded-file mark.
+* If the ZIP is already extracted, unblock everything in this folder from
+  PowerShell:  Get-ChildItem -Recurse | Unblock-File
+* If SmartScreen shows "Windows protected your PC", choose More info and then
+  Run anyway, after verifying the adjacent .sha256 checksum.
+* Smart App Control has no per-file exception. If it blocks the app, turn Smart
+  App Control off (Windows Security > App & browser control > Smart App Control
+  settings) for a build you have verified. See the project's
+  .docs/WINDOWS-SECURITY.md.
+
 Cleanup
 -------
 
@@ -94,8 +112,9 @@ installed by this package.
 Runtime and support
 -------------------
 
-The archive contains the required app-local MSVC runtime, worker dependency
-closure, and exact private OpenUSD host/resource tree. Direct3D 12, DXGI,
+The archive contains the required app-local MSVC runtime, the app's own
+executables with their dependency closure statically linked, and the exact
+private OpenUSD schema/plugin resources. Direct3D 12, DXGI,
 Direct2D, DirectWrite, WIC, and D3DCompiler 47 are
 Windows 11 system components and are not redistributed. A Direct3D feature
 level 11-capable adapter/driver is required. Coarse/full rendering intentionally

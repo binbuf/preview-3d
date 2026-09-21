@@ -163,7 +163,7 @@ jobs:
           }
 
           $common = @(
-            '--triplet', 'x64-windows',
+            '--triplet', 'x64-windows-static-md',
             "--overlay-triplets=$env:GITHUB_WORKSPACE\packaging\triplets",
             "--vcpkg-root=$vcpkgRoot",
             "--x-buildtrees-root=$buildtreesRoot",
@@ -174,7 +174,7 @@ jobs:
             '--x-wait-for-lock'
           )
 
-          $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows'
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows-static-md'
           & $vcpkg install @common `
             "--x-manifest-root=$env:GITHUB_WORKSPACE" `
             "--x-install-root=$installRoot"

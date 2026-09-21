@@ -32,6 +32,8 @@ This is commonly a Microsoft Defender SmartScreen reputation warning. Confirm th
 
 Smart App Control (SAC) is different: it does **not** offer a per-app or per-file exception, so the Properties **Unblock** checkbox and a SmartScreen override will not bypass SAC. Microsoft explains that SAC allows apps it recognizes as safe or that have a valid signature; otherwise it can block them.
 
+A blocked bundled DLL can surface as a Bad Image dialog naming that file — for example `worker\zstd.dll` with `Error status 0xC0E90002`. SAC evaluates each image on its own, so an unsigned dependency is refused even when the main executable starts.
+
 If you have verified this release and still choose to run it, the available user-level option is to turn off SAC:
 
 1. Open **Windows Security**.
@@ -44,5 +46,7 @@ Turning off SAC lowers protection for all apps, not just Preview 3D. Do this onl
 ## What we are doing
 
 The project is working toward properly code-signed release artifacts and the reputation required by Windows protection services. In the meantime, releases provide SHA-256 checksums so you can independently verify the exact file you downloaded.
+
+Code signing is applied per executable image, and Smart App Control evaluates every image separately. A signed Preview3D.exe is therefore not enough on its own: the DLLs bundled beside it (the worker/OpenUSD/OCCT dependency closure) must be signed too, or SAC can still refuse one of them. Until that whole payload is covered, use the steps above.
 
 For the technical details, see Microsoft’s [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions) and the [related Microsoft Q&A discussion](https://learn.microsoft.com/en-us/answers/questions/5637638/smart-app-blocked-my-app).

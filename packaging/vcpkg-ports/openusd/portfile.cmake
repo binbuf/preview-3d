@@ -11,10 +11,19 @@ vcpkg_from_github(
 # formats, or ship command-line tools. A monolithic DLL also gives the host a
 # small, auditable app-local DLL allowlist while retaining OpenUSD's required
 # generated schema and file-format plugInfo resources.
+# The Preview3D release statically links its dependency closure so the shipped
+# payload contains no upstream DLLs (only the app's own images, which can be
+# signed). Honor the triplet so a dynamic developer build still works.
+if(VCPKG_LIBRARY_LINKAGE STREQUAL "static")
+    set(BUILD_SHARED_LIBS OFF)
+else()
+    set(BUILD_SHARED_LIBS ON)
+endif()
+
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}"
     OPTIONS
-        -DBUILD_SHARED_LIBS=ON
+        -DBUILD_SHARED_LIBS=${BUILD_SHARED_LIBS}
         -DPXR_BUILD_MONOLITHIC=ON
         -DPXR_BUILD_TESTS=OFF
         -DPXR_BUILD_EXAMPLES=OFF
@@ -47,12 +56,15 @@ vcpkg_cmake_configure(
 vcpkg_cmake_install()
 vcpkg_cmake_config_fixup(CONFIG_PATH cmake)
 
-# OpenUSD installs its monolithic runtime beside the import library. Normalize
-# that upstream layout so vcpkg app-local deployment and package validation can
-# treat it like every other Windows DLL.
-file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/bin")
-file(RENAME "${CURRENT_PACKAGES_DIR}/lib/usd_ms.dll"
-            "${CURRENT_PACKAGES_DIR}/bin/usd_ms.dll")
+# A dynamic OpenUSD installs its monolithic runtime beside the import library.
+# Normalize that upstream layout so vcpkg app-local deployment and package
+# validation can treat it like every other Windows DLL. A static build (the
+# release triplet) has no runtime DLL or matching PDB to relocate.
+if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/usd_ms.dll")
+    file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/bin")
+    file(RENAME "${CURRENT_PACKAGES_DIR}/lib/usd_ms.dll"
+                "${CURRENT_PACKAGES_DIR}/bin/usd_ms.dll")
+endif()
 # The release-only CI triplet (VCPKG_BUILD_TYPE=release) installs no debug tree,
 # so the debug relocation must not assume one exists.
 if(EXISTS "${CURRENT_PACKAGES_DIR}/debug/lib/usd_ms.dll")
@@ -61,10 +73,12 @@ if(EXISTS "${CURRENT_PACKAGES_DIR}/debug/lib/usd_ms.dll")
                 "${CURRENT_PACKAGES_DIR}/debug/bin/usd_ms.dll")
 endif()
 if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/usd_ms.pdb")
+    file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/bin")
     file(RENAME "${CURRENT_PACKAGES_DIR}/lib/usd_ms.pdb"
                 "${CURRENT_PACKAGES_DIR}/bin/usd_ms.pdb")
 endif()
 if(EXISTS "${CURRENT_PACKAGES_DIR}/debug/lib/usd_ms.pdb")
+    file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/debug/bin")
     file(RENAME "${CURRENT_PACKAGES_DIR}/debug/lib/usd_ms.pdb"
                 "${CURRENT_PACKAGES_DIR}/debug/bin/usd_ms.pdb")
 endif()

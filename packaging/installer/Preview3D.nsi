@@ -89,6 +89,22 @@ Function .onInit
   ${EndIf}
   SetRegView 64
   SetShellVarContext all
+  ; This engineering build is unsigned, and Smart App Control has no per-app
+  ; exception. It evaluates every executable image separately, so an unsigned
+  ; payload can install cleanly and then fail at run time when the worker loads
+  ; a bundled DLL (a Bad Image error naming, for example, worker\zstd.dll with
+  ; status 0xC0E90002). Surface that here, before install, instead of after.
+  ; VerifiedAndReputablePolicyState is 0 when Smart App Control is off; any
+  ; other value means it is active (enforcing or evaluating).
+  StrCpy $1 0
+  ReadRegDWORD $1 HKLM "SYSTEM\CurrentControlSet\Control\CI\Policy" "VerifiedAndReputablePolicyState"
+  StrCmp $1 0 sac_policy_ok
+  MessageBox MB_YESNO|MB_ICONEXCLAMATION \
+    "This Preview 3D build is unsigned, and Smart App Control is active on this PC.$\r$\n$\r$\nSmart App Control has no per-app exception, so Windows can block the app or one of the DLLs bundled with it after installation (for example worker\zstd.dll, error status 0xC0E90002).$\r$\n$\r$\nTo run this build, turn off Smart App Control under Windows Security > App & browser control > Smart App Control, then run setup again.$\r$\n$\r$\nInstall anyway?" \
+    IDYES sac_policy_ok IDNO sac_policy_abort
+sac_policy_abort:
+  Abort
+sac_policy_ok:
 check_viewer_closed:
   FindWindow $0 "Preview3DWindow"
   StrCmp $0 0 viewer_closed
