@@ -1,12 +1,8 @@
 # Preview 3D
 
-**A fast, read-only 3D model viewer for Windows 11.**
+**A fast, secure, and native 3D object viewer for Windows**
 
-[![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/binbuf/preview-3d/total?style=flat-square&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install)
-[![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP-6e7681?style=flat-square)](#supported-formats)
+[![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install) [![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP-6e7681?style=flat-square)](#supported-formats)
 
 [Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Contributing](CONTRIBUTING.md) · [Windows security help](.docs/WINDOWS-SECURITY.md)
 
