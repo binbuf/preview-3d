@@ -1,0 +1,93 @@
+name: Bug report
+description: Report a crash, rendering problem, or incorrect model preview
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not attach confidential models or
+        personal file paths. A minimal or synthesized model is ideal.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I am using the latest release from this repository's Releases page.
+          required: true
+        - label: This is not a security issue (those go through SECURITY.md).
+          required: true
+        - label: I have searched existing issues for this problem.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Preview 3D version
+      description: From the release name or the installer/portable ZIP file name.
+      placeholder: "e.g. 0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and build
+      description: Run `winver` or check Settings > System > About.
+      placeholder: "e.g. Windows 11 24H2 (26100.1742)"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation type
+      options:
+        - Installer
+        - Portable ZIP
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: format
+    attributes:
+      label: Model format
+      description: The extension and any sidecars involved (for example `.gltf` with `.bin`).
+      placeholder: "e.g. .glb, .fbx, .step"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do before the problem appeared?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include any error message or status code shown by the app.
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver version (optional)
+      description: Helpful for rendering, performance, and crash reports.
+      placeholder: "e.g. NVIDIA RTX 4070, driver 560.94"
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context (optional)
+      description: Screenshots, logs, or a link to a shareable model.
+  - type: checkboxes
+    id: sac
+    attributes:
+      label: Windows protection
+      options:
+        - label: I verified this is not just the expected unsigned-build warning (see .docs/WINDOWS-SECURITY.md).
+          required: false
