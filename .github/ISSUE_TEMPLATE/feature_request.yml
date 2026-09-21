@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a new capability, format, or workflow improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I have searched existing issues and the format support docs.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that Preview 3D does not support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you would like to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Format support
+        - Navigation and camera
+        - Rendering and shading
+        - User interface
+        - Installer or packaging
+        - Performance
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context (optional)
+      description: Mockups, example files with a clear license, or references.

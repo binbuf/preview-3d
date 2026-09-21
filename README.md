@@ -1,80 +1,56 @@
 # Preview 3D
 
-A fast optimized 3D viewer for Windows 11.
+**A fast, read-only 3D model viewer for Windows 11.**
 
-[Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Windows security help](.docs/WINDOWS-SECURITY.md)
+[![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/binbuf/preview-3d/total?style=flat-square&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install)
+[![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP-6e7681?style=flat-square)](#supported-formats)
+
+[Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Contributing](CONTRIBUTING.md) · [Windows security help](.docs/WINDOWS-SECURITY.md)
+
+<!-- Screenshots: add the images under docs/screenshots/ (see docs/screenshots/README.md), then uncomment this block.
+<p align="center">
+  <img src="docs/screenshots/hero-studio.png" alt="Preview 3D showing a PBR model with the studio lighting preset" width="49%">
+  <img src="docs/screenshots/hero-directional.png" alt="Preview 3D showing the directional light and navigation gizmo" width="49%">
+</p>
+-->
 
 ## Highlights
 
-- Open local GLB/glTF, OBJ/MTL, FBX, STL, PLY, 3MF, USD-family, and STEP/STP files.
-- Navigate with familiar orbit, pan, fly, frame, and orthographic-view controls.
-- Drag and drop files, use **Open**, or pass a path on the command line.
-- Run parsing and decoding in a zero-capability AppContainer worker; models stay local and are never modified.
-- Install file associations for supported formats, or use a portable ZIP with no installer.
+- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, and STEP/STP** files locally.
+- Navigate with familiar Blender-style orbit, pan, and frame controls, plus Unreal-style right-mouse fly, a navigation gizmo, and a keyboard-friendly command set.
+- Inspect models with Studio, Clay, and rotatable Directional lighting, Wireframe mode, an information panel, and point-cloud rendering.
+- Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration.
+- Parse and decode in a zero-capability AppContainer worker: models stay local, are never modified, and nothing is uploaded.
+- Install with the setup program, or use the portable ZIP with no installer.
 
 ## Supported formats
 
 | Format | Support |
 | --- | --- |
-| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars |
+| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, Draco/meshopt geometry, KTX2/Basis and PNG/JPEG/WebP textures |
 | Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars |
 | FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose |
 | STL | ASCII and binary |
 | PLY | ASCII and binary triangle meshes and point clouds |
 | 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews |
-| Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`; static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
-| STEP | `.step` and `.stp` self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, and authored length units through a dedicated isolated OCCT host |
+| Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`: static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
+| STEP | `.step` and `.stp`: self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies, instance/shape/face colors, and authored length units |
 
-USD files first use TinyUSDZ in the general isolated importer. Stages requiring
-supported composition are retried atomically in a separately isolated, lazily
-started OpenUSD host. Local relative sublayers, references, payloads, authored
-default variants, and texture dependencies are brokered by the viewer; remote
-assets and arbitrary resolvers/plugins are never allowed.
+For the exact supported subset, resource ceilings, and known limitations of each format, see [Format support and limits](.docs/FORMAT-SUPPORT.md).
 
-STEP/STP uses a third, dedicated zero-capability host with a pinned constrained
-OCCT closure. It receives only an inherited read-only handle (never a path),
-performs product-owned Part-21 admission before the CAD kernel runs, and emits
-only normalized wire records. The route is case-insensitive on command line,
-dialog, drag/drop, single-instance activation, Retry, and Open With.
-
-The implemented USD viewer path has an immutable corpus and a standalone
-sanitizer fuzz-smoke lane. Final release qualification still requires the
-recorded clean-machine, repeated performance/heartbeat, soak, and signed-build
-gates; see [USD-009 verification](.docs/USD-009-VERIFICATION.md). Explorer USD
-thumbnails are a separate follow-up and are not installed.
-
-This is a static, read-only viewer. Animation playback, editing, other CAD
-formats (IGES/IFC/JT/native CAD), Explorer thumbnails (including for 3MF, USD,
-FBX, and STEP), network assets,
-skeletal USD data, MaterialX, procedural schemas, and interactive variant
-selection are not currently included. The supported STEP/STP subset is bounded
-and self-contained only: external STEP documents are out of scope, and there is
-no PMI/GD&T, editing, saved views, exact measurement, or shape healing. 3MF slicer-private multi-plate grouping,
-printer/process settings, Slice, Secure Content, Volumetric, Implicit, toolpath,
-repair, slicing, and export features are not supported. 3MF and USD are bounded
-Tier B paths: among their ceilings are 2 GiB per primary source, 4 GiB
-aggregate local source/archive expansion, and 20 million triangles or points.
-The separate USD compatibility host has a commit cap of the lower of 4 GiB or
-35% of physical memory.
-
-For preview compatibility, a mesh labeled Core object type `other` is shown if
-it is referenced by the build, as some slicers produce this even though the 3MF
-Core specification disallows it. Slicer plate grouping and print settings do
-not affect the preview; a multi-plate project may show all root-build objects
-together. The 3MF build placement is preserved, including models positioned
-head-down for printing. To view one upright on the grid, select ground axis Z
-and use the ground direction button to make negative Z point up.
-
-## Install and use
+## Install
 
 1. Download the installer or portable ZIP from [Releases](https://github.com/binbuf/preview-3d/releases/latest).
-2. For the portable ZIP, extract it and keep `worker`, `OpenUsdHost`, and `StepHost` beside `Preview3D.exe`.
-3. Open a model with `Ctrl+O`, drag a supported file onto the window, or run `Preview3D.exe <path-to-model>`.
+2. Run the installer, or extract the portable ZIP and keep `worker`, `OpenUsdHost`, and `StepHost` beside `Preview3D.exe`.
+3. Open a model by dragging a supported file onto the window, pressing `Ctrl+O`, or running `Preview3D.exe <path-to-model>`.
 
 The installer adds Preview 3D to **Open with** and **Default apps** for the supported extensions. Windows keeps existing default-app choices; confirm any changes in Default apps after installation.
 
 > [!IMPORTANT]
-> Releases are currently **unsigned** while code-signing and reputation work is in progress, so Windows may block the app or one of the DLLs bundled beside it (for example the Bad Image status `0xC0E90002`). Only download from this repository’s Releases page and verify the supplied SHA-256 checksum. For the portable ZIP, right-click the downloaded file, choose **Properties**, and select **Unblock** *before* extracting, so its contents do not inherit the mark. Smart App Control has no per-file exception; see [Windows security help](.docs/WINDOWS-SECURITY.md) for the specific, safe steps to allow a release you have verified.
+> Releases are currently **unsigned** while code-signing and reputation work is in progress, so Windows may block the app or one of the DLLs bundled beside it (for example the Bad Image status `0xC0E90002`). Only download from this repository's Releases page and verify the supplied SHA-256 checksum. For the portable ZIP, right-click the downloaded file, choose **Properties**, and select **Unblock** *before* extracting, so its contents do not inherit the mark. Smart App Control has no per-file exception; see [Windows security help](.docs/WINDOWS-SECURITY.md) for the specific, safe steps to allow a release you have verified.
 
 ## Build from source
 
@@ -114,11 +90,16 @@ msbuild Preview3D.slnx /t:CreateInstaller /p:Configuration=Release /p:Platform=x
 
 The first command builds the viewer, worker, and both compatibility hosts. The second writes the portable archive and checksum to `artifacts\portable`; the third requires NSIS 3 and writes the installer to `artifacts\installer`. See the [portable package notes](packaging/portable/PORTABLE-README.txt) and [installer notes](packaging/installer/INSTALLER-README.txt) for release and cleanup details.
 
-## Project notes
+Tests, fixture lanes, and fuzz targets are described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Documentation
+
+- [Format support and limits](.docs/FORMAT-SUPPORT.md)
 - [Windows download and protection guidance](.docs/WINDOWS-SECURITY.md)
 - [Installer verification](.docs/INSTALLER_VERIFICATION.md)
 - [Release workflow](.github/workflows/release.yml)
+- [Contributing guidelines](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 
 ## Credits
 
