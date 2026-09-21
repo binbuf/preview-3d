@@ -74,18 +74,45 @@ and use the ground direction button to make negative Z point up.
 The installer adds Preview 3D to **Open with** and **Default apps** for the supported extensions. Windows keeps existing default-app choices; confirm any changes in Default apps after installation.
 
 > [!IMPORTANT]
-> Windows may flag a new or unsigned release while code-signing and reputation work is in progress. Only download from this repository’s Releases page and verify the supplied SHA-256 checksum. See [Windows security help](.docs/WINDOWS-SECURITY.md) for safe, specific steps—including the difference between a file’s **Unblock** checkbox and Smart App Control.
+> Releases are currently **unsigned** while code-signing and reputation work is in progress, so Windows may block the app or one of the DLLs bundled beside it (for example the Bad Image status `0xC0E90002`). Only download from this repository’s Releases page and verify the supplied SHA-256 checksum. For the portable ZIP, right-click the downloaded file, choose **Properties**, and select **Unblock** *before* extracting, so its contents do not inherit the mark. Smart App Control has no per-file exception; see [Windows security help](.docs/WINDOWS-SECURITY.md) for the specific, safe steps to allow a release you have verified.
 
 ## Build from source
 
-Open `Preview3D.slnx` in Visual Studio with the **Desktop development with C++** workload and vcpkg available, then build `Release | x64`.
+### Prerequisites
+
+- Windows 11 x64.
+- Visual Studio with the **Desktop development with C++** workload (the `v145` MSVC toolset, C++20) and a Windows 10/11 SDK. The `.slnx` solution format needs a recent Visual Studio release.
+- [vcpkg](https://learn.microsoft.com/vcpkg/get_started/get-started). Visual Studio ships one at `<Visual Studio>\VC\vcpkg`; a standalone clone works too.
+- NSIS 3, only for the installer target.
+
+### Set up on a new workstation
+
+The pinned dependency versions live in `vcpkg.json` and `vcpkg-configuration.json`, but the compiled dependencies are **not** committed — `vcpkg_installed/` is gitignored. A fresh clone therefore has to restore them once, and MSBuild only does that when vcpkg integration is installed for your user. Using the vcpkg you intend to build with (the Visual Studio-bundled copy lives at `<Visual Studio>\VC\vcpkg`):
 
 ```powershell
+vcpkg integrate install
+```
+
+Then open `Preview3D.slnx`, pick **Release | x64** (or **Debug | x64**), and build. The first build runs `vcpkg install` against the root manifest and populates `vcpkg_installed\x64-windows-static-md`. Release builds statically link the dependency closure (`VcpkgUseStatic`/`VcpkgUseMD` in `Directory.Build.props`) so the shipped payload contains no upstream DLLs — only the app's own images. The OpenUSD overlay port (`packaging/vcpkg-ports/openusd`) and the STEP host's separate OCCT manifest (`compatibility-host-step\vcpkg.json`, installed under `compatibility-host-step\vcpkg_installed`) compile from source, so this first restore takes **tens of minutes to a few hours**; later builds reuse the archives under `%LOCALAPPDATA%\vcpkg\archives`.
+
+If the build cannot find a third-party header instead of restoring, the integration is not active for the MSBuild you are running:
+
+```
+error C1083: Cannot open include file: 'pxr/base/plug/plugin.h'
+error C1083: Cannot open include file: 'fastgltf/core.hpp'
+```
+
+Re-run `vcpkg integrate install` with the vcpkg you build with, then rebuild. (With a standalone vcpkg, make sure `VCPKG_ROOT` points at it and that no other vcpkg is integrated.)
+
+### Command line
+
+```powershell
+msbuild Preview3D.slnx /p:Configuration=Release /p:Platform=x64
 msbuild Preview3D.slnx /t:CreatePortableRelease /p:Configuration=Release /p:Platform=x64
 msbuild Preview3D.slnx /t:CreateInstaller /p:Configuration=Release /p:Platform=x64
 ```
 
-The first command writes the portable archive and checksum to `artifacts\portable`; the second requires NSIS 3 and writes the installer to `artifacts\installer`. See the [portable package notes](packaging/portable/PORTABLE-README.txt) and [installer notes](packaging/installer/INSTALLER-README.txt) for release and cleanup details.
+The first command builds the viewer, worker, and both compatibility hosts. The second writes the portable archive and checksum to `artifacts\portable`; the third requires NSIS 3 and writes the installer to `artifacts\installer`. See the [portable package notes](packaging/portable/PORTABLE-README.txt) and [installer notes](packaging/installer/INSTALLER-README.txt) for release and cleanup details.
 
 ## Project notes
 

@@ -70,11 +70,23 @@ and attempts to remove the uninstalling user's AppContainer profile. It removes
 only product-owned registration; source models and unrelated file associations
 are not touched.
 
+Windows may block this build
+----------------------------
+
+This engineering build is unsigned. Setup shows an "unknown publisher" elevation
+prompt, and if SmartScreen shows "Windows protected your PC", choose More info
+and then Run anyway, after verifying the adjacent .sha256 checksum. Smart App
+Control has no per-file exception: if it blocks the app (for example a Bad Image
+error naming worker\zstd.dll with status 0xC0E90002), turn Smart App Control off
+(Windows Security > App & browser control > Smart App Control settings) for a
+build you have verified. See the project's .docs/WINDOWS-SECURITY.md.
+
 Runtime and release metadata
 ----------------------------
 
-The installation contains its app-local MSVC runtime, worker dependencies, and
-the exact private OpenUSD DLL/resource tree and OCCT STEP-host DLL tree.
+The installation contains its app-local MSVC runtime, the app's own executables
+with their dependency closure statically linked, and the exact private OpenUSD
+schema/plugin resources.
 Direct3D 12 feature level 11_0 or later is required. MANIFEST.json records
 payload SHA-256 values; SBOM.cdx.json, THIRD-PARTY-NOTICES.txt, and licenses\
 record dependency provenance and redistribution notices.

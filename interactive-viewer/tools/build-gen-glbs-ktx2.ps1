@@ -7,7 +7,7 @@ $sdkVer = $sdkDir.Name
 $toolsDir = $PSScriptRoot
 $repoRoot = Split-Path -Parent $PSScriptRoot           # interactive-viewer/
 $gitRoot = Split-Path -Parent $repoRoot                # repo root -- vcpkg_installed/ lives here
-$vcpkgInstalled = "$gitRoot\vcpkg_installed\x64-windows\x64-windows"
+$vcpkgInstalled = "$gitRoot\vcpkg_installed\x64-windows-static-md\x64-windows-static-md"
 $objDir = "$repoRoot\obj_test"
 New-Item -ItemType Directory -Force -Path $objDir | Out-Null
 
@@ -21,13 +21,10 @@ New-Item -ItemType Directory -Force -Path $objDir | Out-Null
     "/LIBPATH:C:\Program Files (x86)\Windows Kits\10\Lib\$sdkVer\um\x64" `
     "/LIBPATH:C:\Program Files (x86)\Windows Kits\10\Lib\$sdkVer\ucrt\x64" `
     "/LIBPATH:$vcpkgInstalled\lib" `
-    ktx.lib
+    ktx.lib zstd.lib
 if ($LASTEXITCODE -ne 0) { throw 'compile failed' }
 
-# ktx.dll (and its own zstd.dll dependency) must be next to the generator
-# .exe to actually run it.
-Copy-Item "$vcpkgInstalled\bin\ktx.dll" "$toolsDir\ktx.dll" -Force
-Copy-Item "$vcpkgInstalled\bin\zstd.dll" "$toolsDir\zstd.dll" -Force
-
+# The release triplet links ktx and zstd statically, so there are no DLLs to
+# stage next to the generator.
 & "$toolsDir\gen-test-glbs-ktx2.exe"
 if ($LASTEXITCODE -ne 0) { throw 'generation failed' }
