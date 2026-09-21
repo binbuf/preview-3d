@@ -1,0 +1,194 @@
+name: Dependencies
+
+# Restores the pinned vcpkg manifests on the same runner image the release
+# workflow uses, without packaging anything. This is the early-warning lane for
+# the failure mode that only surfaced when a release tag was pushed: a cold
+# OpenUSD + OCCT build does not fit on the runner's C: drive and takes hours.
+#
+# It is intentionally narrow. It runs when a dependency lock/manifest, an
+# overlay port, the release-only CI triplet, or this workflow changes, and it
+# can be dispatched by hand to exercise the cold path on demand.
+#
+# The binary-cache key matches release.yml so a successful run here warms the
+# cache a later tagged release restores.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly warm-up. Keeps the Actions files cache from going 7 idle days
+    # without access (which evicts it) and catches upstream port drift between
+    # releases instead of at tag time.
+    - cron: '23 5 * * 1'
+  push:
+    branches:
+      - main
+    paths:
+      - 'vcpkg.json'
+      - 'vcpkg-configuration.json'
+      - 'compatibility-host-step/vcpkg.json'
+      - 'compatibility-host-step/vcpkg-configuration.json'
+      - 'packaging/vcpkg-ports/**'
+      - 'packaging/triplets/**'
+      - '.github/workflows/dependencies.yml'
+  pull_request:
+    paths:
+      - 'vcpkg.json'
+      - 'vcpkg-configuration.json'
+      - 'compatibility-host-step/vcpkg.json'
+      - 'compatibility-host-step/vcpkg-configuration.json'
+      - 'packaging/vcpkg-ports/**'
+      - 'packaging/triplets/**'
+      - '.github/workflows/dependencies.yml'
+
+permissions:
+  contents: read
+  # Push and restore the vcpkg binary cache on GitHub Packages; see release.yml.
+  packages: write
+
+concurrency:
+  group: dependencies-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  restore:
+    name: Restore vcpkg manifests
+    runs-on: windows-2025
+    # Cold OpenUSD + OCCT from source is the long pole; the binary cache keeps
+    # repeat runs short. Same budget as release so a timeout here means the
+    # release would have timed out too.
+    timeout-minutes: 360
+
+    env:
+      VCPKG_FEED_OWNER: ${{ github.repository_owner }}
+      VCPKG_FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
+      VCPKG_SCRATCH: ${{ github.workspace }}\..\.vcpkg-scratch
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Report disk layout
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_.Used) -and ($_.Used + $_.Free) -gt 0 } |
+            ForEach-Object {
+              '{0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB)
+            }
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        # Best-effort: the durable cache is the GitHub Packages NuGet feed.
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-
+
+      - name: Add NuGet binary-cache source
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT 'vcpkg.exe'
+          if (-not (Test-Path -LiteralPath $vcpkg -PathType Leaf)) {
+            throw "vcpkg.exe was not found at '$vcpkg'."
+          }
+
+          # See release.yml. Publish VCPKG_BINARY_SOURCES through GITHUB_ENV so a
+          # Packages outage degrades to the files cache instead of failing.
+          $filesSource = "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
+          try {
+            $nuget = (& $vcpkg fetch nuget |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+              Select-Object -Last 1).Trim()
+            if ([string]::IsNullOrWhiteSpace($nuget) -or -not (Test-Path -LiteralPath $nuget -PathType Leaf)) {
+              throw "vcpkg did not provide a usable nuget.exe (got '$nuget')."
+            }
+
+            & $nuget sources add `
+              -Source $env:VCPKG_FEED_URL `
+              -StorePasswordInClearText `
+              -Name GitHubPackages `
+              -UserName $env:VCPKG_FEED_OWNER `
+              -Password $env:GITHUB_TOKEN
+            if ($LASTEXITCODE -ne 0) {
+              throw "nuget sources add failed with exit code $LASTEXITCODE."
+            }
+
+            & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL
+            if ($LASTEXITCODE -ne 0) {
+              throw "nuget setapikey failed with exit code $LASTEXITCODE."
+            }
+
+            "VCPKG_BINARY_SOURCES=clear;nuget,$env:VCPKG_FEED_URL,readwrite;$filesSource" >> $env:GITHUB_ENV
+            Write-Host 'vcpkg binary cache: GitHub Packages feed plus local files cache.'
+          } catch {
+            Write-Warning "GitHub Packages binary cache unavailable; using the local files cache only. $_"
+            "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
+          }
+
+      - name: Restore vcpkg dependencies
+        shell: pwsh
+        run: |
+          function Show-Disk([string] $label) {
+            Write-Host "--- disk after $label ---"
+            Get-PSDrive -PSProvider FileSystem |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_.Used) -and ($_.Used + $_.Free) -gt 0 } |
+              ForEach-Object {
+                Write-Host ('  {0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB))
+              }
+          }
+
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          $vcpkg = Join-Path $vcpkgRoot 'vcpkg.exe'
+          if (-not (Test-Path -LiteralPath $vcpkg -PathType Leaf)) {
+            throw "vcpkg.exe was not found at '$vcpkg'."
+          }
+
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+
+          # Keep every scratch tree on the workspace volume, not the runner
+          # image's C: drive, and build Release only. See release.yml for the
+          # full rationale.
+          $buildtreesRoot = Join-Path $env:VCPKG_SCRATCH 'buildtrees'
+          $packagesRoot = Join-Path $env:VCPKG_SCRATCH 'packages'
+          $downloadsRoot = Join-Path $env:VCPKG_SCRATCH 'downloads'
+          foreach ($path in @($buildtreesRoot, $packagesRoot, $downloadsRoot)) {
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+          }
+
+          $common = @(
+            '--triplet', 'x64-windows',
+            "--overlay-triplets=$env:GITHUB_WORKSPACE\packaging\triplets",
+            "--vcpkg-root=$vcpkgRoot",
+            "--x-buildtrees-root=$buildtreesRoot",
+            "--x-packages-root=$packagesRoot",
+            "--downloads-root=$downloadsRoot",
+            '--clean-buildtrees-after-build',
+            '--clean-packages-after-build',
+            '--x-wait-for-lock'
+          )
+
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows'
+          & $vcpkg install @common `
+            "--x-manifest-root=$env:GITHUB_WORKSPACE" `
+            "--x-install-root=$installRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg root-manifest restore failed with exit code $LASTEXITCODE."
+          }
+          Show-Disk 'root manifest'
+
+          $stepManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'compatibility-host-step'
+          $stepInstallRoot = Join-Path $stepManifestRoot 'vcpkg_installed'
+          & $vcpkg install @common `
+            "--x-manifest-root=$stepManifestRoot" `
+            "--x-install-root=$stepInstallRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg STEP-manifest restore failed with exit code $LASTEXITCODE."
+          }
+          Show-Disk 'STEP manifest'

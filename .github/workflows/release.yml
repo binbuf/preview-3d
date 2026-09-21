@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: write
+  # Push and restore the vcpkg binary cache on GitHub Packages. The Actions
+  # cache (10 GB/repo, evicted after 7 idle days) cannot durably hold a cold
+  # OpenUSD + OCCT closure; the Packages NuGet feed can.
+  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -24,8 +28,25 @@ jobs:
     env:
       # Persist vcpkg's compiled package archives across runs so a release does
       # not rebuild OpenUSD/OCCT from source every time.
+      #
+      # The durable cache is a NuGet feed on GitHub Packages, which has no
+      # 10 GB per-repo cap and no 7-day idle eviction. The Actions files cache
+      # is kept as a fast, same-run secondary source; it is best-effort only.
+      # VCPKG_BINARY_SOURCES is published by the "Add NuGet binary-cache source"
+      # step so a Packages outage degrades to the files cache rather than
+      # failing the release.
+      #
+      # This cache (and, in the restore step, every vcpkg scratch tree) lives on
+      # the workspace volume, not the runner image's C: drive. By default vcpkg
+      # puts `buildtrees`, `packages`, and `downloads` under
+      # VCPKG_INSTALLATION_ROOT (C:\vcpkg); OpenUSD's and, especially, OCCT's
+      # object files filled C: and OCCT died with C1085 "No space left on
+      # device". The workspace volume is the one that already has to hold the
+      # multi-GB vcpkg_installed trees.
+      VCPKG_FEED_OWNER: ${{ github.repository_owner }}
+      VCPKG_FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
-      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}\.vcpkg-binary-cache,readwrite'
+      VCPKG_SCRATCH: ${{ github.workspace }}\..\.vcpkg-scratch
 
     steps:
       - name: Check out source
@@ -34,11 +55,24 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Report disk layout
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_.Used) -and ($_.Used + $_.Free) -gt 0 } |
+            ForEach-Object {
+              '{0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB)
+            }
+
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
+        # Best-effort: the durable cache is the GitHub Packages NuGet feed. If
+        # this directory exceeds the 10 GB per-repo cache limit, the save must
+        # not fail an otherwise successful release.
+        continue-on-error: true
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'packaging/vcpkg-ports/**') }}
+          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
           restore-keys: |
             vcpkg-binary-${{ runner.os }}-
 
@@ -119,15 +153,101 @@ jobs:
           "vcpkg=$vcpkg" >> $env:GITHUB_OUTPUT
           "vcpkg_root=$vcpkgRoot" >> $env:GITHUB_OUTPUT
 
+      - name: Add NuGet binary-cache source
+        shell: pwsh
+        env:
+          VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Register the GitHub Packages NuGet feed with the nuget.exe that
+          # vcpkg itself uses, so its nuget binary-cache provider finds the
+          # credentials in the user-level NuGet.Config. `vcpkg fetch nuget`
+          # downloads that copy on first use and prints its path last.
+          #
+          # The binary source is published to later steps through GITHUB_ENV
+          # rather than set up front, so a NuGet or GitHub Packages outage
+          # degrades to the local files cache instead of failing the release.
+          $filesSource = "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
+          try {
+            $nuget = (& $env:VCPKG_EXE fetch nuget |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+              Select-Object -Last 1).Trim()
+            if ([string]::IsNullOrWhiteSpace($nuget) -or -not (Test-Path -LiteralPath $nuget -PathType Leaf)) {
+              throw "vcpkg did not provide a usable nuget.exe (got '$nuget')."
+            }
+
+            & $nuget sources add `
+              -Source $env:VCPKG_FEED_URL `
+              -StorePasswordInClearText `
+              -Name GitHubPackages `
+              -UserName $env:VCPKG_FEED_OWNER `
+              -Password $env:GITHUB_TOKEN
+            if ($LASTEXITCODE -ne 0) {
+              throw "nuget sources add failed with exit code $LASTEXITCODE."
+            }
+
+            & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL
+            if ($LASTEXITCODE -ne 0) {
+              throw "nuget setapikey failed with exit code $LASTEXITCODE."
+            }
+
+            "VCPKG_BINARY_SOURCES=clear;nuget,$env:VCPKG_FEED_URL,readwrite;$filesSource" >> $env:GITHUB_ENV
+            Write-Host 'vcpkg binary cache: GitHub Packages feed plus local files cache.'
+          } catch {
+            Write-Warning "GitHub Packages binary cache unavailable; using the local files cache only. $_"
+            "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
+          }
+
       - name: Restore vcpkg dependencies
         shell: pwsh
         env:
           VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
           VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
         run: |
+          function Show-Disk([string] $label) {
+            Write-Host "--- disk after $label ---"
+            Get-PSDrive -PSProvider FileSystem |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_.Used) -and ($_.Used + $_.Free) -gt 0 } |
+              ForEach-Object {
+                Write-Host ('  {0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB))
+              }
+          }
+
           # actions/cache only materializes the directory on a cache hit, so a
           # cold run leaves it missing and vcpkg rejects the binary cache path.
           New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+
+          # Route every scratch tree off the runner image's C: drive. vcpkg's
+          # default is <VCPKG_ROOT>\{buildtrees,packages,downloads}, i.e. C:,
+          # which is what filled up. The workspace volume also holds the
+          # installed trees, so it is the volume with room.
+          $buildtreesRoot = Join-Path $env:VCPKG_SCRATCH 'buildtrees'
+          $packagesRoot = Join-Path $env:VCPKG_SCRATCH 'packages'
+          $downloadsRoot = Join-Path $env:VCPKG_SCRATCH 'downloads'
+          foreach ($path in @($buildtreesRoot, $packagesRoot, $downloadsRoot)) {
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+          }
+
+          # Shared flags for both manifests.
+          #
+          # --overlay-triplets shadows x64-windows with packaging\triplets\x64-windows.cmake,
+          # which sets VCPKG_BUILD_TYPE=release. Nothing here consumes vcpkg's
+          # debug half, so building it only doubles compile time and disk.
+          #
+          # --clean-*-after-build bounds peak scratch usage to roughly the
+          # largest single package (OCCT). The compiled archives are already in
+          # the binary cache by then, so pruning costs nothing on a re-run.
+          $common = @(
+            '--triplet', 'x64-windows',
+            "--overlay-triplets=$env:GITHUB_WORKSPACE\packaging\triplets",
+            "--vcpkg-root=$env:VCPKG_ROOT",
+            "--x-buildtrees-root=$buildtreesRoot",
+            "--x-packages-root=$packagesRoot",
+            "--downloads-root=$downloadsRoot",
+            '--clean-buildtrees-after-build',
+            '--clean-packages-after-build',
+            '--x-wait-for-lock'
+          )
 
           & $env:VCPKG_EXE integrate install
           if ($LASTEXITCODE -ne 0) {
@@ -138,15 +258,13 @@ jobs:
           # The default project layout resolves to
           # vcpkg_installed\x64-windows\x64-windows, matching VcpkgInstalledDir.
           $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows'
-          & $env:VCPKG_EXE install `
-            --triplet x64-windows `
+          & $env:VCPKG_EXE install @common `
             "--x-manifest-root=$env:GITHUB_WORKSPACE" `
-            "--x-install-root=$installRoot" `
-            "--vcpkg-root=$env:VCPKG_ROOT" `
-            --x-wait-for-lock
+            "--x-install-root=$installRoot"
           if ($LASTEXITCODE -ne 0) {
             throw "vcpkg root-manifest restore failed with exit code $LASTEXITCODE."
           }
+          Show-Disk 'root manifest'
 
           # Isolated STEP manifest: OCCT only. Preview3DStepHost sets
           # VcpkgInstalledDir=compatibility-host-step\vcpkg_installed, so its
@@ -155,15 +273,13 @@ jobs:
           # the OCCT license and SPDX record from.
           $stepManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'compatibility-host-step'
           $stepInstallRoot = Join-Path $stepManifestRoot 'vcpkg_installed'
-          & $env:VCPKG_EXE install `
-            --triplet x64-windows `
+          & $env:VCPKG_EXE install @common `
             "--x-manifest-root=$stepManifestRoot" `
-            "--x-install-root=$stepInstallRoot" `
-            "--vcpkg-root=$env:VCPKG_ROOT" `
-            --x-wait-for-lock
+            "--x-install-root=$stepInstallRoot"
           if ($LASTEXITCODE -ne 0) {
             throw "vcpkg STEP-manifest restore failed with exit code $LASTEXITCODE."
           }
+          Show-Disk 'STEP manifest'
 
       - name: Import optional signing certificate
         id: signing
