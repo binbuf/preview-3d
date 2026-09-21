@@ -50,11 +50,16 @@ vcpkg_cmake_config_fixup(CONFIG_PATH cmake)
 # OpenUSD installs its monolithic runtime beside the import library. Normalize
 # that upstream layout so vcpkg app-local deployment and package validation can
 # treat it like every other Windows DLL.
-file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/bin" "${CURRENT_PACKAGES_DIR}/debug/bin")
+file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/bin")
 file(RENAME "${CURRENT_PACKAGES_DIR}/lib/usd_ms.dll"
             "${CURRENT_PACKAGES_DIR}/bin/usd_ms.dll")
-file(RENAME "${CURRENT_PACKAGES_DIR}/debug/lib/usd_ms.dll"
-            "${CURRENT_PACKAGES_DIR}/debug/bin/usd_ms.dll")
+# The release-only CI triplet (VCPKG_BUILD_TYPE=release) installs no debug tree,
+# so the debug relocation must not assume one exists.
+if(EXISTS "${CURRENT_PACKAGES_DIR}/debug/lib/usd_ms.dll")
+    file(MAKE_DIRECTORY "${CURRENT_PACKAGES_DIR}/debug/bin")
+    file(RENAME "${CURRENT_PACKAGES_DIR}/debug/lib/usd_ms.dll"
+                "${CURRENT_PACKAGES_DIR}/debug/bin/usd_ms.dll")
+endif()
 if(EXISTS "${CURRENT_PACKAGES_DIR}/lib/usd_ms.pdb")
     file(RENAME "${CURRENT_PACKAGES_DIR}/lib/usd_ms.pdb"
                 "${CURRENT_PACKAGES_DIR}/bin/usd_ms.pdb")
