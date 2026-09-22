@@ -59,13 +59,11 @@ constexpr int kMaxNodeDepth = 256;
 constexpr uint64_t kMaxAggregateDecodedTexturePixels = 1'000'000'000;
 
 // KHR_materials_transmission is approximated rather than rendered: this
-// renderer has no refraction/transmission pass, so the transmitted fraction
-// becomes alpha-blend opacity. A surface with transmissionFactor 1 would
-// otherwise blend to fully invisible, losing the gloss/Fresnel term the
-// shader already computes. A high retained floor keeps glass and car windows
-// reading as a mostly-opaque surface with a visible environment reflection
-// instead of a ghostly hole; only a minority of the transmitted light shows.
-constexpr float kTransmissionGlassSheen = 0.70f;
+// renderer has no refraction/transmission pass. The scalar transmissionFactor
+// is carried through to the shader (with kMaterialFlagTransmissive) so it can
+// suppress transmitted diffuse and add a view-dependent Fresnel term to the
+// blend alpha. The authored base-color alpha is left untouched as the
+// material's intrinsic opacity instead of being overwritten by a fixed floor.
 
 // One fully-assembled mesh chunk's worth of data, held in memory before the
 // total section size is known and everything is written out in one pass --
@@ -973,14 +971,15 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     pending.data.alphaCutoff = material.alphaCutoff;
     pending.data.flags = (material.doubleSided ? kMaterialFlagDoubleSided : 0u)
         | (material.unlit ? kMaterialFlagUnlit : 0u);
-    pending.data.reserved0 = 0;
+    pending.data.transmissionFactor = 0.0f;
 
     // KHR_materials_transmission: there is no refraction/transmission pass, so
-    // the transmitted fraction is approximated as alpha-blend opacity. A
-    // per-texel transmissionTexture is not representable in MaterialPayload
-    // (it has no slot for one), so the scalar factor -- what the common
-    // "glass" export carries -- is what is applied. A Mask material keeps its
-    // authored discard test untouched rather than silently reinterpreting it.
+    // the transmitted fraction is carried to the shader, which approximates it
+    // with a Fresnel-driven blend alpha plus suppressed transmitted diffuse. A
+    // per-texel transmissionTexture is not representable in MaterialPayload (it
+    // has no slot for one), so the scalar factor -- what the common "glass"
+    // export carries -- is what is applied. A Mask material keeps its authored
+    // discard test untouched rather than silently reinterpreting it.
     if (material.transmission && material.alphaMode != fastgltf::AlphaMode::Mask) {
         float transmission = material.transmission->transmissionFactor;
         if (!std::isfinite(transmission)) {
@@ -988,9 +987,8 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         }
         transmission = std::clamp(transmission, 0.0f, 1.0f);
         if (transmission > 0.0f) {
-            const float opacity = pending.data.baseColorFactor[3] * (1.0f - transmission)
-                + kTransmissionGlassSheen * transmission;
-            pending.data.baseColorFactor[3] = std::clamp(opacity, 0.0f, 1.0f);
+            pending.data.transmissionFactor = transmission;
+            pending.data.flags |= kMaterialFlagTransmissive;
             if (material.alphaMode == fastgltf::AlphaMode::Opaque) {
                 pending.data.alphaMode = static_cast<uint32_t>(AlphaModeId::Blend);
             }

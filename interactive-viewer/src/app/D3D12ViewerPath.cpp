@@ -325,6 +325,7 @@ PixelOutput PSMain(PSInput input)
     bool textureLayer=(flags&512u)!=0;
     bool textureMix=(flags&1024u)!=0;
     bool clay=gLighting.x>0.5f && gLighting.x<1.5f;
+    bool transmissive=!clay && (flags&4096u)!=0;
     float4 vertexColor=input.color;
     if ((flags&2048u)!=0) vertexColor.rgb=SrgbToLinear(vertexColor.rgb);
     float4 base=clay ? float4(.58f,.58f,.58f,1.0f) : gBaseColorFactor*vertexColor;
@@ -355,29 +356,40 @@ PixelOutput PSMain(PSInput input)
     float metallic=clay?0.0f:gMaterialFactors.x, roughness=clay?.82f:gMaterialFactors.y;
     if (!clay && (maps&2) && uvValid) { float4 mr=nearest?gMetallicRoughness.Sample(gNearestSampler,sampleUv):gMetallicRoughness.Sample(gLinearSampler,sampleUv); metallic*=mr.b; roughness*=mr.g; }
     roughness=clamp(roughness,.045f,1.0f);
+    // KHR_materials_transmission approximation. A transmissive surface has no
+    // transmitted diffuse; it shows a view-dependent Fresnel reflection over
+    // whatever is behind it. The blend alpha carries that reflectance so the
+    // straight-alpha blend composites reflection over background correctly,
+    // and the environment reflection is added unfresneled because alpha
+    // already supplies the reflectance factor.
+    float transmission=transmissive?clamp(gUvRotationAndMaps.w,0.0f,1.0f):0.0f;
+    float nv=saturate(dot(n,viewDir));
+    float diffuseScale=1.0f-transmission;
+    float glassReflectance=lerp(0.04f,1.0f,pow(1.0f-nv,5.0f));
+    if (transmissive) base.a=saturate(base.a*diffuseScale+glassReflectance*transmission);
     float3 color;
     if (!clay && (flags&2)) {
-        color=base.rgb;
+        color=base.rgb*diffuseScale;
     } else if (gLighting.x>1.5f) {
         // A single hard key whose elevation is user-adjustable via the gizmo's
         // sun. Higher elevations read as daylight on upward faces; lower ones
         // rake across slopes to expose relief.
         float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
         float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
-        color=EvaluateLight(n,viewDir,lightDir,base.rgb,metallic,roughness,3.4f)
-            + base.rgb*(1.0f-metallic)*.08f;
+        color=EvaluateLight(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,3.4f)
+            + base.rgb*(1.0f-metallic)*.08f*diffuseScale;
+        if (transmissive) color+=StudioEnvironment(reflect(-viewDir,n),roughness);
     } else {
         // Neutral studio environment. Analytic diffuse irradiance plus a
         // roughness-blurred reflection keep authored base color and make
         // metallic and roughness meaningful; a single soft key adds form.
         float3 f0=lerp(float3(.04f,.04f,.04f),base.rgb,metallic);
-        float nv=saturate(dot(n,viewDir));
         float3 fresnel=f0+(1.0f-f0)*pow(1.0f-nv,5.0f);
-        color=base.rgb*(1.0f-metallic)*EnvironmentIrradiance(n)*.85f;
+        color=base.rgb*(1.0f-metallic)*EnvironmentIrradiance(n)*.85f*diffuseScale;
         float3 refl=reflect(-viewDir,n);
-        color+=StudioEnvironment(refl,roughness)*fresnel;
-        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb,metallic,roughness,1.9f);
-        color+=base.rgb*(1.0f-metallic)*.05f;
+        color+=StudioEnvironment(refl,roughness)*(transmissive?float3(1.0f,1.0f,1.0f):fresnel);
+        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,1.9f);
+        color+=base.rgb*(1.0f-metallic)*.05f*diffuseScale;
     }
     if (!clay) {
         float3 emissive=gEmissiveFactor.rgb;
@@ -1349,12 +1361,14 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 | ((mesh.material.flags&model_core::kMaterialSamplerFlags)<<1)
                 | ((mesh.material.flags&model_core::kMaterialFlagTextureLayer)?512u:0u)
                 | ((mesh.material.flags&model_core::kMaterialFlagTextureMix)?1024u:0u)
-                | ((mesh.material.flags&model_core::kMaterialFlagVertexSrgb)?2048u:0u));
+                | ((mesh.material.flags&model_core::kMaterialFlagVertexSrgb)?2048u:0u)
+                | ((mesh.material.flags&model_core::kMaterialFlagTransmissive)?4096u:0u));
             std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
             material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
             material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
             material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
             material[18]=float(mapMask);
+            material[19]=mesh.material.transmissionFactor;
             commandList->SetGraphicsRoot32BitConstants(6,20,material,0);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
