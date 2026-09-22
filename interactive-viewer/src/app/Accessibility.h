@@ -56,6 +56,8 @@ enum class Control
     LightingDirectional,
     DirectionalLightAngle,
     Wireframe,
+    // Appended after Wireframe so its numeric runtime ID stays stable.
+    DirectionalLightElevation,
     Count,
 };
 

@@ -20,6 +20,8 @@ constexpr float kDotLogical = 5.5f;
 constexpr float kStemWidthLogical = 2.4f;
 constexpr float kCornerMarginLogical = 14.0f;
 constexpr float kHitSlopLogical = 3.0f;
+// Sun-marker reach (the outer tip of its rays), used as the light drag handle.
+constexpr float kSunOuterLogical = 7.3f;
 // Half-width of the Part::Light annulus straddling the outer ring. Wide
 // enough to grab comfortably, narrow enough that the inner disc still reads
 // as the orbit target.
@@ -121,6 +123,7 @@ void NavGizmo::UpdateLayout(int viewportWidth, int viewportHeight, int topInset,
     stemWidth_ = kStemWidthLogical * scale;
     hitSlop_ = kHitSlopLogical * scale;
     ringBand_ = kLightRingBandLogical * scale;
+    sun_ = kSunOuterLogical * scale;
     const float margin = kCornerMarginLogical * scale;
     const float width = std::max(1.0f, static_cast<float>(viewportWidth));
     const float top = static_cast<float>(topInset);
@@ -135,13 +138,27 @@ void NavGizmo::UpdateLayout(int viewportWidth, int viewportHeight, int topInset,
     hover = Part::None;
 }
 
-NavGizmo::Part NavGizmo::HitTest(XMVECTOR cameraOrientation, float pointerX, float pointerY, bool lightRing) const
+NavGizmo::Part NavGizmo::HitTest(XMVECTOR cameraOrientation, float pointerX, float pointerY,
+    bool lightRing, float directionalLightAngle, float directionalLightElevation) const
 {
     const float gx = pointerX - centerX_;
     const float gy = pointerY - centerY_;
     const float distanceSq = gx * gx + gy * gy;
     const float reach = outer_ + (lightRing ? std::max(hitSlop_, ringBand_) : hitSlop_);
     if (distanceSq > reach * reach) return Part::None;
+
+    // The sun marker is its own drag handle wherever elevation has moved it to,
+    // so pulling it toward the center to raise the light is a direct grab rather
+    // than a ring-only gesture. It wins over an axis node it may overlap because
+    // it is the only handle for the light.
+    if (lightRing)
+    {
+        const SunGeometry sun = ComputeSun(cameraOrientation, directionalLightAngle, directionalLightElevation);
+        const float sunDx = gx - sun.x;
+        const float sunDy = gy - sun.y;
+        const float sunReach = sun_ + hitSlop_;
+        if (sunDx * sunDx + sunDy * sunDy <= sunReach * sunReach) return Part::Light;
+    }
 
     XMVECTOR axes[3]{};
     AxisDirections(cameraOrientation, axes);
@@ -254,10 +271,12 @@ NavGizmo::DrawGeometry NavGizmo::ComputeDraw(XMVECTOR cameraOrientation) const
     return geometry;
 }
 
-NavGizmo::SunGeometry NavGizmo::ComputeSun(XMVECTOR cameraOrientation, float directionalLightAngle) const
+NavGizmo::SunGeometry NavGizmo::ComputeSun(XMVECTOR cameraOrientation, float directionalLightAngle,
+    float directionalLightElevation) const
 {
     SunGeometry sun;
     const float azimuth = directionalLightAngle * XM_2PI;
+    const float elevation = std::clamp(directionalLightElevation, 0.0f, 1.4835f);
     const float cosine = std::cos(azimuth);
     const float sine = std::sin(azimuth);
 
@@ -274,15 +293,17 @@ NavGizmo::SunGeometry NavGizmo::ComputeSun(XMVECTOR cameraOrientation, float dir
     const float along = XMVectorGetX(XMVector3Dot(light, right));   // screen +x
     const float ahead = XMVectorGetX(XMVector3Dot(light, forward)); // screen -y
 
-    // (along, ahead) is the unit light direction in the camera's ground frame,
-    // so the marker lands exactly on the ring.
-    sun.x = along * outer_;
-    sun.y = -ahead * outer_;
+    // Elevation is encoded radially: on the horizon the sun rides the outer
+    // ring, and it converges on the center as it climbs overhead. The bearing
+    // still covers every angle because it comes from the yaw-only frame above.
+    const float radius = outer_ * std::cos(elevation);
+    sun.x = along * radius;
+    sun.y = -ahead * radius;
 
     // Keep a true 3D depth so the renderer can tell when the light is on the
-    // far side of the model. The elevation must match the shader's key light
-    // (D3D12ViewerPath.cpp's `normalize(float3(cos,sin,0.55))`).
-    const XMVECTOR light3D = XMVector3Normalize(XMVectorSet(cosine, sine, 0.55f, 0.0f));
+    // far side of the model.
+    const XMVECTOR light3D = XMVector3Normalize(XMVectorSet(
+        cosine * std::cos(elevation), sine * std::cos(elevation), std::sin(elevation), 0.0f));
     const XMVECTOR inverse = XMQuaternionConjugate(XMQuaternionNormalize(cameraOrientation));
     sun.depth = XMVectorGetZ(XMVector3Rotate(light3D, inverse));
     sun.visible = true;
@@ -310,6 +331,17 @@ bool NavGizmo::LightAngleForPoint(XMVECTOR cameraOrientation, float pointerX, fl
     float normalized = std::atan2(XMVectorGetY(light), XMVectorGetX(light)) / XM_2PI;
     normalized -= std::floor(normalized);
     angle = normalized;
+    return true;
+}
+
+bool NavGizmo::LightElevationForPoint(float pointerX, float pointerY, float& elevation) const
+{
+    if (outer_ <= 0.0f) return false;
+    const float gx = pointerX - centerX_;
+    const float gy = pointerY - centerY_;
+    const float radial = std::sqrt(gx * gx + gy * gy);
+    // Inverse of ComputeSun's radius = outer * cos(elevation).
+    elevation = std::acos(std::clamp(radial / outer_, 0.0f, 1.0f));
     return true;
 }
 

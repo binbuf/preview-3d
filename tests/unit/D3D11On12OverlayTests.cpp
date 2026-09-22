@@ -617,6 +617,44 @@ TEST_CASE("The nav gizmo rides the directional-light sun marker on its outer rin
     CHECK(std::abs(second.depth) <= 1.0f);
 }
 
+TEST_CASE("The sun marker rises toward the gizmo center with elevation and round-trips", "[graphics][gizmo]")
+{
+    NavGizmo gizmo;
+    gizmo.UpdateLayout(800, 600, 40, 40, 1.0f);
+    const auto identity = DirectX::XMQuaternionIdentity();
+    const auto geometry = gizmo.ComputeDraw(identity);
+    const float ring = geometry.outerRadius;
+    REQUIRE(ring > 0.0f);
+
+    const auto horizon = gizmo.ComputeSun(identity, 0.25f, 0.0f);
+    const auto mid = gizmo.ComputeSun(identity, 0.25f, 0.6f);
+    const auto overhead = gizmo.ComputeSun(identity, 0.25f, 1.4835f);
+    const float radiusHorizon = std::sqrt(horizon.x * horizon.x + horizon.y * horizon.y);
+    const float radiusMid = std::sqrt(mid.x * mid.x + mid.y * mid.y);
+    const float radiusOverhead = std::sqrt(overhead.x * overhead.x + overhead.y * overhead.y);
+
+    // At the horizon the marker rides the ring; raising it pulls it inward.
+    CHECK(std::abs(radiusHorizon - ring) < 0.01f);
+    CHECK(radiusMid < radiusHorizon);
+    CHECK(radiusOverhead < radiusMid);
+    CHECK(radiusOverhead < 0.2f * ring);
+
+    // The radial placement inverts back to the elevation it was drawn at.
+    for (const float expected : { 0.0f, 0.3f, 0.7f, 1.2f })
+    {
+        const auto sun = gizmo.ComputeSun(identity, 0.4f, expected);
+        REQUIRE(sun.visible);
+        float recovered = -1.0f;
+        REQUIRE(gizmo.LightElevationForPoint(geometry.centerX + sun.x, geometry.centerY + sun.y, recovered));
+        CHECK(std::abs(recovered - expected) < 0.01f);
+    }
+
+    // A raised marker is still its own light drag handle.
+    const auto marker = gizmo.ComputeSun(identity, 0.25f, 0.7f);
+    CHECK(gizmo.HitTest(identity, geometry.centerX + marker.x, geometry.centerY + marker.y, true, 0.25f, 0.7f)
+        == NavGizmo::Part::Light);
+}
+
 TEST_CASE("The nav gizmo carves the light ring out of the orbit ball only when asked", "[graphics][gizmo]")
 {
     NavGizmo gizmo;

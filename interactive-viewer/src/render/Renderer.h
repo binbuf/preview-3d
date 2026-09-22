@@ -94,6 +94,7 @@ struct OverlayInfo
     bool isFullscreen = false;
     LightingMode lightingMode = LightingMode::Studio;
     float directionalLightAngle = 0.0f; // normalized 0..1 horizontal rotation
+    float directionalLightElevation = 0.502f; // radians above the horizon, 0..~85deg
     RECT lightingToolbarRect{};
     RECT studioButtonRect{};
     RECT clayButtonRect{};
