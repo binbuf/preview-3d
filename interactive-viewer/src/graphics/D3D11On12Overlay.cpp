@@ -795,7 +795,25 @@ void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const Nav
             const float rayInner = Scale(4.5f, scale);
             const float rayOuter = Scale(7.3f, scale);
             const float sunStroke = Scale(1.5f, scale);
-            SetBrush(D2D1::ColorF(1.0f, 0.80f, 0.26f, 1.0f));
+
+            // While the sun is held, an opaque disc larger than an axis node
+            // makes it read as its own control rather than another axis button,
+            // so a drag is never mistaken for an orbit/axis hit.
+            if (overlay.lightDragging)
+            {
+                const float backdrop = g.nodeRadius * 1.45f;
+                SetBrush(D2D1::ColorF(1.0f, 0.80f, 0.10f, 1.0f)); // golden yellow
+                d2dContext_->FillEllipse(D2D1::Ellipse(position, backdrop, backdrop), overlayBrush.Get());
+                SetBrush(D2D1::ColorF(0.82f, 0.58f, 0.06f, 1.0f)); // deeper gold edge
+                d2dContext_->DrawEllipse(D2D1::Ellipse(position, backdrop, backdrop), overlayBrush.Get(),
+                    Scale(1.4f, scale));
+            }
+
+            // White while the sun is held, lighter yellow on hover, amber
+            // otherwise, so the grabbed control is unmistakable.
+            SetBrush(overlay.lightDragging ? D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f)
+                    : lightHover ? D2D1::ColorF(1.0f, 0.95f, 0.62f, 1.0f)
+                                 : D2D1::ColorF(1.0f, 0.80f, 0.26f, 1.0f));
             d2dContext_->DrawEllipse(D2D1::Ellipse(position, core, core), overlayBrush.Get(), sunStroke);
             for (int ray = 0; ray < 8; ++ray)
             {
