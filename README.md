@@ -6,12 +6,10 @@
 
 [Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Contributing](CONTRIBUTING.md) · [Windows security help](.docs/WINDOWS-SECURITY.md)
 
-<!-- Screenshots: add the images under docs/screenshots/ (see docs/screenshots/README.md), then uncomment this block.
+<!-- Screenshots: see docs/screenshots/README.md for the shot list and how to add more. -->
 <p align="center">
-  <img src="docs/screenshots/hero-studio.png" alt="Preview 3D showing a PBR model with the studio lighting preset" width="49%">
-  <img src="docs/screenshots/hero-directional.png" alt="Preview 3D showing the directional light and navigation gizmo" width="49%">
+  <img src="docs/screenshots/hero-studio.png" alt="Preview 3D showing a PBR model with the studio lighting preset" width="70%">
 </p>
--->
 
 ## Highlights
 
