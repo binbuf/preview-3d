@@ -35,6 +35,11 @@ constexpr uint32_t kMaterialFlagNearest = 1u << 7;
 constexpr uint32_t kMaterialFlagTextureLayer = 1u << 8;
 constexpr uint32_t kMaterialFlagTextureMix = 1u << 9;
 constexpr uint32_t kMaterialFlagVertexSrgb = 1u << 10;
+// KHR_materials_transmission is rendered without a refraction pass: the shader
+// suppresses transmitted diffuse, adds a view-dependent Fresnel term to output
+// alpha, and lets the environment reflection pass through unchanged. The
+// accompanying transmissionFactor is meaningful only when this flag is set.
+constexpr uint32_t kMaterialFlagTransmissive = 1u << 11;
 constexpr uint32_t MaterialAddressFlags(TextureAddressId u, TextureAddressId v) noexcept
 {
     return (uint32_t(u) << kMaterialAddressUShift)
@@ -43,11 +48,12 @@ constexpr uint32_t MaterialAddressFlags(TextureAddressId u, TextureAddressId v) 
 constexpr uint32_t kMaterialSamplerFlags =
     (kMaterialAddressMask << kMaterialAddressUShift)
     | (kMaterialAddressMask << kMaterialAddressVShift) | kMaterialFlagNearest;
-// Bits 11-31 reserved, must be 0 -- SharedSectionValidator rejects any set.
+// Bits 12-31 reserved, must be 0 -- SharedSectionValidator rejects any set.
 constexpr uint32_t kMaterialFlagsKnownMask =
     kMaterialFlagDoubleSided | kMaterialFlagUnlit | kMaterialFlagFlipV
     | kMaterialSamplerFlags | kMaterialFlagTextureLayer
-    | kMaterialFlagTextureMix | kMaterialFlagVertexSrgb;
+    | kMaterialFlagTextureMix | kMaterialFlagVertexSrgb
+    | kMaterialFlagTransmissive;
 
 #pragma pack(push, 1)
 
@@ -62,7 +68,10 @@ struct MaterialPayload {
     uint32_t alphaMode;       // AlphaModeId
     float alphaCutoff;        // default 0.5
     uint32_t flags;           // kMaterialFlag*
-    uint32_t reserved0;       // must be 0
+    // KHR_materials_transmission factor [0,1]; 0 and ignored unless
+    // kMaterialFlagTransmissive is set. This reuses the former reserved word to
+    // avoid growing the 72-byte wire record.
+    float transmissionFactor;
 };
 static_assert(sizeof(MaterialPayload) == 72, "MaterialPayload wire layout changed");
 

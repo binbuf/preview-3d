@@ -260,7 +260,7 @@ TEST_CASE("A Material chunk with an unrecognized flags bit set is rejected",
 {
     auto chunks = ValidTriple();
     MaterialPayload p = ValidMaterialPayload();
-    p.flags = 1u << 11;
+    p.flags = 1u << 12;
     chunks[1].payload = ToBytes(p);
     auto section = BuildSection(chunks, 1);
     auto result = import_broker::ValidateAndCopySection(section, 1, 8);
@@ -278,6 +278,40 @@ TEST_CASE("The closed material flag mask accepts the 3MF sampler and blending fl
     const auto section = BuildSection(chunks, 1);
     const auto result = import_broker::ValidateAndCopySection(section, 1, 8);
     CHECK(result.ok);
+}
+
+TEST_CASE("A transmissive Material chunk accepts its in-range factor and rejects the rest",
+          "[shared-section-validator][texture]")
+{
+    auto accepted = ValidTriple();
+    MaterialPayload p = ValidMaterialPayload();
+    p.flags |= kMaterialFlagTransmissive;
+    p.transmissionFactor = 0.5f;
+    accepted[1].payload = ToBytes(p);
+    const auto acceptedSection = BuildSection(accepted, 1);
+    CHECK(import_broker::ValidateAndCopySection(acceptedSection, 1, 8).ok);
+
+    auto outOfRange = p;
+    outOfRange.transmissionFactor = 1.5f;
+    auto chunks = ValidTriple();
+    chunks[1].payload = ToBytes(outOfRange);
+    const auto section = BuildSection(chunks, 1);
+    const auto result = import_broker::ValidateAndCopySection(section, 1, 8);
+    CHECK_FALSE(result.ok);
+    CHECK(result.errorCode == ImportErrorCode::MalformedData);
+}
+
+TEST_CASE("A Material transmission factor without its flag is rejected",
+          "[shared-section-validator][texture]")
+{
+    auto chunks = ValidTriple();
+    MaterialPayload p = ValidMaterialPayload();
+    p.transmissionFactor = 0.5f; // flag deliberately not set
+    chunks[1].payload = ToBytes(p);
+    const auto section = BuildSection(chunks, 1);
+    const auto result = import_broker::ValidateAndCopySection(section, 1, 8);
+    CHECK_FALSE(result.ok);
+    CHECK(result.errorCode == ImportErrorCode::MalformedData);
 }
 
 TEST_CASE("A Material chunk whose dependency resolves to a non-Image chunk is rejected",

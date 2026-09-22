@@ -520,7 +520,7 @@ private:
                                                   : static_cast<std::uint32_t>(AlphaModeId::Opaque);
         record.payload.alphaCutoff = 0.5f;
         record.payload.flags = 0;
-        record.payload.reserved0 = 0;
+        record.payload.transmissionFactor = 0.0f;
         materialByKey_.emplace(key, record.chunkId);
         materials_.push_back(record);
         return record.chunkId;
