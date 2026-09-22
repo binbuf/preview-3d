@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -43,17 +44,24 @@ struct ScratchGltfDirectory {
 
     void WriteSibling(const std::wstring& relativeName, size_t sizeBytes = 4) const
     {
-        std::ofstream out(directory + L"\\" + relativeName, std::ios::binary | std::ios::trunc);
+        WriteRelative(relativeName, sizeBytes);
+    }
+
+    // Writes a file at a path relative to the primary's directory, creating
+    // any intermediate subdirectories (the "textures/foo.jpg" layout).
+    void WriteRelative(const std::wstring& relativeName, size_t sizeBytes = 4) const
+    {
+        const std::filesystem::path path = std::filesystem::path(directory) / relativeName;
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
         std::string content(sizeBytes, 'x');
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
 
     ~ScratchGltfDirectory()
     {
-        DeleteFileW((directory + L"\\scene.gltf").c_str());
-        DeleteFileW((directory + L"\\mesh.bin").c_str());
-        DeleteFileW((directory + L"\\diffuse.png").c_str());
-        RemoveDirectoryW(directory.c_str());
+        std::error_code error;
+        std::filesystem::remove_all(directory, error);
     }
 };
 
@@ -68,6 +76,41 @@ TEST_CASE("A valid relative sidecar reference resolves successfully", "[sidecar-
     REQUIRE(result.file);
     CHECK(result.fileSizeBytes == 4);
     CHECK(result.rejectionCode == model_core::ImportErrorCode::None);
+}
+
+TEST_CASE("A sidecar reference into a subdirectory of the primary directory resolves",
+          "[sidecar-resolver]")
+{
+    ScratchGltfDirectory dir;
+    dir.WriteRelative(L"textures\\diffuse.png");
+
+    auto result = import_broker::ResolveSidecarPath(dir.primaryCanonicalPath, "textures/diffuse.png", 1024);
+    REQUIRE(result.file);
+    CHECK(result.fileSizeBytes == 4);
+    CHECK(result.rejectionCode == model_core::ImportErrorCode::None);
+}
+
+TEST_CASE("A sidecar reference into a nested subdirectory of the primary directory resolves",
+          "[sidecar-resolver]")
+{
+    ScratchGltfDirectory dir;
+    dir.WriteRelative(L"assets\\textures\\diffuse.png");
+
+    auto result = import_broker::ResolveSidecarPath(dir.primaryCanonicalPath,
+                                                    "assets/textures/diffuse.png", 1024);
+    REQUIRE(result.file);
+    CHECK(result.rejectionCode == model_core::ImportErrorCode::None);
+}
+
+TEST_CASE("A reference that traverses up and back into a subdirectory is rejected", "[sidecar-resolver]")
+{
+    ScratchGltfDirectory dir;
+    dir.WriteRelative(L"textures\\diffuse.png");
+
+    auto result = import_broker::ResolveSidecarPath(dir.primaryCanonicalPath,
+                                                    "textures/../diffuse.png", 1024);
+    CHECK_FALSE(result.file);
+    CHECK(result.rejectionCode == model_core::ImportErrorCode::UnsafeReference);
 }
 
 TEST_CASE("An empty sidecar reference is rejected", "[sidecar-resolver]")

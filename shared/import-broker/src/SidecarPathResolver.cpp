@@ -85,6 +85,13 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
     }
 
     std::filesystem::path referencePath(reference);
+    // The primary canonical path carries the "\\?\" extended-length prefix
+    // (GetFinalPathNameByHandleW's normalized form), and that prefix disables
+    // Windows path normalization: a forward slash in a glTF URI
+    // ("textures/foo.jpg") is not accepted by CreateFileW once joined under
+    // it. The reference is already validated as relative with no "..", so
+    // converting its separators to the platform's preferred form is safe.
+    referencePath.make_preferred();
     if (referencePath.is_absolute() || referencePath.has_root_name() || referencePath.has_root_directory()) {
         return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference is absolute/rooted");
     }
@@ -121,14 +128,25 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
     }
     canonicalPath.resize(writtenLength);
 
-    // Reparse points resolved after opening -- compare the resulting
-    // canonical *directory* against the primary's own, full string
-    // compare (not a prefix check a sibling like "C:\Foo2" could satisfy
-    // against "C:\Foo").
-    std::filesystem::path primaryCanonicalDirectory
-        = std::filesystem::path(primaryCanonicalPath).parent_path();
-    std::filesystem::path sidecarCanonicalDirectory = std::filesystem::path(canonicalPath).parent_path();
-    if (LowerCopy(sidecarCanonicalDirectory.wstring()) != LowerCopy(primaryCanonicalDirectory.wstring())) {
+    // Containment to the primary file's directory *tree*, not just to its
+    // immediate directory: a .gltf commonly references "textures/foo.jpg" or
+    // "buffer/mesh.bin", so a subdirectory below the primary directory must
+    // resolve. What must never resolve is anything above or beside it. The
+    // reference text has already been checked for ".." and rooting, and both
+    // sides here are GetFinalPathNameByHandleW-canonicalized
+    // (FILE_NAME_NORMALIZED), so a reparse point that resolves outside the
+    // primary directory surfaces as a canonical path outside it. Compare the
+    // sidecar's full canonical path against the primary directory with a
+    // trailing separator -- a plain string prefix would let a sibling like
+    // "C:\Foo2" satisfy "C:\Foo", and the separator also stops a same-named
+    // file from being matched component-by-component.
+    std::wstring primaryDirectoryPrefix = LowerCopy(primaryDirectory.wstring());
+    if (primaryDirectoryPrefix.empty() || primaryDirectoryPrefix.back() != L'\\') {
+        primaryDirectoryPrefix.push_back(L'\\');
+    }
+    std::wstring sidecarCanonicalPath = LowerCopy(canonicalPath);
+    if (sidecarCanonicalPath.size() <= primaryDirectoryPrefix.size()
+        || sidecarCanonicalPath.compare(0, primaryDirectoryPrefix.size(), primaryDirectoryPrefix) != 0) {
         return Reject(ImportErrorCode::UnsafeReference,
                        L"sidecar reference resolved outside the primary file's directory");
     }
