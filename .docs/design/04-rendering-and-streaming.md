@@ -55,7 +55,7 @@ The MVP uses a forward, rasterized PBR-lite pipeline:
 
 - right-handed internal coordinates and camera-relative float matrices;
 - reversed-Z depth with a floating-point depth buffer;
-- one fixed image-based ambient term plus a camera-relative key/fill light;
+- one analytic studio environment (diffuse irradiance plus a roughness-blurred reflection) with a camera-relative key/fill light;
 - base color, metallic, roughness, emissive, normal map and UV transform when present, vertex color, unlit mode, alpha mask, double-sided state;
 - bounded point primitives rendered as depth-tested camera-scaled round splats with source color or neutral shading;
 - opaque and masked geometry before sorted transparent draw groups;

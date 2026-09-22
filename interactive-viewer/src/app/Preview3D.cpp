@@ -131,6 +131,9 @@ struct ViewerApp
     bool fullscreenButtonPressed = false;
     LightingMode lightingMode = LightingMode::Studio;
     float directionalLightAngle = 0.875f;
+    // Elevation above the horizon in radians; atan(0.55) matches the previous
+    // fixed key elevation. The gizmo sun's distance from center encodes it.
+    float directionalLightElevation = 0.502f;
     int lightingButtonPressed = -1; // 0 Studio, 1 Clay, 2 Directional, 3 Wireframe
     int lightingButtonHover = -1;
     bool isFullscreen = false;
@@ -1231,21 +1234,32 @@ int HitLightingButton(const ViewerApp& app,POINT point)
     return -1;
 }
 
-// Rotates the directional light so its gizmo sun lands under the pointer.
-// Returns false when the pointer is at the ring's center or the current view
-// makes the light's projected path degenerate, in which case the caller keeps
-// the existing angle.
+// "Directional light  315° / 29°" — azimuth then elevation, both in degrees.
+std::wstring DirectionalLightHudText(const ViewerApp& app)
+{
+    constexpr float kRadiansToDegrees = 57.29577951308232f;
+    return L"Directional light  "
+        + std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle * 360.0f))) + L"\u00B0"
+        + L" / " + std::to_wstring(static_cast<int>(std::lround(app.directionalLightElevation * kRadiansToDegrees))) + L"\u00B0";
+}
+
+// Rotates and raises the directional light so its gizmo sun lands under the
+// pointer. Returns false only when the pointer cannot define either an angle
+// (dead center) or an elevation. The horizontal position sets the azimuth and
+// the distance from center sets elevation, so dragging the sun inward raises it.
 bool SetDirectionalLightFromGizmoPoint(ViewerApp& app, POINT point)
 {
+    const auto orientation = app.renderThread.LockCamera()->Orientation();
+    const float x = static_cast<float>(point.x);
+    const float y = static_cast<float>(point.y);
     float angle = app.directionalLightAngle;
-    if (!app.gizmo.LightAngleForPoint(app.renderThread.LockCamera()->Orientation(),
-            static_cast<float>(point.x), static_cast<float>(point.y), app.directionalLightAngle, angle))
-    {
-        return false;
-    }
-    app.directionalLightAngle=angle;
-    app.modeHudText=L"Directional light  "
-        +std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle*360.0f)))+L"\u00B0";
+    const bool haveAngle = app.gizmo.LightAngleForPoint(orientation, x, y, app.directionalLightAngle, angle);
+    float elevation = app.directionalLightElevation;
+    const bool haveElevation = app.gizmo.LightElevationForPoint(x, y, elevation);
+    if (!haveAngle && !haveElevation) return false;
+    if (haveAngle) app.directionalLightAngle = angle;
+    if (haveElevation) app.directionalLightElevation = elevation;
+    app.modeHudText = DirectionalLightHudText(app);
     app.modeHudUntil=NowSeconds()+kHudVisibleSeconds;
     InvalidateRect(app.window,nullptr,FALSE);
     return true;
@@ -1256,7 +1270,7 @@ void SetLightingMode(ViewerApp& app,LightingMode mode)
     app.lightingMode=mode;
     app.modeHudText=mode==LightingMode::Studio ? L"Studio lighting"
         : mode==LightingMode::Clay ? L"Clay / Solid"
-        : mode==LightingMode::Directional ? L"Directional light" : L"Wireframe";
+        : mode==LightingMode::Directional ? DirectionalLightHudText(app) : L"Wireframe";
     app.modeHudUntil=NowSeconds()+kHudVisibleSeconds;
     InvalidateRect(app.window,nullptr,FALSE);
 }
@@ -2219,6 +2233,19 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.visible=model&&app.lightingMode==LightingMode::Directional;info.role=ROLE_SYSTEM_SLIDER;
         info.value=std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle*360.0f)))+L" degrees";break;
     }
+    case Control::DirectionalLightElevation:
+    {
+        // Same gizmo anchor as the angle; drag the sun toward or away from the
+        // center to raise/lower it, or nudge with the arrow keys.
+        float centerX=0.0f,centerY=0.0f,radius=0.0f;
+        app.gizmo.RingBounds(centerX,centerY,radius);
+        info.name=L"Directional light elevation";
+        info.description=L"Raise or lower the inspection light by dragging its sun toward or away from the gizmo center";
+        info.rect=RECT{static_cast<LONG>(centerX-radius),static_cast<LONG>(centerY-radius),
+            static_cast<LONG>(centerX+radius),static_cast<LONG>(centerY+radius)};
+        info.visible=model&&app.lightingMode==LightingMode::Directional;info.role=ROLE_SYSTEM_SLIDER;
+        info.value=std::to_wstring(static_cast<int>(std::lround(app.directionalLightElevation*57.29577951308232f)))+L" degrees";break;
+    }
     case Control::Wireframe:
         info.name=L"Wireframe";info.description=L"Show only mesh edges with all triangle surfaces hidden";
         info.rect=ComputeLightingToolbarLayout(app).wireframe;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
@@ -2387,6 +2414,13 @@ bool HandleAccessibleKey(ViewerApp& app, WPARAM key)
         app.directionalLightAngle=std::clamp(app.directionalLightAngle+direction/36.0f,0.0f,1.0f);
         InvalidateRect(app.window,nullptr,FALSE);return true;
     }
+    if (app.keyboardControl==Control::DirectionalLightElevation)
+    {
+        constexpr float kRadiansToDegrees=57.29577951308232f;
+        app.directionalLightElevation=std::clamp(
+            app.directionalLightElevation+direction*5.0f/kRadiansToDegrees,0.0f,1.4835f);
+        InvalidateRect(app.window,nullptr,FALSE);return true;
+    }
     return false;
 }
 
@@ -2547,6 +2581,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.isFullscreen = app.isFullscreen;
     overlay.lightingMode=app.lightingMode;
     overlay.directionalLightAngle=app.directionalLightAngle;
+    overlay.directionalLightElevation=app.directionalLightElevation;
     overlay.hasModel = app.renderThread.HasModel();
     overlay.gridVisible = app.gridVisible;
     overlay.axisSnapEnabled = app.axisSnapEnabled;
@@ -3328,11 +3363,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             const POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             const bool lightRing = app->lightingMode == LightingMode::Directional;
             const NavGizmo::Part part = app->gizmo.HitTest(app->renderThread.LockCamera()->Orientation(),
-                static_cast<float>(point.x), static_cast<float>(point.y), lightRing);
+                static_cast<float>(point.x), static_cast<float>(point.y), lightRing,
+                app->directionalLightAngle, app->directionalLightElevation);
             if (part == NavGizmo::Part::Light)
             {
-                // Outer light ring: drag the sun to rotate the directional
-                // light. Never orbits the camera.
+                // Outer light ring: drag the sun to rotate (and raise/lower) the
+                // directional light. Never orbits the camera.
                 SetCapture(window);
                 app->pointerMode = PointerMode::LightDrag;
                 app->renderThread.LockCamera()->CancelInertia();
@@ -3508,7 +3544,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             {
                 const NavGizmo::Part part = app->gizmo.HitTest(app->renderThread.LockCamera()->Orientation(),
                     static_cast<float>(movePoint.x), static_cast<float>(movePoint.y),
-                    app->lightingMode == LightingMode::Directional);
+                    app->lightingMode == LightingMode::Directional,
+                    app->directionalLightAngle, app->directionalLightElevation);
                 if (part != app->gizmo.hover)
                 {
                     app->gizmo.hover = part;

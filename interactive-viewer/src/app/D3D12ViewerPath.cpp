@@ -134,13 +134,15 @@ PixelOutput PSMain(PSInput input)
         ? float3(.58f,.58f,.58f) : gBaseColorFactor.rgb;
     float3 color;
     if (gLighting.x > 1.5f) {
-        float3 lightDir=normalize(float3(cos(gLighting.y),sin(gLighting.y),0.55f));
+        float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
+        float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
         color=albedo*(0.08f+1.05f*saturate(dot(n,lightDir)));
     } else {
         float key=saturate(dot(n,normalize(float3(.45f,-.55f,.70f))));
         float fill=saturate(dot(n,normalize(float3(-.70f,.25f,.38f))));
         float rim=saturate(dot(n,normalize(float3(.18f,.76f,.28f))));
-        color=albedo*(0.22f+0.78f*key+0.34f*fill+0.18f*rim);
+        float hemi=saturate(n.z*.5f+.5f);
+        color=albedo*(0.10f+0.62f*key+0.30f*fill+0.16f*rim+0.18f*hemi);
     }
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
@@ -269,6 +271,26 @@ float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float
     float3 diffuse=(1.0f-f)*(1.0f-metallic)*base/3.14159265f;
     return (diffuse+specular)*nl*intensity;
 }
+// Analytic studio environment. There is no HDRI asset, but a smooth
+// sky/wall/floor gradient plus a broad virtual softbox gives diffuse
+// irradiance and a roughness-blurred reflection, so metals and rough
+// dielectrics read correctly instead of going flat grey.
+float3 StudioEnvironment(float3 dir, float roughness)
+{
+    float up=saturate(dir.z*0.5f+0.5f);
+    float3 env=lerp(float3(.16f,.15f,.14f),float3(.40f,.41f,.43f),smoothstep(0.0f,0.5f,up));
+    env=lerp(env,float3(.92f,.93f,.95f),smoothstep(0.5f,1.0f,up));
+    float3 key=normalize(float3(.45f,-.55f,.70f));
+    float tight=lerp(0.90f,0.30f,roughness);
+    float glow=saturate((dot(normalize(dir),key)-tight)/max(1e-3f,1.0f-tight));
+    env+=float3(1.0f,.99f,.97f)*glow*glow*(1.0f-roughness)*1.6f;
+    return env;
+}
+float3 EnvironmentIrradiance(float3 n)
+{
+    float up=saturate(n.z*0.5f+0.5f);
+    return lerp(float3(.14f,.13f,.12f),float3(.78f,.80f,.84f),smoothstep(0.0f,1.0f,up));
+}
 float3 DisplayMap(float3 color)
 {
     // Compress only luminance and scale the chroma with it. A per-channel
@@ -337,24 +359,25 @@ PixelOutput PSMain(PSInput input)
     if (!clay && (flags&2)) {
         color=base.rgb;
     } else if (gLighting.x>1.5f) {
-        // A single hard key at a mid elevation: high enough that upward-facing
-        // surfaces read as daylight rather than dusk, while still raking
-        // across slopes so the rotatable azimuth exposes surface relief.
-        float3 lightDir=normalize(float3(cos(gLighting.y),sin(gLighting.y),0.55f));
+        // A single hard key whose elevation is user-adjustable via the gizmo's
+        // sun. Higher elevations read as daylight on upward faces; lower ones
+        // rake across slopes to expose relief.
+        float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
+        float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
         color=EvaluateLight(n,viewDir,lightDir,base.rgb,metallic,roughness,3.4f)
             + base.rgb*(1.0f-metallic)*.08f;
     } else {
-        // Neutral high-dynamic-range studio environment. Three broad white
-        // sources and a colorless diffuse/specular floor preserve authored
-        // base color while making metallic and roughness easy to evaluate.
-        color=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb,metallic,roughness,2.45f);
-        color+=EvaluateLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),base.rgb,metallic,roughness,1.15f);
-        color+=EvaluateLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),base.rgb,metallic,roughness,.72f);
+        // Neutral studio environment. Analytic diffuse irradiance plus a
+        // roughness-blurred reflection keep authored base color and make
+        // metallic and roughness meaningful; a single soft key adds form.
         float3 f0=lerp(float3(.04f,.04f,.04f),base.rgb,metallic);
         float nv=saturate(dot(n,viewDir));
         float3 fresnel=f0+(1.0f-f0)*pow(1.0f-nv,5.0f);
-        color+=base.rgb*(1.0f-metallic)*(.13f+.07f*saturate(n.z));
-        color+=fresnel*(.12f+.22f*(1.0f-roughness)*(1.0f-roughness));
+        color=base.rgb*(1.0f-metallic)*EnvironmentIrradiance(n)*.85f;
+        float3 refl=reflect(-viewDir,n);
+        color+=StudioEnvironment(refl,roughness)*fresnel;
+        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb,metallic,roughness,1.9f);
+        color+=base.rgb*(1.0f-metallic)*.05f;
     }
     if (!clay) {
         float3 emissive=gEmissiveFactor.rgb;
@@ -1196,7 +1219,8 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 &viewportConstants,sizeof(viewportConstants));
     const DirectX::XMFLOAT4 lightingConstants(
         static_cast<float>(chrome.info.lightingMode),
-        chrome.info.directionalLightAngle * DirectX::XM_2PI, 0.0f, 0.0f);
+        chrome.info.directionalLightAngle * DirectX::XM_2PI,
+        chrome.info.directionalLightElevation, 0.0f);
     std::memcpy(frameConstantBufferMapped + constantBufferOffset + sizeof(viewProjection)
                     + sizeof(eyeSelection) + sizeof(viewportConstants),
                 &lightingConstants, sizeof(lightingConstants));

@@ -62,9 +62,10 @@ constexpr uint64_t kMaxAggregateDecodedTexturePixels = 1'000'000'000;
 // renderer has no refraction/transmission pass, so the transmitted fraction
 // becomes alpha-blend opacity. A surface with transmissionFactor 1 would
 // otherwise blend to fully invisible, losing the gloss/Fresnel term the
-// shader already computes, so a small retained "sheen" floor keeps it
-// reading as glass instead of a hole.
-constexpr float kTransmissionGlassSheen = 0.30f;
+// shader already computes. A high retained floor keeps glass and car windows
+// reading as a mostly-opaque surface with a visible environment reflection
+// instead of a ghostly hole; only a minority of the transmitted light shows.
+constexpr float kTransmissionGlassSheen = 0.70f;
 
 // One fully-assembled mesh chunk's worth of data, held in memory before the
 // total section size is known and everything is written out in one pass --

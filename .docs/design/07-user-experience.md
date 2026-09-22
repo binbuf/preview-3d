@@ -38,7 +38,7 @@ Clicking Speed opens a floating 220 × 64 logical-pixel panel anchored beneath i
 
 ### Navigation gizmo
 
-A Blender-style six-axis ball gizmo sits in the viewport's top-right corner (48 logical-pixel ball radius, with the white light ring floating at 52) with colored axis stems. Dragging the ball orbits the camera using the same math as an ordinary orbit drag; clicking an axis node snaps to that canonical view. While Directional lighting is active, a sun rides the white outer ring showing the key light's compass bearing relative to the camera's heading (so it always sweeps the full circle, whatever the view), and dragging that ring rotates the light so the sun follows the cursor; the ring is carved out of the ball so it never starts a camera orbit.
+A Blender-style six-axis ball gizmo sits in the viewport's top-right corner (48 logical-pixel ball radius, with the white light ring floating at 52) with colored axis stems. Dragging the ball orbits the camera using the same math as an ordinary orbit drag; clicking an axis node snaps to that canonical view. While Directional lighting is active, a sun rides the white outer ring showing the key light's compass bearing relative to the camera's heading (so it always sweeps the full circle, whatever the view), and dragging the sun rotates the light so it follows the cursor. The ring is the horizon: pulling the sun toward the center raises the light's elevation (the sun converges on the center when overhead) and dragging outward lowers it back to the horizon, with the current azimuth and elevation shown in the HUD. The ring is carved out of the ball so it never starts a camera orbit.
 
 ### Information panel ("Stats & Shading")
 

@@ -786,7 +786,8 @@ void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const Nav
     // easy to see and grab.
     if (overlay.lightingMode == LightingMode::Directional)
     {
-        const NavGizmo::SunGeometry sun = gizmo.ComputeSun(XMLoadFloat4(&orientation), overlay.directionalLightAngle);
+        const NavGizmo::SunGeometry sun = gizmo.ComputeSun(XMLoadFloat4(&orientation),
+            overlay.directionalLightAngle, overlay.directionalLightElevation);
         if (sun.visible)
         {
             const D2D1_POINT_2F position{ center.x + sun.x, center.y + sun.y };

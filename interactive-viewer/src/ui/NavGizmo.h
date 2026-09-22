@@ -104,28 +104,36 @@ public:
     // white outline never starts a camera orbit; the inner disc stays Ball.
     // When false the whole disc behaves exactly as before.
     Part HitTest(DirectX::XMVECTOR cameraOrientation, float pointerX, float pointerY,
-        bool lightRing = false) const;
+        bool lightRing = false, float directionalLightAngle = 0.0f,
+        float directionalLightElevation = 0.0f) const;
 
     // Projects the world axes through the inverse camera rotation into
     // gizmo-local screen space for this frame's drawing.
     DrawGeometry ComputeDraw(DirectX::XMVECTOR cameraOrientation) const;
 
-    // Places the directional-light sun marker on the outer ring for the
-    // current camera. `directionalLightAngle` is the app's normalized 0..1
-    // horizontal rotation. The marker is a compass bearing relative to the
-    // camera's own ground-plane heading, so it can always sweep the full ring
-    // (the true 3D light direction's view depth is still reported through
-    // `depth`).
-    SunGeometry ComputeSun(DirectX::XMVECTOR cameraOrientation, float directionalLightAngle) const;
+    // Places the directional-light sun marker for the current camera.
+    // `directionalLightAngle` is the app's normalized 0..1 horizontal rotation
+    // and `directionalLightElevation` is the elevation above the horizon in
+    // radians (0 = on the horizon/ring, pi/2 = overhead). The marker's distance
+    // from the center encodes elevation -- horizon on the ring, overhead at the
+    // center -- so pulling the sun inward raises it while the ring stays the
+    // horizon guide. The bearing is measured against the camera's own
+    // ground-plane heading, so azimuth always sweeps the full circle.
+    SunGeometry ComputeSun(DirectX::XMVECTOR cameraOrientation, float directionalLightAngle,
+        float directionalLightElevation = 0.0f) const;
 
-    // Inverts ComputeSun: given a pointer on the light ring, returns (via
-    // `angle`) the normalized 0..1 directional-light angle whose sun marker
-    // lands under that pointer, so dragging the ring makes the sun follow the
-    // cursor. `currentAngle` is unused by the compass mapping but kept for
+    // Inverts ComputeSun's azimuth: given a pointer, returns (via `angle`) the
+    // normalized 0..1 directional-light angle whose sun bearing lies under that
+    // pointer. `currentAngle` is unused by the compass mapping but kept for
     // symmetry with ComputeSun. Returns false only when the pointer is at the
-    // ring's center, in which case the caller should leave the angle unchanged.
+    // center, in which case the caller should leave the angle unchanged.
     bool LightAngleForPoint(DirectX::XMVECTOR cameraOrientation, float pointerX, float pointerY,
         float currentAngle, float& angle) const;
+
+    // Inverts ComputeSun's radial mapping: the pointer's distance from the
+    // gizmo center becomes an elevation in radians (ring = 0, center = pi/2).
+    // Always succeeds while the gizmo has been laid out.
+    bool LightElevationForPoint(float pointerX, float pointerY, float& elevation) const;
 
     // The outer ring's client-pixel center and radius, so the light-angle
     // accessibility fragment can anchor to the control the user sees rather
@@ -148,4 +156,5 @@ private:
     float stemWidth_ = 0.0f;
     float hitSlop_ = 0.0f;
     float ringBand_ = 0.0f;
+    float sun_ = 0.0f;
 };
