@@ -58,6 +58,14 @@ constexpr int kMaxNodeDepth = 256;
 // and must never rely on this worker-side accounting alone.
 constexpr uint64_t kMaxAggregateDecodedTexturePixels = 1'000'000'000;
 
+// KHR_materials_transmission is approximated rather than rendered: this
+// renderer has no refraction/transmission pass, so the transmitted fraction
+// becomes alpha-blend opacity. A surface with transmissionFactor 1 would
+// otherwise blend to fully invisible, losing the gloss/Fresnel term the
+// shader already computes, so a small retained "sheen" floor keeps it
+// reading as glass instead of a hole.
+constexpr float kTransmissionGlassSheen = 0.30f;
+
 // One fully-assembled mesh chunk's worth of data, held in memory before the
 // total section size is known and everything is written out in one pass --
 // mirrors SyntheticSceneGenerator's "compute everything, check once, then
@@ -386,7 +394,8 @@ bool IsSupportedExtension(std::string_view extension)
         || extension == "KHR_mesh_quantization"
         || extension == "EXT_meshopt_compression"
         || extension == "EXT_texture_webp"
-        || extension == "KHR_materials_unlit";
+        || extension == "KHR_materials_unlit"
+        || extension == "KHR_materials_transmission";
 }
 
 std::optional<std::span<const std::byte>> ResolveBufferBytes(WalkState& state, size_t bufferIndex)
@@ -964,6 +973,28 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     pending.data.flags = (material.doubleSided ? kMaterialFlagDoubleSided : 0u)
         | (material.unlit ? kMaterialFlagUnlit : 0u);
     pending.data.reserved0 = 0;
+
+    // KHR_materials_transmission: there is no refraction/transmission pass, so
+    // the transmitted fraction is approximated as alpha-blend opacity. A
+    // per-texel transmissionTexture is not representable in MaterialPayload
+    // (it has no slot for one), so the scalar factor -- what the common
+    // "glass" export carries -- is what is applied. A Mask material keeps its
+    // authored discard test untouched rather than silently reinterpreting it.
+    if (material.transmission && material.alphaMode != fastgltf::AlphaMode::Mask) {
+        float transmission = material.transmission->transmissionFactor;
+        if (!std::isfinite(transmission)) {
+            transmission = 0.0f;
+        }
+        transmission = std::clamp(transmission, 0.0f, 1.0f);
+        if (transmission > 0.0f) {
+            const float opacity = pending.data.baseColorFactor[3] * (1.0f - transmission)
+                + kTransmissionGlassSheen * transmission;
+            pending.data.baseColorFactor[3] = std::clamp(opacity, 0.0f, 1.0f);
+            if (material.alphaMode == fastgltf::AlphaMode::Opaque) {
+                pending.data.alphaMode = static_cast<uint32_t>(AlphaModeId::Blend);
+            }
+        }
+    }
 
     if (material.pbrData.baseColorTexture.has_value()) {
         const fastgltf::TextureInfo& textureInfo = *material.pbrData.baseColorTexture;
@@ -2183,7 +2214,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                              | fastgltf::Extensions::KHR_mesh_quantization
                              | fastgltf::Extensions::EXT_meshopt_compression
                              | fastgltf::Extensions::EXT_texture_webp
-                             | fastgltf::Extensions::KHR_materials_unlit);
+                             | fastgltf::Extensions::KHR_materials_unlit
+                             | fastgltf::Extensions::KHR_materials_transmission);
     // loadGltf (rather than loadGltfBinary) auto-detects GLB vs. plain-JSON
     // .gltf via fastgltf::determineGltfFileType internally -- needed so a
     // real multi-file .gltf (this chunk's whole point) parses at all; a

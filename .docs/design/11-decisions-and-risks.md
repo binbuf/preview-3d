@@ -351,8 +351,8 @@ missing fallback geometry still fails. WebP is an optional image dependency:
 decode/MIME/container failure uses the existing bounded semantic fallback and
 warning without dropping valid geometry. Unknown required extensions fail;
 unknown optional extensions remain bounded warnings. External BIN/image data
-continues through sibling-only handle brokering with no worker path/network
-authority. Frozen valid/corrupt meshopt and WebP seeds, quantized accessors,
+continues through directory-tree-contained handle brokering with no worker
+path/network authority. Frozen valid/corrupt meshopt and WebP seeds, quantized accessors,
 valid/invalid sparse accessors, data-URI limits, required-extension mutation,
 and sidecar traversal/network/ADS fixtures cover the enabled attack surface.
 The thumbnail provider does not link either decoder or claim compressed-glTF

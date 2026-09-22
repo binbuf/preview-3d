@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <span>
@@ -364,6 +365,27 @@ struct ScratchExternalGltf {
                                     reinterpret_cast<const std::byte*>(json.data()), json.size()));
     }
 
+    // Same mesh as WriteGltf, but with a base-color image material whose
+    // image URI is supplied by the caller -- lets a case put the image in a
+    // "textures/" subdirectory instead of beside the .gltf.
+    void WriteTexturedGltf(const std::string& imageUri)
+    {
+        std::string json
+            = "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+              "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],"
+              "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+              "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+              "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+              "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+              "\"buffers\":[{\"uri\":\"mesh.bin\",\"byteLength\":48}],"
+              "\"images\":[{\"uri\":\""
+            + imageUri + "\",\"mimeType\":\"image/png\"}],"
+              "\"textures\":[{\"source\":0}],"
+              "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}]}";
+        WriteRaw(L"scene.gltf", std::span<const std::byte>(
+                                    reinterpret_cast<const std::byte*>(json.data()), json.size()));
+    }
+
     void WriteBin(const std::wstring& name, size_t byteCount)
     {
         auto bytes = TriangleBufferBytes();
@@ -373,21 +395,20 @@ struct ScratchExternalGltf {
 
     void WriteRaw(const std::wstring& name, std::span<const std::byte> bytes)
     {
-        std::wstring path = directory + L"\\" + name;
+        std::filesystem::path path = std::filesystem::path(directory) / name;
+        std::filesystem::create_directories(path.parent_path());
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
         REQUIRE(out.is_open());
         out.write(reinterpret_cast<const char*>(bytes.data()),
                   static_cast<std::streamsize>(bytes.size()));
         out.close();
-        writtenFiles.push_back(path);
+        writtenFiles.push_back(path.wstring());
     }
 
     ~ScratchExternalGltf()
     {
-        for (const auto& path : writtenFiles) {
-            DeleteFileW(path.c_str());
-        }
-        RemoveDirectoryW(directory.c_str());
+        std::error_code error;
+        std::filesystem::remove_all(directory, error);
     }
 };
 
@@ -834,6 +855,94 @@ TEST_CASE("A material with flat PBR factors and no texture emits one Material ch
     CHECK((payload.flags & model_core::kMaterialFlagDoubleSided) != 0);
 }
 
+TEST_CASE("KHR_materials_transmission is accepted and approximated as alpha-blended glass",
+          "[gltf-import][material][transmission]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // extensionsRequired (not just extensionsUsed) so a missing parser-mask
+    // entry would fail the load outright -- the strongest proof the extension
+    // is genuinely recognized. The lens shape mirrors the common Khronos
+    // Blender "glass" export: grey base color, roughness 0, transmission 1.
+    const char* json =
+        "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],"
+        "\"extensionsUsed\":[\"KHR_materials_transmission\"],"
+        "\"extensionsRequired\":[\"KHR_materials_transmission\"],"
+        "\"materials\":[{\"name\":\"lens\",\"doubleSided\":true,"
+        "\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.8,0.8,0.8,1.0],\"metallicFactor\":0.0,"
+        "\"roughnessFactor\":0.0},"
+        "\"extensions\":{\"KHR_materials_transmission\":{\"transmissionFactor\":1.0}}}],"
+        "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+        "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],\"buffers\":[{\"byteLength\":48}]}";
+    std::vector<std::byte> bin;
+    auto appendF32 = [&bin](float f) {
+        uint32_t bits;
+        std::memcpy(&bits, &f, sizeof(bits));
+        for (int i = 0; i < 4; ++i) bin.push_back(static_cast<std::byte>((bits >> (i * 8)) & 0xFF));
+    };
+    auto appendU32 = [&bin](uint32_t v) {
+        for (int i = 0; i < 4; ++i) bin.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));
+    };
+    const float tri[3][3] = { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 } };
+    for (const auto& p : tri) {
+        appendF32(p[0]);
+        appendF32(p[1]);
+        appendF32(p[2]);
+    }
+    appendU32(0);
+    appendU32(1);
+    appendU32(2);
+
+    std::string jsonStr(json);
+    while (jsonStr.size() % 4 != 0) jsonStr.push_back(' ');
+    while (bin.size() % 4 != 0) bin.push_back(std::byte{ 0 });
+
+    std::vector<std::byte> glb;
+    auto push32 = [&glb](uint32_t v) {
+        for (int i = 0; i < 4; ++i) glb.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));
+    };
+    push32(0x46546C67);
+    push32(2);
+    push32(static_cast<uint32_t>(12 + 8 + jsonStr.size() + 8 + bin.size()));
+    push32(static_cast<uint32_t>(jsonStr.size()));
+    push32(0x4E4F534A);
+    for (char c : jsonStr) glb.push_back(static_cast<std::byte>(c));
+    push32(static_cast<uint32_t>(bin.size()));
+    push32(0x004E4942);
+    glb.insert(glb.end(), bin.begin(), bin.end());
+
+    auto run = RunGltfImport(fixture.sid, glb, /*generationId=*/21, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& c : run.validation.chunks) {
+        if (c.descriptor.topology == model_core::ChunkTopology::Material) materialChunk = &c;
+        // A recognized extension must not be reported as an unsupported
+        // optional feature.
+        if (c.descriptor.topology == model_core::ChunkTopology::ImportStatus) {
+            model_core::ImportStatusPayload status{};
+            REQUIRE(c.payload.size() >= sizeof(status));
+            std::memcpy(&status, c.payload.data(), sizeof(status));
+            CHECK(status.optionalFeatureWarnings == 0);
+        }
+    }
+    REQUIRE(materialChunk != nullptr);
+
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    // Approximated as blend, not left opaque: the transmitted fraction became
+    // opacity, floored by the retained glass sheen.
+    CHECK(payload.alphaMode == static_cast<uint32_t>(model_core::AlphaModeId::Blend));
+    CHECK(payload.baseColorFactor[0] == Catch::Approx(0.8f));
+    CHECK(payload.baseColorFactor[3] == Catch::Approx(0.30f));
+    CHECK((payload.flags & model_core::kMaterialFlagDoubleSided) != 0);
+}
+
 TEST_CASE("basisu_textured_triangle.glb (KHR_texture_basisu base color) produces a full "
           "mesh -> material -> image chain",
           "[gltf-import][texture]")
@@ -1015,6 +1124,52 @@ TEST_CASE("zero-base sparse positions and EXT_texture_webp resolve through broke
     CHECK(header.width == 1);
     CHECK(header.height == 1);
     CHECK(header.mipLevels == 1);
+    CHECK(header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Srgb));
+    CHECK(material->descriptor.dependencyCount == 1);
+    CHECK(material->descriptor.dependencyIds[0] == image->descriptor.chunkId);
+}
+
+// Real-world glTF exporters commonly place images in a "textures/"
+// subdirectory beside the .gltf ("uri": "textures/foo.jpg"). That layout is
+// inside the primary file's directory tree, so the brokered sidecar resolver
+// must approve it, and the worker's forward-slash URI must survive the join
+// onto the "\\?\"-prefixed canonical primary path. Regression coverage for a
+// file that otherwise rendered geometry but no color.
+TEST_CASE("A glTF image in a textures/ subdirectory resolves through the brokered sidecar path",
+          "[gltf-import][texture][sidecar]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto png = ReadFileBytes(TestAssetPath(L"textures\\gray.png"));
+    REQUIRE(png.has_value());
+
+    ScratchExternalGltf scratch;
+    scratch.WriteBin(L"mesh.bin", 48);
+    scratch.WriteRaw(L"textures\\gray.png", *png);
+    scratch.WriteTexturedGltf("textures/gray.png");
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, scratch.gltfPath, 2097, 8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    CHECK(run.sidecarRequestCount == 2); // mesh.bin + textures/gray.png
+
+    const import_broker::ValidatedChunk* image = nullptr;
+    const import_broker::ValidatedChunk* material = nullptr;
+    bool textureWarning = false;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image) image = &chunk;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material) material = &chunk;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TextureWarning) textureWarning = true;
+    }
+    REQUIRE(image != nullptr);
+    REQUIRE(material != nullptr);
+    // The real decoded image, not the deterministic checker fallback.
+    CHECK_FALSE(textureWarning);
+    REQUIRE(image->payload.size() >= sizeof(model_core::ImagePayloadHeader));
+    model_core::ImagePayloadHeader header{};
+    std::memcpy(&header, image->payload.data(), sizeof(header));
+    CHECK(header.width > 0);
+    CHECK(header.height > 0);
     CHECK(header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Srgb));
     CHECK(material->descriptor.dependencyCount == 1);
     CHECK(material->descriptor.dependencyIds[0] == image->descriptor.chunkId);
