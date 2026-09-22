@@ -935,11 +935,13 @@ TEST_CASE("KHR_materials_transmission is accepted and approximated as alpha-blen
     REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
     model_core::MaterialPayload payload{};
     std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
-    // Approximated as blend, not left opaque: the transmitted fraction became
-    // opacity, floored by the retained glass sheen.
+    // Approximated as blend, not left opaque: the transmission factor is
+    // carried to the shader and the authored base-color alpha is preserved.
     CHECK(payload.alphaMode == static_cast<uint32_t>(model_core::AlphaModeId::Blend));
     CHECK(payload.baseColorFactor[0] == Catch::Approx(0.8f));
-    CHECK(payload.baseColorFactor[3] == Catch::Approx(0.70f));
+    CHECK(payload.baseColorFactor[3] == Catch::Approx(1.0f));
+    CHECK((payload.flags & model_core::kMaterialFlagTransmissive) != 0);
+    CHECK(payload.transmissionFactor == Catch::Approx(1.0f));
     CHECK((payload.flags & model_core::kMaterialFlagDoubleSided) != 0);
 }
 

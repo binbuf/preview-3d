@@ -29,6 +29,7 @@ using model_core::WireChecksum64;
 using model_core::ImagePayloadHeader;
 using model_core::ImportErrorCode;
 using model_core::kMaterialFlagsKnownMask;
+using model_core::kMaterialFlagTransmissive;
 using model_core::MaterialPayload;
 using model_core::PixelFormatBlockInfo;
 using model_core::PixelFormatId;
@@ -583,6 +584,17 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             }
             if ((payload.flags & ~kMaterialFlagsKnownMask) != 0) {
                 return Reject(ImportErrorCode::MalformedData, "material flags has unrecognized bits set");
+            }
+            // transmissionFactor is only meaningful alongside the transmissive
+            // flag; when absent it must stay exactly zero so older producers
+            // that leave the former reserved word zero remain valid.
+            if ((payload.flags & kMaterialFlagTransmissive) != 0) {
+                if (!std::isfinite(payload.transmissionFactor)
+                    || payload.transmissionFactor < 0.0f || payload.transmissionFactor > 1.0f) {
+                    return Reject(ImportErrorCode::MalformedData, "material transmissionFactor out of range");
+                }
+            } else if (payload.transmissionFactor != 0.0f) {
+                return Reject(ImportErrorCode::MalformedData, "material transmissionFactor set without its flag");
             }
             if (descriptor.dependencyCount > model_core::kMaxDependencyIds) {
                 return Reject(ImportErrorCode::MalformedData, "material dependencyCount exceeds cap");
