@@ -280,8 +280,9 @@ NavGizmo::SunGeometry NavGizmo::ComputeSun(XMVECTOR cameraOrientation, float dir
     sun.y = -ahead * outer_;
 
     // Keep a true 3D depth so the renderer can tell when the light is on the
-    // far side of the model.
-    const XMVECTOR light3D = XMVector3Normalize(XMVectorSet(cosine, sine, 0.24f, 0.0f));
+    // far side of the model. The elevation must match the shader's key light
+    // (D3D12ViewerPath.cpp's `normalize(float3(cos,sin,0.55))`).
+    const XMVECTOR light3D = XMVector3Normalize(XMVectorSet(cosine, sine, 0.55f, 0.0f));
     const XMVECTOR inverse = XMQuaternionConjugate(XMQuaternionNormalize(cameraOrientation));
     sun.depth = XMVectorGetZ(XMVector3Rotate(light3D, inverse));
     sun.visible = true;

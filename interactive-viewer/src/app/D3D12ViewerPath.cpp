@@ -134,8 +134,8 @@ PixelOutput PSMain(PSInput input)
         ? float3(.58f,.58f,.58f) : gBaseColorFactor.rgb;
     float3 color;
     if (gLighting.x > 1.5f) {
-        float3 lightDir=normalize(float3(cos(gLighting.y),sin(gLighting.y),0.24f));
-        color=albedo*(0.035f+1.35f*saturate(dot(n,lightDir)));
+        float3 lightDir=normalize(float3(cos(gLighting.y),sin(gLighting.y),0.55f));
+        color=albedo*(0.08f+1.05f*saturate(dot(n,lightDir)));
     } else {
         float key=saturate(dot(n,normalize(float3(.45f,-.55f,.70f))));
         float fill=saturate(dot(n,normalize(float3(-.70f,.25f,.38f))));
@@ -271,7 +271,13 @@ float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float
 }
 float3 DisplayMap(float3 color)
 {
-    color=color/(color+0.82f);
+    // Compress only luminance and scale the chroma with it. A per-channel
+    // roll-off lifts dark channels faster than bright ones, which washes
+    // saturated base color toward grey; a luminance roll-off keeps hue and
+    // saturation while still taming specular highlights.
+    float peak=max(color.r,max(color.g,color.b));
+    float mapped=peak/(peak+0.82f);
+    color=peak>1e-5f ? color*(mapped/peak) : color;
     return pow(saturate(color),1.0f/2.2f);
 }
 float3 SrgbToLinear(float3 color)
@@ -318,6 +324,12 @@ PixelOutput PSMain(PSInput input)
         n=normalize(sampled.x*t+sampled.y*b+sampled.z*n);
     }
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
+    // Double-sided materials can show their back faces. The authored normal
+    // then points away from the eye (a surface authored "inside out" lights as
+    // if it were in shadow), so light the side actually being viewed by
+    // flipping the shading normal toward the camera. This matches glTF's
+    // requirement to reverse the normal on back-facing double-sided triangles.
+    if ((flags&1u)!=0 && dot(n,viewDir)<0.0f) n=-n;
     float metallic=clay?0.0f:gMaterialFactors.x, roughness=clay?.82f:gMaterialFactors.y;
     if (!clay && (maps&2) && uvValid) { float4 mr=nearest?gMetallicRoughness.Sample(gNearestSampler,sampleUv):gMetallicRoughness.Sample(gLinearSampler,sampleUv); metallic*=mr.b; roughness*=mr.g; }
     roughness=clamp(roughness,.045f,1.0f);
@@ -325,11 +337,12 @@ PixelOutput PSMain(PSInput input)
     if (!clay && (flags&2)) {
         color=base.rgb;
     } else if (gLighting.x>1.5f) {
-        // A deliberately low, hard key: rotating it is a fast normal-map
-        // and displacement inspection tool rather than a beauty light.
-        float3 lightDir=normalize(float3(cos(gLighting.y),sin(gLighting.y),0.24f));
-        color=EvaluateLight(n,viewDir,lightDir,base.rgb,metallic,roughness,4.2f)
-            + base.rgb*(1.0f-metallic)*.025f;
+        // A single hard key at a mid elevation: high enough that upward-facing
+        // surfaces read as daylight rather than dusk, while still raking
+        // across slopes so the rotatable azimuth exposes surface relief.
+        float3 lightDir=normalize(float3(cos(gLighting.y),sin(gLighting.y),0.55f));
+        color=EvaluateLight(n,viewDir,lightDir,base.rgb,metallic,roughness,3.4f)
+            + base.rgb*(1.0f-metallic)*.08f;
     } else {
         // Neutral high-dynamic-range studio environment. Three broad white
         // sources and a colorless diffuse/specular floor preserve authored
@@ -1305,7 +1318,8 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
             material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
             material[6]=mesh.material.alphaCutoff;
-            material[7]=float(((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
+            material[7]=float((twoSided?1u:0u)
+                | ((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
                 | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u)
                 | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u)
                 | ((mesh.material.flags&model_core::kMaterialSamplerFlags)<<1)
@@ -1364,7 +1378,8 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
                 material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
                 material[6]=mesh.material.alphaCutoff;
-                material[7]=float(((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
+                material[7]=float(((mesh.material.flags&model_core::kMaterialFlagDoubleSided)?1u:0u)
+                    | ((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
                     | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u)
                     | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u)
                     | ((mesh.material.flags&model_core::kMaterialSamplerFlags)<<1)
