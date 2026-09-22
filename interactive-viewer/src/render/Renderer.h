@@ -95,6 +95,7 @@ struct OverlayInfo
     LightingMode lightingMode = LightingMode::Studio;
     float directionalLightAngle = 0.0f; // normalized 0..1 horizontal rotation
     float directionalLightElevation = 0.502f; // radians above the horizon, 0..~85deg
+    bool lightDragging = false; // LMB held on the gizmo's sun (drag affordance)
     RECT lightingToolbarRect{};
     RECT studioButtonRect{};
     RECT clayButtonRect{};

@@ -2582,6 +2582,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.lightingMode=app.lightingMode;
     overlay.directionalLightAngle=app.directionalLightAngle;
     overlay.directionalLightElevation=app.directionalLightElevation;
+    overlay.lightDragging=app.pointerMode==PointerMode::LightDrag;
     overlay.hasModel = app.renderThread.HasModel();
     overlay.gridVisible = app.gridVisible;
     overlay.axisSnapEnabled = app.axisSnapEnabled;

@@ -463,6 +463,59 @@ TEST_CASE("Real chrome paints the bars, information panel and navigation gizmo a
     else WARN("D3D12 info queue unavailable -- debug-layer validation not exercised in this build");
 }
 
+TEST_CASE("The directional sun highlights on hover and gains an opaque drag backdrop", "[graphics][chrome]")
+{
+    OverlayHarness harness;
+    REQUIRE(harness.overlay.Initialize(SharedDevice(), harness.directQueue, harness.swapChain, harness.error));
+
+    const int width = static_cast<int>(harness.swapChain.Width());
+    const int height = static_cast<int>(harness.swapChain.Height());
+
+    auto makeFrame = [&] {
+        OverlayFrame frame;
+        frame.info.state = ViewerState::Ready;
+        frame.info.hasModel = true;
+        frame.info.barToolbarHeight = 40;
+        frame.info.barBottomBarHeight = 0;
+        frame.info.lightingMode = LightingMode::Directional;
+        frame.info.directionalLightAngle = 0.0f;
+        frame.info.directionalLightElevation = 0.0f;
+        frame.chrome.UpdateLayout(width, 40, 1.0f, true, false, false);
+        frame.gizmo.UpdateLayout(width, height, 40, 0, 1.0f);
+        return frame;
+    };
+
+    OverlayFrame base = makeFrame();
+    const auto identity = DirectX::XMQuaternionIdentity();
+    const auto geometry = base.gizmo.ComputeDraw(identity);
+    const auto sun = base.gizmo.ComputeSun(identity, 0.0f, 0.0f);
+    const int sunX = static_cast<int>(geometry.centerX + sun.x);
+    const int sunY = static_cast<int>(geometry.centerY + sun.y);
+
+    const auto normal = harness.DrawChromeAndReadback(base);
+    base.gizmo.hover = NavGizmo::Part::Light;
+    const auto hovered = harness.DrawChromeAndReadback(base);
+    base.info.lightDragging = true;
+    const auto dragging = harness.DrawChromeAndReadback(base);
+
+    auto changedAroundSun = [&](const auto& first, const auto& second) {
+        std::size_t count = 0;
+        for (int y = sunY - 22; y <= sunY + 22; ++y) {
+            for (int x = sunX - 22; x <= sunX + 22; ++x) {
+                if (x < 0 || y < 0 || x >= width || y >= height) continue;
+                const auto index = static_cast<std::size_t>(y) * width + x;
+                if (first[index] != second[index]) ++count;
+            }
+        }
+        return count;
+    };
+    // Hover repaints the sun a lighter yellow...
+    CHECK(changedAroundSun(normal, hovered) > 0);
+    // ...and the drag backdrop adds a visibly larger, opaque control.
+    CHECK(changedAroundSun(normal, dragging) > 0);
+    CHECK(changedAroundSun(hovered, dragging) > 0);
+}
+
 TEST_CASE("The bottom bar animates while the render timer runs and then shows its duration", "[graphics][chrome]")
 {
     OverlayHarness harness;
