@@ -2,12 +2,14 @@
 
 // Constrained sidecar-file resolution, per .docs/design/03-file-formats-and-
 // ingestion.md's "Input boundary": a .gltf's referenced .bin/.png/.jpg/
-// .jpeg/.webp/.ktx2 sibling must resolve to a file that (a) is a relative,
+// .jpeg/.webp/.ktx2 sidecar must resolve to a file that (a) is a relative,
 // local reference -- never absolute, UNC, a device path, or any URI scheme
 // -- and (b) canonicalizes (after opening, the same trusted technique
 // SourceFileAccess.cpp already uses for the primary file) to a path inside
-// the primary file's own directory, so a reparse point cannot smuggle the
-// reference outside it. Path authority lives only in this trusted-process
+// the primary file's own directory tree, so a reparse point cannot smuggle
+// the reference outside it. Subdirectories below the primary directory
+// (the common "textures/foo.jpg" layout) are inside that tree and resolve;
+// siblings and anything above it are rejected. Path authority lives only in this trusted-process
 // function; the sandboxed worker never opens a path itself (see
 // SidecarRequestServicer.h, which calls this).
 
