@@ -5,7 +5,7 @@
     <RepositoryRoot>$(MSBuildThisFileDirectory)..</RepositoryRoot>
     <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
     <Platform Condition="'$(Platform)' == ''">x64</Platform>
-    <ReleaseVersion Condition="'$(ReleaseVersion)' == ''">0.3.6</ReleaseVersion>
+    <ReleaseVersion Condition="'$(ReleaseVersion)' == ''">0.3.7</ReleaseVersion>
     <InstallerTimestampUrl Condition="'$(InstallerTimestampUrl)' == ''">https://timestamp.digicert.com</InstallerTimestampUrl>
   </PropertyGroup>
 

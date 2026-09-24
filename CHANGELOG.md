@@ -8,6 +8,40 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.3.7] - 2026-09-23
+
+### Added
+
+- Import glTF scenes that require the archived `KHR_materials_pbrSpecularGlossiness`
+  extension and approximate them as diffuse albedo with a dielectric response
+  (metallic 0, roughness `1 - glossiness`). The combined specular-glossiness
+  texture has no matching slot and is dropped with a bounded warning.
+
+### Fixed
+
+- Textured single-sided meshes no longer render inside-out. The textured D3D12
+  pipelines culled clockwise triangles as front-facing while glTF and every
+  importer author front faces counter-clockwise, so a model's near surface
+  vanished and its far interior showed through.
+- FBX materials that author both `Opacity` and the inverted `TransparencyFactor`
+  (the common 3ds Max pairing) no longer render fully transparent, which made
+  entire models invisible in the textured shading modes. The explicit authored
+  `Opacity` now wins over `TransparencyFactor`.
+- FBX and OBJ textures now sample with the correct V orientation. Those formats
+  author a bottom-left texture origin while the renderer's samplers expect a
+  top-left one, so texture atlases previously landed on their vertical mirror
+  and mixed UV islands across the surface.
+- Large embedded PNG, BMP, and TIFF textures decode again. Sources above a flat
+  pixel budget were rejected even when a downscaled result would have fit, so
+  4K PNG texture sets fell back to the 2×2 checker. They now pass through a
+  bounded WIC scaler at the requested output size.
+- FBX scenes that reuse one bitmap across several material maps decode it once
+  instead of once per slot, so texture-heavy interiors fit the aggregate texture
+  budget instead of failing with a resource limit.
+- Progressive glTF texture publication accounts for the low-resolution copies it
+  keeps alongside each full refinement, so texture-heavy scenes no longer trip
+  the broker's independent aggregate texture cap on the refinement batch.
+
 ## [0.3.6] - 2026-09-22
 
 ### Added
