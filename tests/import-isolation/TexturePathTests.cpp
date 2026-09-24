@@ -102,6 +102,24 @@ TEST_CASE("Explicit inbox raster decoders preserve pixels, bound scaling and gen
     CHECK(std::to_integer<uint8_t>(linear->pixelBytes[36])==113);
 }
 
+TEST_CASE("Raster decode downscales large non-JPEG sources through a bounded scaler", "[texture-decode]")
+{
+    ComScope com;
+    // 3000x3000 = 9,000,000 pixels exceeds the former flat
+    // maxDecodedBytes/4 source-pixel guard (8,000,000 here), which used to
+    // reject common 4K PNG texture sets outright. The scaler path must still
+    // bound the result to maxDimension at full quality.
+    auto encoded=Encode(CLSID_WICPngEncoder,3000,3000);
+    TextureDecodeOptions options;options.maxDimension=512;
+    auto result=DecodeRasterImageWic(encoded,ColorSpaceId::Srgb,options);
+    REQUIRE(result);
+    CHECK(result->width==375);
+    CHECK(result->height==375);
+    CHECK(result->pixelBytes.size()==*ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,375,375,result->mipLevels));
+    for (size_t i=0;i<result->pixelBytes.size();i+=4)
+        CHECK(std::abs(int(std::to_integer<uint8_t>(result->pixelBytes[i]))-128)<=2);
+}
+
 TEST_CASE("Raster decode rejects hostile dimensions and expansion, and observes tile cancellation", "[texture-decode]")
 {
     ComScope com;auto encoded=Encode(CLSID_WICPngEncoder,256,256,true);
