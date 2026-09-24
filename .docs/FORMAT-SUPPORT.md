@@ -8,7 +8,7 @@ For install and build instructions, see the [README](../README.md).
 
 | Format | Support |
 | --- | --- |
-| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, bounded Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP textures, material texture slots, and texture transforms |
+| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, bounded Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP textures, material texture slots, texture transforms, and `KHR_materials_pbrSpecularGlossiness` approximated as diffuse albedo plus a dielectric response |
 | Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars; ufbx polygon triangulation, smoothing/generated normals, UVs, vertex colors, object/group meshes, MTL material factors, and broker-approved base-color, normal/bump, and emissive maps |
 | FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose; supported skin and blend deformation is baked |
 | STL | ASCII and binary |
