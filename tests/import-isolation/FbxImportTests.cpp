@@ -655,6 +655,7 @@ TEST_CASE("FBX maps factors alpha texture roles emissive and UV transform",
         CHECK(material.uvScale[0] == Catch::Approx(2.0f));
         CHECK(material.uvScale[1] == Catch::Approx(3.0f));
         CHECK(material.uvRotation == Catch::Approx(0.5235988f));
+        CHECK((material.flags & model_core::kMaterialFlagFlipV) != 0);
         CHECK(chunk.descriptor.dependencyCount == 3);
         CHECK(chunk.descriptor.dependencyIds[0] != 0);
         CHECK(chunk.descriptor.dependencyIds[1] == 0);

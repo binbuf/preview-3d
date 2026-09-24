@@ -105,6 +105,9 @@ TEST_CASE("OBJ and MTL normalize polygons attributes materials and brokered text
     CHECK(payload.baseColorFactor[2] == Catch::Approx(0.6f));
     CHECK(payload.baseColorFactor[3] == Catch::Approx(0.75f));
     CHECK(payload.alphaMode == uint32_t(model_core::AlphaModeId::Blend));
+    // OBJ texture V coordinates are authored bottom-left while the D3D12
+    // samplers expect top-left, so the normalized material must flip V.
+    CHECK((payload.flags & model_core::kMaterialFlagFlipV) != 0);
     CHECK(imageCount == 2);
     CHECK(material->descriptor.dependencyCount == 2);
     CHECK(mesh->descriptor.dependencyIds[0] == material->descriptor.chunkId);
