@@ -954,7 +954,14 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     D3D12_RASTERIZER_DESC rasterizer{};
     rasterizer.FillMode = D3D12_FILL_MODE_SOLID;
     rasterizer.CullMode = D3D12_CULL_MODE_BACK;
-    rasterizer.FrontCounterClockwise = FALSE;
+    // glTF (and the STL/PLY/OBJ/FBX/USD/3MF/STEP importers) author front
+    // faces counter-clockwise when viewed from outside in a right-handed
+    // frame. The view/projection stay right-handed and the D3D viewport keeps
+    // NDC +Y pointing at the render target's smaller y, so the authored
+    // winding survives to the rasterizer unchanged: CCW must be front-facing.
+    // (The mirrored variant below flips this for negative-determinant
+    // instance transforms, which reverse the projected winding.)
+    rasterizer.FrontCounterClockwise = TRUE;
     rasterizer.DepthClipEnable = TRUE;
 
     D3D12_BLEND_DESC blend{};
@@ -1001,11 +1008,11 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
         error=L"The textured wireframe overlay pipeline state could not be created (HRESULT "
             +std::to_wstring(static_cast<long>(wireResult))+L").";return false;
     }
-    psoDesc.RasterizerState.FrontCounterClockwise=TRUE;
+    psoDesc.RasterizerState.FrontCounterClockwise=FALSE;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedMirroredPipelineState)))) {
         error=L"The mirrored material pipeline state could not be created.";return false;
     }
-    psoDesc.RasterizerState.FrontCounterClockwise=FALSE;
+    psoDesc.RasterizerState.FrontCounterClockwise=TRUE;
     psoDesc.RasterizerState.CullMode=D3D12_CULL_MODE_NONE;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedDoubleSidedPipelineState)))) {
         error=L"The double-sided material pipeline state could not be created.";return false;
@@ -1025,7 +1032,7 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedBlendPipelineState)))) {
         error=L"The blended material pipeline state could not be created.";return false;
     }
-    psoDesc.RasterizerState.FrontCounterClockwise=TRUE;
+    psoDesc.RasterizerState.FrontCounterClockwise=FALSE;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedBlendMirroredPipelineState)))) {
         error=L"The mirrored blended material pipeline state could not be created.";return false;
     }
