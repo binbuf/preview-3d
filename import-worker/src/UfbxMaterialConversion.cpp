@@ -49,9 +49,22 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
     result.baseColorFactor[0] = Saturate(base.x * baseFactor);
     result.baseColorFactor[1] = Saturate(base.y * baseFactor);
     result.baseColorFactor[2] = Saturate(base.z * baseFactor);
-    const double opacity = material.pbr.opacity.has_value
-        ? material.pbr.opacity.value_real : (material.fbx.transparency_factor.has_value
-            ? 1.0 - material.fbx.transparency_factor.value_real : 1.0);
+    // 3ds Max exports write an explicit scalar Opacity alongside the
+    // TransparencyFactor that FBX normally inverts; when both are present the
+    // authored Opacity is the surface opacity. Trusting TransparencyFactor
+    // alone reads every one of those materials as fully transparent (the
+    // exporter writes TransparencyFactor=1 on opaque materials), which makes
+    // the whole model invisible in the shaded view while clay/wireframe, which
+    // ignore material alpha, still draw it.
+    double opacity = 1.0;
+    if (material.pbr.opacity.has_value) {
+        opacity = material.pbr.opacity.value_real;
+    } else if (const ufbx_prop* authoredOpacity = ufbx_find_prop(&material.props, "Opacity");
+               authoredOpacity && Finite(authoredOpacity->value_real)) {
+        opacity = authoredOpacity->value_real;
+    } else if (material.fbx.transparency_factor.has_value) {
+        opacity = 1.0 - material.fbx.transparency_factor.value_real;
+    }
     result.baseColorFactor[3] = Saturate(opacity);
     result.metallicFactor = material.pbr.metalness.has_value
         ? Saturate(material.pbr.metalness.value_real, 0.0f) : 0.0f;
