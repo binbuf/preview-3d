@@ -394,7 +394,8 @@ bool IsSupportedExtension(std::string_view extension)
         || extension == "EXT_meshopt_compression"
         || extension == "EXT_texture_webp"
         || extension == "KHR_materials_unlit"
-        || extension == "KHR_materials_transmission";
+        || extension == "KHR_materials_transmission"
+        || extension == "KHR_materials_pbrSpecularGlossiness";
 }
 
 std::optional<std::span<const std::byte>> ResolveBufferBytes(WalkState& state, size_t bufferIndex)
@@ -973,6 +974,41 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         | (material.unlit ? kMaterialFlagUnlit : 0u);
     pending.data.transmissionFactor = 0.0f;
 
+    // KHR_materials_pbrSpecularGlossiness is archived in the Khronos registry
+    // but still emitted as a required extension by current exporters (the
+    // Sketchfab glTF downloads here mark it required). The normalized material
+    // has no specular-glossiness lobe, so approximate it with the diffuse
+    // albedo plus a dielectric response: metallic 0 and roughness =
+    // 1 - glossiness. The specular-glossiness texture packs specular RGB and
+    // glossiness alpha, which does not match the metallic/roughness slots, so
+    // it is dropped with a bounded warning.
+    const fastgltf::TextureInfo* baseColorTexture = nullptr;
+    if (material.specularGlossiness) {
+        const fastgltf::MaterialSpecularGlossiness& specularGlossiness = *material.specularGlossiness;
+        for (int channel = 0; channel < 4; ++channel) {
+            const double value = specularGlossiness.diffuseFactor[channel];
+            pending.data.baseColorFactor[channel] = std::isfinite(value)
+                ? std::clamp(float(value), 0.0f, 1.0f) : (channel == 3 ? 1.0f : 0.0f);
+        }
+        pending.data.metallicFactor = 0.0f;
+        const double glossiness = specularGlossiness.glossinessFactor;
+        pending.data.roughnessFactor = std::isfinite(glossiness)
+            ? 1.0f - std::clamp(float(glossiness), 0.0f, 1.0f) : 1.0f;
+        if (specularGlossiness.specularGlossinessTexture.has_value())
+            state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
+        if (specularGlossiness.diffuseTexture.has_value()) {
+            // The normalized vertex layout carries UV0 only; a diffuse map on
+            // another set would be sampled in the wrong place, so fall back to
+            // the factor with a warning instead.
+            if (specularGlossiness.diffuseTexture->texCoordIndex == 0)
+                baseColorTexture = &*specularGlossiness.diffuseTexture;
+            else
+                state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
+        }
+    } else if (material.pbrData.baseColorTexture.has_value()) {
+        baseColorTexture = &*material.pbrData.baseColorTexture;
+    }
+
     // KHR_materials_transmission: there is no refraction/transmission pass, so
     // the transmitted fraction is carried to the shader, which approximates it
     // with a Fresnel-driven blend alpha plus suppressed transmitted diffuse. A
@@ -995,8 +1031,8 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         }
     }
 
-    if (material.pbrData.baseColorTexture.has_value()) {
-        const fastgltf::TextureInfo& textureInfo = *material.pbrData.baseColorTexture;
+    if (baseColorTexture) {
+        const fastgltf::TextureInfo& textureInfo = *baseColorTexture;
         if (textureInfo.transform) {
             pending.data.uvOffset[0] = textureInfo.transform->uvOffset.x();
             pending.data.uvOffset[1] = textureInfo.transform->uvOffset.y();
@@ -2214,7 +2250,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                              | fastgltf::Extensions::EXT_meshopt_compression
                              | fastgltf::Extensions::EXT_texture_webp
                              | fastgltf::Extensions::KHR_materials_unlit
-                             | fastgltf::Extensions::KHR_materials_transmission);
+                             | fastgltf::Extensions::KHR_materials_transmission
+                             | fastgltf::Extensions::KHR_materials_pbrSpecularGlossiness);
     // loadGltf (rather than loadGltfBinary) auto-detects GLB vs. plain-JSON
     // .gltf via fastgltf::determineGltfFileType internally -- needed so a
     // real multi-file .gltf (this chunk's whole point) parses at all; a
@@ -2327,6 +2364,28 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                 h = (std::max)(1u, h / 2);
                 ++first;
             }
+        if (low && first) {
+            // The low-resolution copy stays in the generation next to the full
+            // refinement the worker emits later, so the broker's independent
+            // aggregate texture cap sees both. Account it here and keep the
+            // full chain as the only copy when the remainder of the budget (or
+            // the pixel cap) cannot hold it -- progressive first-preview is an
+            // optimization, and the broker rejects the whole batch otherwise.
+            const size_t lowBytes = image.pixelBytes.size() - offset;
+            const auto lowChain = ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM, w, h, image.mipLevels - first);
+            const bool fits = lowChain
+                && lowBytes <= kMaxAggregateTextureBytes - state.totalDecodedImageBytes
+                && *lowChain / 4 <= kMaxAggregateTexturePixels - state.totalDecodedImagePixels;
+            if (!fits) {
+                w = image.width;
+                h = image.height;
+                first = 0;
+                offset = 0;
+            } else {
+                state.totalDecodedImageBytes += lowBytes;
+                state.totalDecodedImagePixels += *lowChain / 4;
+            }
+        }
         ImagePayloadHeader header{};
         header.pixelFormat = uint32_t(image.pixelFormat);
         header.width = w;
@@ -2480,17 +2539,25 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             ++first;
         }
         if (!first) continue;
+        // The low-resolution copy is retained alongside the full chain, so
+        // both count against the aggregate texture budget. When the remainder
+        // of the budget (or catalog) cannot hold the extra copy, keep the full
+        // image as the only copy: progressive first-preview is an optimization,
+        // and failing the whole file for it would hide otherwise valid geometry.
+        if (image.pixelBytes.size()-offset > kMaxAggregateTextureBytes-state.totalDecodedImageBytes)
+            continue;
+        if (state.pendingImages.size()+state.chunks.size()+state.pendingMaterials.size()+1>=maxChunkCount)
+            continue;
+        const auto lowChain=ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,w,h,image.mipLevels-first);
+        if (!lowChain) continue;
+        const uint64_t lowPixels=*lowChain/4;
+        if (lowPixels>kMaxAggregateTexturePixels-state.totalDecodedImagePixels) continue;
         PendingImage full=std::move(image);
         PendingImage low;
         low.pixelFormat=full.pixelFormat; low.colorSpace=full.colorSpace;
         low.width=w; low.height=h; low.mipLevels=full.mipLevels-first;
         low.pixelBytes.assign(full.pixelBytes.begin()+offset,full.pixelBytes.end());
-        if (low.pixelBytes.size()>kMaxAggregateTextureBytes-state.totalDecodedImageBytes
-            || state.pendingImages.size()+state.chunks.size()+state.pendingMaterials.size()+1>=maxChunkCount)
-            return ImportErrorCode::ResourceLimit;
         state.totalDecodedImageBytes+=low.pixelBytes.size();
-        const auto lowPixels=*ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,w,h,low.mipLevels)/4;
-        if (lowPixels>kMaxAggregateTexturePixels-state.totalDecodedImagePixels) return ImportErrorCode::ResourceLimit;
         state.totalDecodedImagePixels+=lowPixels;
         image=std::move(low); full.refines=k;
         state.pendingImages.push_back(std::move(full));
@@ -2746,3 +2813,4 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
 }
 
 } // namespace import_worker
+

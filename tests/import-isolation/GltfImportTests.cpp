@@ -945,6 +945,93 @@ TEST_CASE("KHR_materials_transmission is accepted and approximated as alpha-blen
     CHECK((payload.flags & model_core::kMaterialFlagDoubleSided) != 0);
 }
 
+TEST_CASE("KHR_materials_pbrSpecularGlossiness is accepted and approximated as a diffuse dielectric",
+          "[gltf-import][material][specular-glossiness]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // extensionsRequired so a parser mask that left the archived extension
+    // disabled would fail the load outright, exactly like the real Sketchfab
+    // downloads that require it.
+    const char* json =
+        "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],"
+        "\"extensionsUsed\":[\"KHR_materials_pbrSpecularGlossiness\"],"
+        "\"extensionsRequired\":[\"KHR_materials_pbrSpecularGlossiness\"],"
+        "\"materials\":[{\"name\":\"paint\",\"doubleSided\":true,"
+        "\"extensions\":{\"KHR_materials_pbrSpecularGlossiness\":{\"diffuseFactor\":[0.25,0.5,0.75,0.8],"
+        "\"specularFactor\":[1.0,0.5,0.0],\"glossinessFactor\":0.25}}}],"
+        "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+        "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],\"buffers\":[{\"byteLength\":48}]}";
+    std::vector<std::byte> bin;
+    auto appendF32 = [&bin](float f) {
+        uint32_t bits;
+        std::memcpy(&bits, &f, sizeof(bits));
+        for (int i = 0; i < 4; ++i) bin.push_back(static_cast<std::byte>((bits >> (i * 8)) & 0xFF));
+    };
+    auto appendU32 = [&bin](uint32_t v) {
+        for (int i = 0; i < 4; ++i) bin.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));
+    };
+    const float tri[3][3] = { { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 } };
+    for (const auto& p : tri) {
+        appendF32(p[0]);
+        appendF32(p[1]);
+        appendF32(p[2]);
+    }
+    appendU32(0);
+    appendU32(1);
+    appendU32(2);
+
+    std::string jsonStr(json);
+    while (jsonStr.size() % 4 != 0) jsonStr.push_back(' ');
+    while (bin.size() % 4 != 0) bin.push_back(std::byte{ 0 });
+
+    std::vector<std::byte> glb;
+    auto push32 = [&glb](uint32_t v) {
+        for (int i = 0; i < 4; ++i) glb.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));
+    };
+    push32(0x46546C67);
+    push32(2);
+    push32(static_cast<uint32_t>(12 + 8 + jsonStr.size() + 8 + bin.size()));
+    push32(static_cast<uint32_t>(jsonStr.size()));
+    push32(0x4E4F534A);
+    for (char c : jsonStr) glb.push_back(static_cast<std::byte>(c));
+    push32(static_cast<uint32_t>(bin.size()));
+    push32(0x004E4942);
+    glb.insert(glb.end(), bin.begin(), bin.end());
+
+    auto run = RunGltfImport(fixture.sid, glb, /*generationId=*/23, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& c : run.validation.chunks) {
+        if (c.descriptor.topology == model_core::ChunkTopology::Material) materialChunk = &c;
+        if (c.descriptor.topology == model_core::ChunkTopology::ImportStatus) {
+            model_core::ImportStatusPayload status{};
+            REQUIRE(c.payload.size() >= sizeof(status));
+            std::memcpy(&status, c.payload.data(), sizeof(status));
+            CHECK(status.optionalFeatureWarnings == 0);
+        }
+    }
+    REQUIRE(materialChunk != nullptr);
+
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    // Diffuse becomes the base color, and the specular/glossiness lobe is
+    // approximated as a dielectric: no metalness, roughness = 1 - glossiness.
+    CHECK(payload.baseColorFactor[0] == Catch::Approx(0.25f));
+    CHECK(payload.baseColorFactor[1] == Catch::Approx(0.5f));
+    CHECK(payload.baseColorFactor[2] == Catch::Approx(0.75f));
+    CHECK(payload.baseColorFactor[3] == Catch::Approx(0.8f));
+    CHECK(payload.metallicFactor == Catch::Approx(0.0f));
+    CHECK(payload.roughnessFactor == Catch::Approx(0.75f));
+    CHECK((payload.flags & model_core::kMaterialFlagDoubleSided) != 0);
+}
+
 TEST_CASE("basisu_textured_triangle.glb (KHR_texture_basisu base color) produces a full "
           "mesh -> material -> image chain",
           "[gltf-import][texture]")

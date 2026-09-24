@@ -171,6 +171,10 @@ std::string MaterialTextureFixture(std::span<const std::byte> embedded)
     std::string ascii = TextureFixture(embedded, "material-texture.png");
     ReplaceOnce(ascii, "P: \"DiffuseColor\", \"Color\", \"\", \"A\",1,1,1",
                        "P: \"DiffuseColor\", \"Color\", \"\", \"A\",0.25,0.5,0.75");
+    // 3ds Max-style files carry both Opacity and TransparencyFactor; this
+    // fixture intentionally authors only the inverted TransparencyFactor so the
+    // fallback conversion stays covered.
+    ReplaceOnce(ascii, "\t\t\tP: \"Opacity\", \"double\", \"Number\", \"\",1", "");
     ReplaceOnce(ascii, "P: \"TransparencyFactor\", \"Number\", \"\", \"A\",1",
                        "P: \"TransparencyFactor\", \"Number\", \"\", \"A\",0.25");
     ReplaceOnce(ascii, "P: \"Emissive\", \"Vector3D\", \"Vector\", \"\",0,0,0",
@@ -388,10 +392,11 @@ TEST_CASE("ASCII FBX preserves hierarchy and shares static mesh geometry across 
             CHECK(material.baseColorFactor[0] == Catch::Approx(0.4f));
             CHECK(material.baseColorFactor[1] == Catch::Approx(0.4f));
             CHECK(material.baseColorFactor[2] == Catch::Approx(0.4f));
-            // This fixture's authored TransparencyFactor is one; ufbx's FBX
-            // fallback therefore normalizes to a transparent blend material.
-            CHECK(material.baseColorFactor[3] == Catch::Approx(0.0f));
-            CHECK(material.alphaMode == uint32_t(model_core::AlphaModeId::Blend));
+            // This fixture authors both Opacity=1 and TransparencyFactor=1,
+            // the 3ds Max pairing for an opaque material: the explicit Opacity
+            // wins over the inverted TransparencyFactor convention.
+            CHECK(material.baseColorFactor[3] == Catch::Approx(1.0f));
+            CHECK(material.alphaMode == uint32_t(model_core::AlphaModeId::Opaque));
             CHECK(material.metallicFactor == Catch::Approx(0.0f));
             CHECK(material.roughnessFactor == Catch::Approx(1.0f));
             CHECK((material.flags & model_core::kMaterialFlagDoubleSided) != 0);
@@ -630,7 +635,10 @@ TEST_CASE("FBX maps factors alpha texture roles emissive and UV transform",
     const auto result = import_broker::RunImportSession(Request(source.path, 5022));
     CAPTURE(result.stage, result.errorCode, result.errorPhase);
     REQUIRE(result.ok);
-    CHECK(Count(result, model_core::ChunkTopology::Image) == 3);
+    // Diffuse and EmissiveColor read the same file, so the shared sRGB decode
+    // is emitted once; the normal map keeps its own (Linear, renormalized)
+    // image.
+    CHECK(Count(result, model_core::ChunkTopology::Image) == 2);
     REQUIRE(Count(result, model_core::ChunkTopology::Material) == 1);
     for (const auto& chunk : result.chunks) {
         if (chunk.descriptor.topology != model_core::ChunkTopology::Material) continue;
@@ -650,11 +658,15 @@ TEST_CASE("FBX maps factors alpha texture roles emissive and UV transform",
         CHECK(material.uvScale[0] == Catch::Approx(2.0f));
         CHECK(material.uvScale[1] == Catch::Approx(3.0f));
         CHECK(material.uvRotation == Catch::Approx(0.5235988f));
+        CHECK((material.flags & model_core::kMaterialFlagFlipV) != 0);
         CHECK(chunk.descriptor.dependencyCount == 3);
         CHECK(chunk.descriptor.dependencyIds[0] != 0);
         CHECK(chunk.descriptor.dependencyIds[1] == 0);
         CHECK(chunk.descriptor.dependencyIds[2] != 0);
         CHECK(chunk.descriptor.dependencyIds[3] != 0);
+        // Base color and emissive share one decoded image chunk.
+        CHECK(chunk.descriptor.dependencyIds[0] == chunk.descriptor.dependencyIds[3]);
+        CHECK(chunk.descriptor.dependencyIds[0] != chunk.descriptor.dependencyIds[2]);
     }
 }
 
@@ -688,7 +700,10 @@ TEST_CASE("FBX material and image dependencies remain valid across progressive b
     REQUIRE(result.ok);
     CHECK(result.batchCount > 1);
     CHECK(Count(result, model_core::ChunkTopology::Material) == 1);
-    CHECK(Count(result, model_core::ChunkTopology::Image) == 3);
+    // The fixture points Diffuse and EmissiveColor at the same file, so the
+    // shared sRGB decode is emitted once; only the normal map (Linear, with
+    // renormalized mips) keeps its own image.
+    CHECK(Count(result, model_core::ChunkTopology::Image) == 2);
 }
 
 TEST_CASE("FBX instances select distinct materials without duplicating shared geometry",
