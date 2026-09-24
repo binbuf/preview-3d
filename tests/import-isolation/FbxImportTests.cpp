@@ -635,7 +635,10 @@ TEST_CASE("FBX maps factors alpha texture roles emissive and UV transform",
     const auto result = import_broker::RunImportSession(Request(source.path, 5022));
     CAPTURE(result.stage, result.errorCode, result.errorPhase);
     REQUIRE(result.ok);
-    CHECK(Count(result, model_core::ChunkTopology::Image) == 3);
+    // Diffuse and EmissiveColor read the same file, so the shared sRGB decode
+    // is emitted once; the normal map keeps its own (Linear, renormalized)
+    // image.
+    CHECK(Count(result, model_core::ChunkTopology::Image) == 2);
     REQUIRE(Count(result, model_core::ChunkTopology::Material) == 1);
     for (const auto& chunk : result.chunks) {
         if (chunk.descriptor.topology != model_core::ChunkTopology::Material) continue;
@@ -661,6 +664,9 @@ TEST_CASE("FBX maps factors alpha texture roles emissive and UV transform",
         CHECK(chunk.descriptor.dependencyIds[1] == 0);
         CHECK(chunk.descriptor.dependencyIds[2] != 0);
         CHECK(chunk.descriptor.dependencyIds[3] != 0);
+        // Base color and emissive share one decoded image chunk.
+        CHECK(chunk.descriptor.dependencyIds[0] == chunk.descriptor.dependencyIds[3]);
+        CHECK(chunk.descriptor.dependencyIds[0] != chunk.descriptor.dependencyIds[2]);
     }
 }
 
@@ -694,7 +700,10 @@ TEST_CASE("FBX material and image dependencies remain valid across progressive b
     REQUIRE(result.ok);
     CHECK(result.batchCount > 1);
     CHECK(Count(result, model_core::ChunkTopology::Material) == 1);
-    CHECK(Count(result, model_core::ChunkTopology::Image) == 3);
+    // The fixture points Diffuse and EmissiveColor at the same file, so the
+    // shared sRGB decode is emitted once; only the normal map (Linear, with
+    // renormalized mips) keeps its own image.
+    CHECK(Count(result, model_core::ChunkTopology::Image) == 2);
 }
 
 TEST_CASE("FBX instances select distinct materials without duplicating shared geometry",
