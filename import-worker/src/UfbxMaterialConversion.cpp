@@ -83,7 +83,12 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
     result.alphaMode = uint32_t(result.baseColorFactor[3] < 0.999f
         ? AlphaModeId::Blend : AlphaModeId::Opaque);
     result.alphaCutoff = 0.5f;
-    result.flags = kMaterialFlagDoubleSided;
+    // ufbx preserves the FBX/OBJ convention that a texture's V axis points up
+    // (bottom-left origin), while the D3D12 samplers and every glTF/3MF/USD
+    // texture carry a top-left origin. Flip the final sampling coordinate so
+    // authored atlases land on their intended UV islands instead of a vertical
+    // mirror of them.
+    result.flags = kMaterialFlagDoubleSided | kMaterialFlagFlipV;
 
     if (fbxPolicy) {
         if (const ufbx_prop* alphaMode = ufbx_find_prop(
