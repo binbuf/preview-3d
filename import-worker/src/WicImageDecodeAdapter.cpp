@@ -137,35 +137,52 @@ std::optional<DecodedRasterImage> DecodeRasterImageWic(std::span<const std::byte
             }
         }
     }
-    // Without verified native downscale, limit the codec's possible full-frame
-    // expansion too; tiling our output alone cannot constrain codec internals.
-    if (!nativeDecoded && *pixelCount>options.maxDecodedBytes/4) return std::nullopt;
+    // Without a verified native downscale, the codec's possible full-frame
+    // expansion must stay bounded. A scaler keeps our own reads and the
+    // converter's source at the output size, so a 4K PNG no longer has to be
+    // rejected outright the way the old flat source-pixel guard did; the
+    // decoder still runs under the dimension/pixel caps above plus the
+    // worker's Job commit ceiling.
+    UINT rasterWidth=width, rasterHeight=height;
+    ComPtr<IWICBitmapSource> rasterSource;
+    if (!nativeDecoded) {
+        if (*pixelCount>options.maxDecodedBytes/4) {
+            ComPtr<IWICBitmapScaler> scaler;
+            if (FAILED(factory->CreateBitmapScaler(&scaler))
+                || FAILED(scaler->Initialize(frame.Get(),outputW,outputH,WICBitmapInterpolationModeFant)))
+                return std::nullopt;
+            rasterSource=scaler;
+            rasterWidth=outputW; rasterHeight=outputH;
+        } else {
+            rasterSource=frame;
+        }
+    }
     if (!nativeDecoded) {
         ComPtr<IWICFormatConverter> converter;
         if (FAILED(factory->CreateFormatConverter(&converter))
-            || FAILED(converter->Initialize(frame.Get(),GUID_WICPixelFormat32bppRGBA,WICBitmapDitherTypeNone,
+            || FAILED(converter->Initialize(rasterSource.Get(),GUID_WICPixelFormat32bppRGBA,WICBitmapDitherTypeNone,
                 nullptr,0.0,WICBitmapPaletteTypeCustom))) return std::nullopt;
         // Scratch <=2 MiB even for the maximum permitted source width.
-        std::vector<std::byte> tile(size_t(width)*4*32);
+        std::vector<std::byte> tile(size_t(rasterWidth)*4*32);
         // Area reduce source pixels in linear light into <=32 output rows.
         for (uint32_t outY=0;outY<outputH;++outY) {
             if (options.Cancelled()) return std::nullopt;
             std::vector<float> sums(size_t(outputW)*4,0.0f);
-            const uint32_t y0=outY*height/outputH, y1=(outY+1)*height/outputH;
+            const uint32_t y0=outY*rasterHeight/outputH, y1=(outY+1)*rasterHeight/outputH;
             for (uint32_t y=y0;y<y1;y+=32) {
                 if (options.Cancelled()) return std::nullopt;
                 const uint32_t rows=(std::min)(32u,y1-y);
-                WICRect rect{0,static_cast<INT>(y),static_cast<INT>(width),static_cast<INT>(rows)};
-                if (FAILED(converter->CopyPixels(&rect,width*4,rows*width*4,reinterpret_cast<BYTE*>(tile.data())))) return std::nullopt;
+                WICRect rect{0,static_cast<INT>(y),static_cast<INT>(rasterWidth),static_cast<INT>(rows)};
+                if (FAILED(converter->CopyPixels(&rect,rasterWidth*4,rows*rasterWidth*4,reinterpret_cast<BYTE*>(tile.data())))) return std::nullopt;
                 for (uint32_t x=0;x<outputW;++x) for (uint32_t sy=0;sy<rows;++sy)
-                    for (uint32_t sx=x*width/outputW;sx<(x+1)*width/outputW;++sx) for (unsigned c=0;c<4;++c) {
-                        float v=float(std::to_integer<uint8_t>(tile[(size_t(sy)*width+sx)*4+c]))/255.0f;
+                    for (uint32_t sx=x*rasterWidth/outputW;sx<(x+1)*rasterWidth/outputW;++sx) for (unsigned c=0;c<4;++c) {
+                        float v=float(std::to_integer<uint8_t>(tile[(size_t(sy)*rasterWidth+sx)*4+c]))/255.0f;
                         if (colorSpace==ColorSpaceId::Srgb && c<3) v=v<=0.04045f ? v/12.92f : std::pow((v+0.055f)/1.055f,2.4f);
                         sums[size_t(x)*4+c]+=v;
                     }
             }
             for (uint32_t x=0;x<outputW;++x) for (unsigned c=0;c<4;++c) {
-                float v=sums[size_t(x)*4+c]/float(((x+1)*width/outputW-x*width/outputW)*(y1-y0));
+                float v=sums[size_t(x)*4+c]/float(((x+1)*rasterWidth/outputW-x*rasterWidth/outputW)*(y1-y0));
                 if (colorSpace==ColorSpaceId::Srgb && c<3) v=v<=0.0031308f ? v*12.92f : 1.055f*std::pow(v,1.0f/2.4f)-0.055f;
                 result.pixelBytes[(size_t(outY)*outputW+x)*4+c]=std::byte(uint8_t(std::clamp(std::lround(v*255),0l,255l)));
             }
