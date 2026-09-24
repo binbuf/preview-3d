@@ -171,6 +171,10 @@ std::string MaterialTextureFixture(std::span<const std::byte> embedded)
     std::string ascii = TextureFixture(embedded, "material-texture.png");
     ReplaceOnce(ascii, "P: \"DiffuseColor\", \"Color\", \"\", \"A\",1,1,1",
                        "P: \"DiffuseColor\", \"Color\", \"\", \"A\",0.25,0.5,0.75");
+    // 3ds Max-style files carry both Opacity and TransparencyFactor; this
+    // fixture intentionally authors only the inverted TransparencyFactor so the
+    // fallback conversion stays covered.
+    ReplaceOnce(ascii, "\t\t\tP: \"Opacity\", \"double\", \"Number\", \"\",1", "");
     ReplaceOnce(ascii, "P: \"TransparencyFactor\", \"Number\", \"\", \"A\",1",
                        "P: \"TransparencyFactor\", \"Number\", \"\", \"A\",0.25");
     ReplaceOnce(ascii, "P: \"Emissive\", \"Vector3D\", \"Vector\", \"\",0,0,0",
@@ -388,10 +392,11 @@ TEST_CASE("ASCII FBX preserves hierarchy and shares static mesh geometry across 
             CHECK(material.baseColorFactor[0] == Catch::Approx(0.4f));
             CHECK(material.baseColorFactor[1] == Catch::Approx(0.4f));
             CHECK(material.baseColorFactor[2] == Catch::Approx(0.4f));
-            // This fixture's authored TransparencyFactor is one; ufbx's FBX
-            // fallback therefore normalizes to a transparent blend material.
-            CHECK(material.baseColorFactor[3] == Catch::Approx(0.0f));
-            CHECK(material.alphaMode == uint32_t(model_core::AlphaModeId::Blend));
+            // This fixture authors both Opacity=1 and TransparencyFactor=1,
+            // the 3ds Max pairing for an opaque material: the explicit Opacity
+            // wins over the inverted TransparencyFactor convention.
+            CHECK(material.baseColorFactor[3] == Catch::Approx(1.0f));
+            CHECK(material.alphaMode == uint32_t(model_core::AlphaModeId::Opaque));
             CHECK(material.metallicFactor == Catch::Approx(0.0f));
             CHECK(material.roughnessFactor == Catch::Approx(1.0f));
             CHECK((material.flags & model_core::kMaterialFlagDoubleSided) != 0);
