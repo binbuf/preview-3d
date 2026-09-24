@@ -676,8 +676,26 @@ uint32_t ResolveImage(BoundedChunkWriter& writer, MaterialContext& context,
                       std::unordered_map<uint64_t, uint32_t>& cache)
 {
     if (!texture) return 0;
-    const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(texture)) >> 3)
-        ^ (uint64_t(space) << 61) ^ (uint64_t(semantic) << 58);
+    // Normal maps generate renormalized mips, so they keep their own decode
+    // identity. With the same source and color space, base-color, emissive,
+    // and data roles decode to identical pixels, so they share one image chunk
+    // instead of spending the aggregate texture budget once per slot -- real
+    // interior scenes (loft-17) reuse the same bitmap for Diffuse and
+    // Emissive across many materials. The source identity is the authored
+    // filename, because ufbx exposes one texture object per material map even
+    // when every one of them reads the same embedded blob.
+    const uint64_t role = semantic == TextureSemantic::Normal ? 1u : 0u;
+    const ufbx_string path = texture->relative_filename.length
+        ? texture->relative_filename : texture->filename;
+    uint64_t identity = uint64_t(reinterpret_cast<uintptr_t>(texture)) >> 3;
+    if (path.data && path.length) {
+        identity = 1469598103934665603ull;
+        for (size_t i = 0; i < path.length; ++i) {
+            identity ^= static_cast<unsigned char>(path.data[i]);
+            identity *= 1099511628211ull;
+        }
+    }
+    const uint64_t key = identity ^ (uint64_t(space) << 61) ^ (role << 58);
     if (const auto it = cache.find(key); it != cache.end()) return it->second;
     auto image = DecodeTexture(context, texture, space, semantic);
     if (!image) {
