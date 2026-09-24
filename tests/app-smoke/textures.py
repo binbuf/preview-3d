@@ -20,6 +20,47 @@ def png(width, height):
     return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))+chunk(b'IDAT', zlib.compress(rows, 9))+chunk(b'IEND', b'')
 
 
+def quad_glb(image):
+    """A single-sided textured quad whose front faces home camera +Z.
+
+    Deliberately NOT doubleSided: the D3D12 back-culling convention must keep
+    authored counter-clockwise front faces (glTF) visible. A regression here
+    makes the whole quad invisible and un-pickable.
+    """
+    positions = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    uvs = [(0, 1), (1, 1), (1, 0), (0, 0)]
+    indices = [0, 1, 2, 0, 2, 3]
+    pos_bytes = b''.join(struct.pack('<3f', *p) for p in positions)
+    uv_bytes = b''.join(struct.pack('<2f', *t) for t in uvs)
+    idx_bytes = b''.join(struct.pack('<I', i) for i in indices)
+    geometry = pos_bytes+uv_bytes+idx_bytes
+    doc = {
+        'asset': {'version': '2.0'}, 'scene': 0, 'scenes': [{'nodes': [0]}],
+        'nodes': [{'mesh': 0}],
+        'meshes': [{'primitives': [{'attributes': {'POSITION': 0, 'TEXCOORD_0': 1},
+                                    'indices': 2, 'material': 0}]}],
+        'materials': [{'pbrMetallicRoughness': {'baseColorTexture': {'index': 0}}}],
+        'textures': [{'source': 0}],
+        'images': [{'bufferView': 3, 'mimeType': 'image/png'}],
+        'accessors': [
+            {'bufferView': 0, 'componentType': 5126, 'count': 4, 'type': 'VEC3'},
+            {'bufferView': 1, 'componentType': 5126, 'count': 4, 'type': 'VEC2'},
+            {'bufferView': 2, 'componentType': 5125, 'count': 6, 'type': 'SCALAR'}],
+        'bufferViews': [
+            {'buffer': 0, 'byteOffset': 0, 'byteLength': len(pos_bytes)},
+            {'buffer': 0, 'byteOffset': len(pos_bytes), 'byteLength': len(uv_bytes)},
+            {'buffer': 0, 'byteOffset': len(pos_bytes)+len(uv_bytes), 'byteLength': len(idx_bytes)},
+            {'buffer': 0, 'byteOffset': len(geometry), 'byteLength': len(image)}],
+        'buffers': [{'byteLength': len(geometry)+len(image)}]}
+    binary = geometry+image
+    binary += b'\0'*((-len(binary)) % 4)
+    text = json.dumps(doc, sort_keys=True, separators=(',', ':')).encode()
+    text += b' '*((-len(text)) % 4)
+    data = struct.pack('<III', 0x46546c67, 2, 28+len(text)+len(binary))
+    data += struct.pack('<II', len(text), 0x4e4f534a)+text+struct.pack('<II', len(binary), 0x004e4942)+binary
+    return data
+
+
 def fixtures(directory):
     seed = (ROOT/'interactive-viewer/test-assets/basisu_textured_triangle.glb').read_bytes()
     size = struct.unpack_from('<I', seed, 12)[0]
@@ -44,6 +85,9 @@ def fixtures(directory):
         directory.mkdir(parents=True, exist_ok=True)
         (directory/name).write_bytes(data)
         hashes[name] = hashlib.sha256(data).hexdigest()
+    quad = quad_glb(png(256, 256))
+    (directory/'raster-quad-single-sided.glb').write_bytes(quad)
+    hashes['raster-quad-single-sided.glb'] = hashlib.sha256(quad).hexdigest()
     return hashes
 
 
@@ -72,6 +116,14 @@ def run(exe, directory):
         text = C.create_unicode_buffer(str(path.resolve()))
         data = CopyData(104, C.sizeof(text), C.cast(text, C.c_void_p))
         return send(hwnd, 0x4a, 0, C.addressof(data))
+    def click(packed):
+        point = W.POINT(packed & 65535, packed >> 16)
+        user.ClientToScreen.argtypes = [W.HWND, C.POINTER(W.POINT)]
+        user.ClientToScreen(hwnd, C.byref(point))
+        user.SetCursorPos(point.x, point.y)
+        time.sleep(0.03)
+        send(hwnd, 0x201, 1, packed)
+        send(hwnd, 0x202, 0, packed)
     try:
         hwnd = wait(lambda: find_window(app.pid), 'window')
         wait(lambda: query(2), 'background')
@@ -89,6 +141,15 @@ def run(exe, directory):
             assert query(38) == 1 and query(11) == 1, 'refinement retained duplicate live textures'
             scene.update(fullExtent=query(37), fullMips=query(39), textureCount=query(38))
             report['scenes'].append(scene)
+        # A single-sided textured quad must remain visible under back-face
+        # culling, so its projected bounds center must GPU-pick. An inverted
+        # front-face convention makes the whole quad invisible and un-pickable.
+        generation = open_file(directory/'raster-quad-single-sided.glb')
+        wait(lambda: query(4) == generation and query(0) == 3 and query(37) == 256 and query(11) == 1,
+             'single-sided textured quad Ready')
+        click(query(29))
+        wait(lambda: query(22) == 1, 'single-sided textured quad GPU pick')
+        report['singleSidedFrontFacePick'] = True
         generation = open_file(directory/'raster-corrupt.glb')
         wait(lambda: query(4) == generation and query(0) == 3, 'optional fallback Ready')
         assert query(37) == 2 and query(40) > 0 and query(11) == 1
