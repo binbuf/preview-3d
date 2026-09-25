@@ -707,7 +707,13 @@ bool IsVisible(const UsdPrim& prim, const UsdTimeCode time, ProductionState& sta
 bool RequiredUnsupportedSchema(const UsdPrim& prim)
 {
     const std::string type = prim.GetTypeName().GetString();
-    return type.find("Skel") != std::string::npos || type.find("Volume") != std::string::npos
+    // Skeletal schemas (SkelRoot/Skeleton/SkelAnimation) are not rejected:
+    // their meshes still carry an authored rest/bind pose, which is the static
+    // preview the other formats already show (the FBX path bakes a start pose).
+    // The skel prims are non-geometry and are skipped as ordinary non-Xformable
+    // prims; the meshes render at rest. Volume/Field/Procedural/MaterialX
+    // remain required-content rejections.
+    return type.find("Volume") != std::string::npos
         || type.find("Field") != std::string::npos || type.find("Procedural") != std::string::npos
         || type.find("MaterialX") != std::string::npos;
 }

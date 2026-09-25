@@ -52,8 +52,10 @@ AppContainer granted access only to that tree.
 
 Animation playback, editing, other CAD formats (IGES/IFC/JT/native CAD),
 Explorer thumbnails (including for 3MF, USD, FBX, and STEP), network assets,
-skeletal USD data, MaterialX, procedural schemas, and interactive variant
-selection are not currently included.
+USD skeletal deformation, MaterialX, procedural schemas, and interactive variant
+selection are not currently included. USD skeletal bindings are ignored and the
+authored rest pose is previewed statically (matching the baked start pose FBX
+already shows).
 
 The supported STEP/STP subset is bounded and self-contained only: external STEP
 documents are out of scope, and there is no PMI/GD&T, editing, saved views, exact

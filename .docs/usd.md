@@ -24,9 +24,10 @@ any USD extension.
 In this plan, **USD support** means the original design's bounded static-preview
 subset across `.usd`, `.usda`, `.usdc`, and `.usdz`. It does not mean complete
 USD authoring fidelity or every OpenUSD schema/plugin. In particular, animation
-playback, skeletal data, interactive variant selection, MaterialX, procedural
+playback, skeletal deformation, interactive variant selection, MaterialX, procedural
 schemas, arbitrary renderer/file-format plugins, remote assets, and unrestricted
-composition remain out of scope.
+composition remain out of scope. Skeletal bindings are ignored and the authored
+rest pose is previewed statically.
 
 ## Review findings
 

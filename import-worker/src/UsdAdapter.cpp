@@ -93,13 +93,23 @@ std::optional<std::string> NormalizeAssetPath(std::string_view input)
         start = end + 1;
     }
     if (result.empty()) return std::nullopt;
-    const auto dot = result.find_last_of('.');
-    if (dot == std::string::npos) return std::nullopt;
-    const std::string extension = FoldAscii(std::string_view(result).substr(dot));
-    if (extension != ".png" && extension != ".jpg" && extension != ".jpeg"
-        && extension != ".bmp" && extension != ".tif" && extension != ".tiff"
-        && extension != ".webp" && extension != ".ktx2") return std::nullopt;
+    // Path safety only. Container type is checked separately in ResolveAsset so
+    // an unsupported image type (for example an EXR normal map) degrades to an
+    // optional-texture miss instead of a fatal UnsafeReference.
     return result;
+}
+
+// Extensions this adapter can actually consume: image containers the shared
+// decoders handle, plus the USD layer encodings. Anything else (EXR, TGA, ...)
+// is an unsupported optional asset: TinyUSDZ should treat it as missing rather
+// than as a containment failure.
+bool SupportedAssetExtension(std::string_view path)
+{
+    if (HasDecodableImageExtension(path)) return true;
+    const size_t dot = path.find_last_of('.');
+    if (dot == std::string_view::npos) return false;
+    const std::string extension = FoldAscii(path.substr(dot));
+    return extension == ".usd" || extension == ".usda" || extension == ".usdc";
 }
 
 struct AssetContext {
@@ -150,6 +160,14 @@ int ResolveAsset(const char* assetName, const std::vector<std::string>&,
     const auto normalized = NormalizeAssetPath(assetName ? std::string_view(assetName) : std::string_view{});
     if (!normalized) {
         context.error = ImportErrorCode::UnsafeReference;
+        return -2;
+    }
+    // A path-safe reference to a container no decoder handles (for example an
+    // EXR normal map) is an unsupported optional asset, not a containment
+    // failure. Report it as missing after a bounded warning so the rest of the
+    // stage still imports.
+    if (!SupportedAssetExtension(*normalized)) {
+        context.warnings = (std::min)(64u, context.warnings + 1);
         return -2;
     }
     *resolved = *normalized;
@@ -380,6 +398,35 @@ void ClassifyPrim(const Prim& prim, double time, bool parentVisible,
 
     for (const Prim& child : prim.children())
         ClassifyPrim(child, time, visible, includedPurpose, path, depth + 1, policy);
+}
+
+// Skeletal deformation is out of scope, but the authored rest/bind pose is
+// still meaningful static geometry (the FBX path already previews a baked start
+// pose). Clear each mesh's skel:skeleton binding so TinyUSDZ's render-scene
+// converter treats the mesh as static instead of failing on rigs it cannot
+// build (for example a multi-root armature). Returns the number of bindings
+// cleared so the caller can surface one bounded optional warning.
+uint32_t StripSkeletonBindings(Prim& prim)
+{
+    uint32_t cleared = 0;
+    if (auto* mesh = prim.get_data().as<GeomMesh>(/*strict_cast=*/true)) {
+        if (mesh->skeleton.has_value()) {
+            mesh->skeleton.reset();
+            ++cleared;
+        }
+        // Remove the skinning inputs too. TinyUSDZ's converter indexes its
+        // skeleton table from a mesh's joint indices even when the skeleton
+        // binding was absent, so leaving them turns the rest-pose preview into
+        // an out-of-bounds crash. With no skinning primvars the mesh is emitted
+        // as plain static geometry.
+        mesh->props.erase("primvars:skel:jointIndices");
+        mesh->props.erase("primvars:skel:jointWeights");
+        mesh->props.erase("primvars:skel:joints");
+        mesh->props.erase("primvars:skel:geomBindTransform");
+        mesh->props.erase("skel:skeleton");
+    }
+    for (Prim& child : prim.children()) cleared += StripSkeletonBindings(child);
+    return cleared;
 }
 
 StagePolicy ClassifyStage(const tinyusdz::Stage& stage, double time)
@@ -1290,9 +1337,16 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
         || Axis(stage) == UpAxisId::Unknown)
         return Fail(ImportErrorCode::MalformedData, ImportFailurePhase::Geometry);
 
+    // Ignore skeletal bindings and preview the authored rest pose; see
+    // StripSkeletonBindings. This must precede the classification and the
+    // render-scene conversion.
+    uint32_t skeletonBindings = 0;
+    for (Prim& root : stage.root_prims()) skeletonBindings += StripSkeletonBindings(root);
+
     // This classification is intentionally before BoundedChunkWriter exists:
     // UnsupportedComposition can never follow candidate publication.
     StagePolicy policy = ClassifyStage(stage, time);
+    if (skeletonBindings) SaturatingWarn(policy);
     if (policy.primCount > kTierBObjectLimit) return Fail(ImportErrorCode::ResourceLimit);
     if (policy.hasComposition) return Fail(ImportErrorCode::UnsupportedComposition,
                                            ImportFailurePhase::Geometry);

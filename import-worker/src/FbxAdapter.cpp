@@ -563,6 +563,30 @@ const ufbx_texture* MapTexture(const ufbx_material_map& primary, MaterialContext
     return nullptr;
 }
 
+// Conservative syntactic mirror of the sidecar policy's containment checks,
+// used only to decide whether a reference may be short-circuited by the
+// unsupported-format filter below. Anything that looks unsafe must still go to
+// the resolver so its rejection stays terminal and fail-closed. The resolver
+// remains the authority (its canonical-path containment also catches reparse
+// points); this is just a guard so a disallowed extension can never mask an
+// unsafe reference.
+bool ReferenceLooksUnsafe(std::string_view path)
+{
+    if (path.empty() || path.front() == '/' || path.front() == '\\') return true;
+    if (path.find('\\') != std::string_view::npos
+        || path.find(':') != std::string_view::npos) return true;
+    size_t start = 0;
+    while (start <= path.size()) {
+        const size_t end = path.find('/', start);
+        const std::string_view component = path.substr(
+            start, end == std::string_view::npos ? path.size() - start : end - start);
+        if (component == "..") return true;
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return false;
+}
+
 std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_texture* texture,
                                           ColorSpaceId space, TextureSemantic semantic)
 {
@@ -574,6 +598,17 @@ std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_t
         const ufbx_string path = texture->relative_filename.length
             ? texture->relative_filename : texture->filename;
         if (!path.data || !path.length || !context.sidecars) {
+            Warn(context.textureWarnings);
+            return std::nullopt;
+        }
+        // Skip formats no decoder handles (for example the EXR normal/
+        // roughness maps some exporters emit). Requesting one would surface the
+        // sidecar resolver's disallowed-extension rejection as a fatal
+        // UnsafeReference for the whole model; the map is optional, so degrade
+        // to a texture warning instead. A reference that looks unsafe is never
+        // short-circuited: it still goes to the resolver and fails closed.
+        const std::string_view pathView(path.data, path.length);
+        if (!ReferenceLooksUnsafe(pathView) && !HasDecodableImageExtension(pathView)) {
             Warn(context.textureWarnings);
             return std::nullopt;
         }
