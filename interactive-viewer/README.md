@@ -106,9 +106,10 @@ its D3D11 renderer is never instantiated.
 Still deferred: TGA/DDS/HDR, animation playback, advanced material lobes, meshoptimizer-built
 LOD/hierarchies, persistent derived cache, and the remaining Tier B formats. FBX geometry caches,
 dynamic constraints, NURBS/subdivision tessellation, cameras, and lights are outside the supported
-static subset. USD skeletal data, MaterialX, procedural schemas, remote assets,
+static subset. USD skeletal deformation, MaterialX, procedural schemas, remote assets,
 arbitrary renderer/file-format plugins, interactive variants, and animation are
-also outside the supported subset. Tier B USD ceilings include 2 GiB primary,
+also outside the supported subset (USD skeletal bindings are ignored and the
+authored rest pose is previewed statically). Tier B USD ceilings include 2 GiB primary,
 4 GiB aggregate local source/archive expansion, 20 million triangles or points,
 50,000 nodes, and a compatibility-host commit cap of min(4 GiB, 35% physical
 memory). Explorer thumbnails, including 3MF, USD, FBX, and STEP thumbnails, remain a

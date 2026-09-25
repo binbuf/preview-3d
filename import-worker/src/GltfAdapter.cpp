@@ -925,6 +925,34 @@ std::optional<size_t> ResolveTextureSlotImage(WalkState& state, const fastgltf::
     return ResolveImage(state, *gltfImageIndex, colorSpace, semantic);
 }
 
+// True when the texture slot's image cannot carry an alpha channel (JPEG).
+// Only used for the degenerate Blend case below: an authored ALPHA BLEND whose
+// base color is a JPEG and whose base color factor is fully opaque has no
+// transparency source anywhere, so the blend is a no-op.
+bool TextureImageHasNoAlpha(const WalkState& state, const fastgltf::TextureInfo& info)
+{
+    if (info.textureIndex >= state.asset.textures.size()) return false;
+    const fastgltf::Texture& texture = state.asset.textures[info.textureIndex];
+    const std::optional<size_t> imageIndex = texture.basisuImageIndex.has_value()
+        ? texture.basisuImageIndex
+        : (texture.webpImageIndex.has_value() ? texture.webpImageIndex : texture.imageIndex);
+    if (!imageIndex.has_value() || *imageIndex >= state.asset.images.size()) return false;
+    const fastgltf::Image& image = state.asset.images[*imageIndex];
+    return std::visit([](const auto& source) -> bool {
+        using T = std::decay_t<decltype(source)>;
+        if constexpr (std::is_same_v<T, fastgltf::sources::URI>) {
+            std::string path(source.uri.path());
+            std::ranges::transform(path, path.begin(),
+                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            return path.ends_with(".jpg") || path.ends_with(".jpeg");
+        } else if constexpr (requires { source.mimeType; }) {
+            return source.mimeType == fastgltf::MimeType::JPEG;
+        } else {
+            return false;
+        }
+    }, image.data);
+}
+
 // Resolves (with dedup by glTF material index) the pending-material index
 // for asset.materials[materialIndex]. All four PBR texture slots
 // (baseColor/metallicRoughness/normal/emissive) are inspected, each
@@ -1016,7 +1044,17 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     // has no slot for one), so the scalar factor -- what the common "glass"
     // export carries -- is what is applied. A Mask material keeps its authored
     // discard test untouched rather than silently reinterpreting it.
-    if (material.transmission && material.alphaMode != fastgltf::AlphaMode::Mask) {
+    //
+    // A dielectric whose index of refraction is at or below 1 has no optical
+    // interface: it neither bends nor reflects light, so an authored
+    // transmission factor is physically unobservable. Some exporters stamp
+    // transmission=1 together with KHR_materials_ior ior=1 (and often
+    // specularFactor=0) on every material -- the crew suit is the canonical
+    // case -- which must stay the opaque surface it is rather than becoming a
+    // see-through ghost.
+    const bool hasOpticalInterface = material.ior > 1.0f + 1.0e-4f;
+    if (material.transmission && material.alphaMode != fastgltf::AlphaMode::Mask
+        && hasOpticalInterface) {
         float transmission = material.transmission->transmissionFactor;
         if (!std::isfinite(transmission)) {
             transmission = 0.0f;
@@ -1029,6 +1067,24 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
                 pending.data.alphaMode = static_cast<uint32_t>(AlphaModeId::Blend);
             }
         }
+    }
+
+    // Degenerate ALPHA BLEND recovery. Blender's glTF exporter writes
+    // alphaMode BLEND for a material whose blend mode is "Blend" even when it
+    // could not bake the transparency into the base color (a separate opacity
+    // map that the export dropped). The result is a blend with no alpha source
+    // at all -- opaque factor alpha over a JPEG that cannot carry alpha -- which
+    // is otherwise indistinguishable from OPAQUE, yet renders as an opaque
+    // black cover over whatever is behind it (a clock face under glass). The
+    // only non-fabricated reading of such a material is the glass it was meant
+    // to be, so recover it as transmissive rather than as an opaque mirror.
+    if (material.alphaMode == fastgltf::AlphaMode::Blend
+        && pending.data.transmissionFactor == 0.0f
+        && pending.data.baseColorFactor[3] >= 1.0f
+        && baseColorTexture && TextureImageHasNoAlpha(state, *baseColorTexture)) {
+        pending.data.transmissionFactor = 1.0f;
+        pending.data.flags |= kMaterialFlagTransmissive;
+        state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
     }
 
     if (baseColorTexture) {

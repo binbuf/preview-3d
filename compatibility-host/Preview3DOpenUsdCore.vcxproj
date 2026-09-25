@@ -30,6 +30,12 @@
            consumer links them: shlwapi (Path*), ws2_32 (gethostname), dbghelp
            (Sym*), plus the rest of the core closure. -->
       <AdditionalDependencies>usd_m.lib;psapi.lib;bcrypt.lib;windowscodecs.lib;ole32.lib;shlwapi.lib;ws2_32.lib;dbghelp.lib;advapi32.lib;userenv.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- A static OpenUSD must be whole-archived: its file-format, schema, and
+           resolver registrations are global constructors (TF_REGISTRY_FUNCTION)
+           in object files that no caller symbol references, so a plain archive
+           link silently drops them and UsdStage::Open fails for every USD file.
+           Upstream's CMake expresses this as LINK_LIBRARY:WHOLE_ARCHIVE,usd_m. -->
+      <AdditionalOptions>/WHOLEARCHIVE:usd_m.lib %(AdditionalOptions)</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>

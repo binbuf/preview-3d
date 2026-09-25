@@ -1,6 +1,7 @@
 #include "ImageFormatSniff.h"
 
 #include <array>
+#include <cctype>
 #include <cstring>
 
 namespace import_worker {
@@ -57,6 +58,38 @@ SniffedImageFormat SniffImageFormat(std::span<const std::byte> bytes) noexcept
         return SniffedImageFormat::Ktx2;
     }
     return SniffedImageFormat::Unknown;
+}
+
+bool HasDecodableImageExtension(std::string_view path) noexcept
+{
+    const size_t dot = path.find_last_of('.');
+    if (dot == std::string_view::npos || dot + 1 >= path.size()) {
+        return false;
+    }
+    std::string_view extension = path.substr(dot + 1);
+    // The extension ends at the first separator or alternate-stream/query
+    // character, so "inside.png:stream" and "tex/a.png?x" report "png" rather
+    // than an unrecognized blob. This keeps the request filter from being
+    // fooled into treating a syntactically unsafe reference as an unsupported
+    // optional format.
+    size_t length = 0;
+    while (length < extension.size()) {
+        const unsigned char ch = static_cast<unsigned char>(extension[length]);
+        if (!std::isalnum(ch)) break;
+        ++length;
+    }
+    extension = extension.substr(0, length);
+    if (extension.size() > 5) {
+        return false;
+    }
+    char folded[6]{};
+    for (size_t i = 0; i < extension.size(); ++i) {
+        const unsigned char ch = static_cast<unsigned char>(extension[i]);
+        folded[i] = static_cast<char>(ch < 0x80 ? std::tolower(ch) : ch);
+    }
+    const std::string_view lower(folded, extension.size());
+    return lower == "png" || lower == "jpg" || lower == "jpeg" || lower == "bmp"
+        || lower == "tif" || lower == "tiff" || lower == "webp" || lower == "ktx2";
 }
 
 } // namespace import_worker

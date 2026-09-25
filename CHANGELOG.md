@@ -8,6 +8,33 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.3.8] - 2026-09-25
+
+### Fixed
+
+- The OpenUSD compatibility host now whole-archives the statically linked
+  `usd_m.lib`. A plain archive link dropped OpenUSD's file-format, schema, and
+  resolver registration objects (`TF_REGISTRY_FUNCTION` global constructors that
+  no caller symbol references), so `UsdStage::Open` failed for every USDZ and
+  composed USD stage with the compatibility-host error.
+- FBX and USD models whose materials reference formats the decoder does not
+  handle (for example EXR normal/roughness/metalness maps) now import with those
+  maps skipped and a bounded warning, instead of failing the whole model with
+  `UnsafeReference`. Unsafe references still fail closed through the sidecar
+  resolver.
+- glTF materials authored with `KHR_materials_transmission` and
+  `KHR_materials_ior` at or below 1 are no longer rendered as see-through ghost
+  glass. An index of refraction of 1 has no optical interface, so the authored
+  transmission is unobservable and the surface stays opaque.
+- glTF `ALPHA BLEND` materials with no transparency source at all (opaque base
+  color factor over a JPEG base color texture) are recovered as transmissive
+  glass rather than an opaque cover. This matches the intended glass of exports
+  whose separate opacity map was not included.
+- USD skeletal bindings are ignored so skinned meshes preview their authored
+  rest pose instead of failing; the blend/rest pose is what FBX already bakes.
+  The skinning primvars are removed as well, because TinyUSDZ's converter
+  indexes its skeleton table from joint indices even without a bound skeleton.
+
 ## [0.3.7] - 2026-09-23
 
 ### Added
