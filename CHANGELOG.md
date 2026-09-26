@@ -8,6 +8,38 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.3.10] - 2026-09-26
+
+### Fixed
+
+- Large texture-heavy FBX packages no longer fail with a spurious
+  `ResourceLimit` on imports that do not consume progressive batches (the
+  bridge's default return path, recovery, and tests). The trusted broker still
+  bounded how much it accumulated for such callers, but at a fixed 128 MiB --
+  far below what a legitimately accepted Tier-B model can normalize to. The
+  Honda-E detailed-interior FBX, for example, passes every per-format count,
+  byte, and texture limit yet normalizes to roughly 580 MiB, so it was rejected
+  even though each batch validated. That host bound is now 2 GiB; callers that
+  cannot retain the whole result keep streaming through `onBatch` and never
+  accumulate it.
+- FBX Phong reflective surfaces -- chrome, mirrors, reflective car paint, and
+  headlight reflectors -- now preview as reflective instead of flat and
+  opaque. Phong stores reflectivity as `ReflectionColor` scaled by
+  `ReflectionFactor`; the converter previously read only the unified-PBR
+  metalness (absent in Phong files) and dropped it, leaving these surfaces at
+  the shader's fixed 4% dielectric reflectance. A non-black reflection color is
+  now carried into the normalized metalness, where the shader uses the base
+  color as F0 and drops the diffuse lobe, matching how the same surfaces render
+  from glTF. The default FBX template (`ReflectionColor` black,
+  `ReflectionFactor` 1) is ignored, so ordinary dielectrics are unchanged.
+- FBX window glass exported as an opaque white Phong surface with no
+  transparency and no reflection -- indistinguishable from opaque plastic --
+  is now carried through as transmissive when the material name identifies it
+  as glass (`glass`, `cristal`, `crystal`, `vidrio`, `verre`, `vetro`, ...),
+  so the shader's Fresnel glass path can make it see-through. The same
+  recovery glTF already applies to degenerate glass. An authored alpha mode,
+  opacity, or reflectivity always takes precedence.
+
 ## [0.3.9] - 2026-09-25
 
 ### Added

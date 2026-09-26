@@ -398,6 +398,62 @@ WireSnapshot Snapshot(const import_broker::ImportSessionResult& result)
 
 } // namespace
 
+TEST_CASE("FBX Phong reflection drives the normalized metalness",
+          "[fbx][materials][reflection]")
+{
+    // Phong authors surface reflectivity as ReflectionColor scaled by
+    // ReflectionFactor; the normalized contract has only metalness, so a
+    // non-black reflection color with a factor must become metalness (mirror,
+    // chrome trim, reflective paint, headlight reflector) instead of being
+    // dropped and rendering as a flat opaque surface.
+    std::string ascii = ReadAsciiFixture("hierarchy-instances-pivots-ascii.fbx");
+    ReplaceOnce(ascii, "P: \"DiffuseFactor\", \"Number\", \"\", \"A\",0.800000011920929",
+        "P: \"DiffuseFactor\", \"Number\", \"\", \"A\",0.800000011920929\n"
+        "\t\t\tP: \"ReflectionColor\", \"Color\", \"\", \"A\",0.6,0.6,0.6\n"
+        "\t\t\tP: \"ReflectionFactor\", \"Number\", \"\", \"A\",0.75");
+    ScratchFbx source;
+    source.Write(ascii);
+    const auto result = import_broker::RunImportSession(Request(source.path, 5032));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    uint32_t materials = 0;
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::Material) continue;
+        model_core::MaterialPayload material{};
+        std::memcpy(&material, chunk.payload.data(), sizeof(material));
+        CHECK(material.metallicFactor == Catch::Approx(0.75f));
+        ++materials;
+    }
+    CHECK(materials == 1);
+}
+
+TEST_CASE("Opaque FBX Phong glass is recovered as transmissive by material name",
+          "[fbx][materials][glass]")
+{
+    // Window glass is commonly exported as an opaque white Phong surface with
+    // no transparency and no reflection, which is otherwise indistinguishable
+    // from opaque plastic. A glass-identifying material name must carry it
+    // through as transmissive so the shader can make it see-through.
+    std::string ascii = ReadAsciiFixture("hierarchy-instances-pivots-ascii.fbx");
+    ReplaceOnce(ascii, "Material::lambert1", "Material::WindowGlass");
+    ScratchFbx source;
+    source.Write(ascii);
+    const auto result = import_broker::RunImportSession(Request(source.path, 5033));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase);
+    REQUIRE(result.ok);
+    uint32_t materials = 0;
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::Material) continue;
+        model_core::MaterialPayload material{};
+        std::memcpy(&material, chunk.payload.data(), sizeof(material));
+        CHECK((material.flags & model_core::kMaterialFlagTransmissive) != 0);
+        CHECK(material.transmissionFactor == Catch::Approx(1.0f));
+        CHECK(material.alphaMode == uint32_t(model_core::AlphaModeId::Blend));
+        ++materials;
+    }
+    CHECK(materials == 1);
+}
+
 TEST_CASE("ASCII FBX preserves hierarchy and shares static mesh geometry across instances",
           "[fbx][hierarchy][instances]")
 {
@@ -1225,4 +1281,47 @@ TEST_CASE("FBX node counts are bounded before scene-record allocation", "[fbx][l
     const auto result = import_broker::RunImportSession(Request(source.path, 512));
     REQUIRE_FALSE(result.ok);
     CHECK(result.errorCode == model_core::ImportErrorCode::ResourceLimit);
+}
+
+TEST_CASE("FBX problem model: texture-heavy downloaded package imports without progressive batches",
+          "[fbx][problem-model][limits]")
+{
+    // The Honda-E interior export normalizes to ~580 MiB of de-indexed geometry
+    // plus a full decoded-texture set, so it previously failed with a host
+    // ResourceLimit on the non-progressive bridge path (which returns the whole
+    // model in one result). Every FBX per-format limit passes; only the host's
+    // fixed 128 MiB accumulation bound rejected it.
+    const std::filesystem::path modelRoot =
+        std::filesystem::path(PREVIEW3D_IMPORT_WORKER_EXE).parent_path().parent_path().parent_path();
+    const std::filesystem::path realModel = modelRoot
+        / L"test-models" / L"problem-models" / L"free-honda-e-detailed-interior-2021"
+        / L"source" / L"Honda E Export.fbx";
+    if (!std::filesystem::exists(realModel)) {
+        std::printf("SKIP: %ls is not present\n", realModel.c_str());
+        return;
+    }
+    d3d12_import_bridge::EnsureImportSandboxPrepared();
+    const auto result = d3d12_import_bridge::RunImport(
+        d3d12_import_bridge::SourceFormat::Fbx, realModel.wstring(), 9099);
+    CAPTURE(result.errorStage, result.errorCode, result.errorPhase,
+            result.meshes.size(), result.images.size());
+    REQUIRE(result.ok);
+    REQUIRE_FALSE(result.meshes.empty());
+    uint64_t triangles = 0;
+    for (const auto& mesh : result.meshes)
+        if (mesh.topology == model_core::ChunkTopology::TriangleList)
+            triangles += mesh.indexCount / 3;
+    CHECK(triangles > 2'000'000);
+    // This car authors chrome/mirror materials only through the Phong
+    // reflection slot; at least one must reach the renderer's reflective
+    // (high-metalness) path instead of rendering as flat opaque plastic.
+    REQUIRE_FALSE(result.materials.empty());
+    uint32_t reflectiveMaterials = 0, transmissiveMaterials = 0;
+    for (const auto& material : result.materials) {
+        if (material.data.metallicFactor >= 0.9f) ++reflectiveMaterials;
+        if ((material.data.flags & model_core::kMaterialFlagTransmissive) != 0)
+            ++transmissiveMaterials;
+    }
+    CHECK(reflectiveMaterials >= 1);
+    CHECK(transmissiveMaterials >= 1);
 }

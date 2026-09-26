@@ -3,8 +3,11 @@
 #include "ufbx.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <limits>
+#include <string>
+#include <string_view>
 
 namespace import_worker {
 namespace {
@@ -12,6 +15,31 @@ namespace {
 bool Finite(double value)
 {
     return std::isfinite(value) && std::abs(value) <= 1.0e30;
+}
+
+// The FBX material model has no dedicated glass/transmission channel: these
+// exports author window glass as an opaque white Phong surface with a bright
+// specular and zero reflection, which is otherwise indistinguishable from
+// opaque white plastic. When the material name identifies it as glass, carry
+// it through as transmissive so the shader's Fresnel glass path (see
+// kMaterialFlagTransmissive) can make the window see-through. Names are
+// already used elsewhere in this adapter for the common base-color recovery,
+// and the match is deliberately limited to unambiguous glass tokens across
+// the exporters' common languages.
+bool LooksLikeGlass(std::string_view name)
+{
+    static constexpr std::string_view kTokens[] = {
+        "glass", "cristal", "crystal", "vidrio", "verre", "vetro", "cristallo", "glas"
+    };
+    std::string lower;
+    lower.reserve(name.size());
+    for (const char c : name) {
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    for (const std::string_view token : kTokens) {
+        if (lower.find(token) != std::string::npos) return true;
+    }
+    return false;
 }
 
 float Saturate(double value, float fallback = 1.0f)
@@ -70,6 +98,27 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
         ? Saturate(material.pbr.metalness.value_real, 0.0f) : 0.0f;
     result.roughnessFactor = material.pbr.roughness.has_value
         ? Saturate(material.pbr.roughness.value_real) : 1.0f;
+    // FBX Phong has no metallic channel: reflectivity is authored as
+    // ReflectionColor scaled by ReflectionFactor (the classic 3ds Max
+    // reflection slot), which the normalized contract has no separate field
+    // for. Carry it in the one scalar metalness slot, where the shader uses
+    // the base color as F0 and drops the diffuse lobe -- exactly how a mirror,
+    // chrome trim, reflective car paint, or a headlight reflector reads.
+    // Without this every such surface kept metalness 0 and the shader's fixed
+    // 4% dielectric F0, so its environment reflection was imperceptible and it
+    // rendered as flat opaque plastic. The default FBX property template
+    // authors ReflectionColor=black with ReflectionFactor=1, so a non-black
+    // reflection color is required: ordinary Phong dielectrics (glass, cloth,
+    // matte plastic) keep metalness 0 and their authored dielectric look.
+    if (fbxPolicy && !material.pbr.metalness.has_value) {
+        const ufbx_vec3 reflectionColor = material.fbx.reflection_color.value_vec3;
+        const double reflectivity = (std::max)({ reflectionColor.x, reflectionColor.y,
+                                                 reflectionColor.z });
+        if (Finite(reflectivity) && reflectivity > 1.0e-3
+            && material.fbx.reflection_factor.has_value) {
+            result.metallicFactor = Saturate(material.fbx.reflection_factor.value_real, 0.0f);
+        }
+    }
     const bool usePbrEmission = !fbxPolicy || material.pbr.emission_color.has_value;
     const auto emission = usePbrEmission ? material.pbr.emission_color.value_vec3
                                          : material.fbx.emission_color.value_vec3;
@@ -117,6 +166,20 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
             || (material.features.thin_walled.is_explicit && material.features.thin_walled.enabled)
             || (material.features.caustics.is_explicit && material.features.caustics.enabled))
             Warn(optionalWarnings);
+        // Recover window/glass surfaces the exporter left as opaque. Only an
+        // opaque, non-reflective Phong material whose name identifies it as
+        // glass is affected; an authored alpha mode, opacity, or reflectivity
+        // is always left untouched.
+        const std::string_view materialName(material.name.data ? material.name.data : "",
+                                            material.name.data ? material.name.length : 0);
+        if (result.alphaMode == uint32_t(AlphaModeId::Opaque)
+            && result.baseColorFactor[3] >= 0.999f
+            && result.metallicFactor == 0.0f
+            && LooksLikeGlass(materialName)) {
+            result.transmissionFactor = 1.0f;
+            result.flags |= kMaterialFlagTransmissive;
+            result.alphaMode = uint32_t(AlphaModeId::Blend);
+        }
     }
     return result;
 }

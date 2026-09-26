@@ -47,6 +47,18 @@ constexpr const wchar_t* kWorkerContainerName = L"Binbuf.Preview3D.ImportWorker"
 constexpr const wchar_t* kCompatibilityContainerName = L"Binbuf.Preview3D.ImportHost";
 constexpr const wchar_t* kStepContainerName = L"Binbuf.Preview3D.StepHost";
 
+// Bounds host-side accumulation for callers that do not consume progressive
+// batches (ImportSessionRequest::onBatch is empty). Such a caller has asked for
+// the whole model in one result, so the bound has to admit the largest
+// normalized output a legitimately accepted file can produce: a downloaded
+// FBX/3MF/USD package can normalize millions of de-indexed triangles plus a
+// full decoded-texture set to several hundred MiB. The previous fixed 128 MiB
+// rejected such packages (for example the Honda-E detailed-interior FBX, whose
+// batches total ~580 MiB) with a ResourceLimit even though every per-format
+// count, byte, and texture limit had passed. Callers that cannot afford to
+// retain the whole result use onBatch and stream it instead.
+constexpr uint64_t kMaxAccumulatedPayloadBytes = 2ull * 1024 * 1024 * 1024;
+
 std::wstring DirectoryOf(const std::wstring& filePath)
 {
     auto lastSlash = filePath.find_last_of(L"\\/");
@@ -1132,7 +1144,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         {
             for (const auto& chunk : validation.chunks)
             {
-                if (chunk.payload.size() > 128ull * 1024 * 1024 - accumulatedBytes)
+                if (chunk.payload.size() > kMaxAccumulatedPayloadBytes - accumulatedBytes)
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::ResourceLimit);
                     return false;
