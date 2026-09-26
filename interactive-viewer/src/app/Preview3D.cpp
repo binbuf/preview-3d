@@ -129,6 +129,8 @@ struct ViewerApp
     bool infoPanelCloseButtonPressed = false;
     bool fullscreenButtonHover = false;
     bool fullscreenButtonPressed = false;
+    bool warningButtonHover = false;
+    bool warningButtonPressed = false;
     LightingMode lightingMode = LightingMode::Studio;
     float directionalLightAngle = 0.875f;
     // Elevation above the horizon in radians; atan(0.55) matches the previous
@@ -225,6 +227,13 @@ struct ViewerApp
     bool renderPresentationPending = false;
     std::wstring renderDurationText;
     std::wstring warning;
+    // Authored relative references whose sidecar assets could not be found for
+    // the loaded model. Non-empty makes the warning badge offer a folder picker
+    // and a re-import.
+    std::vector<std::wstring> missingAssets;
+    // Directories the user has offered as asset search roots. Applied to the
+    // immediate re-import; a fresh Open/Drop clears them.
+    std::vector<std::wstring> assetSearchRoots;
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
     import_broker::ImportStage errorStage = import_broker::ImportStage::OpenSource;
     model_core::ImportFailurePhase errorPhase = model_core::ImportFailurePhase::Unspecified;
@@ -1178,6 +1187,24 @@ RECT InfoButtonRect(const ViewerApp& app)
     return RECT{ margin, centerY - height / 2, margin + width, centerY + height / 2 };
 }
 
+// Bottom-right warning badge: the same content-anchored box the renderer draws
+// (above the bottom bar, left of the Information panel). Empty whenever no
+// warning is active, so input handling can treat an empty rect as "no badge".
+// Shared by drawing (BuildOverlayInfo) and WM_LBUTTONDOWN/MOUSEMOVE/UP, so the
+// two can never disagree about where the badge is.
+RECT WarningButtonRect(const ViewerApp& app)
+{
+    if (app.warning.empty() || !HasNavigableModel(app)) return RECT{};
+    RECT client{};
+    GetClientRect(app.window, &client);
+    const int size = Scale(app, 30);
+    const int margin = Scale(app, 14);
+    const int contentRight = client.right - InfoPanelWidthPixels(app);
+    const int contentBottom = client.bottom - (HasNavigableModel(app) ? app.bottomBarHeight : 0);
+    return RECT{ contentRight - margin - size, contentBottom - margin - size,
+                 contentRight - margin, contentBottom - margin };
+}
+
 struct LightingToolbarLayout
 {
     RECT bounds{};
@@ -1338,6 +1365,8 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     if (app.infoButtonHover) return { 100, InfoButtonRect(app), L"Model information", false };
     if (app.fullscreenButtonHover) return { 101, FullscreenButtonRect(app), L"Fullscreen", false };
     if (app.infoPanelCloseButtonHover) return { 102, InfoPanelCloseButtonRect(app), L"Close information panel", true };
+    if (app.warningButtonHover) return { 103, WarningButtonRect(app),
+        app.missingAssets.empty() ? L"Model warnings" : L"Missing assets — click to locate them", false };
     if (app.lightingButtonHover>=0) {
         const auto layout=ComputeLightingToolbarLayout(app);
         const RECT rects[]={layout.studio,layout.clay,layout.directional,layout.wireframe};
@@ -1733,9 +1762,10 @@ void CancelOpen(ViewerApp& app)
     viewer_accessibility::Announce(app.window, app.uiaAccessible, AccessibilityStatus(app));
 }
 
-void BeginOpen(ViewerApp& app, std::wstring path)
+void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> assetSearchRoots = {})
 {
     if (path.empty()) return;
+    app.assetSearchRoots = assetSearchRoots;
     ++app.generation;
     if (app.cancellation)
     {
@@ -1780,6 +1810,9 @@ void BeginOpen(ViewerApp& app, std::wstring path)
     app.errorDetails.clear();
     app.filename = FileNameFromPath(path);
     app.warning.clear();
+    app.missingAssets.clear();
+    app.warningButtonHover = false;
+    app.warningButtonPressed = false;
     UpdateTitle(app);
     UpdateButtonAvailability(app);
     LayoutControls(app);
@@ -1807,7 +1840,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
     auto* stepPhase = &app.stepProgressPhase;
     auto* stepDone = &app.stepProgressDone;
     auto* stepTotal = &app.stepProgressTotal;
-    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting, stepPhase, stepDone, stepTotal]()
+    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting, stepPhase, stepDone, stepTotal, assetSearchRoots]()
     {
         d3d12_import_bridge::ImportResult result;
         bool initialComplete = false;
@@ -1830,7 +1863,7 @@ void BeginOpen(ViewerApp& app, std::wstring path)
             result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
             {
                 return cancellation->load(std::memory_order_relaxed);
-            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard, stepProgress);
+            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard, stepProgress, assetSearchRoots);
         }
         catch (const std::length_error&)
         {
@@ -2017,6 +2050,117 @@ void RenderFallback(ViewerApp& app, HDC dc)
     SelectObject(dc, old);
 }
 
+// Composes the full warning text shown by the badge and the diagnostics menu:
+// the existing feature/texture warnings plus the named missing assets, so the
+// user can see exactly which files could not be found.
+std::wstring BuildModelWarningText(const ViewerApp& app)
+{
+    std::wstring text = app.warning;
+    if (!app.missingAssets.empty())
+    {
+        if (!text.empty()) text += L"\n";
+        text += L"Missing assets:";
+        for (const auto& asset : app.missingAssets)
+        {
+            text += L"\n  \u2022 ";
+            text += asset;
+        }
+    }
+    return text;
+}
+
+struct AssetWarningDialogContext
+{
+    const std::wstring* text = nullptr;
+    bool hasMissingAssets = false;
+};
+
+INT_PTR CALLBACK AssetWarningDialogProc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_INITDIALOG:
+    {
+        auto* context = reinterpret_cast<AssetWarningDialogContext*>(lParam);
+        SetWindowLongPtrW(dialog, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(context));
+        if (context && context->text)
+            SetDlgItemTextW(dialog, IDC_ASSETWARNING_TEXT, context->text->c_str());
+        if (context && context->hasMissingAssets)
+            SetDlgItemTextW(dialog, IDC_ASSETWARNING_LOCATE, L"Locate folder\u2026");
+        else
+            EnableWindow(GetDlgItem(dialog, IDC_ASSETWARNING_LOCATE), FALSE);
+        return TRUE;
+    }
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case IDC_ASSETWARNING_LOCATE:
+            EndDialog(dialog, IDC_ASSETWARNING_LOCATE);
+            return TRUE;
+        case IDOK:
+        case IDCANCEL:
+            EndDialog(dialog, IDCANCEL);
+            return TRUE;
+        default: break;
+        }
+        break;
+    case WM_CLOSE:
+        EndDialog(dialog, IDCANCEL);
+        return TRUE;
+    default: break;
+    }
+    return FALSE;
+}
+
+// Opens the folder picker, adds the chosen directory to the active search
+// roots, then re-imports the current model so the missing assets can resolve.
+// The chosen root is trusted (the user picked it) but still passes the same
+// canonical-containment check as every other sidecar root.
+void LocateMissingAssets(ViewerApp& app)
+{
+    if (app.currentPath.empty()) return;
+    ComPtr<IFileOpenDialog> dialog;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
+    {
+        MessageBoxW(app.window, L"Windows could not create the folder picker.", L"Missing assets", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    DWORD options = 0;
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    dialog->SetTitle(L"Select the folder that contains the missing assets");
+    const HRESULT shown = dialog->Show(app.window);
+    if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
+    if (FAILED(shown))
+    {
+        MessageBoxW(app.window, L"The folder picker stopped unexpectedly.", L"Missing assets", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    ComPtr<IShellItem> item;
+    PWSTR selectedPath = nullptr;
+    if (FAILED(dialog->GetResult(&item)) || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &selectedPath)))
+        return;
+    std::wstring folder(selectedPath);
+    CoTaskMemFree(selectedPath);
+    if (folder.empty()) return;
+    if (std::find(app.assetSearchRoots.begin(), app.assetSearchRoots.end(), folder) == app.assetSearchRoots.end())
+        app.assetSearchRoots.push_back(folder);
+    BeginOpen(app, app.currentPath, app.assetSearchRoots);
+}
+
+// Shows the warning/missing-asset detail dialog. When the warning stands for
+// missing assets, its action button opens the folder picker and re-imports.
+void ShowModelWarnings(ViewerApp& app)
+{
+    if (app.warning.empty() && app.missingAssets.empty()) return;
+    const std::wstring text = BuildModelWarningText(app);
+    AssetWarningDialogContext context{ &text, !app.missingAssets.empty() };
+    const INT_PTR result = DialogBoxParamW(app.instance, MAKEINTRESOURCEW(IDD_ASSETWARNING), app.window,
+                                            AssetWarningDialogProc, reinterpret_cast<LPARAM>(&context));
+    if (result == IDC_ASSETWARNING_LOCATE)
+        LocateMissingAssets(app);
+}
+
 void HandleCommand(ViewerApp& app, int id)
 {
     switch (id)
@@ -2048,7 +2192,7 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_CONTROLS: ShowControlsDialog(app.window); break;
     case ID_VIEW_SETTINGS: ToggleSettingsPanel(app); break;
     case ID_VIEW_DIAGNOSTICS:
-        MessageBoxW(app.window, app.warning.c_str(), L"Model warnings", MB_OK | MB_ICONWARNING);
+        ShowModelWarnings(app);
         break;
     case IDM_ABOUT:
         MessageBoxW(app.window, L"A native static viewer for glTF, OBJ, FBX, STL, PLY, the supported static 3MF preview subset, and USD-family models. 3MF includes Core, Materials, Production, and bounded Beam Lattice content. USD uses a fast isolated importer with a separate isolated OpenUSD compatibility host for bounded local composition.\n\nImports are bounded and local-only. No cloud, animation playback, editing, file modification, slicer-private multi-plate grouping, Explorer thumbnails, or persistent model cache.",
@@ -2530,6 +2674,10 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.errorSummary = app.errorSummary;
     overlay.errorDetails = app.errorDetails;
     overlay.warning = app.warning;
+    overlay.warningButtonRect = WarningButtonRect(app);
+    overlay.warningButtonHover = app.warningButtonHover;
+    overlay.warningButtonPressed = app.warningButtonPressed;
+    overlay.warningHasMissingAssets = !app.missingAssets.empty();
     overlay.renderDurationText = app.renderDurationText;
     overlay.renderTimerRunning = app.renderStartedMicroseconds != 0
         && (app.state == ViewerState::Loading || app.renderPresentationPending);
@@ -3212,7 +3360,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 return TRUE;
             }
             if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover
-                || app->lightingButtonHover>=0)
+                || app->warningButtonHover || app->lightingButtonHover>=0)
             {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
@@ -3232,11 +3380,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             app->chrome.hover = Chrome::Part::None;
             InvalidateRect(window, nullptr, FALSE);
         }
-        if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover || app->lightingButtonHover>=0)
+        if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover || app->warningButtonHover || app->lightingButtonHover>=0)
         {
             app->infoButtonHover = false;
             app->infoPanelCloseButtonHover = false;
             app->fullscreenButtonHover = false;
+            app->warningButtonHover = false;
             app->lightingButtonHover = -1;
             InvalidateRect(window, nullptr, FALSE);
         }
@@ -3357,6 +3506,15 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 UpdateTooltipTracking(*app);
                 return 0;
             }
+            const RECT warningBadge = WarningButtonRect(*app);
+            if (!IsRectEmpty(&warningBadge) && PtInRect(&warningBadge, downPoint))
+            {
+                SetCapture(window);
+                app->warningButtonPressed = true;
+                InvalidateRect(window, nullptr, FALSE);
+                UpdateTooltipTracking(*app);
+                return 0;
+            }
         }
         if (PointInViewport(*app, POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) }) && CanNavigate(*app))
         {
@@ -3460,7 +3618,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (app->chrome.pressed != Chrome::Part::None) return 0;
         if (app->infoButtonPressed || app->infoPanelCloseButtonPressed || app->fullscreenButtonPressed
-            || app->lightingButtonPressed>=0) return 0;
+            || app->warningButtonPressed || app->lightingButtonPressed>=0) return 0;
         if (app->pointerMode == PointerMode::None)
         {
             const RECT panelCloseButton = InfoPanelCloseButtonRect(*app);
@@ -3538,6 +3696,21 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     app->infoButtonHover = false;
                     app->fullscreenButtonHover = false;
                     app->lightingButtonHover=-1;
+                    InvalidateRect(window, nullptr, FALSE);
+                }
+                // Warning badge hover (above the bottom bar, below the rest of
+                // the viewport chrome). Tracked here so a click on it is never
+                // mistaken for a viewport orbit.
+                const RECT warningBadge = WarningButtonRect(*app);
+                const bool overWarning = !IsRectEmpty(&warningBadge) && PtInRect(&warningBadge, movePoint) != FALSE;
+                if (overWarning != app->warningButtonHover)
+                {
+                    app->warningButtonHover = overWarning;
+                    if (overWarning)
+                    {
+                        TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, window, 0 };
+                        TrackMouseEvent(&track);
+                    }
                     InvalidateRect(window, nullptr, FALSE);
                 }
             }
@@ -3691,6 +3864,17 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             UpdateTooltipTracking(*app);
             return 0;
         }
+        if (app->warningButtonPressed)
+        {
+            const POINT upPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            app->warningButtonPressed = false;
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+            const RECT warningBadge = WarningButtonRect(*app);
+            if (!IsRectEmpty(&warningBadge) && PtInRect(&warningBadge, upPoint)) ShowModelWarnings(*app);
+            UpdateTooltipTracking(*app);
+            return 0;
+        }
         if (app->pointerMode == PointerMode::Orbit && !app->selectDragged && CanNavigate(*app) &&
             NowSeconds() - app->selectDownSeconds < kClickMaxSeconds)
         {
@@ -3717,6 +3901,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_CAPTURECHANGED:
     case WM_CANCELMODE:
         app->lightingButtonPressed=-1;
+        app->warningButtonPressed=false;
         EndPointer(*app);
         return 0;
     case WM_LBUTTONDBLCLK:
@@ -3814,7 +3999,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path, complete->result.errorCode, complete->result.errorStage, complete->result.errorPhase);
             return 0;
         }
-        app->renderThread.FinishImport(complete->generation, complete->result.sourceIdentity);
+        app->renderThread.FinishImport(complete->generation, complete->result.sourceIdentity, complete->result.missingAssets);
         return 0;
     }
     case kRenderStartFailedMessage:
@@ -3864,6 +4049,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (!app->loadedModel || app->loadedModel->source.generationId != uploaded->generation) app->meshSelected = false;
             app->loadedModel = uploaded->metadata;
             app->warning=uploaded->metadata->warning;
+            app->missingAssets=uploaded->metadata->missingAssets;
         }
         app->currentPath = uploaded->path;
         app->filename = FileNameFromPath(uploaded->path);

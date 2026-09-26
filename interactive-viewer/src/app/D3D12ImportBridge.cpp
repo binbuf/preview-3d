@@ -8,6 +8,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstring>
 #include <cwctype>
 #include <functional>
@@ -23,6 +24,24 @@ std::wstring ToLower(std::wstring s)
         c = static_cast<wchar_t>(towlower(c));
     }
     return s;
+}
+
+// Sidecar references cross the protocol as the worker's own UTF-8 bytes.
+// User-facing text is wide; an undecodable reference is shown as its raw
+// bytes rather than silently dropped, so the user still sees that *something*
+// referenced by the model could not be found.
+std::wstring Utf8ReferenceToWide(const std::string& utf8)
+{
+    if (utf8.empty()) {
+        return {};
+    }
+    const int required = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (required <= 0) {
+        return std::wstring(utf8.begin(), utf8.end());
+    }
+    std::wstring wide(static_cast<size_t>(required), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wide.data(), required);
+    return wide;
 }
 
 std::wstring ExtensionOf(const std::wstring& path)
@@ -428,14 +447,28 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<bool()> isCancelled, std::function<void(ImportResult)> onBatch, uint64_t sectionBytes, bool delayBatchesForTesting, uint32_t faultForTesting,
                         std::function<uint32_t()> nextDetail,
                         std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows,
-                        std::function<void(const model_core::StepProgressNotice&)> onStepProgress)
+                        std::function<void(const model_core::StepProgressNotice&)> onStepProgress,
+                        std::vector<std::wstring> additionalSidecarSearchRoots)
 {
     ImportResult result;
+    // Aggregated on the import thread only: the onSidecarUnavailable callback
+    // and every onBatch call run sequentially on that same thread, so no
+    // synchronization is needed. Each batch carries the snapshot discovered so
+    // far, and the terminal result carries the complete list.
+    std::vector<std::wstring> missingAssets;
+    auto recordMissing = [&missingAssets](const std::string& referenceUtf8) {
+        std::wstring reference = Utf8ReferenceToWide(referenceUtf8);
+        if (reference.empty()) return;
+        if (std::find(missingAssets.begin(), missingAssets.end(), reference) == missingAssets.end())
+            missingAssets.push_back(std::move(reference));
+    };
     // Startup normally prewarms this pool, but direct/retry callers must not
     // depend on that timing. The coordinator makes repeated preparation cheap.
     EnsureImportSandboxPrepared();
 
     import_broker::ImportSessionRequest sessionRequest;
+    sessionRequest.additionalSidecarSearchRoots = std::move(additionalSidecarSearchRoots);
+    sessionRequest.onSidecarUnavailable = recordMissing;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
         && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf
         && format != SourceFormat::Usd && format != SourceFormat::Step;
@@ -613,7 +646,11 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         result.ok = true;
         return result;
     };
-    if (onBatch) sessionRequest.onBatch = [&](auto chunks) { onBatch(unpack(std::move(chunks))); };
+    if (onBatch) sessionRequest.onBatch = [&](auto chunks) {
+        auto batch = unpack(std::move(chunks));
+        batch.missingAssets = missingAssets;
+        onBatch(std::move(batch));
+    };
     auto session = import_broker::RunImportSession(sessionRequest);
     if (!session.ok) {
         if (delayBatchesForTesting && session.stage!=import_broker::ImportStage::Cancelled) std::fprintf(stderr,"Import smoke failure: stage %u code %u\n",unsigned(session.stage),unsigned(session.errorCode));
@@ -666,9 +703,11 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     {
         result = unpack(std::move(session.chunks));
         result.sourceIdentity = session.sourceIdentity;
+        result.missingAssets = missingAssets;
         return result;
     }
     result.sourceIdentity = session.sourceIdentity;
+    result.missingAssets = missingAssets;
     result.ok = true;
     return result;
 }

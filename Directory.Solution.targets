@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
   <PropertyGroup>
-    <ReleaseVersion Condition="'$(ReleaseVersion)' == ''">0.3.8</ReleaseVersion>
+    <ReleaseVersion Condition="'$(ReleaseVersion)' == ''">0.3.9</ReleaseVersion>
     <PortableTimestampUrl Condition="'$(PortableTimestampUrl)' == ''">https://timestamp.digicert.com</PortableTimestampUrl>
     <InstallerTimestampUrl Condition="'$(InstallerTimestampUrl)' == ''">https://timestamp.digicert.com</InstallerTimestampUrl>
   </PropertyGroup>

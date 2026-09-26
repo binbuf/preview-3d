@@ -429,3 +429,114 @@ TEST_CASE("The model's own folder wins over a same-named file in a sibling packa
     std::error_code error;
     std::filesystem::remove_all(sibling, error);
 }
+
+namespace {
+
+// A user-chosen asset root: an otherwise-unrelated directory the user points
+// the viewer at after a missing-asset warning. Mirrors the package fixture but
+// deliberately lives outside the primary file's directory tree.
+struct ScratchAssetRoot {
+    std::wstring path;
+
+    ScratchAssetRoot()
+    {
+        wchar_t tempDir[MAX_PATH]{};
+        REQUIRE(GetTempPathW(MAX_PATH, tempDir) != 0);
+        wchar_t uniquePath[MAX_PATH]{};
+        REQUIRE(GetTempFileNameW(tempDir, L"p3d", 0, uniquePath) != 0);
+        REQUIRE(DeleteFileW(uniquePath));
+        path = uniquePath;
+        REQUIRE(CreateDirectoryW(path.c_str(), nullptr));
+    }
+
+    void WriteAt(const std::wstring& relativeName, size_t sizeBytes = 4) const
+    {
+        const std::filesystem::path file = std::filesystem::path(path) / relativeName;
+        std::filesystem::create_directories(file.parent_path());
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        std::string content(sizeBytes, 'y');
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+
+    ~ScratchAssetRoot()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+    }
+};
+
+} // namespace
+
+TEST_CASE("A user-chosen asset root resolves a missing sidecar outside the primary tree",
+          "[sidecar-resolver][asset-root]")
+{
+    ScratchPackageDirectory model;   // <root>/source/scene.gltf, with no sidecars
+    ScratchAssetRoot assets;         // an unrelated directory the user picked
+    assets.WriteAt(L"tex.png");
+
+    // Without the asset root the reference stays contained to the primary's
+    // own tree and misses, exactly as before this fallback existed.
+    const auto contained = import_broker::ResolveSidecarPath(model.primaryCanonicalPath, "tex.png", 1024);
+    CHECK_FALSE(contained.file);
+    CHECK(contained.rejectionCode == model_core::ImportErrorCode::FileUnavailable);
+
+    // The authored relative path is ignored for a user root: only the leaf
+    // name is matched, so a reference into a directory the user's folder does
+    // not contain still resolves.
+    const std::vector<std::wstring> roots{ assets.path };
+    const auto resolved = import_broker::ResolveSidecarPath(
+        model.primaryCanonicalPath, "textures/tex.png", 1024, /*allowPackageBasenameLookup=*/true, roots);
+    REQUIRE(resolved.file);
+    CHECK(resolved.rejectionCode == model_core::ImportErrorCode::None);
+    CHECK(resolved.canonicalPath.find(L"tex.png") != std::wstring::npos);
+}
+
+TEST_CASE("A user-chosen asset root also searches its texture subfolders",
+          "[sidecar-resolver][asset-root]")
+{
+    ScratchPackageDirectory model;
+    ScratchAssetRoot assets;
+    assets.WriteAt(L"textures\\pattern.png");
+
+    const std::vector<std::wstring> roots{ assets.path };
+    const auto resolved = import_broker::ResolveSidecarPath(
+        model.primaryCanonicalPath, "images/pattern.png", 1024, /*allowPackageBasenameLookup=*/true, roots);
+    REQUIRE(resolved.file);
+    CHECK(resolved.canonicalPath.find(L"pattern.png") != std::wstring::npos);
+}
+
+TEST_CASE("A user-chosen asset root resolves non-image sidecars by exact name",
+          "[sidecar-resolver][asset-root]")
+{
+    ScratchPackageDirectory model;
+    ScratchAssetRoot assets;
+    assets.WriteAt(L"mesh.bin");
+
+    const std::vector<std::wstring> roots{ assets.path };
+    const auto resolved = import_broker::ResolveSidecarPath(
+        model.primaryCanonicalPath, "data/mesh.bin", 1024, /*allowPackageBasenameLookup=*/true, roots);
+    REQUIRE(resolved.file);
+    CHECK(resolved.canonicalPath.find(L"mesh.bin") != std::wstring::npos);
+}
+
+TEST_CASE("A user-chosen asset root is still bounded to its own directory tree",
+          "[sidecar-resolver][asset-root][security]")
+{
+    ScratchPackageDirectory model;
+    ScratchAssetRoot assets;
+    // A same-named file one level above the chosen root must never be reached,
+    // because only the root and its texture subfolders are searched.
+    const std::filesystem::path parent = std::filesystem::path(assets.path).parent_path();
+    const std::filesystem::path outside = parent / (L"outside-" +
+        std::filesystem::path(assets.path).filename().wstring() + L".png");
+    { std::ofstream out(outside, std::ios::binary); out << "zzzz"; }
+
+    const std::vector<std::wstring> roots{ assets.path };
+    const auto resolved = import_broker::ResolveSidecarPath(
+        model.primaryCanonicalPath, "tex.png", 1024, /*allowPackageBasenameLookup=*/true, roots);
+    CHECK_FALSE(resolved.file);
+    CHECK(resolved.rejectionCode == model_core::ImportErrorCode::FileUnavailable);
+
+    std::error_code error;
+    std::filesystem::remove(outside, error);
+}

@@ -623,6 +623,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     if (request.onSourceOpened) request.onSourceOpened(sourceIdentity);
     uint64_t allSourceBytes = primaryBytes;
     uint64_t accumulatedBytes = 0;
+    std::vector<std::string> missingSidecarReferencesUtf8;
     std::vector<SourceChunkRange> sourceCatalog;
     platform::Win32Handle outputSection = CreateSharedSection(static_cast<SIZE_T>(request.sectionByteCapacity));
     if (!outputSection) {
@@ -1168,10 +1169,14 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
 
             model_core::RequestSidecarFileNotice sidecar{};
             std::memcpy(&sidecar, received.payload.data(), sizeof(sidecar));
+            std::string requestedRelative(
+                reinterpret_cast<const char*>(sidecar.relativePathUtf8),
+                std::min<size_t>(sidecar.relativePathLength, model_core::kMaxSidecarRelativePathBytes));
             auto serviced = ServiceSidecarRequest(workerProcess, opened.canonicalPath, sidecar,
                                                   request.maxSidecarFileBytes,
                                                   12ull * 1024 * 1024 * 1024 - allSourceBytes,
-                                                  /*allowPackageBasenameLookup=*/true);
+                                                  /*allowPackageBasenameLookup=*/true,
+                                                  request.additionalSidecarSearchRoots);
 
             bool sentReply = false;
             if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {
@@ -1180,6 +1185,13 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                                              model_core::ControlOpcode::SidecarFileReady, ready,
                                                              sizeof(*ready));
             } else if (const auto* unavailable = std::get_if<model_core::SidecarFileUnavailableNotice>(&serviced)) {
+                if (missingSidecarReferencesUtf8.size() < 256
+                    && std::find(missingSidecarReferencesUtf8.begin(),
+                                 missingSidecarReferencesUtf8.end(),
+                                 requestedRelative) == missingSidecarReferencesUtf8.end()) {
+                    missingSidecarReferencesUtf8.push_back(requestedRelative);
+                    if (request.onSidecarUnavailable) request.onSidecarUnavailable(requestedRelative);
+                }
                 sentReply = model_core::WriteControlMessage(controlInput,
                                                              model_core::ControlOpcode::SidecarFileUnavailable,
                                                              unavailable, sizeof(*unavailable));
@@ -1430,6 +1442,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     result.batchCount = acceptance.nextBatchIndex;
     result.sourceCatalog = std::move(sourceCatalog);
     result.sourceIdentity = sourceIdentity;
+    result.missingSidecarReferencesUtf8 = std::move(missingSidecarReferencesUtf8);
     result.workerProcessId = GetProcessId(workerProcess);
     result.stepProgressCount = stepProgressCount;
     result.lastStepProgress = lastStepProgress;

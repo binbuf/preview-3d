@@ -8,7 +8,20 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
-## [Unreleased]
+## [0.3.9] - 2026-09-25
+
+### Added
+
+- The bottom-right warning badge is now an interactive control, and missing
+  sidecar assets are named. Opening a model whose glTF/OBJ/FBX/USD sidecars
+  cannot be found (a texture, `.bin` buffer, `.mtl` file, or USD layer) shows
+  the badge; clicking it lists the warning text and every unresolved reference.
+  A **Locate folder…** button opens a folder picker, adds the chosen directory
+  as an asset search root, and re-imports the model so the assets can resolve.
+  The chosen root is matched by file name (in the folder and its
+  `texture`/`textures` subfolders) and still goes through the same canonical
+  containment and size checks, so it can never address anything outside itself.
+  The existing "Model warnings…" menu entry opens the same dialog.
 
 ### Fixed
 

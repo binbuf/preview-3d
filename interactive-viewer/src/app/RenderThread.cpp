@@ -42,6 +42,36 @@ bool IsDeviceLoss(HRESULT value)
         || value == DXGI_ERROR_DEVICE_HUNG;
 }
 
+// Merge a batch's missing-asset references into the accumulating model
+// metadata without duplicates; request order is preserved.
+void MergeMissingAssets(ModelData& metadata, const std::vector<std::wstring>& assets)
+{
+    for (const auto& asset : assets) {
+        if (asset.empty()) continue;
+        if (std::find(metadata.missingAssets.begin(), metadata.missingAssets.end(), asset)
+            == metadata.missingAssets.end())
+            metadata.missingAssets.push_back(asset);
+    }
+}
+
+// The single place the user-visible warning banner text is composed, so the
+// existing feature/texture warnings and the missing-asset warning can never
+// drift apart across the terminal/detail/per-batch metadata snapshots.
+void RebuildModelWarning(ModelData& metadata)
+{
+    metadata.warning.clear();
+    if (metadata.importStatus.optionalFeatureWarnings)
+        metadata.warning = L"Some optional glTF features are not supported. Their fallback representation is shown.";
+    if (metadata.importStatus.textureWarnings) {
+        metadata.warning += (metadata.warning.empty() ? L"" : L"\n");
+        metadata.warning += L"Some textures could not be loaded. Fallback textures are shown.";
+    }
+    if (!metadata.missingAssets.empty()) {
+        metadata.warning += (metadata.warning.empty() ? L"" : L"\n");
+        metadata.warning += L"Some referenced assets could not be found.";
+    }
+}
+
 } // namespace
 
 RenderThread::~RenderThread()
@@ -247,7 +277,8 @@ std::function<void(d3d12_import_bridge::ImportResult)> RenderThread::BeginImport
     };
 }
 
-void RenderThread::FinishImport(std::uint64_t generation, model_core::FileIdentity sourceIdentity)
+void RenderThread::FinishImport(std::uint64_t generation, model_core::FileIdentity sourceIdentity,
+                                std::vector<std::wstring> missingAssets)
 {
     // The terminal marker follows every accepted batch. It carries no payload
     // and takes no capacity; at most one marker exists for the active generation.
@@ -259,6 +290,7 @@ void RenderThread::FinishImport(std::uint64_t generation, model_core::FileIdenti
         task.terminal = true;
         task.path = uploads_->path;
         task.result.sourceIdentity = sourceIdentity;
+        task.result.missingAssets = std::move(missingAssets);
         uploads_->tasks.push_back(std::move(task));
         uploads_->changed.notify_all();
     }
@@ -736,6 +768,10 @@ void RenderThread::PumpUploads(HWND window)
     message->terminal = pub.task.terminal;
     message->refinement=pub.task.result.detail;
     if (pub.task.terminal) {
+        if (stagedMetadata_) {
+            MergeMissingAssets(*stagedMetadata_, pub.task.result.missingAssets);
+            RebuildModelWarning(*stagedMetadata_);
+        }
         message->ok = !stagedFailed_ && (!stagedProxyMode_ || stagedProxyComplete_) && modelGeneration_ == pub.task.generation && path_.hasModel && stagedHaveBounds_ && stagedMetadata_;
         if (!message->ok) { message->errorCode = model_core::ImportErrorCode::EmptyGeometry; message->errorDetails = L"The import completed without displayable geometry."; }
         if (message->ok && stagedMetadata_) {
@@ -779,6 +815,8 @@ void RenderThread::PumpUploads(HWND window)
             message->errorCode=model_core::ImportErrorCode::UploadFailure;
             message->errorDetails=descriptorError;
         }
+        MergeMissingAssets(*stagedMetadata_, pub.task.result.missingAssets);
+        RebuildModelWarning(*stagedMetadata_);
         message->metadata=std::make_shared<const ModelData>(*stagedMetadata_);
     } else {
         auto& metadata = *stagedMetadata_;
@@ -903,13 +941,8 @@ void RenderThread::PumpUploads(HWND window)
         if (stagedProxyMode_ && !stagedPreviewOnly_) scannedPrimitives_.store(metadata.triangleCount+metadata.pointCount);
         metadata.importStatus.textureWarnings = std::max(metadata.importStatus.textureWarnings,
             std::max(pub.task.result.textureWarningCount, pub.task.result.status.textureWarnings));
-        metadata.warning.clear();
-        if (metadata.importStatus.optionalFeatureWarnings)
-            metadata.warning = L"Some optional glTF features are not supported. Their fallback representation is shown.";
-        if (metadata.importStatus.textureWarnings) {
-            metadata.warning += (metadata.warning.empty() ? L"" : L"\n");
-            metadata.warning += L"Some textures could not be loaded. Fallback textures are shown.";
-        }
+        MergeMissingAssets(metadata, pub.task.result.missingAssets);
+        RebuildModelWarning(metadata);
         D3D12ViewerPath::ModelResources displaced;
         for (auto& texture : pub.resources.textures) {
             auto old=std::find_if(destination.textures.begin(),destination.textures.end(),

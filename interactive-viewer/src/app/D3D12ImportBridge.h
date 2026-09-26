@@ -102,6 +102,11 @@ struct ImportResult {
     model_core::FileIdentity sourceIdentity{};
     uint32_t textureWarningCount = 0;
     model_core::ImportStatusPayload status{};
+    // Authored relative references whose sidecar assets could not be found,
+    // deduplicated, in request order. Non-empty only when the model loaded but
+    // some referenced asset is missing; the viewer offers a folder picker to
+    // locate them and re-import.
+    std::vector<std::wstring> missingAssets;
     bool forceUploadFailureForTesting = false;
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
     import_broker::ImportStage errorStage = import_broker::ImportStage::Completed;
@@ -136,7 +141,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<uint32_t()> nextDetail = {},
                         std::function<void(const model_core::FileIdentity&)> onInitialComplete = {},
                         std::function<bool(uint64_t)> cpuBudgetAllows = {},
-                        std::function<void(const model_core::StepProgressNotice&)> onStepProgress = {});
+                        std::function<void(const model_core::StepProgressNotice&)> onStepProgress = {},
+                        std::vector<std::wstring> additionalSidecarSearchRoots = {});
 
 // Creates the import worker's AppContainer profile and grants it
 // read+execute on the worker's own directory -- without this the sandboxed
