@@ -1349,12 +1349,23 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     if (!overlay.warning.empty() && overlay.hasModel)
     {
         const float size = Scale(30, scale);
-        const float right = contentRight - Scale(14, scale);
-        const float bottom = contentBottom - Scale(14, scale);
-        SetBrush(D2D1::ColorF(0xFF9F0A, 0.92f));
-        d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(right - size * 0.5f, bottom - size * 0.5f),
-            size * 0.5f, size * 0.5f), overlayBrush.Get());
-        DrawText(L"!", filenameFormat.Get(), D2D1::RectF(right - size, bottom - size + Scale(2, scale), right, bottom),
+        RECT badge = overlay.warningButtonRect;
+        if (badge.right <= badge.left || badge.bottom <= badge.top) {
+            const float right = contentRight - Scale(14, scale);
+            const float bottom = contentBottom - Scale(14, scale);
+            badge = RECT{ static_cast<LONG>(right - size), static_cast<LONG>(bottom - size),
+                          static_cast<LONG>(right), static_cast<LONG>(bottom) };
+        }
+        const float left = static_cast<float>(badge.left);
+        const float top = static_cast<float>(badge.top);
+        const float diameter = static_cast<float>(badge.right - badge.left);
+        const D2D1_COLOR_F badgeFill = overlay.warningButtonPressed ? D2D1::ColorF(0xD98A00, 1.0f)
+            : overlay.warningButtonHover ? D2D1::ColorF(0xFFB340, 1.0f)
+            : D2D1::ColorF(0xFF9F0A, 0.92f);
+        SetBrush(badgeFill);
+        d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(left + diameter * 0.5f, top + diameter * 0.5f),
+            diameter * 0.5f, diameter * 0.5f), overlayBrush.Get());
+        DrawText(L"!", filenameFormat.Get(), D2D1::RectF(left, top + Scale(2, scale), left + diameter, top + diameter),
             D2D1::ColorF(0xFFFFFF), DWRITE_TEXT_ALIGNMENT_CENTER);
     }
 

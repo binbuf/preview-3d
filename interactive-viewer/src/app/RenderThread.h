@@ -214,7 +214,8 @@ public:
     // Only this background sink may wait for capacity; cancellation wakes it.
     std::function<void(d3d12_import_bridge::ImportResult)> BeginImport(
         std::uint64_t generation, std::wstring path, std::shared_ptr<std::atomic_bool> cancellation);
-    void FinishImport(std::uint64_t generation, model_core::FileIdentity sourceIdentity = {});
+    void FinishImport(std::uint64_t generation, model_core::FileIdentity sourceIdentity = {},
+                      std::vector<std::wstring> missingAssets = {});
     void CancelUploads();
     void SetSmokeUploads(unsigned copyMs, uint64_t sectionBytes, bool delayBatches) {
         copyDelayMs_ = copyMs; smokeSectionBytes_ = sectionBytes; delayBatches_ = delayBatches;

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <string>
 #include <variant>
+#include <vector>
 #include <windows.h>
 
 namespace import_broker {
@@ -29,10 +30,15 @@ namespace import_broker {
 // fallback for the downloaded `<model>/source/...` + `<model>/textures/`
 // layout; the trusted host enables it for local file imports, never from
 // worker-provided text.
+//
+// additionalSearchRoots is forwarded to ResolveSidecarPath's user-chosen
+// asset-root fallback (see that header). It is supplied only by the trusted
+// host after the user picks a folder.
 std::variant<model_core::SidecarFileReadyNotice, model_core::SidecarFileUnavailableNotice>
 ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonicalPath,
                       const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes,
                       uint64_t remainingSourceBytes = UINT64_MAX,
-                      bool allowPackageBasenameLookup = false);
+                      bool allowPackageBasenameLookup = false,
+                      const std::vector<std::wstring>& additionalSearchRoots = {});
 
 } // namespace import_broker

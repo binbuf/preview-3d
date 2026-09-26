@@ -168,6 +168,16 @@ struct ImportSessionRequest {
     // kill-on-close) rather than servicing forever.
     uint32_t maxSidecarRequestsPerGeneration = 0;
     uint64_t maxSidecarFileBytes = 0;
+    // User-chosen asset roots tried last when a sidecar reference misses the
+    // primary directory tree and the package lookup. Supplied only by the
+    // trusted host after a folder-picker selection; each is still canonical-
+    // containment checked by ResolveSidecarPath. Empty for ordinary opens.
+    std::vector<std::wstring> additionalSidecarSearchRoots;
+    // Called on the import thread once per sidecar request that could not be
+    // resolved, with the authored relative reference (UTF-8, bounded). Lets
+    // the caller name the missing assets to the user. Never called for a
+    // resolved sidecar. Optional.
+    std::function<void(const std::string& relativeReferenceUtf8)> onSidecarUnavailable;
     // Job Object private-commit ceiling for this import's worker. Injectable
     // rather than hardcoded so a test can prove enforcement end-to-end at a
     // small, fast cap -- the same seam DxgiBudgetMonitor's QueryFn already
@@ -282,6 +292,10 @@ struct ImportSessionResult {
     // Geometry provenance only; no normalized payload or source bytes.
     std::vector<SourceChunkRange> sourceCatalog;
     model_core::FileIdentity sourceIdentity{};
+    // Authored relative references whose sidecar resolution failed, in first-
+    // request order with duplicates removed. Empty when every reference
+    // resolved. UTF-8, exactly as the worker requested them.
+    std::vector<std::string> missingSidecarReferencesUtf8;
     // Test/qualification evidence only; no handle authority crosses this
     // boundary. Sequential pooled imports can prove reuse by stable PID.
     uint32_t workerProcessId = 0;

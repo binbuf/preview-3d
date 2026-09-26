@@ -38,6 +38,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace import_broker {
 
@@ -54,9 +55,21 @@ struct SidecarResolution {
 // reference as the worker's own parser decoded it (fastgltf::URI::path(),
 // UTF-8) -- never re-decoded or re-interpreted as a URI here, just checked
 // as a plain relative filesystem path.
+//
+// additionalSearchRoots: user-chosen directories offered as a last resort
+// after both the primary directory tree and the package lookup miss. These
+// exist because a model opened from elsewhere can reference assets the user
+// keeps in a separate folder. Each root is trusted only because the trusted
+// UI picked it; the same canonical-containment rule still applies, so a
+// reparse point inside a root cannot address anything outside that root.
+// Only the reference's leaf file name is matched under each root (in the
+// root itself and its `texture`/`textures` subfolders), never the authored
+// relative path -- a user points at "the folder the assets are in", which
+// need not mirror the document's own directory layout.
 SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
                                       const std::string& relativeReferenceUtf8,
                                       uint64_t maxSidecarFileBytes,
-                                      bool allowPackageBasenameLookup = false);
+                                      bool allowPackageBasenameLookup = false,
+                                      const std::vector<std::wstring>& additionalSearchRoots = {});
 
 } // namespace import_broker

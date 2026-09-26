@@ -8,7 +8,8 @@ namespace import_broker {
 std::variant<model_core::SidecarFileReadyNotice, model_core::SidecarFileUnavailableNotice>
 ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonicalPath,
                       const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes,
-                      uint64_t remainingSourceBytes, bool allowPackageBasenameLookup)
+                      uint64_t remainingSourceBytes, bool allowPackageBasenameLookup,
+                      const std::vector<std::wstring>& additionalSearchRoots)
 {
     model_core::SidecarFileUnavailableNotice unavailable{};
     unavailable.generationId = request.generationId;
@@ -21,7 +22,8 @@ ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonical
                                        request.relativePathLength);
 
     SidecarResolution resolution = ResolveSidecarPath(primaryCanonicalPath, relativeReferenceUtf8,
-                                                      maxSidecarFileBytes, allowPackageBasenameLookup);
+                                                      maxSidecarFileBytes, allowPackageBasenameLookup,
+                                                      additionalSearchRoots);
     if (!resolution.file) {
         unavailable.errorCode = static_cast<uint32_t>(resolution.rejectionCode);
         return unavailable;

@@ -92,6 +92,10 @@ struct ModelData
     double relativeMax[3]{};
     bool boundsVerified = false;
     std::wstring warning;
+    // Authored relative references whose sidecar assets could not be found,
+    // deduplicated and in request order. The viewer lists these and offers a
+    // folder picker so the user can point at where the assets live.
+    std::vector<std::wstring> missingAssets;
     model_core::ImportStatusPayload importStatus{};
     ModelStats stats;
 

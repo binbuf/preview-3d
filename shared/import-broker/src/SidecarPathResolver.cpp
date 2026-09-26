@@ -305,12 +305,52 @@ std::optional<std::filesystem::path> FindPackagedImage(const std::filesystem::pa
     return std::nullopt;
 }
 
+// A user-chosen asset root: match the reference's leaf file name in the root
+// itself and its `texture`/`textures` subfolders only. The authored relative
+// path is deliberately ignored here -- the folder the user points at is the
+// one that holds the assets, not a mirror of the document's directory tree.
+// Images still get the canonical-name match; every other allowed sidecar
+// (.bin, .mtl, USD layer) must match its exact file name.
+std::optional<std::filesystem::path> FindAssetInUserRoot(const std::filesystem::path& root,
+                                                         const std::wstring& leafName,
+                                                         bool image)
+{
+    if (leafName.empty()
+        || leafName.find(L'*') != std::wstring::npos
+        || leafName.find(L'?') != std::wstring::npos) {
+        return std::nullopt;
+    }
+    const std::filesystem::path candidates[] = { root, root / L"texture", root / L"textures" };
+    const std::optional<std::wstring> canonicalLeaf = image
+        ? std::optional<std::wstring>(CanonicalImageKey(leafName)) : std::nullopt;
+    for (const auto& directory : candidates) {
+        WIN32_FIND_DATAW entry{};
+        HANDLE find = FindFirstFileW((directory / leafName).c_str(), &entry);
+        if (find != INVALID_HANDLE_VALUE) {
+            FindClose(find);
+            if ((entry.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0) {
+                const std::filesystem::path exact = directory / entry.cFileName;
+                if (image ? HasImageTextureExtension(exact) : HasAllowedSidecarExtension(exact)) {
+                    return exact;
+                }
+            }
+        }
+        if (canonicalLeaf) {
+            if (const auto normalized = FindNormalizedImage(directory, *canonicalLeaf)) {
+                return normalized;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
                                       const std::string& relativeReferenceUtf8,
                                       uint64_t maxSidecarFileBytes,
-                                      bool allowPackageBasenameLookup)
+                                      bool allowPackageBasenameLookup,
+                                      const std::vector<std::wstring>& additionalSearchRoots)
 {
     if (relativeReferenceUtf8.empty()) {
         return Reject(ImportErrorCode::UnsafeReference, L"empty sidecar reference");
@@ -373,12 +413,37 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
     // `textures/` subfolders, and the same under the parent package root, in
     // that order; the first exact image match wins. Required buffers, MTL
     // files and USD layers are never resolved this way.
-    if (!allowPackageBasenameLookup || !HasImageTextureExtension(referencePath)) {
-        return direct;
+    if (allowPackageBasenameLookup && HasImageTextureExtension(referencePath)) {
+        if (const auto match = FindPackagedImage(primaryDirectory, referencePath.filename().wstring())) {
+            if (SidecarResolution packaged = AcceptCandidate(*match, DirectoryPrefix(PackageRootFor(primaryDirectory)),
+                                                              maxSidecarFileBytes);
+                packaged.file) {
+                return packaged;
+            }
+        }
     }
-    if (const auto match = FindPackagedImage(primaryDirectory, referencePath.filename().wstring())) {
-        return AcceptCandidate(*match, DirectoryPrefix(PackageRootFor(primaryDirectory)),
-                               maxSidecarFileBytes);
+
+    // User-chosen asset roots, tried last. The trusted UI picked each one, but
+    // every match still runs the full canonical-containment check against that
+    // same root, so a reparse point inside it cannot escape -- exactly the
+    // boundary the primary directory already enforces.
+    if (HasAllowedSidecarExtension(referencePath)) {
+        const bool image = HasImageTextureExtension(referencePath);
+        const std::wstring leafName = referencePath.filename().wstring();
+        for (const auto& root : additionalSearchRoots) {
+            const std::filesystem::path rootPath(root);
+            if (rootPath.empty()) {
+                continue;
+            }
+            const auto match = FindAssetInUserRoot(rootPath, leafName, image);
+            if (!match) {
+                continue;
+            }
+            SidecarResolution userResolved = AcceptCandidate(*match, DirectoryPrefix(rootPath), maxSidecarFileBytes);
+            if (userResolved.file) {
+                return userResolved;
+            }
+        }
     }
     return direct;
 }

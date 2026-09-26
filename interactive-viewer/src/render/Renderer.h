@@ -50,6 +50,15 @@ struct OverlayInfo
     std::wstring errorSummary;
     std::wstring errorDetails;
     std::wstring warning;
+    // Bottom-right warning badge hit rect (client px). Empty while no warning
+    // badge is shown. Drawn from this same rect so drawing and hit-testing can
+    // never disagree.
+    RECT warningButtonRect{};
+    bool warningButtonHover = false;
+    bool warningButtonPressed = false;
+    // True when the warning badge stands for unresolved sidecar assets, so the
+    // activation path offers a folder picker instead of only an explanation.
+    bool warningHasMissingAssets = false;
     std::wstring failureContext;
     std::wstring loadingStatus;
     // Set after the successful Present that includes the final visible
