@@ -1170,7 +1170,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             std::memcpy(&sidecar, received.payload.data(), sizeof(sidecar));
             auto serviced = ServiceSidecarRequest(workerProcess, opened.canonicalPath, sidecar,
                                                   request.maxSidecarFileBytes,
-                                                  12ull * 1024 * 1024 * 1024 - allSourceBytes);
+                                                  12ull * 1024 * 1024 * 1024 - allSourceBytes,
+                                                  /*allowPackageBasenameLookup=*/true);
 
             bool sentReply = false;
             if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {

@@ -8,9 +8,12 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <span>
+#include <string>
 #include <ktx.h>
 
 using Microsoft::WRL::ComPtr;
@@ -201,6 +204,119 @@ TEST_CASE("Corrupt optional texture uses deterministic checker and one bounded w
     TempGlb invalidIndex(garbage,"{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}","image/png",UINT32_MAX);
     result=import_broker::RunImportSession(invalidIndex.Request());REQUIRE(result.ok);
     CHECK(std::count_if(result.chunks.begin(),result.chunks.end(),[](const auto& chunk){return chunk.descriptor.topology==ChunkTopology::TextureWarning;})==1);
+}
+
+namespace {
+struct ScratchGltfPackage {
+    std::filesystem::path root;
+    std::filesystem::path path;
+    explicit ScratchGltfPackage(std::wstring_view extension, bool inSource = true) {
+        static std::atomic_uint64_t next{0};
+        root = std::filesystem::temp_directory_path() / (L"Preview3D-package-"
+            + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64())
+            + L"-" + std::to_wstring(next.fetch_add(1)));
+        if (inSource) {
+            REQUIRE(std::filesystem::create_directories(root / L"source"));
+            path = root / L"source" / (L"scene." + std::wstring(extension));
+        } else {
+            REQUIRE(std::filesystem::create_directories(root));
+            path = root / (L"scene." + std::wstring(extension));
+        }
+    }
+    ~ScratchGltfPackage() { std::error_code error; std::filesystem::remove_all(root, error); }
+    void Write(const std::filesystem::path& name, std::span<const std::byte> bytes) {
+        const std::filesystem::path target = root / name;
+        std::filesystem::create_directories(target.parent_path());
+        std::ofstream output(target, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+        REQUIRE(output.good());
+    }
+    void WriteText(const std::filesystem::path& name, const std::string& text) {
+        Write(name, std::as_bytes(std::span(text)));
+    }
+};
+
+import_broker::ImportSessionRequest PackageRequest(const ScratchGltfPackage& package, uint64_t generation)
+{
+    import_broker::ImportSessionRequest request;
+    request.workerExePath = sandbox_test_support::WorkerExePath();
+    request.sourcePath = package.path.wstring();
+    request.format = import_broker::ImportFormat::Gltf;
+    request.generationId = generation;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 64;
+    request.maxChunkBatchesPerGeneration = 32;
+    request.maxSidecarRequestsPerGeneration = 16;
+    request.maxSidecarFileBytes = 1024 * 1024;
+    return request;
+}
+
+std::string PackageGltfDocument(const std::string& imageUri)
+{
+    return R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
+        R"("meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],)"
+        R"("materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],)"
+        R"("textures":[{"source":0}],"images":[{"uri":")" + imageUri + R"("}],)"
+        R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],)"
+        R"("bufferViews":[{"buffer":0,"byteLength":36}],)"
+        R"("buffers":[{"uri":"mesh.bin","byteLength":36}]})";
+}
+
+void ExpectPackageImageResolves(const ScratchGltfPackage& package, uint64_t generation)
+{
+    const auto result = import_broker::RunImportSession(PackageRequest(package, generation));
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.batchCount);
+    REQUIRE(result.ok);
+    bool geometry = false, image = false, warning = false;
+    for (const auto& chunk : result.chunks) {
+        geometry |= chunk.descriptor.topology == ChunkTopology::TriangleList;
+        image |= chunk.descriptor.topology == ChunkTopology::Image;
+        warning |= chunk.descriptor.topology == ChunkTopology::TextureWarning;
+    }
+    CHECK(geometry);
+    CHECK(image);
+    CHECK_FALSE(warning);
+}
+} // namespace
+
+TEST_CASE("A model in a download package resolves its textures by file name",
+          "[texture-progressive][package-lookup]")
+{
+    ComScope com;
+    const auto png = Encode(CLSID_WICPngEncoder, 8, 8, true);
+    const std::array<float, 9> positions{ -1, -1, 0, 1, -1, 0, 0, 1, 0 };
+
+    // `model/source/model.gltf` + `model/textures/*`.
+    ScratchGltfPackage sourced(L"gltf");
+    sourced.Write(L"source/mesh.bin", std::as_bytes(std::span(positions)));
+    sourced.WriteText(L"source/scene.gltf", PackageGltfDocument("textures/pattern.png"));
+    sourced.Write(L"textures/pattern.png", png);
+    ExpectPackageImageResolves(sourced, 205);
+
+    // The same package as Blender writes it: the URI is relative to the glTF,
+    // so the authored reference is `../textures/pattern.png`. The traversal is
+    // never followed; only the file name is used.
+    ScratchGltfPackage blenderStyle(L"gltf");
+    blenderStyle.Write(L"source/mesh.bin", std::as_bytes(std::span(positions)));
+    blenderStyle.WriteText(L"source/scene.gltf", PackageGltfDocument("../textures/pattern.png"));
+    blenderStyle.Write(L"textures/pattern.png", png);
+    ExpectPackageImageResolves(blenderStyle, 208);
+
+    // `model/model.gltf` + `model/texture/*`: the model itself at the package
+    // root, textures in a singular `texture/` folder.
+    ScratchGltfPackage rooted(L"gltf", /*inSource=*/false);
+    rooted.Write(L"mesh.bin", std::as_bytes(std::span(positions)));
+    rooted.WriteText(L"scene.gltf", PackageGltfDocument("textures/pattern.png"));
+    rooted.Write(L"texture/pattern.png", png);
+    ExpectPackageImageResolves(rooted, 206);
+
+    // An image beside the model matches even when the authored reference
+    // includes a directory that is not present.
+    ScratchGltfPackage sameFolder(L"gltf", /*inSource=*/false);
+    sameFolder.Write(L"mesh.bin", std::as_bytes(std::span(positions)));
+    sameFolder.WriteText(L"scene.gltf", PackageGltfDocument("images/pattern.png"));
+    sameFolder.Write(L"pattern.png", png);
+    ExpectPackageImageResolves(sameFolder, 207);
 }
 
 TEST_CASE("KTX2 and Basis preserve all validated mip levels and semantic targets", "[texture-transcode]")

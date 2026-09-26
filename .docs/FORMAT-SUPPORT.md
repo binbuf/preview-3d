@@ -8,9 +8,9 @@ For install and build instructions, see the [README](../README.md).
 
 | Format | Support |
 | --- | --- |
-| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, bounded Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP textures, material texture slots, texture transforms, and `KHR_materials_pbrSpecularGlossiness` approximated as diffuse albedo plus a dielectric response |
+| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, bounded Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP textures, material texture slots, texture transforms, `KHR_materials_pbrSpecularGlossiness` approximated as diffuse albedo plus a dielectric response, and `KHR_materials_transmission`/`KHR_materials_ior` approximated as Fresnel-weighted glass (an authored index of refraction at or below 1 keeps the surface opaque, since there is no optical interface) |
 | Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars; ufbx polygon triangulation, smoothing/generated normals, UVs, vertex colors, object/group meshes, MTL material factors, and broker-approved base-color, normal/bump, and emissive maps |
-| FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose; supported skin and blend deformation is baked |
+| FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose; supported skin and blend deformation is baked. Image references that carry the authoring machine's absolute path are reduced to their file name and resolve through the package lookup below |
 | STL | ASCII and binary |
 | PLY | ASCII and binary triangle meshes and point clouds |
 | 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews |
@@ -20,6 +20,64 @@ For install and build instructions, see the [README](../README.md).
 `.mtl` is always a sidecar and is never a primary open type. The Open dialog,
 command line, drag/drop, single-instance activation, Retry, and Open With all
 accept the same direct formats, case-insensitively.
+
+## Downloaded-package texture layout
+
+Many downloaded models use a package layout rather than keeping every file
+beside the model:
+
+```
+model/
+  source/model.fbx          # or .glb/.gltf/.obj/.usd/.usdc/...
+  textures/*.png            # sibling folder
+```
+
+```
+model/
+  model.gltf                # model at the package root
+  texture/*.png             # or textures/, singular or plural
+  pattern.png               # images beside the model
+```
+
+For a local file import, a sidecar image reference that does not resolve
+directly is looked up, in this exact order:
+
+1. beside the model;
+2. `<model dir>/texture`;
+3. `<model dir>/textures`;
+4. `<parent>/texture`;
+5. `<parent>/textures`.
+
+The first directory with a matching image wins, so the closest copy is
+preferred and two model packages in the same parent cannot collide. The search
+is **image-only** (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff`, `.webp`,
+`.ktx2`); a missing `.bin` buffer, `.mtl`, or USD layer is never resolved this
+way. Names are matched exactly first, then with case, space/underscore, and
+`jpg`/`jpeg`/`tif`/`tiff` spelling normalized, plus material-role
+abbreviations (`_BaseColor`/`_B`, `_Normal`/`_N`, `_Roughness`/`_R`,
+`_Emissive`/`_E`, `_Metallic`/`_M`, `_Glossiness`/`_G`) and a trailing download
+annotation such as `_(Personalizado)`, so files renamed by a download site
+still match. A name containing wildcards is never used as a pattern, and the
+matched file still passes the same canonical containment and size checks as any
+other sidecar. Traversal, UNC/device, alternate-data-stream, and URL references
+are rejected before any search and never resolve this way. The authored path
+itself is never opened.
+
+FBX additionally recovers a material whose base color was not wired at all but
+whose map sits in a texture folder: the material name is used to ask for
+`<Name>_Base_color.png`/`.jpg`, resolved through the same package lookup (one
+or two bounded requests per material, never enough to threaten the 64-request
+generation cap). The inferred map is best-effort and can never fail a model
+whose authored maps already fit.
+
+The aggregate decoded-texture budget is bounded per generation. When a
+texture-heavy package reaches it, remaining maps are downscaled (down to a
+small preview resolution) so the model still loads with as many maps as fit,
+instead of failing; per-texture resolution is still capped and validated by the
+worker and the broker independently. A glTF image URI that contains `..` (what
+exporters write for a model inside `source/`) is reduced to its file name
+before the request, so the authored traversal is never followed; required
+buffers and USD layers keep the strict rejection.
 
 ## Isolation model
 

@@ -35,6 +35,15 @@ sidecars under the common decode budgets.
 4. Do not request geometry caches, video, remote URLs, absolute paths, ADS,
    traversal, or environment-selected resources. Missing optional textures use
    deterministic fallbacks and warnings; unsafe references remain hard errors.
+   A reference that stores the authoring machine's absolute path is reduced to
+   its file name first; the broker may then resolve exactly one matching name
+   under the model package root (the primary file's parent directory, covering
+   the common `<model>/source/<file>.fbx` + `<model>/textures/` layout). That
+   package lookup is shared by every local format, is depth/entry bounded,
+   skips reparse points, and only opens the matched file after the ordinary
+   canonical containment and size checks; the authored absolute path is never
+   opened. Traversal, UNC/device, ADS, URL, and forward-slash drive text keep
+   failing closed through the resolver.
 5. Preserve geometry sharing when instances bind different materials: geometry
    is uploaded once, while instance draw records select the applicable material.
    Validate every cross-batch geometry/node/instance/material/image dependency

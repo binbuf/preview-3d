@@ -12,7 +12,11 @@ namespace import_worker {
 enum class TextureSemantic { Color, Data, Normal, Emissive };
 
 struct TextureDecodeOptions {
-    uint64_t maxEncodedBytes = 256ull * 1024 * 1024;
+    // Aggregate encoded (compressed source) bytes read for one generation's
+    // textures. 16-bit 4K PNG maps are commonly tens of MiB each, so this has
+    // to comfortably hold a full set; the decoded-pixel budget is the memory
+    // gate, not this transient read budget.
+    uint64_t maxEncodedBytes = 512ull * 1024 * 1024;
     uint64_t maxDecodedBytes = 32ull * 1024 * 1024;
     uint64_t maxPixels = 1'000'000'000;
     uint32_t maxDimension = 2048;

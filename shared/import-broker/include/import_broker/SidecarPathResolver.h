@@ -12,6 +12,26 @@
 // siblings and anything above it are rejected. Path authority lives only in this trusted-process
 // function; the sandboxed worker never opens a path itself (see
 // SidecarRequestServicer.h, which calls this).
+//
+// allowPackageBasenameLookup: the downloaded-package image fallback. When an
+// image reference does not resolve directly, its file name is looked up in
+// exactly these directories, closest first:
+//   1. beside the primary file
+//   2. <primary dir>/texture
+//   3. <primary dir>/textures
+//   4. <parent>/texture
+//   5. <parent>/textures
+// The first directory with a match wins, and only after the same canonical-
+// containment and size checks as any other sidecar. Names match exactly first,
+// then with case, space/underscore, and jpg/jpeg/tif/tiff spelling normalized,
+// plus material-role abbreviations (`_BaseColor`/`_B`, `_Normal`/`_N`,
+// `_Roughness`/`_R`, `_Emissive`/`_E`, ...) and a trailing download annotation
+// such as `_(Personalizado)`, so files renamed by a download site still match.
+// The fallback is image-only:
+// .bin buffers, .mtl files, and USD layers must stay where the document
+// references them. Every syntactically unsafe reference is rejected before the
+// lookup, so traversal/UNC/ADS/URL text keeps failing closed, and a name with
+// wildcard characters is never used as a search pattern.
 
 #include "model_core/ImportError.h"
 #include "platform/Win32Handle.h"
@@ -36,6 +56,7 @@ struct SidecarResolution {
 // as a plain relative filesystem path.
 SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
                                       const std::string& relativeReferenceUtf8,
-                                      uint64_t maxSidecarFileBytes);
+                                      uint64_t maxSidecarFileBytes,
+                                      bool allowPackageBasenameLookup = false);
 
 } // namespace import_broker
