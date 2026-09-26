@@ -707,6 +707,51 @@ bool EnsureAccessorBytesResolvable(WalkState& state, const fastgltf::Accessor& a
 // to sources::URI's *local-path* branch, not the isDataUri() branch, since
 // decoding a data URI needs no filesystem I/O) -- so sources::URI here
 // always means a real external file reference.
+// External image references are optional, so a path the resolver must reject
+// -- most commonly the `../textures/foo.png` a glTF exporter writes when the
+// model lives in a `source/` folder -- must not be the difference between a
+// textured and an untextured model. Instead of sending traversal text, ask
+// only for the file name: the broker's package lookup can then find the
+// texture by name without ever following the authored path. This is applied
+// to images only (never required buffers or USD layers). Anything that is not
+// a local path, or that carries an alternate-stream/URI colon, keeps its
+// authored text and follows the ordinary soft-failure path.
+std::string ImageSidecarReference(const fastgltf::URI& uri)
+{
+    if (!uri.isLocalPath()) {
+        return std::string(uri.path());
+    }
+    std::string reference(uri.path());
+    if (reference.find(':') != std::string::npos) {
+        return reference;
+    }
+    const size_t separator = reference.find_last_of("/\\");
+    if (separator == std::string::npos) {
+        return reference;
+    }
+    bool traversal = false;
+    size_t start = 0;
+    while (start <= reference.size()) {
+        const size_t end = reference.find_first_of("/\\", start);
+        const std::string_view component(reference.data() + start,
+            (end == std::string::npos ? reference.size() : end) - start);
+        if (component == "..") {
+            traversal = true;
+            break;
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    if (!traversal) {
+        return reference;
+    }
+    const std::string_view leaf(reference.data() + separator + 1,
+                                reference.size() - separator - 1);
+    return leaf.empty() ? reference : std::string(leaf);
+}
+
 std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state, size_t imageIndex,
                                                                uint64_t maxEncodedBytes)
 {
@@ -744,7 +789,8 @@ std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state,
         if (state.sidecarClient == nullptr) {
             return std::nullopt;
         }
-        auto result = state.sidecarClient->RequestSidecarBytes(std::string(uriSource->uri.path()), remaining);
+        auto result = state.sidecarClient->RequestSidecarBytes(
+            ImageSidecarReference(uriSource->uri), remaining);
         return std::move(result.bytes); // nullopt on any failure -- images are never geometry-required
     }
 
@@ -2299,6 +2345,10 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     // just stay at identity). Never LoadExternalBuffers/LoadExternalImages:
     // the worker has no path authority. LoadGLBBuffers is deprecated in
     // 0.9.0 (now default behaviour) and deliberately not passed.
+    // KHR_materials_ior is enabled only so the transmission guard can read the
+    // authored index of refraction; fastgltf otherwise leaves material.ior at
+    // its 1.5 default and an authored ior=1 would be misread as an optical
+    // interface, turning the whole model into see-through glass.
     fastgltf::Parser parser(fastgltf::Extensions::KHR_draco_mesh_compression
                              | fastgltf::Extensions::KHR_texture_basisu
                              | fastgltf::Extensions::KHR_texture_transform
@@ -2307,6 +2357,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                              | fastgltf::Extensions::EXT_texture_webp
                              | fastgltf::Extensions::KHR_materials_unlit
                              | fastgltf::Extensions::KHR_materials_transmission
+                             | fastgltf::Extensions::KHR_materials_ior
                              | fastgltf::Extensions::KHR_materials_pbrSpecularGlossiness);
     // loadGltf (rather than loadGltfBinary) auto-detects GLB vs. plain-JSON
     // .gltf via fastgltf::determineGltfFileType internally -- needed so a

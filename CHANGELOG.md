@@ -8,6 +8,55 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [Unreleased]
+
+### Fixed
+
+- glTF materials that author `KHR_materials_transmission` together with
+  `KHR_materials_ior` at or below 1 no longer render as see-through ghost
+  glass. `KHR_materials_ior` is now enabled in the parser, so the transmission
+  guard can read the authored index of refraction instead of fastgltf's 1.5
+  default -- the crew-suit export that stamps `transmission=1`, `ior=1`, and
+  `specular=0` on every material stays opaque.
+- Downloaded model packages now resolve their textures for both common
+  layouts: `model/source/model.<ext>` with a sibling `model/textures/`, and
+  `model/model.<ext>` with `model/texture(s)/` or images beside the model. For
+  a local import, a missing image reference is looked up by file name in
+  exactly these directories, closest first: beside the model, its `texture/`
+  and `textures/` subfolders, then the same under the parent. The search is
+  image-only (buffers, MTL files, and USD layers are never relocated), matches
+  case, space/underscore, and jpg/jpeg/tif/tiff spelling changes so renamed
+  downloads still match, treats wildcards as misses, and keeps the ordinary
+  canonical containment and size checks. The closest directory wins, so
+  sibling model packages cannot collide. Names also match across material-role
+  abbreviations (`_BaseColor`/`_B`, `_Normal`/`_N`, ...) and a trailing
+  download annotation such as `_(Personalizado)`. glTF image URIs that use
+  `../textures/...` resolve the same way (the authored traversal is reduced to
+  its file name and never followed). Traversal, UNC/device, ADS, URL, and
+  forward-slash drive references still fail closed, and the authored path is
+  never opened. FBX image references that carry an authoring machine's
+  absolute path are reduced to their file name first, so
+  `C:\Project\Textures\foo.png` no longer fails the whole model with
+  `UnsafeReference`.
+- FBX materials whose base color map was not wired into the file but whose
+  `<Material>_Base_color.png`/`.jpg` sits in a package texture folder now
+  preview with that map. The inference is best-effort (a small, capped number
+  of requests per generation) and can never fail a model whose authored maps
+  already fit.
+- The FBX importer downscales remaining maps to fit the aggregate
+  decoded-texture budget instead of failing the model, matching the glTF path,
+  and the transient encoded-image read budget is raised to 512 MiB so 16-bit
+  4K PNG texture sets no longer run out while decoding.
+- FBX texture-heavy packages no longer fail to import once the aggregate
+  decoded-texture budget is reached: remaining maps are downscaled (to a small
+  preview resolution at minimum) so the model loads with as many maps as fit,
+  matching the glTF path. A genuinely exhausted budget still reports the typed
+  resource limit.
+- USD metallic and roughness inputs connected to maps the decoder cannot
+  consume (for example separate EXR exports) fall back to the shader's scalar
+  values -- UsdPreviewSurface's metallic 0 and roughness 0.5 -- instead of the
+  texture-path 1.0 that made painted surfaces look like rough bare metal.
+
 ## [0.3.8] - 2026-09-25
 
 ### Fixed

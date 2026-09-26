@@ -24,9 +24,15 @@ namespace import_broker {
 // same underlying kernel file object -- the host does not need to keep its
 // own resolve-time handle open afterward, so this function's own handle is
 // closed before returning either way.
+//
+// allowPackageBasenameLookup forwards ResolveSidecarPath's package-name
+// fallback for the downloaded `<model>/source/...` + `<model>/textures/`
+// layout; the trusted host enables it for local file imports, never from
+// worker-provided text.
 std::variant<model_core::SidecarFileReadyNotice, model_core::SidecarFileUnavailableNotice>
 ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonicalPath,
                       const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes,
-                      uint64_t remainingSourceBytes = UINT64_MAX);
+                      uint64_t remainingSourceBytes = UINT64_MAX,
+                      bool allowPackageBasenameLookup = false);
 
 } // namespace import_broker

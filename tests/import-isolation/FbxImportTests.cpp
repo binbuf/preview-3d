@@ -61,6 +61,48 @@ struct ScratchFbx {
     }
 };
 
+// The downloaded-model layout the FBX package search exists for:
+//
+//   <root>/source/model.fbx
+//   <root>/textures/foo.png
+//
+// One level below the package root, matching Sketchfab/Unity-style exports
+// whose texture folder sits beside `source/`.
+struct ScratchFbxPackage {
+    std::filesystem::path root;
+    std::filesystem::path path;
+
+    ScratchFbxPackage()
+    {
+        static std::atomic_uint64_t next{0};
+        root = std::filesystem::temp_directory_path() /
+            (L"Preview3D-fbx-package-" + std::to_wstring(GetCurrentProcessId()) + L"-"
+             + std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(next.fetch_add(1)));
+        REQUIRE(std::filesystem::create_directories(root / L"source"));
+        path = root / L"source" / L"model.fbx";
+    }
+    ~ScratchFbxPackage()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
+    void Write(std::string_view bytes)
+    {
+        std::ofstream output(path, std::ios::binary);
+        output.write(bytes.data(), std::streamsize(bytes.size()));
+        REQUIRE(output.good());
+    }
+    void WriteRootSidecar(const std::filesystem::path& name, std::span<const std::byte> bytes)
+    {
+        const auto sidecar = root / name;
+        REQUIRE((std::filesystem::create_directories(sidecar.parent_path())
+                 || std::filesystem::exists(sidecar.parent_path())));
+        std::ofstream output(sidecar, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+        REQUIRE(output.good());
+    }
+};
+
 std::vector<std::byte> DecodeBase64(std::span<const char> raw)
 {
     auto digit = [](unsigned char c) -> int {
@@ -624,6 +666,60 @@ TEST_CASE("FBX unsafe external texture references fail closed",
         CHECK(result.errorCode == model_core::ImportErrorCode::UnsafeReference);
         CHECK(result.errorPhase == model_core::ImportFailurePhase::Sidecars);
     }
+}
+
+TEST_CASE("FBX resolves an exporter-absolute texture path through the model package",
+          "[fbx][materials][sidecar][package-lookup]")
+{
+    const auto jpeg = ReadAsset(L"textures/gray.jpg");
+    ScratchFbxPackage source;
+    // Backslash drive path from the authoring machine, the shape 3ds Max /
+    // Unity exports store. The helper reduces it to its leaf, and the broker
+    // finds that leaf in the package's sibling textures folder.
+    source.Write(TextureFixture({}, R"(C:\Author\Project\textures\tiny_clouds.jpg)"));
+    source.WriteRootSidecar(L"textures\\tiny_clouds.jpg", jpeg);
+    const auto result = import_broker::RunImportSession(Request(source.path, 5029));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase, result.chunks.size());
+    REQUIRE(result.ok);
+    CHECK(Count(result, model_core::ChunkTopology::Image) >= 1);
+
+    // Relative backslash paths (Substance-style exports) keep their directory
+    // components normalized to '/'; this one misses directly and still
+    // resolves by file name under the package.
+    ScratchFbxPackage relative;
+    relative.Write(TextureFixture({}, R"(Substance\Textures\tiny_clouds.jpg)"));
+    relative.WriteRootSidecar(L"textures\\tiny_clouds.jpg", jpeg);
+    const auto nested = import_broker::RunImportSession(Request(relative.path, 5030));
+    CAPTURE(nested.stage, nested.errorCode, nested.errorPhase, nested.chunks.size());
+    REQUIRE(nested.ok);
+    CHECK(Count(nested, model_core::ChunkTopology::Image) >= 1);
+}
+
+TEST_CASE("FBX infers an unwired base-color map from the material name",
+          "[fbx][materials][sidecar][inference]")
+{
+    const auto jpeg = ReadAsset(L"textures/gray.jpg");
+    ScratchFbxPackage source;
+    // The embedded-PNG fixture wires its texture to the material's
+    // DiffuseColor. Drop that connection so the authored material has no base
+    // color at all (the tank model's shape), then put the map in the package
+    // texture folder under the material's name.
+    std::string ascii = TextureFixture({}, "textures/tiny_clouds.png");
+    ReplaceOnce(ascii, "\tC: \"OP\",2483116064336,2483102580784, \"DiffuseColor\"\n", "");
+    source.Write(ascii);
+    source.WriteRootSidecar(L"textures\\lambert1_Base_color.jpg", jpeg);
+
+    const auto result = import_broker::RunImportSession(Request(source.path, 5031));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase, result.chunks.size());
+    REQUIRE(result.ok);
+    bool imageChunk = false, hasBase = false;
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image) imageChunk = true;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material
+            && chunk.descriptor.dependencyIds[0] != 0) hasBase = true;
+    }
+    CHECK(imageChunk);
+    CHECK(hasBase);
 }
 
 TEST_CASE("FBX maps factors alpha texture roles emissive and UV transform",

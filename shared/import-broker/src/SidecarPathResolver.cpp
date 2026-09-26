@@ -3,7 +3,9 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cwchar>
 #include <filesystem>
+#include <optional>
 
 namespace import_broker {
 
@@ -53,11 +55,262 @@ bool HasAllowedSidecarExtension(const std::filesystem::path& path)
     return false;
 }
 
+// The package search is deliberately image-only: a missing buffer, MTL file,
+// or USD layer must stay exactly where the document references it, while a
+// model's texture maps are routinely reorganized into a texture folder.
+bool HasImageTextureExtension(const std::filesystem::path& path)
+{
+    static const std::wstring kImage[] = { L".png", L".jpg", L".jpeg", L".bmp",
+                                           L".tif", L".tiff", L".webp", L".ktx2" };
+    const std::wstring ext = LowerCopy(path.extension().wstring());
+    for (const auto& allowed : kImage) {
+        if (ext == allowed) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Opens one candidate path and runs the full handle-based validation every
+// accepted sidecar must pass: canonicalize the opened handle, confirm the
+// canonical path stays inside `allowedDirectoryPrefix` (lowercase, trailing
+// separator), and enforce a nonzero size within the cap. Never trusts the
+// candidate text itself.
+SidecarResolution AcceptCandidate(const std::filesystem::path& candidate,
+                                  const std::wstring& allowedDirectoryPrefix,
+                                  uint64_t maxSidecarFileBytes)
+{
+    HANDLE rawFile = CreateFileW(candidate.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (rawFile == INVALID_HANDLE_VALUE) {
+        return Reject(ImportErrorCode::FileUnavailable,
+                       L"sidecar file could not be opened (Windows error " + std::to_wstring(GetLastError())
+                           + L")");
+    }
+    platform::Win32Handle file(rawFile);
+
+    DWORD requiredLength = GetFinalPathNameByHandleW(file.get(), nullptr, 0, FILE_NAME_NORMALIZED);
+    if (requiredLength == 0) {
+        return Reject(ImportErrorCode::FileUnavailable, L"sidecar canonical path could not be determined");
+    }
+    std::wstring canonicalPath(requiredLength, L'\0');
+    DWORD writtenLength = GetFinalPathNameByHandleW(file.get(), canonicalPath.data(), requiredLength,
+                                                      FILE_NAME_NORMALIZED);
+    if (writtenLength == 0 || writtenLength >= requiredLength) {
+        return Reject(ImportErrorCode::FileUnavailable, L"sidecar canonical path could not be determined");
+    }
+    canonicalPath.resize(writtenLength);
+
+    // Containment to the allowed directory tree, not just the immediate
+    // directory. Both sides here are GetFinalPathNameByHandleW-canonicalized
+    // (FILE_NAME_NORMALIZED), so a reparse point that resolves outside the
+    // allowed directory surfaces as a canonical path outside it. Compare with
+    // a trailing separator -- a plain string prefix would let a sibling like
+    // "C:\Foo2" satisfy "C:\Foo".
+    std::wstring sidecarCanonicalPath = LowerCopy(canonicalPath);
+    if (sidecarCanonicalPath.size() <= allowedDirectoryPrefix.size()
+        || sidecarCanonicalPath.compare(0, allowedDirectoryPrefix.size(), allowedDirectoryPrefix) != 0) {
+        return Reject(ImportErrorCode::UnsafeReference,
+                       L"sidecar reference resolved outside the primary file's directory");
+    }
+
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file.get(), &size) || size.QuadPart <= 0) {
+        return Reject(ImportErrorCode::FileUnavailable, L"sidecar file is empty or its size could not be read");
+    }
+    if (static_cast<uint64_t>(size.QuadPart) > maxSidecarFileBytes) {
+        return Reject(ImportErrorCode::FileUnavailable, L"sidecar file exceeds the size cap");
+    }
+
+    SidecarResolution result;
+    result.file = std::move(file);
+    result.canonicalPath = std::move(canonicalPath);
+    result.fileSizeBytes = static_cast<uint64_t>(size.QuadPart);
+    return result;
+}
+
+std::wstring DirectoryPrefix(std::filesystem::path directory)
+{
+    std::wstring prefix = LowerCopy(directory.wstring());
+    if (prefix.empty() || prefix.back() != L'\\') {
+        prefix.push_back(L'\\');
+    }
+    return prefix;
+}
+
+// The package root a downloaded model's sibling textures live under: the
+// primary file's directory when that parent would itself be a drive root
+// (searching an entire volume is not "a model package"), otherwise the parent.
+std::filesystem::path PackageRootFor(const std::filesystem::path& primaryDirectory)
+{
+    std::filesystem::path parent = primaryDirectory.parent_path();
+    if (parent.empty() || parent == parent.root_path()) {
+        return primaryDirectory;
+    }
+    return parent;
+}
+
+// A downloaded package's texture files are often renamed from the names the
+// model references: spaces become underscores, case changes, `.jpeg` becomes
+// `.jpg`, and the material role is abbreviated (`..._BaseColor` -> `..._B`,
+// `..._Normal` -> `..._N`). Compare on a canonical key so those renames still
+// match without inventing an association: the non-role stem must be identical
+// and, when both sides name a role, the roles must be equivalent. A trailing
+// download annotation such as `_(Personalizado)` is ignored.
+std::wstring CanonicalImageExtension(std::wstring extension)
+{
+    if (extension == L".jpeg" || extension == L".jpe") return L".jpg";
+    if (extension == L".tiff") return L".tif";
+    return extension;
+}
+
+std::wstring CanonicalImageKey(std::wstring name)
+{
+    std::wstring lower = LowerCopy(std::move(name));
+    for (wchar_t& c : lower) {
+        if (c == L' ') {
+            c = L'_';
+        }
+    }
+    const size_t dot = lower.rfind(L'.');
+    std::wstring stem = dot == std::wstring::npos ? lower : lower.substr(0, dot);
+    const std::wstring extension = dot == std::wstring::npos
+        ? std::wstring{} : CanonicalImageExtension(lower.substr(dot));
+
+    // Ignore a trailing site annotation only when it is the final segment
+    // (`..._diffuse_(Personalizado)`), never a mid-name parenthetical such as
+    // `..._Buttons-Detail(text)_B`.
+    const size_t annotation = stem.rfind(L"_(");
+    if (annotation != std::wstring::npos && stem.find(L'_', annotation + 2) == std::wstring::npos) {
+        stem = stem.substr(0, annotation);
+    }
+
+    struct RoleAlias { const wchar_t* suffix; const wchar_t* role; };
+    static const RoleAlias kRoles[] = {
+        { L"_base_color", L"basecolor" }, { L"_basecolor", L"basecolor" }, { L"_base", L"basecolor" },
+        { L"_diffuse", L"basecolor" }, { L"_albedo", L"basecolor" }, { L"_color", L"basecolor" },
+        { L"_b", L"basecolor" },
+        { L"_normal", L"normal" }, { L"_nrm", L"normal" }, { L"_nor", L"normal" }, { L"_n", L"normal" },
+        { L"_roughness", L"roughness" }, { L"_rough", L"roughness" }, { L"_rgh", L"roughness" },
+        { L"_r", L"roughness" },
+        { L"_metallic", L"metallic" }, { L"_metalness", L"metallic" }, { L"_metal", L"metallic" },
+        { L"_m", L"metallic" },
+        { L"_emissive", L"emissive" }, { L"_emission", L"emissive" }, { L"_emit", L"emissive" },
+        { L"_e", L"emissive" },
+        { L"_glossiness", L"glossiness" }, { L"_gloss", L"glossiness" }, { L"_g", L"glossiness" },
+        { L"_specular", L"specular" }, { L"_spec", L"specular" },
+        { L"_occlusion", L"occlusion" }, { L"_ao", L"occlusion" },
+        { L"_opacity", L"opacity" }, { L"_alpha", L"opacity" },
+    };
+    std::wstring role;
+    for (const auto& alias : kRoles) {
+        const size_t length = wcslen(alias.suffix);
+        if (stem.size() > length && stem.compare(stem.size() - length, length, alias.suffix) == 0) {
+            role = alias.role;
+            stem.resize(stem.size() - length);
+            break;
+        }
+    }
+    return stem + L"|" + role + extension;
+}
+
+// Scan one candidate directory for an image whose canonical key matches. The
+// scan is entry-bounded, skips directories and reparse points, and treats two
+// files that canonicalize to the same key as ambiguous (a miss) rather than
+// guessing. `.bin`, `.mtl`, and layer extensions are never considered.
+std::optional<std::filesystem::path> FindNormalizedImage(const std::filesystem::path& directory,
+                                                         const std::wstring& canonicalLeaf)
+{
+    constexpr size_t kMaxDirectoryScanEntries = 4096;
+    WIN32_FIND_DATAW entry{};
+    HANDLE find = FindFirstFileW((directory / L"*").c_str(), &entry);
+    if (find == INVALID_HANDLE_VALUE) {
+        return std::nullopt;
+    }
+    std::optional<std::filesystem::path> match;
+    size_t scanned = 0;
+    bool ambiguous = false;
+    do {
+        if (++scanned > kMaxDirectoryScanEntries) {
+            break;
+        }
+        if ((entry.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+            continue;
+        }
+        const std::filesystem::path candidate = directory / entry.cFileName;
+        if (!HasImageTextureExtension(candidate)) {
+            continue;
+        }
+        if (CanonicalImageKey(entry.cFileName) != canonicalLeaf) {
+            continue;
+        }
+        if (match && _wcsicmp(match->c_str(), candidate.c_str()) != 0) {
+            ambiguous = true;
+            break;
+        }
+        match = candidate;
+    } while (FindNextFileW(find, &entry));
+    FindClose(find);
+    return ambiguous ? std::nullopt : match;
+}
+
+// The exact directories a downloaded package may keep textures in, in the
+// priority order the viewer promises:
+//
+//   1. beside the model
+//   2. <model dir>/texture
+//   3. <model dir>/textures
+//   4. <parent>/texture
+//   5. <parent>/textures
+//
+// Each directory is checked for the exact file name first, then for a
+// canonical-name match (case, space/underscore, jpg/jpeg, tif/tiff). The first
+// directory that has the image wins, so the closest copy is preferred and two
+// model packages in the same parent cannot collide. Only image files are
+// considered, and a name containing wildcard characters is never used as a
+// pattern.
+std::optional<std::filesystem::path> FindPackagedImage(const std::filesystem::path& primaryDirectory,
+                                                       const std::wstring& leafName)
+{
+    if (leafName.empty()
+        || leafName.find(L'*') != std::wstring::npos
+        || leafName.find(L'?') != std::wstring::npos) {
+        return std::nullopt;
+    }
+    const std::filesystem::path parent = PackageRootFor(primaryDirectory);
+    const std::filesystem::path candidates[] = {
+        primaryDirectory,
+        primaryDirectory / L"texture",
+        primaryDirectory / L"textures",
+        parent / L"texture",
+        parent / L"textures",
+    };
+    const std::wstring canonicalLeaf = CanonicalImageKey(leafName);
+    for (const auto& directory : candidates) {
+        WIN32_FIND_DATAW entry{};
+        HANDLE find = FindFirstFileW((directory / leafName).c_str(), &entry);
+        if (find != INVALID_HANDLE_VALUE) {
+            FindClose(find);
+            if ((entry.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0) {
+                const std::filesystem::path exact = directory / entry.cFileName;
+                if (HasImageTextureExtension(exact)) {
+                    return exact;
+                }
+            }
+        }
+        if (const auto normalized = FindNormalizedImage(directory, canonicalLeaf)) {
+            return normalized;
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
                                       const std::string& relativeReferenceUtf8,
-                                      uint64_t maxSidecarFileBytes)
+                                      uint64_t maxSidecarFileBytes,
+                                      bool allowPackageBasenameLookup)
 {
     if (relativeReferenceUtf8.empty()) {
         return Reject(ImportErrorCode::UnsafeReference, L"empty sidecar reference");
@@ -107,63 +360,27 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
     std::filesystem::path primaryDirectory = std::filesystem::path(primaryCanonicalPath).parent_path();
     std::filesystem::path joined = primaryDirectory / referencePath;
 
-    HANDLE rawFile = CreateFileW(joined.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                  FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (rawFile == INVALID_HANDLE_VALUE) {
-        return Reject(ImportErrorCode::FileUnavailable,
-                       L"sidecar file could not be opened (Windows error " + std::to_wstring(GetLastError())
-                           + L")");
-    }
-    platform::Win32Handle file(rawFile);
-
-    DWORD requiredLength = GetFinalPathNameByHandleW(file.get(), nullptr, 0, FILE_NAME_NORMALIZED);
-    if (requiredLength == 0) {
-        return Reject(ImportErrorCode::FileUnavailable, L"sidecar canonical path could not be determined");
-    }
-    std::wstring canonicalPath(requiredLength, L'\0');
-    DWORD writtenLength = GetFinalPathNameByHandleW(file.get(), canonicalPath.data(), requiredLength,
-                                                      FILE_NAME_NORMALIZED);
-    if (writtenLength == 0 || writtenLength >= requiredLength) {
-        return Reject(ImportErrorCode::FileUnavailable, L"sidecar canonical path could not be determined");
-    }
-    canonicalPath.resize(writtenLength);
-
-    // Containment to the primary file's directory *tree*, not just to its
-    // immediate directory: a .gltf commonly references "textures/foo.jpg" or
-    // "buffer/mesh.bin", so a subdirectory below the primary directory must
-    // resolve. What must never resolve is anything above or beside it. The
-    // reference text has already been checked for ".." and rooting, and both
-    // sides here are GetFinalPathNameByHandleW-canonicalized
-    // (FILE_NAME_NORMALIZED), so a reparse point that resolves outside the
-    // primary directory surfaces as a canonical path outside it. Compare the
-    // sidecar's full canonical path against the primary directory with a
-    // trailing separator -- a plain string prefix would let a sibling like
-    // "C:\Foo2" satisfy "C:\Foo", and the separator also stops a same-named
-    // file from being matched component-by-component.
-    std::wstring primaryDirectoryPrefix = LowerCopy(primaryDirectory.wstring());
-    if (primaryDirectoryPrefix.empty() || primaryDirectoryPrefix.back() != L'\\') {
-        primaryDirectoryPrefix.push_back(L'\\');
-    }
-    std::wstring sidecarCanonicalPath = LowerCopy(canonicalPath);
-    if (sidecarCanonicalPath.size() <= primaryDirectoryPrefix.size()
-        || sidecarCanonicalPath.compare(0, primaryDirectoryPrefix.size(), primaryDirectoryPrefix) != 0) {
-        return Reject(ImportErrorCode::UnsafeReference,
-                       L"sidecar reference resolved outside the primary file's directory");
+    SidecarResolution direct = AcceptCandidate(joined, DirectoryPrefix(primaryDirectory), maxSidecarFileBytes);
+    if (direct.file || direct.rejectionCode != ImportErrorCode::FileUnavailable) {
+        return direct;
     }
 
-    LARGE_INTEGER size{};
-    if (!GetFileSizeEx(file.get(), &size) || size.QuadPart <= 0) {
-        return Reject(ImportErrorCode::FileUnavailable, L"sidecar file is empty or its size could not be read");
+    // Package image fallback, image-only. The authored text was already checked
+    // as relative, local, and free of ".." / ":" / rooting, so matching its
+    // file name in a texture folder cannot expand what the reference may
+    // address -- it only widens *where* a safe image name may be found. The
+    // five candidate directories are the model's own, its `texture/` and
+    // `textures/` subfolders, and the same under the parent package root, in
+    // that order; the first exact image match wins. Required buffers, MTL
+    // files and USD layers are never resolved this way.
+    if (!allowPackageBasenameLookup || !HasImageTextureExtension(referencePath)) {
+        return direct;
     }
-    if (static_cast<uint64_t>(size.QuadPart) > maxSidecarFileBytes) {
-        return Reject(ImportErrorCode::FileUnavailable, L"sidecar file exceeds the size cap");
+    if (const auto match = FindPackagedImage(primaryDirectory, referencePath.filename().wstring())) {
+        return AcceptCandidate(*match, DirectoryPrefix(PackageRootFor(primaryDirectory)),
+                               maxSidecarFileBytes);
     }
-
-    SidecarResolution result;
-    result.file = std::move(file);
-    result.canonicalPath = std::move(canonicalPath);
-    result.fileSizeBytes = static_cast<uint64_t>(size.QuadPart);
-    return result;
+    return direct;
 }
 
 } // namespace import_broker

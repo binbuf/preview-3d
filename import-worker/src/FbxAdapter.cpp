@@ -9,13 +9,16 @@
 #include "WicImageDecodeAdapter.h"
 #include "model_core/GeometryBounds.h"
 #include "model_core/MaterialPayload.h"
+#include "model_core/PixelFormats.h"
 #include "model_core/TierALimits.h"
 #include "model_core/VertexLayouts.h"
 #include "ufbx.h"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -531,7 +534,17 @@ struct MaterialContext {
     uint64_t decodedPixels = 0;
     uint64_t maxDecodedBytes = kMaxAggregateTextureBytes;
     uint64_t maxDecodedPixels = kMaxAggregateTexturePixels;
+    // Bounded extra sidecar requests spent trying to infer an untextured
+    // material's base color from its name; the broker caps a generation at 64
+    // requests, so this stays small.
+    uint32_t inferredRequests = 0;
 };
+
+// Material-name base-color inference is deliberately tiny: at most this many
+// synthesized sidecar requests per generation. One request is usually enough,
+// because the broker's package lookup normalizes role suffixes (`_BaseColor`,
+// `_B`, `_diffuse`, ...) against the real file name.
+constexpr uint32_t kMaxInferredTextureRequests = 8;
 
 void Warn(uint32_t& warnings)
 {
@@ -587,8 +600,45 @@ bool ReferenceLooksUnsafe(std::string_view path)
     return false;
 }
 
+// FBX exporters commonly store the machine path that created the file
+// ("C:\Project\Textures\foo.png") or a project-root-relative backslash path
+// ("\Project\Textures\foo.png"). The worker has no path authority and the
+// broker's package search can only match a texture by its file name, so those
+// absolute/rooted Windows paths are reduced to their final component before
+// they are requested. The resolver still enforces containment on whatever
+// leaf is sent: it may find a matching file under the primary/package tree,
+// never the authored absolute path. A relative backslash path
+// ("Textures\foo.png") keeps its directory components, normalized to '/',
+// so it resolves normally inside the primary directory tree.
+//
+// Every reference that keeps a forward slash, a URI/UNC prefix, an alternate
+// data stream colon, or a ".." component is returned unchanged, so those
+// patterns still reach the resolver with their authored text and fail closed
+// exactly as the FBX security tests pin. A drive colon is only accepted at
+// index 1 ("C:\..."), not as part of a file name or stream.
+std::string SidecarTextureReference(std::string_view path)
+{
+    if (path.empty() || path.find('/') != std::string_view::npos) return std::string(path);
+    if (path.find("..") != std::string_view::npos) return std::string(path);
+    const size_t colon = path.find(':');
+    const bool driveColon = colon == 1
+        && std::isalpha(static_cast<unsigned char>(path[0]));
+    if (colon != std::string_view::npos && !driveColon) return std::string(path);
+    if (path.size() >= 2 && path[0] == '\\' && path[1] == '\\') return std::string(path);
+    const size_t separator = path.find_last_of('\\');
+    if (separator == std::string_view::npos) return std::string(path);
+    if (driveColon || path.front() == '\\') {
+        const std::string_view leaf = path.substr(separator + 1);
+        return leaf.empty() ? std::string(path) : std::string(leaf);
+    }
+    std::string normalized(path);
+    std::replace(normalized.begin(), normalized.end(), '\\', '/');
+    return normalized;
+}
+
 std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_texture* texture,
-                                          ColorSpaceId space, TextureSemantic semantic)
+                                          ColorSpaceId space, TextureSemantic semantic,
+                                          uint32_t maxDimensionOverride = 0)
 {
     std::optional<std::vector<std::byte>> owned;
     std::span<const std::byte> encoded;
@@ -607,14 +657,16 @@ std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_t
         // UnsafeReference for the whole model; the map is optional, so degrade
         // to a texture warning instead. A reference that looks unsafe is never
         // short-circuited: it still goes to the resolver and fails closed.
-        const std::string_view pathView(path.data, path.length);
-        if (!ReferenceLooksUnsafe(pathView) && !HasDecodableImageExtension(pathView)) {
+        const std::string reference = SidecarTextureReference(
+            std::string_view(path.data, path.length));
+        const std::string_view referenceView(reference);
+        if (!ReferenceLooksUnsafe(referenceView) && !HasDecodableImageExtension(referenceView)) {
             Warn(context.textureWarnings);
             return std::nullopt;
         }
         const uint64_t remaining = context.encodedBytes < context.options->maxEncodedBytes
             ? context.options->maxEncodedBytes - context.encodedBytes : 0;
-        auto result = context.sidecars->RequestSidecarBytes(std::string(path.data, path.length), remaining);
+        auto result = context.sidecars->RequestSidecarBytes(reference, remaining);
         if (!result.bytes) {
             if (result.errorCode == ImportErrorCode::UnsafeReference
                 || result.errorCode == ImportErrorCode::FileChanged
@@ -635,6 +687,9 @@ std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_t
     context.encodedBytes += encoded.size();
     TextureDecodeOptions options = *context.options;
     options.semantic = semantic;
+    if (maxDimensionOverride != 0 && maxDimensionOverride < options.maxDimension) {
+        options.maxDimension = maxDimensionOverride;
+    }
     const uint64_t remainingDecodedBytes = context.decodedBytes < context.maxDecodedBytes
         ? context.maxDecodedBytes - context.decodedBytes : 0;
     const uint64_t remainingDecodedPixels = context.decodedPixels < context.maxDecodedPixels
@@ -644,6 +699,23 @@ std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_t
         || remainingDecodedPixels < (std::min)(options.maxPixels, maxDimensionPixels);
     options.maxDecodedBytes = (std::min)(options.maxDecodedBytes, remainingDecodedBytes);
     options.maxPixels = (std::min)(options.maxPixels, remainingDecodedPixels);
+    // As the aggregate budget fills, shrink this map's requested resolution so
+    // a texture-heavy package keeps *all* of its maps at progressively lower
+    // detail instead of failing once the budget is reached -- the same adaptive
+    // dimension behavior as the glTF path. A minimum preview resolution keeps
+    // the flood case bounded: if even that no longer fits, the aggregate is
+    // genuinely exhausted and the typed ResourceLimit below still applies.
+    constexpr uint32_t kMinAggregateTextureDimension = 64;
+    while (options.maxDimension > kMinAggregateTextureDimension) {
+        const auto bytes = ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM, options.maxDimension,
+                                                  options.maxDimension,
+                                                  FullImageMipCount(options.maxDimension, options.maxDimension));
+        if (bytes && *bytes + *bytes / 64 <= options.maxDecodedBytes
+            && *bytes / 4 <= options.maxPixels) {
+            break;
+        }
+        options.maxDimension /= 2;
+    }
     DecodedImage image;
     image.space = space;
     switch (SniffImageFormat(encoded)) {
@@ -704,6 +776,62 @@ uint32_t EmitImage(BoundedChunkWriter& writer, DecodedImage&& image)
     ChunkDescriptor descriptor{};
     descriptor.topology = ChunkTopology::Image; descriptor.chunkId = writer.NextId();
     return writer.Add(descriptor, ChunkBytes(header), image.pixels) ? descriptor.chunkId : 0;
+}
+
+// The name an untextured material's base color would be stored under, e.g.
+// "Arm.003" -> "Arm". A trailing instance suffix is dropped, and any name that
+// would itself look like a path (separators, drive colon, "..") is rejected so
+// the synthesized reference can never be anything but a plain file name.
+std::string SanitizeMaterialBaseName(std::string_view name)
+{
+    std::string base(name.substr(0, name.find('.')));
+    while (!base.empty() && (base.back() == ' ' || base.back() == '\t')) base.pop_back();
+    if (base.empty() || base.find("..") != std::string::npos) return {};
+    for (char c : base) {
+        if (c == '/' || c == '\\' || c == ':') return {};
+    }
+    return base;
+}
+
+// Recovery for the common export where a material's diffuse map was wired as a
+// texture object our map conversion did not surface and the FBX therefore has
+// no base color at all, while `<Material>_Base_color.png` (or a role variant
+// such as `_BaseColor`/`_B`/`_diffuse`) sits in the package texture folder.
+// One synthesized request per material is normally enough, because the broker
+// normalizes the role suffix. Bounded tightly so the generation's 64-request
+// cap is never at risk.
+uint32_t TryInferBaseColor(BoundedChunkWriter& writer, MaterialContext& context,
+                           std::string_view materialName)
+{
+    if (!context.sidecars || context.inferredRequests >= kMaxInferredTextureRequests) return 0;
+    const std::string base = SanitizeMaterialBaseName(materialName);
+    if (base.empty()) return 0;
+    for (const char* suffix : { "_Base_color.png", "_Base_color.jpg" }) {
+        if (context.inferredRequests >= kMaxInferredTextureRequests) break;
+        ++context.inferredRequests;
+        const std::string candidate = base + suffix;
+        ufbx_texture synthetic{};
+        synthetic.type = UFBX_TEXTURE_FILE;
+        synthetic.relative_filename.data = candidate.data();
+        synthetic.relative_filename.length = candidate.size();
+        auto image = DecodeTexture(context, &synthetic, ColorSpaceId::Srgb, TextureSemantic::Color,
+                                   /*maxDimensionOverride=*/512);
+        if (!image) {
+            // Inference is best-effort: an optional inferred map must never
+            // fail a model whose authored maps already fit the budget, so any
+            // resource/containment outcome from the synthesized request is
+            // consumed here. Cancellation and out-of-memory still propagate.
+            if (context.error != ImportErrorCode::None
+                && context.error != ImportErrorCode::Cancelled
+                && context.error != ImportErrorCode::OutOfMemory) {
+                context.error = ImportErrorCode::None;
+            }
+            if (context.error != ImportErrorCode::None) return 0;
+            continue; // not found / not decodable: the deterministic factor stays
+        }
+        return EmitImage(writer, std::move(*image));
+    }
+    return 0;
 }
 
 uint32_t ResolveImage(BoundedChunkWriter& writer, MaterialContext& context,
@@ -774,6 +902,11 @@ bool EmitMaterials(const ufbx_scene& scene, BoundedChunkWriter& writer, Material
         uint32_t images[4]{};
         images[0] = ResolveImage(writer, context, base, ColorSpaceId::Srgb, TextureSemantic::Color, imageIds);
         if (context.error != ImportErrorCode::None || (base && !images[0])) return false;
+        if (!base && !images[0]) {
+            images[0] = TryInferBaseColor(writer, context,
+                std::string_view(material->name.data ? material->name.data : "", material->name.length));
+            if (context.error != ImportErrorCode::None) return false;
+        }
         if (roughness && roughness == metalness) {
             images[1] = ResolveImage(writer, context, roughness, ColorSpaceId::Linear, TextureSemantic::Data, imageIds);
             if (context.error != ImportErrorCode::None || !images[1]) return false;

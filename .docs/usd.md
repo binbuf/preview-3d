@@ -538,7 +538,10 @@ dependency subset.
   fields. Tydra material subsets are range/overlap validated and split into
   material-homogeneous geometry runs, so ordinary and point-instancer records
   bind the correct material chunk. Unsupported optional shader inputs and UV
-  sets become bounded status warnings.
+  sets become bounded status warnings. A metallic or roughness input connected
+  to a map the decoder cannot consume (separate EXR exports, for example) falls
+  back to the shader's scalar value -- UsdPreviewSurface defaults metallic 0 and
+  roughness 0.5 -- rather than the texture-path 1.0.
 - Texture bytes remain encoded through TinyUSDZ. Product code sniffs them and
   uses the existing WIC, WebP, and KTX/Basis adapters with semantic sRGB/linear
   selection, per-image and aggregate decoded limits, cancellation, and small

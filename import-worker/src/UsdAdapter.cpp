@@ -733,6 +733,25 @@ struct MaterialContext {
 
 void Warn(uint32_t& warnings) { warnings = (std::min)(64u, warnings + 1); }
 
+// True when a graph texture points at an image whose asset actually arrived.
+// An unsupported container (for example an EXR metallic/roughness map) leaves
+// buffer_id at -1 and gets the deterministic fallback later; a scalar factor
+// is the more faithful reading for those inputs than treating the fallback
+// texel as authored data.
+bool TextureAssetAvailable(const MaterialContext& context, int textureIndex)
+{
+    if (!context.scene || textureIndex < 0
+        || size_t(textureIndex) >= context.scene->textures.size()) {
+        return false;
+    }
+    const auto& texture = context.scene->textures[size_t(textureIndex)];
+    if (texture.texture_image_id < 0
+        || size_t(texture.texture_image_id) >= context.scene->images.size()) {
+        return false;
+    }
+    return context.scene->images[size_t(texture.texture_image_id)].buffer_id >= 0;
+}
+
 bool ImageExtensionMatches(std::string_view path, SniffedImageFormat format)
 {
     const size_t dot = path.find_last_of('.');
@@ -949,8 +968,6 @@ bool EmitMaterials(BoundedChunkWriter& writer, const RenderScene& scene,
         }
         payload.baseColorFactor[3] = shader.opacity.is_texture()
             ? 1.0f : shader.opacity.value;
-        payload.metallicFactor = shader.metallic.is_texture() ? 1.0f : shader.metallic.value;
-        payload.roughnessFactor = shader.roughness.is_texture() ? 1.0f : shader.roughness.value;
         payload.uvScale[0] = payload.uvScale[1] = 1.0f;
         payload.alphaCutoff = shader.opacityThreshold.value > 0.0f
             ? shader.opacityThreshold.value : 0.5f;
@@ -962,8 +979,7 @@ bool EmitMaterials(BoundedChunkWriter& writer, const RenderScene& scene,
         for (float value : payload.baseColorFactor) if (!std::isfinite(value)) {
             context.error = ImportErrorCode::MalformedData; return false;
         }
-        if (!std::isfinite(payload.metallicFactor) || !std::isfinite(payload.roughnessFactor)
-            || !std::isfinite(payload.alphaCutoff)) {
+        if (!std::isfinite(payload.alphaCutoff)) {
             context.error = ImportErrorCode::MalformedData; return false;
         }
         for (float value : payload.emissiveFactor) if (!std::isfinite(value)) {
@@ -978,12 +994,27 @@ bool EmitMaterials(BoundedChunkWriter& writer, const RenderScene& scene,
             && shader.opacity.texture_id != shader.diffuseColor.texture_id) {
             Warn(context.optionalWarnings);
         }
+        // The combined slot can only carry one map. A decodable texture shared
+        // by metallic and roughness drives it with factor 1; anything else --
+        // separate maps, or a container no decoder handles (the EXR exports
+        // this alarm clock carries) -- falls back to the shader's scalar
+        // values (UsdPreviewSurface defaults: metallic 0, roughness 0.5).
+        // Keeping the texture-path 1.0 there would leave a painted surface
+        // looking like rough bare metal.
+        bool combinedMetallicRoughness = false;
         if (shader.metallic.is_texture() && shader.roughness.is_texture()
-            && shader.metallic.texture_id == shader.roughness.texture_id) {
+            && shader.metallic.texture_id == shader.roughness.texture_id
+            && TextureAssetAvailable(context, shader.roughness.texture_id)) {
             images[1] = ResolveTexture(writer, context, shader.roughness.texture_id,
                                        ColorSpaceId::Linear, TextureSemantic::Data);
+            combinedMetallicRoughness = images[1] != 0;
         } else if (shader.metallic.is_texture() || shader.roughness.is_texture()) {
             Warn(context.optionalWarnings);
+        }
+        payload.metallicFactor = combinedMetallicRoughness ? 1.0f : shader.metallic.value;
+        payload.roughnessFactor = combinedMetallicRoughness ? 1.0f : shader.roughness.value;
+        if (!std::isfinite(payload.metallicFactor) || !std::isfinite(payload.roughnessFactor)) {
+            context.error = ImportErrorCode::MalformedData; return false;
         }
         if (context.error != ImportErrorCode::None) return false;
         images[2] = ResolveTexture(writer, context, shader.normal.texture_id,
