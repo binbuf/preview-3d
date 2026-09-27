@@ -68,6 +68,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright (c) 2026 Binbuf"
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchDefaultApps
 
 !insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "${STAGE_DIR}\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
