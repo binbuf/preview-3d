@@ -137,6 +137,7 @@ int wmain(int argc, wchar_t** argv)
     std::wstring mode = L"control";
     std::wstring cxList = L"32,48,64,256";
     std::wstring file;
+    std::wstring gltfPath;
     std::wstring logPath = L"";
     int runs = 3;
 
@@ -147,6 +148,7 @@ int wmain(int argc, wchar_t** argv)
         else if (arg == L"--mode") mode = next();
         else if (arg == L"--cx") cxList = next();
         else if (arg == L"--file") file = next();
+        else if (arg == L"--gltf") gltfPath = next();
         else if (arg == L"--log") logPath = next();
         else if (arg == L"--runs") runs = _wtoi(next().c_str());
     }
@@ -161,6 +163,7 @@ int wmain(int argc, wchar_t** argv)
     SetConfigString(L"Mode", mode);
     SetConfigString(L"LogPath", logPath);
     SetConfigString(L"RunToken", token);
+    if (!gltfPath.empty()) SetConfigString(L"GltfPath", gltfPath);
 
     const bool isolationOptOut = ReadIsolationOptOut();
 

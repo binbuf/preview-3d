@@ -40,7 +40,7 @@ before it is built.
 
 - [x] T01 — Freeze the provider specification and eight-family roster → [tasks/01-freeze-provider-spec.md](tasks/01-freeze-provider-spec.md)
 - [x] T02 — SPIKE-8a: prototype the mesh and point CPU rasterizer → [tasks/02-spike-rasterizer-prototype.md](tasks/02-spike-rasterizer-prototype.md)
-- [~] T03 — SPIKE-8b: prove isolated Shell surrogate hosting → [tasks/03-spike-surrogate-hosting.md](tasks/03-spike-surrogate-hosting.md) ⟵ running
+- [x] T03 — SPIKE-8b: prove isolated Shell surrogate hosting → [tasks/03-spike-surrogate-hosting.md](tasks/03-spike-surrogate-hosting.md)
 - [ ] T04 — Freeze provider interfaces and the shared model-core subset → [tasks/04-freeze-provider-interfaces.md](tasks/04-freeze-provider-interfaces.md)
 - [ ] T05 — Scaffold the provider build and test integration → [tasks/05-provider-build-test-scaffold.md](tasks/05-provider-build-test-scaffold.md)
 - [ ] T06 — Define budgets, deadlines, and HRESULT mapping → [tasks/06-budgets-deadlines-hresults.md](tasks/06-budgets-deadlines-hresults.md)
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T21:18:24Z · 2/29 done
+**Pipeline status** — updated 2026-09-29T21:43:54Z · 3/29 done
 
-- Completed: T01, T02
+- Completed: T01, T02, T03
 - Blocked: none
 - Failed: none
-- Remaining: T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T02 — done · Prototype CPU rasterizer + driver, 8 deterministic goldens, and 9 regression cases landed; cap-render time/commit (mesh 59 ms/79 MiB, points 186 ms/80 MiB at 512 px 2x SS) meet targets; full Tests.Unit green (115 cases). T03 still owns the decisive in-surrogate measurement and the KTX2/WebP/meshopt decode paths.
+- Remaining: T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T03 — done · Linked and measured the ADR-0003 compressed-glTF closure (fastgltf/draco/meshopt/KTX2-Basis/WebP) inside dllhost.exe via new probe gltf/image modes (14-29 ms, <=9 MiB peak; mesh/points re-confirmed 129-201 ms, 57 MiB), fixed the fastgltf FASTGLTF_ENABLE_DEPRECATED_EXT ABI define, added 8 in-process regression cases (Tests.Unit 123 green, lint ok) and removed registration; only the elevated HKLM rerun and real 150/200% DPI observation remain, both blocked by the non-interactive session.
 <!-- /symphony:status -->

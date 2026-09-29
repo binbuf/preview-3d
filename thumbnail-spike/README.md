@@ -49,9 +49,10 @@ vary with host load; T03 repeats the measurement inside the surrogate.
 ## Compressed-glTF fixtures for T03
 
 Prepared under `interactive-viewer/test-assets/corpus/`; the decoder closure is the ADR-0003 provider
-set. The spike itself exercises only the **Draco** decoder (see the `[draco]` Catch2 case, which
-encodes then decodes a bounded Draco bitstream before rasterizing it). The remaining decoders are the
-T03 measurement targets, not exercised by this rasterizer-only spike.
+set. This rasterizer-only spike (T02) exercises only the **Draco** decoder (see the `[draco]` Catch2
+case, which encodes then decodes a bounded Draco bitstream before rasterizing it). The full closure
+(fastgltf + draco + meshoptimizer + KTX2/Basis + libwebp) is linked and measured by the T03 surrogate
+probe (`surrogate-probe/GltfSpikeDecode.{h,cpp}`); see `surrogate-probe/README.md`.
 
 | Fixture | Exercises |
 | --- | --- |
