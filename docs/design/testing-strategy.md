@@ -27,6 +27,7 @@
 | Isolation tests | provider test group in `Tests.Unit.exe` | Stream-only ingestion: no sidecar/path/network/process/cache access; adversary corpora per adapter |
 | Fuzz | `tests/fuzz/` (ASan/libFuzzer) | Each adapter's parse/sample boundary; no crash, hang, overflow or unbounded allocation |
 | Surrogate soak | new / `tests/app-smoke/` | Parallel apartments, repeated load/unload in the real Shell surrogate, GDI/User/private-byte leak checks |
+| Local installed smoke | `packaging/smoke/` | Per-user registered CLSID + extension `ShellEx`, a real `.stl` thumbnail through `IThumbnailCache`, module-identity proof of `DllHost` hosting, and no `DisableProcessIsolation` (T22; ADR-0020) |
 | Install verification | `packaging/` + clean VM | Each CLSID loads into the isolated surrogate, not `explorer.exe`; no `DisableProcessIsolation`; conflict/repair/uninstall |
 
 Catch2 binaries are run by hand out of `x64\<Config>\` today (there is no CI); routine provider
@@ -54,6 +55,14 @@ rather than a copy, so a fixture is rendered through the production
 orchestration; the `Family::Unknown` placeholder scene proves the harness before
 the first real adapter exists. The full workflow is in
 `tests/provider-host/README.md` and `design/adr/0019-provider-com-host-harness.md`.
+
+The local installed smoke (`packaging/smoke/`, T22; ADR-0020) is the first registered,
+Shell-resolved proof: it stages the Release DLL and its CRT closure, registers one family's
+CLSID and extension `ShellEx` per-user, then renders a real `.stl` twice — in-process through the
+DLL's PRIVATE `DllGetClassObject` (the reference image) and through the real Shell
+`IThumbnailCache::GetThumbnail` path. It passes only when the two images match, which proves the
+Explorer thumbnail is model-derived and produced by this provider, and it confirms `DllHost`
+hosting with no `DisableProcessIsolation`. Every later family task re-runs it for its family.
 
 ## Containment and hostile input
 

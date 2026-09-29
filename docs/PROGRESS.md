@@ -20,6 +20,7 @@
 - **T17 - Build the provider COM host test harness — E2E slice review**: `tests/provider-host/Tests.ProviderHost.exe` (new project in `Preview3D.slnx`; GUID; Files: `ProviderHostMain.cpp` (Catch2 session), `ProviderHostSupport.h` (Shell activation
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 - **T21 - Implement the STL thumbnail adapter**: Provider STL adapter lives in `thumbnail-provider/StlFamilyAdapter.{h,cpp}` (class; **Naming gotcha:** the provider files are `StlFamilyAdapter.*`, not `StlAdapter.*`.
+- **T22 — First installed Release smoke in Windows Explorer — E2E slice review**: Repeatable local smoke lives in `packaging/smoke/` (ADR-0020): `Stage-ProviderSmoke.ps1`; **Verification shape (reusable by T23–T34 and T44):** render the same file twice — in-process
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -568,6 +569,12 @@ markers); sessions are pointed at this file and read it themselves.
 - The original WiX/MSI (Gate 7) is unbuilt; T41 registers through the current installer path and the
   MSI must later adopt the same identities and rules (ADR-0006).
 
+- T22 landed the local smoke (`packaging/smoke/`, ADR-0020). T23–T34 must add their CLSID + one
+  extension mapping to `Register-ProviderSmoke.ps1`/`Unregister-ProviderSmoke.ps1`, commit a small
+  non-degenerate model fixture, and re-run `Invoke-ProviderSmoke.ps1`. The visual-quality check (a
+  recognizable bright model, not a degenerate sliver) is a follow-up for each family; the
+  `interactive-viewer\test-assets\corpus\A-small-stl.stl` fixture is degenerate and unsuitable.
+
 ## T21 - Implement the STL thumbnail adapter
 
 - Provider STL adapter lives in `thumbnail-provider/StlFamilyAdapter.{h,cpp}` (class
@@ -602,3 +609,48 @@ markers); sessions are pointed at this file and read it themselves.
   214 / 134485 (Debug); `Tests.ProviderHost.exe` 5 cases / 55 assertions in both configs;
   dependency-closure check OK. Build via
   `msbuild tests\unit\Tests.Unit.vcxproj /p:Configuration=<Debug|Release> /p:Platform=x64 /p:SolutionDir=<root>\`.
+
+## T22 — First installed Release smoke in Windows Explorer — E2E slice review
+
+- Repeatable local smoke lives in `packaging/smoke/` (ADR-0020): `Stage-ProviderSmoke.ps1`
+  (DLL + app-local MSVC CRT closure into `artifacts\smoke\stage\<Config>`),
+  `Register-ProviderSmoke.ps1`/`Unregister-ProviderSmoke.ps1` (STL CLSID +
+  `InprocServer32`/`ThreadingModel=Apartment`, AppID with empty `DllSurrogate`,
+  extension `ShellEx`; backup+restore, default HKCU), `ProviderSmokeHost.cpp`
+  (`x64\Release\ProviderSmokeHost.exe`, in `Preview3D.slnx`), `Invoke-ProviderSmoke.ps1`
+  (build→stage→cache-clear→register→verify→unregister, exits 0 on pass),
+  `fixtures/smoke-cube.stl`, `README.md`.
+- **Verification shape (reusable by T23–T34 and T44):** render the same file twice — in-process
+  through the DLL's PRIVATE `DllGetClassObject` (an `HBITMAP` cannot cross a surrogate) and through
+  the real Shell path `IThumbnailCache::GetThumbnail` with `WTS_FORCEEXTRACTION` — then require the
+  two pixel buffers to match. That proves the Shell thumbnail is model-derived from this provider,
+  not a generic icon. Separately `CoCreateInstance(CLSCTX_LOCAL_SERVER)` + a `CreateToolhelp32Snapshot`
+  module scan finds `Preview3DThumbnailProvider.dll` mapped in `dllhost.exe` (never the caller), and
+  `DisableProcessIsolation` is probed absent in both hives.
+- **Exact HKCU keys** (see Hand-off in the task file): CLSID default "Preview 3D STL Thumbnail
+  Provider" + `AppID`; `InprocServer32` default = staged DLL, `ThreadingModel=Apartment`; AppID
+  `DllSurrogate=""`; `.stl\shellex\{E357FCCD-A995-4576-B01F-234630154E96}` default = STL CLSID.
+  The STL CLSID is `{BFC86E1A-55C1-4C2D-AA36-3C25DECF30C9}` (FamilyRouting.h); AppID is
+  `{BFC86E1A-55C1-4C2D-AA36-3C25DECF3010}`.
+- Evidence (Release x64, OS 10.0.26200, 96 DPI): `Invoke-ProviderSmoke.ps1` exit 0;
+  reference 256x256 opaque 0.7407 maxChannel 212; Shell thumbnail 256x256 `WTSAT_ARGB`;
+  module hosts `dllhost.exe`; reference-vs-shell `meanAbs=0.0000 maxAbs=0`; cleanup removed every
+  written key. `Tests.Unit.exe` 214 cases / 134400 assertions green; `Tests.ProviderHost.exe`
+  5 / 55 green; dependency closure OK (9 modules).
+- **Gotchas:** (1) the non-interactive, non-elevated session cannot browse Explorer or write HKLM —
+  the Shell `IThumbnailCache` path is the substitute and HKCU is the scope (T03 recorded the same
+  limits). (2) `interactive-viewer\test-assets\corpus\A-small-stl.stl` is a degenerate fixture
+  (240 identical flat triangles) and renders as a faint sliver; use the committed
+  `packaging/smoke/fixtures/smoke-cube.stl` for a recognizable model. (3) The AppID + empty
+  `DllSurrogate` is what routes `CLSCTX_LOCAL_SERVER` into `DllHost`; the Shell path isolates by
+  default. (4) `Unregister-ProviderSmoke.ps1` stops only `dllhost.exe` processes whose module list
+  contains the provider, so a stale surrogate cannot lock the staged DLL.
+- Full-solution `Preview3D.slnx` Release build still fails only at the pre-existing
+  `compatibility-host-step` OCCT `x64-windows-static-md` gap (`C1083 BRepBndLib.hxx`); the provider
+  and the smoke host build clean through the same solution. The orchestrator builds the two needed
+  projects directly so the smoke is not gated on that gap.
+- Docs: new `docs/design/adr/0020-developer-local-installed-smoke.md`; updated
+  `docs/design/testing-strategy.md` and `docs/design/08-installation-and-registration.md`.
+- **Follow-up (visual quality, not T22-blocking):** confirm a real, non-degenerate model of each
+  family renders brightly in Explorer as families land; the current smoke golden is the committed
+  cube. `A-small-stl.stl` (corpus) is a degenerate sliver, not representative.

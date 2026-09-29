@@ -126,6 +126,10 @@ provider at that stable install path.
 
 The handler key is the Windows thumbnail-handler category. Registration does not add IPreviewHandler, context-menu, property, icon-overlay, or property-handler entries.
 
+A developer/QA-local smoke (`packaging/smoke/`, T22; ADR-0020) writes the same CLSID/`InprocServer32`/
+`AppID`/`ShellEx` shape at per-user (`HKCU\Software\Classes`) scope from a staged DLL and removes it
+again; it is not the installer and does not change the machine-level contract above.
+
 Component ownership is exact: every key/value has a component/key path and uninstall removes only
 values installed by this product. T41 implements these rules in the current NSIS installer
 (ADR-0007); the eventual MSI adopts the same identities and rules through its component table. The

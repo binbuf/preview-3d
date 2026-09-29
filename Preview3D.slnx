@@ -14,6 +14,7 @@
   <Project Path="thumbnail-spike/surrogate-probe/host/SurrogateProbeHost.vcxproj" Id="3a6f1e02-9c4d-4b57-8e21-7d5a0c9b6f14" />
   <Project Path="tests/unit/Tests.Unit.vcxproj" Id="286cbb0d-2cac-45fe-88bb-55383e3632d3" />
   <Project Path="tests/provider-host/Tests.ProviderHost.vcxproj" Id="6c2f9a10-7d3e-4b21-9f4a-2d8c1b7e5a64" />
+  <Project Path="packaging/smoke/ProviderSmokeHost.vcxproj" Id="7e4b2c91-3a5d-4f18-b6c2-9d8e1f0a3b57" />
   <Project Path="tests/hostile-worker/Preview3DHostileWorker.vcxproj" Id="41213d60-a737-46f9-8251-2e54234ed2b1" />
   <Project Path="tests/import-isolation/Tests.ImportIsolation.vcxproj" Id="22fff45c-3a1a-45a4-86cc-c8966db2b435" />
 </Solution>
