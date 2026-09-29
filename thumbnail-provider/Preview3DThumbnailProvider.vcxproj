@@ -95,6 +95,7 @@
     <ClInclude Include="Deadline.h" />
     <ClInclude Include="AllocationLedger.h" />
     <ClInclude Include="ProviderErrors.h" />
+    <ClInclude Include="ComCore.h" />
     <!-- T07: the provider-shared parser subset. These are the same source
          files the import worker compiles (ADR-0004, source-not-state); none
          of them reference a broker/worker/viewer header. -->
@@ -104,6 +105,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="ComCore.cpp" />
     <ClCompile Include="ProviderContracts.cpp" />
     <ClCompile Include="ProviderExports.cpp" />
     <!-- The shared parser subset must not use the provider precompiled
