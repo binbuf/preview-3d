@@ -10,6 +10,13 @@
 //   control - solid teal image; proves the COM/bitmap plumbing alone
 //   mesh    - T02 cap-sized mesh scene (2M inspected / 250k rasterized)
 //   points  - T02 cap-sized point cloud (6M inspected / 250k rasterized)
+//   gltf    - bounded compressed-glTF decode (draco/meshopt geometry plus
+//             KTX2/Basis and WebP images) of HKCU\...\GltfPath, rendered with
+//             the same T02 rasterizer. Forces the ADR-0003 decoder closure to
+//             load and run inside the surrogate.
+//   image   - decodes a standalone .ktx2/.webp from HKCU\...\GltfPath via the
+//             same decoders and renders the control image, measuring the
+//             image-decoder closure without a glTF container.
 //
 // Every GetThumbnail appends one line (with the host's RunToken) to the log so
 // the host can prove which process actually executed the call.
@@ -29,6 +36,7 @@
 #include <string>
 #include <vector>
 
+#include "GltfSpikeDecode.h"
 #include "SceneFixtures.h"
 #include "ThumbnailRasterizer.h"
 
@@ -61,6 +69,15 @@ std::wstring ReadConfigString(const wchar_t* name, const wchar_t* fallback)
         return buffer;
     }
     return fallback;
+}
+
+std::wstring ToWide(const std::string& text)
+{
+    if (text.empty()) return {};
+    const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    std::wstring wide(static_cast<std::size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), length);
+    return wide;
 }
 
 std::wstring ProcessImagePath()
@@ -212,9 +229,51 @@ public:
         std::vector<std::uint8_t> pixels;
         std::uint64_t inspected = 0;
         std::uint64_t kept = 0;
+        std::wstring extra;
         thumbnail_rasterizer::Status status = thumbnail_rasterizer::Status::Ok;
 
-        if (mode_ == L"mesh") {
+        if (mode_ == L"gltf") {
+            const std::wstring gltfPath = ReadConfigString(L"GltfPath", L"");
+            std::vector<thumbnail_rasterizer::Triangle> decoded;
+            gltf_spike::DecodeStats gltfStats;
+            std::string gltfError;
+            if (gltfPath.empty() || !gltf_spike::Decode(gltfPath, decoded, gltfStats, gltfError)) {
+                status = thumbnail_rasterizer::Status::NoGeometry;
+                extra = L" gltf_error=" + ToWide(gltfError.empty() ? std::string("no path") : gltfError);
+            } else {
+                thumbnail_rasterizer::GeometryView view;
+                view.triangles = decoded;
+                thumbnail_rasterizer::Options options;
+                options.size = size;
+                options.supersample = 1;
+                thumbnail_rasterizer::Image image;
+                status = thumbnail_rasterizer::Render(view, options, image);
+                pixels = std::move(image.bgraPremultiplied);
+                inspected = gltfStats.vertices;
+                kept = gltfStats.triangles;
+                extra = L" decoder=" + ToWide(gltfStats.geometryDecoder) + L" source_bytes=" +
+                        std::to_wstring(gltfStats.sourceBytes) + L" image_pixels=" +
+                        std::to_wstring(gltfStats.imagePixels) + L" images=";
+                for (std::size_t i = 0; i < gltfStats.decodedImages.size(); ++i) {
+                    if (i != 0) extra += L",";
+                    extra += ToWide(gltfStats.decodedImages[i]);
+                }
+            }
+        } else if (mode_ == L"image") {
+            const std::wstring imagePath = ReadConfigString(L"GltfPath", L"");
+            gltf_spike::DecodeStats imageStats;
+            std::string imageError;
+            if (imagePath.empty() || !gltf_spike::DecodeStandaloneImage(imagePath, imageStats, imageError)) {
+                status = thumbnail_rasterizer::Status::NoGeometry;
+                extra = L" image_error=" + ToWide(imageError.empty() ? std::string("no path") : imageError);
+            } else {
+                FillControlImage(size, pixels);
+                extra = L" decoder=" + ToWide(imageStats.decodedImages.empty() ? std::string("none")
+                                                                               : imageStats.decodedImages[0]) +
+                        L" source_bytes=" + std::to_wstring(imageStats.sourceBytes) + L" image_pixels=" +
+                        std::to_wstring(imageStats.imagePixels);
+            }
+        } else if (mode_ == L"mesh") {
             auto scene = thumbnail_spike::GenerateLargeMesh(2000000, 250000, thumbnail_spike::SeedFromString("spike8-mesh"));
             inspected = scene.inspected;
             kept = scene.triangles.size();
@@ -252,7 +311,7 @@ public:
                   L" mode=" + mode_ + L" inspected=" + std::to_wstring(inspected) + L" kept=" + std::to_wstring(kept) +
                   L" status=" + std::to_wstring(static_cast<int>(status)) + L" elapsed_ms=" + std::to_wstring(elapsed) +
                   L" commit_after_bytes=" + std::to_wstring(after) + L" commit_delta_bytes=" + std::to_wstring(after - baselinePrivate_) +
-                  L" peak_bytes=" + std::to_wstring(peak));
+                  L" peak_bytes=" + std::to_wstring(peak) + extra);
 
         if (bitmap == nullptr) return E_FAIL;
         *phbmp = bitmap;
