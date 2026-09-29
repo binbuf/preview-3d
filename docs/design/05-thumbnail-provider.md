@@ -203,9 +203,14 @@ documented by [ADR-0013](adr/0013-provider-com-core-lifetime.md): one class fact
 CLSID (family chosen from the CLSID alone, never sniffed), explicit atomic
 module/object/lock/active-call counts behind `DllCanUnloadNow`, and a `ProviderObject`
 that implements `IInitializeWithStream` (T12, [ADR-0014](adr/0014-bounded-stream-backing.md))
-over the bounded stream source; T13 adds `IThumbnailProvider` to the same object. DllMain only
-records the module handle and disables the unused thread notifications; it performs no COM,
-registration, library load or thread work.
+over the bounded stream source; T13 adds `IThumbnailProvider` to the same object. `GetThumbnail`
+routes the CLSID-selected family through `thumbnail-provider/ThumbnailPipeline.h` (the
+`RunThumbnailPipeline` orchestration and its `IThumbnailDependencies` seam), consumes the linked
+adapter from `FamilyAdapterRegistry.h`, converts the rasterizer's `RasterImage` to the returned DIB
+in `RasterBitmap.h`, and sets `WTSAT_ARGB`; [ADR-0015](adr/0015-provider-thumbnail-pipeline-and-cx.md)
+records the composition and the `cx == 0` -> `E_INVALIDARG` row. DllMain only records the module
+handle and disables the unused thread notifications; it performs no COM, registration, library load
+or thread work.
 
 ## Security and robustness
 
@@ -228,6 +233,7 @@ An importer crash must be addressed by fuzzing/fixing; SEH containment is a last
 | Condition | HRESULT |
 | --- | --- |
 | Bad pointer/invalid call order | E_POINTER / E_UNEXPECTED |
+| Invalid argument (the degenerate `cx == 0`) | E_INVALIDARG |
 | Unsupported stream behavior or format feature | HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED) |
 | Malformed or empty geometry | HRESULT_FROM_WIN32(ERROR_BAD_FORMAT) |
 | Limit or deadline exceeded | HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE) / ERROR_TIMEOUT |

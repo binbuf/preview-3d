@@ -14,6 +14,9 @@
 // output bitmap to null and returns the precise HRESULT).
 //
 // Mapping of the adapter taxonomy onto the table:
+//   - BadArgument (E_INVALIDARG): a caller argument outside the COM contract
+//     (the degenerate cx == 0 request), distinct from a bad pointer or an
+//     out-of-order call (ADR-0015);
 //   - Unsupported (ERROR_NOT_SUPPORTED): unsupported format/encoding/required
 //     feature/composition, and unsafe references;
 //   - BadFormat (ERROR_BAD_FORMAT): malformed/empty geometry and unusable or
@@ -33,13 +36,14 @@
 
 namespace preview3d::provider {
 
-// One row of the design/05 HRESULT table (plus success). Bad pointer and
-// invalid call order are distinct because the table lists two codes; they are
-// COM-boundary outcomes, not adapter-returned error codes.
+// One row of the design/05 HRESULT table (plus success). Bad pointer, invalid
+// call order and invalid argument are distinct because the table lists them
+// separately; they are COM-boundary outcomes, not adapter-returned error codes.
 enum class ProviderOutcome : std::uint32_t {
     Success = 0,
     BadPointer,          // E_POINTER
     InvalidCallSequence, // E_UNEXPECTED
+    BadArgument,         // E_INVALIDARG (degenerate cx == 0; ADR-0015)
     Unsupported,         // HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)
     BadFormat,           // HRESULT_FROM_WIN32(ERROR_BAD_FORMAT)
     LimitExceeded,       // HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE)
@@ -56,6 +60,7 @@ constexpr HRESULT HresultFor(ProviderOutcome outcome) noexcept
         case O::Success: return S_OK;
         case O::BadPointer: return E_POINTER;
         case O::InvalidCallSequence: return E_UNEXPECTED;
+        case O::BadArgument: return E_INVALIDARG;
         case O::Unsupported: return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
         case O::BadFormat: return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
         case O::LimitExceeded: return HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE);

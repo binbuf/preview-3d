@@ -254,6 +254,7 @@ TEST_CASE("provider HRESULT mapping matches every table row", "[provider][budget
     CHECK(HresultFor(O::Success) == S_OK);
     CHECK(HresultFor(O::BadPointer) == E_POINTER);
     CHECK(HresultFor(O::InvalidCallSequence) == E_UNEXPECTED);
+    CHECK(HresultFor(O::BadArgument) == E_INVALIDARG);
     CHECK(HresultFor(O::Unsupported) == HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
     CHECK(HresultFor(O::BadFormat) == HRESULT_FROM_WIN32(ERROR_BAD_FORMAT));
     CHECK(HresultFor(O::LimitExceeded) == HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE));

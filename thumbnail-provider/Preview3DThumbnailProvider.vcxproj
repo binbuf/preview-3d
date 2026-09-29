@@ -59,6 +59,8 @@
       <CETCompat>true</CETCompat>
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <DataExecutionPrevention>true</DataExecutionPrevention>
+      <!-- T13 CreateDIBSection (gdi32); no other GDI object is created. -->
+      <AdditionalDependencies>gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -81,6 +83,8 @@
       <CETCompat>true</CETCompat>
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <DataExecutionPrevention>true</DataExecutionPrevention>
+      <!-- T13 CreateDIBSection (gdi32); no other GDI object is created. -->
+      <AdditionalDependencies>gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -97,6 +101,10 @@
     <ClInclude Include="ProviderErrors.h" />
     <ClInclude Include="ComCore.h" />
     <ClInclude Include="StreamSource.h" />
+    <!-- T13 routed pipeline, adapter registry and DIB/HBITMAP boundary. -->
+    <ClInclude Include="ThumbnailPipeline.h" />
+    <ClInclude Include="FamilyAdapterRegistry.h" />
+    <ClInclude Include="RasterBitmap.h" />
     <!-- T07: the provider-shared parser subset. These are the same source
          files the import worker compiles (ADR-0004, source-not-state); none
          of them reference a broker/worker/viewer header. -->
@@ -113,6 +121,17 @@
          use the provider precompiled header: the same file compiles in
          Tests.Unit, which has none. -->
     <ClCompile Include="StreamSource.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T13. Like StreamSource.cpp these stay PCH-free so the same sources
+         compile into Tests.Unit.exe for direct coverage. -->
+    <ClCompile Include="ThumbnailPipeline.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="FamilyAdapterRegistry.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="RasterBitmap.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <!-- The shared parser subset must not use the provider precompiled

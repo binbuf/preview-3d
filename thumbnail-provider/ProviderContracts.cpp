@@ -56,6 +56,8 @@ static_assert(Deadline::kCooperativeStop == std::chrono::milliseconds{2000});
 static_assert(ClassifyError(ErrorCode::OutOfMemory) == ProviderOutcome::OutOfMemory);
 static_assert(HresultFor(ProviderOutcome::LimitExceeded) ==
               HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE));
+// T13/ADR-0015: the degenerate cx == 0 request is an invalid argument.
+static_assert(HresultFor(ProviderOutcome::BadArgument) == E_INVALIDARG);
 
 // Checked helpers are usable at compile time for file-derived checks.
 static_assert(FitsInRange(0, ProviderLimits::kStreamMaxBytes,

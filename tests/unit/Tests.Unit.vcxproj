@@ -49,7 +49,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;windowscodecs.lib;ole32.lib;advapi32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;windowscodecs.lib;ole32.lib;advapi32.lib;bcrypt.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -79,6 +79,14 @@
     <!-- T12 bounded stream backing over IInitializeWithStream. -->
     <ClCompile Include="..\..\thumbnail-provider\StreamSource.cpp" />
     <ClCompile Include="ProviderStreamTests.cpp" />
+    <!-- T13 routed pipeline, adapter registry and DIB/HBITMAP boundary, plus
+         their direct behavior coverage. -->
+    <ClCompile Include="..\..\thumbnail-provider\ThumbnailPipeline.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\FamilyAdapterRegistry.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\RasterBitmap.cpp" />
+    <ClCompile Include="ProviderPipelineTests.cpp" />
+    <ClCompile Include="ProviderRasterBitmapTests.cpp" />
+    <ClCompile Include="ProviderThumbnailTests.cpp" />
     <!-- T07 shared parser-core regression coverage; compiled with no
          worker/broker/viewer header to pin the provider compile boundary. -->
     <ClCompile Include="ParserCoreTests.cpp" />
