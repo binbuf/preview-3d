@@ -59,7 +59,7 @@ before it is built.
 ## Phase 3 — First end-to-end slice: STL in Explorer
 
 - [x] T21 — Implement the STL thumbnail adapter → [tasks/21-stl-adapter.md](tasks/21-stl-adapter.md)
-- [ ] T22 — First installed Release smoke in Windows Explorer — E2E slice review → [tasks/22-first-installed-release-smoke.md](tasks/22-first-installed-release-smoke.md)
+- [x] T22 — First installed Release smoke in Windows Explorer — E2E slice review → [tasks/22-first-installed-release-smoke.md](tasks/22-first-installed-release-smoke.md)
 
 ## Phase 4 — Tier A breadth
 
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T23:22:02Z · 15/29 done
+**Pipeline status** — updated 2026-09-29T23:32:24Z · 16/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22
 - Blocked: none
 - Failed: none
-- Remaining: T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T21 — done · Jev classified the session as done (confidence 100%)
+- Remaining: T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T22 — done · Added a repeatable per-user packaging/smoke procedure (stage/register/verify/unregister + ProviderSmokeHost in the solution) that proves a real .stl Shell thumbnail matches the provider's reference, loads in dllhost.exe, sets no DisableProcessIsolation, and cleans up all keys; ADR-0020/docs/hand-off recorded, tests green, only the pre-existing compatibility-host-step OCCT gap remains.
 <!-- /symphony:status -->
