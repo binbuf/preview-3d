@@ -12,6 +12,7 @@
 - **T06 — Define budgets, deadlines, and HRESULT mapping**: T06 services are header-only and live in `thumbnail-provider/`:; Constants as frozen: 256 MiB stream, 128 MiB contiguous backing, 192 MiB accounted scratch,
 - **T07 — Extract the provider-shared parser source subset**: `shared/parser-core/` is the extracted source set, compiled into both `Preview3DImportWorker.exe`; Worker adapters now consume it: `import-worker/src/StlAdapter.cpp`/`PlyAdapter.cpp` include
 - **T11 — Implement the COM core and lifetime exports**: The provider's in-proc COM core is `thumbnail-provider/ComCore.h`/`ComCore.cpp` (ADR-0013):; Routing without sniffing: the incoming `REFCLSID` is formatted to the canonical upper-case
+- **T12 — Implement bounded stream backing over IInitializeWithStream**: `thumbnail-provider/StreamSource.h`/`StreamSource.cpp` hold the single `BoundedSource`; `Create(IStream*, Deadline, AllocationLedger&, ProviderOutcome&)` adopts the stream, probes
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 <!-- symphony:digest:end -->
 
@@ -283,6 +284,35 @@ markers); sessions are pointed at this file and read it themselves.
   shims) because of the C++ standard-library use; these are CRT-only and the dependency-closure
   rule (no `Preview3D*` import) still holds.
 
+## T12 — Implement bounded stream backing over IInitializeWithStream
+
+- `thumbnail-provider/StreamSource.h`/`StreamSource.cpp` hold the single `BoundedSource`
+  implementation (`BoundedStreamSource`, ADR-0014). `StreamSource.cpp` compiles **without the
+  provider PCH** (like the shared parser subset) and also builds into `Tests.Unit.exe`, so the
+  behavior tests run the real code rather than a copy.
+- `Create(IStream*, Deadline, AllocationLedger&, ProviderOutcome&)` adopts the stream, probes
+  seekability with `Seek(STREAM_SEEK_CUR)`, then preflights `Stat` + a seek-to-end probe. A
+  reported size over 256 MiB fails fast with `LimitExceeded` **before any read**. The 64 KiB ×
+  8-slot block cache is charged through the ledger before allocation; contiguous backing (up to
+  128 MiB) is materialized on demand and charged before each growth. Short reads inside the
+  reported extent abort with `BadFormat`; deadline/limit/OOM map through `ProviderErrors.h`.
+- `ComCore.cpp`'s `ProviderObject` now derives from `IInitializeWithStream` (no second object
+  type): null stream → `E_POINTER`, second `Initialize` → `E_UNEXPECTED`, preflight failure →
+  `HresultFor(outcome)`. `ProviderObject::StreamSource()` is the T13 hand-off.
+- Gotcha: the source owns one `Deadline` copied at `Initialize`; **T13/T16 must restart it at
+  `GetThumbnail` entry** (`source->MutableDeadline().Restart()` or pass `&MutableDeadline()` as
+  `AdapterInput::deadline`), otherwise reads fail `Deadline` once 2 s have passed since init.
+- Gotcha: `ContiguousView()` returns empty (`Unsupported`/`LimitExceeded` in `FailureCause()`)
+  when the source is over 128 MiB or size unknown-but-seekable; adapters must treat empty as the
+  safe fallback, not as zero-length input.
+- Tests: `tests/unit/ProviderStreamTests.cpp` (`[provider][stream]`, 9 cases) with a stack
+  `MemoryStream` double; `[provider][stream][com]` loads the built DLL. Evidence: Release
+  155 cases / 76405 assertions, Debug 155 / 76491, all green; `[provider]` 26 cases; exports still
+  exactly the two `PRIVATE` symbols; dependency closure exit 0 (no ole32/propsys import).
+- Build wiring: `StreamSource.{h,cpp}` added to `Preview3DThumbnailProvider.vcxproj` (cpp with
+  `<PrecompiledHeader>NotUsing`) and `StreamSource.cpp` + `ProviderStreamTests.cpp` to
+  `Tests.Unit.vcxproj`. New decision: `docs/design/adr/0014-bounded-stream-backing.md`.
+
 ## Follow-ups
 
 - T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every
@@ -300,6 +330,11 @@ markers); sessions are pointed at this file and read it themselves.
   and T16 wraps `GetThumbnail` in `ActiveCallGuard`. The class factory/lifetime contract, the
   `.def` two-symbol `PRIVATE` surface and `CLASS_E_CLASSNOTAVAILABLE` for unknown CLSIDs are
   frozen by T11/ADR-0013.
+- T12 landed; T13/T16 must take `ProviderObject::StreamSource()`, pass it to adapters as
+  `BoundedSource*`, and restart its deadline at `GetThumbnail` entry
+  (`MutableDeadline().Restart()` or `&MutableDeadline()` as `AdapterInput::deadline`). Treat an
+  empty `ContiguousView()` as the safe fallback. No second ledger; `StreamSource.cpp` stays
+  PCH-free and free of worker/broker/viewer headers.
 - T17 creates `Tests.ProviderHost.exe` under the name frozen by T05/ADR-0010 and wires it into
   `Preview3D.slnx`, activating the provider via COM/`GetProcAddress` rather than linking.
 

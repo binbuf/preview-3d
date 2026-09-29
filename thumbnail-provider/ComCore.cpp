@@ -4,6 +4,18 @@
 
 #include "ComCore.h"
 
+// T12: the provider object also implements IInitializeWithStream over the
+// bounded stream source. propsys.h declares the interface; only __uuidof is
+// used, so no propsys/ole32 import is added.
+#include "AllocationLedger.h"
+#include "Deadline.h"
+#include "ProviderErrors.h"
+#include "StreamSource.h"
+
+#include <objbase.h>
+#include <propsys.h>
+
+#include <memory>
 #include <new>
 
 namespace preview3d::provider {
@@ -46,11 +58,12 @@ void FormatClsid(REFGUID clsid, char out[40]) noexcept
     out[at] = '\0';
 }
 
-// The provider object shell. T11 owns identity/QI/refcount only; T12 adds
-// IInitializeWithStream and T13 adds IThumbnailProvider to this same class, and
-// T16 wraps GetThumbnail in ActiveCallGuard. Aggregation is not supported, so
-// CreateInstance rejects a non-null pUnkOuter before an instance exists.
-class ProviderObject final : public IUnknown {
+// The provider object. T11 owns identity/QI/refcount; T12 adds
+// IInitializeWithStream over BoundedStreamSource and T13 adds
+// IThumbnailProvider to this same class, and T16 wraps GetThumbnail in
+// ActiveCallGuard. Aggregation is not supported, so CreateInstance rejects a
+// non-null pUnkOuter before an instance exists.
+class ProviderObject final : public IInitializeWithStream {
 public:
     explicit ProviderObject(Family family) noexcept : family_(family)
     {
@@ -60,6 +73,10 @@ public:
     ~ProviderObject() noexcept { ModuleLifetime::ReleaseObject(); }
 
     Family FamilyValue() const noexcept { return family_; }
+
+    // The bounded source adopted by Initialize, for T13's GetThumbnail caller.
+    // Null until a successful Initialize.
+    BoundedStreamSource* StreamSource() const noexcept { return source_.get(); }
 
     HRESULT WINAPI QueryInterface(REFIID riid, void** ppv) noexcept override
     {
@@ -72,7 +89,12 @@ public:
             AddRef();
             return S_OK;
         }
-        // IInitializeWithStream (T12) and IThumbnailProvider (T13) join here.
+        if (IsEqualIID(riid, __uuidof(IInitializeWithStream))) {
+            *ppv = static_cast<IInitializeWithStream*>(this);
+            AddRef();
+            return S_OK;
+        }
+        // IThumbnailProvider (T13) joins here.
         return E_NOINTERFACE;
     }
 
@@ -90,9 +112,34 @@ public:
         return remaining;
     }
 
+    // IInitializeWithStream (T12). Accepts exactly one non-null stream, takes an
+    // independent reference through the bounded source and rejects a second
+    // initialization. A null stream is E_POINTER; an already-adopted stream is
+    // E_UNEXPECTED; preflight caps and the ledger map through the T06 table.
+    HRESULT WINAPI Initialize(IStream* pstream, DWORD grfMode) noexcept override
+    {
+        (void)grfMode;
+        if (pstream == nullptr) {
+            return E_POINTER;
+        }
+        if (source_ != nullptr) {
+            return E_UNEXPECTED;
+        }
+
+        ProviderOutcome outcome = ProviderOutcome::Success;
+        auto source = BoundedStreamSource::Create(
+            pstream, Deadline{}, AllocationLedger::ProcessWide(), outcome);
+        if (!source) {
+            return HresultFor(outcome);
+        }
+        source_ = std::move(source);
+        return S_OK;
+    }
+
 private:
     std::atomic<ULONG> ref_{1};
     Family family_;
+    std::unique_ptr<BoundedStreamSource> source_;
 };
 
 // One class-factory instance per routed family CLSID. It holds a module object
