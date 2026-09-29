@@ -84,9 +84,11 @@
     <ClCompile Include="..\..\thumbnail-provider\ThumbnailPipeline.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\FamilyAdapterRegistry.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\StlFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\PlyFamilyAdapter.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\RasterBitmap.cpp" />
     <ClCompile Include="ProviderPipelineTests.cpp" />
     <ClCompile Include="ProviderStlAdapterTests.cpp" />
+    <ClCompile Include="ProviderPlyAdapterTests.cpp" />
     <ClCompile Include="ProviderRasterBitmapTests.cpp" />
     <ClCompile Include="ProviderThumbnailTests.cpp" />
     <!-- T14 deterministic geometry sampler and over-cap sampling policy. -->

@@ -1,4 +1,4 @@
-# T22 developer/QA-local smoke cleanup (STL only).
+# T22/T23 developer/QA-local smoke cleanup (STL + PLY).
 #
 # Removes every key Register-ProviderSmoke.ps1 created and restores the exact
 # pre-registration state from the captured backups. Also stops any DllHost
@@ -15,10 +15,23 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
-$providerClsid = '{BFC86E1A-55C1-4C2D-AA36-3C25DECF30C9}'
-$providerAppId = '{BFC86E1A-55C1-4C2D-AA36-3C25DECF3010}'
 $thumbnailHandlerGuid = '{E357FCCD-A995-4576-B01F-234630154E96}'
 $classesRoot = "${Scope}:\Software\Classes"
+
+$families = @(
+    [ordered]@{
+        Name      = 'STL'
+        Clsid     = '{BFC86E1A-55C1-4C2D-AA36-3C25DECF30C9}'
+        AppId     = '{BFC86E1A-55C1-4C2D-AA36-3C25DECF3010}'
+        Extension = '.stl'
+    },
+    [ordered]@{
+        Name      = 'PLY'
+        Clsid     = '{F4DC6119-E235-4BAC-8089-54EDD84F8492}'
+        AppId     = '{F4DC6119-E235-4BAC-8089-54EDD84F8493}'
+        Extension = '.ply'
+    }
+)
 
 $stateDir = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path 'artifacts\smoke'
 $manifestPath = Join-Path $stateDir "backup-manifest-$Scope.json"
@@ -61,40 +74,47 @@ foreach ($process in @(Get-Process -Name dllhost -ErrorAction SilentlyContinue))
     }
 }
 
-Restore-Or-Remove "$classesRoot\CLSID\$providerClsid"
-Restore-Or-Remove "$classesRoot\AppID\$providerAppId"
+foreach ($family in $families) {
+    Restore-Or-Remove "$classesRoot\CLSID\$($family.Clsid)"
+    Restore-Or-Remove "$classesRoot\AppID\$($family.AppId)"
 
-# The handler key and its parents: restore a pre-existing handler value, then
-# prune the shellex/.stl keys only when this smoke created them.
-$handlerKey = "$classesRoot\.stl\shellex\$thumbnailHandlerGuid"
-if (Test-ManifestExisted $handlerKey) {
-    $backup = $manifest[$handlerKey].backup
-    if (Test-Path -LiteralPath $backup) {
-        & reg.exe import $backup | Out-Null
-        Write-Output "restored $handlerKey from backup"
+    # The handler key and its parents: restore a pre-existing handler value, then
+    # prune the shellex/extension keys only when this smoke created them.
+    $handlerKey = "$classesRoot\$($family.Extension)\shellex\$thumbnailHandlerGuid"
+    if (Test-ManifestExisted $handlerKey) {
+        $backup = $manifest[$handlerKey].backup
+        if (Test-Path -LiteralPath $backup) {
+            & reg.exe import $backup | Out-Null
+            Write-Output "restored $handlerKey from backup"
+        }
+    } elseif (Test-Path $handlerKey) {
+        Remove-Item -Path $handlerKey -Recurse -Force
+        Write-Output "removed $handlerKey"
     }
-} elseif (Test-Path $handlerKey) {
-    Remove-Item -Path $handlerKey -Recurse -Force
-    Write-Output "removed $handlerKey"
-}
 
-$shellexKey = "$classesRoot\.stl\shellex"
-if (-not (Test-ManifestExisted $shellexKey) -and (Test-Path $shellexKey)) {
-    $children = @(Get-ChildItem -Path $shellexKey -ErrorAction SilentlyContinue)
-    $values = @(Get-ItemProperty -Path $shellexKey -ErrorAction SilentlyContinue |
-        Get-Member -MemberType NoteProperty | Where-Object { $_.Name -notmatch '^PS' })
-    if ($children.Count -eq 0 -and $values.Count -eq 0) {
-        Remove-Item -Path $shellexKey -Recurse -Force
-        Write-Output "removed empty $shellexKey"
+    $shellexKey = "$classesRoot\$($family.Extension)\shellex"
+    if (-not (Test-ManifestExisted $shellexKey) -and (Test-Path $shellexKey)) {
+        $children = @(Get-ChildItem -Path $shellexKey -ErrorAction SilentlyContinue)
+        $values = @()
+        $properties = @(Get-ItemProperty -Path $shellexKey -ErrorAction SilentlyContinue)
+        if ($properties.Count -gt 0) {
+            $values = @($properties |
+                Get-Member -MemberType NoteProperty |
+                Where-Object { $_.Name -notmatch '^PS' })
+        }
+        if ($children.Count -eq 0 -and $values.Count -eq 0) {
+            Remove-Item -Path $shellexKey -Recurse -Force
+            Write-Output "removed empty $shellexKey"
+        }
     }
-}
 
-$extensionKey = "$classesRoot\.stl"
-if (-not (Test-ManifestExisted $extensionKey) -and (Test-Path $extensionKey)) {
-    $children = @(Get-ChildItem -Path $extensionKey -ErrorAction SilentlyContinue)
-    if ($children.Count -eq 0) {
-        Remove-Item -Path $extensionKey -Recurse -Force
-        Write-Output "removed empty $extensionKey"
+    $extensionKey = "$classesRoot\$($family.Extension)"
+    if (-not (Test-ManifestExisted $extensionKey) -and (Test-Path $extensionKey)) {
+        $children = @(Get-ChildItem -Path $extensionKey -ErrorAction SilentlyContinue)
+        if ($children.Count -eq 0) {
+            Remove-Item -Path $extensionKey -Recurse -Force
+            Write-Output "removed empty $extensionKey"
+        }
     }
 }
 
@@ -107,4 +127,4 @@ foreach ($scratch in @($manifestPath, (Join-Path $stateDir "registered-keys-$Sco
     if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force }
 }
 
-Write-Output "STL smoke registration cleanup complete"
+Write-Output "STL/PLY smoke registration cleanup complete"

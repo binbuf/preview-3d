@@ -63,7 +63,7 @@ before it is built.
 
 ## Phase 4 — Tier A breadth
 
-- [ ] T23 — Implement the PLY thumbnail adapter → [tasks/23-ply-adapter.md](tasks/23-ply-adapter.md)
+- [x] T23 — Implement the PLY thumbnail adapter → [tasks/23-ply-adapter.md](tasks/23-ply-adapter.md)
 - [ ] T24 — Implement the OBJ thumbnail adapter → [tasks/24-obj-adapter.md](tasks/24-obj-adapter.md)
 - [ ] T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review → [tasks/25-gltf-adapter.md](tasks/25-gltf-adapter.md)
 
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T23:32:24Z · 16/29 done
+**Pipeline status** — updated 2026-09-29T23:44:31Z · 17/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23
 - Blocked: none
 - Failed: none
-- Remaining: T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T22 — done · Added a repeatable per-user packaging/smoke procedure (stage/register/verify/unregister + ProviderSmokeHost in the solution) that proves a real .stl Shell thumbnail matches the provider's reference, loads in dllhost.exe, sets no DisableProcessIsolation, and cleans up all keys; ADR-0020/docs/hand-off recorded, tests green, only the pre-existing compatibility-host-step OCCT gap remains.
+- Remaining: T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T23 — done · PLY adapter (ASCII + LE/BE binary, mesh/point, colors, stride-based binary mesh, bounded ASCII table, typed hostile failures) wired through registry, tests, provider-host goldens and the STL+PLY Explorer smoke; Tests.Unit green in Debug and Release.
 <!-- /symphony:status -->

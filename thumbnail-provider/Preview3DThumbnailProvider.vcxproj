@@ -113,6 +113,8 @@
     <ClInclude Include="RasterBitmap.h" />
     <!-- T21 STL family adapter. -->
     <ClInclude Include="StlFamilyAdapter.h" />
+    <!-- T23 PLY family adapter. -->
+    <ClInclude Include="PlyFamilyAdapter.h" />
     <!-- T07: the provider-shared parser subset. These are the same source
          files the import worker compiles (ADR-0004, source-not-state); none
          of them reference a broker/worker/viewer header. -->
@@ -157,6 +159,10 @@
          ThumbnailPipeline.cpp so Tests.Unit and Tests.ProviderHost compile the
          exact source the DLL links. -->
     <ClCompile Include="StlFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T23 PLY family adapter, PCH-free for the same reason. -->
+    <ClCompile Include="PlyFamilyAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="RasterBitmap.cpp">

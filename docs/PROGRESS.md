@@ -21,6 +21,7 @@
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 - **T21 - Implement the STL thumbnail adapter**: Provider STL adapter lives in `thumbnail-provider/StlFamilyAdapter.{h,cpp}` (class; **Naming gotcha:** the provider files are `StlFamilyAdapter.*`, not `StlAdapter.*`.
 - **T22 — First installed Release smoke in Windows Explorer — E2E slice review**: Repeatable local smoke lives in `packaging/smoke/` (ADR-0020): `Stage-ProviderSmoke.ps1`; **Verification shape (reusable by T23–T34 and T44):** render the same file twice — in-process
+- **T23 — Implement the PLY thumbnail adapter**: Provider PLY adapter lives in `thumbnail-provider/PlyFamilyAdapter.{h,cpp}` (class; Shape: ASCII + binary little/big-endian; required finite scalar `x/y/z`; optional `nx/ny/nz` and
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -569,9 +570,10 @@ markers); sessions are pointed at this file and read it themselves.
 - The original WiX/MSI (Gate 7) is unbuilt; T41 registers through the current installer path and the
   MSI must later adopt the same identities and rules (ADR-0006).
 
-- T22 landed the local smoke (`packaging/smoke/`, ADR-0020). T23–T34 must add their CLSID + one
-  extension mapping to `Register-ProviderSmoke.ps1`/`Unregister-ProviderSmoke.ps1`, commit a small
-  non-degenerate model fixture, and re-run `Invoke-ProviderSmoke.ps1`. The visual-quality check (a
+- T22 landed the local smoke (`packaging/smoke/`, ADR-0020). T23 generalized `Register-ProviderSmoke.ps1`
+  / `Unregister-ProviderSmoke.ps1` to a family list and added STL+PLY, so T24–T34 add their CLSID +
+  one extension mapping to those arrays and a `--<family>` case to `ProviderSmokeHost`; commit a small
+  non-degenerate model fixture and re-run `Invoke-ProviderSmoke.ps1`. The visual-quality check (a
   recognizable bright model, not a degenerate sliver) is a follow-up for each family; the
   `interactive-viewer\test-assets\corpus\A-small-stl.stl` fixture is degenerate and unsuitable.
 
@@ -654,3 +656,47 @@ markers); sessions are pointed at this file and read it themselves.
 - **Follow-up (visual quality, not T22-blocking):** confirm a real, non-degenerate model of each
   family renders brightly in Explorer as families land; the current smoke golden is the committed
   cube. `A-small-stl.stl` (corpus) is a degenerate sliver, not representative.
+
+## T23 — Implement the PLY thumbnail adapter
+
+- Provider PLY adapter lives in `thumbnail-provider/PlyFamilyAdapter.{h,cpp}` (class
+  `preview3d::provider::PlyAdapter`), registered for `Family::Ply` in
+  `FamilyAdapterRegistry.cpp`. PCH/COM/GDI-free, so it compiles into the DLL, `Tests.Unit.exe` and
+  `Tests.ProviderHost.exe`. **Naming:** use `PlyFamilyAdapter.*`, never `PlyAdapter.*` (the worker's
+  `import-worker/src/PlyAdapter.*` is on the Tests.Unit include path — the T21 STL gotcha).
+- Shape: ASCII + binary little/big-endian; required finite scalar `x/y/z`; optional `nx/ny/nz` and
+  `red/green/blue[/alpha]` (or `r/g/b[/a]`); `face` + integer `vertex_indices`/`vertex_index` list =
+  fan-triangulated mesh, otherwise a point cloud. Colors keep material 1 with a white base so
+  `vertexColor * baseColor` preserves source color; uncolored keeps the neutral palette. Point samples
+  feed the T14 sampler's depth-tested splat path, triangles the triangle path — no second reservoir in
+  the adapter.
+- **Binary mesh never materializes positions:** `Parse` proves vertex/face body offsets plus the vertex
+  extent with `CheckedMultiply`/`FitsInRange`, then `EnumerateGeometry` reads each referenced record at
+  `vertexStart + index * stride` through a 256-entry direct-mapped cache; the record buffer + cache are
+  charged to the ledger. ASCII mesh retains a bounded `VertexSample` table, rejected over
+  `ProviderLimits::kAccountedScratchMaxBytes` and charged before allocation (ADR-0021). A binary vertex
+  element with a list property (no fixed stride) fails `UnsupportedRequiredFeature`.
+- Bounds: per-face list ≤255, unknown list length ≤65536, skipped element records ≤
+  `kPointsInspectedMax`, vertex count ≤ `kPointsInspectedMax`; hostile counts typed before allocation;
+  `AdapterInput::deadline->Checkpoint()` per bounded unit. `EnumerateMaterials` emits index 1.
+- Coverage `tests/unit/ProviderPlyAdapterTests.cpp` (`[provider][ply]`, 20 cases): ASCII/binary-LE/BE
+  meshes and points, colors, normals, unknown scalar/list props + unknown element, out-of-range and
+  degenerate faces, hostile vertex count, hostile face list, truncated binary/ASCII, missing position,
+  cap stop, expired deadline, ledger exhaustion, pipeline error mapping, a real rendered bitmap, CLSID
+  routing.
+- Host harness: `ply-cube` + `ply-points` fixtures in `FixtureRegistry.cpp` with committed goldens
+  `tests/provider-host/goldens/ply-{cube,points}-256.pam`. `Tests.ProviderHost.vcxproj` now compiles
+  `PlyFamilyAdapter.cpp` **and** `shared/parser-core/src/PlyParserCore.cpp` (it was missing and broke
+  the host link until added). Regenerate with `x64\Release\Tests.ProviderHost.exe "[write-host-goldens]"`.
+- Smoke: `Register-ProviderSmoke.ps1`/`Unregister-ProviderSmoke.ps1` refactored to a `$families` array
+  (STL+PLY, PLY CLSID `{F4DC6119-E235-4BAC-8089-54EDD84F8492}`, AppID `{...8493}`, `.ply\shellex`);
+  `ProviderSmokeHost.exe` takes `--stl` or `--ply` and picks the CLSID/keys; `Invoke-ProviderSmoke.ps1`
+  runs both and exits 0 only when both match; committed `fixtures/smoke-cube.ply` (colored ASCII cube).
+  Gotcha: the shellex-prune block must guard `Get-ItemProperty | Get-Member` against an empty pipeline
+  (fixed) or `$ErrorActionPreference='Stop'` aborts cleanup.
+- Evidence (Release x64): `Tests.Unit.exe` 234 cases / 134495 assertions green; `Tests.ProviderHost.exe`
+  5 cases / 64 assertions green; `Invoke-ProviderSmoke.ps1` exit 0 — PLY reference 256² opaque 0.7407
+  maxChannel 232, Shell `WTSAT_ARGB` in `dllhost.exe`, reference-vs-Shell `meanAbs=0.0000 maxAbs=0`,
+  registration cleaned up. Provider + host build clean under `/W4 /WX`.
+- ADR-0021 records the stride/bounded-ASCII decision; `design/05-thumbnail-provider.md` documents the
+  adapter.

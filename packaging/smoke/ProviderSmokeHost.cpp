@@ -47,9 +47,12 @@ namespace
 {
 
 const CLSID kStlClsid = {0xBFC86E1A, 0x55C1, 0x4C2D, {0xAA, 0x36, 0x3C, 0x25, 0xDE, 0xCF, 0x30, 0xC9}};
+const CLSID kPlyClsid = {0xF4DC6119, 0xE235, 0x4BAC, {0x80, 0x89, 0x54, 0xED, 0xD8, 0x4F, 0x84, 0x92}};
 constexpr wchar_t kProviderModuleName[] = L"Preview3DThumbnailProvider.dll";
-constexpr wchar_t kProviderClsidKey[] = L"Software\\Classes\\CLSID\\{BFC86E1A-55C1-4C2D-AA36-3C25DECF30C9}";
-constexpr wchar_t kProviderAppIdKey[] = L"Software\\Classes\\AppID\\{BFC86E1A-55C1-4C2D-AA36-3C25DECF3010}";
+constexpr wchar_t kStlClsidKey[] = L"Software\\Classes\\CLSID\\{BFC86E1A-55C1-4C2D-AA36-3C25DECF30C9}";
+constexpr wchar_t kStlAppIdKey[] = L"Software\\Classes\\AppID\\{BFC86E1A-55C1-4C2D-AA36-3C25DECF3010}";
+constexpr wchar_t kPlyClsidKey[] = L"Software\\Classes\\CLSID\\{F4DC6119-E235-4BAC-8089-54EDD84F8492}";
+constexpr wchar_t kPlyAppIdKey[] = L"Software\\Classes\\AppID\\{F4DC6119-E235-4BAC-8089-54EDD84F8493}";
 
 std::string ToUtf8(const std::wstring& text)
 {
@@ -236,6 +239,7 @@ int wmain(int argc, wchar_t** argv)
     SetConsoleOutputCP(CP_UTF8);
     std::wstring dllPath;
     std::wstring stlPath;
+    std::wstring plyPath;
     std::wstring outDir;
     unsigned cx = 256;
     for (int i = 1; i < argc; ++i) {
@@ -243,14 +247,24 @@ int wmain(int argc, wchar_t** argv)
         auto next = [&]() -> std::wstring { return (i + 1 < argc) ? argv[++i] : std::wstring(); };
         if (arg == L"--dll") dllPath = next();
         else if (arg == L"--stl") stlPath = next();
+        else if (arg == L"--ply") plyPath = next();
         else if (arg == L"--out") outDir = next();
         else if (arg == L"--cx") cx = static_cast<unsigned>(_wtoi(next().c_str()));
     }
-    if (dllPath.empty() || stlPath.empty()) {
-        std::printf("usage: ProviderSmokeHost.exe --dll <path> --stl <path> [--cx 256] [--out <dir>]\n");
+    if (dllPath.empty() || (stlPath.empty() && plyPath.empty())) {
+        std::printf("usage: ProviderSmokeHost.exe --dll <path> (--stl <path> | --ply <path>) [--cx 256] [--out <dir>]\n");
         return 2;
     }
     if (outDir.empty()) outDir = L".";
+
+    // Each family smoke selects its own frozen CLSID and AppID; the rest of the
+    // procedure (surrogate hosting, Shell path, image match) is family-agnostic.
+    const bool ply = !plyPath.empty();
+    const std::wstring& modelPath = ply ? plyPath : stlPath;
+    const CLSID clsid = ply ? kPlyClsid : kStlClsid;
+    const wchar_t* clsidKey = ply ? kPlyClsidKey : kStlClsidKey;
+    const wchar_t* appIdKey = ply ? kPlyAppIdKey : kStlAppIdKey;
+    const char* familyName = ply ? "ply" : "stl";
 
     FILE* report = nullptr;
     if (fopen_s(&report, ToUtf8(outDir + L"\\report.txt").c_str(), "wb") != 0) report = nullptr;
@@ -276,22 +290,23 @@ int wmain(int argc, wchar_t** argv)
 
     std::printf("provider smoke host\n");
     std::printf("  dll=%s\n", ToUtf8(dllPath).c_str());
-    std::printf("  stl=%s\n", ToUtf8(stlPath).c_str());
+    std::printf("  %s=%s\n", familyName, ToUtf8(modelPath).c_str());
     std::printf("  cx=%u out=%s\n", cx, ToUtf8(outDir).c_str());
-    std::printf("  stl clsid=%s\n", GuidToText(kStlClsid).c_str());
+    std::printf("  %s clsid=%s\n", familyName, GuidToText(clsid).c_str());
     if (report != nullptr) {
         std::fprintf(report, "provider smoke report\n");
         std::fprintf(report, "dll=%s\n", ToUtf8(dllPath).c_str());
-        std::fprintf(report, "stl=%s\n", ToUtf8(stlPath).c_str());
+        std::fprintf(report, "model=%s\n", ToUtf8(modelPath).c_str());
+        std::fprintf(report, "family=%s\n", familyName);
         std::fprintf(report, "cx=%u\n", cx);
-        std::fprintf(report, "stl_clsid=%s\n", GuidToText(kStlClsid).c_str());
+        std::fprintf(report, "clsid=%s\n", GuidToText(clsid).c_str());
     }
 
     // -- 1. no DisableProcessIsolation anywhere we register ------------------
-    const bool clsidOptOutHkcu = RegistryValuePresent(HKEY_CURRENT_USER, kProviderClsidKey, L"DisableProcessIsolation");
-    const bool clsidOptOutHklm = RegistryValuePresent(HKEY_LOCAL_MACHINE, kProviderClsidKey, L"DisableProcessIsolation");
-    const bool appIdOptOutHkcu = RegistryValuePresent(HKEY_CURRENT_USER, kProviderAppIdKey, L"DisableProcessIsolation");
-    const bool appIdOptOutHklm = RegistryValuePresent(HKEY_LOCAL_MACHINE, kProviderAppIdKey, L"DisableProcessIsolation");
+    const bool clsidOptOutHkcu = RegistryValuePresent(HKEY_CURRENT_USER, clsidKey, L"DisableProcessIsolation");
+    const bool clsidOptOutHklm = RegistryValuePresent(HKEY_LOCAL_MACHINE, clsidKey, L"DisableProcessIsolation");
+    const bool appIdOptOutHkcu = RegistryValuePresent(HKEY_CURRENT_USER, appIdKey, L"DisableProcessIsolation");
+    const bool appIdOptOutHklm = RegistryValuePresent(HKEY_LOCAL_MACHINE, appIdKey, L"DisableProcessIsolation");
     const bool anyOptOut = clsidOptOutHkcu || clsidOptOutHklm || appIdOptOutHkcu || appIdOptOutHklm;
     std::printf("  DisableProcessIsolation: HKCU_CLSID=%s HKLM_CLSID=%s HKCU_AppID=%s HKLM_AppID=%s\n",
                 clsidOptOutHkcu ? "present" : "absent", clsidOptOutHklm ? "present" : "absent",
@@ -317,12 +332,12 @@ int wmain(int argc, wchar_t** argv)
         IStream* stream = nullptr;
         if (getClassObject == nullptr) {
             renderHr = E_FAIL;
-        } else if (FAILED(SHCreateStreamOnFileEx(stlPath.c_str(), STGM_READ | STGM_SHARE_DENY_WRITE,
+        } else if (FAILED(SHCreateStreamOnFileEx(modelPath.c_str(), STGM_READ | STGM_SHARE_DENY_WRITE,
                                                  FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &stream))) {
             renderHr = E_FAIL;
         } else {
             void* raw = nullptr;
-            renderHr = getClassObject(kStlClsid, __uuidof(IClassFactory), &raw);
+            renderHr = getClassObject(clsid, __uuidof(IClassFactory), &raw);
             if (SUCCEEDED(renderHr) && raw != nullptr) {
                 auto* factory = static_cast<IClassFactory*>(raw);
                 IThumbnailProvider* provider = nullptr;
@@ -378,7 +393,7 @@ int wmain(int argc, wchar_t** argv)
     bool surrogateObserved = false;
     IThumbnailProvider* remoteProvider = nullptr;
     const HRESULT remoteHr =
-        CoCreateInstance(kStlClsid, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(IThumbnailProvider),
+        CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(IThumbnailProvider),
                          reinterpret_cast<void**>(&remoteProvider));
     std::vector<ModuleHit> afterActivation;
     if (SUCCEEDED(remoteHr) && remoteProvider != nullptr) {
@@ -404,7 +419,7 @@ int wmain(int argc, wchar_t** argv)
     WTS_CACHEFLAGS shellFlags = WTS_DEFAULT;
     bool shellOk = false;
     IShellItem* item = nullptr;
-    if (FAILED(SHCreateItemFromParsingName(stlPath.c_str(), nullptr, IID_PPV_ARGS(&item)))) {
+    if (FAILED(SHCreateItemFromParsingName(modelPath.c_str(), nullptr, IID_PPV_ARGS(&item)))) {
         CoUninitialize();
         return fail("SHCreateItemFromParsingName failed");
     }

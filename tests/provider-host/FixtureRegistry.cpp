@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <string>
 
 namespace preview3d::test {
 namespace {
@@ -42,6 +43,92 @@ std::vector<std::byte> BuildCubeStl()
     for (const auto& quad : kQuads) {
         appendFacet(kCube[quad[0]], kCube[quad[1]], kCube[quad[2]]);
         appendFacet(kCube[quad[0]], kCube[quad[2]], kCube[quad[3]]);
+    }
+    return bytes;
+}
+
+// A binary little-endian PLY cube: 8 vertices with RGB colors and 6 quad faces
+// (fan-triangulated by the adapter). T23's committed provider-host fixture.
+std::vector<std::byte> BuildCubePly()
+{
+    constexpr float kCube[8][3] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+                                   {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
+    constexpr std::uint8_t kColor[8][3] = {{230, 90, 70},  {240, 170, 70}, {110, 200, 90},
+                                           {80, 160, 220}, {160, 110, 220}, {230, 110, 180},
+                                           {90, 200, 200}, {230, 210, 90}};
+    constexpr int kQuads[6][4] = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4},
+                                  {3, 7, 6, 2}, {0, 4, 7, 3}, {1, 2, 6, 5}};
+
+    const std::string header =
+        "ply\nformat binary_little_endian 1.0\n"
+        "element vertex 8\nproperty float x\nproperty float y\nproperty float z\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+        "element face 6\nproperty list uchar int vertex_indices\nend_header\n";
+    std::vector<std::byte> bytes;
+    const auto appendText = [&bytes](const std::string& text) {
+        const auto* data = reinterpret_cast<const std::byte*>(text.data());
+        bytes.insert(bytes.end(), data, data + text.size());
+    };
+    const auto appendFloat = [&bytes](float value) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        const auto* data = reinterpret_cast<const std::byte*>(&bits);
+        bytes.insert(bytes.end(), data, data + sizeof(bits));
+    };
+    const auto appendInt = [&bytes](std::int32_t value) {
+        const auto* data = reinterpret_cast<const std::byte*>(&value);
+        bytes.insert(bytes.end(), data, data + sizeof(value));
+    };
+
+    appendText(header);
+    for (int i = 0; i < 8; ++i) {
+        appendFloat(kCube[i][0]);
+        appendFloat(kCube[i][1]);
+        appendFloat(kCube[i][2]);
+        for (int channel = 0; channel < 3; ++channel) {
+            bytes.push_back(static_cast<std::byte>(kColor[i][channel]));
+        }
+    }
+    for (const auto& quad : kQuads) {
+        bytes.push_back(std::byte{4});
+        for (int corner = 0; corner < 4; ++corner) {
+            appendInt(quad[corner]);
+        }
+    }
+    return bytes;
+}
+
+// A binary little-endian colored point cloud: a 4x4x4 grid with a per-axis hue.
+std::vector<std::byte> BuildColoredPointsPly()
+{
+    constexpr int kSide = 4;
+    const std::string header =
+        "ply\nformat binary_little_endian 1.0\n"
+        "element vertex 64\nproperty float x\nproperty float y\nproperty float z\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n";
+    std::vector<std::byte> bytes;
+    const auto appendText = [&bytes](const std::string& text) {
+        const auto* data = reinterpret_cast<const std::byte*>(text.data());
+        bytes.insert(bytes.end(), data, data + text.size());
+    };
+    const auto appendFloat = [&bytes](float value) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        const auto* data = reinterpret_cast<const std::byte*>(&bits);
+        bytes.insert(bytes.end(), data, data + sizeof(bits));
+    };
+    appendText(header);
+    for (int x = 0; x < kSide; ++x) {
+        for (int y = 0; y < kSide; ++y) {
+            for (int z = 0; z < kSide; ++z) {
+                appendFloat(static_cast<float>(x));
+                appendFloat(static_cast<float>(y));
+                appendFloat(static_cast<float>(z));
+                bytes.push_back(static_cast<std::byte>(40 + x * 60));
+                bytes.push_back(static_cast<std::byte>(40 + y * 60));
+                bytes.push_back(static_cast<std::byte>(40 + z * 60));
+            }
+        }
     }
     return bytes;
 }
@@ -80,6 +167,25 @@ std::span<const GoldenFixture> ProviderHostFixtures()
         stlCube.tolerance = GoldenTolerance{2.0, 48};
         stlCube.cx = 256;
         fixtures.push_back(std::move(stlCube));
+
+        // T23: PLY mesh and point-cloud fixtures through the linked PlyAdapter.
+        GoldenFixture plyCube;
+        plyCube.name = "ply-cube";
+        plyCube.family = preview3d::provider::Family::Ply;
+        plyCube.source = BuildCubePly();
+        plyCube.goldenPath = ProviderHostGoldenDirectory() + "ply-cube-256.pam";
+        plyCube.tolerance = GoldenTolerance{2.0, 48};
+        plyCube.cx = 256;
+        fixtures.push_back(std::move(plyCube));
+
+        GoldenFixture plyPoints;
+        plyPoints.name = "ply-points";
+        plyPoints.family = preview3d::provider::Family::Ply;
+        plyPoints.source = BuildColoredPointsPly();
+        plyPoints.goldenPath = ProviderHostGoldenDirectory() + "ply-points-256.pam";
+        plyPoints.tolerance = GoldenTolerance{2.0, 48};
+        plyPoints.cx = 256;
+        fixtures.push_back(std::move(plyPoints));
 
         return fixtures;
     }();
