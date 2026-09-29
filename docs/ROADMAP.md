@@ -51,7 +51,7 @@ before it is built.
 - [x] T11 — Implement the COM core and lifetime exports → [tasks/11-com-core-lifetime.md](tasks/11-com-core-lifetime.md)
 - [x] T12 — Implement bounded stream backing over IInitializeWithStream → [tasks/12-bounded-stream-backing.md](tasks/12-bounded-stream-backing.md)
 - [x] T13 — Implement family routing and the adapter interface → [tasks/13-family-routing-adapter-interface.md](tasks/13-family-routing-adapter-interface.md)
-- [ ] T14 — Implement the deterministic geometry sampler → [tasks/14-geometry-sampler.md](tasks/14-geometry-sampler.md)
+- [x] T14 — Implement the deterministic geometry sampler → [tasks/14-geometry-sampler.md](tasks/14-geometry-sampler.md)
 - [ ] T15 — Implement the CPU tile rasterizer and bitmap output → [tasks/15-cpu-tile-rasterizer.md](tasks/15-cpu-tile-rasterizer.md)
 - [ ] T16 — Implement threading, deadline, and containment behavior → [tasks/16-threading-deadline-containment.md](tasks/16-threading-deadline-containment.md)
 - [ ] T17 — Build the provider COM host test harness — E2E slice review → [tasks/17-provider-test-harness.md](tasks/17-provider-test-harness.md)
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T22:40:39Z · 10/29 done
+**Pipeline status** — updated 2026-09-29T22:50:06Z · 11/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14
 - Blocked: none
 - Failed: none
-- Remaining: T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T13 — done · IThumbnailProvider GetThumbnail wired to CLSID-routed adapter via new ThumbnailPipeline/FamilyAdapterRegistry/RasterBitmap, E_INVALIDARG for cx==0 (ADR-0015), 13 new tests; Release 168/76723 and Debug 168/76809 green, exports/closure/lint clean.
+- Remaining: T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T14 — done · T14 deterministic geometry sampler landed (min-hash reservoir + spatial/material coverage + over-cap policy); 179/179 tests green in Debug and Release, provider dependency closure and 2-symbol export surface intact.
 <!-- /symphony:status -->

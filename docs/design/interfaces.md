@@ -87,6 +87,13 @@ The seed is stable per source so Explorer's cache stays consistent. T14 owns the
 spatial/reservoir policy, the 2 M-triangle / 6 M-point inspect caps, the 250 k
 rasterized-sample cap, and charging retained storage against the T06 ledger.
 
+T14 landed as `thumbnail-provider/DeterministicGeometrySampler.{h,cpp}` (a deterministic
+min-hash bottom-k reservoir with per-spatial-cell and per-material coverage) plus the over-cap
+policy `thumbnail-provider/GeometrySamplingPolicy.h` (`DecideGeometrySampling`/
+`StratifiedOffsets`) that adapters (T21–T34) consult before reading a source over the cap
+(ADR-0016). `IGeometrySampler` itself is unchanged: it stays stream-only and takes no bounds or
+source.
+
 ## Rasterizer contract
 
 `ICpuRasterizer::Render(const RasterRequest&, RasterImage&) noexcept` consumes

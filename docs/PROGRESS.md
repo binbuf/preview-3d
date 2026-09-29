@@ -14,6 +14,7 @@
 - **T11 — Implement the COM core and lifetime exports**: The provider's in-proc COM core is `thumbnail-provider/ComCore.h`/`ComCore.cpp` (ADR-0013):; Routing without sniffing: the incoming `REFCLSID` is formatted to the canonical upper-case
 - **T12 — Implement bounded stream backing over IInitializeWithStream**: `thumbnail-provider/StreamSource.h`/`StreamSource.cpp` hold the single `BoundedSource`; `Create(IStream*, Deadline, AllocationLedger&, ProviderOutcome&)` adopts the stream, probes
 - **T13 — Implement family routing and the adapter interface**: `IThumbnailProvider::GetThumbnail` is wired onto the T11 `ProviderObject` (same object, no second; The orchestration is `thumbnail-provider/ThumbnailPipeline.{h,cpp}`
+- **T14 — Implement the deterministic geometry sampler**: `thumbnail-provider/DeterministicGeometrySampler.{h,cpp}` implements the frozen; **Enumeration continues to the inspect cap** even after the retained reservoir fills; returning
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 <!-- symphony:digest:end -->
 
@@ -350,6 +351,50 @@ markers); sessions are pointed at this file and read it themselves.
 - Build: `msbuild tests\unit\Tests.Unit.vcxproj /p:Configuration=Release|Debug /p:Platform=x64
   /p:SolutionDir=<repo root>\`. The provider source still builds clean under `/W4 /WX`.
 
+## T14 — Implement the deterministic geometry sampler
+
+- `thumbnail-provider/DeterministicGeometrySampler.{h,cpp}` implements the frozen
+  `IGeometrySampler`. Policy: a deterministic **min-hash bottom-k priority reservoir** (each
+  sample's 64-bit key = FNV-1a of `sourceSeed` + the full sample, splitmix-finished). Sequential
+  reservoir sampling was rejected because it is source-order dependent and would fail the
+  reorder/Explorer-cache requirement. Output is de-duplicated and sorted by `(key, full sample)`,
+  so a reordered enumeration is byte-identical.
+- **Enumeration continues to the inspect cap** even after the retained reservoir fills; returning
+  false at the retained cap would bias the result to a source prefix. `AddTriangle`/`AddPoint`
+  return false only at `ProviderLimits::kTrianglesInspectedMax`/`kPointsInspectedMax`. The single
+  250 k retained budget (`kRasterizedSamplesMax`) is shared by triangles and points.
+- **Coverage floor** (mirrors ADR-015 in miniature): one representative per occupied **spatial
+  cell** (`kSpatialSlots = 65'536`, `kSpatialCellSize = 1.0` model units, a slot keeps the smallest
+  cell key so collisions are order-independent) and one per **material** (index
+  `0..kMaterialsMax`, out-of-range/0 share the neutral slot). Final set = coverage ∪ smallest
+  priority keys up to 250 k.
+- **Validation:** any non-finite position/normal/color/origin/radius is dropped
+  (`DroppedNonFinite`), zero-area triangles are dropped (`DroppedDegenerate`); `Bounds` accumulate
+  from the finite positions of all valid inspected samples.
+- **Accounting:** the reservoir (`kMaxRetained * sizeof(Candidate)`) and the coverage tables are
+  reserved against the caller's `AllocationLedger` (default `ProcessWide()`) before allocation, in
+  two independent `ReserveScoped` calls. A failed reservation → empty result (`AccountingFailed()`);
+  `RunThumbnailPipeline` then maps empty to `BadFormat` (the frozen interface has no error channel;
+  noted in ADR-0016).
+- **Over-cap policy** is `thumbnail-provider/GeometrySamplingPolicy.h`:
+  `DecideGeometrySampling(seekable, declaredPrimitives, inspectCap)` → `Enumerate` /
+  `StratifiedAcrossExtent` (`kGeometrySamplingStrata = 64`) / `SafeFallback`; `StratifiedOffsets`
+  returns the deterministic centred offset set. T21–T34 own the I/O and must consult it; a
+  non-seekable over-cap stream is the safe fallback (metadata cannot make a stream seekable).
+  The frozen `IGeometrySampler` stays stream-only (no bounds/source/deadline parameter).
+- `DefaultThumbnailDependencies::CreateSampler()` now returns `DeterministicGeometrySampler`
+  (`ThumbnailPipeline.cpp`); `GeometrySampler.cpp` is added to both `.vcxproj` with
+  `PrecompiledHeader=NotUsing`. Tests: `tests/unit/ProviderSamplerTests.cpp`
+  (`[provider][sampler]`, 11 cases) — reorder + over-cap byte-identity, caps, spatial/material
+  coverage, bounds, NaN/Inf/degenerate, ledger degradation, policy table, `StratifiedOffsets`,
+  and `DefaultThumbnailDependencies` exposure.
+- Evidence: Release `x64\Release\Tests.Unit.exe` 179 cases / 85041 assertions green (Debug 179 /
+  85126); `[provider]` still green. Dependency closure exit 0 both configs (new CRT-only imports
+  `api-ms-win-crt-math`, `MSVCP140`); exports still exactly `DllCanUnloadNow`,
+  `DllGetClassObject`. Build `Tests.Unit.vcxproj` directly with `/p:SolutionDir=<root>\`.
+- **T15 must not change the sampler.** It consumes `SampledGeometry` unchanged. In-sampler
+  deadline polling is impossible via the frozen interface; adapters poll between bounded units.
+
 ## Follow-ups
 
 - T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every
@@ -370,8 +415,9 @@ markers); sessions are pointed at this file and read it themselves.
   `.def` two-symbol `PRIVATE` surface and `CLASS_E_CLASSNOTAVAILABLE` for unknown CLSIDs are
   frozen by T11/ADR-0013.
 - T12 landed; T13 landed: `GetThumbnail` takes `ProviderObject::StreamSource()`, restarts
-  `MutableDeadline()` at entry and passes it as `AdapterInput::deadline`. T14 still implements
-  `DefaultThumbnailDependencies::CreateSampler()`, T15 `Render()`, T21–T34 the
+  `MutableDeadline()` at entry and passes it as `AdapterInput::deadline`. T14 landed (see its
+  section): `DefaultThumbnailDependencies::CreateSampler()` returns the deterministic sampler.
+  T15 implements `Render()`, T21–T34 the
   `FamilyAdapterRegistry.cpp` cases, and T16 wraps `GetThumbnail` in `ActiveCallGuard`. Treat an
   empty `ContiguousView()` as the safe fallback. No second ledger; `StreamSource.cpp` stays
   PCH-free and free of worker/broker/viewer headers.
