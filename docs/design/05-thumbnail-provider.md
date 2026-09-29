@@ -40,6 +40,38 @@ the machine-level mapping (ADR-0006/0007); users remain in control of default op
 
 Registering a handler as InprocServer32 is necessary for Explorer to load it, but it is not what isolates it: by default the Shell loads thumbnail handlers into an isolated per-handler COM surrogate (normally `DllHost.exe`) rather than into `explorer.exe` itself, and that surrogate process boundary — not apartment threading, not the COM contract — is what contains a parser crash inside this DLL away from Explorer. (`Prevhost.exe` is a different, unrelated surrogate that Windows uses to host `IPreviewHandler` for the Preview pane; this product implements no `IPreviewHandler` and is never hosted by it — see [01-product-scope.md](./01-product-scope.md).) The installer, its registry entries, and any troubleshooting documentation MUST NOT set `DisableProcessIsolation=1` (or an equivalent per-handler opt-out) for any of the eight CLSIDs above, in the installer or in support guidance. A future change that enables in-process (`explorer.exe`-hosted) execution for performance reasons requires a new ADR, a revised threat model in [09-quality-performance-and-security.md](./09-quality-performance-and-security.md), and re-justifying every claim in this document that currently depends on Shell process isolation.
 
+## Frozen specification
+
+T01 freezes this contract as the single authority adapter work is scheduled against:
+
+- **Roster.** The eight-family CLSID table above is final, including the STEP identity
+  `{6EE961AC-AC3B-4958-A898-E30523FEE79D}`. The seven earlier identities are product
+  identities and are never regenerated or renamed ([ADR-0001](adr/0001-eight-family-clsid-roster.md);
+  [`adapters/step-009-thumbnail.md`](adapters/step-009-thumbnail.md)). `.mtl` remains a sidecar with no CLSID.
+- **OCCT linkage.** The provider links a separately built, explicitly limited OCCT
+  STEP/XDE/tessellation adapter into this DLL only, never into the viewer, general worker or
+  either import host, and launches no process ([ADR-0002](adr/0002-occt-linked-into-thumbnail-adapter.md)).
+- **Decoder scope.** The bounded decoders the provider links (Draco, meshoptimizer, KTX2/Basis,
+  WebP) are those in [ADR-0003](adr/0003-provider-decoder-scope.md); this supersedes the
+  scope-limited-MVP restriction recorded in [11-decisions-and-risks.md](./11-decisions-and-risks.md).
+- **Registration vehicle.** Registration ships through the project's per-machine NSIS installer
+  now, and the same component identities are adopted by the eventual MSI
+  ([ADR-0006](adr/0006-registration-through-installer.md), [ADR-0007](adr/0007-provider-program-scope-and-installer.md)).
+  The extension-level `ShellEx` location is provisional until T03 proves it with a third-party
+  default ProgID and a per-user association.
+
+**Limit and error authority.** For the limits T06 encodes, the source of truth is the
+*Thumbnail host* column of [03-file-formats-and-ingestion.md](./03-file-formats-and-ingestion.md)
+together with the HRESULT table below. The accountable caps (256 MiB stream maximum, 128 MiB
+contiguous backing, 192 MiB parser/normalizer scratch, per-component decode caps, and the
+384 MiB product-owned allocation ledger) fail closed to the generic icon with the first exceeded
+limit named. The **384 MiB total process private commit above the idle, loaded surrogate
+baseline** is a measured release qualification target, not a hard ledger ceiling: it cannot be
+enforced against library allocations without callbacks, DLL loading, or GDI/Shell-surrogate
+overhead, and T51 measures the actual peak. The **2 s point is a cooperative stop check** at
+bounded parser/sampler/raster intervals, not an interruptible wall-clock timeout for an opaque
+third-party call.
+
 ## Call contract
 
 Initialize:

@@ -4,6 +4,7 @@
 ## Key facts (maintained by symphony — do not edit)
 
 - **Program context (pre-run)**: This roadmap implements the **Explorer thumbnail provider** end to end. The provider was a stub:; Design authority is `docs/design/`. It contains reviewed copies of the original baseline
+- **T01 — Freeze the provider specification and eight-family roster**: Specification authority is frozen. Eight CLSIDs, one per family, in; `design/05-thumbnail-provider.md` now has a "Frozen specification" section. It records: roster
 - **Follow-ups**: Family viewer release qualification remains open in the viewer program; it does not block provider; The original WiX/MSI (Gate 7) is unbuilt; T41 registers through the current installer path and the
 <!-- symphony:digest:end -->
 
@@ -34,6 +35,28 @@ markers); sessions are pointed at this file and read it themselves.
   Catch2 filter (e.g. `[stl-import],[ply-import],[gltf-import]`) or `Tests.Unit.exe`.
 - Eight families are in scope (ADR-0001): glTF, STL, PLY, OBJ, FBX, 3MF, USD, STEP. OCCT links only
   into a separate bounded adapter in the DLL (ADR-0002); decoder scope is ADR-0003.
+
+## T01 — Freeze the provider specification and eight-family roster
+
+- Specification authority is frozen. Eight CLSIDs, one per family, in
+  `design/05-thumbnail-provider.md` (CLSID table) and `design/overview.md` (target roster). STEP =
+  `{6EE961AC-AC3B-4958-A898-E30523FEE79D}`. The seven pre-existing CLSIDs are product identities;
+  never regenerate or rename any of them.
+- `design/05-thumbnail-provider.md` now has a "Frozen specification" section. It records: roster
+  (ADR-0001), in-DLL constrained OCCT adapter (ADR-0002), decoder scope (ADR-0003), NSIS-now/MSI-later
+  registration with provisional extension-level `ShellEx` until T03 (ADR-0006/0007).
+- Limit/HRESULT source of truth for T06: the *Thumbnail host* column of
+  `design/03-file-formats-and-ingestion.md` plus the HRESULT table in `design/05-thumbnail-provider.md`.
+  Hard accountable caps: 256 MiB stream max, 128 MiB contiguous backing, 192 MiB scratch, per-component
+  decode caps, 384 MiB product-owned ledger. The 384 MiB *total process private commit above the idle,
+  loaded surrogate baseline* is a measured release target (T51), not a ledger-enforced ceiling. The 2 s
+  point is a cooperative stop check, not an interruptible call timeout.
+- ADR-0001–0007 are all `accepted` (verified, unchanged). The `design/` copies already agreed with them;
+  T01 only fixed residual wording: `02` (ADR-0002 supersession note), `11` TSK-209 (ADR-0003 supersedes
+  its "does not link either decoder" sentence), `08` (freeze + provisional ShellEx note).
+- No normative "seven CLSID"/"seven stable" statement remains; only historical quotes in `overview.md`,
+  `adr/0001` and `adr/0007`. Verify with
+  `Select-String -Path docs/design/*.md,docs/design/adr/*.md -Pattern 'seven'`.
 
 ## Follow-ups
 
