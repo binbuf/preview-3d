@@ -13,6 +13,7 @@
 - **T07 — Extract the provider-shared parser source subset**: `shared/parser-core/` is the extracted source set, compiled into both `Preview3DImportWorker.exe`; Worker adapters now consume it: `import-worker/src/StlAdapter.cpp`/`PlyAdapter.cpp` include
 - **T11 — Implement the COM core and lifetime exports**: The provider's in-proc COM core is `thumbnail-provider/ComCore.h`/`ComCore.cpp` (ADR-0013):; Routing without sniffing: the incoming `REFCLSID` is formatted to the canonical upper-case
 - **T12 — Implement bounded stream backing over IInitializeWithStream**: `thumbnail-provider/StreamSource.h`/`StreamSource.cpp` hold the single `BoundedSource`; `Create(IStream*, Deadline, AllocationLedger&, ProviderOutcome&)` adopts the stream, probes
+- **T13 — Implement family routing and the adapter interface**: `IThumbnailProvider::GetThumbnail` is wired onto the T11 `ProviderObject` (same object, no second; The orchestration is `thumbnail-provider/ThumbnailPipeline.{h,cpp}`
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 <!-- symphony:digest:end -->
 
@@ -313,6 +314,42 @@ markers); sessions are pointed at this file and read it themselves.
   `<PrecompiledHeader>NotUsing`) and `StreamSource.cpp` + `ProviderStreamTests.cpp` to
   `Tests.Unit.vcxproj`. New decision: `docs/design/adr/0014-bounded-stream-backing.md`.
 
+## T13 — Implement family routing and the adapter interface
+
+- `IThumbnailProvider::GetThumbnail` is wired onto the T11 `ProviderObject` (same object, no second
+  type). It rejects null out-params (`E_POINTER`), an uninitialized object (`E_UNEXPECTED`) and
+  `cx == 0` (**new `E_INVALIDARG`**, `ProviderOutcome::BadArgument`, ADR-0015; design/05 table row
+  added), restarts the T12 source deadline at entry, then runs the routed pipeline. Success sets
+  `*phbmp` to a top-down 32-bpp premultiplied DIB section and `*pdwAlpha = WTSAT_ARGB`; every failure
+  leaves `*phbmp == nullptr` and `*pdwAlpha == WTSAT_UNKNOWN`. `cx` is only a hint; the rasterizer
+  clamps `min(cx,512)` (T15).
+- The orchestration is `thumbnail-provider/ThumbnailPipeline.{h,cpp}`
+  (`RunThumbnailPipeline` + `IThumbnailDependencies`), compiled into both the DLL and `Tests.Unit.exe`
+  it is PCH/COM/GDI-free. It runs `Initialize`→`Parse`→`EnumerateMaterials`→`EnumerateGeometry`, feeds
+  the T14 sampler, calls the T15 `RasterRequest`, always calls `adapter->Reset()`, and maps errors via
+  `HresultForError`. Empty geometry = `BadFormat`; a material-table ledger charge that fails =
+  `LimitExceeded`; a missing adapter/sampler stage = `Unsupported`; a failed or empty render leaves
+  `RasterImage` empty.
+- Adapter selection is `thumbnail-provider/FamilyAdapterRegistry.{h,cpp}`:
+  `CreateFamilyAdapter(Family)` is a **build-time switch** (no mutable registry). All eight families
+  return `nullptr` today, so the DLL `GetThumbnail` currently returns
+  `HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)` for any real request. T21–T34 each add one case.
+- `thumbnail-provider/RasterBitmap.{h,cpp}` (`CreatePremultipliedDib`) is the only GDI boundary: it
+  creates one `CreateDIBSection(nullptr, ...)` (top-down, negative biHeight, 32-bpp BI_RGB) and copies
+  the `RasterImage`; no other GDI object. The provider DLL now imports `GDI32.dll` (`gdi32.lib` added
+  to both `.vcxproj`; dependency-closure still exit 0).
+- `DefaultThumbnailDependencies()` in `ThumbnailPipeline.cpp` is the single production composition
+  point: **T14 replaces `CreateSampler()`**, **T15 replaces `Render()`**, T21–T34 add
+  `FamilyAdapterRegistry.cpp` cases. Do not implement the sampler/rasterizer elsewhere.
+- `AdapterInput::deadline` is `&source->MutableDeadline()` (already restarted by `GetThumbnail`);
+  `AdapterInput::ledger` is `AllocationLedger::ProcessWide()`; `limits` is `ProviderLimits::Default()`.
+- Tests: `[provider][pipeline]` (8), `[provider][bitmap]` (2), `[provider][thumbnail]` (3) — 13 cases
+  / 316 assertions. `tests/unit/ProviderTestSupport.h` holds the shared `MemoryStream`/`ProviderModule`
+  doubles. Evidence: Release `x64\Release\Tests.Unit.exe` 168 cases / 76723 assertions; Debug 168 /
+  76808; exports still exactly `DllCanUnloadNow`,`DllGetClassObject`.
+- Build: `msbuild tests\unit\Tests.Unit.vcxproj /p:Configuration=Release|Debug /p:Platform=x64
+  /p:SolutionDir=<repo root>\`. The provider source still builds clean under `/W4 /WX`.
+
 ## Follow-ups
 
 - T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every
@@ -322,7 +359,9 @@ markers); sessions are pointed at this file and read it themselves.
   provider include path; `parser_core::StlParserCore`/`PlyParserCore` include it and `PlyParserCore`
   uses `platform::CheckedAdd`.
 - Any new `model_core::ImportErrorCode` must be added to `ProviderErrors.h::ClassifyError`; a new
-  HRESULT requires an ADR (design/05).
+  HRESULT requires an ADR (design/05). Done once by T13/ADR-0015: `ProviderOutcome::BadArgument` ->
+  `E_INVALIDARG` for `cx == 0` is the only row beyond the T06 table; keep `ProviderErrors.h` and the
+  design/05 table in sync if another is ever added.
 - T51 still owns measuring the actual peak process private commit above the idle, loaded surrogate
   baseline against the 384 MiB target and recording unaccounted excess.
 - T12/T13 extend `ComCore.cpp`'s `ProviderObject` with `IInitializeWithStream`/
@@ -330,9 +369,10 @@ markers); sessions are pointed at this file and read it themselves.
   and T16 wraps `GetThumbnail` in `ActiveCallGuard`. The class factory/lifetime contract, the
   `.def` two-symbol `PRIVATE` surface and `CLASS_E_CLASSNOTAVAILABLE` for unknown CLSIDs are
   frozen by T11/ADR-0013.
-- T12 landed; T13/T16 must take `ProviderObject::StreamSource()`, pass it to adapters as
-  `BoundedSource*`, and restart its deadline at `GetThumbnail` entry
-  (`MutableDeadline().Restart()` or `&MutableDeadline()` as `AdapterInput::deadline`). Treat an
+- T12 landed; T13 landed: `GetThumbnail` takes `ProviderObject::StreamSource()`, restarts
+  `MutableDeadline()` at entry and passes it as `AdapterInput::deadline`. T14 still implements
+  `DefaultThumbnailDependencies::CreateSampler()`, T15 `Render()`, T21–T34 the
+  `FamilyAdapterRegistry.cpp` cases, and T16 wraps `GetThumbnail` in `ActiveCallGuard`. Treat an
   empty `ContiguousView()` as the safe fallback. No second ledger; `StreamSource.cpp` stays
   PCH-free and free of worker/broker/viewer headers.
 - T17 creates `Tests.ProviderHost.exe` under the name frozen by T05/ADR-0010 and wires it into

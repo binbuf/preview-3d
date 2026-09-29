@@ -145,6 +145,36 @@ two-symbol export surface:
   `IThumbnailProvider` and T16 wraps `GetThumbnail` in `ActiveCallGuard`.
   [ADR-0013](adr/0013-provider-com-core-lifetime.md) records the decision.
 
+## Routed thumbnail pipeline (T13)
+
+`IThumbnailProvider::GetThumbnail` is a thin COM boundary over
+`thumbnail-provider/ThumbnailPipeline.{h,cpp}`; the orchestration is free of
+the provider PCH, COM and GDI and is compiled into `Tests.Unit.exe` as well as
+the DLL ([ADR-0015](adr/0015-provider-thumbnail-pipeline-and-cx.md)):
+
+- `RunThumbnailPipeline(ThumbnailRequest, IThumbnailDependencies&, RasterImage&)`
+  restarts nothing itself; the caller (`ComCore.cpp`) restarts the T12 source
+  deadline at entry, then this runs `Initialize` -> `Parse` ->
+  `EnumerateMaterials` -> `EnumerateGeometry` on the CLSID-selected adapter,
+  feeds the samples to the T14 sampler, and renders through the T15 rasterizer.
+- `IThumbnailDependencies` is the test seam: `CreateAdapter(Family)`,
+  `CreateSampler()` and `Render(RasterRequest, RasterImage&)`. The production
+  `DefaultThumbnailDependencies()` takes the adapter from
+  `FamilyAdapterRegistry.h` and wires T14/T15 once they land; until then a
+  missing stage returns the tabulated `Unsupported`.
+- The pipeline maps every adapter error code through `HresultForError`; empty
+  geometry is `BadFormat`, an exhausted material reservation is `LimitExceeded`,
+  and a failed render leaves `RasterImage` empty. A success image is never
+  fabricated.
+- `thumbnail-provider/FamilyAdapterRegistry.h` (`CreateFamilyAdapter(Family)`)
+  is the only adapter-construction point: a build-time switch, not a mutable
+  runtime registry. Each family task (T21–T34) adds its case; an unlinked family
+  returns `nullptr`.
+- `thumbnail-provider/RasterBitmap.h` (`CreatePremultipliedDib`) is the single
+  GDI boundary: it returns the top-down 32-bpp premultiplied `HBITMAP` and
+  creates no other GDI object. `ComCore.cpp` sets `WTS_ALPHATYPE` to
+  `WTSAT_ARGB` on success and leaves both out-params null/unknown on failure.
+
 ## Shared source subset (handed to T07)
 
 ADR-0004 compiles the needed source files directly into the DLL. T04 enumerates

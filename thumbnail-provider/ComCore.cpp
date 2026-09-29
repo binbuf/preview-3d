@@ -7,14 +7,24 @@
 // T12: the provider object also implements IInitializeWithStream over the
 // bounded stream source. propsys.h declares the interface; only __uuidof is
 // used, so no propsys/ole32 import is added.
+//
+// T13 adds IThumbnailProvider to the same object and routes GetThumbnail
+// through ThumbnailPipeline (ADR-0015); thumbcache.h declares the interface and
+// WTS_ALPHATYPE, and gdi32 provides CreateDIBSection. Only __uuidof is used, so
+// no thumbcache import is added.
 #include "AllocationLedger.h"
 #include "Deadline.h"
 #include "ProviderErrors.h"
+#include "ProviderLimits.h"
+#include "RasterBitmap.h"
 #include "StreamSource.h"
+#include "ThumbnailPipeline.h"
 
 #include <objbase.h>
 #include <propsys.h>
+#include <thumbcache.h>
 
+#include <cstdint>
 #include <memory>
 #include <new>
 
@@ -63,7 +73,7 @@ void FormatClsid(REFGUID clsid, char out[40]) noexcept
 // IThumbnailProvider to this same class, and T16 wraps GetThumbnail in
 // ActiveCallGuard. Aggregation is not supported, so CreateInstance rejects a
 // non-null pUnkOuter before an instance exists.
-class ProviderObject final : public IInitializeWithStream {
+class ProviderObject final : public IInitializeWithStream, public IThumbnailProvider {
 public:
     explicit ProviderObject(Family family) noexcept : family_(family)
     {
@@ -85,7 +95,9 @@ public:
         }
         *ppv = nullptr;
         if (IsEqualIID(riid, __uuidof(IUnknown))) {
-            *ppv = static_cast<IUnknown*>(this);
+            // Two IUnknown bases are inherited (IInitializeWithStream and
+            // IThumbnailProvider), so the upcast is disambiguated through one.
+            *ppv = static_cast<IUnknown*>(static_cast<IInitializeWithStream*>(this));
             AddRef();
             return S_OK;
         }
@@ -94,7 +106,11 @@ public:
             AddRef();
             return S_OK;
         }
-        // IThumbnailProvider (T13) joins here.
+        if (IsEqualIID(riid, __uuidof(IThumbnailProvider))) {
+            *ppv = static_cast<IThumbnailProvider*>(this);
+            AddRef();
+            return S_OK;
+        }
         return E_NOINTERFACE;
     }
 
@@ -133,6 +149,57 @@ public:
             return HresultFor(outcome);
         }
         source_ = std::move(source);
+        return S_OK;
+    }
+
+    // IThumbnailProvider (T13). `cx` is the caller's maximum physical-pixel
+    // hint; only the degenerate cx == 0 is rejected (E_INVALIDARG, ADR-0015)
+    // and the actual resolution is clamped independently by the rasterizer.
+    // The family was fixed by the object's CLSID, so no content is sniffed. On
+    // every failure both out-params stay null/unknown; a success bitmap is
+    // never fabricated (design/05, "HRESULT mapping").
+    HRESULT WINAPI GetThumbnail(UINT cx, HBITMAP* phbmp,
+                                WTS_ALPHATYPE* pdwAlpha) noexcept override
+    {
+        if (phbmp == nullptr || pdwAlpha == nullptr) {
+            return E_POINTER;
+        }
+        *phbmp = nullptr;
+        *pdwAlpha = WTSAT_UNKNOWN;
+
+        if (source_ == nullptr) {
+            return HresultFor(ProviderOutcome::InvalidCallSequence);
+        }
+        if (cx == 0) {
+            return HresultFor(ProviderOutcome::BadArgument);
+        }
+
+        // Restart the per-object read deadline for this call (ADR-0014).
+        source_->MutableDeadline().Restart();
+
+        ThumbnailRequest request{};
+        request.family = family_;
+        request.source = source_.get();
+        request.limits = &ProviderLimits::Default();
+        request.deadline = &source_->MutableDeadline();
+        request.ledger = &AllocationLedger::ProcessWide();
+        request.cx = static_cast<std::uint32_t>(cx);
+
+        RasterImage image;
+        const ProviderOutcome outcome =
+            RunThumbnailPipeline(request, DefaultThumbnailDependencies(), image);
+        if (outcome != ProviderOutcome::Success) {
+            return HresultFor(outcome);
+        }
+
+        HBITMAP bitmap = nullptr;
+        const ProviderOutcome dib = CreatePremultipliedDib(image, bitmap);
+        if (dib != ProviderOutcome::Success) {
+            return HresultFor(dib);
+        }
+
+        *phbmp = bitmap;
+        *pdwAlpha = WTSAT_ARGB;
         return S_OK;
     }
 
