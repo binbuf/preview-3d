@@ -18,8 +18,8 @@
 //
 // The counters are the one process-global mutable state the DLL owns, and they
 // are pure reference bookkeeping -- not a cache and not model data. The provider
-// object implements only IUnknown here; T12 adds IInitializeWithStream and T13
-// adds IThumbnailProvider to the same class.
+// object implements IUnknown and IInitializeWithStream (T12); T13 adds
+// IThumbnailProvider to the same class.
 
 #include "FamilyRouting.h"
 

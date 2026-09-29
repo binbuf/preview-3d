@@ -123,6 +123,13 @@ Explorer owns the returned HBITMAP. The provider releases every other GDI object
 
 256 MiB is the maximum source data this provider will ever read or cache from the stream; it is not a product-wide maximum file size. A multi-gigabyte GLB or STL still opens normally in the full viewer ([03-file-formats-and-ingestion.md](./03-file-formats-and-ingestion.md)) — it simply receives no Explorer thumbnail, and Explorer falls back to the generic file icon. When STATSTG reports a size over 256 MiB, the provider fails fast to that fallback rather than attempting a partial read, so an oversized file costs Explorer no more than a quick size check. The provider does not write a temporary or persistent file. Seek-capable streams under the budget are accessed through serialized, bounded range reads and a small block cache. If an adapter requires one contiguous buffer, the provider may create a checked in-process backing buffer up to 128 MiB; a larger input on that path returns the safe generic-icon fallback. Non-seekable inputs may use that same bounded backing buffer. Reads abort on deadline, limit, or short-read inconsistency.
 
+The single implementation of `BoundedSource` is `thumbnail-provider/StreamSource.h`/`StreamSource.cpp`
+(T12, [ADR-0014](adr/0014-bounded-stream-backing.md)): `IInitializeWithStream::Initialize` on the T11
+`ProviderObject` adopts one non-null stream and rejects a second initialization; the source owns a
+64 KiB × 8-slot block cache charged to the T06 ledger and materializes the 128 MiB contiguous backing
+buffer on demand, also charged before allocation. `StreamSource.cpp` compiles without the provider
+precompiled header so `Tests.Unit.exe` links the same source for its `[provider][stream]` coverage.
+
 The per-component caps (128 MiB contiguous backing, 192 MiB parser/normalizer scratch, 32 MP decoded
 texture, sampled geometry, raster targets) apply to allocations the provider can account for. A
 process-wide ledger reserves product-owned allocations before they occur, including concurrent
@@ -194,10 +201,11 @@ DllCanUnloadNow returns S_OK only when live objects, class-factory locks, and ac
 The COM core is implemented in `thumbnail-provider/ComCore.h`/`ComCore.cpp` and
 documented by [ADR-0013](adr/0013-provider-com-core-lifetime.md): one class factory per routed
 CLSID (family chosen from the CLSID alone, never sniffed), explicit atomic
-module/object/lock/active-call counts behind `DllCanUnloadNow`, and a `ProviderObject` shell
-that T12/T13 extend with `IInitializeWithStream` and `IThumbnailProvider`. DllMain only records
-the module handle and disables the unused thread notifications; it performs no COM, registration,
-library load or thread work.
+module/object/lock/active-call counts behind `DllCanUnloadNow`, and a `ProviderObject`
+that implements `IInitializeWithStream` (T12, [ADR-0014](adr/0014-bounded-stream-backing.md))
+over the bounded stream source; T13 adds `IThumbnailProvider` to the same object. DllMain only
+records the module handle and disables the unused thread notifications; it performs no COM,
+registration, library load or thread work.
 
 ## Security and robustness
 

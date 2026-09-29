@@ -62,11 +62,14 @@ void      Reset() noexcept;                               // noexcept teardown
   result must leave no partially trusted state.
 - `Reset` releases every per-call resource; destructors are `noexcept`.
 
-`BoundedSource` is implemented once by T12 over `IInitializeWithStream`: a
-validated `Size()`, `Seekable()`, checked `ReadAt(offset, dest)` (false on a
-short read, an out-of-range read, an exceeded limit or an expired deadline), and
-an optional `ContiguousView()` for adapters that need one buffer within the
-128 MiB backing cap.
+`BoundedSource` is implemented once by T12 over `IInitializeWithStream` in
+`thumbnail-provider/StreamSource.h`/`StreamSource.cpp` (`BoundedStreamSource`,
+[ADR-0014](adr/0014-bounded-stream-backing.md)): a validated `Size()`, `Seekable()`,
+checked `ReadAt(offset, dest)` (false on a short read, an out-of-range read, an exceeded
+limit or an expired deadline), and an optional `ContiguousView()` for adapters that need
+one buffer within the 128 MiB backing cap. Seekable input is served by a ledger-charged
+64 KiB × 8-slot block cache; `StreamSource.cpp` compiles without the provider PCH so
+`Tests.Unit.exe` links it directly.
 
 ## Sampler contract
 
@@ -136,10 +139,11 @@ two-symbol export surface:
   `ActiveCallGuard` back `DllCanUnloadNow`, which is `S_OK` only when all three
   are zero. `RecordModuleHandle`/`ModuleHandle` are set by a side-effect-free
   `DllMain`.
-- The created object is a `ProviderObject` shell implementing only `IUnknown`;
-  T12 adds `IInitializeWithStream`, T13 adds `IThumbnailProvider` and T16 wraps
-  `GetThumbnail` in `ActiveCallGuard`. [ADR-0013](adr/0013-provider-com-core-lifetime.md)
-  records the decision.
+- The created object is a `ProviderObject` implementing `IUnknown` and
+  `IInitializeWithStream` (T12; `StreamSource.h`/`StreamSource.cpp`,
+  [ADR-0014](adr/0014-bounded-stream-backing.md)); T13 adds
+  `IThumbnailProvider` and T16 wraps `GetThumbnail` in `ActiveCallGuard`.
+  [ADR-0013](adr/0013-provider-com-core-lifetime.md) records the decision.
 
 ## Shared source subset (handed to T07)
 
