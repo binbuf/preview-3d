@@ -42,7 +42,7 @@ before it is built.
 - [x] T02 — SPIKE-8a: prototype the mesh and point CPU rasterizer → [tasks/02-spike-rasterizer-prototype.md](tasks/02-spike-rasterizer-prototype.md)
 - [x] T03 — SPIKE-8b: prove isolated Shell surrogate hosting → [tasks/03-spike-surrogate-hosting.md](tasks/03-spike-surrogate-hosting.md)
 - [x] T04 — Freeze provider interfaces and the shared model-core subset → [tasks/04-freeze-provider-interfaces.md](tasks/04-freeze-provider-interfaces.md)
-- [ ] T05 — Scaffold the provider build and test integration → [tasks/05-provider-build-test-scaffold.md](tasks/05-provider-build-test-scaffold.md)
+- [x] T05 — Scaffold the provider build and test integration → [tasks/05-provider-build-test-scaffold.md](tasks/05-provider-build-test-scaffold.md)
 - [ ] T06 — Define budgets, deadlines, and HRESULT mapping → [tasks/06-budgets-deadlines-hresults.md](tasks/06-budgets-deadlines-hresults.md)
 - [ ] T07 — Extract the provider-shared parser source subset → [tasks/07-extract-provider-shared-source.md](tasks/07-extract-provider-shared-source.md)
 
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T21:51:15Z · 4/29 done
+**Pipeline status** — updated 2026-09-29T22:05:09Z · 5/29 done
 
-- Completed: T01, T02, T03, T04
+- Completed: T01, T02, T03, T04, T05
 - Blocked: none
 - Failed: none
-- Remaining: T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T04 — done · Froze adapter/sampler/raster contracts + CLSID routing in five provider headers compiled via ProviderContracts.cpp, documented signatures/routing and the T07 move/duplicate/exclude source list in design/interfaces.md (ADR-0009), and filled hand-off/PROGRESS; provider Debug+Release builds clean and Tests.Unit 123 cases green. Only pre-existing gap: compatibility-host-step cannot build here because its OCCT x64-windows-static-md vcpkg triplet is missing (unrelated to T04).
+- Remaining: T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T05 — done · Provider DLL hardened, two-symbol PRIVATE export surface pinned via .def, provider scaffold tests + automated PE dependency-closure check added to Tests.Unit (Release 126/74024 and Debug 126/74112 green, debug+release provider builds zero warnings); only remaining gap is the pre-existing unrelated compatibility-host-step OCCT x64-windows-static-md triplet, recorded for follow-up.
 <!-- /symphony:status -->
