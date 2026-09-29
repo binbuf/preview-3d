@@ -96,6 +96,7 @@
     <ClInclude Include="DeterministicGeometrySampler.h" />
     <ClInclude Include="GeometrySamplingPolicy.h" />
     <ClInclude Include="CpuRasterizer.h" />
+    <ClInclude Include="CpuRasterizerImpl.h" />
     <ClInclude Include="FamilyRouting.h" />
     <ClInclude Include="ProviderLimits.h" />
     <ClInclude Include="Deadline.h" />
@@ -140,6 +141,12 @@
          StreamSource.cpp/ThumbnailPipeline.cpp so Tests.Unit links the same
          source for direct coverage. -->
     <ClCompile Include="GeometrySampler.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T15 CPU tile rasterizer. PCH-free like StreamSource.cpp/
+         ThumbnailPipeline.cpp/GeometrySampler.cpp so Tests.Unit links the same
+         source for direct coverage. -->
+    <ClCompile Include="CpuRasterizer.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <!-- The shared parser subset must not use the provider precompiled

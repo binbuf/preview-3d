@@ -15,6 +15,7 @@
 - **T12 — Implement bounded stream backing over IInitializeWithStream**: `thumbnail-provider/StreamSource.h`/`StreamSource.cpp` hold the single `BoundedSource`; `Create(IStream*, Deadline, AllocationLedger&, ProviderOutcome&)` adopts the stream, probes
 - **T13 — Implement family routing and the adapter interface**: `IThumbnailProvider::GetThumbnail` is wired onto the T11 `ProviderObject` (same object, no second; The orchestration is `thumbnail-provider/ThumbnailPipeline.{h,cpp}`
 - **T14 — Implement the deterministic geometry sampler**: `thumbnail-provider/DeterministicGeometrySampler.{h,cpp}` implements the frozen; **Enumeration continues to the inspect cap** even after the retained reservoir fills; returning
+- **T15 — Implement the CPU tile rasterizer and bitmap output**: `thumbnail-provider/CpuRasterizer.{h,cpp}` implements the frozen `ICpuRasterizer`;; **Resolution:** `size = min(cx, 512)` for nonzero `cx` (larger requests are clamped, never
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 <!-- symphony:digest:end -->
 
@@ -395,6 +396,42 @@ markers); sessions are pointed at this file and read it themselves.
 - **T15 must not change the sampler.** It consumes `SampledGeometry` unchanged. In-sampler
   deadline polling is impossible via the frozen interface; adapters poll between bounded units.
 
+## T15 — Implement the CPU tile rasterizer and bitmap output
+
+- `thumbnail-provider/CpuRasterizer.{h,cpp}` implements the frozen `ICpuRasterizer`;
+  `CpuRasterizerImpl.h` names `RenderCpuTileRaster(const RasterRequest&, RasterImage&)` and the
+  thin `CpuTileRasterizer`. It replaces the T02 prototype (which stays in `thumbnail-spike/`),
+  consumes the T14 `SampledGeometry` + `model_core::MaterialPayload`, and is PCH/COM/GDI-free so
+  both the DLL and `Tests.Unit.exe` compile it. `ThumbnailPipeline.cpp`'s
+  `DefaultDependencies::Render` now calls it, so the pipeline render stage is live.
+- **Resolution:** `size = min(cx, 512)` for nonzero `cx` (larger requests are clamped, never
+  rejected); 2x supersampling only when `allowSupersample` and `Deadline::remaining() >= 250 ms`
+  (the prototype's cap render took ~186 ms at 2x), else 1x. A fresh default `Deadline` starts at
+  2 s, so goldens/tests use 2x.
+- **Material resolution (owned here for now):** albedo = `vertexColor.rgb * baseColorFactor.rgb`;
+  `alphaMode` Opaque/Mask(discard < `alphaCutoff`)/Blend(weighted-opaque toward a neutral frost,
+  opaque depth-writing result); `kMaterialFlagDoubleSided` controls culling, `kMaterialFlagUnlit`
+  skips the two fixed lights, `emissiveFactor` is added after shading; index 0/out-of-range →
+  `NeutralMaterial()`. Colors are treated as already linear (see the headers); T21–T34 supply the
+  actual material values.
+- **Ledger/deadline:** color(16 B/px) + depth(4 B/px) + output(4 B/px) are reserved
+  (`ReserveScoped`) before allocation; crossing the ceiling → `ResourceLimit`
+  (`ERROR_FILE_TOO_LARGE`) with a null image and no allocation. A null ledger disables accounting
+  (unit convenience, like the sampler; the pipeline always passes one). The deadline is polled
+  every 2048 work units → `Cancelled` (`ERROR_TIMEOUT`), out empty.
+- **Goldens:** `thumbnail-provider/goldens/*.pam` (mesh + points at 32/64/256/512, alpha-256),
+  committed; `tests/unit/ProviderRasterizerTests.cpp` (`[provider][rasterizer]`, 11 cases) uses
+  the tolerant metric (meanAbs ≤ 2.0, maxAbs ≤ 48). Regenerate with
+  `x64\Release\Tests.Unit.exe "[write-goldens]"`; the hidden `[rasterizer-perf]` records the cap
+  time. `Tests.Unit.vcxproj` gained `PREVIEW3D_PROVIDER_GOLDEN_DIR`.
+- **Evidence:** Release 190 cases / 134290 assertions, Debug 190 / 134296, both green; cap render
+  mesh 59.2 ms / points 189.7 ms at 512 px 2x SS (prototype 58.8/185.9); dependency closure OK
+  (9 modules, no viewer/worker/host/core import); `[provider][scaffold]` green both configs.
+- **Later tasks:** T21–T34 must populate `MaterialPayload` (and keep vertex colors linear); T16
+  wraps `GetThumbnail` in `ActiveCallGuard`. A real end-to-end bitmap needs an adapter from
+  T21–T34. Golden files are build artifacts of the hidden test, regenerate after any deliberate
+  rasterizer change and bump the tolerance only with evidence.
+
 ## Follow-ups
 
 - T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every
@@ -417,7 +454,8 @@ markers); sessions are pointed at this file and read it themselves.
 - T12 landed; T13 landed: `GetThumbnail` takes `ProviderObject::StreamSource()`, restarts
   `MutableDeadline()` at entry and passes it as `AdapterInput::deadline`. T14 landed (see its
   section): `DefaultThumbnailDependencies::CreateSampler()` returns the deterministic sampler.
-  T15 implements `Render()`, T21–T34 the
+  T15 landed (see its section): `DefaultThumbnailDependencies::Render()` is the CPU tile
+  rasterizer. T21–T34 the
   `FamilyAdapterRegistry.cpp` cases, and T16 wraps `GetThumbnail` in `ActiveCallGuard`. Treat an
   empty `ContiguousView()` as the safe fallback. No second ledger; `StreamSource.cpp` stays
   PCH-free and free of worker/broker/viewer headers.
@@ -438,7 +476,8 @@ markers); sessions are pointed at this file and read it themselves.
 - T03 remaining (environment-limited, not design work): re-run `register-probe.ps1 -Scope HKLM` from
   an elevated shell, and observe the Shell's own `cx` under 150/200% DPI in a scaled session. Both
   are blocked by the non-interactive/UAC-filtered session, not by the spike.
-- T15 should replace the T02 prototype behind the same contract, not reuse it as-is.
+- Resolved by T15: the production rasterizer is `thumbnail-provider/CpuRasterizer.cpp` behind the
+  frozen contract (ADR-0017); the T02 prototype in `thumbnail-spike/` remains spike evidence only.
 - Family viewer release qualification remains open in the viewer program; it does not block provider
   work but must be true before any public claim pairs manager thumbnails with qualified viewer support.
 - The original WiX/MSI (Gate 7) is unbuilt; T41 registers through the current installer path and the

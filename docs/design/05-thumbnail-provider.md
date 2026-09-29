@@ -201,6 +201,19 @@ The thumbnail DLL uses a product-owned tile rasterizer; no GPU device or graphic
 - Render point-cloud samples as depth-tested round splats with deterministic size and source/neutral color.
 - Downsample in linear space and convert to premultiplied BGRA.
 
+T15 implements this as `thumbnail-provider/CpuRasterizer.cpp` behind the frozen
+`ICpuRasterizer` (`CpuRasterizerImpl.h` names the entry point; `ThumbnailPipeline.cpp` calls it),
+[ADR-0017](adr/0017-cpu-tile-rasterizer.md). Resolution is `min(cx, 512)`; 2x internal
+supersampling is used only when `allowSupersample` is set and the cooperative deadline has at
+least 250 ms of remaining headroom, otherwise 1x. A triangle's albedo is
+`vertexColor.rgb * baseColorFactor.rgb`; `alphaMode` selects Opaque, Mask (discard below
+`alphaCutoff`) or Blend (the weighted-opaque approximation), `kMaterialFlagDoubleSided` controls
+culling, `emissiveFactor` is added after shading and `kMaterialFlagUnlit` skips the light rig.
+Raster targets and the output buffer are charged to the T06 ledger before allocation (a charge
+that would cross the ceiling returns `ERROR_FILE_TOO_LARGE` with no image), the deadline is polled
+every 2048 work units, and `thumbnail-provider/goldens/` holds the 32/64/256/512 px mesh/point
+plus alpha PAM goldens compared with the tolerant perceptual metric.
+
 No text, file path, watermark, network content, or nondeterministic animation appears in the bitmap.
 
 ## Threading and unload
