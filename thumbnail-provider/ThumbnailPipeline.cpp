@@ -7,6 +7,7 @@
 #include "ThumbnailPipeline.h"
 
 #include "AllocationLedger.h"
+#include "CpuRasterizerImpl.h"
 #include "Deadline.h"
 #include "DeterministicGeometrySampler.h"
 #include "FamilyAdapterRegistry.h"
@@ -87,9 +88,9 @@ ProviderOutcome FromError(ErrorCode code) noexcept
 }
 
 // The production dependency set. Family adapters come from the T13 registry;
-// the sampler and rasterizer are T14/T15 and are not linked yet, so an adapter
-// that does exist cannot complete a call until those tasks land. This is the
-// single composition point they replace.
+// the sampler is the T14 deterministic sampler and the renderer is the T15 CPU
+// tile rasterizer. An adapter that does not exist yet (T21-T34) still cannot
+// complete a call. This is the single composition point for those stages.
 class DefaultDependencies final : public IThumbnailDependencies {
 public:
     std::unique_ptr<IFamilyAdapter> CreateAdapter(Family family) noexcept override
@@ -108,11 +109,10 @@ public:
         }
     }
 
-    ErrorCode Render(const RasterRequest&, RasterImage& out) noexcept override
+    ErrorCode Render(const RasterRequest& request, RasterImage& out) noexcept override
     {
-        // T15 replaces this with the product-owned tile rasterizer.
-        out = RasterImage{};
-        return ErrorCode::UnsupportedRequiredFeature;
+        // T15: the product-owned CPU tile rasterizer behind the frozen contract.
+        return RenderCpuTileRaster(request, out);
     }
 };
 
