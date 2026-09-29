@@ -22,11 +22,11 @@
 // IThumbnailProvider to the same class.
 
 #include "FamilyRouting.h"
+#include "ModuleLifetime.h"
 
 #include <windows.h>
 #include <unknwn.h>
 
-#include <atomic>
 #include <cstdint>
 
 namespace preview3d::provider {
@@ -40,37 +40,10 @@ HMODULE ModuleHandle() noexcept;
 
 // -- Lifetime bookkeeping ----------------------------------------------------
 
-// Explicit module/object/lock/active-call reference counts (design/05,
-// "Threading and unload"). A live COM object holds one object reference for its
-// lifetime; IClassFactory::LockServer(TRUE) adds a lock; a bounded COM call is
-// wrapped in ActiveCallGuard so it keeps the module alive even if the caller
-// releases every external reference concurrently.
-//
-// CanUnloadNow() is the single predicate behind DllCanUnloadNow. It returns true
-// only when the object, lock and active-call counts are all zero.
-namespace ModuleLifetime {
-
-void AddObject() noexcept;
-void ReleaseObject() noexcept;
-void AddLock() noexcept;
-void ReleaseLock() noexcept;
-void AddActiveCall() noexcept;
-void ReleaseActiveCall() noexcept;
-
-bool CanUnloadNow() noexcept;
-
-} // namespace ModuleLifetime
-
-// RAII marker for an in-flight bounded call.
-class ActiveCallGuard {
-public:
-    ActiveCallGuard() noexcept { ModuleLifetime::AddActiveCall(); }
-    ActiveCallGuard(const ActiveCallGuard&) = delete;
-    ActiveCallGuard& operator=(const ActiveCallGuard&) = delete;
-    ActiveCallGuard(ActiveCallGuard&&) = delete;
-    ActiveCallGuard& operator=(ActiveCallGuard&&) = delete;
-    ~ActiveCallGuard() noexcept { ModuleLifetime::ReleaseActiveCall(); }
-};
+// The explicit module/object/lock/active-call reference counts and the RAII
+// `ActiveCallGuard` live in ModuleLifetime.h (T16 extracted them from this
+// header so Tests.Unit.exe can prove the active-call unload gate directly).
+// design/05 ("Threading and unload") and ADR-0013 fix their contract.
 
 // -- COM entry point ---------------------------------------------------------
 

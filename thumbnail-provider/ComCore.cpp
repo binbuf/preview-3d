@@ -13,7 +13,9 @@
 // WTS_ALPHATYPE, and gdi32 provides CreateDIBSection. Only __uuidof is used, so
 // no thumbcache import is added.
 #include "AllocationLedger.h"
+#include "Containment.h"
 #include "Deadline.h"
+#include "Diagnostics.h"
 #include "ProviderErrors.h"
 #include "ProviderLimits.h"
 #include "RasterBitmap.h"
@@ -24,6 +26,7 @@
 #include <propsys.h>
 #include <thumbcache.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <new>
@@ -31,13 +34,11 @@
 namespace preview3d::provider {
 namespace {
 
-// The one process-global mutable state: pure lifetime reference counts, never a
-// cache and never model data.
+// The module handle. The lifetime counters and ActiveCallGuard live in
+// ModuleLifetime.{h,cpp} (T16); they are the one process-global mutable state
+// and are pure reference bookkeeping, never a cache and never model data.
 HMODULE g_module = nullptr;
 constexpr char kHexDigits[] = "0123456789ABCDEF";
-std::atomic<std::uint32_t> g_liveObjects{0};
-std::atomic<std::uint32_t> g_locks{0};
-std::atomic<std::uint32_t> g_activeCalls{0};
 
 // Formats a GUID as the canonical upper-case, brace-wrapped CLSID string the
 // routing table stores ({XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}). Done locally
@@ -66,6 +67,32 @@ void FormatClsid(REFGUID clsid, char out[40]) noexcept
     }
     out[at++] = '}';
     out[at] = '\0';
+}
+
+// Context for the contained pipeline call. Kept as a plain struct so the
+// contained call is a fixed function pointer rather than a capturing lambda.
+struct PipelineCall {
+    const ThumbnailRequest* request = nullptr;
+    IThumbnailDependencies* dependencies = nullptr;
+    RasterImage* image = nullptr;
+};
+
+ProviderOutcome InvokePipeline(void* context) noexcept
+{
+    auto* call = static_cast<PipelineCall*>(context);
+    return RunThumbnailPipeline(*call->request, *call->dependencies, *call->image);
+}
+
+// Context for the contained DIB/HBITMAP boundary call.
+struct BitmapCall {
+    const RasterImage* image = nullptr;
+    HBITMAP* bitmap = nullptr;
+};
+
+ProviderOutcome InvokeBitmap(void* context) noexcept
+{
+    auto* call = static_cast<BitmapCall*>(context);
+    return CreatePremultipliedDib(*call->image, *call->bitmap);
 }
 
 // The provider object. T11 owns identity/QI/refcount; T12 adds
@@ -142,6 +169,9 @@ public:
             return E_UNEXPECTED;
         }
 
+        // T16: this bounded COM call keeps the module loaded for its duration.
+        ActiveCallGuard guard;
+
         ProviderOutcome outcome = ProviderOutcome::Success;
         auto source = BoundedStreamSource::Create(
             pstream, Deadline{}, AllocationLedger::ProcessWide(), outcome);
@@ -174,28 +204,46 @@ public:
             return HresultFor(ProviderOutcome::BadArgument);
         }
 
+        // T16: this bounded COM call keeps the module loaded for its duration,
+        // even if the caller releases the object concurrently.
+        ActiveCallGuard guard;
+
         // Restart the per-object read deadline for this call (ADR-0014).
         source_->MutableDeadline().Restart();
+        Deadline& deadline = source_->MutableDeadline();
 
         ThumbnailRequest request{};
         request.family = family_;
         request.source = source_.get();
         request.limits = &ProviderLimits::Default();
-        request.deadline = &source_->MutableDeadline();
+        request.deadline = &deadline;
         request.ledger = &AllocationLedger::ProcessWide();
         request.cx = static_cast<std::uint32_t>(cx);
 
+        // Every stage runs on the calling thread (design/05, "Threading and
+        // unload"); no pool or worker is created. The pipeline and the DIB
+        // boundary are the last-resort containment points: a C++ exception or a
+        // structured exception that escapes a third-party parser is translated
+        // to the tabulated HRESULT instead of taking down the surrogate. An
+        // uninterruptible call that returned after the cooperative stop point is
+        // rejected after the fact, with its real elapsed time recorded.
         RasterImage image;
-        const ProviderOutcome outcome =
-            RunThumbnailPipeline(request, DefaultThumbnailDependencies(), image);
-        if (outcome != ProviderOutcome::Success) {
-            return HresultFor(outcome);
+        PipelineCall pipelineCall{&request, &DefaultThumbnailDependencies(), &image};
+        const ContainmentResult containedPipeline = RunContained(
+            &InvokePipeline, &pipelineCall, &deadline, DiagnosticStage::Render);
+        if (containedPipeline.outcome != ProviderOutcome::Success) {
+            return HresultFor(containedPipeline.outcome);
         }
 
         HBITMAP bitmap = nullptr;
-        const ProviderOutcome dib = CreatePremultipliedDib(image, bitmap);
-        if (dib != ProviderOutcome::Success) {
-            return HresultFor(dib);
+        BitmapCall bitmapCall{&image, &bitmap};
+        const ContainmentResult containedBitmap = RunContained(
+            &InvokeBitmap, &bitmapCall, &deadline, DiagnosticStage::Bitmap);
+        if (containedBitmap.outcome != ProviderOutcome::Success) {
+            if (bitmap != nullptr) {
+                ::DeleteObject(bitmap);
+            }
+            return HresultFor(containedBitmap.outcome);
         }
 
         *phbmp = bitmap;
@@ -293,24 +341,6 @@ private:
 void RecordModuleHandle(HMODULE module) noexcept { g_module = module; }
 
 HMODULE ModuleHandle() noexcept { return g_module; }
-
-namespace ModuleLifetime {
-
-void AddObject() noexcept { g_liveObjects.fetch_add(1, std::memory_order_relaxed); }
-void ReleaseObject() noexcept { g_liveObjects.fetch_sub(1, std::memory_order_acq_rel); }
-void AddLock() noexcept { g_locks.fetch_add(1, std::memory_order_relaxed); }
-void ReleaseLock() noexcept { g_locks.fetch_sub(1, std::memory_order_acq_rel); }
-void AddActiveCall() noexcept { g_activeCalls.fetch_add(1, std::memory_order_relaxed); }
-void ReleaseActiveCall() noexcept { g_activeCalls.fetch_sub(1, std::memory_order_acq_rel); }
-
-bool CanUnloadNow() noexcept
-{
-    return g_liveObjects.load(std::memory_order_acquire) == 0 &&
-           g_locks.load(std::memory_order_acquire) == 0 &&
-           g_activeCalls.load(std::memory_order_acquire) == 0;
-}
-
-} // namespace ModuleLifetime
 
 HRESULT GetClassObject(REFCLSID clsid, REFIID riid, void** ppv) noexcept
 {

@@ -94,6 +94,16 @@
          is compiled directly here (PCH-free) so the shipped source is tested. -->
     <ClCompile Include="..\..\thumbnail-provider\CpuRasterizer.cpp" />
     <ClCompile Include="ProviderRasterizerTests.cpp" />
+    <!-- T16 threading/unload lifetime, diagnostics and the exception/SEH
+         containment boundary, compiled from the shipped source. Containment.cpp
+         is pinned to /EHsc so `catch (...)` does not swallow a structured
+         exception. -->
+    <ClCompile Include="..\..\thumbnail-provider\ModuleLifetime.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\Diagnostics.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\Containment.cpp">
+      <ExceptionHandling>Sync</ExceptionHandling>
+    </ClCompile>
+    <ClCompile Include="ProviderThreadingTests.cpp" />
     <!-- T07 shared parser-core regression coverage; compiled with no
          worker/broker/viewer header to pin the provider compile boundary. -->
     <ClCompile Include="ParserCoreTests.cpp" />
