@@ -1,5 +1,12 @@
 # Progress notes
 
+<!-- symphony:digest:start -->
+## Key facts (maintained by symphony — do not edit)
+
+- **Program context (pre-run)**: This roadmap implements the **Explorer thumbnail provider** end to end. The provider was a stub:; Design authority is `docs/design/`. It contains reviewed copies of the original baseline
+- **Follow-ups**: Family viewer release qualification remains open in the viewer program; it does not block provider; The original WiX/MSI (Gate 7) is unbuilt; T41 registers through the current installer path and the
+<!-- symphony:digest:end -->
+
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
 later tasks need to know: real paths, commands that work, contract deviations, gotchas. Facts, not
 narrative. The harness keeps a generated "Key facts" digest at the top (between the symphony:digest

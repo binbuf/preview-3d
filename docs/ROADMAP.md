@@ -38,7 +38,7 @@ before it is built.
 
 ## Phase 1 — Prerequisites and de-risking
 
-- [ ] T01 — Freeze the provider specification and eight-family roster → [tasks/01-freeze-provider-spec.md](tasks/01-freeze-provider-spec.md)
+- [~] T01 — Freeze the provider specification and eight-family roster → [tasks/01-freeze-provider-spec.md](tasks/01-freeze-provider-spec.md) ⟵ failed
 - [ ] T02 — SPIKE-8a: prototype the mesh and point CPU rasterizer → [tasks/02-spike-rasterizer-prototype.md](tasks/02-spike-rasterizer-prototype.md)
 - [ ] T03 — SPIKE-8b: prove isolated Shell surrogate hosting → [tasks/03-spike-surrogate-hosting.md](tasks/03-spike-surrogate-hosting.md)
 - [ ] T04 — Freeze provider interfaces and the shared model-core subset → [tasks/04-freeze-provider-interfaces.md](tasks/04-freeze-provider-interfaces.md)
@@ -85,3 +85,13 @@ before it is built.
 
 - [ ] T51 — Qualify performance and memory against the provider budgets → [tasks/51-performance-memory-qualification.md](tasks/51-performance-memory-qualification.md)
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
+
+<!-- symphony:status -->
+**Pipeline status** — updated 2026-09-29T20:46:11Z · 0/29 done
+
+- Completed: none
+- Blocked: none
+- Failed: T01
+- Remaining: T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T01 — failed · interrupted during retry backoff
+<!-- /symphony:status -->
