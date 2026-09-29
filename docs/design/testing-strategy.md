@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | Provider unit tests | `tests/unit/` (Catch2, `Tests.Unit.exe`) | COM identity/refcount/unload, stream backing, checked arithmetic, budget ledger, sampler determinism, rasterizer math and HRESULT mapping |
 | Golden images | `tests/unit/` / fixtures | Deterministic perceptual output at 32, 64, 256 and 512 px for representative and malformed inputs |
-| COM host harness | new target `Tests.ProviderHost.exe` (name frozen by T05/ADR-0010) | `IClassFactory`/`IThumbnailProvider` exercised through the real COM activation path, per CLSID, plus parallel-apartment and load/unload leak soak |
+| COM host harness | new target `Tests.ProviderHost.exe` (name frozen by T05/ADR-0010) | `IClassFactory`/`IThumbnailProvider` exercised through the real COM activation path, per CLSID, plus the tolerant golden comparator, the fixture registry, parallel-apartment and load/unload leak soak |
 | Isolation tests | provider test group in `Tests.Unit.exe` | Stream-only ingestion: no sidecar/path/network/process/cache access; adversary corpora per adapter |
 | Fuzz | `tests/fuzz/` (ASan/libFuzzer) | Each adapter's parse/sample boundary; no crash, hang, overflow or unbounded allocation |
 | Surrogate soak | new / `tests/app-smoke/` | Parallel apartments, repeated load/unload in the real Shell surrogate, GDI/User/private-byte leak checks |
@@ -41,6 +41,19 @@ checks run `Tests.Unit.exe` and scoped `Tests.ImportIsolation.exe` filters in De
   must return a null bitmap with a typed HRESULT.
 - A fabricated "success" bitmap for a failed parse poisons the Shell cache and is prohibited; a golden
   that encodes a fallback must assert the null-bitmap error path instead.
+
+The COM host harness (`Tests.ProviderHost.exe`, T17) owns the reusable
+comparator (`tests/provider-host/GoldenImage.h`: mean absolute error per channel
+plus a max-outlier guard, `meanAbs <= 2.0`, `maxAbs <= 48` by default) and a
+build-time fixture registry (`tests/provider-host/FixtureRegistry.cpp`). Each
+family task links its adapter into the host, registers one `GoldenFixture`
+(family, small committed source, golden path, tolerance, `cx`), regenerates the
+committed PAM with the hidden `[write-host-goldens]` case and verifies both
+configurations. The host compiles the shipped pipeline, sampler and rasterizer
+rather than a copy, so a fixture is rendered through the production
+orchestration; the `Family::Unknown` placeholder scene proves the harness before
+the first real adapter exists. The full workflow is in
+`tests/provider-host/README.md` and `design/adr/0019-provider-com-host-harness.md`.
 
 ## Containment and hostile input
 

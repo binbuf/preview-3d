@@ -17,6 +17,7 @@
 - **T14 — Implement the deterministic geometry sampler**: `thumbnail-provider/DeterministicGeometrySampler.{h,cpp}` implements the frozen; **Enumeration continues to the inspect cap** even after the retained reservoir fills; returning
 - **T15 — Implement the CPU tile rasterizer and bitmap output**: `thumbnail-provider/CpuRasterizer.{h,cpp}` implements the frozen `ICpuRasterizer`;; **Resolution:** `size = min(cx, 512)` for nonzero `cx` (larger requests are clamped, never
 - **T16 — Implement threading, deadline, and containment behavior**: `thumbnail-provider/ModuleLifetime.{h,cpp}` now owns the T11 object/lock/active-call counters and; `thumbnail-provider/Containment.{h,cpp}` (new; PCH/COM-free; **compiled `/EHsc`** in both projects)
+- **T17 - Build the provider COM host test harness — E2E slice review**: `tests/provider-host/Tests.ProviderHost.exe` (new project in `Preview3D.slnx`; GUID; Files: `ProviderHostMain.cpp` (Catch2 session), `ProviderHostSupport.h` (Shell activation
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 <!-- symphony:digest:end -->
 
@@ -473,6 +474,47 @@ markers); sessions are pointed at this file and read it themselves.
   `design/adr/0018-provider-threading-containment-and-diagnostics.md`.
 - Build gotcha: `Containment.cpp` must stay `/EHsc`; under the compiler's default model `catch (...)`
   also catches structured exceptions, so SEH would be misclassified as a C++ exception.
+
+## T17 - Build the provider COM host test harness — E2E slice review
+
+- `tests/provider-host/Tests.ProviderHost.exe` (new project in `Preview3D.slnx`; GUID
+  `6c2f9a10-7d3e-4b21-9f4a-2d8c1b7e5a64`) is the reusable harness. It loads
+  `x64\$(Configuration)\Preview3DThumbnailProvider.dll` (build-order-only `ProjectReference`, no
+  import-library link) and compiles the shipped `ThumbnailPipeline.cpp`,
+  `FamilyAdapterRegistry.cpp`, `GeometrySampler.cpp`, `CpuRasterizer.cpp`, `RasterBitmap.cpp` so
+  fixtures render through the production pipeline. Build macros:
+  `PREVIEW3D_PROVIDER_DLL=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DThumbnailProvider.dll)"`
+  and `PREVIEW3D_PROVIDER_HOST_GOLDEN_DIR=LR"($(SolutionDir)tests\provider-host\goldens\\)"` (note the
+  **double trailing backslash** — a single `\` before the closing quote escapes it and breaks the
+  literal; `Tests.Unit` uses the same `\\` trick). Include dirs: `shared\model-core\include`,
+  `shared\platform\include`, `thumbnail-provider`, `thumbnail-spike\rasterizer`.
+- Files: `ProviderHostMain.cpp` (Catch2 session), `ProviderHostSupport.h` (Shell activation
+  `DllGetClassObject` → `IClassFactory::CreateInstance` → `IInitializeWithStream` → `GetThumbnail` +
+  stack `IStream`/`BoundedSource` doubles + placeholder adapter + `HostDependencies` + `RunFixture` +
+  GDI/User/private-byte/thread sampler), `GoldenImage.h` (MAE-per-channel + max-outlier comparator,
+  defaults `meanAbs <= 2.0`/`maxAbs <= 48`, PAM load/save), `FixtureRegistry.{h,cpp}` (additive
+  build-time fixture list), `ProviderHostTests.cpp` (5 cases), `goldens/placeholder-256.pam`,
+  `README.md` (commands + the family-task fixture workflow), `design/adr/0019-provider-com-host-harness.md`.
+- Layer tags: `[host][com]` (Shell sequence per frozen CLSID, then `DllCanUnloadNow == S_OK`; unknown
+  CLSID `CLASS_E_CLASSNOTAVAILABLE`), `[host][golden]`, `[host][parallel]` (4 STA × 25),
+  `[host][leak]` (32 warm-up + 128 load/use/unload; GDI ≤ 4, User ≤ 4, threads ≤ 1, private bytes
+  ≤ 16 MiB), hidden `[.][write-host-goldens]`.
+- **Key decision (ADR-0019):** with every `CreateFamilyAdapter` case still `nullptr`, the golden is
+  rendered through the linked real `RunThumbnailPipeline` (adapter → T14 sampler → T15 rasterizer) with
+  a `Family::Unknown` placeholder adapter, while the DLL itself is exercised separately via COM.
+  `[host][com]` asserts either `S_OK`/`WTSAT_ARGB` or the `ERROR_NOT_SUPPORTED`/null fallback, so it
+  keeps passing once T21 links an adapter.
+- **T21+ must know:** to golden a family, add the adapter source(s) to `Tests.ProviderHost.vcxproj`'s
+  `ClCompile`, register a `GoldenFixture` in `FixtureRegistry.cpp`, and run
+  `x64\Release\Tests.ProviderHost.exe "[write-host-goldens]"` to (re)write the committed PAM. The host
+  compiles the same `FamilyAdapterRegistry.cpp` as the DLL, so the two stay in agreement. Verify
+  `x64\Release\Tests.ProviderHost.exe`, `x64\Debug\Tests.ProviderHost.exe` and
+  `x64\Release\Tests.Unit.exe`.
+- Evidence: Release + Debug host builds clean (`/W4 /WX`); `Tests.ProviderHost.exe` 5 cases / 51
+  assertions green in both configs; `[host][com],[host][golden]` 3 / 44 and
+  `[host][leak],[host][parallel]` 2 / 7; `Tests.Unit.exe` 200 cases / 134254 assertions green. No
+  product source or dependency-closure change.
+- Out of scope and unchanged: the real `DllHost.exe` surrogate, DPI and clean-machine install (T44).
 
 ## Follow-ups
 

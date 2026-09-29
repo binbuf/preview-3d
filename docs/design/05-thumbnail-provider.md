@@ -304,6 +304,7 @@ Explorer is allowed to fall back to the generic icon. Returning a fabricated “
 - PLY mesh/point-cloud golden and hostile-list tests; glTF Draco/KTX2 provider-limit tests.
 - Golden images at 32, 64, 256, and 512 pixels with tolerant perceptual comparison.
 - STA parallel-host stress using multiple COM objects.
+- The COM host harness `Tests.ProviderHost.exe` (T17, [ADR-0019](adr/0019-provider-com-host-harness.md)) drives the Shell activation sequence per CLSID, compares a registered fixture rendered through the real pipeline against a tolerant PAM golden, and soaks repeated load/unload against GDI/User/private-byte/thread growth.
 - Truncation, archive bomb, adversarial count, non-seekable stream, timeout, OOM injection, and fuzz corpora.
 - Repeated Explorer surrogate load/unload with GDI/User handle and private-byte leak checks.
 - Verification in the actual Windows thumbnail surrogate at 100%, 150%, and 200% DPI.
