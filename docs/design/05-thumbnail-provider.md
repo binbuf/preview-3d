@@ -60,6 +60,12 @@ T01 freezes this contract as the single authority adapter work is scheduled agai
   The extension-level `ShellEx` location is provisional until T03 proves it with a third-party
   default ProgID and a per-user association.
 
+The C++ adapter/sampler/rasterizer contracts and the exact shared `model-core`/parser source subset
+the DLL compiles are frozen in [interfaces.md](./interfaces.md) (T04, ADR-0009); that document is the
+signature-level companion to this one. The CLSID→family routing table lives once in
+`thumbnail-provider/FamilyRouting.h` and is shared by runtime routing and installer registration
+(T41).
+
 **Limit and error authority.** For the limits T06 encodes, the source of truth is the
 *Thumbnail host* column of [03-file-formats-and-ingestion.md](./03-file-formats-and-ingestion.md)
 together with the HRESULT table below. The accountable caps (256 MiB stream maximum, 128 MiB
