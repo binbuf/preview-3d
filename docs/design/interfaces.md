@@ -154,12 +154,21 @@ two-symbol export surface:
 - `ModuleLifetime` (atomic object/lock/active-call counters) plus
   `ActiveCallGuard` back `DllCanUnloadNow`, which is `S_OK` only when all three
   are zero. `RecordModuleHandle`/`ModuleHandle` are set by a side-effect-free
-  `DllMain`.
+  `DllMain`. T16 moved the counters and the guard into
+  `thumbnail-provider/ModuleLifetime.{h,cpp}` (PCH-free) so `Tests.Unit.exe`
+  proves the active-call unload gate.
 - The created object is a `ProviderObject` implementing `IUnknown` and
   `IInitializeWithStream` (T12; `StreamSource.h`/`StreamSource.cpp`,
   [ADR-0014](adr/0014-bounded-stream-backing.md)); T13 adds
-  `IThumbnailProvider` and T16 wraps `GetThumbnail` in `ActiveCallGuard`.
+  `IThumbnailProvider` and T16 holds an `ActiveCallGuard` for the whole body of
+  both `Initialize` and `GetThumbnail`.
   [ADR-0013](adr/0013-provider-com-core-lifetime.md) records the decision.
+- T16 adds `thumbnail-provider/Containment.{h,cpp}` (`RunContained`, the
+  exception/SEH boundary that maps a contained fault to the T06 HRESULT table and
+  records elapsed/overrun) and `thumbnail-provider/Diagnostics.{h,cpp}` (opt-in,
+  path-free numeric events). `ComCore.cpp` runs the pipeline and the DIB
+  conversion through `RunContained`. See
+  [ADR-0018](adr/0018-provider-threading-containment-and-diagnostics.md).
 
 ## Routed thumbnail pipeline (T13)
 

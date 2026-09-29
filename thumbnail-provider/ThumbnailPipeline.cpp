@@ -180,13 +180,27 @@ ProviderOutcome RunThumbnailPipeline(const ThumbnailRequest& request,
     input.ledger = request.ledger;
     input.family = request.family;
 
+    // T16: a cooperative deadline checkpoint between every bounded stage, so a
+    // long product-owned adapter loop that polls only at its own units still
+    // cannot hand an over-budget intermediate to the next stage. This is not an
+    // in-call interrupt (design/05; Deadline.h).
+    const auto stageTimedOut = [&request]() noexcept {
+        return !request.deadline->Checkpoint();
+    };
+
     ProviderOutcome outcome = FromError(adapter->Initialize(input));
     if (outcome != ProviderOutcome::Success) {
         return outcome;
     }
+    if (stageTimedOut()) {
+        return ProviderOutcome::Deadline;
+    }
     outcome = FromError(adapter->Parse());
     if (outcome != ProviderOutcome::Success) {
         return outcome;
+    }
+    if (stageTimedOut()) {
+        return ProviderOutcome::Deadline;
     }
 
     sampler->Begin(SourceSeed(request.family, *request.source));
@@ -196,11 +210,17 @@ ProviderOutcome RunThumbnailPipeline(const ThumbnailRequest& request,
     if (outcome != ProviderOutcome::Success) {
         return outcome;
     }
+    if (stageTimedOut()) {
+        return ProviderOutcome::Deadline;
+    }
 
     SamplerGeometrySink geometrySink(*sampler);
     outcome = FromError(adapter->EnumerateGeometry(geometrySink));
     if (outcome != ProviderOutcome::Success) {
         return outcome;
+    }
+    if (stageTimedOut()) {
+        return ProviderOutcome::Deadline;
     }
 
     const SampledGeometry& sampled = sampler->Result();

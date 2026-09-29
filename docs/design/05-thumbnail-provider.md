@@ -236,6 +236,28 @@ records the composition and the `cx == 0` -> `E_INVALIDARG` row. DllMain only re
 handle and disables the unused thread notifications; it performs no COM, registration, library load
 or thread work.
 
+T16 implements this directly (see [ADR-0018](adr/0018-provider-threading-containment-and-diagnostics.md)).
+The object/lock/active-call counters and the RAII `ActiveCallGuard` live in
+`thumbnail-provider/ModuleLifetime.{h,cpp}` (PCH/COM-free, so `Tests.Unit.exe` proves the
+active-call unload gate). Both `Initialize` and `GetThumbnail` hold an `ActiveCallGuard` for their
+whole body, so releasing the last external object reference cannot unload the module out from under
+an in-flight call; thread-local containment scratch is a trivial `std::uint32_t`, which registers no
+TLS destructor and cannot keep the module alive. Work stays on the Shell's calling thread: no pool,
+worker, process or GPU device is created and no process-global mutable cache is added.
+`RunThumbnailPipeline` takes a cooperative `Deadline::Checkpoint()` between every bounded stage
+(Initialize/Parse/EnumerateMaterials/EnumerateGeometry/Render), in addition to the per-unit polls
+inside the T12 stream source and T15 rasterizer; the adapters (T21-T34) poll
+`AdapterInput::deadline->Checkpoint()` inside their own long loops. The COM boundary runs the
+pipeline and the DIB conversion through `thumbnail-provider/Containment.{h,cpp}` (`RunContained`),
+the last-resort HRESULT boundary that translates a C++ exception (`std::bad_alloc` -> `E_OUTOFMEMORY`,
+anything else -> `E_FAIL`) and a contained structured exception (`E_FAIL`) to the T06 table. A call
+already in progress is never interrupted: `RunContained` records the real elapsed time and, if an
+uninterruptible call returned after the cooperative 2 s stop point, rejects it afterwards as
+`ERROR_TIMEOUT`. Stack overflow, breakpoint and single-step are deliberately not swallowed.
+Diagnostics are `thumbnail-provider/Diagnostics.{h,cpp}`: numeric events only (no field a path could
+travel in), emitted only while explicitly enabled or via
+`PREVIEW3D_THUMBNAIL_DIAGNOSTICS=1`, and off by default.
+
 ## Security and robustness
 
 The DLL is treated as hostile-input code executing in a sensitive host:
@@ -249,6 +271,15 @@ The DLL is treated as hostile-input code executing in a sensitive host:
 - place third-party parser calls behind exception and structured-exception containment at the COM boundary where legally safe, while fixing ordinary memory faults rather than masking them;
 - write no model-derived persistent cache;
 - keep diagnostic events path-redacted and disabled unless troubleshooting is enabled.
+
+T16 implements the exception/SEH boundary once in `thumbnail-provider/Containment.h`/`Containment.cpp`
+(`RunContained`) and calls it at the COM boundary; adapters route their third-party calls through it
+(their frozen methods are `noexcept`, so an uncontained throw would terminate). A contained fault
+returns the tabulated failure with a diagnostic event, never a fabricated success; the ordinary
+memory fault behind it is still expected to be fuzzed and fixed (T43). Diagnostics are
+`thumbnail-provider/Diagnostics.h`/`Diagnostics.cpp`: events carry only a stage, outcome, counters and
+elapsed time — no string field exists, so a path cannot leak — and are disabled unless troubleshooting
+is enabled.
 
 An importer crash must be addressed by fuzzing/fixing; SEH containment is a last-resort HRESULT boundary, not a correctness mechanism.
 

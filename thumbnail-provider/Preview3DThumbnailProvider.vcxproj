@@ -103,6 +103,9 @@
     <ClInclude Include="AllocationLedger.h" />
     <ClInclude Include="ProviderErrors.h" />
     <ClInclude Include="ComCore.h" />
+    <ClInclude Include="ModuleLifetime.h" />
+    <ClInclude Include="Diagnostics.h" />
+    <ClInclude Include="Containment.h" />
     <ClInclude Include="StreamSource.h" />
     <!-- T13 routed pipeline, adapter registry and DIB/HBITMAP boundary. -->
     <ClInclude Include="ThumbnailPipeline.h" />
@@ -120,6 +123,20 @@
     <ClCompile Include="ComCore.cpp" />
     <ClCompile Include="ProviderContracts.cpp" />
     <ClCompile Include="ProviderExports.cpp" />
+    <!-- T16 module lifetime, diagnostics and the exception/SEH containment
+         boundary. PCH-free like StreamSource.cpp so Tests.Unit.exe compiles the
+         same sources. Containment.cpp is pinned to /EHsc so `catch (...)` does
+         not swallow a structured exception. -->
+    <ClCompile Include="ModuleLifetime.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="Diagnostics.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="Containment.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ExceptionHandling>Sync</ExceptionHandling>
+    </ClCompile>
     <!-- T12 bounded stream backing. Like the shared parser subset it must not
          use the provider precompiled header: the same file compiles in
          Tests.Unit, which has none. -->

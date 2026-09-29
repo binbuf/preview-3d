@@ -16,6 +16,7 @@
 - **T13 — Implement family routing and the adapter interface**: `IThumbnailProvider::GetThumbnail` is wired onto the T11 `ProviderObject` (same object, no second; The orchestration is `thumbnail-provider/ThumbnailPipeline.{h,cpp}`
 - **T14 — Implement the deterministic geometry sampler**: `thumbnail-provider/DeterministicGeometrySampler.{h,cpp}` implements the frozen; **Enumeration continues to the inspect cap** even after the retained reservoir fills; returning
 - **T15 — Implement the CPU tile rasterizer and bitmap output**: `thumbnail-provider/CpuRasterizer.{h,cpp}` implements the frozen `ICpuRasterizer`;; **Resolution:** `size = min(cx, 512)` for nonzero `cx` (larger requests are clamped, never
+- **T16 — Implement threading, deadline, and containment behavior**: `thumbnail-provider/ModuleLifetime.{h,cpp}` now owns the T11 object/lock/active-call counters and; `thumbnail-provider/Containment.{h,cpp}` (new; PCH/COM-free; **compiled `/EHsc`** in both projects)
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 <!-- symphony:digest:end -->
 
@@ -431,6 +432,47 @@ markers); sessions are pointed at this file and read it themselves.
   wraps `GetThumbnail` in `ActiveCallGuard`. A real end-to-end bitmap needs an adapter from
   T21–T34. Golden files are build artifacts of the hidden test, regenerate after any deliberate
   rasterizer change and bump the tolerance only with evidence.
+
+## T16 — Implement threading, deadline, and containment behavior
+
+- `thumbnail-provider/ModuleLifetime.{h,cpp}` now owns the T11 object/lock/active-call counters and
+  `ActiveCallGuard` (moved out of `ComCore.cpp`) plus `LiveObjects()/Locks()/ActiveCalls()`; PCH/COM/
+  Windows-free so `Tests.Unit.exe` compiles it. `ComCore.h` includes it. `Initialize` and
+  `GetThumbnail` each hold an `ActiveCallGuard` for their whole body, so `DllCanUnloadNow` is
+  `S_FALSE` while a call is in flight even after the last external `Release`. The only thread-local is
+  a trivial `std::uint32_t`, which registers no TLS destructor and cannot keep the module alive.
+- `thumbnail-provider/Containment.{h,cpp}` (new; PCH/COM-free; **compiled `/EHsc`** in both projects)
+  exposes `RunContained(ContainedCall, void* context, const Deadline*, DiagnosticStage)`.
+  `ContainedCall` is `ProviderOutcome(*)(void*)` and intentionally non-`noexcept`; the C++ boundary
+  maps `std::bad_alloc` -> `E_OUTOFMEMORY`, any other C++ exception -> `E_FAIL`, and the nested
+  `__try/__except` boundary maps a contained structured exception -> `E_FAIL`. It records real
+  elapsed time and rejects a completed call that passed the 2 s stop point afterwards as
+  `ERROR_TIMEOUT` (cooperative; no in-call interrupt). `ShouldContainStructuredCode` returns false for
+  `EXCEPTION_STACK_OVERFLOW`/`EXCEPTION_BREAKPOINT`/`EXCEPTION_SINGLE_STEP`; access violations are
+  contained. Create/adapters: all third-party calls must go through `RunContained` because the frozen
+  adapter methods are `noexcept`.
+- `thumbnail-provider/Diagnostics.{h,cpp}` (new; PCH/COM-free): `DiagnosticEvent` has only
+  numeric/enum fields (stage, outcome, elapsedMs, overran/cpp/SEH flags, SEH code) — no field a path
+  could travel in. `Diagnostics::Enabled()` is off by default; `SetEnabled`/`SetSink` are the
+  test/troubleshooting hooks and `PREVIEW3D_THUMBNAIL_DIAGNOSTICS=1` is the one-shot env probe.
+  `FormatDiagnostic` writes `stage=.. outcome=.. elapsed_ms=.. seh=.. cpp=.. overrun=..` (no `\`, `/`
+  or `:`). `RunContained` emits on every call when enabled.
+- `ComCore.cpp`: `GetThumbnail`/`Initialize` take `ActiveCallGuard`; the pipeline call and the DIB
+  conversion each run through `RunContained` via the non-capturing `InvokePipeline`/`InvokeBitmap`
+  (a failed DIB deletes a partially-created bitmap). No pool, worker, process or GPU device is created;
+  work stays on the calling thread.
+- `ThumbnailPipeline.cpp`: `Deadline::Checkpoint()` between every bounded stage (after Initialize,
+  Parse, EnumerateMaterials, EnumerateGeometry and before Render).
+- Tests: `tests/unit/ProviderThreadingTests.cpp` (`[provider][threading]`, 10 cases) —
+  unload gate across objects/locks/threads, injected C++/`bad_alloc`/raised+genuine AV, not-swallowed
+  code table, after-the-fact overrun + elapsed, default-off/path-free diagnostics. Evidence: Release
+  `x64\Release\Tests.Unit.exe` 200 cases / 134337 assertions; Debug 200 / 134422; `[provider]` 71
+  cases both configs; dependency closure exit 0 (Release 9, Debug 6 modules, Debug DLL gains a `.tls`
+  section for the trivial `thread_local`); exports still exactly `DllCanUnloadNow`,`DllGetClassObject`.
+- Docs: `design/05` ("Threading and unload", "Security and robustness"), `design/interfaces.md`, new
+  `design/adr/0018-provider-threading-containment-and-diagnostics.md`.
+- Build gotcha: `Containment.cpp` must stay `/EHsc`; under the compiler's default model `catch (...)`
+  also catches structured exceptions, so SEH would be misclassified as a C++ exception.
 
 ## Follow-ups
 

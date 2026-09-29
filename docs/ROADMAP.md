@@ -53,7 +53,7 @@ before it is built.
 - [x] T13 — Implement family routing and the adapter interface → [tasks/13-family-routing-adapter-interface.md](tasks/13-family-routing-adapter-interface.md)
 - [x] T14 — Implement the deterministic geometry sampler → [tasks/14-geometry-sampler.md](tasks/14-geometry-sampler.md)
 - [x] T15 — Implement the CPU tile rasterizer and bitmap output → [tasks/15-cpu-tile-rasterizer.md](tasks/15-cpu-tile-rasterizer.md)
-- [ ] T16 — Implement threading, deadline, and containment behavior → [tasks/16-threading-deadline-containment.md](tasks/16-threading-deadline-containment.md)
+- [x] T16 — Implement threading, deadline, and containment behavior → [tasks/16-threading-deadline-containment.md](tasks/16-threading-deadline-containment.md)
 - [ ] T17 — Build the provider COM host test harness — E2E slice review → [tasks/17-provider-test-harness.md](tasks/17-provider-test-harness.md)
 
 ## Phase 3 — First end-to-end slice: STL in Explorer
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T22:58:31Z · 12/29 done
+**Pipeline status** — updated 2026-09-29T23:08:52Z · 13/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16
 - Blocked: none
 - Failed: none
-- Remaining: T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T15 — done · Shipped the CPU tile rasterizer (thumbnail-provider/CpuRasterizer.{h,cpp}) behind ICpuRasterizer, wired it into DefaultThumbnailDependencies, added 11 [provider][rasterizer] cases + committed PAM goldens at 32/64/256/512 plus alpha/point, ADR-0017/docs/handoff; Release+Debug 190 cases green, cap render 59/190 ms meets the prototype budget.
+- Remaining: T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T16 — done · T16 landed ModuleLifetime extraction + ActiveCallGuard on Initialize/GetThumbnail, RunContained exception/SEH boundary with elapsed/overrun recording, per-stage deadline checkpoints, and opt-in path-free diagnostics; 10 new [provider][threading] cases green in Debug+Release (200 cases total), dependency closure and two-symbol export surface intact.
 <!-- /symphony:status -->
