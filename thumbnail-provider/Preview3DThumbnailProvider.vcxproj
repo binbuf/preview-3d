@@ -93,6 +93,8 @@
     <ClInclude Include="ProviderTypes.h" />
     <ClInclude Include="FamilyAdapter.h" />
     <ClInclude Include="GeometrySampler.h" />
+    <ClInclude Include="DeterministicGeometrySampler.h" />
+    <ClInclude Include="GeometrySamplingPolicy.h" />
     <ClInclude Include="CpuRasterizer.h" />
     <ClInclude Include="FamilyRouting.h" />
     <ClInclude Include="ProviderLimits.h" />
@@ -132,6 +134,12 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="RasterBitmap.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T14 deterministic sampler + over-cap policy. PCH-free like
+         StreamSource.cpp/ThumbnailPipeline.cpp so Tests.Unit links the same
+         source for direct coverage. -->
+    <ClCompile Include="GeometrySampler.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <!-- The shared parser subset must not use the provider precompiled

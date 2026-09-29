@@ -8,6 +8,7 @@
 
 #include "AllocationLedger.h"
 #include "Deadline.h"
+#include "DeterministicGeometrySampler.h"
 #include "FamilyAdapterRegistry.h"
 #include "ProviderLimits.h"
 
@@ -98,8 +99,13 @@ public:
 
     std::unique_ptr<IGeometrySampler> CreateSampler() noexcept override
     {
-        // T14 replaces this with the deterministic spatial/reservoir sampler.
-        return nullptr;
+        // T14: the deterministic spatial/material/reservoir sampler, charged to
+        // the process-wide ledger for the duration of the call.
+        try {
+            return std::make_unique<DeterministicGeometrySampler>();
+        } catch (...) {
+            return nullptr;
+        }
     }
 
     ErrorCode Render(const RasterRequest&, RasterImage& out) noexcept override

@@ -177,6 +177,17 @@ sampled across, and the fallback covers the rest.
 
 If trustworthy format metadata supplies bounds, it can guide sampling but is verified against sampled positions. For formats that cannot stream geometry safely under the limits, the provider stops and lets Explorer show its generic icon.
 
+T14 implements this as `thumbnail-provider/DeterministicGeometrySampler.{h,cpp}` behind the
+frozen `IGeometrySampler`: a deterministic min-hash priority reservoir (bottom-k) so a reordered
+enumeration is byte-identical, plus one representative per occupied spatial cell and per material
+so separated components and material boundaries survive the retained cap. Enumeration continues
+to the inspect cap even when the retained reservoir is full, so the result is never a source
+prefix. The single 250k sample budget is shared by triangles and points, retained storage is
+charged to the T06 ledger before allocation, and the over-cap policy
+(`GeometrySamplingPolicy.h`, `DecideGeometrySampling`/`StratifiedOffsets`) is the one place
+adapters (T21–T34) consult before reading a source that exceeds the cap; an over-cap stream the
+provider cannot position returns the safe fallback ([ADR-0016](adr/0016-deterministic-geometry-sampling.md)).
+
 ## CPU renderer
 
 The thumbnail DLL uses a product-owned tile rasterizer; no GPU device or graphics queue is created inside Explorer.

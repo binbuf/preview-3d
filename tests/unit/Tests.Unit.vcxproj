@@ -87,6 +87,9 @@
     <ClCompile Include="ProviderPipelineTests.cpp" />
     <ClCompile Include="ProviderRasterBitmapTests.cpp" />
     <ClCompile Include="ProviderThumbnailTests.cpp" />
+    <!-- T14 deterministic geometry sampler and over-cap sampling policy. -->
+    <ClCompile Include="..\..\thumbnail-provider\GeometrySampler.cpp" />
+    <ClCompile Include="ProviderSamplerTests.cpp" />
     <!-- T07 shared parser-core regression coverage; compiled with no
          worker/broker/viewer header to pin the provider compile boundary. -->
     <ClCompile Include="ParserCoreTests.cpp" />
