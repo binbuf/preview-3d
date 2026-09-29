@@ -113,16 +113,18 @@ The CLSIDs and family mapping in [05-thumbnail-provider.md](./05-thumbnail-provi
         (Default) = "[INSTALLFOLDER]Preview3DThumbnailProvider.dll"
         ThreadingModel = "Apartment"
 
-Proposed mapping for each direct extension (T03 must prove this works with a
-third-party default ProgID and a per-user association before T41 freezes it):
+Validated mapping for each direct extension (proven by T03/ADR-0008; T41 freezes it):
 
     HKLM\Software\Classes\<extension>\shellex\
       {E357FCCD-A995-4576-B01F-234630154E96} = "{family-clsid}"
 
+T03 confirmed this extension-level key resolves with a third-party default ProgID and a per-user
+association, and that the handler is then loaded in `DllHost.exe` (not `explorer.exe`) with no
+`DisableProcessIsolation`. The handler does not require the extension to have an open-association
+ProgID, and the surrogate loads the DLL from the absolute `InprocServer32` path, so T42 must keep the
+provider at that stable install path.
+
 The handler key is the Windows thumbnail-handler category. Registration does not add IPreviewHandler, context-menu, property, icon-overlay, or property-handler entries.
-If this extension-level mapping does not resolve in either T03 scenario, T03 updates this
-section and ADR-0006 to the validated Shell association location; T41 must not
-implement an unverified registry shape.
 
 Component ownership is exact: every key/value has a component/key path and uninstall removes only
 values installed by this product. T41 implements these rules in the current NSIS installer

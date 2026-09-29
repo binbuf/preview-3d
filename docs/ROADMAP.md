@@ -40,7 +40,7 @@ before it is built.
 
 - [x] T01 — Freeze the provider specification and eight-family roster → [tasks/01-freeze-provider-spec.md](tasks/01-freeze-provider-spec.md)
 - [x] T02 — SPIKE-8a: prototype the mesh and point CPU rasterizer → [tasks/02-spike-rasterizer-prototype.md](tasks/02-spike-rasterizer-prototype.md)
-- [ ] T03 — SPIKE-8b: prove isolated Shell surrogate hosting → [tasks/03-spike-surrogate-hosting.md](tasks/03-spike-surrogate-hosting.md)
+- [~] T03 — SPIKE-8b: prove isolated Shell surrogate hosting → [tasks/03-spike-surrogate-hosting.md](tasks/03-spike-surrogate-hosting.md) ⟵ running
 - [ ] T04 — Freeze provider interfaces and the shared model-core subset → [tasks/04-freeze-provider-interfaces.md](tasks/04-freeze-provider-interfaces.md)
 - [ ] T05 — Scaffold the provider build and test integration → [tasks/05-provider-build-test-scaffold.md](tasks/05-provider-build-test-scaffold.md)
 - [ ] T06 — Define budgets, deadlines, and HRESULT mapping → [tasks/06-budgets-deadlines-hresults.md](tasks/06-budgets-deadlines-hresults.md)

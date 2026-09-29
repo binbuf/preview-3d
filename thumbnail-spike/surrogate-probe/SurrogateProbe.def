@@ -1,0 +1,4 @@
+LIBRARY SurrogateProbe
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE
