@@ -7,10 +7,14 @@
 
 #include "pch.h"
 
+#include "AllocationLedger.h"
 #include "CpuRasterizer.h"
+#include "Deadline.h"
 #include "FamilyAdapter.h"
 #include "FamilyRouting.h"
 #include "GeometrySampler.h"
+#include "ProviderErrors.h"
+#include "ProviderLimits.h"
 #include "ProviderTypes.h"
 
 namespace preview3d::provider {
@@ -31,5 +35,33 @@ static_assert(RouteForClsid("{E938BC70-4C08-4446-A15D-EE31576BFB48}")->extension
 static_assert(kThumbnailHandlerShellExGuid[0] == '{');
 
 static_assert(NeutralMaterial().alphaMode == static_cast<std::uint32_t>(model_core::AlphaModeId::Opaque));
+
+// T06 budgets, deadline policy and HRESULT mapping (design/05, design/03).
+static_assert(ProviderLimits::kStreamMaxBytes == 256ull * 1024 * 1024);
+static_assert(ProviderLimits::kContiguousBackingMaxBytes == 128ull * 1024 * 1024);
+static_assert(ProviderLimits::kAccountedScratchMaxBytes == 192ull * 1024 * 1024);
+static_assert(ProviderLimits::kAllocationLedgerMaxBytes == 384ull * 1024 * 1024);
+static_assert(ProviderLimits::kProcessCommitQualificationTargetBytes == 384ull * 1024 * 1024);
+static_assert(ProviderLimits::kTrianglesInspectedMax == 2'000'000);
+static_assert(ProviderLimits::kPointsInspectedMax == 6'000'000);
+static_assert(ProviderLimits::kRasterizedSamplesMax == 250'000);
+static_assert(ProviderLimits::kDecodedTexturePixelsMax == 32'000'000);
+static_assert(ProviderLimits::kNodesMax == 10'000);
+static_assert(ProviderLimits::kMaterialsMax == 4'096);
+static_assert(ProviderLimits::kDracoDecodedWorkingSetMaxBytes == 96ull * 1024 * 1024);
+static_assert(ProviderLimits::kDracoTrianglesMax == 1'000'000);
+static_assert(AllocationLedger::kDefaultLimitBytes == ProviderLimits::kAllocationLedgerMaxBytes);
+static_assert(Deadline::kTargetP95 == std::chrono::milliseconds{750});
+static_assert(Deadline::kCooperativeStop == std::chrono::milliseconds{2000});
+static_assert(ClassifyError(ErrorCode::OutOfMemory) == ProviderOutcome::OutOfMemory);
+static_assert(HresultFor(ProviderOutcome::LimitExceeded) ==
+              HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE));
+
+// Checked helpers are usable at compile time for file-derived checks.
+static_assert(FitsInRange(0, ProviderLimits::kStreamMaxBytes,
+                          ProviderLimits::kStreamMaxBytes));
+static_assert(!FitsInRange(0, ProviderLimits::kStreamMaxBytes + 1,
+                           ProviderLimits::kStreamMaxBytes));
+static_assert(!CheckedMultiply(UINT64_MAX, 2).has_value());
 
 } // namespace preview3d::provider

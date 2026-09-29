@@ -9,7 +9,8 @@
 - **T03 — SPIKE-8b: prove isolated Shell surrogate hosting**: Spike lives in `thumbnail-spike/surrogate-probe/`; builds; **Surrogate hosting proven**: both `CoCreateInstance(CLSCTX_LOCAL_SERVER)` and the real Shell
 - **T04 — Freeze provider interfaces and the shared model-core subset**: Frozen interface headers live in `thumbnail-provider/`: `ProviderTypes.h` (value types, `Family`,; `ProviderTypes.h` forward-declares `ProviderLimits`, `Deadline`, `AllocationLedger`; **T06 must
 - **T05 — Scaffold the provider build and test integration**: Provider DLL now builds with the product-boundary hardening and an explicit two-symbol export; Confirmed in both configs: `dumpbin /headers` + `/loadconfig` show Control Flow Guard, CET
-- **Follow-ups**: T11 must replace `thumbnail-provider/ProviderExports.cpp` stub bodies, keeping the `.def`; T17 creates `Tests.ProviderHost.exe` under the name frozen by T05/ADR-0010 and wires it into
+- **T06 — Define budgets, deadlines, and HRESULT mapping**: T06 services are header-only and live in `thumbnail-provider/`:; Constants as frozen: 256 MiB stream, 128 MiB contiguous backing, 192 MiB accounted scratch,
+- **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; T07's shared-source extraction must keep `shared/platform/include/platform/CheckedMath.h` available
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -177,8 +178,54 @@ markers); sessions are pointed at this file and read it themselves.
   (`C1083 BRepBndLib.hxx` / `BRepMesh_IncrementalMesh.hxx`; its OCCT `x64-windows-static-md` path is
   not installed). The provider and `Tests.Unit` build clean in both configs through the same solution.
 
+## T06 — Define budgets, deadlines, and HRESULT mapping
+
+- T06 services are header-only and live in `thumbnail-provider/`:
+  `ProviderLimits.h` (frozen `static constexpr` caps + `CheckedAdd/Multiply/RangeEnd/FitsInRange/
+  CheckedNarrow<T>` over `platform/CheckedMath.h`), `Deadline.h` (steady-clock `Deadline`,
+  750 ms p95 target, 2 s cooperative stop, `expired()/remaining()/Checkpoint()`), `AllocationLedger.h`
+  (process-wide lock-free atomic ledger, default 384 MiB, RAII `AllocationReservation`), and
+  `ProviderErrors.h` (`ProviderOutcome`, `HresultFor`, `ClassifyError`, `HresultForError`).
+- Constants as frozen: 256 MiB stream, 128 MiB contiguous backing, 192 MiB accounted scratch,
+  384 MiB ledger, 384 MiB process-commit qualification target, 2 M triangles, 6 M points inspected,
+  250 k rasterized, 32 MP (`32'000'000`) decoded texture, 10 k nodes, 4 096 materials,
+  96 MiB / 1 M Draco unit.
+- Provider project now adds `..\shared\platform\include` to its include path; the four headers are
+  compiled by `ProviderContracts.cpp` with `static_assert`s, and listed in the `.vcxproj`. Tests:
+  `tests/unit/ProviderBudgetTests.cpp`, tags `[provider][budget]`, via the `..\..\thumbnail-provider`
+  include path added to `Tests.Unit.vcxproj`.
+- Usage contract for T12/T14/T15/adapters: pass `&ProviderLimits::Default()` in `AdapterInput`/
+  `RasterRequest`, charge controlled bytes with `AllocationLedger::ProcessWide()` (or a caller-owned
+  ledger), and poll `Deadline::Checkpoint()` between bounded work units. `Checkpoint()` is
+  cooperative — it does not interrupt an opaque third-party call; an overrun must fail to the generic
+  icon and be measured.
+- The 384 MiB **total process private commit above the idle, loaded surrogate baseline** remains a
+  measured T51 target, not ledger-enforced. Unaccounted library allocations, DLL/GDI and decoder
+  allocations without callbacks are outside the ledger (documented in `AllocationLedger.h`/ADR-0011).
+- HRESULT mapping (design/05 table, no new codes): bad pointer `E_POINTER`, invalid call order
+  `E_UNEXPECTED`, unsupported `HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)`, bad format
+  `ERROR_BAD_FORMAT`, limit `ERROR_FILE_TOO_LARGE`, deadline `ERROR_TIMEOUT`, OOM `E_OUTOFMEMORY`,
+  decoder failure `E_FAIL`. `ClassifyError` folds every `model_core::ImportErrorCode` into one row
+  (file-level -> BadFormat, `Cancelled`/`WorkerTimedOut` -> Deadline, all resource/host limits ->
+  LimitExceeded, importer/decoder faults -> DecoderFailure); adding a code forces a `ClassifyError`
+  update (the test walks the enum range).
+- Verified: `x64\Release\Tests.Unit.exe` 134 cases / 76215 assertions green; Debug 134 / 76304 green;
+  `[provider][budget]` 8 cases green in both. Provider Release+Debug build clean under `/W4 /WX`.
+  Build directly with `/p:SolutionDir=<root>\` as before.
+- ADR-0011 records the representation/accounting/classification decision; `design/05` and
+  `design/interfaces.md` were updated to name the new headers.
+
 ## Follow-ups
 
+- T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every
+  controlled allocation; prefer `ReserveScoped`) and `Deadline::Checkpoint()`/`HresultForError`
+  instead of local limits/error strings; do not create a second ledger or a second HRESULT table.
+- T07's shared-source extraction must keep `shared/platform/include/platform/CheckedMath.h` available
+  to the provider (T06 added it to the provider include path) if it relocates that header.
+- Any new `model_core::ImportErrorCode` must be added to `ProviderErrors.h::ClassifyError`; a new
+  HRESULT requires an ADR (design/05).
+- T51 still owns measuring the actual peak process private commit above the idle, loaded surrogate
+  baseline against the 384 MiB target and recording unaccounted excess.
 - T11 must replace `thumbnail-provider/ProviderExports.cpp` stub bodies, keeping the `.def`
   two-symbol `PRIVATE` export surface (return `CLASS_E_CLASSNOTAVAILABLE` for unknown CLSIDs).
 - T17 creates `Tests.ProviderHost.exe` under the name frozen by T05/ADR-0010 and wires it into
