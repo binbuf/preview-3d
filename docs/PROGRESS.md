@@ -11,6 +11,7 @@
 - **T05 — Scaffold the provider build and test integration**: Provider DLL now builds with the product-boundary hardening and an explicit two-symbol export; Confirmed in both configs: `dumpbin /headers` + `/loadconfig` show Control Flow Guard, CET
 - **T06 — Define budgets, deadlines, and HRESULT mapping**: T06 services are header-only and live in `thumbnail-provider/`:; Constants as frozen: 256 MiB stream, 128 MiB contiguous backing, 192 MiB accounted scratch,
 - **T07 — Extract the provider-shared parser source subset**: `shared/parser-core/` is the extracted source set, compiled into both `Preview3DImportWorker.exe`; Worker adapters now consume it: `import-worker/src/StlAdapter.cpp`/`PlyAdapter.cpp` include
+- **T11 — Implement the COM core and lifetime exports**: The provider's in-proc COM core is `thumbnail-provider/ComCore.h`/`ComCore.cpp` (ADR-0013):; Routing without sniffing: the incoming `REFCLSID` is formatted to the canonical upper-case
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 <!-- symphony:digest:end -->
 
@@ -251,6 +252,37 @@ markers); sessions are pointed at this file and read it themselves.
   `Tests.Unit` via the solution or with `/p:SolutionDir=<root>\` so `PREVIEW3D_PROVIDER_DLL`
   expands correctly.
 
+## T11 — Implement the COM core and lifetime exports
+
+- The provider's in-proc COM core is `thumbnail-provider/ComCore.h`/`ComCore.cpp` (ADR-0013):
+  `GetClassObject(REFCLSID, REFIID, void**)` builds one `IClassFactory` per `FamilyRoutes()`
+  entry; `ProviderExports.cpp` is the stable two-symbol surface and `dllmain.cpp` only records
+  the module handle + `DisableThreadLibraryCalls`.
+- Routing without sniffing: the incoming `REFCLSID` is formatted to the canonical upper-case
+  brace string locally (`FormatClsid`) and compared with `RouteForClsid`; no ole32/
+  `StringFromGUID2` import was added. Unknown CLSID -> `CLASS_E_CLASSNOTAVAILABLE`; factory
+  `riid` not `IUnknown`/`IClassFactory` -> `E_NOINTERFACE`; null out-param -> `E_POINTER`;
+  `pUnkOuter` -> `CLASS_E_NOAGGREGATION`. The `.def` still exports exactly the two `PRIVATE`
+  symbols, no `DllRegisterServer`/`DllUnregisterServer`.
+- Lifetime: atomic `ModuleLifetime` object/lock/active-call counters (+ `ActiveCallGuard`), so
+  `DllCanUnloadNow` == `S_OK` only when all three are zero. Destructors are `noexcept`. The
+  counters are the one process-global mutable state and are reference bookkeeping only.
+- Extension point: `ProviderObject` implements only `IUnknown` today; **T12 adds
+  `IInitializeWithStream`, T13 adds `IThumbnailProvider` to the same class, T16 wraps
+  `GetThumbnail` in `ActiveCallGuard`** — do not add a second object type.
+- Tests `tests/unit/ProviderComTests.cpp` (`[provider][com]`) load the built DLL like the
+  Shell/T17 host (PRIVATE exports, no import library) and cover routing, identity,
+  `QueryInterface`, aggregation rejection, refcount, lock server and unload.
+- Evidence: `x64\Release\Tests.Unit.exe` 146 cases / 76347 assertions green (Debug 146 / 76434);
+  `[provider]` 17 cases green both configs; `dumpbin /exports` = exactly `DllCanUnloadNow`,
+  `DllGetClassObject`; `check-provider-dependency-closure.ps1` exit 0 in both configs. Full
+  `Preview3D.slnx` Release build still fails only on the pre-existing unrelated
+  `compatibility-host-step` OCCT `x64-windows-static-md` `C1083 BRepBndLib.hxx`/
+  `BRepMesh_IncrementalMesh.hxx` gap from T04.
+- Debug DLL now also imports `MSVCP140D.dll` (and Release the CRT `api-ms-win-crt-heap/string`
+  shims) because of the C++ standard-library use; these are CRT-only and the dependency-closure
+  rule (no `Preview3D*` import) still holds.
+
 ## Follow-ups
 
 - T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every
@@ -263,8 +295,11 @@ markers); sessions are pointed at this file and read it themselves.
   HRESULT requires an ADR (design/05).
 - T51 still owns measuring the actual peak process private commit above the idle, loaded surrogate
   baseline against the 384 MiB target and recording unaccounted excess.
-- T11 must replace `thumbnail-provider/ProviderExports.cpp` stub bodies, keeping the `.def`
-  two-symbol `PRIVATE` export surface (return `CLASS_E_CLASSNOTAVAILABLE` for unknown CLSIDs).
+- T12/T13 extend `ComCore.cpp`'s `ProviderObject` with `IInitializeWithStream`/
+  `IThumbnailProvider` (the objects created by the T11 class factories; no second object type),
+  and T16 wraps `GetThumbnail` in `ActiveCallGuard`. The class factory/lifetime contract, the
+  `.def` two-symbol `PRIVATE` surface and `CLASS_E_CLASSNOTAVAILABLE` for unknown CLSIDs are
+  frozen by T11/ADR-0013.
 - T17 creates `Tests.ProviderHost.exe` under the name frozen by T05/ADR-0010 and wires it into
   `Preview3D.slnx`, activating the provider via COM/`GetProcAddress` rather than linking.
 

@@ -122,6 +122,25 @@ T41 consumes the same header to write the machine-level registration (design
 registration test must compare the installed values against this table so the
 two cannot drift. The eventual MSI adopts the same identities.
 
+## COM core and lifetime
+
+`thumbnail-provider/ComCore.h` (implemented in `ComCore.cpp`, T11) owns the
+in-proc server's class factories and lifetime bookkeeping behind the fixed
+two-symbol export surface:
+
+- `GetClassObject(REFCLSID, REFIID, void**)` builds one `IClassFactory` per
+  `FamilyRoutes()` entry; unknown CLSIDs return `CLASS_E_CLASSNOTAVAILABLE`,
+  non-`IUnknown`/`IClassFactory` IIDs return `E_NOINTERFACE`, a null out-param
+  returns `E_POINTER`, and aggregation returns `CLASS_E_NOAGGREGATION`.
+- `ModuleLifetime` (atomic object/lock/active-call counters) plus
+  `ActiveCallGuard` back `DllCanUnloadNow`, which is `S_OK` only when all three
+  are zero. `RecordModuleHandle`/`ModuleHandle` are set by a side-effect-free
+  `DllMain`.
+- The created object is a `ProviderObject` shell implementing only `IUnknown`;
+  T12 adds `IInitializeWithStream`, T13 adds `IThumbnailProvider` and T16 wraps
+  `GetThumbnail` in `ActiveCallGuard`. [ADR-0013](adr/0013-provider-com-core-lifetime.md)
+  records the decision.
+
 ## Shared source subset (handed to T07)
 
 ADR-0004 compiles the needed source files directly into the DLL. T04 enumerates

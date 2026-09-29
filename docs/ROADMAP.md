@@ -48,7 +48,7 @@ before it is built.
 
 ## Phase 2 — Shared foundation
 
-- [ ] T11 — Implement the COM core and lifetime exports → [tasks/11-com-core-lifetime.md](tasks/11-com-core-lifetime.md)
+- [x] T11 — Implement the COM core and lifetime exports → [tasks/11-com-core-lifetime.md](tasks/11-com-core-lifetime.md)
 - [ ] T12 — Implement bounded stream backing over IInitializeWithStream → [tasks/12-bounded-stream-backing.md](tasks/12-bounded-stream-backing.md)
 - [ ] T13 — Implement family routing and the adapter interface → [tasks/13-family-routing-adapter-interface.md](tasks/13-family-routing-adapter-interface.md)
 - [ ] T14 — Implement the deterministic geometry sampler → [tasks/14-geometry-sampler.md](tasks/14-geometry-sampler.md)
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T22:24:13Z · 7/29 done
+**Pipeline status** — updated 2026-09-29T22:27:54Z · 8/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11
 - Blocked: none
 - Failed: none
-- Remaining: T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T07 — done · Extracted shared/parser-core (AsciiTokenizer + StlParserCore + PlyParserCore), worker consumes it, provider compiles it; verify filter 69/1564 green, Tests.Unit 140/76245 green, docs+ADR-0012 recorded; only pre-existing OCCT step-host solution failure remains.
+- Remaining: T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T11 — done · Provider COM core landed (routed class factories, explicit object/lock/active-call lifetime, two-symbol export preserved) with `[provider][com]` tests; Debug+Release green (146 cases) and dumpbin confirms exactly the two exports.
 <!-- /symphony:status -->

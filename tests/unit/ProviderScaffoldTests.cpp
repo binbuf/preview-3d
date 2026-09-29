@@ -11,8 +11,9 @@
 // harness do) and inspects the PE import/export directories directly, so a
 // regression in the build boundary fails here without needing dumpbin on PATH.
 //
-// Behavioral COM tests (identity, refcount, lock server, unload) are added by
-// T11; this file only pins the build boundary the later tasks rely on.
+// Behavioral COM tests (identity, refcount, lock server, unload, aggregation
+// rejection) live in ProviderComTests.cpp (T11); this file pins the build
+// boundary the later tasks rely on.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -139,7 +140,8 @@ TEST_CASE("provider DLL imports no viewer, worker, host or core binary", "[provi
     }
 }
 
-TEST_CASE("provider COM entry points are callable before T11 lands", "[provider][scaffold]")
+TEST_CASE("provider COM entry points return the frozen results for unknown input",
+          "[provider][scaffold]")
 {
     const LoadedModule module;
     REQUIRE(module.handle != nullptr);

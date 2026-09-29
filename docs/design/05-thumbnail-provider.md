@@ -191,6 +191,14 @@ An object is apartment-affine. GetThumbnail performs work on the calling thread 
 
 DllCanUnloadNow returns S_OK only when live objects, class-factory locks, and active calls are all zero. Destructors are noexcept and release stream/backing resources. Thread-local parser scratch cannot keep the module artificially alive.
 
+The COM core is implemented in `thumbnail-provider/ComCore.h`/`ComCore.cpp` and
+documented by [ADR-0013](adr/0013-provider-com-core-lifetime.md): one class factory per routed
+CLSID (family chosen from the CLSID alone, never sniffed), explicit atomic
+module/object/lock/active-call counts behind `DllCanUnloadNow`, and a `ProviderObject` shell
+that T12/T13 extend with `IInitializeWithStream` and `IThumbnailProvider`. DllMain only records
+the module handle and disables the unused thread notifications; it performs no COM, registration,
+library load or thread work.
+
 ## Security and robustness
 
 The DLL is treated as hostile-input code executing in a sensitive host:

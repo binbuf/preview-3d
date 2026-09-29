@@ -1,26 +1,27 @@
-// T05 scaffolding for the provider's COM in-proc server entry points.
+// T11 provider COM in-proc server entry points.
 //
 // The linker's module-definition file (Preview3DThumbnailProvider.def) exports
-// exactly these two symbols and nothing else, so the DLL links and the
-// export-surface / dependency-closure tests in Tests.Unit.exe can run before the
-// real implementation exists. T11 replaces these bodies with the class factory
-// and module/object/lock reference counts; the signatures and the export surface
-// are frozen here.
+// exactly these two symbols and nothing else, both PRIVATE (ADR-0010). The class
+// factory and lifetime bookkeeping live in ComCore.h/.cpp; this translation unit
+// is only the stable entry-point surface the Shell (and the T17 host) resolves
+// with GetProcAddress.
 //
-// Implementing full COM behavior is explicitly out of scope for T05 (→ T11).
+// There is deliberately no DllRegisterServer/DllUnregisterServer: registration is
+// installer-owned (ADR-0006/0007) and a self-registration export would
+// bypass the non-clobber policy in design/05-thumbnail-provider.md.
 
 #include "pch.h"
 
+#include "ComCore.h"
+
 #include <objbase.h>
 
-extern "C" HRESULT WINAPI DllGetClassObject(REFCLSID, REFIID, void** ppv)
+extern "C" HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void** ppv)
 {
-    if (ppv == nullptr) return E_POINTER;
-    *ppv = nullptr;
-    return CLASS_E_CLASSNOTAVAILABLE;
+    return preview3d::provider::GetClassObject(clsid, riid, ppv);
 }
 
 extern "C" HRESULT WINAPI DllCanUnloadNow()
 {
-    return S_OK;
+    return preview3d::provider::ModuleLifetime::CanUnloadNow() ? S_OK : S_FALSE;
 }
