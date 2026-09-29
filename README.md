@@ -4,7 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install) [![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP-6e7681?style=flat-square)](#supported-formats)
 
-[Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Contributing](CONTRIBUTING.md) · [Windows security help](.docs/WINDOWS-SECURITY.md)
+[Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Contributing](CONTRIBUTING.md) · [Windows security help](docs/WINDOWS-SECURITY.md)
 
 <!-- Screenshots: see docs/screenshots/README.md for the shot list and how to add more. -->
 <p align="center">
@@ -33,7 +33,7 @@
 | Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`: static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
 | STEP | `.step` and `.stp`: self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies, instance/shape/face colors, and authored length units |
 
-For the exact supported subset, resource ceilings, and known limitations of each format, see [Format support and limits](.docs/FORMAT-SUPPORT.md).
+For the exact supported subset, resource ceilings, and known limitations of each format, see [Format support and limits](docs/FORMAT-SUPPORT.md).
 
 ## Install
 
@@ -44,7 +44,7 @@ For the exact supported subset, resource ceilings, and known limitations of each
 The installer adds Preview 3D to **Open with** and **Default apps** for the supported extensions. Windows keeps existing default-app choices; confirm any changes in Default apps after installation.
 
 > [!IMPORTANT]
-> Releases are currently **unsigned** while code-signing and reputation work is in progress, so Windows may block the app or one of the DLLs bundled beside it (for example the Bad Image status `0xC0E90002`). Only download from this repository's Releases page and verify the supplied SHA-256 checksum. For the portable ZIP, right-click the downloaded file, choose **Properties**, and select **Unblock** *before* extracting, so its contents do not inherit the mark. Smart App Control has no per-file exception; see [Windows security help](.docs/WINDOWS-SECURITY.md) for the specific, safe steps to allow a release you have verified.
+> Releases are currently **unsigned** while code-signing and reputation work is in progress, so Windows may block the app or one of the DLLs bundled beside it (for example the Bad Image status `0xC0E90002`). Only download from this repository's Releases page and verify the supplied SHA-256 checksum. For the portable ZIP, right-click the downloaded file, choose **Properties**, and select **Unblock** *before* extracting, so its contents do not inherit the mark. Smart App Control has no per-file exception; see [Windows security help](docs/WINDOWS-SECURITY.md) for the specific, safe steps to allow a release you have verified.
 
 ## Build from source
 
@@ -88,9 +88,9 @@ Tests, fixture lanes, and fuzz targets are described in [CONTRIBUTING.md](CONTRI
 
 ## Documentation
 
-- [Format support and limits](.docs/FORMAT-SUPPORT.md)
-- [Windows download and protection guidance](.docs/WINDOWS-SECURITY.md)
-- [Installer verification](.docs/INSTALLER_VERIFICATION.md)
+- [Format support and limits](docs/FORMAT-SUPPORT.md)
+- [Windows download and protection guidance](docs/WINDOWS-SECURITY.md)
+- [Earlier NSIS installer verification (2026-09-16)](docs/legacy/INSTALLER_VERIFICATION.md)
 - [Release workflow](.github/workflows/release.yml)
 - [Contributing guidelines](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
