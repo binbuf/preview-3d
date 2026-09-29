@@ -44,7 +44,7 @@ before it is built.
 - [x] T04 — Freeze provider interfaces and the shared model-core subset → [tasks/04-freeze-provider-interfaces.md](tasks/04-freeze-provider-interfaces.md)
 - [x] T05 — Scaffold the provider build and test integration → [tasks/05-provider-build-test-scaffold.md](tasks/05-provider-build-test-scaffold.md)
 - [x] T06 — Define budgets, deadlines, and HRESULT mapping → [tasks/06-budgets-deadlines-hresults.md](tasks/06-budgets-deadlines-hresults.md)
-- [ ] T07 — Extract the provider-shared parser source subset → [tasks/07-extract-provider-shared-source.md](tasks/07-extract-provider-shared-source.md)
+- [x] T07 — Extract the provider-shared parser source subset → [tasks/07-extract-provider-shared-source.md](tasks/07-extract-provider-shared-source.md)
 
 ## Phase 2 — Shared foundation
 
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T22:10:26Z · 6/29 done
+**Pipeline status** — updated 2026-09-29T22:24:13Z · 7/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06
+- Completed: T01, T02, T03, T04, T05, T06, T07
 - Blocked: none
 - Failed: none
-- Remaining: T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T06 — done · T06 budgets, monotonic deadline, process-wide allocation ledger, checked range helpers and HRESULT mapping implemented, documented (ADR-0011, design/05, interfaces) and covered by 8 ProviderBudget tests; full Tests.Unit passes in Debug (134/76304) and Release (134/76215).
+- Remaining: T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T07 — done · Extracted shared/parser-core (AsciiTokenizer + StlParserCore + PlyParserCore), worker consumes it, provider compiles it; verify filter 69/1564 green, Tests.Unit 140/76245 green, docs+ADR-0012 recorded; only pre-existing OCCT step-host solution failure remains.
 <!-- /symphony:status -->

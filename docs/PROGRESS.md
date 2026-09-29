@@ -10,7 +10,8 @@
 - **T04 — Freeze provider interfaces and the shared model-core subset**: Frozen interface headers live in `thumbnail-provider/`: `ProviderTypes.h` (value types, `Family`,; `ProviderTypes.h` forward-declares `ProviderLimits`, `Deadline`, `AllocationLedger`; **T06 must
 - **T05 — Scaffold the provider build and test integration**: Provider DLL now builds with the product-boundary hardening and an explicit two-symbol export; Confirmed in both configs: `dumpbin /headers` + `/loadconfig` show Control Flow Guard, CET
 - **T06 — Define budgets, deadlines, and HRESULT mapping**: T06 services are header-only and live in `thumbnail-provider/`:; Constants as frozen: 256 MiB stream, 128 MiB contiguous backing, 192 MiB accounted scratch,
-- **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; T07's shared-source extraction must keep `shared/platform/include/platform/CheckedMath.h` available
+- **T07 — Extract the provider-shared parser source subset**: `shared/parser-core/` is the extracted source set, compiled into both `Preview3DImportWorker.exe`; Worker adapters now consume it: `import-worker/src/StlAdapter.cpp`/`PlyAdapter.cpp` include
+- **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -215,13 +216,49 @@ markers); sessions are pointed at this file and read it themselves.
 - ADR-0011 records the representation/accounting/classification decision; `design/05` and
   `design/interfaces.md` were updated to name the new headers.
 
+## T07 — Extract the provider-shared parser source subset
+
+- `shared/parser-core/` is the extracted source set, compiled into both `Preview3DImportWorker.exe`
+  and `Preview3DThumbnailProvider.dll`: `include/parser_core/AsciiTokenizer.h`+`src/AsciiTokenizer.cpp`
+  (moved, namespace renamed to `parser_core`), `StlParserCore.h/.cpp` (binary-STL constants,
+  `ReadFloatLE`/`ReadU32LE`, `Vec3`/`Cross`/`Dot`/`IsFinite`, `NormalizeStlFacet`,
+  `DecodeStlBinaryHeader`, `IsAsciiStl`) and `PlyParserCore.h/.cpp` (`PlyScalarType`,
+  `ScalarByteSize`, `NormalizeColor`, `ParseScalarTypeName`, `ReadScalarAsDouble`, the
+  `PlyProperty`/`PlyElement`/`PlyHeader` model, `ParseHeader`, `ReadBytes`, `IsAsciiPly`,
+  `Vec3f`/`Cross`/`Dot`). None includes an IPC/broker/worker/viewer header.
+- Worker adapters now consume it: `import-worker/src/StlAdapter.cpp`/`PlyAdapter.cpp` include
+  `parser_core/...`, and the old `import-worker/src/AsciiTokenizer.*` files are deleted. The
+  wire-emitting Tier A/B loops (`BoundedChunkWriter`/`ChunkBatchSink`/`CoarseSampler`/`MappedFile`)
+  stay in the adapters, which interfaces.md now classifies **duplicate** (intrinsic worker policy).
+- Project wiring: the worker and provider `.vcxproj` add `..\shared\parser-core\include` and compile
+  the three `shared/parser-core/src/*.cpp`. In the provider the three files set
+  `<PrecompiledHeader>NotUsing</PrecompiledHeader>` because the worker build has no PCH.
+  `Tests.Unit.vcxproj` also compiles them and adds `tests/unit/ParserCoreTests.cpp` (`[parser]`).
+- Classification (interfaces.md "Shared source subset"): moved -> AsciiTokenizer + StlParserCore +
+  PlyParserCore; duplicate -> `StlAdapter.*`/`PlyAdapter.*` and the remaining family decoder cores;
+  cut from the DLL -> `BoundedChunkWriter.h`, `ChunkBatchSink.*`, `CoarseSampler.h`,
+  `SidecarFileClient.*`, `GenerationWorker.*`, `WorkerRequestDispatch.*`, `main.cpp`,
+  `ControlProtocol.h`/`ControlChannelIo.*`, `WireFormat.h`, `Checksum.h`, `VertexLayouts.h`,
+  `GeometryBounds.h`, `MappedFile.*`, `FileIdentity.h`. The Tier A count constants already live in the
+  shared `model_core/TierALimits.h`.
+- Verify evidence (Release unless noted): `msbuild Preview3D.slnx /p:Configuration=Release|Debug
+  /p:Platform=x64` builds everything except the pre-existing `compatibility-host-step` OCCT
+  `x64-windows-static-md` gap (`C1083 BRepBndLib.hxx`), unchanged from T04.
+  `x64\Release\Tests.ImportIsolation.exe "[stl-import],[ply-import],[gltf-import]"` = 69 cases /
+  1564 assertions green (worker parser behaviour undisturbed). `x64\Release\Tests.Unit.exe` = 140
+  cases / 76245 assertions green (includes 6 `[parser]` cases); Debug `[parser]` green.
+- ADR-0012 records the move/duplicate/cut decision and the PCH/no-worker-header boundary. Build
+  `Tests.Unit` via the solution or with `/p:SolutionDir=<root>\` so `PREVIEW3D_PROVIDER_DLL`
+  expands correctly.
+
 ## Follow-ups
 
 - T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every
   controlled allocation; prefer `ReserveScoped`) and `Deadline::Checkpoint()`/`HresultForError`
   instead of local limits/error strings; do not create a second ledger or a second HRESULT table.
-- T07's shared-source extraction must keep `shared/platform/include/platform/CheckedMath.h` available
-  to the provider (T06 added it to the provider include path) if it relocates that header.
+- Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
+  provider include path; `parser_core::StlParserCore`/`PlyParserCore` include it and `PlyParserCore`
+  uses `platform::CheckedAdd`.
 - Any new `model_core::ImportErrorCode` must be added to `ProviderErrors.h::ClassifyError`; a new
   HRESULT requires an ADR (design/05).
 - T51 still owns measuring the actual peak process private commit above the idle, loaded surrogate
@@ -237,9 +274,10 @@ markers); sessions are pointed at this file and read it themselves.
   `compatibility-host-step` is affected.
 - T06 must define `ProviderLimits`, `Deadline`, `AllocationLedger` under the exact names frozen in
   `thumbnail-provider/ProviderTypes.h`, and may expand (not rename) them.
-- T07 must decouple `StlAdapter.*`/`PlyAdapter.*` from `BoundedChunkWriter.h`/`ChunkBatchSink.h` and
-  extract the `kTierATriangles`/`kTierAPoints`/`kTierAVertices` constants before those parser cores
-  can compile into the provider without a worker header.
+- T07 completed the `StlAdapter.*`/`PlyAdapter.*` decoupling via `shared/parser-core/` (ADR-0012),
+  and the `kTierATriangles`/`kTierAPoints`/`kTierAVertices` limits already live in the shared
+  `model_core/TierALimits.h`. T21/T23 must reuse `parser_core::StlParserCore`/`PlyParserCore` and
+  must not pull a worker/broker header into the provider.
 
 - T03 remaining (environment-limited, not design work): re-run `register-probe.ps1 -Scope HKLM` from
   an elevated shell, and observe the Shell's own `cx` under 150/200% DPI in a scaled session. Both

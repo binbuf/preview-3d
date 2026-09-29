@@ -25,3 +25,6 @@ target may be introduced, but the provider still embeds its own copy.
   exactly which binaries enter Shell isolation.
 - Any future "shared library" refactor must preserve the no-shared-state invariant and is itself an
   ADR-worthy change.
+- T07 realized the subset as `shared/parser-core/`: the format-agnostic STL/PLY primitives and the
+  ASCII tokenizer move there and compile into both consumers, while the worker's wire-emitting
+  adapter shells stay in `import-worker/` (see [ADR-0012](0012-provider-parser-core-extraction.md)).

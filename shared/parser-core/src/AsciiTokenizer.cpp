@@ -1,8 +1,8 @@
-#include "AsciiTokenizer.h"
+#include "parser_core/AsciiTokenizer.h"
 
 #include <charconv>
 
-namespace import_worker {
+namespace parser_core {
 
 namespace {
 
@@ -71,4 +71,4 @@ std::optional<double> AsciiTokenizer::NextNumber()
     return value;
 }
 
-} // namespace import_worker
+} // namespace parser_core
