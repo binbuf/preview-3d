@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  T17 Tests.ProviderHost.exe — the provider COM host harness (name frozen by
+  T05/ADR-0010). It activates the built Preview3DThumbnailProvider.dll through
+  the real Shell COM sequence without linking it (the two entry points are
+  PRIVATE), drives parallel STA apartments, and runs the repeated load/unload
+  leak loop.
+
+  It also compiles the real provider orchestration (ThumbnailPipeline,
+  GeometrySampler, CpuRasterizer, RasterBitmap) so a registered fixture can be
+  rendered through the T14 sampler and T15 rasterizer and compared with its
+  committed golden before the first family adapter lands. See
+  tests/provider-host/README.md for the fixture workflow.
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{6c2f9a10-7d3e-4b21-9f4a-2d8c1b7e5a64}</ProjectGuid>
+    <RootNamespace>TestsProviderHost</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg">
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>..\..\shared\model-core\include;..\..\shared\platform\include;..\..\thumbnail-provider;..\..\thumbnail-spike\rasterizer;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>PREVIEW3D_PROVIDER_DLL=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DThumbnailProvider.dll)";PREVIEW3D_PROVIDER_HOST_GOLDEN_DIR=LR"($(SolutionDir)tests\provider-host\goldens\\)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>ole32.lib;user32.lib;gdi32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="ProviderHostMain.cpp" />
+    <ClCompile Include="FixtureRegistry.cpp" />
+    <!-- The real provider orchestration, compiled from the shipped sources so
+         the golden path is the production pipeline, not a copy. -->
+    <ClCompile Include="..\..\thumbnail-provider\ThumbnailPipeline.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\FamilyAdapterRegistry.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\GeometrySampler.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\CpuRasterizer.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\RasterBitmap.cpp" />
+    <ClCompile Include="ProviderHostTests.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="FixtureRegistry.h" />
+    <ClInclude Include="GoldenImage.h" />
+    <ClInclude Include="ProviderHostSupport.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Build-order only: the host loads the DLL at runtime, so it must exist
+         and be current before Tests.ProviderHost.exe runs. Its only importable
+         surface is the two PRIVATE COM entry points, resolved with
+         GetProcAddress. -->
+    <ProjectReference Include="..\..\thumbnail-provider\Preview3DThumbnailProvider.vcxproj">
+      <Project>{0b5aa70c-f16a-42a1-95d1-73ad75d2fcbf}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
