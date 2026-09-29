@@ -16,6 +16,12 @@
     <ProjectGuid>{0b5aa70c-f16a-42a1-95d1-73ad75d2fcbf}</ProjectGuid>
     <RootNamespace>Preview3DThumbnailProvider</RootNamespace>
   </PropertyGroup>
+  <!-- T24: the OBJ adapter links the provider-local pinned ufbx copy, so the
+       provider now consumes the root vcpkg manifest like the worker and the
+       test executables (x64-windows-static-md, static libraries). -->
+  <PropertyGroup Label="Vcpkg">
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
@@ -115,6 +121,8 @@
     <ClInclude Include="StlFamilyAdapter.h" />
     <!-- T23 PLY family adapter. -->
     <ClInclude Include="PlyFamilyAdapter.h" />
+    <!-- T24 OBJ family adapter (provider-local pinned ufbx). -->
+    <ClInclude Include="ObjFamilyAdapter.h" />
     <!-- T07: the provider-shared parser subset. These are the same source
          files the import worker compiles (ADR-0004, source-not-state); none
          of them reference a broker/worker/viewer header. -->
@@ -163,6 +171,11 @@
     </ClCompile>
     <!-- T23 PLY family adapter, PCH-free for the same reason. -->
     <ClCompile Include="PlyFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T24 OBJ family adapter (ufbx). PCH-free like the other adapters so
+         Tests.Unit and Tests.ProviderHost compile the exact shipped source. -->
+    <ClCompile Include="ObjFamilyAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="RasterBitmap.cpp">

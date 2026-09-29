@@ -201,6 +201,19 @@ unknown list lengths (≤65 536), skipped elements (≤6 M records) and the vert
 bounded, and every read polls the deadline. Out-of-range indices and non-finite positions drop the
 affected triangle locally; a list-typed vertex element in a binary mesh falls back to the generic icon.
 
+T24 implements the OBJ adapter as `thumbnail-provider/ObjFamilyAdapter.{h,cpp}` (selected only by the
+routed `Family::Obj` CLSID) over the provider-local pinned ufbx static library, with the external
+access policy recorded in [ADR-0022](adr/0022-obj-adapter-ufbx-isolation.md). Parsing forces the OBJ
+grammar, disables format detection from content/extension, and sets `load_external_files = false`
+plus a deny `open_file_cb`, so `mtllib` and every texture reference are ignored and an MTL/texture
+dependency can never fail an otherwise valid mesh or trigger a file open. ufbx's OBJ defaults split
+by object and group inhabitation into separate meshes; polygons are triangulated (per-face ceiling
+65 536 triangles), missing normals are generated and normalized, and vertex colors (`v x y z r g b`)
+are carried with a white base so `vertexColor * baseColor` preserves the source. The neutral
+material is index 1. OBJ text is read in one contiguous pass — the frozen view when available,
+otherwise a checked ledger-charged backing buffer bounded by the 128 MiB cap — and the ufbx
+`progress_cb` plus the geometry loop poll the cooperative deadline.
+
 ## CPU renderer
 
 The thumbnail DLL uses a product-owned tile rasterizer; no GPU device or graphics queue is created inside Explorer.
