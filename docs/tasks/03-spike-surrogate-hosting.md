@@ -45,4 +45,70 @@ This completes the Spike 8 feasibility precondition before foundation work.
 - [ ] Hand-off below filled in.
 
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+
+### What landed
+- `thumbnail-spike/surrogate-probe/` — throwaway spike (not product code):
+  - `SurrogateProbe.cpp` + `SurrogateProbe.def` + `SurrogateProbe.vcxproj`: COM in-proc server with
+    `IInitializeWithStream` + `IThumbnailProvider`, modes `control`/`mesh`/`points`; per call it logs
+    PID/process image/module path, requested `cx`, rendered size, in-surrogate elapsed time, private
+    commit and peak commit to `HKCU\...\LogPath` (UTF-8).
+  - `host/SurrogateProbeHost.cpp` + `SurrogateProbeHost.vcxproj`: `x64\Release\SurrogateProbeHost.exe`.
+    `--scenario com` activates via `CLSCTX_LOCAL_SERVER` (AppID + `DllSurrogate`); `--scenario shell`
+    uses the real Shell path `IThumbnailCache::GetThumbnail` with `WTS_FORCEEXTRACTION` on a scratch
+    file. Both report whether the call ran in `dllhost.exe`.
+  - `register-probe.ps1` / `unregister-probe.ps1`: register/remove the scratch CLSID
+    `{C7A5B3E1-9D24-4F88-A1B6-2E5C7D9F0A31}`, AppID `{...0A32}`, extension `.z3dprobe`; every touched
+    key is backed up and restored exactly. Neither writes `UserChoice` nor `DisableProcessIsolation`.
+  - `README.md`: results table, registry shape, commands, gotchas.
+- `Preview3D.slnx` — the two spike projects added.
+- `docs/design/adr/0008-surrogate-hosting-and-shellEx-validation.md` (new, accepted) and the
+  `08-installation-and-registration.md` "Thumbnail COM registration" section now record the validated
+  shape; ADR-0006's "provisional until T03" wording is superseded by ADR-0008.
+
+### Evidence (OS 10.0.26200, Release x64, system DPI 96 = 100%)
+- **Isolation proven.** On both the COM and real Shell paths the probe ran in
+  `C:\Windows\System32\dllhost.exe`, never in the host or `explorer.exe`; no `DisableProcessIsolation`
+  value existed under the probe CLSID. The surrogate loaded the DLL from the absolute
+  `InprocServer32` path.
+- **Routing proven (per-user scope).** Extension-level
+  `.z3dprobe\shellex\{E357FCCD-A995-4576-B01F-234630154E96}` resolved through
+  `IThumbnailCache::GetThumbnail` and rendered in `dllhost.exe` even though `assoc .z3dprobe` reports
+  no open association and the scratch extension's default was a foreign third-party ProgID
+  (`ArchiveExtractor.Archive.1`) in one run.
+- **Timing/commit inside the surrogate** (in-surrogate `elapsed_ms`, 5 runs at 512 px, supersample=1;
+  surrogate baseline ~2.4 MiB): mesh (2M inspected/250k kept) 135–150 ms, p50 141 ms, peak 54.2 MiB;
+  points (6M inspected/250k kept) 202–226 ms, p50 213 ms, peak 19.8 MiB. Both clear the 750 ms p95 and
+  384 MiB measured-commit targets. No 2 s overrun. Host-observed elapsed (adds COM/IPC) 139–169 ms
+  (mesh) and 206–236 ms (points).
+- **DPI scope.** System was fixed at 96 dpi. `cx` was honored exactly at
+  32/48/64/96/128/192/256 (the values the Shell requests at 100/150/200% for its 32/96/256 cache
+  sizes). On the Shell path the Shell itself snapped `cx=64` to its 96 px cache entry.
+- **Cleanup verified.** `unregister-probe.ps1` removed all four keys and the scratch artifacts; a
+  `Test-Path` check confirms the CLSID, AppID, `.z3dprobe` and config keys are gone. Exact registry
+  values inspected are in `thumbnail-spike/surrogate-probe/README.md`.
+
+### Deviations and why (this attempt)
+- **HKLM machine-level scope not exercised**: the session is not elevated (`HKLM\Software\Classes`
+  write denied, UAC-filtered token). The experiment used the equivalent per-user HKCU shape, which
+  the Shell resolves identically; this is a limitation of the run, not a routing failure.
+- **Third-party default not selected through the Default Apps UI**: non-interactive session. A
+  foreign ProgID was written as the scratch extension's classes default instead; the protected
+  `UserChoice` value was deliberately never touched.
+- **Compressed-glTF decode not measured in the surrogate**: the probe implements mesh/points only.
+  Linking the ADR-0003 decoder closure (draco/meshopt/KTX2-Basis/WebP) and the GLB path is the
+  remaining measurement; it is a scope-completion item, not a failed routing experiment, so no replan.
+- No new decision on the mapping location was needed: the extension-level mapping worked, so ADR-0008
+  confirms it rather than replacing it.
+
+### Remaining work / blockers (fresh session)
+1. Link the ADR-0003 decoders into `SurrogateProbe` (vcpkg manifest + fastgltf/draco/meshopt/ktx/basisu/libwebp),
+   add a `gltf` mode that decodes `interactive-viewer/test-assets/corpus/{draco_*.glb, meshopt.glb,
+   basisu_*.glb, webp.gltf}`, and record in-surrogate time/commit for each. Then the SPIKE-8 gate can
+   be called done.
+2. Re-run `register-probe.ps1 -Scope HKLM` from an elevated shell to confirm the machine-level shape;
+   the `unregister-probe.ps1` cleanup already handles both scopes.
+3. Observe the Shell's own `cx` at 150%/200% by running under a DPI-scaled session; direct `cx`
+   handling is already proven.
+4. T41 consumes ADR-0008: write CLSID/`InprocServer32`/`AppID`/`DllSurrogate` + extension `ShellEx`
+   at machine scope, no `DisableProcessIsolation`; T42 keeps the DLL at the registered absolute path;
+   T44 uses the T03 `IThumbnailCache` + module-identity method for its surrogate/DLL verification.
