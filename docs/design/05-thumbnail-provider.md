@@ -66,6 +66,13 @@ signature-level companion to this one. The CLSID→family routing table lives on
 `thumbnail-provider/FamilyRouting.h` and is shared by runtime routing and installer registration
 (T41).
 
+T07 performed the source extraction: the format-agnostic STL/PLY parser primitives and the ASCII
+tokenizer now live in `shared/parser-core/` and are compiled into both `Preview3DImportWorker.exe`
+and `Preview3DThumbnailProvider.dll`, with no worker/broker/host/viewer header crossing the DLL
+boundary ([ADR-0004](adr/0004-share-source-not-state.md),
+[ADR-0012](adr/0012-provider-parser-core-extraction.md)). The worker's wire/streaming adapter shells
+stay in `import-worker/`; T21–T34 add only their family parser core + `IFamilyAdapter`.
+
 **Limit and error authority.** For the limits T06 encodes, the source of truth is the
 *Thumbnail host* column of [03-file-formats-and-ingestion.md](./03-file-formats-and-ingestion.md)
 together with the HRESULT table below. The accountable caps (256 MiB stream maximum, 128 MiB

@@ -148,14 +148,39 @@ extraction; family tasks consume the result.
 | `shared/model-core/include/model_core/OpenUsdIdentifier.h` | exclude | USD identifier helper. |
 | `shared/model-core/include/ModelCore.h`, `src/ModelCore.cpp` | exclude | Stub `Version()` only. |
 
+### `shared/parser-core/` (extracted by T07, compiled into both consumers)
+
+T07 turned the "compile the same source files" intention into a compilable boundary by extracting the
+format-agnostic parser primitives both consumers need into `shared/parser-core/`. Nothing in this
+directory includes an IPC, mapping, broker, worker or viewer header; the import worker's
+`StlAdapter.cpp`/`PlyAdapter.cpp` now consume it as well, so a change to a shared primitive changes
+both the worker and the provider ([ADR-0004](adr/0004-share-source-not-state.md),
+[ADR-0012](adr/0012-provider-parser-core-extraction.md)). The provider project compiles these three
+translation units (with the provider precompiled header disabled, because the worker build has none),
+and `Tests.Unit.exe` compiles them too as the `[parser]` regression set.
+
+| File | Class | Why |
+| --- | --- | --- |
+| `shared/parser-core/include/parser_core/AsciiTokenizer.h`, `src/AsciiTokenizer.cpp` | move | std-only bounded tokenizer shared by ASCII STL/PLY. |
+| `shared/parser-core/include/parser_core/StlParserCore.h`, `src/StlParserCore.cpp` | move | Binary-STL layout/limits, native-endian reads, per-facet validation and supplied/flat-normal policy, and ASCII/binary dialect detection. |
+| `shared/parser-core/include/parser_core/PlyParserCore.h`, `src/PlyParserCore.cpp` | move | PLY scalar-type model, endian-aware scalar reads, color normalization, and the bounded header parser. |
+
+The wire-emitting and Tier A/B streaming loops that call these primitives stay in the worker.
+`StlAdapter.*`/`PlyAdapter.*` are therefore reclassified **duplicate** (a worker wire/streaming shell)
+rather than move: their `BoundedChunkWriter`/`ChunkBatchSink`/`CoarseSampler`/`MappedFile` coupling is
+intrinsic to the worker's IPC, progressive-delivery and coarse-proxy protocol and cannot cross into
+the DLL. The provider's T21/T23 adapters instead reuse `shared/parser-core/` and emit
+`IGeometrySink`/`IMaterialSink` samples. This is the "move the format-agnostic code once; duplicate
+the intrinsic policy shim" rule from [ADR-0004](adr/0004-share-source-not-state.md).
+
 ### Product parser cores (from `import-worker/src`)
 
 | File | Class | Phase | Why |
 | --- | --- | --- | --- |
-| `AsciiTokenizer.h`, `AsciiTokenizer.cpp` | move | T07 | Standalone, std-only bounded tokenizer shared by ASCII STL/PLY. |
-| `StlAdapter.h`, `StlAdapter.cpp` | move | T07 | Product STL parser core; must be decoupled from the wire `ChunkBatchSink`/`BoundedChunkWriter` so it emits adapter sink values. |
-| `PlyAdapter.h`, `PlyAdapter.cpp` | move | T07 | Product PLY parser core; same decoupling as STL. |
-| `BoundedChunkWriter.h` | exclude (extract constants) | T07 | Wire batch writer; only its Tier-A count constants (`kTierATriangles`, `kTierAPoints`, `kTierAVertices`) move into the shared parser-core limits header. |
+| `AsciiTokenizer.h`, `AsciiTokenizer.cpp` | moved | T07 | Now `shared/parser-core/`; std-only bounded tokenizer shared by ASCII STL/PLY. |
+| `StlAdapter.h`, `StlAdapter.cpp` | duplicate | T21 | Worker wire/streaming shell; reuses `parser_core::StlParserCore` and stays out of the DLL. The provider copy emits `IGeometrySink` samples. |
+| `PlyAdapter.h`, `PlyAdapter.cpp` | duplicate | T23 | Worker wire/streaming shell; reuses `parser_core::PlyParserCore` and stays out of the DLL. The provider copy emits `IGeometrySink`/`IMaterialSink` samples. |
+| `BoundedChunkWriter.h` | exclude | — | Wire batch writer (IPC). The Tier A count constants it exposed already live in the shared `model_core/TierALimits.h` (`kTierATriangleLimit`/`kTierAPointLimit`/`kTierAVertexLimit`), which `parser_core::StlParserCore` uses directly. |
 | `ChunkBatchSink.h`, `ChunkBatchSink.cpp` | exclude | — | Shared-section batch sink (IPC). |
 | `CoarseSampler.h` | exclude | — | Viewer coarse-proxy sampler; the provider uses T14. |
 | `SidecarFileClient.h`, `SidecarFileClient.cpp` | exclude | — | The provider resolves no external sidecars. |
