@@ -1,0 +1,11 @@
+; Export surface of the Explorer thumbnail provider (T05).
+;
+; Exactly two COM in-proc server entry points are exported, both PRIVATE so they
+; cannot be linked against by accident. DllRegisterServer/DllUnregisterServer
+; are deliberately absent: registration is installer-owned (ADR-0006/0007) and a
+; self-registration export would bypass the non-clobber rules in
+; docs/design/05-thumbnail-provider.md.
+LIBRARY Preview3DThumbnailProvider
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

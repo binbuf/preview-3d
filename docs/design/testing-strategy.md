@@ -9,7 +9,13 @@
   warning level, warnings-as-errors at the product boundary).
 - The DLL links its own copy of the bounded fast-path parsers; it must not import the viewer, the
   import worker, either import host, the old `Preview3D` project or the persistent cache. Prove the
-  closure with `dumpbin /dependents` and the packaging allowlist (T42).
+  closure with `dumpbin /dependents` and the packaging allowlist (T42). The `[provider][scaffold]`
+  cases in `Tests.Unit.exe` assert this automatically (no import whose name starts with `Preview3D`)
+  and pin the two-symbol export surface, so the baseline verify command exercises it; the
+  `tests/unit/check-provider-dependency-closure.ps1` script is the literal `dumpbin` evidence view.
+- The provider's COM in-proc server exports exactly `DllGetClassObject` and `DllCanUnloadNow` from a
+  `.def`, both `PRIVATE` (ADR-0010). Provider tests therefore load the built DLL at runtime rather
+  than link it, which is also how the Shell and the COM host harness activate it.
 
 ## Test layers
 
@@ -17,7 +23,7 @@
 | --- | --- | --- |
 | Provider unit tests | `tests/unit/` (Catch2, `Tests.Unit.exe`) | COM identity/refcount/unload, stream backing, checked arithmetic, budget ledger, sampler determinism, rasterizer math and HRESULT mapping |
 | Golden images | `tests/unit/` / fixtures | Deterministic perceptual output at 32, 64, 256 and 512 px for representative and malformed inputs |
-| COM host harness | new target `Tests.ProviderHost.exe` | `IClassFactory`/`IThumbnailProvider` exercised through the real COM activation path, per CLSID, plus parallel-apartment and load/unload leak soak |
+| COM host harness | new target `Tests.ProviderHost.exe` (name frozen by T05/ADR-0010) | `IClassFactory`/`IThumbnailProvider` exercised through the real COM activation path, per CLSID, plus parallel-apartment and load/unload leak soak |
 | Isolation tests | provider test group in `Tests.Unit.exe` | Stream-only ingestion: no sidecar/path/network/process/cache access; adversary corpora per adapter |
 | Fuzz | `tests/fuzz/` (ASan/libFuzzer) | Each adapter's parse/sample boundary; no crash, hang, overflow or unbounded allocation |
 | Surrogate soak | new / `tests/app-smoke/` | Parallel apartments, repeated load/unload in the real Shell surrogate, GDI/User/private-byte leak checks |
