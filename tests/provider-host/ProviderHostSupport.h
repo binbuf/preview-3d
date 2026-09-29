@@ -193,19 +193,34 @@ private:
     LONG ref_ = 1;
 };
 
-// Minimal BoundedSource double; the placeholder adapter never reads it, it only
-// seeds the sampler from its validated size.
+// Minimal BoundedSource over committed fixture bytes. A family fixture routes a
+// real adapter, so this double must serve the source through both the
+// contiguous view and bounded range reads exactly as the T12 source would.
 class MemorySource final : public preview3d::provider::BoundedSource {
 public:
-    explicit MemorySource(std::uint64_t size) noexcept : size_(size) {}
+    explicit MemorySource(std::vector<std::byte> bytes) : bytes_(std::move(bytes)) {}
 
-    std::uint64_t Size() const noexcept override { return size_; }
+    std::uint64_t Size() const noexcept override { return bytes_.size(); }
     bool Seekable() const noexcept override { return true; }
-    bool ReadAt(std::uint64_t, std::span<std::byte>) override { return false; }
-    std::span<const std::byte> ContiguousView() override { return {}; }
+
+    bool ReadAt(std::uint64_t offset, std::span<std::byte> dest) override
+    {
+        if (offset > bytes_.size() || dest.size() > bytes_.size() - offset) {
+            return false;
+        }
+        if (!dest.empty()) {
+            std::memcpy(dest.data(), bytes_.data() + offset, dest.size());
+        }
+        return true;
+    }
+
+    std::span<const std::byte> ContiguousView() override
+    {
+        return {bytes_.data(), bytes_.size()};
+    }
 
 private:
-    std::uint64_t size_;
+    std::vector<std::byte> bytes_;
 };
 
 inline GUID GuidFromText(const char* text)
@@ -389,7 +404,7 @@ public:
 // fills `out` only on Success.
 inline ProviderOutcome RunFixture(const GoldenFixture& fixture, RasterImage& out)
 {
-    MemorySource source(fixture.source.size());
+    MemorySource source(std::vector<std::byte>(fixture.source));
     preview3d::provider::Deadline deadline;
     preview3d::provider::AllocationLedger ledger;
 

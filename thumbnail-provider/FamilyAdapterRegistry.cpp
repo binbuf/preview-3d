@@ -10,13 +10,21 @@
 
 #include "FamilyAdapterRegistry.h"
 
+#include "StlFamilyAdapter.h"
+
 namespace preview3d::provider {
 
 std::unique_ptr<IFamilyAdapter> CreateFamilyAdapter(Family family) noexcept
 {
     switch (family) {
-        case Family::Gltf:
         case Family::Stl:
+            // T21: the product ASCII/binary STL adapter (StlAdapter.{h,cpp}).
+            try {
+                return std::make_unique<StlAdapter>();
+            } catch (...) {
+                return nullptr;
+            }
+        case Family::Gltf:
         case Family::Ply:
         case Family::Obj:
         case Family::Fbx:
