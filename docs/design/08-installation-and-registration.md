@@ -1,13 +1,13 @@
 # Installation and registration
 
-Current implementation note (2026-09-18): the shipping engineering package
+Current implementation note (2026-09-18; provider identities frozen by T01): the shipping engineering package
 is NSIS-based, not the proposed MSI/WiX package below. It currently registers
 interactive Open With/Default Apps for all direct formats, including `.3mf`,
 and stages the exact worker-only `lib3mf`/libzip/zlib/bzip2 runtime closure.
 It does not yet register any Explorer thumbnail handler: T41 in this program
 adds machine-level thumbnail CLSID/ShellEx registration to the NSIS installer
 (ADR-0006, ADR-0007), using the registry location validated by T03 with a
-third-party default and per-user association. The MSI and transactional repair
+third-party default and per-user association. T01 froze the eight COM identities in [05-thumbnail-provider.md](./05-thumbnail-provider.md) and this NSIS-now / MSI-later vehicle; the extension-level `ShellEx` location below remains provisional until T03 proves it. The MSI and transactional repair
 sections below remain future design targets. The NSIS repair path for this program
 is an idempotent rerun of the same signed installer; its ARP entry currently
 advertises `NoRepair=1`.

@@ -38,7 +38,7 @@ before it is built.
 
 ## Phase 1 — Prerequisites and de-risking
 
-- [~] T01 — Freeze the provider specification and eight-family roster → [tasks/01-freeze-provider-spec.md](tasks/01-freeze-provider-spec.md) ⟵ failed
+- [x] T01 — Freeze the provider specification and eight-family roster → [tasks/01-freeze-provider-spec.md](tasks/01-freeze-provider-spec.md)
 - [ ] T02 — SPIKE-8a: prototype the mesh and point CPU rasterizer → [tasks/02-spike-rasterizer-prototype.md](tasks/02-spike-rasterizer-prototype.md)
 - [ ] T03 — SPIKE-8b: prove isolated Shell surrogate hosting → [tasks/03-spike-surrogate-hosting.md](tasks/03-spike-surrogate-hosting.md)
 - [ ] T04 — Freeze provider interfaces and the shared model-core subset → [tasks/04-freeze-provider-interfaces.md](tasks/04-freeze-provider-interfaces.md)
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T20:52:58Z · 0/29 done
+**Pipeline status** — updated 2026-09-29T21:09:01Z · 1/29 done
 
-- Completed: none
+- Completed: T01
 - Blocked: none
-- Failed: T01
+- Failed: none
 - Remaining: T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T01 — failed · interrupted during retry backoff
+- Last finished: T01 — done · Froze the eight-family CLSID roster (STEP `{6EE961AC-...}`), reconciled 02/05/08/11/overview with ADR-0001–0007, recorded the 03 Thumbnail-host column + 05 HRESULT table as T06's limit source of truth, and documented hard caps vs. the measured 384 MiB target and cooperative 2 s stop point; `lint: ok (29 tasks)`, all ADRs accepted, no blockers.
 <!-- /symphony:status -->

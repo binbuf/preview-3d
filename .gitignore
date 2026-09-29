@@ -78,3 +78,7 @@ test-models/
 
 # symphony harness (local tool, not tracked)
 .stop
+
+# added by symphony (ephemeral/secret files)
+node_modules/
+tools/

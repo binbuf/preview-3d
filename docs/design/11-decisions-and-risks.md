@@ -358,8 +358,14 @@ continues through directory-tree-contained handle brokering with no worker
 path/network authority. Frozen valid/corrupt meshopt and WebP seeds, quantized accessors,
 valid/invalid sparse accessors, data-URI limits, required-extension mutation,
 and sidecar traversal/network/ADS fixtures cover the enabled attack surface.
-The thumbnail provider does not link either decoder or claim compressed-glTF
-thumbnail support in this limited MVP.
+This paragraph described the scope-limited portable MVP. The installed provider
+program supersedes its decoder restriction: under [ADR-0003](adr/0003-provider-decoder-scope.md)
+the provider links bounded Draco, meshoptimizer, KTX2/Basis and WebP decoders for
+stream-contained thumbnails, each independently budget-bounded. The sentence below
+is retained only as the historical baseline it supersedes.
+
+> The thumbnail provider does not link either decoder or claim compressed-glTF
+> thumbnail support in this limited MVP.
 
 Performance classification remains Tier A for ordinary/meshopt glTF source
 layout, with each compressed stream an independently bounded decode unit;
