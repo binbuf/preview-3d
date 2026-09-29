@@ -188,6 +188,19 @@ charged to the T06 ledger before allocation, and the over-cap policy
 adapters (T21–T34) consult before reading a source that exceeds the cap; an over-cap stream the
 provider cannot position returns the safe fallback ([ADR-0016](adr/0016-deterministic-geometry-sampling.md)).
 
+T23 implements the PLY adapter as `thumbnail-provider/PlyFamilyAdapter.{h,cpp}` (selected only by the
+routed `Family::Ply` CLSID) and records its memory policy in
+[ADR-0021](adr/0021-ply-adapter-stride-and-bounded-ascii.md). It parses ASCII and binary
+little/big-endian 1.0 headers through `shared/parser-core`, requires finite scalar `x`/`y`/`z`,
+carries optional `nx/ny/nz` and `red/green/blue[/alpha]` (or `r/g/b[/a]`) colors, and treats a `face`
+element with an integer `vertex_indices`/`vertex_index` list as a fan-triangulated mesh and otherwise
+as a point cloud. A binary mesh addresses each referenced vertex by its fixed record stride
+(`vertexStart + index * stride`) with a small direct-mapped cache, so no source positions are
+materialized; an ASCII mesh retains a bounded, ledger-charged vertex table. Per-face lists (≤255),
+unknown list lengths (≤65 536), skipped elements (≤6 M records) and the vertex count (≤6 M) are
+bounded, and every read polls the deadline. Out-of-range indices and non-finite positions drop the
+affected triangle locally; a list-typed vertex element in a binary mesh falls back to the generic icon.
+
 ## CPU renderer
 
 The thumbnail DLL uses a product-owned tile rasterizer; no GPU device or graphics queue is created inside Explorer.

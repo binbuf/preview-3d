@@ -10,6 +10,7 @@
 
 #include "FamilyAdapterRegistry.h"
 
+#include "PlyFamilyAdapter.h"
 #include "StlFamilyAdapter.h"
 
 namespace preview3d::provider {
@@ -24,8 +25,14 @@ std::unique_ptr<IFamilyAdapter> CreateFamilyAdapter(Family family) noexcept
             } catch (...) {
                 return nullptr;
             }
-        case Family::Gltf:
         case Family::Ply:
+            // T23: the product ASCII/binary PLY mesh/point adapter.
+            try {
+                return std::make_unique<PlyAdapter>();
+            } catch (...) {
+                return nullptr;
+            }
+        case Family::Gltf:
         case Family::Obj:
         case Family::Fbx:
         case Family::ThreeMf:

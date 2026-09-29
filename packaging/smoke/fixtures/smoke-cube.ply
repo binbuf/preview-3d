@@ -1,0 +1,27 @@
+ply
+format ascii 1.0
+comment Preview3D T23 PLY smoke fixture: unit cube with per-vertex RGB color
+element vertex 8
+property float x
+property float y
+property float z
+property uchar red
+property uchar green
+property uchar blue
+element face 6
+property list uchar int vertex_indices
+end_header
+0 0 0 230 90 70
+1 0 0 240 170 70
+1 1 0 110 200 90
+0 1 0 80 160 220
+0 0 1 160 110 220
+1 0 1 230 110 180
+1 1 1 90 200 200
+0 1 1 230 210 90
+4 0 3 2 1
+4 4 5 6 7
+4 0 1 5 4
+4 3 7 6 2
+4 0 4 7 3
+4 1 2 6 5
