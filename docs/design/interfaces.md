@@ -19,6 +19,10 @@ translation unit, no runtime behavior):
 | `GeometrySampler.h` | `SampledGeometry`, `IGeometrySampler`. |
 | `CpuRasterizer.h` | `RasterRequest`, `RasterImage`, `ICpuRasterizer`. |
 | `FamilyRouting.h` | The frozen CLSID→family table and the thumbnail-handler ShellEx GUID. |
+| `ProviderLimits.h` | T06 frozen budget constants and the checked file-derived integer/range helpers. |
+| `Deadline.h` | T06 monotonic 750 ms p95 / cooperative 2 s `Deadline` with `expired()`/`remaining()`/`Checkpoint()`. |
+| `AllocationLedger.h` | T06 process-wide atomic product-owned allocation ledger plus the RAII `AllocationReservation`. |
+| `ProviderErrors.h` | T06 HRESULT mapping (`ProviderOutcome`, `HresultFor`, `ClassifyError`, `HresultForError`). |
 
 ## Product-owned types only
 
@@ -174,7 +178,13 @@ whose extraction is owned by T34; it never enters the worker or viewer.
 - **T05** scaffolds the hardening flags, exports and test wiring for the
   provider project; headers above are already part of it.
 - **T06** defines the concrete `ProviderLimits`, `Deadline` and
-  `AllocationLedger` named (but not defined) by `ProviderTypes.h`.
+  `AllocationLedger` named (but not defined) by `ProviderTypes.h`, plus the
+  HRESULT mapping and checked file-derived arithmetic (`ProviderLimits.h`,
+  `Deadline.h`, `AllocationLedger.h`, `ProviderErrors.h`; [ADR-0011](adr/0011-provider-budgets-deadline-ledger-and-hresult.md)).
+  T12/T14/T15 and adapters charge controlled allocations against
+  `AllocationLedger::ProcessWide()`; the 384 MiB total-process-commit figure stays
+  a measured T51 target, not a ledger claim. `Interfaces.md` consumers (T07) must
+  therefore see `platform/CheckedMath.h` available in the provider build.
 - **T07** performs the extraction and proves the subset compiles with no
   viewer/worker/host header.
 - **T11–T17** implement routing, the COM core, the bounded source, the sampler

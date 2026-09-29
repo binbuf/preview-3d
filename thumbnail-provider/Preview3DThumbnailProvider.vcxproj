@@ -43,7 +43,7 @@
       <PreprocessorDefinitions>_DEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\shared\model-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- Product-boundary hardening (design/05-thumbnail-provider.md). /sdl,
            /W4 and warnings-as-errors come from Directory.Build.props.
            /guard:cf cannot be combined with the Debug default /ZI (Edit and
@@ -68,7 +68,7 @@
       <PreprocessorDefinitions>NDEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\shared\model-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- Product-boundary hardening (design/05-thumbnail-provider.md). /sdl,
            /W4 and warnings-as-errors come from Directory.Build.props. -->
       <ControlFlowGuard>Guard</ControlFlowGuard>
@@ -91,6 +91,10 @@
     <ClInclude Include="GeometrySampler.h" />
     <ClInclude Include="CpuRasterizer.h" />
     <ClInclude Include="FamilyRouting.h" />
+    <ClInclude Include="ProviderLimits.h" />
+    <ClInclude Include="Deadline.h" />
+    <ClInclude Include="AllocationLedger.h" />
+    <ClInclude Include="ProviderErrors.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />

@@ -78,6 +78,14 @@ overhead, and T51 measures the actual peak. The **2 s point is a cooperative sto
 bounded parser/sampler/raster intervals, not an interruptible wall-clock timeout for an opaque
 third-party call.
 
+The checked encoding of these limits and helpers is one source of truth owned by T06:
+`thumbnail-provider/ProviderLimits.h` (the frozen constants and the file-derived checked
+integer/range helpers), `thumbnail-provider/Deadline.h` (the monotonic 750 ms p95 / cooperative 2 s
+deadline), `thumbnail-provider/AllocationLedger.h` (the process-wide product-owned allocation
+ledger), and `thumbnail-provider/ProviderErrors.h` (the HRESULT mapping). `ProviderContracts.cpp`
+compiles them under the provider's `/W4 /WX` policy, and `Tests.Unit.exe` covers every constant,
+the aggregate/concurrent ledger, deadline arithmetic, overflow rejection and every mapping.
+
 ## Call contract
 
 Initialize:
