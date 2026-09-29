@@ -22,6 +22,7 @@
 - **T21 - Implement the STL thumbnail adapter**: Provider STL adapter lives in `thumbnail-provider/StlFamilyAdapter.{h,cpp}` (class; **Naming gotcha:** the provider files are `StlFamilyAdapter.*`, not `StlAdapter.*`.
 - **T22 — First installed Release smoke in Windows Explorer — E2E slice review**: Repeatable local smoke lives in `packaging/smoke/` (ADR-0020): `Stage-ProviderSmoke.ps1`; **Verification shape (reusable by T23–T34 and T44):** render the same file twice — in-process
 - **T23 — Implement the PLY thumbnail adapter**: Provider PLY adapter lives in `thumbnail-provider/PlyFamilyAdapter.{h,cpp}` (class; Shape: ASCII + binary little/big-endian; required finite scalar `x/y/z`; optional `nx/ny/nz` and
+- **T24 — Implement the OBJ thumbnail adapter**: Provider OBJ adapter lives in `thumbnail-provider/ObjFamilyAdapter.{h,cpp}` (class; **ufbx linkage:** the provider project now sets `VcpkgEnableManifest=true` and links the pinned
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -700,3 +701,43 @@ markers); sessions are pointed at this file and read it themselves.
   registration cleaned up. Provider + host build clean under `/W4 /WX`.
 - ADR-0021 records the stride/bounded-ASCII decision; `design/05-thumbnail-provider.md` documents the
   adapter.
+
+## T24 — Implement the OBJ thumbnail adapter
+
+- Provider OBJ adapter lives in `thumbnail-provider/ObjFamilyAdapter.{h,cpp}` (class
+  `preview3d::provider::ObjAdapter`), registered for `Family::Obj` in `FamilyAdapterRegistry.cpp`.
+  PCH/COM/GDI-free, so it compiles into the DLL, `Tests.Unit.exe` and `Tests.ProviderHost.exe`.
+  **Naming:** use `ObjFamilyAdapter.*`, never `ObjAdapter.*` (the worker's
+  `import-worker/src/ObjAdapter.*` is on the Tests.Unit include path — the T21/T23 gotcha).
+- **ufbx linkage:** the provider project now sets `VcpkgEnableManifest=true` and links the pinned
+  ufbx static library from `x64-windows-static-md`, the same way the worker and test executables do.
+  This appends the whole triplet's `.lib` list to the link line, but unused libraries contribute no
+  objects and the DLL stays import-clean (`check-provider-dependency-closure.ps1` still passes).
+  Rejected alternative: hand-linking a triplet/configuration-specific `ufbx.lib` path.
+- **External access disabled:** `Parse` forces `UFBX_FILE_FORMAT_OBJ`, disables content/extension
+  detection, sets `load_external_files = false` + `ignore_missing_external_files = true`, and
+  installs a deny `open_file_cb`. `mtllib`/`usemtl`/textures are ignored; material index 1 is the
+  neutral palette (white base when vertex colors exist). `ObjAdapter::ExternalFileDenied()` is the
+  test hook proving ufbx never even requested a sidecar for a stream-contained OBJ.
+- **Geometry:** ufbx OBJ defaults keep `obj_merge_objects`/`obj_merge_groups` false, so `o`/`g`
+  become separate meshes; polygons are triangulated with `ufbx_triangulate_face` (per-face ceiling
+  65536, T14 sink cap ends enumeration), generated/normalized normals are used, vertex colors
+  (`v x y z r g b`) carried, UVs parsed but dropped (the frozen `VertexSample` has no UV channel and
+  the neutral material needs none).
+- **Memory:** OBJ text is one contiguous pass — `ContiguousView()` when available, else a checked
+  ledger-charged backing buffer bounded by `kContiguousBackingMaxBytes` (128 MiB); ufbx
+  `temp_allocator`/`result_allocator` `memory_limit` each 96 MiB; `progress_cb` and a per-1024-face
+  loop poll the deadline. Hostile counts surface as ufbx `MEMORY_LIMIT`/`ALLOCATION_LIMIT` ->
+  `ResourceLimit`.
+- Coverage `tests/unit/ProviderObjAdapterTests.cpp` (`[provider][obj]`, 15 cases): triangle mesh,
+  quad triangulation, multiple objects, UVs, vertex colors + white base, MTL-referencing isolation,
+  non-contiguous backing, sink cap stop, expired deadline, non-OBJ and truncated typed failures,
+  over-ceiling polygon resource limit, pipeline error mapping, a real rendered bitmap, CLSID routing.
+- Host harness: `obj-cube` fixture in `FixtureRegistry.cpp` (geometry with `mtllib`/`usemtl`) with
+  committed golden `tests/provider-host/goldens/obj-cube-256.pam`; regenerate with
+  `x64\Release\Tests.ProviderHost.exe "[write-host-goldens]"`.
+- Evidence (Release x64): `Tests.Unit.exe` 249 cases / 134553 assertions green; Debug 249 /
+  134636 green; `Tests.ProviderHost.exe` 5 cases / 68 assertions green; dependency closure OK.
+  Provider + host build clean under `/W4 /WX`.
+- ADR-0022 records the ufbx linkage + external-access decision; `design/05-thumbnail-provider.md`
+  documents the adapter. Explorer T22 smoke was not run in this non-interactive session.

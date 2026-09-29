@@ -98,6 +98,30 @@ std::vector<std::byte> BuildCubePly()
     return bytes;
 }
 
+// An ASCII OBJ cube whose geometry references an ignored `.mtl`: six quad
+// faces fan-triangulated by the T24 adapter into twelve neutral triangles. The
+// `mtllib`/`usemtl` lines prove the thumbnail path never resolves the sidecar.
+std::vector<std::byte> BuildCubeObj()
+{
+    const std::string text =
+        "mtllib cube-sidecar.mtl\n"
+        "o cube\n"
+        "usemtl cube\n"
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+        "v 0 0 1\nv 1 0 1\nv 1 1 1\nv 0 1 1\n"
+        "f 1 4 3 2\n"
+        "f 5 6 7 8\n"
+        "f 1 2 6 5\n"
+        "f 4 8 7 3\n"
+        "f 1 5 8 4\n"
+        "f 2 3 7 6\n";
+    std::vector<std::byte> bytes(text.size());
+    if (!text.empty()) {
+        std::memcpy(bytes.data(), text.data(), text.size());
+    }
+    return bytes;
+}
+
 // A binary little-endian colored point cloud: a 4x4x4 grid with a per-axis hue.
 std::vector<std::byte> BuildColoredPointsPly()
 {
@@ -186,6 +210,18 @@ std::span<const GoldenFixture> ProviderHostFixtures()
         plyPoints.tolerance = GoldenTolerance{2.0, 48};
         plyPoints.cx = 256;
         fixtures.push_back(std::move(plyPoints));
+
+        // T24: an OBJ cube, routed through the linked ObjAdapter (provider-local
+        // ufbx). Its `mtllib`/`usemtl` references are ignored, so the golden is
+        // the neutral-palette cube.
+        GoldenFixture objCube;
+        objCube.name = "obj-cube";
+        objCube.family = preview3d::provider::Family::Obj;
+        objCube.source = BuildCubeObj();
+        objCube.goldenPath = ProviderHostGoldenDirectory() + "obj-cube-256.pam";
+        objCube.tolerance = GoldenTolerance{2.0, 48};
+        objCube.cx = 256;
+        fixtures.push_back(std::move(objCube));
 
         return fixtures;
     }();

@@ -10,6 +10,7 @@
 
 #include "FamilyAdapterRegistry.h"
 
+#include "ObjFamilyAdapter.h"
 #include "PlyFamilyAdapter.h"
 #include "StlFamilyAdapter.h"
 
@@ -32,8 +33,15 @@ std::unique_ptr<IFamilyAdapter> CreateFamilyAdapter(Family family) noexcept
             } catch (...) {
                 return nullptr;
             }
-        case Family::Gltf:
         case Family::Obj:
+            // T24: the product Wavefront OBJ adapter over the provider-local
+            // pinned ufbx copy (external-file access disabled).
+            try {
+                return std::make_unique<ObjAdapter>();
+            } catch (...) {
+                return nullptr;
+            }
+        case Family::Gltf:
         case Family::Fbx:
         case Family::ThreeMf:
         case Family::Usd:
