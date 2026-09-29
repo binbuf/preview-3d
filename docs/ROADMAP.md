@@ -58,7 +58,7 @@ before it is built.
 
 ## Phase 3 — First end-to-end slice: STL in Explorer
 
-- [ ] T21 — Implement the STL thumbnail adapter → [tasks/21-stl-adapter.md](tasks/21-stl-adapter.md)
+- [x] T21 — Implement the STL thumbnail adapter → [tasks/21-stl-adapter.md](tasks/21-stl-adapter.md)
 - [ ] T22 — First installed Release smoke in Windows Explorer — E2E slice review → [tasks/22-first-installed-release-smoke.md](tasks/22-first-installed-release-smoke.md)
 
 ## Phase 4 — Tier A breadth
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T23:15:43Z · 14/29 done
+**Pipeline status** — updated 2026-09-29T23:22:02Z · 15/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21
 - Blocked: none
 - Failed: none
-- Remaining: T21, T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T17 — done · Tests.ProviderHost.exe landed (Shell COM activation per CLSID, tolerant golden comparator + fixture registry with a placeholder fixture rendered through the real pipeline, 4-STA parallel stress, repeated load/unload GDI/User/private-byte/thread leak loop), wired into Preview3D.slnx; Release+Debug 5 cases/51 assertions green, Tests.Unit 200/134254 green, fixture workflow + ADR-0019 documented; T21 links its adapter and registers the first real fixture.
+- Remaining: T22, T23, T24, T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T21 — done · Jev classified the session as done (confidence 100%)
 <!-- /symphony:status -->

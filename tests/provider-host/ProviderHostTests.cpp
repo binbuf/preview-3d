@@ -16,6 +16,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "FamilyAdapterRegistry.h"
 #include "FamilyRouting.h"
 #include "ProviderHostSupport.h"
 #include "RasterBitmap.h"
@@ -116,13 +117,24 @@ TEST_CASE("the Shell activation sequence renders or falls back per CLSID, then u
             ActivateAndRender(module, GuidFromText(route.clsid), stream, 256, bitmap, alpha);
 
         INFO("family CLSID " << route.clsid);
-        if (hr == S_OK) {
-            // A linked adapter produced a real, owned bitmap.
-            CHECK(bitmap != nullptr);
-            CHECK(alpha == WTSAT_ARGB);
+        // A family with a linked adapter either renders a real bitmap or fails
+        // closed on the garbage stream with a precise HRESULT and no bitmap. A
+        // family with no adapter in this build gets the generic-icon fallback.
+        const bool linked =
+            preview3d::provider::CreateFamilyAdapter(route.family) != nullptr;
+        if (linked) {
+            if (hr == S_OK) {
+                // A linked adapter produced a real, owned bitmap.
+                CHECK(bitmap != nullptr);
+                CHECK(alpha == WTSAT_ARGB);
+            } else {
+                // No fabricated bitmap on a typed parse failure.
+                CHECK(bitmap == nullptr);
+                CHECK(alpha == WTSAT_UNKNOWN);
+            }
         } else {
-            // No adapter linked yet: the generic-icon fallback, never a
-            // fabricated bitmap.
+            // No adapter linked: the generic-icon fallback, never a fabricated
+            // bitmap.
             CHECK(hr == HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
             CHECK(bitmap == nullptr);
             CHECK(alpha == WTSAT_UNKNOWN);

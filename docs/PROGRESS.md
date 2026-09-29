@@ -19,6 +19,7 @@
 - **T16 — Implement threading, deadline, and containment behavior**: `thumbnail-provider/ModuleLifetime.{h,cpp}` now owns the T11 object/lock/active-call counters and; `thumbnail-provider/Containment.{h,cpp}` (new; PCH/COM-free; **compiled `/EHsc`** in both projects)
 - **T17 - Build the provider COM host test harness — E2E slice review**: `tests/provider-host/Tests.ProviderHost.exe` (new project in `Preview3D.slnx`; GUID; Files: `ProviderHostMain.cpp` (Catch2 session), `ProviderHostSupport.h` (Shell activation
 - **Follow-ups**: T12/T14/T15 and T21–T34 must use `ProviderLimits`, `AllocationLedger::ProcessWide()` (charge every; Resolved by T07: `shared/platform/include/platform/CheckedMath.h` stayed in place and is on the
+- **T21 - Implement the STL thumbnail adapter**: Provider STL adapter lives in `thumbnail-provider/StlFamilyAdapter.{h,cpp}` (class; **Naming gotcha:** the provider files are `StlFamilyAdapter.*`, not `StlAdapter.*`.
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -566,3 +567,38 @@ markers); sessions are pointed at this file and read it themselves.
   work but must be true before any public claim pairs manager thumbnails with qualified viewer support.
 - The original WiX/MSI (Gate 7) is unbuilt; T41 registers through the current installer path and the
   MSI must later adopt the same identities and rules (ADR-0006).
+
+## T21 - Implement the STL thumbnail adapter
+
+- Provider STL adapter lives in `thumbnail-provider/StlFamilyAdapter.{h,cpp}` (class
+  `preview3d::provider::StlAdapter`), registered for `Family::Stl` in
+  `FamilyAdapterRegistry.cpp`. `Family::Stl` now constructs a real adapter; the other seven remain
+  `nullptr`.
+- **Naming gotcha:** the provider files are `StlFamilyAdapter.*`, not `StlAdapter.*`.
+  `Tests.Unit.vcxproj` has `import-worker/src` on its include path, which also holds `StlAdapter.h`
+  (the worker's `import_worker` parser); including `"StlAdapter.h"` silently resolved to the worker
+  header. T23/T24 et al. must use distinct provider file names for any family whose worker adapter
+  shares the name (`PlyFamilyAdapter.*`, `ObjFamilyAdapter.*`, ...).
+- Parse/emit shape: `Parse` copies the checked 84-byte prefix (contiguous view first, else one
+  bounded `ReadAt`), classifies with `parser_core::IsAsciiStl` (binary shape wins over a leading
+  `"solid"`), and for binary validates the declared count against `parser_core::kMaxStlFacets` and
+  the source extent before any allocation. Binary facets stream in 4096-facet (200 KiB) blocks via
+  `ReadAt`, charged to the T06 ledger, with a deadline checkpoint per block. `EnumerateMaterials`
+  emits the neutral material as index 1; facets use the shared `NormalizeStlFacet` policy. ASCII
+  uses `AsciiTokenizer` over the whole source and fails closed (`ResourceLimit`) above the 128 MiB
+  contiguous cap.
+- Host harness: the first real family fixture `stl-cube` (`Family::Stl`, 684-byte in-memory binary
+  cube) is registered in `tests/provider-host/FixtureRegistry.cpp` with committed golden
+  `tests/provider-host/goldens/stl-cube-256.pam`. `ProviderHostSupport.h`'s `MemorySource` now
+  serves fixture bytes (`ReadAt` + `ContiguousView`), and `ProviderHostTests.cpp`'s `[host][com]`
+  branches on `CreateFamilyAdapter(family) != nullptr`: a linked adapter may return a real bitmap or
+  a typed parse failure with a null bitmap; an unlinked family still requires
+  `ERROR_NOT_SUPPORTED`/null.
+- Coverage: `tests/unit/ProviderStlAdapterTests.cpp` (`[provider][stl]`, 16 cases) covers binary +
+  ASCII meshes, the `solid`-header binary case, the streaming (no contiguous view) path, over-cap
+  count, fabricated count, truncation, mixed/only non-finite facets, sink cap stop, expired
+  deadline, pipeline error mapping, a real rendered bitmap, and CLSID routing.
+- Evidence (Release x64 unless noted): `Tests.Unit.exe` 214 cases / 134400 assertions (Release) and
+  214 / 134485 (Debug); `Tests.ProviderHost.exe` 5 cases / 55 assertions in both configs;
+  dependency-closure check OK. Build via
+  `msbuild tests\unit\Tests.Unit.vcxproj /p:Configuration=<Debug|Release> /p:Platform=x64 /p:SolutionDir=<root>\`.

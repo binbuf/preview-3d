@@ -56,7 +56,7 @@
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\shared\model-core\include;..\..\shared\platform\include;..\..\thumbnail-provider;..\..\thumbnail-spike\rasterizer;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\shared\model-core\include;..\..\shared\platform\include;..\..\shared\parser-core\include;..\..\thumbnail-provider;..\..\thumbnail-spike\rasterizer;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>PREVIEW3D_PROVIDER_DLL=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DThumbnailProvider.dll)";PREVIEW3D_PROVIDER_HOST_GOLDEN_DIR=LR"($(SolutionDir)tests\provider-host\goldens\\)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -84,9 +84,13 @@
          the golden path is the production pipeline, not a copy. -->
     <ClCompile Include="..\..\thumbnail-provider\ThumbnailPipeline.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\FamilyAdapterRegistry.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\StlFamilyAdapter.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\GeometrySampler.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\CpuRasterizer.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\RasterBitmap.cpp" />
+    <!-- T21: the shared parser subset StlAdapter.cpp consumes. -->
+    <ClCompile Include="..\..\shared\parser-core\src\AsciiTokenizer.cpp" />
+    <ClCompile Include="..\..\shared\parser-core\src\StlParserCore.cpp" />
     <ClCompile Include="ProviderHostTests.cpp" />
   </ItemGroup>
   <ItemGroup>
