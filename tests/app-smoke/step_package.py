@@ -46,6 +46,7 @@ def check_stage(stage):
 
 def check_registration():
     nsi = (ROOT / 'packaging/installer/Preview3D.nsi').read_text(encoding='utf-8-sig')
+    reg = (ROOT / 'packaging/installer/Preview3DThumbnailRegistration.ps1').read_text(encoding='utf-8-sig')
     reset = (ROOT / 'packaging/installer/Reset-Preview3DTestAssociations.ps1').read_text(encoding='utf-8-sig')
     progid = 'Binbuf.Preview3D.STEP.1'
     assert f'!define PROGID_STEP "{progid}"' in nsi
@@ -54,9 +55,15 @@ def check_registration():
         assert nsi.count(f'RegisterExtension "{ext}" "${{PROGID_STEP}}"') == 1, ext
         assert nsi.count(f'UnregisterExtension "{ext}" "${{PROGID_STEP}}"') == 1, ext
         assert f"'{ext}'" in reset, ext
+        assert f"'{ext}'" in reg, ext
     assert nsi.count('DeleteRegKey HKLM "Software\\Classes\\${PROGID_STEP}"') == 1
     assert 'UserChoice' not in nsi
-    assert 'shellex' not in nsi.lower()
+    # T41: the machine-level thumbnail handler ships through the registration step.
+    assert 'Preview3DThumbnailRegistration.ps1' in nsi
+    assert '-Action Install -Scope HKLM' in nsi
+    assert '-Action Uninstall -Scope HKLM' in nsi
+    assert '{6EE961AC-AC3B-4958-A898-E30523FEE79D}' in reg
+    assert 'IPreviewHandler' not in reg and 'ContextMenuHandlers' not in reg
     assert f"'{progid}'" in reset
     assert 'File /r "${STAGE_DIR}\\StepHost"' in nsi
     assert 'RMDir /r "$INSTDIR\\StepHost"' in nsi

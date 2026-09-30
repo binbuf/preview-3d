@@ -28,6 +28,7 @@
 - **T32 — Implement the 3MF thumbnail adapter**: Provider 3MF adapter lives in `thumbnail-provider/ThreeMfFamilyAdapter.{h,cpp}` (class; **Reused source-not-state:** the worker's `import-worker/src/ThreeMfOpcPreflight.{h,cpp}` (namespace
 - **T33 - Implement the USD/USDZ thumbnail adapter**: Provider USD/USDZ adapter lives in `thumbnail-provider/UsdFamilyAdapter.{h,cpp}` (class; **Reused source-not-state:** the worker's `import-worker/src/UsdZipPreflight.{h,cpp}` (`import_worker`
 - **T34 — Implement the STEP/STP thumbnail adapter — E2E slice review**: Provider STEP adapter lives in `thumbnail-provider/StepFamilyAdapter.{h,cpp}` (class; **Dedicated static OCCT closure (new):** `thumbnail-provider/step-occt/vcpkg.json` +
+- **T41 — Register all eight CLSIDs and ShellEx handlers**: Registration is installer/script-owned (ADR-0028): `packaging/installer/Preview3DThumbnailRegistration.ps1`; Identities are frozen by T41: the eight per-family AppIDs (one per CLSID) match the T03/T22-validated
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -617,7 +618,15 @@ markers); sessions are pointed at this file and read it themselves.
   surrogate (SEH cannot catch `__fastfail`), so T43 must fuzz the STEP adapter; (d)
   `XCAFApp_Application::GetApplication()` is a process singleton (standard OCCT lifetime) while
   every document is per call and closed on `Reset`; (e) per-face subshape colors are not yet
-  carried (shape- and instance-level colors are), a candidate for a later fidelity task.
+carried (shape- and instance-level colors are), a candidate for a later fidelity task.
+
+- T41 landed (see its section). Follow-ups: (a) T42 must add `Preview3DThumbnailProvider.dll` + its
+  family runtime closure to the NSIS payload (`File` in `Preview3D.nsi`), remove it from
+  `Create-PortableRelease.ps1`'s `forbiddenNames`, and keep the two T41 registration scripts staged;
+  (b) T42 should update `packaging/installer/INSTALLER-README.txt`, which still says Explorer
+  thumbnails are not part of the release; (c) T44 verifies the installed handler in `DllHost.exe` with
+  no `DisableProcessIsolation` and that a third-party handler survives conflict/repair/uninstall on a
+  clean machine; (d) the eventual MSI adopts the T41 CLSIDs/AppIDs/extension mapping (ADR-0028).
 
 ## T21 - Implement the STL thumbnail adapter
 
@@ -1054,3 +1063,39 @@ markers); sessions are pointed at this file and read it themselves.
 - Docs: new `docs/design/adr/0027-step-adapter-constrained-occt.md`; `design/05` documents the
   adapter and `adr/0002` records the T34 implementation. This closes the Tier B breadth slice;
   the T34 E2E review is non-blocking.
+
+## T41 — Register all eight CLSIDs and ShellEx handlers
+
+- Registration is installer/script-owned (ADR-0028): `packaging/installer/Preview3DThumbnailRegistration.ps1`
+  writes machine-level `CLSID\{clsid}` (+`AppID`, `InprocServer32` default = DLL path,
+  `ThreadingModel=Apartment`) and `AppID\{appid}` (+`DllSurrogate=""`) for the eight frozen families,
+  plus `Software\Classes\<ext>\shellex\{E357FCCD-A995-4576-B01F-234630154E96}` = family CLSID for every
+  direct extension (glTF `.glb`/`.gltf`, STL, PLY, OBJ — the T22 smoke never registered `.obj`, FBX, 3MF,
+  USD `.usd`/`.usda`/`.usdc`/`.usdz`, STEP `.step`/`.stp`). `.mtl` is absent. `Preview3D.nsi` invokes it
+  elevated for `-Action Install|Uninstall -Scope HKLM`; `Create-PortableRelease.ps1` stages the two
+  installer scripts only for the `Installer` distribution.
+- Identities are frozen by T41: the eight per-family AppIDs (one per CLSID) match the T03/T22-validated
+  shape. `tests/app-smoke/thumbnail_registration.py` parses `thumbnail-provider/FamilyRouting.h` and fails
+  on any drift from the script table.
+- Non-clobber/ownership: a pre-existing non-product handler in an extension `ShellEx` value is preserved
+  and recorded; state lives under `HKLM\Software\Binbuf\Preview3D\Thumbnails`
+  (`OwnedClsid`/`OwnedAppId`/`OwnedShellEx`/`Conflicts`). Repair = idempotent same-version rerun. Uninstall
+  removes a handler value only while it equals a product CLSID and deletes the state key; user defaults
+  (`UserChoice`) are never read/written and `DisableProcessIsolation` is never written (removed if present).
+- Notification: `packaging/installer/Notify-Preview3DShellChanged.ps1` calls
+  `SHChangeNotify(0x08000000, 0, null, null)`. `Preview3D.nsi` runs it with a basic-user token
+  (`nsExec` + `runas.exe /trustlevel:0x20000`, `$\"` escaped quotes) and also calls the existing
+  `${NotifyShell_AssocChanged}` as a guaranteed fallback; failure is non-fatal.
+- Gotcha: the PowerShell provider `Remove-ItemProperty -Name '(default)'` does not delete a registry
+  key's unnamed default value. `Remove-RegistryDefaultValue` opens the key writable via
+  `[Microsoft.Win32.Registry]` and calls `DeleteValue('', $false)`.
+- Verify: `python tests/app-smoke/thumbnail_registration.py` → exit 0 (static + sandboxed HKCU
+  install/conflict/repair/uninstall; foreign `.stl`/`.obj` handler and `.stl` default/OpenWithProgids
+  survive). `makensis /PPO /NOCD ... packaging/installer/Preview3D.nsi` → exit 0. `step_package.py` /
+  `three_mf_package.py` `check_registration()` → exit 0 (the old "no shellex in NSIS" assertion is
+  replaced by family CLSID/extension + T41-step assertions).
+- Non-elevated session: HKLM install could not be executed here; T44 owns clean-machine verification.
+  T42 still owns adding `Preview3DThumbnailProvider.dll` + closure to the payload (and the `File` line).
+- Docs: new `docs/design/adr/0028-thumbnail-registration-non-clobber-step.md`; `design/08` implementation
+  note and key shape updated. Roadmap follow-ups about T41 registering FBX/3MF/USD/STEP with the real
+  installer rules are now satisfied.

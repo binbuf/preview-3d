@@ -1,15 +1,16 @@
 # Installation and registration
 
-Current implementation note (2026-09-18; provider identities frozen by T01): the shipping engineering package
-is NSIS-based, not the proposed MSI/WiX package below. It currently registers
-interactive Open With/Default Apps for all direct formats, including `.3mf`,
-and stages the exact worker-only `lib3mf`/libzip/zlib/bzip2 runtime closure.
-It does not yet register any Explorer thumbnail handler: T41 in this program
-adds machine-level thumbnail CLSID/ShellEx registration to the NSIS installer
-(ADR-0006, ADR-0007), using the registry location validated by T03 with a
-third-party default and per-user association. T01 froze the eight COM identities in [05-thumbnail-provider.md](./05-thumbnail-provider.md) and this NSIS-now / MSI-later vehicle; the extension-level `ShellEx` location below remains provisional until T03 proves it. The MSI and transactional repair
-sections below remain future design targets. The NSIS repair path for this program
-is an idempotent rerun of the same signed installer; its ARP entry currently
+Current implementation note (2026-09-30; provider identities frozen by T01, machine registration
+landed in T41): the shipping engineering package is NSIS-based, not the proposed MSI/WiX package
+below. It registers interactive Open With/Default Apps for all direct formats, including `.3mf`, and
+stages the exact worker-only `lib3mf`/libzip/zlib/bzip2 runtime closure. T41 now adds machine-level
+thumbnail CLSID/ShellEx registration to the NSIS installer (ADR-0006, ADR-0007, ADR-0028) through
+`packaging/installer/Preview3DThumbnailRegistration.ps1`, using the registry location validated by
+T03 (ADR-0008) with a third-party default and per-user association. The provider DLL payload and its
+family runtime closure are added by T42; T41 writes only the registry shape. T01 froze the eight COM
+identities in [05-thumbnail-provider.md](./05-thumbnail-provider.md) and this NSIS-now / MSI-later
+vehicle. The MSI and transactional repair sections below remain future design targets. The NSIS repair
+path for this program is an idempotent rerun of the same signed installer; its ARP entry currently
 advertises `NoRepair=1`.
 
 ## Future WiX/MSI package contract
@@ -109,9 +110,18 @@ The CLSIDs and family mapping in [05-thumbnail-provider.md](./05-thumbnail-provi
 
     CLSID\{family-clsid}\
       (Default) = "Preview 3D <family> Thumbnail Provider"
+      AppID = "{family-appid}"
       InprocServer32\
         (Default) = "[INSTALLFOLDER]Preview3DThumbnailProvider.dll"
         ThreadingModel = "Apartment"
+
+    AppID\{family-appid}\
+      (Default) = "Preview 3D <family> Thumbnail Provider"
+      DllSurrogate = ""
+
+The per-family AppID with an empty `DllSurrogate` is what routes an explicit `CLSCTX_LOCAL_SERVER`
+activation into `DllHost.exe`; Explorer's own thumbnail path isolates by default without it
+(ADR-0008). The eight AppIDs are frozen by T41 (ADR-0028) and are never regenerated.
 
 Validated mapping for each direct extension (proven by T03/ADR-0008; T41 freezes it):
 
@@ -132,11 +142,24 @@ again; it is not the installer and does not change the machine-level contract ab
 
 Component ownership is exact: every key/value has a component/key path and uninstall removes only
 values installed by this product. T41 implements these rules in the current NSIS installer
-(ADR-0007); the eventual MSI adopts the same identities and rules through its component table. The
-provider DLL exports no `DllRegisterServer`/`DllUnregisterServer`, so there is no self-registration
-path that could write these keys without the non-clobber policy. If a pre-existing non-product
-thumbnail handler occupies the effective handler value, the install records a conflict and does not
-overwrite it silently. The UI reports that interactive Open With support installed but the conflicting thumbnail integration was preserved. Repair follows the same non-clobber rule unless the existing value is one of this product's CLSIDs. In NSIS, repair is a same-version installer rerun tested for idempotent files, registry ownership and conflict preservation; the eventual MSI uses transactional repair.
+through `packaging/installer/Preview3DThumbnailRegistration.ps1` (invoked elevated as
+`-Action Install|Uninstall -Scope HKLM`; ADR-0007, ADR-0028): the eight CLSIDs and extension mappings
+are mirrored from `thumbnail-provider/FamilyRouting.h`, ownership is recorded under
+`HKLM\Software\Binbuf\Preview3D\Thumbnails`, and `tests/app-smoke/thumbnail_registration.py` runs the
+same script against a sandboxed per-user classes/state root to prove install, conflict, repair rerun
+and uninstall without elevation. The eventual MSI adopts the same identities and rules through its
+component table. The provider DLL exports no `DllRegisterServer`/`DllUnregisterServer`, so there is
+no self-registration path that could write these keys without the non-clobber policy. If a
+pre-existing non-product thumbnail handler occupies the effective handler value, the install records
+a conflict (in the ownership state key and in the installer detail log) and does not overwrite it
+silently. The UI reports that interactive Open With support installed but the conflicting thumbnail
+integration was preserved. Repair follows the same non-clobber rule unless the existing value is one
+of this product's CLSIDs. In NSIS, repair is a same-version installer rerun tested for idempotent
+files, registry ownership and conflict preservation; the eventual MSI uses transactional repair.
+Install and uninstall announce the change with `SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST,
+null, null)` from `packaging/installer/Notify-Preview3DShellChanged.ps1`, which the installer runs
+with a basic-user token (`runas /trustlevel:0x20000`) and also broadcasts from its own process as a
+guaranteed fallback; the notification is non-fatal and changes no state.
 
 ## Future MSI installation flow
 

@@ -76,7 +76,7 @@ before it is built.
 
 ## Phase 6 — Production hardening and full registration
 
-- [ ] T41 — Register all eight CLSIDs and ShellEx handlers → [tasks/41-shell-registration.md](tasks/41-shell-registration.md)
+- [x] T41 — Register all eight CLSIDs and ShellEx handlers → [tasks/41-shell-registration.md](tasks/41-shell-registration.md)
 - [ ] T42 — Package, sign, and audit the provider payload closure → [tasks/42-payload-closure-signing-sbom.md](tasks/42-payload-closure-signing-sbom.md)
 - [ ] T43 — Harden with fuzz, ASan, and hostile corpora → [tasks/43-adversarial-hardening.md](tasks/43-adversarial-hardening.md)
 - [ ] T44 — Verify the actual surrogate, DPI, and clean-machine install — E2E slice review → [tasks/44-surrogate-dpi-install-verification.md](tasks/44-surrogate-dpi-install-verification.md)
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-30T05:14:42Z · 23/29 done
+**Pipeline status** — updated 2026-09-30T05:21:31Z · 24/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41
 - Blocked: none
 - Failed: none
-- Remaining: T41, T42, T43, T44, T51, T52
-- Last finished: T34 — done · STEP/STP renders through the frozen CLSID over a dedicated static OCCT 7.8 closure linked only into the provider/tests; Part-21 admission + T16 containment + low-detail tessellation; Tests.Unit Release/Debug green (339 cases), ProviderHost green with a STEP golden, closure OK, ~18 ms/<1 MiB per render, and the T22 smoke yields a model-derived Explorer thumbnail (meanAbs=0); docs/ADR/PROGRESS/hand-off updated.
+- Remaining: T42, T43, T44, T51, T52
+- Last finished: T41 — done · NSIS thumbnail registration for all 8 CLSIDs + every direct extension's ShellEx is implemented as a non-clobber, repair-capable, owned-only-uninstall script invoked by the installer with a non-elevated SHChangeNotify; automated static + sandboxed HKCU lifecycle test passes; design/08, ADR-0028, hand-off and PROGRESS updated. T42 must still add the provider DLL payload.
 <!-- /symphony:status -->
