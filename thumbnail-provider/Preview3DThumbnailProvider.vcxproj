@@ -131,6 +131,8 @@
     <ClInclude Include="ObjFamilyAdapter.h" />
     <!-- T25 glTF/GLB family adapter (fastgltf + Draco/meshopt/KTX2/WebP). -->
     <ClInclude Include="GltfFamilyAdapter.h" />
+    <!-- T31 FBX family adapter (provider-local pinned ufbx). -->
+    <ClInclude Include="FbxFamilyAdapter.h" />
     <!-- T07: the provider-shared parser subset. These are the same source
          files the import worker compiles (ADR-0004, source-not-state); none
          of them reference a broker/worker/viewer header. -->
@@ -190,6 +192,11 @@
          PCH-free like the other adapters so Tests.Unit and Tests.ProviderHost
          compile the exact shipped source. -->
     <ClCompile Include="GltfFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T31 FBX family adapter (ufbx). PCH-free like the other adapters so
+         Tests.Unit and Tests.ProviderHost compile the exact shipped source. -->
+    <ClCompile Include="FbxFamilyAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="RasterBitmap.cpp">

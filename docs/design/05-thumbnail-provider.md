@@ -235,6 +235,33 @@ material is index 1. OBJ text is read in one contiguous pass — the frozen view
 otherwise a checked ledger-charged backing buffer bounded by the 128 MiB cap — and the ufbx
 `progress_cb` plus the geometry loop poll the cooperative deadline.
 
+T31 implements the FBX adapter as `thumbnail-provider/FbxFamilyAdapter.{h,cpp}` (selected only by the
+routed `Family::Fbx` CLSID, the fixed identity `{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}`) over the same
+provider-local pinned ufbx copy, with the static-pose and external-access policy recorded in
+[ADR-0024](adr/0024-fbx-adapter-static-pose.md). The encoding (ASCII or binary) is detected from
+stream content only — extension detection is disabled and a synthesized filename never reaches the
+filesystem — and a stream whose `metadata.file_format` is not FBX is rejected with the generic icon.
+`load_external_files = false`, `ignore_missing_external_files`, and a deny `open_file_cb` mean external
+geometry caches and texture sidecars are never opened. Because `ufbx_evaluate_scene` has no progress
+callback (FBX-001), the adapter preflights element/triangle/vertex counts **before** evaluation
+(2 M triangles / 6 M vertices / 10 000 nodes, meshes, animation stacks, skin deformers and bones; 4 096
+materials) and bounds the call with explicit temp/result allocator memory (96 MiB each) and allocation
+limits; a call never runs unbounded merely because Shell uses a surrogate. The deterministic static
+pose evaluates at the first animation stack's `time_begin` (or `scene->anim` at time zero when no stack
+exists) with `evaluate_skinning = true` and `evaluate_caches = false`; `mesh.skinned_position` /
+`mesh.skinned_normal` are authoritative, transformed by `node.geometry_to_world` (position) and its
+inverse-transpose (normal) when `skinned_is_local` is set. Polygons are triangulated with
+`ufbx_triangulate_face` (per-face ceiling 65 536 triangles), reversed winding is honored, vertex colors
+are carried, and UVs are dropped. Each face resolves its material through `node.materials` then
+`mesh.materials`; a face with no material uses index 0, except that a mesh with vertex colors uses a
+registered white fallback. NURBS-only, subdivision-only, procedural-only or geometry-cache-only content
+with no supported polygon remaining returns `UnsupportedRequiredFeature` (generic icon); when supported
+polygons remain the unsupported features are omitted. Embedded images are structurally validated only
+— the allowlisted container (PNG/JPEG/GIF/BMP/WebP) is sniffed, bounded by encoded bytes (32 MiB each)
+and decoded pixels (32 MP aggregate), then discarded — because the frozen `MaterialPayload` has no
+texture slot and the rasterizer samples no texture; an external texture therefore uses the neutral
+fallback and never fails valid geometry.
+
 ## CPU renderer
 
 The thumbnail DLL uses a product-owned tile rasterizer; no GPU device or graphics queue is created inside Explorer.

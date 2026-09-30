@@ -59,7 +59,7 @@
       <AdditionalIncludeDirectories>..\..\shared\model-core\include;..\..\shared\platform\include;..\..\shared\parser-core\include;..\..\thumbnail-provider;..\..\thumbnail-spike\rasterizer;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- FASTGLTF_ENABLE_DEPRECATED_EXT=1 must match the vcpkg fastgltf static
            library's INTERFACE_COMPILE_DEFINITIONS (see the provider project). -->
-      <PreprocessorDefinitions>PREVIEW3D_PROVIDER_DLL=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DThumbnailProvider.dll)";PREVIEW3D_PROVIDER_HOST_GOLDEN_DIR=LR"($(SolutionDir)tests\provider-host\goldens\\)";FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PREVIEW3D_PROVIDER_DLL=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DThumbnailProvider.dll)";PREVIEW3D_PROVIDER_HOST_GOLDEN_DIR=LR"($(SolutionDir)tests\provider-host\goldens\\)";PREVIEW3D_FBX_FIXTURE_DIR=LR"($(SolutionDir)tests\fixtures\fbx-spike\\)";FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -90,6 +90,7 @@
     <ClCompile Include="..\..\thumbnail-provider\PlyFamilyAdapter.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\ObjFamilyAdapter.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\GltfFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\FbxFamilyAdapter.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\GeometrySampler.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\CpuRasterizer.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\RasterBitmap.cpp" />

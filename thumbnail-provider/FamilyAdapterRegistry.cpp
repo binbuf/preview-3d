@@ -10,6 +10,7 @@
 
 #include "FamilyAdapterRegistry.h"
 
+#include "FbxFamilyAdapter.h"
 #include "GltfFamilyAdapter.h"
 #include "ObjFamilyAdapter.h"
 #include "PlyFamilyAdapter.h"
@@ -52,6 +53,14 @@ std::unique_ptr<IFamilyAdapter> CreateFamilyAdapter(Family family) noexcept
                 return nullptr;
             }
         case Family::Fbx:
+            // T31: the product binary/ASCII FBX adapter over the provider-local
+            // pinned ufbx copy (external-file access disabled, bounded static
+            // pose with skin/blend baked).
+            try {
+                return std::make_unique<FbxAdapter>();
+            } catch (...) {
+                return nullptr;
+            }
         case Family::ThreeMf:
         case Family::Usd:
         case Family::Step:

@@ -49,6 +49,7 @@ namespace
 const CLSID kStlClsid = {0xBFC86E1A, 0x55C1, 0x4C2D, {0xAA, 0x36, 0x3C, 0x25, 0xDE, 0xCF, 0x30, 0xC9}};
 const CLSID kPlyClsid = {0xF4DC6119, 0xE235, 0x4BAC, {0x80, 0x89, 0x54, 0xED, 0xD8, 0x4F, 0x84, 0x92}};
 const CLSID kGltfClsid = {0xA592F425, 0xEA68, 0x4C88, {0xBB, 0x96, 0x02, 0x08, 0x05, 0xD4, 0xBE, 0x56}};
+const CLSID kFbxClsid = {0xFBC218D4, 0xFD2C, 0x41DF, {0xB1, 0x68, 0x7F, 0x3B, 0x9E, 0x53, 0xC8, 0x4E}};
 constexpr wchar_t kProviderModuleName[] = L"Preview3DThumbnailProvider.dll";
 constexpr wchar_t kStlClsidKey[] = L"Software\\Classes\\CLSID\\{BFC86E1A-55C1-4C2D-AA36-3C25DECF30C9}";
 constexpr wchar_t kStlAppIdKey[] = L"Software\\Classes\\AppID\\{BFC86E1A-55C1-4C2D-AA36-3C25DECF3010}";
@@ -56,6 +57,8 @@ constexpr wchar_t kPlyClsidKey[] = L"Software\\Classes\\CLSID\\{F4DC6119-E235-4B
 constexpr wchar_t kPlyAppIdKey[] = L"Software\\Classes\\AppID\\{F4DC6119-E235-4BAC-8089-54EDD84F8493}";
 constexpr wchar_t kGltfClsidKey[] = L"Software\\Classes\\CLSID\\{A592F425-EA68-4C88-BB96-020805D4BE56}";
 constexpr wchar_t kGltfAppIdKey[] = L"Software\\Classes\\AppID\\{A592F425-EA68-4C88-BB96-020805D4BE57}";
+constexpr wchar_t kFbxClsidKey[] = L"Software\\Classes\\CLSID\\{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}";
+constexpr wchar_t kFbxAppIdKey[] = L"Software\\Classes\\AppID\\{FBC218D4-FD2C-41DF-B168-7F3B9E53C84F}";
 
 std::string ToUtf8(const std::wstring& text)
 {
@@ -244,6 +247,7 @@ int wmain(int argc, wchar_t** argv)
     std::wstring stlPath;
     std::wstring plyPath;
     std::wstring gltfPath;
+    std::wstring fbxPath;
     std::wstring outDir;
     unsigned cx = 256;
     for (int i = 1; i < argc; ++i) {
@@ -253,30 +257,44 @@ int wmain(int argc, wchar_t** argv)
         else if (arg == L"--stl") stlPath = next();
         else if (arg == L"--ply") plyPath = next();
         else if (arg == L"--gltf") gltfPath = next();
+        else if (arg == L"--fbx") fbxPath = next();
         else if (arg == L"--out") outDir = next();
         else if (arg == L"--cx") cx = static_cast<unsigned>(_wtoi(next().c_str()));
     }
-    if (dllPath.empty() || (stlPath.empty() && plyPath.empty() && gltfPath.empty())) {
-        std::printf("usage: ProviderSmokeHost.exe --dll <path> (--stl <path> | --ply <path> | --gltf <path>) [--cx 256] [--out <dir>]\n");
+    if (dllPath.empty() || (stlPath.empty() && plyPath.empty() && gltfPath.empty() && fbxPath.empty())) {
+        std::printf("usage: ProviderSmokeHost.exe --dll <path> (--stl <path> | --ply <path> | --gltf <path> | --fbx <path>) [--cx 256] [--out <dir>]\n");
         return 2;
     }
     if (outDir.empty()) outDir = L".";
 
     // Each family smoke selects its own frozen CLSID and AppID; the rest of the
     // procedure (surrogate hosting, Shell path, image match) is family-agnostic.
-    enum class SmokeFamily { Stl, Ply, Gltf };
-    const SmokeFamily family = !gltfPath.empty() ? SmokeFamily::Gltf
-        : (!plyPath.empty() ? SmokeFamily::Ply : SmokeFamily::Stl);
-    const std::wstring& modelPath = family == SmokeFamily::Gltf ? gltfPath
-        : (family == SmokeFamily::Ply ? plyPath : stlPath);
+    enum class SmokeFamily { Stl, Ply, Gltf, Fbx };
+    SmokeFamily family = SmokeFamily::Stl;
+    const std::wstring* model = &stlPath;
+    if (!gltfPath.empty()) {
+        family = SmokeFamily::Gltf;
+        model = &gltfPath;
+    } else if (!fbxPath.empty()) {
+        family = SmokeFamily::Fbx;
+        model = &fbxPath;
+    } else if (!plyPath.empty()) {
+        family = SmokeFamily::Ply;
+        model = &plyPath;
+    }
+    const std::wstring& modelPath = *model;
     const CLSID clsid = family == SmokeFamily::Gltf ? kGltfClsid
-        : (family == SmokeFamily::Ply ? kPlyClsid : kStlClsid);
+        : (family == SmokeFamily::Fbx ? kFbxClsid
+           : (family == SmokeFamily::Ply ? kPlyClsid : kStlClsid));
     const wchar_t* clsidKey = family == SmokeFamily::Gltf ? kGltfClsidKey
-        : (family == SmokeFamily::Ply ? kPlyClsidKey : kStlClsidKey);
+        : (family == SmokeFamily::Fbx ? kFbxClsidKey
+           : (family == SmokeFamily::Ply ? kPlyClsidKey : kStlClsidKey));
     const wchar_t* appIdKey = family == SmokeFamily::Gltf ? kGltfAppIdKey
-        : (family == SmokeFamily::Ply ? kPlyAppIdKey : kStlAppIdKey);
+        : (family == SmokeFamily::Fbx ? kFbxAppIdKey
+           : (family == SmokeFamily::Ply ? kPlyAppIdKey : kStlAppIdKey));
     const char* familyName = family == SmokeFamily::Gltf ? "gltf"
-        : (family == SmokeFamily::Ply ? "ply" : "stl");
+        : (family == SmokeFamily::Fbx ? "fbx"
+           : (family == SmokeFamily::Ply ? "ply" : "stl"));
 
     FILE* report = nullptr;
     if (fopen_s(&report, ToUtf8(outDir + L"\\report.txt").c_str(), "wb") != 0) report = nullptr;
