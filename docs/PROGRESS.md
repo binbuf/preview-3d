@@ -29,6 +29,7 @@
 - **T33 - Implement the USD/USDZ thumbnail adapter**: Provider USD/USDZ adapter lives in `thumbnail-provider/UsdFamilyAdapter.{h,cpp}` (class; **Reused source-not-state:** the worker's `import-worker/src/UsdZipPreflight.{h,cpp}` (`import_worker`
 - **T34 — Implement the STEP/STP thumbnail adapter — E2E slice review**: Provider STEP adapter lives in `thumbnail-provider/StepFamilyAdapter.{h,cpp}` (class; **Dedicated static OCCT closure (new):** `thumbnail-provider/step-occt/vcpkg.json` +
 - **T41 — Register all eight CLSIDs and ShellEx handlers**: Registration is installer/script-owned (ADR-0028): `packaging/installer/Preview3DThumbnailRegistration.ps1`; Identities are frozen by T41: the eight per-family AppIDs (one per CLSID) match the T03/T22-validated
+- **T42 — Package, sign, and audit the provider payload closure**: The provider's real closure is **static**: `dumpbin /dependents x64\Release\Preview3DThumbnailProvider.dll`; `packaging/portable/Create-PortableRelease.ps1` stages `Preview3DThumbnailProvider.dll` at the install
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -1099,3 +1100,36 @@ carried (shape- and instance-level colors are), a candidate for a later fidelity
 - Docs: new `docs/design/adr/0028-thumbnail-registration-non-clobber-step.md`; `design/08` implementation
   note and key shape updated. Roadmap follow-ups about T41 registering FBX/3MF/USD/STEP with the real
   installer rules are now satisfied.
+
+## T42 — Package, sign, and audit the provider payload closure
+
+- The provider's real closure is **static**: `dumpbin /dependents x64\Release\Preview3DThumbnailProvider.dll`
+  shows only `GDI32, ole32, KERNEL32, MSVCP140, MSVCP140_1, bcrypt, VCRUNTIME140(_1), WS2_32, ADVAPI32,
+  USER32` + `api-ms-win-crt-*`. ufbx/fastgltf/lib3mf/TinyUSDZ/Draco/KTX2/Basis/libwebp/meshopt plus the
+  constrained OCCT `TK*` closure are statically linked (release triplet, commit `4f89dff`). So the staged
+  payload addition is the DLL plus `msvcp140_1.dll`; the other CRT files were already at the root.
+- `packaging/portable/Create-PortableRelease.ps1` stages `Preview3DThumbnailProvider.dll` at the install
+  root for `-Distribution Installer` only (portable still forbids it), adds `msvcp140_1.dll` to the root
+  CRT, and enforces: a **closed provider import allowlist** (system DLLs + the 4-file CRT; any other
+  non-system import fails), no provider-only static-closure module or `TK*.dll` anywhere in the payload,
+  and the one-way boundary (no product binary imports the provider; the provider imports no product
+  binary). A `Preview3DThumbnailProvider` SBOM component is emitted for the Installer distribution.
+- `packaging/installer/Preview3D.nsi` adds `File`/`Delete` for the provider DLL and `msvcp140_1.dll`;
+  `Create-Installer.ps1` now also builds `thumbnail-provider\Preview3DThumbnailProvider.vcxproj` (it is
+  deliberately not a viewer `ProjectReference`). `THIRD-PARTY-NOTICES.txt` names the provider.
+- New durable test `tests/app-smoke/provider_package.py`: static packaging contract + `MANIFEST.json`
+  hash/SBOM/stage verification. Run `python tests/app-smoke/provider_package.py artifacts\installer\stage`.
+- Signing: no local Authenticode cert, so the run is an unsigned engineering candidate — SBOM
+  `preview3d:signed=false`, `MANIFEST.json` covers every binary, setup `.sha256` emitted. Signing is wired
+  (signs every payload PE, skips already-trusted CRT images) and takes a `-CertificateThumbprint`.
+- Environment gotcha (pre-existing, not T42 code): `compatibility-host-step\vcpkg_installed` held only a
+  stale dynamic `x64-windows` OCCT tree and `Preview3DStepHost.exe` was a stale dynamic build, so the
+  packaging failed before any provider work. A fresh `vcpkg install` hit a vcpkg tool/port version skew
+  (`vcpkg_host_path_list ... REMOVE_DUPLICATES not recognized`); the local static tree was re-provisioned
+  by reusing the already-built provider static OCCT tree and `Preview3DStepHost.exe` was rebuilt static.
+  CI provisions it from `.github/workflows/dependencies.yml`.
+- Verify (all green): create-installer produced `artifacts\installer\Preview3D-0.3.10-x64-setup.exe`
+  (SHA-256 `9c355c0aac11c0b3a30f2023b2db40a2881737593211bbf1d296b1c4fb02fee5`); `Create-PortableRelease`
+  staged 67 files; `provider_package.py` + `thumbnail_registration.py` pass;
+  `tests/unit/check-provider-dependency-closure.ps1` reports no product imports; `Tests.Unit.exe` green
+  (339 cases). T44 owns the signed clean-machine install and DllHost surrogate verification.

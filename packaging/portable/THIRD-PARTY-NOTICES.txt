@@ -14,8 +14,9 @@ installed by those pinned ports are preserved in licenses\:
   libwebp.txt      WebP codec and libsharpyuv
   libzip.txt       libzip archive reader used by lib3mf
   meshoptimizer.txt meshoptimizer
-  opencascade.txt   Open CASCADE Technology (OCCT) CAD kernel used only by the
-                    isolated STEP host
+  opencascade.txt   Open CASCADE Technology (OCCT) CAD kernel used by the
+                    isolated STEP host and, statically linked, by the Explorer
+                    thumbnail provider's constrained STEP adapter
   openusd.txt       Pixar OpenUSD
   simdjson.txt     simdjson
   tbb.txt          Intel oneAPI Threading Building Blocks
@@ -23,6 +24,15 @@ installed by those pinned ports are preserved in licenses\:
   ufbx.txt         ufbx FBX and OBJ/MTL loader
   zlib.txt         zlib compression library used by the worker and libzip
   zstd.txt         Zstandard
+
+The installed distribution also contains Preview3DThumbnailProvider.dll, the
+Explorer thumbnail provider. Its upstream parser/decoder/codec and constrained
+OCCT dependencies (basisu, bzip2, draco, fastgltf, ktx, lib3mf, libwebp, libzip,
+meshoptimizer, opencascade, simdjson, tinyusdz, ufbx, zlib) are statically linked
+into that single image, so no upstream DLL is shipped separately. The provider's
+own name and its statically linked closure are recorded in SBOM.cdx.json; its
+resolved runtime imports are the app-local Microsoft Visual C++ Runtime files
+only.
 
 The app-local Microsoft Visual C++ Runtime files are Microsoft distributable
 code supplied by the installed Visual Studio C++ toolset. Their redistribution
