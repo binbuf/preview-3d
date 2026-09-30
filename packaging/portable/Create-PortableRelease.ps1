@@ -275,6 +275,8 @@ if ($Distribution -eq 'Portable') {
     Copy-RequiredFile (Join-Path $repository 'packaging\installer\INSTALLER-README.txt') (Join-Path $stage 'README.txt')
     Copy-RequiredFile (Join-Path $repository 'packaging\portable\Remove-Preview3DProfile.ps1') (Join-Path $stage 'Remove-Preview3DProfile.ps1')
     Copy-RequiredFile (Join-Path $repository 'packaging\installer\Provision-Preview3DWorkerAcl.ps1') (Join-Path $stage 'Provision-Preview3DWorkerAcl.ps1')
+    Copy-RequiredFile (Join-Path $repository 'packaging\installer\Preview3DThumbnailRegistration.ps1') (Join-Path $stage 'Preview3DThumbnailRegistration.ps1')
+    Copy-RequiredFile (Join-Path $repository 'packaging\installer\Notify-Preview3DShellChanged.ps1') (Join-Path $stage 'Notify-Preview3DShellChanged.ps1')
 }
 $stagedReadme = Join-Path $stage 'README.txt'
 (Get-Content -LiteralPath $stagedReadme -Raw).Replace('@VERSION@', $Version) |

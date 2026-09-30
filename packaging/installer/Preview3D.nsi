@@ -28,6 +28,10 @@ Unicode true
 !define PROGID_USD "Binbuf.Preview3D.USD.1"
 !define PROGID_STEP "Binbuf.Preview3D.STEP.1"
 
+!define THUMBNAIL_REGISTRATION_SCRIPT "Preview3DThumbnailRegistration.ps1"
+!define SHELL_NOTIFICATION_SCRIPT "Notify-Preview3DShellChanged.ps1"
+!define THUMBNAIL_PROVIDER_DLL "Preview3DThumbnailProvider.dll"
+
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
@@ -129,6 +133,24 @@ Function LaunchDefaultApps
   ExecShell "open" "ms-settings:defaultapps?registeredAppMachine=Preview%203D"
 FunctionEnd
 
+!macro NotifyPreview3DShellChangedBody
+  ; Best-effort non-elevated notification (design 08 step 5). runas
+  ; /trustlevel:0x20000 runs the helper with a basic-user token in this
+  ; interactive session; the caller still broadcasts from its own process as a
+  ; guaranteed fallback below. Both are non-fatal and change no state.
+  nsExec::ExecToLog '"$SYSDIR\runas.exe" /trustlevel:0x20000 "$\"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe$\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $\"$INSTDIR\${SHELL_NOTIFICATION_SCRIPT}$\""'
+  Pop $0
+  Pop $1
+!macroend
+
+Function NotifyPreview3DShellChanged
+  !insertmacro NotifyPreview3DShellChangedBody
+FunctionEnd
+
+Function un.NotifyPreview3DShellChanged
+  !insertmacro NotifyPreview3DShellChangedBody
+FunctionEnd
+
 !macro RegisterProgId PROGID FRIENDLY_NAME
   WriteRegStr HKLM "Software\Classes\${PROGID}" "" "${FRIENDLY_NAME}"
   WriteRegStr HKLM "Software\Classes\${PROGID}" "FriendlyTypeName" "${FRIENDLY_NAME}"
@@ -170,6 +192,8 @@ Section "Preview 3D" SEC_MAIN
   File "${STAGE_DIR}\MANIFEST.json"
   File "${STAGE_DIR}\Remove-Preview3DProfile.ps1"
   File "${STAGE_DIR}\Provision-Preview3DWorkerAcl.ps1"
+  File "${STAGE_DIR}\${THUMBNAIL_REGISTRATION_SCRIPT}"
+  File "${STAGE_DIR}\${SHELL_NOTIFICATION_SCRIPT}"
   File /r "${STAGE_DIR}\licenses"
   File /r "${STAGE_DIR}\worker"
   File /r "${STAGE_DIR}\OpenUsdHost"
@@ -241,6 +265,18 @@ Section "Preview 3D" SEC_MAIN
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "EstimatedSize" $0
 
+  ; T41: machine-level thumbnail registration (eight CLSIDs + extension ShellEx)
+  ; with non-clobber conflict handling. The DLL payload itself is added by T42;
+  ; a registration failure is reported but does not abort the Open With install.
+  DetailPrint "Registering the Explorer thumbnail provider..."
+  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}" -Action Install -Scope HKLM -DllPath "$INSTDIR\${THUMBNAIL_PROVIDER_DLL}"'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    DetailPrint "Thumbnail registration reported: $1"
+  ${EndIf}
+  Call NotifyPreview3DShellChanged
+
   ${NotifyShell_AssocChanged}
 SectionEnd
 
@@ -254,6 +290,15 @@ Section "Uninstall"
   IfFileExists "$INSTDIR\Remove-Preview3DProfile.ps1" 0 profile_cleanup_done
   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\Remove-Preview3DProfile.ps1"'
 profile_cleanup_done:
+
+  ; T41: remove only product-owned thumbnail keys; a foreign handler in an
+  ; extension ShellEx value is preserved. Then announce the change.
+  IfFileExists "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}" 0 thumbnail_unregister_done
+  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}" -Action Uninstall -Scope HKLM -DllPath "$INSTDIR\${THUMBNAIL_PROVIDER_DLL}"'
+  Pop $0
+  Pop $1
+thumbnail_unregister_done:
+  Call un.NotifyPreview3DShellChanged
 
   DeleteRegValue HKLM "Software\RegisteredApplications" "${PRODUCT_NAME}"
   DeleteRegKey HKLM "${PRODUCT_KEY}\Capabilities"
@@ -344,6 +389,8 @@ profile_cleanup_done:
   Delete "$INSTDIR\MANIFEST.json"
   Delete "$INSTDIR\Remove-Preview3DProfile.ps1"
   Delete "$INSTDIR\Provision-Preview3DWorkerAcl.ps1"
+  Delete "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}"
+  Delete "$INSTDIR\${SHELL_NOTIFICATION_SCRIPT}"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
   RMDir "$PROGRAMFILES64\Binbuf"
