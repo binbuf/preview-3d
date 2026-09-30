@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 NSI = ROOT / 'packaging' / 'installer' / 'Preview3D.nsi'
 PORTABLE = ROOT / 'packaging' / 'portable' / 'Create-PortableRelease.ps1'
 NOTICES = ROOT / 'packaging' / 'portable' / 'THIRD-PARTY-NOTICES.txt'
+CREATE_INSTALLER = ROOT / 'packaging' / 'CreateInstaller.proj'
 
 PROVIDER = 'Preview3DThumbnailProvider.dll'
 PROVIDER_CRT = ('msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
@@ -38,6 +39,7 @@ def check_static():
     nsi = NSI.read_text(encoding='utf-8-sig')
     portable = PORTABLE.read_text(encoding='utf-8-sig')
     notices = NOTICES.read_text(encoding='utf-8-sig')
+    create_installer = CREATE_INSTALLER.read_text(encoding='utf-8-sig')
 
     # Installer stages the provider and its extra resolved CRT module at root.
     assert f'File "${{STAGE_DIR}}\\${{THUMBNAIL_PROVIDER_DLL}}"' in nsi, 'installer does not stage the provider'
@@ -63,6 +65,12 @@ def check_static():
     assert 'Preview3DThumbnailProvider.dll' in notices
     assert 'statically linked' in notices
     assert "name = 'Preview3DThumbnailProvider'" in portable, 'SBOM component missing'
+
+    # The `msbuild /t:CreateInstaller` path used by the release workflow invokes
+    # Create-Installer.ps1 with -SkipBuild, so the installer target itself must
+    # build the provider or the payload stage fails on the missing DLL.
+    assert 'thumbnail-provider\\Preview3DThumbnailProvider.vcxproj' in create_installer, \
+        'CreateInstaller.proj does not build the thumbnail provider'
 
 
 def check_stage(stage):
