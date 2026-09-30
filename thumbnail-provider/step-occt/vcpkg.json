@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "preview3d-step-thumbnail-occt",
+  "version": "0.1.0",
+  "description": "Dedicated static OCCT closure for the constrained STEP thumbnail adapter (ADR-0002). Deliberately isolated from the repository-root manifest so the viewer, general worker and either import host can never link or deploy OCCT; only Preview3DThumbnailProvider.dll, Tests.Unit.exe and Tests.ProviderHost.exe consume this tree.",
+  "dependencies": [
+    {
+      "name": "opencascade",
+      "default-features": false
+    }
+  ]
+}

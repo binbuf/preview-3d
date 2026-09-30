@@ -410,8 +410,10 @@ with regression gates.
 
 Complete the original-MVP STEP family without blocking the viewer slice.
 
-Status: blocked on STEP-008 and the general Gate 6 thumbnail-provider
-foundation.
+Status: the Explorer thumbnail adapter is implemented by T34 (2026-09-29) over a
+dedicated static OCCT closure (`thumbnail-provider/step-occt/`,
+[ADR-0027](../adr/0027-step-adapter-constrained-occt.md)); STEP-008 viewer
+qualification items and a genuine large-file thumbnail corpus remain open.
 
 1. Link a separately built, explicitly limited OCCT STEP/XDE/tessellation
    adapter only into the isolated thumbnail DLL/surrogate, never the viewer or

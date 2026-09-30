@@ -90,6 +90,20 @@ $families = @(
         AppId     = '{E938BC70-4C08-4446-A15D-EE31576BFB49}'
         Extension = '.usdz'
         Display   = 'Preview 3D USDZ Thumbnail Provider'
+    },
+    [ordered]@{
+        Name      = 'STEP'
+        Clsid     = '{6EE961AC-AC3B-4958-A898-E30523FEE79D}'
+        AppId     = '{6EE961AC-AC3B-4958-A898-E30523FEE79E}'
+        Extension = '.step'
+        Display   = 'Preview 3D STEP Thumbnail Provider'
+    },
+    [ordered]@{
+        Name      = 'STEP'
+        Clsid     = '{6EE961AC-AC3B-4958-A898-E30523FEE79D}'
+        AppId     = '{6EE961AC-AC3B-4958-A898-E30523FEE79E}'
+        Extension = '.stp'
+        Display   = 'Preview 3D STP Thumbnail Provider'
     }
 )
 

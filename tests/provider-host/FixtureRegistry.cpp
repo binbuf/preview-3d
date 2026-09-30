@@ -250,6 +250,27 @@ std::vector<std::byte> ReadFbxFixture(const char* name)
     return bytes;
 }
 
+// COMMITTED STEP-003/006 fixtures live in `tests/fixtures/stp-spike`; they are
+// clear-text ISO 10303-21 and read whole. The provider never opens a path.
+// Missing file -> empty fixture -> the golden case fails loudly.
+std::vector<std::byte> ReadStepFixture(const char* name)
+{
+    const std::filesystem::path path =
+        std::filesystem::path(PREVIEW3D_STEP_FIXTURE_DIR) / name;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const std::streamoff size = file.tellg();
+    if (size <= 0) {
+        return {};
+    }
+    file.seekg(0);
+    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(bytes.data()), size);
+    return bytes;
+}
+
 int Base64Value(char c)
 {
     if (c >= 'A' && c <= 'Z') return c - 'A';
@@ -484,6 +505,18 @@ std::span<const GoldenFixture> ProviderHostFixtures()
         usdZip.tolerance = GoldenTolerance{2.0, 48};
         usdZip.cx = 256;
         fixtures.push_back(std::move(usdZip));
+
+        // T34: a committed self-contained AP214 part routed through the linked
+        // StepAdapter (dedicated static OCCT closure, Part-21 admission first,
+        // low-detail tessellation, bounded shape color).
+        GoldenFixture stepPart;
+        stepPart.name = "step-part";
+        stepPart.family = preview3d::provider::Family::Step;
+        stepPart.source = ReadStepFixture("part_ap214.stp");
+        stepPart.goldenPath = ProviderHostGoldenDirectory() + "step-part-256.pam";
+        stepPart.tolerance = GoldenTolerance{2.0, 48};
+        stepPart.cx = 256;
+        fixtures.push_back(std::move(stepPart));
 
         return fixtures;
     }();

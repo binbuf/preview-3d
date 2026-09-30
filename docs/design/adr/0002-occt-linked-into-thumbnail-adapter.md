@@ -24,6 +24,10 @@ and deadline/limit enforcement — not on the surrogate. This supersedes the "ne
 provider" wording in the archived `02-system-architecture.md`.
 
 ## Consequences
+- Implemented by T34: the constrained adapter is a dedicated static OCCT 7.8
+  closure (`thumbnail-provider/step-occt/`, [ADR-0027](0027-step-adapter-constrained-occt.md))
+  linked only into the provider DLL, `Tests.Unit.exe` and `Tests.ProviderHost.exe`;
+  the STEP host keeps its own separate OCCT closure.
 - The provider's dependency/licence/SBOM closure grows to include the constrained OCCT adapter (T42).
 - The STEP adapter is the highest-risk family and is scheduled last (T34), gated on ADR-0001 and a
   feasibility check inside T34.

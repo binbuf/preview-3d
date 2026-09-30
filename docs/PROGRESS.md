@@ -27,6 +27,7 @@
 - **T31 — Implement the FBX thumbnail adapter**: Provider FBX adapter lives in `thumbnail-provider/FbxFamilyAdapter.{h,cpp}` (class; **ufbx linkage is shared with T24:** the provider already links the pinned `x64-windows-static-md`
 - **T32 — Implement the 3MF thumbnail adapter**: Provider 3MF adapter lives in `thumbnail-provider/ThreeMfFamilyAdapter.{h,cpp}` (class; **Reused source-not-state:** the worker's `import-worker/src/ThreeMfOpcPreflight.{h,cpp}` (namespace
 - **T33 - Implement the USD/USDZ thumbnail adapter**: Provider USD/USDZ adapter lives in `thumbnail-provider/UsdFamilyAdapter.{h,cpp}` (class; **Reused source-not-state:** the worker's `import-worker/src/UsdZipPreflight.{h,cpp}` (`import_worker`
+- **T34 — Implement the STEP/STP thumbnail adapter — E2E slice review**: Provider STEP adapter lives in `thumbnail-provider/StepFamilyAdapter.{h,cpp}` (class; **Dedicated static OCCT closure (new):** `thumbnail-provider/step-occt/vcpkg.json` +
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -606,6 +607,17 @@ markers); sessions are pointed at this file and read it themselves.
   revisit ADR-0025; (e) lib3mf allocations are outside the product ledger (recorded for T51).
 - T33 (`ProviderThumbnailTests.cpp` "no adapter" branch and the host `[parallel]` unsupported-family
   branch) currently uses `Family::Usd`; when T33 links USD the branch must move to STEP (T34).
+- T34 (STEP) landed; every family now links a real adapter, so the `ProviderThumbnailTests.cpp`
+  and host `[parallel]` branches use the STEP CLSID only to exercise a typed fallback on a garbage
+  stream. Remaining follow-ups: (a) T41 must register `.step` and `.stp` ShellEx for the STEP CLSID
+  `{6EE961AC-AC3B-4958-A898-E30523FEE79D}` (the local smoke uses smoke-only AppID `{...F79E}`) with
+  the real installer rules; (b) the static OCCT closure must enter the T42 payload/SBOM and the T51
+  measured process-commit target; the committed fixtures are small, so T51/STEP-008 must measure a
+  genuine large STEP corpus; (c) a fast-fail/stack-cookie fault inside OCCT would still kill the
+  surrogate (SEH cannot catch `__fastfail`), so T43 must fuzz the STEP adapter; (d)
+  `XCAFApp_Application::GetApplication()` is a process singleton (standard OCCT lifetime) while
+  every document is per call and closed on `Reset`; (e) per-face subshape colors are not yet
+  carried (shape- and instance-level colors are), a candidate for a later fidelity task.
 
 ## T21 - Implement the STL thumbnail adapter
 
@@ -991,3 +1003,54 @@ markers); sessions are pointed at this file and read it themselves.
 - Docs: new `docs/design/adr/0026-usd-adapter-pinned-tinyusdz.md`; `design/05-thumbnail-provider.md` and
   `design/adapters/usd-010-thumbnail.md` (USD-010 status) document the adapter; `packaging/smoke/README.md`
   covers USD.
+## T34 — Implement the STEP/STP thumbnail adapter — E2E slice review
+
+- Provider STEP adapter lives in `thumbnail-provider/StepFamilyAdapter.{h,cpp}` (class
+  `preview3d::provider::StepAdapter`, opaque `Impl` so no OCCT header crosses the boundary),
+  registered for `Family::Step` (CLSID `{6EE961AC-AC3B-4958-A898-E30523FEE79D}`) in
+  `FamilyAdapterRegistry.cpp`. PCH/COM/GDI-free; compiled into the DLL, `Tests.Unit.exe` and
+  `Tests.ProviderHost.exe`. The adapter routes OCCT calls through the T16 `RunContained`
+  boundary and reuses the STEP host's `compatibility-host-step/src/StepPart21Preflight.{h,cpp}`
+  (source-not-state) before any OCCT call.
+- **Dedicated static OCCT closure (new):** `thumbnail-provider/step-occt/vcpkg.json` +
+  `vcpkg-configuration.json` declare `opencascade` `default-features=false` and are built for
+  `x64-windows-static-md` into `thumbnail-provider/step-occt/vcpkg_installed/` (gitignored, ~7.3 GB).
+  Build once with:
+  `C:\vcpkg\vcpkg.exe install --triplet x64-windows-static-md --x-manifest-root=<repo>\thumbnail-provider\step-occt --x-install-root=<repo>\thumbnail-provider\step-occt\vcpkg_installed`
+  (took 27 min; used the vcpkg built-in ports, i.e. a `vcpkg-configuration.json` with only
+  `overlay-ports`, because the pinned 04a9… registry baseline's `vcpkg-cmake` needs a
+  `REMOVE_DUPLICATES` operation the installed vcpkg 2025-02-11 does not implement). It is NOT
+  added to the repository-root manifest, so the viewer/worker/hosts never link OCCT; the STEP
+  host keeps its separate dynamic OCCT closure.
+- **Linking gotchas:** consumers must define `OCCT_STATIC_BUILD` (else `Standard_EXPORT` is
+  `__declspec(dllexport)` and every OCCT symbol lands in the provider export table, breaking the
+  `[provider][scaffold]` two-export assertion). Debug links `...\debug\lib`, Release `...\lib`
+  via the `OcctStaticLibDir` project property. `Tests.ProviderHost.vcxproj` must compile
+  `Diagnostics.cpp` + `Containment.cpp` (with `ExceptionHandling=Sync`) because the adapter uses
+  `RunContained`.
+- **Crash/fault gotcha (must read):** OCCT-out-of-range authored tessellation
+  (`faceted_invalid_ap242.stp`) raises a `Standard_Failure`; because the entity-extraction loop
+  was inside a `noexcept` function it called `std::terminate` (exit `0xC0000409`). The fix is that
+  `LoadDocumentInner`/`BuildGeometryInner` are **not `noexcept`** and the `RunContained` callbacks
+  (`LoadContained`/`MeshContained`) catch `Standard_Failure` into a typed failure; SEH catches the
+  rest. Any new OCCT call inside a `noexcept` helper will reintroduce the terminate.
+- Admission policy: 256 MiB stream, 2 M entity records, 20 M references, 4096 sections, 1 MiB
+  record/string, external documents rejected as `UnsupportedRequiredFeature`. Low-detail policy:
+  relative deflection 0.05 clamped `[0.01, 5.0]`, angle 0.7, `InParallel=false`, 1 M triangles per
+  definition, 2 M inspected total, 96 MiB scratch reservation.
+- Fixtures: the committed `tests/fixtures/stp-spike/` corpus (`PREVIEW3D_STEP_FIXTURE_DIR`).
+  Provider-host golden `tests/provider-host/goldens/step-part-256.pam` (`step-part`, read from
+  `part_ap214.stp`); smoke fixture `packaging/smoke/fixtures/smoke-cube.stp` (copy of
+  `part_ap214.stp`).
+- Evidence (x64): `Tests.Unit.exe` Release 339 cases / 134 916 assertions green, Debug 339 /
+  134 994 green (23 `[provider][step]` cases); `Tests.ProviderHost.exe` 5 cases / 103 assertions
+  green both configs; provider dependency closure OK Release (22 modules) and Debug (12 modules),
+  no `Preview3D*`/TK import; provider Release DLL 23.7 MB. Hidden `[step-perf]` measurement
+  (Release, tiny corpus): ~18–19 ms and 0–0.11 MiB commit delta per render at cx=256 — well inside
+  the 750 ms p95 / 384 MiB targets (a genuine large corpus remains STEP-008/51 work).
+- Smoke: `Invoke-ProviderSmoke.ps1 -SkipBuild` exit 0 for STL+PLY+glTF+FBX+3MF+USD+STEP; the STEP
+  reference-vs-Shell `meanAbs=0.0000 maxAbs=0`, `WTSAT_ARGB` in `dllhost.exe`, no
+  `DisableProcessIsolation`, registration cleaned up (`.step`/`.stp`).
+- Docs: new `docs/design/adr/0027-step-adapter-constrained-occt.md`; `design/05` documents the
+  adapter and `adr/0002` records the T34 implementation. This closes the Tier B breadth slice;
+  the T34 E2E review is non-blocking.
