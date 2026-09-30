@@ -135,6 +135,8 @@
     <ClInclude Include="FbxFamilyAdapter.h" />
     <!-- T32 3MF family adapter (provider-local pinned lib3mf). -->
     <ClInclude Include="ThreeMfFamilyAdapter.h" />
+    <!-- T33 USD/USDZ family adapter (provider-local pinned TinyUSDZ). -->
+    <ClInclude Include="UsdFamilyAdapter.h" />
     <!-- T07: the provider-shared parser subset. These are the same source
          files the import worker compiles (ADR-0004, source-not-state); none
          of them reference a broker/worker/viewer header. -->
@@ -209,6 +211,16 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\import-worker\src\ThreeMfOpcPreflight.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T33 USD/USDZ family adapter (TinyUSDZ) plus the product USDZ preflight
+         it reuses from the import worker (source-not-state, ADR-0004). PCH-free
+         like the other adapters so Tests.Unit and Tests.ProviderHost compile
+         the exact shipped source. -->
+    <ClCompile Include="UsdFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\import-worker\src\UsdZipPreflight.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="RasterBitmap.cpp">

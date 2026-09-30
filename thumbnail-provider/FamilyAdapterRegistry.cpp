@@ -16,6 +16,7 @@
 #include "PlyFamilyAdapter.h"
 #include "StlFamilyAdapter.h"
 #include "ThreeMfFamilyAdapter.h"
+#include "UsdFamilyAdapter.h"
 
 namespace preview3d::provider {
 
@@ -72,6 +73,14 @@ std::unique_ptr<IFamilyAdapter> CreateFamilyAdapter(Family family) noexcept
                 return nullptr;
             }
         case Family::Usd:
+            // T33: the product stream-only USDA/USDC/USDZ adapter over the
+            // provider-local pinned TinyUSDZ reader (no composition, no external
+            // resolution, no OpenUSD).
+            try {
+                return std::make_unique<UsdAdapter>();
+            } catch (...) {
+                return nullptr;
+            }
         case Family::Step:
         case Family::Unknown:
         default:

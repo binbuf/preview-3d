@@ -71,7 +71,7 @@ before it is built.
 
 - [x] T31 — Implement the FBX thumbnail adapter → [tasks/31-fbx-adapter.md](tasks/31-fbx-adapter.md)
 - [x] T32 — Implement the 3MF thumbnail adapter → [tasks/32-3mf-adapter.md](tasks/32-3mf-adapter.md)
-- [ ] T33 — Implement the USD/USDZ thumbnail adapter → [tasks/33-usd-adapter.md](tasks/33-usd-adapter.md)
+- [~] T33 — Implement the USD/USDZ thumbnail adapter → [tasks/33-usd-adapter.md](tasks/33-usd-adapter.md) ⟵ failed
 - [ ] T34 — Implement the STEP/STP thumbnail adapter — E2E slice review → [tasks/34-step-adapter.md](tasks/34-step-adapter.md)
 
 ## Phase 6 — Production hardening and full registration
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-30T00:55:55Z · 21/29 done
+**Pipeline status** — updated 2026-09-30T01:11:13Z · 21/29 done
 
 - Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32
 - Blocked: none
-- Failed: none
-- Remaining: T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T32 — done · 3MF thumbnail adapter (lib3mf + product OPC/required-extension preflight, colors, bounded beam/ball lattice) routes .3mf, with 16 unit cases, two host goldens, smoke coverage and docs; Debug/Release Tests.Unit (299 cases) and host suites plus the STL/PLY/glTF/FBX/3MF smoke all pass.
+- Failed: T33
+- Remaining: T34, T41, T42, T43, T44, T51, T52
+- Last finished: T33 — failed · interrupted by the run view
 <!-- /symphony:status -->
