@@ -25,6 +25,7 @@
 - **T24 — Implement the OBJ thumbnail adapter**: Provider OBJ adapter lives in `thumbnail-provider/ObjFamilyAdapter.{h,cpp}` (class; **ufbx linkage:** the provider project now sets `VcpkgEnableManifest=true` and links the pinned
 - **T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review**: Provider glTF adapter lives in `thumbnail-provider/GltfFamilyAdapter.{h,cpp}` (class; **Embedded-only:** fastgltf `Options::None`; only the GLB BIN chunk and embedded `data:` URIs are
 - **T31 — Implement the FBX thumbnail adapter**: Provider FBX adapter lives in `thumbnail-provider/FbxFamilyAdapter.{h,cpp}` (class; **ufbx linkage is shared with T24:** the provider already links the pinned `x64-windows-static-md`
+- **T32 — Implement the 3MF thumbnail adapter**: Provider 3MF adapter lives in `thumbnail-provider/ThreeMfFamilyAdapter.{h,cpp}` (class; **Reused source-not-state:** the worker's `import-worker/src/ThreeMfOpcPreflight.{h,cpp}` (namespace
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -594,6 +595,16 @@ markers); sessions are pointed at this file and read it themselves.
   distribution and any real cancellation must go through the worker/Job path (FBX-001), not the
   adapter; (c) embedded images are structurally validated but not decoded (no texture consumer), so a
   later texture-sampling task must promote this to a bounded decoder and revisit ADR-0024.
+- T32 (3MF) landed. Remaining follow-ups: (a) T41 must register `.3mf` ShellEx for the 3MF CLSID
+  `{D8389A63-8526-454A-9892-72F3149484B9}` with the real installer rules (the local smoke uses AppID
+  `{...84BA}`, a smoke-only identity); (b) the adapter always tessellates a lattice and ignores an
+  authored `representationmesh` (it is still bounded and recognizable) — a later task that wants the
+  authored mesh must also validate its reference rules; (c) the required-extension scan only reads the
+  root `<model>` start tag, so a required extension declared elsewhere relies on lib3mf; (d) contained
+  textures are structurally validated but not decoded — a texture-sampling task must promote this and
+  revisit ADR-0025; (e) lib3mf allocations are outside the product ledger (recorded for T51).
+- T33 (`ProviderThumbnailTests.cpp` "no adapter" branch and the host `[parallel]` unsupported-family
+  branch) currently uses `Family::Usd`; when T33 links USD the branch must move to STEP (T34).
 
 ## T21 - Implement the STL thumbnail adapter
 
@@ -862,3 +873,61 @@ markers); sessions are pointed at this file and read it themselves.
   `design/adapters/fbx-008-thumbnail.md` document the adapter; `packaging/smoke/README.md` covers FBX.
 - Environment note: the shell here is non-interactive, but the T22 smoke procedure is headless and ran
   end-to-end (no Explorer GUI needed). Debug/Release builds both link cleanly under `/W4 /WX`.
+
+## T32 — Implement the 3MF thumbnail adapter
+
+- Provider 3MF adapter lives in `thumbnail-provider/ThreeMfFamilyAdapter.{h,cpp}` (class
+  `preview3d::provider::ThreeMfAdapter`), registered for `Family::ThreeMf` in
+  `FamilyAdapterRegistry.cpp`. PCH/COM/GDI-free, so it compiles into the DLL, `Tests.Unit.exe` and
+  `Tests.ProviderHost.exe`.
+- **Reused source-not-state:** the worker's `import-worker/src/ThreeMfOpcPreflight.{h,cpp}` (namespace
+  `import_worker`) is compiled directly into the provider, `Tests.Unit.exe` and `Tests.ProviderHost.exe`
+  (add `..\import-worker\src` to the provider/host include paths). Its `ThreeMfOpcLimits` are lowered to
+  the provider ceilings: 256 MiB stream, 128 MiB aggregate expansion, 100:1 ratio, 4096 entries, 32-level
+  paths. No new vcpkg dependency: lib3mf/zip/z/bz2 were already in the root manifest and linked by the
+  wildcard `$(VcpkgInstalledDir)\lib\*.lib`; lib3mf is statically linked (`x64-windows-static-md`), so the
+  provider adds no runtime DLL import and `check-provider-dependency-closure.ps1` still passes (20 modules).
+- **Required-extension policy (provider-local):** lib3mf compatible mode does not enforce
+  `requiredextensions`, so `ScanModelPart()` does a bounded byte-level scan of every `.model` part for the
+  root `<model>` start tag: it rejects `<!DOCTYPE`/`<!ENTITY`, parses attribute pairs, and rejects any
+  `requiredextensions` prefix whose `xmlns:prefix` URI is outside the Core/Materials/Production/
+  Beam-Lattice/Ball allowlist (`UnsupportedRequiredFeature`). This replaces the worker's COM `IXmlReader`
+  scan so the provider stays COM/WIC-free.
+- **Reader:** `Lib3MF::CWrapper::loadLibrary()` -> `CreateModel()` -> `QueryReader("3mf")`,
+  `SetStrictModeActive(false)`, `SetProgressCallback` (aborts on `Context.failed` or an expired deadline),
+  `ReadFromCallback` over the bounded in-memory bytes. No path API, no worker, no sidecar/network/persistent
+  write. lib3mf exceptions map `CALCULATIONABORTED` -> `Cancelled`, else `MalformedData`.
+- **Scene:** standard root build only. Build items -> components traversal with checked double-precision
+  row-vector transforms (`Multiply(local, parent)`), 256-level depth cap, 10 000 occurrences, 2 M inspected
+  triangles (summed per occurrence). Bare meshes emit triangle samples with a flat geometric normal and the
+  object/triangle/per-corner color resolved to a linear vertex color over one registered white material
+  (`EnumerateMaterials` emits a single index-1 white material). Property types supported: BaseMaterial,
+  Colors, TexCoord (validated image, white color), Composite (mix), Multi (multiply/mix).
+- **Textures:** contained attachments are structurally sniffed (PNG/JPEG), bounded by 32 MiB encoded and the
+  32 MP aggregate budget, then discarded — the frozen `MaterialPayload` has no texture slot. Corrupt/over-
+  budget textures never fail valid geometry.
+- **Beam lattice:** `mesh->BeamLattice()` -> tessellated tapered frusta with Butt/Hemisphere/Sphere caps
+  and explicit/`All` balls, radial chosen from {16,12,8,6,4,3} under a 262 144-triangle per-lattice ceiling
+  and the remaining inspected budget. `inside` clipping is honoured only for a closed axis-aligned 8-vertex/
+  12-triangle box; `outside`/non-box clipping without a representation mesh returns
+  `UnsupportedRequiredFeature`. A zero/unspecified lib3mf radius falls back to `extent * 0.01`.
+- Coverage `tests/unit/ProviderThreeMfAdapterTests.cpp` (`[provider][3mf]`, 16 cases) using the committed
+  corpus `tests/fixtures/3mf-spike/*.3mf.base64` via `PREVIEW3D_3MF_FIXTURE_DIR` (decoded in the test):
+  Core box, nested components, static Production multi-part, Materials texture (image validated), bounded
+  beam lattice, outside-clipped lattice unsupported, required-extension rejection (`production-boxes`),
+  truncated/empty/non-3MF, expired deadline, sink cap stop, ledger-capped backing, non-contiguous parse,
+  rendered bitmap, CLSID routing.
+- Host harness: `three-mf-core` and `three-mf-lattice` fixtures in `FixtureRegistry.cpp` with committed
+  goldens `tests/provider-host/goldens/three-mf-{core,lattice}-256.pam` (regenerate with
+  `x64\Release\Tests.ProviderHost.exe "[write-host-goldens]"`). `[parallel]` in `ProviderHostTests.cpp` and
+  the "no adapter" branch in `ProviderThumbnailTests.cpp` moved from 3MF to USD (T33).
+- Smoke: `Register/Unregister-ProviderSmoke.ps1` add 3MF (CLSID `{D8389A63-...84B9}`, smoke AppID
+  `{...84BA}`, `.3mf\shellex`); `ProviderSmokeHost.exe` takes `--mf`; `Invoke-ProviderSmoke.ps1` runs
+  STL+PLY+glTF+FBX+3MF; committed `fixtures/smoke-cube.3mf` (1680-byte Core box decoded from the corpus).
+- Evidence (x64): `Tests.Unit.exe` 299 cases / 134 766 assertions (Release) and 299 / 134 844 (Debug) green;
+  `Tests.ProviderHost.exe` 5 cases / 85 assertions green in both configs; `Invoke-ProviderSmoke.ps1` exit 0
+  — STL/PLY/glTF/FBX/3MF reference-vs-Shell `meanAbs=0.0000 maxAbs=0`, hosted in `dllhost.exe`, no isolation
+  opt-out; dependency closure OK (20 modules).
+- Docs: new `docs/design/adr/0025-3mf-adapter-opc-and-lib3mf.md`; `design/05-thumbnail-provider.md` and
+  `design/adapters/3mf-thumbnail.md` (3MF-008 status) document the adapter; `packaging/smoke/README.md`
+  covers 3MF.

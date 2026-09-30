@@ -42,6 +42,12 @@ $families = @(
         Clsid     = '{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}'
         AppId     = '{FBC218D4-FD2C-41DF-B168-7F3B9E53C84F}'
         Extension = '.fbx'
+    },
+    [ordered]@{
+        Name      = '3MF'
+        Clsid     = '{D8389A63-8526-454A-9892-72F3149484B9}'
+        AppId     = '{D8389A63-8526-454A-9892-72F3149484BA}'
+        Extension = '.3mf'
     }
 )
 
@@ -139,4 +145,4 @@ foreach ($scratch in @($manifestPath, (Join-Path $stateDir "registered-keys-$Sco
     if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force }
 }
 
-Write-Output "STL/PLY smoke registration cleanup complete"
+Write-Output "STL/PLY/glTF/FBX/3MF smoke registration cleanup complete"

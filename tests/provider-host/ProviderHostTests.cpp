@@ -192,10 +192,10 @@ TEST_CASE("multiple STA apartments drive provider objects concurrently", "[host]
     ProviderModule module;
     REQUIRE(module.Ready());
 
-    // 3MF still has no linked adapter (T32), so the concurrent activation here
+    // USD (T33) has no linked adapter yet, so the concurrent activation here
     // exercises the tabulated ERROR_NOT_SUPPORTED fallback; the golden case
     // above covers a real adapter concurrently through the fixtures loop.
-    const GUID clsid = FamilyClsid(preview3d::provider::Family::ThreeMf);
+    const GUID clsid = FamilyClsid(preview3d::provider::Family::Usd);
     constexpr int kThreads = 4;
     constexpr int kIterations = 25;
     std::atomic<int> failures{0};

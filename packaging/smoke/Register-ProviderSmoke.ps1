@@ -1,7 +1,7 @@
-# T22/T23 developer/QA-local smoke registration (STL + PLY).
+# T22/T23 developer/QA-local smoke registration (STL + PLY + glTF + FBX + 3MF).
 #
 # Registers the product thumbnail CLSIDs and the T03-validated extension ShellEx
-# mappings so the Shell routes .stl/.ply thumbnails to
+# mappings so the Shell routes .stl/.ply/.glb/.fbx/.3mf thumbnails to
 # Preview3DThumbnailProvider.dll. This is a minimal local smoke, NOT the T41
 # installer: it performs no conflict/repair/uninstall policy, and never sets
 # DisableProcessIsolation.
@@ -55,6 +55,13 @@ $families = @(
         AppId     = '{FBC218D4-FD2C-41DF-B168-7F3B9E53C84F}'
         Extension = '.fbx'
         Display   = 'Preview 3D FBX Thumbnail Provider'
+    },
+    [ordered]@{
+        Name      = '3MF'
+        Clsid     = '{D8389A63-8526-454A-9892-72F3149484B9}'
+        AppId     = '{D8389A63-8526-454A-9892-72F3149484BA}'
+        Extension = '.3mf'
+        Display   = 'Preview 3D 3MF Thumbnail Provider'
     }
 )
 

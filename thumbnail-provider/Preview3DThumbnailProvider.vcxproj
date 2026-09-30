@@ -52,7 +52,7 @@
       <PreprocessorDefinitions>_DEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;..\import-worker\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- Product-boundary hardening (design/05-thumbnail-provider.md). /sdl,
            /W4 and warnings-as-errors come from Directory.Build.props.
            /guard:cf cannot be combined with the Debug default /ZI (Edit and
@@ -82,7 +82,7 @@
       <PreprocessorDefinitions>NDEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;..\import-worker\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- Product-boundary hardening (design/05-thumbnail-provider.md). /sdl,
            /W4 and warnings-as-errors come from Directory.Build.props. -->
       <ControlFlowGuard>Guard</ControlFlowGuard>
@@ -133,6 +133,8 @@
     <ClInclude Include="GltfFamilyAdapter.h" />
     <!-- T31 FBX family adapter (provider-local pinned ufbx). -->
     <ClInclude Include="FbxFamilyAdapter.h" />
+    <!-- T32 3MF family adapter (provider-local pinned lib3mf). -->
+    <ClInclude Include="ThreeMfFamilyAdapter.h" />
     <!-- T07: the provider-shared parser subset. These are the same source
          files the import worker compiles (ADR-0004, source-not-state); none
          of them reference a broker/worker/viewer header. -->
@@ -197,6 +199,16 @@
     <!-- T31 FBX family adapter (ufbx). PCH-free like the other adapters so
          Tests.Unit and Tests.ProviderHost compile the exact shipped source. -->
     <ClCompile Include="FbxFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T32 3MF family adapter (lib3mf) plus the product OPC/ZIP preflight it
+         reuses from the import worker (source-not-state, ADR-0004). PCH-free
+         like the other adapters so Tests.Unit and Tests.ProviderHost compile
+         the exact shipped source. -->
+    <ClCompile Include="ThreeMfFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\import-worker\src\ThreeMfOpcPreflight.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="RasterBitmap.cpp">
