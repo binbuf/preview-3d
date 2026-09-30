@@ -93,7 +93,10 @@
     <ClCompile Include="..\..\thumbnail-provider\FbxFamilyAdapter.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\ThreeMfFamilyAdapter.cpp" />
     <ClCompile Include="..\..\import-worker\src\ThreeMfOpcPreflight.cpp" />
-    <ClCompile Include="..\..\thumbnail-provider\UsdFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\UsdFamilyAdapter.cpp">
+      <!-- TinyUSDZ's prim-types.hh emits C4702 under /Od; vendored header. -->
+      <DisableSpecificWarnings>4702;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
     <ClCompile Include="..\..\import-worker\src\UsdZipPreflight.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\GeometrySampler.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\CpuRasterizer.cpp" />

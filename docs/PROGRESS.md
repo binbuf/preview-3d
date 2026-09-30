@@ -26,6 +26,7 @@
 - **T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review**: Provider glTF adapter lives in `thumbnail-provider/GltfFamilyAdapter.{h,cpp}` (class; **Embedded-only:** fastgltf `Options::None`; only the GLB BIN chunk and embedded `data:` URIs are
 - **T31 — Implement the FBX thumbnail adapter**: Provider FBX adapter lives in `thumbnail-provider/FbxFamilyAdapter.{h,cpp}` (class; **ufbx linkage is shared with T24:** the provider already links the pinned `x64-windows-static-md`
 - **T32 — Implement the 3MF thumbnail adapter**: Provider 3MF adapter lives in `thumbnail-provider/ThreeMfFamilyAdapter.{h,cpp}` (class; **Reused source-not-state:** the worker's `import-worker/src/ThreeMfOpcPreflight.{h,cpp}` (namespace
+- **T33 - Implement the USD/USDZ thumbnail adapter**: Provider USD/USDZ adapter lives in `thumbnail-provider/UsdFamilyAdapter.{h,cpp}` (class; **Reused source-not-state:** the worker's `import-worker/src/UsdZipPreflight.{h,cpp}` (`import_worker`
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -931,3 +932,62 @@ markers); sessions are pointed at this file and read it themselves.
 - Docs: new `docs/design/adr/0025-3mf-adapter-opc-and-lib3mf.md`; `design/05-thumbnail-provider.md` and
   `design/adapters/3mf-thumbnail.md` (3MF-008 status) document the adapter; `packaging/smoke/README.md`
   covers 3MF.
+
+## T33 - Implement the USD/USDZ thumbnail adapter
+
+- Provider USD/USDZ adapter lives in `thumbnail-provider/UsdFamilyAdapter.{h,cpp}` (class
+  `preview3d::provider::UsdAdapter`), registered for `Family::Usd` (CLSID
+  `{E938BC70-4C08-4446-A15D-EE31576BFB48}`) in `FamilyAdapterRegistry.cpp`. PCH/COM/GDI-free, so it
+  compiles into the DLL, `Tests.Unit.exe` and `Tests.ProviderHost.exe`.
+- **Reused source-not-state:** the worker's `import-worker/src/UsdZipPreflight.{h,cpp}` (`import_worker`
+  namespace) is compiled into the provider and both test hosts. Provider ceilings: 256 MiB stream, 128 MiB
+  aggregate expansion, 100:1 ratio, 4096 entries, 32-level paths, stored-only, checked offsets/CRC. The
+  archive stays in the brokered in-memory stream; nothing is extracted.
+- **Container sniffing:** never by extension. ZIP local header `PK\x03\x04` -> USDZ; crate magic
+  `PXR-USDC` -> USDC; leading `#usda` (after optional UTF-8 BOM/whitespace) -> USDA; anything else is
+  `MalformedData`. The adapter also uppercases/validates asset paths for the contained-asset map.
+- **Reader:** `tinyusdz::LoadUSDFromMemory` on the bounded stream with `num_threads=1`,
+  `max_memory_limit_in_mb=192`, `max_allowed_asset_size_in_mb=128`, and `load_assets`,
+  `do_composition`, `load_sublayers`, `load_references`, `load_payloads` all false. A wildcard
+  `AssetResolutionHandler` resolves only names present in the USDZ entry map (case-folded); any other
+  request sets `UnsafeReference`. No path API, worker, host, cache or network access.
+- **Composition/external fallback:** `ClassifyStage` records sublayers, references, payloads, inherits,
+  specializes, variants, clips and instanceable before the Tydra conversion and returns
+  `UnsupportedComposition` (generic icon); an external texture/reference returns `UnsafeReference`. The
+  provider has no compatibility-host retry path, so composition-dependent input is simply the icon.
+- **Static policy/material:** `UsdPreviewSurface`/display-color values normalize into `MaterialPayload`
+  (base color/opacity, metallic, roughness, emissive, alpha mode/cutoff, double-sided); triangles carry
+  double-precision world transforms, purpose/visibility, and bounded point-instancer expansion; skeletal
+  bindings are stripped so the authored rest pose previews. Contained textures are recorded but not
+  decoded (frozen `MaterialPayload` has no texture slot). Tydra's Tydra node-id -> mesh-index map is
+  bounds-checked and `Node&`/`ErrorCode` signatures match the installed pinned headers.
+- **fast_float ABI collision (must read):** linking TinyUSDZ's static lib and lib3mf's static lib into one
+  module (DLL, `Tests.Unit.exe`, `Tests.ProviderHost.exe`) made the linker pick one
+  `fast_float::from_chars_advanced<double>` COMDAT between two incompatible `parse_options_t` layouts,
+  crashing USDA ASCII parse. Fixed at the dependency by building TinyUSDZ against the vcpkg-pinned
+  `fast_float`: overlay port `packaging/vcpkg-ports/tinyusdz` gained `use-vcpkg-fast-float.patch`
+  (`#include <fast_float/fast_float.h>` + `find_package(FastFloat CONFIG REQUIRED)` /
+  `target_link_libraries(... FastFloat::fast_float)`) and a `fast-float` dependency, now `0.9.1#3`. Rebuild
+  with `vcpkg install --triplet x64-windows-static-md --x-manifest-root=<repo>
+  --x-install-root=<repo>\vcpkg_installed\x64-windows-static-md`. A consumer-side `#ifdef` guard was tried
+  and rejected: it fixed USD but broke Debug 3MF.
+- Coverage `tests/unit/ProviderUsdAdapterTests.cpp` (`[provider][usd]`, 20 cases) over the committed
+  `tests/fixtures/usd-spike` corpus via `PREVIEW3D_USD_FIXTURE_DIR` (binary `.base64` decoded in-test):
+  USDA mesh, crate USDC cube, contained USDZ, static time/purpose/visibility, point instancers,
+  external-texture fallback, composed-stage fallback, malformed/non-USD/empty/truncated, deadline,
+  sink-cap stop, ledger-capped backing, non-contiguous parse, routed bitmap, CLSID routing.
+- Host harness: `usd-mesh`/`usd-crate`/`usd-zip` fixtures in `FixtureRegistry.cpp` with committed goldens
+  `tests/provider-host/goldens/usd-{mesh,crate,zip}-256.pam` (regenerate with
+  `x64\Release\Tests.ProviderHost.exe "[write-host-goldens]"`). The `[parallel]` branch in
+  `ProviderHostTests.cpp` and the "no adapter" branch in `ProviderThumbnailTests.cpp` moved from USD to
+  STEP (T34).
+- Smoke: `Register/Unregister-ProviderSmoke.ps1` add USD (CLSID `{E938BC70-...FB48}`, smoke AppID
+  `{...FB49}`, `.usd/.usda/.usdc/.usdz` `shellex`); `ProviderSmokeHost.exe` takes `--usd`; the orchestrator
+  runs STL+PLY+glTF+FBX+3MF+USD; committed `fixtures/smoke-cube.usda`.
+- Evidence (x64): `Tests.Unit.exe` 316 cases / 134 834 assertions (Release) and 316 / 134 912 (Debug) green;
+  `Tests.ProviderHost.exe` 5 cases / 99 assertions green; provider Debug+Release builds zero warnings;
+  `Invoke-ProviderSmoke.ps1` exit 0 with USD reference-vs-Shell `meanAbs=0.0000 maxAbs=0` in `dllhost.exe`
+  and no isolation opt-out.
+- Docs: new `docs/design/adr/0026-usd-adapter-pinned-tinyusdz.md`; `design/05-thumbnail-provider.md` and
+  `design/adapters/usd-010-thumbnail.md` (USD-010 status) document the adapter; `packaging/smoke/README.md`
+  covers USD.

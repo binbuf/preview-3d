@@ -20,6 +20,7 @@ param(
     [string]$GltfPath = '',
     [string]$FbxPath = '',
     [string]$MfPath = '',
+    [string]$UsdPath = '',
     [switch]$SkipBuild,
     [switch]$KeepRegistered,
     [switch]$SkipThumbnailCacheClear
@@ -44,6 +45,9 @@ if ([string]::IsNullOrWhiteSpace($FbxPath)) {
 if ([string]::IsNullOrWhiteSpace($MfPath)) {
     $MfPath = Join-Path $PSScriptRoot 'fixtures\smoke-cube.3mf'
 }
+if ([string]::IsNullOrWhiteSpace($UsdPath)) {
+    $UsdPath = Join-Path $PSScriptRoot 'fixtures\smoke-cube.usda'
+}
 if (-not (Test-Path -LiteralPath $StlPath -PathType Leaf)) {
     throw "Smoke .stl not found: $StlPath"
 }
@@ -58,6 +62,9 @@ if (-not (Test-Path -LiteralPath $FbxPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $MfPath -PathType Leaf)) {
     throw "Smoke .3mf not found: $MfPath"
+}
+if (-not (Test-Path -LiteralPath $UsdPath -PathType Leaf)) {
+    throw "Smoke .usda not found: $UsdPath"
 }
 
 $stage = Join-Path $repository "artifacts\smoke\stage\$Configuration"
@@ -113,6 +120,7 @@ $plyExit = 1
 $gltfExit = 1
 $fbxExit = 1
 $mfExit = 1
+$usdExit = 1
 try {
     & $hostExe --dll $stagedDll --stl $StlPath --cx 256 --out $evidence
     $stlExit = $LASTEXITCODE
@@ -128,6 +136,9 @@ try {
 
     & $hostExe --dll $stagedDll --mf $MfPath --cx 256 --out $evidence
     $mfExit = $LASTEXITCODE
+
+    & $hostExe --dll $stagedDll --usd $UsdPath --cx 256 --out $evidence
+    $usdExit = $LASTEXITCODE
 } finally {
     if (-not $KeepRegistered) {
         & (Join-Path $PSScriptRoot 'Unregister-ProviderSmoke.ps1') -Scope HKCU
@@ -137,8 +148,8 @@ try {
 }
 
 Write-Output "evidence directory: $evidence"
-if ($stlExit -ne 0 -or $plyExit -ne 0 -or $gltfExit -ne 0 -or $fbxExit -ne 0 -or $mfExit -ne 0) {
-    Write-Output "smoke FAILED (stl exit $stlExit, ply exit $plyExit, gltf exit $gltfExit, fbx exit $fbxExit, 3mf exit $mfExit)"
+if ($stlExit -ne 0 -or $plyExit -ne 0 -or $gltfExit -ne 0 -or $fbxExit -ne 0 -or $mfExit -ne 0 -or $usdExit -ne 0) {
+    Write-Output "smoke FAILED (stl exit $stlExit, ply exit $plyExit, gltf exit $gltfExit, fbx exit $fbxExit, 3mf exit $mfExit, usd exit $usdExit)"
     exit 1
 }
 exit 0
