@@ -122,6 +122,76 @@ std::vector<std::byte> BuildCubeObj()
     return bytes;
 }
 
+// A minimal embedded GLB: one triangle with a material whose factors exercise
+// the T25 glTF adapter. No external sidecar; the BIN chunk is stream-contained.
+std::vector<std::byte> BuildGltfTriangle()
+{
+    constexpr float kPositions[3][3] = {{0, 0, 0}, {2, 0, 0}, {0, 2, 0}};
+    std::vector<std::byte> bin;
+    const auto appendFloat = [&bin](float value) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        const auto* raw = reinterpret_cast<const std::byte*>(&bits);
+        bin.insert(bin.end(), raw, raw + sizeof(bits));
+    };
+    const auto appendU32 = [&bin](std::uint32_t value) {
+        const auto* raw = reinterpret_cast<const std::byte*>(&value);
+        bin.insert(bin.end(), raw, raw + sizeof(value));
+    };
+    for (const auto& position : kPositions) {
+        appendFloat(position[0]);
+        appendFloat(position[1]);
+        appendFloat(position[2]);
+    }
+    appendU32(0);
+    appendU32(1);
+    appendU32(2);
+
+    const std::string json =
+        "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,"
+        "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},"
+        "\"indices\":1,\"material\":0}]}],"
+        "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.2,0.6,0.9,1.0]},"
+        "\"doubleSided\":true}],"
+        "\"accessors\":["
+        "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+        "\"min\":[0,0,0],\"max\":[2,2,0]},"
+        "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":["
+        "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+        "\"buffers\":[{\"byteLength\":48}]}";
+
+    std::vector<std::byte> jsonChunk(json.size());
+    if (!json.empty()) {
+        std::memcpy(jsonChunk.data(), json.data(), json.size());
+    }
+    while (jsonChunk.size() % 4 != 0) {
+        jsonChunk.push_back(std::byte{0x20});
+    }
+    while (bin.size() % 4 != 0) {
+        bin.push_back(std::byte{0x00});
+    }
+    const std::uint32_t total =
+        static_cast<std::uint32_t>(12 + 8 + jsonChunk.size() + 8 + bin.size());
+    std::vector<std::byte> glb;
+    const auto appendToGlb = [&glb](std::uint32_t value) {
+        const auto* raw = reinterpret_cast<const std::byte*>(&value);
+        glb.insert(glb.end(), raw, raw + sizeof(value));
+    };
+    appendToGlb(0x46546C67u);
+    appendToGlb(2u);
+    appendToGlb(total);
+    appendToGlb(static_cast<std::uint32_t>(jsonChunk.size()));
+    appendToGlb(0x4E4F534Au);
+    glb.insert(glb.end(), jsonChunk.begin(), jsonChunk.end());
+    appendToGlb(static_cast<std::uint32_t>(bin.size()));
+    appendToGlb(0x004E4942u);
+    glb.insert(glb.end(), bin.begin(), bin.end());
+    return glb;
+}
+
 // A binary little-endian colored point cloud: a 4x4x4 grid with a per-axis hue.
 std::vector<std::byte> BuildColoredPointsPly()
 {
@@ -222,6 +292,17 @@ std::span<const GoldenFixture> ProviderHostFixtures()
         objCube.tolerance = GoldenTolerance{2.0, 48};
         objCube.cx = 256;
         fixtures.push_back(std::move(objCube));
+
+        // T25: an embedded glTF triangle routed through the linked GltfAdapter
+        // (provider-local fastgltf; no external sidecar).
+        GoldenFixture gltfTriangle;
+        gltfTriangle.name = "gltf-triangle";
+        gltfTriangle.family = preview3d::provider::Family::Gltf;
+        gltfTriangle.source = BuildGltfTriangle();
+        gltfTriangle.goldenPath = ProviderHostGoldenDirectory() + "gltf-triangle-256.pam";
+        gltfTriangle.tolerance = GoldenTolerance{2.0, 48};
+        gltfTriangle.cx = 256;
+        fixtures.push_back(std::move(gltfTriangle));
 
         return fixtures;
     }();

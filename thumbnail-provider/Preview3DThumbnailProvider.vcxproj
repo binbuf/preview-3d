@@ -46,7 +46,10 @@
   <PropertyGroup Label="UserMacros" />
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <PreprocessorDefinitions>_DEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- FASTGLTF_ENABLE_DEPRECATED_EXT=1 must match the vcpkg fastgltf static
+           library's INTERFACE_COMPILE_DEFINITIONS (OFF would change the
+           fastgltf::Material layout and corrupt the heap). -->
+      <PreprocessorDefinitions>_DEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -73,7 +76,10 @@
     <ClCompile>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>NDEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- FASTGLTF_ENABLE_DEPRECATED_EXT=1 must match the vcpkg fastgltf static
+           library's INTERFACE_COMPILE_DEFINITIONS (OFF would change the
+           fastgltf::Material layout and corrupt the heap). -->
+      <PreprocessorDefinitions>NDEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -123,6 +129,8 @@
     <ClInclude Include="PlyFamilyAdapter.h" />
     <!-- T24 OBJ family adapter (provider-local pinned ufbx). -->
     <ClInclude Include="ObjFamilyAdapter.h" />
+    <!-- T25 glTF/GLB family adapter (fastgltf + Draco/meshopt/KTX2/WebP). -->
+    <ClInclude Include="GltfFamilyAdapter.h" />
     <!-- T07: the provider-shared parser subset. These are the same source
          files the import worker compiles (ADR-0004, source-not-state); none
          of them reference a broker/worker/viewer header. -->
@@ -176,6 +184,12 @@
     <!-- T24 OBJ family adapter (ufbx). PCH-free like the other adapters so
          Tests.Unit and Tests.ProviderHost compile the exact shipped source. -->
     <ClCompile Include="ObjFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T25 glTF/GLB family adapter (fastgltf + bounded Draco/meshopt/KTX2/WebP).
+         PCH-free like the other adapters so Tests.Unit and Tests.ProviderHost
+         compile the exact shipped source. -->
+    <ClCompile Include="GltfFamilyAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="RasterBitmap.cpp">

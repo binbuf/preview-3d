@@ -201,6 +201,27 @@ unknown list lengths (≤65 536), skipped elements (≤6 M records) and the vert
 bounded, and every read polls the deadline. Out-of-range indices and non-finite positions drop the
 affected triangle locally; a list-typed vertex element in a binary mesh falls back to the generic icon.
 
+T25 implements the glTF/GLB adapter as `thumbnail-provider/GltfFamilyAdapter.{h,cpp}` (selected only
+by the routed `Family::Gltf` CLSID) over the provider-local fastgltf static library, with the decoder
+scope and external-access policy recorded in [ADR-0003](adr/0003-provider-decoder-scope.md) and
+[ADR-0023](adr/0023-gltf-adapter-embedded-only.md). It parses with fastgltf `Options::None`, so only
+the GLB BIN chunk and embedded `data:` URIs are resolved; any external `.bin`/image URI is rejected as
+an unsafe reference and receives the generic icon without ever opening a path. Node instances from the
+default scene (or the implicit roots) are traversed and each instance's double-precision world
+transform is applied to the emitted triangles; `NORMAL` is transformed by the inverse-transpose and
+left zero (the rasterizer derives a geometric normal) when absent, `COLOR_0` is carried, and UVs are
+dropped because the frozen `VertexSample` has no UV channel. Materials carry the product-owned
+base-color/metallic/roughness/emissive/unlit/alpha-mode/cutoff/double-sided values. Geometry decode is
+bounded: uncompressed accessors through a meshopt-aware buffer adapter, bounded **Draco**
+(`KHR_draco_mesh_compression`, 96 MiB / 1 million triangles) and bounded **meshopt**
+(`EXT_meshopt_compression`) decode, each charged to the T06 ledger. Embedded **KTX2/Basis** and **WebP**
+images are decoded under the 32 MP aggregate texture budget and validated but discarded, because the
+frozen `MaterialPayload` has no texture slot and the T15 rasterizer samples no texture; a missing,
+corrupt or over-budget *optional* image therefore uses the default material and never fails valid
+geometry. `fastgltf`'s `FASTGLTF_ENABLE_DEPRECATED_EXT` define must match the vcpkg static library's
+`INTERFACE_COMPILE_DEFINITIONS` in every consuming project or the `fastgltf::Material` layout differs
+and corrupts the heap.
+
 T24 implements the OBJ adapter as `thumbnail-provider/ObjFamilyAdapter.{h,cpp}` (selected only by the
 routed `Family::Obj` CLSID) over the provider-local pinned ufbx static library, with the external
 access policy recorded in [ADR-0022](adr/0022-obj-adapter-ufbx-isolation.md). Parsing forces the OBJ

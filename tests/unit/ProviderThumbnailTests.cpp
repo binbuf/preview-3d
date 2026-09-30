@@ -128,9 +128,10 @@ TEST_CASE("GetThumbnail rejects cx == 0 and fails closed without an adapter",
     ProviderModule module;
     REQUIRE(module.Ready());
 
+    // T25 links the glTF adapter, so this case uses the FBX CLSID, which still has
+    // no linked adapter (T31), to prove the "no adapter" fallback.
     IThumbnailProvider* provider =
-        CreateThumbnailProvider(module, GuidFromText(
-            preview3d::provider::FamilyRoutes().front().clsid));
+        CreateThumbnailProvider(module, preview3d::test::FamilyClsid(Family::Fbx));
     REQUIRE(provider != nullptr);
 
     IInitializeWithStream* init = AsInitializable(provider);
@@ -145,7 +146,7 @@ TEST_CASE("GetThumbnail rejects cx == 0 and fails closed without an adapter",
     CHECK(bitmap == nullptr);
     CHECK(alpha == WTSAT_UNKNOWN);
 
-    // No adapter is linked for any family yet, so a real request falls back to
+    // No adapter is linked for this family yet, so a real request falls back to
     // the generic icon with the tabulated code and no fabricated bitmap. A
     // request larger than today's cache sizes is still only a hint.
     for (const UINT cx : {32u, 256u, 4096u}) {

@@ -17,6 +17,7 @@ param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
     [string]$StlPath = '',
     [string]$PlyPath = '',
+    [string]$GltfPath = '',
     [switch]$SkipBuild,
     [switch]$KeepRegistered,
     [switch]$SkipThumbnailCacheClear
@@ -32,11 +33,17 @@ if ([string]::IsNullOrWhiteSpace($StlPath)) {
 if ([string]::IsNullOrWhiteSpace($PlyPath)) {
     $PlyPath = Join-Path $PSScriptRoot 'fixtures\smoke-cube.ply'
 }
+if ([string]::IsNullOrWhiteSpace($GltfPath)) {
+    $GltfPath = Join-Path $PSScriptRoot 'fixtures\smoke-cube.glb'
+}
 if (-not (Test-Path -LiteralPath $StlPath -PathType Leaf)) {
     throw "Smoke .stl not found: $StlPath"
 }
 if (-not (Test-Path -LiteralPath $PlyPath -PathType Leaf)) {
     throw "Smoke .ply not found: $PlyPath"
+}
+if (-not (Test-Path -LiteralPath $GltfPath -PathType Leaf)) {
+    throw "Smoke .glb not found: $GltfPath"
 }
 
 $stage = Join-Path $repository "artifacts\smoke\stage\$Configuration"
@@ -89,12 +96,16 @@ if (-not $SkipThumbnailCacheClear) {
 $hostExe = Join-Path $repository "x64\$Configuration\ProviderSmokeHost.exe"
 $stlExit = 1
 $plyExit = 1
+$gltfExit = 1
 try {
     & $hostExe --dll $stagedDll --stl $StlPath --cx 256 --out $evidence
     $stlExit = $LASTEXITCODE
 
     & $hostExe --dll $stagedDll --ply $PlyPath --cx 256 --out $evidence
     $plyExit = $LASTEXITCODE
+
+    & $hostExe --dll $stagedDll --gltf $GltfPath --cx 256 --out $evidence
+    $gltfExit = $LASTEXITCODE
 } finally {
     if (-not $KeepRegistered) {
         & (Join-Path $PSScriptRoot 'Unregister-ProviderSmoke.ps1') -Scope HKCU
@@ -104,8 +115,8 @@ try {
 }
 
 Write-Output "evidence directory: $evidence"
-if ($stlExit -ne 0 -or $plyExit -ne 0) {
-    Write-Output "smoke FAILED (stl exit $stlExit, ply exit $plyExit)"
+if ($stlExit -ne 0 -or $plyExit -ne 0 -or $gltfExit -ne 0) {
+    Write-Output "smoke FAILED (stl exit $stlExit, ply exit $plyExit, gltf exit $gltfExit)"
     exit 1
 }
 exit 0

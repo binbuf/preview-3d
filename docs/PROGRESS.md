@@ -23,6 +23,7 @@
 - **T22 — First installed Release smoke in Windows Explorer — E2E slice review**: Repeatable local smoke lives in `packaging/smoke/` (ADR-0020): `Stage-ProviderSmoke.ps1`; **Verification shape (reusable by T23–T34 and T44):** render the same file twice — in-process
 - **T23 — Implement the PLY thumbnail adapter**: Provider PLY adapter lives in `thumbnail-provider/PlyFamilyAdapter.{h,cpp}` (class; Shape: ASCII + binary little/big-endian; required finite scalar `x/y/z`; optional `nx/ny/nz` and
 - **T24 — Implement the OBJ thumbnail adapter**: Provider OBJ adapter lives in `thumbnail-provider/ObjFamilyAdapter.{h,cpp}` (class; **ufbx linkage:** the provider project now sets `VcpkgEnableManifest=true` and links the pinned
+- **T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review**: Provider glTF adapter lives in `thumbnail-provider/GltfFamilyAdapter.{h,cpp}` (class; **Embedded-only:** fastgltf `Options::None`; only the GLB BIN chunk and embedded `data:` URIs are
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -577,6 +578,14 @@ markers); sessions are pointed at this file and read it themselves.
   non-degenerate model fixture and re-run `Invoke-ProviderSmoke.ps1`. The visual-quality check (a
   recognizable bright model, not a degenerate sliver) is a follow-up for each family; the
   `interactive-viewer\test-assets\corpus\A-small-stl.stl` fixture is degenerate and unsuitable.
+- T25 (glTF) landed. Remaining follow-ups: (a) T41 must register both `.glb` and `.gltf` ShellEx
+  extensions for the glTF CLSID (the local smoke registers `.glb` only); (b) the provider decodes
+  embedded KTX2/WebP images under budget but discards the pixels because `MaterialPayload` has no
+  texture slot and the rasterizer samples none — if a later task adds texture sampling, revisit
+  ADR-0023; (c) the "Tier A breadth complete" E2E review can run now.
+- Any project that includes fastgltf headers must define `FASTGLTF_ENABLE_DEPRECATED_EXT=1` to match
+  the vcpkg static library's `INTERFACE_COMPILE_DEFINITIONS`; MSBuild autolink does not apply them
+  and the mismatch corrupts the heap (T25).
 
 ## T21 - Implement the STL thumbnail adapter
 
@@ -741,3 +750,51 @@ markers); sessions are pointed at this file and read it themselves.
   Provider + host build clean under `/W4 /WX`.
 - ADR-0022 records the ufbx linkage + external-access decision; `design/05-thumbnail-provider.md`
   documents the adapter. Explorer T22 smoke was not run in this non-interactive session.
+
+## T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review
+
+- Provider glTF adapter lives in `thumbnail-provider/GltfFamilyAdapter.{h,cpp}` (class
+  `preview3d::provider::GltfAdapter`), registered for `Family::Gltf` in
+  `FamilyAdapterRegistry.cpp`. PCH/COM/GDI-free, so it compiles into the DLL, `Tests.Unit.exe` and
+  `Tests.ProviderHost.exe`. Uses the distinct name `GltfFamilyAdapter.*` (the T21/T23/T24 naming
+  gotcha: `import-worker/src/GltfAdapter.h` is on the Tests.Unit include path).
+- **Embedded-only:** fastgltf `Options::None`; only the GLB BIN chunk and embedded `data:` URIs are
+  resolved. Any non-`data:` buffer/image URI sets `ExternalReferenceDetected()` and returns
+  `UnsafeReference` (generic icon) without opening a path. `sidecar-missing.gltf` /
+  `sidecar-approved.gltf` prove it; the pipeline maps it to `ProviderOutcome::Unsupported`.
+- **Geometry:** nodes are traversed from the default scene (or implicit roots); each instance's
+  double-precision world transform is applied, `NORMAL` by inverse-transpose, `COLOR_0` carried, UVs
+  dropped (no UV channel in `VertexSample`). Uncompressed accessors go through a meshopt-aware
+  buffer adapter; Draco (96 MiB / 1M triangles; `draco_triangle.glb`) and `EXT_meshopt_compression`
+  (`meshopt.glb`) are decoded and ledger-charged. Materials carry base-color/metallic/roughness/
+  emissive/unlit/alpha/cutoff/double-sided.
+- **Images:** embedded KTX2/Basis and WebP are decoded under the 32 MP aggregate budget and then
+  discarded (`DecodedImageCount()`/`DecodedImagePixels()` expose the stats). The frozen
+  `MaterialPayload` has no texture slot and the rasterizer samples no texture, so a corrupt/absent
+  optional image uses the default material and never fails geometry (`basisu_corrupt_ktx2.glb`).
+  PNG/JPEG embedded images are structurally validated by fastgltf but not decoded (no thumbnail use).
+- **Critical build gotcha:** `FASTGLTF_ENABLE_DEPRECATED_EXT=1` must be defined in *every* project
+  that includes fastgltf headers (`Tests.Unit` already set it). The vcpkg static library publishes it
+  through `INTERFACE_COMPILE_DEFINITIONS`, which MSBuild autolink does not apply; without the define
+  the `fastgltf::Material` layout differs from the library's and corrupts the heap. It bit as a
+  `Tests.ProviderHost.exe` `[write-host-goldens]` SIGSEGV until added to the provider and host
+  projects.
+- Coverage `tests/unit/ProviderGltfAdapterTests.cpp` (`[provider][gltf]`, 19 cases): in-memory GLB
+  and `.gltf` data-URI fixtures, instanced/transformed scene, non-contiguous backing, the real
+  corpus Draco/meshopt/KTX2/WebP fixtures, corrupt KTX2 fallback, sidecar isolation (x2), truncated
+  GLB, over-cap material count, expired deadline, sink cap stop, pipeline mapping, a rendered bitmap,
+  and CLSID routing.
+- Host harness: `gltf-triangle` fixture in `FixtureRegistry.cpp` with committed golden
+  `tests/provider-host/goldens/gltf-triangle-256.pam`; the provider-host `[parallel]` case now uses
+  Family::Fbx (still unlinked) for its `ERROR_NOT_SUPPORTED` branch.
+- Smoke: `Register-ProviderSmoke.ps1`/`Unregister-ProviderSmoke.ps1` add glTF (CLSID
+  `{A592F425-EA68-4C88-BB96-020805D4BE56}`, AppID `{...BE57}`, `.glb\shellex`); `ProviderSmokeHost.exe`
+  takes `--gltf`; `Invoke-ProviderSmoke.ps1` runs STL+PLY+glTF and exits 0 only when all match;
+  committed `fixtures/smoke-cube.glb` (840-byte embedded GLB cube).
+- Evidence (Release x64 unless noted): `Tests.Unit.exe` 268 cases / 134646 assertions (Release) and
+  268 / 134727 (Debug) green; `Tests.ProviderHost.exe` 5 cases / 72 assertions green in both configs;
+  `Invoke-ProviderSmoke.ps1` exit 0 — STL/PLY/glTF reference-vs-Shell `meanAbs=0.0000 maxAbs=0`,
+  hosted in `dllhost.exe`, no isolation opt-out; dependency closure OK (14 modules).
+- Docs: new `docs/design/adr/0023-gltf-adapter-embedded-only.md`; `design/05-thumbnail-provider.md`
+  documents the adapter; `packaging/smoke/README.md` covers the glTF family.
+- **This closes the Tier A breadth slice (STL, PLY, OBJ, glTF); the T25 E2E review is non-blocking.**

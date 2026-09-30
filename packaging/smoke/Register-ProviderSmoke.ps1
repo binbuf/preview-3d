@@ -41,6 +41,13 @@ $families = @(
         AppId     = '{F4DC6119-E235-4BAC-8089-54EDD84F8493}'
         Extension = '.ply'
         Display   = 'Preview 3D PLY Thumbnail Provider'
+    },
+    [ordered]@{
+        Name      = 'glTF'
+        Clsid     = '{A592F425-EA68-4C88-BB96-020805D4BE56}'
+        AppId     = '{A592F425-EA68-4C88-BB96-020805D4BE57}'
+        Extension = '.glb'
+        Display   = 'Preview 3D glTF Thumbnail Provider'
     }
 )
 
