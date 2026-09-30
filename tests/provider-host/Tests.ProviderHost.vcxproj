@@ -59,7 +59,7 @@
       <AdditionalIncludeDirectories>..\..\shared\model-core\include;..\..\shared\platform\include;..\..\shared\parser-core\include;..\..\thumbnail-provider;..\..\thumbnail-spike\rasterizer;..\..\import-worker\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- FASTGLTF_ENABLE_DEPRECATED_EXT=1 must match the vcpkg fastgltf static
            library's INTERFACE_COMPILE_DEFINITIONS (see the provider project). -->
-      <PreprocessorDefinitions>PREVIEW3D_PROVIDER_DLL=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DThumbnailProvider.dll)";PREVIEW3D_PROVIDER_HOST_GOLDEN_DIR=LR"($(SolutionDir)tests\provider-host\goldens\\)";PREVIEW3D_FBX_FIXTURE_DIR=LR"($(SolutionDir)tests\fixtures\fbx-spike\\)";PREVIEW3D_3MF_FIXTURE_DIR=LR"($(SolutionDir)tests\fixtures\3mf-spike\\)";FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PREVIEW3D_PROVIDER_DLL=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DThumbnailProvider.dll)";PREVIEW3D_PROVIDER_HOST_GOLDEN_DIR=LR"($(SolutionDir)tests\provider-host\goldens\\)";PREVIEW3D_FBX_FIXTURE_DIR=LR"($(SolutionDir)tests\fixtures\fbx-spike\\)";PREVIEW3D_3MF_FIXTURE_DIR=LR"($(SolutionDir)tests\fixtures\3mf-spike\\)";PREVIEW3D_USD_FIXTURE_DIR=LR"($(SolutionDir)tests\fixtures\usd-spike\\)";FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -93,6 +93,8 @@
     <ClCompile Include="..\..\thumbnail-provider\FbxFamilyAdapter.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\ThreeMfFamilyAdapter.cpp" />
     <ClCompile Include="..\..\import-worker\src\ThreeMfOpcPreflight.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\UsdFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\import-worker\src\UsdZipPreflight.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\GeometrySampler.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\CpuRasterizer.cpp" />
     <ClCompile Include="..\..\thumbnail-provider\RasterBitmap.cpp" />
