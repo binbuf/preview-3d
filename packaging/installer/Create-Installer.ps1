@@ -115,9 +115,16 @@ if (-not $SkipBuild) {
     # The viewer project has build-order references to both isolated import
     # executables and the OpenUSD host's private core payload.
     $viewerProject = Join-Path $repository 'interactive-viewer\Preview3D.vcxproj'
-    & $msbuild $viewerProject /t:Build /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=$repository\" /m:1 /v:minimal
-    if ($LASTEXITCODE -ne 0) {
-        throw "The Release x64 product build failed with exit code $LASTEXITCODE."
+    # T42: the thumbnail provider is not referenced by the viewer (that boundary
+    # is deliberate), so the release procedure builds it explicitly. Its own
+    # dedicated static OCCT tree means it also must be built from the repository
+    # root for the same relative include/library paths the provider project uses.
+    $providerProject = Join-Path $repository 'thumbnail-provider\Preview3DThumbnailProvider.vcxproj'
+    foreach ($project in @($viewerProject, $providerProject)) {
+        & $msbuild $project /t:Build /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=$repository\" /m:1 /v:minimal
+        if ($LASTEXITCODE -ne 0) {
+            throw "The Release x64 build failed for '$project' with exit code $LASTEXITCODE."
+        }
     }
 }
 

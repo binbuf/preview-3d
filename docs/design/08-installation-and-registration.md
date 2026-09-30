@@ -1,13 +1,17 @@
 # Installation and registration
 
 Current implementation note (2026-09-30; provider identities frozen by T01, machine registration
-landed in T41): the shipping engineering package is NSIS-based, not the proposed MSI/WiX package
-below. It registers interactive Open With/Default Apps for all direct formats, including `.3mf`, and
-stages the exact worker-only `lib3mf`/libzip/zlib/bzip2 runtime closure. T41 now adds machine-level
+landed in T41, provider payload landed in T42): the shipping engineering package is NSIS-based, not
+the proposed MSI/WiX package below. It registers interactive Open With/Default Apps for all direct
+formats, including `.3mf`, and (because the release triplet is static) stages only the product images
+plus the app-local MSVC CRT rather than any upstream parser/decoder DLL. T41 adds machine-level
 thumbnail CLSID/ShellEx registration to the NSIS installer (ADR-0006, ADR-0007, ADR-0028) through
 `packaging/installer/Preview3DThumbnailRegistration.ps1`, using the registry location validated by
-T03 (ADR-0008) with a third-party default and per-user association. The provider DLL payload and its
-family runtime closure are added by T42; T41 writes only the registry shape. T01 froze the eight COM
+T03 (ADR-0008) with a third-party default and per-user association. T42 stages the provider DLL at the
+stable `[INSTALLFOLDER]Preview3DThumbnailProvider.dll` path with its resolved CRT: its bounded
+parser/decoder copies and constrained OCCT adapter are statically linked into that one image (verified
+by `dumpbin /dependents`, which must show only Windows system DLLs plus the app-local CRT), and the
+packaging fails if a provider-only module leaks into any other payload. T01 froze the eight COM
 identities in [05-thumbnail-provider.md](./05-thumbnail-provider.md) and this NSIS-now / MSI-later
 vehicle. The MSI and transactional repair sections below remain future design targets. The NSIS repair
 path for this program is an idempotent rerun of the same signed installer; its ARP entry currently

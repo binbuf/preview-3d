@@ -185,11 +185,20 @@ $viewerFiles = @('Preview3D.exe')
 $workerFiles = @(
     'Preview3DImportWorker.exe'
 )
+# T42: the thumbnail provider statically links its own bounded copies of the
+# family parsers/decoders and the constrained OCCT adapter, so its real closure
+# (dumpbin /dependents, not the vcpkg manifest) is the DLL plus the app-local
+# MSVC CRT. It ships only in the installed distribution at the stable install
+# path its InprocServer32 names; the portable ZIP stays provider-free (ADR-0016).
+$providerDllName = 'Preview3DThumbnailProvider.dll'
 foreach ($name in $viewerFiles) {
     Copy-RequiredFile (Join-Path $buildOutput $name) (Join-Path $stage $name)
 }
 foreach ($name in $workerFiles) {
     Copy-RequiredFile (Join-Path $buildOutput $name) (Join-Path $workerStage $name)
+}
+if ($Distribution -eq 'Installer') {
+    Copy-RequiredFile (Join-Path $buildOutput $providerDllName) (Join-Path $stage $providerDllName)
 }
 
 $openUsdHostSource = Join-Path $buildOutput 'OpenUsdHost'
@@ -231,7 +240,10 @@ foreach ($name in $stepHostFiles) {
 
 $visualStudioRoot = Find-VisualStudioInstallation
 $crtDirectory = Find-CrtDirectory $visualStudioRoot
-$viewerCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+# The root CRT backs both Preview3D.exe and (when installed) the thumbnail
+# provider; msvcp140_1.dll is the provider's extra resolved module (its
+# dumpbin dependency set is msvcp140/msvcp140_1/vcruntime140/vcruntime140_1).
+$viewerCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 $workerCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 $openUsdHostCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
 $stepHostCrt = @('concrt140.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
@@ -341,6 +353,58 @@ foreach ($pe in $peFiles) {
     }
 }
 
+# T42: the provider's PE import closure is a closed allowlist. Because the
+# release triplet statically links its format/decoder/OCCT closure, dumpbin must
+# show only the app-local MSVC CRT plus Windows system DLLs; any other non-system
+# import (a stray upstream DLL, an OCCT toolkit, or a product binary) fails the
+# release instead of shipping an unsigned runtime. This is a dumpbin fact, not a
+# vcpkg-manifest list (docs/tasks/42, design note).
+#
+# The provider-only static closure must also not leak as standalone DLLs into any
+# other payload (viewer, worker, USD host, or STEP host), and no product binary
+# may import the provider (or vice versa). The provider is one self-contained image.
+$providerCrtImports = @('msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+$productBinaryNames = @('Preview3D.exe', 'Preview3DImportWorker.exe', 'Preview3DImportHost.exe', 'Preview3DOpenUsdCore.dll', 'Preview3DStepHost.exe')
+if ($Distribution -eq 'Installer') {
+    $providerAllowedImports = @($systemDlls + $providerCrtImports)
+    $providerDependencies = @(Get-PeDependencies $dumpbin (Join-Path $stage $providerDllName))
+
+    foreach ($dependency in $providerDependencies) {
+        if ($dependency.StartsWith('api-ms-win-') -or $dependency.StartsWith('ext-ms-win-')) { continue }
+        if ($dependency -in $providerAllowedImports) { continue }
+        throw "The thumbnail provider imports unexpected non-system module '$dependency'; the closed payload allowlist must be extended deliberately."
+    }
+    foreach ($dependency in $providerDependencies) {
+        if ($dependency -in @($productBinaryNames | ForEach-Object { $_.ToLowerInvariant() })) {
+            throw "The thumbnail provider imports product binary '$dependency'; it must be self-contained."
+        }
+    }
+    $missingProviderImports = @($providerCrtImports | Where-Object { $_ -in $providerDependencies -and -not (Test-Path -LiteralPath (Join-Path $stage $_)) })
+    if ($missingProviderImports.Count -ne 0) {
+        throw "The thumbnail provider's CRT import(s) are not staged app-local: $($missingProviderImports -join ', ')."
+    }
+
+    $providerOnlyModules = @(
+        'fastgltf.dll', 'draco.dll', 'ktx.dll', 'libwebp.dll', 'libsharpyuv.dll', 'basisu.dll',
+        'meshoptimizer.dll', 'ufbx.dll', 'lib3mf.dll', 'libzip.dll', 'zip.dll', 'z.dll', 'bz2.dll',
+        'tinyusdz.dll', 'simdjson.dll', 'zstd.dll'
+    )
+    $stagedPayloadNames = @(Get-ChildItem -LiteralPath $stage -File -Recurse | ForEach-Object { $_.Name.ToLowerInvariant() })
+    $stagedProviderOnly = @($providerOnlyModules | Where-Object { $_ -in $stagedPayloadNames } | Sort-Object -Unique)
+    $stagedOcctToolkits = @($stagedPayloadNames | Where-Object { $_ -match '^tk.*\.dll$' } | Sort-Object -Unique)
+    if ($stagedProviderOnly.Count -ne 0 -or $stagedOcctToolkits.Count -ne 0) {
+        throw "Provider-only static closure leaked into the standalone payload: $(@($stagedProviderOnly + $stagedOcctToolkits) -join ', ')."
+    }
+    foreach ($pe in $peFiles) {
+        if ($pe.Name -eq $providerDllName) { continue }
+        foreach ($dependency in (Get-PeDependencies $dumpbin $pe.FullName)) {
+            if ($dependency -eq $providerDllName.ToLowerInvariant()) {
+                throw "Product binary '$($pe.Name)' imports the thumbnail provider; the provider boundary is one-way."
+            }
+        }
+    }
+}
+
 $baseline = (Get-Content -LiteralPath (Join-Path $repository 'vcpkg-configuration.json') -Raw | ConvertFrom-Json).'default-registry'.baseline
 $status = Read-VcpkgStatus $vcpkgStatusPath
 # OCCT is absent from the root status because only the dedicated STEP host
@@ -390,6 +454,24 @@ $components += [ordered]@{
     licenses = @(@{ license = @{ name = 'Microsoft Visual Studio distributable code terms' } })
     properties = @(@{ name = 'preview3d:provenance'; value = "Visual Studio MSVC $crtToolsetVersion x64 app-local CRT" })
 }
+if ($Distribution -eq 'Installer') {
+    # T42: the provider is a product image, but its own binary must be named by
+    # the SBOM so the installed payload is complete. Its third-party closure is
+    # the statically linked set already listed above (the provider's dumpbin
+    # imports show only the CRT); the property records that fact.
+    $components += [ordered]@{
+        type = 'library'
+        name = 'Preview3DThumbnailProvider'
+        version = $Version
+        'bom-ref' = "preview3d-thumbnail-provider-$Version"
+        licenses = @(@{ license = @{ name = 'See LICENSE' } })
+        properties = @(
+            @{ name = 'preview3d:role'; value = 'Explorer thumbnail provider (in-proc COM)' },
+            @{ name = 'preview3d:statically-links'; value = 'basisu,bzip2,draco,fastgltf,ktx,lib3mf,libwebp,libzip,meshoptimizer,opencascade,simdjson,tinyusdz,ufbx,zlib' },
+            @{ name = 'preview3d:runtime-imports'; value = 'msvcp140.dll,msvcp140_1.dll,vcruntime140.dll,vcruntime140_1.dll' }
+        )
+    }
+}
 $sbom = [ordered]@{
     bomFormat = 'CycloneDX'
     specVersion = '1.5'
@@ -410,10 +492,12 @@ $sbom = [ordered]@{
 }
 $sbom | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $stage 'SBOM.cdx.json') -Encoding UTF8
 
-$forbiddenNames = @(
-    'Preview3DThumbnailProvider.dll',
-    'Preview3DHostileWorker.exe', 'Tests.Unit.exe', 'Tests.ImportIsolation.exe'
-)
+$forbiddenNames = @('Preview3DHostileWorker.exe', 'Tests.Unit.exe', 'Tests.ImportIsolation.exe')
+if ($Distribution -eq 'Portable') {
+    # The provider is an installed feature (ADR-0016); the portable archive stays
+    # provider-free.
+    $forbiddenNames += 'Preview3DThumbnailProvider.dll'
+}
 $stagedNames = @(Get-ChildItem -LiteralPath $stage -File -Recurse | ForEach-Object { $_.Name })
 foreach ($forbidden in $forbiddenNames) {
     if ($forbidden -in $stagedNames) { throw "Excluded payload '$forbidden' entered the stage." }

@@ -77,7 +77,7 @@ before it is built.
 ## Phase 6 — Production hardening and full registration
 
 - [x] T41 — Register all eight CLSIDs and ShellEx handlers → [tasks/41-shell-registration.md](tasks/41-shell-registration.md)
-- [ ] T42 — Package, sign, and audit the provider payload closure → [tasks/42-payload-closure-signing-sbom.md](tasks/42-payload-closure-signing-sbom.md)
+- [~] T42 — Package, sign, and audit the provider payload closure → [tasks/42-payload-closure-signing-sbom.md](tasks/42-payload-closure-signing-sbom.md) ⟵ failed
 - [ ] T43 — Harden with fuzz, ASan, and hostile corpora → [tasks/43-adversarial-hardening.md](tasks/43-adversarial-hardening.md)
 - [ ] T44 — Verify the actual surrogate, DPI, and clean-machine install — E2E slice review → [tasks/44-surrogate-dpi-install-verification.md](tasks/44-surrogate-dpi-install-verification.md)
 
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-30T05:21:31Z · 24/29 done
+**Pipeline status** — updated 2026-09-30T05:29:45Z · 24/29 done
 
 - Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34, T41
 - Blocked: none
-- Failed: none
-- Remaining: T42, T43, T44, T51, T52
-- Last finished: T41 — done · NSIS thumbnail registration for all 8 CLSIDs + every direct extension's ShellEx is implemented as a non-clobber, repair-capable, owned-only-uninstall script invoked by the installer with a non-elevated SHChangeNotify; automated static + sandboxed HKCU lifecycle test passes; design/08, ADR-0028, hand-off and PROGRESS updated. T42 must still add the provider DLL payload.
+- Failed: T42
+- Remaining: T43, T44, T51, T52
+- Last finished: T42 — failed · interrupted by SIGTERM
 <!-- /symphony:status -->
