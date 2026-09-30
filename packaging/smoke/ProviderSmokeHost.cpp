@@ -51,6 +51,7 @@ const CLSID kPlyClsid = {0xF4DC6119, 0xE235, 0x4BAC, {0x80, 0x89, 0x54, 0xED, 0x
 const CLSID kGltfClsid = {0xA592F425, 0xEA68, 0x4C88, {0xBB, 0x96, 0x02, 0x08, 0x05, 0xD4, 0xBE, 0x56}};
 const CLSID kFbxClsid = {0xFBC218D4, 0xFD2C, 0x41DF, {0xB1, 0x68, 0x7F, 0x3B, 0x9E, 0x53, 0xC8, 0x4E}};
 const CLSID kThreeMfClsid = {0xD8389A63, 0x8526, 0x454A, {0x98, 0x92, 0x72, 0xF3, 0x14, 0x94, 0x84, 0xB9}};
+const CLSID kUsdClsid = {0xE938BC70, 0x4C08, 0x4446, {0xA1, 0x5D, 0xEE, 0x31, 0x57, 0x6B, 0xFB, 0x48}};
 constexpr wchar_t kProviderModuleName[] = L"Preview3DThumbnailProvider.dll";
 constexpr wchar_t kStlClsidKey[] = L"Software\\Classes\\CLSID\\{BFC86E1A-55C1-4C2D-AA36-3C25DECF30C9}";
 constexpr wchar_t kStlAppIdKey[] = L"Software\\Classes\\AppID\\{BFC86E1A-55C1-4C2D-AA36-3C25DECF3010}";
@@ -62,6 +63,8 @@ constexpr wchar_t kFbxClsidKey[] = L"Software\\Classes\\CLSID\\{FBC218D4-FD2C-41
 constexpr wchar_t kFbxAppIdKey[] = L"Software\\Classes\\AppID\\{FBC218D4-FD2C-41DF-B168-7F3B9E53C84F}";
 constexpr wchar_t kThreeMfClsidKey[] = L"Software\\Classes\\CLSID\\{D8389A63-8526-454A-9892-72F3149484B9}";
 constexpr wchar_t kThreeMfAppIdKey[] = L"Software\\Classes\\AppID\\{D8389A63-8526-454A-9892-72F3149484BA}";
+constexpr wchar_t kUsdClsidKey[] = L"Software\\Classes\\CLSID\\{E938BC70-4C08-4446-A15D-EE31576BFB48}";
+constexpr wchar_t kUsdAppIdKey[] = L"Software\\Classes\\AppID\\{E938BC70-4C08-4446-A15D-EE31576BFB49}";
 
 std::string ToUtf8(const std::wstring& text)
 {
@@ -252,6 +255,7 @@ int wmain(int argc, wchar_t** argv)
     std::wstring gltfPath;
     std::wstring fbxPath;
     std::wstring mfPath;
+    std::wstring usdPath;
     std::wstring outDir;
     unsigned cx = 256;
     for (int i = 1; i < argc; ++i) {
@@ -263,19 +267,20 @@ int wmain(int argc, wchar_t** argv)
         else if (arg == L"--gltf") gltfPath = next();
         else if (arg == L"--fbx") fbxPath = next();
         else if (arg == L"--mf") mfPath = next();
+        else if (arg == L"--usd") usdPath = next();
         else if (arg == L"--out") outDir = next();
         else if (arg == L"--cx") cx = static_cast<unsigned>(_wtoi(next().c_str()));
     }
     if (dllPath.empty() || (stlPath.empty() && plyPath.empty() && gltfPath.empty() && fbxPath.empty()
-                            && mfPath.empty())) {
-        std::printf("usage: ProviderSmokeHost.exe --dll <path> (--stl <path> | --ply <path> | --gltf <path> | --fbx <path> | --mf <path>) [--cx 256] [--out <dir>]\n");
+                            && mfPath.empty() && usdPath.empty())) {
+        std::printf("usage: ProviderSmokeHost.exe --dll <path> (--stl <path> | --ply <path> | --gltf <path> | --fbx <path> | --mf <path> | --usd <path>) [--cx 256] [--out <dir>]\n");
         return 2;
     }
     if (outDir.empty()) outDir = L".";
 
     // Each family smoke selects its own frozen CLSID and AppID; the rest of the
     // procedure (surrogate hosting, Shell path, image match) is family-agnostic.
-    enum class SmokeFamily { Stl, Ply, Gltf, Fbx, ThreeMf };
+    enum class SmokeFamily { Stl, Ply, Gltf, Fbx, ThreeMf, Usd };
     SmokeFamily family = SmokeFamily::Stl;
     const std::wstring* model = &stlPath;
     if (!gltfPath.empty()) {
@@ -287,27 +292,38 @@ int wmain(int argc, wchar_t** argv)
     } else if (!mfPath.empty()) {
         family = SmokeFamily::ThreeMf;
         model = &mfPath;
+    } else if (!usdPath.empty()) {
+        family = SmokeFamily::Usd;
+        model = &usdPath;
     } else if (!plyPath.empty()) {
         family = SmokeFamily::Ply;
         model = &plyPath;
     }
     const std::wstring& modelPath = *model;
-    const CLSID clsid = family == SmokeFamily::Gltf ? kGltfClsid
-        : (family == SmokeFamily::Fbx ? kFbxClsid
-           : (family == SmokeFamily::ThreeMf ? kThreeMfClsid
-              : (family == SmokeFamily::Ply ? kPlyClsid : kStlClsid)));
-    const wchar_t* clsidKey = family == SmokeFamily::Gltf ? kGltfClsidKey
-        : (family == SmokeFamily::Fbx ? kFbxClsidKey
-           : (family == SmokeFamily::ThreeMf ? kThreeMfClsidKey
-              : (family == SmokeFamily::Ply ? kPlyClsidKey : kStlClsidKey)));
-    const wchar_t* appIdKey = family == SmokeFamily::Gltf ? kGltfAppIdKey
-        : (family == SmokeFamily::Fbx ? kFbxAppIdKey
-           : (family == SmokeFamily::ThreeMf ? kThreeMfAppIdKey
-              : (family == SmokeFamily::Ply ? kPlyAppIdKey : kStlAppIdKey)));
-    const char* familyName = family == SmokeFamily::Gltf ? "gltf"
-        : (family == SmokeFamily::Fbx ? "fbx"
-           : (family == SmokeFamily::ThreeMf ? "3mf"
-              : (family == SmokeFamily::Ply ? "ply" : "stl")));
+    CLSID clsid = kStlClsid;
+    const wchar_t* clsidKey = kStlClsidKey;
+    const wchar_t* appIdKey = kStlAppIdKey;
+    const char* familyName = "stl";
+    switch (family) {
+        case SmokeFamily::Ply:
+            clsid = kPlyClsid; clsidKey = kPlyClsidKey; appIdKey = kPlyAppIdKey; familyName = "ply";
+            break;
+        case SmokeFamily::Gltf:
+            clsid = kGltfClsid; clsidKey = kGltfClsidKey; appIdKey = kGltfAppIdKey; familyName = "gltf";
+            break;
+        case SmokeFamily::Fbx:
+            clsid = kFbxClsid; clsidKey = kFbxClsidKey; appIdKey = kFbxAppIdKey; familyName = "fbx";
+            break;
+        case SmokeFamily::ThreeMf:
+            clsid = kThreeMfClsid; clsidKey = kThreeMfClsidKey; appIdKey = kThreeMfAppIdKey; familyName = "3mf";
+            break;
+        case SmokeFamily::Usd:
+            clsid = kUsdClsid; clsidKey = kUsdClsidKey; appIdKey = kUsdAppIdKey; familyName = "usd";
+            break;
+        case SmokeFamily::Stl:
+        default:
+            break;
+    }
 
     FILE* report = nullptr;
     if (fopen_s(&report, ToUtf8(outDir + L"\\report.txt").c_str(), "wb") != 0) report = nullptr;

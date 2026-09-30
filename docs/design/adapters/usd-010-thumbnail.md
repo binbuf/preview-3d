@@ -1,6 +1,6 @@
 # USD post-MVP work plan
 
-Status: implementation in progress; USD-001 through USD-008 complete, viewer/distribution route exposed; USD-009 corpus/fuzz slice complete and environmental qualification pending
+Status: implementation in progress; USD-001 through USD-008 complete, viewer/distribution route exposed; USD-009 corpus/fuzz slice complete and environmental qualification pending; USD-010 Explorer thumbnail adapter landed (T33)
 
 Prepared: 2026-09-17  
 Design authority: [design/README.md](design/README.md)
@@ -950,9 +950,24 @@ implemented and rerun; this is not a documentation-only signoff.
 
 ## USD-010: Explorer USD thumbnail adapter
 
-Status: blocked on the general Gate 6 thumbnail-provider foundation  
+Status: thumbnail adapter landed (T33, 2026-09-29). The isolated thumbnail DLL now routes `.usd`,
+`.usda`, `.usdc` and `.usdz` by their fixed CLSID and renders the supported static stream-contained subset
+from the Shell stream; USD-009 viewer qualification (corpus/fuzz/clean-VM/signed release) remains a
+separate gate.  
 Depends on: USD-009 and a working bounded COM thumbnail provider  
 Completes: original-MVP USD-family support
+
+The adapter (`thumbnail-provider/UsdFamilyAdapter.{h,cpp}`) byte-sniffs the container, validates a USDZ
+stream with the worker's product preflight under provider ceilings, feeds the pinned TinyUSDZ reader only
+in-memory bytes with composition/asset loading disabled, and fails every composition arc or external
+reference/texture closed to the generic icon. There is no compatibility-host path in the provider.
+Decisions and limits are recorded in [ADR-0026](../adr/0026-usd-adapter-pinned-tinyusdz.md); the provider
+contract section is [05-thumbnail-provider.md](../05-thumbnail-provider.md). Host goldens cover a USDA
+mesh, a crate USDC cube and a contained USDZ archive; unit coverage covers the four extensions, contained
+assets, point instancers, purpose/visibility/time policy, external-texture/composition/malformed/
+oversized/deadline/ledger fallbacks, the routed pipeline bitmap, and CLSID routing. The
+`fast_float` ABI collision between TinyUSDZ and lib3mf is fixed by building TinyUSDZ against the
+vcpkg-pinned `fast_float` (`tinyusdz 0.9.1#3`).
 
 ### Objective
 

@@ -22,6 +22,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+
 #include <limits>
 #include <string>
 #include <string_view>
@@ -493,7 +494,7 @@ struct PointInstanceRecord {
 struct UsdAssetContext {
     std::span<const std::byte> source;
     const import_worker::UsdzArchiveView* archive = nullptr;
-    ImportErrorCode error = ImportErrorCode::None;
+    ErrorCode error = ErrorCode::None;
 
     const import_worker::UsdzEntryView* Find(std::string_view normalized) const
     {
@@ -519,11 +520,11 @@ int ResolveAsset(const char* assetName, const std::vector<std::string>&,
     const auto normalized = NormalizeAssetPath(
         assetName ? std::string_view(assetName) : std::string_view{});
     if (!normalized) {
-        context.error = ImportErrorCode::UnsafeReference;
+        context.error = ErrorCode::UnsafeReference;
         return -2;
     }
     if (context.Find(*normalized) == nullptr) {
-        context.error = ImportErrorCode::UnsafeReference;
+        context.error = ErrorCode::UnsafeReference;
         return -2;
     }
     *resolved = *normalized;
@@ -554,11 +555,11 @@ int ReadAsset(const char* resolvedName, std::uint64_t requested, std::uint8_t* o
     }
     if (entry->dataOffset > context.source.size()
         || entry->byteSize > context.source.size() - entry->dataOffset) {
-        context.error = ImportErrorCode::ArchiveLimit;
+        context.error = ErrorCode::ArchiveLimit;
         return -2;
     }
     if (requested < entry->byteSize) {
-        context.error = ImportErrorCode::ResourceLimit;
+        context.error = ErrorCode::ResourceLimit;
         return -2;
     }
     if (entry->byteSize != 0) {
@@ -911,9 +912,10 @@ ErrorCode UsdAdapter::LoadStage() noexcept
         const char* syntheticName = usedUsdz_ ? "preview3d-primary.usd"
                                               : "preview3d-primary.usda";
         std::string warning, parseError;
-        if (!tinyusdz::LoadUSDFromMemory(
+        const bool ok = tinyusdz::LoadUSDFromMemory(
                 reinterpret_cast<const std::uint8_t*>(bytes_.data()), bytes_.size(),
-                syntheticName, &holder_->stage, &warning, &parseError, options)) {
+                syntheticName, &holder_->stage, &warning, &parseError, options);
+        if (!ok) {
             return ErrorCode::MalformedData;
         }
         if (holder_->stage.root_prims().empty()) {
@@ -932,7 +934,7 @@ ErrorCode UsdAdapter::BuildScene() noexcept
     if (holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
     }
-    const tinyusdz::Stage& stage = holder_->stage;
+    tinyusdz::Stage& stage = holder_->stage;
     const auto& metas = stage.metas();
 
     const double time = metas.startTimeCode.authored() ? metas.startTimeCode.get_value() : 0.0;

@@ -1,11 +1,14 @@
 {
   "name": "tinyusdz",
   "version-semver": "0.9.1",
-  "port-version": 2,
+  "port-version": 3,
   "description": "Dependency-free USDA, USDC, and USDZ reader with Tydra render-data conversion",
   "homepage": "https://github.com/lighttransport/tinyusdz",
   "license": "Apache-2.0",
   "dependencies": [
+    {
+      "name": "fast-float"
+    },
     {
       "name": "vcpkg-cmake",
       "host": true

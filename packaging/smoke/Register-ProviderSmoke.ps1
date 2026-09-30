@@ -1,7 +1,7 @@
-# T22/T23 developer/QA-local smoke registration (STL + PLY + glTF + FBX + 3MF).
+# T22/T23 developer/QA-local smoke registration (STL + PLY + glTF + FBX + 3MF + USD).
 #
 # Registers the product thumbnail CLSIDs and the T03-validated extension ShellEx
-# mappings so the Shell routes .stl/.ply/.glb/.fbx/.3mf thumbnails to
+# mappings so the Shell routes .stl/.ply/.glb/.fbx/.3mf/.usd/.usda/.usdc/.usdz thumbnails to
 # Preview3DThumbnailProvider.dll. This is a minimal local smoke, NOT the T41
 # installer: it performs no conflict/repair/uninstall policy, and never sets
 # DisableProcessIsolation.
@@ -62,6 +62,34 @@ $families = @(
         AppId     = '{D8389A63-8526-454A-9892-72F3149484BA}'
         Extension = '.3mf'
         Display   = 'Preview 3D 3MF Thumbnail Provider'
+    },
+    [ordered]@{
+        Name      = 'USD'
+        Clsid     = '{E938BC70-4C08-4446-A15D-EE31576BFB48}'
+        AppId     = '{E938BC70-4C08-4446-A15D-EE31576BFB49}'
+        Extension = '.usd'
+        Display   = 'Preview 3D USD Thumbnail Provider'
+    },
+    [ordered]@{
+        Name      = 'USD'
+        Clsid     = '{E938BC70-4C08-4446-A15D-EE31576BFB48}'
+        AppId     = '{E938BC70-4C08-4446-A15D-EE31576BFB49}'
+        Extension = '.usda'
+        Display   = 'Preview 3D USDA Thumbnail Provider'
+    },
+    [ordered]@{
+        Name      = 'USD'
+        Clsid     = '{E938BC70-4C08-4446-A15D-EE31576BFB48}'
+        AppId     = '{E938BC70-4C08-4446-A15D-EE31576BFB49}'
+        Extension = '.usdc'
+        Display   = 'Preview 3D USDC Thumbnail Provider'
+    },
+    [ordered]@{
+        Name      = 'USD'
+        Clsid     = '{E938BC70-4C08-4446-A15D-EE31576BFB48}'
+        AppId     = '{E938BC70-4C08-4446-A15D-EE31576BFB49}'
+        Extension = '.usdz'
+        Display   = 'Preview 3D USDZ Thumbnail Provider'
     }
 )
 

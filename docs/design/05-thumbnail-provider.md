@@ -287,6 +287,30 @@ or non-box clipping without a representation mesh. An unsupported required exten
 scene, an unclipped parametric lattice or a malformed package fails closed; a supported scene is never
 rendered only in part.
 
+T33 implements the USD/USDZ adapter as `thumbnail-provider/UsdFamilyAdapter.{h,cpp}` (selected only by the
+routed `Family::Usd` CLSID, the fixed identity `{E938BC70-4C08-4446-A15D-EE31576BFB48}`) over the
+provider-local pinned TinyUSDZ 0.9.1 static reader, with the stream-only/no-composition/no-external-
+resolution policy recorded in [ADR-0026](adr/0026-usd-adapter-pinned-tinyusdz.md). The container is
+byte-sniffed independently of the suffix (ZIP local header → USDZ, `PXR-USDC` crate magic → USDC, a leading
+`#usda` after an optional BOM/whitespace → USDA, anything else malformed). A USDZ stream is validated by the
+product-owned worker preflight (`import-worker/src/UsdZipPreflight.cpp`, compiled source-not-state into the
+provider) under provider ceilings — 128 MiB aggregate expansion, 100:1 ratio, 4096 entries, 32-level
+normalized paths, stored-only, checked offsets and CRC — and every byte stays in the brokered stream;
+nothing is extracted. TinyUSDZ is fed the bounded in-memory bytes with `load_assets`, `do_composition`,
+`load_sublayers`, `load_references` and `load_payloads` all disabled and a wildcard asset resolver that
+resolves only names present in the USDZ entry map (any other request is `UnsafeReference`). Composition arcs
+(sublayers, references, payloads, inherits, specializes, variants, clips, instanceable) are classified
+before conversion and fail closed to the generic icon (`UnsupportedComposition`), as does any external
+reference or texture (`UnsafeReference`); the provider never launches the compatibility host, reads the
+cache, recovers a path or reaches the network. The static `UsdPreviewSurface`/display-color policy is
+normalized into the frozen `MaterialPayload` (base color/opacity, metallic, roughness, emissive, alpha
+mode/cutoff, double-sided) and finite triangle samples with double-precision world transforms,
+purpose/visibility and bounded point-instancer expansion; skeletal bindings are stripped so the authored
+rest pose previews. Contained textures are recorded but not decoded — the frozen `MaterialPayload` has no
+texture slot — so an absent or external image never fabricates geometry. A `fast_float` ABI collision
+between TinyUSDZ's vendored copy and lib3mf's vcpkg copy is removed by building TinyUSDZ against the
+vcpkg-pinned `fast_float` in the overlay port (`0.9.1#3`, [ADR-0026](adr/0026-usd-adapter-pinned-tinyusdz.md)).
+
 ## CPU renderer
 
 The thumbnail DLL uses a product-owned tile rasterizer; no GPU device or graphics queue is created inside Explorer.

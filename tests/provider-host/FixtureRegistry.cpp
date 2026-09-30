@@ -301,6 +301,50 @@ std::vector<std::byte> ReadThreeMfFixture(const char* name)
     return out;
 }
 
+// COMMITTED USD-001/USD-005 fixtures live in `tests/fixtures/usd-spike`; the
+// binary cube is `.base64` text decoded in memory. The provider never opens a
+// path. Missing file -> empty fixture -> the golden case fails loudly.
+std::vector<std::byte> ReadUsdFixture(const char* name)
+{
+    const std::filesystem::path path =
+        std::filesystem::path(PREVIEW3D_USD_FIXTURE_DIR) / name;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const std::streamoff size = file.tellg();
+    if (size <= 0) {
+        return {};
+    }
+    file.seekg(0);
+    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(bytes.data()), size);
+    if (path.extension() != ".base64") {
+        return bytes;
+    }
+
+    std::vector<std::byte> out;
+    int accumulator = 0;
+    int bits = 0;
+    for (const std::byte raw : bytes) {
+        const char c = static_cast<char>(raw);
+        if (c == '=') {
+            break;
+        }
+        const int value = Base64Value(c);
+        if (value < 0) {
+            continue;
+        }
+        accumulator = (accumulator << 6) | value;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<std::byte>((accumulator >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 std::string ProviderHostGoldenDirectory()
@@ -409,6 +453,37 @@ std::span<const GoldenFixture> ProviderHostFixtures()
         threeMfLattice.tolerance = GoldenTolerance{2.0, 48};
         threeMfLattice.cx = 256;
         fixtures.push_back(std::move(threeMfLattice));
+
+        // T33: stream-contained USD encodings routed through the linked
+        // UsdAdapter (provider-local pinned TinyUSDZ; no composition, no paths).
+        // A committed USDA mesh, a crate-encoded USDC cube, and a contained
+        // USDZ archive each render real geometry.
+        GoldenFixture usdMesh;
+        usdMesh.name = "usd-mesh";
+        usdMesh.family = preview3d::provider::Family::Usd;
+        usdMesh.source = ReadUsdFixture("mesh.usda");
+        usdMesh.goldenPath = ProviderHostGoldenDirectory() + "usd-mesh-256.pam";
+        usdMesh.tolerance = GoldenTolerance{2.0, 48};
+        usdMesh.cx = 256;
+        fixtures.push_back(std::move(usdMesh));
+
+        GoldenFixture usdCrate;
+        usdCrate.name = "usd-crate";
+        usdCrate.family = preview3d::provider::Family::Usd;
+        usdCrate.source = ReadUsdFixture("cube.usdc.base64");
+        usdCrate.goldenPath = ProviderHostGoldenDirectory() + "usd-crate-256.pam";
+        usdCrate.tolerance = GoldenTolerance{2.0, 48};
+        usdCrate.cx = 256;
+        fixtures.push_back(std::move(usdCrate));
+
+        GoldenFixture usdZip;
+        usdZip.name = "usd-zip";
+        usdZip.family = preview3d::provider::Family::Usd;
+        usdZip.source = ReadUsdFixture("cube.usdz.base64");
+        usdZip.goldenPath = ProviderHostGoldenDirectory() + "usd-zip-256.pam";
+        usdZip.tolerance = GoldenTolerance{2.0, 48};
+        usdZip.cx = 256;
+        fixtures.push_back(std::move(usdZip));
 
         return fixtures;
     }();

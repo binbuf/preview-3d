@@ -48,6 +48,30 @@ $families = @(
         Clsid     = '{D8389A63-8526-454A-9892-72F3149484B9}'
         AppId     = '{D8389A63-8526-454A-9892-72F3149484BA}'
         Extension = '.3mf'
+    },
+    [ordered]@{
+        Name      = 'USD'
+        Clsid     = '{E938BC70-4C08-4446-A15D-EE31576BFB48}'
+        AppId     = '{E938BC70-4C08-4446-A15D-EE31576BFB49}'
+        Extension = '.usd'
+    },
+    [ordered]@{
+        Name      = 'USD'
+        Clsid     = '{E938BC70-4C08-4446-A15D-EE31576BFB48}'
+        AppId     = '{E938BC70-4C08-4446-A15D-EE31576BFB49}'
+        Extension = '.usda'
+    },
+    [ordered]@{
+        Name      = 'USD'
+        Clsid     = '{E938BC70-4C08-4446-A15D-EE31576BFB48}'
+        AppId     = '{E938BC70-4C08-4446-A15D-EE31576BFB49}'
+        Extension = '.usdc'
+    },
+    [ordered]@{
+        Name      = 'USD'
+        Clsid     = '{E938BC70-4C08-4446-A15D-EE31576BFB48}'
+        AppId     = '{E938BC70-4C08-4446-A15D-EE31576BFB49}'
+        Extension = '.usdz'
     }
 )
 
@@ -145,4 +169,4 @@ foreach ($scratch in @($manifestPath, (Join-Path $stateDir "registered-keys-$Sco
     if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force }
 }
 
-Write-Output "STL/PLY/glTF/FBX/3MF smoke registration cleanup complete"
+Write-Output "STL/PLY/glTF/FBX/3MF/USD smoke registration cleanup complete"

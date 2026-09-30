@@ -219,6 +219,9 @@
          the exact shipped source. -->
     <ClCompile Include="UsdFamilyAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <!-- C4702 for TinyUSDZ's prim-types.hh under /Od (Debug): vendored
+           header, not product code. Release /O2 does not emit it. -->
+      <DisableSpecificWarnings>4702;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <ClCompile Include="..\import-worker\src\UsdZipPreflight.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

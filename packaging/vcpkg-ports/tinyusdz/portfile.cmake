@@ -7,6 +7,7 @@ vcpkg_from_github(
     PATCHES
         install-minimal-static-library.patch
         register-usda-point-instancer.patch
+        use-vcpkg-fast-float.patch
 )
 
 vcpkg_cmake_configure(
