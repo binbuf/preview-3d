@@ -44,15 +44,21 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <OcctStaticLibDir>$(MSBuildThisFileDirectory)step-occt\vcpkg_installed\x64-windows-static-md\debug\lib</OcctStaticLibDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <OcctStaticLibDir>$(MSBuildThisFileDirectory)step-occt\vcpkg_installed\x64-windows-static-md\lib</OcctStaticLibDir>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <!-- FASTGLTF_ENABLE_DEPRECATED_EXT=1 must match the vcpkg fastgltf static
            library's INTERFACE_COMPILE_DEFINITIONS (OFF would change the
            fastgltf::Material layout and corrupt the heap). -->
-      <PreprocessorDefinitions>_DEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;OCCT_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;..\import-worker\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;..\import-worker\src;..\compatibility-host-step\src;$(MSBuildThisFileDirectory)step-occt\vcpkg_installed\x64-windows-static-md\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- Product-boundary hardening (design/05-thumbnail-provider.md). /sdl,
            /W4 and warnings-as-errors come from Directory.Build.props.
            /guard:cf cannot be combined with the Debug default /ZI (Edit and
@@ -68,8 +74,12 @@
       <CETCompat>true</CETCompat>
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <DataExecutionPrevention>true</DataExecutionPrevention>
+      <!-- T34: the constrained OCCT STEP adapter links the dedicated static
+           OCCT closure, isolated from the repository-root manifest so the
+           viewer, general worker and either import host can never link it. -->
+      <AdditionalLibraryDirectories>$(OcctStaticLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <!-- T13 CreateDIBSection (gdi32); no other GDI object is created. -->
-      <AdditionalDependencies>gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>gdi32.lib;TKernel.lib;TKMath.lib;TKG2d.lib;TKG3d.lib;TKGeomBase.lib;TKBRep.lib;TKTopAlgo.lib;TKPrim.lib;TKBO.lib;TKBool.lib;TKGeomAlgo.lib;TKShHealing.lib;TKMesh.lib;TKFeat.lib;TKFillet.lib;TKOffset.lib;TKHLR.lib;TKXSBase.lib;TKDESTEP.lib;TKDE.lib;TKCDF.lib;TKCAF.lib;TKLCAF.lib;TKVCAF.lib;TKXCAF.lib;TKXmlXCAF.lib;TKBinXCAF.lib;TKStd.lib;TKStdL.lib;TKXml.lib;TKXmlL.lib;TKBin.lib;TKBinL.lib;TKTObj.lib;TKBinTObj.lib;TKXmlTObj.lib;TKService.lib;TKV3d.lib;TKXMesh.lib;ws2_32.lib;advapi32.lib;user32.lib;shell32.lib;ole32.lib;oleaut32.lib;iphlpapi.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -79,10 +89,10 @@
       <!-- FASTGLTF_ENABLE_DEPRECATED_EXT=1 must match the vcpkg fastgltf static
            library's INTERFACE_COMPILE_DEFINITIONS (OFF would change the
            fastgltf::Material layout and corrupt the heap). -->
-      <PreprocessorDefinitions>NDEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;OCCT_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;..\import-worker\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;..\import-worker\src;..\compatibility-host-step\src;$(MSBuildThisFileDirectory)step-occt\vcpkg_installed\x64-windows-static-md\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- Product-boundary hardening (design/05-thumbnail-provider.md). /sdl,
            /W4 and warnings-as-errors come from Directory.Build.props. -->
       <ControlFlowGuard>Guard</ControlFlowGuard>
@@ -95,8 +105,12 @@
       <CETCompat>true</CETCompat>
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <DataExecutionPrevention>true</DataExecutionPrevention>
+      <!-- T34: the constrained OCCT STEP adapter links the dedicated static
+           OCCT closure, isolated from the repository-root manifest so the
+           viewer, general worker and either import host can never link it. -->
+      <AdditionalLibraryDirectories>$(OcctStaticLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <!-- T13 CreateDIBSection (gdi32); no other GDI object is created. -->
-      <AdditionalDependencies>gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>gdi32.lib;TKernel.lib;TKMath.lib;TKG2d.lib;TKG3d.lib;TKGeomBase.lib;TKBRep.lib;TKTopAlgo.lib;TKPrim.lib;TKBO.lib;TKBool.lib;TKGeomAlgo.lib;TKShHealing.lib;TKMesh.lib;TKFeat.lib;TKFillet.lib;TKOffset.lib;TKHLR.lib;TKXSBase.lib;TKDESTEP.lib;TKDE.lib;TKCDF.lib;TKCAF.lib;TKLCAF.lib;TKVCAF.lib;TKXCAF.lib;TKXmlXCAF.lib;TKBinXCAF.lib;TKStd.lib;TKStdL.lib;TKXml.lib;TKXmlL.lib;TKBin.lib;TKBinL.lib;TKTObj.lib;TKBinTObj.lib;TKXmlTObj.lib;TKService.lib;TKV3d.lib;TKXMesh.lib;ws2_32.lib;advapi32.lib;user32.lib;shell32.lib;ole32.lib;oleaut32.lib;iphlpapi.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -137,6 +151,8 @@
     <ClInclude Include="ThreeMfFamilyAdapter.h" />
     <!-- T33 USD/USDZ family adapter (provider-local pinned TinyUSDZ). -->
     <ClInclude Include="UsdFamilyAdapter.h" />
+    <!-- T34 STEP/STP family adapter (dedicated static OCCT closure). -->
+    <ClInclude Include="StepFamilyAdapter.h" />
     <!-- T07: the provider-shared parser subset. These are the same source
          files the import worker compiles (ADR-0004, source-not-state); none
          of them reference a broker/worker/viewer header. -->
@@ -224,6 +240,16 @@
       <DisableSpecificWarnings>4702;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <ClCompile Include="..\import-worker\src\UsdZipPreflight.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T34 STEP/STP family adapter (OCCT XDE/STEP/tessellation) plus the
+         product-owned Part-21 admission scanner it reuses from the STEP host
+         (source-not-state, ADR-0004). PCH-free like the other adapters. OCCT
+         headers are warning-suppressed inside the translation unit. -->
+    <ClCompile Include="StepFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\compatibility-host-step\src\StepPart21Preflight.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="RasterBitmap.cpp">

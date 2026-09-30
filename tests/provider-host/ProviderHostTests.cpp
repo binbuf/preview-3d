@@ -192,9 +192,10 @@ TEST_CASE("multiple STA apartments drive provider objects concurrently", "[host]
     ProviderModule module;
     REQUIRE(module.Ready());
 
-    // STEP (T34) has no linked adapter yet, so the concurrent activation here
-    // exercises the tabulated ERROR_NOT_SUPPORTED fallback; the golden case
-    // above covers a real adapter concurrently through the fixtures loop.
+    // All eight families now link a real adapter, so the concurrent activation
+    // here drives the STEP family's typed fallback on a garbage stream (null
+    // bitmap on any failure); the golden case above covers a real adapter
+    // concurrently through the fixtures loop.
     const GUID clsid = FamilyClsid(preview3d::provider::Family::Step);
     constexpr int kThreads = 4;
     constexpr int kIterations = 25;
@@ -217,12 +218,12 @@ TEST_CASE("multiple STA apartments drive provider objects concurrently", "[host]
                     if (bitmap == nullptr || alpha != WTSAT_ARGB) {
                         ++failures;
                     }
-                } else if (hr == HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)) {
+                } else {
+                    // Any typed failure is acceptable for the garbage stream as
+                    // long as it fabricates no bitmap.
                     if (bitmap != nullptr) {
                         ++failures;
                     }
-                } else {
-                    ++failures;
                 }
                 if (bitmap != nullptr) {
                     ::DeleteObject(bitmap);

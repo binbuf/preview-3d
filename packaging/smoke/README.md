@@ -1,8 +1,9 @@
-# Developer/QA-local installed Release smoke (T22/T23/T25/T31/T32/T33)
+# Developer/QA-local installed Release smoke (T22/T23/T25/T31/T32/T33/T34)
 
 Proves the production-shaped end-to-end slice on this machine: a Release build,
-staged provider DLL, the STL, PLY, glTF, FBX, 3MF and USD CLSIDs + extension `ShellEx` registered, and a real
-`.stl`/`.ply`/`.glb`/`.fbx`/`.3mf`/`.usda` rendered to a model-derived thumbnail through the same Shell path Explorer uses.
+staged provider DLL, all eight CLSIDs (STL, PLY, glTF, FBX, 3MF, USD, STEP) + extension `ShellEx`
+registered, and a real `.stl`/`.ply`/`.glb`/`.fbx`/`.3mf`/`.usda`/`.stp` rendered to a
+model-derived thumbnail through the same Shell path Explorer uses.
 
 This is a **local developer/QA smoke, not the release artifact**. It writes per-user
 (`HKCU`) keys, stages a scratch copy of the DLL and CRT, and cleans up after itself. It
@@ -15,7 +16,7 @@ clean-machine/DPI acceptance (T44). See `docs/design/adr/0020-developer-local-in
 | --- | --- |
 | `Invoke-ProviderSmoke.ps1` | Orchestrates build → stage → clear thumbnail cache → register → verify → unregister. Exit 0 means every check passed. |
 | `Stage-ProviderSmoke.ps1` | Copies `Preview3DThumbnailProvider.dll` and its non-system runtime closure (app-local MSVC CRT) into `artifacts\smoke\stage\<Config>` and verifies the closure with `dumpbin`. |
-| `Register-ProviderSmoke.ps1` | Writes each family's `CLSID`/`InprocServer32`/`ThreadingModel=Apartment`, AppID (`DllSurrogate=""`) and extension-level `ShellEx` mapping (STL + PLY + glTF `.glb` + FBX `.fbx` + 3MF `.3mf` + USD `.usd`/`.usda`/`.usdc`/`.usdz`). Backs up every touched key first; never writes `DisableProcessIsolation`. |
+| `Register-ProviderSmoke.ps1` | Writes each family's `CLSID`/`InprocServer32`/`ThreadingModel=Apartment`, AppID (`DllSurrogate=""`) and extension-level `ShellEx` mapping (STL + PLY + glTF `.glb` + FBX `.fbx` + 3MF `.3mf` + USD `.usd`/`.usda`/`.usdc`/`.usdz` + STEP `.step`/`.stp`). Backs up every touched key first; never writes `DisableProcessIsolation`. |
 | `Unregister-ProviderSmoke.ps1` | Removes the owned keys, restores pre-existing ones, stops any `DllHost` still holding the DLL, and prunes keys this smoke created. |
 | `ProviderSmokeHost.cpp` / `.vcxproj` | `ProviderSmokeHost.exe`: the verifier (see below). Part of `Preview3D.slnx`. |
 | `fixtures/smoke-cube.stl` | A small, recognizable binary STL cube (12 facets) used as the STL smoke model. |
@@ -24,6 +25,7 @@ clean-machine/DPI acceptance (T44). See `docs/design/adr/0020-developer-local-in
 | `fixtures/smoke-cube.fbx` | The small binary FBX cube from the FBX corpus, used as the FBX smoke model. |
 | `fixtures/smoke-cube.3mf` | The small Core 3MF unit cube from the 3MF corpus, used as the 3MF smoke model. |
 | `fixtures/smoke-cube.usda` | An original Preview3D ASCII USDA unit cube (12 triangles), used as the USD smoke model. |
+| `fixtures/smoke-cube.stp` | The committed AP214 analytic part with a through-hole and shape color, used as the STEP smoke model. |
 
 ## Run
 
@@ -35,8 +37,8 @@ pwsh -File packaging\smoke\Invoke-ProviderSmoke.ps1
 
 Useful switches: `-SkipBuild`, `-KeepRegistered` (leave the HKCU keys in place),
 `-SkipThumbnailCacheClear`, `-StlPath <file>`, `-PlyPath <file>`, `-GltfPath <file>`,
-`-FbxPath <file>`, `-MfPath <file>`, `-UsdPath <file>`, `-Configuration Debug`. The orchestrator runs the verifier once per family
-(STL, PLY, glTF, FBX, 3MF, USD) and exits 0 only when all match.
+`-FbxPath <file>`, `-MfPath <file>`, `-UsdPath <file>`, `-StepPath <file>`, `-Configuration Debug`. The orchestrator runs the verifier once per family
+(STL, PLY, glTF, FBX, 3MF, USD, STEP) and exits 0 only when all match.
 
 The orchestrator builds the provider and the smoke host directly (with
 `/p:SolutionDir=<repo>\`) so it is not blocked by unrelated projects. The full-solution
@@ -76,9 +78,11 @@ Evidence is written to `artifacts\smoke\evidence\<Config>\`:
 - `Unregister-ProviderSmoke.ps1` restores exactly the keys that pre-existed and removes only
   the values/keys this smoke added, so the machine's existing `.stl` associations are kept.
 
-## For later family tasks (T24–T34)
+## Adding a family
 
 Add the family's CLSID, AppID and extension to the `$families` array in both register/unregister
 scripts, add its `--<family>` case and CLSID/key constants to `ProviderSmokeHost.cpp`, add the model
 to `Invoke-ProviderSmoke.ps1`, commit a small non-degenerate fixture, and re-run the orchestrator.
 The verifier itself is family-agnostic; the CLSID and model path are the only family-specific values.
+T34 completed the eighth family (STEP/STP); T41 must still move these smoke identities to the real
+installer rules. The STEP DLL statically contains OCCT, so it stages no extra runtime DLL.

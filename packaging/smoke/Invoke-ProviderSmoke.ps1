@@ -21,6 +21,7 @@ param(
     [string]$FbxPath = '',
     [string]$MfPath = '',
     [string]$UsdPath = '',
+    [string]$StepPath = '',
     [switch]$SkipBuild,
     [switch]$KeepRegistered,
     [switch]$SkipThumbnailCacheClear
@@ -48,6 +49,9 @@ if ([string]::IsNullOrWhiteSpace($MfPath)) {
 if ([string]::IsNullOrWhiteSpace($UsdPath)) {
     $UsdPath = Join-Path $PSScriptRoot 'fixtures\smoke-cube.usda'
 }
+if ([string]::IsNullOrWhiteSpace($StepPath)) {
+    $StepPath = Join-Path $PSScriptRoot 'fixtures\smoke-cube.stp'
+}
 if (-not (Test-Path -LiteralPath $StlPath -PathType Leaf)) {
     throw "Smoke .stl not found: $StlPath"
 }
@@ -65,6 +69,9 @@ if (-not (Test-Path -LiteralPath $MfPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $UsdPath -PathType Leaf)) {
     throw "Smoke .usda not found: $UsdPath"
+}
+if (-not (Test-Path -LiteralPath $StepPath -PathType Leaf)) {
+    throw "Smoke .stp not found: $StepPath"
 }
 
 $stage = Join-Path $repository "artifacts\smoke\stage\$Configuration"
@@ -121,6 +128,7 @@ $gltfExit = 1
 $fbxExit = 1
 $mfExit = 1
 $usdExit = 1
+$stepExit = 1
 try {
     & $hostExe --dll $stagedDll --stl $StlPath --cx 256 --out $evidence
     $stlExit = $LASTEXITCODE
@@ -139,6 +147,9 @@ try {
 
     & $hostExe --dll $stagedDll --usd $UsdPath --cx 256 --out $evidence
     $usdExit = $LASTEXITCODE
+
+    & $hostExe --dll $stagedDll --step $StepPath --cx 256 --out $evidence
+    $stepExit = $LASTEXITCODE
 } finally {
     if (-not $KeepRegistered) {
         & (Join-Path $PSScriptRoot 'Unregister-ProviderSmoke.ps1') -Scope HKCU
@@ -148,8 +159,8 @@ try {
 }
 
 Write-Output "evidence directory: $evidence"
-if ($stlExit -ne 0 -or $plyExit -ne 0 -or $gltfExit -ne 0 -or $fbxExit -ne 0 -or $mfExit -ne 0 -or $usdExit -ne 0) {
-    Write-Output "smoke FAILED (stl exit $stlExit, ply exit $plyExit, gltf exit $gltfExit, fbx exit $fbxExit, 3mf exit $mfExit, usd exit $usdExit)"
+if ($stlExit -ne 0 -or $plyExit -ne 0 -or $gltfExit -ne 0 -or $fbxExit -ne 0 -or $mfExit -ne 0 -or $usdExit -ne 0 -or $stepExit -ne 0) {
+    Write-Output "smoke FAILED (stl exit $stlExit, ply exit $plyExit, gltf exit $gltfExit, fbx exit $fbxExit, 3mf exit $mfExit, usd exit $usdExit, step exit $stepExit)"
     exit 1
 }
 exit 0

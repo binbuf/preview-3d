@@ -14,6 +14,7 @@
 #include "GltfFamilyAdapter.h"
 #include "ObjFamilyAdapter.h"
 #include "PlyFamilyAdapter.h"
+#include "StepFamilyAdapter.h"
 #include "StlFamilyAdapter.h"
 #include "ThreeMfFamilyAdapter.h"
 #include "UsdFamilyAdapter.h"
@@ -82,6 +83,14 @@ std::unique_ptr<IFamilyAdapter> CreateFamilyAdapter(Family family) noexcept
                 return nullptr;
             }
         case Family::Step:
+            // T34: the constrained STEP/STP adapter over the dedicated static
+            // OCCT closure (Part-21 admission before OCCT, bounded XDE read and
+            // low-detail tessellation; no Preview3DStepHost.exe launch).
+            try {
+                return std::make_unique<StepAdapter>();
+            } catch (...) {
+                return nullptr;
+            }
         case Family::Unknown:
         default:
             return nullptr;

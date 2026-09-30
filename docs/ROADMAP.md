@@ -72,7 +72,7 @@ before it is built.
 - [x] T31 — Implement the FBX thumbnail adapter → [tasks/31-fbx-adapter.md](tasks/31-fbx-adapter.md)
 - [x] T32 — Implement the 3MF thumbnail adapter → [tasks/32-3mf-adapter.md](tasks/32-3mf-adapter.md)
 - [x] T33 — Implement the USD/USDZ thumbnail adapter → [tasks/33-usd-adapter.md](tasks/33-usd-adapter.md)
-- [ ] T34 — Implement the STEP/STP thumbnail adapter — E2E slice review → [tasks/34-step-adapter.md](tasks/34-step-adapter.md)
+- [x] T34 — Implement the STEP/STP thumbnail adapter — E2E slice review → [tasks/34-step-adapter.md](tasks/34-step-adapter.md)
 
 ## Phase 6 — Production hardening and full registration
 
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-30T04:09:00Z · 22/29 done
+**Pipeline status** — updated 2026-09-30T05:14:42Z · 23/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31, T32, T33, T34
 - Blocked: none
 - Failed: none
-- Remaining: T34, T41, T42, T43, T44, T51, T52
-- Last finished: T33 — done · USD/USDZ adapter landed and routed by CLSID over pinned TinyUSDZ (byte-sniffed USDA/USDC/USDZ, contained-only, composition/external fail-closed); fixed the TinyUSDZ/lib3mf fast_float ABI crash via tinyusdz port 0.9.1#3; Tests.Unit green Debug+Release (316 cases), ProviderHost goldens and six-family smoke pass.
+- Remaining: T41, T42, T43, T44, T51, T52
+- Last finished: T34 — done · STEP/STP renders through the frozen CLSID over a dedicated static OCCT 7.8 closure linked only into the provider/tests; Part-21 admission + T16 containment + low-detail tessellation; Tests.Unit Release/Debug green (339 cases), ProviderHost green with a STEP golden, closure OK, ~18 ms/<1 MiB per render, and the T22 smoke yields a model-derived Explorer thumbnail (meanAbs=0); docs/ADR/PROGRESS/hand-off updated.
 <!-- /symphony:status -->

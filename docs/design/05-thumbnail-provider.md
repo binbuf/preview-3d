@@ -311,6 +311,31 @@ texture slot — so an absent or external image never fabricates geometry. A `fa
 between TinyUSDZ's vendored copy and lib3mf's vcpkg copy is removed by building TinyUSDZ against the
 vcpkg-pinned `fast_float` in the overlay port (`0.9.1#3`, [ADR-0026](adr/0026-usd-adapter-pinned-tinyusdz.md)).
 
+T34 implements the STEP/STP adapter as `thumbnail-provider/StepFamilyAdapter.{h,cpp}`
+(selected only by the routed `Family::Step` CLSID, the fixed identity
+`{6EE961AC-AC3B-4958-A898-E30523FEE79D}`) over a **dedicated static OCCT 7.8
+closure** declared by the isolated manifest `thumbnail-provider/step-occt/` and
+linked only into the provider, `Tests.Unit.exe` and `Tests.ProviderHost.exe`
+([ADR-0027](adr/0027-step-adapter-constrained-occt.md)); the existing STEP host
+keeps its own separate OCCT closure and the provider never launches
+`Preview3DStepHost.exe`. The adapter reuses the STEP host's product-owned
+Part-21 admission scanner (source-not-state, [ADR-0004](adr/0004-share-source-not-state.md))
+before any OCCT call: it rejects external documents (`FILE_POPULATION`/
+`DOCUMENT_FILE`), unsupported encodings and over-budget input (256 MiB stream,
+2 M entity records, 20 M references, 4096 sections). OCCT then reads a bounded
+seekable `std::streambuf` over the T12 `BoundedSource` — never a path — with
+color/name/layer modes and a per-call `TDocStd_Document`; opaque OCCT calls run
+under the T16 exception/structured-exception containment boundary so a malformed
+authored tessellation is a typed failure, never a fabricated image. The XDE
+assembly/instance hierarchy is walked with checked double-precision row-vector
+transforms (256-level depth cap, cycle detection, 20 000 definitions) and a fixed
+low-detail deterministic meshing policy (`IMeshTools_Parameters` relative
+deflection `0.05` clamped to `[0.01, 5.0]`, angle `0.7`; 1 M triangles per
+definition, 2 M inspected total) with shape/instance colors normalized to the
+shared `MaterialPayload`. A non-contiguous or over-128 MiB stream is read through
+bounded range reads; an over-`kAllocationLedgerMaxBytes` accounted scratch
+reservation fails closed.
+
 ## CPU renderer
 
 The thumbnail DLL uses a product-owned tile rasterizer; no GPU device or graphics queue is created inside Explorer.

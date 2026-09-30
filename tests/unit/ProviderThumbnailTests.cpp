@@ -128,8 +128,11 @@ TEST_CASE("GetThumbnail rejects cx == 0 and fails closed without an adapter",
     ProviderModule module;
     REQUIRE(module.Ready());
 
-    // T33 links the USD adapter, so this case uses the STEP CLSID, which still
-    // has no linked adapter (T34), to prove the "no adapter" fallback.
+    // T34 links the last family (STEP), so every routed family now has a real
+    // adapter; a garbage stream through the STEP CLSID reaches that adapter and
+    // falls back to the generic icon with the tabulated bad-format code. The
+    // "no linked adapter" path itself is covered at the pipeline seam by
+    // ProviderPipelineTests' scripted dependencies.
     IThumbnailProvider* provider =
         CreateThumbnailProvider(module, preview3d::test::FamilyClsid(Family::Step));
     REQUIRE(provider != nullptr);
@@ -146,14 +149,14 @@ TEST_CASE("GetThumbnail rejects cx == 0 and fails closed without an adapter",
     CHECK(bitmap == nullptr);
     CHECK(alpha == WTSAT_UNKNOWN);
 
-    // No adapter is linked for this family yet, so a real request falls back to
-    // the generic icon with the tabulated code and no fabricated bitmap. A
-    // request larger than today's cache sizes is still only a hint.
+    // A garbage stream is not a Part-21 envelope, so the STEP adapter fails
+    // closed to the generic icon with the tabulated bad-format code and never a
+    // fabricated bitmap. A request larger than today's cache sizes is a hint.
     for (const UINT cx : {32u, 256u, 4096u}) {
         bitmap = reinterpret_cast<HBITMAP>(1);
         alpha = WTSAT_ARGB;
         CHECK(provider->GetThumbnail(cx, &bitmap, &alpha) ==
-              HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
+              HRESULT_FROM_WIN32(ERROR_BAD_FORMAT));
         CHECK(bitmap == nullptr);
         CHECK(alpha == WTSAT_UNKNOWN);
     }
@@ -163,7 +166,7 @@ TEST_CASE("GetThumbnail rejects cx == 0 and fails closed without an adapter",
     bitmap = nullptr;
     alpha = WTSAT_UNKNOWN;
     CHECK(provider->GetThumbnail(64, &bitmap, &alpha) ==
-          HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
+          HRESULT_FROM_WIN32(ERROR_BAD_FORMAT));
     CHECK(bitmap == nullptr);
 
     init->Release();
