@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace preview3d::test {
@@ -227,6 +228,28 @@ std::vector<std::byte> BuildColoredPointsPly()
     return bytes;
 }
 
+// A committed ASCII FBX hierarchy from the FBX qualification corpus. The
+// provider never opens a path; the host reads the bytes once and hands them to
+// the bounded source. Missing file -> empty fixture -> the golden case fails
+// loudly rather than silently.
+std::vector<std::byte> ReadFbxFixture(const char* name)
+{
+    const std::filesystem::path path =
+        std::filesystem::path(PREVIEW3D_FBX_FIXTURE_DIR) / name;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const std::streamoff size = file.tellg();
+    if (size <= 0) {
+        return {};
+    }
+    file.seekg(0);
+    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(bytes.data()), size);
+    return bytes;
+}
+
 } // namespace
 
 std::string ProviderHostGoldenDirectory()
@@ -303,6 +326,17 @@ std::span<const GoldenFixture> ProviderHostFixtures()
         gltfTriangle.tolerance = GoldenTolerance{2.0, 48};
         gltfTriangle.cx = 256;
         fixtures.push_back(std::move(gltfTriangle));
+
+        // T31: a committed ASCII FBX hierarchy routed through the linked
+        // FbxAdapter (provider-local ufbx; deterministic static pose).
+        GoldenFixture fbxHierarchy;
+        fbxHierarchy.name = "fbx-hierarchy";
+        fbxHierarchy.family = preview3d::provider::Family::Fbx;
+        fbxHierarchy.source = ReadFbxFixture("hierarchy-instances-pivots-ascii.fbx");
+        fbxHierarchy.goldenPath = ProviderHostGoldenDirectory() + "fbx-hierarchy-256.pam";
+        fbxHierarchy.tolerance = GoldenTolerance{2.0, 48};
+        fbxHierarchy.cx = 256;
+        fixtures.push_back(std::move(fbxHierarchy));
 
         return fixtures;
     }();

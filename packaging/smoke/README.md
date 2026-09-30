@@ -1,8 +1,8 @@
-# Developer/QA-local installed Release smoke (T22/T23/T25)
+# Developer/QA-local installed Release smoke (T22/T23/T25/T31)
 
 Proves the production-shaped end-to-end slice on this machine: a Release build,
-staged provider DLL, the STL, PLY and glTF CLSIDs + extension `ShellEx` registered, and a real
-`.stl`/`.ply`/`.glb` rendered to a model-derived thumbnail through the same Shell path Explorer uses.
+staged provider DLL, the STL, PLY, glTF and FBX CLSIDs + extension `ShellEx` registered, and a real
+`.stl`/`.ply`/`.glb`/`.fbx` rendered to a model-derived thumbnail through the same Shell path Explorer uses.
 
 This is a **local developer/QA smoke, not the release artifact**. It writes per-user
 (`HKCU`) keys, stages a scratch copy of the DLL and CRT, and cleans up after itself. It
@@ -15,12 +15,13 @@ clean-machine/DPI acceptance (T44). See `docs/design/adr/0020-developer-local-in
 | --- | --- |
 | `Invoke-ProviderSmoke.ps1` | Orchestrates build → stage → clear thumbnail cache → register → verify → unregister. Exit 0 means every check passed. |
 | `Stage-ProviderSmoke.ps1` | Copies `Preview3DThumbnailProvider.dll` and its non-system runtime closure (app-local MSVC CRT) into `artifacts\smoke\stage\<Config>` and verifies the closure with `dumpbin`. |
-| `Register-ProviderSmoke.ps1` | Writes each family's `CLSID`/`InprocServer32`/`ThreadingModel=Apartment`, AppID (`DllSurrogate=""`) and extension-level `ShellEx` mapping (STL + PLY + glTF `.glb`). Backs up every touched key first; never writes `DisableProcessIsolation`. |
+| `Register-ProviderSmoke.ps1` | Writes each family's `CLSID`/`InprocServer32`/`ThreadingModel=Apartment`, AppID (`DllSurrogate=""`) and extension-level `ShellEx` mapping (STL + PLY + glTF `.glb` + FBX `.fbx`). Backs up every touched key first; never writes `DisableProcessIsolation`. |
 | `Unregister-ProviderSmoke.ps1` | Removes the owned keys, restores pre-existing ones, stops any `DllHost` still holding the DLL, and prunes keys this smoke created. |
 | `ProviderSmokeHost.cpp` / `.vcxproj` | `ProviderSmokeHost.exe`: the verifier (see below). Part of `Preview3D.slnx`. |
 | `fixtures/smoke-cube.stl` | A small, recognizable binary STL cube (12 facets) used as the STL smoke model. |
 | `fixtures/smoke-cube.ply` | A small, recognizable colored ASCII PLY cube used as the PLY smoke model. |
 | `fixtures/smoke-cube.glb` | A small, recognizable embedded GLB cube (one BIN chunk, no sidecar) used as the glTF smoke model. |
+| `fixtures/smoke-cube.fbx` | The small binary FBX cube from the FBX corpus, used as the FBX smoke model. |
 
 ## Run
 
@@ -32,8 +33,8 @@ pwsh -File packaging\smoke\Invoke-ProviderSmoke.ps1
 
 Useful switches: `-SkipBuild`, `-KeepRegistered` (leave the HKCU keys in place),
 `-SkipThumbnailCacheClear`, `-StlPath <file>`, `-PlyPath <file>`, `-GltfPath <file>`,
-`-Configuration Debug`. The orchestrator runs the verifier once per family (STL, PLY, glTF) and
-exits 0 only when all match.
+`-FbxPath <file>`, `-Configuration Debug`. The orchestrator runs the verifier once per family
+(STL, PLY, glTF, FBX) and exits 0 only when all match.
 
 The orchestrator builds the provider and the smoke host directly (with
 `/p:SolutionDir=<repo>\`) so it is not blocked by unrelated projects. The full-solution

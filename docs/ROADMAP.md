@@ -69,7 +69,7 @@ before it is built.
 
 ## Phase 5 — Tier B breadth
 
-- [ ] T31 — Implement the FBX thumbnail adapter → [tasks/31-fbx-adapter.md](tasks/31-fbx-adapter.md)
+- [x] T31 — Implement the FBX thumbnail adapter → [tasks/31-fbx-adapter.md](tasks/31-fbx-adapter.md)
 - [ ] T32 — Implement the 3MF thumbnail adapter → [tasks/32-3mf-adapter.md](tasks/32-3mf-adapter.md)
 - [ ] T33 — Implement the USD/USDZ thumbnail adapter → [tasks/33-usd-adapter.md](tasks/33-usd-adapter.md)
 - [ ] T34 — Implement the STEP/STP thumbnail adapter — E2E slice review → [tasks/34-step-adapter.md](tasks/34-step-adapter.md)
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-30T00:15:16Z · 19/29 done
+**Pipeline status** — updated 2026-09-30T00:30:53Z · 20/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25, T31
 - Blocked: none
 - Failed: none
-- Remaining: T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T25 — done · glTF/GLB provider adapter (embedded-only, transformed/instanced geometry, bounded Draco/meshopt, budgeted KTX2/WebP, sidecar fail-closed) implemented and registered; Debug+Release Tests.Unit, provider-host goldens, dependency closure, and the STL/PLY/glTF Shell smoke all pass; docs/ADR/hand-off updated.
+- Remaining: T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T31 — done · FBX adapter implemented and registered; binary/ASCII parse, static pose, embedded-image validation, external/unsupported fallbacks, preflight-bounded evaluation; Debug+Release Tests.Unit, ProviderHost goldens, dependency closure and the headless T22 smoke all pass; ADR-0024 and hand-off written.
 <!-- /symphony:status -->

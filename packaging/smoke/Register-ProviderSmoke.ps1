@@ -48,6 +48,13 @@ $families = @(
         AppId     = '{A592F425-EA68-4C88-BB96-020805D4BE57}'
         Extension = '.glb'
         Display   = 'Preview 3D glTF Thumbnail Provider'
+    },
+    [ordered]@{
+        Name      = 'FBX'
+        Clsid     = '{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}'
+        AppId     = '{FBC218D4-FD2C-41DF-B168-7F3B9E53C84F}'
+        Extension = '.fbx'
+        Display   = 'Preview 3D FBX Thumbnail Provider'
     }
 )
 

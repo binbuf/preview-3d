@@ -24,6 +24,7 @@
 - **T23 — Implement the PLY thumbnail adapter**: Provider PLY adapter lives in `thumbnail-provider/PlyFamilyAdapter.{h,cpp}` (class; Shape: ASCII + binary little/big-endian; required finite scalar `x/y/z`; optional `nx/ny/nz` and
 - **T24 — Implement the OBJ thumbnail adapter**: Provider OBJ adapter lives in `thumbnail-provider/ObjFamilyAdapter.{h,cpp}` (class; **ufbx linkage:** the provider project now sets `VcpkgEnableManifest=true` and links the pinned
 - **T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review**: Provider glTF adapter lives in `thumbnail-provider/GltfFamilyAdapter.{h,cpp}` (class; **Embedded-only:** fastgltf `Options::None`; only the GLB BIN chunk and embedded `data:` URIs are
+- **T31 — Implement the FBX thumbnail adapter**: Provider FBX adapter lives in `thumbnail-provider/FbxFamilyAdapter.{h,cpp}` (class; **ufbx linkage is shared with T24:** the provider already links the pinned `x64-windows-static-md`
 <!-- symphony:digest:end -->
 
 Shared notebook for the symphony run. Each task session appends a "## Txx — title" section with what
@@ -586,6 +587,13 @@ markers); sessions are pointed at this file and read it themselves.
 - Any project that includes fastgltf headers must define `FASTGLTF_ENABLE_DEPRECATED_EXT=1` to match
   the vcpkg static library's `INTERFACE_COMPILE_DEFINITIONS`; MSBuild autolink does not apply them
   and the mismatch corrupts the heap (T25).
+- T31 (FBX) landed. Remaining follow-ups: (a) T41 must register `.fbx` ShellEx for the FBX CLSID
+  `{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}` with the real installer rules (the local smoke uses AppID
+  `{...C84F}`, which is a smoke-only identity); (b) `ufbx_evaluate_scene` still cannot be cooperatively
+  interrupted, so a pathological in-cap file can overrun the 750 ms p95 target — T51 must measure that
+  distribution and any real cancellation must go through the worker/Job path (FBX-001), not the
+  adapter; (c) embedded images are structurally validated but not decoded (no texture consumer), so a
+  later texture-sampling task must promote this to a bounded decoder and revisit ADR-0024.
 
 ## T21 - Implement the STL thumbnail adapter
 
@@ -798,3 +806,59 @@ markers); sessions are pointed at this file and read it themselves.
 - Docs: new `docs/design/adr/0023-gltf-adapter-embedded-only.md`; `design/05-thumbnail-provider.md`
   documents the adapter; `packaging/smoke/README.md` covers the glTF family.
 - **This closes the Tier A breadth slice (STL, PLY, OBJ, glTF); the T25 E2E review is non-blocking.**
+
+## T31 — Implement the FBX thumbnail adapter
+
+- Provider FBX adapter lives in `thumbnail-provider/FbxFamilyAdapter.{h,cpp}` (class
+  `preview3d::provider::FbxAdapter`), registered for `Family::Fbx` in `FamilyAdapterRegistry.cpp`.
+  PCH/COM/GDI-free, so it compiles into the DLL, `Tests.Unit.exe` and `Tests.ProviderHost.exe`.
+  Uses the distinct name `FbxFamilyAdapter.*` (the T21/T24 naming gotcha: `import-worker/src/FbxAdapter.*`
+  is on the Tests.Unit include path).
+- **ufbx linkage is shared with T24:** the provider already links the pinned `x64-windows-static-md`
+  ufbx static library via the root vcpkg manifest, so T31 adds no new dependency and the DLL stays
+  import-clean (`check-provider-dependency-closure.ps1` still passes, 14 modules).
+- **Encoding/external access:** `file_format = UFBX_FILE_FORMAT_UNKNOWN`, `no_format_from_content=false`,
+  `no_format_from_extension=true` (ASCII vs binary detected from bytes), a synthesized
+  `document.fbx` filename, `load_external_files=false`, `ignore_missing_external_files=true`, and a
+  deny `open_file_cb`. A stream whose `metadata.file_format != UFBX_FILE_FORMAT_FBX` returns
+  `UnsupportedFormat`.
+- **Bounded evaluation (FBX-001 has no eval progress callback):** `Preflight()` runs *before*
+  `ufbx_evaluate_scene` and caps nodes/meshes/anim-stacks/skins/bones (10 000), materials (4 096),
+  triangles (2 M) and vertices (6 M); evaluation temp/result allocators are each
+  `kAccountedScratchMaxBytes/2` with a 1 M allocation cap. Load uses the same allocator caps plus
+  `progress_cb`/`force_single_thread_ascii_parsing`.
+- **Static pose:** first anim stack `time_begin` (or `scene->anim` at 0), `evaluate_skinning=true`,
+  `evaluate_caches=false`; authoritative `mesh.skinned_position`/`skinned_normal`, transformed by
+  `node.geometry_to_world` + inverse-transpose normals when `skinned_is_local`, else already world.
+  `ufbx_evaluate_scene` returns a whole new scene; the loaded scene is freed immediately.
+- **Geometry/materials:** `ufbx_triangulate_face` (per-face ceiling 65 536), `reversed_winding`
+  honored by corner swap, vertex colors carried, UVs dropped. Face material resolves via
+  `node.materials` then `mesh.materials`; no material -> index 0, or a registered white fallback when
+  the mesh has vertex colors. Unsupported-only content (NURBS/subdivision/procedural/cache) with no
+  supported polygon -> `UnsupportedRequiredFeature`; otherwise omitted and the rest renders.
+- **Embedded images:** structural allowlist sniff + encoded-byte/decoded-pixel budget (PNG/JPEG/GIF/
+  BMP/WebP), then discarded (no texture consumer). External textures use the neutral fallback.
+- Coverage `tests/unit/ProviderFbxAdapterTests.cpp` (`[provider][fbx]`, 15 cases): binary cube, ASCII
+  hierarchy with instances, deterministic skinned static pose, embedded PNG validation, external
+  texture fallback, NURBS-only unsupported, truncated malformed, non-FBX stream, expired deadline,
+  sink cap stop, ledger-capped non-contiguous backing, non-contiguous parse, pipeline error mapping,
+  rendered bitmap, CLSID routing. Fixtures are read from `tests/fixtures/fbx-spike` via
+  `PREVIEW3D_FBX_FIXTURE_DIR`; `.fbx.base64` binaries are decoded in the test.
+- Host harness: `fbx-hierarchy` fixture in `FixtureRegistry.cpp` (reads
+  `hierarchy-instances-pivots-ascii.fbx` via the same macro) with committed golden
+  `tests/provider-host/goldens/fbx-hierarchy-256.pam`; regenerate with
+  `x64\Release\Tests.ProviderHost.exe "[write-host-goldens]"`. The `[parallel]` case moved its
+  unsupported-family branch from FBX to 3MF, and `ProviderThumbnailTests.cpp` moved its "no adapter"
+  branch from FBX to 3MF.
+- Smoke: `Register-ProviderSmoke.ps1`/`Unregister-ProviderSmoke.ps1` add FBX (CLSID
+  `{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}`, smoke AppID `{...C84F}`, `.fbx\shellex`);
+  `ProviderSmokeHost.exe` takes `--fbx`; `Invoke-ProviderSmoke.ps1` runs STL+PLY+glTF+FBX;
+  committed `fixtures/smoke-cube.fbx` (11 020-byte binary cube from the corpus).
+- Evidence (x64): `Tests.Unit.exe` 283 cases / 134 698 assertions (Release) and 283 / 134 779 (Debug)
+  green; `Tests.ProviderHost.exe` 5 cases / 76 assertions green in both configs;
+  `Invoke-ProviderSmoke.ps1` exit 0 — STL/PLY/glTF/FBX reference-vs-Shell `meanAbs=0.0000 maxAbs=0`,
+  hosted in `dllhost.exe`, no isolation opt-out; dependency closure OK (14 modules).
+- Docs: new `docs/design/adr/0024-fbx-adapter-static-pose.md`; `design/05-thumbnail-provider.md` and
+  `design/adapters/fbx-008-thumbnail.md` document the adapter; `packaging/smoke/README.md` covers FBX.
+- Environment note: the shell here is non-interactive, but the T22 smoke procedure is headless and ran
+  end-to-end (no Explorer GUI needed). Debug/Release builds both link cleanly under `/W4 /WX`.

@@ -1,6 +1,7 @@
 # FBX-008: Explorer FBX thumbnail adapter
 
-Status: blocked on the general Gate 6 thumbnail-provider foundation  
+Status: implemented as the T31 thumbnail adapter (`thumbnail-provider/FbxFamilyAdapter.{h,cpp}`,
+[ADR-0024](../adr/0024-fbx-adapter-static-pose.md)); installer registration and FBX-007 qualification remain later tasks  
 Depends on: FBX-007 and a working bounded COM thumbnail provider  
 Completes: original-MVP FBX family support
 
