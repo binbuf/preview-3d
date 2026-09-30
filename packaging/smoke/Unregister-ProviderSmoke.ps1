@@ -30,6 +30,12 @@ $families = @(
         Clsid     = '{F4DC6119-E235-4BAC-8089-54EDD84F8492}'
         AppId     = '{F4DC6119-E235-4BAC-8089-54EDD84F8493}'
         Extension = '.ply'
+    },
+    [ordered]@{
+        Name      = 'glTF'
+        Clsid     = '{A592F425-EA68-4C88-BB96-020805D4BE56}'
+        AppId     = '{A592F425-EA68-4C88-BB96-020805D4BE57}'
+        Extension = '.glb'
     }
 )
 

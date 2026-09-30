@@ -65,7 +65,7 @@ before it is built.
 
 - [x] T23 — Implement the PLY thumbnail adapter → [tasks/23-ply-adapter.md](tasks/23-ply-adapter.md)
 - [x] T24 — Implement the OBJ thumbnail adapter → [tasks/24-obj-adapter.md](tasks/24-obj-adapter.md)
-- [ ] T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review → [tasks/25-gltf-adapter.md](tasks/25-gltf-adapter.md)
+- [x] T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review → [tasks/25-gltf-adapter.md](tasks/25-gltf-adapter.md)
 
 ## Phase 5 — Tier B breadth
 
@@ -87,11 +87,11 @@ before it is built.
 - [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-09-29T23:52:50Z · 18/29 done
+**Pipeline status** — updated 2026-09-30T00:15:16Z · 19/29 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24
+- Completed: T01, T02, T03, T04, T05, T06, T07, T11, T12, T13, T14, T15, T16, T17, T21, T22, T23, T24, T25
 - Blocked: none
 - Failed: none
-- Remaining: T25, T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
-- Last finished: T24 — done · Jev classified the session as done (confidence 99%)
+- Remaining: T31, T32, T33, T34, T41, T42, T43, T44, T51, T52
+- Last finished: T25 — done · glTF/GLB provider adapter (embedded-only, transformed/instanced geometry, bounded Draco/meshopt, budgeted KTX2/WebP, sidecar fail-closed) implemented and registered; Debug+Release Tests.Unit, provider-host goldens, dependency closure, and the STL/PLY/glTF Shell smoke all pass; docs/ADR/hand-off updated.
 <!-- /symphony:status -->

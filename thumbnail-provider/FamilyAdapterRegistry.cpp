@@ -10,6 +10,7 @@
 
 #include "FamilyAdapterRegistry.h"
 
+#include "GltfFamilyAdapter.h"
 #include "ObjFamilyAdapter.h"
 #include "PlyFamilyAdapter.h"
 #include "StlFamilyAdapter.h"
@@ -42,6 +43,14 @@ std::unique_ptr<IFamilyAdapter> CreateFamilyAdapter(Family family) noexcept
                 return nullptr;
             }
         case Family::Gltf:
+            // T25: the product glTF/GLB adapter over fastgltf (embedded data
+            // URIs/GLB BIN only; bounded Draco/meshopt geometry and KTX2/WebP
+            // images; no external sidecar).
+            try {
+                return std::make_unique<GltfAdapter>();
+            } catch (...) {
+                return nullptr;
+            }
         case Family::Fbx:
         case Family::ThreeMf:
         case Family::Usd:
