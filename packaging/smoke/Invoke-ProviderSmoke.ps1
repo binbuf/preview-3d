@@ -19,6 +19,7 @@ param(
     [string]$PlyPath = '',
     [string]$GltfPath = '',
     [string]$FbxPath = '',
+    [string]$MfPath = '',
     [switch]$SkipBuild,
     [switch]$KeepRegistered,
     [switch]$SkipThumbnailCacheClear
@@ -40,6 +41,9 @@ if ([string]::IsNullOrWhiteSpace($GltfPath)) {
 if ([string]::IsNullOrWhiteSpace($FbxPath)) {
     $FbxPath = Join-Path $PSScriptRoot 'fixtures\smoke-cube.fbx'
 }
+if ([string]::IsNullOrWhiteSpace($MfPath)) {
+    $MfPath = Join-Path $PSScriptRoot 'fixtures\smoke-cube.3mf'
+}
 if (-not (Test-Path -LiteralPath $StlPath -PathType Leaf)) {
     throw "Smoke .stl not found: $StlPath"
 }
@@ -51,6 +55,9 @@ if (-not (Test-Path -LiteralPath $GltfPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $FbxPath -PathType Leaf)) {
     throw "Smoke .fbx not found: $FbxPath"
+}
+if (-not (Test-Path -LiteralPath $MfPath -PathType Leaf)) {
+    throw "Smoke .3mf not found: $MfPath"
 }
 
 $stage = Join-Path $repository "artifacts\smoke\stage\$Configuration"
@@ -105,6 +112,7 @@ $stlExit = 1
 $plyExit = 1
 $gltfExit = 1
 $fbxExit = 1
+$mfExit = 1
 try {
     & $hostExe --dll $stagedDll --stl $StlPath --cx 256 --out $evidence
     $stlExit = $LASTEXITCODE
@@ -117,6 +125,9 @@ try {
 
     & $hostExe --dll $stagedDll --fbx $FbxPath --cx 256 --out $evidence
     $fbxExit = $LASTEXITCODE
+
+    & $hostExe --dll $stagedDll --mf $MfPath --cx 256 --out $evidence
+    $mfExit = $LASTEXITCODE
 } finally {
     if (-not $KeepRegistered) {
         & (Join-Path $PSScriptRoot 'Unregister-ProviderSmoke.ps1') -Scope HKCU
@@ -126,8 +137,8 @@ try {
 }
 
 Write-Output "evidence directory: $evidence"
-if ($stlExit -ne 0 -or $plyExit -ne 0 -or $gltfExit -ne 0 -or $fbxExit -ne 0) {
-    Write-Output "smoke FAILED (stl exit $stlExit, ply exit $plyExit, gltf exit $gltfExit, fbx exit $fbxExit)"
+if ($stlExit -ne 0 -or $plyExit -ne 0 -or $gltfExit -ne 0 -or $fbxExit -ne 0 -or $mfExit -ne 0) {
+    Write-Output "smoke FAILED (stl exit $stlExit, ply exit $plyExit, gltf exit $gltfExit, fbx exit $fbxExit, 3mf exit $mfExit)"
     exit 1
 }
 exit 0

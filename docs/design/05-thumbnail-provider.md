@@ -262,6 +262,31 @@ and decoded pixels (32 MP aggregate), then discarded — because the frozen `Mat
 texture slot and the rasterizer samples no texture; an external texture therefore uses the neutral
 fallback and never fails valid geometry.
 
+T32 implements the 3MF adapter as `thumbnail-provider/ThreeMfFamilyAdapter.{h,cpp}` (selected only by
+the routed `Family::ThreeMf` CLSID, the fixed identity `{D8389A63-8526-454A-9892-72F3149484B9}`) over
+the provider-local pinned lib3mf 2.5 reader, with the package/required-extension and appearance policy
+recorded in [ADR-0025](adr/0025-3mf-adapter-opc-and-lib3mf.md). The bounded product OPC/ZIP preflight
+(`ThreeMfOpcPreflight.cpp`, compiled from the worker's source under provider ceilings: 256 MiB stream,
+128 MiB aggregate expansion, 100:1 ratio, 4096 entries, 32-level paths) rejects unsafe packages before
+lib3mf reads a byte; a bounded byte-level scan of every `.model` part then rejects an unsupported
+`requiredextensions` entry (Core/Materials/Production/Beam-Lattice/Ball allowlist) and DTD/entity
+content, which lib3mf's compatible reader mode does not enforce. lib3mf is statically linked and fed
+the bounded in-memory bytes through read/seek callbacks with a deadline-aborting progress callback —
+never its filename API — so the provider launches no worker and performs no filesystem, sidecar,
+network or persistent access. The standard root build is traversed deterministically across build
+items and component graphs (256-level depth cap, 10 000 occurrences, 2 M inspected triangles) with
+checked double-precision row-vector transforms; bare-mesh occurrences emit a flat-normal triangle
+sample with the object/triangle/per-corner color resolved to a linear vertex color over one registered
+white material. Supported property types are base materials, color groups, texture-coordinate groups,
+composites and multi-properties; a texture group is structurally validated against the 32 MP aggregate
+budget but not decoded (the frozen `MaterialPayload` has no texture slot). A beam/ball lattice
+occurrence prefers a bounded tessellation of tapered beams (Butt/Hemisphere/Sphere caps) and balls,
+`inside`-clips against a closed axis-aligned 8-vertex/12-triangle box under a 262 144-triangle
+per-lattice ceiling with deterministic radial degradation, and fails to the generic icon for `outside`
+or non-box clipping without a representation mesh. An unsupported required extension, an over-budget
+scene, an unclipped parametric lattice or a malformed package fails closed; a supported scene is never
+rendered only in part.
+
 ## CPU renderer
 
 The thumbnail DLL uses a product-owned tile rasterizer; no GPU device or graphics queue is created inside Explorer.

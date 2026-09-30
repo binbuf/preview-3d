@@ -250,6 +250,57 @@ std::vector<std::byte> ReadFbxFixture(const char* name)
     return bytes;
 }
 
+int Base64Value(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+// COMMITTED 3MF fixtures are `.base64` text; decode in memory (the provider
+// itself never opens a path). Missing file -> empty fixture -> the golden case
+// fails loudly rather than silently.
+std::vector<std::byte> ReadThreeMfFixture(const char* name)
+{
+    const std::filesystem::path path =
+        std::filesystem::path(PREVIEW3D_3MF_FIXTURE_DIR) / name;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const std::streamoff size = file.tellg();
+    if (size <= 0) {
+        return {};
+    }
+    file.seekg(0);
+    std::vector<std::byte> text(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(text.data()), size);
+
+    std::vector<std::byte> out;
+    int accumulator = 0;
+    int bits = 0;
+    for (const std::byte raw : text) {
+        const char c = static_cast<char>(raw);
+        if (c == '=') {
+            break;
+        }
+        const int value = Base64Value(c);
+        if (value < 0) {
+            continue;
+        }
+        accumulator = (accumulator << 6) | value;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<std::byte>((accumulator >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 std::string ProviderHostGoldenDirectory()
@@ -337,6 +388,27 @@ std::span<const GoldenFixture> ProviderHostFixtures()
         fbxHierarchy.tolerance = GoldenTolerance{2.0, 48};
         fbxHierarchy.cx = 256;
         fixtures.push_back(std::move(fbxHierarchy));
+
+        // T32: a committed Core 3MF box and a bounded Beam Lattice, routed
+        // through the linked ThreeMfAdapter (provider-local pinned lib3mf; the
+        // committed corpus is transported as base64).
+        GoldenFixture threeMfCore;
+        threeMfCore.name = "three-mf-core";
+        threeMfCore.family = preview3d::provider::Family::ThreeMf;
+        threeMfCore.source = ReadThreeMfFixture("core-box.3mf.base64");
+        threeMfCore.goldenPath = ProviderHostGoldenDirectory() + "three-mf-core-256.pam";
+        threeMfCore.tolerance = GoldenTolerance{2.0, 48};
+        threeMfCore.cx = 256;
+        fixtures.push_back(std::move(threeMfCore));
+
+        GoldenFixture threeMfLattice;
+        threeMfLattice.name = "three-mf-lattice";
+        threeMfLattice.family = preview3d::provider::Family::ThreeMf;
+        threeMfLattice.source = ReadThreeMfFixture("beam-lattice.3mf.base64");
+        threeMfLattice.goldenPath = ProviderHostGoldenDirectory() + "three-mf-lattice-256.pam";
+        threeMfLattice.tolerance = GoldenTolerance{2.0, 48};
+        threeMfLattice.cx = 256;
+        fixtures.push_back(std::move(threeMfLattice));
 
         return fixtures;
     }();

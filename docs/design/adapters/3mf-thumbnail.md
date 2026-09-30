@@ -614,9 +614,19 @@ Produce the evidence required to call the Gate 4 3MF viewer slice complete.
 
 ## 3MF-008 — Explorer thumbnail adapter
 
-Status: blocked on the general Gate 6 thumbnail-provider foundation  
-Depends on: 3MF-007 and a working bounded COM thumbnail provider  
+Status: thumbnail adapter landed (T32, 2026-09-29). The isolated thumbnail DLL now routes `.3mf` by
+its fixed CLSID and renders the supported static root build from the Shell stream; 3MF-007 viewer
+qualification (corpus/fuzz/clean-VM/signed release) remains a separate gate.
+Depends on: 3MF-007 and a working bounded COM thumbnail provider
 Completes: original-MVP 3MF family support
+
+The adapter (`thumbnail-provider/ThreeMfFamilyAdapter.{h,cpp}`) reuses the worker's product OPC/ZIP
+preflight under provider ceilings, adds a bounded byte-level `requiredextensions`/DTD scan, links
+lib3mf only into the thumbnail DLL, and tessellates a bounded lattice preview. Decisions and limits
+are recorded in [ADR-0025](../adr/0025-3mf-adapter-opc-and-lib3mf.md); the provider contract section is
+[05-thumbnail-provider.md](../05-thumbnail-provider.md). Golden fixtures cover the Core box and the
+bounded Beam Lattice; unit coverage covers Core/Production/Materials/lattice plus
+unsupported-required-extension, malformed, over-budget and deadline fallbacks.
 
 ### Work
 

@@ -15,6 +15,7 @@
 #include "ObjFamilyAdapter.h"
 #include "PlyFamilyAdapter.h"
 #include "StlFamilyAdapter.h"
+#include "ThreeMfFamilyAdapter.h"
 
 namespace preview3d::provider {
 
@@ -62,6 +63,14 @@ std::unique_ptr<IFamilyAdapter> CreateFamilyAdapter(Family family) noexcept
                 return nullptr;
             }
         case Family::ThreeMf:
+            // T32: the product 3MF adapter over the provider-local pinned
+            // lib3mf reader (bounded OPC/required-extension preflight, root
+            // build traversal, colors, bounded beam/ball lattice; no worker).
+            try {
+                return std::make_unique<ThreeMfAdapter>();
+            } catch (...) {
+                return nullptr;
+            }
         case Family::Usd:
         case Family::Step:
         case Family::Unknown:

@@ -128,10 +128,10 @@ TEST_CASE("GetThumbnail rejects cx == 0 and fails closed without an adapter",
     ProviderModule module;
     REQUIRE(module.Ready());
 
-    // T31 links the FBX adapter, so this case uses the 3MF CLSID, which still has
-    // no linked adapter (T32), to prove the "no adapter" fallback.
+    // T32 links the 3MF adapter, so this case uses the USD CLSID, which still has
+    // no linked adapter (T33), to prove the "no adapter" fallback.
     IThumbnailProvider* provider =
-        CreateThumbnailProvider(module, preview3d::test::FamilyClsid(Family::ThreeMf));
+        CreateThumbnailProvider(module, preview3d::test::FamilyClsid(Family::Usd));
     REQUIRE(provider != nullptr);
 
     IInitializeWithStream* init = AsInitializable(provider);
