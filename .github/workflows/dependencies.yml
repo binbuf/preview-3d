@@ -27,6 +27,8 @@ on:
       - 'vcpkg-configuration.json'
       - 'compatibility-host-step/vcpkg.json'
       - 'compatibility-host-step/vcpkg-configuration.json'
+      - 'thumbnail-provider/step-occt/vcpkg.json'
+      - 'thumbnail-provider/step-occt/vcpkg-configuration.json'
       - 'packaging/vcpkg-ports/**'
       - 'packaging/triplets/**'
       - '.github/workflows/dependencies.yml'
@@ -36,6 +38,8 @@ on:
       - 'vcpkg-configuration.json'
       - 'compatibility-host-step/vcpkg.json'
       - 'compatibility-host-step/vcpkg-configuration.json'
+      - 'thumbnail-provider/step-occt/vcpkg.json'
+      - 'thumbnail-provider/step-occt/vcpkg-configuration.json'
       - 'packaging/vcpkg-ports/**'
       - 'packaging/triplets/**'
       - '.github/workflows/dependencies.yml'
@@ -85,7 +89,7 @@ jobs:
         continue-on-error: true
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
+          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
           restore-keys: |
             vcpkg-binary-${{ runner.os }}-
 
@@ -192,3 +196,17 @@ jobs:
             throw "vcpkg STEP-manifest restore failed with exit code $LASTEXITCODE."
           }
           Show-Disk 'STEP manifest'
+
+          # Isolated thumbnail-provider STEP manifest: OCCT only, in its own
+          # tree (ADR-0002). CreateInstaller builds
+          # Preview3DThumbnailProvider.vcxproj, which reads this tree directly,
+          # so the release lane needs it restored cold (see release.yml).
+          $providerManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'thumbnail-provider\step-occt'
+          $providerInstallRoot = Join-Path $providerManifestRoot 'vcpkg_installed'
+          & $vcpkg install @common `
+            "--x-manifest-root=$providerManifestRoot" `
+            "--x-install-root=$providerInstallRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg thumbnail-provider STEP-manifest restore failed with exit code $LASTEXITCODE."
+          }
+          Show-Disk 'thumbnail-provider STEP manifest'

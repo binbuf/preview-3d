@@ -72,7 +72,7 @@ jobs:
         continue-on-error: true
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
+          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
           restore-keys: |
             vcpkg-binary-${{ runner.os }}-
 
@@ -284,6 +284,22 @@ jobs:
             throw "vcpkg STEP-manifest restore failed with exit code $LASTEXITCODE."
           }
           Show-Disk 'STEP manifest'
+
+          # Isolated thumbnail-provider STEP manifest: OCCT only, in its own
+          # tree so neither the viewer/worker nor either import host can link
+          # it (ADR-0002). Preview3DThumbnailProvider.vcxproj hard-codes
+          # thumbnail-provider\step-occt\vcpkg_installed\<triplet>, and
+          # CreateInstaller builds that project, so a cold release runner must
+          # restore this tree or the STEP adapter cannot find BRepBndLib.hxx.
+          $providerManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'thumbnail-provider\step-occt'
+          $providerInstallRoot = Join-Path $providerManifestRoot 'vcpkg_installed'
+          & $env:VCPKG_EXE install @common `
+            "--x-manifest-root=$providerManifestRoot" `
+            "--x-install-root=$providerInstallRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg thumbnail-provider STEP-manifest restore failed with exit code $LASTEXITCODE."
+          }
+          Show-Disk 'thumbnail-provider STEP manifest'
 
       - name: Import optional signing certificate
         id: signing
