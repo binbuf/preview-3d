@@ -1,5 +1,6 @@
 #include "framework.h"
 #include "ControlsDialog.h"
+#include "Localization.h"
 #include "Resource.h"
 
 #include <dwmapi.h>
@@ -219,8 +220,8 @@ void DrawCallout(HDC dc, const DialogState& state, int y, COLORREF accent,
 void DrawKeyboard(HDC dc, const DialogState& state)
 {
     const auto& colors = state.colors;
-    DrawSectionTitle(dc, state, L"KEYBOARD", 48, 119, colors.flight);
-    DrawTextLine(dc, state.smallFont, colors.muted, L"Highlighted keys are grouped by what they control",
+    DrawSectionTitle(dc, state, Loc("controls.keyboard", L"KEYBOARD").c_str(), 48, 119, colors.flight);
+    DrawTextLine(dc, state.smallFont, colors.muted, Loc("controls.keyboardHint", L"Highlighted keys are grouped by what they control").c_str(),
         ScaledRect(state, 151, 118, 600, 140), DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     DrawKey(dc, state, 50, 153, 43, L"Esc");
@@ -266,14 +267,14 @@ void DrawKeyboard(HDC dc, const DialogState& state)
     DrawKey(dc, state, 125, 362, 54, L"Ctrl");
     DrawKey(dc, state, 184, 362, 210, L"Space");
 
-    DrawTextLine(dc, state.keyFont, colors.muted, L"ARROWS",
+    DrawTextLine(dc, state.keyFont, colors.muted, Loc("controls.arrows", L"ARROWS").c_str(),
         ScaledRect(state, 420, 323, 488, 339), DT_CENTER | DT_SINGLELINE);
     const RECT up = DrawKey(dc, state, 441, 341, 34, L"↑", colors.orbit, 28);
     DrawKey(dc, state, 402, 374, 34, L"←", colors.orbit, 28);
     DrawKey(dc, state, 441, 374, 34, L"↓", colors.orbit, 28);
     DrawKey(dc, state, 480, 374, 34, L"→", colors.orbit, 28);
 
-    DrawTextLine(dc, state.keyFont, colors.muted, L"NUMPAD",
+    DrawTextLine(dc, state.keyFont, colors.muted, Loc("controls.numpad", L"NUMPAD").c_str(),
         ScaledRect(state, 538, 323, 616, 339), DT_CENTER | DT_SINGLELINE);
     DrawKey(dc, state, 540, 342, 32, L"7", colors.views, 28);
     DrawKey(dc, state, 576, 342, 32, L"/", CLR_INVALID, 28);
@@ -289,12 +290,16 @@ void DrawKeyboard(HDC dc, const DialogState& state)
     DrawConnector(dc, state, RightCenter(actionAnchor), 285, colors.actions);
     DrawConnector(dc, state, RightCenter(viewAnchor), 359, colors.views);
 
-    DrawCallout(dc, state, 137, colors.flight, L"FLY", L"Hold right mouse · W A S D move\nQ / E rise · Z / C roll · Shift boosts");
-    DrawCallout(dc, state, 211, colors.orbit, L"ORBIT & PAN", L"Arrow keys orbit\nShift + arrows pan along the ground");
-    DrawCallout(dc, state, 285, colors.actions, L"FRAME & RESET", L"F frames selection · G toggles grid\nR or Home resets the view");
-    DrawCallout(dc, state, 359, colors.views, L"VIEW SNAP", L"Num 1 / 3 / 7 · Ctrl reverses\nNum 5 toggles perspective · Num . frames");
+    DrawCallout(dc, state, 137, colors.flight, Loc("controls.fly", L"FLY").c_str(),
+        Loc("controls.flyDetail", L"Hold right mouse · W A S D move\nQ / E rise · Z / C roll · Shift boosts").c_str());
+    DrawCallout(dc, state, 211, colors.orbit, Loc("controls.orbitPan", L"ORBIT & PAN").c_str(),
+        Loc("controls.orbitPanDetail", L"Arrow keys orbit\nShift + arrows pan along the ground").c_str());
+    DrawCallout(dc, state, 285, colors.actions, Loc("controls.frameReset", L"FRAME & RESET").c_str(),
+        Loc("controls.frameResetDetail", L"F frames selection · G toggles grid\nR or Home resets the view").c_str());
+    DrawCallout(dc, state, 359, colors.views, Loc("controls.viewSnap", L"VIEW SNAP").c_str(),
+        Loc("controls.viewSnapDetail", L"Num 1 / 3 / 7 · Ctrl reverses\nNum 5 toggles perspective · Num . frames").c_str());
     DrawTextLine(dc, state.smallFont, colors.muted,
-        L"Gizmo: click an axis ball to snap\nToolbar: Ground axis cycles · Snap locks pan",
+        Loc("controls.gizmoToolbarHint", L"Gizmo: click an axis ball to snap\nToolbar: Ground axis cycles · Snap locks pan").c_str(),
         ScaledRect(state, 731, 417, 998, 451), DT_LEFT | DT_TOP | DT_WORDBREAK);
 }
 
@@ -303,7 +308,7 @@ void DrawMouseCard(HDC dc, const DialogState& state)
     const auto& colors = state.colors;
     const RECT card = ScaledRect(state, 24, 470, 548, 591);
     FillRoundedRect(dc, card, Scale(state, 12), colors.surface, colors.border);
-    DrawSectionTitle(dc, state, L"MOUSE", 44, 486, colors.zoom);
+    DrawSectionTitle(dc, state, Loc("controls.mouse", L"MOUSE").c_str(), 44, 486, colors.zoom);
 
     const RECT mouse = ScaledRect(state, 45, 519, 91, 575);
     FillRoundedRect(dc, mouse, Scale(state, 20), colors.elevated, colors.border);
@@ -318,14 +323,14 @@ void DrawMouseCard(HDC dc, const DialogState& state)
     const RECT wheel = ScaledRect(state, 64, 526, 72, 538);
     FillRoundedRect(dc, wheel, Scale(state, 4), colors.zoom, colors.zoom);
 
-    DrawTextLine(dc, state.bodyFont, colors.text, L"Left", ScaledRect(state, 112, 515, 162, 536), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    DrawTextLine(dc, state.smallFont, colors.secondary, L"click select / clear · drag orbit · double-click frame",
+    DrawTextLine(dc, state.bodyFont, colors.text, Loc("controls.mouseLeft", L"Left").c_str(), ScaledRect(state, 112, 515, 162, 536), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextLine(dc, state.smallFont, colors.secondary, Loc("controls.mouseLeftDetail", L"click select / clear · drag orbit · double-click frame").c_str(),
         ScaledRect(state, 162, 515, 518, 536), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    DrawTextLine(dc, state.bodyFont, colors.text, L"Middle", ScaledRect(state, 112, 538, 172, 559), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    DrawTextLine(dc, state.smallFont, colors.secondary, L"drag pan · Ctrl + drag zoom",
+    DrawTextLine(dc, state.bodyFont, colors.text, Loc("controls.mouseMiddle", L"Middle").c_str(), ScaledRect(state, 112, 538, 172, 559), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextLine(dc, state.smallFont, colors.secondary, Loc("controls.mouseMiddleDetail", L"drag pan · Ctrl + drag zoom").c_str(),
         ScaledRect(state, 172, 538, 518, 559), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    DrawTextLine(dc, state.bodyFont, colors.text, L"Right", ScaledRect(state, 112, 561, 165, 582), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    DrawTextLine(dc, state.smallFont, colors.secondary, L"hold for fly look · wheel changes fly speed",
+    DrawTextLine(dc, state.bodyFont, colors.text, Loc("controls.mouseRight", L"Right").c_str(), ScaledRect(state, 112, 561, 165, 582), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextLine(dc, state.smallFont, colors.secondary, Loc("controls.mouseRightDetail", L"hold for fly look · wheel changes fly speed").c_str(),
         ScaledRect(state, 165, 561, 518, 582), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -343,11 +348,11 @@ void DrawAppCard(HDC dc, const DialogState& state)
 {
     const RECT card = ScaledRect(state, 562, 470, 1016, 591);
     FillRoundedRect(dc, card, Scale(state, 12), state.colors.surface, state.colors.border);
-    DrawSectionTitle(dc, state, L"VIEWER", 582, 486, state.colors.actions);
-    DrawShortcut(dc, state, 582, 520, 60, L"Ctrl O", L"Open model");
-    DrawShortcut(dc, state, 762, 520, 47, L"F11", L"Fullscreen");
-    DrawShortcut(dc, state, 582, 554, 47, L"Esc", L"Cancel / exit");
-    DrawShortcut(dc, state, 762, 554, 47, L"?", L"This guide");
+    DrawSectionTitle(dc, state, Loc("controls.viewer", L"VIEWER").c_str(), 582, 486, state.colors.actions);
+    DrawShortcut(dc, state, 582, 520, 60, L"Ctrl O", Loc("controls.openModel", L"Open model").c_str());
+    DrawShortcut(dc, state, 762, 520, 47, L"F11", Loc("controls.fullscreen", L"Fullscreen").c_str());
+    DrawShortcut(dc, state, 582, 554, 47, L"Esc", Loc("controls.cancelExit", L"Cancel / exit").c_str());
+    DrawShortcut(dc, state, 762, 554, 47, L"?", Loc("controls.thisGuide", L"This guide").c_str());
 }
 
 void PaintDialog(DialogState& state, HDC target, const RECT& client)
@@ -360,13 +365,13 @@ void PaintDialog(DialogState& state, HDC target, const RECT& client)
     FillRect(buffer, &client, background);
     DeleteObject(background);
 
-    DrawTextLine(buffer, state.titleFont, state.colors.text, L"Controls",
+    DrawTextLine(buffer, state.titleFont, state.colors.text, Loc("controls.title", L"Controls").c_str(),
         ScaledRect(state, 24, 20, 300, 56), DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     DrawTextLine(buffer, state.bodyFont, state.colors.secondary,
-        L"A quick map for navigating your model",
+        Loc("controls.subtitle", L"A quick map for navigating your model").c_str(),
         ScaledRect(state, 24, 58, 500, 82), DT_LEFT | DT_SINGLELINE | DT_VCENTER);
     DrawTextLine(buffer, state.smallFont, state.colors.muted,
-        L"Drag gestures wrap at the screen edge and glide to a smooth stop.",
+        Loc("controls.wrapHint", L"Drag gestures wrap at the screen edge and glide to a smooth stop.").c_str(),
         ScaledRect(state, 540, 36, 1016, 60), DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
 
     const RECT keyboardCard = ScaledRect(state, 24, 98, 1016, 456);
@@ -375,7 +380,7 @@ void PaintDialog(DialogState& state, HDC target, const RECT& client)
     DrawMouseCard(buffer, state);
     DrawAppCard(buffer, state);
 
-    DrawTextLine(buffer, state.smallFont, state.colors.muted, L"Press Esc to close",
+    DrawTextLine(buffer, state.smallFont, state.colors.muted, Loc("controls.pressEscToClose", L"Press Esc to close").c_str(),
         ScaledRect(state, 24, 606, 250, 635), DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     BitBlt(target, 0, 0, client.right, client.bottom, buffer, 0, 0, SRCCOPY);
@@ -398,7 +403,7 @@ void DrawCloseButton(DialogState& state, const DRAWITEMSTRUCT& item)
     COLORREF fill = pressed ? Blend(state.colors.elevated, state.colors.zoom, 80) : state.colors.elevated;
     COLORREF border = focused ? state.colors.zoom : state.colors.border;
     FillRoundedRect(item.hDC, item.rcItem, Scale(state, 7), fill, border, focused ? Scale(state, 2) : 1);
-    DrawTextLine(item.hDC, state.bodyFont, state.colors.text, L"Done", item.rcItem,
+    DrawTextLine(item.hDC, state.bodyFont, state.colors.text, Loc("action.done", L"Done").c_str(), item.rcItem,
         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -422,7 +427,7 @@ LRESULT CALLBACK ControlsWindowProcedure(HWND window, UINT message, WPARAM wPara
         state->highContrast = HighContrastEnabled();
         state->colors = CurrentPalette(state->highContrast);
         RecreateFonts(*state);
-        state->closeButton = CreateWindowExW(0, L"BUTTON", L"Done",
+        state->closeButton = CreateWindowExW(0, L"BUTTON", Loc("action.done", L"Done").c_str(),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
             0, 0, 0, 0, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCloseButtonId)),
             GetModuleHandleW(nullptr), nullptr);
@@ -541,7 +546,7 @@ void ShowControlsDialog(HWND owner)
     y = std::clamp(y, static_cast<int>(monitorInfo.rcWork.top),
         std::max(static_cast<int>(monitorInfo.rcWork.top), static_cast<int>(monitorInfo.rcWork.bottom) - height));
 
-    HWND dialog = CreateWindowExW(extendedStyle, kControlsWindowClass, L"Preview 3D controls",
+    HWND dialog = CreateWindowExW(extendedStyle, kControlsWindowClass, Loc("controls.windowTitle", L"Preview 3D controls").c_str(),
         style, x, y, width, height, owner, nullptr, instance, &state);
     if (!dialog) return;
 

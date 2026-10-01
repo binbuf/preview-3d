@@ -89,9 +89,11 @@ The MVP does not include:
 - CAD kernels or unlisted formats such as IGES, IFC, AMF, DAE, and native Blender files. A bounded static STEP/STP preview subset through the dedicated OCCT host is designed separately and is not a general CAD kernel; it is self-contained only, because external STEP documents are out of scope by recorded product decision (see ADR-017);
 - ray tracing, mesh-shader-only rendering, GPU decompression, DirectStorage, virtual-texture reserved resources, or multi-GPU rendering;
 - perfect/full-resolution simultaneous residency for a scene larger than the safe GPU budget;
-- online/UNC resource resolution, recent-files history, crash upload, automatic update, localization, background daemon, tray icon, or start-at-login;
+- online/UNC resource resolution, recent-files history, crash upload, automatic update, background daemon, tray icon, or start-at-login;
 - Explorer Preview pane, property handler, context-menu extension, or global hotkey;
 - Windows 10/ARM64/x86/Store support.
+
+GUI localization, formerly excluded here, is now in scope: the viewer ships UTF-8 language packs under `lang\` beside the executable, selects the Windows display language at startup, and offers an in-app override in Settings (see `interactive-viewer/src/app/Localization.h`).
 
 ## Release acceptance
 

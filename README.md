@@ -18,6 +18,7 @@
 - Inspect models with Studio, Clay, and rotatable Directional lighting, Wireframe mode, an information panel, and point-cloud rendering.
 - Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration.
 - Parse and decode in a zero-capability AppContainer worker: models stay local, are never modified, and nothing is uploaded.
+- Follow your Windows display language automatically, with 38 interface language packs (see `interactive-viewer/lang`) and an in-app language override under **Settings**.
 - Install with the setup program, or use the portable ZIP with no installer.
 
 ## Supported formats

@@ -110,6 +110,14 @@ ViewerSettings LoadSettings()
     if (hideCursorText == "true") settings.hideCursorWhileDragging = true;
     else if (hideCursorText == "false") settings.hideCursorWhileDragging = false;
 
+    const std::string languageText = FindJsonValue(content, "language");
+    if (languageText.size() >= 2 && languageText.front() == '"' && languageText.back() == '"')
+    {
+        const std::string code = languageText.substr(1, languageText.size() - 2);
+        // The code is a plain ASCII token; widen it directly.
+        settings.language.assign(code.begin(), code.end());
+    }
+
     return settings;
 }
 
@@ -128,11 +136,27 @@ void SaveSettings(const ViewerSettings& settings)
     const char* groundAxis = settings.groundAxis == GroundAxis::X ? "X"
         : settings.groundAxis == GroundAxis::Y ? "Y"
         : settings.groundAxis == GroundAxis::Z ? "Z" : "Automatic";
+    // Language codes are plain ASCII tokens; keep only the ASCII bytes so the
+    // narrowing from wchar_t is explicit rather than a warning-as-error.
+    std::string language;
+    language.reserve(settings.language.size());
+    for (const wchar_t character : settings.language)
+    {
+        if (character < 0x80) language.push_back(static_cast<char>(character));
+    }
+    std::string escapedLanguage;
+    escapedLanguage.reserve(language.size());
+    for (const char character : language)
+    {
+        if (character == '"' || character == '\\') escapedLanguage.push_back('\\');
+        escapedLanguage.push_back(character);
+    }
     const std::string json = "{\n  \"version\": " + std::to_string(settings.version) +
         ",\n  \"showNativeOrientation\": " + (settings.showNativeOrientation ? "true" : "false") +
         ",\n  \"groundAxis\": \"" + groundAxis + "\"" +
         ",\n  \"groundAxisInverted\": " + (settings.groundAxisInverted ? "true" : "false") +
-        ",\n  \"hideCursorWhileDragging\": " + (settings.hideCursorWhileDragging ? "true" : "false") + "\n}\n";
+        ",\n  \"hideCursorWhileDragging\": " + (settings.hideCursorWhileDragging ? "true" : "false") +
+        ",\n  \"language\": \"" + escapedLanguage + "\"\n}\n";
 
     HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

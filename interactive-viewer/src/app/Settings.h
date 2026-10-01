@@ -2,6 +2,8 @@
 
 #include "GroundAxis.h"
 
+#include <string>
+
 // Tiny persisted-preference store: %LOCALAPPDATA%\Binbuf\Preview 3D\settings.json,
 // a sibling of (not inside) the future DerivedCache\v1 folder described in the
 // design docs' rendering/streaming spec. Every field is optional and defaulted:
@@ -27,6 +29,10 @@ struct ViewerSettings
     // Hide the pointer during viewport mouse drags so wrapped/infinite
     // camera gestures do not show the cursor jumping across the screen.
     bool hideCursorWhileDragging = true;
+
+    // UI language pack code (e.g. "fr", "pt-BR", "zh_Hans"). Empty means
+    // "follow the Windows display language".
+    std::wstring language;
 
     // Future preferences are added here as additional flat fields with their
     // own defaults — see Settings.cpp for why this needs no migration step.

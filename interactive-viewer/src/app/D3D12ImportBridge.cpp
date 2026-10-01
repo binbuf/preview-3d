@@ -1,5 +1,6 @@
 #include "model_core/TierALimits.h"
 #include "D3D12ImportBridge.h"
+#include "Localization.h"
 #include <cstdio>
 
 #include "import_broker/ImportSession.h"
@@ -102,89 +103,88 @@ void DescribeImportError(model_core::ImportErrorCode code, std::wstring& summary
 {
     switch (code) {
     case model_core::ImportErrorCode::UnsupportedEncoding:
-        summary = L"This encoding is not supported.";
-        details = L"Use a supported glTF, STL, PLY, OBJ, FBX, 3MF, USD, or clear-text STEP encoding."; return;
+        summary = Loc("fb.summary.this.encoding.is.not.supported", L"This encoding is not supported.");
+        details = Loc("fb.details.use.a.supported.gltf.stl.ply.obj.fbx.3mf.usd.or", L"Use a supported glTF, STL, PLY, OBJ, FBX, 3MF, USD, or clear-text STEP encoding."); return;
     case model_core::ImportErrorCode::WorkerCrashed:
-        summary = L"The sandboxed importer stopped unexpectedly.";
-        details = L"The worker exited before completing this model. Retry or open another model."; return;
+        summary = Loc("fb.summary.the.sandboxed.importer.stopped.unexpectedly", L"The sandboxed importer stopped unexpectedly.");
+        details = Loc("fb.details.the.worker.exited.before.completing.this.model.r", L"The worker exited before completing this model. Retry or open another model."); return;
     case model_core::ImportErrorCode::UnsupportedRequiredFeature:
-        summary = L"This model requires an unsupported feature.";
-        details = L"Export a static model using the documented supported subset."; return;
+        summary = Loc("fb.summary.this.model.requires.an.unsupported.feature", L"This model requires an unsupported feature.");
+        details = Loc("fb.details.export.a.static.model.using.the.documented.suppo", L"Export a static model using the documented supported subset."); return;
     case model_core::ImportErrorCode::UnsupportedComposition:
-        summary = L"This USD stage requires compatibility import.";
-        details = L"The fast importer requested the isolated compatibility host."; return;
+        summary = Loc("fb.summary.this.usd.stage.requires.compatibility.import", L"This USD stage requires compatibility import.");
+        details = Loc("fb.details.the.fast.importer.requested.the.isolated.compati", L"The fast importer requested the isolated compatibility host."); return;
     case model_core::ImportErrorCode::CompatibilityHostFailure:
-        summary = L"The USD compatibility importer stopped unexpectedly.";
-        details = L"The isolated compatibility host could not complete this model."; return;
+        summary = Loc("fb.summary.the.usd.compatibility.importer.stopped.unexpecte", L"The USD compatibility importer stopped unexpectedly.");
+        details = Loc("fb.details.the.isolated.compatibility.host.could.not.comple", L"The isolated compatibility host could not complete this model."); return;
     case model_core::ImportErrorCode::CompatibilityHostLimit:
-        summary = L"This USD stage is too large or complex to preview.";
-        details = L"The compatibility host reached a bounded resource limit."; return;
+        summary = Loc("fb.summary.this.usd.stage.is.too.large.or.complex.to.previe", L"This USD stage is too large or complex to preview.");
+        details = Loc("fb.details.the.compatibility.host.reached.a.bounded.resourc", L"The compatibility host reached a bounded resource limit."); return;
     case model_core::ImportErrorCode::StepHostFailure:
-        summary = L"The STEP importer stopped unexpectedly.";
-        details = L"The isolated STEP host could not complete this model."; return;
+        summary = Loc("fb.summary.the.step.importer.stopped.unexpectedly", L"The STEP importer stopped unexpectedly.");
+        details = Loc("fb.details.the.isolated.step.host.could.not.complete.this.m", L"The isolated STEP host could not complete this model."); return;
     case model_core::ImportErrorCode::StepHostLimit:
-        summary = L"This STEP model is too large or complex to preview.";
-        details = L"The STEP host reached a bounded resource limit."; return;
+        summary = Loc("fb.summary.this.step.model.is.too.large.or.complex.to.previ", L"This STEP model is too large or complex to preview.");
+        details = Loc("fb.details.the.step.host.reached.a.bounded.resource.limit", L"The STEP host reached a bounded resource limit."); return;
     case model_core::ImportErrorCode::TessellationFailed:
-        summary = L"This STEP model could not be tessellated.";
-        details = L"One or more shapes exceeded the supported CAD tessellation budget. Export a simpler solid or assembly."; return;
+        summary = Loc("fb.summary.this.step.model.could.not.be.tessellated", L"This STEP model could not be tessellated.");
+        details = Loc("fb.details.one.or.more.shapes.exceeded.the.supported.cad.te", L"One or more shapes exceeded the supported CAD tessellation budget. Export a simpler solid or assembly."); return;
     case model_core::ImportErrorCode::ArchiveLimit:
-        summary = L"This model archive is not supported.";
-        details = L"The archive violates a path, structure, compression, or expansion limit."; return;
+        summary = Loc("fb.summary.this.model.archive.is.not.supported", L"This model archive is not supported.");
+        details = Loc("fb.details.the.archive.violates.a.path.structure.compressio", L"The archive violates a path, structure, compression, or expansion limit."); return;
     case model_core::ImportErrorCode::EmptyGeometry:
-        summary = L"This model has no displayable geometry.";
-        details = L"No valid triangles or points remain in the selected scene."; return;
+        summary = Loc("fb.summary.this.model.has.no.displayable.geometry", L"This model has no displayable geometry.");
+        details = Loc("fb.details.no.valid.triangles.or.points.remain.in.the.selec", L"No valid triangles or points remain in the selected scene."); return;
     case model_core::ImportErrorCode::OutOfMemory:
-        summary = L"There is not enough memory to preview this model.";
-        details = L"Close other applications or export a smaller model, then retry."; return;
+        summary = Loc("fb.summary.there.is.not.enough.memory.to.preview.this.model", L"There is not enough memory to preview this model.");
+        details = Loc("fb.details.close.other.applications.or.export.a.smaller.mod", L"Close other applications or export a smaller model, then retry."); return;
     case model_core::ImportErrorCode::FileChanged:
-        summary = L"The source changed during import.";
-        details = L"Save a stable local copy of the model and its sidecars, then retry."; return;
+        summary = Loc("fb.summary.the.source.changed.during.import", L"The source changed during import.");
+        details = Loc("fb.details.save.a.stable.local.copy.of.the.model.and.its.si", L"Save a stable local copy of the model and its sidecars, then retry."); return;
     case model_core::ImportErrorCode::ImportProtocolViolation:
-        summary = L"The importer returned invalid data.";
-        details = L"The sandbox response failed validation and was discarded."; return;
+        summary = Loc("fb.summary.the.importer.returned.invalid.data", L"The importer returned invalid data.");
+        details = Loc("fb.details.the.sandbox.response.failed.validation.and.was.d", L"The sandbox response failed validation and was discarded."); return;
     case model_core::ImportErrorCode::MalformedData:
-        summary = L"This file could not be read.";
-        details = L"The importer found data that doesn't match the expected file format.";
+        summary = Loc("fb.summary.this.file.could.not.be.read", L"This file could not be read.");
+        details = Loc("fb.details.the.importer.found.data.that.doesn.t.match.the.e", L"The importer found data that doesn't match the expected file format.");
         return;
     case model_core::ImportErrorCode::PrimarySourceLimit:
-        summary = L"The primary source exceeds the import limit.";
-        details = L"ASCII STL/PLY files are limited to 2 GiB; Tier A primary files are limited to 8 GiB.";
+        summary = Loc("fb.summary.the.primary.source.exceeds.the.import.limit", L"The primary source exceeds the import limit.");
+        details = Loc("fb.details.ascii.stl.ply.files.are.limited.to.2.gib.tier.a", L"ASCII STL/PLY files are limited to 2 GiB; Tier A primary files are limited to 8 GiB.");
         return;
     case model_core::ImportErrorCode::AggregateSourceLimit:
-        summary = L"The model and sidecars exceed the import limit.";
-        details = L"Combined local source files are limited to 12 GiB.";
+        summary = Loc("fb.summary.the.model.and.sidecars.exceed.the.import.limit", L"The model and sidecars exceed the import limit.");
+        details = Loc("fb.details.combined.local.source.files.are.limited.to.12.gi", L"Combined local source files are limited to 12 GiB.");
         return;
     case model_core::ImportErrorCode::ScratchLimit:
-        summary = L"The importer scratch budget was exceeded.";
-        details = L"Import scratch is limited to 1 GiB or 25% of physical RAM, whichever is lower.";
+        summary = Loc("fb.summary.the.importer.scratch.budget.was.exceeded", L"The importer scratch budget was exceeded.");
+        details = Loc("fb.details.import.scratch.is.limited.to.1.gib.or.25.of.phys", L"Import scratch is limited to 1 GiB or 25% of physical RAM, whichever is lower.");
         return;
     case model_core::ImportErrorCode::ChunkCatalogLimit:
-        summary = L"The model has too many source ranges.";
-        details = L"The bounded geometry, material and image catalog cannot accept more entries.";
+        summary = Loc("fb.summary.the.model.has.too.many.source.ranges", L"The model has too many source ranges.");
+        details = Loc("fb.details.the.bounded.geometry.material.and.image.catalog", L"The bounded geometry, material and image catalog cannot accept more entries.");
         return;
     case model_core::ImportErrorCode::DracoPrimitiveLimit:
-        summary = L"A compressed primitive exceeds the decode limit.";
-        details =
-            L"One Draco primitive is limited to 512 MiB of estimated decode work and 10 million triangles.";
+        summary = Loc("fb.summary.a.compressed.primitive.exceeds.the.decode.limit", L"A compressed primitive exceeds the decode limit.");
+        details = Loc("fb.details.one.draco.primitive.is.limited.to.512.mib.of.est", L"One Draco primitive is limited to 512 MiB of estimated decode work and 10 million triangles.");
         return;
     case model_core::ImportErrorCode::ResourceLimit:
-        summary = L"This model is too large to preview.";
-        details = L"The file exceeds a resource limit the sandboxed importer enforces.";
+        summary = Loc("fb.summary.this.model.is.too.large.to.preview", L"This model is too large to preview.");
+        details = Loc("fb.details.the.file.exceeds.a.resource.limit.the.sandboxed", L"The file exceeds a resource limit the sandboxed importer enforces.");
         return;
     case model_core::ImportErrorCode::UnsafeReference:
-        summary = L"This model could not be previewed.";
-        details = L"The file references another file in a way that isn't allowed.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed", L"This model could not be previewed.");
+        details = Loc("fb.details.the.file.references.another.file.in.a.way.that.i", L"The file references another file in a way that isn't allowed.");
         return;
     case model_core::ImportErrorCode::FileUnavailable:
-        summary = L"This model could not be previewed.";
-        details = L"A file this model depends on could not be opened.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.2", L"This model could not be previewed.");
+        details = Loc("fb.details.a.file.this.model.depends.on.could.not.be.opened", L"A file this model depends on could not be opened.");
         return;
     case model_core::ImportErrorCode::InternalImporterFailure:
     case model_core::ImportErrorCode::None:
     default:
-        summary = L"This model could not be previewed.";
-        details = L"The importer stopped unexpectedly while reading the file.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.3", L"This model could not be previewed.");
+        details = Loc("fb.details.the.importer.stopped.unexpectedly.while.reading", L"The importer stopped unexpectedly while reading the file.");
         return;
     }
 }
@@ -199,62 +199,62 @@ void DescribeSessionFailureInternal(const import_broker::ImportSessionResult& se
     using import_broker::ImportStage;
     switch (session.stage) {
     case ImportStage::OpenSource:
-        summary = L"This file could not be opened.";
+        summary = Loc("fb.summary.this.file.could.not.be.opened", L"This file could not be opened.");
         details = session.openError;
         return;
     case ImportStage::DuplicateSourceHandle:
-        summary = L"This file could not be prepared for preview.";
-        details = L"The file handle could not be shared with the sandboxed importer.";
+        summary = Loc("fb.summary.this.file.could.not.be.prepared.for.preview", L"This file could not be prepared for preview.");
+        details = Loc("fb.details.the.file.handle.could.not.be.shared.with.the.san", L"The file handle could not be shared with the sandboxed importer.");
         return;
     case ImportStage::CreateOutputSection:
-        summary = L"This model could not be previewed.";
-        details = L"A shared memory section for the importer's output could not be created.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.4", L"This model could not be previewed.");
+        details = Loc("fb.details.a.shared.memory.section.for.the.importer.s.outpu", L"A shared memory section for the importer's output could not be created.");
         return;
     case ImportStage::CreateSandboxProfile:
-        summary = L"This model could not be previewed.";
-        details = L"The sandbox container for the importer could not be created.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.5", L"This model could not be previewed.");
+        details = Loc("fb.details.the.sandbox.container.for.the.importer.could.not", L"The sandbox container for the importer could not be created.");
         return;
     case ImportStage::CreateControlChannel:
-        summary = L"This model could not be previewed.";
-        details = L"The control channel to the sandboxed importer could not be created.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.6", L"This model could not be previewed.");
+        details = Loc("fb.details.the.control.channel.to.the.sandboxed.importer.co", L"The control channel to the sandboxed importer could not be created.");
         return;
     case ImportStage::LaunchWorker:
-        summary = L"This model could not be previewed.";
-        details = L"The sandboxed importer process could not be started.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.7", L"This model could not be previewed.");
+        details = Loc("fb.details.the.sandboxed.importer.process.could.not.be.star", L"The sandboxed importer process could not be started.");
         return;
     case ImportStage::ResumeWorker:
-        summary = L"This model could not be previewed.";
-        details = L"The sandboxed importer process could not be resumed.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.8", L"This model could not be previewed.");
+        details = Loc("fb.details.the.sandboxed.importer.process.could.not.be.resu", L"The sandboxed importer process could not be resumed.");
         return;
     case ImportStage::SendRequest:
-        summary = L"This model could not be previewed.";
-        details = L"The import request could not be sent to the sandboxed importer.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.9", L"This model could not be previewed.");
+        details = Loc("fb.details.the.import.request.could.not.be.sent.to.the.sand", L"The import request could not be sent to the sandboxed importer.");
         return;
     case ImportStage::SidecarRequestLimit:
-        summary = L"This model could not be previewed.";
-        details = L"The sandboxed importer made too many file requests.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.10", L"This model could not be previewed.");
+        details = Loc("fb.details.the.sandboxed.importer.made.too.many.file.reques", L"The sandboxed importer made too many file requests.");
         return;
     case ImportStage::AwaitReply:
-        summary = L"This model could not be previewed.";
-        details = L"The sandboxed importer did not respond.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.11", L"This model could not be previewed.");
+        details = Loc("fb.details.the.sandboxed.importer.did.not.respond", L"The sandboxed importer did not respond.");
         return;
     case ImportStage::ReplyTimedOut:
-        summary = L"This model could not be previewed.";
-        details = L"The sandboxed importer stopped responding and was shut down.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.12", L"This model could not be previewed.");
+        details = Loc("fb.details.the.sandboxed.importer.stopped.responding.and.wa", L"The sandboxed importer stopped responding and was shut down.");
         return;
     case ImportStage::Cancelled:
         // Superseded or closing: the caller drops the result rather than
         // showing it, so this text exists only so no path returns empty.
-        summary = L"This preview was cancelled.";
-        details = L"A newer file was opened, or the window was closed.";
+        summary = Loc("fb.summary.this.preview.was.cancelled", L"This preview was cancelled.");
+        details = Loc("fb.details.a.newer.file.was.opened.or.the.window.was.closed", L"A newer file was opened, or the window was closed.");
         return;
     case ImportStage::UnexpectedReply:
-        summary = L"This model could not be previewed.";
-        details = L"The sandboxed importer returned an unexpected response.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.13", L"This model could not be previewed.");
+        details = Loc("fb.details.the.sandboxed.importer.returned.an.unexpected.re", L"The sandboxed importer returned an unexpected response.");
         return;
     case ImportStage::MapOutputSection:
-        summary = L"This model could not be previewed.";
-        details = L"The importer's output could not be read.";
+        summary = Loc("fb.summary.this.model.could.not.be.previewed.14", L"This model could not be previewed.");
+        details = Loc("fb.details.the.importer.s.output.could.not.be.read", L"The importer's output could not be read.");
         return;
     case ImportStage::WorkerReportedError:
     case ImportStage::ValidateSection:
@@ -321,27 +321,27 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
         using import_broker::ImportStage;
         switch (session.stage) {
         case ImportStage::WorkerReportedError:
-            summary = L"The USD compatibility importer could not complete this stage.";
+            summary = Loc("fb.summary.the.usd.compatibility.importer.could.not.complet", L"The USD compatibility importer could not complete this stage.");
             switch (session.errorPhase) {
             case model_core::ImportFailurePhase::Geometry:
-                details = L"The compatibility host stopped while parsing or normalizing the stage geometry."; break;
+                details = Loc("fb.details.the.compatibility.host.stopped.while.parsing.or", L"The compatibility host stopped while parsing or normalizing the stage geometry."); break;
             case model_core::ImportFailurePhase::Sidecars:
-                details = L"The compatibility host stopped while resolving the stage's referenced layers or sidecars."; break;
+                details = Loc("fb.details.the.compatibility.host.stopped.while.resolving.t", L"The compatibility host stopped while resolving the stage's referenced layers or sidecars."); break;
             case model_core::ImportFailurePhase::Textures:
-                details = L"The compatibility host stopped while decoding the stage's textures."; break;
+                details = Loc("fb.details.the.compatibility.host.stopped.while.decoding.th", L"The compatibility host stopped while decoding the stage's textures."); break;
             default:
-                details = L"The compatibility host stopped before producing preview geometry."; break;
+                details = Loc("fb.details.the.compatibility.host.stopped.before.producing", L"The compatibility host stopped before producing preview geometry."); break;
             }
             break;
         case ImportStage::ValidateSection:
         case ImportStage::UnexpectedReply:
-            summary = L"The USD compatibility importer returned invalid data.";
-            details = L"The compatibility host response failed validation and was discarded.";
+            summary = Loc("fb.summary.the.usd.compatibility.importer.returned.invalid", L"The USD compatibility importer returned invalid data.");
+            details = Loc("fb.details.the.compatibility.host.response.failed.validatio", L"The compatibility host response failed validation and was discarded.");
             break;
         case ImportStage::AwaitReply:
         case ImportStage::ReplyTimedOut:
-            summary = L"The USD compatibility importer stopped responding.";
-            details = L"The compatibility host was shut down before it completed this stage.";
+            summary = Loc("fb.summary.the.usd.compatibility.importer.stopped.respondin", L"The USD compatibility importer stopped responding.");
+            details = Loc("fb.details.the.compatibility.host.was.shut.down.before.it.c", L"The compatibility host was shut down before it completed this stage.");
             break;
         case ImportStage::CreateOutputSection:
         case ImportStage::CreateSandboxProfile:
@@ -349,8 +349,8 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
         case ImportStage::LaunchWorker:
         case ImportStage::ResumeWorker:
         case ImportStage::SendRequest:
-            summary = L"The USD compatibility importer could not be started.";
-            details = L"The isolated compatibility host process or its shared resources could not be prepared.";
+            summary = Loc("fb.summary.the.usd.compatibility.importer.could.not.be.star", L"The USD compatibility importer could not be started.");
+            details = Loc("fb.details.the.isolated.compatibility.host.process.or.its.s", L"The isolated compatibility host process or its shared resources could not be prepared.");
             break;
         default:
             break;
@@ -372,10 +372,10 @@ std::wstring SourceFormatLabel(const std::wstring& path)
     if (ext == L"usd" || ext == L"usda" || ext == L"usdc") return L"USD";
     if (ext == L"usdz") return L"USDZ";
     // Extension only, capped and restricted to printable alphanumerics.
-    if (ext.empty() || ext.size() > 16) return L"Unknown";
+    if (ext.empty() || ext.size() > 16) return Loc("format.unknown", L"Unknown");
     std::wstring label;
     for (auto c : ext) {
-        if (!((c >= L'a' && c <= L'z') || (c >= L'0' && c <= L'9'))) return L"Unknown";
+        if (!((c >= L'a' && c <= L'z') || (c >= L'0' && c <= L'9'))) return Loc("format.unknown", L"Unknown");
         label += wchar_t(towupper(c));
     }
     return label;
@@ -385,35 +385,37 @@ std::wstring StageLabel(import_broker::ImportStage stage)
 {
     using import_broker::ImportStage;
     switch (stage) {
-    case ImportStage::Completed: return L"complete";
-    case ImportStage::OpenSource: return L"opening source";
-    case ImportStage::WorkerReportedError: return L"parsing / decoding";
+    case ImportStage::Completed: return Loc("stage.complete", L"complete");
+    case ImportStage::OpenSource: return Loc("stage.openingSource", L"opening source");
+    case ImportStage::WorkerReportedError: return Loc("stage.parsingDecoding", L"parsing / decoding");
     case ImportStage::ValidateSection: case ImportStage::UnexpectedReply:
-    case ImportStage::ChunkBatchOutOfOrder: return L"validating import";
-    case ImportStage::ReplyTimedOut: case ImportStage::AwaitReply: return L"waiting for importer";
-    case ImportStage::SidecarRequestLimit: return L"resolving sidecars";
-    case ImportStage::ChunkBatchLimit: case ImportStage::ChunkCountLimit: return L"accepting batches";
-    case ImportStage::ChunkBatchAckFailed: return L"acknowledging batch";
-    case ImportStage::Upload: return L"uploading geometry / textures";
-    case ImportStage::Cancelled: return L"cancelled";
-    default: return L"preparing sandbox";
+    case ImportStage::ChunkBatchOutOfOrder: return Loc("stage.validatingImport", L"validating import");
+    case ImportStage::ReplyTimedOut: case ImportStage::AwaitReply: return Loc("stage.waitingForImporter", L"waiting for importer");
+    case ImportStage::SidecarRequestLimit: return Loc("stage.resolvingSidecars", L"resolving sidecars");
+    case ImportStage::ChunkBatchLimit: case ImportStage::ChunkCountLimit: return Loc("stage.acceptingBatches", L"accepting batches");
+    case ImportStage::ChunkBatchAckFailed: return Loc("stage.acknowledgingBatch", L"acknowledging batch");
+    case ImportStage::Upload: return Loc("stage.uploadingGeometry", L"uploading geometry / textures");
+    case ImportStage::Cancelled: return Loc("stage.cancelled", L"cancelled");
+    default: return Loc("stage.preparingSandbox", L"preparing sandbox");
     }
 }
 
 std::wstring DiagnosticDetails(const std::wstring& path, const ImportResult& result)
 {
-    return result.errorSummary + L"\r\n\r\n" + result.errorDetails + L"\r\n\r\nFormat: "
-        + SourceFormatLabel(path) + L"\r\nPhase: " + FailurePhaseLabel(result)
-        + L"\r\nCode: " + std::to_wstring(uint32_t(result.errorCode));
+    std::wstring text = result.errorSummary + L"\r\n\r\n" + result.errorDetails + L"\r\n\r\n";
+    text += LocalizedJoin(Loc("diagnostics.format", L"Format:"), SourceFormatLabel(path));
+    text += L"\r\n" + LocalizedJoin(Loc("diagnostics.phase", L"Phase:"), FailurePhaseLabel(result));
+    text += L"\r\n" + LocalizedJoin(Loc("diagnostics.code", L"Code:"), std::to_wstring(uint32_t(result.errorCode)));
+    return text;
 }
 
 std::wstring FailurePhaseLabel(const ImportResult& result)
 {
     if (result.errorStage == import_broker::ImportStage::WorkerReportedError) {
         switch (result.errorPhase) {
-        case model_core::ImportFailurePhase::Geometry: return L"parsing geometry";
-        case model_core::ImportFailurePhase::Sidecars: return L"resolving sidecars";
-        case model_core::ImportFailurePhase::Textures: return L"decoding textures";
+        case model_core::ImportFailurePhase::Geometry: return Loc("phase.geometry", L"parsing geometry");
+        case model_core::ImportFailurePhase::Sidecars: return Loc("phase.sidecars", L"resolving sidecars");
+        case model_core::ImportFailurePhase::Textures: return Loc("phase.textures", L"decoding textures");
         default: break;
         }
     }
@@ -662,39 +664,39 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         DescribeSessionFailure(session, result.errorSummary, result.errorDetails);
         if (format == SourceFormat::Fbx) {
             if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
-                result.errorDetails = L"Export or bake this FBX as static polygon geometry using the supported material and deformation subset.";
+                result.errorDetails = Loc("fb.detail.export.or.bake.this.fbx.as.static.polygon.geomet", L"Export or bake this FBX as static polygon geometry using the supported material and deformation subset.");
             } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
-                result.errorDetails = L"FBX files are limited to the bounded Tier B source size.";
+                result.errorDetails = Loc("fb.detail.fbx.files.are.limited.to.the.bounded.tier.b.sour", L"FBX files are limited to the bounded Tier B source size.");
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
-                result.errorDetails = L"FBX parsing or static-pose evaluation exceeded the bounded importer scratch budget.";
+                result.errorDetails = Loc("fb.detail.fbx.parsing.or.static.pose.evaluation.exceeded.t", L"FBX parsing or static-pose evaluation exceeded the bounded importer scratch budget.");
             }
         } else if (format == SourceFormat::ThreeMf) {
             if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
-                result.errorDetails = L"This viewer supports static 3MF Core, Materials and Properties, Production, and bounded Beam Lattice content. Other required extensions or features cannot be previewed.";
+                result.errorDetails = Loc("fb.detail.this.viewer.supports.static.3mf.core.materials.a", L"This viewer supports static 3MF Core, Materials and Properties, Production, and bounded Beam Lattice content. Other required extensions or features cannot be previewed.");
             } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
-                result.errorDetails = L"3MF files are limited to the bounded Tier B primary-source size.";
+                result.errorDetails = Loc("fb.detail.3mf.files.are.limited.to.the.bounded.tier.b.prim", L"3MF files are limited to the bounded Tier B primary-source size.");
             } else if (session.errorCode == model_core::ImportErrorCode::ArchiveLimit) {
-                result.errorDetails = L"The 3MF package exceeded a bounded archive, relationship, or expansion limit.";
+                result.errorDetails = Loc("fb.detail.the.3mf.package.exceeded.a.bounded.archive.relat", L"The 3MF package exceeded a bounded archive, relationship, or expansion limit.");
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
-                result.errorDetails = L"3MF package parsing or normalization exceeded the bounded Tier B scratch budget.";
+                result.errorDetails = Loc("fb.detail.3mf.package.parsing.or.normalization.exceeded.th", L"3MF package parsing or normalization exceeded the bounded Tier B scratch budget.");
             }
         } else if (format == SourceFormat::Usd) {
             if (session.errorCode == model_core::ImportErrorCode::UnsupportedEncoding) {
-                result.errorDetails = L"Use USDA, USDC, or USDZ content whose encoding matches the explicit suffix; .usd is detected by bytes.";
+                result.errorDetails = Loc("fb.detail.use.usda.usdc.or.usdz.content.whose.encoding.mat", L"Use USDA, USDC, or USDZ content whose encoding matches the explicit suffix; .usd is detected by bytes.");
             } else if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
-                result.errorDetails = L"Export a static USD stage using supported meshes, primvars, instances, and USD Preview Surface materials.";
+                result.errorDetails = Loc("fb.detail.export.a.static.usd.stage.using.supported.meshes", L"Export a static USD stage using supported meshes, primvars, instances, and USD Preview Surface materials.");
             } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
-                result.errorDetails = L"USD files are limited to the bounded Tier B primary-source size.";
+                result.errorDetails = Loc("fb.detail.usd.files.are.limited.to.the.bounded.tier.b.prim", L"USD files are limited to the bounded Tier B primary-source size.");
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
-                result.errorDetails = L"USD parsing, composition, or normalization exceeded the bounded Tier B scratch budget.";
+                result.errorDetails = Loc("fb.detail.usd.parsing.composition.or.normalization.exceede", L"USD parsing, composition, or normalization exceeded the bounded Tier B scratch budget.");
             }
         } else if (format == SourceFormat::Step) {
             if (session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
-                result.errorDetails = L"Export a self-contained ISO 10303-21 STEP file. Required external STEP documents are not supported yet.";
+                result.errorDetails = Loc("fb.detail.export.a.self.contained.iso.10303.21.step.file.r", L"Export a self-contained ISO 10303-21 STEP file. Required external STEP documents are not supported yet.");
             } else if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
-                result.errorDetails = L"STEP files are limited to the bounded Tier B primary-source size.";
+                result.errorDetails = Loc("fb.detail.step.files.are.limited.to.the.bounded.tier.b.pri", L"STEP files are limited to the bounded Tier B primary-source size.");
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
-                result.errorDetails = L"STEP parsing or tessellation exceeded the bounded Tier B scratch budget.";
+                result.errorDetails = Loc("fb.detail.step.parsing.or.tessellation.exceeded.the.bounde", L"STEP parsing or tessellation exceeded the bounded Tier B scratch budget.");
             }
         }
         return result;
