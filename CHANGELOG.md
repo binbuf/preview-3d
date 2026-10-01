@@ -8,6 +8,33 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.4.0] - 2026-09-30
+
+### Added
+
+- **Windows Explorer thumbnails for every direct format.** A new thumbnail
+  provider (`Preview3DThumbnailProvider.dll`) implements `IThumbnailProvider`
+  over a bounded, stream-only import, a deterministic geometry sampler, and a
+  CPU tile rasterizer that emits premultiplied BGRA bitmaps, with per-call
+  deadline and containment budgets so a malformed model can never hang or crash
+  Explorer. Family adapters cover glTF/GLB, STL, PLY, OBJ, FBX, 3MF, USD/USDZ,
+  and STEP/STP. The handler runs in the isolated Shell surrogate
+  (`dllhost.exe`) with process isolation left on, and an unsupported family
+  returns the generic icon rather than a fabricated image.
+- The installed payload now carries the provider and its closed static runtime
+  closure, an SBOM component for it, and `msvcp140_1.dll`. The portable
+  distribution continues to omit the provider.
+- A license step in the installer and `LICENSE.txt` in the portable ZIP.
+
+### Changed
+
+- Thumbnail registration is installer-and script-owned, machine-wide, and
+  non-clobbering: CLSID/AppID and per-extension `ShellEx` handlers are written
+  only for the eight frozen families, a pre-existing foreign handler is
+  preserved and recorded, and uninstall removes a handler value only while it
+  still points at a product CLSID. User defaults (`UserChoice`) are never read
+  or written, and `DisableProcessIsolation` is never set.
+
 ## [0.3.10] - 2026-09-26
 
 ### Fixed
