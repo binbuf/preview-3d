@@ -149,7 +149,7 @@ jobs:
               if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $nsisArchive -PathType Leaf)) {
                 break
               }
-              Write-Warning "NSIS source failed with exit code $LASTEXITCODE: $nsisSource"
+              Write-Warning "NSIS source '$nsisSource' failed with exit code ${LASTEXITCODE}."
             }
           }
           if (-not (Test-Path -LiteralPath $nsisArchive -PathType Leaf)) {
