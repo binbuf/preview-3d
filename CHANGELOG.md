@@ -8,7 +8,7 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
-## [Unreleased]
+## [0.5.0] - 2026-10-01
 
 ### Added
 
@@ -27,6 +27,23 @@ the whole pre-release build-up as well as the changes made in that tag.
   whitespace cannot produce output like `29.092unidades`; the texture-count row
   is a positional placeholder (`Textured ({0})`) rather than a concatenation,
   for the same reason.
+- A `CONTRIBUTING.md` localization section documents the canonical-English
+  rule, how to add or change a string or language, and the regeneration and
+  `-Verify` workflow.
+
+### Changed
+
+- The STEP host's and thumbnail provider's isolated OCCT vcpkg manifests are now
+  restored automatically by `Preview3DRestoreIsolatedVcpkgManifests` in
+  `Directory.Build.targets`. A fresh clone previously failed with
+  `Cannot open include file: 'BRepBndLib.hxx'`, because vcpkg's own manifest
+  install skips those deliberately disabled trees; the README setup notes were
+  corrected to match.
+
+### Fixed
+
+- The viewer smoke scripts no longer hard-code an authoring workstation path;
+  they resolve the built `Preview3D.exe` relative to the script.
 
 ## [0.4.0] - 2026-09-30
 
