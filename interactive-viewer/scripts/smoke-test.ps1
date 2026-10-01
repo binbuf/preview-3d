@@ -18,7 +18,9 @@ public class Win32Shot {
 # Per-Monitor V2 DPI awareness so coordinates and captures are physical.
 [Win32Shot]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null
 
-$exe = 'D:\repos\binbuf\3d-preview-windows\interactive-viewer\x64\Release\Preview3D.exe'
+# Resolve the built viewer relative to this script so the smoke lane is not
+# tied to any workstation path.
+$exe = Join-Path $PSScriptRoot '..\x64\Release\Preview3D.exe'
 $p = Start-Process -FilePath $exe -ArgumentList "`"$GlbPath`"" -PassThru
 Start-Sleep -Seconds $WaitSeconds
 $p.Refresh()

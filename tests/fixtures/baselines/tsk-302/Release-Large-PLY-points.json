@@ -4,7 +4,7 @@
   "configuration": "Release",
   "reference": "compatibility",
   "fixture": {
-    "path": "D:\\repos\\binbuf\\3d-preview-windows\\TestResults\\tsk205-large-fixtures\\A-large-ply-points-le.ply",
+    "path": "TestResults\\tsk205-large-fixtures\\A-large-ply-points-le.ply",
     "sha256": "85712e8ffbde5759449fd5e6cb27b018c500faf71a20105f5267e61d812c6781",
     "bytes": 2880000398
   },
@@ -132,7 +132,7 @@
       "errorStage": 15,
       "errorSummary": "This model is too large to preview.",
       "errorDetails": "The file exceeds a resource limit the sandboxed importer enforces.",
-      "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\TestResults\\tsk205-large-fixtures\\A-large-ply-points-le.ply",
+      "fixture": "TestResults\\tsk205-large-fixtures\\A-large-ply-points-le.ply",
       "reference": "compatibility",
       "limits": {
         "durationMs": 30000,

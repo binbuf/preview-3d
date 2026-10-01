@@ -3,7 +3,7 @@
   "mode": "scope-limited-mvp",
   "status": "pass",
   "viewerState": 2, "errorCode": 0, "errorStage": 1, "errorSummary": "", "errorDetails": "",
-  "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\corpus\\Pressure.glb",
+  "fixture": "interactive-viewer\\test-assets\\corpus\\Pressure.glb",
   "reference": "compatibility",
   "limits": {"durationMs": 5000, "frameLimit": 20000, "repeatCount": 1, "renderDurationMs": 5000, "renderFrameLimitWithWarmup": 20120, "renderObservedPresents": 1200, "generalWorkerJobCommitBytes": 4294967296},
   "milestonesMs": {"firstBackground": 458.443, "loadingUi": 458.443, "firstGeometry": 1237.185, "completeCoarse": 1237.185, "verifiedBounds": 1237.185, "firstRefinement": -1.000},

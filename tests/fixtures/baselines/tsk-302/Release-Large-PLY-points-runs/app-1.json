@@ -3,7 +3,7 @@
   "mode": "scope-limited-mvp",
   "status": "fail",
   "viewerState": 3, "errorCode": 2, "errorStage": 15, "errorSummary": "This model is too large to preview.", "errorDetails": "The file exceeds a resource limit the sandboxed importer enforces.",
-  "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\TestResults\\tsk205-large-fixtures\\A-large-ply-points-le.ply",
+  "fixture": "TestResults\\tsk205-large-fixtures\\A-large-ply-points-le.ply",
   "reference": "compatibility",
   "limits": {"durationMs": 30000, "frameLimit": 100000, "repeatCount": 1, "renderDurationMs": 30000, "renderFrameLimitWithWarmup": 100120, "renderObservedPresents": 7196, "generalWorkerJobCommitBytes": 4294967296},
   "milestonesMs": {"firstBackground": 433.528, "loadingUi": 433.528, "firstGeometry": -1.000, "completeCoarse": -1.000, "verifiedBounds": -1.000, "firstRefinement": -1.000},

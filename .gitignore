@@ -79,6 +79,10 @@ test-models/
 # symphony harness (local tool, not tracked)
 .stop
 
-# added by symphony (ephemeral/secret files)
+# added by symphony (ephemeral/secret files). Anchor `tools/` to the repository
+# root: an unanchored `tools/` also matched interactive-viewer/tools/, which
+# holds tracked sources (the test-fixture generators and
+# generate-language-packs.ps1) whose only untracked outputs are the *.exe/*.dll
+# already ignored above.
 node_modules/
-tools/
+/tools/

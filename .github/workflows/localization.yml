@@ -46,4 +46,9 @@ jobs:
       #   pwsh interactive-viewer/tools/generate-language-packs.ps1
       - name: Verify packs match the source
         shell: pwsh
-        run: ./interactive-viewer/tools/generate-language-packs.ps1 -Verify
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'interactive-viewer/tools/generate-language-packs.ps1'
+          if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
+            throw "Language-pack generator not found at '$script'."
+          }
+          & $script -Verify
