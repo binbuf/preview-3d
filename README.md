@@ -63,7 +63,13 @@ The pinned dependency versions live in `vcpkg.json` and `vcpkg-configuration.jso
 vcpkg integrate install
 ```
 
-Then open `Preview3D.slnx`, pick **Release | x64** (or **Debug | x64**), and build. The first build runs `vcpkg install` against the root manifest and populates `vcpkg_installed\x64-windows-static-md`. Release builds statically link the dependency closure (`VcpkgUseStatic`/`VcpkgUseMD` in `Directory.Build.props`) so the shipped payload contains no upstream DLLs — only the app's own images. The OpenUSD overlay port (`packaging/vcpkg-ports/openusd`) and the STEP host's separate OCCT manifest (`compatibility-host-step\vcpkg.json`, installed under `compatibility-host-step\vcpkg_installed`) compile from source, so this first restore takes **tens of minutes to a few hours**; later builds reuse the archives under `%LOCALAPPDATA%\vcpkg\archives`.
+Then open `Preview3D.slnx`, pick **Release | x64** (or **Debug | x64**), and build. With integration installed, the first build restores every manifest the solution needs, with no manual `vcpkg install` required:
+
+- the repository root manifest into `vcpkg_installed\x64-windows-static-md` (fastgltf, draco, lib3mf, TinyUSDZ, OpenUSD, and the rest);
+- the STEP host's isolated OCCT manifest into `compatibility-host-step\vcpkg_installed`;
+- the thumbnail provider's isolated OCCT manifest into `thumbnail-provider\step-occt\vcpkg_installed`.
+
+The latter two are restored by `Preview3DRestoreIsolatedVcpkgManifests` in `Directory.Build.targets`; they are gitignored and are *not* handled by vcpkg's own manifest install (the STEP host disables it on purpose), so a fresh clone would otherwise fail with `Cannot open include file: 'BRepBndLib.hxx'`. Release builds statically link the dependency closure (`VcpkgUseStatic`/`VcpkgUseMD` in `Directory.Build.props`) so the shipped payload contains no upstream DLLs — only the app's own images. The OpenUSD overlay port (`packaging/vcpkg-ports/openusd`) and both OCCT closures compile from source, so this first restore takes **tens of minutes to a few hours** (the two OCCT trees are the long pole); later builds reuse the archives under `%LOCALAPPDATA%\vcpkg\archives` and are a no-op.
 
 If the build cannot find a third-party header instead of restoring, the integration is not active for the MSBuild you are running:
 

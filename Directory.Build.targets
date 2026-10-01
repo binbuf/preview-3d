@@ -81,4 +81,52 @@
       <FileWrites Include="@(_Preview3DVcpkgDllToResync->'$(OutDir)%(Filename)%(Extension)')" />
     </ItemGroup>
   </Target>
+
+  <!--
+    Restore the two *isolated* vcpkg manifests that vcpkg/MSBuild integration
+    does not install by itself.
+
+    Why this exists: the root manifest (vcpkg.json) is restored by vcpkg's own
+    VcpkgInstallManifestDependencies target whenever a consuming project has
+    VcpkgEnableManifest=true. The STEP host and the thumbnail provider instead
+    own separate OCCT closures:
+
+      compatibility-host-step\vcpkg_installed        (owns Preview3DStepHost)
+      thumbnail-provider\step-occt\vcpkg_installed   (read directly by the provider)
+
+    The STEP host deliberately sets VcpkgManifestInstall=false so an ordinary
+    build never re-runs the multi-hour CAD kernel restore, and no project
+    manifest-installs the provider's step-occt tree at all. Both directories are
+    gitignored, so a fresh clone has neither and the build fails with
+    "cannot open include file 'BRepBndLib.hxx'". CI provisions them explicitly
+    in .github/workflows/dependencies.yml; this makes a local "Build Solution"
+    self-heal the same way.
+
+    The restore runs at most once per tree: the target only fires while the OCCT
+    headers are absent, and vcpkg's own binary cache under
+    %LOCALAPPDATA%\vcpkg\archives makes later restores a no-op. The stock
+    x64-windows-static-md triplet is used (not CI's release-only overlay
+    triplet) so Debug builds get the debug half the provider expects.
+  -->
+  <Target Name="Preview3DRestoreIsolatedVcpkgManifests"
+          BeforeTargets="ClCompile"
+          Condition="'$(VcpkgRoot)' != '' and '$(DesignTimeBuild)' != 'true'
+                     and (('$(MSBuildProjectName)' == 'Preview3DStepHost'
+                           and !Exists('$(MSBuildThisFileDirectory)compatibility-host-step\vcpkg_installed\x64-windows-static-md\include\opencascade\Standard_Failure.hxx'))
+                       or ('$(MSBuildProjectName)' == 'Preview3DThumbnailProvider'
+                           and !Exists('$(MSBuildThisFileDirectory)thumbnail-provider\step-occt\vcpkg_installed\x64-windows-static-md\include\opencascade\Standard_Failure.hxx')))">
+    <PropertyGroup>
+      <_Preview3DVcpkgExe>$([System.IO.Path]::Combine('$(VcpkgRoot)','vcpkg.exe'))</_Preview3DVcpkgExe>
+      <_Preview3DIsolatedManifestRoot Condition="'$(MSBuildProjectName)' == 'Preview3DStepHost'">$(MSBuildThisFileDirectory)compatibility-host-step</_Preview3DIsolatedManifestRoot>
+      <_Preview3DIsolatedManifestRoot Condition="'$(MSBuildProjectName)' == 'Preview3DThumbnailProvider'">$(MSBuildThisFileDirectory)thumbnail-provider\step-occt</_Preview3DIsolatedManifestRoot>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('$(_Preview3DVcpkgExe)')"
+           Text="Preview 3D needs the isolated OCCT dependency tree under '$(_Preview3DIsolatedManifestRoot)', but vcpkg.exe was not found at '$(_Preview3DVcpkgExe)'. Run 'vcpkg integrate install' with the vcpkg you build with (see README 'Set up on a new workstation'), then rebuild." />
+
+    <Message Importance="high"
+             Text="Preview 3D: restoring isolated OCCT vcpkg manifest '$(_Preview3DIsolatedManifestRoot)\vcpkg.json'. The first restore compiles OCCT from source and can take ~30 minutes; later builds reuse the vcpkg archive cache." />
+
+    <Exec Command="&quot;$(_Preview3DVcpkgExe)&quot; install --triplet x64-windows-static-md --x-manifest-root=&quot;$(_Preview3DIsolatedManifestRoot)&quot; --x-install-root=&quot;$(_Preview3DIsolatedManifestRoot)\vcpkg_installed&quot;" />
+  </Target>
 </Project>
