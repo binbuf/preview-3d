@@ -3,7 +3,7 @@
   "mode": "scope-limited-mvp",
   "status": "fail",
   "viewerState": 3, "errorCode": 15, "errorStage": 11, "errorSummary": "This model could not be previewed.", "errorDetails": "The sandboxed importer stopped responding and was shut down.",
-  "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
+  "fixture": "interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
   "reference": "compatibility",
   "limits": {"durationMs": 3000, "frameLimit": 10000, "repeatCount": 1, "renderDurationMs": 3000, "renderFrameLimitWithWarmup": 10120, "renderObservedPresents": 717, "generalWorkerJobCommitBytes": 4294967296},
   "milestonesMs": {"firstBackground": 473.305, "loadingUi": 473.305, "firstGeometry": -1.000, "completeCoarse": -1.000, "verifiedBounds": -1.000, "firstRefinement": -1.000},

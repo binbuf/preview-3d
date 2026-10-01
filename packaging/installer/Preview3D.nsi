@@ -199,6 +199,8 @@ Section "Preview 3D" SEC_MAIN
   File "${STAGE_DIR}\${THUMBNAIL_REGISTRATION_SCRIPT}"
   File "${STAGE_DIR}\${SHELL_NOTIFICATION_SCRIPT}"
   File /r "${STAGE_DIR}\licenses"
+  ; UI language packs (UTF-8 JSON, resolved by the viewer from lang\ beside it).
+  File /r "${STAGE_DIR}\lang"
   File /r "${STAGE_DIR}\worker"
   File /r "${STAGE_DIR}\OpenUsdHost"
   File /r "${STAGE_DIR}\StepHost"
@@ -359,6 +361,7 @@ thumbnail_unregister_done:
 
   RMDir /r "$INSTDIR\OpenUsdHost"
   RMDir /r "$INSTDIR\StepHost"
+  RMDir /r "$INSTDIR\lang"
 
   Delete "$INSTDIR\licenses\basisu.txt"
   Delete "$INSTDIR\licenses\bzip2.txt"

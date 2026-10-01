@@ -73,6 +73,35 @@ release workflow only builds and packages. State exactly which commands and
 configurations you ran in your pull request, and note your GPU and Windows build
 for rendering or timing changes.
 
+## Localization
+
+User-facing strings are written in place as English fallbacks,
+`Loc("area.name", L"English text")` (see
+`interactive-viewer/src/app/Localization.h`). To add or change a string, edit the
+call site; to add a language, drop a `<code>.json` pack into
+`interactive-viewer/lang` and run `msbuild` (the pack is copied beside the
+executable). Regenerate the shipped packs and translation catalogue with:
+
+```powershell
+pwsh interactive-viewer/tools/generate-language-packs.ps1
+```
+
+English in the source is canonical; `interactive-viewer/lang/*.json` are derived
+and should never be hand-edited except to improve a translation. The
+`Localization` workflow enforces this by running the generator's check mode,
+which fails on a key collision (two call sites disagreeing on English), a value
+or key that drifted from the source, a missing/stale key, an empty translation,
+or a translation that dropped a `{0}`-style placeholder:
+
+```powershell
+pwsh interactive-viewer/tools/generate-language-packs.ps1 -Verify
+```
+
+Machine translations are a starting point; hand-reviewed corrections to
+`interactive-viewer/lang/*.json` are welcome and should be committed (run
+`-Verify` afterward). `Tests.Unit`'s `[localization]` cases exercise the loader
+against the real `interactive-viewer/lang` tree.
+
 ## Coding guidelines
 
 - Match the style of the surrounding code. Keep changes small and focused.

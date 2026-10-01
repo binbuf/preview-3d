@@ -4,7 +4,7 @@
   "configuration": "Release",
   "reference": "compatibility",
   "fixture": {
-    "path": "D:\\repos\\binbuf\\3d-preview-windows\\TestResults\\tsk205-large-fixtures\\A-large-stl.stl",
+    "path": "TestResults\\tsk205-large-fixtures\\A-large-stl.stl",
     "sha256": "360819748f668e5a520f05684ab8069464cb74fce19edd4154468038dfa4b62e",
     "bytes": 3000000084
   },
@@ -132,7 +132,7 @@
       "errorStage": 1,
       "errorSummary": "",
       "errorDetails": "",
-      "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\TestResults\\tsk205-large-fixtures\\A-large-stl.stl",
+      "fixture": "TestResults\\tsk205-large-fixtures\\A-large-stl.stl",
       "reference": "compatibility",
       "limits": {
         "durationMs": 30000,

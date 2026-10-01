@@ -10,6 +10,21 @@
 
 namespace
 {
+// Resolves interactive-viewer/test-assets from this tool's own executable
+// location (built into interactive-viewer/tools), so no absolute workstation
+// path is baked in. Duplicated per-tool by the same deliberate precedent as
+// AppendU32 below.
+std::wstring TestAssetPath(const wchar_t* leaf)
+{
+    wchar_t modulePath[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath, ARRAYSIZE(modulePath));
+    if (length == 0 || length >= ARRAYSIZE(modulePath)) return std::wstring(L"..\\test-assets\\") + leaf;
+    std::wstring directory(modulePath, length);
+    const std::size_t slash = directory.find_last_of(L'\\');
+    if (slash != std::wstring::npos) directory.erase(slash);
+    return directory + L"\\..\\test-assets\\" + leaf;
+}
+
 // Duplicated from gen-test-glbs.cpp rather than shared -- small deliberate
 // duplication over cross-tool coupling, matching this repo's established
 // precedent (see e.g. StlAdapter/PlyAdapter's separate request structs).
@@ -182,7 +197,7 @@ int wmain()
         auto compressed = EncodeDracoTriangleStrip(4, true, true);
         if (!compressed.empty()) {
             WriteDracoGlb(
-                L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\draco_triangle.glb",
+                TestAssetPath(L"draco_triangle.glb").c_str(),
                 compressed, 4, true, true);
         }
     }
@@ -193,7 +208,7 @@ int wmain()
         auto compressed = EncodeDracoTriangleStrip(2, false, false);
         if (!compressed.empty()) {
             WriteDracoGlb(
-                L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\draco_position_only.glb",
+                TestAssetPath(L"draco_position_only.glb").c_str(),
                 compressed, 2, false, false);
         }
     }

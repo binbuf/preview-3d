@@ -1,0 +1,54 @@
+name: Localization
+
+# Guards the invariant documented in interactive-viewer/src/app/Localization.h:
+# the English strings in the source are canonical, and every file under
+# interactive-viewer/lang is a derived artefact. This lane is deliberately tiny
+# and build-free -- it needs only PowerShell -- so it can run on every relevant
+# change without touching vcpkg or the C++ toolchain.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'interactive-viewer/src/**'
+      - 'interactive-viewer/lang/**'
+      - 'interactive-viewer/tools/generate-language-packs.ps1'
+      - '.github/workflows/localization.yml'
+  pull_request:
+    paths:
+      - 'interactive-viewer/src/**'
+      - 'interactive-viewer/lang/**'
+      - 'interactive-viewer/tools/generate-language-packs.ps1'
+      - '.github/workflows/localization.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localization-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify language packs
+    runs-on: windows-2025
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Fails on: a key collision (two call sites disagreeing on English), a
+      # committed pack whose keys or values drifted from the source, a missing
+      # or stale key, an empty translation, or a translation that dropped a
+      # {0}-style placeholder. Regenerate with:
+      #   pwsh interactive-viewer/tools/generate-language-packs.ps1
+      - name: Verify packs match the source
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'interactive-viewer/tools/generate-language-packs.ps1'
+          if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
+            throw "Language-pack generator not found at '$script'."
+          }
+          & $script -Verify

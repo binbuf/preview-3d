@@ -1,4 +1,5 @@
 #include "Accessibility.h"
+#include "Localization.h"
 
 #include <atomic>
 #include <comutil.h>
@@ -95,8 +96,9 @@ public:
         if (!action) return E_POINTER; *action = nullptr;
         if (IsSelf(child)) return S_FALSE;
         const LONG role = Info(child).role;
-        const wchar_t* text = role == ROLE_SYSTEM_SLIDER ? L"Adjust" : role == ROLE_SYSTEM_CHECKBUTTON ? L"Toggle" : L"Press";
-        *action = SysAllocString(text); return *action ? S_OK : E_OUTOFMEMORY;
+        const std::wstring text = role == ROLE_SYSTEM_SLIDER ? Loc("a11y.actionAdjust", L"Adjust")
+            : role == ROLE_SYSTEM_CHECKBUTTON ? Loc("a11y.actionToggle", L"Toggle") : Loc("a11y.actionPress", L"Press");
+        *action = SysAllocString(text.c_str()); return *action ? S_OK : E_OUTOFMEMORY;
     }
     HRESULT STDMETHODCALLTYPE accSelect(long flags, VARIANT child) override
     {

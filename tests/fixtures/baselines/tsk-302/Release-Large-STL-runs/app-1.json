@@ -3,7 +3,7 @@
   "mode": "scope-limited-mvp",
   "status": "fail",
   "viewerState": 1, "errorCode": 0, "errorStage": 1, "errorSummary": "", "errorDetails": "",
-  "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\TestResults\\tsk205-large-fixtures\\A-large-stl.stl",
+  "fixture": "TestResults\\tsk205-large-fixtures\\A-large-stl.stl",
   "reference": "compatibility",
   "limits": {"durationMs": 30000, "frameLimit": 100000, "repeatCount": 1, "renderDurationMs": 30000, "renderFrameLimitWithWarmup": 100120, "renderObservedPresents": 7207, "generalWorkerJobCommitBytes": 4294967296},
   "milestonesMs": {"firstBackground": 538.910, "loadingUi": 538.910, "firstGeometry": -1.000, "completeCoarse": -1.000, "verifiedBounds": -1.000, "firstRefinement": -1.000},

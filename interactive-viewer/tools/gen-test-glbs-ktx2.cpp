@@ -9,6 +9,21 @@
 
 namespace
 {
+// Resolves interactive-viewer/test-assets from this tool's own executable
+// location (built into interactive-viewer/tools), so no absolute workstation
+// path is baked in. Duplicated per-tool by the same deliberate precedent as
+// AppendU32 below.
+std::wstring TestAssetPath(const wchar_t* leaf)
+{
+    wchar_t modulePath[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath, ARRAYSIZE(modulePath));
+    if (length == 0 || length >= ARRAYSIZE(modulePath)) return std::wstring(L"..\\test-assets\\") + leaf;
+    std::wstring directory(modulePath, length);
+    const std::size_t slash = directory.find_last_of(L'\\');
+    if (slash != std::wstring::npos) directory.erase(slash);
+    return directory + L"\\..\\test-assets\\" + leaf;
+}
+
 void AppendU32(std::vector<std::uint8_t>& out, std::uint32_t value)
 {
     out.push_back(static_cast<std::uint8_t>(value & 0xFF));
@@ -179,10 +194,10 @@ int wmain()
         return 1;
     }
 
-    WriteFile(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\basisu_sample.ktx2",
+    WriteFile(TestAssetPath(L"basisu_sample.ktx2").c_str(),
               ktx2);
     WriteBasisuGlb(
-        L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\basisu_textured_triangle.glb",
+        TestAssetPath(L"basisu_textured_triangle.glb").c_str(),
         ktx2);
 
     // basisu_corrupt_ktx2.glb: a valid KHR_texture_basisu reference whose
@@ -191,7 +206,7 @@ int wmain()
     // never a hard import failure).
     std::vector<std::uint8_t> garbage(64, 0x11);
     WriteBasisuGlb(
-        L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\basisu_corrupt_ktx2.glb",
+        TestAssetPath(L"basisu_corrupt_ktx2.glb").c_str(),
         garbage);
 
     return 0;

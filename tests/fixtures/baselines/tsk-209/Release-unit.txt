@@ -7,10 +7,10 @@ Run with -? for options
 -------------------------------------------------------------------------------
 Overlay frames and a resize leave the debug layer silent
 -------------------------------------------------------------------------------
-D:\repos\binbuf\3d-preview-windows\tests\unit\D3D11On12OverlayTests.cpp(357)
+tests\unit\D3D11On12OverlayTests.cpp(357)
 ...............................................................................
 
-D:\repos\binbuf\3d-preview-windows\tests\unit\D3D11On12OverlayTests.cpp(369): warning:
+tests\unit\D3D11On12OverlayTests.cpp(369): warning:
   D3D12 info queue unavailable -- debug-layer validation not exercised in this
   build
 
@@ -18,20 +18,20 @@ D:\repos\binbuf\3d-preview-windows\tests\unit\D3D11On12OverlayTests.cpp(369): wa
 Real chrome paints the bars, information panel and navigation gizmo across
 buffers and resize
 -------------------------------------------------------------------------------
-D:\repos\binbuf\3d-preview-windows\tests\unit\D3D11On12OverlayTests.cpp(405)
+tests\unit\D3D11On12OverlayTests.cpp(405)
 ...............................................................................
 
-D:\repos\binbuf\3d-preview-windows\tests\unit\D3D11On12OverlayTests.cpp(453): warning:
+tests\unit\D3D11On12OverlayTests.cpp(453): warning:
   D3D12 info queue unavailable -- debug-layer validation not exercised in this
   build
 
 -------------------------------------------------------------------------------
 A mixed buffer/texture upload batch raises no debug-layer error
 -------------------------------------------------------------------------------
-D:\repos\binbuf\3d-preview-windows\tests\unit\UploadRingTests.cpp(434)
+tests\unit\UploadRingTests.cpp(434)
 ...............................................................................
 
-D:\repos\binbuf\3d-preview-windows\tests\unit\UploadRingTests.cpp(446): warning:
+tests\unit\UploadRingTests.cpp(446): warning:
   D3D12 info queue unavailable (Release build or no Graphics Tools feature) --
   debug-layer assertion skipped
 

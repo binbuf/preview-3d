@@ -7,6 +7,7 @@
 #include "D3D12ImportBridge.h"
 #include "RenderThread.h"
 #include "InfoPanel.h"
+#include "Localization.h"
 #include "Model.h"
 #include "Renderer.h"
 #include "NavGizmo.h"
@@ -24,6 +25,7 @@
 #include <sstream>
 #include <bit>
 #include <atomic>
+#include <deque>
 #include <string_view>
 
 using Microsoft::WRL::ComPtr;
@@ -113,6 +115,9 @@ struct ViewerApp
     HWND openAnotherButton = nullptr;
     HWND copyButton = nullptr;
     HWND tooltip = nullptr;
+    // Owns the text buffers referenced by the tooltip control for its lifetime
+    // (a deque so pointers to earlier entries survive later insertions).
+    std::deque<std::wstring> tooltipTexts;
     HFONT buttonFont = nullptr;
     UINT dpi = 96;
     float dpiScale = 1.0f;
@@ -257,6 +262,9 @@ struct ViewerApp
     bool groundAxisInverted = false;
     bool hideCursorWhileDragging = true;
     bool settingsPanelOpen = false;
+    // Active UI language pack code ("" == follow the Windows display language),
+    // mirrored from ViewerSettings so the Settings panel can show and change it.
+    std::wstring language;
     std::wstring speedHudText;
     double speedHudUntil = 0.0;
     std::wstring modeHudText;
@@ -863,7 +871,7 @@ RECT SettingsPanelRect(const ViewerApp& app)
 {
     const RECT overflowButton = app.chrome.Button(Chrome::Part::Overflow).rect;
     const int width = Scale(app, 280);
-    const int height = Scale(app, 112);
+    const int height = Scale(app, 156);
     const int gap = Scale(app, 6);
     RECT client{};
     GetClientRect(app.window, &client);
@@ -895,7 +903,7 @@ RECT SettingsCursorToggleRowRect(const ViewerApp& app)
     const RECT panel = SettingsPanelRect(app);
     const int marginX = Scale(app, 16);
     return RECT{ panel.left + marginX, panel.top + Scale(app, 56),
-        panel.right - marginX, panel.bottom - Scale(app, 8) };
+        panel.right - marginX, panel.top + Scale(app, 100) };
 }
 
 RECT SettingsCursorSwitchRect(const ViewerApp& app)
@@ -905,6 +913,18 @@ RECT SettingsCursorSwitchRect(const ViewerApp& app)
     const int switchHeight = Scale(app, 20);
     const int centerY = (row.top + row.bottom) / 2;
     return RECT{ row.right - switchWidth, centerY - switchHeight / 2, row.right, centerY + switchHeight / 2 };
+}
+
+// Third row: a language selector. Unlike the two on/off switches above it, the
+// whole row is a button that opens a native popup menu of installed packs
+// (TrackPopupMenu scales to dozens of entries far better than a custom-drawn
+// dropdown would).
+RECT SettingsLanguageRowRect(const ViewerApp& app)
+{
+    const RECT panel = SettingsPanelRect(app);
+    const int marginX = Scale(app, 16);
+    return RECT{ panel.left + marginX, panel.top + Scale(app, 104),
+        panel.right - marginX, panel.bottom - Scale(app, 8) };
 }
 
 void BeginWrappedDrag(ViewerApp& app, const POINT& point)
@@ -1074,7 +1094,7 @@ void AdjustFlySpeed(ViewerApp& app, float wheelSteps)
         cam->SetFlySpeedScale(cam->FlySpeedScale() * std::pow(1.18, static_cast<double>(wheelSteps)));
         scaled = cam->FlySpeedScale();
     }
-    ShowSpeedHud(app, L"Travel speed ×" + FormatMultiplier(scaled));
+    ShowSpeedHud(app, LocFormat("hud.travelSpeed", L"Travel speed ×{0}", { FormatMultiplier(scaled) }));
 }
 
 // Direct manipulation: sets speed immediately from a drag position within
@@ -1265,9 +1285,9 @@ int HitLightingButton(const ViewerApp& app,POINT point)
 std::wstring DirectionalLightHudText(const ViewerApp& app)
 {
     constexpr float kRadiansToDegrees = 57.29577951308232f;
-    return L"Directional light  "
-        + std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle * 360.0f))) + L"\u00B0"
-        + L" / " + std::to_wstring(static_cast<int>(std::lround(app.directionalLightElevation * kRadiansToDegrees))) + L"\u00B0";
+    return LocFormat("hud.directionalLight", L"Directional light  {0}\u00B0 / {1}\u00B0",
+        { std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle * 360.0f))),
+          std::to_wstring(static_cast<int>(std::lround(app.directionalLightElevation * kRadiansToDegrees))) });
 }
 
 // Rotates and raises the directional light so its gizmo sun lands under the
@@ -1295,9 +1315,9 @@ bool SetDirectionalLightFromGizmoPoint(ViewerApp& app, POINT point)
 void SetLightingMode(ViewerApp& app,LightingMode mode)
 {
     app.lightingMode=mode;
-    app.modeHudText=mode==LightingMode::Studio ? L"Studio lighting"
-        : mode==LightingMode::Clay ? L"Clay / Solid"
-        : mode==LightingMode::Directional ? DirectionalLightHudText(app) : L"Wireframe";
+    app.modeHudText=mode==LightingMode::Studio ? Loc("hud.studioLighting", L"Studio lighting")
+        : mode==LightingMode::Clay ? Loc("hud.claySolid", L"Clay / Solid")
+        : mode==LightingMode::Directional ? DirectionalLightHudText(app) : Loc("hud.wireframe", L"Wireframe");
     app.modeHudUntil=NowSeconds()+kHudVisibleSeconds;
     InvalidateRect(app.window,nullptr,FALSE);
 }
@@ -1333,47 +1353,54 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
         const GroundAxis next = NextGroundAxis(current, app.loadedModel->source.upAxis);
         return { static_cast<int>(Chrome::Part::GroundAxis) + 1,
             app.chrome.Button(Chrome::Part::GroundAxis).rect,
-            std::wstring(L"Ground axis ") + GroundAxisName(current) + L"; click for " + GroundAxisName(next), true };
+            LocFormat("tooltip.groundAxis", L"Ground axis {0}; click for {1}",
+                { GroundAxisName(current), GroundAxisName(next) }), true };
     }
     if (app.chrome.hover == Chrome::Part::GroundDirection && app.loadedModel)
     {
         const GroundAxis axis = ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis);
         const wchar_t* currentSign = app.groundAxisInverted ? L"-" : L"+";
         const wchar_t* nextSign = app.groundAxisInverted ? L"+" : L"-";
+        const std::wstring axisName = GroundAxisName(axis);
         return { static_cast<int>(Chrome::Part::GroundDirection) + 1,
             app.chrome.Button(Chrome::Part::GroundDirection).rect,
-            std::wstring(currentSign) + GroundAxisName(axis) + L" is up; click for " + nextSign + GroundAxisName(axis), true };
+            LocFormat("tooltip.groundDirection", L"{0}{1} is up; click for {2}{3}",
+                { std::wstring(currentSign), axisName, std::wstring(nextSign), axisName }), true };
     }
-    struct Entry { Chrome::Part part; const wchar_t* text; };
+    struct Entry { Chrome::Part part; const char* key; const wchar_t* text; };
     static constexpr Entry kEntries[] = {
-        { Chrome::Part::Grid, L"Toggle ground grid" },
-        { Chrome::Part::AxisSnap, L"Snap truck to axis" },
-        { Chrome::Part::Speed, L"Flight speed" },
-        { Chrome::Part::Fit, L"Frame model in view" },
-        { Chrome::Part::Reset, L"Reset view" },
-        { Chrome::Part::Share, L"Share" },
-        { Chrome::Part::Overflow, L"More options" },
-        { Chrome::Part::OpenWith, L"Open with" },
+        { Chrome::Part::Grid, "tooltip.grid", L"Toggle ground grid" },
+        { Chrome::Part::AxisSnap, "tooltip.axisSnap", L"Snap truck to axis" },
+        { Chrome::Part::Speed, "tooltip.speed", L"Flight speed" },
+        { Chrome::Part::Fit, "tooltip.fit", L"Frame model in view" },
+        { Chrome::Part::Reset, "tooltip.reset", L"Reset view" },
+        { Chrome::Part::Share, "tooltip.share", L"Share" },
+        { Chrome::Part::Overflow, "tooltip.more", L"More options" },
+        { Chrome::Part::OpenWith, "tooltip.openWith", L"Open with" },
     };
     for (const Entry& entry : kEntries)
     {
         if (app.chrome.hover == entry.part)
         {
-            return { static_cast<int>(entry.part) + 1, app.chrome.Button(entry.part).rect, entry.text, true };
+            return { static_cast<int>(entry.part) + 1, app.chrome.Button(entry.part).rect, Loc(entry.key, entry.text), true };
         }
     }
-    if (app.infoButtonHover) return { 100, InfoButtonRect(app), L"Model information", false };
-    if (app.fullscreenButtonHover) return { 101, FullscreenButtonRect(app), L"Fullscreen", false };
-    if (app.infoPanelCloseButtonHover) return { 102, InfoPanelCloseButtonRect(app), L"Close information panel", true };
+    if (app.infoButtonHover) return { 100, InfoButtonRect(app), Loc("tooltip.info", L"Model information"), false };
+    if (app.fullscreenButtonHover) return { 101, FullscreenButtonRect(app), Loc("tooltip.fullscreen", L"Fullscreen"), false };
+    if (app.infoPanelCloseButtonHover) return { 102, InfoPanelCloseButtonRect(app), Loc("tooltip.infoClose", L"Close information panel"), true };
     if (app.warningButtonHover) return { 103, WarningButtonRect(app),
-        app.missingAssets.empty() ? L"Model warnings" : L"Missing assets — click to locate them", false };
+        app.missingAssets.empty() ? Loc("tooltip.warnings", L"Model warnings")
+                                  : Loc("tooltip.missingAssets", L"Missing assets — click to locate them"), false };
     if (app.lightingButtonHover>=0) {
         const auto layout=ComputeLightingToolbarLayout(app);
         const RECT rects[]={layout.studio,layout.clay,layout.directional,layout.wireframe};
-        static constexpr const wchar_t* labels[]={
-            L"Studio: neutral material lighting",L"Clay: inspect geometry without textures",
-            L"Directional: rotate a sharp inspection light",L"Wireframe: show only mesh edges"};
-        return {110+app.lightingButtonHover,rects[app.lightingButtonHover],labels[app.lightingButtonHover],false};
+        struct LightingLabel { const char* key; const wchar_t* text; };
+        static constexpr LightingLabel labels[]={
+            {"tooltip.lightingStudio", L"Studio: neutral material lighting"},
+            {"tooltip.lightingClay", L"Clay: inspect geometry without textures"},
+            {"tooltip.lightingDirectional", L"Directional: rotate a sharp inspection light"},
+            {"tooltip.lightingWireframe", L"Wireframe: show only mesh edges"}};
+        return {110+app.lightingButtonHover,rects[app.lightingButtonHover],Loc(labels[app.lightingButtonHover].key,labels[app.lightingButtonHover].text),false};
     }
     return {};
 }
@@ -1425,7 +1452,8 @@ void ToggleGrid(ViewerApp& app)
 {
     if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_GRID)) return;
     app.gridVisible = !app.gridVisible;
-    ShowModeHud(app, app.gridVisible ? L"Ground grid shown" : L"Ground grid hidden");
+    ShowModeHud(app, app.gridVisible ? Loc("hud.gridShown", L"Ground grid shown")
+                                     : Loc("hud.gridHidden", L"Ground grid hidden"));
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
@@ -1434,7 +1462,8 @@ void ToggleProjection(ViewerApp& app)
     if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_PROJECTION)) return;
     const bool toOrthographic = app.renderThread.LockCamera()->Projection() == ProjectionMode::Perspective;
     app.renderThread.LockCamera()->SetProjection(toOrthographic ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
-    ShowModeHud(app, toOrthographic ? L"Orthographic" : L"Perspective");
+    ShowModeHud(app, toOrthographic ? Loc("hud.orthographic", L"Orthographic")
+                                    : Loc("hud.perspective", L"Perspective"));
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
@@ -1442,7 +1471,8 @@ void ToggleAxisSnap(ViewerApp& app)
 {
     if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_AXIS_SNAP)) return;
     app.axisSnapEnabled = !app.axisSnapEnabled;
-    ShowModeHud(app, app.axisSnapEnabled ? L"Axis snap on" : L"Axis snap off");
+    ShowModeHud(app, app.axisSnapEnabled ? Loc("hud.axisSnapOn", L"Axis snap on")
+                                         : Loc("hud.axisSnapOff", L"Axis snap off"));
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
@@ -1453,6 +1483,7 @@ void SaveViewerPreferences(const ViewerApp& app)
     settings.groundAxis = app.groundAxis;
     settings.groundAxisInverted = app.groundAxisInverted;
     settings.hideCursorWhileDragging = app.hideCursorWhileDragging;
+    settings.language = app.language;
     SaveSettings(settings);
 }
 
@@ -1468,7 +1499,7 @@ void CycleGroundAxis(ViewerApp& app)
     DirectX::XMFLOAT3 effectiveMax{};
     EffectiveBounds(app, effectiveMin, effectiveMax);
     app.renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(app));
-    ShowModeHud(app, std::wstring(L"Ground axis ") + GroundAxisName(app.groundAxis));
+    ShowModeHud(app, LocFormat("hud.groundAxis", L"Ground axis {0}", { GroundAxisName(app.groundAxis) }));
     SaveViewerPreferences(app);
     InvalidateRect(app.window, nullptr, FALSE);
 }
@@ -1484,8 +1515,8 @@ void ToggleGroundDirection(ViewerApp& app)
     EffectiveBounds(app, effectiveMin, effectiveMax);
     app.renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(app));
     const GroundAxis axis = ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis);
-    ShowModeHud(app, std::wstring(L"Ground direction ") +
-        (app.groundAxisInverted ? L"-" : L"+") + GroundAxisName(axis) + L" up");
+    ShowModeHud(app, LocFormat("hud.groundDirection", L"Ground direction {0}{1} up",
+        { app.groundAxisInverted ? L"-" : L"+", GroundAxisName(axis) }));
     SaveViewerPreferences(app);
     InvalidateRect(app.window, nullptr, FALSE);
 }
@@ -1505,7 +1536,8 @@ void ToggleShowNativeOrientation(ViewerApp& app)
         // jumped ~90 degrees, so the old camera pose has no useful
         // relationship to the new one — treat this exactly like a fresh open.
         app.renderThread.LockCamera()->SetBounds(effectiveMin, effectiveMax, ViewportAspect(app));
-        ShowModeHud(app, app.showNativeOrientation ? L"Native orientation" : L"Normalized orientation");
+        ShowModeHud(app, app.showNativeOrientation ? Loc("hud.nativeOrientation", L"Native orientation")
+                                                   : Loc("hud.normalizedOrientation", L"Normalized orientation"));
     }
     InvalidateRect(app.window, nullptr, FALSE);
     SaveViewerPreferences(app);
@@ -1668,13 +1700,16 @@ LRESULT CALLBACK ErrorButtonAccessibilitySubclass(HWND window, UINT message, WPA
     return DefSubclassProc(window, message, wParam, lParam);
 }
 
-void AddTooltip(ViewerApp& app, HWND control, const wchar_t* text)
+void AddTooltip(ViewerApp& app, HWND control, std::wstring text)
 {
+    // The tooltip control keeps the pointer, so the buffer must outlive this
+    // call; app.tooltipTexts owns it.
+    app.tooltipTexts.push_back(std::move(text));
     TOOLINFOW info{ sizeof(info) };
     info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
     info.hwnd = app.window;
     info.uId = reinterpret_cast<UINT_PTR>(control);
-    info.lpszText = const_cast<wchar_t*>(text);
+    info.lpszText = const_cast<wchar_t*>(app.tooltipTexts.back().c_str());
     SendMessageW(app.tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
 }
 
@@ -1687,18 +1722,18 @@ void CreateControls(ViewerApp& app)
     // slider is D2D-drawn too (ZoomTrackRect/DrawBottomBar) with its own
     // pointer handling, same split as the Speed flyout. Only the
     // error-state action buttons remain real HWND controls.
-    app.retryButton = CreateButton(app, ID_VIEW_RETRY, L"Retry");
-    app.openAnotherButton = CreateButton(app, ID_VIEW_OPEN_ANOTHER, L"Open another");
-    app.copyButton = CreateButton(app, ID_VIEW_COPY_DETAILS, L"Copy details");
+    app.retryButton = CreateButton(app, ID_VIEW_RETRY, Loc("action.retry", L"Retry").c_str());
+    app.openAnotherButton = CreateButton(app, ID_VIEW_OPEN_ANOTHER, Loc("action.openAnother", L"Open another").c_str());
+    app.copyButton = CreateButton(app, ID_VIEW_COPY_DETAILS, Loc("action.copyDetails", L"Copy details").c_str());
     for (HWND button : { app.retryButton, app.openAnotherButton, app.copyButton })
         SetWindowSubclass(button, ErrorButtonAccessibilitySubclass, 1, 0);
     app.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, app.window, nullptr, app.instance, nullptr);
     SetWindowPos(app.tooltip, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     SendMessageW(app.tooltip, TTM_SETMAXTIPWIDTH, 0, Scale(app, 360));
-    AddTooltip(app, app.retryButton, L"Try opening this file again");
-    AddTooltip(app, app.openAnotherButton, L"Choose a different supported 3D model");
-    AddTooltip(app, app.copyButton, L"Copy technical error details without the file path");
+    AddTooltip(app, app.retryButton, Loc("action.retryTip", L"Try opening this file again"));
+    AddTooltip(app, app.openAnotherButton, Loc("action.openAnotherTip", L"Choose a different supported 3D model"));
+    AddTooltip(app, app.copyButton, Loc("action.copyDetailsTip", L"Copy technical error details without the file path"));
     RecreateButtonFont(app);
     UpdateButtonAvailability(app);
     LayoutControls(app);
@@ -1713,7 +1748,7 @@ void SyncDisplayedModel(ViewerApp& app)
         app.warning = displayed->metadata->warning;
         if (displayed->metadata->source.format == model_core::SourceFormatId::Step
             && displayed->metadata->importStatus.optionalFeatureWarnings)
-            app.warning = L"Some STEP surfaces or assembly items could not be displayed.";
+            app.warning = Loc("warning.stepSurfaces", L"Some STEP surfaces or assembly items could not be displayed.");
     }
 }
 
@@ -1776,8 +1811,9 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     {
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
-        SetFailure(app, L"Remote model paths are not opened.",
-            L"Choose a supported model stored on a local drive for this viewer.", path, model_core::ImportErrorCode::UnsafeReference);
+        SetFailure(app, Loc("failure.remotePath.summary", L"Remote model paths are not opened."),
+            Loc("failure.remotePath.details", L"Choose a supported model stored on a local drive for this viewer."),
+            path, model_core::ImportErrorCode::UnsafeReference);
         return;
     }
     const auto d3d12Format = d3d12_import_bridge::ClassifyByExtension(path);
@@ -1785,8 +1821,9 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     {
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
-        SetFailure(app, L"This model format is not supported.",
-            L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, .usdz, .step, or .stp file. Other model formats are deferred.", path, model_core::ImportErrorCode::UnsupportedFormat);
+        SetFailure(app, Loc("failure.unsupported.summary", L"This model format is not supported."),
+            Loc("failure.unsupported.details", L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, .usdz, .step, or .stp file. Other model formats are deferred."),
+            path, model_core::ImportErrorCode::UnsupportedFormat);
         return;
     }
 
@@ -1869,22 +1906,22 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
         {
             result.errorCode = model_core::ImportErrorCode::ResourceLimit;
             result.errorStage = import_broker::ImportStage::Upload;
-            result.errorSummary = L"This model exceeds the upload capacity.";
-            result.errorDetails = L"An accepted batch exceeded the bounded upload queue. Export a smaller model and retry.";
+            result.errorSummary = Loc("failure.uploadCapacity.summary", L"This model exceeds the upload capacity.");
+            result.errorDetails = Loc("failure.uploadCapacity.details", L"An accepted batch exceeded the bounded upload queue. Export a smaller model and retry.");
         }
         catch (const std::bad_alloc&)
         {
             result.errorCode = model_core::ImportErrorCode::OutOfMemory;
             result.errorStage = import_broker::ImportStage::WorkerReportedError;
-            result.errorSummary = L"There is not enough memory to open this model.";
-            result.errorDetails = L"Importing this model exceeded the available memory budget.";
+            result.errorSummary = Loc("failure.oom.summary", L"There is not enough memory to open this model.");
+            result.errorDetails = Loc("failure.oom.details", L"Importing this model exceeded the available memory budget.");
         }
         catch (...)
         {
             result.errorCode = model_core::ImportErrorCode::InternalImporterFailure;
             result.errorStage = import_broker::ImportStage::WorkerReportedError;
-            result.errorSummary = L"This model could not be previewed.";
-            result.errorDetails = L"The importer stopped unexpectedly while reading the model.";
+            result.errorSummary = Loc("failure.generic.summary", L"This model could not be previewed.");
+            result.errorDetails = Loc("failure.generic.details", L"The importer stopped unexpectedly while reading the model.");
         }
         if (!alive->load(std::memory_order_relaxed) || (initialComplete && cancellation->load())) return;
         auto* message = new (std::nothrow) D3D12CompleteMessage{ generation, path, std::move(result) };
@@ -1902,21 +1939,36 @@ void OpenDialog(ViewerApp& app)
     ComPtr<IFileOpenDialog> dialog;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
     {
-        SetFailure(app, L"The Open dialog is unavailable.", L"Windows could not create the system file picker.");
+        SetFailure(app, Loc("failure.openDialogUnavailable.summary", L"The Open dialog is unavailable."),
+        Loc("failure.openDialogUnavailable.details", L"Windows could not create the system file picker."));
         return;
     }
-    const COMDLG_FILTERSPEC filters[] = {
-        { L"Supported 3D models", L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx;*.3mf;*.usd;*.usda;*.usdc;*.usdz;*.step;*.stp" },
-        { L"glTF models (*.glb; *.gltf)", L"*.glb;*.gltf" },
-        { L"STL (*.stl)", L"*.stl" },
-        { L"PLY meshes and points (*.ply)", L"*.ply" },
-        { L"Wavefront OBJ with MTL (*.obj)", L"*.obj" },
-        { L"Autodesk FBX (*.fbx)", L"*.fbx" },
-        { L"3D Manufacturing Format (*.3mf)", L"*.3mf" },
-        { L"Universal Scene Description (*.usd; *.usda; *.usdc; *.usdz)", L"*.usd;*.usda;*.usdc;*.usdz" },
-        { L"STEP CAD models (*.step; *.stp)", L"*.step;*.stp" },
-        { L"All files (*.*)", L"*.*" }
+    // Filter labels are localized; the extension patterns are not. The label
+    // strings must outlive SetFileTypes, so they live in these arrays.
+    const std::wstring filterNames[] = {
+        Loc("open.filter.all", L"Supported 3D models"),
+        Loc("open.filter.gltf", L"glTF models (*.glb; *.gltf)"),
+        Loc("open.filter.stl", L"STL (*.stl)"),
+        Loc("open.filter.ply", L"PLY meshes and points (*.ply)"),
+        Loc("open.filter.obj", L"Wavefront OBJ with MTL (*.obj)"),
+        Loc("open.filter.fbx", L"Autodesk FBX (*.fbx)"),
+        Loc("open.filter.3mf", L"3D Manufacturing Format (*.3mf)"),
+        Loc("open.filter.usd", L"Universal Scene Description (*.usd; *.usda; *.usdc; *.usdz)"),
+        Loc("open.filter.step", L"STEP CAD models (*.step; *.stp)"),
+        Loc("open.filter.allFiles", L"All files (*.*)"),
     };
+    const wchar_t* const filterPatterns[] = {
+        L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx;*.3mf;*.usd;*.usda;*.usdc;*.usdz;*.step;*.stp",
+        L"*.glb;*.gltf", L"*.stl", L"*.ply", L"*.obj", L"*.fbx", L"*.3mf",
+        L"*.usd;*.usda;*.usdc;*.usdz", L"*.step;*.stp", L"*.*",
+    };
+    static_assert(ARRAYSIZE(filterNames) == ARRAYSIZE(filterPatterns), "filter arrays must match");
+    COMDLG_FILTERSPEC filters[ARRAYSIZE(filterNames)];
+    for (std::size_t index = 0; index < ARRAYSIZE(filterNames); ++index)
+    {
+        filters[index].pszName = filterNames[index].c_str();
+        filters[index].pszSpec = filterPatterns[index];
+    }
     dialog->SetFileTypes(ARRAYSIZE(filters), filters);
     dialog->SetDefaultExtension(L"glb");
     dialog->SetOptions(FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
@@ -1924,7 +1976,8 @@ void OpenDialog(ViewerApp& app)
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
     if (FAILED(shown))
     {
-        SetFailure(app, L"The Open dialog stopped unexpectedly.", L"Try dropping a supported local 3D model into the window.");
+        SetFailure(app, Loc("failure.openDialogFailed.summary", L"The Open dialog stopped unexpectedly."),
+            Loc("failure.openDialogFailed.details", L"Try dropping a supported local 3D model into the window."));
         return;
     }
     ComPtr<IShellItem> item;
@@ -1967,13 +2020,13 @@ void ShowMoreMenu(ViewerApp& app)
     HMENU menu = CreatePopupMenu();
     if (!app.warning.empty())
     {
-        AppendMenuW(menu, MF_STRING, ID_VIEW_DIAGNOSTICS, L"Model warnings…");
+        AppendMenuW(menu, MF_STRING, ID_VIEW_DIAGNOSTICS, Loc("menu.modelWarnings", L"Model warnings…").c_str());
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
-    AppendMenuW(menu, MF_STRING, ID_VIEW_CONTROLS, L"Controls\t?");
-    AppendMenuW(menu, MF_STRING, ID_VIEW_SETTINGS, L"Settings…");
+    AppendMenuW(menu, MF_STRING, ID_VIEW_CONTROLS, Loc("menu.controls", L"Controls\t?").c_str());
+    AppendMenuW(menu, MF_STRING, ID_VIEW_SETTINGS, Loc("menu.settings", L"Settings…").c_str());
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, IDM_ABOUT, L"About Preview 3D");
+    AppendMenuW(menu, MF_STRING, IDM_ABOUT, Loc("menu.about", L"About Preview 3D").c_str());
     RECT button = app.chrome.Button(Chrome::Part::Overflow).rect;
     POINT anchor{ button.right, button.bottom };
     ClientToScreen(app.window, &anchor);
@@ -1987,6 +2040,61 @@ void ToggleSettingsPanel(ViewerApp& app)
 {
     app.settingsPanelOpen = !app.settingsPanelOpen;
     InvalidateRect(app.window, nullptr, FALSE);
+}
+
+constexpr UINT kLanguageMenuBase = 50000;
+
+// Switches the active language pack without a restart: every string resolved
+// at draw time (chrome, tooltips, panels, menus) updates immediately. Strings
+// already captured into app state (an error card's summary, for example) keep
+// their previous language until that state is replaced, matching how most
+// desktop apps treat an in-place language change.
+void ApplyLanguage(ViewerApp& app, const std::wstring& code)
+{
+    app.language = code;
+    LocalizationSetLanguage(code);
+    SaveViewerPreferences(app);
+    UpdateTitle(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+    viewer_accessibility::Announce(app.window, app.uiaAccessible, AccessibilityStatus(app));
+}
+
+void ShowLanguageMenu(ViewerApp& app)
+{
+    HMENU menu = CreatePopupMenu();
+    const std::wstring systemLabel = Loc("settings.language.system", L"System default (Windows language)");
+    AppendMenuW(menu, MF_STRING, kLanguageMenuBase, systemLabel.c_str());
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
+    const std::vector<LanguageInfo>& languages = LocalizationAvailableLanguages();
+    const std::wstring current = LocalizationLanguage();
+    // Menu items reference the label buffers for the duration of
+    // TrackPopupMenu, so they must outlive the AppendMenuW calls.
+    std::vector<std::wstring> labels;
+    labels.reserve(languages.size());
+    for (std::size_t index = 0; index < languages.size(); ++index)
+    {
+        labels.push_back(languages[index].displayName + L"  (" + languages[index].code + L")");
+        const UINT flags = MF_STRING | (languages[index].code == current ? MF_CHECKED : 0u);
+        AppendMenuW(menu, flags, kLanguageMenuBase + 1 + static_cast<UINT>(index), labels.back().c_str());
+    }
+
+    const RECT row = SettingsLanguageRowRect(app);
+    POINT anchor{ row.left, row.bottom };
+    ClientToScreen(app.window, &anchor);
+    const int selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+        anchor.x, anchor.y, 0, app.window, nullptr);
+    DestroyMenu(menu);
+
+    if (selected == static_cast<int>(kLanguageMenuBase))
+    {
+        ApplyLanguage(app, std::wstring());
+    }
+    else if (selected >= static_cast<int>(kLanguageMenuBase) + 1)
+    {
+        const std::size_t index = static_cast<std::size_t>(selected - (kLanguageMenuBase + 1));
+        if (index < languages.size()) ApplyLanguage(app, languages[index].code);
+    }
 }
 
 void DrawOwnerButton(ViewerApp& app, const DRAWITEMSTRUCT& item)
@@ -2059,7 +2167,7 @@ std::wstring BuildModelWarningText(const ViewerApp& app)
     if (!app.missingAssets.empty())
     {
         if (!text.empty()) text += L"\n";
-        text += L"Missing assets:";
+        text += Loc("warning.missingAssetsHeader", L"Missing assets:");
         for (const auto& asset : app.missingAssets)
         {
             text += L"\n  \u2022 ";
@@ -2083,12 +2191,18 @@ INT_PTR CALLBACK AssetWarningDialogProc(HWND dialog, UINT message, WPARAM wParam
     {
         auto* context = reinterpret_cast<AssetWarningDialogContext*>(lParam);
         SetWindowLongPtrW(dialog, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(context));
+        // The dialog template carries English fallbacks; the localized strings
+        // are applied here so no per-language resource script is needed.
+        SetWindowTextW(dialog, Loc("assetWarning.caption", L"Model assets").c_str());
+        SetDlgItemTextW(dialog, IDC_ASSETWARNING_INSTRUCTION,
+            Loc("assetWarning.instruction", L"Some assets referenced by this model could not be found. To load them, choose the folder that contains the missing files.").c_str());
         if (context && context->text)
             SetDlgItemTextW(dialog, IDC_ASSETWARNING_TEXT, context->text->c_str());
         if (context && context->hasMissingAssets)
-            SetDlgItemTextW(dialog, IDC_ASSETWARNING_LOCATE, L"Locate folder\u2026");
+            SetDlgItemTextW(dialog, IDC_ASSETWARNING_LOCATE, Loc("assetWarning.locate", L"Locate folder\u2026").c_str());
         else
             EnableWindow(GetDlgItem(dialog, IDC_ASSETWARNING_LOCATE), FALSE);
+        SetDlgItemTextW(dialog, IDCANCEL, Loc("action.close", L"Close").c_str());
         return TRUE;
     }
     case WM_COMMAND:
@@ -2122,18 +2236,20 @@ void LocateMissingAssets(ViewerApp& app)
     ComPtr<IFileOpenDialog> dialog;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
     {
-        MessageBoxW(app.window, L"Windows could not create the folder picker.", L"Missing assets", MB_OK | MB_ICONWARNING);
+        MessageBoxW(app.window, Loc("assetWarning.folderPickerUnavailable", L"Windows could not create the folder picker.").c_str(),
+            Loc("assetWarning.caption", L"Model assets").c_str(), MB_OK | MB_ICONWARNING);
         return;
     }
     DWORD options = 0;
     dialog->GetOptions(&options);
     dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
-    dialog->SetTitle(L"Select the folder that contains the missing assets");
+    dialog->SetTitle(Loc("assetWarning.pickFolder", L"Select the folder that contains the missing assets").c_str());
     const HRESULT shown = dialog->Show(app.window);
     if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return;
     if (FAILED(shown))
     {
-        MessageBoxW(app.window, L"The folder picker stopped unexpectedly.", L"Missing assets", MB_OK | MB_ICONWARNING);
+        MessageBoxW(app.window, Loc("assetWarning.folderPickerFailed", L"The folder picker stopped unexpectedly.").c_str(),
+            Loc("assetWarning.caption", L"Model assets").c_str(), MB_OK | MB_ICONWARNING);
         return;
     }
     ComPtr<IShellItem> item;
@@ -2195,8 +2311,9 @@ void HandleCommand(ViewerApp& app, int id)
         ShowModelWarnings(app);
         break;
     case IDM_ABOUT:
-        MessageBoxW(app.window, L"A native static viewer for glTF, OBJ, FBX, STL, PLY, the supported static 3MF preview subset, and USD-family models. 3MF includes Core, Materials, Production, and bounded Beam Lattice content. USD uses a fast isolated importer with a separate isolated OpenUSD compatibility host for bounded local composition.\n\nImports are bounded and local-only. No cloud, animation playback, editing, file modification, slicer-private multi-plate grouping, Explorer thumbnails, or persistent model cache.",
-            L"About Preview 3D", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(app.window,
+            Loc("about.body", L"A native static viewer for glTF, OBJ, FBX, STL, PLY, the supported static 3MF preview subset, and USD-family models. 3MF includes Core, Materials, Production, and bounded Beam Lattice content. USD uses a fast isolated importer with a separate isolated OpenUSD compatibility host for bounded local composition.\n\nImports are bounded and local-only. No cloud, animation playback, editing, file modification, slicer-private multi-plate grouping, Explorer thumbnails, or persistent model cache.").c_str(),
+            Loc("about.title", L"About Preview 3D").c_str(), MB_OK | MB_ICONINFORMATION);
         break;
     case IDM_EXIT: DestroyWindow(app.window); break;
     }
@@ -2213,23 +2330,24 @@ void ShowOpenWithMenu(ViewerApp& app)
     OpenWithGroup currentGroup = OpenWithGroup::Status;
     bool hasHeading = false;
     bool hasMenuItem = false;
-    auto heading = [](OpenWithGroup group) -> const wchar_t* {
+    auto heading = [](OpenWithGroup group) -> std::wstring {
         switch (group)
         {
-        case OpenWithGroup::Cad: return L"CAD";
-        case OpenWithGroup::Modeling: return L"Modeling";
-        case OpenWithGroup::Printing: return L"3D printing";
-        case OpenWithGroup::Recommended: return L"Recommended by Windows";
-        default: return nullptr;
+        case OpenWithGroup::Cad: return Loc("openWith.cad", L"CAD");
+        case OpenWithGroup::Modeling: return Loc("openWith.modeling", L"Modeling");
+        case OpenWithGroup::Printing: return Loc("openWith.printing", L"3D printing");
+        case OpenWithGroup::Recommended: return Loc("openWith.recommended", L"Recommended by Windows");
+        default: return {};
         }
     };
     for (std::size_t index = 0; index < entries.size(); ++index)
     {
         const auto& entry = entries[index];
-        if (const wchar_t* label = heading(entry.group); label && (!hasHeading || currentGroup != entry.group))
+        const std::wstring label = heading(entry.group);
+        if (!label.empty() && (!hasHeading || currentGroup != entry.group))
         {
             if (hasMenuItem) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(menu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, label);
+            AppendMenuW(menu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, label.c_str());
             currentGroup = entry.group;
             hasHeading = true;
         }
@@ -2252,7 +2370,7 @@ void ShowOpenWithMenu(ViewerApp& app)
     {
         const auto& entry = entries[selected - kBaseId];
         if (entry.invoke && !entry.invoke(app.currentPath))
-            ShowModeHud(app, L"That app is no longer available");
+            ShowModeHud(app, Loc("hud.appUnavailable", L"That app is no longer available"));
     }
 }
 
@@ -2262,7 +2380,7 @@ void DoShare(ViewerApp& app)
     std::wstring error;
     if (!ShowWindowsShare(app.window, app.currentPath, error))
     {
-        ShowModeHud(app, L"Share isn't available right now");
+        ShowModeHud(app, Loc("hud.shareUnavailable", L"Share isn't available right now"));
     }
 }
 
@@ -2301,17 +2419,17 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     viewer_accessibility::ControlInfo info;
     info.focused = app.keyboardControl == control && GetFocus() == app.window;
     const bool model = HasNavigableModel(app);
-    auto chrome = [&](Chrome::Part part, const wchar_t* name, const wchar_t* description = L"") {
+    auto chrome = [&](Chrome::Part part, const std::wstring& name, const std::wstring& description = {}) {
         const auto& button = app.chrome.Button(part);
         info.name = name; info.description = description; info.rect = button.rect;
         info.visible = button.visible; info.enabled = button.enabled;
     };
     switch (control)
     {
-    case Control::Grid: chrome(Chrome::Part::Grid, L"Ground grid", L"Show or hide the ground grid"); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.gridVisible; break;
+    case Control::Grid: chrome(Chrome::Part::Grid, Loc("a11y.grid", L"Ground grid"), Loc("a11y.gridDesc", L"Show or hide the ground grid")); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.gridVisible; break;
     case Control::GroundAxis:
     {
-        chrome(Chrome::Part::GroundAxis, L"Model ground axis", L"Cycle the model axis treated as vertical");
+        chrome(Chrome::Part::GroundAxis, Loc("a11y.groundAxis", L"Model ground axis"), Loc("a11y.groundAxisDesc", L"Cycle the model axis treated as vertical"));
         const GroundAxis effective = app.loadedModel
             ? ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis) : GroundAxis::Z;
         info.value = GroundAxisName(effective);
@@ -2319,48 +2437,49 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     }
     case Control::GroundDirection:
     {
-        chrome(Chrome::Part::GroundDirection, L"Ground direction", L"Use the opposite side of the selected axis as up");
+        chrome(Chrome::Part::GroundDirection, Loc("a11y.groundDirection", L"Ground direction"), Loc("a11y.groundDirectionDesc", L"Use the opposite side of the selected axis as up"));
         info.role = ROLE_SYSTEM_CHECKBUTTON;
         info.checked = app.groundAxisInverted;
         const GroundAxis effective = app.loadedModel
             ? ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis) : GroundAxis::Z;
-        info.value = std::wstring(app.groundAxisInverted ? L"Negative " : L"Positive ") + GroundAxisName(effective) + L" is up";
+        info.value = LocFormat(app.groundAxisInverted ? "a11y.groundDirectionNegative" : "a11y.groundDirectionPositive",
+            app.groundAxisInverted ? L"Negative {0} is up" : L"Positive {0} is up", { GroundAxisName(effective) });
         break;
     }
-    case Control::AxisSnap: chrome(Chrome::Part::AxisSnap, L"Axis snap", L"Snap truck movement to the nearest world axis"); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.axisSnapEnabled; break;
-    case Control::Speed: chrome(Chrome::Part::Speed, L"Travel speed", L"Open the flight-speed control"); break;
-    case Control::Fit: chrome(Chrome::Part::Fit, L"Fit selection or model"); break;
-    case Control::Reset: chrome(Chrome::Part::Reset, L"Reset view"); break;
-    case Control::Share: chrome(Chrome::Part::Share, L"Share"); break;
-    case Control::More: chrome(Chrome::Part::Overflow, L"More options"); break;
-    case Control::OpenWith: chrome(Chrome::Part::OpenWith, L"Open with"); break;
-    case Control::Minimize: chrome(Chrome::Part::Minimize, L"Minimize"); break;
-    case Control::Maximize: chrome(Chrome::Part::Maximize, IsZoomed(app.window) ? L"Restore" : L"Maximize"); break;
-    case Control::Close: chrome(Chrome::Part::Close, L"Close"); break;
+    case Control::AxisSnap: chrome(Chrome::Part::AxisSnap, Loc("a11y.axisSnap", L"Axis snap"), Loc("a11y.axisSnapDesc", L"Snap truck movement to the nearest world axis")); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.axisSnapEnabled; break;
+    case Control::Speed: chrome(Chrome::Part::Speed, Loc("chrome.travelSpeed", L"Travel speed"), Loc("a11y.speedDesc", L"Open the flight-speed control")); break;
+    case Control::Fit: chrome(Chrome::Part::Fit, Loc("a11y.fit", L"Fit selection or model")); break;
+    case Control::Reset: chrome(Chrome::Part::Reset, Loc("a11y.reset", L"Reset view")); break;
+    case Control::Share: chrome(Chrome::Part::Share, Loc("a11y.share", L"Share")); break;
+    case Control::More: chrome(Chrome::Part::Overflow, Loc("tooltip.more", L"More options")); break;
+    case Control::OpenWith: chrome(Chrome::Part::OpenWith, Loc("a11y.openWith", L"Open with")); break;
+    case Control::Minimize: chrome(Chrome::Part::Minimize, Loc("a11y.minimize", L"Minimize")); break;
+    case Control::Maximize: chrome(Chrome::Part::Maximize, IsZoomed(app.window) ? Loc("a11y.restore", L"Restore") : Loc("a11y.maximize", L"Maximize")); break;
+    case Control::Close: chrome(Chrome::Part::Close, Loc("a11y.close", L"Close")); break;
     case Control::Info:
-        info.name=L"Model information"; info.description=L"Show or hide Stats and Shading"; info.rect=InfoButtonRect(app);
+        info.name=Loc("a11y.info", L"Model information"); info.description=Loc("a11y.infoDesc", L"Show or hide Stats and Shading"); info.rect=InfoButtonRect(app);
         info.visible=model; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.infoPanelVisible; break;
     case Control::InfoPanelClose:
-        info.name=L"Close model information"; info.description=L"Close Stats and Shading";
+        info.name=Loc("a11y.infoClose", L"Close model information"); info.description=Loc("a11y.infoCloseDesc", L"Close Stats and Shading");
         info.rect=InfoPanelCloseButtonRect(app); info.visible=model && app.infoPanelVisible; break;
     case Control::Zoom:
     {
-        info.name=L"Zoom"; info.description=L"Adjust camera zoom"; info.rect=ZoomTrackRect(app); info.visible=model; info.role=ROLE_SYSTEM_SLIDER;
-        auto camera=app.renderThread.LockCamera(); info.value=std::to_wstring(static_cast<int>(std::lround(ZoomPercentFor(*camera))))+L" percent"; break;
+        info.name=Loc("a11y.zoom", L"Zoom"); info.description=Loc("a11y.zoomDesc", L"Adjust camera zoom"); info.rect=ZoomTrackRect(app); info.visible=model; info.role=ROLE_SYSTEM_SLIDER;
+        auto camera=app.renderThread.LockCamera(); info.value=LocFormat("a11y.percent", L"{0} percent", { std::to_wstring(static_cast<int>(std::lround(ZoomPercentFor(*camera)))) }); break;
     }
     case Control::Fullscreen:
-        info.name=L"Fullscreen"; info.description=L"Enter or leave fullscreen"; info.rect=FullscreenButtonRect(app);
+        info.name=Loc("tooltip.fullscreen", L"Fullscreen"); info.description=Loc("a11y.fullscreenDesc", L"Enter or leave fullscreen"); info.rect=FullscreenButtonRect(app);
         info.visible=model; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.isFullscreen; break;
     case Control::LightingStudio:
-        info.name=L"Studio lighting"; info.description=L"Neutral colorless lighting for evaluating PBR materials";
+        info.name=Loc("a11y.studio", L"Studio lighting"); info.description=Loc("a11y.studioDesc", L"Neutral colorless lighting for evaluating PBR materials");
         info.rect=ComputeLightingToolbarLayout(app).studio;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
         info.checked=app.lightingMode==LightingMode::Studio;break;
     case Control::LightingClay:
-        info.name=L"Clay or solid shading";info.description=L"Matte gray material for inspecting geometry";
+        info.name=Loc("a11y.clay", L"Clay or solid shading");info.description=Loc("a11y.clayDesc", L"Matte gray material for inspecting geometry");
         info.rect=ComputeLightingToolbarLayout(app).clay;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
         info.checked=app.lightingMode==LightingMode::Clay;break;
     case Control::LightingDirectional:
-        info.name=L"Directional lighting";info.description=L"Sharp rotatable light for inspecting surface detail";
+        info.name=Loc("a11y.directional", L"Directional lighting");info.description=Loc("a11y.directionalDesc", L"Sharp rotatable light for inspecting surface detail");
         info.rect=ComputeLightingToolbarLayout(app).directional;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
         info.checked=app.lightingMode==LightingMode::Directional;break;
     case Control::DirectionalLightAngle:
@@ -2370,12 +2489,12 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         // sun. Arrow keys still nudge it for keyboard users.
         float centerX=0.0f,centerY=0.0f,radius=0.0f;
         app.gizmo.RingBounds(centerX,centerY,radius);
-        info.name=L"Directional light angle";
-        info.description=L"Rotate the inspection light by dragging its sun around the navigation gizmo";
+        info.name=Loc("a11y.lightAngle", L"Directional light angle");
+        info.description=Loc("a11y.lightAngleDesc", L"Rotate the inspection light by dragging its sun around the navigation gizmo");
         info.rect=RECT{static_cast<LONG>(centerX-radius),static_cast<LONG>(centerY-radius),
             static_cast<LONG>(centerX+radius),static_cast<LONG>(centerY+radius)};
         info.visible=model&&app.lightingMode==LightingMode::Directional;info.role=ROLE_SYSTEM_SLIDER;
-        info.value=std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle*360.0f)))+L" degrees";break;
+        info.value=LocFormat("a11y.degrees", L"{0} degrees", { std::to_wstring(static_cast<int>(std::lround(app.directionalLightAngle*360.0f))) });break;
     }
     case Control::DirectionalLightElevation:
     {
@@ -2383,37 +2502,40 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         // center to raise/lower it, or nudge with the arrow keys.
         float centerX=0.0f,centerY=0.0f,radius=0.0f;
         app.gizmo.RingBounds(centerX,centerY,radius);
-        info.name=L"Directional light elevation";
-        info.description=L"Raise or lower the inspection light by dragging its sun toward or away from the gizmo center";
+        info.name=Loc("a11y.lightElevation", L"Directional light elevation");
+        info.description=Loc("a11y.lightElevationDesc", L"Raise or lower the inspection light by dragging its sun toward or away from the gizmo center");
         info.rect=RECT{static_cast<LONG>(centerX-radius),static_cast<LONG>(centerY-radius),
             static_cast<LONG>(centerX+radius),static_cast<LONG>(centerY+radius)};
         info.visible=model&&app.lightingMode==LightingMode::Directional;info.role=ROLE_SYSTEM_SLIDER;
-        info.value=std::to_wstring(static_cast<int>(std::lround(app.directionalLightElevation*57.29577951308232f)))+L" degrees";break;
+        info.value=LocFormat("a11y.degrees", L"{0} degrees", { std::to_wstring(static_cast<int>(std::lround(app.directionalLightElevation*57.29577951308232f))) });break;
     }
     case Control::Wireframe:
-        info.name=L"Wireframe";info.description=L"Show only mesh edges with all triangle surfaces hidden";
+        info.name=Loc("a11y.wireframe", L"Wireframe");info.description=Loc("a11y.wireframeDesc", L"Show only mesh edges with all triangle surfaces hidden");
         info.rect=ComputeLightingToolbarLayout(app).wireframe;info.visible=model;info.role=ROLE_SYSTEM_RADIOBUTTON;
         info.checked=app.lightingMode==LightingMode::Wireframe;break;
     case Control::SpeedSlider:
     {
-        info.name=L"Travel speed"; info.description=L"Adjust flight speed"; info.rect=SpeedFlyoutTrackRect(app);
+        info.name=Loc("chrome.travelSpeed", L"Travel speed"); info.description=Loc("a11y.speedSliderDesc", L"Adjust flight speed"); info.rect=SpeedFlyoutTrackRect(app);
         info.visible=app.speedFlyoutOpen; info.role=ROLE_SYSTEM_SLIDER;
-        auto camera=app.renderThread.LockCamera(); info.value=L"times "+FormatMultiplier(camera->FlySpeedScale()); break;
+        auto camera=app.renderThread.LockCamera(); info.value=LocFormat("a11y.times", L"times {0}", { FormatMultiplier(camera->FlySpeedScale()) }); break;
     }
     case Control::NativeOrientation:
-        info.name=L"Show model in its original orientation"; info.rect=SettingsToggleRowRect(app);
+        info.name=Loc("settings.nativeOrientation", L"Show model in its original orientation"); info.rect=SettingsToggleRowRect(app);
         info.visible=app.settingsPanelOpen; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.showNativeOrientation; break;
     case Control::HideCursorWhileDragging:
-        info.name=L"Hide cursor while dragging"; info.description=L"Hide the mouse pointer during viewport camera drags";
+        info.name=Loc("settings.hideCursor", L"Hide cursor while dragging"); info.description=Loc("a11y.hideCursorDesc", L"Hide the mouse pointer during viewport camera drags");
         info.rect=SettingsCursorToggleRowRect(app); info.visible=app.settingsPanelOpen;
         info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.hideCursorWhileDragging; break;
     case Control::GizmoPositiveX: case Control::GizmoNegativeX: case Control::GizmoPositiveY:
     case Control::GizmoNegativeY: case Control::GizmoPositiveZ: case Control::GizmoNegativeZ:
     {
-        static constexpr const wchar_t* names[] = { L"View from positive X", L"View from negative X", L"View from positive Y",
-            L"View from negative Y", L"View from positive Z", L"View from negative Z" };
+        struct AxisViewName { const char* key; const wchar_t* text; };
+        static constexpr AxisViewName names[] = {
+            { "a11y.viewPosX", L"View from positive X" }, { "a11y.viewNegX", L"View from negative X" },
+            { "a11y.viewPosY", L"View from positive Y" }, { "a11y.viewNegY", L"View from negative Y" },
+            { "a11y.viewPosZ", L"View from positive Z" }, { "a11y.viewNegZ", L"View from negative Z" } };
         const int index=static_cast<int>(control)-static_cast<int>(Control::GizmoPositiveX);
-        info.name=names[index]; info.description=L"Snap the camera to this axis"; info.visible=model;
+        info.name=Loc(names[index].key, names[index].text); info.description=Loc("a11y.snapAxisDesc", L"Snap the camera to this axis"); info.visible=model;
         DirectX::XMFLOAT4 orientation{}; { auto camera=app.renderThread.LockCamera(); orientation=camera->orientation; }
         const auto geometry=app.gizmo.ComputeDraw(DirectX::XMLoadFloat4(&orientation));
         const int axis=index/2; const bool positive=index%2==0;
@@ -2426,7 +2548,7 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     case Control::ErrorRetry: case Control::ErrorOpenAnother: case Control::ErrorCopyDetails:
     {
         HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton:app.copyButton;
-        info.name=control==Control::ErrorRetry?L"Retry":control==Control::ErrorOpenAnother?L"Open another":L"Copy details";
+        info.name=control==Control::ErrorRetry?Loc("action.retry", L"Retry"):control==Control::ErrorOpenAnother?Loc("action.openAnother", L"Open another"):Loc("action.copyDetails", L"Copy details");
         RECT screen{};GetWindowRect(button,&screen);POINT corners[2]={{screen.left,screen.top},{screen.right,screen.bottom}};
         MapWindowPoints(nullptr,app.window,corners,2);info.rect={corners[0].x,corners[0].y,corners[1].x,corners[1].y};
         info.visible=app.state==ViewerState::Failed;info.enabled=IsWindowEnabled(button)!=FALSE;info.focused=GetFocus()==button;
@@ -2517,12 +2639,12 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
 
 std::wstring AccessibilityStatus(const ViewerApp& app)
 {
-    if (app.state==ViewerState::Loading) return L"Loading "+d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath);
+    if (app.state==ViewerState::Loading) return LocFormat("status.loading", L"Loading {0}", { d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath) });
     if (app.state==ViewerState::Failed) return app.errorSummary+L" "+app.errorDetails;
-    if (!app.warning.empty()) return L"Model loaded with warnings. "+app.warning;
-    if (app.state==ViewerState::Ready) return app.filename.empty()?L"Model ready":app.filename+L" ready";
-    if (app.state==ViewerState::Partial) return L"Preview cancelled; incomplete geometry remains visible";
-    return L"No model open";
+    if (!app.warning.empty()) return LocFormat("status.loadedWithWarnings", L"Model loaded with warnings. {0}", { app.warning });
+    if (app.state==ViewerState::Ready) return app.filename.empty()?Loc("status.modelReady", L"Model ready"):LocFormat("status.fileReady", L"{0} ready", { app.filename });
+    if (app.state==ViewerState::Partial) return Loc("status.previewCancelled", L"Preview cancelled; incomplete geometry remains visible");
+    return Loc("status.noModel", L"No model open");
 }
 
 bool MoveAccessibleFocus(ViewerApp& app, bool backward)
@@ -2635,16 +2757,16 @@ void FinishRenderTimerIfPresented(ViewerApp& app)
 std::wstring StepProgressText(std::uint32_t phase, std::uint32_t done, std::uint32_t total)
 {
     switch (phase) {
-    case model_core::kStepPhasePreflight: return L" • checking STEP text";
-    case model_core::kStepPhaseRead: return L" • reading STEP entities";
-    case model_core::kStepPhaseTransfer: return L" • building CAD model";
-    case model_core::kStepPhasePlan: return L" • planning definitions";
+    case model_core::kStepPhasePreflight: return Loc("status.stepPreflight", L"• checking STEP text");
+    case model_core::kStepPhaseRead: return Loc("status.stepRead", L"• reading STEP entities");
+    case model_core::kStepPhaseTransfer: return Loc("status.stepTransfer", L"• building CAD model");
+    case model_core::kStepPhasePlan: return Loc("status.stepPlan", L"• planning definitions");
     case model_core::kStepPhaseMesh:
-        return total ? L" • tessellating " + std::to_wstring(done) + L" of " + std::to_wstring(total)
-                     : L" • tessellating shapes";
+        return total ? LocFormat("status.stepTessellatingOf", L"• tessellating {0} of {1}", { std::to_wstring(done), std::to_wstring(total) })
+                     : Loc("status.stepTessellating", L"• tessellating shapes");
     case model_core::kStepPhaseEmit:
-        return total ? L" • preparing geometry " + std::to_wstring(done) + L" of " + std::to_wstring(total)
-                     : L" • preparing geometry";
+        return total ? LocFormat("status.stepPreparingOf", L"• preparing geometry {0} of {1}", { std::to_wstring(done), std::to_wstring(total) })
+                     : Loc("status.stepPreparing", L"• preparing geometry");
     default: return {};
     }
 }
@@ -2657,19 +2779,20 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.filename = app.filename;
     d3d12_import_bridge::ImportResult failure; failure.errorStage = app.errorStage; failure.errorPhase = app.errorPhase;
     overlay.failureContext = d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath) + L"  •  " + d3d12_import_bridge::FailurePhaseLabel(failure);
-    overlay.loadingStatus = L"Loading " + d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath);
+    overlay.loadingStatus = LocFormat("status.loading", L"Loading {0}", { d3d12_import_bridge::SourceFormatLabel(app.diagnosticPath) });
     if (app.state == ViewerState::Loading) {
         const auto stepPhase = app.stepProgressPhase.load(std::memory_order_relaxed);
         if (stepPhase != 0)
-            overlay.loadingStatus += StepProgressText(stepPhase,
+            overlay.loadingStatus = LocalizedJoin(overlay.loadingStatus, StepProgressText(stepPhase,
                 app.stepProgressDone.load(std::memory_order_relaxed),
-                app.stepProgressTotal.load(std::memory_order_relaxed));
+                app.stepProgressTotal.load(std::memory_order_relaxed)));
     }
-    if (app.state == ViewerState::Partial) overlay.loadingStatus = L"Preview cancelled • incomplete geometry";
+    if (app.state == ViewerState::Partial) overlay.loadingStatus = Loc("status.previewCancelledShort", L"Preview cancelled • incomplete geometry");
     if (app.loadedModel && app.loadedModel->source.generationId == app.generation) {
         const auto flags = app.loadedModel->importStatus.flags;
-        overlay.loadingStatus += (flags & model_core::kStatusPressure) ? L" • waiting for upload capacity"
-            : (flags & model_core::kStatusRefining) ? L" • refining textures" : L" • verifying complete geometry";
+        overlay.loadingStatus = LocalizedJoin(overlay.loadingStatus,
+            (flags & model_core::kStatusPressure) ? Loc("status.waitingUploadCapacity", L"• waiting for upload capacity")
+            : (flags & model_core::kStatusRefining) ? Loc("status.refiningTextures", L"• refining textures") : Loc("status.verifyingGeometry", L"• verifying complete geometry"));
     }
     overlay.errorSummary = app.errorSummary;
     overlay.errorDetails = app.errorDetails;
@@ -2751,6 +2874,14 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.settingsPanelOpen = app.settingsPanelOpen;
     overlay.showNativeOrientation = app.showNativeOrientation;
     overlay.hideCursorWhileDragging = app.hideCursorWhileDragging;
+    overlay.statsPanelTitle = Loc("info.statsShading", L"Stats & Shading");
+    overlay.speedFlyoutTitle = Loc("chrome.travelSpeed", L"Travel speed");
+    overlay.nativeOrientationLabel = Loc("settings.nativeOrientation", L"Show model in its original orientation");
+    overlay.hideCursorLabel = Loc("settings.hideCursor", L"Hide cursor while dragging");
+    overlay.languageLabel = Loc("settings.language", L"Language");
+    overlay.languageValue = LocalizationDisplayName(LocalizationLanguage());
+    overlay.emptyDropTitle = Loc("empty.dropTitle", L"Drop a 3D model here");
+    overlay.emptySupportedFormats = Loc("empty.supportedFormats", L"Supported formats: GLB/GLTF, STL, PLY, OBJ/MTL, FBX, USD/Z, 3MF, STEP/STP");
     if (overlay.settingsPanelOpen)
     {
         overlay.settingsPanelRect = SettingsPanelRect(app);
@@ -2758,6 +2889,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.nativeOrientationSwitchRect = SettingsSwitchRect(app);
         overlay.hideCursorRowRect = SettingsCursorToggleRowRect(app);
         overlay.hideCursorSwitchRect = SettingsCursorSwitchRect(app);
+        overlay.languageRowRect = SettingsLanguageRowRect(app);
     }
     overlay.selectionAmount = app.meshSelected ? 1.0f : 0.0f;
     const double now = NowSeconds();
@@ -2825,7 +2957,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (auto* result=reinterpret_cast<std::wstring*>(lParam)) *result=AccessibilityStatus(*app);
         return 0;
     case kOpenWithLaunchFailedMessage:
-        ShowModeHud(*app, L"That app is no longer available");
+        ShowModeHud(*app, Loc("hud.appUnavailable", L"That app is no longer available"));
         return 0;
     case kActivationMessage:
         for (auto& command : app->activeInstance.Drain())
@@ -3032,7 +3164,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         app->rendererReady = app->renderThread.Start(window, renderError);
         if (!app->rendererReady)
         {
-            app->errorSummary = L"Graphics could not be started.";
+            app->errorSummary = Loc("failure.graphics.summary", L"Graphics could not be started.");
             app->errorDetails = renderError;
             app->state = ViewerState::Failed;
         }
@@ -3043,7 +3175,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         UpdateButtonAvailability(*app);
         std::wstring activationError;
         if (!app->activeInstance.StartListener(window, kActivationMessage, activationError))
-            SetFailure(*app, L"Single-instance activation is unavailable.", activationError);
+            SetFailure(*app, Loc("failure.activationUnavailable.summary", L"Single-instance activation is unavailable."), activationError);
         if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath);
         return 0;
     }
@@ -3270,7 +3402,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (count != 1)
         {
             DragFinish(drop);
-            SetFailure(*app, L"Open one model at a time.", L"Drop exactly one supported local 3D model into the viewer.");
+            SetFailure(*app, Loc("failure.oneModelAtATime.summary", L"Open one model at a time."),
+                Loc("failure.oneModelAtATime.details", L"Drop exactly one supported local 3D model into the viewer."));
             return 0;
         }
         const UINT length = DragQueryFileW(drop, 0, nullptr, 0);
@@ -3420,6 +3553,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             const RECT switchRect = SettingsSwitchRect(*app);
             const RECT cursorSwitchRect = SettingsCursorSwitchRect(*app);
+            const RECT languageRowRect = SettingsLanguageRowRect(*app);
             const RECT panel = SettingsPanelRect(*app);
             if (PtInRect(&switchRect, downPoint))
             {
@@ -3429,6 +3563,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (PtInRect(&cursorSwitchRect, downPoint))
             {
                 ToggleHideCursorWhileDragging(*app);
+                return 0;
+            }
+            if (PtInRect(&languageRowRect, downPoint))
+            {
+                ShowLanguageMenu(*app);
                 return 0;
             }
             app->settingsPanelOpen = false;
@@ -4011,8 +4150,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         import_broker::ShutdownImportWorkerPool();
         import_broker::ShutdownCompatibilityHost();
         app->renderThread.CancelUploads();
-        SetFailure(*app, L"Graphics could not be started.",
-                   failure ? failure->details : L"The render thread stopped during initialization.");
+        SetFailure(*app, Loc("failure.graphics.summary", L"Graphics could not be started."),
+                   failure ? failure->details : Loc("failure.renderInit.summary", L"The render thread stopped during initialization."));
         return 0;
     }
     case kRenderDeviceRecoveryMessage:
@@ -4023,7 +4162,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (recovery->recovered && !recovery->path.empty()) {
             BeginOpen(*app, recovery->path);
         } else {
-            SetFailure(*app, L"Graphics recovery failed.", recovery->details, recovery->path,
+            SetFailure(*app, Loc("failure.graphicsRecovery.summary", L"Graphics recovery failed."), recovery->details, recovery->path,
                        model_core::ImportErrorCode::UploadFailure, import_broker::ImportStage::Upload);
         }
         return 0;
@@ -4163,6 +4302,11 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.instance = instance;
     app.benchmarkStartedUs = processStartedUs;
     const ViewerSettings settings = LoadSettings();
+    // Localization first: every user-facing string below (including command-line
+    // and security message boxes) resolves through the active language pack.
+    LocalizationInitialize();
+    LocalizationSetLanguage(settings.language);
+    app.language = settings.language;
     app.showNativeOrientation = settings.showNativeOrientation;
     app.groundAxis = settings.groundAxis;
     app.groundAxisInverted = settings.groundAxisInverted;
@@ -4261,7 +4405,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     }
     if (commandLineInvalid)
     {
-        MessageBoxW(nullptr, L"Usage: Preview3D.exe [model-path]\n       Preview3D.exe --open <model-path>",
+        MessageBoxW(nullptr, Loc("cli.usage", L"Usage: Preview3D.exe [model-path]\n       Preview3D.exe --open <model-path>").c_str(),
             kApplicationName, MB_OK | MB_ICONERROR);
         return 2;
     }
@@ -4316,9 +4460,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     if (!app.appSmoke && !app.benchmarkMode && app.benchFrames == 0 && IsSmartAppControlActive())
     {
         MessageBoxW(nullptr,
-            L"Smart App Control is active on this PC, and this Preview 3D build is unsigned.\n\n"
-            L"Smart App Control has no per-app exception, so Windows may block the app or one of the DLLs bundled beside it (for example worker\\zstd.dll, error status 0xC0E90002).\n\n"
-            L"If Preview 3D is blocked, turn off Smart App Control under Windows Security > App & browser control > Smart App Control settings.",
+            Loc("startup.smartAppControl",
+                L"Smart App Control is active on this PC, and this Preview 3D build is unsigned.\n\n"
+                L"Smart App Control has no per-app exception, so Windows may block the app or one of the DLLs bundled beside it (for example worker\\zstd.dll, error status 0xC0E90002).\n\n"
+                L"If Preview 3D is blocked, turn off Smart App Control under Windows Security > App & browser control > Smart App Control settings.").c_str(),
             kApplicationName, MB_OK | MB_ICONWARNING);
     }
 

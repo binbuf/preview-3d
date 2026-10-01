@@ -23,12 +23,12 @@
   Compiling...
   MappedFile.cpp
   Generating Code...
-  Preview3DImportWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DImportWorker.exe
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\draco.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\draco.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\fastgltf.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\fastgltf.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\simdjson.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\simdjson.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\ktx.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\ktx.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\zstd.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\zstd.dll done
+  Preview3DImportWorker.vcxproj -> x64\Debug\Preview3DImportWorker.exe
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\draco.dll -> x64\Debug\draco.dll done
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\fastgltf.dll -> x64\Debug\fastgltf.dll done
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\simdjson.dll -> x64\Debug\simdjson.dll done
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\ktx.dll -> x64\Debug\ktx.dll done
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\zstd.dll -> x64\Debug\zstd.dll done
   Chrome.cpp
   InfoPanel.cpp
   Model.cpp
@@ -62,7 +62,7 @@
   SidecarRequestServicer.cpp
   ControlChannelIo.cpp
   Generating Code...
-  Preview3D.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3D.exe
+  Preview3D.vcxproj -> x64\Debug\Preview3D.exe
   Chrome.cpp
   NavGizmo.cpp
   InfoPanel.cpp
@@ -99,16 +99,16 @@
   Sha256.cpp
   MappedFile.cpp
   Generating Code...
-  Tests.Unit.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Tests.Unit.exe
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\ktx.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\ktx.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\zstd.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\zstd.dll done
+  Tests.Unit.vcxproj -> x64\Debug\Tests.Unit.exe
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\ktx.dll -> x64\Debug\ktx.dll done
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\zstd.dll -> x64\Debug\zstd.dll done
   main.cpp
   AttackModes.cpp
   SyntheticSceneGenerator.cpp
   MappedView.cpp
   ControlChannelIo.cpp
   Generating Code...
-  Preview3DHostileWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Preview3DHostileWorker.exe
+  Preview3DHostileWorker.vcxproj -> x64\Debug\Preview3DHostileWorker.exe
   HarnessSmokeTests.cpp
   FixtureManifestTests.cpp
   SandboxLaunchTests.cpp
@@ -151,7 +151,7 @@
   WorkerPool.cpp
   ControlChannelIo.cpp
   Generating Code...
-  Tests.ImportIsolation.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Debug\Tests.ImportIsolation.exe
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\draco.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\draco.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\ktx.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\ktx.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\debug\bin\zstd.dll -> D:\repos\binbuf\3d-preview-windows\x64\Debug\zstd.dll done
+  Tests.ImportIsolation.vcxproj -> x64\Debug\Tests.ImportIsolation.exe
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\draco.dll -> x64\Debug\draco.dll done
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\ktx.dll -> x64\Debug\ktx.dll done
+  vcpkg_installed\x64-windows\x64-windows\debug\bin\zstd.dll -> x64\Debug\zstd.dll done

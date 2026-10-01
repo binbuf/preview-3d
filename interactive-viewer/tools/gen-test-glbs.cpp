@@ -7,6 +7,20 @@
 
 namespace
 {
+// Fixtures are written under interactive-viewer/test-assets, resolved from this
+// tool's own location (built into interactive-viewer/tools), so the generator
+// carries no absolute workstation path.
+std::wstring TestAssetPath(const wchar_t* leaf)
+{
+    wchar_t modulePath[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath, ARRAYSIZE(modulePath));
+    if (length == 0 || length >= ARRAYSIZE(modulePath)) return std::wstring(L"..\\test-assets\\") + leaf;
+    std::wstring directory(modulePath, length);
+    const std::size_t slash = directory.find_last_of(L'\\');
+    if (slash != std::wstring::npos) directory.erase(slash);
+    return directory + L"\\..\\test-assets\\" + leaf;
+}
+
 void AppendU32(std::vector<std::uint8_t>& out, std::uint32_t value)
 {
     out.push_back(static_cast<std::uint8_t>(value & 0xFF));
@@ -73,7 +87,7 @@ int wmain()
         std::vector<std::uint8_t> bin;
         for (const auto& p : kTriangle) { AppendF32(bin, p[0]); AppendF32(bin, p[1]); AppendF32(bin, p[2]); }
         AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
-        WriteGlb(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\tri_tight.glb", json, bin);
+        WriteGlb(TestAssetPath(L"tri_tight.glb").c_str(), json, bin);
     }
 
     // GLB 2: interleaved strided positions+normals -> exercises strided path
@@ -93,7 +107,7 @@ int wmain()
             AppendF32(bin, 0.0f); AppendF32(bin, 0.0f); AppendF32(bin, 1.0f);
         }
         AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
-        WriteGlb(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\tri_interleaved.glb", json, bin);
+        WriteGlb(TestAssetPath(L"tri_interleaved.glb").c_str(), json, bin);
     }
 
     // GLB 3: same triangle as GLB 1, but on a mesh node that is a child of a
@@ -113,7 +127,7 @@ int wmain()
         std::vector<std::uint8_t> bin;
         for (const auto& p : kTriangle) { AppendF32(bin, p[0]); AppendF32(bin, p[1]); AppendF32(bin, p[2]); }
         AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
-        WriteGlb(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\tri_transformed_node.glb", json, bin);
+        WriteGlb(TestAssetPath(L"tri_transformed_node.glb").c_str(), json, bin);
     }
 
     // GLB 4: same triangle as GLB 1, but declares a required extension the
@@ -133,7 +147,7 @@ int wmain()
         std::vector<std::uint8_t> bin;
         for (const auto& p : kTriangle) { AppendF32(bin, p[0]); AppendF32(bin, p[1]); AppendF32(bin, p[2]); }
         AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
-        WriteGlb(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\unsupported_extension.glb", json, bin);
+        WriteGlb(TestAssetPath(L"unsupported_extension.glb").c_str(), json, bin);
     }
 
     // Pair 5: the same triangle as GLB 1, but as a plain-JSON .gltf whose
@@ -157,9 +171,9 @@ int wmain()
         for (const auto& p : kTriangle) { AppendF32(bin, p[0]); AppendF32(bin, p[1]); AppendF32(bin, p[2]); }
         AppendU32(bin, 0); AppendU32(bin, 1); AppendU32(bin, 2);
         std::string jsonText(json);
-        WriteRawFile(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\tri_external.gltf",
+        WriteRawFile(TestAssetPath(L"tri_external.gltf").c_str(),
                      jsonText.data(), jsonText.size());
-        WriteRawFile(L"D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\tri_external.bin",
+        WriteRawFile(TestAssetPath(L"tri_external.bin").c_str(),
                      bin.data(), bin.size());
     }
     return 0;

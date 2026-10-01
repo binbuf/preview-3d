@@ -5,6 +5,7 @@
 #define NOMINMAX
 
 #include "RenderThread.h"
+#include "Localization.h"
 #include <cstdio>
 
 #include <windows.h>
@@ -61,14 +62,14 @@ void RebuildModelWarning(ModelData& metadata)
 {
     metadata.warning.clear();
     if (metadata.importStatus.optionalFeatureWarnings)
-        metadata.warning = L"Some optional glTF features are not supported. Their fallback representation is shown.";
+        metadata.warning = Loc("warning.optionalFeatures", L"Some optional glTF features are not supported. Their fallback representation is shown.");
     if (metadata.importStatus.textureWarnings) {
         metadata.warning += (metadata.warning.empty() ? L"" : L"\n");
-        metadata.warning += L"Some textures could not be loaded. Fallback textures are shown.";
+        metadata.warning += Loc("warning.textures", L"Some textures could not be loaded. Fallback textures are shown.");
     }
     if (!metadata.missingAssets.empty()) {
         metadata.warning += (metadata.warning.empty() ? L"" : L"\n");
-        metadata.warning += L"Some referenced assets could not be found.";
+        metadata.warning += Loc("warning.missingAssets", L"Some referenced assets could not be found.");
     }
 }
 
@@ -169,14 +170,14 @@ bool RenderThread::Start(HWND window, std::wstring& error)
     wakeEvent_ = platform::Win32Handle(CreateEventW(nullptr, FALSE, FALSE, nullptr));
     startedEvent_ = platform::Win32Handle(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     if (!wakeEvent_ || !startedEvent_) {
-        error = L"The render thread's events could not be created.";
+        error = Loc("failure.renderEvents", L"The render thread's events could not be created.");
         return false;
     }
 
     try {
         thread_ = std::thread(&RenderThread::ThreadMain, this, window);
     } catch (const std::exception&) {
-        error = L"The render coordinator thread could not be created.";
+        error = Loc("failure.renderCoordinatorThread", L"The render coordinator thread could not be created.");
         return false;
     }
     // Graphics initialization and its driver calls remain on the render
@@ -401,7 +402,7 @@ void RenderThread::UploadMain()
                     }
                     inbox->gpuPendingBytes+=pub.task.gpuBytes;
                 }
-                std::wstring error = initialized ? L"" : L"The upload coordinator could not be initialized.";
+                std::wstring error = initialized ? L"" : Loc("failure.uploadCoordinatorInit", L"The upload coordinator could not be initialized.");
                 uploader.uploadIsCancelled=[current] {return !current();};
                 const bool ok = current() && initialized && !pub.task.result.forceUploadFailureForTesting && uploader.BeginUploadModel(pub.task.result.meshes,
                     pub.task.result.materials, pub.task.result.images, error,
@@ -430,7 +431,7 @@ void RenderThread::UploadMain()
                         uploader.ClearModel(); // Coordinator only; drain before discarding destinations.
                         pub.task.result.ok = false;
                         pub.task.result.errorCode = model_core::ImportErrorCode::UploadFailure;
-                        pub.task.result.errorDetails = L"The geometry copy did not complete within its timeout.";
+                        pub.task.result.errorDetails = Loc("failure.geometryCopyTimeout", L"The geometry copy did not complete within its timeout.");
                     }
                 }
                 // Keep only compact metadata after the copy; capacity remains
@@ -442,13 +443,13 @@ void RenderThread::UploadMain()
             uploader.WaitForIdle(); uploader.ReclaimRetired();
             pub.task.result.ok = false;
             pub.task.result.errorCode = model_core::ImportErrorCode::OutOfMemory;
-            pub.task.result.errorDetails = L"There is not enough memory to display this batch.";
+            pub.task.result.errorDetails = Loc("failure.oomBatch", L"There is not enough memory to display this batch.");
             pub.task.result.meshes.clear(); pub.task.result.images.clear();
         } catch (...) {
             uploader.WaitForIdle(); uploader.ReclaimRetired();
             pub.task.result.ok = false;
             pub.task.result.errorCode = model_core::ImportErrorCode::UploadFailure;
-            pub.task.result.errorDetails = L"The upload coordinator stopped while processing this batch.";
+            pub.task.result.errorDetails = Loc("failure.uploadCoordinatorStopped", L"The upload coordinator stopped while processing this batch.");
             pub.task.result.meshes.clear(); pub.task.result.images.clear();
         }
         {
@@ -773,7 +774,7 @@ void RenderThread::PumpUploads(HWND window)
             RebuildModelWarning(*stagedMetadata_);
         }
         message->ok = !stagedFailed_ && (!stagedProxyMode_ || stagedProxyComplete_) && modelGeneration_ == pub.task.generation && path_.hasModel && stagedHaveBounds_ && stagedMetadata_;
-        if (!message->ok) { message->errorCode = model_core::ImportErrorCode::EmptyGeometry; message->errorDetails = L"The import completed without displayable geometry."; }
+        if (!message->ok) { message->errorCode = model_core::ImportErrorCode::EmptyGeometry; message->errorDetails = Loc("failure.importEmptyGeometry", L"The import completed without displayable geometry."); }
         if (message->ok && stagedMetadata_) {
             stagedMetadata_->sourceIdentity = pub.task.result.sourceIdentity;
             stagedMetadata_->boundsVerified = true;
@@ -919,7 +920,7 @@ void RenderThread::PumpUploads(HWND window)
             if(std::any_of(destination.meshes.begin(),destination.meshes.end(),[&](const auto& draw){return draw.instanceId==instance.data.instanceId;}))continue;
             auto geometry=std::find_if(destination.meshes.begin(),destination.meshes.end(),[&](const auto& draw){return draw.chunkId==instance.data.geometryChunkId;});
             if(geometry==destination.meshes.end()){stagedFailed_=true;message->errorCode=model_core::ImportErrorCode::UploadFailure;
-                message->errorDetails=L"An instance's shared geometry was not available after upload.";continue;}
+                message->errorDetails=Loc("failure.instanceGeometryUnavailable", L"An instance's shared geometry was not available after upload.");continue;}
             auto draw=*geometry;draw.instanceId=instance.data.instanceId;draw.sourceNodeId=instance.data.nodeId;
             draw.materialChunkId=instance.data.materialChunkId;draw.drawEnabled=instance.resolvedVisible;
             std::memcpy(draw.instanceTransform,instance.worldTransform,sizeof(draw.instanceTransform));
@@ -1048,9 +1049,9 @@ void RenderThread::PumpUploads(HWND window)
     if (message->ok && message->refinement)
         pendingRefinementGeneration_.store(message->generation, std::memory_order_release);
     if (!message->ok) message->errorSummary = message->errorCode == model_core::ImportErrorCode::OutOfMemory
-        ? L"There is not enough memory to display this model."
-        : message->errorCode == model_core::ImportErrorCode::EmptyGeometry ? L"This model has no displayable geometry."
-        : L"The model was read but could not be displayed.";
+        ? Loc("failure.oomDisplay", L"There is not enough memory to display this model.")
+        : message->errorCode == model_core::ImportErrorCode::EmptyGeometry ? Loc("failure.emptyGeometry", L"This model has no displayable geometry.")
+        : Loc("failure.couldNotDisplay", L"The model was read but could not be displayed.");
     if (PostMessageW(window, kRenderUploadCompleteMessage, 0, reinterpret_cast<LPARAM>(message.get())))
         (void)message.release();
     invalidated_.store(true, std::memory_order_release);
@@ -1197,7 +1198,7 @@ bool RenderThread::RecoverDevice()
     auto notice = std::make_unique<RenderDeviceRecoveryResult>();
     if (const auto snapshot = DisplaySnapshot()) notice->path = snapshot->path;
     if (recoveryAttempted_) {
-        notice->details = L"The graphics device failed again after one recovery attempt.";
+        notice->details = Loc("failure.deviceRecoveryFailed", L"The graphics device failed again after one recovery attempt.");
         PostMessageW(window_, kRenderDeviceRecoveryMessage, 0, reinterpret_cast<LPARAM>(notice.release()));
         return false;
     }
@@ -1238,7 +1239,7 @@ bool RenderThread::RecoverDevice()
 
     std::wstring error;
     if (!InitializeOnThread(window_, error)) {
-        notice->details = L"The graphics device could not be rebuilt once: " + error;
+        notice->details = LocFormat("failure.deviceRebuildFailed", L"The graphics device could not be rebuilt once: {0}", { error });
         PostMessageW(window_, kRenderDeviceRecoveryMessage, 0, reinterpret_cast<LPARAM>(notice.release()));
         return false;
     }
@@ -1246,8 +1247,9 @@ bool RenderThread::RecoverDevice()
     if (benchDurationMs_)
         benchDeadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(benchDurationMs_);
     notice->recovered = true;
-    notice->details = L"The graphics device was rebuilt; the model will be reconstructed from its retained source. ";
-    notice->details += diagnostic;
+    notice->details = LocalizedJoin(
+        Loc("failure.deviceRebuilt", L"The graphics device was rebuilt; the model will be reconstructed from its retained source."),
+        diagnostic);
     PostMessageW(window_, kRenderDeviceRecoveryMessage, 0, reinterpret_cast<LPARAM>(notice.release()));
     return true;
 }
@@ -1315,8 +1317,8 @@ void RenderThread::UpdateBudget()
         failedBudgetGeneration_=modelGeneration_;
         auto message=std::make_unique<RenderUploadResult>(); message->generation=modelGeneration_;
         message->errorCode=model_core::ImportErrorCode::OutOfMemory;
-        message->errorSummary=L"There is not enough GPU memory to refine this model.";
-        message->errorDetails=L"The complete preview and viewer resources exceed the current memory budget. Close other applications, then retry.";
+message->errorSummary=Loc("failure.oomRefine.summary", L"There is not enough GPU memory to refine this model.");
+            message->errorDetails=Loc("failure.oomRefine.details", L"The complete preview and viewer resources exceed the current memory budget. Close other applications, then retry.");
         if (auto snapshot=displaySnapshot_.load()) message->path=snapshot->path;
         if (PostMessageW(window_,kRenderUploadCompleteMessage,0,reinterpret_cast<LPARAM>(message.get()))) message.release();
     }

@@ -8,6 +8,26 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [Unreleased]
+
+### Added
+
+- **Interface localization.** The viewer now ships 38 language packs as UTF-8
+  JSON data files under `lang\` beside `Preview3D.exe` (English is compiled in
+  as the fallback). The Windows display language is selected at startup and can
+  be overridden per user from **Settings → Language**; the choice persists in
+  `settings.json`. The packs are data, not satellite DLLs, so they add no code
+  signing or Smart App Control surface. `interactive-viewer/tools/generate-language-packs.ps1`
+  regenerates the catalogue and translations from the in-source English strings;
+  its `-Verify` mode is the `Localization` CI gate that fails on key collisions,
+  source/pack drift, missing keys, empty translations, or dropped placeholders,
+  and `Tests.Unit`'s new `[localization]` cases cover the runtime loader.
+  Localized fragments are joined to surrounding text by `LocalizedJoin`, which
+  owns the separator space, so a translation that adds or drops boundary
+  whitespace cannot produce output like `29.092unidades`; the texture-count row
+  is a positional placeholder (`Textured ({0})`) rather than a concatenation,
+  for the same reason.
+
 ## [0.4.0] - 2026-09-30
 
 ### Added

@@ -45,6 +45,14 @@
     <ResourceCompile>
       <AdditionalIncludeDirectories>src\app;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
+    <!-- UI language packs load from lang\ beside the executable. Copy the
+         canonical interactive-viewer\lang tree next to the built binary so a
+         local Debug/Release run finds them exactly as the packaged app does. -->
+    <PostBuildEvent>
+      <Command>if not exist "$(OutDir)lang" mkdir "$(OutDir)lang"
+xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
+      <Message>Deploying UI language packs to $(OutDir)lang</Message>
+    </PostBuildEvent>
     <Link>
       <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;d2d1.lib;dwrite.lib;dwmapi.lib;comctl32.lib;shell32.lib;ole32.lib;oleacc.lib;uiautomationcore.lib;advapi32.lib;bcrypt.lib;runtimeobject.lib;d3d12.lib;dxguid.lib;userenv.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
@@ -82,6 +90,7 @@
     <ClInclude Include="src\render\Renderer.h" />
     <ClInclude Include="src\app\Resource.h" />
     <ClInclude Include="src\app\Settings.h" />
+    <ClInclude Include="src\app\Localization.h" />
     <ClInclude Include="src\app\GroundAxis.h" />
     <ClInclude Include="src\platform\ShellIntegration.h" />
     <ClInclude Include="src\platform\OpenWithCache.h" />
@@ -127,6 +136,7 @@
     <ClCompile Include="src\ui\NavGizmo.cpp" />
     <ClCompile Include="src\app\Preview3D.cpp" />
     <ClCompile Include="src\app\Settings.cpp" />
+    <ClCompile Include="src\app\Localization.cpp" />
     <ClCompile Include="src\render\Renderer.cpp" />
     <ClCompile Include="src\platform\ShellIntegration.cpp" />
     <ClCompile Include="src\platform\OpenWithCache.cpp" />

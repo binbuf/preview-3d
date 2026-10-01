@@ -1,5 +1,6 @@
 #include "framework.h"
 #include "InfoPanel.h"
+#include "Localization.h"
 
 #include <algorithm>
 #include <iomanip>
@@ -21,7 +22,7 @@ std::wstring FormatCount(std::uint64_t value)
 
 std::wstring YesNo(bool value)
 {
-    return value ? L"Yes" : L"No";
+    return value ? Loc("infopanel.yes", L"Yes") : Loc("infopanel.no", L"No");
 }
 
 // A texture-slot row reads as a count when any material references it, and
@@ -30,9 +31,9 @@ std::wstring YesNo(bool value)
 // shape for ahead of time.
 std::wstring TextureSlotValue(int textureCount, bool hasConstantFactor)
 {
-    if (textureCount > 0) return L"Textured (" + std::to_wstring(textureCount) + L")";
-    if (hasConstantFactor) return L"Constant";
-    return L"No";
+    if (textureCount > 0) return LocFormat("infopanel.texturedCount", L"Textured ({0})", { std::to_wstring(textureCount) });
+    if (hasConstantFactor) return Loc("infopanel.constant", L"Constant");
+    return Loc("infopanel.no", L"No");
 }
 
 std::wstring FormatDimension(double value, double metersPerUnit)
@@ -41,8 +42,12 @@ std::wstring FormatDimension(double value, double metersPerUnit)
     if (metersPerUnit > 0) value *= metersPerUnit;
     if (value && std::abs(value) < 0.001) text << std::scientific << std::setprecision(3);
     else text << std::fixed << std::setprecision(3);
-    text << value << (metersPerUnit > 0 ? L" m" : L" units");
-    return text.str();
+    const std::wstring unit = metersPerUnit > 0
+        ? Loc("infopanel.metreSuffix", L"m")
+        : Loc("infopanel.unitSuffix", L"units");
+    // The unit is a localized fragment; LocalizedJoin owns the separating space
+    // so a translation that drops it can never jam the number against the unit.
+    return LocalizedJoin(text.str(), unit);
 }
 }
 
@@ -53,68 +58,68 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
 {
     std::vector<InfoPanelSection> sections;
 
-    sections.push_back({ L"Dimensions",
+    sections.push_back({ Loc("infopanel.dimensions", L"Dimensions"),
         {
-            { L"Width (X)", FormatDimension(dimensions ? dimensions[0] : double(boundsMax.x) - double(boundsMin.x), metersPerUnit) },
-            { L"Depth (Y)", FormatDimension(dimensions ? dimensions[1] : double(boundsMax.y) - double(boundsMin.y), metersPerUnit) },
-            { L"Height (Z)", FormatDimension(dimensions ? dimensions[2] : double(boundsMax.z) - double(boundsMin.z), metersPerUnit) },
-            { L"Bounds", boundsVerified ? L"Verified" : L"Provisional (loading)" },
+            { Loc("infopanel.width.x", L"Width (X)"), FormatDimension(dimensions ? dimensions[0] : double(boundsMax.x) - double(boundsMin.x), metersPerUnit) },
+            { Loc("infopanel.depth.y", L"Depth (Y)"), FormatDimension(dimensions ? dimensions[1] : double(boundsMax.y) - double(boundsMin.y), metersPerUnit) },
+            { Loc("infopanel.height.z", L"Height (Z)"), FormatDimension(dimensions ? dimensions[2] : double(boundsMax.z) - double(boundsMin.z), metersPerUnit) },
+            { Loc("infopanel.bounds", L"Bounds"), boundsVerified ? Loc("infopanel.verified", L"Verified") : Loc("infopanel.provisional.loading", L"Provisional (loading)") },
         } });
 
-    sections.push_back({ L"Mesh Data",
+    sections.push_back({ Loc("infopanel.mesh.data", L"Mesh Data"),
         {
-            { L"Triangles", FormatCount(triangleCount) },
-            { L"Vertices", FormatCount(vertexCount) },
-            { L"Points", FormatCount(pointCount) },
-            { L"UV Set 0", YesNo(stats.hasUv0) },
-            { L"UV Set 1", YesNo(stats.hasUv1) },
-            { L"Vertex Colors", YesNo(stats.hasVertexColors) },
-            { L"Material IDs", std::to_wstring(stats.materialCount) },
+            { Loc("infopanel.triangles", L"Triangles"), FormatCount(triangleCount) },
+            { Loc("infopanel.vertices", L"Vertices"), FormatCount(vertexCount) },
+            { Loc("infopanel.points", L"Points"), FormatCount(pointCount) },
+            { Loc("infopanel.uv.set.0", L"UV Set 0"), YesNo(stats.hasUv0) },
+            { Loc("infopanel.uv.set.1", L"UV Set 1"), YesNo(stats.hasUv1) },
+            { Loc("infopanel.vertex.colors", L"Vertex Colors"), YesNo(stats.hasVertexColors) },
+            { Loc("infopanel.material.ids", L"Material IDs"), std::to_wstring(stats.materialCount) },
         } });
 
-    sections.push_back({ L"Texture Data",
+    sections.push_back({ Loc("infopanel.texture.data", L"Texture Data"),
         {
-            { L"Albedo", TextureSlotValue(stats.albedoTextureCount, stats.hasConstantBaseColor) },
-            { L"Normal", TextureSlotValue(stats.normalTextureCount, false) },
-            { L"Specular / Metallic", TextureSlotValue(stats.specularMetallicTextureCount, false) },
-            { L"Gloss / Roughness", stats.specularMetallicTextureCount > 0 ? L"Packed with Specular/Metallic" : L"No" },
-            { L"Occlusion", TextureSlotValue(stats.occlusionTextureCount, false) },
-            { L"Emissive", TextureSlotValue(stats.emissiveTextureCount, false) },
-            { L"Opacity", YesNo(stats.hasTransparency) },
-            { L"Base Color", stats.hasConstantBaseColor ? L"Constant" : (stats.albedoTextureCount > 0 ? L"Textured" : L"No") },
-            { L"Specular Color", TextureSlotValue(0, stats.hasConstantSpecularColor) },
-            { L"Emissive Color", TextureSlotValue(stats.emissiveTextureCount, stats.hasConstantEmissiveColor) },
+            { Loc("infopanel.albedo", L"Albedo"), TextureSlotValue(stats.albedoTextureCount, stats.hasConstantBaseColor) },
+            { Loc("infopanel.normal", L"Normal"), TextureSlotValue(stats.normalTextureCount, false) },
+            { Loc("infopanel.specular.metallic", L"Specular / Metallic"), TextureSlotValue(stats.specularMetallicTextureCount, false) },
+            { Loc("infopanel.gloss.roughness", L"Gloss / Roughness"), stats.specularMetallicTextureCount > 0 ? Loc("infopanel.packed.with.specular.metallic", L"Packed with Specular/Metallic") : Loc("infopanel.no", L"No") },
+            { Loc("infopanel.occlusion", L"Occlusion"), TextureSlotValue(stats.occlusionTextureCount, false) },
+            { Loc("infopanel.emissive", L"Emissive"), TextureSlotValue(stats.emissiveTextureCount, false) },
+            { Loc("infopanel.opacity", L"Opacity"), YesNo(stats.hasTransparency) },
+            { Loc("infopanel.base.color", L"Base Color"), stats.hasConstantBaseColor ? Loc("infopanel.constant", L"Constant") : (stats.albedoTextureCount > 0 ? Loc("infopanel.textured", L"Textured") : Loc("infopanel.no", L"No")) },
+            { Loc("infopanel.specular.color", L"Specular Color"), TextureSlotValue(0, stats.hasConstantSpecularColor) },
+            { Loc("infopanel.emissive.color", L"Emissive Color"), TextureSlotValue(stats.emissiveTextureCount, stats.hasConstantEmissiveColor) },
         } });
 
-    sections.push_back({ L"Animation Data",
+    sections.push_back({ Loc("infopanel.animation.data", L"Animation Data"),
         {
-            { L"Bones", std::to_wstring(stats.boneCount) },
-            { L"Skins", std::to_wstring(stats.skinCount) },
-            { L"Animation Takes", std::to_wstring(stats.animationCount) },
+            { Loc("infopanel.bones", L"Bones"), std::to_wstring(stats.boneCount) },
+            { Loc("infopanel.skins", L"Skins"), std::to_wstring(stats.skinCount) },
+            { Loc("infopanel.animation.takes", L"Animation Takes"), std::to_wstring(stats.animationCount) },
         } });
 
-    sections.push_back({ L"Performance Data",
+    sections.push_back({ Loc("infopanel.performance.data", L"Performance Data"),
         {
-            { L"Draw Calls", std::to_wstring(stats.drawCallCount) },
+            { Loc("infopanel.draw.calls", L"Draw Calls"), std::to_wstring(stats.drawCallCount) },
         } });
 
-    sections.push_back({ L"Scene Data",
+    sections.push_back({ Loc("infopanel.scene.data", L"Scene Data"),
         {
-            { L"Nodes", std::to_wstring(stats.nodeCount) },
-            { L"Meshes", std::to_wstring(stats.meshCount) },
-            { L"Format", format == model_core::SourceFormatId::Gltf ? L"glTF" : format == model_core::SourceFormatId::Glb ? L"GLB"
-                : format == model_core::SourceFormatId::Stl ? L"STL (binary)"
-                : format == model_core::SourceFormatId::AsciiStl ? L"STL (ASCII)"
-                : format == model_core::SourceFormatId::Ply ? L"PLY (binary)"
-                : format == model_core::SourceFormatId::AsciiPly ? L"PLY (ASCII)"
-                : format == model_core::SourceFormatId::Obj ? L"OBJ"
-                : format == model_core::SourceFormatId::Fbx ? L"FBX"
-                : format == model_core::SourceFormatId::Usda ? L"USD (ASCII)"
-                : format == model_core::SourceFormatId::Usdc ? L"USD (crate)"
-                : format == model_core::SourceFormatId::Usdz ? L"USDZ"
-                : format == model_core::SourceFormatId::ThreeMf ? L"3MF"
-                : format == model_core::SourceFormatId::Step ? L"STEP" : L"Unknown" },
-            { L"Units", metersPerUnit > 0 ? L"Metres" : L"Unspecified" },
+            { Loc("infopanel.nodes", L"Nodes"), std::to_wstring(stats.nodeCount) },
+            { Loc("infopanel.meshes", L"Meshes"), std::to_wstring(stats.meshCount) },
+            { Loc("infopanel.format", L"Format"), format == model_core::SourceFormatId::Gltf ? Loc("infopanel.gltf", L"glTF") : format == model_core::SourceFormatId::Glb ? Loc("infopanel.glb", L"GLB")
+                : format == model_core::SourceFormatId::Stl ? Loc("infopanel.stl.binary", L"STL (binary)")
+                : format == model_core::SourceFormatId::AsciiStl ? Loc("infopanel.stl.ascii", L"STL (ASCII)")
+                : format == model_core::SourceFormatId::Ply ? Loc("infopanel.ply.binary", L"PLY (binary)")
+                : format == model_core::SourceFormatId::AsciiPly ? Loc("infopanel.ply.ascii", L"PLY (ASCII)")
+                : format == model_core::SourceFormatId::Obj ? Loc("infopanel.obj", L"OBJ")
+                : format == model_core::SourceFormatId::Fbx ? Loc("infopanel.fbx", L"FBX")
+                : format == model_core::SourceFormatId::Usda ? Loc("infopanel.usd.ascii", L"USD (ASCII)")
+                : format == model_core::SourceFormatId::Usdc ? Loc("infopanel.usd.crate", L"USD (crate)")
+                : format == model_core::SourceFormatId::Usdz ? Loc("infopanel.usdz", L"USDZ")
+                : format == model_core::SourceFormatId::ThreeMf ? Loc("infopanel.3mf", L"3MF")
+                : format == model_core::SourceFormatId::Step ? Loc("infopanel.step", L"STEP") : Loc("infopanel.unknown", L"Unknown") },
+            { Loc("infopanel.units", L"Units"), metersPerUnit > 0 ? Loc("infopanel.metres", L"Metres") : Loc("infopanel.unspecified", L"Unspecified") },
         } });
 
     return sections;

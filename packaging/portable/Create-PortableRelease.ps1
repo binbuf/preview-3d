@@ -201,6 +201,20 @@ if ($Distribution -eq 'Installer') {
     Copy-RequiredFile (Join-Path $buildOutput $providerDllName) (Join-Path $stage $providerDllName)
 }
 
+# UI language packs: UTF-8 JSON data files the viewer resolves from lang\ beside
+# its executable (see interactive-viewer/src/app/Localization.h). They are data,
+# not executable images, so they add no Smart App Control signing surface.
+$langSource = Join-Path $repository 'interactive-viewer\lang'
+if (-not (Test-Path -LiteralPath $langSource -PathType Container)) {
+    throw "The UI language pack directory is missing: $langSource"
+}
+$langStage = Join-Path $stage 'lang'
+New-Item -ItemType Directory -Path $langStage -Force | Out-Null
+Copy-Item -Path (Join-Path $langSource '*.json') -Destination $langStage -Force
+if (@(Get-ChildItem -LiteralPath $langStage -Filter '*.json' -File).Count -eq 0) {
+    throw "No UI language packs were staged from '$langSource'."
+}
+
 $openUsdHostSource = Join-Path $buildOutput 'OpenUsdHost'
 # OpenUSD, TBB, KTX, libwebp, and zstd are statically linked into
 # Preview3DOpenUsdCore.dll by the release triplet. Only the host executable, the

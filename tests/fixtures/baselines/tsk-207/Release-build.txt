@@ -25,12 +25,12 @@
   Previous IPDB not found, fall back to full compilation.
   All 5340 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
   Finished generating code
-  Preview3DImportWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Preview3DImportWorker.exe
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\draco.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\draco.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\fastgltf.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\fastgltf.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\simdjson.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\simdjson.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\ktx.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\ktx.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\zstd.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\zstd.dll done
+  Preview3DImportWorker.vcxproj -> x64\Release\Preview3DImportWorker.exe
+  vcpkg_installed\x64-windows\x64-windows\bin\draco.dll -> x64\Release\draco.dll done
+  vcpkg_installed\x64-windows\x64-windows\bin\fastgltf.dll -> x64\Release\fastgltf.dll done
+  vcpkg_installed\x64-windows\x64-windows\bin\simdjson.dll -> x64\Release\simdjson.dll done
+  vcpkg_installed\x64-windows\x64-windows\bin\ktx.dll -> x64\Release\ktx.dll done
+  vcpkg_installed\x64-windows\x64-windows\bin\zstd.dll -> x64\Release\zstd.dll done
   Chrome.cpp
   InfoPanel.cpp
   Model.cpp
@@ -66,7 +66,7 @@
   Previous IPDB not found, fall back to full compilation.
   All 7541 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
   Finished generating code
-  Preview3D.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Preview3D.exe
+  Preview3D.vcxproj -> x64\Release\Preview3D.exe
   Chrome.cpp
   NavGizmo.cpp
   InfoPanel.cpp
@@ -105,9 +105,9 @@
   Previous IPDB not found, fall back to full compilation.
   All 5282 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
   Finished generating code
-  Tests.Unit.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Tests.Unit.exe
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\ktx.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\ktx.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\zstd.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\zstd.dll done
+  Tests.Unit.vcxproj -> x64\Release\Tests.Unit.exe
+  vcpkg_installed\x64-windows\x64-windows\bin\ktx.dll -> x64\Release\ktx.dll done
+  vcpkg_installed\x64-windows\x64-windows\bin\zstd.dll -> x64\Release\zstd.dll done
   main.cpp
   AttackModes.cpp
   SyntheticSceneGenerator.cpp
@@ -117,7 +117,7 @@
   Previous IPDB not found, fall back to full compilation.
   All 288 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
   Finished generating code
-  Preview3DHostileWorker.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Preview3DHostileWorker.exe
+  Preview3DHostileWorker.vcxproj -> x64\Release\Preview3DHostileWorker.exe
   HarnessSmokeTests.cpp
   FixtureManifestTests.cpp
   SandboxLaunchTests.cpp
@@ -162,7 +162,7 @@
   Previous IPDB not found, fall back to full compilation.
   All 6208 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
   Finished generating code
-  Tests.ImportIsolation.vcxproj -> D:\repos\binbuf\3d-preview-windows\x64\Release\Tests.ImportIsolation.exe
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\draco.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\draco.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\ktx.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\ktx.dll done
-  D:\repos\binbuf\3d-preview-windows\vcpkg_installed\x64-windows\x64-windows\bin\zstd.dll -> D:\repos\binbuf\3d-preview-windows\x64\Release\zstd.dll done
+  Tests.ImportIsolation.vcxproj -> x64\Release\Tests.ImportIsolation.exe
+  vcpkg_installed\x64-windows\x64-windows\bin\draco.dll -> x64\Release\draco.dll done
+  vcpkg_installed\x64-windows\x64-windows\bin\ktx.dll -> x64\Release\ktx.dll done
+  vcpkg_installed\x64-windows\x64-windows\bin\zstd.dll -> x64\Release\zstd.dll done

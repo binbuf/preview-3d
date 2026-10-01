@@ -133,8 +133,20 @@ struct OverlayInfo
     RECT nativeOrientationSwitchRect{};
     RECT hideCursorRowRect{};
     RECT hideCursorSwitchRect{};
+    RECT languageRowRect{};
     bool showNativeOrientation = false;   // current value, for drawing the switch's on/off state
     bool hideCursorWhileDragging = true;
+    // Localized strings for the D2D-drawn chrome. The render thread must never
+    // call Loc() itself, so the UI thread resolves these when it builds the
+    // OverlayInfo snapshot each frame. See Localization.h.
+    std::wstring statsPanelTitle;
+    std::wstring speedFlyoutTitle;
+    std::wstring nativeOrientationLabel;
+    std::wstring hideCursorLabel;
+    std::wstring languageLabel;
+    std::wstring languageValue;
+    std::wstring emptyDropTitle;
+    std::wstring emptySupportedFormats;
     GroundAxis groundAxis = GroundAxis::Automatic; // persisted selection used by rendering
     GroundAxis effectiveGroundAxis = GroundAxis::Z; // resolved X/Y/Z shown by the toolbar
     bool groundAxisInverted = false; // negative side of effectiveGroundAxis is up

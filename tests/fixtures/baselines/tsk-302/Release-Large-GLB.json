@@ -4,7 +4,7 @@
   "configuration": "Release",
   "reference": "compatibility",
   "fixture": {
-    "path": "D:\\repos\\binbuf\\3d-preview-windows\\TestResults\\tsk205-large-fixtures\\A-large-glb.glb",
+    "path": "TestResults\\tsk205-large-fixtures\\A-large-glb.glb",
     "sha256": "44389b88dfc6c79025121072793e56536bfcc7650a6c746d4961a9118e355c1b",
     "bytes": 4294901760
   },
@@ -132,7 +132,7 @@
       "errorStage": 1,
       "errorSummary": "",
       "errorDetails": "",
-      "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\TestResults\\tsk205-large-fixtures\\A-large-glb.glb",
+      "fixture": "TestResults\\tsk205-large-fixtures\\A-large-glb.glb",
       "reference": "compatibility",
       "limits": {
         "durationMs": 30000,

@@ -4,7 +4,7 @@
   "configuration": "Release",
   "reference": "compatibility",
   "fixture": {
-    "path": "D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\corpus\\Draw-heavy.glb",
+    "path": "interactive-viewer\\test-assets\\corpus\\Draw-heavy.glb",
     "sha256": "569ba584e449e9ed316a7131dfc03177579ecd9ce273410e127ba168246ccfe4",
     "bytes": 107864
   },
@@ -142,7 +142,7 @@
       "errorStage": 1,
       "errorSummary": "",
       "errorDetails": "",
-      "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\corpus\\Draw-heavy.glb",
+      "fixture": "interactive-viewer\\test-assets\\corpus\\Draw-heavy.glb",
       "reference": "compatibility",
       "limits": {
         "durationMs": 5000,

@@ -3,7 +3,7 @@
   "mode": "scope-limited-mvp",
   "status": "pass",
   "viewerState": 2, "errorCode": 0, "errorStage": 1, "errorSummary": "", "errorDetails": "",
-  "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
+  "fixture": "interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
   "reference": "compatibility",
   "limits": {"durationMs": 3000, "frameLimit": 10000, "repeatCount": 1, "renderDurationMs": 3000, "renderFrameLimitWithWarmup": 10120, "renderObservedPresents": 719, "generalWorkerJobCommitBytes": 4294967296},
   "milestonesMs": {"firstBackground": 396.690, "loadingUi": 396.690, "firstGeometry": 399.069, "completeCoarse": 399.069, "verifiedBounds": 399.069, "firstRefinement": -1.000},

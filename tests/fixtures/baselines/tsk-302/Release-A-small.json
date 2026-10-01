@@ -4,7 +4,7 @@
   "configuration": "Release",
   "reference": "compatibility",
   "fixture": {
-    "path": "D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
+    "path": "interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
     "sha256": "412f9110575c0b425d8cdc4726ca5a59c4e91c09de4f3d56a226fd1f2fbb6240",
     "bytes": 19280
   },
@@ -142,7 +142,7 @@
       "errorStage": 1,
       "errorSummary": "",
       "errorDetails": "",
-      "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
+      "fixture": "interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
       "reference": "compatibility",
       "limits": {
         "durationMs": 3000,
@@ -948,7 +948,7 @@
       "errorStage": 1,
       "errorSummary": "",
       "errorDetails": "",
-      "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
+      "fixture": "interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
       "reference": "compatibility",
       "limits": {
         "durationMs": 3000,
@@ -1754,7 +1754,7 @@
       "errorStage": 1,
       "errorSummary": "",
       "errorDetails": "",
-      "fixture": "D:\\repos\\binbuf\\3d-preview-windows\\interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
+      "fixture": "interactive-viewer\\test-assets\\corpus\\A-small-glb.glb",
       "reference": "compatibility",
       "limits": {
         "durationMs": 3000,
