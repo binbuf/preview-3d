@@ -1,7 +1,8 @@
 #pragma once
 
 // A small, bounded whitespace-delimited tokenizer shared by the ASCII STL and
-// ASCII PLY adapters (Gate 3 slices 4/5). Per
+// ASCII PLY adapters (Gate 3 slices 4/5; relocated to shared/parser-core by
+// T07 so the thumbnail provider compiles the same source). Per
 // .docs/design/03-file-formats-and-ingestion.md's ASCII-parsing posture ("a
 // streaming tokenizer with fixed-size blocks, a token length cap, locale-
 // independent number parsing, and no recursive grammar"): a single forward
@@ -14,7 +15,7 @@
 #include <span>
 #include <string_view>
 
-namespace import_worker {
+namespace parser_core {
 
 // Treats '\n' as ordinary whitespace, same as ' '/'\t'/'\r' -- callers that
 // need PLY-style "one record per line" structure don't rely on this
@@ -46,4 +47,4 @@ private:
     size_t cursor_ = 0;
 };
 
-} // namespace import_worker
+} // namespace parser_core

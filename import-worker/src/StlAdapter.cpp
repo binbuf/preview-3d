@@ -1,7 +1,8 @@
 #include "StlAdapter.h"
 #include "BoundedChunkWriter.h"
 
-#include "AsciiTokenizer.h"
+#include "parser_core/AsciiTokenizer.h"
+#include "parser_core/StlParserCore.h"
 #include "model_core/Checksum.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
@@ -21,101 +22,34 @@ namespace import_worker {
 namespace {
 
 using namespace model_core;
+using namespace parser_core;
 using platform::CheckedAdd;
 using platform::CheckedMultiply;
-
-constexpr size_t kStlHeaderBytes = 80;
-constexpr size_t kStlCountBytes = 4;
-constexpr size_t kStlFacetBytes = 50; // 12 (normal) + 36 (3 verts) + 2 (attribute count, unused)
-constexpr size_t kStlPrefixBytes = kStlHeaderBytes + kStlCountBytes; // 84
-
-// Tier A facet count is checked before any cluster allocation.
-constexpr uint32_t kMaxFacets = uint32_t(kTierATriangles);
-
-// Bounds how many tokens after "solid" are skipped looking for the first
-// "facet"/"endsolid" keyword -- the free-form solid name can be empty,
-// one word, or several; this just stops a hostile file with neither
-// keyword from scanning forever.
-constexpr int kMaxSolidNameTokens = 256;
-
-float ReadFloatLE(const std::byte* p)
-{
-    float value;
-    std::memcpy(&value, p, sizeof(value));
-    return value;
-}
-
-uint32_t ReadU32LE(const std::byte* p)
-{
-    uint32_t value;
-    std::memcpy(&value, p, sizeof(value));
-    return value;
-}
-
-struct Vec3 {
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-
-    Vec3 operator-(const Vec3& other) const { return { x - other.x, y - other.y, z - other.z }; }
-};
-
-Vec3 Cross(const Vec3& a, const Vec3& b)
-{
-    return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };
-}
-
-double Dot(const Vec3& a, const Vec3& b)
-{
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-bool IsFinite(const Vec3& v)
-{
-    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
-}
 
 // Shared per-facet validation for both the binary and ASCII bodies: a
 // non-finite facet is dropped; a degenerate (near-zero-area) facet is
 // dropped; a supplied normal within ~10% of unit length is trusted (and
 // re-normalized), otherwise the generated flat (cross-product) normal is
 // used -- the design doc's "supplied normals or generated flat normals"
-// wording. Appends nothing when the facet is dropped.
+// wording. Appends nothing when the facet is dropped. The validation/normal
+// policy itself lives in shared/parser-core (T07) so the provider reuses it.
 void ProcessFacet(const Vec3& suppliedNormal, const Vec3& v0, const Vec3& v1, const Vec3& v2,
                    std::vector<VertexPositionNormalUv0F32>& vertices, std::vector<uint32_t>& indices)
 {
-    if (!IsFinite(suppliedNormal) || !IsFinite(v0) || !IsFinite(v1) || !IsFinite(v2)) {
-        return; // non-finite facet: dropped
-    }
-
-    Vec3 flatNormal = Cross(v1 - v0, v2 - v0);
-    double flatLengthSquared = Dot(flatNormal, flatNormal);
-    if (flatLengthSquared <= 0.0 || !std::isfinite(flatLengthSquared)) {
-        return; // degenerate (near-zero-area) facet: dropped
-    }
-    double flatInvLength = 1.0f / std::sqrt(flatLengthSquared);
-    Vec3 flatNormalized{ flatNormal.x * flatInvLength, flatNormal.y * flatInvLength,
-                          flatNormal.z * flatInvLength };
-
-    double suppliedLengthSquared = Dot(suppliedNormal, suppliedNormal);
-    Vec3 normal;
-    if (suppliedLengthSquared > 0.81f && suppliedLengthSquared < 1.21f) {
-        double invLength = 1.0f / std::sqrt(suppliedLengthSquared);
-        normal = { suppliedNormal.x * invLength, suppliedNormal.y * invLength,
-                   suppliedNormal.z * invLength };
-    } else {
-        normal = flatNormalized;
+    NormalizedStlFacet facet;
+    if (!NormalizeStlFacet(StlFacet{ suppliedNormal, v0, v1, v2 }, facet)) {
+        return; // non-finite or degenerate facet: dropped
     }
 
     uint32_t baseIndex = static_cast<uint32_t>(vertices.size());
-    for (const Vec3& v : { v0, v1, v2 }) {
+    for (const Vec3& v : facet.position) {
         VertexPositionNormalUv0F32 vertex{};
         vertex.px = static_cast<float>(v.x);
         vertex.py = static_cast<float>(v.y);
         vertex.pz = static_cast<float>(v.z);
-        vertex.nx = static_cast<float>(normal.x);
-        vertex.ny = static_cast<float>(normal.y);
-        vertex.nz = static_cast<float>(normal.z);
+        vertex.nx = static_cast<float>(facet.normal.x);
+        vertex.ny = static_cast<float>(facet.normal.y);
+        vertex.nz = static_cast<float>(facet.normal.z);
         vertex.u = 0.0f;
         vertex.v = 0.0f;
         vertices.push_back(vertex);
@@ -137,7 +71,7 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const s
     }
 
     uint32_t triangleCount = ReadU32LE(sourceStlBytes.data() + kStlHeaderBytes);
-    if (triangleCount > kMaxFacets) {
+    if (triangleCount > kMaxStlFacets) {
         return ImportErrorCode::ResourceLimit;
     }
 
@@ -216,35 +150,25 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlBinary(std::span<const s
                 ProcessFacet(n,v0,v1,v2,vertices,indices);
             }
         } else {
-            std::atomic_bool allValid=true;
+std::atomic_bool allValid=true;
             vertices.resize(size_t(count)*3);indices.resize(size_t(count)*3);
             const uint32_t blocks=(count+kParallelFacetBlock-1)/kParallelFacetBlock;
             concurrency::parallel_for(uint32_t(0),blocks,[&](uint32_t block) {
             const uint32_t begin=block*kParallelFacetBlock,end=(std::min)(count,begin+kParallelFacetBlock);
             for (uint32_t i=begin;i<end;++i) {
                 const std::byte* facet=facets.data()+size_t(i)*kStlFacetBytes;
-                Vec3 supplied{ReadFloatLE(facet),ReadFloatLE(facet+4),ReadFloatLE(facet+8)};
-                Vec3 source[3]{{ReadFloatLE(facet+12),ReadFloatLE(facet+16),ReadFloatLE(facet+20)},
+                const StlFacet supplied{{ReadFloatLE(facet),ReadFloatLE(facet+4),ReadFloatLE(facet+8)},
+                               {ReadFloatLE(facet+12),ReadFloatLE(facet+16),ReadFloatLE(facet+20)},
                                {ReadFloatLE(facet+24),ReadFloatLE(facet+28),ReadFloatLE(facet+32)},
                                {ReadFloatLE(facet+36),ReadFloatLE(facet+40),ReadFloatLE(facet+44)}};
-                auto flat=Cross(source[1]-source[0],source[2]-source[0]);
-                const double flatLengthSquared=Dot(flat,flat);
-                if (!IsFinite(supplied)||!IsFinite(source[0])||!IsFinite(source[1])||!IsFinite(source[2])
-                    || flatLengthSquared<=0.0||!std::isfinite(flatLengthSquared)) {
+                NormalizedStlFacet normalized;
+                if (!NormalizeStlFacet(supplied,normalized)) {
                     allValid.store(false,std::memory_order_relaxed);continue;
-                }
-                const double flatInv=1.0/std::sqrt(flatLengthSquared);
-                flat={flat.x*flatInv,flat.y*flatInv,flat.z*flatInv};
-                const double suppliedLengthSquared=Dot(supplied,supplied);
-                Vec3 normal=flat;
-                if (suppliedLengthSquared>0.81&&suppliedLengthSquared<1.21) {
-                    const double inverse=1.0/std::sqrt(suppliedLengthSquared);
-                    normal={supplied.x*inverse,supplied.y*inverse,supplied.z*inverse};
                 }
                 for (unsigned corner=0;corner<3;++corner) {
                     auto& vertex=vertices[size_t(i)*3+corner];
-                    vertex.px=float(source[corner].x);vertex.py=float(source[corner].y);vertex.pz=float(source[corner].z);
-                    vertex.nx=float(normal.x);vertex.ny=float(normal.y);vertex.nz=float(normal.z);
+                    vertex.px=float(normalized.position[corner].x);vertex.py=float(normalized.position[corner].y);vertex.pz=float(normalized.position[corner].z);
+                    vertex.nx=float(normalized.normal.x);vertex.ny=float(normalized.normal.y);vertex.nz=float(normalized.normal.z);
                     indices[size_t(i)*3+corner]=i*3+corner;
                 }
             }
@@ -434,19 +358,7 @@ std::variant<StlImportResult, ImportErrorCode> ImportStlAscii(
 
 bool IsAsciiStl(std::span<const std::byte> sourcePrefix, uint64_t sourceSize)
 {
-    bool binaryShape = false;
-    if (sourcePrefix.size() >= kStlPrefixBytes) {
-        const uint32_t triangleCount = ReadU32LE(sourcePrefix.data() + kStlHeaderBytes);
-        if (triangleCount <= kMaxFacets) {
-            const auto facetBytes = CheckedMultiply(uint64_t(triangleCount), uint64_t(kStlFacetBytes));
-            const auto expectedSize = facetBytes
-                ? CheckedAdd(uint64_t(kStlPrefixBytes), *facetBytes) : std::nullopt;
-            binaryShape = expectedSize && sourceSize >= *expectedSize;
-        }
-    }
-    constexpr std::string_view keyword = "solid";
-    return !binaryShape && sourcePrefix.size() >= keyword.size()
-        && std::string_view(reinterpret_cast<const char*>(sourcePrefix.data()), keyword.size()) == keyword;
+    return parser_core::IsAsciiStl(sourcePrefix, sourceSize);
 }
 
 std::variant<StlImportResult, ImportErrorCode> ImportStl(std::span<const std::byte> sourceStlBytes,

@@ -43,4 +43,43 @@ explicit provider decoder scope, and a chosen registration vehicle.
 - [ ] Hand-off below filled in.
 
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+
+### What landed
+- Froze the eight-family roster and the STEP identity `{6EE961AC-AC3B-4958-A898-E30523FEE79D}` in
+  `design/05-thumbnail-provider.md` (new "Frozen specification" section) and `design/overview.md`
+  (now links ADR-0001 and `adapters/step-009-thumbnail.md`). The seven earlier CLSIDs are unchanged.
+- Recorded the provider limit/HRESULT source of truth in `05`: the *Thumbnail host* column of
+  `03-file-formats-and-ingestion.md` plus the `05` HRESULT table, as the authority T06 encodes.
+  Distinguishes hard accountable caps (256 MiB stream, 128 MiB backing, 192 MiB scratch, per-component
+  caps, 384 MiB product-owned ledger) from the measured 384 MiB process-commit target and the
+  cooperative 2 s stop point.
+- Reconcilements: `02-system-architecture.md` now states the ADR-0002 supersession of the archived
+  "OCCT is never the thumbnail provider" wording; `11-decisions-and-risks.md` TSK-209 no longer
+  contradicts ADR-0003 (its "does not link either decoder" sentence is retained only as a quoted
+  historical baseline); `08-installation-and-registration.md` records the T01 freeze and the
+  provisional extension-level `ShellEx` location pending T03.
+- Verified ADR-0001 through ADR-0007 are all `accepted`; no ADR content needed changing.
+
+### Deviations
+- The reviewed `design/` copies already contained most of the reconciliation when this run started
+  (the design package was seeded already agreeing with the ADRs). Work was therefore confirmation
+  plus the residual edits above, not a rewrite. No new ADR was created: the decisions were already
+  captured by ADR-0001/0002/0003/0006/0007.
+
+### Check results
+- `pwsh -NoProfile -File .symphony/symphony.ps1 lint` → `lint: ok (29 tasks)`.
+- `Select-String` sweep: no normative "seven CLSID"/"seven stable" statement remains; the only
+  remaining "seven" hits are historical quotes in `overview.md`, `adr/0001` and `adr/0007`. CLSID
+  table has eight family rows in both `05` and `overview`.
+
+### Changed docs
+- `docs/design/05-thumbnail-provider.md`, `docs/design/overview.md`,
+  `docs/design/02-system-architecture.md`, `docs/design/08-installation-and-registration.md`,
+  `docs/design/11-decisions-and-risks.md`.
+- `docs/design/adr/0001`–`0007` verified unchanged (all `accepted`).
+
+### Next task must know
+- The provider contract is frozen: eight CLSIDs, in-DLL constrained OCCT adapter (ADR-0002), decoder
+  scope (ADR-0003), NSIS-now/MSI-later registration (ADR-0006/0007). Do not regenerate any CLSID.
+- T06's limit source of truth is the `03` Thumbnail host column + the `05` HRESULT table.
+- No blockers. T02/T03 can proceed.

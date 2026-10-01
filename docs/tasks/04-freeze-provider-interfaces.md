@@ -40,4 +40,39 @@ stable contract.
 - [ ] Hand-off below filled in.
 
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+
+**Landed.** Five frozen headers in `thumbnail-provider/`: `ProviderTypes.h` (product value types,
+`Family`, `BoundedSource`, `NeutralMaterial()`), `FamilyAdapter.h` (`IFamilyAdapter`,
+`IGeometrySink`, `IMaterialSink`, `AdapterInput`), `GeometrySampler.h` (`IGeometrySampler`,
+`SampledGeometry`), `CpuRasterizer.h` (`ICpuRasterizer`, `RasterRequest`, `RasterImage`), and
+`FamilyRouting.h` (the eight CLSIDs, extension lists, and the `{E357FCCD-...}` thumbnail ShellEx
+GUID). `ProviderContracts.cpp` is an interface-only TU that compiles them and static_asserts the
+roster. The provider project now includes `..\shared\model-core\include` and all six files.
+Signature-level doc: `docs/design/interfaces.md`; decision: `docs/design/adr/0009-...md`;
+`design/05-thumbnail-provider.md` cross-links both.
+
+**Deviations.** `ProviderLimits`, `Deadline` and `AllocationLedger` are forward-declared here and
+left for T06 to define under those exact names, so T06 owns the concrete budget/deadline/ledger
+types instead of T04 duplicating them; the adapter/sampler/raster signatures reference them by
+pointer. The adapter emits samples through `IGeometrySink`/`IMaterialSink` callbacks (cap stop =
+`false`, not an error) rather than returning a container, keeping the adapter surface small and
+streaming. `RasterImage` carries a premultiplied BGRA buffer rather than an `HBITMAP` so the
+rasterizer interface is GDI/Windows-free and unit-testable; T15/T13 create the DIB/HBITMAP and set
+`WTS_ALPHATYPE`.
+
+**Checks.**
+- `msbuild thumbnail-provider\Preview3DThumbnailProvider.vcxproj /p:Configuration=Debug|x64` and
+  Release: clean (0 warnings, /W4 /WX).
+- `msbuild Preview3D.slnx /p:Configuration=Release /p:Platform=x64`: provider + `Tests.Unit.exe`
+  build; **pre-existing, unrelated failure** in `compatibility-host-step` (`C1083 BRepBndLib.hxx`):
+  its vcpkg `x64-windows-static-md` OCCT triplet is not installed in this environment (only
+  `x64-windows` exists) and the vcxproj hardcodes static-md. Same failure occurs without T04.
+- `x64\Release\Tests.Unit.exe`: 123 cases / 74004 assertions, all passed.
+
+**Next must know.** T06 defines `ProviderLimits`/`Deadline`/`AllocationLedger` under the frozen
+names. T07's exact extraction list and move/duplicate/exclude classification is in
+`docs/design/interfaces.md` ("Shared source subset"); it must decouple `StlAdapter.*`/`PlyAdapter.*`
+from `BoundedChunkWriter.h`/`ChunkBatchSink.h` and extract the `kTierA*` constants. T41 must consume
+`FamilyRouting.h` and assert the installed values match it. The `compatibility-host-step` OCCT
+static-md install gap blocks only the full-solution build, not the verify command; it is recorded in
+`docs/PROGRESS.md` Follow-ups.

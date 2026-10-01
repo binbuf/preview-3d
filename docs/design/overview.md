@@ -53,7 +53,11 @@ things must be settled before adapter work is safe to schedule, and each is an e
 
 All eight CLSIDs above are product identities and **must not be regenerated**. STEP is the one
 identity added after the original seven; it is frozen here and in
-[`05-thumbnail-provider.md`](05-thumbnail-provider.md) under ADR-0001.
+[`05-thumbnail-provider.md`](05-thumbnail-provider.md) under
+[ADR-0001](adr/0001-eight-family-clsid-roster.md), and its adapter requirement is
+[`adapters/step-009-thumbnail.md`](adapters/step-009-thumbnail.md). T01 froze this roster and the
+NSIS-now / MSI-later registration vehicle recorded in `05` and
+[`08-installation-and-registration.md`](08-installation-and-registration.md).
 
 ## Component map
 

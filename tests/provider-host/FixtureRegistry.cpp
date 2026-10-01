@@ -1,0 +1,526 @@
+// T17 golden-fixture registry.
+//
+// Family tasks (T21-T34) register their fixture here, one entry each. The host
+// renders every entry through the real pipeline and compares it with the
+// committed PAM golden named by the entry. See tests/provider-host/README.md for
+// the exact workflow.
+//
+// Today the only entry is the built-in placeholder scene (`Family::Unknown`),
+// which proves the comparator, the pipeline composition and the leak loop before
+// the first real family adapter exists.
+
+#include "FixtureRegistry.h"
+
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+namespace preview3d::test {
+namespace {
+
+// A committed-size binary STL: a unit cube as 12 facets (two per face), each
+// with a generated flat normal (the binary record's normal field is left zero,
+// so the adapter computes it). 84 + 12 * 50 = 684 bytes.
+std::vector<std::byte> BuildCubeStl()
+{
+    constexpr float kCube[8][3] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+                                   {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
+    constexpr int kQuads[6][4] = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4},
+                                  {3, 7, 6, 2}, {0, 4, 7, 3}, {1, 2, 6, 5}};
+
+    std::vector<std::byte> bytes(80 + 4, std::byte{0});
+    const std::uint32_t facetCount = 12;
+    std::memcpy(bytes.data() + 80, &facetCount, sizeof(facetCount));
+
+    const auto appendFacet = [&bytes](const float* a, const float* b, const float* c) {
+        float values[12] = {0, 0, 0, a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]};
+        const auto* raw = reinterpret_cast<const std::byte*>(values);
+        bytes.insert(bytes.end(), raw, raw + sizeof(values));
+        bytes.push_back(std::byte{0});
+        bytes.push_back(std::byte{0});
+    };
+    for (const auto& quad : kQuads) {
+        appendFacet(kCube[quad[0]], kCube[quad[1]], kCube[quad[2]]);
+        appendFacet(kCube[quad[0]], kCube[quad[2]], kCube[quad[3]]);
+    }
+    return bytes;
+}
+
+// A binary little-endian PLY cube: 8 vertices with RGB colors and 6 quad faces
+// (fan-triangulated by the adapter). T23's committed provider-host fixture.
+std::vector<std::byte> BuildCubePly()
+{
+    constexpr float kCube[8][3] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+                                   {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
+    constexpr std::uint8_t kColor[8][3] = {{230, 90, 70},  {240, 170, 70}, {110, 200, 90},
+                                           {80, 160, 220}, {160, 110, 220}, {230, 110, 180},
+                                           {90, 200, 200}, {230, 210, 90}};
+    constexpr int kQuads[6][4] = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4},
+                                  {3, 7, 6, 2}, {0, 4, 7, 3}, {1, 2, 6, 5}};
+
+    const std::string header =
+        "ply\nformat binary_little_endian 1.0\n"
+        "element vertex 8\nproperty float x\nproperty float y\nproperty float z\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+        "element face 6\nproperty list uchar int vertex_indices\nend_header\n";
+    std::vector<std::byte> bytes;
+    const auto appendText = [&bytes](const std::string& text) {
+        const auto* data = reinterpret_cast<const std::byte*>(text.data());
+        bytes.insert(bytes.end(), data, data + text.size());
+    };
+    const auto appendFloat = [&bytes](float value) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        const auto* data = reinterpret_cast<const std::byte*>(&bits);
+        bytes.insert(bytes.end(), data, data + sizeof(bits));
+    };
+    const auto appendInt = [&bytes](std::int32_t value) {
+        const auto* data = reinterpret_cast<const std::byte*>(&value);
+        bytes.insert(bytes.end(), data, data + sizeof(value));
+    };
+
+    appendText(header);
+    for (int i = 0; i < 8; ++i) {
+        appendFloat(kCube[i][0]);
+        appendFloat(kCube[i][1]);
+        appendFloat(kCube[i][2]);
+        for (int channel = 0; channel < 3; ++channel) {
+            bytes.push_back(static_cast<std::byte>(kColor[i][channel]));
+        }
+    }
+    for (const auto& quad : kQuads) {
+        bytes.push_back(std::byte{4});
+        for (int corner = 0; corner < 4; ++corner) {
+            appendInt(quad[corner]);
+        }
+    }
+    return bytes;
+}
+
+// An ASCII OBJ cube whose geometry references an ignored `.mtl`: six quad
+// faces fan-triangulated by the T24 adapter into twelve neutral triangles. The
+// `mtllib`/`usemtl` lines prove the thumbnail path never resolves the sidecar.
+std::vector<std::byte> BuildCubeObj()
+{
+    const std::string text =
+        "mtllib cube-sidecar.mtl\n"
+        "o cube\n"
+        "usemtl cube\n"
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+        "v 0 0 1\nv 1 0 1\nv 1 1 1\nv 0 1 1\n"
+        "f 1 4 3 2\n"
+        "f 5 6 7 8\n"
+        "f 1 2 6 5\n"
+        "f 4 8 7 3\n"
+        "f 1 5 8 4\n"
+        "f 2 3 7 6\n";
+    std::vector<std::byte> bytes(text.size());
+    if (!text.empty()) {
+        std::memcpy(bytes.data(), text.data(), text.size());
+    }
+    return bytes;
+}
+
+// A minimal embedded GLB: one triangle with a material whose factors exercise
+// the T25 glTF adapter. No external sidecar; the BIN chunk is stream-contained.
+std::vector<std::byte> BuildGltfTriangle()
+{
+    constexpr float kPositions[3][3] = {{0, 0, 0}, {2, 0, 0}, {0, 2, 0}};
+    std::vector<std::byte> bin;
+    const auto appendFloat = [&bin](float value) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        const auto* raw = reinterpret_cast<const std::byte*>(&bits);
+        bin.insert(bin.end(), raw, raw + sizeof(bits));
+    };
+    const auto appendU32 = [&bin](std::uint32_t value) {
+        const auto* raw = reinterpret_cast<const std::byte*>(&value);
+        bin.insert(bin.end(), raw, raw + sizeof(value));
+    };
+    for (const auto& position : kPositions) {
+        appendFloat(position[0]);
+        appendFloat(position[1]);
+        appendFloat(position[2]);
+    }
+    appendU32(0);
+    appendU32(1);
+    appendU32(2);
+
+    const std::string json =
+        "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,"
+        "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},"
+        "\"indices\":1,\"material\":0}]}],"
+        "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.2,0.6,0.9,1.0]},"
+        "\"doubleSided\":true}],"
+        "\"accessors\":["
+        "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+        "\"min\":[0,0,0],\"max\":[2,2,0]},"
+        "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":["
+        "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+        "\"buffers\":[{\"byteLength\":48}]}";
+
+    std::vector<std::byte> jsonChunk(json.size());
+    if (!json.empty()) {
+        std::memcpy(jsonChunk.data(), json.data(), json.size());
+    }
+    while (jsonChunk.size() % 4 != 0) {
+        jsonChunk.push_back(std::byte{0x20});
+    }
+    while (bin.size() % 4 != 0) {
+        bin.push_back(std::byte{0x00});
+    }
+    const std::uint32_t total =
+        static_cast<std::uint32_t>(12 + 8 + jsonChunk.size() + 8 + bin.size());
+    std::vector<std::byte> glb;
+    const auto appendToGlb = [&glb](std::uint32_t value) {
+        const auto* raw = reinterpret_cast<const std::byte*>(&value);
+        glb.insert(glb.end(), raw, raw + sizeof(value));
+    };
+    appendToGlb(0x46546C67u);
+    appendToGlb(2u);
+    appendToGlb(total);
+    appendToGlb(static_cast<std::uint32_t>(jsonChunk.size()));
+    appendToGlb(0x4E4F534Au);
+    glb.insert(glb.end(), jsonChunk.begin(), jsonChunk.end());
+    appendToGlb(static_cast<std::uint32_t>(bin.size()));
+    appendToGlb(0x004E4942u);
+    glb.insert(glb.end(), bin.begin(), bin.end());
+    return glb;
+}
+
+// A binary little-endian colored point cloud: a 4x4x4 grid with a per-axis hue.
+std::vector<std::byte> BuildColoredPointsPly()
+{
+    constexpr int kSide = 4;
+    const std::string header =
+        "ply\nformat binary_little_endian 1.0\n"
+        "element vertex 64\nproperty float x\nproperty float y\nproperty float z\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n";
+    std::vector<std::byte> bytes;
+    const auto appendText = [&bytes](const std::string& text) {
+        const auto* data = reinterpret_cast<const std::byte*>(text.data());
+        bytes.insert(bytes.end(), data, data + text.size());
+    };
+    const auto appendFloat = [&bytes](float value) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        const auto* data = reinterpret_cast<const std::byte*>(&bits);
+        bytes.insert(bytes.end(), data, data + sizeof(bits));
+    };
+    appendText(header);
+    for (int x = 0; x < kSide; ++x) {
+        for (int y = 0; y < kSide; ++y) {
+            for (int z = 0; z < kSide; ++z) {
+                appendFloat(static_cast<float>(x));
+                appendFloat(static_cast<float>(y));
+                appendFloat(static_cast<float>(z));
+                bytes.push_back(static_cast<std::byte>(40 + x * 60));
+                bytes.push_back(static_cast<std::byte>(40 + y * 60));
+                bytes.push_back(static_cast<std::byte>(40 + z * 60));
+            }
+        }
+    }
+    return bytes;
+}
+
+// A committed ASCII FBX hierarchy from the FBX qualification corpus. The
+// provider never opens a path; the host reads the bytes once and hands them to
+// the bounded source. Missing file -> empty fixture -> the golden case fails
+// loudly rather than silently.
+std::vector<std::byte> ReadFbxFixture(const char* name)
+{
+    const std::filesystem::path path =
+        std::filesystem::path(PREVIEW3D_FBX_FIXTURE_DIR) / name;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const std::streamoff size = file.tellg();
+    if (size <= 0) {
+        return {};
+    }
+    file.seekg(0);
+    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(bytes.data()), size);
+    return bytes;
+}
+
+// COMMITTED STEP-003/006 fixtures live in `tests/fixtures/stp-spike`; they are
+// clear-text ISO 10303-21 and read whole. The provider never opens a path.
+// Missing file -> empty fixture -> the golden case fails loudly.
+std::vector<std::byte> ReadStepFixture(const char* name)
+{
+    const std::filesystem::path path =
+        std::filesystem::path(PREVIEW3D_STEP_FIXTURE_DIR) / name;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const std::streamoff size = file.tellg();
+    if (size <= 0) {
+        return {};
+    }
+    file.seekg(0);
+    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(bytes.data()), size);
+    return bytes;
+}
+
+int Base64Value(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+// COMMITTED 3MF fixtures are `.base64` text; decode in memory (the provider
+// itself never opens a path). Missing file -> empty fixture -> the golden case
+// fails loudly rather than silently.
+std::vector<std::byte> ReadThreeMfFixture(const char* name)
+{
+    const std::filesystem::path path =
+        std::filesystem::path(PREVIEW3D_3MF_FIXTURE_DIR) / name;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const std::streamoff size = file.tellg();
+    if (size <= 0) {
+        return {};
+    }
+    file.seekg(0);
+    std::vector<std::byte> text(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(text.data()), size);
+
+    std::vector<std::byte> out;
+    int accumulator = 0;
+    int bits = 0;
+    for (const std::byte raw : text) {
+        const char c = static_cast<char>(raw);
+        if (c == '=') {
+            break;
+        }
+        const int value = Base64Value(c);
+        if (value < 0) {
+            continue;
+        }
+        accumulator = (accumulator << 6) | value;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<std::byte>((accumulator >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
+// COMMITTED USD-001/USD-005 fixtures live in `tests/fixtures/usd-spike`; the
+// binary cube is `.base64` text decoded in memory. The provider never opens a
+// path. Missing file -> empty fixture -> the golden case fails loudly.
+std::vector<std::byte> ReadUsdFixture(const char* name)
+{
+    const std::filesystem::path path =
+        std::filesystem::path(PREVIEW3D_USD_FIXTURE_DIR) / name;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return {};
+    }
+    const std::streamoff size = file.tellg();
+    if (size <= 0) {
+        return {};
+    }
+    file.seekg(0);
+    std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(bytes.data()), size);
+    if (path.extension() != ".base64") {
+        return bytes;
+    }
+
+    std::vector<std::byte> out;
+    int accumulator = 0;
+    int bits = 0;
+    for (const std::byte raw : bytes) {
+        const char c = static_cast<char>(raw);
+        if (c == '=') {
+            break;
+        }
+        const int value = Base64Value(c);
+        if (value < 0) {
+            continue;
+        }
+        accumulator = (accumulator << 6) | value;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<std::byte>((accumulator >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+std::string ProviderHostGoldenDirectory()
+{
+    return std::filesystem::path(PREVIEW3D_PROVIDER_HOST_GOLDEN_DIR).string();
+}
+
+std::span<const GoldenFixture> ProviderHostFixtures()
+{
+    static const std::vector<GoldenFixture> kFixtures = [] {
+        std::vector<GoldenFixture> fixtures;
+
+        // Placeholder: exercises the harness itself (adapter -> sampler ->
+        // rasterizer -> golden). Replace/keep alongside the first real family
+        // adapter; it is not a product format.
+        GoldenFixture placeholder;
+        placeholder.name = "placeholder-sphere";
+        placeholder.family = preview3d::provider::Family::Unknown;
+        placeholder.source.assign(4096, std::byte{0x2A});
+        placeholder.goldenPath = ProviderHostGoldenDirectory() + "placeholder-256.pam";
+        placeholder.tolerance = GoldenTolerance{2.0, 48};
+        placeholder.cx = 256;
+        fixtures.push_back(std::move(placeholder));
+
+        // T21: the first real family fixture. Routes Family::Stl through the
+        // linked StlAdapter, the T14 sampler and the T15 rasterizer.
+        GoldenFixture stlCube;
+        stlCube.name = "stl-cube";
+        stlCube.family = preview3d::provider::Family::Stl;
+        stlCube.source = BuildCubeStl();
+        stlCube.goldenPath = ProviderHostGoldenDirectory() + "stl-cube-256.pam";
+        stlCube.tolerance = GoldenTolerance{2.0, 48};
+        stlCube.cx = 256;
+        fixtures.push_back(std::move(stlCube));
+
+        // T23: PLY mesh and point-cloud fixtures through the linked PlyAdapter.
+        GoldenFixture plyCube;
+        plyCube.name = "ply-cube";
+        plyCube.family = preview3d::provider::Family::Ply;
+        plyCube.source = BuildCubePly();
+        plyCube.goldenPath = ProviderHostGoldenDirectory() + "ply-cube-256.pam";
+        plyCube.tolerance = GoldenTolerance{2.0, 48};
+        plyCube.cx = 256;
+        fixtures.push_back(std::move(plyCube));
+
+        GoldenFixture plyPoints;
+        plyPoints.name = "ply-points";
+        plyPoints.family = preview3d::provider::Family::Ply;
+        plyPoints.source = BuildColoredPointsPly();
+        plyPoints.goldenPath = ProviderHostGoldenDirectory() + "ply-points-256.pam";
+        plyPoints.tolerance = GoldenTolerance{2.0, 48};
+        plyPoints.cx = 256;
+        fixtures.push_back(std::move(plyPoints));
+
+        // T24: an OBJ cube, routed through the linked ObjAdapter (provider-local
+        // ufbx). Its `mtllib`/`usemtl` references are ignored, so the golden is
+        // the neutral-palette cube.
+        GoldenFixture objCube;
+        objCube.name = "obj-cube";
+        objCube.family = preview3d::provider::Family::Obj;
+        objCube.source = BuildCubeObj();
+        objCube.goldenPath = ProviderHostGoldenDirectory() + "obj-cube-256.pam";
+        objCube.tolerance = GoldenTolerance{2.0, 48};
+        objCube.cx = 256;
+        fixtures.push_back(std::move(objCube));
+
+        // T25: an embedded glTF triangle routed through the linked GltfAdapter
+        // (provider-local fastgltf; no external sidecar).
+        GoldenFixture gltfTriangle;
+        gltfTriangle.name = "gltf-triangle";
+        gltfTriangle.family = preview3d::provider::Family::Gltf;
+        gltfTriangle.source = BuildGltfTriangle();
+        gltfTriangle.goldenPath = ProviderHostGoldenDirectory() + "gltf-triangle-256.pam";
+        gltfTriangle.tolerance = GoldenTolerance{2.0, 48};
+        gltfTriangle.cx = 256;
+        fixtures.push_back(std::move(gltfTriangle));
+
+        // T31: a committed ASCII FBX hierarchy routed through the linked
+        // FbxAdapter (provider-local ufbx; deterministic static pose).
+        GoldenFixture fbxHierarchy;
+        fbxHierarchy.name = "fbx-hierarchy";
+        fbxHierarchy.family = preview3d::provider::Family::Fbx;
+        fbxHierarchy.source = ReadFbxFixture("hierarchy-instances-pivots-ascii.fbx");
+        fbxHierarchy.goldenPath = ProviderHostGoldenDirectory() + "fbx-hierarchy-256.pam";
+        fbxHierarchy.tolerance = GoldenTolerance{2.0, 48};
+        fbxHierarchy.cx = 256;
+        fixtures.push_back(std::move(fbxHierarchy));
+
+        // T32: a committed Core 3MF box and a bounded Beam Lattice, routed
+        // through the linked ThreeMfAdapter (provider-local pinned lib3mf; the
+        // committed corpus is transported as base64).
+        GoldenFixture threeMfCore;
+        threeMfCore.name = "three-mf-core";
+        threeMfCore.family = preview3d::provider::Family::ThreeMf;
+        threeMfCore.source = ReadThreeMfFixture("core-box.3mf.base64");
+        threeMfCore.goldenPath = ProviderHostGoldenDirectory() + "three-mf-core-256.pam";
+        threeMfCore.tolerance = GoldenTolerance{2.0, 48};
+        threeMfCore.cx = 256;
+        fixtures.push_back(std::move(threeMfCore));
+
+        GoldenFixture threeMfLattice;
+        threeMfLattice.name = "three-mf-lattice";
+        threeMfLattice.family = preview3d::provider::Family::ThreeMf;
+        threeMfLattice.source = ReadThreeMfFixture("beam-lattice.3mf.base64");
+        threeMfLattice.goldenPath = ProviderHostGoldenDirectory() + "three-mf-lattice-256.pam";
+        threeMfLattice.tolerance = GoldenTolerance{2.0, 48};
+        threeMfLattice.cx = 256;
+        fixtures.push_back(std::move(threeMfLattice));
+
+        // T33: stream-contained USD encodings routed through the linked
+        // UsdAdapter (provider-local pinned TinyUSDZ; no composition, no paths).
+        // A committed USDA mesh, a crate-encoded USDC cube, and a contained
+        // USDZ archive each render real geometry.
+        GoldenFixture usdMesh;
+        usdMesh.name = "usd-mesh";
+        usdMesh.family = preview3d::provider::Family::Usd;
+        usdMesh.source = ReadUsdFixture("mesh.usda");
+        usdMesh.goldenPath = ProviderHostGoldenDirectory() + "usd-mesh-256.pam";
+        usdMesh.tolerance = GoldenTolerance{2.0, 48};
+        usdMesh.cx = 256;
+        fixtures.push_back(std::move(usdMesh));
+
+        GoldenFixture usdCrate;
+        usdCrate.name = "usd-crate";
+        usdCrate.family = preview3d::provider::Family::Usd;
+        usdCrate.source = ReadUsdFixture("cube.usdc.base64");
+        usdCrate.goldenPath = ProviderHostGoldenDirectory() + "usd-crate-256.pam";
+        usdCrate.tolerance = GoldenTolerance{2.0, 48};
+        usdCrate.cx = 256;
+        fixtures.push_back(std::move(usdCrate));
+
+        GoldenFixture usdZip;
+        usdZip.name = "usd-zip";
+        usdZip.family = preview3d::provider::Family::Usd;
+        usdZip.source = ReadUsdFixture("cube.usdz.base64");
+        usdZip.goldenPath = ProviderHostGoldenDirectory() + "usd-zip-256.pam";
+        usdZip.tolerance = GoldenTolerance{2.0, 48};
+        usdZip.cx = 256;
+        fixtures.push_back(std::move(usdZip));
+
+        // T34: a committed self-contained AP214 part routed through the linked
+        // StepAdapter (dedicated static OCCT closure, Part-21 admission first,
+        // low-detail tessellation, bounded shape color).
+        GoldenFixture stepPart;
+        stepPart.name = "step-part";
+        stepPart.family = preview3d::provider::Family::Step;
+        stepPart.source = ReadStepFixture("part_ap214.stp");
+        stepPart.goldenPath = ProviderHostGoldenDirectory() + "step-part-256.pam";
+        stepPart.tolerance = GoldenTolerance{2.0, 48};
+        stepPart.cx = 256;
+        fixtures.push_back(std::move(stepPart));
+
+        return fixtures;
+    }();
+    return kFixtures;
+}
+
+} // namespace preview3d::test

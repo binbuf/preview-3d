@@ -1,0 +1,29 @@
+diff --git a/src/ascii-parser-basetype.cc b/src/ascii-parser-basetype.cc
+--- a/src/ascii-parser-basetype.cc
++++ b/src/ascii-parser-basetype.cc
+@@ -47,7 +47,12 @@
+ 
+ // external
+ 
+-#include "external/fast_float/include/fast_float/fast_float.h"
++// Preview3D: use the vcpkg-pinned fast_float (the exact revision the sibling
++// lib3mf static library is built against) instead of TinyUSDZ's older vendored
++// copy. Both libraries otherwise emit the same
++// `fast_float::from_chars_advanced<double>` COMDAT with incompatible
++// `parse_options_t` layouts, which faults when both are linked into one module.
++#include <fast_float/fast_float.h>
+ #include "external/jsteemann/atoi.h"
+ //#include "external/simple_match/include/simple_match/simple_match.hpp"
+ #include "nonstd/expected.hpp"
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1023,5 +1023,8 @@
+ 
+   target_include_directories(${TINYUSDZ_LIB_TARGET}
+                              PRIVATE ${PROJECT_SOURCE_DIR}/src)
+ 
++  find_package(FastFloat CONFIG REQUIRED)
++  target_link_libraries(${TINYUSDZ_LIB_TARGET} PRIVATE FastFloat::fast_float)
++
+   #if(TINYUSDZ_WITH_JSON)

@@ -67,7 +67,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup>
     <ClCompile>
-      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\shared\parser-core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <AdditionalDependencies>ws2_32.lib;windowscodecs.lib;psapi.lib;xmllite.lib;shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -111,7 +111,9 @@
     <ClCompile Include="src\UfbxMaterialConversion.cpp" />
     <ClCompile Include="src\FbxImportWorker.cpp" />
     <ClCompile Include="src\FbxAdapter.cpp" />
-    <ClCompile Include="src\AsciiTokenizer.cpp" />
+    <ClCompile Include="..\shared\parser-core\src\AsciiTokenizer.cpp" />
+    <ClCompile Include="..\shared\parser-core\src\StlParserCore.cpp" />
+    <ClCompile Include="..\shared\parser-core\src\PlyParserCore.cpp" />
     <ClCompile Include="src\WorkerRequestDispatch.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
@@ -150,7 +152,9 @@
     <ClInclude Include="src\UfbxMaterialConversion.h" />
     <ClInclude Include="src\FbxImportWorker.h" />
     <ClInclude Include="src\FbxAdapter.h" />
-    <ClInclude Include="src\AsciiTokenizer.h" />
+    <ClInclude Include="..\shared\parser-core\include\parser_core\AsciiTokenizer.h" />
+    <ClInclude Include="..\shared\parser-core\include\parser_core\StlParserCore.h" />
+    <ClInclude Include="..\shared\parser-core\include\parser_core\PlyParserCore.h" />
     <ClInclude Include="src\WorkerRequestDispatch.h" />
     <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />
     <ClInclude Include="..\shared\platform\include\platform\Win32Handle.h" />

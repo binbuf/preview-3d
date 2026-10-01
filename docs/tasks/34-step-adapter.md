@@ -44,4 +44,46 @@ qualify it before the full eight-family registration/release claim.
 - [ ] Hand-off below filled in.
 
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+
+**What landed.** `.step`/`.stp` renders in Explorer through the frozen STEP CLSID
+`{6EE961AC-AC3B-4958-A898-E30523FEE79D}` and a constrained OCCT 7.8 adapter
+(`thumbnail-provider/StepFamilyAdapter.{h,cpp}`) linked only into the provider DLL,
+`Tests.Unit.exe` and `Tests.ProviderHost.exe`. A dedicated **static** OCCT closure is
+declared by the isolated manifest `thumbnail-provider/step-occt/` (built for
+`x64-windows-static-md`; see PROGRESS T34 for the exact `vcpkg install` command and the
+~27 min build). The provider imports no OCCT DLL and no product/worker/host binary, and it
+never launches `Preview3DStepHost.exe`. Product-owned Part-21 admission (reused from the STEP
+host, source-not-state) runs before any OCCT call and rejects external documents,
+unsupported encodings and over-budget input; OCCT reads a bounded seekable stream over
+`BoundedSource` and all opaque OCCT calls run under the T16 exception/SEH containment
+boundary. The full assembly/instance hierarchy, checked double-precision transforms,
+shape/instance colors and a fixed low-detail deterministic tessellation policy are preserved
+under the stricter provider ceilings.
+
+**Deviations.** (1) The environment shipped only a dynamic OCCT (the STEP host's), so a new
+static closure was built and recorded in ADR-0027 rather than reusing it. (2) `faceted_invalid`
+reports a typed failure at extraction time rather than at transfer (the provider reader does not
+pre-validate authored indices), so the provider-host outcome is `BadFormat`/`DecoderFailure`
+instead of the STEP-006 host's `MalformedData`; both are safe, non-fabricating fallbacks. (3)
+Per-face subshape colors are not carried yet (shape/instance colors are). (4)
+`XCAFApp_Application::GetApplication()` is a process singleton, but every document is per-call and
+closed on `Reset`.
+
+**Checks (x64).** `x64\Release\Tests.Unit.exe` 339 cases / 134 916 assertions green (Debug 339 /
+134 994), including 23 `[provider][step]` cases. `x64\Release\Tests.ProviderHost.exe` 5 cases /
+103 assertions green (Debug identical), with the new committed `step-part-256.pam` golden.
+`tests/unit/check-provider-dependency-closure.ps1` OK Release (22 modules, incl. OCCT's
+`WS2_32/ADVAPI32/USER32`, no `Preview3D*`/TK import) and Debug (12 modules).
+`packaging\smoke\Invoke-ProviderSmoke.ps1 -SkipBuild` exit 0 for STL+PLY+glTF+FBX+3MF+USD+STEP;
+STEP reference-vs-Shell `meanAbs=0.0000 maxAbs=0`, `WTSAT_ARGB` in `dllhost.exe`, no
+`DisableProcessIsolation`, registration cleaned up. Hidden `[step-perf]` (Release, committed
+fixtures): ~18–19 ms and ≤0.11 MiB commit delta per 256 px render, inside the 750 ms p95 / 384 MiB
+targets.
+
+**What the next task must know.** T41 must register both `.step` and `.stp` ShellEx for the STEP
+CLSID with the real installer rules; T42 must include the static OCCT closure in the payload/SBOM
+and T51 must measure a genuine large STEP corpus against the 384 MiB process-commit target (the
+committed fixtures are small). A `__fastfail`/stack-cookie fault inside OCCT would still kill the
+surrogate (SEH cannot catch it), so T43 must fuzz the STEP adapter. Do **not** put OCCT in the
+repository-root `vcpkg.json`. Changed docs: new `design/adr/0027-step-adapter-constrained-occt.md`;
+`design/05-thumbnail-provider.md`; `design/adr/0002-...md`; `design/adapters/step-009-thumbnail.md`.

@@ -16,6 +16,12 @@
     <ProjectGuid>{0b5aa70c-f16a-42a1-95d1-73ad75d2fcbf}</ProjectGuid>
     <RootNamespace>Preview3DThumbnailProvider</RootNamespace>
   </PropertyGroup>
+  <!-- T24: the OBJ adapter links the provider-local pinned ufbx copy, so the
+       provider now consumes the root vcpkg manifest like the worker and the
+       test executables (x64-windows-static-md, static libraries). -->
+  <PropertyGroup Label="Vcpkg">
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
@@ -38,38 +44,240 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <OcctStaticLibDir>$(MSBuildThisFileDirectory)step-occt\vcpkg_installed\x64-windows-static-md\debug\lib</OcctStaticLibDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <OcctStaticLibDir>$(MSBuildThisFileDirectory)step-occt\vcpkg_installed\x64-windows-static-md\lib</OcctStaticLibDir>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <PreprocessorDefinitions>_DEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- FASTGLTF_ENABLE_DEPRECATED_EXT=1 must match the vcpkg fastgltf static
+           library's INTERFACE_COMPILE_DEFINITIONS (OFF would change the
+           fastgltf::Material layout and corrupt the heap). -->
+      <PreprocessorDefinitions>_DEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;OCCT_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;..\import-worker\src;..\compatibility-host-step\src;$(MSBuildThisFileDirectory)step-occt\vcpkg_installed\x64-windows-static-md\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- Product-boundary hardening (design/05-thumbnail-provider.md). /sdl,
+           /W4 and warnings-as-errors come from Directory.Build.props.
+           /guard:cf cannot be combined with the Debug default /ZI (Edit and
+           Continue), so this product binary uses plain /Zi. -->
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
+      <ModuleDefinitionFile>Preview3DThumbnailProvider.def</ModuleDefinitionFile>
+      <CETCompat>true</CETCompat>
+      <RandomizedBaseAddress>true</RandomizedBaseAddress>
+      <DataExecutionPrevention>true</DataExecutionPrevention>
+      <!-- T34: the constrained OCCT STEP adapter links the dedicated static
+           OCCT closure, isolated from the repository-root manifest so the
+           viewer, general worker and either import host can never link it. -->
+      <AdditionalLibraryDirectories>$(OcctStaticLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <!-- T13 CreateDIBSection (gdi32); no other GDI object is created. -->
+      <AdditionalDependencies>gdi32.lib;TKernel.lib;TKMath.lib;TKG2d.lib;TKG3d.lib;TKGeomBase.lib;TKBRep.lib;TKTopAlgo.lib;TKPrim.lib;TKBO.lib;TKBool.lib;TKGeomAlgo.lib;TKShHealing.lib;TKMesh.lib;TKFeat.lib;TKFillet.lib;TKOffset.lib;TKHLR.lib;TKXSBase.lib;TKDESTEP.lib;TKDE.lib;TKCDF.lib;TKCAF.lib;TKLCAF.lib;TKVCAF.lib;TKXCAF.lib;TKXmlXCAF.lib;TKBinXCAF.lib;TKStd.lib;TKStdL.lib;TKXml.lib;TKXmlL.lib;TKBin.lib;TKBinL.lib;TKTObj.lib;TKBinTObj.lib;TKXmlTObj.lib;TKService.lib;TKV3d.lib;TKXMesh.lib;ws2_32.lib;advapi32.lib;user32.lib;shell32.lib;ole32.lib;oleaut32.lib;iphlpapi.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>NDEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- FASTGLTF_ENABLE_DEPRECATED_EXT=1 must match the vcpkg fastgltf static
+           library's INTERFACE_COMPILE_DEFINITIONS (OFF would change the
+           fastgltf::Material layout and corrupt the heap). -->
+      <PreprocessorDefinitions>NDEBUG;PREVIEW3DTHUMBNAILPROVIDER_EXPORTS;_WINDOWS;_USRDLL;FASTGLTF_ENABLE_DEPRECATED_EXT=1;OCCT_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>..\shared\model-core\include;..\shared\platform\include;..\shared\parser-core\include;..\import-worker\src;..\compatibility-host-step\src;$(MSBuildThisFileDirectory)step-occt\vcpkg_installed\x64-windows-static-md\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- Product-boundary hardening (design/05-thumbnail-provider.md). /sdl,
+           /W4 and warnings-as-errors come from Directory.Build.props. -->
+      <ControlFlowGuard>Guard</ControlFlowGuard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
+      <ModuleDefinitionFile>Preview3DThumbnailProvider.def</ModuleDefinitionFile>
+      <CETCompat>true</CETCompat>
+      <RandomizedBaseAddress>true</RandomizedBaseAddress>
+      <DataExecutionPrevention>true</DataExecutionPrevention>
+      <!-- T34: the constrained OCCT STEP adapter links the dedicated static
+           OCCT closure, isolated from the repository-root manifest so the
+           viewer, general worker and either import host can never link it. -->
+      <AdditionalLibraryDirectories>$(OcctStaticLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <!-- T13 CreateDIBSection (gdi32); no other GDI object is created. -->
+      <AdditionalDependencies>gdi32.lib;TKernel.lib;TKMath.lib;TKG2d.lib;TKG3d.lib;TKGeomBase.lib;TKBRep.lib;TKTopAlgo.lib;TKPrim.lib;TKBO.lib;TKBool.lib;TKGeomAlgo.lib;TKShHealing.lib;TKMesh.lib;TKFeat.lib;TKFillet.lib;TKOffset.lib;TKHLR.lib;TKXSBase.lib;TKDESTEP.lib;TKDE.lib;TKCDF.lib;TKCAF.lib;TKLCAF.lib;TKVCAF.lib;TKXCAF.lib;TKXmlXCAF.lib;TKBinXCAF.lib;TKStd.lib;TKStdL.lib;TKXml.lib;TKXmlL.lib;TKBin.lib;TKBinL.lib;TKTObj.lib;TKBinTObj.lib;TKXmlTObj.lib;TKService.lib;TKV3d.lib;TKXMesh.lib;ws2_32.lib;advapi32.lib;user32.lib;shell32.lib;ole32.lib;oleaut32.lib;iphlpapi.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="ProviderTypes.h" />
+    <ClInclude Include="FamilyAdapter.h" />
+    <ClInclude Include="GeometrySampler.h" />
+    <ClInclude Include="DeterministicGeometrySampler.h" />
+    <ClInclude Include="GeometrySamplingPolicy.h" />
+    <ClInclude Include="CpuRasterizer.h" />
+    <ClInclude Include="CpuRasterizerImpl.h" />
+    <ClInclude Include="FamilyRouting.h" />
+    <ClInclude Include="ProviderLimits.h" />
+    <ClInclude Include="Deadline.h" />
+    <ClInclude Include="AllocationLedger.h" />
+    <ClInclude Include="ProviderErrors.h" />
+    <ClInclude Include="ComCore.h" />
+    <ClInclude Include="ModuleLifetime.h" />
+    <ClInclude Include="Diagnostics.h" />
+    <ClInclude Include="Containment.h" />
+    <ClInclude Include="StreamSource.h" />
+    <!-- T13 routed pipeline, adapter registry and DIB/HBITMAP boundary. -->
+    <ClInclude Include="ThumbnailPipeline.h" />
+    <ClInclude Include="FamilyAdapterRegistry.h" />
+    <ClInclude Include="RasterBitmap.h" />
+    <!-- T21 STL family adapter. -->
+    <ClInclude Include="StlFamilyAdapter.h" />
+    <!-- T23 PLY family adapter. -->
+    <ClInclude Include="PlyFamilyAdapter.h" />
+    <!-- T24 OBJ family adapter (provider-local pinned ufbx). -->
+    <ClInclude Include="ObjFamilyAdapter.h" />
+    <!-- T25 glTF/GLB family adapter (fastgltf + Draco/meshopt/KTX2/WebP). -->
+    <ClInclude Include="GltfFamilyAdapter.h" />
+    <!-- T31 FBX family adapter (provider-local pinned ufbx). -->
+    <ClInclude Include="FbxFamilyAdapter.h" />
+    <!-- T32 3MF family adapter (provider-local pinned lib3mf). -->
+    <ClInclude Include="ThreeMfFamilyAdapter.h" />
+    <!-- T33 USD/USDZ family adapter (provider-local pinned TinyUSDZ). -->
+    <ClInclude Include="UsdFamilyAdapter.h" />
+    <!-- T34 STEP/STP family adapter (dedicated static OCCT closure). -->
+    <ClInclude Include="StepFamilyAdapter.h" />
+    <!-- T07: the provider-shared parser subset. These are the same source
+         files the import worker compiles (ADR-0004, source-not-state); none
+         of them reference a broker/worker/viewer header. -->
+    <ClInclude Include="..\shared\parser-core\include\parser_core\AsciiTokenizer.h" />
+    <ClInclude Include="..\shared\parser-core\include\parser_core\StlParserCore.h" />
+    <ClInclude Include="..\shared\parser-core\include\parser_core\PlyParserCore.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="ComCore.cpp" />
+    <ClCompile Include="ProviderContracts.cpp" />
+    <ClCompile Include="ProviderExports.cpp" />
+    <!-- T16 module lifetime, diagnostics and the exception/SEH containment
+         boundary. PCH-free like StreamSource.cpp so Tests.Unit.exe compiles the
+         same sources. Containment.cpp is pinned to /EHsc so `catch (...)` does
+         not swallow a structured exception. -->
+    <ClCompile Include="ModuleLifetime.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="Diagnostics.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="Containment.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ExceptionHandling>Sync</ExceptionHandling>
+    </ClCompile>
+    <!-- T12 bounded stream backing. Like the shared parser subset it must not
+         use the provider precompiled header: the same file compiles in
+         Tests.Unit, which has none. -->
+    <ClCompile Include="StreamSource.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T13. Like StreamSource.cpp these stay PCH-free so the same sources
+         compile into Tests.Unit.exe for direct coverage. -->
+    <ClCompile Include="ThumbnailPipeline.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="FamilyAdapterRegistry.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T21 STL family adapter. PCH-free like StreamSource.cpp/
+         ThumbnailPipeline.cpp so Tests.Unit and Tests.ProviderHost compile the
+         exact source the DLL links. -->
+    <ClCompile Include="StlFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T23 PLY family adapter, PCH-free for the same reason. -->
+    <ClCompile Include="PlyFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T24 OBJ family adapter (ufbx). PCH-free like the other adapters so
+         Tests.Unit and Tests.ProviderHost compile the exact shipped source. -->
+    <ClCompile Include="ObjFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T25 glTF/GLB family adapter (fastgltf + bounded Draco/meshopt/KTX2/WebP).
+         PCH-free like the other adapters so Tests.Unit and Tests.ProviderHost
+         compile the exact shipped source. -->
+    <ClCompile Include="GltfFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T31 FBX family adapter (ufbx). PCH-free like the other adapters so
+         Tests.Unit and Tests.ProviderHost compile the exact shipped source. -->
+    <ClCompile Include="FbxFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T32 3MF family adapter (lib3mf) plus the product OPC/ZIP preflight it
+         reuses from the import worker (source-not-state, ADR-0004). PCH-free
+         like the other adapters so Tests.Unit and Tests.ProviderHost compile
+         the exact shipped source. -->
+    <ClCompile Include="ThreeMfFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\import-worker\src\ThreeMfOpcPreflight.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T33 USD/USDZ family adapter (TinyUSDZ) plus the product USDZ preflight
+         it reuses from the import worker (source-not-state, ADR-0004). PCH-free
+         like the other adapters so Tests.Unit and Tests.ProviderHost compile
+         the exact shipped source. -->
+    <ClCompile Include="UsdFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <!-- C4702 for TinyUSDZ's prim-types.hh under /Od (Debug): vendored
+           header, not product code. Release /O2 does not emit it. -->
+      <DisableSpecificWarnings>4702;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\import-worker\src\UsdZipPreflight.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T34 STEP/STP family adapter (OCCT XDE/STEP/tessellation) plus the
+         product-owned Part-21 admission scanner it reuses from the STEP host
+         (source-not-state, ADR-0004). PCH-free like the other adapters. OCCT
+         headers are warning-suppressed inside the translation unit. -->
+    <ClCompile Include="StepFamilyAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\compatibility-host-step\src\StepPart21Preflight.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="RasterBitmap.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T14 deterministic sampler + over-cap policy. PCH-free like
+         StreamSource.cpp/ThumbnailPipeline.cpp so Tests.Unit links the same
+         source for direct coverage. -->
+    <ClCompile Include="GeometrySampler.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- T15 CPU tile rasterizer. PCH-free like StreamSource.cpp/
+         ThumbnailPipeline.cpp/GeometrySampler.cpp so Tests.Unit links the same
+         source for direct coverage. -->
+    <ClCompile Include="CpuRasterizer.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <!-- The shared parser subset must not use the provider precompiled
+         header: the same files compile in the worker, which has none. -->
+    <ClCompile Include="..\shared\parser-core\src\AsciiTokenizer.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\shared\parser-core\src\StlParserCore.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\shared\parser-core\src\PlyParserCore.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>

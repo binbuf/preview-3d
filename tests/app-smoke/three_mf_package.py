@@ -35,6 +35,7 @@ def check_stage(stage):
 
 def check_registration():
     nsi = (ROOT / 'packaging/installer/Preview3D.nsi').read_text(encoding='utf-8-sig')
+    reg = (ROOT / 'packaging/installer/Preview3DThumbnailRegistration.ps1').read_text(encoding='utf-8-sig')
     reset = (ROOT / 'packaging/installer/Reset-Preview3DTestAssociations.ps1').read_text(encoding='utf-8-sig')
     progid = 'Binbuf.Preview3D.ThreeMF.1'
     assert f'!define PROGID_3MF "{progid}"' in nsi
@@ -43,7 +44,11 @@ def check_registration():
     assert nsi.count('UnregisterExtension ".3mf" "${PROGID_3MF}"') == 1
     assert nsi.count('DeleteRegKey HKLM "Software\\Classes\\${PROGID_3MF}"') == 1
     assert 'UserChoice' not in nsi
-    assert 'shellex' not in nsi.lower()
+    # T41: the machine-level thumbnail handler ships through the registration step.
+    assert 'Preview3DThumbnailRegistration.ps1' in nsi
+    assert '-Action Install -Scope HKLM' in nsi
+    assert "{D8389A63-8526-454A-9892-72F3149484B9}'" in reg and "'.3mf'" in reg
+    assert 'IPreviewHandler' not in reg and 'ContextMenuHandlers' not in reg
     assert "'.3mf'" in reset and f"'{progid}'" in reset
     for name in RUNTIMES:
         assert f'Delete "$INSTDIR\\worker\\{name}"' in nsi
