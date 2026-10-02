@@ -13,6 +13,7 @@
 #include "NavGizmo.h"
 #include "Settings.h"
 #include "ShellIntegration.h"
+#include "SafeFileOps.h"
 #include "platform/ProcessMitigations.h"
 
 #include <commctrl.h>
@@ -26,7 +27,9 @@
 #include <sstream>
 #include <bit>
 #include <atomic>
+#include <cstddef>
 #include <deque>
+#include <span>
 #include <string_view>
 
 using Microsoft::WRL::ComPtr;
@@ -511,20 +514,22 @@ bool WriteBenchmarkResult(ViewerApp& app, int& exitCode)
             "\"Worker private commit is a conservative upper bound on scratch, not an allocator-category measurement.\","
             "\"The null cancellation field is not silently treated as a cancellation qualification.\"]\n}\n";
     const auto text = json.str();
-    HANDLE output = INVALID_HANDLE_VALUE;
-    bool closeOutput = false;
     if (!app.benchmarkResultPath.empty()) {
-        output = CreateFileW(app.benchmarkResultPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        closeOutput = output != INVALID_HANDLE_VALUE;
-    } else {
-        if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
-        output = GetStdHandle(STD_OUTPUT_HANDLE);
+        // The path was validated and confined to the app-owned directory when
+        // the command line was parsed; write it reparse-safely with a unique
+        // temp name rather than truncating `path` in place.
+        std::wstring writeError;
+        const bool ok = preview3d::safeio::WriteFileAtomically(app.benchmarkResultPath,
+            std::as_bytes(std::span(text)), true, writeError);
+        if (!ok) exitCode = 3;
+        return ok;
     }
+    HANDLE output = INVALID_HANDLE_VALUE;
+    if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
+    output = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD written = 0;
     const bool ok = output != INVALID_HANDLE_VALUE && WriteFile(output, text.data(), static_cast<DWORD>(text.size()), &written, nullptr)
         && written == text.size();
-    if (closeOutput) CloseHandle(output);
     if (!ok) exitCode = 3;
     return ok;
 }
@@ -2171,8 +2176,11 @@ std::wstring BuildModelWarningText(const ViewerApp& app)
         text += Loc("warning.missingAssetsHeader", L"Missing assets:");
         for (const auto& asset : app.missingAssets)
         {
+            // Worker-supplied references can contain control characters that
+            // spoof dialog text; strip them and bound the per-reference length
+            // before the text reaches any control.
             text += L"\n  \u2022 ";
-            text += asset;
+            text += preview3d::safeio::SanitizeDisplayText(asset, 256);
         }
     }
     return text;
@@ -2975,6 +2983,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return LresultFromObject(IID_IAccessible, wParam, app->accessible);
         break;
     case WM_APP + 104:
+#if !defined(PREVIEW3D_ENABLE_TEST_CONTROL)
+        // Shipping builds cannot be driven by local WM_APP messages.
+        return 0;
+#else
         if (!app->appSmoke || wParam > 86) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
@@ -3081,8 +3093,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (wParam == 30) { ToggleShowNativeOrientation(*app); return app->showNativeOrientation; }
         return static_cast<LRESULT>(app->renderThread.SmokeValue(static_cast<unsigned>(wParam)));
+#endif // PREVIEW3D_ENABLE_TEST_CONTROL
     case WM_COPYDATA:
     {
+#if !defined(PREVIEW3D_ENABLE_TEST_CONTROL)
+        // Shipping builds cannot be driven by local WM_COPYDATA messages.
+        return 0;
+#else
         if (!app->appSmoke || !lParam) return 0;
         const auto& data = *reinterpret_cast<const COPYDATASTRUCT*>(lParam);
         if ((data.dwData != 104 && data.dwData != 105 && data.dwData != 106 && data.dwData != 107) || !data.lpData ||
@@ -3103,6 +3120,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // generation cancellation, independent of machine/fixture speed.
         if (data.dwData == 105) CancelOpen(*app);
         return static_cast<LRESULT>(app->generation);
+#endif // PREVIEW3D_ENABLE_TEST_CONTROL
     }
     case WM_CREATE:
     {
@@ -4336,6 +4354,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             }
             else if (_wcsicmp(arguments[i], L"--new-instance") == 0) bypassSingleInstance = true;
             else if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
+            // The external test-control surface (--app-smoke plus the WM_APP+104
+            // and WM_COPYDATA message handlers) is compiled only into Debug
+            // developer/test builds. In a Release (shipping) binary these flags
+            // fall through to the unknown-flag branch and are rejected with a
+            // usage exit, so a local process cannot drive the product.
+#if defined(PREVIEW3D_ENABLE_TEST_CONTROL)
             else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
             else if (_wcsicmp(arguments[i], L"--activation-smoke") == 0) {
                 app.appSmoke = true;
@@ -4366,6 +4390,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             else if (_wcsicmp(arguments[i], L"--progressive-smoke") == 0) {
                 app.appSmoke = true; app.renderThread.SetSmokeUploads(750, 4096, true);
             }
+#endif // PREVIEW3D_ENABLE_TEST_CONTROL
             else if (_wcsicmp(arguments[i], L"--frame-stats") == 0) app.showFrameStats = true;
             else if (_wcsicmp(arguments[i], L"--benchmark") == 0) app.benchmarkMode = true;
             else if (_wcsnicmp(arguments[i], L"--benchmark=", 12) == 0) {
@@ -4384,9 +4409,11 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
                 app.benchmarkReference = arguments[i] + 22;
             else if (_wcsnicmp(arguments[i], L"--benchmark-etw=", 16) == 0)
                 app.benchmarkEtwPath = arguments[i] + 16;
+#if defined(PREVIEW3D_ENABLE_TEST_CONTROL)
             else if (_wcsicmp(arguments[i], L"--benchmark-worker-budget-failure") == 0) {
                 app.appSmoke = true; app.faultForTesting = 6;
             }
+#endif
             else if (_wcsicmp(arguments[i], L"--benchmark-occluded") == 0)
                 app.benchmarkOcclusion = true;
             // Deprecated spike flags are no-ops; every frame paints real chrome.
@@ -4419,11 +4446,30 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
 
     if (app.benchmarkMode) {
         const bool validReference = app.benchmarkReference == L"performance" || app.benchmarkReference == L"compatibility";
+        // A --benchmark-result target must be an app-owned .json file. This
+        // rejects UNC/device paths, alternate data streams, traversal, and any
+        // path outside %LOCALAPPDATA%\Binbuf\Preview 3D, so a shortcut or file
+        // association cannot use the benchmark lane to truncate an arbitrary
+        // user-writable file. An empty target keeps the console-output default.
+        bool validResultPath = true;
+        if (!app.benchmarkResultPath.empty()) {
+            std::wstring appRoot;
+            std::wstring pathError;
+            validResultPath = preview3d::safeio::AppDataDirectory(appRoot) &&
+                preview3d::safeio::IsSafeOutputPath(app.benchmarkResultPath, L".json", appRoot, pathError);
+            if (validResultPath) {
+                const std::size_t separator = app.benchmarkResultPath.find_last_of(L"\\/");
+                if (separator != std::wstring::npos) {
+                    CreateDirectoryW(appRoot.c_str(), nullptr);
+                    CreateDirectoryW(app.benchmarkResultPath.substr(0, separator).c_str(), nullptr);
+                }
+            }
+        }
         if (app.initialPath.empty() || app.benchmarkFrameLimit < 1 || app.benchmarkFrameLimit > 100'000
             || app.benchmarkRepeat < 1 || app.benchmarkRepeat > 100 || app.benchmarkDurationMs < 100
-            || app.benchmarkDurationMs > 600'000 || !validReference) {
+            || app.benchmarkDurationMs > 600'000 || !validReference || !validResultPath) {
             if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
-            const char message[] = "Invalid --benchmark arguments (fixture, frames 1..100000, duration 100..600000 ms, repeat 1..100, reference performance|compatibility).\n";
+            const char message[] = "Invalid --benchmark arguments (fixture, frames 1..100000, duration 100..600000 ms, repeat 1..100, reference performance|compatibility, result path under the app data directory with a .json extension).\n";
             DWORD written = 0; WriteFile(GetStdHandle(STD_ERROR_HANDLE), message, sizeof(message) - 1, &written, nullptr);
             if (gBackgroundBrush) DeleteObject(gBackgroundBrush);
             if (SUCCEEDED(comResult)) CoUninitialize();

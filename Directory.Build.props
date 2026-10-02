@@ -152,10 +152,17 @@
     fault-recovery tests that need these modes are gated on the same macro and
     are skipped (not failed) in Release; a Release-only test asserts the
     rejection. See T09 (SEC-09) and ADR-0038.
+
+    PREVIEW3D_ENABLE_TEST_CONTROL additionally gates the viewer's external
+    local control surface (the app-smoke and activation-smoke flags, the other
+    smoke flags, the WM_APP+104 query/command handler, and WM_COPYDATA path
+    injection, plus the benchmark-worker-budget-failure fault switch). It ships
+    only in Debug so a shipping Release binary cannot be driven by a local
+    process. See T11 (SEC-11) and ADR-0040.
   -->
   <ItemDefinitionGroup Condition="'$(Configuration)' == 'Debug'">
     <ClCompile>
-      <PreprocessorDefinitions>PREVIEW3D_ENABLE_FAULT_HARNESS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PREVIEW3D_ENABLE_FAULT_HARNESS;PREVIEW3D_ENABLE_TEST_CONTROL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- /guard:cf is incompatible with /ZI (Edit and Continue). The MSBuild
            default is already /Zi (ProgramDatabase), but state it explicitly so
            a future project template cannot reintroduce /ZI and break the

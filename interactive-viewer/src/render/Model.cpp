@@ -1389,28 +1389,3 @@ bool PickMesh(const ModelData& model, const XMFLOAT3& origin, const XMFLOAT3& di
     hitDistance = best;
     return true;
 }
-
-void TransformBounds(const XMFLOAT3& minimum, const XMFLOAT3& maximum, FXMMATRIX transform,
-    XMFLOAT3& outMinimum, XMFLOAT3& outMaximum)
-{
-    const XMVECTOR corners[8] = {
-        XMVectorSet(minimum.x, minimum.y, minimum.z, 1.0f),
-        XMVectorSet(maximum.x, minimum.y, minimum.z, 1.0f),
-        XMVectorSet(minimum.x, maximum.y, minimum.z, 1.0f),
-        XMVectorSet(maximum.x, maximum.y, minimum.z, 1.0f),
-        XMVectorSet(minimum.x, minimum.y, maximum.z, 1.0f),
-        XMVectorSet(maximum.x, minimum.y, maximum.z, 1.0f),
-        XMVectorSet(minimum.x, maximum.y, maximum.z, 1.0f),
-        XMVectorSet(maximum.x, maximum.y, maximum.z, 1.0f),
-    };
-    XMVECTOR minAccum = g_XMFltMax;
-    XMVECTOR maxAccum = -g_XMFltMax;
-    for (const XMVECTOR& corner : corners)
-    {
-        const XMVECTOR transformed = XMVector3TransformCoord(corner, transform);
-        minAccum = XMVectorMin(minAccum, transformed);
-        maxAccum = XMVectorMax(maxAccum, transformed);
-    }
-    XMStoreFloat3(&outMinimum, minAccum);
-    XMStoreFloat3(&outMaximum, maxAccum);
-}

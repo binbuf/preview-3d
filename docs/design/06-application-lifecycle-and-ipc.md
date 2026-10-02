@@ -26,6 +26,8 @@ Rules:
 
 Developer-only switches such as --warp or --diagnostics are compiled out or rejected by production registration. The import children follow the same rule for fault injection: every `Preview3DImportWorker.exe`/`Preview3DImportHost.exe`/`Preview3DStepHost.exe` fault switch is Debug-only and a Release child rejects it with a usage exit (ADR-0038).
 
+The viewer's external test-control surface is gated the same way (ADR-0040). `--app-smoke`, `--activation-smoke`, and the other `--*-smoke` switches, the `--benchmark-worker-budget-failure` fault switch, the `WM_APP+104` query/command handler, and `WM_COPYDATA` path injection are compiled only into Debug builds; a Release viewer rejects the flags with the ordinary unknown-option usage exit and returns 0 for those messages, so a local process cannot drive a shipping binary. The performance-qualification lane (`--benchmark*`) remains in Release, but a `--benchmark-result` target must be an absolute, app-owned `.json` path under `%LOCALAPPDATA%\Binbuf\Preview 3D`; UNC/device paths, alternate data streams, parent-directory traversal, and other extensions are rejected before the window is created, and the file is written reparse-safely.
+
 ## Startup sequence
 
 The executable separates first-visible work from heavy initialization:

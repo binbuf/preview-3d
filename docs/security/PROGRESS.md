@@ -17,6 +17,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T08 — SEC-08 Provider containment policy (AV, stack, OCCT)**: Reusable facts for later sessions:; **Policy chosen: quarantine, not fail-fast (ADR-0037).** On the first contained structured
 - **T09 — SEC-09 Child-process loader/plugin hardening**: Reusable facts for later sessions:; **Child hardening pattern.** Each import child must, before parsing, call
 - **T10 — SEC-10 Build and process mitigation hardening**: Reusable facts for later sessions:; **Shared build mitigations.** `Directory.Build.props` now sets `ControlFlowGuard=Guard` and
+- **T11 — SEC-11 Viewer local attack-surface reduction**: Reusable facts for later sessions:; **One reusable safety module.** `interactive-viewer/src/platform/SafeFileOps.{h,cpp}`
 - **Follow-ups**: SEC-14: once the payload is Authenticode-signed, enable Microsoft-signed-image enforcement; SEC-14/T10: rebuild the vcpkg ports (and OCCT closures) with `/guard:ehcont` and install the MSVC
 <!-- symphony:digest:end -->
 
@@ -463,6 +464,54 @@ Reusable facts for later sessions:
   `Tests.ImportIsolation` Release 399 cases / 0 failed / 5 skipped, Debug 399 / 0 / 1; `npm test`
   (Tests.Unit Release) 357 green; all seven product projects build in both configs.
 
+## T11 — SEC-11 Viewer local attack-surface reduction
+
+Reusable facts for later sessions:
+
+- **One reusable safety module.** `interactive-viewer/src/platform/SafeFileOps.{h,cpp}`
+  (`preview3d::safeio`) holds `SanitizeDisplayText`, `AppDataDirectory`,
+  `IsSafeOutputPath`, and `WriteFileAtomically`. Compiled into both the viewer and `Tests.Unit`;
+  add new local-file/UI-hardening primitives here so the exact shipped code stays unit-testable.
+- **Reparse-safe write pattern.** `WriteFileAtomically` creates a GUID-named sibling with
+  `CREATE_NEW | FILE_FLAG_OPEN_REPARSE_POINT`, checks `GetFileInformationByHandle` for
+  `FILE_ATTRIBUTE_REPARSE_POINT`, writes+flushes with the handle still open, then
+  `MoveFileExW(MOVEFILE_WRITE_THROUGH [, MOVEFILE_REPLACE_EXISTING])`. `replaceExisting=false`
+  fails closed. Settings, the Open With cache, and DerivedCache use it; the old fixed
+  `<file>.tmp` name is gone everywhere. Tests plant a symlink at `<final>.tmp` and at `<final>`
+  itself and assert the victim is untouched (SKIP when `CreateSymbolicLinkW` is denied).
+- **Control-surface macro.** `PREVIEW3D_ENABLE_TEST_CONTROL` is defined **only for Debug**
+  in `Directory.Build.props`. In `Preview3D.cpp` it gates parsing of `--app-smoke`,
+  `--activation-smoke`, every `--*-smoke`, and `--benchmark-worker-budget-failure`, and
+  short-circuits the `WM_APP+104` and `WM_COPYDATA` cases to `return 0`. Release therefore hits
+  the unknown-option usage exit (2) for those flags. Note `--coarse-proxy-smoke` sets
+  `app.appSmoke`, so it is also Debug-only.
+- **Benchmark output confinement.** `--benchmark*` stays in Release. A non-empty
+  `--benchmark-result` must pass `IsSafeOutputPath(path, L".json", AppDataDirectory())`:
+  absolute drive path, no `\\`/`\\?\`/`\\.\`, no extra `:`/ADS, no `..` component, no controls,
+  `.json`, and under `%LOCALAPPDATA%\Binbuf\Preview 3D`. It is written via
+  `WriteFileAtomically`. `tests/performance/qualify.py` now writes `app-N.json` to
+  `%LOCALAPPDATA%\Binbuf\Preview 3D\benchmarks` and copies it into `run_dir` for evidence;
+  `--copy-delay`/`--worker-budget-failure` are refused on Release.
+- **Parser unlinked from the trusted EXE.** `src/render/Model.cpp` is out of
+  `Preview3D.vcxproj` and `.filters`, and `ws2_32.lib` is off the viewer link line.
+  `TransformBounds` is now header-inline in `Model.h` (the only `Model.cpp` symbol the viewer
+  used); `LoadGlb`/`PickMesh` were already dead in the viewer. `Model.cpp` remains on disk and is
+  still compiled by the manual `interactive-viewer/tools/build-test-loader.ps1` tool. Do not
+  re-add it to the viewer project.
+- **Missing-asset sanitization.** `BuildModelWarningText` runs each `app.missingAssets` entry
+  through `SanitizeDisplayText(asset, 256)` before it reaches the dialog. The worker can still
+  send hostile references; only display-side filtering was added.
+- **Build gotcha (XML).** `Directory.Build.props` is XML: a comment cannot contain `--`. Do not
+  write literal CLI flags such as `--app-smoke` inside its comments (this failed MSB4024).
+- **Verify commands.** MSBuild is not on PATH; use
+  `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe` with
+  `/p:Configuration=Debug|Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\"`.
+  `npm test` (`x64\Release\Tests.Unit.exe`) is 366 cases / 135098 assertions, green.
+  `x64\Release\Tests.Unit.exe "[security]"` is 112 assertions / 13 cases.
+- **Release flag verification.** Search the exe bytes as both ASCII and UTF-16LE for the flag
+  literals. Release contains none of the smoke/fault flags; Debug contains all;
+  `--benchmark-result=` is in both (validated, not a developer control).
+
 ## Follow-ups
 
 - SEC-14: once the payload is Authenticode-signed, enable Microsoft-signed-image enforcement
@@ -475,11 +524,13 @@ Reusable facts for later sessions:
   strict mode/`ProcessControlFlowGuardPolicy` are usable once the D3D runtime is exercised on real
   hardware.
 
-- T11 (viewer attack surface): `interactive-viewer/src/app/Preview3D.cpp` still exposes
-  `--benchmark-worker-budget-failure` (sets `faultForTesting = 6`) and a WM fault-injection message;
-  in a Release build those now hand the child flags it rejects (T09 compiled them out). Compile the
-  switch out or reject it by production registration before relying on the Release benchmark fault
-  path. `D3D12ImportBridge.cpp` is the caller that maps `faultForTesting` to the fault flags.
+- T11 (viewer attack surface): **resolved** — `--benchmark-worker-budget-failure` and the WM
+  fault-injection message are now Debug-only (`PREVIEW3D_ENABLE_TEST_CONTROL`). Remaining: the other
+  `tests/app-smoke/*.py` lanes still accept `--configuration Release` but drive the now-compiled-out
+  control surface; only `run.py` was given an explicit Release rejection. Add the same guard (or
+  force Debug) to `activation.py`, `bounded.py`, `budget.py`, `coarse.py`, `ground_axis.py`,
+  `metadata.py`, `progressive.py`, `recovery.py`, `step.py`, `textures.py`, `three_mf.py`, `usd.py`
+  when next touched; all already default to Debug.
 - T09/SEC-10: process-mitigation attributes are untouched (out of T09 scope).
 
 - SEC-17: implement the soak's SEC-08 allowed-failure classification. A stack-overflow or

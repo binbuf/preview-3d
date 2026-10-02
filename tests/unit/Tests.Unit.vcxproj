@@ -165,6 +165,7 @@
     <ClCompile Include="MappedFileTests.cpp" />
     <ClCompile Include="DxgiBudgetMonitorTests.cpp" />
     <ClCompile Include="DerivedCacheTests.cpp" />
+    <ClCompile Include="SafeFileOpsTests.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12Device.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12CommandQueue.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\D3D12SwapChain.cpp" />
@@ -174,6 +175,8 @@
     <ClCompile Include="..\..\interactive-viewer\src\graphics\SyntheticStreamingSource.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\graphics\DxgiBudgetMonitor.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\cache\DerivedCache.cpp" />
+    <!-- SEC-11: shipped local-file safety primitives exercised in-process. -->
+    <ClCompile Include="..\..\interactive-viewer\src\platform\SafeFileOps.cpp" />
     <ClCompile Include="..\..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\..\shared\platform\src\Sha256.cpp" />
     <ClCompile Include="..\..\shared\model-core\src\MappedFile.cpp" />

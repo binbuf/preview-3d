@@ -27,19 +27,19 @@ writes, so a launcher or planted file cannot abuse the app as a helper.
 - Tests: `tests/unit`, `tests/app-smoke`.
 
 ## Scope
-- [ ] Remove `--benchmark-result` from production builds or validate it to an app-owned directory
+- [x] Remove `--benchmark-result` from production builds or validate it to an app-owned directory
       with a fixed extension; never accept UNC/ADS/traversal. Same treatment as other developer
       flags if the benchmark lane needs to stay.
-- [ ] Compile the `--app-smoke`/`WM_COPYDATA`/`WM_APP+104` control surface only in developer/test
+- [x] Compile the `--app-smoke`/`WM_COPYDATA`/`WM_APP+104` control surface only in developer/test
       builds (or reject the flag in Release), so shipping binaries cannot be driven by local
       processes.
-- [ ] Delete `src/render/Model.cpp` (and `Model.h` remnants) from `Preview3D.vcxproj`, or move it
+- [x] Delete `src/render/Model.cpp` (and `Model.h` remnants) from `Preview3D.vcxproj`, or move it
       under the test-only project that actually uses it; remove the unused `ws2_32.lib` link.
-- [ ] Open temp files with `FILE_FLAG_OPEN_REPARSE_POINT`, create them with a unique name
+- [x] Open temp files with `FILE_FLAG_OPEN_REPARSE_POINT`, create them with a unique name
       (`GetTempFileName`-style or GUID), and re-validate with the handle; do not write through a
       pre-existing link. Apply to settings, Open With cache, and the test-only DerivedCache.
-- [ ] Sanitize missing-asset dialog/UI text (strip control characters, bound length) before display.
-- [ ] Tests: CLI rejection for hostile `--benchmark-result`, reparse-point write resistance, and UI
+- [x] Sanitize missing-asset dialog/UI text (strip control characters, bound length) before display.
+- [x] Tests: CLI rejection for hostile `--benchmark-result`, reparse-point write resistance, and UI
       sanitization unit coverage.
 
 ## Out of scope
@@ -55,9 +55,61 @@ writes, so a launcher or planted file cannot abuse the app as a helper.
   prefer `CREATE_NEW` with unique names and fail closed if the name exists.
 
 ## Done when
-- [ ] Debug and Release build; `Tests.Unit` passes with the new cases.
-- [ ] Release binary contains no accepted developer control flags (verified and recorded).
-- [ ] Hand-off filled in.
+- [x] Debug and Release build; `Tests.Unit` passes with the new cases.
+- [x] Release binary contains no accepted developer control flags (verified and recorded).
+- [x] Hand-off filled in.
 
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+**What landed**
+
+- New `interactive-viewer/src/platform/SafeFileOps.{h,cpp}` (`preview3d::safeio`): `SanitizeDisplayText`
+  (strips C0/C1/DEL + Unicode bidi/format controls, trims, bounds length), `AppDataDirectory`,
+  `IsSafeOutputPath`, and `WriteFileAtomically` (GUID-named `CREATE_NEW` +
+  `FILE_FLAG_OPEN_REPARSE_POINT` sibling, handle re-validation, flush, `MoveFileExW`).
+- `Directory.Build.props`: `PREVIEW3D_ENABLE_TEST_CONTROL` defined only for Debug.
+- `Preview3D.cpp`: `--app-smoke`/`--activation-smoke`/`--*-smoke`/`--benchmark-worker-budget-failure`
+  parsing and the `WM_APP+104`/`WM_COPYDATA` bodies are gated on that macro (Release flags fall to the
+  unknown-option usage exit 2; messages return 0). `--benchmark-result` is validated to
+  `%LOCALAPPDATA%\Binbuf\Preview 3D\**.json` via `IsSafeOutputPath` and written with
+  `WriteFileAtomically`. `BuildModelWarningText` sanitizes each missing-asset reference (256 chars).
+- `Settings.cpp`, `ShellIntegration.cpp` (`SaveCache`), and `DerivedCache.cpp` (`Put`) now use
+  `WriteFileAtomically` instead of a fixed `<file>.tmp` + `CREATE_ALWAYS`.
+- `Model.cpp` removed from `Preview3D.vcxproj`/`.filters`; `ws2_32.lib` dropped. `TransformBounds`
+  moved inline into `Model.h`; `Model.cpp` stays on disk for `tools/build-test-loader.ps1`.
+- New `tests/unit/SafeFileOpsTests.cpp` (9 cases) added to `Tests.Unit.vcxproj`.
+- `tests/app-smoke/run.py` rejects Release; `tests/performance/qualify.py` writes benchmark results
+  under the app-owned dir (archiving a copy), and rejects `--copy-delay`/`--worker-budget-failure`
+  on Release.
+- Docs: `docs/design/06-application-lifecycle-and-ipc.md` and
+  `docs/design/09-quality-performance-and-security.md` updated; ADR-0040 added.
+
+**Deviations**
+
+- `Model.h` is kept (its `ModelData`/`ModelStats` types are the viewer's load-result contract); only
+  the parser TU is unlinked. "Model.h remnants" means the out-of-line `TransformBounds`/`LoadGlb`
+  symbols, not the shared types.
+- The benchmark lane stays in Release, so `--benchmark-result` is validated rather than removed.
+  Confining it to the app-owned directory required the `qualify.py` change above.
+- The app-smoke external control lane is now Debug-only. All `tests/app-smoke/*.py` default to Debug;
+  only `run.py` was given an explicit Release rejection in this session. Other lanes that pass
+  `--configuration Release` will now fail (the CLI flags are gone), so run them Debug.
+- `--coarse-proxy-smoke` also gates off in Release because it sets `appSmoke`; `qualify.py` refuses
+  `--copy-delay` on Release.
+
+**Check results (Release unless noted)**
+
+- `MSBuild interactive-viewer\Preview3D.vcxproj /p:Configuration=Debug|Release /p:Platform=x64`
+  → both link (`x64\Debug\Preview3D.exe`, `x64\Release\Preview3D.exe`), no `ws2_32`.
+- `MSBuild tests\unit\Tests.Unit.vcxproj ... Debug|Release` → both link.
+- `npm test` → exit 0, **366 cases / 135098 assertions, all passed** (was 357).
+- `x64\Release\Tests.Unit.exe "[security]"` and Debug → 112 assertions / 13 cases, all passed.
+- Binary scan (ASCII + UTF-16LE) for the flag literals: Release `--app-smoke`,
+  `--benchmark-worker-budget-failure`, `--coarse-proxy-smoke`, `--uma-budget-smoke`,
+  `--progressive-smoke`, `--texture-mip-smoke`, `--queue-smoke`, `--activation-smoke` all absent;
+  Debug all present (`--benchmark-result=` present in both, by design).
+
+**Remaining / next**
+
+- No blockers. Deriving an app-owned benchmark path in other performance scripts may be needed if
+  they call the viewer directly instead of through `qualify.py`.
+- T12 (active-instance IPC) is unaffected by this slice; the message-surface gate is orthogonal.
