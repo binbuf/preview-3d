@@ -22,7 +22,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T01 — SEC-01 Bound glTF traversal and fix worker limit ordering → [01-gltf-traversal-and-limit-ordering.md](01-gltf-traversal-and-limit-ordering.md)
 - [x] T02 — SEC-02 Preflight compressed decoders before allocation → [02-compressed-decode-preflight.md](02-compressed-decode-preflight.md)
 - [x] T03 — SEC-03 Sandbox limits and broker defensive checks → [03-sandbox-and-broker-limits.md](03-sandbox-and-broker-limits.md)
-- [ ] T04 — SEC-04 Sidecar reference validation (NUL/control, per-format) → [04-sidecar-reference-validation.md](04-sidecar-reference-validation.md)
+- [x] T04 — SEC-04 Sidecar reference validation (NUL/control, per-format) → [04-sidecar-reference-validation.md](04-sidecar-reference-validation.md)
 - [ ] T05 — SEC-05 3MF OPC preflight/library reconciliation → [05-3mf-opc-reconciliation.md](05-3mf-opc-reconciliation.md)
 - [ ] T06 — SEC-06 Provider adapter exception containment → [06-provider-exception-containment.md](06-provider-exception-containment.md)
 
@@ -49,11 +49,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T05:56:29Z · 3/19 done
+**Pipeline status** — updated 2026-10-02T06:17:24Z · 4/19 done
 
-- Completed: T01, T02, T03
+- Completed: T01, T02, T03, T04
 - Blocked: none
 - Failed: none
-- Remaining: T04, T05, T06, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T03 — done · Job CPU-time limits, absolute per-generation wall-clock deadline, null-SID/SetHandleInformation fail-closed checks, checked texture accounting, primary ADS rejection, and stale sidecar-generation validation landed with regression tests; Debug/Release show only documented pre-existing failures and npm test is green.
+- Remaining: T05, T06, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T04 — done · Sidecar references now reject NUL/C0/DEL (two layers) and invalid UTF-8, and the extension allowlist is per requesting format (glTF .bin+images, OBJ .mtl+images, FBX images, USD layers+images, others none); regression tests and two NUL corpus seeds landed, ADR 0032 plus design/03 updated, and Debug/Release ImportIsolation show only the documented pre-existing failures while npm test stays green.
 <!-- /symphony:status -->

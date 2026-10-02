@@ -171,6 +171,110 @@ TEST_CASE("A reference with a disallowed extension is rejected", "[sidecar-resol
     DeleteFileW((dir.directory + L"\\payload.exe").c_str());
 }
 
+TEST_CASE("An embedded NUL cannot defeat the extension allowlist", "[sidecar-resolver][security]")
+{
+    ScratchGltfDirectory dir;
+    // The real file whose name and extension an attacker wants opened.
+    dir.WriteSibling(L"secret.pdf", 8);
+
+    // Each string is a real, disallowed name, then an embedded NUL, then text
+    // that makes the untruncated std::filesystem::path::extension() look
+    // allowed ("secret.pdf\0.png" -> ".png"). Before this fix CreateFileW
+    // truncated at the NUL and opened secret.pdf, which these cases pin.
+    const std::string afterExtension("secret.pdf\0.png", 15);
+    const std::string bareAfterExtension("secret.pdf\0", 11);
+    for (const std::string& attack : { afterExtension, bareAfterExtension }) {
+        CAPTURE(attack.size());
+        const auto result = import_broker::ResolveSidecarPath(dir.primaryCanonicalPath, attack, 1024);
+        CHECK_FALSE(result.file);
+        CHECK(result.rejectionCode == model_core::ImportErrorCode::UnsafeReference);
+    }
+
+    // The mirror shape: a NUL before a real allowed extension still truncates
+    // the open to a name that was never referenced.
+    dir.WriteSibling(L"mesh.bin", 4);
+    const auto leading = import_broker::ResolveSidecarPath(dir.primaryCanonicalPath,
+                                                           std::string("mesh.bin\0.png", 13), 1024);
+    CHECK_FALSE(leading.file);
+    CHECK(leading.rejectionCode == model_core::ImportErrorCode::UnsafeReference);
+}
+
+TEST_CASE("C0 control characters and DEL in a reference are rejected", "[sidecar-resolver][security]")
+{
+    ScratchGltfDirectory dir;
+    dir.WriteSibling(L"mesh.bin");
+
+    const std::string withSoh("mesh\x01.bin", 9);
+    const std::string withLf("mesh\n.bin", 9);
+    const std::string withTab("mesh\t.bin", 9);
+    const std::string withDel("mesh.bin\x7f", 9);
+    for (const std::string& attack : { withSoh, withLf, withTab, withDel }) {
+        CAPTURE(static_cast<int>(attack.back()));
+        const auto result = import_broker::ResolveSidecarPath(dir.primaryCanonicalPath, attack, 1024);
+        CHECK_FALSE(result.file);
+        CHECK(result.rejectionCode == model_core::ImportErrorCode::UnsafeReference);
+    }
+}
+
+TEST_CASE("A reference that is not valid UTF-8 is rejected", "[sidecar-resolver][security]")
+{
+    ScratchGltfDirectory dir;
+    dir.WriteSibling(L"mesh.bin");
+
+    const std::string badLead("mesh\xff.bin", 9);
+    const std::string badPair("mesh\xc3\x28.bin", 10); // truncated 2-byte sequence
+    const std::string loneContinuation("mesh\x80.bin", 9);
+    for (const std::string& attack : { badLead, badPair, loneContinuation }) {
+        CAPTURE(attack.size());
+        const auto result = import_broker::ResolveSidecarPath(dir.primaryCanonicalPath, attack, 1024);
+        CHECK_FALSE(result.file);
+        CHECK(result.rejectionCode == model_core::ImportErrorCode::UnsafeReference);
+    }
+}
+
+TEST_CASE("The allowed sidecar extension set follows the requesting format",
+          "[sidecar-resolver][security]")
+{
+    ScratchGltfDirectory dir;
+    dir.WriteSibling(L"material.mtl");
+    dir.WriteSibling(L"layer.usdc");
+    dir.WriteSibling(L"mesh.bin");
+    const std::vector<std::wstring> noRoots{};
+
+    // glTF may not pull an MTL file or a USD layer.
+    for (const char* reference : { "material.mtl", "layer.usdc" }) {
+        CAPTURE(reference);
+        const auto gltf = import_broker::ResolveSidecarPath(
+            dir.primaryCanonicalPath, reference, 1024, /*allowPackageBasenameLookup=*/false, noRoots,
+            import_broker::ImportFormat::Gltf);
+        CHECK_FALSE(gltf.file);
+        CHECK(gltf.rejectionCode == model_core::ImportErrorCode::UnsafeReference);
+    }
+
+    // OBJ wants .mtl and images, not a glTF .bin buffer.
+    const auto objMtl = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "material.mtl", 1024, false, noRoots, import_broker::ImportFormat::Obj);
+    CHECK(objMtl.file);
+    const auto objBin = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "mesh.bin", 1024, false, noRoots, import_broker::ImportFormat::Obj);
+    CHECK_FALSE(objBin.file);
+    CHECK(objBin.rejectionCode == model_core::ImportErrorCode::UnsafeReference);
+
+    // USD wants layers, not a .bin buffer.
+    const auto usdLayer = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "layer.usdc", 1024, false, noRoots, import_broker::ImportFormat::Usd);
+    CHECK(usdLayer.file);
+    const auto usdBin = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "mesh.bin", 1024, false, noRoots, import_broker::ImportFormat::Usd);
+    CHECK_FALSE(usdBin.file);
+
+    // A format that resolves nothing accepts no sidecar at all.
+    const auto stl = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "mesh.bin", 1024, false, noRoots, import_broker::ImportFormat::Stl);
+    CHECK_FALSE(stl.file);
+    CHECK(stl.rejectionCode == model_core::ImportErrorCode::UnsafeReference);
+}
+
 TEST_CASE("A missing sidecar file is rejected as FileUnavailable", "[sidecar-resolver]")
 {
     ScratchGltfDirectory dir;

@@ -9,6 +9,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T01 — SEC-01 Bound glTF traversal and fix worker limit ordering**: Reusable facts for later sessions:; **glTF node walk budget.** `import-worker/src/GltfAdapter.cpp` `WalkState::totalNodeVisits` is
 - **T02 — SEC-02 Preflight compressed decoders before allocation**: Reusable facts for later sessions:; **Shared preflights.** `shared/model-core/include/model_core/DracoPreflight.h` and
 - **T03 — SEC-03 Sandbox limits and broker defensive checks**: Reusable facts for later sessions:; **Job limits.** `SandboxLimits::processCpuTimeLimitMs` maps to
+- **T04 — SEC-04 Sidecar reference validation (NUL/control, per-format)**: Reusable facts for later sessions:; **Two-layer control check + explicit UTF-8 failure.** `import_broker/src/SidecarRequestServicer.cpp`
 - **Follow-ups**: SEC-04 and later: the primary-path ADS check is a coarse `:` rule shared in spirit with the; The generation wall-clock deadline currently wraps the main reply loop but not the post-terminal
 <!-- symphony:digest:end -->
 
@@ -132,11 +133,51 @@ Reusable facts for later sessions:
   run to run). Release: 3 failed, the `SidecarPathResolverTests` trio only. Do not attribute these
   to new work; confirm with `git stash` + rebuild if unsure.
 
+## T04 — SEC-04 Sidecar reference validation (NUL/control, per-format)
+
+Reusable facts for later sessions:
+
+- **Two-layer control check + explicit UTF-8 failure.** `import_broker/src/SidecarRequestServicer.cpp`
+  rejects any byte `< 0x20` or `0x7F` before constructing a reference; `SidecarPathResolver.cpp`
+  repeats the raw-byte check, then decodes with `MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+  ...)` returning `std::optional<std::wstring>` and re-checks the decoded text. Without
+  `MB_ERR_INVALID_CHARS` invalid sequences became U+FFFD and never failed; an embedded NUL moved
+  through untouched. Both are now hard `UnsafeReference`.
+- **Per-format allowlist.** `IsAllowedSidecarExtension(ImportFormat, path)` in
+  `SidecarPathResolver.cpp` is the single policy point: Gltf `.bin`+images, Obj `.mtl`+images,
+  Fbx images, Usd `.usd/.usda/.usdc`+images, everything else (Stl/Ply/ThreeMf/Step) none. The
+  format is the trusted host's `ImportSessionRequest::format`, threaded through
+  `ServiceSidecarRequest`/`ResolveSidecarPath`; the worker never supplies it, so **no
+  control-protocol change**. The task text said "USD: layers" but USD also brokers direct image
+  assets (`materials.usda` -> brokered `albedo.png`) and FBX brokers textures too; the USDZ
+  in-archive path is unaffected. If a format gains a new dependency type, extend this switch.
+- **`SidecarPathResolver.h` now includes `ImportSession.h`** for `ImportFormat` (no cycle:
+  `ImportSession.h` does not include either sidecar header). `ResolveSidecarPath`/`ServiceSidecarRequest`
+  gained a trailing `ImportFormat format = ImportFormat::Gltf` default so existing callers/tests
+  compile; production always passes the real format.
+- **Corpus seeds.** `tests/fixtures/generate.py` sidecar loop now adds `sidecar-nul-extension.gltf`
+  (`approved.bin\0.png`) and `sidecar-nul-trailing.gltf` (`approved.bin\0`); they are hostile
+  entries in `tests/import-isolation/FixtureManifestTests.cpp`. Regenerating the committed
+  `interactive-viewer/test-assets/corpus/{manifest.json,Expectations.h}` and
+  `tests/fixtures/manifests/qualification-small.json` needs the Release meshoptimizer DLL at
+  `vcpkg_installed/x64-windows/x64-windows/bin/meshoptimizer.dll`; **that DLL is not present in this
+  checkout**, so the manifest was produced by importing `generate.py` and stubbing `meshopt()` to
+  copy the committed `meshopt.glb`. Existing entries were verified byte-identical; a real-DLL
+  regeneration should reproduce it.
+- **Commands.** Build/run Debug:
+  `MSBuild tests\import-isolation\Tests.ImportIsolation.vcxproj /p:Configuration=Debug /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\"`
+  then `x64\Debug\Tests.ImportIsolation.exe`. Harness verify is `npm test` (Tests.Unit Release,
+  350 cases, green). New resolver cases are tagged `[sidecar-resolver][security]`.
+- **Baseline unchanged.** Debug full run 392 cases / 6 failed, Release 392 / 3 failed — the same
+  pre-existing set recorded under T03 (Debug: SidecarPathResolver user-asset-root x3, ThreeMfSpike,
+  OpenUsdHostSpike, UsdSpike; Release: the resolver trio only). Nothing new.
+
 ## Follow-ups
 
 - SEC-04 and later: the primary-path ADS check is a coarse `:` rule shared in spirit with the
   sidecar resolver; if `ResolveSidecarPath` ever adopts per-format rules, keep the primary rule at
-  least as strict.
+  least as strict. (T04 did add per-format extension rules; the `:`/control rules stay at least as
+  strict in both.)
 - The generation wall-clock deadline currently wraps the main reply loop but not the post-terminal
   `nextDetail` replay loop (`ImportSession.cpp`, the `request.nextDetail` branch), which still uses
   the per-reply timeout. If a hostile detail loop becomes a concern, apply `boundedReplyWait()`
@@ -156,3 +197,10 @@ Reusable facts for later sessions:
   version adds a real progress/cancel callback.
 - Provider-host `[parallel]` counts a transient failure in some run orderings; make the fixture loop
   or COM apartment setup deterministic so the leak/parallel gates are not flaky.
+- T04 follow-up: `ImportFormat::Usd` cannot distinguish `.usd`/`.usda`/`.usdc` from `.usdz`, so a
+  `.usdz` primary would also be allowed to request local layer sidecars even though its content is
+  in-archive. Harmless today (the adapter resolves entries in-archive and never asks), but if the
+  wire/`requestFlags` already carries the encoding, tighten the resolver per value.
+- T04 follow-up: the committed corpus manifest cannot be regenerated without the Release
+  `meshoptimizer.dll`; consider committing that frozen seed path or a generator mode that copies the
+  existing `meshopt.glb`, so the documented `--compare` workflow works on a clean checkout.

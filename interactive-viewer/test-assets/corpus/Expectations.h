@@ -27,6 +27,8 @@ inline constexpr File files[] = {
     { L"corpus/sidecar-network.gltf", "a3377e18d94c4c5479c99431db24cb08a8251da6c367a110f5df9d07fa30ffbd" },
     { L"corpus/sidecar-unc.gltf", "cbaf336d741fb505c9a8a9dc071024f3bbca497c7e6de30fa8a2b1ffebd86228" },
     { L"corpus/sidecar-ads.gltf", "1675b70742a0b525b192773b858c94f2db5fb8faecb31d7e28be6e244972954d" },
+    { L"corpus/sidecar-nul-extension.gltf", "93532f8406dab629c1586fab1a701da2041da35b02276ee14c675965ce84bc8d" },
+    { L"corpus/sidecar-nul-trailing.gltf", "f914987901f9ae3bb4af2c5617beeef0456a3e4a1c6e2cec968dc66fb5050c90" },
     { L"corpus/approved.bin", "577f5dd074efad2142c2fd1bc437cdfb72b528f551ef626cfdf45a95c240d241" },
     { L"corpus/sparse-invalid.gltf", "984cae81552ff270d5b039c1d93916bec7b7dcd86d79071b6bc4b91799e9796b" },
     { L"corpus/sparse.bin", "a04e3351807a61b4b5344282fcd688cdc43f8faca65860efdf37127138ebba62" },
@@ -45,6 +47,6 @@ inline constexpr File files[] = {
     { L"corpus/truncated.stl", "ee76e96d8539348808ead934fbc84c5cdb1475b9396b879af6166bdfc0c4d921" },
     { L"corpus/over-limit.ply", "647cf450e8d67952a773e27b9cb90106ea00b049401390f6baacc84feea7dad1" },
     { L"corpus/empty.ply", "235143d3aac455b75daa35f7bf8688e8b6624c2773113dbb1f89808ad392520e" },
-    { L"corpus/manifest.json", "47e8073055cf0311a2259ed5c7b87a0a9b79c7768229f58f27b272e7469a4f97" },
+    { L"corpus/manifest.json", "902945095dd9a8bd978764e3e7c569e598b074261d84a1198dcb6af02cebceda" },
 };
 } // namespace fixture_manifest

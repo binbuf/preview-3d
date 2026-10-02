@@ -1244,7 +1244,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                                   request.maxSidecarFileBytes,
                                                   12ull * 1024 * 1024 * 1024 - allSourceBytes,
                                                   /*allowPackageBasenameLookup=*/true,
-                                                  request.additionalSidecarSearchRoots);
+                                                  request.additionalSidecarSearchRoots,
+                                                  request.format);
 
             bool sentReply = false;
             if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {

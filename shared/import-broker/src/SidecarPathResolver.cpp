@@ -21,17 +21,50 @@ SidecarResolution Reject(ImportErrorCode code, std::wstring message)
     return result;
 }
 
-std::wstring Utf8ToWide(const std::string& utf8)
+// Reject rather than sanitize. An embedded NUL truncates a Win32 path at
+// CreateFileW, so a reference like "secret.pdf\0.png" would pass an extension
+// allowlist that inspects the untruncated text and still open "secret.pdf";
+// any other C0 control or DEL is equally hostile and never a legitimate path
+// component. Checked on the raw UTF-8 bytes and again on the decoded text.
+bool HasControlByte(const std::string& bytes)
+{
+    for (const unsigned char value : bytes) {
+        if (value < 0x20 || value == 0x7F) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HasControlCharacter(const std::wstring& text)
+{
+    for (const wchar_t value : text) {
+        if (value < 0x20 || value == 0x7F) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// std::nullopt is a hard decode failure (invalid UTF-8), distinct from an
+// empty decoded string: MB_ERR_INVALID_CHARS makes the failure explicit
+// instead of substituting U+FFFD and continuing.
+std::optional<std::wstring> Utf8ToWide(const std::string& utf8)
 {
     if (utf8.empty()) {
-        return {};
+        return std::wstring{};
     }
-    int required = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    const int length = static_cast<int>(utf8.size());
+    int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), length, nullptr, 0);
     if (required <= 0) {
-        return {};
+        return std::nullopt;
     }
     std::wstring wide(static_cast<size_t>(required), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wide.data(), required);
+    int written = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), length, wide.data(), required);
+    if (written <= 0) {
+        return std::nullopt;
+    }
+    wide.resize(static_cast<size_t>(written));
     return wide;
 }
 
@@ -41,34 +74,53 @@ std::wstring LowerCopy(std::wstring s)
     return s;
 }
 
-bool HasAllowedSidecarExtension(const std::filesystem::path& path)
+// The package search is deliberately image-only: a missing buffer, MTL file,
+// or USD layer must stay exactly where the document references it, while a
+// model's texture maps are routinely reorganized into a texture folder.
+bool IsImageExtension(const std::wstring& lowerExtension)
 {
-    static const std::wstring kAllowed[] = { L".bin", L".mtl", L".png", L".jpg", L".jpeg",
-                                             L".bmp", L".tif", L".tiff", L".webp", L".ktx2",
-                                             L".usd", L".usda", L".usdc" };
-    std::wstring ext = LowerCopy(path.extension().wstring());
-    for (const auto& allowed : kAllowed) {
-        if (ext == allowed) {
+    static const std::wstring kImage[] = { L".png", L".jpg", L".jpeg", L".bmp",
+                                           L".tif", L".tiff", L".webp", L".ktx2" };
+    for (const auto& allowed : kImage) {
+        if (lowerExtension == allowed) {
             return true;
         }
     }
     return false;
 }
 
-// The package search is deliberately image-only: a missing buffer, MTL file,
-// or USD layer must stay exactly where the document references it, while a
-// model's texture maps are routinely reorganized into a texture folder.
 bool HasImageTextureExtension(const std::filesystem::path& path)
 {
-    static const std::wstring kImage[] = { L".png", L".jpg", L".jpeg", L".bmp",
-                                           L".tif", L".tiff", L".webp", L".ktx2" };
-    const std::wstring ext = LowerCopy(path.extension().wstring());
-    for (const auto& allowed : kImage) {
-        if (ext == allowed) {
-            return true;
-        }
+    return IsImageExtension(LowerCopy(path.extension().wstring()));
+}
+
+// Per-format sidecar policy. Only the extensions a format actually needs are
+// accepted, so a glTF reference can never pull an MTL or a USD layer, and a
+// format that resolves nothing (STL/PLY/FBX/3MF/STEP) accepts no sidecar at
+// all. 3MF and USDZ package entries are handled inside the archive and never
+// become sidecar requests in the first place.
+bool IsAllowedSidecarExtension(ImportFormat format, const std::filesystem::path& path)
+{
+    const std::wstring extension = LowerCopy(path.extension().wstring());
+    switch (format) {
+    case ImportFormat::Gltf:
+        return extension == L".bin" || IsImageExtension(extension);
+    case ImportFormat::Obj:
+        return extension == L".mtl" || IsImageExtension(extension);
+    case ImportFormat::Fbx:
+        // FBX geometry caches are never evaluated (FBX-005), but the unified
+        // PBR material path brokers approved local textures.
+        return IsImageExtension(extension);
+    case ImportFormat::Usd:
+        // The fast path brokers contained image assets; the compatibility host
+        // additionally brokers local layer dependencies for composition arcs.
+        return extension == L".usd" || extension == L".usda" || extension == L".usdc"
+            || IsImageExtension(extension);
+    default:
+        // STL/PLY are self-contained; 3MF/USDZ package entries stay in-archive;
+        // STEP references nothing.
+        return false;
     }
-    return false;
 }
 
 // Opens one candidate path and runs the full handle-based validation every
@@ -313,7 +365,8 @@ std::optional<std::filesystem::path> FindPackagedImage(const std::filesystem::pa
 // (.bin, .mtl, USD layer) must match its exact file name.
 std::optional<std::filesystem::path> FindAssetInUserRoot(const std::filesystem::path& root,
                                                          const std::wstring& leafName,
-                                                         bool image)
+                                                         bool image,
+                                                         ImportFormat format)
 {
     if (leafName.empty()
         || leafName.find(L'*') != std::wstring::npos
@@ -330,7 +383,7 @@ std::optional<std::filesystem::path> FindAssetInUserRoot(const std::filesystem::
             FindClose(find);
             if ((entry.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0) {
                 const std::filesystem::path exact = directory / entry.cFileName;
-                if (image ? HasImageTextureExtension(exact) : HasAllowedSidecarExtension(exact)) {
+                if (image ? HasImageTextureExtension(exact) : IsAllowedSidecarExtension(format, exact)) {
                     return exact;
                 }
             }
@@ -350,10 +403,17 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
                                       const std::string& relativeReferenceUtf8,
                                       uint64_t maxSidecarFileBytes,
                                       bool allowPackageBasenameLookup,
-                                      const std::vector<std::wstring>& additionalSearchRoots)
+                                      const std::vector<std::wstring>& additionalSearchRoots,
+                                      ImportFormat format)
 {
     if (relativeReferenceUtf8.empty()) {
         return Reject(ImportErrorCode::UnsafeReference, L"empty sidecar reference");
+    }
+    // Before decoding: no embedded NUL or other control byte may survive to
+    // the path layer, and CreateFileW would truncate at the NUL regardless of
+    // what the extension check sees.
+    if (HasControlByte(relativeReferenceUtf8)) {
+        return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference contains a control character");
     }
 
     // One conservative rule covering three distinct Input-boundary concerns
@@ -365,9 +425,18 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
         return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference contains ':'");
     }
 
-    std::wstring reference = Utf8ToWide(relativeReferenceUtf8);
+    std::optional<std::wstring> decoded = Utf8ToWide(relativeReferenceUtf8);
+    if (!decoded) {
+        return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference is not valid UTF-8");
+    }
+    std::wstring reference = std::move(*decoded);
     if (reference.empty()) {
-        return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference failed to decode as UTF-8");
+        return Reject(ImportErrorCode::UnsafeReference, L"empty sidecar reference");
+    }
+    // After decoding: catches any control character a multi-byte sequence
+    // could have produced (defense in depth over the raw-byte check).
+    if (HasControlCharacter(reference)) {
+        return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference contains a control character");
     }
 
     // UNC/device-path prefix ("\\server\share", "\\.\", "\\?\") -- none of
@@ -393,7 +462,7 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
             return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference contains a '..' component");
         }
     }
-    if (!HasAllowedSidecarExtension(referencePath)) {
+    if (!IsAllowedSidecarExtension(format, referencePath)) {
         return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference has a disallowed extension");
     }
 
@@ -427,7 +496,7 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
     // every match still runs the full canonical-containment check against that
     // same root, so a reparse point inside it cannot escape -- exactly the
     // boundary the primary directory already enforces.
-    if (HasAllowedSidecarExtension(referencePath)) {
+    if (IsAllowedSidecarExtension(format, referencePath)) {
         const bool image = HasImageTextureExtension(referencePath);
         const std::wstring leafName = referencePath.filename().wstring();
         for (const auto& root : additionalSearchRoots) {
@@ -435,7 +504,7 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
             if (rootPath.empty()) {
                 continue;
             }
-            const auto match = FindAssetInUserRoot(rootPath, leafName, image);
+            const auto match = FindAssetInUserRoot(rootPath, leafName, image, format);
             if (!match) {
                 continue;
             }
