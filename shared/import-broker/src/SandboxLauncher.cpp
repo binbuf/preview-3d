@@ -2,9 +2,76 @@
 
 #include "platform/ProcThreadAttributeList.h"
 
+#include <cwchar>
+#include <string.h>
+#include <string_view>
+#include <vector>
+
 namespace import_broker {
 
 namespace {
+
+// Directory containing the child executable. The child is launched with this
+// as its working directory so the viewer/broker's current directory (both
+// user-controlled) never becomes an implicit loader or relative-path root.
+std::wstring PayloadDirectory(const std::wstring& exePath)
+{
+    const auto slash = exePath.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return {};
+    return exePath.substr(0, slash);
+}
+
+// Plug-in/loader environment variables every sandboxed child must not inherit.
+// This is the union of the two compatibility hosts' explicit scrub lists plus
+// the general worker's format libraries; the in-process HardenProcessDiscovery
+// repeats it as defense in depth.
+bool IsScrubbedVariable(std::wstring_view name)
+{
+    constexpr std::wstring_view variables[] = {
+        L"PREVIEW3D_DISABLED_PLUGIN_PATH", L"PXR_PLUGINPATH_NAME",
+        L"PXR_AR_DEFAULT_SEARCH_PATH", L"PYTHONPATH", L"USDIMAGING_ENABLE_PLUGINS",
+        L"MATERIALX_SEARCH_PATH", L"RMANTREE", L"RMAN_RIXPLUGINPATH",
+        L"CSF_OCCTResourcePath", L"CSF_PluginPath", L"CSF_UnitsLexicon",
+        L"CSF_DefaultUnit", L"CSF_UnitsDefinition", L"CSF_IGESDefaults",
+        L"CSF_STEPDefaults", L"CSF_XCAFDefaults", L"CSF_DrawPluginPath",
+        L"CSF_MDTVTexturesDirectory", L"CSF_ShadersDirectory",
+        L"CSF_GraphicShr", L"MMGT_OPT", L"PATH"
+    };
+    for (const std::wstring_view candidate : variables) {
+        if (name.size() == candidate.size()
+            && _wcsnicmp(name.data(), candidate.data(), name.size()) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Copies the parent's environment (so SystemRoot/TEMP and the rest of the
+// trusted base remain available to OCCT/USD) minus the scrubbed plug-in/loader
+// names, and returns a CreateProcessW-ready double-NUL-terminated block.
+std::vector<wchar_t> BuildScrubbedEnvironmentBlock()
+{
+    std::vector<wchar_t> block;
+    LPWCH current = GetEnvironmentStringsW();
+    if (current == nullptr) {
+        block.push_back(L'\0');
+        return block;
+    }
+    for (LPWCH cursor = current; *cursor != L'\0';) {
+        const std::wstring entry(cursor);
+        cursor += entry.size() + 1;
+        const auto equals = entry.find(L'=');
+        if (equals != std::wstring::npos && equals > 0
+            && IsScrubbedVariable(std::wstring_view(entry).substr(0, equals))) {
+            continue;
+        }
+        block.insert(block.end(), entry.begin(), entry.end());
+        block.push_back(L'\0');
+    }
+    FreeEnvironmentStringsW(current);
+    block.push_back(L'\0');
+    return block;
+}
 
 platform::Win32Handle CreateConfiguredJob(const SandboxLimits& limits)
 {
@@ -86,13 +153,21 @@ std::optional<SandboxProcess> LaunchSuspendedSandboxedWithSid(const std::wstring
     si.lpAttributeList = attrList.get();
 
     PROCESS_INFORMATION pi{};
+    // Every child starts with an explicit environment (parent base minus the
+    // plug-in/loader escape hatches) and an explicit working directory (its
+    // own payload directory) rather than inheriting the viewer's. The
+    // in-process hardening each child performs remains as defense in depth.
+    const std::wstring directory = PayloadDirectory(exePath);
+    std::vector<wchar_t> environment = BuildScrubbedEnvironmentBlock();
     // Import workers are console-subsystem programs solely to use the inherited
     // control pipes.  They never present console output to the user, so prevent
     // Windows from creating a blank console window for every worker launch.
     BOOL created = CreateProcessW(exePath.c_str(), commandLine.data(), nullptr, nullptr,
                                    /*bInheritHandles=*/TRUE,
-                                   CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr,
-                                   nullptr, &si.StartupInfo, &pi);
+                                   CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT
+                                       | EXTENDED_STARTUPINFO_PRESENT,
+                                   environment.data(), directory.empty() ? nullptr : directory.c_str(),
+                                   &si.StartupInfo, &pi);
 
     if (!created) {
         return std::nullopt;

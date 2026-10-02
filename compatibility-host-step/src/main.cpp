@@ -231,12 +231,14 @@ int wmain(int argc, wchar_t** argv)
     if (argc == 2) {
         const std::wstring_view mode(argv[1]);
         if (mode == L"--pool") return RunProductionPool(PoolMode::Normal);
+#ifdef PREVIEW3D_ENABLE_FAULT_HARNESS
         if (mode == L"--pool-crash") return RunProductionPool(PoolMode::Crash);
         if (mode == L"--pool-hang") return RunProductionPool(PoolMode::Hang);
         if (mode == L"--pool-overallocate") return RunProductionPool(PoolMode::ConsumeMemory);
         if (mode == L"--pool-stale") return RunProductionPool(PoolMode::StaleReply);
         if (mode == L"--pool-wrong-format") return RunProductionPool(PoolMode::WrongFormat);
         if (mode == L"--pool-unknown-error") return RunProductionPool(PoolMode::UnknownError);
+#endif // PREVIEW3D_ENABLE_FAULT_HARNESS
     }
 
     if (argc == 4 && std::wstring_view(argv[1]) == L"--probes") {

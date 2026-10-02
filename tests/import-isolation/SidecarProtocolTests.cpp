@@ -177,7 +177,7 @@ TEST_CASE("A real AppContainer-sandboxed worker process can receive a mid-genera
     auto section = import_broker::CreateSharedSection(import_broker::kSyntheticSectionBytes);
     REQUIRE(section);
     auto launch = generation_launch_support::LaunchWorkerWithControlChannel(
-        sandbox_test_support::WorkerExePath(), L"--child-noop", fixture.sid, section.get());
+        sandbox_test_support::WorkerExePath(), L"--pool", fixture.sid, section.get());
     REQUIRE(launch.has_value());
     // Deliberately never resumed -- DuplicateHandle's PROCESS_DUP_HANDLE
     // check is against the handle's access rights from CreateProcessW,

@@ -15,7 +15,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T06a — SEC-03b Fix user-chosen asset-root canonicalization**: Reusable facts for later sessions:; **Root cause (audit F-11).** `ResolveSidecarPath`'s user-root branch compared
 - **T07 — SEC-07 Provider stream/raster/accounting robustness**: Reusable facts for later sessions:; **Stream size validation.** `thumbnail-provider/StreamSource.cpp` has
 - **T08 — SEC-08 Provider containment policy (AV, stack, OCCT)**: Reusable facts for later sessions:; **Policy chosen: quarantine, not fail-fast (ADR-0037).** On the first contained structured
-- **Follow-ups**: SEC-17: implement the soak's SEC-08 allowed-failure classification. A stack-overflow or; SEC-08/T51: STEP's `occurrences_` vector (16-byte transform + definition/index
+- **T09 — SEC-09 Child-process loader/plugin hardening**: Reusable facts for later sessions:; **Child hardening pattern.** Each import child must, before parsing, call
+- **Follow-ups**: T11 (viewer attack surface): `interactive-viewer/src/app/Preview3D.cpp` still exposes; T09/SEC-10: process-mitigation attributes are untouched (out of T09 scope).
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -379,7 +380,51 @@ Reusable facts for later sessions:
   exe through `Select-Object -Last N` to read its tail: closing the pipe early can return a bogus
   nonzero exit code; redirect to a file and read the tail instead.
 
+## T09 — SEC-09 Child-process loader/plugin hardening
+
+Reusable facts for later sessions:
+
+- **Child hardening pattern.** Each import child must, before parsing, call
+  `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS)`, add
+  exactly one `AddDllDirectory` for its own payload directory, `SetCurrentDirectoryW` to that
+  directory, and scrub the OpenUSD/plugin + OCCT `CSF_*` variables. `import-worker/src/main.cpp`
+  `HardenProcessDiscovery` is the third copy (after both hosts); keep the three lists in sync.
+- **Broker passes a clean environment.** `SandboxLauncher.cpp::LaunchSuspendedSandboxedWithSid`
+  copies the caller's environment, drops the same scrub list, and passes it with
+  `CREATE_UNICODE_ENVIRONMENT` plus `lpCurrentDirectory = payload dir`. **If the Unicode flag is
+  omitted, `CreateProcessW` interprets the wide block as ANSI and every launch returns `nullopt`
+  with no diagnostic** (cost: a full bisect). Do not drop that flag.
+- **Fault harness is Debug-only.** `PREVIEW3D_ENABLE_FAULT_HARNESS` is defined in
+  `Directory.Build.props` for `Configuration == Debug`. It guards the fault switches in
+  `import-worker`, `compatibility-host`, and `compatibility-host-step` mains.
+  `sandbox_test_support::FaultHarnessEnabled()` (SandboxTestSupport.h) returns the same value in the
+  test exe; fault cases `SKIP` in Release. The `[sandbox][security]` "Release binaries reject
+  compiled-out fault flags" case drives each child directly with every removed flag and asserts a
+  nonzero exit (Release-only).
+- **Kept in Release on purpose:** `--probes`, `--pool`, `--generate`, `--*-spike`/`--*-spike-pool`,
+  and the normal `--parse-*` routes. design/09 requires the AppContainer/Job restriction suite
+  against every child, so removing these would remove the Release containment proof. Only fault
+  injection is compiled out (ADR-0038).
+- **STEP lexical admission is strict everywhere.** `StepPart21Preflight.cpp` applies the
+  control-byte reject at the top of `Consume` (so NUL/control inside strings and `/* */` comments
+  fails) and buffers up to four leading bytes across `Feed` (`DecideLeadingSignature`, flushed in
+  `Finish`) so split UTF-8/UTF-16 BOM/ZIP/gzip/XML signatures are still classified. New tests:
+  `[step-008][preflight-control][security]`, `[step-008][preflight-split][security]`.
+- **Verify (same MSBuild path as T06a).** Build
+  `tests\import-isolation\Tests.ImportIsolation.vcxproj` with
+  `/p:Configuration=Debug|Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\"`.
+  Release `x64\Release\Tests.ImportIsolation.exe`: 398 cases / 0 failed / 5 fault skips. Debug:
+  398 / 2 pre-existing failures (ThreeMfSpike:630, UsdSpike:296) / 1 skip. `npm test`
+  (`Tests.Unit` Release) 357 cases green.
+
 ## Follow-ups
+
+- T11 (viewer attack surface): `interactive-viewer/src/app/Preview3D.cpp` still exposes
+  `--benchmark-worker-budget-failure` (sets `faultForTesting = 6`) and a WM fault-injection message;
+  in a Release build those now hand the child flags it rejects (T09 compiled them out). Compile the
+  switch out or reject it by production registration before relying on the Release benchmark fault
+  path. `D3D12ImportBridge.cpp` is the caller that maps `faultForTesting` to the fault flags.
+- T09/SEC-10: process-mitigation attributes are untouched (out of T09 scope).
 
 - SEC-17: implement the soak's SEC-08 allowed-failure classification. A stack-overflow or
   `__fastfail`/stack-cookie process death must be recorded (fault code + input) and the process

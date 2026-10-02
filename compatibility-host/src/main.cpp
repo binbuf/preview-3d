@@ -230,11 +230,13 @@ int wmain(int argc, wchar_t** argv)
     if (argc == 2) {
         const std::wstring_view mode(argv[1]);
         if (mode == L"--pool") return RunProductionPool(PoolMode::Normal, directory);
+#ifdef PREVIEW3D_ENABLE_FAULT_HARNESS
         if (mode == L"--pool-crash") return RunProductionPool(PoolMode::Crash, directory);
         if (mode == L"--pool-hang") return RunProductionPool(PoolMode::Hang, directory);
         if (mode == L"--pool-overallocate") return RunProductionPool(PoolMode::ConsumeMemory, directory);
         if (mode == L"--pool-stale") return RunProductionPool(PoolMode::StaleReply, directory);
         if (mode == L"--pool-reverse-fallback") return RunProductionPool(PoolMode::ReverseFallback, directory);
+#endif // PREVIEW3D_ENABLE_FAULT_HARNESS
     }
     if (argc != 4 || std::wstring_view(argv[1]) != L"--usd-002-spike") return 64;
 

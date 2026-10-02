@@ -1026,6 +1026,7 @@ TEST_CASE("USD-006 lazily launches an isolated compatibility producer and discar
 TEST_CASE("USD-006 compatibility crash timeout protocol and commit faults stay generation-local",
           "[usd-006][fallback][hostile][limits][recovery]")
 {
+    if (!sandbox_test_support::FaultHarnessEnabled()) SKIP("fault harness compiled out of Release");
     ScratchUsd composed(L"usda");
     const std::string source =
         "#usda 1.0\n"

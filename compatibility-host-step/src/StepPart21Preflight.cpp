@@ -85,42 +85,30 @@ bool StepPart21Scanner::Feed(std::span<const std::byte> chunk)
 {
     if (phase_ == Phase::Failed) return false;
 
-    std::size_t start = 0;
-    if (!leadingChecked_ && !chunk.empty()) {
-        leadingChecked_ = true;
-        // UTF-8 BOM is transparent; UTF-16 BOM and compressed/XML signatures
-        // are not ISO 10303-21 clear text and fail before any lexing.
-        if (chunk.size() >= 3 && chunk[0] == std::byte{0xEF} && chunk[1] == std::byte{0xBB}
-            && chunk[2] == std::byte{0xBF}) {
-            start = 3;
-        } else if (chunk.size() >= 2
-            && ((chunk[0] == std::byte{0xFF} && chunk[1] == std::byte{0xFE})
-                || (chunk[0] == std::byte{0xFE} && chunk[1] == std::byte{0xFF}))) {
-            Fail(StepPreflightStatus::UnsupportedEncoding);
-            return false;
-        } else if (chunk.size() >= 4 && chunk[0] == std::byte{0x50} && chunk[1] == std::byte{0x4B}
-            && chunk[2] == std::byte{0x03} && chunk[3] == std::byte{0x04}) {
-            Fail(StepPreflightStatus::UnsupportedEncoding);
-            return false;
-        } else if (chunk.size() >= 2 && chunk[0] == std::byte{0x1F} && chunk[1] == std::byte{0x8B}) {
-            Fail(StepPreflightStatus::UnsupportedEncoding);
-            return false;
+    std::size_t index = 0;
+    if (!leadingChecked_) {
+        // Accumulate the signature window before deciding anything. A BOM or
+        // a binary/XML signature may arrive split across Feed calls (the
+        // handle path reads 64 KiB at a time, the fuzz/test path may feed one
+        // byte at a time), so no decision is made until the full window is
+        // held or the caller declares the source complete via Finish().
+        while (index < chunk.size() && leadingBytes_ < kLeadingProbeBytes) {
+            leading_[leadingBytes_++] = chunk[index++];
         }
-        std::size_t probe = start;
-        while (probe < chunk.size() && IsSpaceByte(chunk[probe])) ++probe;
-        if (probe < chunk.size() && chunk[probe] == std::byte{'<'}) {
-            Fail(StepPreflightStatus::UnsupportedEncoding);
-            return false;
+        if (leadingBytes_ < kLeadingProbeBytes) {
+            return phase_ != Phase::Failed;
         }
-        // Count the optional UTF-8 BOM once, but do not pass its bytes to the
-        // Part-21 lexer: they are neither whitespace nor part of the signature.
-        for (std::size_t i = 0; i < start; ++i) {
+        if (!DecideLeadingSignature()) return false;
+        for (std::uint32_t i = leadingStart_; i < leadingBytes_; ++i) {
+            if (phase_ == Phase::Failed) return false;
             if (totalBytes_ >= limits_.maxLexedBytes) { Fail(StepPreflightStatus::SourceLimit); return false; }
             ++totalBytes_;
+            Consume(leading_[i]);
         }
+        leadingBytes_ = 0;
     }
 
-    for (const std::byte value : chunk.subspan(start)) {
+    for (const std::byte value : chunk.subspan(index)) {
         if (phase_ == Phase::Failed) return false;
         if (totalBytes_ >= limits_.maxLexedBytes) { Fail(StepPreflightStatus::SourceLimit); return false; }
         ++totalBytes_;
@@ -129,9 +117,57 @@ bool StepPart21Scanner::Feed(std::span<const std::byte> chunk)
     return phase_ != Phase::Failed;
 }
 
+// Decide what the leading signature window means. Returns false only when the
+// source is terminally rejected. On success leadingStart_ names the bytes of
+// the window that are a transparent UTF-8 BOM (0 or 3) and leadingChecked_ is
+// set so later bytes are lexed directly.
+bool StepPart21Scanner::DecideLeadingSignature()
+{
+    leadingChecked_ = true;
+    leadingStart_ = 0;
+    const auto* bytes = leading_.data();
+    const std::size_t count = leadingBytes_;
+    if (count >= 3 && bytes[0] == std::byte{0xEF} && bytes[1] == std::byte{0xBB}
+        && bytes[2] == std::byte{0xBF}) {
+        leadingStart_ = 3;
+        return true;
+    }
+    if (count >= 2
+        && ((bytes[0] == std::byte{0xFF} && bytes[1] == std::byte{0xFE})
+            || (bytes[0] == std::byte{0xFE} && bytes[1] == std::byte{0xFF}))) {
+        Fail(StepPreflightStatus::UnsupportedEncoding);
+        return false;
+    }
+    if (count >= 4 && bytes[0] == std::byte{0x50} && bytes[1] == std::byte{0x4B}
+        && bytes[2] == std::byte{0x03} && bytes[3] == std::byte{0x04}) {
+        Fail(StepPreflightStatus::UnsupportedEncoding);
+        return false;
+    }
+    if (count >= 2 && bytes[0] == std::byte{0x1F} && bytes[1] == std::byte{0x8B}) {
+        Fail(StepPreflightStatus::UnsupportedEncoding);
+        return false;
+    }
+    std::size_t probe = 0;
+    while (probe < count && IsSpaceByte(bytes[probe])) ++probe;
+    if (probe < count && bytes[probe] == std::byte{'<'}) {
+        Fail(StepPreflightStatus::UnsupportedEncoding);
+        return false;
+    }
+    return true;
+}
+
 void StepPart21Scanner::Consume(std::byte value)
 {
     const char c = static_cast<char>(static_cast<unsigned char>(value));
+
+    // Control bytes are rejected wherever they occur, including inside string
+    // literals and comments: ISO 10303-21 clear text has no use for them, and
+    // admitting an embedded NUL into a quoted string or a /* */ comment hands
+    // a truncated/ambiguous view to OCCT downstream.
+    if (c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != '\v') {
+        Fail(StepPreflightStatus::UnsupportedEncoding);
+        return;
+    }
 
     if (inComment_) {
         if (commentSlash_ && c == '/') { inComment_ = false; commentSlash_ = false; return; }
@@ -176,11 +212,6 @@ void StepPart21Scanner::Consume(std::byte value)
         if (record_.size() >= limits_.maxRecordBytes) { Fail(StepPreflightStatus::RecordLengthLimit); return; }
         record_.push_back('/');
         commentSlash_ = false;
-    }
-
-    if (c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != '\v') {
-        Fail(StepPreflightStatus::UnsupportedEncoding);
-        return;
     }
 
     if (c == '\'' || c == '"') {
@@ -366,6 +397,16 @@ void StepPart21Scanner::ScanTokens(std::string_view text)
 bool StepPart21Scanner::Finish()
 {
     if (phase_ == Phase::Failed) return false;
+    if (!leadingChecked_) {
+        if (!DecideLeadingSignature()) return false;
+        for (std::uint32_t i = leadingStart_; i < leadingBytes_; ++i) {
+            if (phase_ == Phase::Failed) return false;
+            if (totalBytes_ >= limits_.maxLexedBytes) { Fail(StepPreflightStatus::SourceLimit); return false; }
+            ++totalBytes_;
+            Consume(leading_[i]);
+        }
+        leadingBytes_ = 0;
+    }
     result_.lexedBytes = totalBytes_;
     if (inString_ || inComment_ || commentSlash_ || pendingQuoteEnd_) {
         Fail(StepPreflightStatus::MalformedSyntax);

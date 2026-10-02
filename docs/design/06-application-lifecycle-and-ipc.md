@@ -24,7 +24,7 @@ Rules:
 - relative paths are resolved against the launcher's current directory before forwarding;
 - paths remain UTF-16 internally and are never round-tripped through the active code page.
 
-Developer-only switches such as --warp or --diagnostics are compiled out or rejected by production registration.
+Developer-only switches such as --warp or --diagnostics are compiled out or rejected by production registration. The import children follow the same rule for fault injection: every `Preview3DImportWorker.exe`/`Preview3DImportHost.exe`/`Preview3DStepHost.exe` fault switch is Debug-only and a Release child rejects it with a usage exit (ADR-0038).
 
 ## Startup sequence
 

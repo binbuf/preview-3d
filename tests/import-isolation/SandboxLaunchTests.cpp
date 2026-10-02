@@ -189,12 +189,61 @@ TEST_CASE("LaunchSuspendedSandboxedWithSid fails closed on a null SID", "[sandbo
     CHECK_FALSE(proc.has_value());
 }
 
+TEST_CASE("Release binaries reject compiled-out fault flags with a nonzero exit",
+          "[sandbox][security]")
+{
+    if (sandbox_test_support::FaultHarnessEnabled())
+        SKIP("fault harness present; flag rejection is a Release-only property");
+
+    struct ChildFlags {
+        const wchar_t* exe;
+        std::vector<const wchar_t*> flags;
+    };
+    const std::vector<ChildFlags> children{
+        {PREVIEW3D_IMPORT_WORKER_EXE,
+         {L"--hang", L"--cpu-spin", L"--overallocate", L"--child-noop",
+          L"--test-hang-import", L"--test-invalid-import-reply",
+          L"--parse-gltf-delayed-batches", L"--test-parse-stl-ascii",
+          L"--test-parse-ply-ascii"}},
+        {PREVIEW3D_IMPORT_HOST_EXE,
+         {L"--pool-crash", L"--pool-hang", L"--pool-overallocate", L"--pool-stale",
+          L"--pool-reverse-fallback"}},
+        {PREVIEW3D_STEP_HOST_EXE,
+         {L"--pool-crash", L"--pool-hang", L"--pool-overallocate", L"--pool-stale",
+          L"--pool-wrong-format", L"--pool-unknown-error"}},
+    };
+
+    for (const ChildFlags& child : children) {
+        for (const wchar_t* flag : child.flags) {
+            std::string label;
+            for (const wchar_t* p = child.exe; p && *p; ++p)
+                label.push_back(static_cast<char>(*p));
+            label.push_back(' ');
+            for (const wchar_t* p = flag; p && *p; ++p)
+                label.push_back(static_cast<char>(*p));
+            INFO(label);
+            std::wstring cmdLine = L"\"" + std::wstring(child.exe) + L"\" " + flag;
+            STARTUPINFOW si{};
+            si.cb = sizeof(si);
+            PROCESS_INFORMATION pi{};
+            REQUIRE(CreateProcessW(child.exe, cmdLine.data(), nullptr, nullptr, FALSE,
+                                    CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi));
+            platform::Win32Handle process(pi.hProcess);
+            platform::Win32Handle thread(pi.hThread);
+            REQUIRE(WaitForSingleObject(process.get(), 10'000) == WAIT_OBJECT_0);
+            DWORD code = 0;
+            REQUIRE(GetExitCodeProcess(process.get(), &code));
+            CHECK(code != 0);
+        }
+    }
+}
+
 TEST_CASE("Worker is created suspended with job assignment before resume", "[sandbox]")
 {
     SandboxFixture fixture;
     import_broker::SandboxLimits limits{};
 
-    auto launch = LaunchWorker(fixture.sid, L"--hang", limits);
+    auto launch = LaunchWorker(fixture.sid, L"--pool", limits);
     REQUIRE(launch.has_value());
 
     // SuspendThread on an already-suspended thread returns the PREVIOUS
@@ -219,7 +268,7 @@ TEST_CASE("Omitting the report handle from the restricted handle list fails proc
     SandboxFixture fixture;
     import_broker::SandboxLimits limits{};
 
-    auto launch = LaunchWorker(fixture.sid, L"--hang", limits, /*includeHandleInList=*/false);
+    auto launch = LaunchWorker(fixture.sid, L"--pool", limits, /*includeHandleInList=*/false);
     REQUIRE_FALSE(launch.has_value());
 }
 
@@ -283,6 +332,7 @@ TEST_CASE("Default probe run denies filesystem, network, and process-spawn acces
 
 TEST_CASE("Job Object commit limit is enforced against the real worker", "[sandbox]")
 {
+    if (!sandbox_test_support::FaultHarnessEnabled()) SKIP("fault harness compiled out of Release");
     SandboxFixture fixture;
     import_broker::SandboxLimits limits{};
     limits.processMemoryLimitBytes = 64ULL * 1024 * 1024; // 64 MiB test-only cap
@@ -301,6 +351,7 @@ TEST_CASE("Job Object commit limit is enforced against the real worker", "[sandb
 
 TEST_CASE("Job Object CPU-time limit terminates a worker that burns CPU", "[sandbox]")
 {
+    if (!sandbox_test_support::FaultHarnessEnabled()) SKIP("fault harness compiled out of Release");
     SandboxFixture fixture;
     import_broker::SandboxLimits limits{};
     // 200 ms of cumulative user CPU. The --cpu-spin probe never blocks, so
@@ -321,7 +372,7 @@ TEST_CASE("Job Object kill-on-close terminates a hung worker", "[sandbox]")
     SandboxFixture fixture;
     import_broker::SandboxLimits limits{};
 
-    auto launch = LaunchWorker(fixture.sid, L"--hang", limits);
+    auto launch = LaunchWorker(fixture.sid, L"--pool", limits);
     REQUIRE(launch.has_value());
     REQUIRE(import_broker::ResumeSandboxProcess(launch->proc));
 

@@ -104,4 +104,19 @@
       <EnableSegmentHeap>true</EnableSegmentHeap>
     </Manifest>
   </ItemDefinitionGroup>
+
+  <!--
+    Fault/harness hooks (hang, crash, overallocate, child-noop, test-import
+    fault modes, delayed-batch parsing, ...) ship only in Debug. A Release
+    build is a production binary: it rejects every fault mode with a usage
+    exit, because the code paths are not compiled in. The restriction and
+    fault-recovery tests that need these modes are gated on the same macro and
+    are skipped (not failed) in Release; a Release-only test asserts the
+    rejection. See T09 (SEC-09) and ADR-0038.
+  -->
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Debug'">
+    <ClCompile>
+      <PreprocessorDefinitions>PREVIEW3D_ENABLE_FAULT_HARNESS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
 </Project>
