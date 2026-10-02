@@ -1,8 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "SandboxTestSupport.h"
+#include "UsdAdapter.h"
 #include "UsdSpikeWorker.h"
 #include "UsdZipPreflight.h"
+#include "model_core/TierALimits.h"
 #include "import_broker/SharedSection.h"
 #include "import_broker/WorkerPool.h"
 #include "model_core/ControlProtocol.h"
@@ -520,6 +522,30 @@ TEST_CASE("USD-001 noninterruptible TinyUSDZ phase is replaced after the cancell
     CHECK(recovered->succeeded == 1);
     pool.Release(*replacement);
     std::cout << "USD-001 cancellation-replacement-ms=" << elapsed.count() << '\n';
+}
+
+// SEC-01: RecoverMissingTexcoords expands a face-varying UV primvar to one
+// value per triangulated corner. EmitMesh enforces the Tier B triangle/vertex
+// caps, but only after that expansion has already reserved its buffer, so a
+// hostile oversized mesh could reserve hundreds of MB before admission. The
+// adapter now applies the same cap before it reserves; this checks the
+// boundary directly (a real >20M-triangle fixture would be impractical here).
+TEST_CASE("USD UV expansion is bounded by the Tier B triangle and vertex caps before allocation",
+          "[usd-spike][resource-limit]")
+{
+    using model_core::ImportErrorCode;
+    CHECK(import_worker::PrimvarExpansionLimit(0) == ImportErrorCode::None);
+    CHECK(import_worker::PrimvarExpansionLimit(3) == ImportErrorCode::None);
+
+    const uint64_t atCap = uint64_t(model_core::kTierBTriangleLimit) * 3;
+    CHECK(atCap == model_core::kTierBVertexLimit);
+    CHECK(import_worker::PrimvarExpansionLimit(atCap) == ImportErrorCode::None);
+    // One triangle past the triangle cap...
+    CHECK(import_worker::PrimvarExpansionLimit(atCap + 3) == ImportErrorCode::ResourceLimit);
+    // ...and one corner past the vertex cap both fail typed, before reserving.
+    CHECK(import_worker::PrimvarExpansionLimit(uint64_t(model_core::kTierBVertexLimit) + 1)
+          == ImportErrorCode::ResourceLimit);
+    CHECK(import_worker::PrimvarExpansionLimit(UINT64_MAX / 4) == ImportErrorCode::ResourceLimit);
 }
 
 TEST_CASE("USD-001 USDZ preflight rejects archive authority and expansion hazards",

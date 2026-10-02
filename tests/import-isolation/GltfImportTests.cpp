@@ -25,10 +25,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <span>
 #include <string>
@@ -1342,4 +1344,107 @@ TEST_CASE("A glTF image in a textures/ subdirectory resolves through the brokere
     CHECK(header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Srgb));
     CHECK(material->descriptor.dependencyCount == 1);
     CHECK(material->descriptor.dependencyIds[0] == image->descriptor.chunkId);
+}
+
+namespace {
+
+// Wraps JSON (and optional BIN) in the glTF 2.0 container framing. Mirrors
+// the inline builder KHR_mesh_quantization's case uses above.
+std::vector<std::byte> BuildGlb(std::string json, std::span<const std::byte> bin = {})
+{
+    while (json.size() % 4) json.push_back(' ');
+    std::vector<std::byte> binPadded(bin.begin(), bin.end());
+    while (binPadded.size() % 4) binPadded.push_back(std::byte{0});
+    std::vector<std::byte> glb;
+    auto push32 = [&](uint32_t value) {
+        for (unsigned i = 0; i < 4; ++i)
+            glb.push_back(std::byte((value >> (i * 8)) & 0xff));
+    };
+    const uint32_t total = static_cast<uint32_t>(12 + 8 + json.size()
+        + (binPadded.empty() ? 0 : 8 + binPadded.size()));
+    push32(0x46546c67); push32(2); push32(total);
+    push32(static_cast<uint32_t>(json.size())); push32(0x4e4f534a);
+    for (const char value : json) glb.push_back(std::byte(static_cast<unsigned char>(value)));
+    if (!binPadded.empty()) {
+        push32(static_cast<uint32_t>(binPadded.size())); push32(0x004e4942);
+        glb.insert(glb.end(), binPadded.begin(), binPadded.end());
+    }
+    return glb;
+}
+
+// A 40-level doubling DAG: node i has children {i+1, i+1}. A depth-first walk
+// that reprocesses shared subtrees (the interactive-viewer DAG-diamond rule)
+// would take 2^40 visits if left unbounded. The adapter must stop at the
+// Tier A object budget instead.
+std::string DoublingDagJson(bool meshBearing)
+{
+    constexpr int kLevels = 40;
+    std::string json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}]";
+    if (meshBearing) {
+        json += ",\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}]"
+                ",\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+                "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}]"
+                ",\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+                "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}]"
+                ",\"buffers\":[{\"byteLength\":48}]";
+    }
+    json += ",\"nodes\":[";
+    for (int i = 0; i <= kLevels; ++i) {
+        if (i) json += ',';
+        if (i < kLevels)
+            json += "{\"children\":[" + std::to_string(i + 1) + "," + std::to_string(i + 1) + "]}";
+        else
+            json += meshBearing ? "{\"mesh\":0}" : "{}";
+    }
+    json += "]}";
+    return json;
+}
+
+std::vector<std::byte> TriangleBin()
+{
+    const float positions[9] = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+    const uint32_t indices[3] = {0, 1, 2};
+    std::vector<std::byte> bytes(48);
+    std::memcpy(bytes.data(), positions, sizeof(positions));
+    std::memcpy(bytes.data() + 36, indices, sizeof(indices));
+    return bytes;
+}
+
+} // namespace
+
+TEST_CASE("A mesh-less doubling DAG fails fast with ResourceLimit instead of exponential traversal",
+          "[gltf-import][resource-limit][dag]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    const auto glb = BuildGlb(DoublingDagJson(/*meshBearing=*/false));
+
+    const auto start = std::chrono::steady_clock::now();
+    auto run = RunGltfImport(fixture.sid, glb, 3101, 8);
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::ResourceLimit));
+    std::cout << "SEC-01 mesh-less doubling-DAG elapsed-ms=" << elapsedMs << '\n';
+    CHECK(elapsedMs < 5000);
+}
+
+TEST_CASE("A mesh-bearing doubling DAG fails fast with ResourceLimit instead of exponential traversal",
+          "[gltf-import][resource-limit][dag]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    const auto bin = TriangleBin();
+    const auto glb = BuildGlb(DoublingDagJson(/*meshBearing=*/true), bin);
+
+    const auto start = std::chrono::steady_clock::now();
+    auto run = RunGltfImport(fixture.sid, glb, 3102, 8);
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::ResourceLimit));
+    std::cout << "SEC-01 mesh-bearing doubling-DAG elapsed-ms=" << elapsedMs << '\n';
+    CHECK(elapsedMs < 5000);
 }

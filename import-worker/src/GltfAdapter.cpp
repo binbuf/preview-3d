@@ -350,6 +350,13 @@ struct WalkState {
     const model_core::ChunkDescriptor* requested = nullptr;
     uint32_t emittedGeometry = 0;
     uint32_t primitiveOccurrences = 0;
+    // Total VisitNode invocations for the current walk. A DAG diamond is
+    // legally reprocessed (a shared child is visited once per parent), but a
+    // hostile file can build ~60 nodes with children {i+1, i+1} and force
+    // 2^60 visits. Bound the whole walk by the same Tier A object budget that
+    // already caps primitive occurrences; a limit hit is ResourceLimit, while
+    // a true cycle stays MalformedData.
+    uint64_t totalNodeVisits = 0;
     bool preview=false, previewCounting=false;
     uint32_t previewOccurrences=0;
     uint32_t chunkTriangles = kChunkTriangles;
@@ -1998,6 +2005,14 @@ bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::dmat4x4
         state.error = ImportErrorCode::MalformedData; // true cycle
         return false;
     }
+    if (state.textureOptions.Cancelled()) {
+        state.error = ImportErrorCode::Cancelled;
+        return false;
+    }
+    if (++state.totalNodeVisits > kTierAObjectLimit) {
+        state.error = ImportErrorCode::ResourceLimit;
+        return false;
+    }
     state.visitState[nodeIndex] = 1;
 
     const fastgltf::Node& node = state.asset.nodes[nodeIndex];
@@ -2575,6 +2590,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             if (!VisitNode(state,nodeIndex,identity,0)) return state.error;
         state.previewOccurrences=state.primitiveOccurrences;
         state.primitiveOccurrences=0; state.previewCounting=false;
+        state.totalNodeVisits=0;
         std::fill(state.visitState.begin(),state.visitState.end(),uint8_t(0));
     }
     for (size_t nodeIndex : asset.scenes[sceneIndex].nodeIndices) {

@@ -49,11 +49,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T03:45:30Z · 0/19 done
+**Pipeline status** — updated 2026-10-02T04:05:00Z · 0/19 done
 
 - Completed: none
 - Blocked: none
 - Failed: T01
 - Remaining: T02, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T01 — failed · interrupted during retry backoff
+- Last finished: T01 — failed · verify failed (exit 42): npm test — > test > x64\Release\Tests.Unit.exe Randomness seeded to: 4083992932 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Tests.Unit.exe is a Catch2 v3.16.0 host application. Run with -? for options -------------…
 <!-- /symphony:status -->
