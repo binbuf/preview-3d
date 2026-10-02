@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ImportIsolation.exe
+---
+
 # T01 — Bound glTF traversal and fix worker limit ordering
 
 ## Goal

@@ -10,7 +10,7 @@ pipeline:
 ./.symphony/symphony.ps1 status --set security
 ```
 
-- Roadmap: [`ROADMAP.md`](ROADMAP.md) (execution is file order: T01 → T19).
+- Roadmap: [`ROADMAP.md`](ROADMAP.md) (execution is file order: T01 → T19, plus T06a).
 - Task files: [`../tasks/security/`](../tasks/security/).
 - Shared design docs: [`../design/`](../design/).
 - Progress notebook: [`PROGRESS.md`](PROGRESS.md).
@@ -28,6 +28,7 @@ task set (`--set mvp`). Task ids are per-set, so `T01` here is unrelated to `T01
 | [T04](../tasks/security/04-sidecar-reference-validation.md) | SEC-04 | Sidecar reference validation (NUL/control, per-format) | import-broker | 2 |
 | [T05](../tasks/security/05-3mf-opc-reconciliation.md) | SEC-05 | 3MF OPC preflight/library reconciliation | import-worker | 4 |
 | [T06](../tasks/security/06-provider-exception-containment.md) | SEC-06 | Provider adapter exception containment | thumbnail-provider | 3 |
+| [T06a](../tasks/security/06a-asset-root-canonicalization.md) | SEC-03b | Fix user-chosen asset-root canonicalization | import-broker | 3 |
 | [T07](../tasks/security/07-provider-stream-raster-robustness.md) | SEC-07 | Provider stream/raster/accounting robustness | thumbnail-provider | 11 |
 | [T08](../tasks/security/08-provider-containment-policy.md) | SEC-08 | Provider containment policy (AV, stack, OCCT) | thumbnail-provider | 12 |
 | [T09](../tasks/security/09-child-process-loader-hardening.md) | SEC-09 | Child-process loader/plugin hardening | all import processes | 7 |
@@ -42,7 +43,7 @@ task set (`--set mvp`). Task ids are per-set, so `T01` here is unrelated to `T01
 | [T18](../tasks/security/18-docs-reconciliation.md) | SEC-18 | Reconcile design docs with implemented controls | docs | 18 |
 | [T19](../tasks/security/19-license-sbom-metadata.md) | SEC-19 | License/SBOM/dependency metadata | packaging | 19 |
 
-The harness executes T01 → T19 in order, which is intentionally close to the priority column:
+The harness executes T01 → T19 (plus the inserted T06a) in order, which is intentionally close to the priority column:
 parser and sidecar fixes first, provider/sandbox/viewer next, CI and fuzzing last. Tasks 13–17 pay
 risk down continuously and can be reordered with `--from`/`--only` once earlier work lands. Soft
 dependencies (e.g. T02 benefits from T01/T06; T14 builds on T13) are noted in each task's Context.

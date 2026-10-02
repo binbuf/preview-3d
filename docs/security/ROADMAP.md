@@ -24,7 +24,8 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T03 — SEC-03 Sandbox limits and broker defensive checks → [03-sandbox-and-broker-limits.md](03-sandbox-and-broker-limits.md)
 - [x] T04 — SEC-04 Sidecar reference validation (NUL/control, per-format) → [04-sidecar-reference-validation.md](04-sidecar-reference-validation.md)
 - [x] T05 — SEC-05 3MF OPC preflight/library reconciliation → [05-3mf-opc-reconciliation.md](05-3mf-opc-reconciliation.md)
-- [~] T06 — SEC-06 Provider adapter exception containment → [06-provider-exception-containment.md](06-provider-exception-containment.md) ⟵ failed
+- [x] T06 — SEC-06 Provider adapter exception containment → [06-provider-exception-containment.md](06-provider-exception-containment.md) ⟵ accepted
+- [~] T06a — SEC-03b Fix user-chosen asset-root canonicalization → [06a-asset-root-canonicalization.md](06a-asset-root-canonicalization.md) ⟵ running
 
 ## Phase 2 — Provider, process, and viewer hardening
 

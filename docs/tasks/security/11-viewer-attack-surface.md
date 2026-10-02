@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.Unit.exe "~[graphics]"
+---
+
 # T11 — Viewer local attack-surface reduction
 
 ## Goal

@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ImportIsolation.exe
+---
+
 # T09 — Child-process loader/plugin hardening
 
 ## Goal

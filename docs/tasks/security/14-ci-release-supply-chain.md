@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.Unit.exe "~[graphics]"
+---
+
 # T14 — Release and supply-chain hardening
 
 ## Goal

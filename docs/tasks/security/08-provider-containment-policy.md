@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ProviderHost.exe
+---
+
 # T08 — Provider containment policy (AV, stack, OCCT)
 
 ## Goal

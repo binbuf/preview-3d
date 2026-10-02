@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.Unit.exe "~[graphics]"
+---
+
 # T13 — CI test gate for PRs and releases
 
 ## Goal

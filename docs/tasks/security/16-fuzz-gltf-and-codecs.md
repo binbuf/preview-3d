@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.Unit.exe "~[graphics]"
+---
+
 # T16 — Fuzz targets: glTF + compressed codecs
 
 ## Goal

@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ProviderHost.exe
+---
+
 # T07 — Provider stream/raster/accounting robustness
 
 ## Goal

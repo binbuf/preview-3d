@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ImportIsolation.exe
+---
+
 # T10 — Build and process mitigation hardening
 
 ## Goal

@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ImportIsolation.exe
+---
+
 # T05 — 3MF OPC preflight/library reconciliation
 
 ## Goal

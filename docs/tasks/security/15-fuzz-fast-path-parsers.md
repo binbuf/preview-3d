@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.Unit.exe "~[graphics]"
+---
+
 # T15 — Fuzz targets: STL, PLY, OBJ
 
 ## Goal

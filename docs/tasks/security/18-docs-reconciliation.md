@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.Unit.exe "~[graphics]"
+---
+
 # T18 — Reconcile design docs with implemented controls
 
 ## Goal

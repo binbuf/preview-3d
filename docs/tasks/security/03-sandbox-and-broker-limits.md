@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ImportIsolation.exe
+---
+
 # T03 — Sandbox limits and broker defensive checks
 
 ## Goal

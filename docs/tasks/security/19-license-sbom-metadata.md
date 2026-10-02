@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.Unit.exe "~[graphics]"
+---
+
 # T19 — License/SBOM/dependency metadata
 
 ## Goal

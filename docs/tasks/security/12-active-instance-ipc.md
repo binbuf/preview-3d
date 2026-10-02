@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.Unit.exe "[activation]"
+---
+
 # T12 — Active-instance IPC hardening
 
 ## Goal

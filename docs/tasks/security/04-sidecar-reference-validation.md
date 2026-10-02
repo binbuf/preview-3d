@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ImportIsolation.exe
+---
+
 # T04 — Sidecar reference validation (NUL/control, per-format)
 
 ## Goal

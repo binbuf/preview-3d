@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ProviderHost.exe
+---
+
 # T06 — Provider adapter exception containment
 
 ## Goal

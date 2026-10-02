@@ -1,3 +1,7 @@
+---
+verify: x64\Release\Tests.ImportIsolation.exe
+---
+
 # T02 — Preflight compressed decoders before allocation
 
 ## Goal
