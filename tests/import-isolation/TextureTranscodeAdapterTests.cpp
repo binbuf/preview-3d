@@ -8,6 +8,7 @@
 
 #include "TextureTranscodeAdapter.h"
 
+#include "model_core/Ktx2Preflight.h"
 #include "model_core/PixelFormats.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -15,6 +16,7 @@
 
 #include <windows.h>
 
+#include <cstring>
 #include <optional>
 #include <vector>
 
@@ -42,6 +44,36 @@ std::optional<std::vector<std::byte>> ReadFileBytes(const std::wstring& path)
         return std::nullopt;
     }
     return bytes;
+}
+
+// A syntactically valid KTX2 container whose header declares dimensions far
+// beyond the product texture cap; the level index is present but the declared
+// size is never expanded because the preflight rejects first.
+std::vector<std::byte> HostileKtx2Stream(uint32_t width, uint32_t height, uint32_t levels)
+{
+    std::vector<std::byte> stream(80 + size_t(levels) * 24, std::byte{0});
+    const uint8_t magic[12]
+        = {0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A};
+    std::memcpy(stream.data(), magic, sizeof(magic));
+    auto put32 = [&stream](size_t offset, uint32_t value) {
+        std::memcpy(stream.data() + offset, &value, sizeof(value));
+    };
+    auto put64 = [&stream](size_t offset, uint64_t value) {
+        std::memcpy(stream.data() + offset, &value, sizeof(value));
+    };
+    put32(12, 0); // vkFormat: Basis
+    put32(16, 1); // typeSize
+    put32(20, width);
+    put32(24, height);
+    put32(36, 1); // faceCount
+    put32(40, levels);
+    for (uint32_t level = 0; level < levels; ++level) {
+        const size_t base = 80 + size_t(level) * 24;
+        put64(base, 80 + size_t(levels) * 24);
+        put64(base + 8, 1);
+        put64(base + 16, 4);
+    }
+    return stream;
 }
 
 } // namespace
@@ -78,4 +110,25 @@ TEST_CASE("TranscodeKtx2BasisImage returns nullopt on an empty buffer", "[textur
     std::vector<std::byte> empty;
     auto result = import_worker::TranscodeKtx2BasisImage(empty);
     CHECK_FALSE(result.has_value());
+}
+
+TEST_CASE("TranscodeKtx2BasisImage rejects extreme declared dimensions before the KTX library",
+          "[texture-transcode][security]")
+{
+    const uint64_t before = model_core::Ktx2DecoderInvocations().load();
+    auto bytes = HostileKtx2Stream(/*width=*/100'000u, /*height=*/100'000u, /*levels=*/1);
+    auto result = import_worker::TranscodeKtx2BasisImage(bytes);
+    CHECK_FALSE(result.has_value());
+    // The KTX library was never reached, so nothing expanded the declared size.
+    CHECK(model_core::Ktx2DecoderInvocations().load() == before);
+}
+
+TEST_CASE("TranscodeKtx2BasisImage rejects an over-declared level count before the KTX library",
+          "[texture-transcode][security]")
+{
+    const uint64_t before = model_core::Ktx2DecoderInvocations().load();
+    auto bytes = HostileKtx2Stream(/*width=*/64u, /*height=*/64u, /*levels=*/64);
+    auto result = import_worker::TranscodeKtx2BasisImage(bytes);
+    CHECK_FALSE(result.has_value());
+    CHECK(model_core::Ktx2DecoderInvocations().load() == before);
 }

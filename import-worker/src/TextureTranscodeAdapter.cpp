@@ -1,7 +1,7 @@
 #include "TextureTranscodeAdapter.h"
 
 #include <ktx.h>
-#include "ImageFormatSniff.h"
+#include "model_core/Ktx2Preflight.h"
 #include <cstring>
 
 namespace import_worker {
@@ -76,48 +76,19 @@ std::optional<TranscodedImage> TranscodeKtx2BasisImage(std::span<const std::byte
                                                     const TextureDecodeOptions& options)
 {
     // Preflight the fixed KTX2 header and level index before the library can
-    // allocate/decompress attacker-controlled storage (including Zstd expansion).
-    if (options.Cancelled() || bytes.size()<80 || bytes.size()>options.maxEncodedBytes
-        || SniffImageFormat(bytes)!=SniffedImageFormat::Ktx2 || !options.maxDimension) return std::nullopt;
-    auto u32=[&](size_t offset) { uint32_t v; std::memcpy(&v,bytes.data()+offset,4); return v; };
-    auto u64=[&](size_t offset) { uint64_t v; std::memcpy(&v,bytes.data()+offset,8); return v; };
-    const uint32_t width=u32(20),height=u32(24),levels=u32(40),vkFormat=u32(12);
-    if (!width || !height || width>model_core::kMaxTextureDimension || height>model_core::kMaxTextureDimension
-        || u32(28)!=0 || u32(32)!=0 || u32(36)!=1 || !levels
-        || levels>model_core::FullImageMipCount(width,height) || bytes.size()<80+size_t(levels)*24
-        || uint64_t(width)*height>options.maxPixels) return std::nullopt;
-    // Metadata ranges are independently bounded before library allocation.
-    for (const auto range : {std::pair<uint64_t,uint64_t>{u32(48),u32(52)},
-                            std::pair<uint64_t,uint64_t>{u32(56),u32(60)},
-                            std::pair<uint64_t,uint64_t>{u64(64),u64(72)}}) {
-        if (range.second>1024*1024 || range.first>bytes.size() || range.second>bytes.size()-range.first) return std::nullopt;
-    }
-    // Only Basis or the closed set of supported Vulkan UNORM/SRGB formats.
-    PixelFormatId format=PixelFormatId::Unknown;
-    switch (vkFormat) {
-    case 0: break;
-    case 37: case 43: format=PixelFormatId::RGBA8_UNORM; break;
-    case 131: case 132: case 133: case 134: format=PixelFormatId::BC1_UNORM; break;
-    case 137: case 138: format=PixelFormatId::BC3_UNORM; break;
-    case 141: format=PixelFormatId::BC5_UNORM; break;
-    case 145: case 146: format=PixelFormatId::BC7_UNORM; break;
-    default: return std::nullopt;
-    }
-    uint64_t expanded=0;
-    for (uint32_t level=0;level<levels;++level) {
-        const size_t index=80+size_t(level)*24;
-        const uint64_t offset=u64(index),length=u64(index+8),uncompressed=u64(index+16);
-        if (offset<80+size_t(levels)*24 || offset>bytes.size() || !length || length>bytes.size()-offset
-            || uncompressed>options.maxDecodedBytes || expanded>options.maxDecodedBytes-uncompressed) return std::nullopt;
-        expanded+=uncompressed;
-        for (uint32_t prior=0;prior<level;++prior) {
-            const uint64_t a=u64(80+size_t(prior)*24),b=u64(88+size_t(prior)*24);
-            if (offset<a+b && a<offset+length) return std::nullopt;
-        }
-    }
-    const auto worst=model_core::ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,width,height,levels);
-    if (!worst || *worst>options.maxDecodedBytes || options.Cancelled()) return std::nullopt;
+    // allocate/decompress attacker-controlled storage (including Zstd
+    // expansion). Shared with the provider path (SEC-02).
+    if (options.Cancelled()) return std::nullopt;
+    const model_core::Ktx2Limits limits{options.maxEncodedBytes, options.maxDecodedBytes,
+                                        options.maxPixels, model_core::kMaxTextureDimension};
+    const auto preflight = model_core::PreflightKtx2(bytes, limits);
+    if (!preflight.has_value() || options.Cancelled()) return std::nullopt;
+    const uint32_t width = preflight->header.width;
+    const uint32_t height = preflight->header.height;
+    const uint32_t levels = preflight->header.levelCount;
+    PixelFormatId format = preflight->format;
     ktxTexture2* raw=nullptr;
+    model_core::Ktx2DecoderInvocations().fetch_add(1, std::memory_order_relaxed);
     if (ktxTexture2_CreateFromMemory(reinterpret_cast<const ktx_uint8_t*>(bytes.data()),bytes.size(),
         KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,&raw)!=KTX_SUCCESS || !raw) return std::nullopt;
     KtxTexture2Guard guard(raw);

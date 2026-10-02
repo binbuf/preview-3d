@@ -161,7 +161,7 @@ All versions/revisions are exact-pinned in Gate 0 and may change only through de
 | Dependency | Use | Boundary |
 | --- | --- | --- |
 | fastgltf | GLB/glTF 2.0 JSON/metadata/accessors | AppContainer import-worker mapped adapter; separate provider memory-buffer adapter linked only into the thumbnail DLL |
-| Google Draco decoder | `KHR_draco_mesh_compression` | bounded cancellable decode jobs inside the import worker; no encoder in runtime |
+| Google Draco decoder | `KHR_draco_mesh_compression` | bounded decode jobs inside the import worker; declared counts are preflighted before decode and cancellation is cooperative between payloads (the decoder exposes no cancel hook); no encoder in runtime |
 | KTX-Software/Basis transcoder | KTX2 and `KHR_texture_basisu` | bounded import-worker transcode to supported BC/RGBA formats |
 | libwebp | deterministic WebP decode | import-worker/provider memory-buffer adapter where format policy permits |
 | ufbx | FBX plus OBJ/MTL | AppContainer import-worker adapter with its allocation/progress limits enabled |

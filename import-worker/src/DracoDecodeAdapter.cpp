@@ -1,6 +1,7 @@
 #include "DracoDecodeAdapter.h"
 #include "BoundedChunkWriter.h"
 
+#include "model_core/DracoPreflight.h"
 #include "platform/CheckedMath.h"
 
 #include <draco/compression/decode.h>
@@ -54,10 +55,29 @@ std::variant<DracoDecodedMesh, ImportErrorCode> DecodeDracoMesh(
     if (expectedIndexCount % 3 || expectedIndexCount / 3 > kMaxDracoTriangles || !declared ||
         *declared > kMaxDracoDecodedWorkingSetBytes || *declared > TierAScratchLimit() / 2)
         return ImportErrorCode::DracoPrimitiveLimit;
+
+    // SEC-02: parse the decoder-declared connectivity counts from the compressed
+    // span and reject a stream that disagrees with the glTF accessors or
+    // declares an over-budget working set, before draco is allowed to allocate
+    // its corner table from those counts. The accessor-based bound above is
+    // only a claim by the file's own glTF accessors and is not trusted as the
+    // budget source for the decoder's internal allocation.
+    model_core::DracoDeclaredCounts declaredCounts;
+    const auto declaredStatus = model_core::ValidateDracoCounts(
+        compressedBufferViewBytes, expectedVertexCount, expectedIndexCount, kMaxDracoTriangles,
+        kMaxDracoDecodedWorkingSetBytes, &declaredCounts);
+    if (declaredStatus == model_core::DracoPreflightStatus::Malformed) {
+        return ImportErrorCode::MalformedData;
+    }
+    if (declaredStatus == model_core::DracoPreflightStatus::OverLimit) {
+        return ImportErrorCode::DracoPrimitiveLimit;
+    }
+
     draco::DecoderBuffer buffer;
     buffer.Init(reinterpret_cast<const char*>(compressedBufferViewBytes.data()),
                 compressedBufferViewBytes.size());
 
+    model_core::DracoDecoderInvocations().fetch_add(1, std::memory_order_relaxed);
     draco::Decoder decoder;
     draco::StatusOr<std::unique_ptr<draco::Mesh>> statusOrMesh = decoder.DecodeMeshFromBuffer(&buffer);
     if (!statusOrMesh.ok()) {

@@ -7,6 +7,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 ## Key facts (maintained by symphony — do not edit)
 
 - **T01 — SEC-01 Bound glTF traversal and fix worker limit ordering**: Reusable facts for later sessions:; **glTF node walk budget.** `import-worker/src/GltfAdapter.cpp` `WalkState::totalNodeVisits` is
+- **T02 — SEC-02 Preflight compressed decoders before allocation**: Reusable facts for later sessions:; **Shared preflights.** `shared/model-core/include/model_core/DracoPreflight.h` and
 - **Follow-ups**: Consider a large, opt-in (`[.]`) qualification fixture that drives the real `--parse-usd` worker; PLY `meshIndices.reserve(vertexElement->count * 3)` is safe only because `vertexElement->count` is
 <!-- symphony:digest:end -->
 
@@ -57,6 +58,42 @@ Reusable facts for later sessions:
   should show `w/lf` after the fix (it showed `w/crlf` before). To restore after a bad checkout:
   delete the tracked files and `git checkout -- tests/fixtures interactive-viewer/test-assets`.
 
+## T02 — SEC-02 Preflight compressed decoders before allocation
+
+Reusable facts for later sessions:
+
+- **Shared preflights.** `shared/model-core/include/model_core/DracoPreflight.h` and
+  `.../Ktx2Preflight.h` are header-only and are the single definition of the Draco/KTX2 header
+  layouts, called by both `import-worker/src/DracoDecodeAdapter.cpp` /
+  `thumbnail-provider/GltfFamilyAdapter.cpp` and the worker/provider KTX2 paths. `PreflightKtx2`
+  is a direct extraction of the worker's old inline checks; `ValidateDracoCounts` parses the
+  declared counts and rejects accessor mismatch (`Malformed`) or over-budget (`OverLimit`).
+- **Draco bitstream gotcha.** The fixed header is 11 bytes (flags is a little-endian `uint16`).
+  After the optional metadata block, the edgebreaker path consumes a one-byte traversal selector
+  in `MeshEdgebreakerDecoder::InitializeDecoder` *before* `DecodeConnectivity` reads the
+  varint counts. Omitting that byte misreads `num_encoded_vertices`/`num_faces`. Metadata is
+  variable-length; skip it with Draco's own `MetadataDecoder::DecodeGeometryMetadata` rather than
+  reimplementing the format.
+- **No cancellation.** Draco and KTX expose no progress/cancel callback. Decodes are bounded but
+  not interruptible mid-payload; ADR 0030 records this and narrows design/02's "bounded
+  cancellable decode jobs". Do not claim per-payload cancellation.
+- **Evidence seam.** `model_core::DracoDecoderInvocations()` / `Ktx2DecoderInvocations()` are
+  relaxed atomics incremented immediately before the library call; tests read them to prove the
+  third-party decoder was never reached. Any new compressed codec behind these adapters should
+  add the same preflight + counter pattern.
+- **NOMINMAX.** Any TU that includes `model_core/DracoPreflight.h` pulls in draco core headers
+  that use `std::numeric_limits<T>::max()`. TUs that also see `windows.h` (e.g.
+  `tests/unit/ProviderGltfAdapterTests.cpp`) must `#define NOMINMAX` first.
+- **Build/verify.** `MSBuild tests\unit\Tests.Unit.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\"`
+  then `npm test` (350 cases). ImportIsolation:
+  `MSBuild tests\import-isolation\Tests.ImportIsolation.vcxproj /p:Configuration=Debug ...`.
+  `Tests.ProviderHost.exe "[parallel]"` passes alone but is a pre-existing concurrency flake in a
+  full run; none of its fixtures use Draco/KTX2.
+- **Pre-existing `npm test` blockers fixed here.** `interactive-viewer/src/ui/InfoPanel.cpp`
+  `FormatDimension` never streamed `value` (every dimension rendered as just the unit); and
+  `tests/unit/LocalizationTests.cpp` leaked the French active locale into later cases. Both were
+  repaired to reach a green gate (see the T02 hand-off); they are unrelated to SEC-02.
+
 ## Follow-ups
 
 - Consider a large, opt-in (`[.]`) qualification fixture that drives the real `--parse-usd` worker
@@ -65,3 +102,9 @@ Reusable facts for later sessions:
 - PLY `meshIndices.reserve(vertexElement->count * 3)` is safe only because `vertexElement->count` is
   already bounded by the Tier B scratch budget; switching it to `platform::CheckedMultiply` would be
   a defensive cleanup, not a fix.
+- SEC-16: add fuzz seeds/bounds for `model_core::PreflightKtx2` and
+  `model_core::ValidateDracoCounts` (both are pure and never allocate from a file-declared size).
+- SEC-18: reconcile ADR-0030's "no cancel hook" wording with design/02/design/03 if a future codec
+  version adds a real progress/cancel callback.
+- Provider-host `[parallel]` counts a transient failure in some run orderings; make the fixture loop
+  or COM apartment setup deterministic so the leak/parallel gates are not flaky.

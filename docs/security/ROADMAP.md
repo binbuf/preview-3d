@@ -20,7 +20,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 ## Phase 1 — Parser and containment hardening
 
 - [x] T01 — SEC-01 Bound glTF traversal and fix worker limit ordering → [01-gltf-traversal-and-limit-ordering.md](01-gltf-traversal-and-limit-ordering.md)
-- [ ] T02 — SEC-02 Preflight compressed decoders before allocation → [02-compressed-decode-preflight.md](02-compressed-decode-preflight.md)
+- [x] T02 — SEC-02 Preflight compressed decoders before allocation → [02-compressed-decode-preflight.md](02-compressed-decode-preflight.md)
 - [ ] T03 — SEC-03 Sandbox limits and broker defensive checks → [03-sandbox-and-broker-limits.md](03-sandbox-and-broker-limits.md)
 - [ ] T04 — SEC-04 Sidecar reference validation (NUL/control, per-format) → [04-sidecar-reference-validation.md](04-sidecar-reference-validation.md)
 - [ ] T05 — SEC-05 3MF OPC preflight/library reconciliation → [05-3mf-opc-reconciliation.md](05-3mf-opc-reconciliation.md)
@@ -49,11 +49,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T05:02:39Z · 1/19 done
+**Pipeline status** — updated 2026-10-02T05:32:52Z · 2/19 done
 
-- Completed: T01
+- Completed: T01, T02
 - Blocked: none
 - Failed: none
-- Remaining: T02, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T01 — done · SEC-01 code was already correct; fixed the real verify blocker (CRLF-corrupted fixtures with no .gitattributes) via .gitattributes + ADR 0029. npm test now green (339 cases), ImportIsolation down to 5 Debug/3 Release pre-existing failures, new DAG/USD regressions pass.
+- Remaining: T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T02 — done · Draco/KTX2 preflights now reject hostile declared counts before library allocation via shared model_core headers, wired into worker+provider with instrumentation-backed regression tests; npm test green (350 cases). Two unrelated pre-existing npm-test defects (InfoPanel dimension value, LocalizationTests locale leak) were repaired to reach the gate; Tests.ImportIsolation shows only its documented baseline failures.
 <!-- /symphony:status -->

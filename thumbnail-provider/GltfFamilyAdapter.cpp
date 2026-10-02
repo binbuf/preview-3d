@@ -4,6 +4,8 @@
 
 #include "Deadline.h"
 #include "ProviderLimits.h"
+#include "model_core/DracoPreflight.h"
+#include "model_core/Ktx2Preflight.h"
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/math.hpp>
@@ -425,8 +427,23 @@ ErrorCode DecodeDraco(std::span<const std::byte> compressed,
         return ErrorCode::MalformedData;
     }
 
+    // SEC-02: parse the decoder-declared connectivity counts and reject a stream
+    // that disagrees with the glTF accessors or declares an over-budget working
+    // set before draco allocates its corner table from those counts.
+    model_core::DracoDeclaredCounts declaredCounts;
+    const auto declaredStatus = model_core::ValidateDracoCounts(
+        compressed, expectedVertices, expectedIndices, ProviderLimits::kDracoTrianglesMax,
+        ProviderLimits::kDracoDecodedWorkingSetMaxBytes, &declaredCounts);
+    if (declaredStatus == model_core::DracoPreflightStatus::Malformed) {
+        return ErrorCode::MalformedData;
+    }
+    if (declaredStatus == model_core::DracoPreflightStatus::OverLimit) {
+        return ErrorCode::DracoPrimitiveLimit;
+    }
+
     draco::DecoderBuffer buffer;
     buffer.Init(reinterpret_cast<const char*>(compressed.data()), compressed.size());
+    model_core::DracoDecoderInvocations().fetch_add(1, std::memory_order_relaxed);
     auto statusOrMesh = draco::Decoder().DecodeMeshFromBuffer(&buffer);
     if (!statusOrMesh.ok()) {
         return ErrorCode::MalformedData;
@@ -520,13 +537,6 @@ ErrorCode DecodeDraco(std::span<const std::byte> compressed,
 
 // --- Embedded image decode (KTX2/Basis + WebP) ------------------------------
 
-bool LooksLikeKtx2(std::span<const std::byte> bytes) noexcept
-{
-    static constexpr std::uint8_t kMagic[12] = {0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32,
-                                                0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A};
-    return bytes.size() >= sizeof(kMagic) && std::memcmp(bytes.data(), kMagic, sizeof(kMagic)) == 0;
-}
-
 bool LooksLikeWebp(std::span<const std::byte> bytes) noexcept
 {
     return bytes.size() >= 12 && std::memcmp(bytes.data(), "RIFF", 4) == 0
@@ -536,27 +546,37 @@ bool LooksLikeWebp(std::span<const std::byte> bytes) noexcept
 bool TryDecodeKtx2(std::span<const std::byte> bytes, std::uint64_t remainingPixels,
                    std::uint64_t& pixels) noexcept
 {
-    if (!LooksLikeKtx2(bytes)) {
+    if (!model_core::LooksLikeKtx2(bytes)) {
+        return false;
+    }
+    // SEC-02: bound the fixed header, level index and worst-case expansion from
+    // the span before ktxTexture2_CreateFromMemory can allocate or Zstd-expand
+    // from attacker-controlled fields. Provider and worker share this preflight.
+    const std::uint64_t maxDecodedBytes
+        = remainingPixels > (std::numeric_limits<std::uint64_t>::max)() / 4
+              ? (std::numeric_limits<std::uint64_t>::max)()
+              : remainingPixels * 4;
+    const model_core::Ktx2Limits limits{ProviderLimits::kStreamMaxBytes, maxDecodedBytes,
+                                        remainingPixels, model_core::kMaxTextureDimension};
+    const auto preflight = model_core::PreflightKtx2(bytes, limits);
+    if (!preflight.has_value()) {
+        return false;
+    }
+    const std::uint64_t width = preflight->header.width;
+    const std::uint64_t height = preflight->header.height;
+    const auto count = CheckedMultiply(width, height);
+    if (!count.has_value() || *count > remainingPixels) {
         return false;
     }
     ktxTexture2* texture = nullptr;
+    model_core::Ktx2DecoderInvocations().fetch_add(1, std::memory_order_relaxed);
     if (ktxTexture2_CreateFromMemory(reinterpret_cast<const ktx_uint8_t*>(bytes.data()),
                                      bytes.size(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
                                      &texture) != KTX_SUCCESS
         || texture == nullptr) {
         return false;
     }
-    bool ok = texture->baseWidth != 0 && texture->baseHeight != 0;
-    std::uint64_t decodedPixels = 0;
-    if (ok) {
-        const auto count = CheckedMultiply(static_cast<std::uint64_t>(texture->baseWidth),
-                                           static_cast<std::uint64_t>(texture->baseHeight));
-        if (!count.has_value() || *count > remainingPixels) {
-            ok = false;
-        } else {
-            decodedPixels = *count;
-        }
-    }
+    bool ok = texture->baseWidth == width && texture->baseHeight == height;
     if (ok && ktxTexture2_NeedsTranscoding(texture)) {
         if (ktxTexture2_TranscodeBasis(texture, KTX_TTF_RGBA32, 0) != KTX_SUCCESS) {
             ok = false;
@@ -564,7 +584,7 @@ bool TryDecodeKtx2(std::span<const std::byte> bytes, std::uint64_t remainingPixe
     }
     ktxTexture2_Destroy(texture);
     if (ok) {
-        pixels = decodedPixels;
+        pixels = *count;
     }
     return ok;
 }
