@@ -12,6 +12,7 @@
 #include "WicImageDecodeAdapter.h"
 
 #include "model_core/Checksum.h"
+#include "model_core/GltfDataUriPreflight.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
@@ -57,6 +58,10 @@ constexpr int kMaxNodeDepth = 256;
 // SharedSectionValidator re-enforces the same budget at the trust boundary
 // and must never rely on this worker-side accounting alone.
 constexpr uint64_t kMaxAggregateDecodedTexturePixels = 1'000'000'000;
+
+// Cap on one decoded `data:` URI payload (buffer or image), enforced before
+// fastgltf is allowed to decode it.
+constexpr uint64_t kMaxDataUriDecodedBytes = 32ull * 1024 * 1024;
 
 // KHR_materials_transmission is approximated rather than rendered: this
 // renderer has no refraction/transmission pass. The scalar transmissionFactor
@@ -2309,6 +2314,32 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                         return ImportErrorCode::ResourceLimit;
                 }
             }
+        // Reject malformed or oversized base64 `data:` URIs before fastgltf
+        // decodes them. Its 0.9.0 fallback base64 decoder over-writes the
+        // product allocation when the encoded length is not a multiple of four
+        // (SEC-16). Only `buffers`/`images` carry URIs that the worker decodes;
+        // everything else is left to fastgltf unchanged.
+        for (const char* key : {"buffers", "images"})
+        {
+            simdjson::dom::array array;
+            if (object[key].get_array().get(array))
+                continue;
+            for (auto entry : array)
+            {
+                std::string_view uri;
+                if (entry["uri"].get_string().get(uri))
+                    continue;
+                switch (ValidateGltfDataUri(uri, kMaxDataUriDecodedBytes))
+                {
+                case GltfDataUriStatus::Malformed:
+                    return ImportErrorCode::MalformedData;
+                case GltfDataUriStatus::TooLarge:
+                    return ImportErrorCode::ResourceLimit;
+                default:
+                    break;
+                }
+            }
+        }
     }
     // fastgltf receives bounded padded JSON and aliases the already mapped BIN.
     // Its buffer allocation callback returns the BIN address; read(void*) detects
@@ -2384,7 +2415,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         if (!data.bin.empty() && data.source.data() + data.offset == data.bin.data() &&
             bytes <= data.bin.size())
             return {const_cast<std::byte*>(data.bin.data()), 0};
-        if (bytes > 32ull * 1024 * 1024)
+        if (bytes > kMaxDataUriDecodedBytes)
             throw std::out_of_range("data URI limit");
         data.decoded.emplace_back(size_t(bytes));
         return {data.decoded.back().data(), uint32_t(data.decoded.size())};

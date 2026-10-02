@@ -222,21 +222,22 @@ ASan-instrumented TU cannot link `ktx.lib`/`simdjson.lib` (which emit
 The 2 MiB input and 4 MiB output caps keep one unit bounded; the real
 AppContainer/Job worker stays the process-containment evidence.
 
-**Known findings — smoke promotion blocked.** Two deterministic crashes were
-found in the pinned third-party decoders and are minimized under
+**Known findings — one fixed, one open (SEC-16b).** Two deterministic crashes
+were found in the pinned third-party decoders and are minimized under
 `tests/fuzz/corpus/gltf/` (see its README):
 
+- fastgltf 0.9.0 `base64::fallback_decode_inplace` heap overflow on a `.gltf`
+  data URI whose base64 length is not a multiple of four — **fixed in SEC-16**
+  by `model_core::ValidateGltfDataUri`, called from the `GltfAdapter.cpp`
+  simdjson preflight before `loadGltf`; the seed is now a safe regression;
 - KTX-Software 4.4.2 ETC1S/BasisLZ `transcode_slice` null-deref on a two-byte
   mutation of the frozen Basis sample (via an embedded `KHR_texture_basisu`
-  image);
-- fastgltf 0.9.0 `base64::fallback_decode_inplace` heap overflow on a `.gltf`
-  data URI whose base64 length is not a multiple of four.
+  image) — **open**, owned by `docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md`.
 
-Upstream patches are out of SEC-16's scope, so these seeds are deliberately
-kept out of the generated smoke corpus and the target is not yet added to the
-`fuzz-smoke` matrix in `.github/workflows/ci.yml`; the BasisLZ ETC1S transcode
-is excluded from the `Ktx2` domain (preflight only) and the valid BasisLZ GLB
-is excluded from the adapter seeds until a product mitigation or upstream fix
-lands. A findings seed must not join the smoke corpus before its class is
-mitigated or libFuzzer rediscovers it. The seed preparer refuses a non-empty
+The target is therefore not yet added to the `fuzz-smoke` matrix in
+`.github/workflows/ci.yml`: a smoke run would rediscover the open ETC1S crash.
+The BasisLZ ETC1S transcode is excluded from the `Ktx2` domain (preflight only)
+and the valid BasisLZ GLB is excluded from the adapter seeds until that class
+is mitigated. A findings seed must not join the smoke corpus before its class
+is mitigated or libFuzzer rediscovers it. The seed preparer refuses a non-empty
 directory.

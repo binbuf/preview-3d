@@ -39,11 +39,12 @@ task set (`--set mvp`). Task ids are per-set, so `T01` here is unrelated to `T01
 | [T14](../tasks/security/14-ci-release-supply-chain.md) | SEC-14 | Release/supply-chain hardening | CI + packaging | 14 |
 | [T15](../tasks/security/15-fuzz-fast-path-parsers.md) | SEC-15 | Fuzz targets: STL, PLY, OBJ | tests/fuzz | 15 |
 | [T16](../tasks/security/16-fuzz-gltf-and-codecs.md) | SEC-16 | Fuzz targets: glTF + compressed codecs | tests/fuzz | 16 |
+| [T16b](../tasks/security/16b-fuzz-ktx-etc1s-finding.md) | SEC-16b | KTX2/BasisLZ ETC1S finding + GltfFuzz smoke promotion | tests/fuzz | 16b |
 | [T17](../tasks/security/17-fuzz-provider-and-soak.md) | SEC-17 | Fuzz provider pipeline + surrogate soak | tests/fuzz, provider | 17 |
 | [T18](../tasks/security/18-docs-reconciliation.md) | SEC-18 | Reconcile design docs with implemented controls | docs | 18 |
 | [T19](../tasks/security/19-license-sbom-metadata.md) | SEC-19 | License/SBOM/dependency metadata | packaging | 19 |
 
-The harness executes T01 → T19 (plus the inserted T06a) in order, which is intentionally close to the priority column:
+The harness executes T01 → T19 (plus the inserted T06a and T16b) in order, which is intentionally close to the priority column:
 parser and sidecar fixes first, provider/sandbox/viewer next, CI and fuzzing last. Tasks 13–17 pay
 risk down continuously and can be reordered with `--from`/`--only` once earlier work lands. Soft
 dependencies (e.g. T02 benefits from T01/T06; T14 builds on T13) are noted in each task's Context.

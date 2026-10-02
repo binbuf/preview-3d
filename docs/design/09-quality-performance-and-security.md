@@ -202,12 +202,15 @@ Seed corpora include official conformance assets, product regressions, minimized
 SEC-16 adds `GltfFuzz` (`tests/fuzz/GltfFuzz.cpp`) for the GLB/glTF JSON,
 accessor/sparse/range, node-graph, and Draco/meshopt/KTX2/WebP/WIC adapter
 surfaces; see [ADR-0045](adr/0045-gltf-codec-fuzz-findings.md). Its first run
-found two deterministic crashes inside the pinned third-party decoders
-(KTX-Software 4.4.2 ETC1S/BasisLZ transcode; fastgltf 0.9.0 base64 data URI),
-minimized under `tests/fuzz/corpus/gltf/` and contained in production only by
-the AppContainer/Job worker boundary. Until a product mitigation or upstream
-fix lands, those seeds stay out of the smoke corpus and the glTF/codec target
-is not promoted into the `fuzz-smoke` matrix.
+found two deterministic crashes inside the pinned third-party decoders. The
+fastgltf 0.9.0 base64 data-URI overflow is fixed by the product-owned
+`model_core::ValidateGltfDataUri` preflight (`GltfDataUriPreflight.h`) run
+before `loadGltf`. The KTX-Software 4.4.2 ETC1S/BasisLZ transcode null-deref
+remains, minimized under `tests/fuzz/corpus/gltf/`; it is deferred to SEC-16b
+(`docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md`) and is contained in
+production only by the AppContainer/Job worker boundary until then. The
+glTF/codec target is not promoted into the `fuzz-smoke` matrix until SEC-16b
+fixes that class.
 
 ## Threat model
 

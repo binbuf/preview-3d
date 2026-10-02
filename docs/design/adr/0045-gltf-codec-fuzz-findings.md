@@ -30,19 +30,22 @@ instrumentation.
   global data.
 - The target sets `_DISABLE_STL_ANNOTATION` so an ASan TU can link the pinned
   non-ASan static libraries without `LNK2038` (`annotate_*=0` vs `1`).
-- Two deterministic findings are minimized under `tests/fuzz/corpus/gltf/`
-  rather than folded into the smoke corpus: a KTX-Software/basisu ETC1S
-  `transcode_slice` null-deref, and a fastgltf base64 data-URI heap overflow.
-  They are kept out of the generated seeds and out of the `fuzz-smoke` matrix
-  until a product mitigation or upstream fix exists.
+- Two deterministic findings were minimized under `tests/fuzz/corpus/gltf/`
+  rather than folded into the smoke corpus: a fastgltf 0.9.0 base64 data-URI
+  heap overflow and a KTX-Software/basisu ETC1S `transcode_slice` null-deref.
+  The fastgltf class is fixed in-product by `model_core::ValidateGltfDataUri`
+  (`GltfDataUriPreflight.h`), called from the `GltfAdapter.cpp` simdjson
+  preflight before `loadGltf`; its seed is now a safe regression. The ETC1S
+  class is deferred to SEC-16b, which owns its mitigation/decision and the
+  smoke promotion; `GltfFuzz` stays out of `fuzz-smoke` until then.
 
 ## Consequences
 - The glTF/codec target is built and runnable but is not promoted into the
-  `fuzz-smoke` matrix; doing so is blocked on the two third-party decoder
-  findings.
+  `fuzz-smoke` matrix; doing so is blocked on the remaining ETC1S decoder
+  finding (SEC-16b). The fastgltf base64 class is closed.
 - The real AppContainer/Job worker remains the production containment for
   worker-process crashes; the design's "corrupt optional texture falls back"
-  contract is not met for the ETC1S case until it is fixed.
+  contract is not met for the ETC1S case until SEC-16b fixes it.
 - A findings seed must not join the smoke corpus before its class is mitigated
   or libFuzzer rediscovers it.
 - The target needs the root vcpkg manifest restored and must be built

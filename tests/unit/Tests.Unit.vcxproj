@@ -187,6 +187,8 @@
     <!-- SPIKE-8b (T03) throwaway compressed-glTF decoder. -->
     <ClCompile Include="..\..\thumbnail-spike\surrogate-probe\GltfSpikeDecode.cpp" />
     <ClCompile Include="GltfSpikeDecodeTests.cpp" />
+    <!-- SEC-16 shared glTF base64 data-URI preflight. -->
+    <ClCompile Include="GltfDataUriPreflightTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\model-core\include\model_core\WireFormat.h" />

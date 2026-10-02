@@ -657,27 +657,27 @@ Reusable facts for later sessions:
   reusable gate and cannot be split by event without duplicating the Debug/Release matrix. It is not
   a write vector today (`feed-access: read` off `push`), but a future refactor could split it the
   same way `dependencies.yml` was.
-- **SEC-16 finding (KTX-Software 4.4.2 ETC1S/basisu).** `TranscodeKtx2BasisImage` (and therefore
-  `ImportGltf` with an embedded `KHR_texture_basisu` image) reaches a deterministic null-deref in
-  `basist::basisu_lowlevel_etc1s_transcoder::transcode_slice` for a two-byte mutation of the frozen
-  `interactive-viewer/test-assets/basisu_sample.ktx2` ETC1S supercompression global data. The
-  `Ktx2Preflight`/`PreflightKtx2` header/level checks pass; the crash is in the third-party bitstream
-  decoder. Minimized seed: `tests/fuzz/corpus/gltf/basislz-etc1s-crash.env` (and `.ktx2`). Fix
-  required: upstream KTX-Software/basisu patch, or a product-owned ETC1S global-data guard, before
-  the seed can join the smoke corpus. The design's "corrupt optional texture uses a deterministic
-  fallback" contract is violated until then; production containment is only the AppContainer/Job
-  worker boundary.
-- **SEC-16 finding (fastgltf 0.9.0 base64).** `ImportGltf`'s `fastgltf::Parser::loadGltf` reaches a
-  heap-buffer-overflow in `fastgltf::base64::fallback_decode_inplace` (`base64.cpp:413`) for a
-  `.gltf` data URI whose base64 payload length is not a multiple of four; the write overruns the
-  buffer sized by the product's `setBufferAllocationCallback`. Minimized seed:
-  `tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env`. Fix required: upstream fastgltf patch, or a
-  product-owned data-URI base64 preflight (length multiple-of-four plus decoded-size cap) before
-  `loadGltf`.
-- **SEC-16/17 CI promotion.** Do not add `GltfFuzz` to the `fuzz-smoke` matrix until the two decoder
-  findings above are mitigated; the target's Adapter domain rediscovers both within a ~60 s run.
-  Once fixed, add the glTF+codec entry (one target per runner) and then promote the whole lane to the
-  required gate.
+- **SEC-16 finding (KTX-Software 4.4.2 ETC1S/basisu) — deferred to SEC-16b.** `TranscodeKtx2BasisImage`
+  (and therefore `ImportGltf` with an embedded `KHR_texture_basisu` image) reaches a deterministic
+  null-deref in `basist::basisu_lowlevel_etc1s_transcoder::transcode_slice` for a two-byte mutation of
+  the frozen `interactive-viewer/test-assets/basisu_sample.ktx2` ETC1S supercompression global data.
+  The `Ktx2Preflight`/`PreflightKtx2` header/level checks pass; the crash is in the third-party
+  bitstream decoder. Minimized seed: `tests/fuzz/corpus/gltf/basislz-etc1s-crash.env` (and `.ktx2`).
+  Fix required: upstream KTX-Software/basisu patch, a fail-closed rejection, or a product-owned ETC1S
+  global-data guard, before the seed can join the smoke corpus. Owned by
+  `docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md`. The design's "corrupt optional texture uses a
+  deterministic fallback" contract is violated until then; production containment is only the
+  AppContainer/Job worker boundary.
+- **SEC-16 finding (fastgltf 0.9.0 base64) — fixed.** `ImportGltf`'s
+  `fastgltf::Parser::loadGltf` reached a heap-buffer-overflow in
+  `fastgltf::base64::fallback_decode_inplace` (`base64.cpp:413`) for a `.gltf` data URI whose base64
+  payload length is not a multiple of four. `model_core::ValidateGltfDataUri`
+  (`shared/model-core/include/model_core/GltfDataUriPreflight.h`) now rejects malformed/oversized
+  base64 `data:` URIs in the `GltfAdapter.cpp` simdjson preflight before `loadGltf`; the minimized seed
+  `tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env` is now a safe regression.
+- **SEC-16/17 CI promotion.** Do not add `GltfFuzz` to the `fuzz-smoke` matrix until the ETC1S decoder
+  finding is mitigated (SEC-16b); the fastgltf class is closed. Once fixed, add the glTF+codec entry
+  (one target per runner) and then promote the whole lane to the required gate.
 
 ## T13 — SEC-13 CI test gate for PRs and releases
 
@@ -829,16 +829,24 @@ Reusable facts for later sessions:
   `"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" tests\fuzz\GltfFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\" /p:VcpkgRoot=C:\vcpkg /p:VcpkgManifestInstall=false /m:1`
   then `python tests/fuzz/prepare_gltf_seeds.py TestResults/security-t16/gltf-seeds` and
   `tests\fuzz\x64\Release\GltfFuzz.exe TestResults/security-t16/gltf-seeds -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=2097160 -print_final_stats=1 -verbosity=0`.
-- **Two deterministic findings, smoke blocked.** The first run crashed on the pinned decoders within
+- **One finding fixed, one deferred (SEC-16b).** The first run crashed on the pinned decoders within
   ~20 s. `tests/fuzz/corpus/gltf/` holds the minimized seeds + README:
-  `basislz-etc1s-crash.env`/`.ktx2` (KTX-Software 4.4.2 ETC1S `transcode_slice` null-deref) and
   `fastgltf-base64-overflow.env` (fastgltf 0.9.0 `fallback_decode_inplace` heap overflow on a
-  non-multiple-of-four data-URI base64). `GltfFuzz` therefore drives `PreflightKtx2` only for
-  BasisLZ/ETC1S (no third-party ETC1S transcode), excludes the valid BasisLZ GLB from its generated
-  adapter seeds, and is NOT yet in the `fuzz-smoke` matrix. Codec domain sizes:
-  Draco header 8 bytes (u32 expectedVertices, u32 expectedIndices), Meshopt header 16 bytes
-  (u32 count, u32 stride, u64 decodedByteLength), flags select mode/filter/semantics.
+  non-multiple-of-four data-URI base64) and `basislz-etc1s-crash.env`/`.ktx2` (KTX-Software 4.4.2
+  ETC1S `transcode_slice` null-deref). The fastgltf class is fixed by
+  `model_core::ValidateGltfDataUri` (`shared/model-core/include/model_core/GltfDataUriPreflight.h`),
+  called from the `GltfAdapter.cpp` simdjson preflight before `loadGltf`; the seed now exits 0 under
+  `GltfFuzz ... -runs=1` and is a safe regression. The ETC1S class is deferred to
+  `docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md` (guard/decision + smoke promotion). `GltfFuzz`
+  drives `PreflightKtx2` only for BasisLZ/ETC1S (no third-party ETC1S transcode), excludes the valid
+  BasisLZ GLB from its generated adapter seeds, and is NOT yet in the `fuzz-smoke` matrix (blocked on
+  ETC1S). Codec domain sizes: Draco header 8 bytes (u32 expectedVertices, u32 expectedIndices),
+  Meshopt header 16 bytes (u32 count, u32 stride, u64 decodedByteLength), flags select
+  mode/filter/semantics.
 - **Do not edit the corpus manifest for these.** `interactive-viewer/test-assets/corpus/manifest.json`
   is SHA-pinned by `FixtureManifestTests`; the findings live under `tests/fuzz/corpus/gltf/` and
   `.gitattributes` marks `tests/fuzz/corpus/** -text`.
-- **`Tests.Unit.exe "~[graphics]"` stays green** (no production code changed). See ADR-0045.
+- **Verify.** The base64 guard changed product code: `GltfDataUriPreflightTests.cpp`
+  (`[gltf][data-uri]`, 5 cases) is in `Tests.Unit`, and a real-worker `[gltf-import][security]` case is
+  in `GltfImportTests.cpp`. `npm test` (Tests.Unit Release) is 374 cases green; the ETC1S seed still
+  crashes and is owned by SEC-16b. See ADR-0045.

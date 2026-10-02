@@ -37,9 +37,10 @@ violated.
 The mutation also crashes via the Ktx2 domain on the extracted container
 without the GLB wrapper.
 
-Disposition: upstream KTX-Software / basisu fix, or a product-owned ETC1S
-global-data guard, is required before this seed can join the smoke corpus. See
-`docs/security/PROGRESS.md` ("T16 — SEC-16") and the task Hand-off.
+Disposition: an upstream KTX-Software / basisu fix, a product-owned ETC1S
+global-data guard, or a fail-closed rejection is required before this seed can join the smoke corpus.
+This is owned by `docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md`; see `docs/security/PROGRESS.md`
+("T16 — SEC-16") and the task Hand-off.
 
 ## fastgltf-base64-overflow
 
@@ -59,8 +60,10 @@ Reproduce:
 tests/fuzz/x64/Release/GltfFuzz.exe tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env -runs=1
 ```
 
-The product's simdjson preflight accepts the JSON and the product's data-URI
-cap is not reached. Disposition: upstream fastgltf fix, or a product-owned
-data-URI base64 preflight (length multiple-of-four and decoded-size cap) before
-`loadGltf`. Same containment note as above. This is a second, independent
-reason the CI smoke promotion is blocked.
+The product's simdjson preflight accepts the JSON and the product's data-URI cap is not reached.
+**Fixed in SEC-16.** `model_core::ValidateGltfDataUri`
+(`shared/model-core/include/model_core/GltfDataUriPreflight.h`) now rejects a base64 `data:` payload
+whose encoded length is not a multiple of four (and over-cap/mis-padded payloads) in the
+`GltfAdapter.cpp` simdjson preflight before `loadGltf`, so this seed is a safe regression:
+`GltfFuzz.exe tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env -runs=1` exits 0. It no longer
+blocks CI smoke promotion; the remaining blocker is the ETC1S finding above (SEC-16b).

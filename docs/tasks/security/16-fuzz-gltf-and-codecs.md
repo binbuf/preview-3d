@@ -63,38 +63,47 @@ committed Draco/meshopt/WebP/Basis fixtures). `tests/fuzz/README.md` documents t
 build/run, and limitations. ADR-0045 records the boundary decision; design/09's Fuzzing section and
 `docs/security/PROGRESS.md` point at it.
 
-**Deviation — two upstream decoder findings block the "no findings" criterion and CI promotion.**
+**Deviation — one upstream decoder finding is fixed here; one is deferred to SEC-16b.**
 A bounded run found two deterministic crashes in the pinned, non-instrumented third-party decoders,
 reachable from the real worker path:
 
-1. **KTX-Software 4.4.2 / basisu ETC1S** — `TranscodeKtx2BasisImage` (via `ImportGltf` with an
-   embedded `KHR_texture_basisu` image) crashes in
+1. **fastgltf 0.9.0 base64 — fixed in this task.** `ImportGltf`'s `fastgltf::Parser::loadGltf`
+   heap-overflows in `fastgltf::base64::fallback_decode_inplace` (`base64.cpp:413`) on a `.gltf`
+   data URI whose base64 payload length is not a multiple of four. The new shared
+   `model_core::ValidateGltfDataUri` (`shared/model-core/include/model_core/GltfDataUriPreflight.h`)
+   rejects malformed/oversized base64 `data:` URIs in the `GltfAdapter.cpp` simdjson preflight before
+   `loadGltf`, so the decoder is never reached. The minimized seed
+   `tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env` no longer crashes
+   (`GltfFuzz.exe <seed> -runs=1` exits 0). Regression coverage: `tests/unit/GltfDataUriPreflightTests.cpp`
+   (`[gltf][data-uri]`) and a real-worker `[gltf-import][security]` case in
+   `tests/import-isolation/GltfImportTests.cpp`.
+2. **KTX-Software 4.4.2 / basisu ETC1S — deferred to SEC-16b.** `TranscodeKtx2BasisImage` (via
+   `ImportGltf` with an embedded `KHR_texture_basisu` image) crashes in
    `basist::basisu_lowlevel_etc1s_transcoder::transcode_slice` (`basisu_transcoder.cpp:8013`). The
    input is a structurally valid KTX2 that passes `model_core::PreflightKtx2`; a two-byte mutation of
    the frozen `interactive-viewer/test-assets/basisu_sample.ktx2` is enough. Minimized:
-   `tests/fuzz/corpus/gltf/basislz-etc1s-crash.env` + `.ktx2`.
-2. **fastgltf 0.9.0 base64** — `ImportGltf`'s `fastgltf::Parser::loadGltf` heap-overflows in
-   `fastgltf::base64::fallback_decode_inplace` (`base64.cpp:413`) on a `.gltf` data URI whose base64
-   length is not a multiple of four. Minimized: `tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env`.
+   `tests/fuzz/corpus/gltf/basislz-etc1s-crash.env` + `.ktx2`. This class needs a product policy
+   decision (ETC1S global-data guard, fail-closed rejection, or an upstream bump); it is owned by
+   `docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md`.
 
-Upstream patches are out of scope (task Out-of-scope). Because of this, the `Ktx2` domain calls
-`PreflightKtx2` for BasisLZ/ETC1S and only transcodes UASTC/uncompressed containers, the valid
-BasisLZ GLB is excluded from the generated adapter seeds (the crash seed lives only in the findings
-corpus), and **`GltfFuzz` was deliberately not added to the `fuzz-smoke` matrix** — a smoke run
-rediscovers both crashes within ~20–60 s. Adding a guaranteed-red nightly was judged worse than
-recording the finding. This deviates from the Scope bullet "wire into the SEC-13 fuzz-smoke step";
-see the follow-up below.
+The `Ktx2` domain calls `PreflightKtx2` for BasisLZ/ETC1S and only transcodes UASTC/uncompressed
+containers, and the valid BasisLZ GLB stays excluded from the generated adapter seeds (the crash seed
+lives only in the findings corpus). Because the ETC1S crash is still open, **`GltfFuzz` is still not
+added to the `fuzz-smoke` matrix**; T16b owns the mitigation, the smoke-corpus promotion, and the CI
+wiring (one target per runner, then promote the lane).
 
 **Check results.**
 - `MSBuild tests\fuzz\GltfFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=<root>\" /p:VcpkgRoot=C:\vcpkg /p:VcpkgManifestInstall=false /m:1` → success (ASan + `/fsanitize=fuzzer`).
-- `python tests/fuzz/prepare_gltf_seeds.py TestResults/security-t16/gltf-seeds-2` → 34 seeds.
-- Bounded run (`-max_total_time=60`): exited non-zero on the two findings above; per-domain/no-crash
-  confirmation is not claimable while these seeds exist, and the target is intentionally kept out of CI.
-- `x64\Release\Tests.Unit.exe "~[graphics]"` → All tests passed (131,544 assertions in 307 cases).
-- No product code changed.
+- `python tests/fuzz/prepare_gltf_seeds.py TestResults/security-t16/gltf-seeds-2` → 34 seeds (unchanged).
+- `GltfFuzz.exe tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env -runs=1` → exit 0 (was an ASan
+  heap-buffer-overflow before this task's base64 guard).
+- `GltfFuzz.exe tests/fuzz/corpus/gltf/basislz-etc1s-crash.env -runs=1` → still crashes (SEC-16b).
+- `tests/unit/Tests.Unit.vcxproj` Release → success; `npm test` → All tests passed (374 test cases),
+  including the 5 new `[data-uri]` cases.
+- `Tests.ImportIsolation.exe "*malformed base64*"` → All tests passed; product change is the
+  data-URI preflight only.
 
-**Next task must know.** The two findings need a human decision: patch/upgrade the pinned decoders,
-add product-owned mitigations (an ETC1S global-data guard in `Ktx2Preflight`; a data-URI base64
-length/size check before `loadGltf`), or formally accept them as contained worker crashes. Only after
-that should the findings seeds join the smoke corpus and `GltfFuzz` be added to `fuzz-smoke` (one
-target per runner, then promote the lane). `Tests.Unit.exe` is green and untouched.
+**Next task must know.** SEC-16b owns the KTX-Software/BasisLZ ETC1S mitigation and the `GltfFuzz`
+`fuzz-smoke` promotion. The fastgltf base64 class is closed and its seed is safe to promote. The
+`basislz-etc1s-crash.*` seed must not join the smoke corpus until SEC-16b fixes the class, or
+libFuzzer rediscovers it. `Tests.Unit.exe` is green.

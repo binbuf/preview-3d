@@ -672,6 +672,24 @@ TEST_CASE("Truncated GLB bytes are rejected as a clean GenerationError, not a cr
     CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
 }
 
+TEST_CASE("a malformed base64 data URI buffer is rejected before fastgltf (SEC-16)",
+          "[gltf-import][security]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // The minimized SEC-16 fastgltf 0.9.0 finding: the base64 payload length is
+    // not a multiple of four. The adapter's simdjson preflight must reject this
+    // as MalformedData before loadGltf reaches the fallback decoder.
+    const std::string json
+        = R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":3,"uri":"data:application/octet-stream;base64,AAAAA"}]})";
+    std::vector<std::byte> bytes(reinterpret_cast<const std::byte*>(json.data()),
+                                 reinterpret_cast<const std::byte*>(json.data()) + json.size());
+
+    auto run = RunGltfImport(fixture.sid, bytes, /*generationId=*/2110, /*maxChunkCount=*/8);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
 TEST_CASE("A file requiring an unrecognized extension is rejected as a clean GenerationError",
           "[gltf-import]")
 {

@@ -42,6 +42,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T14 — SEC-14 Release and supply-chain hardening → [14-ci-release-supply-chain.md](14-ci-release-supply-chain.md)
 - [x] T15 — SEC-15 Fuzz targets: STL, PLY, OBJ → [15-fuzz-fast-path-parsers.md](15-fuzz-fast-path-parsers.md)
 - [~] T16 — SEC-16 Fuzz targets: glTF + compressed codecs → [16-fuzz-gltf-and-codecs.md](16-fuzz-gltf-and-codecs.md) ⟵ blocked
+- [~] T16b — SEC-16b KTX2/BasisLZ ETC1S decoder finding and GltfFuzz smoke promotion → [16b-fuzz-ktx-etc1s-finding.md](16b-fuzz-ktx-etc1s-finding.md) ⟵ running
 - [ ] T17 — SEC-17 Provider pipeline fuzz + surrogate soak → [17-fuzz-provider-and-soak.md](17-fuzz-provider-and-soak.md)
 
 ## Phase 4 — Documentation and release metadata
