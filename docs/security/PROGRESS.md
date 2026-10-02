@@ -20,6 +20,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T11 — SEC-11 Viewer local attack-surface reduction**: Reusable facts for later sessions:; **One reusable safety module.** `interactive-viewer/src/platform/SafeFileOps.{h,cpp}`
 - **T12 - SEC-12 Active-instance IPC hardening**: Reusable facts for later sessions:; **One security builder, per-object rights.** `interactive-viewer/src/app/ActiveInstance.cpp`
 - **Follow-ups**: T12/SEC-14: once `Preview3D.exe` is Authenticode-signed, extend; T12: add a functional low-integrity rejection test (spawn/impersonate a low-integrity token) to
+- **T13 — SEC-13 CI test gate for PRs and releases**: Reusable facts for later sessions:; **One reusable gate workflow.** `.github/workflows/ci.yml` triggers on `pull_request`, push to
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering

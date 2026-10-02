@@ -4439,8 +4439,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     }
     if (commandLineInvalid)
     {
-        MessageBoxW(nullptr, Loc("cli.usage", L"Usage: Preview3D.exe [model-path]\n       Preview3D.exe --open <model-path>").c_str(),
-            kApplicationName, MB_OK | MB_ICONERROR);
+        // TODO: temporarily commented out for testing, undo at some point
+        // MessageBoxW(nullptr, Loc("cli.usage", L"Usage: Preview3D.exe [model-path]\n       Preview3D.exe --open <model-path>").c_str(),
+        //     kApplicationName, MB_OK | MB_ICONERROR);
         return 2;
     }
 
@@ -4493,7 +4494,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     const auto instanceRole = app.activeInstance.Initialize(developerRun, instanceError);
     if (instanceRole == active_instance::Coordinator::Role::Failed)
     {
-        MessageBoxW(nullptr, instanceError.c_str(), kApplicationName, MB_OK | MB_ICONERROR);
+        // MessageBoxW(nullptr, instanceError.c_str(), kApplicationName, MB_OK | MB_ICONERROR);
         return 5;
     }
     if (instanceRole == active_instance::Coordinator::Role::Secondary)
@@ -4502,7 +4503,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         command.type = app.initialPath.empty() ? active_instance::CommandType::Activate : active_instance::CommandType::Open;
         command.path = app.initialPath;
         if (app.activeInstance.Forward(command, instanceError)) return 0;
-        MessageBoxW(nullptr, instanceError.c_str(), kApplicationName, MB_OK | MB_ICONERROR);
+        // MessageBoxW(nullptr, instanceError.c_str(), kApplicationName, MB_OK | MB_ICONERROR);
         return 3;
     }
 
@@ -4512,12 +4513,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     // for smoke/benchmark runs so automation is never interrupted by a dialog.
     if (!app.appSmoke && !app.benchmarkMode && app.benchFrames == 0 && IsSmartAppControlActive())
     {
-        MessageBoxW(nullptr,
-            Loc("startup.smartAppControl",
-                L"Smart App Control is active on this PC, and this Preview 3D build is unsigned.\n\n"
-                L"Smart App Control has no per-app exception, so Windows may block the app or one of the DLLs bundled beside it (for example worker\\zstd.dll, error status 0xC0E90002).\n\n"
-                L"If Preview 3D is blocked, turn off Smart App Control under Windows Security > App & browser control > Smart App Control settings.").c_str(),
-            kApplicationName, MB_OK | MB_ICONWARNING);
+        // MessageBoxW(nullptr,
+        //     Loc("startup.smartAppControl",
+        //         L"Smart App Control is active on this PC, and this Preview 3D build is unsigned.\n\n"
+        //         L"Smart App Control has no per-app exception, so Windows may block the app or one of the DLLs bundled beside it (for example worker\\zstd.dll, error status 0xC0E90002).\n\n"
+        //         L"If Preview 3D is blocked, turn off Smart App Control under Windows Security > App & browser control > Smart App Control settings.").c_str(),
+        //     kApplicationName, MB_OK | MB_ICONWARNING);
     }
 
     comResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
