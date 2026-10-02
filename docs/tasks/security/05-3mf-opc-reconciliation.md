@@ -48,4 +48,43 @@ real admission gate rather than a second opinion, and ZIP64 fields cannot confus
 - [ ] Hand-off filled in.
 
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+Landed (SEC-05):
+- `import-worker/src/ThreeMfOpcPreflight.cpp`: added a shared `zip64()` extra parser; central
+  entries now resolve ZIP64 fields through it. Rejects general-purpose bit 3 (`flags & 8` →
+  `InvalidDirectory`). Local header now reconciles CRC, compressed/uncompressed size and raw name
+  bytes against the central directory (after local ZIP64 resolution). The local offset is bounded
+  (`off + 30 <= coff`) and the ZIP64 locator offset is bounded with checked add
+  (`zoff + 56` no-wrap, `<= e - 20`) before any field is read. Locator total-disk must be 1
+  (was 0), fixing a fail-closed compatibility bug; other values → `MultiDisk`.
+- `tests/import-isolation/ThreeMfSpikeTests.cpp`: new helpers (`Read16`/`Put16`/`FindEocd`,
+  `WithFirstCentralFlags`, `WithLocalSizeMismatch`, `WithLocalNameMismatch`, `AsZip64`,
+  `WithZip64LocatorOffset`) and a new `[3mf][archive][security]` case asserting `None` for a
+  spec-shaped ZIP64 package (total-disk 1), `MultiDisk` for total-disk 0, and `InvalidDirectory`
+  for locator offsets `0x...ffe0`/`0x...ffff`. The `3MF-007` worker test gained bit-3, local-size
+  and local-name mismatch cases that assert `InvalidDirectory`/`ArchiveLimit` through the real
+  worker (no divergent read).
+- `tests/fixtures/3mf/verify.py` + `manifest.json`: five derived cases (`bit3-entry`,
+  `local-central-size-mismatch`, `local-name-mismatch`, `zip64-valid`, `zip64-locator-wrap`),
+  materialized as fuzz seeds. `verify.py` reports 7 sources / 12 derived.
+- Docs: new ADR 0033; `docs/design/03-file-formats-and-ingestion.md` 3MF paragraph updated;
+  `docs/design/adapters/3mf-thumbnail.md` 3MF-002 text updated (bit-3 rejection replaces the
+  earlier "streaming-extension packages pass" wording).
+
+Deviations: chose to reject bit 3 rather than implement full data-descriptor reconciliation
+(explicitly permitted and matches USDZ). ZIP64 locator total-disk now requires 1 (spec-correct)
+instead of the previous 0; documented in ADR 0033.
+
+Checks:
+- `MSBuild tests\import-isolation\Tests.ImportIsolation.vcxproj /p:Configuration=Debug ...` — built.
+- `x64\Debug\Tests.ImportIsolation.exe "[3mf][archive][security]"` — 1 case, 216 assertions, pass.
+- `x64\Debug\Tests.ImportIsolation.exe "[3mf-007][archive][recovery]"` — 1 case, 1540 assertions, pass.
+- Full Debug suite: 393 cases / 387 passed / 6 failed — exactly the documented pre-existing set
+  (SidecarPathResolver ×3, ThreeMfSpike Job pressure, UsdSpike:230, OpenUsdHostSpike:244); the new
+  case passes.
+- `MSBuild tests\unit\Tests.Unit.vcxproj /p:Configuration=Release ...` then `npm test` — 350 cases,
+  all pass.
+- `python tests/fixtures/3mf/verify.py` — verified 7 sources and 12 derived cases.
+- `tests\fuzz\x64\Release\ThreeMfFuzz.exe TestResults\3mf-007\fuzz-seeds-t05 ... -max_total_time=45`
+  — 872,334 units, no crash/leak/timeout artifacts.
+
+Remaining: none. Next task (T06) is independent.

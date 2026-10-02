@@ -10,6 +10,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T02 — SEC-02 Preflight compressed decoders before allocation**: Reusable facts for later sessions:; **Shared preflights.** `shared/model-core/include/model_core/DracoPreflight.h` and
 - **T03 — SEC-03 Sandbox limits and broker defensive checks**: Reusable facts for later sessions:; **Job limits.** `SandboxLimits::processCpuTimeLimitMs` maps to
 - **T04 — SEC-04 Sidecar reference validation (NUL/control, per-format)**: Reusable facts for later sessions:; **Two-layer control check + explicit UTF-8 failure.** `import_broker/src/SidecarRequestServicer.cpp`
+- **T05 — SEC-05 3MF OPC preflight/library reconciliation**: Reusable facts for later sessions:; **Preflight policy now matches USDZ.** `import-worker/src/ThreeMfOpcPreflight.cpp` rejects
 - **Follow-ups**: SEC-04 and later: the primary-path ADS check is a coarse `:` rule shared in spirit with the; The generation wall-clock deadline currently wraps the main reply loop but not the post-terminal
 <!-- symphony:digest:end -->
 
@@ -171,6 +172,39 @@ Reusable facts for later sessions:
 - **Baseline unchanged.** Debug full run 392 cases / 6 failed, Release 392 / 3 failed — the same
   pre-existing set recorded under T03 (Debug: SidecarPathResolver user-asset-root x3, ThreeMfSpike,
   OpenUsdHostSpike, UsdSpike; Release: the resolver trio only). Nothing new.
+
+## T05 — SEC-05 3MF OPC preflight/library reconciliation
+
+Reusable facts for later sessions:
+
+- **Preflight policy now matches USDZ.** `import-worker/src/ThreeMfOpcPreflight.cpp` rejects
+  general-purpose bit 3 (`flags & 8`) with `InvalidDirectory`, reconciles the local header's CRC,
+  compressed/uncompressed size and raw name bytes against the central directory, and bounds the
+  local offset (`off + 30 <= coff`) and the ZIP64 locator offset (`zoff + 56` checked, `<= e - 20`)
+  before any read. The ZIP64 locator total-disk must now be 1 (was 0); other values return
+  `MultiDisk`. A shared `zip64()` helper parses sentinel-selected extra fields for both central and
+  local entries. `InvalidDirectory` maps to `ArchiveLimit` at the worker/provider boundary.
+- **Deliberate divergence.** Streaming/data-descriptor (`bit 3`) 3MF packages are rejected rather
+  than parsed, unlike the original 3MF-002 plan text. Recorded in ADR 0033 and reflected in
+  `docs/design/03-file-formats-and-ingestion.md` and `adapters/3mf-thumbnail.md`.
+- **Test seams.** `ThreeMfSpikeTests.cpp` has in-process ZIP mutators (`FindEocd`, `WithFirstCentralFlags`,
+  `WithLocalSizeMismatch`, `WithLocalNameMismatch`, `AsZip64`, `WithZip64LocatorOffset`). `AsZip64`
+  wraps a normal stored package in a spec-shaped ZIP64 record/locator without touching the 32-bit
+  central records. `Put16`/`Read16` were added next to the existing `Put32`/`Read32`.
+- **Fixture corpus.** `tests/fixtures/3mf/verify.py` now derives `bit3-entry`,
+  `local-central-size-mismatch`, `local-name-mismatch`, `zip64-valid`, `zip64-locator-wrap` from
+  `core-box`; `manifest.json` carries the frozen bytes/sha256. `python tests/fixtures/3mf/verify.py`
+  prints "verified 7 sources and 12 derived cases". `prepare_3mf_seeds.py` then materializes 19
+  seeds (7 + 12).
+- **Fuzz smoke.** `MSBuild tests\fuzz\ThreeMfFuzz.vcxproj /p:Configuration=Release /p:Platform=x64
+  "/p:SolutionDir=D:\repos\binbuf\preview-3d\\"` puts the exe at
+  `tests\fuzz\x64\Release\ThreeMfFuzz.exe`. Run against a fresh seed dir (preparer refuses a
+  non-empty one); 45 s smoke executed 872k units with no crash artifact.
+- **Baseline.** Debug ImportIsolation is now 393 cases / 6 failed, the same pre-existing set
+  (SidecarPathResolver ×3, ThreeMfSpike Job memory-pressure recovery, UsdSpike:230,
+  OpenUsdHostSpike:244). Release `npm test` (Tests.Unit) is 350/350. The `ThreeMfSpikeTests` Job
+  pressure failure is unrelated to preflight: it runs `--3mf-spike-pool`, which never calls
+  `InspectThreeMfOpc`.
 
 ## Follow-ups
 

@@ -57,6 +57,65 @@ def make_slice_optional(model: bytes) -> bytes:
     return model.replace(required, b'requiredextensions="p"', 1)
 
 
+def set_bit3(source: bytes) -> bytes:
+    data = bytearray(source)
+    eocd = data.rfind(b'PK\x05\x06')
+    assert eocd >= 0
+    central = struct.unpack_from('<I', data, eocd + 16)[0]
+    flags = struct.unpack_from('<H', data, central + 8)[0]
+    struct.pack_into('<H', data, central + 8, flags | 0x0008)
+    return bytes(data)
+
+
+def local_size_mismatch(source: bytes) -> bytes:
+    data = bytearray(source)
+    eocd = data.rfind(b'PK\x05\x06')
+    assert eocd >= 0
+    central = struct.unpack_from('<I', data, eocd + 16)[0]
+    local = struct.unpack_from('<I', data, central + 42)[0]
+    compressed = struct.unpack_from('<I', data, local + 18)[0]
+    assert compressed != 0xffffffff
+    struct.pack_into('<I', data, local + 18, compressed + 1)
+    return bytes(data)
+
+
+def local_name_mismatch(source: bytes) -> bytes:
+    data = bytearray(source)
+    eocd = data.rfind(b'PK\x05\x06')
+    assert eocd >= 0
+    central = struct.unpack_from('<I', data, eocd + 16)[0]
+    local = struct.unpack_from('<I', data, central + 42)[0]
+    data[local + 30] ^= 0x01
+    return bytes(data)
+
+
+def as_zip64(source: bytes) -> bytearray:
+    data = bytearray(source)
+    eocd = data.rfind(b'PK\x05\x06')
+    assert eocd >= 0
+    central_offset = struct.unpack_from('<I', data, eocd + 16)[0]
+    central_size = struct.unpack_from('<I', data, eocd + 12)[0]
+    count = struct.unpack_from('<H', data, eocd + 10)[0]
+    record = struct.pack('<IIHHIIQQQQ', 0x06064b50, 44, 45, 45, 0, 0,
+                         count, count, central_size, central_offset)
+    locator = struct.pack('<IIQI', 0x07064b50, 0, eocd, 1)
+    out = bytearray(data[:eocd]) + record + locator + data[eocd:]
+    relocated = eocd + len(record) + len(locator)
+    struct.pack_into('<H', out, relocated + 8, 0xffff)
+    struct.pack_into('<H', out, relocated + 10, 0xffff)
+    struct.pack_into('<I', out, relocated + 12, 0xffffffff)
+    struct.pack_into('<I', out, relocated + 16, 0xffffffff)
+    return out
+
+
+def zip64_locator_wrap(source: bytes) -> bytes:
+    out = as_zip64(source)
+    eocd = out.rfind(b'PK\x05\x06')
+    assert eocd >= 0
+    struct.pack_into('<Q', out, eocd - 20 + 8, 0xffffffffffffffe0)
+    return bytes(out)
+
+
 def derive(operation: str, source: bytes) -> bytes:
     if operation == 'empty':
         return b''
@@ -85,6 +144,16 @@ def derive(operation: str, source: bytes) -> bytes:
         return rewrite_package(source, add_unknown_required)
     if operation == 'slice-optional':
         return rewrite_package(source, make_slice_optional)
+    if operation == 'bit3-entry':
+        return set_bit3(source)
+    if operation == 'local-central-size-mismatch':
+        return local_size_mismatch(source)
+    if operation == 'local-name-mismatch':
+        return local_name_mismatch(source)
+    if operation == 'zip64-valid':
+        return bytes(as_zip64(source))
+    if operation == 'zip64-locator-wrap':
+        return zip64_locator_wrap(source)
     raise ValueError(f'unknown operation: {operation}')
 
 
