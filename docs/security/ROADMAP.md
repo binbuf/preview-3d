@@ -34,7 +34,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T09 — SEC-09 Child-process loader/plugin hardening → [09-child-process-loader-hardening.md](09-child-process-loader-hardening.md)
 - [x] T10 — SEC-10 Build and process mitigation hardening → [10-build-and-process-mitigations.md](10-build-and-process-mitigations.md)
 - [x] T11 — SEC-11 Viewer local attack-surface reduction → [11-viewer-attack-surface.md](11-viewer-attack-surface.md)
-- [~] T12 — SEC-12 Active-instance IPC hardening → [12-active-instance-ipc.md](12-active-instance-ipc.md) ⟵ failed
+- [x] T12 — SEC-12 Active-instance IPC hardening → [12-active-instance-ipc.md](12-active-instance-ipc.md)
 
 ## Phase 3 — CI, supply chain, and fuzzing
 
@@ -50,11 +50,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T16:39:19Z · 12/20 done
+**Pipeline status** — updated 2026-10-02T18:36:11Z · 13/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12
 - Blocked: none
-- Failed: T12
+- Failed: none
 - Remaining: T13, T14, T15, T16, T17, T18, T19
-- Last finished: T12 — failed · model: UnknownError: Model not found: morphllm/morph-dsv41flash.
+- Last finished: T12 — done · Minimum-rights DACLs + mandatory label, integrity/AppContainer/image client auth, fail-closed squatter rejection, and FIRST_PIPE_INSTANCE pipe reservation landed with new [activation] tests; unit 369/135121, activation 7/66, and Debug activation smoke 8/8 pass; residual deterministic-name medium same-user squat risk documented in ADR-0041.
 <!-- /symphony:status -->

@@ -18,7 +18,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T09 — SEC-09 Child-process loader/plugin hardening**: Reusable facts for later sessions:; **Child hardening pattern.** Each import child must, before parsing, call
 - **T10 — SEC-10 Build and process mitigation hardening**: Reusable facts for later sessions:; **Shared build mitigations.** `Directory.Build.props` now sets `ControlFlowGuard=Guard` and
 - **T11 — SEC-11 Viewer local attack-surface reduction**: Reusable facts for later sessions:; **One reusable safety module.** `interactive-viewer/src/platform/SafeFileOps.{h,cpp}`
-- **Follow-ups**: SEC-14: once the payload is Authenticode-signed, enable Microsoft-signed-image enforcement; SEC-14/T10: rebuild the vcpkg ports (and OCCT closures) with `/guard:ehcont` and install the MSVC
+- **T12 - SEC-12 Active-instance IPC hardening**: Reusable facts for later sessions:; **One security builder, per-object rights.** `interactive-viewer/src/app/ActiveInstance.cpp`
+- **Follow-ups**: T12/SEC-14: once `Preview3D.exe` is Authenticode-signed, extend; T12: add a functional low-integrity rejection test (spawn/impersonate a low-integrity token) to
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -512,7 +513,57 @@ Reusable facts for later sessions:
   literals. Release contains none of the smoke/fault flags; Debug contains all;
   `--benchmark-result=` is in both (validated, not a developer control).
 
+## T12 - SEC-12 Active-instance IPC hardening
+
+Reusable facts for later sessions:
+
+- **One security builder, per-object rights.** `interactive-viewer/src/app/ActiveInstance.cpp`
+  `SecurityForObject(SecuredObject, userSid, …)` is the single place the singleton DACL is built.
+  Rights: mutex `SYNCHRONIZE|MUTEX_MODIFY_STATE|READ_CONTROL` (`0x120001`), event
+  `SYNCHRONIZE|EVENT_MODIFY_STATE|READ_CONTROL` (`0x120002`), pipe `FRFW`; each `O:<user>D:P(SY,user)`
+  plus a medium mandatory label `S:(ML;;NW;;;LW)`. No `GENERIC_ALL`/`WRITE_DAC`/`WRITE_OWNER`. Extend
+  here, not with a new SDDL literal elsewhere.
+- **`CreateEventEx` is auto-reset by default.** `CreateEventW(..., TRUE, ...)` is manual-reset, but
+  `CreateEventExW(..., dwFlags, ...)` needs `CREATE_EVENT_MANUAL_RESET`; flags `0` makes the Ready
+  event auto-reset and the *second* secondary silently times out (`WAIT_TIMEOUT`). This was the T12
+  bug that only showed up on the second activation.
+- **Reusing one named-pipe instance across `DisconnectNamedPipe`→`ConnectNamedPipe` is unsafe here.**
+  Create a fresh instance per connection. `FILE_FLAG_FIRST_PIPE_INSTANCE` is applied only to the first
+  instance; each next instance is created before the previous handle is closed (`nMaxInstances=2`) so
+  the name never lapses and a pre-created pipe still loses.
+- **Peer policy is a pure function.** `active_instance::ClientIdentityAccepted(integrityRid,
+  appContainer, imageMatches, ownChild)` is the testable decision; `AuthenticateClient` feeds it the
+  impersonated token integrity (`TokenIntegrityLevel` last RID), `TokenIsAppContainer`, the client
+  image (`QueryFullProcessImageNameW` from a handle opened *before* impersonation), and parent PID
+  (`CreateToolhelp32Snapshot`). Path equality against `GetModuleFileNameW` handles the portable layout;
+  signer checks are deferred to SEC-14/T10.
+- **Squatter rejection.** On `ERROR_ALREADY_EXISTS`, `ObjectSecurityMatches` compares the existing
+  owner+DACL (via `GetKernelObjectSecurity` → `ConvertSecurityDescriptorToStringSecurityDescriptorW`,
+  `OWNER|DACL` only) to the expected descriptor; mismatch → `Initialize` fails. The abandoned-mutex
+  recovery branch still works because a legitimate predecessor wrote the same descriptor.
+- **Mandatory labels cannot be read in the test process.** Reading a SACL needs `SeSecurityPrivilege`;
+  `GetKernelObjectSecurity(..., SACL_SECURITY_INFORMATION, …)` fails for the unprivileged harness, so
+  `Tests.Unit` asserts the minimum-rights DACL (parsing the SDDL) rather than the `ML` ACE. The label
+  is still passed at creation.
+- **Verify commands.** `MSBuild tests\unit\Tests.Unit.vcxproj /p:Configuration=Release /p:Platform=x64
+  "/p:SolutionDir=D:\repos\binbuf\preview-3d\\"` then `npm test` (369 cases / 135121 assertions) and
+  `x64\Release\Tests.Unit.exe "[activation]"` (7 cases / 66 assertions). The smoke is Debug-only:
+  build `interactive-viewer\Preview3D.vcxproj /p:Configuration=Debug …` then
+  `python tests/app-smoke/activation.py --configuration Debug` (8 checks).
+- **Residual squat risk.** Names stay deterministic (`session + SID hash`); a medium same-user process
+  can still race to pre-create but must reproduce the exact owner+DACL and viewer image, and the pipe
+  reservation blocks capture. A per-logon secret does not help against a medium same-user reader; see
+  ADR-0041.
+
 ## Follow-ups
+
+- T12/SEC-14: once `Preview3D.exe` is Authenticode-signed, extend
+  `active_instance::ClientIdentityAccepted` (or `AuthenticateClient`) to require a signer/`
+  WinVerifyTrust` check on the client image, and re-run the Debug activation smoke.
+- T12: add a functional low-integrity rejection test (spawn/impersonate a low-integrity token) to
+  exercise `AuthenticateClient` end to end; today the rejection is covered by the pure policy test.
+- T12 (viewer attack surface): `tests/app-smoke/activation.py` still accepts `--configuration Release`
+  although `--activation-smoke` is Debug-only (same T11 follow-up as the other lanes).
 
 - SEC-14: once the payload is Authenticode-signed, enable Microsoft-signed-image enforcement
   (`PROCESS_CREATION_MITIGATION_POLICY_BLOCK_NON_MICROSOFT_BINARIES_ALWAYS_ON` in `SandboxLauncher`
