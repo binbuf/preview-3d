@@ -73,7 +73,12 @@ struct SidecarResolution {
 // exist because a model opened from elsewhere can reference assets the user
 // keeps in a separate folder. Each root is trusted only because the trusted
 // UI picked it; the same canonical-containment rule still applies, so a
-// reparse point inside a root cannot address anything outside that root.
+// reparse point inside a root cannot address anything outside that root. The
+// root itself is canonicalized by opening its directory handle
+// (GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED), so an ordinary path the
+// UI supplied compares correctly against the candidate's own canonical path;
+// a root that cannot be canonicalized is skipped (fail closed), never compared
+// as raw text.
 // Only the reference's leaf file name is matched under each root (in the
 // root itself and its `texture`/`textures` subfolders), never the authored
 // relative path -- a user points at "the folder the assets are in", which

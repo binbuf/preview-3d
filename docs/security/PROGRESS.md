@@ -12,6 +12,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T04 — SEC-04 Sidecar reference validation (NUL/control, per-format)**: Reusable facts for later sessions:; **Two-layer control check + explicit UTF-8 failure.** `import_broker/src/SidecarRequestServicer.cpp`
 - **T05 — SEC-05 3MF OPC preflight/library reconciliation**: Reusable facts for later sessions:; **Preflight policy now matches USDZ.** `import-worker/src/ThreeMfOpcPreflight.cpp` rejects
 - **T06 — SEC-06 Provider adapter exception containment**: Reusable facts for later sessions:; **Pattern (chosen).** Keep the frozen `IFamilyAdapter` methods `noexcept`; every adapter's
+- **T06a — SEC-03b Fix user-chosen asset-root canonicalization**: Reusable facts for later sessions:; **Root cause (audit F-11).** `ResolveSidecarPath`'s user-root branch compared
 - **Follow-ups**: SEC-17: the provider-host allocator seam only fails C++ allocations; add a soak/fuzz lane that; `ThreeMfFamilyAdapter.h` still declares `ErrorCode ScanRequiredExtensions();` with no definition
 <!-- symphony:digest:end -->
 
@@ -251,6 +252,39 @@ Reusable facts for later sessions:
 - **Baseline after T06.** `Tests.ProviderHost` Debug and Release: 128 assertions / 6 test cases,
   all pass (was 103/5). `Tests.Unit.exe "[provider]"` Release: 60901 assertions / 214 cases, all
   pass.
+
+## T06a — SEC-03b Fix user-chosen asset-root canonicalization
+
+Reusable facts for later sessions:
+
+- **Root cause (audit F-11).** `ResolveSidecarPath`'s user-root branch compared
+  `AcceptCandidate`'s handle-canonicalized candidate path (`\\?\C:\...`, from
+  `GetFinalPathNameByHandleW(FILE_NAME_NORMALIZED)`) against `DirectoryPrefix(rawRoot)` (`C:\...`),
+  so the prefix never matched and the fallback always missed. Fix:
+  `SidecarPathResolver.cpp::CanonicalDirectoryPrefix` opens the root with
+  `CreateFileW(..., FILE_READ_ATTRIBUTES, FILE_SHARE_READ|FILE_SHARE_WRITE, OPEN_EXISTING,
+  FILE_FLAG_BACKUP_SEMANTICS)`, requires `FILE_ATTRIBUTE_DIRECTORY`, and derives the lowercase
+  trailing-separator prefix from `GetFinalPathNameByHandleW(FILE_NAME_NORMALIZED)`. This mirrors
+  `AcceptCandidate`, so both sides are in the same canonical form. `std::nullopt` (root unopenable /
+  not a directory / canonicalization failed) makes the loop skip the root: fail closed, never compare
+  raw text.
+- **Only the prefix changed.** `FindAssetInUserRoot` still searches the raw user path; the raw path
+  itself is fine for lookup and was never the bug. Do not "fix" the lookup side.
+- **Contract is in `SidecarPathResolver.h`** (the `additionalSearchRoots` comment now states the
+  canonicalize-or-skip rule). ADR 0035 records the decision; rejected a string normalization because
+  it must reimplement reparse/short-name/volume normalization and would disagree with the candidate.
+- **Tests.** `tests/import-isolation/SidecarPathResolverTests.cpp` `[sidecar-resolver][asset-root]`
+  now has six cases: the original normal-path (574), texture subfolder (598), non-image exact-name
+  (612), "still bounded to its own directory tree" security case (626), plus new equivalent-spellings
+  (raw / trailing `\` / `\\?\` prefix / upper-case) and uncanonicalizable-root-skipped. Debug and
+  Release both green (`[asset-root]`: 77 assertions / 6 cases).
+- **Baseline after T06a.** Debug `Tests.ImportIsolation` 395 cases / 2 failed — only
+  `ThreeMfSpikeTests.cpp:345` (Job commit-pressure recovery) and `UsdSpikeTests.cpp:230` (low Job
+  commit cap), both pre-existing and unrelated. Release `Tests.ImportIsolation` is fully green
+  (293018 assertions / 395 cases), which is the task's verify command. `npm test`
+  (`x64\Release\Tests.Unit.exe`) green: 134972 assertions / 350 cases.
+- **Build gotcha.** `MSBuild` is not on PATH in this shell; use
+  `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
 
 ## Follow-ups
 

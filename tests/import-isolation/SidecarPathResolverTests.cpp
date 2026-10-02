@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -643,4 +644,54 @@ TEST_CASE("A user-chosen asset root is still bounded to its own directory tree",
 
     std::error_code error;
     std::filesystem::remove(outside, error);
+}
+
+// The root prefix used for containment is now derived from the opened directory
+// handle, so every ordinary spelling of the same root must still resolve: no
+// trailing separator, one present, an extended-length "\\?\" prefix (the form
+// GetFinalPathNameByHandleW itself returns), and any case.
+TEST_CASE("A user-chosen asset root resolves for equivalent path spellings",
+          "[sidecar-resolver][asset-root]")
+{
+    ScratchPackageDirectory model;
+    ScratchAssetRoot assets;
+    assets.WriteAt(L"spelled.png");
+
+    std::wstring upper = assets.path;
+    for (wchar_t& c : upper) {
+        c = static_cast<wchar_t>(std::towupper(c));
+    }
+    const std::vector<std::wstring> roots{
+        assets.path,
+        assets.path + L"\\",
+        L"\\\\?\\" + assets.path,
+        upper,
+    };
+
+    for (const std::wstring& root : roots) {
+        CAPTURE(root);
+        const std::vector<std::wstring> single{ root };
+        const auto resolved = import_broker::ResolveSidecarPath(
+            model.primaryCanonicalPath, "textures/spelled.png", 1024,
+            /*allowPackageBasenameLookup=*/true, single);
+        REQUIRE(resolved.file);
+        CHECK(resolved.canonicalPath.find(L"spelled.png") != std::wstring::npos);
+    }
+}
+
+// Fail-closed: a root that cannot be opened/canonicalized is skipped, never
+// compared as a raw string prefix.
+TEST_CASE("A user-chosen asset root that cannot be canonicalized is skipped",
+          "[sidecar-resolver][asset-root][security]")
+{
+    ScratchPackageDirectory model;
+    const std::filesystem::path missing =
+        std::filesystem::path(model.root) / L"absent-asset-root";
+
+    const std::vector<std::wstring> roots{ missing.wstring() };
+    const auto resolved = import_broker::ResolveSidecarPath(
+        model.primaryCanonicalPath, "tex.png", 1024,
+        /*allowPackageBasenameLookup=*/true, roots);
+    CHECK_FALSE(resolved.file);
+    CHECK(resolved.rejectionCode == model_core::ImportErrorCode::FileUnavailable);
 }

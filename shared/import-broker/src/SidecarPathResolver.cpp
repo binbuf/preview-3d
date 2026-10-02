@@ -190,6 +190,46 @@ std::wstring DirectoryPrefix(std::filesystem::path directory)
     return prefix;
 }
 
+// Canonicalize a user-chosen asset root by opening the directory handle and
+// asking Windows for its normalized final path -- the exact form
+// AcceptCandidate produces for the opened candidate. The user picks an
+// ordinary path (say C:\Assets), while GetFinalPathNameByHandleW returns the
+// extended "\\?\C:\Assets\" form, so comparing a raw root prefix against a
+// canonicalized candidate can never match (audit finding F-11). std::nullopt
+// means "cannot canonicalize this root" and the caller fails closed by
+// skipping it rather than falling back to the raw path. This also resolves a
+// root that is itself a junction/symlink, and FILE_ATTRIBUTE_DIRECTORY keeps a
+// regular file from being accepted as a root.
+std::optional<std::wstring> CanonicalDirectoryPrefix(const std::filesystem::path& directory)
+{
+    HANDLE rawDirectory = CreateFileW(directory.c_str(), FILE_READ_ATTRIBUTES,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                      FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (rawDirectory == INVALID_HANDLE_VALUE) {
+        return std::nullopt;
+    }
+    platform::Win32Handle directoryHandle(rawDirectory);
+
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!GetFileInformationByHandle(directoryHandle.get(), &information)
+        || (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        return std::nullopt;
+    }
+
+    DWORD requiredLength = GetFinalPathNameByHandleW(directoryHandle.get(), nullptr, 0, FILE_NAME_NORMALIZED);
+    if (requiredLength == 0) {
+        return std::nullopt;
+    }
+    std::wstring canonical(requiredLength, L'\0');
+    DWORD writtenLength = GetFinalPathNameByHandleW(directoryHandle.get(), canonical.data(), requiredLength,
+                                                     FILE_NAME_NORMALIZED);
+    if (writtenLength == 0 || writtenLength >= requiredLength) {
+        return std::nullopt;
+    }
+    canonical.resize(writtenLength);
+    return DirectoryPrefix(std::filesystem::path(canonical));
+}
+
 // The package root a downloaded model's sibling textures live under: the
 // primary file's directory when that parent would itself be a drive root
 // (searching an entire volume is not "a model package"), otherwise the parent.
@@ -504,11 +544,18 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
             if (rootPath.empty()) {
                 continue;
             }
+            // Both sides of AcceptCandidate's containment check must be in the
+            // same handle-canonicalized form; a raw user root never is, so skip
+            // any root that cannot be canonicalized (fail closed).
+            const std::optional<std::wstring> rootPrefix = CanonicalDirectoryPrefix(rootPath);
+            if (!rootPrefix) {
+                continue;
+            }
             const auto match = FindAssetInUserRoot(rootPath, leafName, image, format);
             if (!match) {
                 continue;
             }
-            SidecarResolution userResolved = AcceptCandidate(*match, DirectoryPrefix(rootPath), maxSidecarFileBytes);
+            SidecarResolution userResolved = AcceptCandidate(*match, *rootPrefix, maxSidecarFileBytes);
             if (userResolved.file) {
                 return userResolved;
             }

@@ -25,7 +25,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T04 — SEC-04 Sidecar reference validation (NUL/control, per-format) → [04-sidecar-reference-validation.md](04-sidecar-reference-validation.md)
 - [x] T05 — SEC-05 3MF OPC preflight/library reconciliation → [05-3mf-opc-reconciliation.md](05-3mf-opc-reconciliation.md)
 - [x] T06 — SEC-06 Provider adapter exception containment → [06-provider-exception-containment.md](06-provider-exception-containment.md) ⟵ accepted
-- [~] T06a — SEC-03b Fix user-chosen asset-root canonicalization → [06a-asset-root-canonicalization.md](06a-asset-root-canonicalization.md) ⟵ running
+- [x] T06a — SEC-03b Fix user-chosen asset-root canonicalization → [06a-asset-root-canonicalization.md](06a-asset-root-canonicalization.md)
 
 ## Phase 2 — Provider, process, and viewer hardening
 
@@ -50,11 +50,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T08:16:06Z · 5/19 done
+**Pipeline status** — updated 2026-10-02T14:10:17Z · 7/20 done
 
-- Completed: T01, T02, T03, T04, T05
+- Completed: T01, T02, T03, T04, T05, T06, T06a
 - Blocked: none
-- Failed: T06
+- Failed: none
 - Remaining: T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T06 — failed · verify failed (exit 42): npm test — > test > x64\Release\Tests.Unit.exe Randomness seeded to: 4259318499 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Tests.Unit.exe is a Catch2 v3.16.0 host application. Run with -? for options -------------…
+- Last finished: T06a — done · Canonicalized user-chosen asset roots via directory handle before containment; asset-root cases and Release Tests.ImportIsolation fully green, npm test green; two Debug Job-pressure failures remain pre-existing/unrelated.
 <!-- /symphony:status -->
