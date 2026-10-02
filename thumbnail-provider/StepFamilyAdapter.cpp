@@ -137,6 +137,31 @@ double ElapsedMilliseconds(const SteadyClock::time_point& start) noexcept
     return std::chrono::duration<double, std::milli>(SteadyClock::now() - start).count();
 }
 
+// --- SEC-08 OCCT process-singleton serialization ------------------------------
+//
+// OCCT's `XCAFApp_Application` is a process singleton: the first
+// `GetApplication()` creates it lazily and `NewDocument`/`Close` mutate its
+// document list, so concurrent STEP calls from the surrogate's apartments would
+// race it (ThreadingModel=Apartment isolates objects, not the process globals).
+// Every provider call that touches OCCT (the document read/transfer, the
+// tessellation pass and the final Close) holds this lock, so at most one request
+// drives the kernel at a time. OCCT does not document these entry points as
+// thread-safe for shared documents, so a lock is the conservative choice; the
+// concurrent-STEP harness test proves it.
+//
+// An SRWLOCK (not a std::mutex) is deliberate: the lock is acquired in
+// `noexcept` frames and must not throw, and the guard lives in the *caller* of
+// `RunContained`, above the SEH handler, so a contained access violation cannot
+// unwind past it and leave the lock held.
+SRWLOCK g_occtApplicationLock = SRWLOCK_INIT;
+
+struct OcctApplicationGuard {
+    OcctApplicationGuard() noexcept { ::AcquireSRWLockExclusive(&g_occtApplicationLock); }
+    ~OcctApplicationGuard() noexcept { ::ReleaseSRWLockExclusive(&g_occtApplicationLock); }
+    OcctApplicationGuard(const OcctApplicationGuard&) = delete;
+    OcctApplicationGuard& operator=(const OcctApplicationGuard&) = delete;
+};
+
 // --- affine helpers (row-vector p * M) ---------------------------------------
 
 void IdentityAffine(double out[16]) noexcept
@@ -406,6 +431,8 @@ struct StepAdapter::Impl {
     void Reset() noexcept
     {
         if (!document.IsNull()) {
+            // Serialize the OCCT application singleton with every other OCCT call.
+            OcctApplicationGuard occtGuard;
             try {
                 XCAFApp_Application::GetApplication()->Close(document);
             } catch (...) {
@@ -501,6 +528,11 @@ struct StepAdapter::Impl {
     // fault returns a typed failure and never a fabricated success.
     ErrorCode LoadDocument() noexcept
     {
+        // Serialize the whole OCCT read/transfer against the process singleton and
+        // every other OCCT call. The guard is above the containment SEH frame, so
+        // a contained fault returns here with the lock still owned and it is
+        // released on normal return.
+        OcctApplicationGuard occtGuard;
         loadResult_ = ErrorCode::None;
         loadCompleted_ = false;
         const ContainmentResult contained =
@@ -793,6 +825,9 @@ struct StepAdapter::Impl {
     // boundary: malformed authored tessellation can fault inside the kernel.
     ErrorCode BuildGeometry(const TopoDS_Shape& shape, CachedGeometry& out) noexcept
     {
+        // OCCT meshing runs against process-global kernel state; keep it under
+        // the same singleton lock as the document read/transfer.
+        OcctApplicationGuard occtGuard;
         meshResult_ = ErrorCode::None;
         meshCompleted_ = false;
         activeMeshShape_ = &shape;

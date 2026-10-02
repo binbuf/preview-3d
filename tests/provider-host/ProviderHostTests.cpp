@@ -16,6 +16,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "Containment.h"
 #include "FaultInjectingAllocator.h"
 #include "FamilyAdapterRegistry.h"
 #include "FamilyRouting.h"
@@ -77,6 +78,24 @@ public:
     bool OnTriangle(const preview3d::provider::TriangleSample&) noexcept override { return true; }
     bool OnPoint(const preview3d::provider::PointSample&) noexcept override { return true; }
 };
+
+// A contained call that raises an access violation, for the SEC-08 policy case.
+preview3d::provider::ProviderOutcome RaisedAccessViolationCall(void*)
+{
+    ::RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+    return preview3d::provider::ProviderOutcome::Success;
+}
+
+// The first registered fixture for `family`, or null.
+const GoldenFixture* FindFixture(preview3d::provider::Family family)
+{
+    for (const GoldenFixture& fixture : ProviderHostFixtures()) {
+        if (fixture.family == family) {
+            return &fixture;
+        }
+    }
+    return nullptr;
+}
 
 // One activate/use/unload cycle against a freshly loaded module, plus one
 // in-process placeholder render and DIB round-trip so the loop touches the same
@@ -257,6 +276,71 @@ TEST_CASE("an adapter allocation failure is a typed OutOfMemory, not a process e
         adapter->Reset();
         CHECK(outcome == ErrorCode::OutOfMemory);
     }
+}
+
+TEST_CASE("a contained access violation quarantines the surrogate and later requests fail closed",
+          "[host][containment][quarantine]")
+{
+    using namespace preview3d::provider;
+
+    ResetContainmentQuarantineForTest();
+    REQUIRE_FALSE(ContainmentQuarantined());
+
+    // Inject an access violation through the real shipped boundary.
+    const ContainmentResult contained = RunContained(&RaisedAccessViolationCall, nullptr);
+    CHECK(contained.structuredException);
+    CHECK(contained.structuredCode ==
+          static_cast<std::uint32_t>(EXCEPTION_ACCESS_VIOLATION));
+    CHECK(ContainmentQuarantined());
+    CHECK(ContainmentQuarantineCode() ==
+          static_cast<std::uint32_t>(EXCEPTION_ACCESS_VIOLATION));
+
+    // A later request is refused before any parser runs and fabricates no image.
+    const GoldenFixture* step = FindFixture(Family::Step);
+    REQUIRE(step != nullptr);
+    RasterImage image;
+    CHECK(RunFixture(*step, image) == ProviderOutcome::DecoderFailure);
+    CHECK(image.bgraPremultiplied.empty());
+
+    ResetContainmentQuarantineForTest();
+    CHECK_FALSE(ContainmentQuarantined());
+}
+
+TEST_CASE("two STEP requests run concurrently in one surrogate without racing OCCT",
+          "[host][step][concurrency]")
+{
+    using namespace preview3d::provider;
+
+    ResetContainmentQuarantineForTest();
+
+    const GoldenFixture* step = FindFixture(Family::Step);
+    REQUIRE(step != nullptr);
+    REQUIRE_FALSE(step->source.empty());
+
+    constexpr int kThreads = 2;
+    std::atomic<int> failures{0};
+    std::atomic<int> successes{0};
+
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([step, &failures, &successes] {
+            RasterImage image;
+            if (RunFixture(*step, image) != ProviderOutcome::Success ||
+                image.width == 0 || image.bgraPremultiplied.empty()) {
+                ++failures;
+            } else {
+                ++successes;
+            }
+        });
+    }
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    CHECK(failures.load() == 0);
+    CHECK(successes.load() == kThreads);
+    CHECK_FALSE(ContainmentQuarantined());
 }
 
 TEST_CASE("multiple STA apartments drive provider objects concurrently", "[host][parallel]")

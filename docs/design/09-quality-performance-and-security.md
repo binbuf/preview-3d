@@ -141,6 +141,14 @@ An 8-hour scenario repeatedly opens mixed valid/malformed files through cold/cac
 - an import worker, compatibility host, STEP host, temporary cache write, or broker handle surviving its generation;
 - UI heartbeat or shutdown deadline violation.
 
+The soak's any-crash rule has one documented exception, defined by the SEC-08 policy
+([ADR-0037](./adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)): a stack-overflow
+or uncatchable `__fastfail`/stack-cookie fault inside a third-party parser re-raises and kills the
+surrogate. That death is an *allowed* failure — the surrogate is the crash-containment boundary
+(ADR-0005) — provided the soak records the fault code and the input and the process restarts cleanly.
+A contained access violation is different: it must be quarantined (later requests fail closed, no
+fabricated thumbnail) rather than treated as a normal pass or silently ignored.
+
 ## Graphics validation
 
 Developer validation builds enable:

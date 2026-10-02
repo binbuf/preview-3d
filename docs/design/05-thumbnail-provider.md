@@ -349,7 +349,11 @@ deflection `0.05` clamped to `[0.01, 5.0]`, angle `0.7`; 1 M triangles per
 definition, 2 M inspected total) with shape/instance colors normalized to the
 shared `MaterialPayload`. A non-contiguous or over-128 MiB stream is read through
 bounded range reads; an over-`kAllocationLedgerMaxBytes` accounted scratch
-reservation fails closed.
+reservation fails closed. Every provider OCCT entry point — the lazily created
+`XCAFApp_Application` singleton, `NewDocument`/`Close`, the reader/transfer pass
+and the tessellation pass — is serialized by one process-global `SRWLOCK`
+([ADR-0037](adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)),
+so concurrent STEP requests cannot race OCCT's document list.
 
 ## CPU renderer
 
@@ -420,7 +424,24 @@ the last-resort HRESULT boundary that translates a C++ exception (`std::bad_allo
 anything else -> `E_FAIL`) and a contained structured exception (`E_FAIL`) to the T06 table. A call
 already in progress is never interrupted: `RunContained` records the real elapsed time and, if an
 uninterruptible call returned after the cooperative 2 s stop point, rejects it afterwards as
-`ERROR_TIMEOUT`. Stack overflow, breakpoint and single-step are deliberately not swallowed.
+`ERROR_TIMEOUT`. Stack overflow, breakpoint and single-step are deliberately not swallowed: a stack
+overflow cannot be handled safely in-process and the debug exceptions belong to a debugger, so they
+are re-raised and the surrogate dies; a `__fastfail`/stack-cookie fault is not a catchable
+structured exception at all and likewise kills the process. That process death is an *expected*,
+allowed failure of the surrogate soak (SEC-17), recorded with its code — never counted as a passing
+run.
+
+T08/SEC-08 adds the contained-fault policy ([ADR-0037](adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)):
+a contained structured exception may have corrupted the process, so the boundary records the fault
+(`MarkContainmentQuarantined`) and `RunThumbnailPipeline` refuses every *later* request with
+`ProviderOutcome::DecoderFailure` (`E_FAIL`, no fabricated bitmap) before any adapter or parser
+runs, while requests already in flight drain. The transition and each refusal emit a
+`DiagnosticStage::Containment` event with `quarantined=true`; the state is readable through
+`ContainmentQuarantined()`. Quarantine is chosen over fail-fast because it keeps the safety property
+identical (no later request runs on suspected-corrupt state) without discarding unrelated in-flight
+work, and the Shell reclaims the quarantined surrogate on its next lifecycle. All provider OCCT
+kernel use is additionally serialized by a process-global `SRWLOCK` held above the containment SEH
+handler ([ADR-0037](adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)).
 Diagnostics are `thumbnail-provider/Diagnostics.{h,cpp}`: numeric events only (no field a path could
 travel in), emitted only while explicitly enabled or via
 `PREVIEW3D_THUMBNAIL_DIAGNOSTICS=1`, and off by default.
@@ -447,10 +468,12 @@ matching product-owned path: every family adapter routes its allocating lifecycl
 containers is `ErrorCode::OutOfMemory` too ([ADR-0034](adr/0034-provider-adapter-stage-containment.md)).
 A contained fault
 returns the tabulated failure with a diagnostic event, never a fabricated success; the ordinary
-memory fault behind it is still expected to be fuzzed and fixed (T43). Diagnostics are
-`thumbnail-provider/Diagnostics.h`/`Diagnostics.cpp`: events carry only a stage, outcome, counters and
-elapsed time — no string field exists, so a path cannot leak — and are disabled unless troubleshooting
-is enabled.
+memory fault behind it is still expected to be fuzzed and fixed (T43). A contained *structured*
+fault additionally quarantines the process: later requests fail closed before any parser runs
+([ADR-0037](adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)). Diagnostics are
+`thumbnail-provider/Diagnostics.h`/`Diagnostics.cpp`: events carry only a stage, outcome, counters,
+elapsed time and the `quarantined` flag — no string field exists, so a path cannot leak — and are
+disabled unless troubleshooting is enabled.
 
 An importer crash must be addressed by fuzzing/fixing; SEH containment is a last-resort HRESULT boundary, not a correctness mechanism.
 
@@ -477,6 +500,10 @@ Explorer is allowed to fall back to the generic icon. Returning a fabricated “
 - STA parallel-host stress using multiple COM objects.
 - The COM host harness `Tests.ProviderHost.exe` (T17, [ADR-0019](adr/0019-provider-com-host-harness.md)) drives the Shell activation sequence per CLSID, compares a registered fixture rendered through the real pipeline against a tolerant PAM golden, and soaks repeated load/unload against GDI/User/private-byte/thread growth.
 - Truncation, archive bomb, adversarial count, non-seekable stream, timeout, OOM injection, and fuzz corpora.
+- Containment policy: a contained access violation quarantines the surrogate and later requests
+  fail closed (`[provider][threading][quarantine]`, `[provider][pipeline][quarantine]`,
+  `[host][containment][quarantine]`), and two concurrent STEP requests in one surrogate do not race
+  the serialized OCCT singleton (`[host][step][concurrency]`).
 - Repeated Explorer surrogate load/unload with GDI/User handle and private-byte leak checks.
 - Verification in the actual Windows thumbnail surrogate at 100%, 150%, and 200% DPI.
 - Post-install verification, on a clean machine, that each registered CLSID is actually loaded into the isolated surrogate process (not `explorer.exe`) and that no installed registry value sets `DisableProcessIsolation`; this is a release-blocking check, not an optional audit.

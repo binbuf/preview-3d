@@ -10,6 +10,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <new>
 
 namespace preview3d::provider {
@@ -19,6 +20,12 @@ namespace {
 // no destructor, so it never registers a TLS callback and cannot keep the
 // module artificially loaded (design/05, "Threading and unload").
 thread_local std::uint32_t t_sehCode = 0;
+
+// SEC-08 process-global quarantine. Set once when any contained structured
+// exception is translated; never cleared in production. Pure bookkeeping (two
+// atomics), so it cannot keep the module alive.
+std::atomic<bool> g_quarantined{false};
+std::atomic<std::uint32_t> g_quarantineCode{0};
 
 int SehFilter(EXCEPTION_POINTERS* info) noexcept
 {
@@ -63,6 +70,9 @@ ProviderOutcome SehBoundary(ContainedCall call, void* context, bool* cppThrew,
         return CppBoundary(call, context, cppThrew, outOfMemory);
     } __except (SehFilter(GetExceptionInformation())) {
         *sehCode = t_sehCode;
+        // SEC-08: a contained structured fault may have corrupted the process;
+        // quarantine it so no later request runs on suspect state.
+        MarkContainmentQuarantined(t_sehCode);
         return ProviderOutcome::DecoderFailure;
     }
 }
@@ -79,6 +89,39 @@ bool ShouldContainStructuredCode(std::uint32_t code) noexcept
         default:
             return true;
     }
+}
+
+bool ContainmentQuarantined() noexcept
+{
+    return g_quarantined.load(std::memory_order_acquire);
+}
+
+std::uint32_t ContainmentQuarantineCode() noexcept
+{
+    return g_quarantineCode.load(std::memory_order_acquire);
+}
+
+void MarkContainmentQuarantined(std::uint32_t structuredCode) noexcept
+{
+    // First fault wins: keep the code that isolated the corrupted state.
+    if (g_quarantined.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    g_quarantineCode.store(structuredCode, std::memory_order_release);
+
+    DiagnosticEvent event{};
+    event.stage = DiagnosticStage::Containment;
+    event.outcome = ProviderOutcome::DecoderFailure;
+    event.structuredException = true;
+    event.structuredCode = structuredCode;
+    event.quarantined = true;
+    Diagnostics::Emit(event);
+}
+
+void ResetContainmentQuarantineForTest() noexcept
+{
+    g_quarantineCode.store(0, std::memory_order_release);
+    g_quarantined.store(false, std::memory_order_release);
 }
 
 ContainmentResult RunContained(ContainedCall call, void* context,

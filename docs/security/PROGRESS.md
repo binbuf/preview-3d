@@ -14,7 +14,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T06 — SEC-06 Provider adapter exception containment**: Reusable facts for later sessions:; **Pattern (chosen).** Keep the frozen `IFamilyAdapter` methods `noexcept`; every adapter's
 - **T06a — SEC-03b Fix user-chosen asset-root canonicalization**: Reusable facts for later sessions:; **Root cause (audit F-11).** `ResolveSidecarPath`'s user-root branch compared
 - **T07 — SEC-07 Provider stream/raster/accounting robustness**: Reusable facts for later sessions:; **Stream size validation.** `thumbnail-provider/StreamSource.cpp` has
-- **Follow-ups**: SEC-08/T51: STEP's `occurrences_` vector (16-byte transform + definition/index; SEC-17: the provider-host allocator seam only fails C++ allocations; add a soak/fuzz lane that
+- **T08 — SEC-08 Provider containment policy (AV, stack, OCCT)**: Reusable facts for later sessions:; **Policy chosen: quarantine, not fail-fast (ADR-0037).** On the first contained structured
+- **Follow-ups**: SEC-17: implement the soak's SEC-08 allowed-failure classification. A stack-overflow or; SEC-08/T51: STEP's `occurrences_` vector (16-byte transform + definition/index
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -330,8 +331,61 @@ Reusable facts for later sessions:
   (was 350). `Tests.ProviderHost` Debug and Release: 128 assertions / 6 cases,
   all pass. New cases: 2 stream, 2 rasterizer, 1 STEP.
 
+## T08 — SEC-08 Provider containment policy (AV, stack, OCCT)
+
+Reusable facts for later sessions:
+
+- **Policy chosen: quarantine, not fail-fast (ADR-0037).** On the first contained structured
+  exception the T16 boundary records the code and sets a process-global quarantine
+  (`thumbnail-provider/Containment.cpp`: `MarkContainmentQuarantined`,
+  `ContainmentQuarantined`, `ContainmentQuarantineCode`). `RunThumbnailPipeline` refuses every
+  later request with `ProviderOutcome::DecoderFailure` (`E_FAIL`, no image) before any adapter or
+  parser runs, while in-flight requests drain. The transition and each refusal emit a
+  `DiagnosticStage::Containment` event (`DiagnosticEvent.quarantined=true`; new enum value `8`, new
+  `Diagnostics.cpp` field `quarantined=%u`). Chosen over fail-fast because it keeps the safety
+  property (no later request on suspect state) without discarding unrelated in-flight work and is
+  positively testable in-process; the Shell reclaims the surrogate. Stack
+  overflow/breakpoint/single-step are not contained and never quarantine.
+- **Test-only reset.** `ResetContainmentQuarantineForTest()` must bracket any case that injects an
+  AV through `RunContained` (the state is process-global; `Tests.Unit` shares one process). The AV
+  cases in `ProviderThreadingTests.cpp` use a `QuarantineReset` RAII guard; the pipeline/host cases
+  call the reset directly.
+- **OCCT singleton serialized.** `StepFamilyAdapter.cpp` holds one process-global
+  `SRWLOCK g_occtApplicationLock` (guard type `OcctApplicationGuard`) across `Impl::Reset`
+  (`GetApplication()->Close`), `LoadDocument` (lazy `GetApplication` + `NewDocument` + reader +
+  transfer) and `BuildGeometry` (meshing). `SRWLOCK` not `std::mutex` because the acquisition sites
+  are `noexcept`; the guard lives in the caller of `RunContained`, *above* the SEH handler, so a
+  contained AV cannot leave it locked. Do not acquire it recursively (no nesting today).
+- **Stack-overflow/`__fastfail` are explicit allowed failures.** design/05 and design/09 now record
+  that a re-raised stack overflow or an uncatchable `__fastfail`/stack-cookie fault kills the
+  surrogate and must be classified by the SEC-17 soak as an allowed failure (code + input recorded,
+  process restarts), never as a pass. T08 did not add the soak; SEC-17 owns it (see Follow-ups).
+- **Tests.** `Tests.Unit` `[provider][threading][quarantine]` (boundary transition + first-fault-wins
+  + uncatchable code) and `[provider][pipeline][quarantine]` (quarantined request refused before any
+  adapter runs); `Tests.ProviderHost` `[host][containment][quarantine]` (real injected AV through the
+  shipped boundary then a refused fixture) and `[host][step][concurrency]` (two STEP requests in one
+  surrogate, both succeed). Unit: Debug/Release 357 cases; host: Debug/Release 142 assertions /
+  8 cases.
+- **Build gotcha (LTCG).** After changing a provider inline header (Diagnostics/Containment), an
+  incremental `/GL` build can crash at link time (`LNK1000: Internal error during IMAGE::BuildImage`,
+  sometimes reported as `C1001` on an unrelated TU such as `gltfspikedecodetests.cpp`) because stale
+  LTCG objects are mixed with new ones. Fix: `MSBuild ... /t:Rebuild`. A normal incremental build is
+  fine once every object matches the header.
+- **Verify commands.** `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`
+  (MSBuild is not on PATH). Build `thumbnail-provider\Preview3DThumbnailProvider.vcxproj`,
+  `tests\unit\Tests.Unit.vcxproj` and `tests\provider-host\Tests.ProviderHost.vcxproj` with
+  `/p:Configuration=Debug|Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\"`.
+  Run `x64\<Config>\Tests.Unit.exe` and `x64\<Config>\Tests.ProviderHost.exe`. Do **not** pipe the
+  exe through `Select-Object -Last N` to read its tail: closing the pipe early can return a bogus
+  nonzero exit code; redirect to a file and read the tail instead.
+
 ## Follow-ups
 
+- SEC-17: implement the soak's SEC-08 allowed-failure classification. A stack-overflow or
+  `__fastfail`/stack-cookie process death must be recorded (fault code + input) and the process
+  restarted, not counted as a pass; a contained AV must be observed as a quarantine with later
+  requests failing closed (see `docs/design/09-quality-performance-and-security.md`, "End-to-end
+  soak", and ADR-0037). The provider-host has no real-dllhost soak yet.
 - SEC-08/T51: STEP's `occurrences_` vector (16-byte transform + definition/index
   per instance, bounded only by the 20M reference preflight) is still not charged
   to the ledger; T07 reconciled only the geometry cache/build reservation. If a

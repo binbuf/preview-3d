@@ -55,6 +55,7 @@ const char* DiagnosticStageName(DiagnosticStage stage) noexcept
         case DiagnosticStage::Render: return "render";
         case DiagnosticStage::Bitmap: return "bitmap";
         case DiagnosticStage::Unload: return "unload";
+        case DiagnosticStage::Containment: return "containment";
     }
     return "unknown";
 }
@@ -111,12 +112,13 @@ std::size_t FormatDiagnostic(const DiagnosticEvent& event, char* buffer,
     }
     const int written = std::snprintf(
         buffer, size,
-        "stage=%s outcome=%s elapsed_ms=%u seh=%u cpp=%u overrun=%u",
+        "stage=%s outcome=%s elapsed_ms=%u seh=%u cpp=%u overrun=%u quarantined=%u",
         DiagnosticStageName(event.stage), DiagnosticOutcomeName(event.outcome),
         static_cast<unsigned>(event.elapsedMs),
         static_cast<unsigned>(event.structuredException),
         static_cast<unsigned>(event.cppException),
-        static_cast<unsigned>(event.overranStop));
+        static_cast<unsigned>(event.overranStop),
+        static_cast<unsigned>(event.quarantined));
     if (written < 0) {
         buffer[0] = '\0';
         return 0;

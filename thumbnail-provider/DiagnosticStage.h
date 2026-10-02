@@ -19,6 +19,7 @@ enum class DiagnosticStage : std::uint32_t {
     Render = 5,
     Bitmap = 6,
     Unload = 7,
+    Containment = 8,
 };
 
 } // namespace preview3d::provider

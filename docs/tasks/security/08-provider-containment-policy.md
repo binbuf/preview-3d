@@ -52,4 +52,45 @@ STEP requests cannot race OCCT's process singleton.
 - [ ] Hand-off filled in.
 
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+
+**What landed.**
+- **Contained-AV policy = quarantine (option b).** `Containment.cpp` now records the first contained
+  structured exception in a process-global quarantine
+  (`MarkContainmentQuarantined`/`ContainmentQuarantined`/`ContainmentQuarantineCode`).
+  `RunThumbnailPipeline` refuses every later request with `DecoderFailure` (`E_FAIL`, no bitmap)
+  before any adapter/parser runs, while in-flight requests drain. The transition and each refusal are
+  observable: new `DiagnosticStage::Containment`, new `DiagnosticEvent.quarantined` field (and
+  `quarantined=%u` in `FormatDiagnostic`). `ResetContainmentQuarantineForTest` clears it for tests.
+  Decision + rationale: ADR-0037 and `docs/design/05-thumbnail-provider.md` ("Threading and unload",
+  "Security and robustness").
+- **OCCT serialized.** `StepFamilyAdapter.cpp` holds one process-global `SRWLOCK` across
+  `Impl::Reset` (Close), `LoadDocument` (GetApplication/NewDocument/reader/transfer) and
+  `BuildGeometry` (meshing). The guard is acquired in frames above the containment SEH handler, so a
+  contained AV cannot leave it locked; `SRWLOCK` because the sites are `noexcept`.
+- **Stack-overflow/`__fastfail` made explicit.** design/05 and design/09 state that a re-raised stack
+  overflow or an uncatchable `__fastfail`/stack-cookie fault kills the surrogate and is an SEC-08
+  *allowed* soak failure that must be recorded, not a pass. The soak itself is SEC-17 (follow-up
+  recorded in `docs/security/PROGRESS.md`).
+- **Tests.** `Tests.Unit`: `[provider][threading][quarantine]` and `[provider][pipeline][quarantine]`.
+  `Tests.ProviderHost`: `[host][containment][quarantine]` (real injected AV through the shipped
+  boundary, then a refused fixture) and `[host][step][concurrency]` (two STEP requests in one
+  surrogate).
+
+**Deviations.** None from Scope. Chose quarantine over fail-fast: same safety property (no later
+request on suspect state) without discarding unrelated in-flight work, and it is positively testable
+in the in-process harness (ADR-0037 records the rejected fail-fast option).
+
+**Check results.**
+- `x64\Release\Tests.Unit.exe`: 135005 assertions / 357 cases, all pass (exit 0).
+- `x64\Debug\Tests.Unit.exe`: 135080 assertions / 357 cases, all pass.
+- `x64\Release\Tests.ProviderHost.exe`: 142 assertions / 8 cases, all pass.
+- `x64\Debug\Tests.ProviderHost.exe`: 142 assertions / 8 cases, all pass.
+- Rebuilt `Preview3DThumbnailProvider.dll` Release (0 warnings/errors). Commands in
+  `docs/security/PROGRESS.md` ("T08"), including the LTCG `/t:Rebuild` gotcha.
+
+**What the next task must know.** SEC-17 owns the soak allowed-failure classification (av/stack/
+fastfail). The quarantine is process-global, so any new unit/host case that injects an SEH fault must
+call `ResetContainmentQuarantineForTest()` before finishing. `occurrences_` ledger accounting (T51)
+is still open.
+
+**Remaining work / blockers.** None for this task.

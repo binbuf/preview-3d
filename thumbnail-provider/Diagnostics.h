@@ -38,6 +38,7 @@ struct DiagnosticEvent {
     bool cppException = false;       // a C++ exception was translated
     bool structuredException = false;// a structured exception was translated
     std::uint32_t structuredCode = 0;// SEH code when structuredException
+    bool quarantined = false;        // SEC-08 policy transition (set or refused)
 };
 
 namespace Diagnostics {
