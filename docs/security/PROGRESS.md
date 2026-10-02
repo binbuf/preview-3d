@@ -23,6 +23,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T13 — SEC-13 CI test gate for PRs and releases**: Reusable facts for later sessions:; **One reusable gate workflow.** `.github/workflows/ci.yml` triggers on `pull_request`, push to
 - **T14 — SEC-14 Release and supply-chain hardening**: Reusable facts for later sessions:; **Permissions cannot be conditional.** GitHub Actions `permissions` (top-level or job-level) does
 - **T15 — SEC-15 Fuzz targets: STL, PLY, OBJ**: Reusable facts for later sessions:; **Three targets, one convention.** `tests/fuzz/StlFuzz.cpp`, `PlyFuzz.cpp`, and `ObjFuzz.cpp`
+- **T16 - SEC-16 Fuzz targets: glTF + compressed codecs**: Reusable facts for later sessions:; **One target, seven domains.** `tests/fuzz/GltfFuzz.cpp` (+ `GltfFuzz.vcxproj`, GUID
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -656,6 +657,27 @@ Reusable facts for later sessions:
   reusable gate and cannot be split by event without duplicating the Debug/Release matrix. It is not
   a write vector today (`feed-access: read` off `push`), but a future refactor could split it the
   same way `dependencies.yml` was.
+- **SEC-16 finding (KTX-Software 4.4.2 ETC1S/basisu).** `TranscodeKtx2BasisImage` (and therefore
+  `ImportGltf` with an embedded `KHR_texture_basisu` image) reaches a deterministic null-deref in
+  `basist::basisu_lowlevel_etc1s_transcoder::transcode_slice` for a two-byte mutation of the frozen
+  `interactive-viewer/test-assets/basisu_sample.ktx2` ETC1S supercompression global data. The
+  `Ktx2Preflight`/`PreflightKtx2` header/level checks pass; the crash is in the third-party bitstream
+  decoder. Minimized seed: `tests/fuzz/corpus/gltf/basislz-etc1s-crash.env` (and `.ktx2`). Fix
+  required: upstream KTX-Software/basisu patch, or a product-owned ETC1S global-data guard, before
+  the seed can join the smoke corpus. The design's "corrupt optional texture uses a deterministic
+  fallback" contract is violated until then; production containment is only the AppContainer/Job
+  worker boundary.
+- **SEC-16 finding (fastgltf 0.9.0 base64).** `ImportGltf`'s `fastgltf::Parser::loadGltf` reaches a
+  heap-buffer-overflow in `fastgltf::base64::fallback_decode_inplace` (`base64.cpp:413`) for a
+  `.gltf` data URI whose base64 payload length is not a multiple of four; the write overruns the
+  buffer sized by the product's `setBufferAllocationCallback`. Minimized seed:
+  `tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env`. Fix required: upstream fastgltf patch, or a
+  product-owned data-URI base64 preflight (length multiple-of-four plus decoded-size cap) before
+  `loadGltf`.
+- **SEC-16/17 CI promotion.** Do not add `GltfFuzz` to the `fuzz-smoke` matrix until the two decoder
+  findings above are mitigated; the target's Adapter domain rediscovers both within a ~60 s run.
+  Once fixed, add the glTF+codec entry (one target per runner) and then promote the whole lane to the
+  required gate.
 
 ## T13 — SEC-13 CI test gate for PRs and releases
 
@@ -785,3 +807,38 @@ Reusable facts for later sessions:
 - **Not instrumented.** The OBJ adapter's texture/image decode stages (SEC-16 codecs), the
   `ChunkBatchSink` batch handshake, mapped-window streaming, and the real AppContainer/Job/product
   size caps; those stay in the provider and import-isolation lanes. See ADR-0044.
+## T16 - SEC-16 Fuzz targets: glTF + compressed codecs
+
+Reusable facts for later sessions:
+
+- **One target, seven domains.** `tests/fuzz/GltfFuzz.cpp` (+ `GltfFuzz.vcxproj`, GUID
+  `{A1B2C3D4-0004-...}`) links the real product code: `import-worker/src/GltfAdapter.cpp` and the
+  Draco/meshopt/KTX2/WebP/WIC adapters, plus `ChunkBatchSink.cpp`, `SidecarFileClient.cpp`,
+  `model-core/{ControlChannelIo,MappedFile}.cpp`, `platform/MappedView.cpp`. Envelope is
+  `struct { uint32_t magic ("GLTZ"=0x5A544C47); uint8_t domain; uint8_t flags; uint16_t reserved; }`
+  (8 bytes) + payload. Domains: `Adapter=0`, `Draco=1`, `Meshopt=2`, `Ktx2=3`, `WebP=4`,
+  `WicRaster=5`, `Sniff=6`. Adapter drives `ImportGltf(payload, dest, 1, 1+(flags&0x1f), nullptr,
+  nullptr, TextureDecodeOptions)` with a 4 MiB output window.
+- **Linking against non-ASan vcpkg static libs.** The target must define
+  `_DISABLE_STL_ANNOTATION` (in the vcxproj `PreprocessorDefinitions`) or `ktx.lib`/`simdjson.lib`
+  fail `LNK2038` (`annotate_string/vector/optional` 0 vs 1). ASan still instruments product code and
+  its `memcpy`/store interceptors catch some third-party over-writes. Needs the root vcpkg manifest
+  (`fastgltf`, `simdjson`, `draco`, `basisu`, `ktx`, `meshoptimizer`, `libwebp`) and
+  `FASTGLTF_ENABLE_DEPRECATED_EXT=1`.
+- **Build/run** (MSBuild not on PATH):
+  `"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" tests\fuzz\GltfFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\" /p:VcpkgRoot=C:\vcpkg /p:VcpkgManifestInstall=false /m:1`
+  then `python tests/fuzz/prepare_gltf_seeds.py TestResults/security-t16/gltf-seeds` and
+  `tests\fuzz\x64\Release\GltfFuzz.exe TestResults/security-t16/gltf-seeds -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=2097160 -print_final_stats=1 -verbosity=0`.
+- **Two deterministic findings, smoke blocked.** The first run crashed on the pinned decoders within
+  ~20 s. `tests/fuzz/corpus/gltf/` holds the minimized seeds + README:
+  `basislz-etc1s-crash.env`/`.ktx2` (KTX-Software 4.4.2 ETC1S `transcode_slice` null-deref) and
+  `fastgltf-base64-overflow.env` (fastgltf 0.9.0 `fallback_decode_inplace` heap overflow on a
+  non-multiple-of-four data-URI base64). `GltfFuzz` therefore drives `PreflightKtx2` only for
+  BasisLZ/ETC1S (no third-party ETC1S transcode), excludes the valid BasisLZ GLB from its generated
+  adapter seeds, and is NOT yet in the `fuzz-smoke` matrix. Codec domain sizes:
+  Draco header 8 bytes (u32 expectedVertices, u32 expectedIndices), Meshopt header 16 bytes
+  (u32 count, u32 stride, u64 decodedByteLength), flags select mode/filter/semantics.
+- **Do not edit the corpus manifest for these.** `interactive-viewer/test-assets/corpus/manifest.json`
+  is SHA-pinned by `FixtureManifestTests`; the findings live under `tests/fuzz/corpus/gltf/` and
+  `.gitattributes` marks `tests/fuzz/corpus/** -text`.
+- **`Tests.Unit.exe "~[graphics]"` stays green** (no production code changed). See ADR-0045.

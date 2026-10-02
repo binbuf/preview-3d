@@ -199,6 +199,16 @@ Each format has a standalone, no-GPU fuzz target that accepts bytes plus a const
 
 Seed corpora include official conformance assets, product regressions, minimized crashes, unsupported feature examples, and cross-format mutations. Continuous fuzzing uses ASan/UBSan-compatible builds; every unique crash, timeout, excessive allocation, or assertion is minimized and becomes a regression test. Parser dependency updates must run the complete corpus before merge.
 
+SEC-16 adds `GltfFuzz` (`tests/fuzz/GltfFuzz.cpp`) for the GLB/glTF JSON,
+accessor/sparse/range, node-graph, and Draco/meshopt/KTX2/WebP/WIC adapter
+surfaces; see [ADR-0045](adr/0045-gltf-codec-fuzz-findings.md). Its first run
+found two deterministic crashes inside the pinned third-party decoders
+(KTX-Software 4.4.2 ETC1S/BasisLZ transcode; fastgltf 0.9.0 base64 data URI),
+minimized under `tests/fuzz/corpus/gltf/` and contained in production only by
+the AppContainer/Job worker boundary. Until a product mitigation or upstream
+fix lands, those seeds stay out of the smoke corpus and the glTF/codec target
+is not promoted into the `fuzz-smoke` matrix.
+
 ## Threat model
 
 An attacker may control:

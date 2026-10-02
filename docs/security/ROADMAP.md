@@ -41,7 +41,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T13 — SEC-13 CI test gate for PRs and releases → [13-ci-test-gate.md](13-ci-test-gate.md)
 - [x] T14 — SEC-14 Release and supply-chain hardening → [14-ci-release-supply-chain.md](14-ci-release-supply-chain.md)
 - [x] T15 — SEC-15 Fuzz targets: STL, PLY, OBJ → [15-fuzz-fast-path-parsers.md](15-fuzz-fast-path-parsers.md)
-- [ ] T16 — SEC-16 Fuzz targets: glTF + compressed codecs → [16-fuzz-gltf-and-codecs.md](16-fuzz-gltf-and-codecs.md)
+- [~] T16 — SEC-16 Fuzz targets: glTF + compressed codecs → [16-fuzz-gltf-and-codecs.md](16-fuzz-gltf-and-codecs.md) ⟵ blocked
 - [ ] T17 — SEC-17 Provider pipeline fuzz + surrogate soak → [17-fuzz-provider-and-soak.md](17-fuzz-provider-and-soak.md)
 
 ## Phase 4 — Documentation and release metadata
@@ -50,11 +50,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T19:02:27Z · 16/20 done
+**Pipeline status** — updated 2026-10-02T19:18:13Z · 16/20 done
 
 - Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15
-- Blocked: none
+- Blocked: T16
 - Failed: none
-- Remaining: T16, T17, T18, T19
-- Last finished: T15 — done · Added StlFuzz/PlyFuzz (real adapters + parser-core domains) and ObjFuzz (ufbx OBJ/MTL via in-memory virtual sidecar), three seed preparers, README/ADR-0044/design-doc updates, and STL/PLY/OBJ entries in the ci.yml fuzz-smoke matrix. All three build Release x64 with ASan+fuzzer and ran 30 s each (Stl 41,338 units; Ply 28,875; Obj 212,803) exit 0, no ASan findings; Tests.Unit "~[graphics]" green; actionlint clean.
+- Remaining: T17, T18, T19
+- Last finished: T16 — blocked · GltfFuzz target + seed preparer + README/ADR-0045/PROGRESS/Hand-off landed and build with ASan; the bounded run surfaced two deterministic crashes in pinned upstream decoders (KTX-Software 4.4.2 ETC1S transcode; fastgltf 0.9.0 base64 data URI) that were minimized into tests/fuzz/corpus/gltf, so the "no findings" criterion and fuzz-smoke promotion need a human decision (patch/upgrade, product mitigations, or accept as Job-contained).
 <!-- /symphony:status -->

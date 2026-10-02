@@ -180,3 +180,63 @@ product limits. The adapter's texture/image decode stages and the normalized
 chunk writer are not sanitizer-instrumented here: compressed codecs are SEC-16,
 and the provider/worker lanes cover adapter emission. The seed preparer refuses
 a non-empty directory.
+
+## glTF + compressed codecs
+
+`GltfFuzz` links the real product code: `import_worker::ImportGltf` (GLB
+container parser, the simdjson JSON preflight and its array/storage bounds,
+accessor/bufferView range validation, sparse accessors, the bounded node graph,
+and adapter normalization) plus the Draco, meshopt, KTX2/Basis, WebP, and WIC
+adapter entry points. One 8-byte envelope (format selector + flags + bytes)
+selects a domain:
+
+- `Adapter` — `ImportGltf` with `sidecarClient`/`batchSink` null and a 4 MiB
+  output window, so only the always-self-contained GLB/embedded-data-URI path
+  runs (external `.bin`/image sidecars go through the pipe-based
+  `SidecarFileClient` and are covered by SEC-04 and the real worker, not here);
+- `Draco` — `DecodeDracoMesh` with expected vertex/index counts carried in an
+  8-byte header, exercising the SEC-02 declared-vs-expected connectivity check
+  and the decoder bounds;
+- `Meshopt` — `DecodeMeshoptBuffer` with count/stride/decoded-length in a
+  16-byte header and every mode/filter reachable;
+- `Ktx2` — `model_core::PreflightKtx2` header/level validation for BasisLZ
+  (ETC1S) containers and the real `TranscodeKtx2BasisImage` for
+  UASTC/uncompressed containers;
+- `WebP`, `WicRaster` — `DecodeWebpImage` and `DecodeRasterImageWic` with
+  mutated dimension/encoded/decoded caps and semantics;
+- `Sniff` — `SniffImageFormat` plus the reference-extension policy.
+
+```powershell
+python tests/fuzz/prepare_gltf_seeds.py TestResults/security-t16/gltf-seeds
+msbuild tests/fuzz/GltfFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=<root>\" /p:VcpkgRoot=<vcpkg> /p:VcpkgManifestInstall=false
+tests/fuzz/x64/Release/GltfFuzz.exe TestResults/security-t16/gltf-seeds -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=2097160 -print_final_stats=1 -verbosity=0
+```
+
+The target uses the root vcpkg manifest (fastgltf/simdjson/draco/meshoptimizer/
+ktx/basisu/libwebp). Those pinned static libraries are **not**
+sanitizer-instrumented; ASan still instruments the product-owned preflights and
+adapter code and its interceptor catches some third-party over-writes.
+`_DISABLE_STL_ANNOTATION` is set for this target only because an
+ASan-instrumented TU cannot link `ktx.lib`/`simdjson.lib` (which emit
+`detect_mismatch(annotate_*=0)`) with the default asan container annotations.
+The 2 MiB input and 4 MiB output caps keep one unit bounded; the real
+AppContainer/Job worker stays the process-containment evidence.
+
+**Known findings — smoke promotion blocked.** Two deterministic crashes were
+found in the pinned third-party decoders and are minimized under
+`tests/fuzz/corpus/gltf/` (see its README):
+
+- KTX-Software 4.4.2 ETC1S/BasisLZ `transcode_slice` null-deref on a two-byte
+  mutation of the frozen Basis sample (via an embedded `KHR_texture_basisu`
+  image);
+- fastgltf 0.9.0 `base64::fallback_decode_inplace` heap overflow on a `.gltf`
+  data URI whose base64 length is not a multiple of four.
+
+Upstream patches are out of SEC-16's scope, so these seeds are deliberately
+kept out of the generated smoke corpus and the target is not yet added to the
+`fuzz-smoke` matrix in `.github/workflows/ci.yml`; the BasisLZ ETC1S transcode
+is excluded from the `Ktx2` domain (preflight only) and the valid BasisLZ GLB
+is excluded from the adapter seeds until a product mitigation or upstream fix
+lands. A findings seed must not join the smoke corpus before its class is
+mitigated or libFuzzer rediscovers it. The seed preparer refuses a non-empty
+directory.

@@ -6,3 +6,4 @@
 # checkout and every byte-exact assertion would fail on Windows.
 interactive-viewer/test-assets/** -text
 tests/fixtures/** -text
+tests/fuzz/corpus/** -text
