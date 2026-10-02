@@ -284,6 +284,15 @@ Per change:
 - short ASan/fuzz smoke;
 - package manifest validation.
 
+The `CI` workflow (`.github/workflows/ci.yml`; ADR-0042) enforces the per-change
+Debug/Release build and the unit, import-isolation and provider-host suites on
+every pull request and push to `main`; `Release` will not package until it
+passes. The `[graphics]` unit cases are excluded on the headless runner. A
+bounded libFuzzer smoke starts as an opt-in/nightly job and is promoted into the
+required gate once SEC-15/16/17 land. Lint/static analysis, the headless adapter
+corpus, and package-manifest validation remain manual per-change skills on top of
+the gate (release packaging already restores and validates the manifests).
+
 Nightly:
 
 - hardware D3D debug and performance smoke;

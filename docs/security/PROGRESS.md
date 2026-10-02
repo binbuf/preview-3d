@@ -630,3 +630,55 @@ Reusable facts for later sessions:
 - T04 follow-up: the committed corpus manifest cannot be regenerated without the Release
   `meshoptimizer.dll`; consider committing that frozen seed path or a generator mode that copies the
   existing `meshopt.glb`, so the documented `--compare` workflow works on a clean checkout.
+- T13/SEC-15/16/17: extend the `fuzz-smoke` job in `.github/workflows/ci.yml` with the new
+  STL/PLY/OBJ, glTF+codec, and provider-soak targets, then promote it from the nightly/dispatch-only
+  matrix into the required pull-request gate. It is deliberately not a `needs:` of the release job
+  yet.
+- T13 (run-time evidence): the first real GitHub Actions run must confirm `windows-2025` accepts
+  the AppContainer/Job child processes the import-isolation suite launches, and that the Debug and
+  Release matrices fit the 360-minute timeout from a warm cache. If a suite is environment-sensitive
+  on the runner, scope it explicitly and record why; do not silently skip it.
+- T13 (branch protection): a maintainer must require the `CI` checks `Build and test (Debug)` and
+  `Build and test (Release)` on `main`; GitHub repository settings cannot be changed from the repo.
+
+## T13 — SEC-13 CI test gate for PRs and releases
+
+Reusable facts for later sessions:
+
+- **One reusable gate workflow.** `.github/workflows/ci.yml` triggers on `pull_request`, push to
+  `main`, `workflow_dispatch`, and `workflow_call`. It is intentionally *not* path-filtered, so a
+  required branch-protection check always reports. Job `test` is a `Debug`/`Release` matrix that
+  builds `Preview3D.slnx` through the solution and then runs three separate steps:
+  `Tests.Unit.exe "~[graphics]"`, `Tests.ImportIsolation.exe`, `Tests.ProviderHost.exe`, each failing
+  the job on a nonzero exit. `[graphics]` is excluded because the hosted runner has no D3D12 device
+  (the same filter as the harness verify command).
+- **Release fails closed.** `release.yml` now has a `gate` job (`uses: ./.github/workflows/ci.yml`)
+  and `release` declares `needs: gate`, so packaging cannot start until the tag's gate is green. The
+  reusable workflow is loaded from the pushed tag's ref.
+- **vcpkg restore mirrors release.yml.** The `test` job runs the same three-manifest restore (root,
+  `compatibility-host-step`, `thumbnail-provider/step-occt`) with the same Actions cache key and
+  GitHub Packages NuGet feed as `dependencies.yml`/`release.yml`, routes scratch to the workspace
+  volume, then builds with `/p:VcpkgManifestInstall=false /p:VcpkgRoot=<root>`. The NuGet feed is
+  `readwrite` on `push` and `read` everywhere else, so a fork PR restores warm packages without
+  attempting a push. Keep the cache key in sync with the other two workflows.
+- **Fuzz smoke is opt-in and non-blocking.** Job `fuzz-smoke` runs only on `schedule` or
+  `workflow_dispatch` (never on the PR path, never a `needs:` of release). It is a two-entry matrix
+  (`STEP`, `3MF`) so each target gets its own runner — the fuzz projects share
+  `tests\fuzz\x64\Release` as an intermediate directory (MSB8028). Commands:
+  `python tests/fuzz/prepare_step_seeds.py TestResults/step-008/fuzz-seeds` then
+  `tests\fuzz\x64\Release\StepFuzz.exe <seeds> -max_total_time=60 ...`; same shape for 3MF with
+  `prepare_3mf_seeds.py TestResults/3mf-007/fuzz-seeds`. SEC-15/16/17 add the remaining targets.
+- **Local baseline (this checkout, prebuilt binaries).** `x64\Release\Tests.Unit.exe "~[graphics]"`:
+  307 cases / 131544 assertions green; `x64\Debug\Tests.Unit.exe "~[graphics]"`: 304 / 131511 green.
+  `x64\Release\Tests.ImportIsolation.exe`: 399 cases (394 passed, 5 skipped) / 293037 assertions
+  green; Debug: 399 (398 passed, 1 skipped) / 293034 green. `Tests.ProviderHost.exe` Debug and
+  Release: 8 cases / 142 assertions green. Fuzz smoke: `StepFuzz` built and 15 s run ended exit 0
+  (18876 units, peak RSS 425 MB); `ThreeMfFuzz` builds the same way.
+- **MSBuild is not on PATH locally.** Use
+  `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`. Fuzz
+  projects build standalone with `/p:SolutionDir=<repo root>\` and land in
+  `tests\fuzz\x64\Release\` (Step/3MF/Usd set `OutDir`; Fbx relies on `SolutionDir`).
+- **Manifest install gotcha.** Passing `/p:VcpkgManifestInstall=false` for the solution build is
+  correct *only* because the three manifests are restored up front; the isolated-manifest MSBuild
+  target is gated on the OCCT `Standard_Failure.hxx` header being absent, so the pre-restore makes it
+  a no-op. Do not drop the restore step.

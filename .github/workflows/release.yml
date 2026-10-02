@@ -17,8 +17,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Fail closed: the package job cannot start until the reusable test gate
+  # (Debug and Release builds plus the unit, import-isolation, and provider-host
+  # suites) has passed on this tag. A red test therefore stops the release
+  # before any signed artifact is produced. See .github/workflows/ci.yml.
+  gate:
+    name: Test gate
+    uses: ./.github/workflows/ci.yml
+
   release:
     name: Build, package, and release
+    needs: gate
     runs-on: windows-2025
     # The root manifest (OpenUSD) and the isolated STEP manifest (OCCT) both
     # build from source on a cold runner; the binary cache below keeps repeat
