@@ -16,6 +16,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "FaultInjectingAllocator.h"
 #include "FamilyAdapterRegistry.h"
 #include "FamilyRouting.h"
 #include "ProviderHostSupport.h"
@@ -39,6 +40,7 @@ using preview3d::test::GoldenDiff;
 using preview3d::test::GoldenFixture;
 using preview3d::test::GuidFromText;
 using preview3d::test::LoadGoldenRgba;
+using preview3d::test::MemorySource;
 using preview3d::test::MemoryStream;
 using preview3d::test::ProviderHostFixtures;
 using preview3d::test::ProviderHostGoldenDirectory;
@@ -65,6 +67,15 @@ public:
 
 private:
     bool okay_;
+};
+
+// No-op geometry sink. The allocation-failure case only needs the adapter to
+// reach its first product-owned allocation, which happens before any sample is
+// emitted, so nothing observes a triangle.
+class NullGeometrySink final : public preview3d::provider::IGeometrySink {
+public:
+    bool OnTriangle(const preview3d::provider::TriangleSample&) noexcept override { return true; }
+    bool OnPoint(const preview3d::provider::PointSample&) noexcept override { return true; }
 };
 
 // One activate/use/unload cycle against a freshly loaded module, plus one
@@ -184,6 +195,67 @@ TEST_CASE("every registered fixture matches its committed golden", "[host][golde
         INFO("fixture " << fixture.name << " meanAbs=" << diff.meanAbs
                         << " maxAbs=" << diff.maxAbs);
         CHECK(WithinTolerance(diff, fixture.tolerance));
+    }
+}
+
+TEST_CASE("an adapter allocation failure is a typed OutOfMemory, not a process exit",
+          "[host][containment]")
+{
+    using preview3d::provider::AdapterInput;
+    using preview3d::provider::AllocationLedger;
+    using preview3d::provider::Deadline;
+    using preview3d::provider::ErrorCode;
+    using preview3d::provider::Family;
+    using preview3d::provider::ProviderLimits;
+
+    // One valid fixture per family whose adapter performs product-owned
+    // allocation (the STL/PLY/OBJ/glTF/FBX fast-path families). The
+    // library-backed 3MF/USD/STEP families allocate through their own C
+    // allocators, so this executable's operator-new replacement cannot reach
+    // them; their containment is proven by their own bad_alloc mapping.
+    const Family families[] = {Family::Stl, Family::Ply, Family::Obj, Family::Gltf,
+                               Family::Fbx};
+
+    for (const Family family : families) {
+        const GoldenFixture* fixture = nullptr;
+        for (const GoldenFixture& candidate : ProviderHostFixtures()) {
+            if (candidate.family == family) {
+                fixture = &candidate;
+                break;
+            }
+        }
+        INFO("family " << static_cast<std::uint32_t>(family));
+        REQUIRE(fixture != nullptr);
+        REQUIRE_FALSE(fixture->source.empty());
+
+        auto adapter = preview3d::provider::CreateFamilyAdapter(family);
+        REQUIRE(adapter != nullptr);
+
+        MemorySource source(std::vector<std::byte>(fixture->source));
+        Deadline deadline;
+        AllocationLedger ledger;
+        AdapterInput input{};
+        input.source = &source;
+        input.limits = &ProviderLimits::Default();
+        input.deadline = &deadline;
+        input.ledger = &ledger;
+        input.family = family;
+        REQUIRE(adapter->Initialize(input) == ErrorCode::None);
+
+        ErrorCode outcome = ErrorCode::None;
+        {
+            // Force every executable allocation to fail; the adapter's stage
+            // boundary must translate the first product-owned allocation into a
+            // typed OutOfMemory rather than terminate at the frozen `noexcept`.
+            preview3d::test::ScopedAllocationFailure fail;
+            outcome = adapter->Parse();
+            if (outcome == ErrorCode::None) {
+                NullGeometrySink sink;
+                outcome = adapter->EnumerateGeometry(sink);
+            }
+        }
+        adapter->Reset();
+        CHECK(outcome == ErrorCode::OutOfMemory);
     }
 }
 

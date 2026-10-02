@@ -2,6 +2,7 @@
 
 #include "ThreeMfFamilyAdapter.h"
 
+#include "ContainmentStage.h"
 #include "Deadline.h"
 #include "ProviderLimits.h"
 #include "ThreeMfOpcPreflight.h"
@@ -980,6 +981,12 @@ void ThreeMfAdapter::Reset() noexcept { ResetState(); }
 
 ErrorCode ThreeMfAdapter::Initialize(const AdapterInput& input) noexcept
 {
+    return RunContainedStageMember([this, &input]() { return InitializeImpl(input); },
+                                   DiagnosticStage::AdapterInitialize);
+}
+
+ErrorCode ThreeMfAdapter::InitializeImpl(const AdapterInput& input)
+{
     ResetState();
     if (input.source == nullptr || input.limits == nullptr || input.deadline == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -996,7 +1003,7 @@ ErrorCode ThreeMfAdapter::SourceReadFailure() const noexcept
     return ErrorCode::MalformedData;
 }
 
-ErrorCode ThreeMfAdapter::LoadSourceBytes() noexcept
+ErrorCode ThreeMfAdapter::LoadSourceBytes()
 {
     bytes_ = input_.source->ContiguousView();
     if (!bytes_.empty()) {
@@ -1025,7 +1032,7 @@ ErrorCode ThreeMfAdapter::LoadSourceBytes() noexcept
     return ErrorCode::None;
 }
 
-ErrorCode ThreeMfAdapter::PreflightPackage() noexcept
+ErrorCode ThreeMfAdapter::PreflightPackage()
 {
     import_worker::ThreeMfOpcPackage package;
     import_worker::ThreeMfOpcLimits limits;
@@ -1072,7 +1079,7 @@ ErrorCode ThreeMfAdapter::PreflightPackage() noexcept
     return ErrorCode::None;
 }
 
-ErrorCode ThreeMfAdapter::LoadModel() noexcept
+ErrorCode ThreeMfAdapter::LoadModel()
 {
     try {
         auto wrapper = Lib3MF::CWrapper::loadLibrary();
@@ -1116,7 +1123,7 @@ ErrorCode ThreeMfAdapter::LoadModel() noexcept
     }
 }
 
-ErrorCode ThreeMfAdapter::BuildScene() noexcept
+ErrorCode ThreeMfAdapter::BuildScene()
 {
     try {
         const Lib3MF::PModel& model = holder_->model;
@@ -1270,6 +1277,11 @@ ErrorCode ThreeMfAdapter::BuildScene() noexcept
 
 ErrorCode ThreeMfAdapter::Parse() noexcept
 {
+    return RunContainedStageMember([this]() { return ParseImpl(); }, DiagnosticStage::Parse);
+}
+
+ErrorCode ThreeMfAdapter::ParseImpl()
+{
     if (input_.deadline == nullptr || !input_.deadline->Checkpoint()) {
         return ErrorCode::Cancelled;
     }
@@ -1299,6 +1311,12 @@ ErrorCode ThreeMfAdapter::Parse() noexcept
 
 ErrorCode ThreeMfAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 {
+    return RunContainedStageMember([this, &sink]() { return EnumerateMaterialsImpl(sink); },
+                                   DiagnosticStage::Materials);
+}
+
+ErrorCode ThreeMfAdapter::EnumerateMaterialsImpl(IMaterialSink& sink)
+{
     if (!parsed_ || holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
     }
@@ -1314,6 +1332,12 @@ ErrorCode ThreeMfAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 }
 
 ErrorCode ThreeMfAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateGeometryImpl(sink); },
+                                   DiagnosticStage::Geometry);
+}
+
+ErrorCode ThreeMfAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
 {
     if (!parsed_ || holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;

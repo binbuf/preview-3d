@@ -88,6 +88,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ProviderHostMain.cpp" />
+    <ClCompile Include="FaultInjectingAllocator.cpp" />
     <ClCompile Include="FixtureRegistry.cpp" />
     <!-- The real provider orchestration, compiled from the shipped sources so
          the golden path is the production pipeline, not a copy. -->
@@ -124,6 +125,7 @@
     <ClCompile Include="ProviderHostTests.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="FaultInjectingAllocator.h" />
     <ClInclude Include="FixtureRegistry.h" />
     <ClInclude Include="GoldenImage.h" />
     <ClInclude Include="ProviderHostSupport.h" />

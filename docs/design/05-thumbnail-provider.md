@@ -395,7 +395,11 @@ worker, process or GPU device is created and no process-global mutable cache is 
 `RunThumbnailPipeline` takes a cooperative `Deadline::Checkpoint()` between every bounded stage
 (Initialize/Parse/EnumerateMaterials/EnumerateGeometry/Render), in addition to the per-unit polls
 inside the T12 stream source and T15 rasterizer; the adapters (T21-T34) poll
-`AdapterInput::deadline->Checkpoint()` inside their own long loops. The COM boundary runs the
+`AdapterInput::deadline->Checkpoint()` inside their own long loops. Because those frozen adapter
+methods are `noexcept`, each of their allocating stages also runs its body through
+`thumbnail-provider/ContainmentStage.h` (`RunContainedStage`), so a product-owned `std::bad_alloc`
+is translated to `ErrorCode::OutOfMemory` before it can reach a `noexcept` frame
+([ADR-0034](adr/0034-provider-adapter-stage-containment.md)). The COM boundary runs the
 pipeline and the DIB conversion through `thumbnail-provider/Containment.{h,cpp}` (`RunContained`),
 the last-resort HRESULT boundary that translates a C++ exception (`std::bad_alloc` -> `E_OUTOFMEMORY`,
 anything else -> `E_FAIL`) and a contained structured exception (`E_FAIL`) to the T06 table. A call
@@ -422,7 +426,11 @@ The DLL is treated as hostile-input code executing in a sensitive host:
 
 T16 implements the exception/SEH boundary once in `thumbnail-provider/Containment.h`/`Containment.cpp`
 (`RunContained`) and calls it at the COM boundary; adapters route their third-party calls through it
-(their frozen methods are `noexcept`, so an uncontained throw would terminate). A contained fault
+(their frozen methods are `noexcept`, so an uncontained throw would terminate). SEC-06 adds the
+matching product-owned path: every family adapter routes its allocating lifecycle stage through
+`thumbnail-provider/ContainmentStage.h` (`RunContainedStage`), so a `std::bad_alloc` from its own
+containers is `ErrorCode::OutOfMemory` too ([ADR-0034](adr/0034-provider-adapter-stage-containment.md)).
+A contained fault
 returns the tabulated failure with a diagnostic event, never a fabricated success; the ordinary
 memory fault behind it is still expected to be fuzzed and fixed (T43). Diagnostics are
 `thumbnail-provider/Diagnostics.h`/`Diagnostics.cpp`: events carry only a stage, outcome, counters and

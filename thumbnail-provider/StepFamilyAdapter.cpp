@@ -66,6 +66,7 @@
 #include <istream>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <streambuf>
@@ -980,6 +981,11 @@ ErrorCode StepAdapter::Parse() noexcept
         }
     } catch (const Standard_Failure&) {
         result = ErrorCode::MalformedData;
+    } catch (const std::bad_alloc&) {
+        // A product-owned allocation failure is a typed resource outcome, not
+        // an importer defect (T06). OCCT's own bad_alloc is contained by the
+        // RunContained boundary in LoadDocument/BuildGeometry.
+        result = ErrorCode::OutOfMemory;
     } catch (const std::exception&) {
         result = ErrorCode::InternalImporterFailure;
     } catch (...) {
@@ -1075,6 +1081,8 @@ ErrorCode StepAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
         return ErrorCode::None;
     } catch (const Standard_Failure&) {
         return ErrorCode::TessellationFailed;
+    } catch (const std::bad_alloc&) {
+        return ErrorCode::OutOfMemory;
     } catch (const std::exception&) {
         return ErrorCode::InternalImporterFailure;
     } catch (...) {

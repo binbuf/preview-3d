@@ -9,6 +9,7 @@
 
 #include "UsdFamilyAdapter.h"
 
+#include "ContainmentStage.h"
 #include "Deadline.h"
 #include "ProviderLimits.h"
 #include "UsdZipPreflight.h"
@@ -794,6 +795,12 @@ void UsdAdapter::Reset() noexcept { ResetState(); }
 
 ErrorCode UsdAdapter::Initialize(const AdapterInput& input) noexcept
 {
+    return RunContainedStageMember([this, &input]() { return InitializeImpl(input); },
+                                   DiagnosticStage::AdapterInitialize);
+}
+
+ErrorCode UsdAdapter::InitializeImpl(const AdapterInput& input)
+{
     ResetState();
     if (input.source == nullptr || input.limits == nullptr || input.deadline == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -810,7 +817,7 @@ ErrorCode UsdAdapter::SourceReadFailure() const noexcept
     return ErrorCode::MalformedData;
 }
 
-ErrorCode UsdAdapter::LoadSourceBytes() noexcept
+ErrorCode UsdAdapter::LoadSourceBytes()
 {
     bytes_ = input_.source->ContiguousView();
     if (!bytes_.empty()) {
@@ -839,7 +846,7 @@ ErrorCode UsdAdapter::LoadSourceBytes() noexcept
     return ErrorCode::None;
 }
 
-ErrorCode UsdAdapter::SniffContainer() noexcept
+ErrorCode UsdAdapter::SniffContainer()
 {
     const auto* data = reinterpret_cast<const std::uint8_t*>(bytes_.data());
     const std::size_t size = bytes_.size();
@@ -867,7 +874,7 @@ ErrorCode UsdAdapter::SniffContainer() noexcept
     return ErrorCode::MalformedData;
 }
 
-ErrorCode UsdAdapter::PreflightArchive() noexcept
+ErrorCode UsdAdapter::PreflightArchive()
 {
     if (!usedUsdz_) {
         return ErrorCode::None;
@@ -894,7 +901,7 @@ ErrorCode UsdAdapter::PreflightArchive() noexcept
     return ErrorCode::None;
 }
 
-ErrorCode UsdAdapter::LoadStage() noexcept
+ErrorCode UsdAdapter::LoadStage()
 {
     try {
         tinyusdz::USDLoadOptions options{};
@@ -929,7 +936,7 @@ ErrorCode UsdAdapter::LoadStage() noexcept
     }
 }
 
-ErrorCode UsdAdapter::BuildScene() noexcept
+ErrorCode UsdAdapter::BuildScene()
 {
     if (holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -1026,7 +1033,7 @@ ErrorCode UsdAdapter::BuildScene() noexcept
     return ErrorCode::None;
 }
 
-ErrorCode UsdAdapter::ValidateScene() noexcept
+ErrorCode UsdAdapter::ValidateScene()
 {
     if (holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -1319,6 +1326,11 @@ ErrorCode UsdAdapter::ValidateScene() noexcept
 
 ErrorCode UsdAdapter::Parse() noexcept
 {
+    return RunContainedStageMember([this]() { return ParseImpl(); }, DiagnosticStage::Parse);
+}
+
+ErrorCode UsdAdapter::ParseImpl()
+{
     try {
         if (input_.deadline == nullptr || !input_.deadline->Checkpoint()) {
             return ErrorCode::Cancelled;
@@ -1369,6 +1381,12 @@ ErrorCode UsdAdapter::Parse() noexcept
 
 ErrorCode UsdAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 {
+    return RunContainedStageMember([this, &sink]() { return EnumerateMaterialsImpl(sink); },
+                                   DiagnosticStage::Materials);
+}
+
+ErrorCode UsdAdapter::EnumerateMaterialsImpl(IMaterialSink& sink)
+{
     if (!parsed_ || holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
     }
@@ -1381,6 +1399,12 @@ ErrorCode UsdAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 }
 
 ErrorCode UsdAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateGeometryImpl(sink); },
+                                   DiagnosticStage::Geometry);
+}
+
+ErrorCode UsdAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
 {
     if (!parsed_ || holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;

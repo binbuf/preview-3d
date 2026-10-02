@@ -6,6 +6,7 @@
 // compiles the same source.
 
 #include "Containment.h"
+#include "ContainmentStage.h"
 
 #include <windows.h>
 
@@ -116,6 +117,35 @@ ContainmentResult RunContained(ContainedCall call, void* context,
     Diagnostics::Emit(event);
 
     return result;
+}
+
+ErrorCode RunContainedStage(ContainedStageCall call, void* context,
+                            DiagnosticStage stage) noexcept
+{
+    // Context for the fixed thunk: the adapter's stage function and its opaque
+    // context, plus the typed code the function returned on a normal exit.
+    struct StageContext {
+        ContainedStageCall call = nullptr;
+        void* context = nullptr;
+        ErrorCode code = ErrorCode::InternalImporterFailure;
+    };
+    StageContext state{call, context, ErrorCode::InternalImporterFailure};
+
+    const ContainmentResult contained = RunContained(
+        [](void* raw) -> ProviderOutcome {
+            auto* stageContext = static_cast<StageContext*>(raw);
+            stageContext->code = stageContext->call(stageContext->context);
+            return ClassifyError(stageContext->code);
+        },
+        &state, nullptr, stage);
+
+    // A throw was translated by the boundary; recover the precise typed code.
+    if (contained.cppException || contained.structuredException) {
+        return contained.outcome == ProviderOutcome::OutOfMemory
+                   ? ErrorCode::OutOfMemory
+                   : ErrorCode::InternalImporterFailure;
+    }
+    return state.code;
 }
 
 } // namespace preview3d::provider

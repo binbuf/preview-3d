@@ -11,7 +11,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T03 — SEC-03 Sandbox limits and broker defensive checks**: Reusable facts for later sessions:; **Job limits.** `SandboxLimits::processCpuTimeLimitMs` maps to
 - **T04 — SEC-04 Sidecar reference validation (NUL/control, per-format)**: Reusable facts for later sessions:; **Two-layer control check + explicit UTF-8 failure.** `import_broker/src/SidecarRequestServicer.cpp`
 - **T05 — SEC-05 3MF OPC preflight/library reconciliation**: Reusable facts for later sessions:; **Preflight policy now matches USDZ.** `import-worker/src/ThreeMfOpcPreflight.cpp` rejects
-- **Follow-ups**: SEC-04 and later: the primary-path ADS check is a coarse `:` rule shared in spirit with the; The generation wall-clock deadline currently wraps the main reply loop but not the post-terminal
+- **T06 — SEC-06 Provider adapter exception containment**: Reusable facts for later sessions:; **Pattern (chosen).** Keep the frozen `IFamilyAdapter` methods `noexcept`; every adapter's
+- **Follow-ups**: SEC-17: the provider-host allocator seam only fails C++ allocations; add a soak/fuzz lane that; `ThreeMfFamilyAdapter.h` still declares `ErrorCode ScanRequiredExtensions();` with no definition
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -206,8 +207,58 @@ Reusable facts for later sessions:
   pressure failure is unrelated to preflight: it runs `--3mf-spike-pool`, which never calls
   `InspectThreeMfOpc`.
 
+## T06 — SEC-06 Provider adapter exception containment
+
+Reusable facts for later sessions:
+
+- **Pattern (chosen).** Keep the frozen `IFamilyAdapter` methods `noexcept`; every adapter's
+  `Initialize`/`Parse`/`EnumerateMaterials`/`EnumerateGeometry` is now a thin wrapper around a
+  non-`noexcept` `...Impl()` body routed through
+  `preview3d::provider::RunContainedStage` (`thumbnail-provider/ContainmentStage.h`, implemented in
+  `Containment.cpp`, compiled `/EHsc`). It returns the body's own `ErrorCode` unchanged,
+  `ErrorCode::OutOfMemory` for `std::bad_alloc`, else `InternalImporterFailure`. `Reset` is
+  untouched. Rationale and the rejected "drop `noexcept` everywhere" alternative: ADR-0034.
+- **Windows-free split.** `ContainmentStage.h` includes only `ProviderTypes.h` and a new
+  `DiagnosticStage.h` (the stage enum moved out of `Diagnostics.h`), so an adapter TU with a vendored
+  parser header does not get `windows.h`/`min`/`max` macros. Do not add `windows.h` to it.
+- **Adapters touched.** STL, PLY, OBJ, glTF, FBX, 3MF, USD all use the wrapper. STEP is different by
+  design (its opaque OCCT calls already go through `RunContained`); only its `Parse`/
+  `EnumerateGeometry` catches were reordered to add `catch (const std::bad_alloc&) ->
+  ErrorCode::OutOfMemory` before `catch (const std::exception&)` (which previously swallowed
+  `bad_alloc` as `InternalImporterFailure`). Any internal helper that allocates had `noexcept`
+  removed so its throw reaches the boundary.
+- **`RunContainedStage` passes `deadline = nullptr`**, so it does not rewrite a successful-but-
+  overran result to `Deadline`; the stage's own `Checkpoint()` and the pipeline's between-stage
+  check keep their exact semantics. Diagnostics still record the stage
+  (`AdapterInitialize`/`Parse`/`Materials`/`Geometry`).
+- **Fault injection.** `tests/provider-host/FaultInjectingAllocator.{h,cpp}` replaces the
+  provider-host exe's global `operator new`/`delete` with `malloc`/`free` (`_malloc_dbg`/`_free_dbg`
+  in Debug) and fails on demand via `preview3d::test::ScopedAllocationFailure`. It only reaches
+  product-owned (C++) allocations compiled into the exe; 3MF/USD/STEP library allocations are C
+  allocators and need the SEC-17 soak/fuzz lane.
+- **Debug gotcha.** Under `_ITERATOR_DEBUG_LEVEL=2`, a default-constructed STL container allocates
+  its `_Container_proxy` inside a `noexcept` constructor; a `bad_alloc` there terminates before the
+  adapter boundary. The injector therefore never fails allocations `<= sizeof(std::_Container_proxy)`
+  in Debug (Release fails everything). If this test ever hangs, a modal CRT assertion is the cause:
+  `ProviderHostMain.cpp` redirects CRT reports to stderr in Debug to keep CI from blocking.
+- **Coverage.** `Tests.ProviderHost.exe "[host][containment]"` in `ProviderHostTests.cpp` drives a
+  valid fixture per family (STL/PLY/OBJ/glTF/FBX) directly through the adapter with allocations
+  armed and asserts `ErrorCode::OutOfMemory`.
+- **Verify commands.** Build the host through the solution dir:
+  `MSBuild tests\provider-host\Tests.ProviderHost.vcxproj /p:Configuration=Debug /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\" /m`
+  (same for Release), then run `x64\Debug\Tests.ProviderHost.exe` and `x64\Release\...`.
+  Provider unit coverage: `x64\Release\Tests.Unit.exe "[provider]"`.
+- **Baseline after T06.** `Tests.ProviderHost` Debug and Release: 128 assertions / 6 test cases,
+  all pass (was 103/5). `Tests.Unit.exe "[provider]"` Release: 60901 assertions / 214 cases, all
+  pass.
+
 ## Follow-ups
 
+- SEC-17: the provider-host allocator seam only fails C++ allocations; add a soak/fuzz lane that
+  exercises the library (C-allocator) paths of 3MF/USD/STEP and a genuinely over-committed ledger.
+- `ThreeMfFamilyAdapter.h` still declares `ErrorCode ScanRequiredExtensions();` with no definition
+  anywhere in the provider (pre-existing dead declaration, carried through the T06 header edit).
+  Remove it or implement the intended XML scan.
 - SEC-04 and later: the primary-path ADS check is a coarse `:` rule shared in spirit with the
   sidecar resolver; if `ResolveSidecarPath` ever adopts per-format rules, keep the primary rule at
   least as strict. (T04 did add per-format extension rules; the `:`/control rules stay at least as

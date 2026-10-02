@@ -75,12 +75,22 @@ public:
     bool OmittedUnsupportedTexture() const noexcept { return omittedUnsupportedTexture_; }
 
 private:
+    // Per-stage bodies, run under the T06 stage-containment shim
+    // (ContainmentStage.h). Non-noexcept so a product-owned `std::bad_alloc`
+    // unwinds into the stage boundary (or this adapter's own LoadModel/
+    // BuildScene/EnumerateGeometry try-catch) instead of terminating at a frozen
+    // `noexcept` public method.
+    ErrorCode InitializeImpl(const AdapterInput& input);
+    ErrorCode ParseImpl();
+    ErrorCode EnumerateMaterialsImpl(IMaterialSink& sink);
+    ErrorCode EnumerateGeometryImpl(IGeometrySink& sink);
+
     ErrorCode SourceReadFailure() const noexcept;
-    ErrorCode LoadSourceBytes() noexcept;
-    ErrorCode PreflightPackage() noexcept;
-    ErrorCode ScanRequiredExtensions() noexcept;
-    ErrorCode LoadModel() noexcept;
-    ErrorCode BuildScene() noexcept;
+    ErrorCode LoadSourceBytes();
+    ErrorCode PreflightPackage();
+    ErrorCode ScanRequiredExtensions();
+    ErrorCode LoadModel();
+    ErrorCode BuildScene();
     void ResetState() noexcept;
 
     AdapterInput input_{};

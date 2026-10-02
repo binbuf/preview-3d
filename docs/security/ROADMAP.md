@@ -24,7 +24,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T03 — SEC-03 Sandbox limits and broker defensive checks → [03-sandbox-and-broker-limits.md](03-sandbox-and-broker-limits.md)
 - [x] T04 — SEC-04 Sidecar reference validation (NUL/control, per-format) → [04-sidecar-reference-validation.md](04-sidecar-reference-validation.md)
 - [x] T05 — SEC-05 3MF OPC preflight/library reconciliation → [05-3mf-opc-reconciliation.md](05-3mf-opc-reconciliation.md)
-- [ ] T06 — SEC-06 Provider adapter exception containment → [06-provider-exception-containment.md](06-provider-exception-containment.md)
+- [~] T06 — SEC-06 Provider adapter exception containment → [06-provider-exception-containment.md](06-provider-exception-containment.md) ⟵ failed
 
 ## Phase 2 — Provider, process, and viewer hardening
 
@@ -49,11 +49,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T06:27:14Z · 5/19 done
+**Pipeline status** — updated 2026-10-02T08:16:06Z · 5/19 done
 
 - Completed: T01, T02, T03, T04, T05
 - Blocked: none
-- Failed: none
-- Remaining: T06, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T05 — done · 3MF OPC preflight now rejects bit-3, reconciles local/central headers, bounds the ZIP64 locator and accepts total-disk 1; regression tests, five fuzz seeds, ADR 0033 and docs landed, all targeted checks and the unit suite pass.
+- Failed: T06
+- Remaining: T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T06 — failed · verify failed (exit 42): npm test — > test > x64\Release\Tests.Unit.exe Randomness seeded to: 4259318499 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Tests.Unit.exe is a Catch2 v3.16.0 host application. Run with -? for options -------------…
 <!-- /symphony:status -->

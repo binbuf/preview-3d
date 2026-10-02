@@ -2,6 +2,7 @@
 
 #include "GltfFamilyAdapter.h"
 
+#include "ContainmentStage.h"
 #include "Deadline.h"
 #include "ProviderLimits.h"
 #include "model_core/DracoPreflight.h"
@@ -405,7 +406,7 @@ bool DracoAttributeId(const fastgltf::DracoCompressedPrimitive& draco, const cha
 ErrorCode DecodeDraco(std::span<const std::byte> compressed,
                       const fastgltf::DracoCompressedPrimitive& draco,
                       std::size_t expectedVertices, std::size_t expectedIndices,
-                      DracoMeshData& out) noexcept
+                      DracoMeshData& out)
 {
     std::uint32_t positionId = 0;
     if (!DracoAttributeId(draco, "POSITION", positionId)) {
@@ -719,6 +720,12 @@ void GltfAdapter::Reset() noexcept
 
 ErrorCode GltfAdapter::Initialize(const AdapterInput& input) noexcept
 {
+    return RunContainedStageMember([this, &input]() { return InitializeImpl(input); },
+                                   DiagnosticStage::AdapterInitialize);
+}
+
+ErrorCode GltfAdapter::InitializeImpl(const AdapterInput& input)
+{
     Reset();
     if (input.source == nullptr || input.limits == nullptr || input.deadline == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -727,7 +734,7 @@ ErrorCode GltfAdapter::Initialize(const AdapterInput& input) noexcept
     return ErrorCode::None;
 }
 
-ErrorCode GltfAdapter::LoadSourceBytes() noexcept
+ErrorCode GltfAdapter::LoadSourceBytes()
 {
     bytes_ = input_.source->ContiguousView();
     if (!bytes_.empty()) {
@@ -757,6 +764,11 @@ ErrorCode GltfAdapter::LoadSourceBytes() noexcept
 }
 
 ErrorCode GltfAdapter::Parse() noexcept
+{
+    return RunContainedStageMember([this]() { return ParseImpl(); }, DiagnosticStage::Parse);
+}
+
+ErrorCode GltfAdapter::ParseImpl()
 {
     if (input_.deadline == nullptr || !input_.deadline->Checkpoint()) {
         return ErrorCode::Cancelled;
@@ -948,7 +960,7 @@ bool GltfAdapter::UsedMeshopt() const noexcept
     return holder_ != nullptr && holder_->access != nullptr && holder_->access->UsedMeshopt();
 }
 
-ErrorCode GltfAdapter::DecodeImages() noexcept
+ErrorCode GltfAdapter::DecodeImages()
 {
     const fastgltf::Asset& asset = holder_->asset;
     std::uint64_t remaining = ProviderLimits::kDecodedTexturePixelsMax;
@@ -1016,6 +1028,12 @@ bool GltfAdapter::BuildVertex(VertexSample& vertex, const double world[16],
 
 ErrorCode GltfAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 {
+    return RunContainedStageMember([this, &sink]() { return EnumerateMaterialsImpl(sink); },
+                                   DiagnosticStage::Materials);
+}
+
+ErrorCode GltfAdapter::EnumerateMaterialsImpl(IMaterialSink& sink)
+{
     if (!parsed_ || holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
     }
@@ -1028,6 +1046,12 @@ ErrorCode GltfAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 }
 
 ErrorCode GltfAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateGeometryImpl(sink); },
+                                   DiagnosticStage::Geometry);
+}
+
+ErrorCode GltfAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
 {
     if (!parsed_ || holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
