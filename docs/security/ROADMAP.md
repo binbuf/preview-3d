@@ -19,7 +19,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 
 ## Phase 1 — Parser and containment hardening
 
-- [ ] T01 — SEC-01 Bound glTF traversal and fix worker limit ordering → [01-gltf-traversal-and-limit-ordering.md](01-gltf-traversal-and-limit-ordering.md)
+- [~] T01 — SEC-01 Bound glTF traversal and fix worker limit ordering → [01-gltf-traversal-and-limit-ordering.md](01-gltf-traversal-and-limit-ordering.md) ⟵ failed
 - [ ] T02 — SEC-02 Preflight compressed decoders before allocation → [02-compressed-decode-preflight.md](02-compressed-decode-preflight.md)
 - [ ] T03 — SEC-03 Sandbox limits and broker defensive checks → [03-sandbox-and-broker-limits.md](03-sandbox-and-broker-limits.md)
 - [ ] T04 — SEC-04 Sidecar reference validation (NUL/control, per-format) → [04-sidecar-reference-validation.md](04-sidecar-reference-validation.md)
@@ -47,3 +47,13 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 
 - [ ] T18 — SEC-18 Reconcile design docs with implemented controls → [18-docs-reconciliation.md](18-docs-reconciliation.md)
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
+
+<!-- symphony:status -->
+**Pipeline status** — updated 2026-10-02T03:40:08Z · 0/19 done
+
+- Completed: none
+- Blocked: none
+- Failed: T01
+- Remaining: T02, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T01 — failed · interrupted during retry backoff
+<!-- /symphony:status -->
