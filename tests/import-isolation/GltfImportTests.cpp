@@ -42,11 +42,20 @@
 #error "PREVIEW3D_TEST_ASSETS_DIR must be defined by Tests.ImportIsolation.vcxproj"
 #endif
 
+#ifndef PREVIEW3D_FUZZ_CORPUS_DIR
+#error "PREVIEW3D_FUZZ_CORPUS_DIR must be defined by Tests.ImportIsolation.vcxproj"
+#endif
+
 namespace {
 
 std::wstring TestAssetPath(const wchar_t* fileName)
 {
     return std::wstring(PREVIEW3D_TEST_ASSETS_DIR) + fileName;
+}
+
+std::wstring FuzzCorpusPath(const wchar_t* fileName)
+{
+    return std::wstring(PREVIEW3D_FUZZ_CORPUS_DIR) + fileName;
 }
 
 std::optional<std::vector<std::byte>> ReadFileBytes(const std::wstring& path)
@@ -1194,6 +1203,64 @@ TEST_CASE("basisu_corrupt_ktx2.glb (valid KHR_texture_basisu reference, garbage 
     }
     REQUIRE(materialChunk != nullptr);
     CHECK(materialChunk->descriptor.dependencyCount == 1);
+}
+
+TEST_CASE("basislz-etc1s-crash.env (embedded KHR_texture_basisu with malformed ETC1S tables) "
+          "soft-fails without crashing the worker (SEC-16b)",
+          "[gltf-import][texture][security]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // The minimized SEC-16 finding, stored as a GltfFuzz Adapter-domain
+    // envelope: an 8-byte header (magic/domain/flags/reserved) followed by the
+    // real GLB. Strip the envelope and drive the real worker.
+    auto envelope = ReadFileBytes(FuzzCorpusPath(L"basislz-etc1s-crash.env"));
+    REQUIRE(envelope.has_value());
+    REQUIRE(envelope->size() > 8);
+    std::vector<std::byte> bytes(envelope->begin() + 8, envelope->end());
+
+    auto run = RunGltfImport(fixture.sid, bytes, /*generationId=*/2111, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    // geometry + material + checker fallback + bounded warning
+    CHECK(run.validation.chunks.size() == 4);
+}
+
+TEST_CASE("A primitive material index outside the parsed materials array soft-fails instead of "
+          "indexing an empty array (SEC-16b promoted fuzz finding)",
+          "[gltf-import][security]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto bytes = ReadFileBytes(TestAssetPath(L"basisu_textured_triangle.glb"));
+    REQUIRE(bytes.has_value());
+
+    // fastgltf keeps a primitive's `material` index even when the top-level
+    // `materials` array is absent (a corrupted JSON key is enough). Equal-length
+    // mutation keeps the GLB chunk lengths valid.
+    constexpr std::string_view materialsKey = "\"materials\"";
+    constexpr std::string_view brokenKey = "\"xxxxxxxxx\"";
+    static_assert(materialsKey.size() == brokenKey.size());
+    auto chars = std::span(reinterpret_cast<char*>(bytes->data()), bytes->size());
+    bool mutated = false;
+    for (size_t offset = 0; offset + materialsKey.size() <= chars.size(); ++offset) {
+        if (std::memcmp(chars.data() + offset, materialsKey.data(), materialsKey.size()) == 0) {
+            std::memcpy(chars.data() + offset, brokenKey.data(), brokenKey.size());
+            mutated = true;
+        }
+    }
+    REQUIRE(mutated);
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/2112, /*maxChunkCount=*/8);
+    // The old adapter indexed an empty materials array at ConvertPrimitive and
+    // null-derefed; the fixed adapter either soft-fails the out-of-range
+    // material or rejects the file cleanly -- never a worker fault/crash.
+    if (run.ready) {
+        CHECK(run.validation.ok);
+    } else {
+        CHECK(run.errorNotice.errorCode
+              == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+    }
 }
 
 TEST_CASE("A real on-disk GLB file reaches the sandboxed worker via a duplicated handle and parses "

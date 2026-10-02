@@ -222,22 +222,24 @@ ASan-instrumented TU cannot link `ktx.lib`/`simdjson.lib` (which emit
 The 2 MiB input and 4 MiB output caps keep one unit bounded; the real
 AppContainer/Job worker stays the process-containment evidence.
 
-**Known findings — one fixed, one open (SEC-16b).** Two deterministic crashes
-were found in the pinned third-party decoders and are minimized under
+**Known findings — both fixed.** Two deterministic crashes were found in the
+pinned third-party decoders and are minimized under
 `tests/fuzz/corpus/gltf/` (see its README):
 
 - fastgltf 0.9.0 `base64::fallback_decode_inplace` heap overflow on a `.gltf`
   data URI whose base64 length is not a multiple of four — **fixed in SEC-16**
   by `model_core::ValidateGltfDataUri`, called from the `GltfAdapter.cpp`
-  simdjson preflight before `loadGltf`; the seed is now a safe regression;
+  simdjson preflight before `loadGltf`; the seed is a safe regression;
 - KTX-Software 4.4.2 ETC1S/BasisLZ `transcode_slice` null-deref on a two-byte
   mutation of the frozen Basis sample (via an embedded `KHR_texture_basisu`
-  image) — **open**, owned by `docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md`.
+  image) — **fixed in SEC-16b** by `model_core::ValidateEtc1sGlobalData`
+  (`Etc1sTablePreflight.h`), called from `PreflightKtx2` before
+  `ktxTexture2_TranscodeBasis`; see
+  [ADR-0046](../../docs/design/adr/0046-etc1s-global-data-preflight.md).
 
-The target is therefore not yet added to the `fuzz-smoke` matrix in
-`.github/workflows/ci.yml`: a smoke run would rediscover the open ETC1S crash.
-The BasisLZ ETC1S transcode is excluded from the `Ktx2` domain (preflight only)
-and the valid BasisLZ GLB is excluded from the adapter seeds until that class
-is mitigated. A findings seed must not join the smoke corpus before its class
-is mitigated or libFuzzer rediscovers it. The seed preparer refuses a non-empty
-directory.
+Both minimized `.env` seeds, the extracted `basislz-etc1s-crash.ktx2`, and the
+valid `basisu_textured_triangle.glb` are promoted into the generated smoke
+seeds, and the `Ktx2` domain drives the real ETC1S transcode for every accepted
+container. `GltfFuzz` is in the scheduled/nightly `fuzz-smoke` matrix in
+`.github/workflows/ci.yml` (one target per runner); it is not yet a required
+merge gate. The seed preparer refuses a non-empty directory.

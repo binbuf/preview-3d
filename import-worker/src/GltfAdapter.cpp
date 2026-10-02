@@ -1302,7 +1302,12 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             return false;
         }
     }
+    // fastgltf stores a primitive's material index even when the material array
+    // is absent or the index is out of range (a mutated/broken JSON object key
+    // is enough), so bound it before indexing. ResolveMaterial applies the same
+    // check for the material chunk itself.
     const bool requiresTangents = hasUv && primitive.materialIndex
+        && *primitive.materialIndex < state.asset.materials.size()
         && state.asset.materials[*primitive.materialIndex].normalTexture.has_value();
 
     if (state.emit && !primitive.dracoCompression)

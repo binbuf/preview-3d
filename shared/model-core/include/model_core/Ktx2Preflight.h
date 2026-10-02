@@ -14,6 +14,7 @@
 // is the Khronos KTX2 specification's 80-byte header + level index (24 bytes
 // per level), little-endian.
 
+#include "model_core/Etc1sTablePreflight.h"
 #include "model_core/PixelFormats.h"
 
 #include <atomic>
@@ -206,6 +207,18 @@ inline std::optional<Ktx2Preflight> PreflightKtx2(std::span<const std::byte> byt
                                               header.height, header.levelCount);
     if (!worst || *worst > limits.maxDecodedBytes) {
         return std::nullopt;
+    }
+
+    // SEC-16b: the pinned KTX-Software/basisu ETC1S transcode ignores
+    // decode_tables' failure and null-derefs in transcode_slice. Reject any
+    // BasisLZ container whose global data the decoder's own table read would
+    // reject, before the library can enter the crashing path.
+    if (header.vkFormat == 0 && header.supercompression == 1) {
+        const auto sgd = bytes.subspan(static_cast<std::size_t>(header.sgdOffset),
+                                       static_cast<std::size_t>(header.sgdLength));
+        if (!ValidateEtc1sGlobalData(sgd, header.levelCount)) {
+            return std::nullopt;
+        }
     }
 
     Ktx2Preflight result;

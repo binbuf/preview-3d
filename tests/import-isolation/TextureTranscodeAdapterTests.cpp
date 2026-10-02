@@ -24,6 +24,10 @@
 #error "PREVIEW3D_TEST_ASSETS_DIR must be defined by Tests.ImportIsolation.vcxproj"
 #endif
 
+#ifndef PREVIEW3D_FUZZ_CORPUS_DIR
+#error "PREVIEW3D_FUZZ_CORPUS_DIR must be defined by Tests.ImportIsolation.vcxproj"
+#endif
+
 namespace {
 
 std::optional<std::vector<std::byte>> ReadFileBytes(const std::wstring& path)
@@ -131,4 +135,42 @@ TEST_CASE("TranscodeKtx2BasisImage rejects an over-declared level count before t
     auto result = import_worker::TranscodeKtx2BasisImage(bytes);
     CHECK_FALSE(result.has_value());
     CHECK(model_core::Ktx2DecoderInvocations().load() == before);
+}
+
+TEST_CASE("TranscodeKtx2BasisImage rejects a BasisLZ container with malformed ETC1S Huffman tables "
+          "before the KTX library (SEC-16b)",
+          "[texture-transcode][security]")
+{
+    // The minimized SEC-16 KTX-Software 4.4.2 ETC1S finding: a two-byte
+    // mutation of a valid BasisLZ KTX2 defeats basisu's low-level
+    // decode_tables (the selector table's codelength-code count becomes zero),
+    // which KTX-Software ignores before null-dereferencing in transcode_slice.
+    // The product preflight must reject it without ever entering the library.
+    auto bytes = ReadFileBytes(std::wstring(PREVIEW3D_FUZZ_CORPUS_DIR)
+                              + L"basislz-etc1s-crash.ktx2");
+    REQUIRE(bytes.has_value());
+
+    const uint64_t before = model_core::Ktx2DecoderInvocations().load();
+    auto result = import_worker::TranscodeKtx2BasisImage(*bytes);
+    CHECK_FALSE(result.has_value());
+    CHECK(model_core::Ktx2DecoderInvocations().load() == before);
+
+    // The unmutated fixture still transcodes: the guard rejects only the
+    // malformed global data, not ETC1S as a class.
+    auto valid = ReadFileBytes(std::wstring(PREVIEW3D_TEST_ASSETS_DIR) + L"basisu_sample.ktx2");
+    REQUIRE(valid.has_value());
+    CHECK(import_worker::TranscodeKtx2BasisImage(*valid).has_value());
+
+    // A second, distinct class: mutating the selector codebook (the first byte
+    // after the 20-byte header + 20-byte image descriptor + 48-byte endpoint
+    // codebook of the 208-byte-offset SGD, i.e. file offset 296) makes
+    // decode_palettes fail with an unsupported selector-codebook variant. KTX
+    // ignores that too, leaving the selector objects uninitialized; the guard
+    // must reject before the library.
+    auto selectorMutated = *valid;
+    REQUIRE(selectorMutated.size() > 296);
+    selectorMutated[296] = std::byte{0x52};
+    const uint64_t beforeSelector = model_core::Ktx2DecoderInvocations().load();
+    CHECK_FALSE(import_worker::TranscodeKtx2BasisImage(selectorMutated).has_value());
+    CHECK(model_core::Ktx2DecoderInvocations().load() == beforeSelector);
 }

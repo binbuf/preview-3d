@@ -43,8 +43,6 @@
 #include "WebpDecodeAdapter.h"
 #include "WicImageDecodeAdapter.h"
 
-#include "model_core/Ktx2Preflight.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -190,29 +188,14 @@ void RunMeshopt(const Input& input)
                                              filter, options);
 }
 
-// The pinned KTX-Software 4.4.2 ETC1S/BasisLZ transcoder crashes on a
-// structurally valid container whose ETC1S supercompression global data is
-// mutated (a two-byte change to a frozen corpus KTX2 reaches a null Huffman
-// table in basisu_lowlevel_etc1s_transcoder::transcode_slice). This target
-// therefore drives the product-owned PreflightKtx2 header/level checks for
-// BasisLZ inputs and does not enter the raw third-party ETC1S transcode; the
-// minimized seed is retained under tests/fuzz/corpus/gltf and the real worker
-// Job boundary contains the production crash. Non-BasisLZ (UASTC/uncompressed)
-// containers still exercise the real transcode.
-bool LooksLikeBasisLz(std::span<const std::byte> bytes)
-{
-    return model_core::LooksLikeKtx2(bytes) && ReadU32(bytes, 12) == 0 && ReadU32(bytes, 44) == 1;
-}
-
+// SEC-16b: the pinned KTX-Software 4.4.2 ETC1S/BasisLZ transcode formerly
+// null-derefed on a mutated BasisLZ global data. The product-owned preflight
+// now re-implements basisu's Huffman-table read and rejects any container the
+// decoder's own `decode_tables` would reject, so the real transcode is safe for
+// every accepted container and this domain drives it for BasisLZ inputs too.
 void RunKtx2(const Input& input)
 {
     const auto options = MakeTextureOptions(input, SemanticFor(static_cast<uint8_t>(input.flags >> 2)));
-    if (LooksLikeBasisLz(input.payload)) {
-        const model_core::Ktx2Limits limits{options.maxEncodedBytes, options.maxDecodedBytes,
-                                            options.maxPixels, options.maxDimension};
-        (void)model_core::PreflightKtx2(input.payload, limits);
-        return;
-    }
     (void)import_worker::TranscodeKtx2BasisImage(input.payload, options);
 }
 

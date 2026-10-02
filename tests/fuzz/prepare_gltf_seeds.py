@@ -41,6 +41,10 @@ DRACO_COLOR = 1 << 3
 CORPUS = (Path(__file__).resolve().parents[2]
           / 'interactive-viewer' / 'test-assets' / 'corpus')
 
+# Minimized findings promoted into the smoke corpus now that their class is
+# mitigated (SEC-16b). These are immutable reproducers, read byte-for-byte.
+FINDINGS = Path(__file__).resolve().parent / 'corpus' / 'gltf'
+
 
 def envelope(domain: int, payload: bytes, flags: int = 0) -> bytes:
     return struct.pack('<IBBH', MAGIC, domain, flags, 0) + payload
@@ -50,6 +54,13 @@ def read_corpus(name: str) -> bytes:
     path = CORPUS / name
     if not path.is_file():
         raise SystemExit(f'missing committed corpus fixture: {path}')
+    return path.read_bytes()
+
+
+def read_finding(name: str) -> bytes:
+    path = FINDINGS / name
+    if not path.is_file():
+        raise SystemExit(f'missing committed findings fixture: {path}')
     return path.read_bytes()
 
 
@@ -217,13 +228,22 @@ def main() -> None:
          envelope(ADAPTER, read_corpus('draco_position_only.glb'))),
         ('meshopt-corpus.adapter.seed',
          envelope(ADAPTER, read_corpus('meshopt.glb'))),
-        # basisu_textured_triangle.glb is deliberately NOT an adapter seed: the
-        # pinned KTX-Software 4.4.2 ETC1S transcode crashes on a two-byte
-        # mutation of it. See tests/fuzz/corpus/gltf/README.md and PROGRESS.
+        # Valid BasisLZ/ETC1S transcode: safe again after the SEC-16b table
+        # preflight, so the frozen textured triangle drives the real path.
+        ('basisu-corpus.adapter.seed',
+         envelope(ADAPTER, read_corpus('basisu_textured_triangle.glb'))),
         ('basisu-corrupt.adapter.seed',
          envelope(ADAPTER, read_corpus('basisu_corrupt_ktx2.glb'))),
         ('webp-corpus.adapter.seed', envelope(ADAPTER, read_corpus('webp.gltf'))),
         ('cancel.adapter.seed', envelope(ADAPTER, valid_glb, CANCEL)),
+        # Promoted minimized findings (SEC-16/SEC-16b). Both now reject cleanly:
+        # fastgltf's non-multiple-of-four data-URI base64, and the ETC1S
+        # malformed-Huffman-table container. See corpus/gltf/README.md. The
+        # .env files are already Adapter-domain envelopes.
+        ('fastgltf-base64-overflow.adapter.seed',
+         read_finding('fastgltf-base64-overflow.env')),
+        ('basislz-etc1s-crash.adapter.seed',
+         read_finding('basislz-etc1s-crash.env')),
         # --- Draco domain: SEC-02 declared vs expected connectivity ---
         ('draco-mismatch.seed',
          envelope(DRACO,
@@ -257,9 +277,11 @@ def main() -> None:
          envelope(KTX2, hostile_ktx2_stream(1024, 1024, 64))),
         ('ktx2-zero-dims.seed',
          envelope(KTX2, hostile_ktx2_stream(0, 0, 1))),
-        # Real frozen ETC1S container: preflight-only in this target.
+        # Real frozen ETC1S container, plus the minimized malformed-tables one.
         ('ktx2-basislz-sample.seed',
          envelope(KTX2, (CORPUS.parent / 'basisu_sample.ktx2').read_bytes())),
+        ('ktx2-basislz-malformed-tables.seed',
+         envelope(KTX2, read_finding('basislz-etc1s-crash.ktx2'))),
         # --- WebP domain: metadata/dimension preflight ---
         ('webp-sample.seed', envelope(WEBP, read_corpus('sample.webp'))),
         ('webp-riff-only.seed',

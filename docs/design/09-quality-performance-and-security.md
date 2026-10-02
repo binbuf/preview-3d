@@ -205,12 +205,14 @@ surfaces; see [ADR-0045](adr/0045-gltf-codec-fuzz-findings.md). Its first run
 found two deterministic crashes inside the pinned third-party decoders. The
 fastgltf 0.9.0 base64 data-URI overflow is fixed by the product-owned
 `model_core::ValidateGltfDataUri` preflight (`GltfDataUriPreflight.h`) run
-before `loadGltf`. The KTX-Software 4.4.2 ETC1S/BasisLZ transcode null-deref
-remains, minimized under `tests/fuzz/corpus/gltf/`; it is deferred to SEC-16b
-(`docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md`) and is contained in
-production only by the AppContainer/Job worker boundary until then. The
-glTF/codec target is not promoted into the `fuzz-smoke` matrix until SEC-16b
-fixes that class.
+before `loadGltf`. The KTX-Software 4.4.2 ETC1S/BasisLZ transcode null-deref is
+fixed in SEC-16b by the product-owned `model_core::ValidateEtc1sGlobalData`
+preflight (`Etc1sTablePreflight.h`), called from `PreflightKtx2` before
+`ktxTexture2_TranscodeBasis`; see
+[ADR-0046](adr/0046-etc1s-global-data-preflight.md). Both minimized findings and
+the valid BasisLZ sample are promoted into the generated smoke seeds, and
+`GltfFuzz` is now in the scheduled `fuzz-smoke` matrix (not yet a required merge
+gate; SEC-17 promotes the lane).
 
 ## Threat model
 
@@ -284,7 +286,7 @@ Every third-party component needs:
 - no unreviewed transitive dynamic dependency;
 - an upgrade/rollback record.
 
-Warnings and exceptions from dependency headers are contained at a dedicated build target boundary; product code remains warning-clean. Updating a parser is a behavior change requiring corpus, performance, memory, thumbnail-host, and installer license retest. Updating any import-worker or compatibility-host module — the boundary is symmetric between them — additionally requires broker/protocol, restriction, composed-stage/normalization, binary-size/startup, and signed-payload retesting. Updating Draco, KTX/Basis, libwebp, or DirectXTex requires compressed-expansion and image fuzz corpora plus cache-version review.
+Warnings and exceptions from dependency headers are contained at a dedicated build target boundary; product code remains warning-clean. Updating a parser is a behavior change requiring corpus, performance, memory, thumbnail-host, and installer license retest. Updating any import-worker or compatibility-host module — the boundary is symmetric between them — additionally requires broker/protocol, restriction, composed-stage/normalization, binary-size/startup, and signed-payload retesting. Updating Draco, KTX/Basis, libwebp, or DirectXTex requires compressed-expansion and image fuzz corpora plus cache-version review. A KTX-Software/basisu update additionally re-validates `model_core::ValidateEtc1sGlobalData` (ADR-0046) against the new `decode_tables` and reruns the promoted `GltfFuzz` corpus.
 
 ## CI and release evidence
 

@@ -42,7 +42,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T14 — SEC-14 Release and supply-chain hardening → [14-ci-release-supply-chain.md](14-ci-release-supply-chain.md)
 - [x] T15 — SEC-15 Fuzz targets: STL, PLY, OBJ → [15-fuzz-fast-path-parsers.md](15-fuzz-fast-path-parsers.md)
 - [~] T16 — SEC-16 Fuzz targets: glTF + compressed codecs → [16-fuzz-gltf-and-codecs.md](16-fuzz-gltf-and-codecs.md) ⟵ blocked
-- [~] T16b — SEC-16b KTX2/BasisLZ ETC1S decoder finding and GltfFuzz smoke promotion → [16b-fuzz-ktx-etc1s-finding.md](16b-fuzz-ktx-etc1s-finding.md) ⟵ running
+- [x] T16b — SEC-16b KTX2/BasisLZ ETC1S decoder finding and GltfFuzz smoke promotion → [16b-fuzz-ktx-etc1s-finding.md](16b-fuzz-ktx-etc1s-finding.md)
 - [ ] T17 — SEC-17 Provider pipeline fuzz + surrogate soak → [17-fuzz-provider-and-soak.md](17-fuzz-provider-and-soak.md)
 
 ## Phase 4 — Documentation and release metadata
@@ -51,11 +51,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T19:18:13Z · 16/20 done
+**Pipeline status** — updated 2026-10-02T23:58:44Z · 17/21 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16b
 - Blocked: T16
 - Failed: none
 - Remaining: T17, T18, T19
-- Last finished: T16 — blocked · GltfFuzz target + seed preparer + README/ADR-0045/PROGRESS/Hand-off landed and build with ASan; the bounded run surfaced two deterministic crashes in pinned upstream decoders (KTX-Software 4.4.2 ETC1S transcode; fastgltf 0.9.0 base64 data URI) that were minimized into tests/fuzz/corpus/gltf, so the "no findings" criterion and fuzz-smoke promotion need a human decision (patch/upgrade, product mitigations, or accept as Job-contained).
+- Last finished: T16b — done · ETC1S/BasisLZ global-data preflight closes both decoder crash classes, regressions added, GltfFuzz promoted to fuzz-smoke with promoted corpus; all acceptance checks green (unit, import-isolation, bounded smoke).
 <!-- /symphony:status -->

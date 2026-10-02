@@ -24,10 +24,11 @@ instrumentation.
   (`sidecarClient`/`batchSink` null). External sidecar resolution uses the
   pipe-based `SidecarFileClient`; its reference validation stays in SEC-04 and
   the real worker.
-- The `Ktx2` domain drives `PreflightKtx2` for BasisLZ/ETC1S containers and the
-  real transcode for UASTC/uncompressed containers. The third-party ETC1S
-  transcode is excluded from the bounded smoke because it crashes on malformed
-  global data.
+- The `Ktx2` domain drives `PreflightKtx2` and the real transcode for every
+  container. (Originally the ETC1S transcode was excluded because it crashed on
+  malformed global data; SEC-16b added `model_core::ValidateEtc1sGlobalData` to
+  `PreflightKtx2`, so the real ETC1S transcode is safe for accepted containers;
+  see [ADR-0046](./0046-etc1s-global-data-preflight.md).)
 - The target sets `_DISABLE_STL_ANNOTATION` so an ASan TU can link the pinned
   non-ASan static libraries without `LNK2038` (`annotate_*=0` vs `1`).
 - Two deterministic findings were minimized under `tests/fuzz/corpus/gltf/`
@@ -36,16 +37,15 @@ instrumentation.
   The fastgltf class is fixed in-product by `model_core::ValidateGltfDataUri`
   (`GltfDataUriPreflight.h`), called from the `GltfAdapter.cpp` simdjson
   preflight before `loadGltf`; its seed is now a safe regression. The ETC1S
-  class is deferred to SEC-16b, which owns its mitigation/decision and the
-  smoke promotion; `GltfFuzz` stays out of `fuzz-smoke` until then.
+  class was closed by SEC-16b, which added the ETC1S global-data preflight and
+  promoted `GltfFuzz` into `fuzz-smoke` (ADR-0046).
 
 ## Consequences
-- The glTF/codec target is built and runnable but is not promoted into the
-  `fuzz-smoke` matrix; doing so is blocked on the remaining ETC1S decoder
-  finding (SEC-16b). The fastgltf base64 class is closed.
+- The glTF/codec target is promoted into the `fuzz-smoke` matrix; both SEC-16
+  decoder findings (fastgltf base64 and KTX-Software/basisu ETC1S) are closed.
 - The real AppContainer/Job worker remains the production containment for
   worker-process crashes; the design's "corrupt optional texture falls back"
-  contract is not met for the ETC1S case until SEC-16b fixes it.
+  contract is now met for the ETC1S case by the product-owned preflight.
 - A findings seed must not join the smoke corpus before its class is mitigated
   or libFuzzer rediscovers it.
 - The target needs the root vcpkg manifest restored and must be built

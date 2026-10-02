@@ -24,6 +24,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T14 — SEC-14 Release and supply-chain hardening**: Reusable facts for later sessions:; **Permissions cannot be conditional.** GitHub Actions `permissions` (top-level or job-level) does
 - **T15 — SEC-15 Fuzz targets: STL, PLY, OBJ**: Reusable facts for later sessions:; **Three targets, one convention.** `tests/fuzz/StlFuzz.cpp`, `PlyFuzz.cpp`, and `ObjFuzz.cpp`
 - **T16 - SEC-16 Fuzz targets: glTF + compressed codecs**: Reusable facts for later sessions:; **One target, seven domains.** `tests/fuzz/GltfFuzz.cpp` (+ `GltfFuzz.vcxproj`, GUID
+- **T16b — SEC-16b KTX2/BasisLZ ETC1S decoder finding and GltfFuzz smoke promotion**: Reusable facts for later sessions:; **Root cause (characterized).** KTX-Software 4.4.2's `ktxTexture2_transcodeLzEtc1s`
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -657,17 +658,13 @@ Reusable facts for later sessions:
   reusable gate and cannot be split by event without duplicating the Debug/Release matrix. It is not
   a write vector today (`feed-access: read` off `push`), but a future refactor could split it the
   same way `dependencies.yml` was.
-- **SEC-16 finding (KTX-Software 4.4.2 ETC1S/basisu) — deferred to SEC-16b.** `TranscodeKtx2BasisImage`
-  (and therefore `ImportGltf` with an embedded `KHR_texture_basisu` image) reaches a deterministic
+- **SEC-16 finding (KTX-Software 4.4.2 ETC1S/basisu) — resolved by SEC-16b.** `TranscodeKtx2BasisImage`
+  (and therefore `ImportGltf` with an embedded `KHR_texture_basisu` image) reached a deterministic
   null-deref in `basist::basisu_lowlevel_etc1s_transcoder::transcode_slice` for a two-byte mutation of
   the frozen `interactive-viewer/test-assets/basisu_sample.ktx2` ETC1S supercompression global data.
-  The `Ktx2Preflight`/`PreflightKtx2` header/level checks pass; the crash is in the third-party
-  bitstream decoder. Minimized seed: `tests/fuzz/corpus/gltf/basislz-etc1s-crash.env` (and `.ktx2`).
-  Fix required: upstream KTX-Software/basisu patch, a fail-closed rejection, or a product-owned ETC1S
-  global-data guard, before the seed can join the smoke corpus. Owned by
-  `docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md`. The design's "corrupt optional texture uses a
-  deterministic fallback" contract is violated until then; production containment is only the
-  AppContainer/Job worker boundary.
+  `model_core::ValidateEtc1sGlobalData` (`shared/model-core/include/model_core/Etc1sTablePreflight.h`),
+  called from `PreflightKtx2`, now replays basisu's bounded Huffman-table read and rejects the
+  container before the library. See `docs/design/adr/0046-etc1s-global-data-preflight.md`.
 - **SEC-16 finding (fastgltf 0.9.0 base64) — fixed.** `ImportGltf`'s
   `fastgltf::Parser::loadGltf` reached a heap-buffer-overflow in
   `fastgltf::base64::fallback_decode_inplace` (`base64.cpp:413`) for a `.gltf` data URI whose base64
@@ -675,9 +672,20 @@ Reusable facts for later sessions:
   (`shared/model-core/include/model_core/GltfDataUriPreflight.h`) now rejects malformed/oversized
   base64 `data:` URIs in the `GltfAdapter.cpp` simdjson preflight before `loadGltf`; the minimized seed
   `tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env` is now a safe regression.
-- **SEC-16/17 CI promotion.** Do not add `GltfFuzz` to the `fuzz-smoke` matrix until the ETC1S decoder
-  finding is mitigated (SEC-16b); the fastgltf class is closed. Once fixed, add the glTF+codec entry
-  (one target per runner) and then promote the whole lane to the required gate.
+- **SEC-16/17 CI promotion — glTF done, lane still nightly.** SEC-16b added the glTF+codec entry to the
+  `fuzz-smoke` matrix (one target per runner). Remaining: SEC-17 provider-soak, then promote the whole
+  lane to a required pull-request gate.
+- **SEC-16b (new fuzz finding, fixed): out-of-range `primitive.materialIndex`.** The promoted glTF
+  corpus found `GltfAdapter.cpp` `ConvertPrimitive` indexing `asset.materials[*primitive.materialIndex]`
+  for `normalTexture` without a bounds check; fastgltf keeps a material index even when the `materials`
+  array is absent (a corrupted JSON key suffices), so an empty array null-derefs. Fixed by bounding the
+  index against `asset.materials.size()` before the read. Real-worker regression:
+  `GltfImportTests.cpp` `[gltf-import][security]`. The next fuzz drift here is to keep the Adapter
+  domain's other direct `asset.*[index]` reads reviewed (they are currently guarded by fastgltf
+  validation or explicit checks).
+- **SEC-16b follow-up (required on a KTX/basisu bump):** re-validate the `Etc1sTablePreflight.h` port
+  against the new `external/basisu` `read_huffman_table`/`decode_tables`, and rerun the promoted
+  `GltfFuzz` corpus. The port is version-pinned to BASISD_LIB_VERSION 116.
 
 ## T13 — SEC-13 CI test gate for PRs and releases
 
@@ -850,3 +858,52 @@ Reusable facts for later sessions:
   (`[gltf][data-uri]`, 5 cases) is in `Tests.Unit`, and a real-worker `[gltf-import][security]` case is
   in `GltfImportTests.cpp`. `npm test` (Tests.Unit Release) is 374 cases green; the ETC1S seed still
   crashes and is owned by SEC-16b. See ADR-0045.
+
+## T16b — SEC-16b KTX2/BasisLZ ETC1S decoder finding and GltfFuzz smoke promotion
+
+Reusable facts for later sessions:
+
+- **Root cause (characterized).** KTX-Software 4.4.2's `ktxTexture2_transcodeLzEtc1s`
+  (`lib/basis_transcode.cpp`) calls basisu's low-level `decode_palettes`/`decode_tables` and **ignores
+  their bool return**, then enters `transcode_slice` unconditionally. The minimized two-byte mutation
+  (`tests/fuzz/corpus/gltf/basislz-etc1s-crash.ktx2`, offsets 109/110 of the 208-byte SGD in
+  `interactive-viewer/test-assets/basisu_sample.ktx2`) corrupts the Huffman table blob so the third
+  `read_huffman_table` reads `num_codelength_codes == 0`; `decode_tables` returns false, `m_selector_model`
+  stays empty, and `transcode_slice` indexes its empty lookup at `basisu_transcoder.cpp:8013`. Every KTX2
+  structural field is valid, so a bounds-only guard cannot catch it. A second class (found while
+  validating the promoted corpus): a one-byte selector-codebook mutation (file offset 296) makes
+  `decode_palettes` fail an unsupported selector-codebook variant; the same ignored-return bug leaves the
+  selector objects uninitialized and `convert_etc1s_to_bc7_m5_color` indexes a `[4][4]` table out of
+  bounds. Both must be rejected at preflight.
+- **Pinned decoder is KTX-vendored, not the vcpkg `basisu` package.** KTX 4.4.2 vendors basisu under
+  `external/basisu` (BASISD_LIB_VERSION 116); its symbols are inside `ktx.lib`. The standalone `basisu`
+  vcpkg headers are a different (newer) ABI, so product code must **not** instantiate the transcoder
+  class. The fix therefore re-implements the bounded table read instead of calling the library.
+- **Fix.** `model_core::ValidateEtc1sGlobalData`
+  (`shared/model-core/include/model_core/Etc1sTablePreflight.h`), a bounded allocation-free port of
+  `bitwise_decoder` + `huffman_decoding_table::init` + `read_huffman_table`, is called from
+  `PreflightKtx2` for `vkFormat==0 && supercompression==1` (KTX_SS_BASIS_LZ) before
+  `ktxTexture2_CreateFromMemory`. It replays the deciding reads of both `decode_palettes` (four
+  endpoint tables + selector-codebook variant flags) and `decode_tables` (four tables + 13-bit
+  selector-history-buffer size), and validates the endpoint/selector counts and codebook byte-length
+  sums vs `sgdLength`. Policy #1; no capability regression. See ADR-0046.
+- **Second promoted-corpus finding fixed.** The real `Ktx2` domain and the promoted seeds exposed
+  `GltfAdapter.cpp` `ConvertPrimitive` indexing `asset.materials[*primitive.materialIndex]` without a
+  bounds check; fastgltf keeps `material` even when the `materials` array is absent (a corrupted JSON
+  key suffices) so an empty array null-derefs. Fixed with a `size()` check.
+- **How to build/run the target** (MSBuild not on PATH):
+  `"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" tests\fuzz\GltfFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\" /p:VcpkgRoot=C:\vcpkg /p:VcpkgManifestInstall=false /m:1`
+  then `python tests/fuzz/prepare_gltf_seeds.py TestResults/security-t16b/gltf-seeds` (38 seeds) and
+  `tests\fuzz\x64\Release\GltfFuzz.exe TestResults/security-t16b/gltf-seeds -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 -print_final_stats=1 -verbosity=0`.
+- **Seeds promoted.** `prepare_gltf_seeds.py` now reads `tests/fuzz/corpus/gltf/` (`fastgltf-base64-overflow.env`,
+  `basislz-etc1s-crash.env`, `basislz-etc1s-crash.ktx2`) and re-adds the valid `basisu_textured_triangle.glb`;
+  the `Ktx2` domain drives the real ETC1S transcode for every accepted container. `GltfFuzz` is added to
+  the `fuzz-smoke` matrix (`ci.yml`, target `glTF`, one target per runner). `Tests.ImportIsolation.vcxproj`
+  defines `PREVIEW3D_FUZZ_CORPUS_DIR` so the regression tests read the minimized seeds.
+- **Build caveat.** The fuzz projects share `tests\fuzz\x64\Release`; build one at a time (`/m:1`) or on a
+  fresh runner (MSB8028). The ASan runtime DLL is copied next to the exe by the project.
+- **Verify (all green).** `Tests.Unit.exe "~[graphics]"` → 312 cases / 131,557 assertions;
+  `Tests.ImportIsolation.exe "[texture-transcode]"` → 7 cases; `"[gltf-import][security]"` → 3 cases;
+  bounded `GltfFuzz` smoke over 38 seeds, 60 s, 55,945 units, exit 0, no ASan finding (a separate 180 s
+  run did 187,491 units clean). The worker, thumbnail provider, fuzz target, unit and import-isolation
+  projects all rebuilt Release.

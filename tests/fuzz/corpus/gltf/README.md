@@ -1,10 +1,11 @@
 # GltfFuzz findings corpus
 
-Immutable, minimized reproducers for `GltfFuzz`. These are **not** fed to the
-bounded CI smoke: a finding must be fixed (or its class mitigated) before its
-seed joins the smoke training set, otherwise libFuzzer rediscovers it and the
-run fails. They are retained so the crash is reproducible and so a future
-regression test can assert the intended rejection.
+Immutable, minimized reproducers for `GltfFuzz`. Both classes are now fixed and
+`prepare_gltf_seeds.py` promotes the `.env` seeds (and the extracted
+`basislz-etc1s-crash.ktx2`) into the generated smoke seeds, so libFuzzer
+exercises the fixed rejection continuously. They are retained here as the
+canonical minimal reproducers and drive the real-worker regressions in
+`tests/import-isolation/`.
 
 ## basislz-etc1s-crash
 
@@ -34,13 +35,17 @@ image) and is contained only by the AppContainer/Job process boundary, matching
 the "corrupt optional texture uses a deterministic fallback" contract being
 violated.
 
-The mutation also crashes via the Ktx2 domain on the extracted container
-without the GLB wrapper.
+Before SEC-16b, the mutation also crashed via the Ktx2 domain on the extracted
+container without the GLB wrapper.
 
-Disposition: an upstream KTX-Software / basisu fix, a product-owned ETC1S
-global-data guard, or a fail-closed rejection is required before this seed can join the smoke corpus.
-This is owned by `docs/tasks/security/16b-fuzz-ktx-etc1s-finding.md`; see `docs/security/PROGRESS.md`
-("T16 — SEC-16") and the task Hand-off.
+Disposition: **fixed in SEC-16b** by a product-owned ETC1S global-data guard,
+`model_core::ValidateEtc1sGlobalData` (`shared/model-core/include/model_core/Etc1sTablePreflight.h`),
+called from `PreflightKtx2` before `ktxTexture2_TranscodeBasis`. It replays basisu's bounded
+`decode_palettes`/`decode_tables` deciding reads and rejects the container before the library is
+entered; the real-worker
+regression is the `[gltf-import][texture][security]` case in `tests/import-isolation/GltfImportTests.cpp`
+and the `[texture-transcode][security]` case in `TextureTranscodeAdapterTests.cpp`. See
+`docs/design/adr/0046-etc1s-global-data-preflight.md`.
 
 ## fastgltf-base64-overflow
 
@@ -66,4 +71,4 @@ The product's simdjson preflight accepts the JSON and the product's data-URI cap
 whose encoded length is not a multiple of four (and over-cap/mis-padded payloads) in the
 `GltfAdapter.cpp` simdjson preflight before `loadGltf`, so this seed is a safe regression:
 `GltfFuzz.exe tests/fuzz/corpus/gltf/fastgltf-base64-overflow.env -runs=1` exits 0. It no longer
-blocks CI smoke promotion; the remaining blocker is the ETC1S finding above (SEC-16b).
+blocks CI smoke promotion; the ETC1S finding above is also closed (SEC-16b).

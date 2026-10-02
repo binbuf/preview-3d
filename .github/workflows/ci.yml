@@ -374,6 +374,11 @@ jobs:
             exe: tests\fuzz\x64\Release\ObjFuzz.exe
             prepare: tests/fuzz/prepare_obj_seeds.py
             seeds: TestResults/security-t15/obj-seeds
+          - target: glTF
+            project: tests\fuzz\GltfFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\GltfFuzz.exe
+            prepare: tests/fuzz/prepare_gltf_seeds.py
+            seeds: TestResults/security-t16b/gltf-seeds
 
     steps:
       - name: Check out source
