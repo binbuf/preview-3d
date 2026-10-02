@@ -135,12 +135,30 @@ std::optional<SandboxProcess> LaunchSuspendedSandboxedWithSid(const std::wstring
     caps.CapabilityCount = 0;
     caps.Reserved = 0;
 
-    platform::ProcThreadAttributeList attrList(2);
+    // Apply the process mitigation policy at creation time so no import code
+    // ever runs under a less-restricted intermediate state. CFG is forced
+    // always-on for the child image, extension points (AppInit_DLLs and the
+    // other legacy injection seams) are disabled, and ACG prohibits dynamic
+    // code. Microsoft-signed-image enforcement is intentionally absent until
+    // the payload is Authenticode-signed (SEC-14); the images and app-local
+    // DLLs are unsigned today and that policy would make them unloadable.
+    // Every child that is launched through this broker parses untrusted data,
+    // and the isolation suite validates this set against each pinned parser.
+    DWORD64 childMitigationPolicy =
+        PROCESS_CREATION_MITIGATION_POLICY_CONTROL_FLOW_GUARD_ALWAYS_ON
+        | PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON
+        | PROCESS_CREATION_MITIGATION_POLICY_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON;
+
+    platform::ProcThreadAttributeList attrList(3);
     if (!attrList.Update(PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &caps, sizeof(caps))) {
         return std::nullopt;
     }
     if (!attrList.Update(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inheritedHandles.data(),
                           inheritedHandles.size() * sizeof(HANDLE))) {
+        return std::nullopt;
+    }
+    if (!attrList.Update(PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &childMitigationPolicy,
+                          sizeof(childMitigationPolicy))) {
         return std::nullopt;
     }
 

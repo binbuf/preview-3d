@@ -32,7 +32,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T07 — SEC-07 Provider stream/raster/accounting robustness → [07-provider-stream-raster-robustness.md](07-provider-stream-raster-robustness.md)
 - [x] T08 — SEC-08 Provider containment policy (AV, stack, OCCT) → [08-provider-containment-policy.md](08-provider-containment-policy.md)
 - [x] T09 — SEC-09 Child-process loader/plugin hardening → [09-child-process-loader-hardening.md](09-child-process-loader-hardening.md)
-- [ ] T10 — SEC-10 Build and process mitigation hardening → [10-build-and-process-mitigations.md](10-build-and-process-mitigations.md)
+- [x] T10 — SEC-10 Build and process mitigation hardening → [10-build-and-process-mitigations.md](10-build-and-process-mitigations.md)
 - [ ] T11 — SEC-11 Viewer local attack-surface reduction → [11-viewer-attack-surface.md](11-viewer-attack-surface.md)
 - [ ] T12 — SEC-12 Active-instance IPC hardening → [12-active-instance-ipc.md](12-active-instance-ipc.md)
 
@@ -50,11 +50,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T15:33:55Z · 10/20 done
+**Pipeline status** — updated 2026-10-02T16:16:21Z · 11/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10
 - Blocked: none
 - Failed: none
-- Remaining: T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T09 — done · All three children now establish safe loader/CWD/env state and Release rejects every compiled-out fault flag; STEP preflight rejects control bytes in strings/comments and split signatures; Release ImportIsolation fully green (398 cases, 5 fault-mode skips), Debug only the 2 pre-existing failures, Tests.Unit green.
+- Remaining: T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T10 — done · CFG/CET shared, broker mitigation attribute + per-EXE process mitigations + app manifest landed; Debug/Release product builds green, ImportIsolation Release 399/0, npm test 357. Exclusions measured and documented: /guard:ehcont blocked by un-instrumented vcpkg libs (opt-in), /Qspectre gated on absent component, MicrosoftSignedOnly deferred to SEC-14, viewer ACG pending GPU validation.
 <!-- /symphony:status -->

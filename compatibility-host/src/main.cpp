@@ -4,6 +4,7 @@
 #include "model_core/ControlProtocol.h"
 #include "model_core/ImportError.h"
 #include "platform/MappedView.h"
+#include "platform/ProcessMitigations.h"
 #include "platform/Win32Handle.h"
 
 #include <windows.h>
@@ -227,6 +228,9 @@ int wmain(int argc, wchar_t** argv)
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const auto directory = ExecutableDirectory();
     if (directory.empty() || !HardenProcessDiscovery(directory)) return 65;
+    // Untrusted USD bytes are parsed in this process (via the app-local core
+    // DLL), so it takes the full mitigation set including ACG.
+    if (!platform::ApplyProcessMitigations(/*prohibitDynamicCode=*/true)) return 65;
     if (argc == 2) {
         const std::wstring_view mode(argv[1]);
         if (mode == L"--pool") return RunProductionPool(PoolMode::Normal, directory);

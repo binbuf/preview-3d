@@ -13,6 +13,7 @@
 #include "StlImportWorker.h"
 #include "WorkerRequestDispatch.h"
 #include "model_core/ControlChannelIo.h"
+#include "platform/ProcessMitigations.h"
 
 #include <windows.h>
 
@@ -97,6 +98,12 @@ int main(int argc, char* argv[])
 
     const auto directory = ExecutableDirectory();
     if (directory.empty() || !HardenProcessDiscovery(directory)) {
+        return 1;
+    }
+
+    // Untrusted model bytes are parsed in this process, so it takes the full
+    // mitigation set including ACG. A policy failure is fatal (fail closed).
+    if (!platform::ApplyProcessMitigations(/*prohibitDynamicCode=*/true)) {
         return 1;
     }
 

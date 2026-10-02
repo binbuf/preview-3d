@@ -16,7 +16,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T07 — SEC-07 Provider stream/raster/accounting robustness**: Reusable facts for later sessions:; **Stream size validation.** `thumbnail-provider/StreamSource.cpp` has
 - **T08 — SEC-08 Provider containment policy (AV, stack, OCCT)**: Reusable facts for later sessions:; **Policy chosen: quarantine, not fail-fast (ADR-0037).** On the first contained structured
 - **T09 — SEC-09 Child-process loader/plugin hardening**: Reusable facts for later sessions:; **Child hardening pattern.** Each import child must, before parsing, call
-- **Follow-ups**: T11 (viewer attack surface): `interactive-viewer/src/app/Preview3D.cpp` still exposes; T09/SEC-10: process-mitigation attributes are untouched (out of T09 scope).
+- **T10 — SEC-10 Build and process mitigation hardening**: Reusable facts for later sessions:; **Shared build mitigations.** `Directory.Build.props` now sets `ControlFlowGuard=Guard` and
+- **Follow-ups**: SEC-14: once the payload is Authenticode-signed, enable Microsoft-signed-image enforcement; SEC-14/T10: rebuild the vcpkg ports (and OCCT closures) with `/guard:ehcont` and install the MSVC
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -417,7 +418,62 @@ Reusable facts for later sessions:
   398 / 2 pre-existing failures (ThreeMfSpike:630, UsdSpike:296) / 1 skip. `npm test`
   (`Tests.Unit` Release) 357 cases green.
 
+## T10 — SEC-10 Build and process mitigation hardening
+
+Reusable facts for later sessions:
+
+- **Shared build mitigations.** `Directory.Build.props` now sets `ControlFlowGuard=Guard` and
+  `CETCompat=true` for every project; `Microsoft.CppCommon.targets` derives linker `/GUARD:CF` from
+  the ClCompile metadata, so no explicit linker property is needed. Debug pins
+  `DebugInformationFormat=ProgramDatabase` to keep `/guard:cf` and `/ZI` from colliding. Verified
+  with `dumpbin /headers` + `/loadconfig` on all five product images (Guard CF, CET, DYNAMICBASE,
+  NXCOMPAT, high-entropy VA). See ADR-0039.
+- **`/guard:ehcont` is opt-in and off.** Every product image statically imports vcpkg libraries
+  (draco/ktx/lib3mf/libwebp/meshoptimizer/simdjson/tbb/tinyusdz/usd_m/ufbx/zip/zstd) built without EH
+  continuation metadata; linking with `GuardEHContMetadata` fails LNK1386/LNK2047 (measured on
+  worker, viewer, provider). The switch is `Preview3DEnableGuardEhCont` (default false). This
+  supersedes design/09's unconditional EHCont claim until the ports are rebuilt.
+- **`/Qspectre` is conditional.** `Directory.Build.targets` enables `SpectreMitigation=Spectre` only
+  when `$(VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre)` exists; otherwise MSB8040 fails the
+  build. The detection must live in `Directory.Build.targets`, not props, because the VC library
+  paths are not computed during `Directory.Build.props` evaluation. `-getProperty:
+  Preview3DSpectreMitigationEnabled` reports the measured outcome (`false` on this image).
+- **Broker creation mitigation policy.** `SandboxLauncher.cpp` adds
+  `PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY` (CFG always-on + extension-point disable + ACG) as the
+  third attribute; `UpdateProcThreadAttribute` failure returns `nullopt` (fail closed). No
+  MicrosoftSignedOnly — the payload is unsigned until SEC-14. The attribute is read back while the
+  child is still suspended by the new `[sandbox][security]` case in `SandboxLaunchTests.cpp`.
+- **Startup mitigations.** `shared/platform/ProcessMitigations.h` is header-only:
+  `platform::ApplyProcessMitigations(bool prohibitDynamicCode)` enables
+  `HeapEnableTerminationOnCorruption` and `ProcessExtensionPointDisablePolicy`, and ACG
+  (`ProcessDynamicCodePolicy`) when requested. Called from the viewer (`false`), worker, import host,
+  and STEP host (`true`). Failure is fatal (nonzero exit). Do **not** call
+  `SetProcessMitigationPolicy(ProcessControlFlowGuardPolicy)`: it returns ERROR_ACCESS_DENIED
+  (measured err=5) on an already-CFG image; CFG comes from the PE header, linker, and broker.
+- **Application manifest.** `shared/platform/app.manifest` is added globally through
+  `<Manifest><AdditionalManifestFiles>` in `Directory.Build.props`; `mt.exe` merges it with the
+  linker manifest. The result keeps `trustInfo` + `heapType SegmentHeap` and adds `longPathAware`,
+  `activeCodePage UTF-8`, and the Win10/11 `supportedOS` GUID `{8e0f7a12-...}`.
+- **Gotcha — host startup got slower.** CFG-always-on + ACG + the manifest measurably lengthen child
+  startup; `OpenUsdHostSpikeTests.cpp` replaced its fixed `Sleep(150)` "started" check with a bounded
+  `WaitForState` poll. Any test that assumes a fixed child-startup latency must poll instead.
+- **Build/verify.** MSBuild is not on PATH; use
+  `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`. Build with
+  `/p:Configuration=Debug|Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\" /m`.
+  `Tests.ImportIsolation` Release 399 cases / 0 failed / 5 skipped, Debug 399 / 0 / 1; `npm test`
+  (Tests.Unit Release) 357 green; all seven product projects build in both configs.
+
 ## Follow-ups
+
+- SEC-14: once the payload is Authenticode-signed, enable Microsoft-signed-image enforcement
+  (`PROCESS_CREATION_MITIGATION_POLICY_BLOCK_NON_MICROSOFT_BINARIES_ALWAYS_ON` in `SandboxLauncher`
+  and a `ProcessSignaturePolicy` in `ApplyProcessMitigations`), then re-run the isolation suite.
+- SEC-14/T10: rebuild the vcpkg ports (and OCCT closures) with `/guard:ehcont` and install the MSVC
+  Spectre-mitigated libraries component, then flip `Preview3DEnableGuardEhCont=true` and re-verify
+  that `/Qspectre` activates; no code change beyond the switch is required.
+- T11/GPU: validate whether the viewer can also take ACG (`prohibitDynamicCode=true`) and whether CFG
+  strict mode/`ProcessControlFlowGuardPolicy` are usable once the D3D runtime is exercised on real
+  hardware.
 
 - T11 (viewer attack surface): `interactive-viewer/src/app/Preview3D.cpp` still exposes
   `--benchmark-worker-budget-failure` (sets `faultForTesting = 6`) and a WM fault-injection message;

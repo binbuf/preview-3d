@@ -258,6 +258,20 @@ bool WaitForReply(Launch& launch, DWORD timeoutMilliseconds)
     return false;
 }
 
+// The host now starts with CFG-always-on/ACG and the shared application
+// manifest, so a fixed short sleep is no longer a reliable proxy for "the
+// spike reached the started state". Poll the shared flag instead, with the
+// same bounded-wait discipline as WaitForReply.
+bool WaitForState(volatile long* state, long minimum, DWORD timeoutMilliseconds)
+{
+    const auto deadline = GetTickCount64() + timeoutMilliseconds;
+    while (GetTickCount64() < deadline) {
+        if (InterlockedCompareExchange(state, 0, 0) >= minimum) return true;
+        Sleep(5);
+    }
+    return false;
+}
+
 void CaptureDiagnostics(const OpenUsdSpikeSection& header)
 {
     UNSCOPED_INFO("status=" << static_cast<std::uint32_t>(header.status)
@@ -429,8 +443,7 @@ TEST_CASE("USD-002 host crash hang and Job limit are generation-local and restar
                             OpenUsdSpikeMode::ConsumeMemory}) {
         auto packed = Pack(minimal, mode);
         auto launch = Start(profile, packed, mode == OpenUsdSpikeMode::ConsumeMemory ? 64ull * 1024 * 1024 : 0);
-        Sleep(150);
-        CHECK(packed.header->state == 1);
+        CHECK(WaitForState(&packed.header->state, 1, 30'000));
         CHECK(TerminateJobObject(launch.process.job.get(), 99));
         CHECK(WaitForSingleObject(launch.process.process.get(), 5'000) == WAIT_OBJECT_0);
     }

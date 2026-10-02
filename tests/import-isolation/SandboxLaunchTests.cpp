@@ -272,6 +272,36 @@ TEST_CASE("Omitting the report handle from the restricted handle list fails proc
     REQUIRE_FALSE(launch.has_value());
 }
 
+TEST_CASE("Broker applies the child process mitigation policy at creation", "[sandbox][security]")
+{
+    SandboxFixture fixture;
+    import_broker::SandboxLimits limits{};
+
+    auto launch = LaunchWorker(fixture.sid, L"--pool", limits);
+    REQUIRE(launch.has_value());
+
+    // The worker is still suspended, so these values describe the
+    // PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY applied by CreateProcessW and
+    // cannot come from the worker's own startup hardening.
+    PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY extensionPoints{};
+    REQUIRE(GetProcessMitigationPolicy(launch->proc.process.get(),
+                                        ProcessExtensionPointDisablePolicy, &extensionPoints,
+                                        sizeof(extensionPoints)));
+    CHECK(extensionPoints.DisableExtensionPoints != 0);
+
+    PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY controlFlowGuard{};
+    REQUIRE(GetProcessMitigationPolicy(launch->proc.process.get(), ProcessControlFlowGuardPolicy,
+                                        &controlFlowGuard, sizeof(controlFlowGuard)));
+    CHECK(controlFlowGuard.EnableControlFlowGuard != 0);
+
+    PROCESS_MITIGATION_DYNAMIC_CODE_POLICY dynamicCode{};
+    REQUIRE(GetProcessMitigationPolicy(launch->proc.process.get(), ProcessDynamicCodePolicy,
+                                        &dynamicCode, sizeof(dynamicCode)));
+    CHECK(dynamicCode.ProhibitDynamicCode != 0);
+
+    launch->proc.job.reset(); // kill-on-close cleans up the never-resumed worker
+}
+
 TEST_CASE("Default probe run denies filesystem, network, and process-spawn access", "[sandbox]")
 {
     SandboxFixture fixture;

@@ -13,6 +13,7 @@
 #include "NavGizmo.h"
 #include "Settings.h"
 #include "ShellIntegration.h"
+#include "platform/ProcessMitigations.h"
 
 #include <commctrl.h>
 #include <dwmapi.h>
@@ -4295,6 +4296,12 @@ bool IsSmartAppControlActive()
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
 {
     const auto processStartedUs = NowMicroseconds();
+    // ACG is withheld from the viewer until a GPU run validates the user-mode
+    // D3D runtime's shader compilation path; the import children enable it.
+    if (!platform::ApplyProcessMitigations(/*prohibitDynamicCode=*/false))
+    {
+        return 1;
+    }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     HRESULT comResult = E_FAIL;
 
