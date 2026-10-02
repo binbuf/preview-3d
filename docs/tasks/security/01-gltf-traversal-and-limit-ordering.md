@@ -18,15 +18,15 @@ malformed file inside the sandbox cannot pin CPU or allocate on the broker's beh
   the regression cases belong.
 
 ## Scope
-- [ ] Cap total `VisitNode` visits per walk (reuse an existing Tier A object/budget constant; do not
+- [x] Cap total `VisitNode` visits per walk (reuse an existing Tier A object/budget constant; do not
       invent a new public limit without an ADR) or memoize subtrees already `visitState == 2`.
-- [ ] Add cancellation checks inside the node walk and any other adapter loop that currently checks
+- [x] Add cancellation checks inside the node walk and any other adapter loop that currently checks
       only between top-level stages.
-- [ ] Move the USD UV expansion behind (or bound it by) the triangle/vertex caps; use checked
+- [x] Move the USD UV expansion behind (or bound it by) the triangle/vertex caps; use checked
       multiplication for the reserve size.
-- [ ] Regression tests: deep diamond DAG (mesh-less and mesh-bearing), oversized USDU mesh with a UV
+- [x] Regression tests: deep diamond DAG (mesh-less and mesh-bearing), oversized USDU mesh with a UV
       primvar; assert typed failure and bounded wall time, not a crash.
-- [ ] Sweep the other adapters for the same "cap after expansion" pattern and fix or file a
+- [x] Sweep the other adapters for the same "cap after expansion" pattern and fix or file a
       follow-up task (record which).
 
 ## Out of scope
@@ -40,14 +40,38 @@ malformed file inside the sandbox cannot pin CPU or allocate on the broker's beh
 - Keep `kMaxNodeDepth` as a depth guard, not the only guard.
 
 ## Done when
-- [~] `Tests.ImportIsolation` passes in Debug and Release with the new cases. (New cases pass in both
-  configs; 13 Debug / 11 Release failures are pre-existing and unrelated — see Hand-off.)
+- [x] `npm test` (harness verify: `x64\Release\Tests.Unit.exe`) passes green —
+  "All tests passed (134916 assertions in 339 test cases)", exit 0.
+- [~] `Tests.ImportIsolation` new `[dag]` cases pass in Debug and Release. The suite now has only
+  5 Debug / 3 Release failures (down from 13/11); all remaining ones are pre-existing and unrelated
+  (`SidecarPathResolverTests` user-asset-root cases, `ThreeMfSpikeTests.cpp:630` missing
+  problem-model, `UsdSpikeTests.cpp:230` low Job cap) — see Hand-off.
 - [x] A hand-built 40-level doubling DAG fails fast with `ResourceLimit` (Debug 321 ms mesh-less /
   37 ms mesh-bearing; Release 45 ms / 26 ms).
 - [x] No design limit changed without an ADR; if one changed, link it. (No change.)
 - [x] Hand-off filled in.
 
 ## Hand-off
+
+### Attempt-2 finding: the real verify blocker was fixture line endings, not SEC-01
+The harness verify (`npm test` = `x64\Release\Tests.Unit.exe`) failed with exit 42 on
+`tests/unit/FixtureManifestTests.cpp:52` — 14 SHA mismatches, exactly the text fixtures under
+`interactive-viewer/test-assets/corpus` (`.gltf`, the two text `.ply`, `manifest.json`); every
+binary fixture matched. Root cause: the repo had no `.gitattributes`, and this machine's
+`core.autocrlf=true` rewrote the checked-out text fixtures to CRLF while both the committed blobs
+and `Expectations.h`/`manifest.json` are LF. `tests/fixtures/generate.py` writes LF with
+`write_bytes`, so the manifest is LF by construction.
+The same bug explains most of what the first attempt recorded as "pre-existing USD fixture SHA
+drift": `tests/fixtures/usd-spike/*.usda` were also checked out as CRLF, and their LF bytes hash to
+the manifest values exactly (e.g. `compat-sub.usda` -> `a11a3798…`). So this was one repo defect,
+not two: the repo had no `.gitattributes` and `core.autocrlf=true` broke every byte-exact fixture
+assertion on Windows. It is independent of the SEC-01 code changes, which were already correct.
+Fix: added `.gitattributes` (`interactive-viewer/test-assets/** -text` and `tests/fixtures/** -text`)
+so byte-hashed assets are never line-ending converted, then re-checked-out those trees to restore
+LF. `npm test` is now green, and `Tests.ImportIsolation` improved from 13 Debug / 11 Release
+failures to 5 / 3. The remaining failures are genuinely unrelated (see below). No SEC-01 limit
+changed, so no limit ADR; the line-ending policy is recorded in
+`docs/design/adr/0029-fixture-assets-are-byte-exact.md`.
 
 ### What landed
 - `import-worker/src/GltfAdapter.cpp`
@@ -76,16 +100,22 @@ malformed file inside the sandbox cannot pin CPU or allocate on the broker's beh
   unit test for `PrimvarExpansionLimit`.
 
 ### Check results
-- Debug: `x64\Debug\Tests.ImportIsolation.exe "[dag]"` -> 2/2 passed; mesh-less 321 ms,
-  mesh-bearing 37 ms.
+- Verify (Release, attempt 2): `npm test` (`x64\Release\Tests.Unit.exe`) -> "All tests passed
+  (134916 assertions in 339 test cases)", exit 0. Before the `.gitattributes` fix this exited 42
+  on the 14 CRLF fixture mismatches.
+- Fixtures, Debug: `x64\Debug\Tests.Unit.exe "[fixtures]"` -> 1/1 case, 297 assertions, exit 0.
+- Debug: `x64\Debug\Tests.ImportIsolation.exe "[dag]"` -> 2/2 passed; mesh-less 278 ms,
+  mesh-bearing 34 ms.
 - Release: `x64\Release\Tests.ImportIsolation.exe "[dag]"` -> 2/2 passed; mesh-less 45 ms,
   mesh-bearing 26 ms.
-- New USD boundary case passes Debug and Release.
-- Full suite, Debug: 364/377 passed, 13 failed; Release: 366/377 passed, 11 failed. Every failure
-  is pre-existing and unrelated to this task (checked-in USD fixture SHA drift in
-  `UsdProtocolTests.cpp:1141/1230` and `UsdSpikeTests.cpp:97`; `FbxImportTests.cpp:276`;
-  `SidecarPathResolverTests.cpp` user-asset-root cases; `ThreeMfSpikeTests.cpp:630`;
-  `UsdSpikeTests.cpp:230` low-Job-cap spike). None of the new/changed code paths is involved.
+- New USD boundary case passes Debug and Release: `Tests[resource-limit]` (2 DAG + 1 USD case)
+  -> 27 assertions, 3/3 cases, exit 0 in both configs.
+- Full `Tests.ImportIsolation`, after the `.gitattributes` fix — Debug: 372/377 passed, 5 failed;
+  Release: 374/377 passed, 3 failed (was 13 / 11 before the fix; the difference was the CRLF USD
+  fixture hashes above, not real drift). The remaining failures are pre-existing and unrelated:
+  `SidecarPathResolverTests.cpp` user-asset-root cases (Debug 920/929/950, Release 489/504/518),
+  `ThreeMfSpikeTests.cpp:630` (absent problem-model file), and `UsdSpikeTests.cpp:230` (low Job
+  commit cap). None involve glTF traversal or the USD adapter code changed here.
 - No design limit changed, so no ADR.
 
 ### Deviations
@@ -107,10 +137,19 @@ malformed file inside the sandbox cannot pin CPU or allocate on the broker's beh
   sweep; PLY's `count * 3` reserve is safe because `count` is already under the vertex budget, but
   a future cleanup could switch it to `CheckedMultiply` for consistency.
 
+### Docs changed
+- `docs/tasks/security/01-gltf-traversal-and-limit-ordering.md` (this hand-off).
+- `docs/security/PROGRESS.md` (T01 reusable facts + fixture-line-ending gotcha).
+- `docs/design/adr/0029-fixture-assets-are-byte-exact.md` (new; pins fixture bytes against EOL
+  conversion). No Tier A/B limit changed, so no limit ADR.
+- `.gitattributes` (new; `interactive-viewer/test-assets/** -text` and `tests/fixtures/** -text`).
+
 ### For the next task (SEC-02 / SEC-16)
 - `kTierAObjectLimit` is now the per-walk glTF node-visit budget; if a legitimate very large DAG
   ever needs more, that is a deliberate limit change and needs an ADR.
 - `PrimvarExpansionLimit` lives in `UsdAdapter.h` and is the single place to update if the Tier B
   caps move.
 - The full `Tests.ImportIsolation` suite is not green at baseline (13 Debug / 11 Release failures
-  above); do not attribute them to SEC-01.
+  above); do not attribute them to SEC-01. This is separate from verify, which is `npm test`
+  (`Tests.Unit.exe`) and is now green.
+- Keep `.gitattributes` and ADR 0029: any new byte-hashed fixture tree needs the same `-text` rule.

@@ -1,0 +1,8 @@
+# Byte-exact fixture trees. These files are hashed byte-for-byte by the tests
+# (tests/unit/FixtureManifestTests.cpp, tests/import-isolation/FixtureManifestTests.cpp,
+# tests/import-isolation/UsdProtocolTests.cpp, ...) against checked-in manifests that
+# are generated with LF. Never apply end-of-line conversion here: core.autocrlf would
+# otherwise rewrite the text fixtures (.gltf, .ply, .usda, manifest.json) to CRLF on
+# checkout and every byte-exact assertion would fail on Windows.
+interactive-viewer/test-assets/** -text
+tests/fixtures/** -text

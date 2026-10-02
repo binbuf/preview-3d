@@ -19,7 +19,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 
 ## Phase 1 — Parser and containment hardening
 
-- [~] T01 — SEC-01 Bound glTF traversal and fix worker limit ordering → [01-gltf-traversal-and-limit-ordering.md](01-gltf-traversal-and-limit-ordering.md) ⟵ failed
+- [x] T01 — SEC-01 Bound glTF traversal and fix worker limit ordering → [01-gltf-traversal-and-limit-ordering.md](01-gltf-traversal-and-limit-ordering.md)
 - [ ] T02 — SEC-02 Preflight compressed decoders before allocation → [02-compressed-decode-preflight.md](02-compressed-decode-preflight.md)
 - [ ] T03 — SEC-03 Sandbox limits and broker defensive checks → [03-sandbox-and-broker-limits.md](03-sandbox-and-broker-limits.md)
 - [ ] T04 — SEC-04 Sidecar reference validation (NUL/control, per-format) → [04-sidecar-reference-validation.md](04-sidecar-reference-validation.md)
@@ -49,11 +49,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T04:05:00Z · 0/19 done
+**Pipeline status** — updated 2026-10-02T05:02:39Z · 1/19 done
 
-- Completed: none
+- Completed: T01
 - Blocked: none
-- Failed: T01
+- Failed: none
 - Remaining: T02, T03, T04, T05, T06, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T01 — failed · verify failed (exit 42): npm test — > test > x64\Release\Tests.Unit.exe Randomness seeded to: 4083992932 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Tests.Unit.exe is a Catch2 v3.16.0 host application. Run with -? for options -------------…
+- Last finished: T01 — done · SEC-01 code was already correct; fixed the real verify blocker (CRLF-corrupted fixtures with no .gitattributes) via .gitattributes + ADR 0029. npm test now green (339 cases), ImportIsolation down to 5 Debug/3 Release pre-existing failures, new DAG/USD regressions pass.
 <!-- /symphony:status -->
