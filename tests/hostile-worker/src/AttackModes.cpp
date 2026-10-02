@@ -716,6 +716,34 @@ int RunBatchAfterTerminal()
     return 0;
 }
 
+int RunStaleSidecarGeneration()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) {
+        return 1;
+    }
+    auto& [request, view] = *session;
+    (void)view;
+
+    model_core::RequestSidecarFileNotice notice{};
+    notice.generationId = request.generationId + 1; // stale relative to the host's generation
+    constexpr char kRelative[] = "mesh.bin";
+    notice.relativePathLength = sizeof(kRelative) - 1;
+    std::memcpy(notice.relativePathUtf8, kRelative, sizeof(kRelative) - 1);
+
+    if (!model_core::WriteControlMessage(GetStdHandle(STD_OUTPUT_HANDLE),
+                                          model_core::ControlOpcode::RequestSidecarFile, &notice,
+                                          sizeof(notice))) {
+        return 1;
+    }
+    // Block for the reply the host must refuse. The host's own result is what
+    // the test asserts, not this process's exit; the Job Object terminates it
+    // when the host drops the section.
+    auto reply = model_core::ReadControlMessage(GetStdHandle(STD_INPUT_HANDLE));
+    (void)reply;
+    return 0;
+}
+
 int RunUsdFallbackAfterBatch()
 {
     auto session = ReadFileImportRequestAndMapSection();

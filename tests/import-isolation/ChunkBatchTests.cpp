@@ -34,6 +34,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <map>
 #include <span>
@@ -174,6 +175,44 @@ TEST_CASE("A worker emitting batches without end is stopped at the per-generatio
     // Exactly the cap was accepted, and the cap is what stopped it -- the
     // worker itself never stops.
     CHECK(result.batchCount == 4);
+}
+
+TEST_CASE("A worker that keeps sending progress cannot extend the generation wall-clock deadline",
+          "[chunk-batch]")
+{
+    // The same unbounded worker as the cap test above, but with the batch and
+    // chunk caps raised out of the way so the only thing that can stop it is
+    // an absolute generation deadline. Each accepted batch re-arms the
+    // per-reply timeout, so without that deadline this would run to the cap
+    // (or forever); with it, the generation ends on time and reports the
+    // limit failure, not a protocol violation.
+    auto request = MakeBatchRequest(L"--batches-unbounded", 1'000'000);
+    request.maxChunksPerGeneration = 1'000'000;
+    request.generationWallClockBudgetMs = 400;
+
+    const auto started = std::chrono::steady_clock::now();
+    auto result = import_broker::RunImportSession(request);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    REQUIRE_FALSE(result.ok);
+    CHECK(result.stage == import_broker::ImportStage::GenerationDeadline);
+    CHECK(result.errorCode == ImportErrorCode::ResourceLimit);
+    // The deadline is honoured rather than merely eventual, and far below the
+    // reply timeout the messages kept re-arming.
+    CHECK(elapsed < std::chrono::seconds(20));
+}
+
+TEST_CASE("A sidecar request carrying a stale generation is rejected before it is serviced",
+          "[chunk-batch]")
+{
+    auto result = import_broker::RunImportSession(
+        MakeBatchRequest(L"--sidecar-stale-generation", 8));
+
+    REQUIRE_FALSE(result.ok);
+    CHECK(result.stage == import_broker::ImportStage::UnexpectedReply);
+    CHECK(result.errorCode == ImportErrorCode::ImportProtocolViolation);
+    // Nothing was serviced: no sidecar was even counted as missing.
+    CHECK(result.missingSidecarReferencesUtf8.empty());
 }
 
 TEST_CASE("A worker rewriting the window before its ack can only race itself, never defeat validation",

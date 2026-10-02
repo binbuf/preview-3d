@@ -306,6 +306,7 @@ ImportSessionResult Fail(ImportStage stage, model_core::ImportErrorCode code = m
         case ImportStage::Cancelled: code = E::Cancelled; break;
         case ImportStage::OpenSource: code = E::FileUnavailable; break;
         case ImportStage::ReplyTimedOut: code = E::WorkerTimedOut; break;
+        case ImportStage::GenerationDeadline: code = E::ResourceLimit; break;
         case ImportStage::SendRequest: case ImportStage::AwaitReply: case ImportStage::ChunkBatchAckFailed: code = E::WorkerCrashed; break;
         case ImportStage::SidecarRequestLimit: case ImportStage::ChunkBatchLimit: case ImportStage::ChunkCountLimit: code = E::ResourceLimit; break;
         case ImportStage::StepProgressLimit: code = E::ResourceLimit; break;
@@ -358,7 +359,11 @@ struct BatchAcceptance {
     uint32_t coarseRegions=0;
     bool coarseComplete=false;
 
-    void Record(const std::vector<ValidatedChunk>& chunks)
+    // Returns false if an image header that the validator already accepted
+    // cannot be re-derived here. The validator computes the same value, but
+    // re-checking keeps this accounting honest on its own rather than
+    // depending on the two callers never diverging.
+    bool Record(const std::vector<ValidatedChunk>& chunks)
     {
         for (const auto& chunk : chunks) {
             // The validator already proved each id is new -- both within its
@@ -366,7 +371,10 @@ struct BatchAcceptance {
             catalog.emplace(chunk.descriptor.chunkId, chunk.descriptor.topology);
             if (chunk.descriptor.topology==model_core::ChunkTopology::Image) {
                 model_core::ImagePayloadHeader header; std::memcpy(&header,chunk.payload.data(),sizeof(header));
-                textureBytes+=header.pixelDataByteSize; texturePixels+=*model_core::ComputeImagePixelBytes(model_core::PixelFormatId::RGBA8_UNORM,header.width,header.height,header.mipLevels)/4;
+                const auto rgbaBytes = model_core::ComputeImagePixelBytes(
+                    model_core::PixelFormatId::RGBA8_UNORM,header.width,header.height,header.mipLevels);
+                if (!rgbaBytes) return false;
+                textureBytes+=header.pixelDataByteSize; texturePixels+=*rgbaBytes/4;
                 images.emplace(chunk.descriptor.chunkId,header);
                 if (header.reserved0) { auto latest=header;latest.reserved0=0; images[header.reserved0]=latest; }
             }
@@ -375,6 +383,7 @@ struct BatchAcceptance {
         }
         totalChunks += static_cast<uint32_t>(chunks.size());
         ++nextBatchIndex;
+        return true;
     }
 };
 
@@ -401,6 +410,11 @@ public:
             const auto& container = AcquireWorkerContainer(workerExePath);
             SandboxLimits limits{};
             limits.processMemoryLimitBytes = static_cast<SIZE_T>(commitLimitBytes);
+            // No Job CPU-time limit here: this pool is reused across
+            // generations, and JOB_OBJECT_LIMIT_PROCESS_TIME is cumulative,
+            // so a healthy worker would eventually be killed by its own
+            // legitimate work. The per-generation wall-clock deadline bounds
+            // each generation instead.
             const bool ok = container.ready
                 && candidate->InitializeBorrowed(workerExePath, container.sid.get(), limits,
                                                  poolSize_, error);
@@ -441,6 +455,10 @@ public:
                 : AcquireWorkerContainer(exePath);
         SandboxLimits limits{};
         limits.processMemoryLimitBytes = static_cast<SIZE_T>(commitLimitBytes);
+        // The compatibility/STEP hosts here exit after the generation that
+        // owns them, so a cumulative process CPU cap cannot outlive a healthy
+        // import; it is a hard backstop against a spinning child.
+        limits.processCpuTimeLimitMs = kImportProcessCpuTimeLimitMs;
         const bool ok = container.ready
             && candidate->InitializeBorrowedForTesting(
                 exePath, container.sid.get(), limits, poolSize_, arguments, error);
@@ -731,8 +749,14 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             return Fail(ImportStage::CreateControlChannel);
         controlInRead.reset(inReadRaw); controlInWrite.reset(inWriteRaw);
         controlOutRead.reset(outReadRaw); controlOutWrite.reset(outWriteRaw);
-        SetHandleInformation(controlInWrite.get(), HANDLE_FLAG_INHERIT, 0);
-        SetHandleInformation(controlOutRead.get(), HANDLE_FLAG_INHERIT, 0);
+        // The child must not inherit the parent's own ends of the control
+        // channel. If either clear fails the launch below would leak a live
+        // parent handle into the sandbox, so fail the session rather than
+        // proceed with a weaker inheritance policy than the design promises.
+        if (!SetHandleInformation(controlInWrite.get(), HANDLE_FLAG_INHERIT, 0)
+            || !SetHandleInformation(controlOutRead.get(), HANDLE_FLAG_INHERIT, 0)) {
+            return Fail(ImportStage::CreateControlChannel);
+        }
 
         std::wstring workerArgs = request.workerArgumentsOverride.empty()
             ? std::wstring(ParseFlagFor(request.format)) : request.workerArgumentsOverride;
@@ -746,6 +770,9 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             ? (request.compatibilityHostCommitLimitBytes != 0
                 ? request.compatibilityHostCommitLimitBytes : CompatibilityCommitLimitBytes())
             : request.commitLimitBytes);
+        // One-shot processes are never reused, so a cumulative CPU cap is a
+        // safe hard backstop here (including a one-shot compatibility host).
+        limits.processCpuTimeLimitMs = kImportProcessCpuTimeLimitMs;
         proc = LaunchSuspendedSandboxed(childExePath, cmdLine, inherited, controlOutWrite.get(), limits,
                                          container.sid, controlInRead.get());
         controlInRead.reset(); controlOutWrite.reset();
@@ -785,6 +812,24 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     // terminal ChunksReady/GenerationError reply. Degrades to exactly one
     // iteration for STL/PLY and any single-window GLB, which send neither.
     const auto replyTimeout = std::chrono::milliseconds(request.replyTimeoutMs);
+    // Absolute end of this generation. Every accepted mid-generation message
+    // below re-arms replyTimeout, so without an absolute bound a worker that
+    // keeps sending progress/batches/sidecar requests could hold the reply
+    // loop -- and the import thread -- open indefinitely. Each read is
+    // therefore capped by whatever is left of this deadline.
+    const auto generationDeadline = std::chrono::steady_clock::now()
+        + std::chrono::milliseconds(request.generationWallClockBudgetMs);
+    const auto boundedReplyWait = [&] {
+        const auto left = generationDeadline - std::chrono::steady_clock::now();
+        if (left <= std::chrono::steady_clock::duration::zero()) {
+            return std::chrono::milliseconds::zero();
+        }
+        // Round the remaining budget up to a whole millisecond so the read's
+        // own deadline is never earlier than generationDeadline; otherwise
+        // truncation lets a read time out a hair before the deadline and be
+        // misreported as a per-message reply timeout.
+        return (std::min)(replyTimeout, std::chrono::ceil<std::chrono::milliseconds>(left));
+    };
     const auto cancelProbe = [&] {
         const bool cancelled = request.isCancelled && request.isCancelled();
         if (cancelled) SetEvent(cancellationEvent.get());
@@ -1139,7 +1184,10 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 acceptance.coarseComplete=true;
             }
         }
-        acceptance.Record(validation.chunks);
+        if (!acceptance.Record(validation.chunks)) {
+            failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
+            return false;
+        }
         if (!request.onBatch)
         {
             for (const auto& chunk : validation.chunks)
@@ -1168,19 +1216,27 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     };
 
     model_core::ReceivedControlMessage received{};
-    ControlWaitOutcome outcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
+    ControlWaitOutcome outcome = ReadControlMessageBounded(controlOutput, boundedReplyWait(), received, cancelProbe);
 
     while (outcome == ControlWaitOutcome::Ready && !failure) {
         const auto opcode = static_cast<model_core::ControlOpcode>(received.header.opcode);
 
         if (opcode == model_core::ControlOpcode::RequestSidecarFile
             && received.payload.size() == sizeof(model_core::RequestSidecarFileNotice)) {
+            model_core::RequestSidecarFileNotice sidecar{};
+            std::memcpy(&sidecar, received.payload.data(), sizeof(sidecar));
+            // Every other mid-generation message is checked against the
+            // current generation; this one was not, so a stale request could
+            // be serviced (and a handle duplicated) for a generation the host
+            // has already left. Reject it before it is counted or decoded.
+            if (sidecar.generationId != request.generationId) {
+                failure = Fail(ImportStage::UnexpectedReply, model_core::ImportErrorCode::ImportProtocolViolation);
+                break;
+            }
             if (++sidecarRequestCount > request.maxSidecarRequestsPerGeneration) {
                 break; // never trust worker self-restraint -- treated as a protocol violation below
             }
 
-            model_core::RequestSidecarFileNotice sidecar{};
-            std::memcpy(&sidecar, received.payload.data(), sizeof(sidecar));
             std::string requestedRelative(
                 reinterpret_cast<const char*>(sidecar.relativePathUtf8),
                 std::min<size_t>(sidecar.relativePathLength, model_core::kMaxSidecarRelativePathBytes));
@@ -1213,7 +1269,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 break;
             }
 
-            outcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
+            outcome = ReadControlMessageBounded(controlOutput, boundedReplyWait(), received, cancelProbe);
             continue;
         }
 
@@ -1246,7 +1302,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 break;
             }
 
-            outcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
+            outcome = ReadControlMessageBounded(controlOutput, boundedReplyWait(), received, cancelProbe);
             continue;
         }
 
@@ -1274,7 +1330,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             }
             lastStepProgress = notice;
             if (request.onStepProgress) request.onStepProgress(notice);
-            outcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
+            outcome = ReadControlMessageBounded(controlOutput, boundedReplyWait(), received, cancelProbe);
             continue;
         }
 
@@ -1337,13 +1393,20 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         return fail(ImportStage::Cancelled);
     }
     if (outcome == ControlWaitOutcome::TimedOut) {
+        // A read can time out either because one message took longer than
+        // replyTimeout or because the absolute generation deadline ran out.
+        // Report the latter as the limit failure it is, not as a wedged
+        // worker; a genuine reply timeout leaves the generation deadline in
+        // the future.
+        if (std::chrono::steady_clock::now() >= generationDeadline)
+            return fail(ImportStage::GenerationDeadline, model_core::ImportErrorCode::ResourceLimit);
         return fail(ImportStage::ReplyTimedOut);
     }
     if (outcome == ControlWaitOutcome::ProtocolViolation) return fail(ImportStage::UnexpectedReply);
     if (outcome != ControlWaitOutcome::Ready) {
         JOBOBJECT_LIMIT_VIOLATION_INFORMATION violation{};
         if (QueryInformationJobObject(workerJob, JobObjectLimitViolationInformation, &violation, sizeof(violation), nullptr)
-            && (violation.ViolationLimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY))
+            && (violation.ViolationLimitFlags & (JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_PROCESS_TIME)))
             return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::ResourceLimit);
         // Some Windows builds reap the process before the Job violation flag
         // becomes observable. Preserve the same typed mapping for the closed

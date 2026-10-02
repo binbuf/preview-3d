@@ -8,7 +8,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 
 - **T01 — SEC-01 Bound glTF traversal and fix worker limit ordering**: Reusable facts for later sessions:; **glTF node walk budget.** `import-worker/src/GltfAdapter.cpp` `WalkState::totalNodeVisits` is
 - **T02 — SEC-02 Preflight compressed decoders before allocation**: Reusable facts for later sessions:; **Shared preflights.** `shared/model-core/include/model_core/DracoPreflight.h` and
-- **Follow-ups**: Consider a large, opt-in (`[.]`) qualification fixture that drives the real `--parse-usd` worker; PLY `meshIndices.reserve(vertexElement->count * 3)` is safe only because `vertexElement->count` is
+- **T03 — SEC-03 Sandbox limits and broker defensive checks**: Reusable facts for later sessions:; **Job limits.** `SandboxLimits::processCpuTimeLimitMs` maps to
+- **Follow-ups**: SEC-04 and later: the primary-path ADS check is a coarse `:` rule shared in spirit with the; The generation wall-clock deadline currently wraps the main reply loop but not the post-terminal
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -94,8 +95,55 @@ Reusable facts for later sessions:
   `tests/unit/LocalizationTests.cpp` leaked the French active locale into later cases. Both were
   repaired to reach a green gate (see the T02 hand-off); they are unrelated to SEC-02.
 
+## T03 — SEC-03 Sandbox limits and broker defensive checks
+
+Reusable facts for later sessions:
+
+- **Job limits.** `SandboxLimits::processCpuTimeLimitMs` maps to
+  `JOB_OBJECT_LIMIT_PROCESS_TIME` (`PerProcessUserTimeLimit`, 100 ns units) in
+  `SandboxLauncher.cpp::CreateConfiguredJob`. `ImportSession.cpp` maps a Job violation in that flag
+  (and `JOB_OBJECT_LIMIT_PROCESS_MEMORY`) to `ResourceLimit`. **Never set the CPU cap on a process
+  reused across generations** — it is cumulative per process; the general worker pool is bounded by
+  the generation deadline instead. The compatibility/STEP hosts and the one-shot path get
+  `kImportProcessCpuTimeLimitMs` (15 min, `ImportSession.h`).
+- **Generation wall-clock deadline.** `ImportSessionRequest::generationWallClockBudgetMs`
+  (default `kImportGenerationWallClockBudgetMs`, 300 s, `ImportSession.h`). Every mid-generation
+  read uses `boundedReplyWait()` = `min(replyTimeout, ceil(remaining))`; expiry returns the new
+  `ImportStage::GenerationDeadline` with `ResourceLimit`. The `ceil` matters: truncation lets a
+  read time out a hair before the deadline and be misreported as `ReplyTimedOut` (this was hit in
+  T03 testing).
+- **CPU-time probe.** `import-worker --cpu-spin` (`RunCpuSpinProbe`) blocks on no handle and burns
+  user CPU, so only a Job CPU-time limit can stop it. `SandboxLaunchTests` uses it with a 200 ms cap.
+- **Progress-spam probe.** The hostile worker's `--batches-unbounded` keeps sending valid batches;
+  drive it through `RunImportSession` with `maxChunkBatchesPerGeneration` / `maxChunksPerGeneration`
+  raised and a tiny `generationWallClockBudgetMs` to prove the deadline, not the batch cap, stops
+  it. `--sidecar-stale-generation` sends one `RequestSidecarFile` with `generationId + 1`.
+- **Primary-path ADS.** `OpenAndCanonicalizeSourceFile` rejects any `:` that is not the volume
+  separator (ADS, drive-relative, URI). `\\?\C:\` has its volume colon at index 5, normal `C:\` at
+  index 1.
+- **Texture accounting.** `BatchAcceptance::Record` now returns `bool` and re-derives RGBA8 bytes
+  with a checked `ComputeImagePixelBytes`; a null result fails `ValidateSection`/`MalformedData`.
+- **Build/run.** `MSBuild tests\import-isolation\Tests.ImportIsolation.vcxproj /p:Configuration=Debug /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\"`
+  (or `Release`), then `x64\<Config>\Tests.ImportIsolation.exe`. `npm test` is still the harness
+  verify (Tests.Unit, 350 cases, green).
+- **Baseline still not green.** Debug full run: 386 cases, 6 failed — all pre-existing
+  (`SidecarPathResolverTests` user-asset-root ×3, `UsdSpikeTests:230`, `ThreeMfSpikeTests` 20 MB
+  Job memory-pressure recovery, `OpenUsdHostSpikeTests` startup-timing, which varies 1–3 assertions
+  run to run). Release: 3 failed, the `SidecarPathResolverTests` trio only. Do not attribute these
+  to new work; confirm with `git stash` + rebuild if unsure.
+
 ## Follow-ups
 
+- SEC-04 and later: the primary-path ADS check is a coarse `:` rule shared in spirit with the
+  sidecar resolver; if `ResolveSidecarPath` ever adopts per-format rules, keep the primary rule at
+  least as strict.
+- The generation wall-clock deadline currently wraps the main reply loop but not the post-terminal
+  `nextDetail` replay loop (`ImportSession.cpp`, the `request.nextDetail` branch), which still uses
+  the per-reply timeout. If a hostile detail loop becomes a concern, apply `boundedReplyWait()`
+  there too.
+- Consider a measured multi-gigabyte import budget to re-derive `kImportGenerationWallClockBudgetMs`
+  and `kImportProcessCpuTimeLimitMs`; both are currently backstops anchored to the STEP Ready ≤180 s
+  figure.
 - Consider a large, opt-in (`[.]`) qualification fixture that drives the real `--parse-usd` worker
   with a >20M-triangle UV-bearing USDA and asserts `ResourceLimit` before the expansion reserve.
   Deliberately not added now: the fixture is ~150-200 MB and risks the 120 s worker reply timeout.

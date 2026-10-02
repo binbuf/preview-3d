@@ -45,6 +45,25 @@ TEST_CASE("OpenAndCanonicalizeSourceFile fails cleanly on a nonexistent path", "
     CHECK_FALSE(result.error.empty());
 }
 
+TEST_CASE("OpenAndCanonicalizeSourceFile rejects an alternate data stream on the primary source",
+          "[import-broker]")
+{
+    // CreateFileW would silently open the hidden stream named after the
+    // colon; the broker must reject the reference instead, matching the
+    // sidecar resolver's policy.
+    auto result = import_broker::OpenAndCanonicalizeSourceFile(
+        TestAssetPath(L"tri_tight.glb") + L":hidden");
+    CHECK_FALSE(static_cast<bool>(result.file));
+    CHECK(result.errorCode == model_core::ImportErrorCode::UnsafeReference);
+}
+
+TEST_CASE("OpenAndCanonicalizeSourceFile rejects a drive-relative path", "[import-broker]")
+{
+    auto result = import_broker::OpenAndCanonicalizeSourceFile(L"C:tri_tight.glb");
+    CHECK_FALSE(static_cast<bool>(result.file));
+    CHECK(result.errorCode == model_core::ImportErrorCode::UnsafeReference);
+}
+
 TEST_CASE("DuplicateInheritableHandle produces a distinct, usable, genuinely inheritable handle",
           "[import-broker]")
 {

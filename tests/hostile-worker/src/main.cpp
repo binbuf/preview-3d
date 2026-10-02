@@ -133,6 +133,9 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--batches-after-terminal")) {
         return hostile_worker::RunBatchAfterTerminal();
     }
+    if (ArgEquals(argv[1], "--sidecar-stale-generation")) {
+        return hostile_worker::RunStaleSidecarGeneration();
+    }
     if (ArgEquals(argv[1], "--usd-fallback-after-batch")) {
         return hostile_worker::RunUsdFallbackAfterBatch();
     }

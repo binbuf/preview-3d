@@ -178,6 +178,17 @@ TEST_CASE("AppContainer SID derivation produces a valid zero-capability SID", "[
     CHECK(caps.CapabilityCount == 0);
 }
 
+TEST_CASE("LaunchSuspendedSandboxedWithSid fails closed on a null SID", "[sandbox]")
+{
+    // The security primitive must reject a null SID itself rather than trust
+    // every caller to have guarded it; a null AppContainerSid pointer would
+    // otherwise fault inside CreateProcessW's attribute construction.
+    std::vector<HANDLE> inherited;
+    auto proc = import_broker::LaunchSuspendedSandboxedWithSid(
+        L"C:\\nonexistent-worker.exe", L"", inherited, nullptr, {}, nullptr, nullptr);
+    CHECK_FALSE(proc.has_value());
+}
+
 TEST_CASE("Worker is created suspended with job assignment before resume", "[sandbox]")
 {
     SandboxFixture fixture;
@@ -286,6 +297,23 @@ TEST_CASE("Job Object commit limit is enforced against the real worker", "[sandb
     REQUIRE(results.count("COMMIT_PROBE") == 1);
     CHECK(results["COMMIT_PROBE"].status == "DENIED");
     CHECK(results["COMMIT_PROBE"].code == ERROR_COMMITMENT_LIMIT);
+}
+
+TEST_CASE("Job Object CPU-time limit terminates a worker that burns CPU", "[sandbox]")
+{
+    SandboxFixture fixture;
+    import_broker::SandboxLimits limits{};
+    // 200 ms of cumulative user CPU. The --cpu-spin probe never blocks, so
+    // without JOB_OBJECT_LIMIT_PROCESS_TIME it would stay alive and the
+    // bounded wait below would time out.
+    limits.processCpuTimeLimitMs = 200;
+
+    auto launch = LaunchWorker(fixture.sid, L"--cpu-spin", limits);
+    REQUIRE(launch.has_value());
+    REQUIRE(import_broker::ResumeSandboxProcess(launch->proc));
+
+    DWORD waitResult = WaitForSingleObject(launch->proc.process.get(), 15000);
+    CHECK(waitResult == WAIT_OBJECT_0);
 }
 
 TEST_CASE("Job Object kill-on-close terminates a hung worker", "[sandbox]")

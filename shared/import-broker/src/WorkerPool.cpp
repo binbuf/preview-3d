@@ -27,7 +27,10 @@ std::optional<WorkerPool::PooledWorker> WorkerPool::LaunchOne(std::wstring& erro
     }
     platform::Win32Handle controlInRead(inReadRaw);
     platform::Win32Handle controlInWrite(inWriteRaw);
-    SetHandleInformation(controlInWrite.get(), HANDLE_FLAG_INHERIT, 0);
+    if (!SetHandleInformation(controlInWrite.get(), HANDLE_FLAG_INHERIT, 0)) {
+        error = L"Failed to clear inheritance on the control-in write handle.";
+        return std::nullopt;
+    }
 
     HANDLE outReadRaw = nullptr;
     HANDLE outWriteRaw = nullptr;
@@ -37,7 +40,10 @@ std::optional<WorkerPool::PooledWorker> WorkerPool::LaunchOne(std::wstring& erro
     }
     platform::Win32Handle controlOutRead(outReadRaw);
     platform::Win32Handle controlOutWrite(outWriteRaw);
-    SetHandleInformation(controlOutRead.get(), HANDLE_FLAG_INHERIT, 0);
+    if (!SetHandleInformation(controlOutRead.get(), HANDLE_FLAG_INHERIT, 0)) {
+        error = L"Failed to clear inheritance on the control-out read handle.";
+        return std::nullopt;
+    }
 
     std::vector<HANDLE> inherited{ controlInRead.get(), controlOutWrite.get() };
     std::wstring cmdLine = L"\"" + exePath_ + L"\" " + workerArguments_;

@@ -23,6 +23,14 @@ platform::Win32Handle CreateConfiguredJob(const SandboxLimits& limits)
         info.ProcessMemoryLimit = limits.processMemoryLimitBytes;
     }
 
+    if (limits.processCpuTimeLimitMs != 0) {
+        // JOBOBJECT_BASIC_LIMIT_INFORMATION::PerProcessUserTimeLimit is in
+        // 100 ns units.
+        info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_TIME;
+        info.BasicLimitInformation.PerProcessUserTimeLimit.QuadPart =
+            static_cast<LONGLONG>(limits.processCpuTimeLimitMs) * 10'000;
+    }
+
     if (!SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &info,
                                   sizeof(info))) {
         return {};
@@ -41,6 +49,14 @@ std::optional<SandboxProcess> LaunchSuspendedSandboxedWithSid(const std::wstring
                                                                PSID sid,
                                                                HANDLE stdInput)
 {
+    // The AppContainer security-capabilities attribute dereferences this SID
+    // at CreateProcessW; a null value is a launch-time access violation, so
+    // the primitive itself fails closed rather than trusting every caller to
+    // have guarded it.
+    if (sid == nullptr) {
+        return std::nullopt;
+    }
+
     platform::Win32Handle job = CreateConfiguredJob(limits);
     if (!job) {
         return std::nullopt;

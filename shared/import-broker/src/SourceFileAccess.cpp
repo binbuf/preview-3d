@@ -9,6 +9,25 @@ OpenSourceFileResult OpenAndCanonicalizeSourceFile(const std::wstring& path)
     OpenSourceFileResult result;
     const bool extended = path.rfind(L"\\\\?\\",0) == 0;
     const size_t driveOffset = extended ? 4 : 0;
+
+    // A ':' that is not the volume separator is an NTFS alternate data
+    // stream (`file.txt:stream`), a drive-relative path (`C:foo`), or a URI
+    // scheme. CreateFileW would silently resolve an ADS suffix to a hidden
+    // stream of the same file, so reject it here exactly as
+    // ResolveSidecarPath already rejects one in a sidecar reference.
+    const size_t firstColon = path.find(L':');
+    if (firstColon != std::wstring::npos) {
+        const size_t volumeColon = extended ? 5 : 1;
+        const bool extraColon = path.find(L':', firstColon + 1) != std::wstring::npos;
+        const bool driveRelative = firstColon + 1 >= path.size()
+            || (path[firstColon + 1] != L'\\' && path[firstColon + 1] != L'/');
+        if (firstColon != volumeColon || extraColon || driveRelative) {
+            result.errorCode = model_core::ImportErrorCode::UnsafeReference;
+            result.error = L"Alternate data streams are not supported. Save a local copy and retry.";
+            return result;
+        }
+    }
+
     if ((extended && (path.size() < 7 || path[5] != L':' || path[6] != L'\\'))
         || (path.size() >= driveOffset+3 && path[driveOffset+1] == L':'
             && GetDriveTypeW((path.substr(driveOffset,2)+L"\\").c_str()) == DRIVE_REMOTE)) {

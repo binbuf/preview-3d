@@ -62,6 +62,10 @@ int main(int argc, char* argv[])
         import_worker::RunHangProbe();
         return 0;
     }
+    if (ArgEquals(argv[1], "--cpu-spin")) {
+        import_worker::RunCpuSpinProbe();
+        return 0;
+    }
     if (ArgEquals(argv[1], "--test-hang-import")) {
         model_core::ReadControlMessage(GetStdHandle(STD_INPUT_HANDLE));
         Sleep(INFINITE); return 1;

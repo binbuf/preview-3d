@@ -21,6 +21,13 @@ namespace import_broker {
 struct SandboxLimits {
     SIZE_T processMemoryLimitBytes = 0; // 0 = no Job Object commit limit
     DWORD activeProcessLimit = 1;       // no breakaway: blocks any spawned child
+    // Cumulative user-mode CPU ceiling for the process, in milliseconds
+    // (JOB_OBJECT_LIMIT_PROCESS_TIME). 0 = no limit. This is a cumulative
+    // per-process measurement, so it must only be applied to a process that
+    // is not reused across generations -- a long-lived pooled worker would
+    // eventually trip a healthy import. Callers that reuse a process use the
+    // broker's per-generation wall-clock deadline instead.
+    uint64_t processCpuTimeLimitMs = 0;
 };
 
 struct SandboxProcess {
