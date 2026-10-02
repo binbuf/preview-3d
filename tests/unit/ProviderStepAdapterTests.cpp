@@ -530,6 +530,34 @@ TEST_CASE("accounted scratch over the ledger cap is a resource limit",
     CHECK(result.parse == ErrorCode::ResourceLimit);
 }
 
+TEST_CASE("the STEP scratch reservation covers the worst-case cache plus build",
+          "[provider][step]")
+{
+    // A 100 MiB ledger is above the old flat 96 MiB reservation but below the
+    // reconciled worst case (a full 750k-triangle cache plus a 500k-triangle
+    // definition build), so Parse must refuse before any OCCT call (ADR-0036).
+    {
+        ByteSource source(Fixture("part_ap214.stp"));
+        Deadline deadline;
+        AllocationLedger tight(100ull * 1024 * 1024);
+        CollectSink sink;
+        StepAdapter adapter;
+        const AdapterResult result = RunAdapter(adapter, source, deadline, tight, sink);
+        CHECK(result.parse == ErrorCode::ResourceLimit);
+        CHECK(sink.triangles.empty());
+    }
+    // The default 384 MiB ledger admits the same fixture.
+    {
+        ByteSource source(Fixture("part_ap214.stp"));
+        Deadline deadline;
+        AllocationLedger ledger;
+        CollectSink sink;
+        StepAdapter adapter;
+        const AdapterResult result = RunAdapter(adapter, source, deadline, ledger, sink);
+        CHECK(result.parse == ErrorCode::None);
+    }
+}
+
 TEST_CASE("a non-contiguous STEP source streams through bounded range reads",
           "[provider][step]")
 {

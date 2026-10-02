@@ -51,6 +51,59 @@ and no path relies on undefined behavior.
 - [ ] `Tests.Unit` and `Tests.ProviderHost` pass in Debug and Release with the new cases.
 - [ ] The budget documentation matches what is actually enforced and charged.
 - [ ] Hand-off filled in.
-
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+
+Landed in this session (attempt 1):
+
+- **Stream size validation.** `StreamSource.cpp` now routes every reported size
+  (`STATSTG.cbSize` and `Seek(STREAM_SEEK_END)`) through `TryValidateStreamSize`,
+  which rejects the high bit (a signed `-1`/unknown sentinel) and anything over
+  `kStreamMaxBytes` before storing `size_`/`sizeKnown_`. Both branches now share
+  the same validated `statSize`; the non-seekable materialization cap is
+  unchanged. Behavior for valid streams is identical.
+- **Rasterizer casts + deadline.** `CpuRasterizer.cpp` adds `ClampToRasterExtent`
+  (NaN/low -> low, high -> high, else cast) and uses it for all three
+  double->int screen-extent sites (triangle clip bounds, point radius bounds,
+  floor-shadow bounds/radius). `RenderFloorShadow` now takes `WorkGuard&`,
+  returns `bool`, and checkpoints per pixel; `RenderCpuTileRaster` maps an
+  expired shadow pass to `Cancelled` (empty image). Golden output unchanged.
+- **STEP accounting.** `StepFamilyAdapter.cpp` derives
+  `kStepScratchReservationBytes` from the caps and a real per-triangle layout:
+  `kStepGeometryBytesPerTriangle` = 152 (9 pos floats + 9 normal floats + 1
+  index, doubled for vector growth slack); worst case = (per-definition +
+  cache) = 500,000 + 750,000 triangles = 190,000,000 bytes (181.2 MiB). The
+  per-definition cap was lowered 1,000,000 -> 500,000 so the single reservation
+  is true; a `static_assert` keeps it inside `kAccountedScratchMaxBytes`
+  (192 MiB). Overall emission cap (`kStepMaxTrianglesTotal` = 2,000,000) is
+  unchanged. Recorded in ADR-0036.
+- **Docs.** `docs/design/05-thumbnail-provider.md` and
+  `docs/design/03-file-formats-and-ingestion.md` now enumerate exactly what the
+  384 MiB ledger charges vs what is library/OS-owned, and note the T51 measured
+  target is still open. `docs/design/adapters/step-009-thumbnail.md` records the
+  new caps/reservation. ADR-0036 added.
+- **Tests.** Negative STATSTG-size and negative seek-end-size stream cases;
+  near-INT_MAX triangle and far out-of-frame point raster cases; a STEP case
+  proving a 100 MiB ledger is refused by the reconciled reservation while the
+  default 384 MiB ledger admits the fixture.
+
+Deviation: the task offered "reconcile the reservation or lower the caps"; both
+were done because the existing 1M per-definition cap made an exact reservation
+exceed the 192 MiB accounted-scratch cap. Chosen values are recorded in ADR-0036.
+
+Check results (all foreground, this machine):
+
+- `MSBuild tests\unit\Tests.Unit.vcxproj /p:Configuration=Debug|Release` -> OK.
+- `x64\Debug\Tests.Unit.exe` -> All tests passed (135067 assertions / 355 cases).
+- `x64\Release\Tests.Unit.exe` -> All tests passed (134989 assertions / 355 cases).
+- `MSBuild tests\provider-host\Tests.ProviderHost.vcxproj ...` Debug and Release -> OK.
+- `x64\Debug\Tests.ProviderHost.exe` and `x64\Release\Tests.ProviderHost.exe` ->
+  128 assertions / 6 cases, all pass.
+
+Remaining work / next task must know:
+
+- The public 384 MiB figures were not changed (out of scope; needs T51 evidence).
+- T51 still owes the measured process-private-commit peak; STEP's OCCT
+  reader/mesher allocations remain library-owned and uncharged by the ledger.
+- The floor-shadow checkpoint is not directly unit-tested (deadline timing); the
+  code path is covered by the existing expired-deadline raster case only at the
+  top-level check.

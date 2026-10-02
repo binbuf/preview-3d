@@ -93,11 +93,31 @@ constexpr std::uint32_t kStepMaxStringBytes = 1u << 20;
 
 constexpr std::uint32_t kStepMaxDefinitions = 20'000;
 constexpr std::uint32_t kStepMaxHierarchyDepth = 256;
-constexpr std::uint32_t kStepMaxTrianglesPerDefinition = 1'000'000;
+// Per-definition cap chosen together with the geometry-cache cap so the single
+// scratch reservation below honestly covers the worst-case product-owned
+// residency (a full cache plus one definition being built). See ADR-0036.
+constexpr std::uint32_t kStepMaxTrianglesPerDefinition = 500'000;
 constexpr std::uint64_t kStepMaxTrianglesTotal = 2'000'000;
 constexpr std::uint64_t kStepMaxGeometryCacheTriangles = 750'000;
 
-constexpr std::uint64_t kStepScratchReservationBytes = 96ull * 1024 * 1024;
+// Worst-case bytes a tessellated triangle holds in a `CachedGeometry`:
+// 9 position floats + 9 normal floats + 1 material index, with a 2x factor that
+// bounds the implementation's vector growth slack (the buffers grow by
+// push_back, so capacity can exceed size). This is the per-triangle figure the
+// scratch reservation is derived from.
+constexpr std::uint64_t kStepGeometryBytesPerTriangle =
+    2ull * (9ull * sizeof(float)) + 2ull * (9ull * sizeof(float)) +
+    2ull * sizeof(std::uint32_t);
+
+// The one accounted-scratch charge a STEP call takes for its parser/tessellation
+// working set: the full geometry cache plus a per-definition build. Chosen so it
+// stays inside ProviderLimits::kAccountedScratchMaxBytes (192 MiB) under the
+// caps above; (500000 + 750000) * 152 = 190,000,000 bytes (181.2 MiB).
+constexpr std::uint64_t kStepScratchReservationBytes =
+    (static_cast<std::uint64_t>(kStepMaxTrianglesPerDefinition) +
+     kStepMaxGeometryCacheTriangles) * kStepGeometryBytesPerTriangle;
+static_assert(kStepScratchReservationBytes <= ProviderLimits::kAccountedScratchMaxBytes,
+              "STEP scratch reservation must fit the accounted scratch cap");
 constexpr std::size_t kStepReadBlockBytes = 64 * 1024;
 
 // Low-detail deterministic meshing. Relative deflection is a fraction of the

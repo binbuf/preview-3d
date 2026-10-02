@@ -13,7 +13,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T05 — SEC-05 3MF OPC preflight/library reconciliation**: Reusable facts for later sessions:; **Preflight policy now matches USDZ.** `import-worker/src/ThreeMfOpcPreflight.cpp` rejects
 - **T06 — SEC-06 Provider adapter exception containment**: Reusable facts for later sessions:; **Pattern (chosen).** Keep the frozen `IFamilyAdapter` methods `noexcept`; every adapter's
 - **T06a — SEC-03b Fix user-chosen asset-root canonicalization**: Reusable facts for later sessions:; **Root cause (audit F-11).** `ResolveSidecarPath`'s user-root branch compared
-- **Follow-ups**: SEC-17: the provider-host allocator seam only fails C++ allocations; add a soak/fuzz lane that; `ThreeMfFamilyAdapter.h` still declares `ErrorCode ScanRequiredExtensions();` with no definition
+- **T07 — SEC-07 Provider stream/raster/accounting robustness**: Reusable facts for later sessions:; **Stream size validation.** `thumbnail-provider/StreamSource.cpp` has
+- **Follow-ups**: SEC-08/T51: STEP's `occurrences_` vector (16-byte transform + definition/index; SEC-17: the provider-host allocator seam only fails C++ allocations; add a soak/fuzz lane that
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -286,8 +287,57 @@ Reusable facts for later sessions:
 - **Build gotcha.** `MSBuild` is not on PATH in this shell; use
   `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
 
+## T07 — SEC-07 Provider stream/raster/accounting robustness
+
+Reusable facts for later sessions:
+
+- **Stream size validation.** `thumbnail-provider/StreamSource.cpp` has
+  `TryValidateStreamSize(raw, out)` in its anonymous namespace; it rejects the
+  high bit (signed `-1`/unknown sentinel) and `> kStreamMaxBytes` before anything
+  is stored. Both `STATSTG.cbSize` and `Seek(STREAM_SEEK_END)` go through it; the
+  seek-end path is only reachable when `Stat` is unavailable or fails, and the
+  non-seekable materialization cap is unchanged. `Tests.Unit` needs
+  `MemoryStream::SetSeekEndReportOnly(true)` to
+  produce a raw high-bit `STREAM_SEEK_END` report (the default double rejects it
+  via signed position arithmetic, so it cannot otherwise exercise the guard).
+- **Rasterizer extent clamp.** `ClampToRasterExtent(value, lo, hi)` in
+  `thumbnail-provider/CpuRasterizer.cpp` replaces the three
+  `static_cast<int>(floor/ceil(...))` screen-extent sites. NaN/`-inf` map to the
+  low bound, `+inf`/over-high to the high bound. The floor-shadow pass
+  (`RenderFloorShadow`) now takes `WorkGuard&`, returns `bool`, and checkpoints
+  per pixel; a `false` return becomes `ErrorCode::Cancelled` with an empty
+  image. Do not add a bare `static_cast<int>` on a model-derived double here.
+- **STEP scratch reservation is now derived, not flat.** Constants in
+  `StepFamilyAdapter.cpp`: `kStepGeometryBytesPerTriangle` = 152
+  (2*(9+9)*4 + 2*4, growth headroom), `kStepMaxTrianglesPerDefinition` =
+  500,000 (was 1,000,000), `kStepMaxGeometryCacheTriangles` = 750,000,
+  `kStepScratchReservationBytes` = (500,000+750,000)*152 = 190,000,000 bytes
+  (181.2 MiB), guarded by a `static_assert` against
+  `ProviderLimits::kAccountedScratchMaxBytes` (192 MiB). A single definition
+  above 500k triangles now fails `TessellationFailed`; the 2,000,000 overall
+  emission cap is unchanged. ADR-0036 records the decision. Verify with the
+  `[provider][step]` case "the STEP scratch reservation covers the worst-case
+  cache plus build" (100 MiB ledger refused, default admitted).
+- **Budget documentation.** `docs/design/05-thumbnail-provider.md` and
+  `docs/design/03-file-formats-and-ingestion.md` list charged-vs-library-owned
+  items; the T51 measured-target link is still a placeholder because T51 has not
+  landed.
+- **Verify commands (same as T06a).** `MSBuild` is not on PATH; use
+  `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
+  Build `tests\unit\Tests.Unit.vcxproj` and `tests\provider-host\Tests.ProviderHost.vcxproj`
+  with `/p:Configuration=Debug|Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\" /m`.
+- **Baseline after T07.** `Tests.Unit` Debug and Release: 355 cases, all pass
+  (was 350). `Tests.ProviderHost` Debug and Release: 128 assertions / 6 cases,
+  all pass. New cases: 2 stream, 2 rasterizer, 1 STEP.
+
 ## Follow-ups
 
+- SEC-08/T51: STEP's `occurrences_` vector (16-byte transform + definition/index
+  per instance, bounded only by the 20M reference preflight) is still not charged
+  to the ledger; T07 reconciled only the geometry cache/build reservation. If a
+  hostile STEP file can create millions of visible occurrences, this is the next
+  unaccounted product-owned growth. Also still owed: T51's measured
+  process-private-commit peak and the T07 doc placeholder link.
 - SEC-17: the provider-host allocator seam only fails C++ allocations; add a soak/fuzz lane that
   exercises the library (C-allocator) paths of 3MF/USD/STEP and a genuinely over-committed ledger.
 - `ThreeMfFamilyAdapter.h` still declares `ErrorCode ScanRequiredExtensions();` with no definition

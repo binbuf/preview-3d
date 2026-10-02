@@ -230,13 +230,17 @@ Limits are checked before multiplication/allocation and are configurable only in
 
 These are acceptance ceilings, not promises that all limit-sized scenes fit simultaneously. For the
 thumbnail host, the 384 MiB ledger enforces charges for product-owned allocations across concurrent
-calls. It does not count allocations inside libraries without allocator callbacks, module loading,
-GDI, or other surrogate overhead. Total process private commit above the idle, loaded host baseline
-is therefore a measured qualification target, not a hard limit enforced by the ledger (see
-[05-thumbnail-provider.md](./05-thumbnail-provider.md)). A product-owned charge that would cross its
-cap fails to the generic icon; a measured excess requires narrowing or disabling that family/subset
-before release. GPU detail is separately constrained by the live DXGI budget. Above-limit files
-receive ResourceLimit with the first exceeded named limit; the process remains usable.
+calls: the stream cache/backing, adapter scratch (STEP charges one checked reservation covering a
+full geometry cache plus a definition build, [ADR-0036](./adr/0036-step-scratch-accounting.md)),
+sampler storage, raster targets, the output bitmap, and any library allocation routed through an
+allocator callback. It does not count allocations inside libraries without allocator callbacks,
+module loading, GDI, or other surrogate overhead. Total process private commit above the idle,
+loaded host baseline is therefore a measured qualification target, not a hard limit enforced by the
+ledger (see [05-thumbnail-provider.md](./05-thumbnail-provider.md)); the T51 measurement is still
+open in this task set. A product-owned charge that would cross its cap fails to the generic icon; a
+measured excess requires narrowing or disabling that family/subset before release. GPU detail is
+separately constrained by the live DXGI budget. Above-limit files receive ResourceLimit with the
+first exceeded named limit; the process remains usable.
 
 ## Texture policy
 

@@ -29,7 +29,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 
 ## Phase 2 — Provider, process, and viewer hardening
 
-- [ ] T07 — SEC-07 Provider stream/raster/accounting robustness → [07-provider-stream-raster-robustness.md](07-provider-stream-raster-robustness.md)
+- [x] T07 — SEC-07 Provider stream/raster/accounting robustness → [07-provider-stream-raster-robustness.md](07-provider-stream-raster-robustness.md)
 - [ ] T08 — SEC-08 Provider containment policy (AV, stack, OCCT) → [08-provider-containment-policy.md](08-provider-containment-policy.md)
 - [ ] T09 — SEC-09 Child-process loader/plugin hardening → [09-child-process-loader-hardening.md](09-child-process-loader-hardening.md)
 - [ ] T10 — SEC-10 Build and process mitigation hardening → [10-build-and-process-mitigations.md](10-build-and-process-mitigations.md)
@@ -50,11 +50,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T14:10:17Z · 7/20 done
+**Pipeline status** — updated 2026-10-02T14:23:27Z · 8/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07
 - Blocked: none
 - Failed: none
-- Remaining: T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T06a — done · Canonicalized user-chosen asset roots via directory handle before containment; asset-root cases and Release Tests.ImportIsolation fully green, npm test green; two Debug Job-pressure failures remain pre-existing/unrelated.
+- Remaining: T08, T09, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T07 — done · Hardened stream size validation, raster double->int clamps plus floor-shadow deadline checkpoint, and reconciled STEP scratch accounting (ADR-0036); docs updated; Tests.Unit (355 cases) and Tests.ProviderHost pass in Debug and Release.
 <!-- /symphony:status -->

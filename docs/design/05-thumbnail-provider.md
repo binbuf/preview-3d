@@ -134,13 +134,28 @@ The per-component caps (128 MiB contiguous backing, 192 MiB parser/normalizer sc
 texture, sampled geometry, raster targets) apply to allocations the provider can account for. A
 process-wide ledger reserves product-owned allocations before they occur, including concurrent
 GetThumbnail calls, and rejects a charge that would exceed 384 MiB. Allocator callbacks enforce
-third-party allocations where available. Library allocations without such callbacks, DLL loading,
-GDI and other Shell-surrogate overhead are not covered by this ledger; therefore it cannot enforce
-a hard ceiling on total process private commit. The 384 MiB increase above an idle, loaded
-surrogate baseline is a measured release qualification target. T06 defines accounting and concurrent
-call behavior; T12/T14/T15 and each adapter charge all allocations they control. T51 records actual
-peak process commit and any unaccounted excess. A family/subset that exceeds the target must be
-narrowed or disabled before a release claims that budget.
+third-party allocations where available.
+
+What the 384 MiB ledger does and does not charge:
+
+- **Charged before allocation** (product-owned): the 64 KiB × 8-slot stream block cache and the
+  128 MiB contiguous backing ([ADR-0014](adr/0014-bounded-stream-backing.md)); per-adapter parser
+  and decoded-buffer scratch (for STEP, one checked reservation covering a full geometry cache plus
+  one definition build, [ADR-0036](adr/0036-step-scratch-accounting.md)); the deterministic
+  sampler's retained storage; the raster color/depth targets and the output bitmap; and any library
+  allocation a decoder routes through an allocator callback.
+- **Not charged** (library/OS-owned): library allocations without a callback (lib3mf, Draco, OCCT
+  reader/mesher, fastgltf/TinyUSDZ internals), DLL/module loading, GDI/USER objects, and other
+  Shell-surrogate overhead. The ledger therefore cannot enforce a hard ceiling on total process
+  private commit.
+
+The 384 MiB increase above an idle, loaded surrogate baseline is a measured release qualification
+target. T51 records the actual peak process commit and any unaccounted excess (the measurement is
+still open in this task set; link it here when it lands). A charge that would cross the 384 MiB
+ledger ceiling fails closed to the generic icon with `LimitExceeded`. T06 defines accounting and
+concurrent call behavior; T12/T14/T15 and each adapter charge all allocations they control. A
+family/subset whose measured commit exceeds the target must be narrowed or disabled before a
+release claims that budget.
 
 There is no MapViewOfFile zero-copy guarantee for Shell IStream inputs. This is intentional: Shell isolation, bounded memory, and deterministic latency matter more than sharing the interactive viewer's source mapping implementation.
 

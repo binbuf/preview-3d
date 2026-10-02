@@ -256,6 +256,24 @@ double Edge(double ax, double ay, double bx, double by, double px, double py) no
     return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
 }
 
+// Clamp a model-derived screen coordinate to the raster extent before narrowing
+// it to int. `double` -> `int` is undefined when the value is outside int's
+// range (reachable from a hostile coordinate or an overflowed projection), so
+// the conversion is guarded instead of executed blindly. For a valid frame the
+// clamp is a no-op and behavior is unchanged; NaN falls to the low bound.
+int ClampToRasterExtent(double value, int lo, int hi) noexcept
+{
+    const double low = static_cast<double>(lo);
+    const double high = static_cast<double>(hi);
+    if (!(value > low)) {
+        return lo; // also catches NaN and -inf
+    }
+    if (value > high) {
+        return hi;
+    }
+    return static_cast<int>(value);
+}
+
 // Cooperative deadline polling at bounded raster intervals.
 struct WorkGuard {
     const Deadline* deadline = nullptr;
@@ -304,10 +322,10 @@ void RasterizeTriangle(const Camera& cam, std::vector<float>& color, std::vector
     const double maxX = (std::max)(x0, (std::max)(x1, x2));
     const double minY = (std::min)(y0, (std::min)(y1, y2));
     const double maxY = (std::max)(y0, (std::max)(y1, y2));
-    const int px0 = (std::max)(0, static_cast<int>(std::floor(minX - 0.5)));
-    const int px1 = (std::min)(ssize - 1, static_cast<int>(std::ceil(maxX + 0.5)));
-    const int py0 = (std::max)(0, static_cast<int>(std::floor(minY - 0.5)));
-    const int py1 = (std::min)(ssize - 1, static_cast<int>(std::ceil(maxY + 0.5)));
+    const int px0 = ClampToRasterExtent(std::floor(minX - 0.5), 0, ssize - 1);
+    const int px1 = ClampToRasterExtent(std::ceil(maxX + 0.5), 0, ssize - 1);
+    const int py0 = ClampToRasterExtent(std::floor(minY - 0.5), 0, ssize - 1);
+    const int py1 = ClampToRasterExtent(std::ceil(maxY + 0.5), 0, ssize - 1);
     if (px1 < px0 || py1 < py0) {
         return;
     }
@@ -400,10 +418,10 @@ bool RenderPoints(const Camera& cam, const SampledGeometry& geometry, double def
         double radiusPx = worldRadius * cam.pxPerUnit;
         radiusPx = std::clamp(radiusPx, 1.0, 128.0);
 
-        const int px0 = (std::max)(0, static_cast<int>(std::floor(sx - radiusPx - 1.0)));
-        const int px1 = (std::min)(cam.ssize - 1, static_cast<int>(std::ceil(sx + radiusPx + 1.0)));
-        const int py0 = (std::max)(0, static_cast<int>(std::floor(sy - radiusPx - 1.0)));
-        const int py1 = (std::min)(cam.ssize - 1, static_cast<int>(std::ceil(sy + radiusPx + 1.0)));
+        const int px0 = ClampToRasterExtent(std::floor(sx - radiusPx - 1.0), 0, cam.ssize - 1);
+        const int px1 = ClampToRasterExtent(std::ceil(sx + radiusPx + 1.0), 0, cam.ssize - 1);
+        const int py0 = ClampToRasterExtent(std::floor(sy - radiusPx - 1.0), 0, cam.ssize - 1);
+        const int py1 = ClampToRasterExtent(std::ceil(sy + radiusPx + 1.0), 0, cam.ssize - 1);
         if (px1 < px0 || py1 < py0) {
             continue;
         }
@@ -428,8 +446,8 @@ bool RenderPoints(const Camera& cam, const SampledGeometry& geometry, double def
     return true;
 }
 
-void RenderFloorShadow(const Camera& cam, const Bounds& bounds, double usable,
-                       std::vector<float>& color) noexcept
+bool RenderFloorShadow(const Camera& cam, const Bounds& bounds, double usable,
+                       std::vector<float>& color, WorkGuard& guard) noexcept
 {
     const Vec3 base{(bounds.min[0] + bounds.max[0]) * 0.5, bounds.min[1],
                     (bounds.min[2] + bounds.max[2]) * 0.5};
@@ -440,16 +458,23 @@ void RenderFloorShadow(const Camera& cam, const Bounds& bounds, double usable,
     constexpr double verticalSquash = 0.42;
     constexpr double strength = 0.34;
 
-    const int radius = static_cast<int>(std::ceil(sigma * 3.0));
-    const int px0 = (std::max)(0, static_cast<int>(std::floor(bx)) - radius);
-    const int px1 = (std::min)(cam.ssize - 1, static_cast<int>(std::ceil(bx)) + radius);
-    const int py0 = (std::max)(0, static_cast<int>(std::floor(by)) - radius);
-    const int py1 = (std::min)(cam.ssize - 1, static_cast<int>(std::ceil(by)) + radius);
+    const int radius = ClampToRasterExtent(std::ceil(sigma * 3.0), 0, cam.ssize);
+    const int px0 = ClampToRasterExtent(std::floor(bx) - static_cast<double>(radius), 0,
+                                        cam.ssize - 1);
+    const int px1 = ClampToRasterExtent(std::ceil(bx) + static_cast<double>(radius), 0,
+                                        cam.ssize - 1);
+    const int py0 = ClampToRasterExtent(std::floor(by) - static_cast<double>(radius), 0,
+                                        cam.ssize - 1);
+    const int py1 = ClampToRasterExtent(std::ceil(by) + static_cast<double>(radius), 0,
+                                        cam.ssize - 1);
 
     const double denom = 2.0 * sigma * sigma;
     for (int py = py0; py <= py1; ++py) {
         const double dy = (py + 0.5 - by) / verticalSquash;
         for (int px = px0; px <= px1; ++px) {
+            if (guard.Expired()) {
+                return false;
+            }
             const double dx = px + 0.5 - bx;
             const double d2 = dx * dx + dy * dy;
             const double a = strength * std::exp(-d2 / denom);
@@ -464,6 +489,7 @@ void RenderFloorShadow(const Camera& cam, const Bounds& bounds, double usable,
             color[idx * 4 + 3] = static_cast<float>(a) + color[idx * 4 + 3] * inv;
         }
     }
+    return true;
 }
 
 bool RenderTriangles(const Camera& cam, const SampledGeometry& geometry,
@@ -701,7 +727,10 @@ ErrorCode RenderCpuTileRaster(const RasterRequest& request, RasterImage& out) no
     WorkGuard guard;
     guard.deadline = request.deadline;
 
-    RenderFloorShadow(cam, geometry.bounds, usable, color);
+    if (!RenderFloorShadow(cam, geometry.bounds, usable, color, guard)) {
+        out = RasterImage{};
+        return ErrorCode::Cancelled;
+    }
 
     if (!RenderTriangles(cam, geometry, request.materials, color, depth, clipBuffer, guard)) {
         out = RasterImage{};
