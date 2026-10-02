@@ -111,3 +111,72 @@ The target's 16 MiB primary / 1 MiB virtual-sidecar caps and 64 MiB ufbx
 allocator cap are intentionally lower than product limits so a smoke run has a
 tight, deterministic envelope. Release qualification still relies on the real
 AppContainer/Job tests for process containment and product-size caps.
+
+## STL
+
+`StlFuzz` links the production STL fast path: ASCII/binary detection, the
+binary facet scan, the ASCII `AsciiTokenizer` walk, per-facet supplied/flat
+normal normalization, and the bounded chunk/checkpoint writer behind
+`import_worker::ImportStl`. A second envelope domain drives the shared
+`parser_core::StlParserCore` primitives directly. It creates no window, GPU
+device, mapped file, resolver, or child process: the source is a bounded
+in-memory span and `mappedSource` is always null. The seeds are generated, not
+committed.
+
+```powershell
+python tests/fuzz/prepare_stl_seeds.py TestResults/security-t15/stl-seeds
+msbuild tests/fuzz/StlFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=<root>\"
+tests/fuzz/x64/Release/StlFuzz.exe TestResults/security-t15/stl-seeds -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=2097160 -print_final_stats=1 -verbosity=0
+```
+
+The 2 MiB input cap and 4 MiB output window keep one libFuzzer unit bounded
+without the AppContainer/Job. Real mapping, Tier A/B product-size limits,
+random-detail/coarse-proxy streaming, and batch acknowledgement stay covered by
+the import-isolation suite. The seed preparer refuses a non-empty directory.
+
+## PLY
+
+`PlyFuzz` links the production PLY fast path behind
+`import_worker::ImportPly` for both the binary little/big-endian and the ASCII
+materializing paths: bounded header parsing, element/property walks, list skips,
+endian-aware scalar reads, vertex normalization, polygon fan triangulation, and
+the chunk writer. A second envelope domain drives `parser_core::PlyParserCore`
+primitives directly. It creates no window, GPU device, mapped file, resolver, or
+child process; `mappedSource` is always null.
+
+```powershell
+python tests/fuzz/prepare_ply_seeds.py TestResults/security-t15/ply-seeds
+msbuild tests/fuzz/PlyFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=<root>\"
+tests/fuzz/x64/Release/PlyFuzz.exe TestResults/security-t15/ply-seeds -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=2097160 -print_final_stats=1 -verbosity=0
+```
+
+The 2 MiB input cap and 4 MiB output window bound a unit. Mapped-window
+streaming, checkpoint replay, cancellation, and the production Tier A/B caps
+stay covered by the import-isolation suite. The seed preparer refuses a
+non-empty directory.
+
+## OBJ/MTL
+
+`ObjFuzz` drives the pinned `ufbx` Wavefront parser the same way
+`import_worker::ImportObj` does: an OBJ primary with a bounded, single-entry
+in-memory MTL sidecar served through the open-file callback, and a second
+envelope domain that parses the primary as MTL directly. It covers OBJ/MTL
+tokenization, index/normal normalization, triangulation, missing sidecars, and
+hostile external references; every external open that is not the one sidecar is
+denied without touching the filesystem. It creates no window, GPU device,
+mapped file, filesystem-derived resolver, network client, or child process.
+Seeds are generated, not committed.
+
+```powershell
+python tests/fuzz/prepare_obj_seeds.py TestResults/security-t15/obj-seeds
+msbuild tests/fuzz/ObjFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=<root>\"
+tests/fuzz/x64/Release/ObjFuzz.exe TestResults/security-t15/obj-seeds -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=2097160 -print_final_stats=1 -verbosity=0
+```
+
+`ObjFuzz` uses the root vcpkg manifest for the header-only `ufbx`; build it with
+`VcpkgRoot` pointing at the restored vcpkg installation. The 2 MiB primary /
+1 MiB sidecar caps and 64 MiB ufbx allocator cap are intentionally smaller than
+product limits. The adapter's texture/image decode stages and the normalized
+chunk writer are not sanitizer-instrumented here: compressed codecs are SEC-16,
+and the provider/worker lanes cover adapter emission. The seed preparer refuses
+a non-empty directory.

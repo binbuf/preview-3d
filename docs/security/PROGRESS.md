@@ -22,6 +22,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **Follow-ups**: T12/SEC-14: once `Preview3D.exe` is Authenticode-signed, extend; T12: add a functional low-integrity rejection test (spawn/impersonate a low-integrity token) to
 - **T13 — SEC-13 CI test gate for PRs and releases**: Reusable facts for later sessions:; **One reusable gate workflow.** `.github/workflows/ci.yml` triggers on `pull_request`, push to
 - **T14 — SEC-14 Release and supply-chain hardening**: Reusable facts for later sessions:; **Permissions cannot be conditional.** GitHub Actions `permissions` (top-level or job-level) does
+- **T15 — SEC-15 Fuzz targets: STL, PLY, OBJ**: Reusable facts for later sessions:; **Three targets, one convention.** `tests/fuzz/StlFuzz.cpp`, `PlyFuzz.cpp`, and `ObjFuzz.cpp`
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -632,10 +633,14 @@ Reusable facts for later sessions:
 - T04 follow-up: the committed corpus manifest cannot be regenerated without the Release
   `meshoptimizer.dll`; consider committing that frozen seed path or a generator mode that copies the
   existing `meshopt.glb`, so the documented `--compare` workflow works on a clean checkout.
-- T13/SEC-15/16/17: extend the `fuzz-smoke` job in `.github/workflows/ci.yml` with the new
-  STL/PLY/OBJ, glTF+codec, and provider-soak targets, then promote it from the nightly/dispatch-only
-  matrix into the required pull-request gate. It is deliberately not a `needs:` of the release job
-  yet.
+- T13/SEC-16/17: finish extending the `fuzz-smoke` job in `.github/workflows/ci.yml` with the
+  glTF+codec and provider-soak targets, then promote it from the nightly/dispatch-only matrix into
+  the required pull-request gate. SEC-15 added the STL/PLY/OBJ entries (one target per runner). It is
+  deliberately not a `needs:` of the release job yet.
+- SEC-15: the `fuzz-smoke` job does not restore the root vcpkg manifest before building `ObjFuzz`
+  (header-only `ufbx`) or `ThreeMfFuzz` (zlib); the job relies on the runner's vcpkg integration and
+  warm binary cache. If a cold runner fails the manifest restore at build time, add an explicit
+  restore/tools step like the `test` job has.
 - T13 (run-time evidence): the first real GitHub Actions run must confirm `windows-2025` accepts
   the AppContainer/Job child processes the import-isolation suite launches, and that the Debug and
   Release matrices fit the 360-minute timeout from a warm cache. If a suite is environment-sensitive
@@ -749,3 +754,34 @@ Reusable facts for later sessions:
   user-visible tag-protection/signing policy; `docs/design/adr/0043-signed-attested-release-supply-chain.md`
   records the decision; design/09 "CI and release evidence" links them. The README no longer says
   releases are unsigned.
+
+## T15 — SEC-15 Fuzz targets: STL, PLY, OBJ
+
+Reusable facts for later sessions:
+
+- **Three targets, one convention.** `tests/fuzz/StlFuzz.cpp`, `PlyFuzz.cpp`, and `ObjFuzz.cpp`
+  follow the existing STEP/3MF/USD/FBX pattern: `extern "C" LLVMFuzzerTestOneInput`, `/fsanitize=fuzzer`
+  + `EnableASAN=true`, `OutDir tests\fuzz\x64\$(Configuration)\`, and a `CopyAddressSanitizerRuntime`
+  post-build target. Build one at a time: the projects share `tests\fuzz\x64\Release` (MSB8028).
+- **STL/PLY link the real adapters.** `StlFuzz.vcxproj`/`PlyFuzz.vcxproj` compile
+  `import-worker/src/{Stl,Ply}Adapter.cpp` and `shared/parser-core/src/*` with a null `MappedFile`
+  and a 4 MiB output window. `BoundedChunkWriter::AddRaw` references
+  `ChunkBatchSink::PublishBatch` even when the sink is null, so the projects also compile
+  `import-worker/src/ChunkBatchSink.cpp` and `shared/model-core/src/ControlChannelIo.cpp` plus
+  `MappedFile.cpp`/`MappedView.cpp`. No vcpkg dependency.
+- **OBJ uses ufbx directly.** `ObjFuzz.vcxproj` has `VcpkgEnableManifest=true` (header-only `ufbx`,
+  root manifest) and links only `ObjFuzz.cpp`. Build with `/p:VcpkgRoot=<VS>\VC\vcpkg` locally; CI
+  relies on the runner's vcpkg integration. Envelope = FbxFuzz's `(<IBBHI)` shape, plus a flag to
+  parse the primary as MTL. The open-file callback serves exactly one in-memory sidecar and denies
+  every other path, so hostile/missing references never touch the filesystem.
+- **Generated seeds, not committed.** `prepare_{stl,ply,obj}_seeds.py` write into a fresh directory
+  and refuse a non-empty one (exit 1), matching `prepare_step_seeds.py`. 12 / 12 / 9 seeds.
+- **Build command** (MSBuild is not on PATH):
+  `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe tests\fuzz\<T>Fuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\" /m:1`.
+  Run: `tests\fuzz\x64\Release\<T>Fuzz.exe <seeds> -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=2097160 -print_final_stats=1 -verbosity=0`.
+- **Smoke baseline (30 s each, exit 0, no ASan finding).** StlFuzz 41,338 units / peak RSS 335 MB;
+  PlyFuzz 28,875 units / 339 MB; ObjFuzz 212,803 units / 403 MB. `Tests.Unit.exe "~[graphics]"` stays
+  307 cases / 131,544 assertions green (no production code changed).
+- **Not instrumented.** The OBJ adapter's texture/image decode stages (SEC-16 codecs), the
+  `ChunkBatchSink` batch handshake, mapped-window streaming, and the real AppContainer/Job/product
+  size caps; those stay in the provider and import-isolation lanes. See ADR-0044.

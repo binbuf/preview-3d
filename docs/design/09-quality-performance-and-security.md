@@ -185,10 +185,10 @@ Tests enumerate adversarial interleavings. Thread termination, SuspendThread-bas
 Each format has a standalone, no-GPU fuzz target that accepts bytes plus a constrained virtual sidecar/archive map and runs through normalized metadata/chunk output. Additional targets cover:
 
 - GLB/glTF JSON/accessor/range validation;
-- binary/ASCII STL detection/tokenization;
-- binary/ASCII PLY header, endianness, scalar/list, point, and polygon normalization;
+- binary/ASCII STL detection/tokenization (`StlFuzz`);
+- binary/ASCII PLY header, endianness, scalar/list, point, and polygon normalization (`PlyFuzz`);
 - Draco bitstreams, KTX2/Basis level metadata/transcode boundary, WebP, and expanded texture metadata;
-- OBJ/MTL and FBX adapter options/callbacks;
+- OBJ/MTL and FBX adapter options/callbacks (`ObjFuzz`, `FbxFuzz`);
 - 3MF/USDZ archive directory and expansion accounting;
 - USDA/USDC object graphs;
 - import-worker and compatibility-host protocol/shared-section descriptors and broker dependency requests, including the wire-format header/chunk-descriptor decoder itself;

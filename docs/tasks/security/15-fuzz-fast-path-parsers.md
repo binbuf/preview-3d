@@ -53,4 +53,62 @@ manual bounds/stride/tokenization bugs become minimized, permanent regression ca
 - [ ] Hand-off lists seeds added, runtimes, and any findings filed.
 
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+Changed:
+- `tests/fuzz/StlFuzz.cpp`, `tests/fuzz/StlFuzz.vcxproj` — drives the real
+  `import_worker::ImportStl` (ASCII/binary detection, binary facet scan, ASCII
+  `AsciiTokenizer` walk, facet normalization, bounded writer) plus a direct
+  `parser_core::StlParserCore` domain.
+- `tests/fuzz/PlyFuzz.cpp`, `tests/fuzz/PlyFuzz.vcxproj` — drives the real
+  `import_worker::ImportPly` (binary LE/BE and ASCII paths, header/scalar/list
+  walks, polygon fan triangulation, writer) plus a direct
+  `parser_core::PlyParserCore` domain.
+- `tests/fuzz/ObjFuzz.cpp`, `tests/fuzz/ObjFuzz.vcxproj` — drives the pinned
+  `ufbx` OBJ/MTL parser (OBJ primary with a single in-memory virtual MTL
+  sidecar, and MTL-as-primary) with a bounded normalized scene/material walk.
+- `tests/fuzz/prepare_{stl,ply,obj}_seeds.py` — deterministic generated seeds
+  that refuse a non-empty output directory. 12 STL / 12 PLY / 9 OBJ+MTL seeds.
+- `tests/fuzz/README.md` — STL, PLY, OBJ/MTL sections (build + run commands,
+  caps, what is not instrumented).
+- `.github/workflows/ci.yml` — added STL/PLY/OBJ entries to the `fuzz-smoke`
+  matrix (one target per runner, matching the existing STEP/3MF shape).
+- `docs/design/adr/0044-fuzz-fast-path-parser-boundaries.md` (new);
+  `docs/design/09-quality-performance-and-security.md` (target names);
+  `docs/security/PROGRESS.md` (T15 facts).
+
+Deviations:
+- `ObjFuzz` drives the pinned `ufbx` library and its OBJ/MTL options/callbacks
+  directly rather than linking `ObjAdapter.cpp`. This matches the design doc's
+  "OBJ/MTL and FBX adapter options/callbacks" wording and the `FbxFuzz`
+  precedent, and avoids pulling SEC-16 compressed-image decoders into this
+  target. The adapter's wire-emission/image stages stay covered by the real
+  provider/worker lanes. The in-memory sidecar also gives MTL tokenization
+  deeper coverage than the adapter could (its MTL path requires a mapped-file
+  `MappingLease`, which cannot be synthesized from memory).
+- `StlFuzz`/`PlyFuzz` link the real adapters directly; because the adapters
+  reference `ChunkBatchSink::PublishBatch` even with a null sink, the projects
+  also compile `ChunkBatchSink.cpp` and `ControlChannelIo.cpp` and build with
+  no vcpkg dependency. `ObjFuzz` uses the root vcpkg manifest (header-only
+  `ufbx`).
+
+Check results:
+- Builds: `StlFuzz.vcxproj`, `PlyFuzz.vcxproj`, `ObjFuzz.vcxproj` all build
+  Release x64 with ASan + libFuzzer via
+  `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`
+  and `/p:SolutionDir=<root>\`; `ObjFuzz` additionally with
+  `/p:VcpkgRoot=...\VC\vcpkg`. Exes land in `tests\fuzz\x64\Release\`.
+- Bounded runs (fresh seeds under `TestResults/security-t15/`, 30 s each, exit
+  0, no ASan finding):
+  - StlFuzz: 41,338 units, 1,333 exec/s, 808 new units, peak RSS 335 MB.
+  - PlyFuzz: 28,875 units, 931 exec/s, 741 new units, peak RSS 339 MB.
+  - ObjFuzz: 212,803 units, 6,864 exec/s, 627 new units, peak RSS 403 MB.
+  All with `-max_total_time=30 -timeout=5 -rss_limit_mb=1024 -max_len=2097160`.
+- Seed preparers refuse a non-empty directory (exit 1) — verified.
+- `x64\Release\Tests.Unit.exe "~[graphics]"` — 307 cases / 131,544 assertions
+  green (no production code changed).
+
+Next task must know:
+- SEC-16 extends the same `fuzz-smoke` matrix and then promotes it into the
+  required gate. Keep one target per runner: the fuzz projects share
+  `tests\fuzz\x64\Release` as an intermediate directory (MSB8028).
+- A finding should be minimized into the relevant `prepare_*_seeds.py` output
+  as a new immutable seed and committed with the fix.

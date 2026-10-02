@@ -330,10 +330,11 @@ jobs:
             throw "Tests.ProviderHost ($env:CONFIGURATION) failed with exit code $LASTEXITCODE."
           }
 
-  # Bounded libFuzzer smoke. SEC-15/16/17 extend the fuzz targets and then
-  # promote this into the required gate. Until then it runs only off the PR/push
-  # path (nightly schedule or manual dispatch) so it can never block a merge,
-  # and it is deliberately not a `needs:` of the release package job.
+  # Bounded libFuzzer smoke. SEC-15 added the STL/PLY/OBJ fast-path targets;
+  # SEC-16/17 add glTF/codec and provider-soak and then promote this into the
+  # required gate. Until then it runs only off the PR/push path (nightly
+  # schedule or manual dispatch) so it can never block a merge, and it is
+  # deliberately not a `needs:` of the release package job.
   fuzz-smoke:
     name: Fuzz smoke (${{ matrix.target }})
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -344,8 +345,8 @@ jobs:
       fail-fast: false
       # One target per runner: the fuzz projects share the tests\fuzz\x64\Release
       # intermediate directory, so a fresh runner per target avoids the MSB8028
-      # shared-intermediate-dir hazard. SEC-15/16/17 add STL/PLY/OBJ, glTF+codec
-      # and provider-soak entries here.
+      # shared-intermediate-dir hazard. SEC-16/17 add glTF+codec and
+      # provider-soak entries here.
       matrix:
         include:
           - target: STEP
@@ -358,6 +359,21 @@ jobs:
             exe: tests\fuzz\x64\Release\ThreeMfFuzz.exe
             prepare: tests/fuzz/prepare_3mf_seeds.py
             seeds: TestResults/3mf-007/fuzz-seeds
+          - target: STL
+            project: tests\fuzz\StlFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\StlFuzz.exe
+            prepare: tests/fuzz/prepare_stl_seeds.py
+            seeds: TestResults/security-t15/stl-seeds
+          - target: PLY
+            project: tests\fuzz\PlyFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\PlyFuzz.exe
+            prepare: tests/fuzz/prepare_ply_seeds.py
+            seeds: TestResults/security-t15/ply-seeds
+          - target: OBJ
+            project: tests\fuzz\ObjFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\ObjFuzz.exe
+            prepare: tests/fuzz/prepare_obj_seeds.py
+            seeds: TestResults/security-t15/obj-seeds
 
     steps:
       - name: Check out source
