@@ -59,7 +59,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
 
@@ -73,7 +73,7 @@ jobs:
             }
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         # Best-effort: the durable cache is the GitHub Packages NuGet feed. The
         # key matches dependencies.yml and release.yml so a warm-up there is
         # reused here.
@@ -131,8 +131,13 @@ jobs:
           # GITHUB_TOKEN, so they can restore warm packages from the feed but
           # must not attempt a push; a push to main (and the release gate)
           # warms the feed.
+          #
+          # The token goes into a throwaway NuGet.Config under RUNNER_TEMP and is
+          # consumed via vcpkg's `nugetconfig` source, so nothing is persisted in
+          # the user-profile NuGet.Config; the always() cleanup step removes it.
           $filesSource = "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
           $feedAccess = if ($env:GITHUB_EVENT_NAME -eq 'push') { 'readwrite' } else { 'read' }
+          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
           try {
             $nuget = (& $env:VCPKG_EXE fetch nuget |
               Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
@@ -141,26 +146,49 @@ jobs:
               throw "vcpkg did not provide a usable nuget.exe (got '$nuget')."
             }
 
+            $configLines = @(
+              '<?xml version="1.0" encoding="utf-8"?>',
+              '<configuration>',
+              '  <packageSources>',
+              '    <clear />',
+              '  </packageSources>',
+              '  <config>',
+              "    <add key=`"defaultPushSource`" value=`"$env:VCPKG_FEED_URL`" />",
+              '  </config>',
+              '</configuration>'
+            )
+            Set-Content -LiteralPath $configPath -Value $configLines -Encoding UTF8
+
             & $nuget sources add `
               -Source $env:VCPKG_FEED_URL `
               -StorePasswordInClearText `
               -Name GitHubPackages `
               -UserName $env:VCPKG_FEED_OWNER `
-              -Password $env:GITHUB_TOKEN
+              -Password $env:GITHUB_TOKEN `
+              -ConfigFile $configPath
             if ($LASTEXITCODE -ne 0) {
               throw "nuget sources add failed with exit code $LASTEXITCODE."
             }
 
-            & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL
+            & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL -ConfigFile $configPath
             if ($LASTEXITCODE -ne 0) {
               throw "nuget setapikey failed with exit code $LASTEXITCODE."
             }
 
-            "VCPKG_BINARY_SOURCES=clear;nuget,$env:VCPKG_FEED_URL,$feedAccess;$filesSource" >> $env:GITHUB_ENV
-            Write-Host "vcpkg binary cache: GitHub Packages feed ($feedAccess) plus local files cache."
+            "VCPKG_BINARY_SOURCES=clear;nugetconfig,$configPath,$feedAccess;$filesSource" >> $env:GITHUB_ENV
+            Write-Host "vcpkg binary cache: ephemeral GitHub Packages config ($feedAccess) plus local files cache."
           } catch {
             Write-Warning "GitHub Packages binary cache unavailable; using the local files cache only. $_"
             "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
+          }
+
+      - name: Remove ephemeral NuGet credentials
+        if: always()
+        shell: pwsh
+        run: |
+          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
+          if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            Remove-Item -LiteralPath $configPath -Force
           }
 
       - name: Restore vcpkg dependencies
@@ -333,7 +361,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
 

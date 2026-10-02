@@ -21,6 +21,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T12 - SEC-12 Active-instance IPC hardening**: Reusable facts for later sessions:; **One security builder, per-object rights.** `interactive-viewer/src/app/ActiveInstance.cpp`
 - **Follow-ups**: T12/SEC-14: once `Preview3D.exe` is Authenticode-signed, extend; T12: add a functional low-integrity rejection test (spawn/impersonate a low-integrity token) to
 - **T13 — SEC-13 CI test gate for PRs and releases**: Reusable facts for later sessions:; **One reusable gate workflow.** `.github/workflows/ci.yml` triggers on `pull_request`, push to
+- **T14 — SEC-14 Release and supply-chain hardening**: Reusable facts for later sessions:; **Permissions cannot be conditional.** GitHub Actions `permissions` (top-level or job-level) does
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -641,6 +642,15 @@ Reusable facts for later sessions:
   on the runner, scope it explicitly and record why; do not silently skip it.
 - T13 (branch protection): a maintainer must require the `CI` checks `Build and test (Debug)` and
   `Build and test (Release)` on `main`; GitHub repository settings cannot be changed from the repo.
+- T14/SEC-14: the first maintainer tag run must configure the `release` environment (required
+  reviewers, tags-only deployment), the `WINDOWS_CERTIFICATE_BASE64`/`WINDOWS_CERTIFICATE_PASSWORD`
+  secrets, and a `v*` tag protection rule, then confirm `gh attestation verify` and
+  `signtool verify /p7` succeed. The `/p7` checksum-signing step and attestation are unverified
+  offline.
+- T14/SEC-14: `ci.yml` still declares workflow-level `packages: write`; its `test` job is a single
+  reusable gate and cannot be split by event without duplicating the Debug/Release matrix. It is not
+  a write vector today (`feed-access: read` off `push`), but a future refactor could split it the
+  same way `dependencies.yml` was.
 
 ## T13 — SEC-13 CI test gate for PRs and releases
 
@@ -683,3 +693,59 @@ Reusable facts for later sessions:
   correct *only* because the three manifests are restored up front; the isolated-manifest MSBuild
   target is gated on the OCCT `Standard_Failure.hxx` header being absent, so the pre-restore makes it
   a no-op. Do not drop the restore step.
+
+## T14 — SEC-14 Release and supply-chain hardening
+
+Reusable facts for later sessions:
+
+- **Permissions cannot be conditional.** GitHub Actions `permissions` (top-level or job-level) does
+  not accept `${{ }}` expressions, so "read on PR, write on push" needs separate jobs. The vcpkg
+  restore moved to `.github/workflows/dependencies-restore.yml` (`on: workflow_call`,
+  `inputs.feed-access`); `dependencies.yml` calls it from `restore-pr`
+  (`if: github.event_name == 'pull_request'`, `packages: read`, `feed-access: read`) and `warm`
+  (`else`, `packages: write`, `feed-access: readwrite`). The reusable workflow must **not** declare
+  `permissions:` — an unspecified permission evaluates to `none` and would strip the caller's
+  `packages: write`.
+- **Ephemeral NuGet credentials.** Do not `nuget sources add` without `-ConfigFile`: that persists
+  the token in the user-profile `NuGet.Config`. Instead write a throwaway config under
+  `$env:RUNNER_TEMP` with a `defaultPushSource` entry, add the source/API key with
+  `-ConfigFile`, and consume it through vcpkg's **`nugetconfig`** source (only that provider takes
+  `-Config`, per the vcpkg binary-caching reference). Set
+  `VCPKG_BINARY_SOURCES=clear;nugetconfig,<cfg>,<access>;files,<dir>,readwrite` and delete the file in
+  an `if: always()` step. Applied in `dependencies-restore.yml`, `ci.yml`, and `release.yml`.
+  Gotcha: a PowerShell here-string (`@" ... "@`) inside a YAML `run: |` block breaks the block scalar
+  because the closing `"@` must be column-0; use an array of lines instead.
+  Verified locally with the vcpkg-provided NuGet 7.6.0 (`nuget-7.6.0-windows` from
+  `...\vcpkg\vcpkg.exe fetch nuget`): the temp file ends up with the source,
+  `packageSourceCredentials`, `defaultPushSource`, and `apikeys`, and the user-profile config is
+  untouched.
+- **Pinned actions (Dependabot comment form).** `actions/checkout`
+  `d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0`, `actions/cache`
+  `0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0`, `actions/attest-build-provenance`
+  `e8998f949152b193b063cb0ec769d69d929409be # v2.4.0`. `.github/dependabot.yml` (github-actions,
+  weekly) keeps them current. `git ls-remote --tags <url> 'refs/tags/vN*'` gives the peeled SHAs.
+- **Signing is mandatory for a tag.** `release.yml`'s "Import signing certificate" throws when
+  `WINDOWS_CERTIFICATE_BASE64`/`WINDOWS_CERTIFICATE_PASSWORD` are absent. The unsigned path is the
+  local packaging scripts only (`Create-PortableRelease.ps1`/`Create-Installer.ps1` warn and
+  continue without a thumbprint). The `release` job also has `environment: release` (required
+  reviewers, tags-only deployment) and needs `id-token: write` + `attestations: write`.
+- **Checksum signing is detached PKCS#7.** Authenticode cannot embed a signature in a text file, so
+  `Sign release metadata` runs
+  `signtool sign /sha1 <tp> /fd SHA256 /tr <ts> /td SHA256 /p7 <dir> /p7co 1.3.6.1.4.1.311.2.1.4 <checksums>`
+  and verifies each output with `signtool verify /p7`. Outputs are `<file>.p7`. Untested offline (no
+  cert/signtool here).
+- **Draft-then-publish, no clobber.** "Publish GitHub release" refuses an already **published** tag,
+  deletes a leftover draft, `gh release create --draft --verify-tag`, uploads (no `--clobber`), then
+  `gh release edit <tag> --draft=false`. Assets = the four binaries/checksums plus everything in
+  `artifacts/release/` (renamed SBOM/manifest copies + `Preview3D-<v>-SHA256SUMS` + `.p7` sidecars).
+  The two distributions both emit `SBOM.cdx.json`/`MANIFEST.json`, so the copies are renamed.
+- **Attestation.** `actions/attest-build-provenance` runs over the zip, installer, both SBOMs, both
+  manifests, and `SHA256SUMS`. Verify with `gh attestation verify <file> --repo binbuf/preview-3d`.
+- **Check command.** `actionlint` is on PATH
+  (`C:\Users\dan\go\bin\actionlint.exe`); PowerShell does not glob for native commands, so pass
+  files explicitly: `$files = Get-ChildItem .github/workflows -Filter *.yml | % FullName; actionlint @files`.
+  It resolves the local `uses: ./.github/workflows/dependencies-restore.yml` reference.
+- **Policy doc.** `docs/WINDOWS-SECURITY.md` "What we are doing"/"Verifying a release" is now the
+  user-visible tag-protection/signing policy; `docs/design/adr/0043-signed-attested-release-supply-chain.md`
+  records the decision; design/09 "CI and release evidence" links them. The README no longer says
+  releases are unsigned.

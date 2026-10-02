@@ -293,6 +293,21 @@ required gate once SEC-15/16/17 land. Lint/static analysis, the headless adapter
 corpus, and package-manifest validation remain manual per-change skills on top of
 the gate (release packaging already restores and validates the manifests).
 
+The `Release` workflow (`.github/workflows/release.yml`; ADR-0043) now fails
+closed when its signing secrets are absent — an unsigned artifact is a local
+engineering build, never a CI release. It attests the portable ZIP, the installer,
+both SBOMs, both `MANIFEST.json` files, and the combined `SHA256SUMS` with
+`actions/attest-build-provenance`; publishes the renamed SBOM/manifest copies,
+the checksums, and their detached PKCS#7 signatures as release assets; and gates
+the whole job behind the required-reviewer `release` environment. It refuses to
+overwrite a published tag (draft, then un-draft). Every action is pinned to a
+commit SHA and tracked by `.github/dependabot.yml`. `dependencies.yml` splits its
+permissions by event: a `pull_request` runs the shared restore with
+`packages: read` and can only read the vcpkg binary-cache feed, while
+`push`/`schedule`/`workflow_dispatch` warm it with `packages: write`; the NuGet
+token is written to a throwaway config and cleared in an `always()` step rather
+than persisted to the user profile (ADR-0043).
+
 Nightly:
 
 - hardware D3D debug and performance smoke;

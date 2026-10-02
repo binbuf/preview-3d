@@ -39,7 +39,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 ## Phase 3 — CI, supply chain, and fuzzing
 
 - [x] T13 — SEC-13 CI test gate for PRs and releases → [13-ci-test-gate.md](13-ci-test-gate.md)
-- [ ] T14 — SEC-14 Release and supply-chain hardening → [14-ci-release-supply-chain.md](14-ci-release-supply-chain.md)
+- [x] T14 — SEC-14 Release and supply-chain hardening → [14-ci-release-supply-chain.md](14-ci-release-supply-chain.md)
 - [ ] T15 — SEC-15 Fuzz targets: STL, PLY, OBJ → [15-fuzz-fast-path-parsers.md](15-fuzz-fast-path-parsers.md)
 - [ ] T16 — SEC-16 Fuzz targets: glTF + compressed codecs → [16-fuzz-gltf-and-codecs.md](16-fuzz-gltf-and-codecs.md)
 - [ ] T17 — SEC-17 Provider pipeline fuzz + surrogate soak → [17-fuzz-provider-and-soak.md](17-fuzz-provider-and-soak.md)
@@ -50,11 +50,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T18:46:22Z · 14/20 done
+**Pipeline status** — updated 2026-10-02T18:54:22Z · 15/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14
 - Blocked: none
 - Failed: none
-- Remaining: T14, T15, T16, T17, T18, T19
-- Last finished: T13 — done · CI gate workflow (Debug/Release build + unit/import-isolation/provider-host suites) added, release gated via reusable workflow, fuzz smoke opt-in, docs/ADR updated; actionlint and all local suites green; hosted first run and branch protection remain for a maintainer.
+- Remaining: T15, T16, T17, T18, T19
+- Last finished: T14 — done · Split dependencies cache permissions by event, pinned all actions with Dependabot, made signing fail-closed with release environment + draft/no-clobber publish, added build-provenance attestation and SBOM/manifest/checksum assets with PKCS#7 checksum signatures, and stopped persisting the NuGet token; actionlint and the verify suite are green, with the practice-tag attestation run and secret/environment setup left for a maintainer.
 <!-- /symphony:status -->

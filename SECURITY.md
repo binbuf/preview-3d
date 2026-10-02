@@ -46,7 +46,9 @@ include:
 ## Out of scope
 
 - Windows SmartScreen, Smart App Control, or attachment warnings for unsigned
-  builds. See [Windows download and protection guidance](.docs/WINDOWS-SECURITY.md).
+  engineering builds. Published release artifacts are Authenticode-signed and
+  carry a build-provenance attestation; see
+  [Windows download and protection guidance](docs/WINDOWS-SECURITY.md).
 - Vulnerabilities in upstream dependencies that are not reachable through
   Preview 3D; report those to the upstream project.
 - Resource exhaustion or denial of service within the documented Tier B limits.
