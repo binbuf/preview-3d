@@ -15,6 +15,25 @@ namespace preview3d::provider {
 
 namespace {
 constexpr std::uint64_t kMaterializeChunkBytes = 256ull * 1024;
+
+// A raw stream-reported size is only trusted after it is known to be a plain,
+// non-negative, in-cap value. `STATSTG.cbSize` is unsigned, but a hostile
+// `IStream::Stat`/`Seek(END)` can report the -1/"unknown" sentinel, which
+// reinterpreted unsigned is UINT64_MAX. Reject the high bit (in case a platform
+// or a future signature surfaces the size as a signed LONGLONG) and anything
+// over the 256 MiB stream cap before the value is stored or compared.
+bool TryValidateStreamSize(std::uint64_t raw, std::uint64_t& out) noexcept
+{
+    constexpr std::uint64_t kSignBit = 0x8000'0000'0000'0000ull;
+    if ((raw & kSignBit) != 0) {
+        return false;
+    }
+    if (raw > ProviderLimits::kStreamMaxBytes) {
+        return false;
+    }
+    out = raw;
+    return true;
+}
 } // namespace
 
 BoundedStreamSource::BoundedStreamSource(IStream* stream, Deadline deadline,
@@ -85,10 +104,13 @@ bool BoundedStreamSource::DetermineSize() noexcept
     const HRESULT statHr = stream_->Stat(&stat, STATFLAG_NONAME);
     const bool statOk = SUCCEEDED(statHr) && stat.type == STGTY_STREAM;
 
-    // Fail fast on a reported size over the stream cap, before any read. A
-    // seek-to-end probe below does not override this: STATSTG over the ceiling
-    // is exactly the cheap oversized-file check design/05 requires.
-    if (statOk && stat.cbSize.QuadPart > ProviderLimits::kStreamMaxBytes) {
+    // A negative/unknown or over-cap STATSTG report fails fast, before any read,
+    // and is never stored as a validated size. A seek-to-end probe below does
+    // not override this: STATSTG over the ceiling is exactly the cheap
+    // oversized-file check design/05 requires.
+    std::uint64_t statSize = 0;
+    const bool statSizeValid = statOk && TryValidateStreamSize(stat.cbSize.QuadPart, statSize);
+    if (statOk && !statSizeValid) {
         return Fail(ProviderOutcome::LimitExceeded);
     }
 
@@ -97,21 +119,22 @@ bool BoundedStreamSource::DetermineSize() noexcept
         zero.QuadPart = 0;
         ULARGE_INTEGER end{};
         if (SUCCEEDED(stream_->Seek(zero, STREAM_SEEK_END, &end))) {
-            if (end.QuadPart > ProviderLimits::kStreamMaxBytes) {
+            std::uint64_t endSize = 0;
+            if (!TryValidateStreamSize(end.QuadPart, endSize)) {
                 return Fail(ProviderOutcome::LimitExceeded);
             }
-            size_ = end.QuadPart;
+            size_ = endSize;
             sizeKnown_ = true;
             if (FAILED(stream_->Seek(zero, STREAM_SEEK_SET, nullptr))) {
                 return Fail(ProviderOutcome::Unsupported);
             }
-        } else if (statOk) {
-            size_ = stat.cbSize.QuadPart;
+        } else if (statSizeValid) {
+            size_ = statSize;
             sizeKnown_ = true;
         }
-    } else if (statOk) {
+    } else if (statSizeValid) {
         // Only a hint for non-seekable input; reads/materialization verify it.
-        size_ = stat.cbSize.QuadPart;
+        size_ = statSize;
         sizeKnown_ = true;
     }
 

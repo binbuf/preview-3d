@@ -11,6 +11,13 @@ name: Dependencies
 #
 # The binary-cache key matches release.yml so a successful run here warms the
 # cache a later tagged release restores.
+#
+# Permissions are split by event (SEC-14). A pull_request runs the shared
+# dependencies-restore.yml with `packages: read` and `feed-access: read`, so
+# PR-authored portfiles can restore warm packages but cannot push to the GitHub
+# Packages feed that release.yml later restores. Trusted events
+# (push/schedule/workflow_dispatch) run the same restore with `packages: write`
+# and `feed-access: readwrite` to warm it.
 
 on:
   workflow_dispatch:
@@ -32,6 +39,7 @@ on:
       - 'packaging/vcpkg-ports/**'
       - 'packaging/triplets/**'
       - '.github/workflows/dependencies.yml'
+      - '.github/workflows/dependencies-restore.yml'
   pull_request:
     paths:
       - 'vcpkg.json'
@@ -43,170 +51,44 @@ on:
       - 'packaging/vcpkg-ports/**'
       - 'packaging/triplets/**'
       - '.github/workflows/dependencies.yml'
+      - '.github/workflows/dependencies-restore.yml'
 
 permissions:
   contents: read
-  # Push and restore the vcpkg binary cache on GitHub Packages; see release.yml.
-  packages: write
+  # Safe default: a same-repo pull_request gets a read-only packages token so it
+  # cannot write the release binary-cache feed. The trusted `warm` job below
+  # elevates to `packages: write` for push/schedule/workflow_dispatch.
+  packages: read
 
 concurrency:
   group: dependencies-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  restore:
-    name: Restore vcpkg manifests
-    runs-on: windows-2025
-    # Cold OpenUSD + OCCT from source is the long pole; the binary cache keeps
-    # repeat runs short. Same budget as release so a timeout here means the
-    # release would have timed out too.
-    timeout-minutes: 360
+  restore-pr:
+    name: Restore vcpkg manifests (pull request, read-only)
+    # Same-repo PRs get more than a fork's read-only token, so this job pins the
+    # permission and the feed mode rather than relying on the fork downgrade.
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/dependencies-restore.yml
+    with:
+      feed-access: read
+      # Untrusted: never create the token-bearing NuGet config. `vcpkg install`
+      # runs PR-authored overlay portfiles, which could read it.
+      configure-feed: false
+    secrets: inherit
 
-    env:
-      VCPKG_FEED_OWNER: ${{ github.repository_owner }}
-      VCPKG_FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
-      VCPKG_SCRATCH: ${{ github.workspace }}\..\.vcpkg-scratch
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Report disk layout
-        shell: pwsh
-        run: |
-          Get-PSDrive -PSProvider FileSystem |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_.Used) -and ($_.Used + $_.Free) -gt 0 } |
-            ForEach-Object {
-              '{0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB)
-            }
-
-      - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
-        # Best-effort: the durable cache is the GitHub Packages NuGet feed.
-        continue-on-error: true
-        with:
-          path: ${{ github.workspace }}/.vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
-          restore-keys: |
-            vcpkg-binary-${{ runner.os }}-
-
-      - name: Add NuGet binary-cache source
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT 'vcpkg.exe'
-          if (-not (Test-Path -LiteralPath $vcpkg -PathType Leaf)) {
-            throw "vcpkg.exe was not found at '$vcpkg'."
-          }
-
-          # See release.yml. Publish VCPKG_BINARY_SOURCES through GITHUB_ENV so a
-          # Packages outage degrades to the files cache instead of failing.
-          $filesSource = "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
-          try {
-            $nuget = (& $vcpkg fetch nuget |
-              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-              Select-Object -Last 1).Trim()
-            if ([string]::IsNullOrWhiteSpace($nuget) -or -not (Test-Path -LiteralPath $nuget -PathType Leaf)) {
-              throw "vcpkg did not provide a usable nuget.exe (got '$nuget')."
-            }
-
-            & $nuget sources add `
-              -Source $env:VCPKG_FEED_URL `
-              -StorePasswordInClearText `
-              -Name GitHubPackages `
-              -UserName $env:VCPKG_FEED_OWNER `
-              -Password $env:GITHUB_TOKEN
-            if ($LASTEXITCODE -ne 0) {
-              throw "nuget sources add failed with exit code $LASTEXITCODE."
-            }
-
-            & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL
-            if ($LASTEXITCODE -ne 0) {
-              throw "nuget setapikey failed with exit code $LASTEXITCODE."
-            }
-
-            "VCPKG_BINARY_SOURCES=clear;nuget,$env:VCPKG_FEED_URL,readwrite;$filesSource" >> $env:GITHUB_ENV
-            Write-Host 'vcpkg binary cache: GitHub Packages feed plus local files cache.'
-          } catch {
-            Write-Warning "GitHub Packages binary cache unavailable; using the local files cache only. $_"
-            "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
-          }
-
-      - name: Restore vcpkg dependencies
-        shell: pwsh
-        run: |
-          function Show-Disk([string] $label) {
-            Write-Host "--- disk after $label ---"
-            Get-PSDrive -PSProvider FileSystem |
-              Where-Object { -not [string]::IsNullOrWhiteSpace($_.Used) -and ($_.Used + $_.Free) -gt 0 } |
-              ForEach-Object {
-                Write-Host ('  {0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB))
-              }
-          }
-
-          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
-          $vcpkg = Join-Path $vcpkgRoot 'vcpkg.exe'
-          if (-not (Test-Path -LiteralPath $vcpkg -PathType Leaf)) {
-            throw "vcpkg.exe was not found at '$vcpkg'."
-          }
-
-          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-
-          # Keep every scratch tree on the workspace volume, not the runner
-          # image's C: drive, and build Release only. See release.yml for the
-          # full rationale.
-          $buildtreesRoot = Join-Path $env:VCPKG_SCRATCH 'buildtrees'
-          $packagesRoot = Join-Path $env:VCPKG_SCRATCH 'packages'
-          $downloadsRoot = Join-Path $env:VCPKG_SCRATCH 'downloads'
-          foreach ($path in @($buildtreesRoot, $packagesRoot, $downloadsRoot)) {
-            New-Item -ItemType Directory -Force -Path $path | Out-Null
-          }
-
-          $common = @(
-            '--triplet', 'x64-windows-static-md',
-            "--overlay-triplets=$env:GITHUB_WORKSPACE\packaging\triplets",
-            "--vcpkg-root=$vcpkgRoot",
-            "--x-buildtrees-root=$buildtreesRoot",
-            "--x-packages-root=$packagesRoot",
-            "--downloads-root=$downloadsRoot",
-            '--clean-buildtrees-after-build',
-            '--clean-packages-after-build',
-            '--x-wait-for-lock'
-          )
-
-          $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows-static-md'
-          & $vcpkg install @common `
-            "--x-manifest-root=$env:GITHUB_WORKSPACE" `
-            "--x-install-root=$installRoot"
-          if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg root-manifest restore failed with exit code $LASTEXITCODE."
-          }
-          Show-Disk 'root manifest'
-
-          $stepManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'compatibility-host-step'
-          $stepInstallRoot = Join-Path $stepManifestRoot 'vcpkg_installed'
-          & $vcpkg install @common `
-            "--x-manifest-root=$stepManifestRoot" `
-            "--x-install-root=$stepInstallRoot"
-          if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg STEP-manifest restore failed with exit code $LASTEXITCODE."
-          }
-          Show-Disk 'STEP manifest'
-
-          # Isolated thumbnail-provider STEP manifest: OCCT only, in its own
-          # tree (ADR-0002). CreateInstaller builds
-          # Preview3DThumbnailProvider.vcxproj, which reads this tree directly,
-          # so the release lane needs it restored cold (see release.yml).
-          $providerManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'thumbnail-provider\step-occt'
-          $providerInstallRoot = Join-Path $providerManifestRoot 'vcpkg_installed'
-          & $vcpkg install @common `
-            "--x-manifest-root=$providerManifestRoot" `
-            "--x-install-root=$providerInstallRoot"
-          if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg thumbnail-provider STEP-manifest restore failed with exit code $LASTEXITCODE."
-          }
-          Show-Disk 'thumbnail-provider STEP manifest'
+  warm:
+    name: Restore vcpkg manifests (warm binary cache)
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/dependencies-restore.yml
+    with:
+      feed-access: readwrite
+      configure-feed: true
+    secrets: inherit

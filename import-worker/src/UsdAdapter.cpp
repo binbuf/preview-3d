@@ -21,6 +21,7 @@
 #include "model_core/PixelFormats.h"
 #include "model_core/TierALimits.h"
 #include "model_core/VertexLayouts.h"
+#include "platform/CheckedMath.h"
 
 #include "tinyusdz.hh"
 #include "tydra/render-data.hh"
@@ -58,6 +59,10 @@ using tinyusdz::tydra::VertexAttribute;
 using tinyusdz::tydra::VertexAttributeFormat;
 
 constexpr uint64_t kUsdMaxEncodedTextureBytes = 256ull * 1024 * 1024;
+// Matches the protocol-v10 hierarchy-depth ceiling in
+// docs/design/03-file-formats-and-ingestion.md. Kept as a guard so a hostile
+// scene graph cannot overflow the stack inside the flatten recursion.
+constexpr uint32_t kUsdMaxNodeDepth = 256;
 
 std::string FoldAscii(std::string_view value)
 {
@@ -597,30 +602,67 @@ std::optional<std::string> MeshTexcoordName(const RenderScene& scene,
 }
 
 bool ExpandPrimvarForTriangulatedMesh(const RenderMesh& mesh,
-                                      VertexAttribute& attribute)
+                                      VertexAttribute& attribute,
+                                      const UsdImportOptions& options,
+                                      ImportErrorCode& error)
 {
     const auto& triangleIndices = mesh.faceVertexIndices();
-    if (triangleIndices.empty()) return false;
+    if (triangleIndices.empty()) {
+        error = ImportErrorCode::MalformedData;
+        return false;
+    }
+    // Bound the expansion before it allocates. EmitMesh enforces the same
+    // Tier B caps, but only after this face-varying expansion would already
+    // have reserved up to hundreds of MB for a hostile oversized mesh.
+    const uint64_t corners = triangleIndices.size();
+    if (const ImportErrorCode limit = PrimvarExpansionLimit(corners);
+        limit != ImportErrorCode::None) {
+        error = limit;
+        return false;
+    }
+    const size_t stride = attribute.stride_bytes();
+    if (!stride || attribute.data.size() % stride) {
+        error = ImportErrorCode::MalformedData;
+        return false;
+    }
+    // Checked multiplication keeps a hostile stride/width from wrapping the
+    // reserve request into a small allocation.
+    const auto reserveBytes = platform::CheckedMultiply(corners, uint64_t(stride));
+    if (!reserveBytes) {
+        error = ImportErrorCode::MalformedData;
+        return false;
+    }
     std::vector<size_t> sourceFaces(mesh.usdFaceVertexIndices.size());
     size_t offset = 0;
     for (size_t face = 0; face < mesh.usdFaceVertexCounts.size(); ++face) {
         const size_t count = mesh.usdFaceVertexCounts[face];
-        if (count > sourceFaces.size() - offset) return false;
+        if (count > sourceFaces.size() - offset) {
+            error = ImportErrorCode::MalformedData;
+            return false;
+        }
         std::fill_n(sourceFaces.begin() + offset, count, face);
         offset += count;
     }
-    if (offset != sourceFaces.size()) return false;
+    if (offset != sourceFaces.size()) {
+        error = ImportErrorCode::MalformedData;
+        return false;
+    }
 
-    const size_t stride = attribute.stride_bytes();
-    if (!stride || attribute.data.size() % stride) return false;
     std::vector<uint8_t> expanded;
-    expanded.reserve(triangleIndices.size() * stride);
+    expanded.reserve(static_cast<size_t>(*reserveBytes));
     for (size_t corner = 0; corner < triangleIndices.size(); ++corner) {
+        if ((corner & 65535u) == 0 && options.Cancelled()) {
+            error = ImportErrorCode::Cancelled;
+            return false;
+        }
         const size_t originalCorner = mesh.is_triangulated()
             ? (corner < mesh.triangulatedToOrigFaceVertexIndexMap.size()
                 ? mesh.triangulatedToOrigFaceVertexIndexMap[corner] : SIZE_MAX)
             : corner;
-        if (originalCorner >= mesh.usdFaceVertexIndices.size()) return false;
+        if (originalCorner >= mesh.usdFaceVertexIndices.size()) {
+            error = ImportErrorCode::MalformedData;
+            return false;
+        }
         size_t item = 0;
         switch (attribute.variability) {
         case tinyusdz::tydra::VertexVariability::Constant:
@@ -636,9 +678,13 @@ bool ExpandPrimvarForTriangulatedMesh(const RenderMesh& mesh,
             item = mesh.usdFaceVertexIndices[originalCorner];
             break;
         default:
+            error = ImportErrorCode::MalformedData;
             return false;
         }
-        if (item >= attribute.vertex_count()) return false;
+        if (item >= attribute.vertex_count()) {
+            error = ImportErrorCode::MalformedData;
+            return false;
+        }
         const uint8_t* value = attribute.data.data() + item * stride;
         expanded.insert(expanded.end(), value, value + stride);
     }
@@ -648,17 +694,27 @@ bool ExpandPrimvarForTriangulatedMesh(const RenderMesh& mesh,
     return true;
 }
 
-bool ReadTexcoordPrimvar(const tinyusdz::GeomPrimvar& primvar, double time,
-                         VertexAttribute& attribute, std::string& error)
+ImportErrorCode ReadTexcoordPrimvar(const tinyusdz::GeomPrimvar& primvar, double time,
+                                    VertexAttribute& attribute, std::string& error)
 {
     std::vector<tinyusdz::value::float2> values;
     if (!primvar.flatten_with_indices(
             time, &values, tinyusdz::value::TimeSampleInterpolationType::Linear, &error))
-        return false;
+        return ImportErrorCode::MalformedData;
+    // Bound the flattened sample count before resizing the attribute buffer. The
+    // later PrimvarExpansionLimit keys on the mesh corner count, not this
+    // primvar's sample count, so a small mesh with a huge indexed/Varying
+    // primvar would otherwise allocate the sample buffer uncapped.
+    if (const ImportErrorCode limit = PrimvarSampleLimit(values.size());
+        limit != ImportErrorCode::None)
+        return limit;
     attribute.name = primvar.name();
     attribute.format = VertexAttributeFormat::Vec2;
     attribute.elementSize = 1;
-    attribute.data.resize(values.size() * sizeof(values.front()));
+    const auto dataBytes
+        = platform::CheckedMultiply(values.size(), uint64_t(sizeof(values.front())));
+    if (!dataBytes) return ImportErrorCode::MalformedData;
+    attribute.data.resize(static_cast<size_t>(*dataBytes));
     if (!values.empty())
         std::memcpy(attribute.data.data(), values.data(), attribute.data.size());
     switch (primvar.get_interpolation()) {
@@ -673,36 +729,42 @@ bool ReadTexcoordPrimvar(const tinyusdz::GeomPrimvar& primvar, double time,
     case tinyusdz::Interpolation::FaceVarying:
         attribute.variability = tinyusdz::tydra::VertexVariability::FaceVarying; break;
     default:
-        return false;
+        return ImportErrorCode::MalformedData;
     }
-    return true;
+    return ImportErrorCode::None;
 }
 
-bool RecoverMissingTexcoords(const tinyusdz::Stage& stage, double time,
-                             RenderScene& scene, uint32_t& warnings)
+ImportErrorCode RecoverMissingTexcoords(const tinyusdz::Stage& stage, double time,
+                                        RenderScene& scene, const UsdImportOptions& options,
+                                        uint32_t& warnings)
 {
     for (RenderMesh& mesh : scene.meshes) {
+        if (options.Cancelled()) return ImportErrorCode::Cancelled;
         if (mesh.texcoords.contains(0)) continue;
         const auto name = MeshTexcoordName(scene, mesh);
         if (!name) continue;
         const Prim* prim = nullptr;
         std::string error;
         if (!stage.find_prim_at_path(tinyusdz::Path(mesh.abs_path, ""), prim, &error)
-            || !prim) return false;
+            || !prim) return ImportErrorCode::MalformedData;
         const GeomMesh* sourceMesh = AsExact<GeomMesh>(*prim);
-        if (!sourceMesh) return false;
+        if (!sourceMesh) return ImportErrorCode::MalformedData;
         tinyusdz::GeomPrimvar primvar;
         if (!tinyusdz::tydra::GetGeomPrimvar(stage, sourceMesh, *name, &primvar, &error)) {
             warnings = (std::min)(64u, warnings + 1);
             continue;
         }
         VertexAttribute attribute;
-        if (!ReadTexcoordPrimvar(primvar, time, attribute, error)
-            || !ExpandPrimvarForTriangulatedMesh(mesh, attribute)) return false;
+        if (const ImportErrorCode readError = ReadTexcoordPrimvar(primvar, time, attribute, error);
+            readError != ImportErrorCode::None)
+            return readError;
+        ImportErrorCode expansionError = ImportErrorCode::None;
+        if (!ExpandPrimvarForTriangulatedMesh(mesh, attribute, options, expansionError))
+            return expansionError;
         mesh.texcoords.emplace(0, std::move(attribute));
         mesh.texcoordSlotIdMap.add(*name, 0);
     }
-    return true;
+    return ImportErrorCode::None;
 }
 
 struct GeometryRecord {
@@ -1194,9 +1256,22 @@ struct PointInstanceRecord {
     bool visible = true;
 };
 
-void FlattenNodes(const Node& node, uint32_t parentIndex,
-                  const StagePolicy& policy, std::vector<FlatNode>& nodes)
+bool FlattenNodes(const Node& node, uint32_t parentIndex, const StagePolicy& policy,
+                  const UsdImportOptions& options, uint32_t depth, std::vector<FlatNode>& nodes,
+                  ImportErrorCode& error)
 {
+    if (depth > kUsdMaxNodeDepth) {
+        error = ImportErrorCode::MalformedData;
+        return false;
+    }
+    if (nodes.size() >= kTierBObjectLimit) {
+        error = ImportErrorCode::ResourceLimit;
+        return false;
+    }
+    if ((nodes.size() & 1023u) == 0 && options.Cancelled()) {
+        error = ImportErrorCode::Cancelled;
+        return false;
+    }
     bool visible = parentIndex == UINT32_MAX || nodes[parentIndex].visible;
     if (const auto found = policy.prims.find(node.abs_path); found != policy.prims.end())
         visible = visible && found->second.visible && found->second.includedPurpose;
@@ -1211,7 +1286,10 @@ void FlattenNodes(const Node& node, uint32_t parentIndex,
     const uint32_t index = static_cast<uint32_t>(nodes.size());
     nodes.push_back(FlatNode{
         &node, parentIndex, node.has_resetXform ? UINT32_MAX : parentIndex, visible});
-    for (const Node& child : node.children) FlattenNodes(child, index, policy, nodes);
+    for (const Node& child : node.children)
+        if (!FlattenNodes(child, index, policy, options, depth + 1, nodes, error))
+            return false;
+    return true;
 }
 
 template<class T>
@@ -1426,8 +1504,10 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
         return Fail(assets.error, ImportFailurePhase::Sidecars);
     if (options.Cancelled()) return Fail(ImportErrorCode::Cancelled);
     if (scene.meshes.empty()) return Fail(ImportErrorCode::EmptyGeometry);
-    if (!RecoverMissingTexcoords(stage, time, scene, policy.optionalWarnings))
-        return Fail(ImportErrorCode::MalformedData, ImportFailurePhase::Geometry);
+    if (const ImportErrorCode recovery
+            = RecoverMissingTexcoords(stage, time, scene, options, policy.optionalWarnings);
+        recovery != ImportErrorCode::None)
+        return Fail(recovery, ImportFailurePhase::Geometry);
     if (scene.meshes.size() > kTierBObjectLimit)
         return Fail(ImportErrorCode::ResourceLimit);
     if (scene.materials.size() > kTierBMaterialLimit
@@ -1450,7 +1530,10 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
 
     std::vector<FlatNode> flatNodes;
     flatNodes.reserve(policy.primCount);
-    for (const Node& root : scene.nodes) FlattenNodes(root, UINT32_MAX, policy, flatNodes);
+    ImportErrorCode flattenError = ImportErrorCode::None;
+    for (const Node& root : scene.nodes)
+        if (!FlattenNodes(root, UINT32_MAX, policy, options, 0, flatNodes, flattenError))
+            return Fail(flattenError);
     if (flatNodes.empty() || flatNodes.size() > kTierBObjectLimit)
         return Fail(flatNodes.empty() ? ImportErrorCode::EmptyGeometry
                                       : ImportErrorCode::ResourceLimit);

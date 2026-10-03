@@ -88,14 +88,23 @@ private:
         float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     };
 
-    ErrorCode LoadHeader() noexcept;
+    // Per-stage bodies, run under the T06 stage-containment shim
+    // (ContainmentStage.h). Non-noexcept so a product-owned `std::bad_alloc`
+    // unwinds into the boundary instead of terminating at the frozen `noexcept`
+    // public method.
+    ErrorCode InitializeImpl(const AdapterInput& input);
+    ErrorCode ParseImpl();
+    ErrorCode EnumerateMaterialsImpl(IMaterialSink& sink);
+    ErrorCode EnumerateGeometryImpl(IGeometrySink& sink);
+
+    ErrorCode LoadHeader();
     ErrorCode ResolveSchema() noexcept;
     ErrorCode ComputeBinaryOffsets() noexcept;
 
-    ErrorCode EmitBinaryPoints(IGeometrySink& sink) noexcept;
-    ErrorCode EmitBinaryMesh(IGeometrySink& sink) noexcept;
+    ErrorCode EmitBinaryPoints(IGeometrySink& sink);
+    ErrorCode EmitBinaryMesh(IGeometrySink& sink);
     ErrorCode EmitAsciiPoints(IGeometrySink& sink) noexcept;
-    ErrorCode EmitAsciiMesh(IGeometrySink& sink) noexcept;
+    ErrorCode EmitAsciiMesh(IGeometrySink& sink);
 
     // Bounded binary primitives: a checked range read (prefers the contiguous
     // view), a checked skip, one scalar advance, and a bounded list skip.

@@ -54,6 +54,31 @@ struct ContainmentResult {
 // tabulated failure so one hostile call cannot take down Explorer's surrogate.
 bool ShouldContainStructuredCode(std::uint32_t code) noexcept;
 
+// --- SEC-08 containment policy: quarantine on a contained structured fault ----
+//
+// A contained structured exception (an access violation, in-page error, illegal
+// instruction, ...) is evidence the process may be running on corrupted state.
+// The chosen policy is **quarantine**: the boundary records the fault, every
+// later thumbnail request is refused with the tabulated failure before any
+// parser runs, and requests already in flight are allowed to drain. A later
+// request therefore never runs on suspected-corrupt state, and no success bitmap
+// is fabricated. The state is process-global (the Shell surrogate is one
+// process) and observable through `ContainmentQuarantined()`; the transition is
+// reported through diagnostics as `DiagnosticStage::Containment` with
+// `quarantined=true`. Stack overflow, breakpoint and single-step are not
+// contained, so they never reach this state; a `__fastfail`/stack-cookie fault
+// cannot be caught at all and kills the process (see design/05).
+bool ContainmentQuarantined() noexcept;
+std::uint32_t ContainmentQuarantineCode() noexcept;
+
+// Records a contained structured fault. Idempotent (the first fault wins);
+// called by the boundary and exposed so the policy is testable in-process.
+void MarkContainmentQuarantined(std::uint32_t structuredCode) noexcept;
+
+// Clears the quarantine. Test-only: a case that injects a fault must not leak
+// the state into the next case in the same process. Never called by product code.
+void ResetContainmentQuarantineForTest() noexcept;
+
 // Runs `call(context)` under C++ exception and structured-exception containment.
 // A C++ `std::bad_alloc` maps to E_OUTOFMEMORY; any other C++ exception and any
 // contained structured exception map to E_FAIL (DecoderFailure). When `deadline`

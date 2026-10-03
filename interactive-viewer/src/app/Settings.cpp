@@ -1,10 +1,12 @@
 #include "framework.h"
 #include "Settings.h"
+#include "SafeFileOps.h"
 
 #include <shlobj.h>
 
 #include <cctype>
 #include <cstdlib>
+#include <span>
 #include <string>
 
 namespace
@@ -131,7 +133,6 @@ void SaveSettings(const ViewerSettings& settings)
     CreateDirectoryW(directory.c_str(), nullptr);
 
     const std::wstring finalPath = directory + L"\\" + kSettingsFileName;
-    const std::wstring tempPath = finalPath + L".tmp";
 
     const char* groundAxis = settings.groundAxis == GroundAxis::X ? "X"
         : settings.groundAxis == GroundAxis::Y ? "Y"
@@ -158,20 +159,6 @@ void SaveSettings(const ViewerSettings& settings)
         ",\n  \"hideCursorWhileDragging\": " + (settings.hideCursorWhileDragging ? "true" : "false") +
         ",\n  \"language\": \"" + escapedLanguage + "\"\n}\n";
 
-    HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr,
-        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return;
-    DWORD written = 0;
-    const BOOL wrote = WriteFile(file, json.data(), static_cast<DWORD>(json.size()), &written, nullptr);
-    FlushFileBuffers(file);
-    CloseHandle(file);
-    if (!wrote || written != json.size())
-    {
-        DeleteFileW(tempPath.c_str());
-        return;
-    }
-    if (!MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING))
-    {
-        DeleteFileW(tempPath.c_str());
-    }
+    std::wstring writeError;
+    preview3d::safeio::WriteFileAtomically(finalPath, std::as_bytes(std::span(json)), true, writeError);
 }

@@ -22,6 +22,8 @@
 #include <windows.h>
 #include <psapi.h>
 
+#pragma warning(push)
+#pragma warning(disable: 4244 4305)
 #pragma warning(push, 0)
 #include "pxr/base/plug/plugin.h"
 #include "pxr/base/plug/registry.h"
@@ -74,6 +76,11 @@
 #include <unordered_set>
 #include <vector>
 
+// OpenUSD's gf vector/quaternion and arch timing headers define templated
+// conversions that emit C4244/C4305 when instantiated in this translation unit.
+// SEC-19/T19 audited every suppressed site: they are all upstream header code,
+// never this file's own code, so the suppression is scoped here (the sole
+// OpenUSD consumer) instead of project-wide. The matching pop is at end of file.
 PXR_NAMESPACE_USING_DIRECTIVE
 
 namespace compatibility_host {
@@ -1675,3 +1682,5 @@ extern "C" __declspec(dllexport) int __cdecl Preview3DRunOpenUsdImport(
         static_cast<HANDLE>(controlInput), static_cast<HANDLE>(controlOutput),
         payloadDirectory, *result);
 }
+
+#pragma warning(pop)

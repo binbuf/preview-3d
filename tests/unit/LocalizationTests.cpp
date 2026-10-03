@@ -25,6 +25,17 @@ bool LanguageDirectoryExists()
 {
     return std::filesystem::exists(std::filesystem::path(LanguageDirectory()));
 }
+
+// The active locale is process-global state. Cases that load a translated pack
+// must not leak it into later cases (WireFormatTests expects English literals),
+// and the reset must happen even if a REQUIRE aborts the case.
+struct EnglishLocaleGuard
+{
+    ~EnglishLocaleGuard()
+    {
+        LocalizationLoadDirectoryForTesting(LanguageDirectory(), L"en");
+    }
+};
 }
 
 TEST_CASE("Loc falls back to the in-source English literal for unknown keys", "[localization]")
@@ -58,6 +69,7 @@ TEST_CASE("The shipped English catalogue resolves real keys", "[localization]")
 TEST_CASE("A translated pack loads and preserves its placeholders", "[localization]")
 {
     if (!LanguageDirectoryExists()) SKIP("language pack directory not found");
+    EnglishLocaleGuard restoreEnglish;
     REQUIRE(LocalizationLoadDirectoryForTesting(LanguageDirectory(), L"fr"));
     CHECK(LocalizationLanguage() == L"fr");
     // A real translation replaces the English fallback...
@@ -84,6 +96,7 @@ TEST_CASE("LocalizedJoin owns the separating space and trims the fragment", "[lo
 TEST_CASE("The language list is offered with English first", "[localization]")
 {
     if (!LanguageDirectoryExists()) SKIP("language pack directory not found");
+    EnglishLocaleGuard restoreEnglish;
     LocalizationLoadDirectoryForTesting(LanguageDirectory(), L"fr");
     const std::vector<LanguageInfo>& languages = LocalizationAvailableLanguages();
     REQUIRE_FALSE(languages.empty());

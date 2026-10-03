@@ -80,6 +80,6 @@ constexpr GeometrySamplingDecision DecideGeometrySampling(
 // the sampler; because the offsets depend only on (count, strata) the selection
 // is identical no matter which end of the source the adapter started from.
 std::vector<std::uint64_t> StratifiedOffsets(std::uint64_t count,
-                                             std::uint32_t strata) noexcept;
+                                             std::uint32_t strata);
 
 } // namespace preview3d::provider

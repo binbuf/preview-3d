@@ -6,6 +6,8 @@
 
 #include "DracoDecodeAdapter.h"
 
+#include "model_core/DracoPreflight.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <draco/compression/encode.h>
@@ -53,6 +55,40 @@ std::vector<std::byte> EncodeOneTriangle()
     std::vector<std::byte> bytes(buffer.size());
     std::memcpy(bytes.data(), buffer.data(), buffer.size());
     return bytes;
+}
+
+void AppendVarint(std::vector<std::byte>& bytes, uint32_t value)
+{
+    do {
+        uint8_t byte = static_cast<uint8_t>(value & 0x7Fu);
+        value >>= 7;
+        if (value != 0) {
+            byte |= 0x80u;
+        }
+        bytes.push_back(static_cast<std::byte>(byte));
+    } while (value != 0);
+}
+
+// A well-formed Draco fixed header (v2.2, triangular edgebreaker, no metadata)
+// with a deliberately hostile declared connectivity preamble.
+std::vector<std::byte> HostileDracoStream(uint32_t encodedVertices, uint32_t faces)
+{
+    std::vector<std::byte> stream;
+    const char magic[] = "DRACO";
+    for (size_t i = 0; i < 5; ++i) {
+        stream.push_back(static_cast<std::byte>(magic[i]));
+    }
+    for (uint8_t byte : {2, 2, 1, 1, 0, 0}) { // version, type, method, flags
+        stream.push_back(static_cast<std::byte>(byte));
+    }
+    stream.push_back(std::byte{0}); // edgebreaker traversal decoder selector
+    AppendVarint(stream, encodedVertices);
+    AppendVarint(stream, faces);
+    stream.push_back(std::byte{0}); // num_attribute_data
+    AppendVarint(stream, faces == 0 ? 0 : 1); // num_encoded_symbols
+    AppendVarint(stream, 0); // num_encoded_split_symbols
+    stream.resize(256, std::byte{0});
+    return stream;
 }
 
 } // namespace
@@ -136,4 +172,35 @@ TEST_CASE("Draco declared expansion is checked before invoking the decoder", "[d
     auto result = import_worker::DecodeDracoMesh(bytes, ids, 300000000, 30000000);
     REQUIRE(std::holds_alternative<model_core::ImportErrorCode>(result));
     CHECK(std::get<model_core::ImportErrorCode>(result) == model_core::ImportErrorCode::DracoPrimitiveLimit);
+}
+
+TEST_CASE("DecodeDracoMesh rejects decoder-declared counts that disagree with the glTF accessors",
+          "[draco][security]")
+{
+    const uint64_t before = model_core::DracoDecoderInvocations().load();
+    const auto stream = HostileDracoStream(/*encodedVertices=*/3, /*faces=*/100'000'000u);
+
+    import_worker::DracoAttributeIds ids;
+    ids.position = 0;
+    auto result = import_worker::DecodeDracoMesh(stream, ids, /*expectedVertexCount=*/3,
+                                                 /*expectedIndexCount=*/3);
+    REQUIRE(std::holds_alternative<model_core::ImportErrorCode>(result));
+    CHECK(std::get<model_core::ImportErrorCode>(result) == model_core::ImportErrorCode::MalformedData);
+    // The third-party decoder was never reached.
+    CHECK(model_core::DracoDecoderInvocations().load() == before);
+}
+
+TEST_CASE("DecodeDracoMesh rejects an over-budget decoder-declared vertex count",
+          "[draco][security]")
+{
+    const uint64_t before = model_core::DracoDecoderInvocations().load();
+    const auto stream = HostileDracoStream(/*encodedVertices=*/20'000'000u, /*faces=*/1);
+
+    import_worker::DracoAttributeIds ids;
+    ids.position = 0;
+    auto result = import_worker::DecodeDracoMesh(stream, ids, /*expectedVertexCount=*/3,
+                                                 /*expectedIndexCount=*/3);
+    REQUIRE(std::holds_alternative<model_core::ImportErrorCode>(result));
+    CHECK(std::get<model_core::ImportErrorCode>(result) == model_core::ImportErrorCode::DracoPrimitiveLimit);
+    CHECK(model_core::DracoDecoderInvocations().load() == before);
 }

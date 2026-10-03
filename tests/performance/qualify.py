@@ -4,13 +4,20 @@ import csv
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import platform
+import shutil
 import statistics
 import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# SEC-11 (T11): the viewer only accepts --benchmark-result beneath its own
+# per-user data directory, so the harness writes there and archives a copy.
+APP_BENCHMARK_DIR = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local')) \
+    / 'Binbuf' / 'Preview 3D' / 'benchmarks'
 
 
 def sha256(path):
@@ -71,7 +78,10 @@ def parse_presentmon(path):
 
 
 def run_once(args, exe, fixture, index, run_dir):
-    app_result = run_dir / f'app-{index}.json'
+    APP_BENCHMARK_DIR.mkdir(parents=True, exist_ok=True)
+    app_result = APP_BENCHMARK_DIR / f'app-{index}.json'
+    # A previous run must not satisfy this run's existence check.
+    app_result.unlink(missing_ok=True)
     present_csv = run_dir / f'presentmon-{index}.csv'
     present = None
     if args.presentmon:
@@ -100,6 +110,7 @@ def run_once(args, exe, fixture, index, run_dir):
     if not app_result.exists():
         raise RuntimeError(f'viewer produced no result (exit {completed.returncode})')
     result = json.loads(app_result.read_text(encoding='utf-8'))
+    shutil.copy2(app_result, run_dir / f'app-{index}.json')
     result['processExitCode'] = completed.returncode
     result['etw'] = parse_presentmon(present_csv) if args.presentmon else {
         'available': False, 'reason': 'PresentMon not requested'}
@@ -130,6 +141,9 @@ def main():
     args = parser.parse_args()
     if args.runs < 1 or args.runs > 100:
         parser.error('--runs must be 1..100')
+    if args.configuration == 'Release' and (args.copy_delay or args.worker_budget_failure):
+        parser.error('--copy-delay/--worker-budget-failure require --configuration Debug: their '
+                     'developer flags are compiled out of Release (SEC-11)')
     fixture = args.fixture.resolve()
     if not fixture.is_file():
         parser.error(f'fixture not found: {fixture}')

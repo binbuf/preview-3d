@@ -5,11 +5,28 @@
 
 namespace import_broker {
 
+namespace {
+
+// First layer of the two-layer control-character rejection: refuse the raw
+// worker bytes before any path is even constructed. ResolveSidecarPath repeats
+// the check (and rejects invalid UTF-8) so it stays the authority.
+bool ContainsControlByte(const std::string& bytes)
+{
+    for (const unsigned char value : bytes) {
+        if (value < 0x20 || value == 0x7F) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
 std::variant<model_core::SidecarFileReadyNotice, model_core::SidecarFileUnavailableNotice>
 ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonicalPath,
                       const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes,
                       uint64_t remainingSourceBytes, bool allowPackageBasenameLookup,
-                      const std::vector<std::wstring>& additionalSearchRoots)
+                      const std::vector<std::wstring>& additionalSearchRoots, ImportFormat format)
 {
     model_core::SidecarFileUnavailableNotice unavailable{};
     unavailable.generationId = request.generationId;
@@ -20,10 +37,14 @@ ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonical
     }
     std::string relativeReferenceUtf8(reinterpret_cast<const char*>(request.relativePathUtf8),
                                        request.relativePathLength);
+    if (ContainsControlByte(relativeReferenceUtf8)) {
+        unavailable.errorCode = static_cast<uint32_t>(model_core::ImportErrorCode::UnsafeReference);
+        return unavailable;
+    }
 
     SidecarResolution resolution = ResolveSidecarPath(primaryCanonicalPath, relativeReferenceUtf8,
                                                       maxSidecarFileBytes, allowPackageBasenameLookup,
-                                                      additionalSearchRoots);
+                                                      additionalSearchRoots, format);
     if (!resolution.file) {
         unavailable.errorCode = static_cast<uint32_t>(resolution.rejectionCode);
         return unavailable;

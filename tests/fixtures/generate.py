@@ -221,7 +221,12 @@ def generate(output, lane, tier):
         for label, uri in [('approved', 'approved.bin'), ('missing', 'missing.bin'), ('traversal', '../outside.bin'),
                            ('encoded-traversal', '%2e%2e/outside.bin'), ('absolute', 'C:/outside.bin'),
                            ('network', 'https://example.invalid/mesh.bin'), ('unc', '//server/share/mesh.bin'),
-                           ('ads', 'approved.bin:stream')]:
+                           ('ads', 'approved.bin:stream'),
+                           # NUL before a fake allowed extension (opens approved.bin at
+                           # CreateFileW while the untruncated extension looks like .png)
+                           # and NUL after the real extension.
+                           ('nul-extension', 'approved.bin\x00.png'),
+                           ('nul-trailing', 'approved.bin\x00')]:
             original['buffers'][0]['uri'] = uri
             name = f'sidecar-{label}.gltf'
             (output/name).write_bytes(canonical(original))

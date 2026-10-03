@@ -2,6 +2,7 @@
 
 #include "FbxFamilyAdapter.h"
 
+#include "ContainmentStage.h"
 #include "Deadline.h"
 #include "ProviderLimits.h"
 
@@ -393,6 +394,12 @@ void FbxAdapter::Reset() noexcept
 
 ErrorCode FbxAdapter::Initialize(const AdapterInput& input) noexcept
 {
+    return RunContainedStageMember([this, &input]() { return InitializeImpl(input); },
+                                   DiagnosticStage::AdapterInitialize);
+}
+
+ErrorCode FbxAdapter::InitializeImpl(const AdapterInput& input)
+{
     Reset();
     if (input.source == nullptr || input.limits == nullptr || input.deadline == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -409,7 +416,7 @@ ErrorCode FbxAdapter::SourceReadFailure() const noexcept
     return ErrorCode::MalformedData;
 }
 
-ErrorCode FbxAdapter::LoadSourceBytes() noexcept
+ErrorCode FbxAdapter::LoadSourceBytes()
 {
     bytes_ = input_.source->ContiguousView();
     if (!bytes_.empty()) {
@@ -541,7 +548,7 @@ ErrorCode FbxAdapter::EvaluateStaticPose() noexcept
     return ErrorCode::None;
 }
 
-void FbxAdapter::BuildMaterials() noexcept
+void FbxAdapter::BuildMaterials()
 {
     materials_.clear();
     materialIndex_.clear();
@@ -605,6 +612,11 @@ ErrorCode FbxAdapter::ValidateEmbeddedImages() noexcept
 }
 
 ErrorCode FbxAdapter::Parse() noexcept
+{
+    return RunContainedStageMember([this]() { return ParseImpl(); }, DiagnosticStage::Parse);
+}
+
+ErrorCode FbxAdapter::ParseImpl()
 {
     if (input_.deadline == nullptr || !input_.deadline->Checkpoint()) {
         return ErrorCode::Cancelled;
@@ -720,6 +732,12 @@ ErrorCode FbxAdapter::Parse() noexcept
 
 ErrorCode FbxAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 {
+    return RunContainedStageMember([this, &sink]() { return EnumerateMaterialsImpl(sink); },
+                                   DiagnosticStage::Materials);
+}
+
+ErrorCode FbxAdapter::EnumerateMaterialsImpl(IMaterialSink& sink)
+{
     if (!parsed_) {
         return ErrorCode::InternalImporterFailure;
     }
@@ -732,6 +750,12 @@ ErrorCode FbxAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 }
 
 ErrorCode FbxAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateGeometryImpl(sink); },
+                                   DiagnosticStage::Geometry);
+}
+
+ErrorCode FbxAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
 {
     if (!parsed_ || scene_ == nullptr) {
         return ErrorCode::InternalImporterFailure;

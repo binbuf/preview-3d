@@ -40,6 +40,8 @@ the machine-level mapping (ADR-0006/0007); users remain in control of default op
 
 Registering a handler as InprocServer32 is necessary for Explorer to load it, but it is not what isolates it: by default the Shell loads thumbnail handlers into an isolated per-handler COM surrogate (normally `DllHost.exe`) rather than into `explorer.exe` itself, and that surrogate process boundary — not apartment threading, not the COM contract — is what contains a parser crash inside this DLL away from Explorer. (`Prevhost.exe` is a different, unrelated surrogate that Windows uses to host `IPreviewHandler` for the Preview pane; this product implements no `IPreviewHandler` and is never hosted by it — see [01-product-scope.md](./01-product-scope.md).) The installer, its registry entries, and any troubleshooting documentation MUST NOT set `DisableProcessIsolation=1` (or an equivalent per-handler opt-out) for any of the eight CLSIDs above, in the installer or in support guidance. A future change that enables in-process (`explorer.exe`-hosted) execution for performance reasons requires a new ADR, a revised threat model in [09-quality-performance-and-security.md](./09-quality-performance-and-security.md), and re-justifying every claim in this document that currently depends on Shell process isolation.
 
+The `InprocServer32` registration is also directly activatable: any local process can call `CoCreateInstance` with `CLSCTX_INPROC_SERVER` (or simply load the DLL) and run the handler in its own address space. The `AppID`/`DllSurrogate` routing that puts Explorer's thumbnail path in `DllHost.exe` is specific to that Shell path; it is not a property of the CLSID that prevents in-process hosting elsewhere. The provider's safety therefore rests on its own bounded parsing and deadline/limit enforcement (ADR-0005), not on the assumption that the surrogate is the only possible host.
+
 ## Frozen specification
 
 T01 freezes this contract as the single authority adapter work is scheduled against:
@@ -134,13 +136,28 @@ The per-component caps (128 MiB contiguous backing, 192 MiB parser/normalizer sc
 texture, sampled geometry, raster targets) apply to allocations the provider can account for. A
 process-wide ledger reserves product-owned allocations before they occur, including concurrent
 GetThumbnail calls, and rejects a charge that would exceed 384 MiB. Allocator callbacks enforce
-third-party allocations where available. Library allocations without such callbacks, DLL loading,
-GDI and other Shell-surrogate overhead are not covered by this ledger; therefore it cannot enforce
-a hard ceiling on total process private commit. The 384 MiB increase above an idle, loaded
-surrogate baseline is a measured release qualification target. T06 defines accounting and concurrent
-call behavior; T12/T14/T15 and each adapter charge all allocations they control. T51 records actual
-peak process commit and any unaccounted excess. A family/subset that exceeds the target must be
-narrowed or disabled before a release claims that budget.
+third-party allocations where available.
+
+What the 384 MiB ledger does and does not charge:
+
+- **Charged before allocation** (product-owned): the 64 KiB × 8-slot stream block cache and the
+  128 MiB contiguous backing ([ADR-0014](adr/0014-bounded-stream-backing.md)); per-adapter parser
+  and decoded-buffer scratch (for STEP, one checked reservation covering a full geometry cache plus
+  one definition build, [ADR-0036](adr/0036-step-scratch-accounting.md)); the deterministic
+  sampler's retained storage; the raster color/depth targets and the output bitmap; and any library
+  allocation a decoder routes through an allocator callback.
+- **Not charged** (library/OS-owned): library allocations without a callback (lib3mf, Draco, OCCT
+  reader/mesher, fastgltf/TinyUSDZ internals), DLL/module loading, GDI/USER objects, and other
+  Shell-surrogate overhead. The ledger therefore cannot enforce a hard ceiling on total process
+  private commit.
+
+The 384 MiB increase above an idle, loaded surrogate baseline is a measured release qualification
+target. T51 records the actual peak process commit and any unaccounted excess (the measurement is
+still open in this task set; link it here when it lands). A charge that would cross the 384 MiB
+ledger ceiling fails closed to the generic icon with `LimitExceeded`. T06 defines accounting and
+concurrent call behavior; T12/T14/T15 and each adapter charge all allocations they control. A
+family/subset whose measured commit exceeds the target must be narrowed or disabled before a
+release claims that budget.
 
 There is no MapViewOfFile zero-copy guarantee for Shell IStream inputs. This is intentional: Shell isolation, bounded memory, and deterministic latency matter more than sharing the interactive viewer's source mapping implementation.
 
@@ -279,10 +296,15 @@ checked double-precision row-vector transforms; bare-mesh occurrences emit a fla
 sample with the object/triangle/per-corner color resolved to a linear vertex color over one registered
 white material. Supported property types are base materials, color groups, texture-coordinate groups,
 composites and multi-properties; a texture group is structurally validated against the 32 MP aggregate
-budget but not decoded (the frozen `MaterialPayload` has no texture slot). A beam/ball lattice
-occurrence prefers a bounded tessellation of tapered beams (Butt/Hemisphere/Sphere caps) and balls,
-`inside`-clips against a closed axis-aligned 8-vertex/12-triangle box under a 262 144-triangle
-per-lattice ceiling with deterministic radial degradation, and fails to the generic icon for `outside`
+budget but not decoded (the frozen `MaterialPayload` has no texture slot). Every file-authored count
+that sizes a lib3mf output is capped: multi-property layers (16) and beam/ball counts are checked
+against the product ceiling before the allocating call, composite constituents (4096) are rejected as
+`ResourceLimit` immediately after `GetComposite` (lib3mf exposes no per-property count), and
+`ClipInside` stops at the lattice ceiling as it clips ([ADR-0051](adr/0051-library-count-driven-provider-allocation-bounds.md)).
+A beam/ball lattice occurrence prefers a bounded tessellation of tapered beams
+(Butt/Hemisphere/Sphere caps) and balls, `inside`-clips against a closed axis-aligned
+8-vertex/12-triangle box under a 262 144-triangle per-lattice ceiling with deterministic radial
+degradation, and fails to the generic icon for `outside`
 or non-box clipping without a representation mesh. An unsupported required extension, an over-budget
 scene, an unclipped parametric lattice or a malformed package fails closed; a supported scene is never
 rendered only in part.
@@ -305,8 +327,11 @@ reference or texture (`UnsafeReference`); the provider never launches the compat
 cache, recovers a path or reaches the network. The static `UsdPreviewSurface`/display-color policy is
 normalized into the frozen `MaterialPayload` (base color/opacity, metallic, roughness, emissive, alpha
 mode/cutoff, double-sided) and finite triangle samples with double-precision world transforms,
-purpose/visibility and bounded point-instancer expansion; skeletal bindings are stripped so the authored
-rest pose previews. Contained textures are recorded but not decoded — the frozen `MaterialPayload` has no
+purpose/visibility and bounded point-instancer expansion — the instancer's `protoIndices`,
+`positions`, `ids`, `orientations`, `scales` and `invisibleIds` arrays are capped at the 10 000-prim
+ceiling and an oversized array fails `ResourceLimit`
+([ADR-0051](adr/0051-library-count-driven-provider-allocation-bounds.md)); skeletal bindings are
+stripped so the authored rest pose previews. Contained textures are recorded but not decoded — the frozen `MaterialPayload` has no
 texture slot — so an absent or external image never fabricates geometry. A `fast_float` ABI collision
 between TinyUSDZ's vendored copy and lib3mf's vcpkg copy is removed by building TinyUSDZ against the
 vcpkg-pinned `fast_float` in the overlay port (`0.9.1#3`, [ADR-0026](adr/0026-usd-adapter-pinned-tinyusdz.md)).
@@ -334,7 +359,11 @@ deflection `0.05` clamped to `[0.01, 5.0]`, angle `0.7`; 1 M triangles per
 definition, 2 M inspected total) with shape/instance colors normalized to the
 shared `MaterialPayload`. A non-contiguous or over-128 MiB stream is read through
 bounded range reads; an over-`kAllocationLedgerMaxBytes` accounted scratch
-reservation fails closed.
+reservation fails closed. Every provider OCCT entry point — the lazily created
+`XCAFApp_Application` singleton, `NewDocument`/`Close`, the reader/transfer pass
+and the tessellation pass — is serialized by one process-global `SRWLOCK`
+([ADR-0037](adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)),
+so concurrent STEP requests cannot race OCCT's document list.
 
 ## CPU renderer
 
@@ -395,13 +424,38 @@ worker, process or GPU device is created and no process-global mutable cache is 
 `RunThumbnailPipeline` takes a cooperative `Deadline::Checkpoint()` between every bounded stage
 (Initialize/Parse/EnumerateMaterials/EnumerateGeometry/Render), in addition to the per-unit polls
 inside the T12 stream source and T15 rasterizer; the adapters (T21-T34) poll
-`AdapterInput::deadline->Checkpoint()` inside their own long loops. The COM boundary runs the
+`AdapterInput::deadline->Checkpoint()` inside their own long loops. Because those frozen adapter
+methods are `noexcept`, each of their allocating stages also runs its body through
+`thumbnail-provider/ContainmentStage.h` (`RunContainedStage`), so a product-owned `std::bad_alloc`
+is translated to `ErrorCode::OutOfMemory` before it can reach a `noexcept` frame
+([ADR-0034](adr/0034-provider-adapter-stage-containment.md)). Internal allocating helpers are
+likewise not `noexcept`, so their throw still reaches that stage boundary; the one exception is a
+callback the vendored parser invokes directly (TinyUSDZ's asset resolver), whose `noexcept` body
+catches its own `bad_alloc` and returns the typed error rather than unwinding through third-party
+frames. The COM boundary runs the
 pipeline and the DIB conversion through `thumbnail-provider/Containment.{h,cpp}` (`RunContained`),
 the last-resort HRESULT boundary that translates a C++ exception (`std::bad_alloc` -> `E_OUTOFMEMORY`,
 anything else -> `E_FAIL`) and a contained structured exception (`E_FAIL`) to the T06 table. A call
 already in progress is never interrupted: `RunContained` records the real elapsed time and, if an
 uninterruptible call returned after the cooperative 2 s stop point, rejects it afterwards as
-`ERROR_TIMEOUT`. Stack overflow, breakpoint and single-step are deliberately not swallowed.
+`ERROR_TIMEOUT`. Stack overflow, breakpoint and single-step are deliberately not swallowed: a stack
+overflow cannot be handled safely in-process and the debug exceptions belong to a debugger, so they
+are re-raised and the surrogate dies; a `__fastfail`/stack-cookie fault is not a catchable
+structured exception at all and likewise kills the process. That process death is an *expected*,
+allowed failure of the surrogate soak (SEC-17), recorded with its code — never counted as a passing
+run.
+
+T08/SEC-08 adds the contained-fault policy ([ADR-0037](adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)):
+a contained structured exception may have corrupted the process, so the boundary records the fault
+(`MarkContainmentQuarantined`) and `RunThumbnailPipeline` refuses every *later* request with
+`ProviderOutcome::DecoderFailure` (`E_FAIL`, no fabricated bitmap) before any adapter or parser
+runs, while requests already in flight drain. The transition and each refusal emit a
+`DiagnosticStage::Containment` event with `quarantined=true`; the state is readable through
+`ContainmentQuarantined()`. Quarantine is chosen over fail-fast because it keeps the safety property
+identical (no later request runs on suspected-corrupt state) without discarding unrelated in-flight
+work, and the Shell reclaims the quarantined surrogate on its next lifecycle. All provider OCCT
+kernel use is additionally serialized by a process-global `SRWLOCK` held above the containment SEH
+handler ([ADR-0037](adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)).
 Diagnostics are `thumbnail-provider/Diagnostics.{h,cpp}`: numeric events only (no field a path could
 travel in), emitted only while explicitly enabled or via
 `PREVIEW3D_THUMBNAIL_DIAGNOSTICS=1`, and off by default.
@@ -422,12 +476,18 @@ The DLL is treated as hostile-input code executing in a sensitive host:
 
 T16 implements the exception/SEH boundary once in `thumbnail-provider/Containment.h`/`Containment.cpp`
 (`RunContained`) and calls it at the COM boundary; adapters route their third-party calls through it
-(their frozen methods are `noexcept`, so an uncontained throw would terminate). A contained fault
+(their frozen methods are `noexcept`, so an uncontained throw would terminate). SEC-06 adds the
+matching product-owned path: every family adapter routes its allocating lifecycle stage through
+`thumbnail-provider/ContainmentStage.h` (`RunContainedStage`), so a `std::bad_alloc` from its own
+containers is `ErrorCode::OutOfMemory` too ([ADR-0034](adr/0034-provider-adapter-stage-containment.md)).
+A contained fault
 returns the tabulated failure with a diagnostic event, never a fabricated success; the ordinary
-memory fault behind it is still expected to be fuzzed and fixed (T43). Diagnostics are
-`thumbnail-provider/Diagnostics.h`/`Diagnostics.cpp`: events carry only a stage, outcome, counters and
-elapsed time — no string field exists, so a path cannot leak — and are disabled unless troubleshooting
-is enabled.
+memory fault behind it is still expected to be fuzzed and fixed (T43). A contained *structured*
+fault additionally quarantines the process: later requests fail closed before any parser runs
+([ADR-0037](adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)). Diagnostics are
+`thumbnail-provider/Diagnostics.h`/`Diagnostics.cpp`: events carry only a stage, outcome, counters,
+elapsed time and the `quarantined` flag — no string field exists, so a path cannot leak — and are
+disabled unless troubleshooting is enabled.
 
 An importer crash must be addressed by fuzzing/fixing; SEH containment is a last-resort HRESULT boundary, not a correctness mechanism.
 
@@ -454,6 +514,20 @@ Explorer is allowed to fall back to the generic icon. Returning a fabricated “
 - STA parallel-host stress using multiple COM objects.
 - The COM host harness `Tests.ProviderHost.exe` (T17, [ADR-0019](adr/0019-provider-com-host-harness.md)) drives the Shell activation sequence per CLSID, compares a registered fixture rendered through the real pipeline against a tolerant PAM golden, and soaks repeated load/unload against GDI/User/private-byte/thread growth.
 - Truncation, archive bomb, adversarial count, non-seekable stream, timeout, OOM injection, and fuzz corpora.
+  `ProviderFuzz` (SEC-17, [ADR-0047](adr/0047-provider-pipeline-fuzz-and-surrogate-soak.md)) fuzzes the
+  bounded stream source, each family adapter, the sampler and the rasterizer under ASan/libFuzzer.
+- `ProviderSmokeHost.exe --soak` (SEC-17/T25, `packaging/smoke/ProviderSoak.{h,cpp}`) drives
+  concurrent STA apartments through the real Shell path, keeps a handle on each `dllhost`
+  surrogate it observes, and classifies its exit code against the SEC-08 allowed set. A
+  contained access violation is recorded as a quarantine failure-with-reason (a valid request
+  refused after the boundary contained a fault); a stack-overflow/`__fastfail` surrogate death
+  is recorded as the documented allowed failure rather than a pass; any other death fails the
+  soak. `ProviderSmokeHost.exe --soak-classify-selftest` unit-checks the exit-code classifier;
+  the hostile-input lane (`--hostile <path>`) records expected fail-closed refusals.
+- Containment policy: a contained access violation quarantines the surrogate and later requests
+  fail closed (`[provider][threading][quarantine]`, `[provider][pipeline][quarantine]`,
+  `[host][containment][quarantine]`), and two concurrent STEP requests in one surrogate do not race
+  the serialized OCCT singleton (`[host][step][concurrency]`).
 - Repeated Explorer surrogate load/unload with GDI/User handle and private-byte leak checks.
 - Verification in the actual Windows thumbnail surrogate at 100%, 150%, and 200% DPI.
 - Post-install verification, on a clean machine, that each registered CLSID is actually loaded into the isolated surrogate process (not `explorer.exe`) and that no installed registry value sets `DisableProcessIsolation`; this is a release-blocking check, not an optional audit.

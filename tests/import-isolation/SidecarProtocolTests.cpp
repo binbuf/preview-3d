@@ -98,6 +98,45 @@ TEST_CASE("ServiceSidecarRequest replies Unavailable for a path-traversal attemp
     RemoveDirectoryW(directory.c_str());
 }
 
+TEST_CASE("ServiceSidecarRequest rejects an embedded NUL or invalid UTF-8 before resolving",
+          "[sidecar-protocol][security]")
+{
+    wchar_t tempDir[MAX_PATH]{};
+    REQUIRE(GetTempPathW(MAX_PATH, tempDir) != 0);
+    std::wstring directory = std::wstring(tempDir) + L"p3d_sidecar_ctrl_" + std::to_wstring(GetCurrentProcessId());
+    CreateDirectoryW(directory.c_str(), nullptr);
+    std::wstring primaryPath = directory + L"\\scene.gltf";
+    { std::ofstream primary(primaryPath, std::ios::binary | std::ios::trunc); primary << "{}"; }
+    std::wstring sidecarPath = directory + L"\\mesh.bin";
+    { std::ofstream sidecar(sidecarPath, std::ios::binary | std::ios::trunc); sidecar << "abcd"; }
+
+    HANDLE rawPrimary = CreateFileW(primaryPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                     FILE_ATTRIBUTE_NORMAL, nullptr);
+    REQUIRE(rawPrimary != INVALID_HANDLE_VALUE);
+    wchar_t canonicalBuf[MAX_PATH * 2]{};
+    DWORD canonicalLen = GetFinalPathNameByHandleW(rawPrimary, canonicalBuf, MAX_PATH * 2, FILE_NAME_NORMALIZED);
+    REQUIRE(canonicalLen != 0);
+    std::wstring primaryCanonicalPath(canonicalBuf, canonicalLen);
+    CloseHandle(rawPrimary);
+
+    // "mesh.bin\0.png" would pass the resolver's extension check untruncated
+    // but open mesh.bin at CreateFileW; the servicer's first layer rejects it.
+    const std::string embeddedNul("mesh.bin\0.png", 13);
+    const std::string invalidUtf8("mesh\xc3\x28.bin", 10);
+    for (const std::string& attack : { embeddedNul, invalidUtf8 }) {
+        auto request = MakeRequest(attack);
+        auto serviced = import_broker::ServiceSidecarRequest(GetCurrentProcess(), primaryCanonicalPath, request,
+                                                              1024);
+        REQUIRE(std::holds_alternative<model_core::SidecarFileUnavailableNotice>(serviced));
+        CHECK(std::get<model_core::SidecarFileUnavailableNotice>(serviced).errorCode
+              == static_cast<uint32_t>(model_core::ImportErrorCode::UnsafeReference));
+    }
+
+    DeleteFileW(sidecarPath.c_str());
+    DeleteFileW(primaryPath.c_str());
+    RemoveDirectoryW(directory.c_str());
+}
+
 TEST_CASE("An oversized declared relativePathLength is rejected without reading past the buffer",
           "[sidecar-protocol]")
 {
@@ -138,7 +177,7 @@ TEST_CASE("A real AppContainer-sandboxed worker process can receive a mid-genera
     auto section = import_broker::CreateSharedSection(import_broker::kSyntheticSectionBytes);
     REQUIRE(section);
     auto launch = generation_launch_support::LaunchWorkerWithControlChannel(
-        sandbox_test_support::WorkerExePath(), L"--child-noop", fixture.sid, section.get());
+        sandbox_test_support::WorkerExePath(), L"--pool", fixture.sid, section.get());
     REQUIRE(launch.has_value());
     // Deliberately never resumed -- DuplicateHandle's PROCESS_DUP_HANDLE
     // check is against the handle's access rights from CreateProcessW,

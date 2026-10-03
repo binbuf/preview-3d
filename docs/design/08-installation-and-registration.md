@@ -40,7 +40,7 @@ WiX source lives under installer and is built in the same pinned toolchain as th
 Release payload:
 
 - Preview3D.exe;
-- Preview3DImportWorker.exe plus fastgltf, the product STL/PLY parsers, ufbx, lib3mf, TinyUSDZ, the pinned Draco decoder, KTX/Basis transcoder, libwebp, DirectXTex/WIC, and meshoptimizer — every general-format parser/decoder the product ships, none of which is present in Preview3D.exe's own binary;
+- Preview3DImportWorker.exe plus fastgltf, the product STL/PLY parsers, ufbx, lib3mf, TinyUSDZ, the pinned Draco decoder, KTX/Basis transcoder, libwebp, WIC, and meshoptimizer — every general-format parser/decoder the product ships, none of which is present in Preview3D.exe's own binary;
 - Preview3DImportHost.exe plus the exact signed app-local OpenUSD libraries and release-manifest-hashed resources required by its minimal host build;
 - Preview3DStepHost.exe plus the exact signed app-local constrained OCCT closure (modeling, data-exchange, and foundation toolkits only) required by its minimal STEP host build;
 - Preview3DThumbnailProvider.dll;
@@ -61,7 +61,7 @@ Three distinct AppContainer profiles exist, one per import executable, so a poli
 
 Each profile's deterministic package SID is part of the installer manifest. The installer grants each SID read/execute access only to its own private payload — the worker's general-format parser/decoder binaries, the host's OpenUSD libraries, or the STEP host's OCCT closure — never to another's payload, and never to model or cache directories. Profile creation for any identity is not on ordinary startup beyond what that process's first use requires, and grants no model, cache, registry, device, or network access by itself.
 
-Per-generation pipe, event, and shared-section ACLs admit only the current viewer identity, LocalSystem where required for diagnostics, and the relevant import process's AppContainer SID — never two import SIDs on the same objects. Handles are non-inheritable except for an explicit minimal launch list passed through `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`. Uninstall removes the machine payloads/ACLs for all three profiles and attempts to remove the initiating user's unused profiles; profiles created by other users may remain as inert security identities with no payload or resource grant and are documented for administrator cleanup.
+The broker's per-generation control pipes, cancellation event, and shared sections are anonymous objects with default (no explicit per-generation) security descriptors: no per-object DACL admits one AppContainer SID and excludes another. They are unnamed, so no other process can open them by name, and the child only receives the specific handles the broker duplicates into it through `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`; access is therefore governed by handle possession plus the AppContainer token, and no two import SIDs can share an object because no object is addressable by name (ADR-0048). Handles are non-inheritable except for that explicit minimal launch list. Uninstall removes the machine payloads/ACLs for all three profiles and attempts to remove the initiating user's unused profiles; profiles created by other users may remain as inert security identities with no payload or resource grant and are documented for administrator cleanup.
 
 ## Supported extensions
 
@@ -224,6 +224,7 @@ If a user had selected Preview 3D as default, Windows may show no current defaul
 - CI verifies signatures after packaging and again on an installed image.
 - Third-party versions/commits and licenses are pinned in a lock manifest; source/archive checksums are verified before build.
 - Release artifacts include SBOM, notices, reproducible build inputs, checksums, symbols, and format-limit documentation.
+- The SBOM, the copied license texts, and the `licenses/` index are generated from the installed vcpkg dependency closure (`vcpkg_installed/**/vcpkg/status` plus each isolated STEP tree), not a hand-maintained list. Packaging fails when an installed package has no reviewed SPDX entry in [`packaging/portable/dependency-licenses.json`](../../packaging/portable/dependency-licenses.json) or no upstream `copyright` file. `THIRD-PARTY-LICENSES.md` is a checked navigation aid (versions and the pinned baseline), and the release version is cross-checked across `vcpkg.json`, `Directory.Solution.targets`, and `Preview3D.nsi` so it cannot drift (SEC-19 / [T19](../tasks/security/19-license-sbom-metadata.md), [ADR-0049](adr/0049-generated-sbom-and-license-metadata.md)).
 - No install-time download or dynamic dependency fetching is allowed.
 
 ## Future MSI logging and rollback

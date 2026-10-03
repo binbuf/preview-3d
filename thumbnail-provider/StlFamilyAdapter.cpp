@@ -3,6 +3,7 @@
 #include "StlFamilyAdapter.h"
 
 #include "AllocationLedger.h"
+#include "ContainmentStage.h"
 #include "Deadline.h"
 #include "ProviderLimits.h"
 
@@ -50,6 +51,12 @@ void StlAdapter::Reset() noexcept
 }
 
 ErrorCode StlAdapter::Initialize(const AdapterInput& input) noexcept
+{
+    return RunContainedStageMember([this, &input]() { return InitializeImpl(input); },
+                                   DiagnosticStage::AdapterInitialize);
+}
+
+ErrorCode StlAdapter::InitializeImpl(const AdapterInput& input)
 {
     Reset();
     if (input.source == nullptr || input.limits == nullptr || input.deadline == nullptr) {
@@ -138,6 +145,11 @@ ErrorCode StlAdapter::ValidateBinaryHeader() noexcept
 
 ErrorCode StlAdapter::Parse() noexcept
 {
+    return RunContainedStageMember([this]() { return ParseImpl(); }, DiagnosticStage::Parse);
+}
+
+ErrorCode StlAdapter::ParseImpl()
+{
     if (!input_.deadline->Checkpoint()) {
         return ErrorCode::Cancelled;
     }
@@ -147,6 +159,12 @@ ErrorCode StlAdapter::Parse() noexcept
 }
 
 ErrorCode StlAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateMaterialsImpl(sink); },
+                                   DiagnosticStage::Materials);
+}
+
+ErrorCode StlAdapter::EnumerateMaterialsImpl(IMaterialSink& sink)
 {
     // STL carries no material dialect. The neutral fallback is emitted as
     // material 1 so every triangle resolves through the 1-based table
@@ -182,7 +200,7 @@ bool StlAdapter::EmitFacet(const parser_core::Vec3& normal, const parser_core::V
     return sink.OnTriangle(triangle);
 }
 
-ErrorCode StlAdapter::EmitBinary(IGeometrySink& sink) noexcept
+ErrorCode StlAdapter::EmitBinary(IGeometrySink& sink)
 {
     const std::uint32_t triangleCount = header_.triangleCount;
     if (triangleCount == 0) {
@@ -240,7 +258,7 @@ ErrorCode StlAdapter::EmitBinary(IGeometrySink& sink) noexcept
     return ErrorCode::None;
 }
 
-ErrorCode StlAdapter::EmitAscii(IGeometrySink& sink) noexcept
+ErrorCode StlAdapter::EmitAscii(IGeometrySink& sink)
 {
     std::span<const std::byte> bytes = contiguous_;
     if (bytes.empty()) {
@@ -331,6 +349,12 @@ ErrorCode StlAdapter::EmitAscii(IGeometrySink& sink) noexcept
 }
 
 ErrorCode StlAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateGeometryImpl(sink); },
+                                   DiagnosticStage::Geometry);
+}
+
+ErrorCode StlAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
 {
     if (!parsed_) {
         return ErrorCode::InternalImporterFailure;

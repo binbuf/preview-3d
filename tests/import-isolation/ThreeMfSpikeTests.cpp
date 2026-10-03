@@ -164,6 +164,156 @@ void Put32(std::span<std::byte> bytes, size_t offset, uint32_t value)
         bytes[offset + shift / 8] = std::byte((value >> shift) & 0xffu);
 }
 
+uint16_t Read16(std::span<const std::byte> bytes, size_t offset)
+{
+    REQUIRE(offset + 2 <= bytes.size());
+    return uint16_t(std::to_integer<uint8_t>(bytes[offset]))
+        | uint16_t(uint16_t(std::to_integer<uint8_t>(bytes[offset + 1])) << 8);
+}
+
+void Put16(std::span<std::byte> bytes, size_t offset, uint16_t value)
+{
+    REQUIRE(offset + 2 <= bytes.size());
+    bytes[offset] = std::byte(value & 0xffu);
+    bytes[offset + 1] = std::byte(value >> 8);
+}
+
+void Append16(std::vector<std::byte>& output, uint16_t value);
+void Append32(std::vector<std::byte>& output, uint32_t value);
+
+size_t FindEocd(std::span<const std::byte> bytes)
+{
+    for (size_t offset = bytes.size() - 4; ; --offset) {
+        if (Read32(bytes, offset) == 0x06054b50u) return offset;
+        REQUIRE(offset != 0);
+    }
+}
+
+std::vector<std::byte> WithFirstCentralFlags(std::span<const std::byte> source, uint16_t mask)
+{
+    std::vector<std::byte> data(source.begin(), source.end());
+    const size_t central = Read32(data, FindEocd(data) + 16);
+    Put16(data, central + 8, uint16_t(Read16(data, central + 8) | mask));
+    return data;
+}
+
+std::vector<std::byte> WithLocalSizeMismatch(std::span<const std::byte> source)
+{
+    std::vector<std::byte> data(source.begin(), source.end());
+    const size_t central = Read32(data, FindEocd(data) + 16);
+    const size_t local = Read32(data, central + 42);
+    Put32(data, local + 18, Read32(data, local + 18) + 1);
+    return data;
+}
+
+std::vector<std::byte> WithLocalNameMismatch(std::span<const std::byte> source)
+{
+    std::vector<std::byte> data(source.begin(), source.end());
+    const size_t central = Read32(data, FindEocd(data) + 16);
+    const size_t local = Read32(data, central + 42);
+    data[local + 30] = std::byte(std::to_integer<uint8_t>(data[local + 30]) ^ 0x01u);
+    return data;
+}
+
+// Present a normal single-disk archive as ZIP64 by inserting a spec-shaped
+// ZIP64 EOCD record and locator (total-disk field 1) and setting the 32-bit
+// EOCD sentinels.  The 32-bit central records stay real, which is legal and
+// keeps the fixture small.
+std::vector<std::byte> AsZip64(std::span<const std::byte> source)
+{
+    std::vector<std::byte> data(source.begin(), source.end());
+    const size_t eocd = FindEocd(data);
+    const uint32_t centralOffset = Read32(data, eocd + 16);
+    const uint32_t centralSize = Read32(data, eocd + 12);
+    const uint16_t count = Read16(data, eocd + 10);
+    std::vector<std::byte> record, locator;
+    Append32(record, 0x06064b50u);
+    Append32(record, 44); Append32(record, 0);
+    Append16(record, 45); Append16(record, 45);
+    Append32(record, 0); Append32(record, 0);
+    Append32(record, count); Append32(record, 0);
+    Append32(record, count); Append32(record, 0);
+    Append32(record, centralSize); Append32(record, 0);
+    Append32(record, centralOffset); Append32(record, 0);
+    Append32(locator, 0x07064b50u); Append32(locator, 0);
+    Append32(locator, static_cast<uint32_t>(eocd)); Append32(locator, 0);
+    Append32(locator, 1);
+    std::vector<std::byte> output(data.begin(), data.begin() + eocd);
+    output.insert(output.end(), record.begin(), record.end());
+    output.insert(output.end(), locator.begin(), locator.end());
+    output.insert(output.end(), data.begin() + eocd, data.end());
+    const size_t relocated = eocd + record.size() + locator.size();
+    Put16(output, relocated + 8, 0xffffu);
+    Put16(output, relocated + 10, 0xffffu);
+    Put32(output, relocated + 12, 0xffffffffu);
+    Put32(output, relocated + 16, 0xffffffffu);
+    return output;
+}
+
+std::vector<std::byte> WithZip64LocatorOffset(std::span<const std::byte> source, uint64_t offset)
+{
+    std::vector<std::byte> data(source.begin(), source.end());
+    const size_t locator = FindEocd(data) - 20;
+    REQUIRE(Read32(data, locator) == 0x07064b50u);
+    Put32(data, locator + 8, static_cast<uint32_t>(offset & 0xffffffffu));
+    Put32(data, locator + 12, static_cast<uint32_t>(offset >> 32));
+    return data;
+}
+
+// Insert a ZIP64 extra field (id 1) into the first central record whose declared
+// sub-record size is smaller than the eight bytes the uncompressed-size sentinel
+// selects.  A parser that trusts only the sentinel and reads past the sub-record
+// would consume the adjacent name/extra bytes; the preflight must bound the read
+// to the declared field and reject the malformed directory.
+std::vector<std::byte> WithTruncatedCentralZip64Extra(std::span<const std::byte> source,
+                                                      uint16_t declaredSize,
+                                                      bool compressSentinel = false)
+{
+    std::vector<std::byte> data(source.begin(), source.end());
+    const size_t eocd = FindEocd(data);
+    const size_t central = Read32(data, eocd + 16);
+    REQUIRE(Read32(data, central) == 0x02014b50u);
+    const uint16_t nl = Read16(data, central + 28);
+    const uint16_t xl = Read16(data, central + 30);
+    std::vector<std::byte> field;
+    Append16(field, 1);
+    Append16(field, declaredSize);
+    field.resize(field.size() + declaredSize, std::byte{0});
+    const size_t extra = central + 46 + nl + xl;
+    data.insert(data.begin() + extra, field.begin(), field.end());
+    Put32(data, central + 24, 0xffffffffu);
+    if (compressSentinel) Put32(data, central + 20, 0xffffffffu);
+    Put16(data, central + 30, uint16_t(xl + field.size()));
+    const size_t movedEocd = eocd + field.size();
+    Put32(data, movedEocd + 12, Read32(data, movedEocd + 12) + uint32_t(field.size()));
+    return data;
+}
+
+std::vector<std::byte> WithTruncatedLocalZip64Extra(std::span<const std::byte> source,
+                                                    uint16_t declaredSize,
+                                                    bool compressSentinel = false)
+{
+    std::vector<std::byte> data(source.begin(), source.end());
+    const size_t eocd = FindEocd(data);
+    const size_t central = Read32(data, eocd + 16);
+    const size_t local = Read32(data, central + 42);
+    REQUIRE(Read32(data, local) == 0x04034b50u);
+    const uint16_t nl = Read16(data, local + 26);
+    const uint16_t xl = Read16(data, local + 28);
+    std::vector<std::byte> field;
+    Append16(field, 1);
+    Append16(field, declaredSize);
+    field.resize(field.size() + declaredSize, std::byte{0});
+    const size_t extra = local + 30 + nl + xl;
+    data.insert(data.begin() + extra, field.begin(), field.end());
+    Put32(data, local + 22, 0xffffffffu);
+    if (compressSentinel) Put32(data, local + 18, 0xffffffffu);
+    Put16(data, local + 28, uint16_t(xl + field.size()));
+    const size_t movedEocd = eocd + field.size();
+    Put32(data, movedEocd + 16, Read32(data, movedEocd + 16) + uint32_t(field.size()));
+    return data;
+}
+
 std::vector<std::byte> RelocateZip(std::span<const std::byte> source, uint32_t prefix)
 {
     std::vector<std::byte> relocated(source.begin(), source.end());
@@ -1332,6 +1482,9 @@ TEST_CASE("3MF-007 malformed OPC inputs and unknown requirements recover in the 
         import_worker::ThreeMfOpcError preflight;
         model_core::ImportErrorCode broker;
     };
+    const auto bit3Entry = WithFirstCentralFlags(valid, 0x0008u);
+    const auto localSizeMismatch = WithLocalSizeMismatch(valid);
+    const auto localNameMismatch = WithLocalNameMismatch(valid);
     const std::vector<InvalidCase> cases{
         { {}, import_worker::ThreeMfOpcError::NotZip,
           model_core::ImportErrorCode::EmptyGeometry },
@@ -1342,6 +1495,12 @@ TEST_CASE("3MF-007 malformed OPC inputs and unknown requirements recover in the 
         { brokenCentral, import_worker::ThreeMfOpcError::InvalidDirectory,
           model_core::ImportErrorCode::ArchiveLimit },
         { unsafePath, import_worker::ThreeMfOpcError::UnsafePath,
+          model_core::ImportErrorCode::ArchiveLimit },
+        { bit3Entry, import_worker::ThreeMfOpcError::InvalidDirectory,
+          model_core::ImportErrorCode::ArchiveLimit },
+        { localSizeMismatch, import_worker::ThreeMfOpcError::InvalidDirectory,
+          model_core::ImportErrorCode::ArchiveLimit },
+        { localNameMismatch, import_worker::ThreeMfOpcError::InvalidDirectory,
           model_core::ImportErrorCode::ArchiveLimit },
     };
     uint64_t generation = 0x336d66080000ull;
@@ -1371,6 +1530,53 @@ TEST_CASE("3MF-007 malformed OPC inputs and unknown requirements recover in the 
     CHECK(optionalSlice.ok);
     const auto recovered = ImportThreeMfBytes(valid, ++generation);
     CHECK(recovered.ok);
+}
+
+TEST_CASE("3MF OPC preflight accepts spec ZIP64 and bounds the locator offset",
+          "[3mf][archive][security]")
+{
+    const auto valid = DecodeBase64("core-box.3mf.base64");
+    REQUIRE(import_worker::InspectThreeMfOpc(valid) == import_worker::ThreeMfOpcError::None);
+
+    const auto zip64 = AsZip64(valid);
+    CAPTURE(uint32_t(import_worker::InspectThreeMfOpc(zip64)));
+    CHECK(import_worker::InspectThreeMfOpc(zip64) == import_worker::ThreeMfOpcError::None);
+
+    auto wrongDisks = AsZip64(valid);
+    Put32(wrongDisks, FindEocd(wrongDisks) - 20 + 16, 0);
+    CHECK(import_worker::InspectThreeMfOpc(wrongDisks) == import_worker::ThreeMfOpcError::MultiDisk);
+
+    // A locator offset near UINT64_MAX must fail the checked range requirement
+    // and never wrap into the middle of the buffer.
+    const auto wrapped = WithZip64LocatorOffset(zip64, 0xffffffffffffffe0ull);
+    CHECK(import_worker::InspectThreeMfOpc(wrapped)
+          == import_worker::ThreeMfOpcError::InvalidDirectory);
+    const auto maxWrapped = WithZip64LocatorOffset(zip64, 0xffffffffffffffffull);
+    CHECK(import_worker::InspectThreeMfOpc(maxWrapped)
+          == import_worker::ThreeMfOpcError::InvalidDirectory);
+
+    // A ZIP64 extra field whose declared size does not cover the
+    // sentinel-selected values is a malformed directory.  Reject it rather than
+    // reading into the adjacent name/extra bytes, so the preflight validates
+    // exactly the bytes the library consumes.
+    for (const uint16_t declared : { uint16_t{0}, uint16_t{4}, uint16_t{7} }) {
+        const auto centralTruncated = WithTruncatedCentralZip64Extra(valid, declared);
+        CAPTURE(declared, uint32_t(import_worker::InspectThreeMfOpc(centralTruncated)));
+        CHECK(import_worker::InspectThreeMfOpc(centralTruncated)
+              == import_worker::ThreeMfOpcError::InvalidDirectory);
+        const auto localTruncated = WithTruncatedLocalZip64Extra(valid, declared);
+        CHECK(import_worker::InspectThreeMfOpc(localTruncated)
+              == import_worker::ThreeMfOpcError::InvalidDirectory);
+    }
+    // The field covers the first sentinel value but not the second: the second
+    // read must be rejected at the field boundary, not continue into the next
+    // sub-record (which here holds the comment length and the next signature).
+    const auto centralUnderflow = WithTruncatedCentralZip64Extra(valid, 8, true);
+    CHECK(import_worker::InspectThreeMfOpc(centralUnderflow)
+          == import_worker::ThreeMfOpcError::InvalidDirectory);
+    const auto localUnderflow = WithTruncatedLocalZip64Extra(valid, 8, true);
+    CHECK(import_worker::InspectThreeMfOpc(localUnderflow)
+          == import_worker::ThreeMfOpcError::InvalidDirectory);
 }
 
 TEST_CASE("manually supplied 3MF corpus imports through the production worker",

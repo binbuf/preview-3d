@@ -78,13 +78,22 @@ public:
     bool UsedUsdzArchive() const noexcept { return usedUsdz_; }
 
 private:
+    // Per-stage bodies, run under the T06 stage-containment shim
+    // (ContainmentStage.h). Non-noexcept so a product-owned `std::bad_alloc`
+    // unwinds into the stage boundary (or this adapter's own Parse/Enumerate
+    // try-catch) instead of terminating at a frozen `noexcept` public method.
+    ErrorCode InitializeImpl(const AdapterInput& input);
+    ErrorCode ParseImpl();
+    ErrorCode EnumerateMaterialsImpl(IMaterialSink& sink);
+    ErrorCode EnumerateGeometryImpl(IGeometrySink& sink);
+
     ErrorCode SourceReadFailure() const noexcept;
-    ErrorCode LoadSourceBytes() noexcept;
-    ErrorCode SniffContainer() noexcept;
-    ErrorCode PreflightArchive() noexcept;
-    ErrorCode LoadStage() noexcept;
-    ErrorCode BuildScene() noexcept;
-    ErrorCode ValidateScene() noexcept;
+    ErrorCode LoadSourceBytes();
+    ErrorCode SniffContainer();
+    ErrorCode PreflightArchive();
+    ErrorCode LoadStage();
+    ErrorCode BuildScene();
+    ErrorCode ValidateScene();
     void ResetState() noexcept;
 
     AdapterInput input_{};

@@ -60,18 +60,28 @@ msbuild Preview3D.slnx /t:Preview3D,Tests_Unit,Tests_ImportIsolation /p:Configur
 Then repeat in `Release` before opening a pull request. A solution target only
 builds; each test executable returns nonzero on failure.
 
+The `CI` workflow (`.github/workflows/ci.yml`) runs this gate on every pull
+request and every push to `main`: it builds the solution in Debug and Release
+x64, then runs `Tests.Unit.exe "~[graphics]"`, `Tests.ImportIsolation.exe`, and
+`Tests.ProviderHost.exe`, failing on any nonzero exit. The `[graphics]` cases
+are excluded because the hosted runner has no GPU; run them locally when a change
+touches rendering. The `Release` workflow calls the same gate and will not
+package until it passes. See `docs/design/adr/0042-ci-test-gate.md`.
+
 - **Fixture and app-smoke lanes:** [tests/fixtures/README.md](tests/fixtures/README.md).
   App smoke needs an interactive desktop (not a locked, minimized, or occluded
   session) and Python 3.11+.
 - **Fuzz targets:** [tests/fuzz/README.md](tests/fuzz/README.md). These are
-  explicitly built sanitizer targets, not part of the shipping solution.
+  explicitly built sanitizer targets, not part of the shipping solution. A
+  bounded smoke is part of the required `CI` gate as of SEC-17/T25: it runs on
+  every pull request and push (and the `Release` workflow waits for it).
 - **Performance qualification:** `tests/performance/qualify.py` with the options
   and limits in [.docs/TSK-302_VERIFICATION.md](.docs/TSK-302_VERIFICATION.md).
 
-Full GPU suites, app smoke, and fuzzing are not run by GitHub Actions; the
-release workflow only builds and packages. State exactly which commands and
-configurations you ran in your pull request, and note your GPU and Windows build
-for rendering or timing changes.
+Full GPU suites, app smoke, and extended fuzzing still do not run as required
+pull-request checks. State exactly which commands and configurations you ran in
+your pull request, and note your GPU and Windows build for rendering or timing
+changes.
 
 ## Localization
 

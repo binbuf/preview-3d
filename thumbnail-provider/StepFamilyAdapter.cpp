@@ -66,6 +66,7 @@
 #include <istream>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <streambuf>
@@ -92,11 +93,31 @@ constexpr std::uint32_t kStepMaxStringBytes = 1u << 20;
 
 constexpr std::uint32_t kStepMaxDefinitions = 20'000;
 constexpr std::uint32_t kStepMaxHierarchyDepth = 256;
-constexpr std::uint32_t kStepMaxTrianglesPerDefinition = 1'000'000;
+// Per-definition cap chosen together with the geometry-cache cap so the single
+// scratch reservation below honestly covers the worst-case product-owned
+// residency (a full cache plus one definition being built). See ADR-0036.
+constexpr std::uint32_t kStepMaxTrianglesPerDefinition = 500'000;
 constexpr std::uint64_t kStepMaxTrianglesTotal = 2'000'000;
 constexpr std::uint64_t kStepMaxGeometryCacheTriangles = 750'000;
 
-constexpr std::uint64_t kStepScratchReservationBytes = 96ull * 1024 * 1024;
+// Worst-case bytes a tessellated triangle holds in a `CachedGeometry`:
+// 9 position floats + 9 normal floats + 1 material index, with a 2x factor that
+// bounds the implementation's vector growth slack (the buffers grow by
+// push_back, so capacity can exceed size). This is the per-triangle figure the
+// scratch reservation is derived from.
+constexpr std::uint64_t kStepGeometryBytesPerTriangle =
+    2ull * (9ull * sizeof(float)) + 2ull * (9ull * sizeof(float)) +
+    2ull * sizeof(std::uint32_t);
+
+// The one accounted-scratch charge a STEP call takes for its parser/tessellation
+// working set: the full geometry cache plus a per-definition build. Chosen so it
+// stays inside ProviderLimits::kAccountedScratchMaxBytes (192 MiB) under the
+// caps above; (500000 + 750000) * 152 = 190,000,000 bytes (181.2 MiB).
+constexpr std::uint64_t kStepScratchReservationBytes =
+    (static_cast<std::uint64_t>(kStepMaxTrianglesPerDefinition) +
+     kStepMaxGeometryCacheTriangles) * kStepGeometryBytesPerTriangle;
+static_assert(kStepScratchReservationBytes <= ProviderLimits::kAccountedScratchMaxBytes,
+              "STEP scratch reservation must fit the accounted scratch cap");
 constexpr std::size_t kStepReadBlockBytes = 64 * 1024;
 
 // Low-detail deterministic meshing. Relative deflection is a fraction of the
@@ -115,6 +136,31 @@ double ElapsedMilliseconds(const SteadyClock::time_point& start) noexcept
 {
     return std::chrono::duration<double, std::milli>(SteadyClock::now() - start).count();
 }
+
+// --- SEC-08 OCCT process-singleton serialization ------------------------------
+//
+// OCCT's `XCAFApp_Application` is a process singleton: the first
+// `GetApplication()` creates it lazily and `NewDocument`/`Close` mutate its
+// document list, so concurrent STEP calls from the surrogate's apartments would
+// race it (ThreadingModel=Apartment isolates objects, not the process globals).
+// Every provider call that touches OCCT (the document read/transfer, the
+// tessellation pass and the final Close) holds this lock, so at most one request
+// drives the kernel at a time. OCCT does not document these entry points as
+// thread-safe for shared documents, so a lock is the conservative choice; the
+// concurrent-STEP harness test proves it.
+//
+// An SRWLOCK (not a std::mutex) is deliberate: the lock is acquired in
+// `noexcept` frames and must not throw, and the guard lives in the *caller* of
+// `RunContained`, above the SEH handler, so a contained access violation cannot
+// unwind past it and leave the lock held.
+SRWLOCK g_occtApplicationLock = SRWLOCK_INIT;
+
+struct OcctApplicationGuard {
+    OcctApplicationGuard() noexcept { ::AcquireSRWLockExclusive(&g_occtApplicationLock); }
+    ~OcctApplicationGuard() noexcept { ::ReleaseSRWLockExclusive(&g_occtApplicationLock); }
+    OcctApplicationGuard(const OcctApplicationGuard&) = delete;
+    OcctApplicationGuard& operator=(const OcctApplicationGuard&) = delete;
+};
 
 // --- affine helpers (row-vector p * M) ---------------------------------------
 
@@ -385,6 +431,8 @@ struct StepAdapter::Impl {
     void Reset() noexcept
     {
         if (!document.IsNull()) {
+            // Serialize the OCCT application singleton with every other OCCT call.
+            OcctApplicationGuard occtGuard;
             try {
                 XCAFApp_Application::GetApplication()->Close(document);
             } catch (...) {
@@ -480,6 +528,11 @@ struct StepAdapter::Impl {
     // fault returns a typed failure and never a fabricated success.
     ErrorCode LoadDocument() noexcept
     {
+        // Serialize the whole OCCT read/transfer against the process singleton and
+        // every other OCCT call. The guard is above the containment SEH frame, so
+        // a contained fault returns here with the lock still owned and it is
+        // released on normal return.
+        OcctApplicationGuard occtGuard;
         loadResult_ = ErrorCode::None;
         loadCompleted_ = false;
         const ContainmentResult contained =
@@ -772,6 +825,9 @@ struct StepAdapter::Impl {
     // boundary: malformed authored tessellation can fault inside the kernel.
     ErrorCode BuildGeometry(const TopoDS_Shape& shape, CachedGeometry& out) noexcept
     {
+        // OCCT meshing runs against process-global kernel state; keep it under
+        // the same singleton lock as the document read/transfer.
+        OcctApplicationGuard occtGuard;
         meshResult_ = ErrorCode::None;
         meshCompleted_ = false;
         activeMeshShape_ = &shape;
@@ -980,6 +1036,11 @@ ErrorCode StepAdapter::Parse() noexcept
         }
     } catch (const Standard_Failure&) {
         result = ErrorCode::MalformedData;
+    } catch (const std::bad_alloc&) {
+        // A product-owned allocation failure is a typed resource outcome, not
+        // an importer defect (T06). OCCT's own bad_alloc is contained by the
+        // RunContained boundary in LoadDocument/BuildGeometry.
+        result = ErrorCode::OutOfMemory;
     } catch (const std::exception&) {
         result = ErrorCode::InternalImporterFailure;
     } catch (...) {
@@ -1075,6 +1136,8 @@ ErrorCode StepAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
         return ErrorCode::None;
     } catch (const Standard_Failure&) {
         return ErrorCode::TessellationFailed;
+    } catch (const std::bad_alloc&) {
+        return ErrorCode::OutOfMemory;
     } catch (const std::exception&) {
         return ErrorCode::InternalImporterFailure;
     } catch (...) {

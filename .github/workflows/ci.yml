@@ -1,0 +1,529 @@
+name: CI
+
+# The test gate the design promises (docs/design/09-quality-performance-and-security.md,
+# "CI and release evidence"): every pull request and every push to main builds
+# Debug and Release x64 and runs the unit, import-isolation, and provider-host
+# suites. It is intentionally *not* path-filtered: GitHub branch protection can
+# only require a check that actually reports on every pull request, so skipping
+# the lane on docs-only changes would leave a required check permanently pending.
+#
+# release.yml calls this workflow as a reusable workflow and gates packaging on
+# it, so a red test stops a signed artifact. Do not add steps here that need an
+# interactive desktop or a GPU: the runner is headless, so the unit lane excludes
+# the [graphics] cases (the same filter as the harness verify command) and the
+# import/STEP AppContainer suites run as-is.
+#
+# The vcpkg restore/cache steps mirror release.yml and dependencies.yml. Keep the
+# cache key and the three isolated manifests in sync with those two; the warm
+# binary cache (GitHub Packages NuGet feed plus the Actions files cache) is what
+# turns a cold OpenUSD + OCCT restore into a minutes-long run.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  # Restore the vcpkg binary cache on GitHub Packages, read-only (see
+  # release.yml). This shared matrix never warms the feed: dependencies.yml's
+  # trusted `warm` job does that on the dependency-change paths, so the
+  # pull_request lane can never carry `packages: write` (SEC-14 follow-up, T23).
+  # The "Add NuGet binary-cache source" step configures the feed only on trusted
+  # events and degrades to the local files cache on a pull_request.
+  packages: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test (${{ matrix.configuration }})
+    runs-on: windows-2025
+    # The root manifest (OpenUSD) and the isolated STEP provider manifest (OCCT)
+    # both build from source on a cold runner; the binary cache keeps a warm run
+    # short. Same budget as release so a timeout here is a release-only failure.
+    timeout-minutes: 360
+
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+
+    env:
+      VCPKG_FEED_OWNER: ${{ github.repository_owner }}
+      VCPKG_FEED_URL: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
+      VCPKG_SCRATCH: ${{ github.workspace }}\..\.vcpkg-scratch
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Report disk layout
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_.Used) -and ($_.Used + $_.Free) -gt 0 } |
+            ForEach-Object {
+              '{0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB)
+            }
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        # Best-effort: the durable cache is the GitHub Packages NuGet feed. The
+        # key matches dependencies.yml and release.yml so a warm-up there is
+        # reused here.
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-
+
+      - name: Locate build tools
+        id: tools
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $visualStudio = (& $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -property installationPath).Trim()
+          if ([string]::IsNullOrWhiteSpace($visualStudio)) {
+            throw 'Visual Studio with MSBuild was not found on the runner.'
+          }
+
+          $msbuild = Join-Path $visualStudio 'MSBuild\Current\Bin\MSBuild.exe'
+          if (-not (Test-Path -LiteralPath $msbuild -PathType Leaf)) {
+            throw "MSBuild was not found at '$msbuild'."
+          }
+
+          $vcpkgRoots = @(
+            $env:VCPKG_INSTALLATION_ROOT,
+            (Join-Path $visualStudio 'VC\vcpkg')
+          ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          $vcpkgRoot = $vcpkgRoots |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ 'vcpkg.exe') -PathType Leaf } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($vcpkgRoot)) {
+            throw 'vcpkg.exe was not found on the runner.'
+          }
+          $vcpkgRoot = [IO.Path]::GetFullPath($vcpkgRoot).TrimEnd('\')
+          $vcpkg = Join-Path $vcpkgRoot 'vcpkg.exe'
+
+          "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
+          "vcpkg=$vcpkg" >> $env:GITHUB_OUTPUT
+          "vcpkg_root=$vcpkgRoot" >> $env:GITHUB_OUTPUT
+
+      - name: Add NuGet binary-cache source
+        shell: pwsh
+        env:
+          VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # See release.yml. The GitHub Packages feed is the durable cache; the
+          # local files cache is the always-available secondary source. Publish
+          # VCPKG_BINARY_SOURCES through GITHUB_ENV so a Packages outage degrades
+          # to the files cache instead of failing the lane.
+          #
+          # The Packages token in the ephemeral config is readable by any code
+          # the runner executes, including the overlay portfiles `vcpkg install`
+          # runs, so the feed is configured only on trusted events. A
+          # pull_request uses the local files cache alone and never sees the
+          # token. This workflow is read-only (packages: read); the trusted
+          # `warm` job in dependencies.yml does the writing.
+          #
+          # The token goes into a throwaway NuGet.Config under RUNNER_TEMP and is
+          # consumed via vcpkg's `nugetconfig` source, so nothing is persisted in
+          # the user-profile NuGet.Config; the always() cleanup step removes it.
+          $filesSource = "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
+          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
+          if ($env:GITHUB_EVENT_NAME -eq 'pull_request') {
+            "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
+            Write-Host 'vcpkg binary cache: pull_request uses the local files cache only (no Packages credentials).'
+          } else {
+            try {
+              $nuget = (& $env:VCPKG_EXE fetch nuget |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Last 1).Trim()
+              if ([string]::IsNullOrWhiteSpace($nuget) -or -not (Test-Path -LiteralPath $nuget -PathType Leaf)) {
+                throw "vcpkg did not provide a usable nuget.exe (got '$nuget')."
+              }
+
+              $configLines = @(
+                '<?xml version="1.0" encoding="utf-8"?>',
+                '<configuration>',
+                '  <packageSources>',
+                '    <clear />',
+                '  </packageSources>',
+                '  <config>',
+                "    <add key=`"defaultPushSource`" value=`"$env:VCPKG_FEED_URL`" />",
+                '  </config>',
+                '</configuration>'
+              )
+              Set-Content -LiteralPath $configPath -Value $configLines -Encoding UTF8
+
+              & $nuget sources add `
+                -Source $env:VCPKG_FEED_URL `
+                -StorePasswordInClearText `
+                -Name GitHubPackages `
+                -UserName $env:VCPKG_FEED_OWNER `
+                -Password $env:GITHUB_TOKEN `
+                -ConfigFile $configPath
+              if ($LASTEXITCODE -ne 0) {
+                throw "nuget sources add failed with exit code $LASTEXITCODE."
+              }
+
+              & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL -ConfigFile $configPath
+              if ($LASTEXITCODE -ne 0) {
+                throw "nuget setapikey failed with exit code $LASTEXITCODE."
+              }
+
+              "VCPKG_BINARY_SOURCES=clear;nugetconfig,$configPath,read;$filesSource" >> $env:GITHUB_ENV
+              Write-Host 'vcpkg binary cache: ephemeral GitHub Packages config (read) plus local files cache.'
+            } catch {
+              Write-Warning "GitHub Packages binary cache unavailable; using the local files cache only. $_"
+              "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
+            }
+          }
+
+      - name: Restore vcpkg dependencies
+        shell: pwsh
+        env:
+          VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
+        run: |
+          function Show-Disk([string] $label) {
+            Write-Host "--- disk after $label ---"
+            Get-PSDrive -PSProvider FileSystem |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_.Used) -and ($_.Used + $_.Free) -gt 0 } |
+              ForEach-Object {
+                Write-Host ('  {0}: {1:N1} GB free of {2:N1} GB' -f $_.Name, ($_.Free / 1GB), (($_.Used + $_.Free) / 1GB))
+              }
+          }
+
+          # actions/cache only materializes the directory on a cache hit, so a
+          # cold run leaves it missing and vcpkg rejects the binary cache path.
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+
+          # Route every scratch tree off the runner image's C: drive; see
+          # release.yml for why (OpenUSD/OCCT object files filled C:).
+          $buildtreesRoot = Join-Path $env:VCPKG_SCRATCH 'buildtrees'
+          $packagesRoot = Join-Path $env:VCPKG_SCRATCH 'packages'
+          $downloadsRoot = Join-Path $env:VCPKG_SCRATCH 'downloads'
+          foreach ($path in @($buildtreesRoot, $packagesRoot, $downloadsRoot)) {
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+          }
+
+          $common = @(
+            '--triplet', 'x64-windows-static-md',
+            "--overlay-triplets=$env:GITHUB_WORKSPACE\packaging\triplets",
+            "--vcpkg-root=$env:VCPKG_ROOT",
+            "--x-buildtrees-root=$buildtreesRoot",
+            "--x-packages-root=$packagesRoot",
+            "--downloads-root=$downloadsRoot",
+            '--clean-buildtrees-after-build',
+            '--clean-packages-after-build',
+            '--x-wait-for-lock'
+          )
+
+          # Root manifest: viewer/worker, OpenUSD compatibility host and tests.
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows-static-md'
+          & $env:VCPKG_EXE install @common `
+            "--x-manifest-root=$env:GITHUB_WORKSPACE" `
+            "--x-install-root=$installRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg root-manifest restore failed with exit code $LASTEXITCODE."
+          }
+          Show-Disk 'root manifest'
+
+          # Isolated STEP manifest (OCCT); Preview3DStepHost reads it directly.
+          $stepManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'compatibility-host-step'
+          $stepInstallRoot = Join-Path $stepManifestRoot 'vcpkg_installed'
+          & $env:VCPKG_EXE install @common `
+            "--x-manifest-root=$stepManifestRoot" `
+            "--x-install-root=$stepInstallRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg STEP-manifest restore failed with exit code $LASTEXITCODE."
+          }
+          Show-Disk 'STEP manifest'
+
+          # Isolated thumbnail-provider STEP manifest (OCCT only, ADR-0002).
+          $providerManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'thumbnail-provider\step-occt'
+          $providerInstallRoot = Join-Path $providerManifestRoot 'vcpkg_installed'
+          & $env:VCPKG_EXE install @common `
+            "--x-manifest-root=$providerManifestRoot" `
+            "--x-install-root=$providerInstallRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg thumbnail-provider STEP-manifest restore failed with exit code $LASTEXITCODE."
+          }
+          Show-Disk 'thumbnail-provider STEP manifest'
+
+      - name: Register vcpkg MSBuild integration
+        shell: pwsh
+        env:
+          VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
+        run: |
+          & $env:VCPKG_EXE integrate install
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg MSBuild integration failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Build solution (${{ matrix.configuration }})
+        shell: pwsh
+        env:
+          MSBUILD_PATH: ${{ steps.tools.outputs.msbuild }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
+          CONFIGURATION: ${{ matrix.configuration }}
+        run: |
+          # Build through the solution so $(SolutionDir) resolves and vcpkg
+          # app-local deployment runs; a project-level build breaks both
+          # (docs/design/testing-strategy.md). VcpkgManifestInstall=false tells
+          # MSBuild the three manifests were already restored above, matching
+          # release.yml.
+          & $env:MSBUILD_PATH Preview3D.slnx `
+            "/p:Configuration=$env:CONFIGURATION" `
+            /p:Platform=x64 `
+            "/p:VcpkgRoot=$env:VCPKG_ROOT" `
+            /p:VcpkgManifestInstall=false `
+            /m `
+            /v:minimal
+          if ($LASTEXITCODE -ne 0) {
+            throw "Solution build ($env:CONFIGURATION) failed with exit code $LASTEXITCODE."
+          }
+
+      # One step per suite so a failure is legible without moving multi-GB
+      # build output between jobs. Each executable returns nonzero on failure.
+      - name: Run unit suite (${{ matrix.configuration }})
+        shell: pwsh
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+        run: |
+          # Exclude [graphics]: those cases demand a real D3D12 device that a
+          # hosted runner does not have (same filter as the harness verify).
+          & ".\x64\$env:CONFIGURATION\Tests.Unit.exe" "~[graphics]"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Tests.Unit ($env:CONFIGURATION) failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Run import-isolation suite (${{ matrix.configuration }})
+        shell: pwsh
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+        run: |
+          & ".\x64\$env:CONFIGURATION\Tests.ImportIsolation.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Tests.ImportIsolation ($env:CONFIGURATION) failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Run provider-host suite (${{ matrix.configuration }})
+        shell: pwsh
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+        run: |
+          & ".\x64\$env:CONFIGURATION\Tests.ProviderHost.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Tests.ProviderHost ($env:CONFIGURATION) failed with exit code $LASTEXITCODE."
+          }
+
+      # Final step: the ephemeral Packages config must survive the restore above
+      # (that is what makes the durable feed usable). `always()` deletes it even
+      # when an earlier step failed, so the token never outlives the job.
+      - name: Remove ephemeral NuGet credentials
+        if: always()
+        shell: pwsh
+        run: |
+          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
+          if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            Remove-Item -LiteralPath $configPath -Force
+          }
+
+  # Bounded libFuzzer smoke covering every format lane plus the provider
+  # pipeline. SEC-15 added the STL/PLY/OBJ fast-path targets; SEC-16/16b added
+  # glTF+codecs; SEC-17/T25 added ProviderFuzz and promoted this lane into the
+  # required gate (SEC-13/T13): it runs on every pull_request/push and via
+  # workflow_call from release.yml, so a red fuzz smoke fails the release
+  # package job. One target per runner: the fuzz projects share the
+  # tests\fuzz\x64\Release intermediate directory, so a fresh runner per target
+  # avoids the MSB8028 shared-intermediate-dir hazard. ProviderFuzz links all
+  # eight adapters including STEP/OCCT (ADR-0047), so its runner also restores
+  # the isolated thumbnail-provider STEP manifest (ADR-0002).
+  fuzz-smoke:
+    name: Fuzz smoke (${{ matrix.target }})
+    runs-on: windows-2025
+    timeout-minutes: 120
+
+    env:
+      # Reuse the test/dependencies binary cache so a warm restore keeps a
+      # per-PR smoke feasible. This lane holds no Packages credentials, so it is
+      # safe on a fork pull_request; a cache miss rebuilds from source as the
+      # previous nightly-only lane already did.
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
+      VCPKG_SCRATCH: ${{ github.workspace }}\..\.vcpkg-scratch
+
+    strategy:
+      fail-fast: false
+      # One target per runner: the fuzz projects share the tests\fuzz\x64\Release
+      # intermediate directory, so a fresh runner per target avoids the MSB8028
+      # shared-intermediate-dir hazard. SEC-16/16b/17 add the glTF+codec and
+      # provider targets.
+      matrix:
+        include:
+          - target: STEP
+            project: tests\fuzz\StepFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\StepFuzz.exe
+            prepare: tests/fuzz/prepare_step_seeds.py
+            seeds: TestResults/step-008/fuzz-seeds
+          - target: 3MF
+            project: tests\fuzz\ThreeMfFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\ThreeMfFuzz.exe
+            prepare: tests/fuzz/prepare_3mf_seeds.py
+            seeds: TestResults/3mf-007/fuzz-seeds
+          - target: STL
+            project: tests\fuzz\StlFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\StlFuzz.exe
+            prepare: tests/fuzz/prepare_stl_seeds.py
+            seeds: TestResults/security-t15/stl-seeds
+          - target: PLY
+            project: tests\fuzz\PlyFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\PlyFuzz.exe
+            prepare: tests/fuzz/prepare_ply_seeds.py
+            seeds: TestResults/security-t15/ply-seeds
+          - target: OBJ
+            project: tests\fuzz\ObjFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\ObjFuzz.exe
+            prepare: tests/fuzz/prepare_obj_seeds.py
+            seeds: TestResults/security-t15/obj-seeds
+          - target: glTF
+            project: tests\fuzz\GltfFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\GltfFuzz.exe
+            prepare: tests/fuzz/prepare_gltf_seeds.py
+            seeds: TestResults/security-t16b/gltf-seeds
+          - target: Provider
+            project: tests\fuzz\ProviderFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\ProviderFuzz.exe
+            prepare: tests/fuzz/prepare_provider_seeds.py
+            seeds: TestResults/security-t17/provider-seeds
+            # OCCT tessellation on a mutated STEP seed can exceed the default
+            # 5 s per-input stop, so keep the target's documented budget.
+            timeout: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        # Best-effort and credential-free: the shared files cache is reused from
+        # the test/dependencies lane; a miss falls back to a source build.
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-
+
+      - name: Use the local vcpkg files cache
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          "VCPKG_BINARY_SOURCES=clear;files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite" >> $env:GITHUB_ENV
+
+      - name: Locate build tools
+        id: tools
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $visualStudio = (& $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -property installationPath).Trim()
+          if ([string]::IsNullOrWhiteSpace($visualStudio)) {
+            throw 'Visual Studio with MSBuild was not found on the runner.'
+          }
+          $msbuild = Join-Path $visualStudio 'MSBuild\Current\Bin\MSBuild.exe'
+          if (-not (Test-Path -LiteralPath $msbuild -PathType Leaf)) {
+            throw "MSBuild was not found at '$msbuild'."
+          }
+          $vcpkgRoots = @(
+            $env:VCPKG_INSTALLATION_ROOT,
+            (Join-Path $visualStudio 'VC\vcpkg')
+          ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          $vcpkgRoot = $vcpkgRoots |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ 'vcpkg.exe') -PathType Leaf } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($vcpkgRoot)) {
+            throw 'vcpkg.exe was not found on the runner.'
+          }
+          $vcpkgRoot = [IO.Path]::GetFullPath($vcpkgRoot).TrimEnd('\')
+          "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
+          "vcpkg=$(Join-Path $vcpkgRoot 'vcpkg.exe')" >> $env:GITHUB_OUTPUT
+          "vcpkg_root=$vcpkgRoot" >> $env:GITHUB_OUTPUT
+
+      - name: Restore isolated provider STEP manifest
+        # ProviderFuzz compiles the STEP adapter, which needs the OCCT static
+        # closure from the isolated thumbnail-provider manifest. The root
+        # manifest is installed by MSBuild's manifest mode for every target; this
+        # second tree is not discoverable that way (ADR-0002/0047).
+        if: matrix.target == 'Provider'
+        shell: pwsh
+        env:
+          VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
+        run: |
+          $buildtreesRoot = Join-Path $env:VCPKG_SCRATCH 'buildtrees'
+          $packagesRoot = Join-Path $env:VCPKG_SCRATCH 'packages'
+          $downloadsRoot = Join-Path $env:VCPKG_SCRATCH 'downloads'
+          foreach ($path in @($buildtreesRoot, $packagesRoot, $downloadsRoot)) {
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+          }
+          $common = @(
+            '--triplet', 'x64-windows-static-md',
+            "--overlay-triplets=$env:GITHUB_WORKSPACE\packaging\triplets",
+            "--vcpkg-root=$env:VCPKG_ROOT",
+            "--x-buildtrees-root=$buildtreesRoot",
+            "--x-packages-root=$packagesRoot",
+            "--downloads-root=$downloadsRoot",
+            '--clean-buildtrees-after-build',
+            '--clean-packages-after-build',
+            '--x-wait-for-lock'
+          )
+          $providerManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'thumbnail-provider\step-occt'
+          $providerInstallRoot = Join-Path $providerManifestRoot 'vcpkg_installed'
+          & $env:VCPKG_EXE install @common `
+            "--x-manifest-root=$providerManifestRoot" `
+            "--x-install-root=$providerInstallRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg thumbnail-provider STEP-manifest restore failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Build ${{ matrix.target }} fuzz target
+        shell: pwsh
+        env:
+          MSBUILD_PATH: ${{ steps.tools.outputs.msbuild }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
+        run: |
+          & $env:MSBUILD_PATH ${{ matrix.project }} `
+            /p:Configuration=Release /p:Platform=x64 `
+            "/p:SolutionDir=$env:GITHUB_WORKSPACE\\" `
+            "/p:VcpkgRoot=$env:VCPKG_ROOT" /m:1 /v:minimal
+          if ($LASTEXITCODE -ne 0) {
+            throw "${{ matrix.target }} fuzz build failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Run ${{ matrix.target }} fuzz smoke
+        shell: pwsh
+        run: |
+          python ${{ matrix.prepare }} ${{ matrix.seeds }}
+          if ($LASTEXITCODE -ne 0) {
+            throw "${{ matrix.target }} seed preparation failed with exit code $LASTEXITCODE."
+          }
+          & "${{ matrix.exe }}" ${{ matrix.seeds }} `
+            -max_total_time=60 -timeout=${{ matrix.timeout || 5 }} -rss_limit_mb=1024 -max_len=1048576 `
+            -print_final_stats=1 -verbosity=0
+          if ($LASTEXITCODE -ne 0) {
+            throw "${{ matrix.target }} fuzz smoke failed with exit code $LASTEXITCODE."
+          }

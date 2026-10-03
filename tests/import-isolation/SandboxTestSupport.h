@@ -24,6 +24,19 @@
 
 namespace sandbox_test_support {
 
+// True when the child binaries under test were built with the fault harness
+// (Debug). A production Release build compiles the fault modes out and rejects
+// their flags, so fault-injection cases must skip rather than assert in
+// Release. Tag such cases with a call to this at the top of the body.
+constexpr bool FaultHarnessEnabled()
+{
+#ifdef PREVIEW3D_ENABLE_FAULT_HARNESS
+    return true;
+#else
+    return false;
+#endif
+}
+
 inline const wchar_t* WorkerExePath()
 {
     return PREVIEW3D_IMPORT_WORKER_EXE;

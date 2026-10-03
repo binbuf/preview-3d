@@ -82,9 +82,19 @@ public:
     bool UsedMeshopt() const noexcept;
 
 private:
+    // Per-stage bodies, run under the T06 stage-containment shim
+    // (ContainmentStage.h). Non-noexcept so a product-owned `std::bad_alloc`
+    // (the backing copy, the fastgltf holder/asset, the material table, the
+    // instance walk and the per-primitive scratch) unwinds into the boundary
+    // instead of terminating at the frozen `noexcept` public method.
+    ErrorCode InitializeImpl(const AdapterInput& input);
+    ErrorCode ParseImpl();
+    ErrorCode EnumerateMaterialsImpl(IMaterialSink& sink);
+    ErrorCode EnumerateGeometryImpl(IGeometrySink& sink);
+
     ErrorCode SourceReadFailure() const noexcept;
-    ErrorCode LoadSourceBytes() noexcept;
-    ErrorCode DecodeImages() noexcept;
+    ErrorCode LoadSourceBytes();
+    ErrorCode DecodeImages();
     bool BuildVertex(VertexSample& vertex, const double world[16],
                      const float* positions, const float* normals, const float* colors,
                      std::size_t index) noexcept;

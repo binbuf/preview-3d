@@ -4,6 +4,7 @@
 #include <sddl.h>
 #include <shellapi.h>
 #include <objbase.h>
+#include <tlhelp32.h>
 
 #include <algorithm>
 #include <array>
@@ -33,8 +34,20 @@ static_assert(sizeof(FrameHeader) == 28);
 constexpr DWORD kActivationTimeoutMs = 1000;
 constexpr std::size_t kMaximumQueuedCommands = 16;
 
+// Each object gets only the rights the protocol needs. The interactive user
+// never receives GENERIC_ALL/WRITE_DAC/WRITE_OWNER, so a same-user peer cannot
+// rewrite the security descriptor of the singleton objects (SEC-12).
+//   SYNCHRONIZE 0x00100000, MUTEX_MODIFY_STATE 0x0001, READ_CONTROL 0x00020000
+constexpr DWORD kMutexAccess = SYNCHRONIZE | MUTEX_MODIFY_STATE | READ_CONTROL;
+constexpr wchar_t kMutexSddlRights[] = L"0x00120001";
+//   EVENT_MODIFY_STATE 0x0002
+constexpr DWORD kEventAccess = SYNCHRONIZE | EVENT_MODIFY_STATE | READ_CONTROL;
+constexpr wchar_t kEventSddlRights[] = L"0x00120002";
+
 struct LocalFreeDeleter { void operator()(void* value) const noexcept { if (value) LocalFree(value); } };
 using LocalMemory = std::unique_ptr<void, LocalFreeDeleter>;
+
+enum class SecuredObject { Mutex, Event, Pipe };
 
 bool CurrentIdentity(std::vector<std::uint8_t>& sid, DWORD& sessionId, std::wstring& error)
 {
@@ -90,16 +103,27 @@ std::wstring IdentitySuffix(const std::vector<std::uint8_t>& tokenUser, DWORD se
     return std::to_wstring(sessionId) + L"." + hash;
 }
 
-bool SecurityForCurrentUser(const std::vector<std::uint8_t>& tokenUser, SECURITY_ATTRIBUTES& attributes,
-    LocalMemory& descriptor, std::wstring& error)
+std::wstring SidString(const std::vector<std::uint8_t>& tokenUser)
 {
     const auto* user = reinterpret_cast<const TOKEN_USER*>(tokenUser.data());
     LPWSTR sidString = nullptr;
-    if (!ConvertSidToStringSidW(user->User.Sid, &sidString)) {
-        error = L"Windows could not secure the activation channel."; return false;
-    }
-    LocalMemory sidHolder(sidString);
-    const std::wstring sddl = L"D:P(A;;GA;;;SY)(A;;GA;;;" + std::wstring(sidString) + L")";
+    if (!ConvertSidToStringSidW(user->User.Sid, &sidString)) return {};
+    LocalMemory holder(sidString);
+    return sidString;
+}
+
+bool SecurityForObject(SecuredObject kind, std::wstring_view userSid, SECURITY_ATTRIBUTES& attributes,
+    LocalMemory& descriptor, std::wstring& error)
+{
+    const wchar_t* rights = kind == SecuredObject::Mutex ? kMutexSddlRights
+        : kind == SecuredObject::Event ? kEventSddlRights : L"FRFW";
+    // Owner is set explicitly so a recovered (abandoned) object can be compared
+    // against the expected identity. The mandatory label must be Medium so the
+    // no-write-up ACE denies a Low-integrity same-user process: a Low label
+    // would admit every subject at Low and above. No ACE grants
+    // WRITE_DAC/WRITE_OWNER/GENERIC_ALL.
+    const std::wstring sddl = L"O:" + std::wstring(userSid) + L"D:P(A;;" + rights + L";;;SY)(A;;" +
+        rights + L";;;" + std::wstring(userSid) + L")S:(ML;;NW;;;ME)";
     PSECURITY_DESCRIPTOR raw = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &raw, nullptr)) {
         error = L"Windows could not secure the activation channel."; return false;
@@ -107,6 +131,95 @@ bool SecurityForCurrentUser(const std::vector<std::uint8_t>& tokenUser, SECURITY
     descriptor.reset(raw);
     attributes = { sizeof(attributes), raw, FALSE };
     return true;
+}
+
+// Confirms an object that already existed was created with the descriptor this
+// process would have used. A same-user squatter is rejected unless it both
+// owns the object as the current user and reproduced the exact minimum-rights
+// DACL, which the owner check plus the per-session name make expensive.
+bool ObjectSecurityMatches(HANDLE object, PSECURITY_DESCRIPTOR expected)
+{
+    const SECURITY_INFORMATION requested = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    DWORD bytes = 0;
+    GetKernelObjectSecurity(object, requested, nullptr, 0, &bytes);
+    if (!bytes) return false;
+    std::vector<std::uint8_t> actual(bytes);
+    if (!GetKernelObjectSecurity(object, requested, actual.data(), bytes, &bytes)) return false;
+    LPWSTR actualText = nullptr;
+    LPWSTR expectedText = nullptr;
+    if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            reinterpret_cast<PSECURITY_DESCRIPTOR>(actual.data()), SDDL_REVISION_1, requested, &actualText, nullptr)) {
+        return false;
+    }
+    LocalMemory actualHolder(actualText);
+    if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(expected, SDDL_REVISION_1, requested, &expectedText, nullptr)) {
+        return false;
+    }
+    LocalMemory expectedHolder(expectedText);
+    return _wcsicmp(actualText, expectedText) == 0;
+}
+
+std::wstring CurrentProcessImagePath()
+{
+    std::wstring path(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+        if (!length) return {};
+        if (length < path.size()) { path.resize(length); return path; }
+        if (path.size() >= 32768) return {};
+        path.resize(path.size() * 2);
+    }
+}
+
+std::wstring ProcessImagePath(DWORD processId)
+{
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process) return {};
+    std::unique_ptr<void, decltype(&CloseHandle)> holder(process, CloseHandle);
+    std::wstring path(MAX_PATH, L'\0');
+    DWORD size = static_cast<DWORD>(path.size());
+    for (;;) {
+        if (QueryFullProcessImageNameW(process, 0, path.data(), &size)) { path.resize(size); return path; }
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || path.size() >= 32768) return {};
+        path.resize(path.size() * 2);
+        size = static_cast<DWORD>(path.size());
+    }
+}
+
+DWORD ParentProcessId(DWORD processId)
+{
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return 0;
+    std::unique_ptr<void, decltype(&CloseHandle)> holder(snapshot, CloseHandle);
+    PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
+    if (!Process32FirstW(snapshot, &entry)) return 0;
+    do {
+        if (entry.th32ProcessID == processId) return entry.th32ParentProcessID;
+    } while (Process32NextW(snapshot, &entry));
+    return 0;
+}
+
+bool TokenIntegrityRid(HANDLE token, DWORD& rid)
+{
+    DWORD bytes = 0;
+    GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &bytes);
+    if (!bytes) return false;
+    std::vector<std::uint8_t> buffer(bytes);
+    if (!GetTokenInformation(token, TokenIntegrityLevel, buffer.data(), bytes, &bytes)) return false;
+    const auto* label = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(buffer.data());
+    const UCHAR* count = GetSidSubAuthorityCount(label->Label.Sid);
+    if (!count || !*count) return false;
+    const DWORD* subAuthority = GetSidSubAuthority(label->Label.Sid, *count - 1);
+    if (!subAuthority) return false;
+    rid = *subAuthority;
+    return true;
+}
+
+bool TokenIsAppContainerProcess(HANDLE token)
+{
+    DWORD isAppContainer = 0, bytes = sizeof(isAppContainer);
+    if (!GetTokenInformation(token, TokenIsAppContainer, &isAppContainer, bytes, &bytes)) return true;
+    return isAppContainer != 0;
 }
 
 bool Utf8FromWide(std::wstring_view text, std::string& utf8)
@@ -240,10 +353,32 @@ bool Transfer(HANDLE pipe, bool write, void* bytes, DWORD byteCount, HANDLE stop
     return ok;
 }
 
-bool AuthenticateClient(HANDLE pipe, const std::vector<std::uint8_t>& expectedUser, DWORD expectedSession)
+// SID/session equality is necessary but not sufficient: any same-user process
+// could satisfy it. The additional policy rejects sandboxed (AppContainer)
+// peers, any peer whose image is not this installed/portable viewer, and peers
+// below medium integrity unless they are our own child. The caller only ever
+// uses values read from a process handle it opened before authenticating, so a
+// recycled PID cannot substitute another image between the check and use.
+bool EqualsIgnoreCase(std::wstring_view left, std::wstring_view right)
+{
+    if (left.size() != right.size()) return false;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        if (std::towlower(left[i]) != std::towlower(right[i])) return false;
+    }
+    return true;
+}
+
+bool AuthenticateClient(HANDLE pipe, const std::vector<std::uint8_t>& expectedUser, DWORD expectedSession,
+    const std::wstring& expectedImage)
 {
     ULONG clientPid = 0;
     if (!GetNamedPipeClientProcessId(pipe, &clientPid) || !clientPid) return false;
+    // Open the process before impersonating; holding this handle pins the
+    // process object so the PID cannot be recycled while we read its image.
+    HANDLE rawClient = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, clientPid);
+    if (!rawClient) return false;
+    std::unique_ptr<void, decltype(&CloseHandle)> client(rawClient, CloseHandle);
+
     if (!ImpersonateNamedPipeClient(pipe)) return false;
     HANDLE rawToken = nullptr;
     const bool opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &rawToken) != FALSE;
@@ -258,8 +393,25 @@ bool AuthenticateClient(HANDLE pipe, const std::vector<std::uint8_t>& expectedUs
         || !ProcessIdToSessionId(clientPid, &session)) return false;
     const auto* expected = reinterpret_cast<const TOKEN_USER*>(expectedUser.data());
     const auto* found = reinterpret_cast<const TOKEN_USER*>(actual.data());
-    return session == expectedSession && EqualSid(expected->User.Sid, found->User.Sid);
+    if (session != expectedSession || !EqualSid(expected->User.Sid, found->User.Sid)) return false;
+
+    DWORD integrityRid = 0;
+    if (!TokenIntegrityRid(rawToken, integrityRid)) return false;
+    const bool appContainer = TokenIsAppContainerProcess(rawToken);
+    const std::wstring clientImage = ProcessImagePath(clientPid);
+    const bool imageMatches = !expectedImage.empty() && !clientImage.empty()
+        && EqualsIgnoreCase(clientImage, expectedImage);
+    const bool ownChild = ParentProcessId(clientPid) == GetCurrentProcessId();
+    return ClientIdentityAccepted(integrityRid, appContainer, imageMatches, ownChild);
 }
+}
+
+bool ClientIdentityAccepted(std::uint32_t integrityRid, bool appContainer, bool imageMatches, bool ownChild)
+{
+    if (appContainer) return false;
+    if (!imageMatches) return false;
+    if (integrityRid < SECURITY_MANDATORY_MEDIUM_RID) return ownChild;
+    return true;
 }
 
 bool EncodePayload(const Command& command, std::vector<std::uint8_t>& payload, std::wstring& error)
@@ -353,29 +505,65 @@ Coordinator::Role Coordinator::Initialize(bool bypass, std::wstring& error)
     if (!CurrentIdentity(userSid_, sessionId_, error)) return role_ = Role::Failed;
     const std::wstring suffix = IdentitySuffix(userSid_, sessionId_);
     if (suffix.empty()) { error = L"Windows could not derive the activation identity."; return role_ = Role::Failed; }
+    const std::wstring userSid = SidString(userSid_);
+    if (userSid.empty()) { error = L"Windows could not derive the activation identity."; return role_ = Role::Failed; }
     mutexName_ = L"Local\\Binbuf.Preview3D." + suffix;
     readyName_ = mutexName_ + L".Ready";
     pipeName_ = L"\\\\.\\pipe\\Binbuf.Preview3D." + suffix;
 
     SECURITY_ATTRIBUTES attributes{}; LocalMemory descriptor;
-    if (!SecurityForCurrentUser(userSid_, attributes, descriptor, error)) return role_ = Role::Failed;
-    mutex_ = CreateMutexW(&attributes, TRUE, mutexName_.c_str());
+    if (!SecurityForObject(SecuredObject::Mutex, userSid, attributes, descriptor, error)) return role_ = Role::Failed;
+    mutex_ = CreateMutexExW(&attributes, mutexName_.c_str(), CREATE_MUTEX_INITIAL_OWNER, kMutexAccess);
     if (!mutex_) { error = L"Windows could not create the application instance lock."; return role_ = Role::Failed; }
-    if (GetLastError() != ERROR_ALREADY_EXISTS) {
-        readyEvent_ = CreateEventW(&attributes, TRUE, FALSE, readyName_.c_str());
+    const bool existed = GetLastError() == ERROR_ALREADY_EXISTS;
+    if (existed && !ObjectSecurityMatches(mutex_, descriptor.get())) {
+        CloseHandle(mutex_); mutex_ = nullptr;
+        error = L"Windows rejected an untrusted application instance lock.";
+        return role_ = Role::Failed;
+    }
+
+    SECURITY_ATTRIBUTES eventAttributes{}; LocalMemory eventDescriptor;
+    if (!SecurityForObject(SecuredObject::Event, userSid, eventAttributes, eventDescriptor, error)) return role_ = Role::Failed;
+
+    if (!existed) {
+        readyEvent_ = CreateEventExW(&eventAttributes, readyName_.c_str(), CREATE_EVENT_MANUAL_RESET, kEventAccess);
         if (!readyEvent_) { error = L"Windows could not create the activation ready event."; return role_ = Role::Failed; }
+        if (GetLastError() == ERROR_ALREADY_EXISTS && !ObjectSecurityMatches(readyEvent_, eventDescriptor.get())) {
+            CloseHandle(readyEvent_); readyEvent_ = nullptr;
+            error = L"Windows rejected an untrusted activation ready event.";
+            return role_ = Role::Failed;
+        }
         stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         return role_ = Role::Primary;
     }
     const DWORD acquired = WaitForSingleObject(mutex_, 0);
     if (acquired == WAIT_OBJECT_0 || acquired == WAIT_ABANDONED) {
-        readyEvent_ = CreateEventW(&attributes, TRUE, FALSE, readyName_.c_str());
+        readyEvent_ = CreateEventExW(&eventAttributes, readyName_.c_str(), CREATE_EVENT_MANUAL_RESET, kEventAccess);
         if (!readyEvent_) { error = L"Windows could not recover the activation ready event."; return role_ = Role::Failed; }
+        if (GetLastError() == ERROR_ALREADY_EXISTS && !ObjectSecurityMatches(readyEvent_, eventDescriptor.get())) {
+            CloseHandle(readyEvent_); readyEvent_ = nullptr;
+            error = L"Windows rejected an untrusted activation ready event.";
+            return role_ = Role::Failed;
+        }
         ResetEvent(readyEvent_);
         stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         return role_ = Role::Primary;
     }
     return role_ = Role::Secondary;
+}
+
+bool Coordinator::SessionObjectNames(std::wstring& mutexName, std::wstring& readyName, std::wstring& pipeName,
+    std::wstring& error)
+{
+    std::vector<std::uint8_t> userSid;
+    DWORD sessionId = 0;
+    if (!CurrentIdentity(userSid, sessionId, error)) return false;
+    const std::wstring suffix = IdentitySuffix(userSid, sessionId);
+    if (suffix.empty()) { error = L"Windows could not derive the activation identity."; return false; }
+    mutexName = L"Local\\Binbuf.Preview3D." + suffix;
+    readyName = mutexName + L".Ready";
+    pipeName = L"\\\\.\\pipe\\Binbuf.Preview3D." + suffix;
+    return true;
 }
 
 bool Coordinator::StartListener(HWND window, UINT message, std::wstring& error)
@@ -400,24 +588,36 @@ bool Coordinator::Queue(Command command)
 
 void Coordinator::ListenerMain(std::stop_token stop)
 {
+    const std::wstring userSid = SidString(userSid_);
+    const std::wstring viewerImage = CurrentProcessImagePath();
     SECURITY_ATTRIBUTES attributes{}; LocalMemory descriptor; std::wstring ignored;
-    if (!SecurityForCurrentUser(userSid_, attributes, descriptor, ignored)) return;
-    bool published = false;
-    while (!stop.stop_requested() && WaitForSingleObject(stopEvent_, 0) != WAIT_OBJECT_0) {
-        HANDLE pipe = CreateNamedPipeW(pipeName_.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            1, 4096, kMaximumPayloadBytes + sizeof(FrameHeader), kActivationTimeoutMs, &attributes);
-        if (pipe == INVALID_HANDLE_VALUE) return;
-        if (!published) { SetEvent(readyEvent_); published = true; }
+    if (userSid.empty() || !SecurityForObject(SecuredObject::Pipe, userSid, attributes, descriptor, ignored)) return;
 
+    const auto createPipe = [&](bool first) {
+        return CreateNamedPipeW(pipeName_.c_str(),
+            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | (first ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0u),
+            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            2, 4096, kMaximumPayloadBytes + sizeof(FrameHeader), kActivationTimeoutMs, &attributes);
+    };
+
+    // FILE_FLAG_FIRST_PIPE_INSTANCE fails closed if a squatter already published
+    // this pipe name. Each next instance is created before the previous one is
+    // released, so the name stays reserved for the whole listener lifetime and
+    // no reconnect race can hand a forward to a pre-created pipe.
+    HANDLE pipe = createPipe(true);
+    if (pipe == INVALID_HANDLE_VALUE) return;
+    SetEvent(readyEvent_);
+
+    while (!stop.stop_requested() && WaitForSingleObject(stopEvent_, 0) != WAIT_OBJECT_0) {
         OVERLAPPED connection{}; connection.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!connection.hEvent) break;
         BOOL connected = ConnectNamedPipe(pipe, &connection);
         bool accepted = connected != FALSE || GetLastError() == ERROR_PIPE_CONNECTED;
         if (!accepted && GetLastError() == ERROR_IO_PENDING) {
             DWORD transferred = 0; accepted = WaitOverlapped(pipe, connection, stopEvent_, INFINITE, transferred);
         }
         CloseHandle(connection.hEvent);
-        if (!accepted) { CloseHandle(pipe); continue; }
+        if (!accepted) break;
 
         std::vector<std::uint8_t> frame(sizeof(FrameHeader) + kMaximumPayloadBytes);
         DWORD read = 0;
@@ -427,7 +627,7 @@ void Coordinator::ListenerMain(std::stop_token stop)
         // Named-pipe impersonation is defined against the client's last
         // completed write, so receive the bounded opaque frame before
         // authenticating, but do not inspect or parse it until this succeeds.
-        if (valid) { rejection = "authentication"; valid = AuthenticateClient(pipe, userSid_, sessionId_); }
+        if (valid) { rejection = "authentication"; valid = AuthenticateClient(pipe, userSid_, sessionId_, viewerImage); }
         FrameHeader header{};
         Command command;
         if (valid) {
@@ -453,8 +653,14 @@ void Coordinator::ListenerMain(std::stop_token stop)
             std::uint8_t receipt = 0; DWORD receiptBytes = 0;
             Transfer(pipe, false, &receipt, 1, stopEvent_, kActivationTimeoutMs, receiptBytes);
         }
-        DisconnectNamedPipe(pipe); CloseHandle(pipe);
+
+        DisconnectNamedPipe(pipe);
+        HANDLE next = createPipe(false);
+        CloseHandle(pipe);
+        if (next == INVALID_HANDLE_VALUE) break;
+        pipe = next;
     }
+    CloseHandle(pipe);
 }
 
 bool Coordinator::Forward(const Command& command, std::wstring& error)
@@ -468,6 +674,15 @@ bool Coordinator::Forward(const Command& command, std::wstring& error)
     if (!WaitNamedPipeW(pipeName_.c_str(), kActivationTimeoutMs)) { error = L"Preview 3D is not responding."; return false; }
     HANDLE pipe = CreateFileW(pipeName_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
     if (pipe == INVALID_HANDLE_VALUE) { error = L"Preview 3D could not accept the activation request."; return false; }
+    // Refuse to forward a model path to a same-user impostor that published a
+    // pipe under our name; only this viewer image is trusted as the server.
+    ULONG serverPid = 0;
+    const std::wstring serverImage = (GetNamedPipeServerProcessId(pipe, &serverPid) && serverPid)
+        ? ProcessImagePath(serverPid) : std::wstring();
+    const std::wstring viewerImage = CurrentProcessImagePath();
+    if (serverImage.empty() || viewerImage.empty() || !EqualsIgnoreCase(serverImage, viewerImage)) {
+        CloseHandle(pipe); error = L"Preview 3D could not accept the activation request."; return false;
+    }
     DWORD mode = PIPE_READMODE_MESSAGE; SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
     std::vector<std::uint8_t> payload;
     if (!EncodePayload(command, payload, error)) { CloseHandle(pipe); return false; }

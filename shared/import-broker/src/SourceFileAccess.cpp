@@ -1,5 +1,7 @@
 #include "import_broker/SourceFileAccess.h"
 
+#include "platform/SourcePathPolicy.h"
+
 #include <utility>
 
 namespace import_broker {
@@ -7,18 +9,55 @@ namespace import_broker {
 OpenSourceFileResult OpenAndCanonicalizeSourceFile(const std::wstring& path)
 {
     OpenSourceFileResult result;
-    const bool extended = path.rfind(L"\\\\?\\",0) == 0;
-    const size_t driveOffset = extended ? 4 : 0;
-    if ((extended && (path.size() < 7 || path[5] != L':' || path[6] != L'\\'))
-        || (path.size() >= driveOffset+3 && path[driveOffset+1] == L':'
-            && GetDriveTypeW((path.substr(driveOffset,2)+L"\\").c_str()) == DRIVE_REMOTE)) {
-        result.errorCode = model_core::ImportErrorCode::UnsafeReference;
-        result.error = L"Remote and device paths are not supported. Save a local copy and retry.";
-        return result;
-    }
-    if (path.rfind(L"\\\\", 0) == 0 && path.rfind(L"\\\\?\\", 0) != 0) {
+
+    // Classify before any CreateFileW. A forward-slash UNC ("//server/share"),
+    // an extended UNC ("\\?\UNC\server\..."), a device namespace ("\\.\...")
+    // and a relative/drive-relative path are rejected here, so CreateFileW can
+    // never initiate an SMB/device open that is only caught by the post-open
+    // canonical check. The classifier normalizes separators on a copy; the
+    // original text is opened unchanged.
+    switch (platform::ClassifySourcePath(path)) {
+    case platform::SourcePathKind::RemoteOrDevice:
         result.errorCode = model_core::ImportErrorCode::UnsafeReference;
         result.error = L"Choose a model and its sidecars stored on a local drive.";
+        return result;
+    case platform::SourcePathKind::Relative:
+        result.errorCode = model_core::ImportErrorCode::UnsafeReference;
+        result.error = L"Choose a model using an absolute path on a local drive.";
+        return result;
+    case platform::SourcePathKind::LocalAbsolute:
+        break;
+    }
+
+    const bool extended = path.rfind(L"\\\\?\\",0) == 0;
+    const size_t driveOffset = extended ? 4 : 0;
+
+    // A ':' that is not the volume separator is an NTFS alternate data
+    // stream (`file.txt:stream`), a drive-relative path (`C:foo`), or a URI
+    // scheme. CreateFileW would silently resolve an ADS suffix to a hidden
+    // stream of the same file, so reject it here exactly as
+    // ResolveSidecarPath already rejects one in a sidecar reference. (A
+    // drive-relative path is already rejected by the classifier above; the
+    // rest of this check is for ADS and extra colons.)
+    const size_t firstColon = path.find(L':');
+    if (firstColon != std::wstring::npos) {
+        const size_t volumeColon = extended ? 5 : 1;
+        const bool extraColon = path.find(L':', firstColon + 1) != std::wstring::npos;
+        const bool driveRelative = firstColon + 1 >= path.size()
+            || (path[firstColon + 1] != L'\\' && path[firstColon + 1] != L'/');
+        if (firstColon != volumeColon || extraColon || driveRelative) {
+            result.errorCode = model_core::ImportErrorCode::UnsafeReference;
+            result.error = L"Alternate data streams are not supported. Save a local copy and retry.";
+            return result;
+        }
+    }
+
+    // The classifier admits any drive letter; a mounted network share is still
+    // a remote open, so probe the volume before CreateFileW reaches it.
+    if (path.size() >= driveOffset+3 && path[driveOffset+1] == L':'
+        && GetDriveTypeW((path.substr(driveOffset,2)+L"\\").c_str()) == DRIVE_REMOTE) {
+        result.errorCode = model_core::ImportErrorCode::UnsafeReference;
+        result.error = L"Remote and device paths are not supported. Save a local copy and retry.";
         return result;
     }
 

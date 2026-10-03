@@ -30,8 +30,11 @@
 | Local installed smoke | `packaging/smoke/` | Per-user registered CLSID + extension `ShellEx`, a real `.stl` thumbnail through `IThumbnailCache`, module-identity proof of `DllHost` hosting, and no `DisableProcessIsolation` (T22; ADR-0020) |
 | Install verification | `packaging/` + clean VM | Each CLSID loads into the isolated surrogate, not `explorer.exe`; no `DisableProcessIsolation`; conflict/repair/uninstall |
 
-Catch2 binaries are run by hand out of `x64\<Config>\` today (there is no CI); routine provider
-checks run `Tests.Unit.exe` and scoped `Tests.ImportIsolation.exe` filters in Debug and Release.
+The `CI` workflow (`.github/workflows/ci.yml`) builds Debug and Release x64 and runs `Tests.Unit.exe`
+(`~[graphics]`), `Tests.ImportIsolation.exe` and `Tests.ProviderHost.exe` on every pull request and
+push to `main`, and `Release` gates packaging on that workflow. Routine provider checks still use
+`Tests.Unit.exe` and scoped `Tests.ImportIsolation.exe` filters locally in Debug and Release. See
+[adr/0042-ci-test-gate.md](adr/0042-ci-test-gate.md).
 
 ## Golden-image policy
 

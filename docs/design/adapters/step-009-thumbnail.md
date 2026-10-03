@@ -424,9 +424,14 @@ qualification items and a genuine large-file thumbnail corpus remain open.
    ceilings: 256 MiB stream, 192 MiB accounted parser/tessellation scratch,
    384 MiB measured process-commit increase target, a much smaller
    inspected/rasterized triangle cap, and the general cooperative 2-second
-   stop point/750 ms p95 target. Required external
-   documents, unsupported content, or budget pressure safely return failure so
-   Explorer uses its normal icon.
+   stop point/750 ms p95 target. The adapter charges one checked scratch
+   reservation covering its worst-case product-owned residency — a full
+   geometry cache (`kStepMaxGeometryCacheTriangles` = 750,000) plus a single
+   definition build (`kStepMaxTrianglesPerDefinition` = 500,000, i.e. 181.2 MiB
+   at 152 bytes/triangle with growth headroom; [ADR-0036](../adr/0036-step-scratch-accounting.md));
+   a definition above the per-definition cap fails closed rather than being
+   tessellated in full. Required external documents, unsupported content, or budget
+   pressure safely return failure so Explorer uses its normal icon.
 3. Use a fixed low-detail deterministic tessellation/sample policy and the CPU
    rasterizer. Preserve bounded shape colors and complete-assembly spatial
    representation where possible; do not represent a source-prefix or launch

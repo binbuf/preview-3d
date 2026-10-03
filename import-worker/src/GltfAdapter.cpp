@@ -12,6 +12,7 @@
 #include "WicImageDecodeAdapter.h"
 
 #include "model_core/Checksum.h"
+#include "model_core/GltfDataUriPreflight.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
@@ -57,6 +58,10 @@ constexpr int kMaxNodeDepth = 256;
 // SharedSectionValidator re-enforces the same budget at the trust boundary
 // and must never rely on this worker-side accounting alone.
 constexpr uint64_t kMaxAggregateDecodedTexturePixels = 1'000'000'000;
+
+// Cap on one decoded `data:` URI payload (buffer or image), enforced before
+// fastgltf is allowed to decode it.
+constexpr uint64_t kMaxDataUriDecodedBytes = 32ull * 1024 * 1024;
 
 // KHR_materials_transmission is approximated rather than rendered: this
 // renderer has no refraction/transmission pass. The scalar transmissionFactor
@@ -350,6 +355,13 @@ struct WalkState {
     const model_core::ChunkDescriptor* requested = nullptr;
     uint32_t emittedGeometry = 0;
     uint32_t primitiveOccurrences = 0;
+    // Total VisitNode invocations for the current walk. A DAG diamond is
+    // legally reprocessed (a shared child is visited once per parent), but a
+    // hostile file can build ~60 nodes with children {i+1, i+1} and force
+    // 2^60 visits. Bound the whole walk by the same Tier A object budget that
+    // already caps primitive occurrences; a limit hit is ResourceLimit, while
+    // a true cycle stays MalformedData.
+    uint64_t totalNodeVisits = 0;
     bool preview=false, previewCounting=false;
     uint32_t previewOccurrences=0;
     uint32_t chunkTriangles = kChunkTriangles;
@@ -1290,7 +1302,12 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             return false;
         }
     }
+    // fastgltf stores a primitive's material index even when the material array
+    // is absent or the index is out of range (a mutated/broken JSON object key
+    // is enough), so bound it before indexing. ResolveMaterial applies the same
+    // check for the material chunk itself.
     const bool requiresTangents = hasUv && primitive.materialIndex
+        && *primitive.materialIndex < state.asset.materials.size()
         && state.asset.materials[*primitive.materialIndex].normalTexture.has_value();
 
     if (state.emit && !primitive.dracoCompression)
@@ -1998,6 +2015,14 @@ bool VisitNode(WalkState& state, size_t nodeIndex, const fastgltf::math::dmat4x4
         state.error = ImportErrorCode::MalformedData; // true cycle
         return false;
     }
+    if (state.textureOptions.Cancelled()) {
+        state.error = ImportErrorCode::Cancelled;
+        return false;
+    }
+    if (++state.totalNodeVisits > kTierAObjectLimit) {
+        state.error = ImportErrorCode::ResourceLimit;
+        return false;
+    }
     state.visitState[nodeIndex] = 1;
 
     const fastgltf::Node& node = state.asset.nodes[nodeIndex];
@@ -2294,6 +2319,32 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                         return ImportErrorCode::ResourceLimit;
                 }
             }
+        // Reject malformed or oversized base64 `data:` URIs before fastgltf
+        // decodes them. Its 0.9.0 fallback base64 decoder over-writes the
+        // product allocation when the encoded length is not a multiple of four
+        // (SEC-16). Only `buffers`/`images` carry URIs that the worker decodes;
+        // everything else is left to fastgltf unchanged.
+        for (const char* key : {"buffers", "images"})
+        {
+            simdjson::dom::array array;
+            if (object[key].get_array().get(array))
+                continue;
+            for (auto entry : array)
+            {
+                std::string_view uri;
+                if (entry["uri"].get_string().get(uri))
+                    continue;
+                switch (ValidateGltfDataUri(uri, kMaxDataUriDecodedBytes))
+                {
+                case GltfDataUriStatus::Malformed:
+                    return ImportErrorCode::MalformedData;
+                case GltfDataUriStatus::TooLarge:
+                    return ImportErrorCode::ResourceLimit;
+                default:
+                    break;
+                }
+            }
+        }
     }
     // fastgltf receives bounded padded JSON and aliases the already mapped BIN.
     // Its buffer allocation callback returns the BIN address; read(void*) detects
@@ -2369,7 +2420,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         if (!data.bin.empty() && data.source.data() + data.offset == data.bin.data() &&
             bytes <= data.bin.size())
             return {const_cast<std::byte*>(data.bin.data()), 0};
-        if (bytes > 32ull * 1024 * 1024)
+        if (bytes > kMaxDataUriDecodedBytes)
             throw std::out_of_range("data URI limit");
         data.decoded.emplace_back(size_t(bytes));
         return {data.decoded.back().data(), uint32_t(data.decoded.size())};
@@ -2575,6 +2626,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             if (!VisitNode(state,nodeIndex,identity,0)) return state.error;
         state.previewOccurrences=state.primitiveOccurrences;
         state.primitiveOccurrences=0; state.previewCounting=false;
+        state.totalNodeVisits=0;
         std::fill(state.visitState.begin(),state.visitState.end(),uint8_t(0));
     }
     for (size_t nodeIndex : asset.scenes[sceneIndex].nodeIndices) {

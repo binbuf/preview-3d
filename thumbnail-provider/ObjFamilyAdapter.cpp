@@ -2,6 +2,7 @@
 
 #include "ObjFamilyAdapter.h"
 
+#include "ContainmentStage.h"
 #include "Deadline.h"
 #include "ProviderLimits.h"
 
@@ -121,6 +122,12 @@ void ObjAdapter::Reset() noexcept
 
 ErrorCode ObjAdapter::Initialize(const AdapterInput& input) noexcept
 {
+    return RunContainedStageMember([this, &input]() { return InitializeImpl(input); },
+                                   DiagnosticStage::AdapterInitialize);
+}
+
+ErrorCode ObjAdapter::InitializeImpl(const AdapterInput& input)
+{
     Reset();
     if (input.source == nullptr || input.limits == nullptr || input.deadline == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -138,6 +145,11 @@ ErrorCode ObjAdapter::SourceReadFailure() const noexcept
 }
 
 ErrorCode ObjAdapter::Parse() noexcept
+{
+    return RunContainedStageMember([this]() { return ParseImpl(); }, DiagnosticStage::Parse);
+}
+
+ErrorCode ObjAdapter::ParseImpl()
 {
     if (!input_.deadline->Checkpoint()) {
         return ErrorCode::Cancelled;
@@ -246,6 +258,12 @@ ErrorCode ObjAdapter::Parse() noexcept
 
 ErrorCode ObjAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 {
+    return RunContainedStageMember([this, &sink]() { return EnumerateMaterialsImpl(sink); },
+                                   DiagnosticStage::Materials);
+}
+
+ErrorCode ObjAdapter::EnumerateMaterialsImpl(IMaterialSink& sink)
+{
     // OBJ material records and their `.mtl` are deliberately ignored: the
     // thumbnail path renders the neutral palette. When the geometry carries
     // vertex colors the base color is forced white so `vertexColor * baseColor`
@@ -262,6 +280,12 @@ ErrorCode ObjAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 }
 
 ErrorCode ObjAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateGeometryImpl(sink); },
+                                   DiagnosticStage::Geometry);
+}
+
+ErrorCode ObjAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
 {
     if (!parsed_ || scene_ == nullptr) {
         return ErrorCode::InternalImporterFailure;

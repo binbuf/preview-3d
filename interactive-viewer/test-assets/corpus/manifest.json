@@ -541,6 +541,58 @@
       "sha256": "1675b70742a0b525b192773b858c94f2db5fb8faecb31d7e28be6e244972954d"
     },
     {
+      "bytes": 828,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "reject",
+        "triangles": 1
+      },
+      "id": "sidecar-nul-extension",
+      "path": "sidecar-nul-extension.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "approved.bin\u0000.png"
+      },
+      "sha256": "93532f8406dab629c1586fab1a701da2041da35b02276ee14c675965ce84bc8d"
+    },
+    {
+      "bytes": 824,
+      "expected": {
+        "bounds": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            0
+          ]
+        ],
+        "policy": "reject",
+        "triangles": 1
+      },
+      "id": "sidecar-nul-trailing",
+      "path": "sidecar-nul-trailing.gltf",
+      "recipe": {
+        "algorithm": "external glTF URI mutation",
+        "uri": "approved.bin\u0000"
+      },
+      "sha256": "f914987901f9ae3bb4af2c5617beeef0456a3e4a1c6e2cec968dc66fb5050c90"
+    },
+    {
       "bytes": 48,
       "expected": {
         "role": "broker-approved local sidecar"
