@@ -38,4 +38,41 @@ ever honors the requested extent over `cbBufferSize`.
 - [ ] Hand-off records the contract decision.
 
 ## Hand-off
-_(filled in by the implementing session)_
+
+### Contract decision
+`IWICBitmapSourceTransform::CopyPixels` requires `uiWidth`/`uiHeight` to equal the value returned by
+`GetClosestSize` (the *scaled full-image* size); `prc` then clips that already-scaled image, and
+`nStride`/`cbBufferSize` describe the destination. The code already verifies
+`GetClosestSize(...) == {outputW, outputH}` before entering the native path, so passing the full
+`outputH` as `uiHeight` is contract-correct and must **not** be changed to the tile row count (that
+would mis-scale the image). The real gap was that the scratch held only 32 rows while the call
+described an `outputW x outputH` extent, so the buffer was not visibly large enough for the extent
+it passed. Fixed by sizing the scratch for the full requested extent
+`size_t(outputW)*channels*outputH`; the 32-row loop remains only for cancellation latency. This makes
+the no-overrun property independent of the codec honoring `cbBufferSize`/`prc`. The extent is bounded:
+`channels <= 4`, so the scratch is at most the base RGBA image, which the `ComputeImagePixelBytes(...)
+<= maxDecodedBytes` chain check at the top of the function already bounds.
+
+### Changes
+- `import-worker/src/WicImageDecodeAdapter.cpp`: native JPEG scratch is now
+  `outputW*channels*outputH` (was `outputW*channels*32`) with the contract/invariant comment.
+  Re-checked `outputW`/`outputH`/`rows` and the byte chain: halving preserves aspect and is capped at
+  `kMaxImageDimension`; `rows <= 32`; `outputW*channels` (stride) and `rows*outputW*channels`
+  (`cbBufferSize`) both fit `UINT`; `result.pixelBytes` size is `outputW*outputH*4`.
+- `tests/import-isolation/TexturePathTests.cpp`: added `EncodeJpegVerticalGradient` and a
+  `[texture-decode]` case that decodes a 40x160 JPEG (five 32-row tiles) and asserts the full-height
+  ramp is correct and alpha stays 255.
+- `docs/design/adr/0054-wic-native-copy-buffer-invariant.md`: new accepted ADR.
+- `docs/design/03-file-formats-and-ingestion.md`: texture policy sentence records the invariant.
+- `docs/security/PROGRESS.md`: T28 reusable-facts section.
+
+### Checks (Release, exit 0)
+- `x64\Release\Tests.ImportIsolation.exe "[texture-decode]"` → 4 cases, 239430 assertions, all passed.
+- `x64\Release\Tests.ImportIsolation.exe` full → 409 cases / 404 passed / 5 skipped / 0 failed;
+  302036 assertions passed.
+- Build: `MSBuild tests\import-isolation\Tests.ImportIsolation.vcxproj /p:Configuration=Release
+  /p:Platform=x64 "/p:SolutionDir=D:\repos\binbuf\preview-3d\\" /p:VcpkgRoot=C:\vcpkg
+  /p:VcpkgManifestInstall=false /m:1`.
+
+### Remaining
+None.

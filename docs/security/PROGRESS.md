@@ -36,6 +36,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T24 - Bound provider allocations fed by library-supplied counts (3MF/USD)**: Reusable facts for later sessions:; **Pre-cap where lib3mf exposes a count.** `CBeamLattice::GetBeamCount()` /
 - **T25 — Complete SEC-17: provider fuzz/soak promotion and hostile failure classification**: Reusable facts for later sessions:; **`fuzz-smoke` is now a required gate.** `.github/workflows/ci.yml` `fuzz-smoke` runs on
 - **T26 — Normalize untrusted paths before opening (remote UNC + absolute primary)**: Reusable facts for later sessions:; **One classifier, two callers.** `shared/platform/include/platform/SourcePathPolicy.h` (header-only)
+- **T28 — Worker WIC native-copy buffer invariant**: Reusable facts for later sessions:; **WIC contract.** `IWICBitmapSourceTransform::CopyPixels` (`wincodec.h`) requires `uiWidth`/`uiHeight`
 - **Follow-ups**: T25 hosted: confirm a fork `pull_request` runs the promoted `fuzz-smoke` lane from the files cache; T25: a live stack-overflow/`__fastfail` surrogate death is not deterministically inducible from a
 <!-- symphony:digest:end -->
 
@@ -1330,6 +1331,35 @@ Reusable facts for later sessions:
   `MSBuild <vcxproj> /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=<repo>\" /p:VcpkgRoot=C:\vcpkg`;
   the solution target names differ from the `.vcxproj` names. The new header was added as `ClInclude`
   to `Preview3D`, `Tests.Unit`, and `Tests.ImportIsolation`.
+
+## T28 — Worker WIC native-copy buffer invariant
+
+Reusable facts for later sessions:
+
+- **WIC contract.** `IWICBitmapSourceTransform::CopyPixels` (`wincodec.h`) requires `uiWidth`/`uiHeight`
+  to equal `GetClosestSize`'s *scaled full-image* size; `prc` clips the already-scaled image; `nStride`
+  and `cbBufferSize` describe the destination. Do not "fix" the mismatch by passing the tile row count
+  as `uiHeight` — that is a contract violation and mis-scales. The `WicImageDecodeAdapter.cpp` native
+  path already verifies `GetClosestSize == {outputW, outputH}` before it relies on the transform.
+- **Fix.** The native JPEG scratch is now `size_t(outputW)*channels*outputH` (was
+  `size_t(outputW)*channels*32`), so the buffer is explicitly large enough for the full extent the call
+  passes and a codec that writes `uiWidth*uiHeight` over `cbBufferSize` cannot overrun it. Bounded by
+  the existing `ComputeImagePixelBytes(...) <= maxDecodedBytes` chain check (`channels <= 4`). The
+  32-row loop stays only to bound cancellation latency.
+- **Only one helper.** `DecodeRasterImageWic` is the single shared implementation (glTF/FBX/OBJ/3MF/USD
+  adapters and the compatibility host call it); no provider/thumbnail path uses it, so one change covers
+  all callers. No sandbox-boundary change.
+- **Regression.** `tests/import-isolation/TexturePathTests.cpp` `EncodeJpegVerticalGradient` + the
+  `[texture-decode]` "Tall JPEG native decode keeps the full-height copy within its buffer" case: a
+  40x160 JPEG is five 32-row tiles; a smooth vertical ramp localizes any tile-offset/truncated-copy bug
+  (JPEG reproduces the ramp within a few levels).
+- **Files.** `import-worker/src/WicImageDecodeAdapter.cpp`, `tests/import-isolation/TexturePathTests.cpp`,
+  ADR-0054, `docs/design/03-file-formats-and-ingestion.md`.
+- **Verify (Release, exit 0).** Build:
+  `MSBuild tests\import-isolation\Tests.ImportIsolation.vcxproj /p:Configuration=Release /p:Platform=x64
+  "/p:SolutionDir=<repo>\" /p:VcpkgRoot=C:\vcpkg /p:VcpkgManifestInstall=false /m:1`.
+  `Tests.ImportIsolation.exe "[texture-decode]"` → 4 cases / 239430 assertions; full suite → 409 cases /
+  404 passed / 5 skipped / 0 failed.
 
 ## Follow-ups
 

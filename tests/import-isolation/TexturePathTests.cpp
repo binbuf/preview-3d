@@ -53,6 +53,36 @@ std::vector<std::byte> Encode(const CLSID& codec, uint32_t width, uint32_t heigh
     return bytes;
 }
 
+// A smooth vertical ramp survives JPEG well enough to localize a row, so a
+// decoded row value that is far from its source row exposes a tile-offset or
+// truncated-copy bug rather than lossy noise.
+std::vector<std::byte> EncodeJpegVerticalGradient(uint32_t width, uint32_t height)
+{
+    ComPtr<IWICImagingFactory> factory;
+    REQUIRE(SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&factory))));
+    ComPtr<IStream> stream; REQUIRE(SUCCEEDED(CreateStreamOnHGlobal(nullptr,TRUE,&stream)));
+    ComPtr<IWICBitmapEncoder> encoder;
+    REQUIRE(SUCCEEDED(CoCreateInstance(CLSID_WICJpegEncoder,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&encoder))));
+    REQUIRE(SUCCEEDED(encoder->Initialize(stream.Get(),WICBitmapEncoderNoCache)));
+    ComPtr<IWICBitmapFrameEncode> frame;ComPtr<IPropertyBag2> props;
+    REQUIRE(SUCCEEDED(encoder->CreateNewFrame(&frame,&props)));
+    REQUIRE(SUCCEEDED(frame->Initialize(props.Get())));REQUIRE(SUCCEEDED(frame->SetSize(width,height)));
+    WICPixelFormatGUID format=GUID_WICPixelFormat24bppBGR;
+    REQUIRE(SUCCEEDED(frame->SetPixelFormat(&format)));REQUIRE(format==GUID_WICPixelFormat24bppBGR);
+    std::vector<BYTE> pixels(size_t(width)*height*3);
+    for (uint32_t y=0;y<height;++y) for (uint32_t x=0;x<width;++x) {
+        const BYTE v=BYTE(height>1 ? y*255u/(height-1) : 128u);
+        for (unsigned c=0;c<3;++c) pixels[(size_t(y)*width+x)*3+c]=v;
+    }
+    REQUIRE(SUCCEEDED(frame->WritePixels(height,width*3,static_cast<UINT>(pixels.size()),pixels.data())));
+    REQUIRE(SUCCEEDED(frame->Commit()));REQUIRE(SUCCEEDED(encoder->Commit()));
+    STATSTG stat{};REQUIRE(SUCCEEDED(stream->Stat(&stat,STATFLAG_NONAME)));
+    LARGE_INTEGER zero{};REQUIRE(SUCCEEDED(stream->Seek(zero,STREAM_SEEK_SET,nullptr)));
+    std::vector<std::byte> bytes(static_cast<size_t>(stat.cbSize.QuadPart));ULONG read=0;
+    REQUIRE(SUCCEEDED(stream->Read(bytes.data(),static_cast<ULONG>(bytes.size()),&read)));REQUIRE(read==bytes.size());
+    return bytes;
+}
+
 struct TempGlb {
     std::filesystem::path path;
     TempGlb(std::span<const std::byte> image, const std::string& slots, const std::string& mime="image/png",unsigned imageIndex=0) {
@@ -121,6 +151,26 @@ TEST_CASE("Raster decode downscales large non-JPEG sources through a bounded sca
     CHECK(result->pixelBytes.size()==*ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,375,375,result->mipLevels));
     for (size_t i=0;i<result->pixelBytes.size();i+=4)
         CHECK(std::abs(int(std::to_integer<uint8_t>(result->pixelBytes[i]))-128)<=2);
+}
+
+TEST_CASE("Tall JPEG native decode keeps the full-height copy within its buffer", "[texture-decode]")
+{
+    ComScope com;
+    // 40x160 is five 32-row tiles, so the native IWICBitmapSourceTransform path
+    // runs more than one CopyPixels iteration. The requested transform extent is
+    // the full 40x160 size returned by GetClosestSize, so the scratch has to be
+    // sized for that extent even though each iteration clips to 32 rows.
+    auto encoded=EncodeJpegVerticalGradient(40,160);
+    auto result=DecodeRasterImageWic(encoded,ColorSpaceId::Srgb);
+    REQUIRE(result);
+    CHECK(result->width==40);
+    CHECK(result->height==160);
+    CHECK(result->pixelBytes.size()==*ComputeImagePixelBytes(PixelFormatId::RGBA8_UNORM,40,160,result->mipLevels));
+    const auto row=[&](uint32_t y){return std::to_integer<uint8_t>(result->pixelBytes[(size_t(y)*result->width+20)*4]);};
+    CHECK(row(0)<=16);
+    CHECK(std::abs(int(row(80))-int(80*255/159))<=16);
+    CHECK(row(159)>=239);
+    for (size_t i=0;i<result->pixelBytes.size();i+=4) CHECK(result->pixelBytes[i+3]==std::byte{255});
 }
 
 TEST_CASE("Raster decode rejects hostile dimensions and expansion, and observes tile cancellation", "[texture-decode]")

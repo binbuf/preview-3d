@@ -65,14 +65,14 @@ not re-fix those. Each task below carries its audit evidence inline.
 - [x] T25 — Complete SEC-17: provider fuzz/soak promotion and hostile failure classification → [25-sec17-completion.md](25-sec17-completion.md)
 - [x] T26 — Normalize untrusted paths before opening (remote UNC + absolute primary) → [26-path-normalization.md](26-path-normalization.md)
 - [x] T27 — Bound 3MF ZIP64 extra-field reads to the sub-record (SEC-05 follow-up) → [27-3mf-zip64-extra-field.md](27-3mf-zip64-extra-field.md)
-- [ ] T28 — Worker WIC native-copy buffer invariant → [28-wic-native-copy.md](28-wic-native-copy.md)
+- [x] T28 — Worker WIC native-copy buffer invariant → [28-wic-native-copy.md](28-wic-native-copy.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-03T03:07:14Z · 29/30 done
+**Pipeline status** — updated 2026-10-03T03:12:47Z · 30/30 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T16b, T17, T18, T19, T20, T21, T22, T23, T24, T25, T26, T27
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T16b, T17, T18, T19, T20, T21, T22, T23, T24, T25, T26, T27, T28
 - Blocked: none
 - Failed: none
-- Remaining: T28
-- Last finished: T27 — done · Bounded 3MF ZIP64 extra-field reads to the sub-record (central+local now typed InvalidDirectory); regression tests and two fuzz seeds added, full Release suite and ThreeMfFuzz smoke green.
+- Remaining: none
+- Last finished: T28 — done · Sized the WIC native JPEG copy scratch to the full requested transform extent, added a tall-JPEG multi-tile regression, recorded the contract decision in ADR-0054 and design/03; Release Tests.ImportIsolation full suite green (409/404/5 skipped/0 failed).
 <!-- /symphony:status -->
