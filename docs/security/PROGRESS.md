@@ -1044,3 +1044,28 @@ Reusable facts for later sessions:
   / 131559 assertions, all pass.
 - **ADR.** [ADR-0049](../design/adr/0049-generated-sbom-and-license-metadata.md). Design/08
   "Signing and supply chain" now describes the generated inventory.
+
+## Post-audit inline fixes (2026-10-03)
+
+A follow-up source audit of the whole security set found two small, self-contained
+defects that were fixed directly rather than deferred to a task; the remaining
+findings are the new `T20`–`T27` tasks below.
+
+- **SEC-12 mandatory label was `LW` (Low), not medium.** `SecurityForObject` in
+  `interactive-viewer/src/app/ActiveInstance.cpp` built the object SACL as
+  `S:(ML;;NW;;;LW)`. A Low object label admits every subject at Low and above, so
+  the documented "low-integrity writer cannot open the object" property did not
+  hold; it is now `S:(ML;;NW;;;ME)` (Medium) and the comment states why. ADR-0041
+  corrected. The `AuthenticateClient` integrity gate was already the working
+  control on the forward path; the residual SACL-not-compared limitation is
+  unchanged. Verified `Tests.Unit [activation]` (7 cases).
+- **Provider USD `StripSkeletonBindings` recurred with no depth bound.** It runs in
+  `thumbnail-provider/UsdFamilyAdapter.cpp` *before* `ClassifyStage` enforces
+  `kMaxHierarchyDepth` (256); a deeply nested stage could overflow the stack, and
+  `EXCEPTION_STACK_OVERFLOW` is deliberately not contained (SEC-08). It now takes a
+  depth and returns at `depth > kMaxHierarchyDepth`, matching the sibling
+  `ClassifyPrim` walk. Verified `Tests.Unit [provider][usd]` and
+  `Tests.ProviderHost`; `npm test` 375 cases green.
+
+Next-task note: `T20`–`T27` below carry the audit evidence inline. Do not re-fix
+the two items above.

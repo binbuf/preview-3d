@@ -118,11 +118,12 @@ bool SecurityForObject(SecuredObject kind, std::wstring_view userSid, SECURITY_A
     const wchar_t* rights = kind == SecuredObject::Mutex ? kMutexSddlRights
         : kind == SecuredObject::Event ? kEventSddlRights : L"FRFW";
     // Owner is set explicitly so a recovered (abandoned) object can be compared
-    // against the expected identity. The mandatory label stops a low-integrity
-    // same-user process from opening the object for write, and no ACE grants
+    // against the expected identity. The mandatory label must be Medium so the
+    // no-write-up ACE denies a Low-integrity same-user process: a Low label
+    // would admit every subject at Low and above. No ACE grants
     // WRITE_DAC/WRITE_OWNER/GENERIC_ALL.
     const std::wstring sddl = L"O:" + std::wstring(userSid) + L"D:P(A;;" + rights + L";;;SY)(A;;" +
-        rights + L";;;" + std::wstring(userSid) + L")S:(ML;;NW;;;LW)";
+        rights + L";;;" + std::wstring(userSid) + L")S:(ML;;NW;;;ME)";
     PSECURITY_DESCRIPTOR raw = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &raw, nullptr)) {
         error = L"Windows could not secure the activation channel."; return false;

@@ -331,8 +331,14 @@ StagePolicy ClassifyStage(const tinyusdz::Stage& stage, double time)
 // meaningful static geometry. Clear each mesh's skeleton binding so TinyUSDZ's
 // render-scene converter treats the mesh as static instead of failing on rigs
 // it cannot build.
-std::uint32_t StripSkeletonBindings(Prim& prim)
+std::uint32_t StripSkeletonBindings(Prim& prim, std::uint32_t depth)
 {
+    // This walk runs before ClassifyStage enforces kMaxHierarchyDepth, so bound
+    // it here too: a deeply nested stage must not overflow the stack on the way
+    // to the classification pass that rejects it.
+    if (depth > kMaxHierarchyDepth) {
+        return 0;
+    }
     std::uint32_t cleared = 0;
     if (auto* mesh = prim.get_data().as<GeomMesh>(/*strict_cast=*/true)) {
         if (mesh->skeleton.has_value()) {
@@ -346,7 +352,7 @@ std::uint32_t StripSkeletonBindings(Prim& prim)
         mesh->props.erase("skel:skeleton");
     }
     for (Prim& child : prim.children()) {
-        cleared += StripSkeletonBindings(child);
+        cleared += StripSkeletonBindings(child, depth + 1);
     }
     return cleared;
 }
@@ -966,7 +972,7 @@ ErrorCode UsdAdapter::BuildScene()
     // precede classification and conversion.
     std::uint32_t skeletonBindings = 0;
     for (Prim& root : stage.root_prims()) {
-        skeletonBindings += StripSkeletonBindings(root);
+        skeletonBindings += StripSkeletonBindings(root, 1);
     }
 
     StagePolicy policy = ClassifyStage(stage, time);

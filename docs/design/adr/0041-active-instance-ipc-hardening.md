@@ -15,8 +15,10 @@ named objects could become the "primary", and a pre-created pipe could capture a
 - **Minimum-rights security descriptors, no `GENERIC_ALL`.** `SecurityForObject` builds one descriptor
   per object kind: mutex `SYNCHRONIZE|MUTEX_MODIFY_STATE|READ_CONTROL` (`0x120001`), event
   `SYNCHRONIZE|EVENT_MODIFY_STATE|READ_CONTROL` (`0x120002`), pipe `FR|FW`. Each is `D:P` with
-  `SY|user` ACEs and carries a medium mandatory label (`S:(ML;;NW;;;LW)`) so a low-integrity same-user
-  process cannot open the object for write. `PIPE_REJECT_REMOTE_CLIENTS` is retained.
+  `SY|user` ACEs and carries a medium mandatory label (`S:(ML;;NW;;;ME)`) so a low-integrity same-user
+  process cannot open the object for write. (An earlier revision mislabeled the object `LW`, which is
+  Low, and therefore did not deny Low-integrity writers; see the audit note below.) `PIPE_REJECT_REMOTE_CLIENTS`
+  is retained.
 - **Peer identity beyond SID/session.** After `ImpersonateNamedPipeClient` the server requires the
   client token's integrity RID to be at least medium (a lower-integrity peer is accepted only when it
   is our own child), rejects `TokenIsAppContainer`, and requires the client process image to equal this
