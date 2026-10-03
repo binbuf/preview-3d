@@ -296,10 +296,15 @@ checked double-precision row-vector transforms; bare-mesh occurrences emit a fla
 sample with the object/triangle/per-corner color resolved to a linear vertex color over one registered
 white material. Supported property types are base materials, color groups, texture-coordinate groups,
 composites and multi-properties; a texture group is structurally validated against the 32 MP aggregate
-budget but not decoded (the frozen `MaterialPayload` has no texture slot). A beam/ball lattice
-occurrence prefers a bounded tessellation of tapered beams (Butt/Hemisphere/Sphere caps) and balls,
-`inside`-clips against a closed axis-aligned 8-vertex/12-triangle box under a 262 144-triangle
-per-lattice ceiling with deterministic radial degradation, and fails to the generic icon for `outside`
+budget but not decoded (the frozen `MaterialPayload` has no texture slot). Every file-authored count
+that sizes a lib3mf output is capped: multi-property layers (16) and beam/ball counts are checked
+against the product ceiling before the allocating call, composite constituents (4096) are rejected as
+`ResourceLimit` immediately after `GetComposite` (lib3mf exposes no per-property count), and
+`ClipInside` stops at the lattice ceiling as it clips ([ADR-0051](adr/0051-library-count-driven-provider-allocation-bounds.md)).
+A beam/ball lattice occurrence prefers a bounded tessellation of tapered beams
+(Butt/Hemisphere/Sphere caps) and balls, `inside`-clips against a closed axis-aligned
+8-vertex/12-triangle box under a 262 144-triangle per-lattice ceiling with deterministic radial
+degradation, and fails to the generic icon for `outside`
 or non-box clipping without a representation mesh. An unsupported required extension, an over-budget
 scene, an unclipped parametric lattice or a malformed package fails closed; a supported scene is never
 rendered only in part.
@@ -322,8 +327,11 @@ reference or texture (`UnsafeReference`); the provider never launches the compat
 cache, recovers a path or reaches the network. The static `UsdPreviewSurface`/display-color policy is
 normalized into the frozen `MaterialPayload` (base color/opacity, metallic, roughness, emissive, alpha
 mode/cutoff, double-sided) and finite triangle samples with double-precision world transforms,
-purpose/visibility and bounded point-instancer expansion; skeletal bindings are stripped so the authored
-rest pose previews. Contained textures are recorded but not decoded — the frozen `MaterialPayload` has no
+purpose/visibility and bounded point-instancer expansion — the instancer's `protoIndices`,
+`positions`, `ids`, `orientations`, `scales` and `invisibleIds` arrays are capped at the 10 000-prim
+ceiling and an oversized array fails `ResourceLimit`
+([ADR-0051](adr/0051-library-count-driven-provider-allocation-bounds.md)); skeletal bindings are
+stripped so the authored rest pose previews. Contained textures are recorded but not decoded — the frozen `MaterialPayload` has no
 texture slot — so an absent or external image never fabricates geometry. A `fast_float` ABI collision
 between TinyUSDZ's vendored copy and lib3mf's vcpkg copy is removed by building TinyUSDZ against the
 vcpkg-pinned `fast_float` in the overlay port (`0.9.1#3`, [ADR-0026](adr/0026-usd-adapter-pinned-tinyusdz.md)).

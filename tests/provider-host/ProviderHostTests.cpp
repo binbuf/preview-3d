@@ -23,11 +23,14 @@
 #include "ProviderHostSupport.h"
 #include "RasterBitmap.h"
 
+#include <Bindings/Cpp/lib3mf_implicit.hpp>
+
 #include <windows.h>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -124,6 +127,117 @@ std::vector<std::byte> MeshlessDoublingDagJson(int levels)
     }
     append("]}");
     return json;
+}
+
+// T24: a PointInstancer whose file-authored `protoIndices`/`positions` arrays
+// hold more elements than the provider's whole-prim ceiling (kMaxPrimCount).
+// TinyUSDZ has no count accessor before Evaluate copies the array, so the
+// adapter must reject the oversized result as ResourceLimit instead of letting
+// the copy and the derived id set grow with the authored count.
+std::vector<std::byte> HugePointInstancerUsda(std::size_t count)
+{
+    std::string text =
+        "#usda 1.0\n"
+        "(\n"
+        "    defaultPrim = \"Root\"\n"
+        ")\n"
+        "\n"
+        "def Xform \"Root\"\n"
+        "{\n"
+        "    def Xform \"Prototypes\"\n"
+        "    {\n"
+        "        def Mesh \"Triangle\"\n"
+        "        {\n"
+        "            int[] faceVertexCounts = [3]\n"
+        "            int[] faceVertexIndices = [0, 1, 2]\n"
+        "            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]\n"
+        "            uniform token subdivisionScheme = \"none\"\n"
+        "        }\n"
+        "    }\n"
+        "    def PointInstancer \"Instances\"\n"
+        "    {\n"
+        "        rel prototypes = [</Root/Prototypes/Triangle>]\n"
+        "        int[] protoIndices = [";
+    for (std::size_t i = 0; i < count; ++i) {
+        if (i != 0) {
+            text += ", ";
+        }
+        text += "0";
+    }
+    text += "]\n        point3f[] positions = [";
+    for (std::size_t i = 0; i < count; ++i) {
+        if (i != 0) {
+            text += ", ";
+        }
+        text += "(0, 0, 0)";
+    }
+    text += "]\n    }\n}\n";
+
+    std::vector<std::byte> bytes;
+    bytes.reserve(text.size());
+    for (const char ch : text) {
+        bytes.push_back(static_cast<std::byte>(ch));
+    }
+    return bytes;
+}
+
+// T24: a valid package whose composite material references more constituents
+// than the provider allows. lib3mf exposes no per-property constituent count,
+// so the adapter must reject the oversized `GetComposite` result as
+// ResourceLimit rather than absorbing it. Built through the same pinned lib3mf
+// the provider links.
+std::vector<std::byte> BuildOversizedCompositeThreeMf(std::size_t constituents)
+{
+    Lib3MF::PWrapper wrapper = Lib3MF::CWrapper::loadLibrary();
+    Lib3MF::PModel model = wrapper->CreateModel();
+
+// lib3mf merges composite constituents that share a base-material property,
+    // so every constituent needs its own material to survive the round trip.
+    Lib3MF::PBaseMaterialGroup materials = model->AddBaseMaterialGroup();
+    Lib3MF::PCompositeMaterials composite = model->AddCompositeMaterials(materials);
+    std::vector<Lib3MF::sCompositeConstituent> list(constituents);
+    for (std::size_t i = 0; i < list.size(); ++i) {
+        const auto shade = static_cast<Lib3MF_uint8>(20 + (i % 200));
+        list[i].m_PropertyID = materials->AddMaterial(
+            "m" + std::to_string(i), wrapper->RGBAToColor(shade, 90, 160, 255));
+        list[i].m_MixingRatio = 1.0;
+    }
+    const Lib3MF_uint32 compositeId = composite->AddComposite(list);
+
+    Lib3MF::PMeshObject mesh = model->AddMeshObject();
+    std::vector<Lib3MF::sPosition> vertices(3);
+    vertices[0].m_Coordinates[0] = 0.0f;
+    vertices[0].m_Coordinates[1] = 0.0f;
+    vertices[0].m_Coordinates[2] = 0.0f;
+    vertices[1].m_Coordinates[0] = 1.0f;
+    vertices[1].m_Coordinates[1] = 0.0f;
+    vertices[1].m_Coordinates[2] = 0.0f;
+    vertices[2].m_Coordinates[0] = 0.0f;
+    vertices[2].m_Coordinates[1] = 1.0f;
+    vertices[2].m_Coordinates[2] = 0.0f;
+    std::vector<Lib3MF::sTriangle> triangles(1);
+    triangles[0].m_Indices[0] = 0;
+    triangles[0].m_Indices[1] = 1;
+    triangles[0].m_Indices[2] = 2;
+    mesh->SetGeometry(vertices, triangles);
+
+    mesh->SetObjectLevelProperty(composite->GetResourceID(), compositeId);
+
+    Lib3MF::sTransform transform{};
+    transform.m_Fields[0][0] = 1.0f;
+    transform.m_Fields[1][1] = 1.0f;
+    transform.m_Fields[2][2] = 1.0f;
+    model->AddBuildItem(mesh.get(), transform);
+
+    Lib3MF::PWriter writer = model->QueryWriter("3mf");
+    std::vector<Lib3MF_uint8> buffer;
+    writer->WriteToBuffer(buffer);
+
+    std::vector<std::byte> bytes(buffer.size());
+    if (!bytes.empty()) {
+        std::memcpy(bytes.data(), buffer.data(), bytes.size());
+    }
+    return bytes;
 }
 
 // One activate/use/unload cycle against a freshly loaded module, plus one
@@ -356,6 +470,53 @@ TEST_CASE("a mesh-less doubling glTF DAG is bounded by the total-visit cap",
     input.family = Family::Gltf;
     REQUIRE(adapter->Initialize(input) == ErrorCode::None);
     CHECK(adapter->Parse() == ErrorCode::ResourceLimit);
+    adapter->Reset();
+}
+
+TEST_CASE("an oversized USD point-instancer array is rejected as ResourceLimit",
+          "[host][usd][security]")
+{
+    using namespace preview3d::provider;
+
+    auto adapter = CreateFamilyAdapter(Family::Usd);
+    REQUIRE(adapter != nullptr);
+
+    // One more instance than the provider can ever emit (kMaxPrimCount).
+    MemorySource source(HugePointInstancerUsda(10001));
+    Deadline deadline;
+    AllocationLedger ledger;
+    AdapterInput input{};
+    input.source = &source;
+    input.limits = &ProviderLimits::Default();
+    input.deadline = &deadline;
+    input.ledger = &ledger;
+    input.family = Family::Usd;
+    REQUIRE(adapter->Initialize(input) == ErrorCode::None);
+    CHECK(adapter->Parse() == ErrorCode::ResourceLimit);
+    adapter->Reset();
+}
+
+TEST_CASE("an oversized 3MF composite material is rejected as ResourceLimit",
+          "[host][3mf][security]")
+{
+    using namespace preview3d::provider;
+
+    auto adapter = CreateFamilyAdapter(Family::ThreeMf);
+    REQUIRE(adapter != nullptr);
+
+    MemorySource source(BuildOversizedCompositeThreeMf(4097));
+    Deadline deadline;
+    AllocationLedger ledger;
+    AdapterInput input{};
+    input.source = &source;
+    input.limits = &ProviderLimits::Default();
+    input.deadline = &deadline;
+    input.ledger = &ledger;
+    input.family = Family::ThreeMf;
+    REQUIRE(adapter->Initialize(input) == ErrorCode::None);
+    REQUIRE(adapter->Parse() == ErrorCode::None);
+    NullGeometrySink sink;
+    CHECK(adapter->EnumerateGeometry(sink) == ErrorCode::ResourceLimit);
     adapter->Reset();
 }
 

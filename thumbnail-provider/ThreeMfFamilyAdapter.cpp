@@ -44,6 +44,14 @@ constexpr std::uint64_t kEmbeddedImageEncodedMaxBytes = 32ull * 1024 * 1024;
 // Per-lattice preview triangle ceiling (design/03, "bounded Beam Lattice").
 constexpr std::uint64_t kLatticeTrianglesMax = 262'144;
 
+// File-controlled counts in the 3MF material helpers. lib3mf resizes its output
+// vector from the authored count, so the cap is enforced before the call where
+// an accessor exists (`GetLayerCount`, `GetBeamCount`, `GetBallCount`) and
+// immediately after it otherwise (composite constituents). Overrun is
+// `ResourceLimit`, not `OutOfMemory`.
+constexpr std::size_t kCompositeConstituentsMax = 4096;
+constexpr std::uint32_t kMultiPropertyLayersMax = 16;
+
 // Hierarchy depth cap (the worker uses the same 256-level combined cap).
 constexpr std::uint32_t kMaxHierarchyDepth = 256;
 
@@ -416,7 +424,12 @@ GenVertex Interpolate(const GenVertex& a, const GenVertex& b, double t) noexcept
     return result;
 }
 
-void ClipInside(std::vector<GenTriangle>& triangles, const Aabb& box)
+// Clips `triangles` against the six box half-spaces. Returns false as soon as
+// the output would exceed `maxTriangles`, so a hostile estimate cannot make the
+// clipper grow the live vector past the product lattice cap before it is
+// checked. The caller maps false to `ResourceLimit`.
+bool ClipInside(std::vector<GenTriangle>& triangles, const Aabb& box,
+                std::size_t maxTriangles)
 {
     for (std::uint32_t plane = 0; plane < 6; ++plane) {
         std::vector<GenTriangle> clipped;
@@ -445,14 +458,18 @@ void ClipInside(std::vector<GenTriangle>& triangles, const Aabb& box)
                 }
             }
             for (std::size_t index = 1; index + 1 < next.size(); ++index) {
+                if (clipped.size() >= maxTriangles) {
+                    return false;
+                }
                 clipped.push_back({next[0], next[index], next[index + 1]});
             }
         }
         triangles.swap(clipped);
         if (triangles.empty()) {
-            return;
+            return true;
         }
     }
+    return true;
 }
 
 // --- Required-extension scan -----------------------------------------------
@@ -729,13 +746,15 @@ ErrorCode MapLib3mfError(const Lib3MF::ELib3MFException& error) noexcept
         ? ErrorCode::Cancelled : ErrorCode::MalformedData;
 }
 
-// Resolves one 3MF property reference to a linear RGBA vertex color. Returns
-// false only for a bounded/unsupported failure that must fail the call; an
-// absent or unknown optional property falls back to the neutral color.
-bool ResolveProperty(const Lib3MF::PModel& model, std::uint32_t resourceId,
-                     std::uint32_t propertyId, float color[4], bool& hasTexture,
-                     std::uint64_t& imageCount, std::uint64_t& imagePixels,
-                     std::unordered_set<std::uint32_t>& validatedTextures)
+// Resolves one 3MF property reference to a linear RGBA vertex color. Returns a
+// typed failure only for a bounded/unsupported failure that must fail the call;
+// an absent or unknown optional property falls back to the neutral color. A
+// file-controlled constituent/layer count over the product cap is
+// `ResourceLimit`, never `OutOfMemory`.
+ErrorCode ResolveProperty(const Lib3MF::PModel& model, std::uint32_t resourceId,
+                          std::uint32_t propertyId, float color[4], bool& hasTexture,
+                          std::uint64_t& imageCount, std::uint64_t& imagePixels,
+                          std::unordered_set<std::uint32_t>& validatedTextures)
 {
     const auto setNeutral = [&] {
         color[0] = color[1] = color[2] = kDefaultVertexColor;
@@ -744,37 +763,37 @@ bool ResolveProperty(const Lib3MF::PModel& model, std::uint32_t resourceId,
     setNeutral();
     hasTexture = false;
     if (resourceId == 0) {
-        return true;
+        return ErrorCode::None;
     }
     switch (model->GetPropertyTypeByID(resourceId)) {
         case Lib3MF::ePropertyType::BaseMaterial: {
             const auto group = model->GetBaseMaterialGroupByID(resourceId);
             if (!group) {
-                return false;
+                return ErrorCode::MalformedData;
             }
             const Lib3MF::sColor value = group->GetDisplayColor(propertyId);
             color[0] = SrgbToLinearComponent(static_cast<float>(value.m_Red) / 255.0f);
             color[1] = SrgbToLinearComponent(static_cast<float>(value.m_Green) / 255.0f);
             color[2] = SrgbToLinearComponent(static_cast<float>(value.m_Blue) / 255.0f);
             color[3] = static_cast<float>(value.m_Alpha) / 255.0f;
-            return true;
+            return ErrorCode::None;
         }
         case Lib3MF::ePropertyType::Colors: {
             const auto group = model->GetColorGroupByID(resourceId);
             if (!group) {
-                return false;
+                return ErrorCode::MalformedData;
             }
             const Lib3MF::sColor value = group->GetColor(propertyId);
             color[0] = SrgbToLinearComponent(static_cast<float>(value.m_Red) / 255.0f);
             color[1] = SrgbToLinearComponent(static_cast<float>(value.m_Green) / 255.0f);
             color[2] = SrgbToLinearComponent(static_cast<float>(value.m_Blue) / 255.0f);
             color[3] = static_cast<float>(value.m_Alpha) / 255.0f;
-            return true;
+            return ErrorCode::None;
         }
         case Lib3MF::ePropertyType::TexCoord: {
             const auto group = model->GetTexture2DGroupByID(resourceId);
             if (!group || !group->GetTexture2D()) {
-                return false;
+                return ErrorCode::MalformedData;
             }
             const std::uint32_t textureId = group->GetTexture2D()->GetUniqueResourceID();
             hasTexture = true;
@@ -805,27 +824,33 @@ bool ResolveProperty(const Lib3MF::PModel& model, std::uint32_t resourceId,
             }
             color[0] = color[1] = color[2] = 1.0f;
             color[3] = 1.0f;
-            return true;
+            return ErrorCode::None;
         }
         case Lib3MF::ePropertyType::Composite: {
             const auto composite = model->GetCompositeMaterialsByID(resourceId);
             if (!composite || !composite->GetBaseMaterialGroup()) {
-                return false;
+                return ErrorCode::MalformedData;
             }
+            // lib3mf has no per-property constituent-count accessor; the buffer
+            // is sized from the authored count, so cap the result immediately
+            // and fail ResourceLimit on an oversized package.
             std::vector<Lib3MF::sCompositeConstituent> values;
             composite->GetComposite(propertyId, values);
-            if (values.empty() || values.size() > 4096) {
-                return false;
+            if (values.empty()) {
+                return ErrorCode::MalformedData;
+            }
+            if (values.size() > kCompositeConstituentsMax) {
+                return ErrorCode::ResourceLimit;
             }
             double sum = 0.0;
             for (const auto& value : values) {
                 if (!Finite(value.m_MixingRatio) || value.m_MixingRatio < 0.0) {
-                    return false;
+                    return ErrorCode::MalformedData;
                 }
                 sum += value.m_MixingRatio;
             }
             if (!Finite(sum)) {
-                return false;
+                return ErrorCode::MalformedData;
             }
             const bool equalWeights = sum == 0.0;
             if (equalWeights) {
@@ -848,18 +873,26 @@ bool ResolveProperty(const Lib3MF::PModel& model, std::uint32_t resourceId,
             for (std::uint32_t channel = 0; channel < 4; ++channel) {
                 color[channel] = static_cast<float>(mixed[channel] / sum);
             }
-            return true;
+            return ErrorCode::None;
         }
         case Lib3MF::ePropertyType::Multi: {
             const auto group = model->GetMultiPropertyGroupByID(resourceId);
             if (!group) {
-                return false;
+                return ErrorCode::MalformedData;
             }
+            // Pre-cap the authored layer count (exposed by GetLayerCount)
+            // before GetMultiProperty sizes its output vector.
             const std::uint32_t layers = group->GetLayerCount();
+            if (layers == 0) {
+                return ErrorCode::MalformedData;
+            }
+            if (layers > kMultiPropertyLayersMax) {
+                return ErrorCode::ResourceLimit;
+            }
             std::vector<std::uint32_t> indices;
             group->GetMultiProperty(propertyId, indices);
-            if (!layers || layers != indices.size() || layers > 16) {
-                return false;
+            if (indices.size() != layers) {
+                return ErrorCode::MalformedData;
             }
             float accumulated[4] = {1.0f, 1.0f, 1.0f, 1.0f};
             bool initialized = false;
@@ -867,9 +900,11 @@ bool ResolveProperty(const Lib3MF::PModel& model, std::uint32_t resourceId,
                 const auto layer = group->GetLayer(layerIndex);
                 float current[4] = {1.0f, 1.0f, 1.0f, 1.0f};
                 bool layerTexture = false;
-                if (!ResolveProperty(model, layer.m_ResourceID, indices[layerIndex], current,
-                                     layerTexture, imageCount, imagePixels, validatedTextures)) {
-                    return false;
+                const ErrorCode nested = ResolveProperty(
+                    model, layer.m_ResourceID, indices[layerIndex], current, layerTexture,
+                    imageCount, imagePixels, validatedTextures);
+                if (nested != ErrorCode::None) {
+                    return nested;
                 }
                 if (!initialized) {
                     std::copy(current, current + 4, accumulated);
@@ -888,17 +923,17 @@ bool ResolveProperty(const Lib3MF::PModel& model, std::uint32_t resourceId,
                     }
                     accumulated[3] = alpha + accumulated[3] * (1.0f - alpha);
                 } else {
-                    return false;
+                    return ErrorCode::MalformedData;
                 }
                 hasTexture = hasTexture || layerTexture;
             }
             std::copy(accumulated, accumulated + 4, color);
-            return true;
+            return ErrorCode::None;
         }
         case Lib3MF::ePropertyType::NoPropertyType:
         default:
             setNeutral();
-            return true;
+            return ErrorCode::None;
     }
 }
 
@@ -1479,10 +1514,11 @@ ErrorCode ThreeMfAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
                         std::uint32_t property = properties.m_ResourceID
                             ? properties.m_PropertyIDs[corner] : defaultProperty;
                         bool hasTexture = false;
-                        if (!ResolveProperty(model, resource, property, colors[corner],
-                                             hasTexture, embeddedImageCount_,
-                                             embeddedImagePixels_, validatedTextures)) {
-                            return ErrorCode::MalformedData;
+                        const ErrorCode resolved = ResolveProperty(
+                            model, resource, property, colors[corner], hasTexture,
+                            embeddedImageCount_, embeddedImagePixels_, validatedTextures);
+                        if (resolved != ErrorCode::None) {
+                            return resolved;
                         }
                         omittedUnsupportedTexture_ = omittedUnsupportedTexture_ || hasTexture;
                     }
@@ -1507,10 +1543,11 @@ ErrorCode ThreeMfAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
                                      kDefaultVertexColor, 1.0f};
             if (objectHasProperty) {
                 bool hasTexture = false;
-                if (!ResolveProperty(model, objectResource, objectProperty, latticeColor,
-                                     hasTexture, embeddedImageCount_, embeddedImagePixels_,
-                                     validatedTextures)) {
-                    return ErrorCode::MalformedData;
+                const ErrorCode resolved = ResolveProperty(
+                    model, objectResource, objectProperty, latticeColor, hasTexture,
+                    embeddedImageCount_, embeddedImagePixels_, validatedTextures);
+                if (resolved != ErrorCode::None) {
+                    return resolved;
                 }
                 omittedUnsupportedTexture_ = omittedUnsupportedTexture_ || hasTexture;
             }
@@ -1549,23 +1586,30 @@ ErrorCode ThreeMfAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
                 latticePositions.push_back(point);
             }
 
+            // Pre-cap the authored beam/ball counts (both exposed by lib3mf)
+            // before GetBeams/GetBalls size their output vectors.
+            const std::uint32_t authoredBeamCount = lattice->GetBeamCount();
+            const std::uint32_t authoredBallCount = lattice->GetBallCount();
+            if (authoredBeamCount > kLatticeTrianglesMax
+                || authoredBallCount > kLatticeTrianglesMax
+                || static_cast<std::uint64_t>(authoredBeamCount) + authoredBallCount
+                       > kLatticeTrianglesMax) {
+                return ErrorCode::ResourceLimit;
+            }
             std::vector<Lib3MF::sBeam> beams;
             lattice->GetBeams(beams);
-            if (beams.size() > kLatticeTrianglesMax) {
-                return ErrorCode::ResourceLimit;
+            if (beams.size() != authoredBeamCount) {
+                return ErrorCode::MalformedData;
             }
             std::vector<Lib3MF::sBall> balls;
             lattice->GetBalls(balls);
+            if (balls.size() != authoredBallCount) {
+                return ErrorCode::MalformedData;
+            }
             Lib3MF::eBeamLatticeBallMode ballMode =
                 Lib3MF::eBeamLatticeBallMode::BeamLatticeBallModeNone;
             double defaultBallRadius = 0.0;
             lattice->GetBallOptions(ballMode, defaultBallRadius);
-
-            const double beamCount = static_cast<double>(beams.size());
-            const double ballCount = static_cast<double>(balls.size());
-            if (beamCount + ballCount > static_cast<double>(kLatticeTrianglesMax)) {
-                return ErrorCode::ResourceLimit;
-            }
 
             std::vector<Lib3MF::sBeam> validBeams;
             validBeams.reserve(beams.size());
@@ -1650,8 +1694,9 @@ ErrorCode ThreeMfAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
                               radial, (std::max)(2u, radial / 2), latticeColor);
                 }
             }
-            if (clipped) {
-                ClipInside(generated, clippingBox);
+            if (clipped && !ClipInside(generated, clippingBox,
+                                       static_cast<std::size_t>(kLatticeTrianglesMax))) {
+                return ErrorCode::ResourceLimit;
             }
             if (generated.size() > kLatticeTrianglesMax) {
                 return ErrorCode::ResourceLimit;

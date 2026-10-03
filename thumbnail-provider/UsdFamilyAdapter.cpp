@@ -1133,8 +1133,18 @@ ErrorCode UsdAdapter::ValidateScene()
         std::vector<int32_t> protoIndices;
         std::vector<tinyusdz::value::point3f> positions;
         if (!Evaluate(instancer->protoIndices, time, protoIndices)
-            || !Evaluate(instancer->positions, time, positions)
-            || protoIndices.size() != positions.size()) {
+            || !Evaluate(instancer->positions, time, positions)) {
+            return ErrorCode::MalformedData;
+        }
+        // TinyUSDZ exposes no element-count accessor before Evaluate copies the
+        // authored array, so cap the result immediately. A point instancer can
+        // contribute at most kMaxPrimCount instances, and each instance needs a
+        // matching proto/position/id, so anything larger is ResourceLimit (not
+        // OutOfMemory) and must not be absorbed into the ledger.
+        if (protoIndices.size() > kMaxPrimCount || positions.size() > kMaxPrimCount) {
+            return ErrorCode::ResourceLimit;
+        }
+        if (protoIndices.size() != positions.size()) {
             return ErrorCode::MalformedData;
         }
         std::vector<int64_t> ids;
@@ -1165,6 +1175,11 @@ ErrorCode UsdAdapter::ValidateScene()
         if (instancer->invisibleIds.authored()
             && !Evaluate(instancer->invisibleIds, time, invisibleValues)) {
             return ErrorCode::MalformedData;
+        }
+        // Bound the id set before it is materialized: it is file-count-driven
+        // and unrelated to positions.size().
+        if (invisibleValues.size() > kMaxPrimCount) {
+            return ErrorCode::ResourceLimit;
         }
         const std::unordered_set<int64_t> invisible(invisibleValues.begin(), invisibleValues.end());
         const auto prototypePaths = PrototypePaths(*instancer);

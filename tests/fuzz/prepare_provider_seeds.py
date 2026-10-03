@@ -80,6 +80,32 @@ def cube_stl():
     return bytes(out)
 
 
+def huge_point_instancer_usda(count=10001):
+    """A PointInstancer whose authored arrays exceed the provider prim cap.
+
+    Exercises the T24 count bound: the adapter must reject the oversized
+    protoIndices/positions result as ResourceLimit, not absorb it.
+    """
+    zeros = ', '.join('0' for _ in range(count))
+    points = ', '.join('(0, 0, 0)' for _ in range(count))
+    return (
+        '#usda 1.0\n(\n    defaultPrim = "Root"\n)\n\n'
+        'def Xform "Root"\n{\n'
+        '    def Xform "Prototypes"\n    {\n'
+        '        def Mesh "Triangle"\n        {\n'
+        '            int[] faceVertexCounts = [3]\n'
+        '            int[] faceVertexIndices = [0, 1, 2]\n'
+        '            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]\n'
+        '            uniform token subdivisionScheme = "none"\n'
+        '        }\n    }\n'
+        '    def PointInstancer "Instances"\n    {\n'
+        '        rel prototypes = [</Root/Prototypes/Triangle>]\n'
+        f'        int[] protoIndices = [{zeros}]\n'
+        f'        point3f[] positions = [{points}]\n'
+        '    }\n}\n'
+    ).encode()
+
+
 def f32_bits(value):
     return struct.unpack('<I', struct.pack('<f', value))[0]
 
@@ -172,6 +198,8 @@ def main():
                  reported=0xFFFFFFFFFFFFFFFF))
     add('pipeline-usd-wrong-type.pipeline.seed',
         envelope(PIPELINE, read(usd_ascii), family=USD, flags=STAT_WRONG_TYPE))
+    add('pipeline-usd-huge-instancer.pipeline.seed',
+        envelope(PIPELINE, huge_point_instancer_usda(), family=USD))
 
     # --- Stream domain: bounded source edge cases --------------------------
     add('stream-normal.stream.seed', envelope(STREAM, b'hello bounded stream'))

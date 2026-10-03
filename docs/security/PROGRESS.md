@@ -33,7 +33,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T21 — Complete the SEC-01 sweep: worker USD primvar cap and provider glTF visit cap**: Reusable facts for later sessions:; **USD primvar sample cap.** `import-worker/src/UsdAdapter.h::PrimvarSampleLimit(samples)` is the
 - **T22 — Make the broker generation wall-clock deadline absolute (SEC-03 completion)**: Reusable facts for later sessions:; **The deadline is enforced at the loop boundary, not in the pipe wait.**
 - **T23 - Fix release/CI NuGet credential lifecycle and durable-cache restore (SEC-14 follow-up)**: Reusable facts for later sessions:; **The cleanup step was the bug.** In `ci.yml`, `release.yml` and
-- **Follow-ups**: Hosted verification of T23: confirm a `push`/`schedule`/tag run hits the GitHub Packages NuGet
+- **T24 - Bound provider allocations fed by library-supplied counts (3MF/USD)**: Reusable facts for later sessions:; **Pre-cap where lib3mf exposes a count.** `CBeamLattice::GetBeamCount()` /
+- **Follow-ups**: Hosted verification of T23: confirm a `push`/`schedule`/tag run hits the GitHub Packages NuGet; T24: rebuild and run `Tests.Unit` (the changed `ThreeMfFamilyAdapter.cpp`/`UsdFamilyAdapter.cpp`
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -1226,8 +1227,54 @@ Reusable facts for later sessions:
   observation still owed: a trusted run must actually resolve packages from the GitHub Packages
   NuGet source (not just the files cache), and a PR run must still restore from the files cache.
 
+## T24 - Bound provider allocations fed by library-supplied counts (3MF/USD)
+
+Reusable facts for later sessions:
+
+- **Pre-cap where lib3mf exposes a count.** `CBeamLattice::GetBeamCount()` /
+  `GetBallCount()` and `CMultiPropertyGroup::GetLayerCount()` are available, so
+  `ThreeMfFamilyAdapter.cpp` checks them against `kLatticeTrianglesMax` (262 144)
+  and `kMultiPropertyLayersMax` (16) **before** `GetBeams`/`GetBalls`/
+  `GetMultiProperty` size their vectors. A returned size that disagrees with the
+  authored count is `MalformedData`, not `ResourceLimit`.
+- **No composite count accessor.** lib3mf's `CCompositeMaterials::GetComposite`
+  queries `elementsNeeded` internally and resizes the caller vector; there is no
+  per-property count. The accepted shape is allocate-then-check: cap at
+  `kCompositeConstituentsMax` (4096) right after the call and fail
+  `ResourceLimit`. `ResolveProperty` had to change from `bool` to `ErrorCode` so
+  this code reaches the caller instead of being flattened to `MalformedData`.
+- **`ClipInside` bound.** The clip can grow a triangle across six planes, so it
+  now takes the cap, returns `false` as soon as the output would exceed it, and
+  the caller maps `false` to `ResourceLimit`. This bounds the live `GenTriangle`
+  vector peak (~192 B/tri) rather than only checking after the fact. A normal
+  bounded lattice is unaffected (the committed `beam-lattice` golden still
+  renders); a pathological clip whose final count would fit could now fail early.
+- **USD has no pre-copy count either.** `tinyusdz::Animatable::get` copies the
+  authored array; `Evaluate` therefore copies first. Cap `protoIndices`/
+  `positions`/`invisibleIds` at `kMaxPrimCount` (10 000) immediately after
+  `Evaluate` and before building the `invisible` `unordered_set`. `positions` is
+  the driver: `ids`/`orientations`/`scales` are already checked equal to it.
+- **Test construction gotcha.** To build an oversized-composite 3MF through
+  lib3mf, every constituent needs its own base material: lib3mf merges
+  constituents that share a `m_PropertyID`, so 4097 constituents over 2 materials
+  round-trips as 2. Set an object-level property on the mesh (a triangle-property
+  mesh with no object-level property fails to read back).
+- **Files.** `thumbnail-provider/ThreeMfFamilyAdapter.cpp`,
+  `thumbnail-provider/UsdFamilyAdapter.cpp`,
+  `tests/provider-host/ProviderHostTests.cpp`,
+  `tests/fuzz/prepare_provider_seeds.py`, ADR-0051,
+  `docs/design/05-thumbnail-provider.md`.
+- **Verify (Release, exit 0).** `x64\Release\Tests.ProviderHost.exe` full:
+  162 assertions / 11 cases. Build: `MSBuild
+  tests\provider-host\Tests.ProviderHost.vcxproj /p:Configuration=Release
+  /p:Platform=x64 /p:SolutionDir=<repo>\` (the solution-level `OutDir` puts the
+  exe in `x64\Release`). Tests.Unit was not rebuilt this session.
+
 ## Follow-ups
 
 - Hosted verification of T23: confirm a `push`/`schedule`/tag run hits the GitHub Packages NuGet
   source after the cleanup reorder, and that a `pull_request` restores from the files cache with no
   `preview3d-nuget.config` created (no token in the PR lane).
+- T24: rebuild and run `Tests.Unit` (the changed `ThreeMfFamilyAdapter.cpp`/`UsdFamilyAdapter.cpp`
+  are compiled into it) to confirm the provider unit cases still pass; this session only rebuilt and
+  ran `Tests.ProviderHost`, which exercises the same changed sources and the `beam-lattice` golden.
