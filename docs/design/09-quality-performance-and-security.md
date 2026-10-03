@@ -284,6 +284,7 @@ Windows, the signed installed payload, and the graphics driver are trust depende
 ### Files and archives
 
 - Handle-based canonical path checks and FILE_SHARE_READ-only lifetime policy reduce time-of-check/time-of-use changes.
+- The trusted viewer's open guard and the broker classify a primary path with `platform::ClassifySourcePath` *before* `CreateFileW`: UNC/device namespaces in either separator form (`//server/share`, `\\server\share`, `\\?\UNC\...`, `\\.\...`) and any non-drive-qualified (relative or drive-relative) path are rejected up front, so a crafted path cannot make a trusted process initiate an SMB/device connection that is only refused after it is already open. The post-open canonical containment check remains as defense in depth ([ADR-0053](./adr/0053-prebound-primary-path-classification.md)).
 - All sizes/counts use checked 64-bit math before conversion to size_t/D3D types.
 - Allocation, depth, object, dependency, time, decoded-pixel, and archive-ratio budgets are enforced through mandatory parser callbacks inside the owning import process and, independently, by that process's broker/Job Object limits — a callback bug in one layer does not remove the other.
 - Archive entry names are canonicalized as virtual relative paths; absolute, drive, device, alternate-stream, traversal, duplicate-conflicting, and symlink-like entries are rejected.

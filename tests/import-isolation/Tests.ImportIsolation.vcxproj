@@ -146,6 +146,7 @@
     <ClInclude Include="..\..\shared\platform\include\platform\MappedView.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\Sha256.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\CheckedMath.h" />
+    <ClInclude Include="..\..\shared\platform\include\platform\SourcePathPolicy.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\Generation.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\ControlChannelWait.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\ImportSession.h" />

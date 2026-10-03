@@ -35,6 +35,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T23 - Fix release/CI NuGet credential lifecycle and durable-cache restore (SEC-14 follow-up)**: Reusable facts for later sessions:; **The cleanup step was the bug.** In `ci.yml`, `release.yml` and
 - **T24 - Bound provider allocations fed by library-supplied counts (3MF/USD)**: Reusable facts for later sessions:; **Pre-cap where lib3mf exposes a count.** `CBeamLattice::GetBeamCount()` /
 - **T25 — Complete SEC-17: provider fuzz/soak promotion and hostile failure classification**: Reusable facts for later sessions:; **`fuzz-smoke` is now a required gate.** `.github/workflows/ci.yml` `fuzz-smoke` runs on
+- **T26 — Normalize untrusted paths before opening (remote UNC + absolute primary)**: Reusable facts for later sessions:; **One classifier, two callers.** `shared/platform/include/platform/SourcePathPolicy.h` (header-only)
 - **Follow-ups**: T25 hosted: confirm a fork `pull_request` runs the promoted `fuzz-smoke` lane from the files cache; T25: a live stack-overflow/`__fastfail` surrogate death is not deterministically inducible from a
 <!-- symphony:digest:end -->
 
@@ -1304,6 +1305,32 @@ Reusable facts for later sessions:
 - **Gotcha.** The retained handle detects a crash-killed `dllhost` even after its PID leaves the
   process snapshot; exit code 0 is the Shell's normal teardown and is ignored.
 
+## T26 — Normalize untrusted paths before opening (remote UNC + absolute primary)
+
+Reusable facts for later sessions:
+
+- **One classifier, two callers.** `shared/platform/include/platform/SourcePathPolicy.h` (header-only)
+  defines `platform::ClassifySourcePath(path) -> LocalAbsolute | RemoteOrDevice | Relative` and
+  `platform::NormalizeSourcePathSeparators`. It replaces `/` with `\` on a *copy* and classifies that
+  copy, then callers open the original text. `LocalAbsolute` = `X:\...` or `\\?\X:\...`;
+  `RemoteOrDevice` = any leading `\\` that is not the extended drive form, i.e. `\\server`,
+  `\\.\`, `\\?\UNC\`, `\\?\GLOBALROOT\`, `\\?\Volume{...}\`; everything else is `Relative`.
+- **Broker.** `OpenAndCanonicalizeSourceFile` (`shared/import-broker/src/SourceFileAccess.cpp`)
+  classifies first and returns `UnsafeReference` for `RemoteOrDevice` and `Relative` before
+  `CreateFileW`; the ADS/extra-colon check and the `GetDriveTypeW == DRIVE_REMOTE` mapped-drive probe
+  remain. A forward-slash UNC and a bare relative name are the cases the old prefix checks missed.
+- **Viewer.** `BeginOpen` (`interactive-viewer/src/app/Preview3D.cpp`) rejects everything that is not
+  `LocalAbsolute` with the existing `failure.remotePath` surface; `BeginOpen` is in an anonymous
+  namespace, so the unit tests exercise `platform::ClassifySourcePath` directly in
+  `tests/unit/SafeFileOpsTests.cpp` (`[security][source-path]`).
+- **Tests.** `tests/import-isolation/SourceFileAccessTests.cpp` has a remote/device rejection case, a
+  relative-primary rejection case, and a forward-slash-absolute acceptance case (proves normalization
+  does not over-reject).
+- **Gotcha.** Build individual projects with
+  `MSBuild <vcxproj> /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=<repo>\" /p:VcpkgRoot=C:\vcpkg`;
+  the solution target names differ from the `.vcxproj` names. The new header was added as `ClInclude`
+  to `Preview3D`, `Tests.Unit`, and `Tests.ImportIsolation`.
+
 ## Follow-ups
 
 - T25 hosted: confirm a fork `pull_request` runs the promoted `fuzz-smoke` lane from the files cache
@@ -1317,3 +1344,8 @@ Reusable facts for later sessions:
 - T24: rebuild and run `Tests.Unit` (the changed `ThreeMfFamilyAdapter.cpp`/`UsdFamilyAdapter.cpp`
   are compiled into it) to confirm the provider unit cases still pass; this session only rebuilt and
   ran `Tests.ProviderHost`, which exercises the same changed sources and the `beam-lattice` golden.
+- T26: a DOS reserved device name reached through a drive-qualified path (`C:\models\CON.glb`) is
+  still opened and only refused by the post-open `GetFileType != FILE_TYPE_DISK` check; unlike a
+  `\\.\`/`\\?\UNC\` open this is a local character device, not an SMB/network open. If a future audit
+  wants it rejected pre-open, extend `platform::ClassifySourcePath` with a component-level reserved-name
+  check.

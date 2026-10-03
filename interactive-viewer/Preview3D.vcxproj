@@ -111,6 +111,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="..\shared\platform\include\platform\ProcThreadAttributeList.h" />
     <ClInclude Include="..\shared\platform\include\platform\MappedView.h" />
     <ClInclude Include="..\shared\platform\include\platform\CheckedMath.h" />
+    <ClInclude Include="..\shared\platform\include\platform\SourcePathPolicy.h" />
     <ClInclude Include="..\shared\import-broker\include\import_broker\ControlChannelWait.h" />
     <ClInclude Include="..\shared\import-broker\include\import_broker\ImportSession.h" />
     <ClInclude Include="..\shared\import-broker\include\import_broker\SandboxLauncher.h" />

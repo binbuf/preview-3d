@@ -63,16 +63,16 @@ not re-fix those. Each task below carries its audit evidence inline.
 - [x] T23 — Fix release/CI NuGet credential lifecycle and durable-cache restore (SEC-14 follow-up) → [23-ci-credential-lifecycle.md](23-ci-credential-lifecycle.md)
 - [x] T24 — Bound provider allocations fed by library-supplied counts (3MF/USD) → [24-provider-library-count-bounds.md](24-provider-library-count-bounds.md)
 - [x] T25 — Complete SEC-17: provider fuzz/soak promotion and hostile failure classification → [25-sec17-completion.md](25-sec17-completion.md)
-- [ ] T26 — Normalize untrusted paths before opening (remote UNC + absolute primary) → [26-path-normalization.md](26-path-normalization.md)
+- [x] T26 — Normalize untrusted paths before opening (remote UNC + absolute primary) → [26-path-normalization.md](26-path-normalization.md)
 - [ ] T27 — Bound 3MF ZIP64 extra-field reads to the sub-record (SEC-05 follow-up) → [27-3mf-zip64-extra-field.md](27-3mf-zip64-extra-field.md)
 - [ ] T28 — Worker WIC native-copy buffer invariant → [28-wic-native-copy.md](28-wic-native-copy.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-03T02:49:38Z · 27/30 done
+**Pipeline status** — updated 2026-10-03T02:57:16Z · 28/30 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T16b, T17, T18, T19, T20, T21, T22, T23, T24, T25
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T16b, T17, T18, T19, T20, T21, T22, T23, T24, T25, T26
 - Blocked: none
 - Failed: none
-- Remaining: T26, T27, T28
-- Last finished: T25 — done · Promoted ProviderFuzz into the required fuzz-smoke gate (step-occt restore, matrix, PR/push/release) and added SEC-08 hostile surrogate-death classification to the soak; verify Tests.Unit passes 131561/314, ProviderFuzz smoke and soak classification exit 0, actionlint green.
+- Remaining: T27, T28
+- Last finished: T26 — done · Pre-open UNC/device/relative primary-path classification landed in viewer + broker with tests; Release Tests.ImportIsolation and Tests.Unit [security] pass, docs/ADR-0053 updated.
 <!-- /symphony:status -->

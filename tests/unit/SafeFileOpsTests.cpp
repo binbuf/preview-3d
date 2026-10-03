@@ -5,6 +5,8 @@
 
 #include "SafeFileOps.h"
 
+#include "platform/SourcePathPolicy.h"
+
 #include <windows.h>
 
 #include <catch2/catch_test_macros.hpp>
@@ -172,6 +174,62 @@ TEST_CASE("IsSafeOutputPath rejects hostile benchmark-result targets", "[securit
         INFO("hostile case " << index);
         CHECK_FALSE(preview3d::safeio::IsSafeOutputPath(candidate, L".json", root, error));
         CHECK_FALSE(error.empty());
+        ++index;
+    }
+}
+
+TEST_CASE("ClassifySourcePath rejects remote/device paths before BeginOpen opens them",
+    "[security][source-path]")
+{
+    // T26: the viewer guard must refuse these before the import worker is
+    // asked to open anything. Forward-slash and extended UNC forms are the
+    // cases the old "\\"-prefix check missed.
+    const wchar_t* remoteOrDevice[] = {
+        L"//server/share/model.glb",
+        L"\\\\server\\share\\model.glb",
+        L"\\\\?\\UNC\\server\\share\\model.glb",
+        L"\\\\.\\C:\\model.glb",
+        L"\\\\.\\PhysicalDrive0",
+        L"\\\\?\\GLOBALROOT\\Device\\HarddiskVolume0\\model.glb",
+        L"\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\model.glb",
+    };
+    std::size_t index = 0;
+    for (const wchar_t* candidate : remoteOrDevice) {
+        INFO("remote/device case " << index);
+        CHECK(platform::ClassifySourcePath(candidate) == platform::SourcePathKind::RemoteOrDevice);
+        ++index;
+    }
+
+    const wchar_t* relative[] = {
+        L"",
+        L"model.glb",
+        L"models\\model.glb",
+        L"models/model.glb",
+        L"\\model.glb",
+        L"/model.glb",
+        L"C:model.glb",
+    };
+    index = 0;
+    for (const wchar_t* candidate : relative) {
+        INFO("relative case " << index);
+        CHECK(platform::ClassifySourcePath(candidate) == platform::SourcePathKind::Relative);
+        ++index;
+    }
+}
+
+TEST_CASE("ClassifySourcePath accepts local absolute drive paths", "[security][source-path]")
+{
+    const wchar_t* local[] = {
+        L"C:\\models\\model.glb",
+        L"C:/models/model.glb",
+        L"c:\\models\\model.glb",
+        L"\\\\?\\C:\\models\\model.glb",
+        L"\\\\?\\c:/models/model.glb",
+    };
+    std::size_t index = 0;
+    for (const wchar_t* candidate : local) {
+        INFO("local case " << index);
+        CHECK(platform::ClassifySourcePath(candidate) == platform::SourcePathKind::LocalAbsolute);
         ++index;
     }
 }

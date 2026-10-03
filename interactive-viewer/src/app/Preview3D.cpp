@@ -15,6 +15,7 @@
 #include "ShellIntegration.h"
 #include "SafeFileOps.h"
 #include "platform/ProcessMitigations.h"
+#include "platform/SourcePathPolicy.h"
 
 #include <commctrl.h>
 #include <dwmapi.h>
@@ -1813,7 +1814,12 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
         app.cancellation->store(true, std::memory_order_relaxed);
         app.cancellation.reset();
     }
-    if (path.rfind(L"\\\\", 0) == 0 && path.rfind(L"\\\\?\\", 0) != 0)
+    // Reject remote/device and relative paths before any import worker is
+    // asked to open them. The classifier normalizes separators on a copy, so a
+    // forward-slash UNC ("//server/share") and "\\?\UNC\server\..." are caught
+    // here rather than only by the broker's post-open canonical check; a
+    // relative path is refused because the primary source must be absolute.
+    if (platform::ClassifySourcePath(path) != platform::SourcePathKind::LocalAbsolute)
     {
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);

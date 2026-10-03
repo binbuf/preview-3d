@@ -199,6 +199,7 @@
     <ClInclude Include="..\..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\MappedFile.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\CheckedMath.h" />
+    <ClInclude Include="..\..\shared\platform\include\platform\SourcePathPolicy.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\Generation.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\Win32Handle.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\MappedView.h" />
