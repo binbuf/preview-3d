@@ -26,6 +26,19 @@ inline model_core::ImportErrorCode PrimvarExpansionLimit(uint64_t corners)
     return model_core::ImportErrorCode::None;
 }
 
+// Admits a flattened texture-coordinate primvar only if its sample count fits
+// the Tier B vertex budget. PrimvarExpansionLimit bounds the expanded corner
+// buffer, but that cap keys on the mesh corner count: a small mesh can carry an
+// indexed or Varying primvar whose flattened sample count dwarfs its corners, so
+// the sample buffer itself needs this pre-resize admission check. Reuses
+// kTierBVertexLimit (no new public limit).
+inline model_core::ImportErrorCode PrimvarSampleLimit(uint64_t samples)
+{
+    if (samples > model_core::kTierBVertexLimit)
+        return model_core::ImportErrorCode::ResourceLimit;
+    return model_core::ImportErrorCode::None;
+}
+
 class ChunkBatchSink;
 class SidecarFileClient;
 struct TextureDecodeOptions;

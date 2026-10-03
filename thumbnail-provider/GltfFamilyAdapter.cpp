@@ -903,7 +903,14 @@ ErrorCode GltfAdapter::ParseImpl()
     }
     std::uint64_t visited = 0;
     while (!stack.empty()) {
-        if ((++visited & 0x3FFu) == 0 && !input_.deadline->Checkpoint()) {
+        // Bound the total walk, not just the depth: a mesh-less DAG re-walks
+        // shared subtrees, so depth alone lets a small file multiply visits
+        // exponentially until the deadline. Reuses the provider scene-graph
+        // node budget; a limit hit is ResourceLimit, matching the worker walk.
+        if (++visited > ProviderLimits::kNodesMax) {
+            return ErrorCode::ResourceLimit;
+        }
+        if ((visited & 0x3FFu) == 0 && !input_.deadline->Checkpoint()) {
             return ErrorCode::Cancelled;
         }
         const Work work = stack.back();

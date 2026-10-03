@@ -58,7 +58,7 @@ mandatory label in `ActiveInstance.cpp`; provider USD `StripSkeletonBindings` re
 not re-fix those. Each task below carries its audit evidence inline.
 
 - [x] T20 — Close provider allocating-`noexcept` holes (SEC-06 completion) → [20-provider-allocating-noexcept-closure.md](20-provider-allocating-noexcept-closure.md)
-- [ ] T21 — Complete the SEC-01 sweep: USD primvar cap and provider glTF visit cap → [21-sec01-sweep-completion.md](21-sec01-sweep-completion.md)
+- [x] T21 — Complete the SEC-01 sweep: USD primvar cap and provider glTF visit cap → [21-sec01-sweep-completion.md](21-sec01-sweep-completion.md)
 - [ ] T22 — Make the broker generation wall-clock deadline absolute (SEC-03 completion) → [22-generation-deadline-absolute.md](22-generation-deadline-absolute.md)
 - [ ] T23 — Fix release/CI NuGet credential lifecycle and durable-cache restore (SEC-14 follow-up) → [23-ci-credential-lifecycle.md](23-ci-credential-lifecycle.md)
 - [ ] T24 — Bound provider allocations fed by library-supplied counts (3MF/USD) → [24-provider-library-count-bounds.md](24-provider-library-count-bounds.md)
@@ -68,11 +68,11 @@ not re-fix those. Each task below carries its audit evidence inline.
 - [ ] T28 — Worker WIC native-copy buffer invariant → [28-wic-native-copy.md](28-wic-native-copy.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-03T01:45:30Z · 22/30 done
+**Pipeline status** — updated 2026-10-03T02:06:38Z · 23/30 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T16b, T17, T18, T19, T20
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T16b, T17, T18, T19, T20, T21
 - Blocked: none
 - Failed: none
-- Remaining: T21, T22, T23, T24, T25, T26, T27, T28
-- Last finished: T20 — done · Closed all audited allocating-`noexcept` holes in the 3MF/USD/GeometrySampler provider paths (3MF helpers and StratifiedOffsets de-noexcept'd; USD TinyUSDZ resolver callbacks contain bad_alloc internally), extended the fault-injection case to 3MF/USD, and all ProviderHost Debug/Release and Release Unit `[provider]` checks pass. STEP stays excluded (OCCT C allocator) and is recorded for the SEC-17 soak.
+- Remaining: T22, T23, T24, T25, T26, T27, T28
+- Last finished: T21 — done · Bound USD texcoord sample buffers by kTierBVertexLimit before resize and capped the provider glTF walk at ProviderLimits::kNodesMax; regression tests added and all Release acceptance checks (ImportIsolation, Unit, ProviderHost) pass green.
 <!-- /symphony:status -->

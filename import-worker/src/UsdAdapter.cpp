@@ -694,19 +694,26 @@ bool ExpandPrimvarForTriangulatedMesh(const RenderMesh& mesh,
     return true;
 }
 
-bool ReadTexcoordPrimvar(const tinyusdz::GeomPrimvar& primvar, double time,
-                         VertexAttribute& attribute, std::string& error)
+ImportErrorCode ReadTexcoordPrimvar(const tinyusdz::GeomPrimvar& primvar, double time,
+                                    VertexAttribute& attribute, std::string& error)
 {
     std::vector<tinyusdz::value::float2> values;
     if (!primvar.flatten_with_indices(
             time, &values, tinyusdz::value::TimeSampleInterpolationType::Linear, &error))
-        return false;
+        return ImportErrorCode::MalformedData;
+    // Bound the flattened sample count before resizing the attribute buffer. The
+    // later PrimvarExpansionLimit keys on the mesh corner count, not this
+    // primvar's sample count, so a small mesh with a huge indexed/Varying
+    // primvar would otherwise allocate the sample buffer uncapped.
+    if (const ImportErrorCode limit = PrimvarSampleLimit(values.size());
+        limit != ImportErrorCode::None)
+        return limit;
     attribute.name = primvar.name();
     attribute.format = VertexAttributeFormat::Vec2;
     attribute.elementSize = 1;
     const auto dataBytes
         = platform::CheckedMultiply(values.size(), uint64_t(sizeof(values.front())));
-    if (!dataBytes) return false;
+    if (!dataBytes) return ImportErrorCode::MalformedData;
     attribute.data.resize(static_cast<size_t>(*dataBytes));
     if (!values.empty())
         std::memcpy(attribute.data.data(), values.data(), attribute.data.size());
@@ -722,9 +729,9 @@ bool ReadTexcoordPrimvar(const tinyusdz::GeomPrimvar& primvar, double time,
     case tinyusdz::Interpolation::FaceVarying:
         attribute.variability = tinyusdz::tydra::VertexVariability::FaceVarying; break;
     default:
-        return false;
+        return ImportErrorCode::MalformedData;
     }
-    return true;
+    return ImportErrorCode::None;
 }
 
 ImportErrorCode RecoverMissingTexcoords(const tinyusdz::Stage& stage, double time,
@@ -748,8 +755,9 @@ ImportErrorCode RecoverMissingTexcoords(const tinyusdz::Stage& stage, double tim
             continue;
         }
         VertexAttribute attribute;
-        if (!ReadTexcoordPrimvar(primvar, time, attribute, error))
-            return ImportErrorCode::MalformedData;
+        if (const ImportErrorCode readError = ReadTexcoordPrimvar(primvar, time, attribute, error);
+            readError != ImportErrorCode::None)
+            return readError;
         ImportErrorCode expansionError = ImportErrorCode::None;
         if (!ExpandPrimvarForTriangulatedMesh(mesh, attribute, options, expansionError))
             return expansionError;

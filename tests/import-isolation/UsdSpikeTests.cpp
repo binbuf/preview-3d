@@ -548,6 +548,24 @@ TEST_CASE("USD UV expansion is bounded by the Tier B triangle and vertex caps be
     CHECK(import_worker::PrimvarExpansionLimit(UINT64_MAX / 4) == ImportErrorCode::ResourceLimit);
 }
 
+// SEC-01 sweep: ReadTexcoordPrimvar sizes its sample buffer from the flattened
+// primvar sample count. PrimvarExpansionLimit keys on the mesh corner count, so
+// a small mesh with a huge indexed/Varying primvar could allocate the sample
+// buffer unchecked. PrimvarSampleLimit is the pre-resize admission check and
+// reuses kTierBVertexLimit (no new limit).
+TEST_CASE("USD texcoord sample buffers are bounded by the Tier B vertex cap before allocation",
+          "[usd-spike][resource-limit]")
+{
+    using model_core::ImportErrorCode;
+    CHECK(import_worker::PrimvarSampleLimit(0) == ImportErrorCode::None);
+    CHECK(import_worker::PrimvarSampleLimit(3) == ImportErrorCode::None);
+    CHECK(import_worker::PrimvarSampleLimit(uint64_t(model_core::kTierBVertexLimit))
+          == ImportErrorCode::None);
+    CHECK(import_worker::PrimvarSampleLimit(uint64_t(model_core::kTierBVertexLimit) + 1)
+          == ImportErrorCode::ResourceLimit);
+    CHECK(import_worker::PrimvarSampleLimit(UINT64_MAX / 8) == ImportErrorCode::ResourceLimit);
+}
+
 TEST_CASE("USD-001 USDZ preflight rejects archive authority and expansion hazards",
           "[usd-spike][usdz][archive]")
 {

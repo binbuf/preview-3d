@@ -30,6 +30,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T19 — SEC-19 License/SBOM/dependency metadata**: Reusable facts for later sessions:; **One generator, one mapping.** `packaging/ReleaseMetadata.ps1` holds the installed-closure
 - **Post-audit inline fixes (2026-10-03)**: A follow-up source audit of the whole security set found two small, self-contained; **SEC-12 mandatory label was `LW` (Low), not medium.** `SecurityForObject` in
 - **T20 — Close provider allocating-`noexcept` holes (SEC-06 completion)**: **Landed.** Every remaining product-owned allocating helper in the 3MF/USD/GeometrySampler; `thumbnail-provider/ThreeMfFamilyAdapter.cpp`: dropped `noexcept` from `AddSphere`, `AddBeam`,
+- **T21 — Complete the SEC-01 sweep: worker USD primvar cap and provider glTF visit cap**: Reusable facts for later sessions:; **USD primvar sample cap.** `import-worker/src/UsdAdapter.h::PrimvarSampleLimit(samples)` is the
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -750,6 +751,11 @@ Reusable facts for later sessions:
 - **SEC-16b follow-up (required on a KTX/basisu bump):** re-validate the `Etc1sTablePreflight.h` port
   against the new `external/basisu` `read_huffman_table`/`decode_tables`, and rerun the promoted
   `GltfFuzz` corpus. The port is version-pinned to BASISD_LIB_VERSION 116.
+- T21/SEC-01: `ProviderLimits::kNodesMax` (10000) is now also the provider glTF walk's total-visit
+  budget, so a legitimate *mesh-less* DAG that expands to more than 10000 paths fails
+  `ResourceLimit`. The provider already caps node and instance counts at the same value, so this
+  matches the existing scene-graph budget; raising it is a deliberate provider-limit change and
+  needs an ADR.
 
 ## T13 — SEC-13 CI test gate for PRs and releases
 
@@ -1109,3 +1115,36 @@ allocating helpers must not be `noexcept` and that the TinyUSDZ resolver callbac
 **Checks.** `x64\Debug\Tests.ProviderHost.exe` 152 assertions / 8 cases pass; `x64\Release\`
 identical; `[host][containment]` 44 assertions / 2 cases; `x64\Release\Tests.Unit.exe "[provider]"`
 60934 assertions / 221 cases.
+
+## T21 — Complete the SEC-01 sweep: worker USD primvar cap and provider glTF visit cap
+
+Reusable facts for later sessions:
+
+- **USD primvar sample cap.** `import-worker/src/UsdAdapter.h::PrimvarSampleLimit(samples)` is the
+  pre-`attribute.data.resize` admission check for a flattened texcoord primvar; it reuses
+  `model_core::kTierBVertexLimit` (60M samples) and returns `ResourceLimit`. `ReadTexcoordPrimvar`
+  now returns `ImportErrorCode` (was `bool`) and calls it on `values.size()`; `RecoverMissingTexcoords`
+  propagates the code instead of flattening every read failure to `MalformedData`. Structural errors
+  and wrapped `CheckedMultiply` stay `MalformedData`. Rationale: `PrimvarExpansionLimit(corners)`
+  bounds the *expanded* buffer by the mesh corner count, which does not bound a small mesh carrying a
+  hostile indexed/Varying primvar whose flattened sample count dwarfs its corners.
+- **Provider glTF total-visit cap.** `thumbnail-provider/GltfFamilyAdapter.cpp` transform-walk loop
+  fails `ErrorCode::ResourceLimit` when `++visited > ProviderLimits::kNodesMax` (10000), in addition
+  to `kMaxTransformDepth = 256` and the per-1024 deadline checkpoint. This is the provider-side mirror
+  of the worker `WalkState::totalNodeVisits` / `kTierAObjectLimit` budget and bounds a mesh-less
+  doubling DAG that re-walks shared subtrees. No new limit and no ADR: `kNodesMax` is already the
+  provider scene-graph node cap.
+- **Regression seams.** Worker: `UsdSpikeTests.cpp` `[usd-spike][resource-limit]` boundary-tests
+  `PrimvarSampleLimit` (a real >60M-sample USDA is impractical, same deviation as T01's
+  `PrimvarExpansionLimit`). Provider: `ProviderGltfAdapterTests.cpp` (`[provider][gltf][security]`)
+  and `ProviderHostTests.cpp` (`[host][gltf][security]`) both build a 40-level mesh-less doubling DAG
+  (`MeshlessDoublingDagJson`) and assert `ResourceLimit` with no geometry.
+- **Verify (Release, all exit 0).** `Tests.ImportIsolation.exe` full: 404 cases / 399 passed / 5
+  skipped / 0 failed; `[usd-spike][resource-limit]` 12 assertions / 2 cases. Harness verify
+  `x64\Release\Tests.Unit.exe`: 135138 assertions / 376 cases; `"[provider]"` 60936 / 222;
+  `"[provider][gltf][security]"` 21 / 5. `Tests.ProviderHost.exe` full: 155 assertions / 9 cases;
+  `"[host][gltf][security]"` 3 / 1. Debug unit + import-isolation targeted cases green.
+- **No ADR.** Both fixes reuse existing constants (`kTierBVertexLimit`, `ProviderLimits::kNodesMax`),
+  so no new public/Tier/provider limit was introduced. Build with MSBuild at
+  `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe` and
+  `/p:SolutionDir=D:\repos\binbuf\preview-3d\\`.

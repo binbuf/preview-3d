@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -95,6 +96,34 @@ const GoldenFixture* FindFixture(preview3d::provider::Family family)
         }
     }
     return nullptr;
+}
+
+// SEC-01 sweep: a mesh-less doubling glTF DAG. Each node under `levels` has two
+// identical children, so the walk would visit 2^levels nodes if it were not
+// bounded by a total-visit budget.
+std::vector<std::byte> MeshlessDoublingDagJson(int levels)
+{
+    std::vector<std::byte> json;
+    const auto append = [&json](const std::string& text) {
+        for (const char ch : text) {
+            json.push_back(static_cast<std::byte>(ch));
+        }
+    };
+    append("{\"asset\":{\"version\":\"2.0\"},\"scene\":0,"
+           "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[");
+    for (int i = 0; i < levels; ++i) {
+        if (i != 0) {
+            append(",");
+        }
+        if (i + 1 < levels) {
+            const std::string child = std::to_string(i + 1);
+            append("{\"children\":[" + child + "," + child + "]}");
+        } else {
+            append("{}");
+        }
+    }
+    append("]}");
+    return json;
 }
 
 // One activate/use/unload cycle against a freshly loaded module, plus one
@@ -306,6 +335,28 @@ TEST_CASE("a contained access violation quarantines the surrogate and later requ
 
     ResetContainmentQuarantineForTest();
     CHECK_FALSE(ContainmentQuarantined());
+}
+
+TEST_CASE("a mesh-less doubling glTF DAG is bounded by the total-visit cap",
+          "[host][gltf][security]")
+{
+    using namespace preview3d::provider;
+
+    auto adapter = CreateFamilyAdapter(Family::Gltf);
+    REQUIRE(adapter != nullptr);
+
+    MemorySource source(MeshlessDoublingDagJson(40));
+    Deadline deadline;
+    AllocationLedger ledger;
+    AdapterInput input{};
+    input.source = &source;
+    input.limits = &ProviderLimits::Default();
+    input.deadline = &deadline;
+    input.ledger = &ledger;
+    input.family = Family::Gltf;
+    REQUIRE(adapter->Initialize(input) == ErrorCode::None);
+    CHECK(adapter->Parse() == ErrorCode::ResourceLimit);
+    adapter->Reset();
 }
 
 TEST_CASE("two STEP requests run concurrently in one surrogate without racing OCCT",

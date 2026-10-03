@@ -379,6 +379,29 @@ std::string OverBudgetMaterialsJson()
     return json;
 }
 
+// SEC-01 sweep: a mesh-less doubling DAG. Each node under `levels` has two
+// identical children, so depth alone can be modest while the number of visits
+// doubles per level. No mesh is ever reached, so the instance cap cannot bound
+// it; only a total-visit budget stops it.
+std::string MeshlessDoublingDagJson(int levels)
+{
+    std::string nodes = "[";
+    for (int i = 0; i < levels; ++i) {
+        if (i != 0) {
+            nodes += ",";
+        }
+        if (i + 1 < levels) {
+            const std::string child = std::to_string(i + 1);
+            nodes += "{\"children\":[" + child + "," + child + "]}";
+        } else {
+            nodes += "{}";
+        }
+    }
+    nodes += "]";
+    return "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,"
+           "\"scenes\":[{\"nodes\":[0]}],\"nodes\":" + nodes + "}";
+}
+
 // --- SEC-02 hostile compressed payload fixtures -----------------------------
 
 void AppendVarint(std::vector<std::byte>& bytes, std::uint32_t value)
@@ -832,6 +855,21 @@ TEST_CASE("a truncated GLB is a typed malformed-data failure", "[provider][gltf]
 TEST_CASE("a glTF over the material cap is a resource limit", "[provider][gltf]")
 {
     ByteSource source(AsBytes(OverBudgetMaterialsJson()));
+    Deadline deadline;
+    AllocationLedger ledger;
+    CollectSink sink;
+
+    GltfAdapter adapter;
+    const AdapterResult result = RunAdapter(adapter, source, deadline, ledger, sink);
+
+    CHECK(result.parse == ErrorCode::ResourceLimit);
+    CHECK(sink.triangles.empty());
+}
+
+TEST_CASE("a mesh-less doubling glTF DAG is bounded by the total-visit cap",
+          "[provider][gltf][security]")
+{
+    ByteSource source(AsBytes(MeshlessDoublingDagJson(40)));
     Deadline deadline;
     AllocationLedger ledger;
     CollectSink sink;
