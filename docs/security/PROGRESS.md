@@ -34,7 +34,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T22 — Make the broker generation wall-clock deadline absolute (SEC-03 completion)**: Reusable facts for later sessions:; **The deadline is enforced at the loop boundary, not in the pipe wait.**
 - **T23 - Fix release/CI NuGet credential lifecycle and durable-cache restore (SEC-14 follow-up)**: Reusable facts for later sessions:; **The cleanup step was the bug.** In `ci.yml`, `release.yml` and
 - **T24 - Bound provider allocations fed by library-supplied counts (3MF/USD)**: Reusable facts for later sessions:; **Pre-cap where lib3mf exposes a count.** `CBeamLattice::GetBeamCount()` /
-- **Follow-ups**: Hosted verification of T23: confirm a `push`/`schedule`/tag run hits the GitHub Packages NuGet; T24: rebuild and run `Tests.Unit` (the changed `ThreeMfFamilyAdapter.cpp`/`UsdFamilyAdapter.cpp`
+- **T25 — Complete SEC-17: provider fuzz/soak promotion and hostile failure classification**: Reusable facts for later sessions:; **`fuzz-smoke` is now a required gate.** `.github/workflows/ci.yml` `fuzz-smoke` runs on
+- **Follow-ups**: T25 hosted: confirm a fork `pull_request` runs the promoted `fuzz-smoke` lane from the files cache; T25: a live stack-overflow/`__fastfail` surrogate death is not deterministically inducible from a
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -1270,8 +1271,46 @@ Reusable facts for later sessions:
   /p:Platform=x64 /p:SolutionDir=<repo>\` (the solution-level `OutDir` puts the
   exe in `x64\Release`). Tests.Unit was not rebuilt this session.
 
+## T25 — Complete SEC-17: provider fuzz/soak promotion and hostile failure classification
+
+Reusable facts for later sessions:
+
+- **`fuzz-smoke` is now a required gate.** `.github/workflows/ci.yml` `fuzz-smoke` runs on
+  `pull_request`/`push`/`workflow_call` (the nightly `if:` guard was removed) and has a `Provider`
+  matrix entry. `ProviderFuzz` links the STEP/OCCT adapter, so the `Provider` runner restores the
+  isolated `thumbnail-provider/step-occt` manifest (`--x-manifest-root=<repo>\thumbnail-provider\step-occt
+  --x-install-root=<...>\vcpkg_installed`); the root manifest is still MSBuild's implicit manifest-mode
+  install. The job uses `VCPKG_BINARY_SOURCES=clear;files,$VCPKG_DEFAULT_BINARY_CACHE,readwrite`
+  (no Packages credentials, fork-PR safe) and the shared Actions cache key. `actionlint ci.yml` is green.
+- **ProviderFuzz build (local).** `MSBuild tests\fuzz\ProviderFuzz.vcxproj /p:Configuration=Release
+  /p:Platform=x64 "/p:SolutionDir=<repo>\" /p:VcpkgRoot=C:\vcpkg /p:VcpkgManifestInstall=false /m:1`.
+  Its OCCT include/lib paths are hardcoded to
+  `thumbnail-provider\step-occt\vcpkg_installed\x64-windows-static-md`. Seeds come from
+  `python tests/fuzz/prepare_provider_seeds.py <new-dir>` (refuses a non-empty dir).
+- **Soak classification.** `packaging/smoke/ProviderSoak.cpp` tracks every provider-hosting `dllhost`
+  with an `OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION)` handle and reaps it via
+  `WaitForSingleObject(...,0)`+`GetExitCodeProcess`. `IsAllowedSurrogateExitCode` (exposed in
+  `ProviderSoak.h`) allows `0xC00000FD`/`0xC0000409`/`0xC0000602`. A valid-phase failure with zero
+  observed surrogate deaths is a quarantine failure-with-reason (exit 1); allowed-only deaths report
+  `ALLOWED` and exit 0; any other death exits 1. `--hostile <path>` is a repeatable expected-fail-closed
+  lane (recorded as `rejected`); `--soak-classify-selftest` checks the classifier.
+- **Soak run recipe.** `MSBuild packaging\smoke\ProviderSmokeHost.vcxproj /p:Configuration=Release
+  /p:Platform=x64 "/p:SolutionDir=<repo>\"`; `Stage-ProviderSmoke.ps1 -RepositoryRoot <repo>
+  -Configuration Release -Destination artifacts\smoke\stage\Release`; `Register-ProviderSmoke.ps1
+  -DllPath <stagedDll> -Scope HKCU`; `x64\Release\ProviderSmokeHost.exe --soak --dll <stagedDll>
+  --stl ... --hostile ... --apartments 2 --iterations 20 --out ...`; finally
+  `Unregister-ProviderSmoke.ps1 -Scope HKCU`. Evidence lands in
+  `artifacts\smoke\evidence\Release\<dir>\soak-report.txt` (gitignored).
+- **Gotcha.** The retained handle detects a crash-killed `dllhost` even after its PID leaves the
+  process snapshot; exit code 0 is the Shell's normal teardown and is ignored.
+
 ## Follow-ups
 
+- T25 hosted: confirm a fork `pull_request` runs the promoted `fuzz-smoke` lane from the files cache
+  with no Packages token, and add the `Fuzz smoke (<target>)` checks to branch protection.
+- T25: a live stack-overflow/`__fastfail` surrogate death is not deterministically inducible from a
+  fixture; if one is found, add it to the `--hostile` lane to exercise the allowed-death branch
+  end-to-end.
 - Hosted verification of T23: confirm a `push`/`schedule`/tag run hits the GitHub Packages NuGet
   source after the cleanup reorder, and that a `pull_request` restores from the files cache with no
   `preview3d-nuget.config` created (no token in the PR lane).

@@ -221,8 +221,8 @@ preflight (`Etc1sTablePreflight.h`), called from `PreflightKtx2` before
 `ktxTexture2_TranscodeBasis`; see
 [ADR-0046](adr/0046-etc1s-global-data-preflight.md). Both minimized findings and
 the valid BasisLZ sample are promoted into the generated smoke seeds, and
-`GltfFuzz` is now in the scheduled `fuzz-smoke` matrix (not yet a required merge
-gate; SEC-17 promotes the lane).
+`GltfFuzz` is in the `fuzz-smoke` matrix (SEC-17/T25 promoted that lane into the
+required merge gate).
 
 SEC-17 adds `ProviderFuzz` (`tests/fuzz/ProviderFuzz.cpp`) over the provider
 boundary the worker targets do not reach: `BoundedStreamSource`, every family
@@ -238,6 +238,17 @@ surrogate after release, and bounded GDI/User/handle/thread/private-byte growth
 (`packaging/smoke/README.md`). A contained access violation must surface as a
 quarantine with later requests failing closed; a stack-overflow/`__fastfail`
 surrogate death is the documented allowed failure (see "End-to-end soak").
+
+SEC-17/T25 completes the lane. `ProviderFuzz` joins the `fuzz-smoke` matrix, and
+that target's runner restores the isolated `thumbnail-provider/step-occt`
+manifest it links (ADR-0002); `fuzz-smoke` now runs on every `pull_request`/`push`
+and in the `release.yml` gate instead of only the nightly schedule. The surrogate
+soak classifies hostile input rather than treating any failure as an anonymous
+crash: a contained access violation is recorded as a quarantine
+failure-with-reason (exit nonzero), a stack-overflow/`__fastfail` surrogate death
+is recorded as the documented *allowed* failure with its exit code (not a pass),
+and any other surrogate death fails the soak. `ProviderSmokeHost.exe
+--soak-classify-selftest` exercises the exit-code classifier deterministically.
 
 ## Threat model
 
@@ -331,9 +342,10 @@ The `CI` workflow (`.github/workflows/ci.yml`; ADR-0042) is a **mandatory merge
 gate**: it enforces the per-change Debug/Release build and the unit,
 import-isolation and provider-host suites on every pull request and push to
 `main`, and a branch-protection rule must require both matrix checks before
-merge; `Release` will not package until the same gate passes. The `[graphics]` unit cases are excluded on the headless runner. A
-bounded libFuzzer smoke starts as an opt-in/nightly job and is promoted into the
-required gate once SEC-15/16/17 land. Lint/static analysis, the headless adapter
+merge; `Release` will not package until the same gate passes. The `[graphics]` unit cases are excluded on the headless runner. The
+bounded libFuzzer smoke (`.github/workflows/ci.yml` job `fuzz-smoke`) is part of
+that required gate as of SEC-17/T25: it runs on every pull request and push, and
+`Release` waits for it. Lint/static analysis, the headless adapter
 corpus, and package-manifest validation remain manual per-change skills on top of
 the gate (release packaging already restores and validates the manifests).
 

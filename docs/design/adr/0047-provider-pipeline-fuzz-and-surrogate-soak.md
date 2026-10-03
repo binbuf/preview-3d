@@ -30,9 +30,9 @@ restored.
   does; the target's own translation unit and the product-owned sources stay
   ASan-instrumented. The target links all eight adapters including STEP/OCCT,
   so it needs both vcpkg manifests restored; it is documented in
-  `tests/fuzz/README.md` and deliberately left out of the `fuzz-smoke` matrix
-  (that job restores only the root manifest) until the isolated `step-occt`
-  manifest is restored there.
+  `tests/fuzz/README.md`. T25 makes that job restore the isolated `step-occt`
+  manifest on the provider runner, so `ProviderFuzz` is now in the `fuzz-smoke`
+  matrix.
 - Add the surrogate soak as `ProviderSoak.{h,cpp}` compiled into
   `packaging\smoke\ProviderSmokeHost.vcxproj` and reached with `--soak`. It
   drives concurrent STA apartments through `IThumbnailCache::GetThumbnail`
@@ -55,6 +55,11 @@ restored.
 - The STEP adapter's OCCT transfer/tessellation remains un-instrumented (as
   `StepFuzz` already documents); its process containment is still the
   AppContainer/Job suite, and the provider soak re-ran that suite Release-green.
-- The `fuzz-smoke` promotion is the remaining follow-up: restore the isolated
-  `step-occt` manifest in that job, add `ProviderFuzz` to the matrix, and make
-  the fuzz lane a required gate (SEC-17/T13).
+- The `fuzz-smoke` promotion lands in SEC-17/T25: the job restores the isolated
+  `step-occt` manifest on the `Provider` runner, `ProviderFuzz` is in the matrix,
+  and the lane now runs on every `pull_request`/`push` and in the `release.yml`
+  gate (SEC-13/T13). The soak classifies hostile input: a contained access
+  violation is a quarantine failure-with-reason, a stack-overflow/`__fastfail`
+  surrogate death is the recorded allowed failure, and any other surrogate death
+  fails the soak; `ProviderSmokeHost.exe --soak-classify-selftest` covers the
+  exit-code classifier.

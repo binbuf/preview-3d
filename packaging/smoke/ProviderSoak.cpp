@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,6 +31,7 @@ constexpr DWORD kHandleTolerance = 256;
 constexpr DWORD kThreadTolerance = 8;
 constexpr std::uint64_t kPrivateToleranceBytes = 32ull * 1024 * 1024; // 32 MiB
 constexpr unsigned kTeardownTimeoutMs = 30000;
+constexpr unsigned kMonitorIntervalMs = 200;
 
 std::string ToUtf8(const std::wstring& text)
 {
@@ -135,6 +137,87 @@ ProcessMetrics SampleSurrogates(std::vector<DWORD>* pidsOut)
     return total;
 }
 
+std::uint64_t HostPeakWorkingSetBytes()
+{
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    counters.cb = sizeof(counters);
+    if (!GetProcessMemoryInfo(GetCurrentProcess(),
+                              reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                              sizeof(counters))) {
+        return 0;
+    }
+    return counters.PeakWorkingSetSize;
+}
+
+// --- SEC-08 hostile-input classification ------------------------------------
+
+struct Classification {
+    std::uint64_t rejected = 0;         // hostile inputs that failed closed with the surrogate alive
+    std::uint64_t quarantined = 0;      // valid requests refused after a contained fault
+    std::uint64_t allowedFaults = 0;    // surrogate deaths with a documented SEC-08 code
+    std::uint64_t unexpectedFaults = 0; // any other surrogate death
+    unsigned long lastAllowedCode = 0;
+    unsigned long lastUnexpectedCode = 0;
+};
+
+// Keeps a handle on every surrogate that has hosted the provider so its exit
+// code can be read even after the PID disappears. A nonzero exit is classified;
+// a clean exit (0) is the Shell's normal teardown and is ignored.
+struct SurrogateTracker {
+    std::map<DWORD, HANDLE> live;
+    Classification classification;
+    std::atomic<bool> stop{false};
+
+    void Observe()
+    {
+        for (auto it = live.begin(); it != live.end();) {
+            DWORD code = 0;
+            if (WaitForSingleObject(it->second, 0) == WAIT_OBJECT_0
+                && GetExitCodeProcess(it->second, &code)) {
+                if (code != 0) {
+                    if (IsAllowedSurrogateExitCode(code)) {
+                        ++classification.allowedFaults;
+                        classification.lastAllowedCode = code;
+                    } else {
+                        ++classification.unexpectedFaults;
+                        classification.lastUnexpectedCode = code;
+                    }
+                }
+                CloseHandle(it->second);
+                it = live.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (const DWORD pid : FindSurrogatePids()) {
+            if (live.find(pid) != live.end()) continue;
+            const HANDLE process = OpenProcess(
+                SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (process != nullptr) live.emplace(pid, process);
+        }
+    }
+
+    void RunMonitor()
+    {
+        while (!stop.load()) {
+            Observe();
+            Sleep(kMonitorIntervalMs);
+        }
+        Observe();
+    }
+
+    void CloseAll()
+    {
+        for (auto& entry : live) CloseHandle(entry.second);
+        live.clear();
+    }
+};
+
+void MonitorLoop(SurrogateTracker* tracker)
+{
+    tracker->RunMonitor();
+}
+
 struct WorkerStats {
     std::uint64_t attempts = 0;
     std::uint64_t ok = 0;
@@ -233,7 +316,28 @@ std::wstring JoinPids(const std::vector<DWORD>& pids)
     return text.empty() ? L"none" : text;
 }
 
+std::string HexCode(unsigned long code)
+{
+    char buffer[16]{};
+    std::snprintf(buffer, sizeof(buffer), "%08lX", code);
+    return std::string(buffer);
+}
+
 } // namespace
+
+bool IsAllowedSurrogateExitCode(unsigned long exitCode) noexcept
+{
+    // SEC-08/ADR-0037: a re-raised stack overflow or an uncatchable
+    // `__fastfail`/stack-cookie fault is an allowed surrogate death.
+    switch (exitCode) {
+        case 0xC00000FDu: // STATUS_STACK_OVERFLOW
+        case 0xC0000409u: // STATUS_STACK_BUFFER_OVERRUN (__fastfail / stack cookie)
+        case 0xC0000602u: // STATUS_FAIL_FAST_EXCEPTION (__fastfail)
+            return true;
+        default:
+            return false;
+    }
+}
 
 int RunProviderSoak(const SoakOptions& options)
 {
@@ -254,11 +358,19 @@ int RunProviderSoak(const SoakOptions& options)
         if (report != nullptr) std::fprintf(report, "%s\n", text.c_str());
     };
 
+    const DWORD startTicks = GetTickCount();
+
+    // Watch every surrogate that hosts the provider for the whole run so a
+    // crash's exit code is classified rather than guessed.
+    SurrogateTracker tracker;
+    std::thread monitor(MonitorLoop, &tracker);
+
     std::vector<DWORD> beforePids;
     const ProcessMetrics before = SampleSurrogates(&beforePids);
     say("provider surrogate soak");
     say("  dll=" + ToUtf8(options.dllPath));
     say("  models=" + std::to_string(options.models.size())
+        + " hostile=" + std::to_string(options.hostile.size())
         + " apartments=" + std::to_string(options.apartments)
         + " iterations=" + std::to_string(options.iterations)
         + " cx=" + std::to_string(options.cx));
@@ -277,6 +389,20 @@ int RunProviderSoak(const SoakOptions& options)
         + " handles=" + std::to_string(baseline.handles)
         + " threads=" + std::to_string(baseline.threads)
         + " privateBytes=" + std::to_string(baseline.privateBytes));
+
+    // Hostile-input lane (SEC-08). It runs before the valid phase so that a
+    // contained fault which leaves the surrogate quarantined surfaces as valid
+    // requests refusing to render (the quarantine is process-global).
+    WorkerStats hostileStats;
+    if (!options.hostile.empty()) {
+        SoakOptions hostilePhase = options;
+        hostilePhase.models = options.hostile;
+        hostileStats = RunPhase(hostilePhase, options.iterations);
+        say("  hostile attempts=" + std::to_string(hostileStats.attempts)
+            + " ok=" + std::to_string(hostileStats.ok)
+            + " failed=" + std::to_string(hostileStats.failed)
+            + " (a refusal is the expected fail-closed result)");
+    }
 
     const WorkerStats main = RunPhase(options, options.iterations);
     std::vector<DWORD> finalPids;
@@ -297,8 +423,8 @@ int RunProviderSoak(const SoakOptions& options)
     // Release path: after the last cache object is released the Shell surrogate
     // must drop the module and tear down. Poll for it.
     std::vector<DWORD> afterPids = finalPids;
-    const DWORD start = GetTickCount();
-    while (!afterPids.empty() && GetTickCount() - start < kTeardownTimeoutMs) {
+    const DWORD teardownStart = GetTickCount();
+    while (!afterPids.empty() && GetTickCount() - teardownStart < kTeardownTimeoutMs) {
         Sleep(500);
         afterPids = FindSurrogatePids();
     }
@@ -311,27 +437,59 @@ int RunProviderSoak(const SoakOptions& options)
         }
     }
     say("  surrogates after_teardown=" + ToUtf8(JoinPids(afterPids))
-        + " waited_ms=" + std::to_string(static_cast<unsigned long>(GetTickCount() - start)));
+        + " waited_ms=" + std::to_string(static_cast<unsigned long>(GetTickCount() - teardownStart)));
     say(std::string("  persistent_new_surrogate=")
         + (persistentNewSurrogate ? "true" : "false"));
 
-    const bool crashOrHang = (main.failed != 0) || (warm.failed != 0);
-    if (crashOrHang) {
-        say("  first_failure_hr=0x" + [&] {
-            char buffer[16]{};
-            std::snprintf(buffer, sizeof(buffer), "%08lX",
-                          static_cast<unsigned long>(main.firstFailure != 0 ? main.firstFailure
-                                                                            : warm.firstFailure));
-            return std::string(buffer);
-        }());
+    // Stop the monitor and take one final classification pass.
+    tracker.stop.store(true);
+    if (monitor.joinable()) monitor.join();
+
+    Classification classification = tracker.classification;
+    classification.rejected = hostileStats.failed;
+
+    // A valid request that failed while no surrogate died is a contained fault
+    // that the boundary quarantined: record it as a failure-with-reason.
+    const std::uint64_t validFailed = warm.failed + main.failed;
+    if (validFailed != 0 && classification.allowedFaults == 0
+        && classification.unexpectedFaults == 0) {
+        classification.quarantined = validFailed;
     }
 
+    say("  classify rejected=" + std::to_string(classification.rejected)
+        + " quarantined=" + std::to_string(classification.quarantined)
+        + " allowed_faults=" + std::to_string(classification.allowedFaults)
+        + " unexpected_faults=" + std::to_string(classification.unexpectedFaults));
+    if (classification.allowedFaults != 0) {
+        say("  allowed_fault_code=0x" + HexCode(classification.lastAllowedCode));
+    }
+    if (classification.unexpectedFaults != 0) {
+        say("  unexpected_fault_code=0x" + HexCode(classification.lastUnexpectedCode));
+    }
+    if (validFailed != 0) {
+        const long first = main.firstFailure != 0 ? main.firstFailure : warm.firstFailure;
+        say("  first_valid_failure_hr=0x" + HexCode(static_cast<unsigned long>(first)));
+    }
+    if (hostileStats.failed != 0) {
+        say("  first_hostile_failure_hr=0x"
+            + HexCode(static_cast<unsigned long>(hostileStats.firstFailure)));
+    }
+    say("  elapsed_ms=" + std::to_string(static_cast<unsigned long>(GetTickCount() - startTicks)));
+    say("  host_peak_working_set_bytes=" + std::to_string(HostPeakWorkingSetBytes()));
+
     if (report != nullptr) std::fclose(report);
+    tracker.CloseAll();
     CoUninitialize();
 
-    if (crashOrHang) {
-        std::printf("FAIL: the soak saw %llu failed thumbnails (crash/hang)\n",
-                    static_cast<unsigned long long>(main.failed + warm.failed));
+    if (classification.unexpectedFaults != 0) {
+        std::printf("FAIL: a surrogate died unexpectedly (exit=0x%08lX)\n",
+                    classification.lastUnexpectedCode);
+        return 1;
+    }
+    if (classification.quarantined != 0) {
+        std::printf("FAIL (contained): %llu valid thumbnail(s) refused after a contained fault "
+                    "(quarantine)\n",
+                    static_cast<unsigned long long>(classification.quarantined));
         return 1;
     }
     if (growth) {
@@ -341,6 +499,13 @@ int RunProviderSoak(const SoakOptions& options)
     if (persistentNewSurrogate) {
         std::printf("FAIL: a surrogate still hosts the provider after teardown\n");
         return 1;
+    }
+    if (classification.allowedFaults != 0) {
+        std::printf("ALLOWED: %llu surrogate death(s) classified as the SEC-08 allowed failure "
+                    "0x%08lX (not a pass)\n",
+                    static_cast<unsigned long long>(classification.allowedFaults),
+                    classification.lastAllowedCode);
+        return 0;
     }
     std::printf("PASS: surrogate soak stable over %u apartments x %u iterations\n",
                 options.apartments, options.iterations);

@@ -240,9 +240,10 @@ pinned third-party decoders and are minimized under
 Both minimized `.env` seeds, the extracted `basislz-etc1s-crash.ktx2`, and the
 valid `basisu_textured_triangle.glb` are promoted into the generated smoke
 seeds, and the `Ktx2` domain drives the real ETC1S transcode for every accepted
-container. `GltfFuzz` is in the scheduled/nightly `fuzz-smoke` matrix in
-`.github/workflows/ci.yml` (one target per runner); it is not yet a required
-merge gate. The seed preparer refuses a non-empty directory.
+container. `GltfFuzz` is in the `fuzz-smoke` matrix in
+`.github/workflows/ci.yml` (one target per runner); SEC-17/T25 promoted that
+lane into the required pull-request/push and release gate. The seed preparer
+refuses a non-empty directory.
 
 ## Provider pipeline (SEC-17)
 
@@ -281,14 +282,16 @@ tests/fuzz/x64/Release/ProviderFuzz.exe TestResults/security-t17/provider-seeds 
 
 The provider STEP manifest is isolated from the root manifest
 (`thumbnail-provider\step-occt\vcpkg.json`, ADR-0002), so a cold build needs
-both `vcpkg_installed` trees restored (the main CI `test` job already does
-this). The seed preparer refuses a non-empty directory because libFuzzer mutates
-its corpus in place. Measured Release smoke on the reference machine:
-30 s / 590 executions / 330 MiB peak RSS, and 60 s / 788 executions / 447 MiB
-peak RSS, with no crash, hang or ASan report on the 36 committed seeds. The
-target is not yet in the scheduled `fuzz-smoke` matrix because that job restores
-only the root vcpkg manifest; promoting it is a follow-up (restore the isolated
-`step-occt` manifest in that job first).
+both `vcpkg_installed` trees restored. The `fuzz-smoke` job in
+`.github/workflows/ci.yml` restores the isolated `step-occt` manifest on the
+`Provider` runner (the root manifest is restored for every target), so
+`ProviderFuzz` is now one of the seven `fuzz-smoke` matrix entries; SEC-17/T25
+promoted that lane from the nightly schedule into the required PR/push and
+release gate (SEC-13/T13). The seed preparer refuses a non-empty directory
+because libFuzzer mutates its corpus in place. Measured Release smoke on the
+reference machine: 30 s / 590 executions / 330 MiB peak RSS, and 60 s / 788
+executions / 447 MiB peak RSS on 36 seeds (SEC-17); re-run by T25, 30 s / 580
+executions / 338 MiB peak RSS on 37 seeds, exit 0, no crash/ASan report.
 
 The surrogate soak that proves Explorer stability across concurrent DllHost
 apartments, repeated load/unload and thumbnail-cache churn is documented in

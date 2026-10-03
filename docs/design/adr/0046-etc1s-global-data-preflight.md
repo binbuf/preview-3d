@@ -75,7 +75,7 @@ product TU against the wrong header would be an object-layout mismatch.
   re-validate this port against the new `basisu_transcoder_internal.h` and
   rerun the promoted corpus before sign-off (add to the dependency-update
   checklist in design/09).
-- `GltfFuzz` is in the nightly/scheduled `fuzz-smoke` lane (one target per
-  runner). It is not yet a required merge gate; SEC-17 promotes the lane.
+- `GltfFuzz` is in the `fuzz-smoke` lane (one target per runner), which
+  SEC-17/T25 promoted into the required merge gate.
 - The promoted-corpus material-index fix is a product hardening change with a
   real-worker regression in `GltfImportTests.cpp`.

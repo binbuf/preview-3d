@@ -516,6 +516,14 @@ Explorer is allowed to fall back to the generic icon. Returning a fabricated “
 - Truncation, archive bomb, adversarial count, non-seekable stream, timeout, OOM injection, and fuzz corpora.
   `ProviderFuzz` (SEC-17, [ADR-0047](adr/0047-provider-pipeline-fuzz-and-surrogate-soak.md)) fuzzes the
   bounded stream source, each family adapter, the sampler and the rasterizer under ASan/libFuzzer.
+- `ProviderSmokeHost.exe --soak` (SEC-17/T25, `packaging/smoke/ProviderSoak.{h,cpp}`) drives
+  concurrent STA apartments through the real Shell path, keeps a handle on each `dllhost`
+  surrogate it observes, and classifies its exit code against the SEC-08 allowed set. A
+  contained access violation is recorded as a quarantine failure-with-reason (a valid request
+  refused after the boundary contained a fault); a stack-overflow/`__fastfail` surrogate death
+  is recorded as the documented allowed failure rather than a pass; any other death fails the
+  soak. `ProviderSmokeHost.exe --soak-classify-selftest` unit-checks the exit-code classifier;
+  the hostile-input lane (`--hostile <path>`) records expected fail-closed refusals.
 - Containment policy: a contained access violation quarantines the surrogate and later requests
   fail closed (`[provider][threading][quarantine]`, `[provider][pipeline][quarantine]`,
   `[host][containment][quarantine]`), and two concurrent STEP requests in one surrogate do not race

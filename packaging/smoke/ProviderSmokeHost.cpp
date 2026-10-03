@@ -263,8 +263,10 @@ int wmain(int argc, wchar_t** argv)
     std::wstring usdPath;
     std::wstring stepPath;
     std::wstring outDir;
+    std::vector<std::wstring> hostilePaths;
     unsigned cx = 256;
     bool soak = false;
+    bool soakClassifySelfTest = false;
     unsigned apartments = 4;
     unsigned iterations = 200;
     for (int i = 1; i < argc; ++i) {
@@ -278,13 +280,47 @@ int wmain(int argc, wchar_t** argv)
         else if (arg == L"--mf") mfPath = next();
         else if (arg == L"--usd") usdPath = next();
         else if (arg == L"--step") stepPath = next();
+        else if (arg == L"--hostile") hostilePaths.push_back(next());
         else if (arg == L"--out") outDir = next();
         else if (arg == L"--cx") cx = static_cast<unsigned>(_wtoi(next().c_str()));
         else if (arg == L"--soak") soak = true;
+        else if (arg == L"--soak-classify-selftest") soakClassifySelfTest = true;
         else if (arg == L"--apartments") apartments = static_cast<unsigned>(_wtoi(next().c_str()));
         else if (arg == L"--iterations") iterations = static_cast<unsigned>(_wtoi(next().c_str()));
     }
     if (outDir.empty()) outDir = L".";
+
+    // Deterministic check of the SEC-08 surrogate-death classifier that the
+    // soak applies to observed dllhost exit codes (T25).
+    if (soakClassifySelfTest) {
+        struct Case {
+            unsigned long code;
+            bool allowed;
+            const char* label;
+        };
+        const Case cases[] = {
+            {0xC00000FDu, true, "STATUS_STACK_OVERFLOW"},
+            {0xC0000409u, true, "STATUS_STACK_BUFFER_OVERRUN/__fastfail"},
+            {0xC0000602u, true, "STATUS_FAIL_FAST_EXCEPTION"},
+            {0xC0000005u, false, "STATUS_ACCESS_VIOLATION"},
+            {0x80000003u, false, "STATUS_BREAKPOINT"},
+            {0x00000000u, false, "normal exit"},
+        };
+        int failures = 0;
+        for (const Case& one : cases) {
+            const bool actual = provider_smoke::IsAllowedSurrogateExitCode(one.code);
+            std::printf("  %08lX %-40s allowed=%s expect=%s %s\n", one.code, one.label,
+                        actual ? "true" : "false", one.allowed ? "true" : "false",
+                        actual == one.allowed ? "OK" : "MISMATCH");
+            if (actual != one.allowed) ++failures;
+        }
+        if (failures != 0) {
+            std::printf("FAIL: %d surrogate-death classification mismatch(es)\n", failures);
+            return 1;
+        }
+        std::printf("PASS: SEC-08 surrogate-death classification\n");
+        return 0;
+    }
 
     // SEC-17 surrogate soak: many concurrent apartments force repeated
     // activation, extraction and teardown in the real DllHost surrogate while
@@ -309,10 +345,16 @@ int wmain(int argc, wchar_t** argv)
         addModel("3mf", kThreeMfClsid, mfPath);
         addModel("usd", kUsdClsid, usdPath);
         addModel("step", kStepClsid, stepPath);
+        for (const std::wstring& hostilePath : hostilePaths) {
+            if (!hostilePath.empty()) {
+                options.hostile.push_back({"hostile", CLSID{}, hostilePath});
+            }
+        }
         if (options.dllPath.empty() || options.models.empty() || apartments == 0
             || iterations == 0) {
             std::printf("usage: ProviderSmokeHost.exe --soak --dll <path> --stl <path> [--ply ...] "
-                        "[--apartments 4] [--iterations 200] [--cx 256] [--out <dir>]\n");
+                        "[--hostile <path> ...] [--apartments 4] [--iterations 200] [--cx 256] "
+                        "[--out <dir>]\n");
             return 2;
         }
         return provider_smoke::RunProviderSoak(options);

@@ -73,8 +73,8 @@ package until it passes. See `docs/design/adr/0042-ci-test-gate.md`.
   session) and Python 3.11+.
 - **Fuzz targets:** [tests/fuzz/README.md](tests/fuzz/README.md). These are
   explicitly built sanitizer targets, not part of the shipping solution. A
-  bounded smoke runs nightly (and on manual dispatch); it is not yet a required
-  pull-request check.
+  bounded smoke is part of the required `CI` gate as of SEC-17/T25: it runs on
+  every pull request and push (and the `Release` workflow waits for it).
 - **Performance qualification:** `tests/performance/qualify.py` with the options
   and limits in [.docs/TSK-302_VERIFICATION.md](.docs/TSK-302_VERIFICATION.md).
 

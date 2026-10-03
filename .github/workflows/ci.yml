@@ -342,23 +342,35 @@ jobs:
             Remove-Item -LiteralPath $configPath -Force
           }
 
-  # Bounded libFuzzer smoke. SEC-15 added the STL/PLY/OBJ fast-path targets;
-  # SEC-16/17 add glTF/codec and provider-soak and then promote this into the
-  # required gate. Until then it runs only off the PR/push path (nightly
-  # schedule or manual dispatch) so it can never block a merge, and it is
-  # deliberately not a `needs:` of the release package job.
+  # Bounded libFuzzer smoke covering every format lane plus the provider
+  # pipeline. SEC-15 added the STL/PLY/OBJ fast-path targets; SEC-16/16b added
+  # glTF+codecs; SEC-17/T25 added ProviderFuzz and promoted this lane into the
+  # required gate (SEC-13/T13): it runs on every pull_request/push and via
+  # workflow_call from release.yml, so a red fuzz smoke fails the release
+  # package job. One target per runner: the fuzz projects share the
+  # tests\fuzz\x64\Release intermediate directory, so a fresh runner per target
+  # avoids the MSB8028 shared-intermediate-dir hazard. ProviderFuzz links all
+  # eight adapters including STEP/OCCT (ADR-0047), so its runner also restores
+  # the isolated thumbnail-provider STEP manifest (ADR-0002).
   fuzz-smoke:
     name: Fuzz smoke (${{ matrix.target }})
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-2025
     timeout-minutes: 120
+
+    env:
+      # Reuse the test/dependencies binary cache so a warm restore keeps a
+      # per-PR smoke feasible. This lane holds no Packages credentials, so it is
+      # safe on a fork pull_request; a cache miss rebuilds from source as the
+      # previous nightly-only lane already did.
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
+      VCPKG_SCRATCH: ${{ github.workspace }}\..\.vcpkg-scratch
 
     strategy:
       fail-fast: false
       # One target per runner: the fuzz projects share the tests\fuzz\x64\Release
       # intermediate directory, so a fresh runner per target avoids the MSB8028
-      # shared-intermediate-dir hazard. SEC-16/17 add glTF+codec and
-      # provider-soak entries here.
+      # shared-intermediate-dir hazard. SEC-16/16b/17 add the glTF+codec and
+      # provider targets.
       matrix:
         include:
           - target: STEP
@@ -391,12 +403,37 @@ jobs:
             exe: tests\fuzz\x64\Release\GltfFuzz.exe
             prepare: tests/fuzz/prepare_gltf_seeds.py
             seeds: TestResults/security-t16b/gltf-seeds
+          - target: Provider
+            project: tests\fuzz\ProviderFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\ProviderFuzz.exe
+            prepare: tests/fuzz/prepare_provider_seeds.py
+            seeds: TestResults/security-t17/provider-seeds
+            # OCCT tessellation on a mutated STEP seed can exceed the default
+            # 5 s per-input stop, so keep the target's documented budget.
+            timeout: 10
 
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        # Best-effort and credential-free: the shared files cache is reused from
+        # the test/dependencies lane; a miss falls back to a source build.
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
+          restore-keys: |
+            vcpkg-binary-${{ runner.os }}-
+
+      - name: Use the local vcpkg files cache
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          "VCPKG_BINARY_SOURCES=clear;files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite" >> $env:GITHUB_ENV
 
       - name: Locate build tools
         id: tools
@@ -411,16 +448,68 @@ jobs:
           if (-not (Test-Path -LiteralPath $msbuild -PathType Leaf)) {
             throw "MSBuild was not found at '$msbuild'."
           }
+          $vcpkgRoots = @(
+            $env:VCPKG_INSTALLATION_ROOT,
+            (Join-Path $visualStudio 'VC\vcpkg')
+          ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          $vcpkgRoot = $vcpkgRoots |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_ 'vcpkg.exe') -PathType Leaf } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace($vcpkgRoot)) {
+            throw 'vcpkg.exe was not found on the runner.'
+          }
+          $vcpkgRoot = [IO.Path]::GetFullPath($vcpkgRoot).TrimEnd('\')
           "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
+          "vcpkg=$(Join-Path $vcpkgRoot 'vcpkg.exe')" >> $env:GITHUB_OUTPUT
+          "vcpkg_root=$vcpkgRoot" >> $env:GITHUB_OUTPUT
+
+      - name: Restore isolated provider STEP manifest
+        # ProviderFuzz compiles the STEP adapter, which needs the OCCT static
+        # closure from the isolated thumbnail-provider manifest. The root
+        # manifest is installed by MSBuild's manifest mode for every target; this
+        # second tree is not discoverable that way (ADR-0002/0047).
+        if: matrix.target == 'Provider'
+        shell: pwsh
+        env:
+          VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
+        run: |
+          $buildtreesRoot = Join-Path $env:VCPKG_SCRATCH 'buildtrees'
+          $packagesRoot = Join-Path $env:VCPKG_SCRATCH 'packages'
+          $downloadsRoot = Join-Path $env:VCPKG_SCRATCH 'downloads'
+          foreach ($path in @($buildtreesRoot, $packagesRoot, $downloadsRoot)) {
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+          }
+          $common = @(
+            '--triplet', 'x64-windows-static-md',
+            "--overlay-triplets=$env:GITHUB_WORKSPACE\packaging\triplets",
+            "--vcpkg-root=$env:VCPKG_ROOT",
+            "--x-buildtrees-root=$buildtreesRoot",
+            "--x-packages-root=$packagesRoot",
+            "--downloads-root=$downloadsRoot",
+            '--clean-buildtrees-after-build',
+            '--clean-packages-after-build',
+            '--x-wait-for-lock'
+          )
+          $providerManifestRoot = Join-Path $env:GITHUB_WORKSPACE 'thumbnail-provider\step-occt'
+          $providerInstallRoot = Join-Path $providerManifestRoot 'vcpkg_installed'
+          & $env:VCPKG_EXE install @common `
+            "--x-manifest-root=$providerManifestRoot" `
+            "--x-install-root=$providerInstallRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg thumbnail-provider STEP-manifest restore failed with exit code $LASTEXITCODE."
+          }
 
       - name: Build ${{ matrix.target }} fuzz target
         shell: pwsh
         env:
           MSBUILD_PATH: ${{ steps.tools.outputs.msbuild }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
         run: |
           & $env:MSBUILD_PATH ${{ matrix.project }} `
             /p:Configuration=Release /p:Platform=x64 `
-            "/p:SolutionDir=$env:GITHUB_WORKSPACE\\" /m:1 /v:minimal
+            "/p:SolutionDir=$env:GITHUB_WORKSPACE\\" `
+            "/p:VcpkgRoot=$env:VCPKG_ROOT" /m:1 /v:minimal
           if ($LASTEXITCODE -ne 0) {
             throw "${{ matrix.target }} fuzz build failed with exit code $LASTEXITCODE."
           }
@@ -433,7 +522,7 @@ jobs:
             throw "${{ matrix.target }} seed preparation failed with exit code $LASTEXITCODE."
           }
           & "${{ matrix.exe }}" ${{ matrix.seeds }} `
-            -max_total_time=60 -timeout=5 -rss_limit_mb=1024 -max_len=1048576 `
+            -max_total_time=60 -timeout=${{ matrix.timeout || 5 }} -rss_limit_mb=1024 -max_len=1048576 `
             -print_final_stats=1 -verbosity=0
           if ($LASTEXITCODE -ne 0) {
             throw "${{ matrix.target }} fuzz smoke failed with exit code $LASTEXITCODE."
