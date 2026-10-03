@@ -19,6 +19,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T10 — SEC-10 Build and process mitigation hardening**: Reusable facts for later sessions:; **Shared build mitigations.** `Directory.Build.props` now sets `ControlFlowGuard=Guard` and
 - **T11 — SEC-11 Viewer local attack-surface reduction**: Reusable facts for later sessions:; **One reusable safety module.** `interactive-viewer/src/platform/SafeFileOps.{h,cpp}`
 - **T12 - SEC-12 Active-instance IPC hardening**: Reusable facts for later sessions:; **One security builder, per-object rights.** `interactive-viewer/src/app/ActiveInstance.cpp`
+- **T17 — SEC-17 Provider pipeline fuzz + surrogate soak**: Reusable facts for later sessions:; **Provider pipeline fuzz target.** `tests/fuzz/ProviderFuzz.cpp` (+ `ProviderFuzz.vcxproj`,
 - **Follow-ups**: T12/SEC-14: once `Preview3D.exe` is Authenticode-signed, extend; T12: add a functional low-integrity rejection test (spawn/impersonate a low-integrity token) to
 - **T13 — SEC-13 CI test gate for PRs and releases**: Reusable facts for later sessions:; **One reusable gate workflow.** `.github/workflows/ci.yml` triggers on `pull_request`, push to
 - **T14 — SEC-14 Release and supply-chain hardening**: Reusable facts for later sessions:; **Permissions cannot be conditional.** GitHub Actions `permissions` (top-level or job-level) does
@@ -557,8 +558,51 @@ Reusable facts for later sessions:
   `python tests/app-smoke/activation.py --configuration Debug` (8 checks).
 - **Residual squat risk.** Names stay deterministic (`session + SID hash`); a medium same-user process
   can still race to pre-create but must reproduce the exact owner+DACL and viewer image, and the pipe
-  reservation blocks capture. A per-logon secret does not help against a medium same-user reader; see
+reservation blocks capture. A per-logon secret does not help against a medium same-user reader; see
   ADR-0041.
+
+## T17 — SEC-17 Provider pipeline fuzz + surrogate soak
+
+Reusable facts for later sessions:
+
+- **Provider pipeline fuzz target.** `tests/fuzz/ProviderFuzz.cpp` (+ `ProviderFuzz.vcxproj`,
+  `prepare_provider_seeds.py`) is a libFuzzer + ASan target over the real provider sources. A 24-byte
+  envelope (`<IBBBBIQI`: magic `PRVZ`, domain, family, flags, reserved, cx, reported size,
+  payload length) selects `Pipeline` (registry -> adapter -> sampler -> rasterizer over a
+  memory-backed `BoundedStreamSource`), `Stream`, `Sampler`, or `Raster`. `Prepare_provider_seeds.py`
+  materializes 36 seeds (one real fixture per family from `.../corpus`, `tests/fixtures/*-spike`, plus
+  hostile stream/sampler/raster seeds) and refuses a non-empty directory.
+- **Build needs two vcpkg manifests.** The target links all eight adapters including STEP/OCCT, so a
+  cold build needs both the root `vcpkg_installed` and `thumbnail-provider\step-occt\vcpkg_installed`
+  restored. It sets `_DISABLE_STL_ANNOTATION` to link the prebuilt non-ASan static libraries (same
+  trick as `GltfFuzz`); a distinct `IntDir` avoids the MSB8028 shared-intermediate hazard with the
+  other `tests\fuzz` projects. MSBuild is not on PATH; use
+  `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe`.
+- **Measured smoke.** `tests\fuzz\x64\Release\ProviderFuzz.exe <seeds> -max_total_time=60 -timeout=10
+  -rss_limit_mb=2048 -max_len=2100000 -print_final_stats=1 -verbosity=0` ran 788 executions / 447 MiB
+  peak RSS in 60 s (30 s: 590 / 330 MiB) with no crash/ASan report. The STEP adapter prints OCCT
+  `StepFile`/`StepReaderData` errors to stderr on malformed input; that is expected and harmless.
+- **Surrogate soak.** `packaging/smoke/ProviderSoak.{h,cpp}` is compiled into the existing
+  `ProviderSmokeHost.exe` and reached with `--soak --dll <staged> --<family> <fixture>...
+  --apartments 4 --iterations 100 --cx 256 --out <dir>`. It drives concurrent STA apartments through
+  `IThumbnailCache::GetThumbnail` (`WTS_EXTRACT|WTS_FORCEEXTRACTION`) so the provider is loaded,
+  rendered and torn down in the real `dllhost.exe` surrogate with cache churn, then requires every
+  call to return a bitmap, the surrogate to disappear within 30 s, and bounded growth (GDI/User +64,
+  handles +256, threads +8, private +32 MiB). `soak-report.txt` records the raw baseline/final numbers.
+- **Measured soak.** Stage/register with `packaging\smoke\Stage-ProviderSmoke.ps1` +
+  `Register-ProviderSmoke.ps1`; the 7-family Release run (4 apartments x 100 + 4 warm-up = 404
+  thumbnails) had 0 failures, GDI 0->0, User 6->8, handles 189->207, threads 10->11, private bytes
+  4,665,344 -> 9,818,112 (+5.15 MiB), one `dllhost.exe` surrogate, teardown in 5.1 s, then
+  `Unregister-ProviderSmoke.ps1`.
+- **No finding.** The committed seeds produced no crash, hang, OOM or leak in the fuzz target or the
+  soak, so no new regression fixture was needed. The SEC-08 quarantine and OCCT serialization are
+  unchanged.
+- **Restriction suite re-run.** `x64\Release\Tests.ImportIsolation.exe "[sandbox]"`: 17 cases
+  (15 passed, 2 skipped for the compiled-out Release fault harness), 764 assertions. Full Release
+  `Tests.ImportIsolation.exe`: 403 cases / 398 passed / 5 skipped / 0 failed. Harness verify
+  `x64\Release\Tests.Unit.exe "~[graphics]"`: 312 cases / 131557 assertions, all pass.
+- **ADR.** [ADR-0047](../design/adr/0047-provider-pipeline-fuzz-and-surrogate-soak.md) records the
+  target domains, the `_DISABLE_STL_ANNOTATION`/two-manifest constraint, and the soak classification.
 
 ## Follow-ups
 
@@ -589,11 +633,17 @@ Reusable facts for later sessions:
   when next touched; all already default to Debug.
 - T09/SEC-10: process-mitigation attributes are untouched (out of T09 scope).
 
-- SEC-17: implement the soak's SEC-08 allowed-failure classification. A stack-overflow or
-  `__fastfail`/stack-cookie process death must be recorded (fault code + input) and the process
-  restarted, not counted as a pass; a contained AV must be observed as a quarantine with later
-  requests failing closed (see `docs/design/09-quality-performance-and-security.md`, "End-to-end
-  soak", and ADR-0037). The provider-host has no real-dllhost soak yet.
+- SEC-17: the real-dllhost soak now exists (`ProviderSmokeHost.exe --soak`); it counts a surrogate
+  crash/hang as a hard failure and a persistent surrogate/growth as failures. Remaining: implement
+  the SEC-08 allowed-failure *classification* - a stack-overflow or `__fastfail`/stack-cookie process
+  death should be recorded (fault code + input) and the process restarted rather than reported as a
+  generic crash, and a contained AV observed as a quarantine with later requests failing closed (see
+  `docs/design/09-quality-performance-and-security.md`, "End-to-end soak", and ADR-0037). The
+  committed valid-fixture soak cannot trigger an AV, so this needs a hostile-input soak lane.
+- SEC-17/CI: `ProviderFuzz` is documented and runnable but not in the scheduled `fuzz-smoke` matrix
+  (`.github/workflows/ci.yml`) because that job restores only the root vcpkg manifest and the target
+  links the isolated `thumbnail-provider\step-occt` manifest. Restore that manifest in the job, add
+  the matrix entry, then promote the lane to a required gate (ADR-0047).
 - SEC-08/T51: STEP's `occurrences_` vector (16-byte transform + definition/index
   per instance, bounded only by the 20M reference preflight) is still not charged
   to the ledger; T07 reconciled only the geometry cache/build reservation. If a

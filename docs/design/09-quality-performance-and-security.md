@@ -195,7 +195,8 @@ Each format has a standalone, no-GPU fuzz target that accepts bytes plus a const
 - persistent-cache manifests, indexes, section tables, and normalized payloads;
 - image metadata/decode boundary;
 - IPC frame and JSON;
-- CPU thumbnail clipping/raster setup.
+- CPU thumbnail clipping/raster setup (`ProviderFuzz` `Raster` domain: clipping math,
+  degenerate transforms, NaN/Inf coordinates, extreme aspect ratios, `cx == 0`).
 
 Seed corpora include official conformance assets, product regressions, minimized crashes, unsupported feature examples, and cross-format mutations. Continuous fuzzing uses ASan/UBSan-compatible builds; every unique crash, timeout, excessive allocation, or assertion is minimized and becomes a regression test. Parser dependency updates must run the complete corpus before merge.
 
@@ -213,6 +214,21 @@ preflight (`Etc1sTablePreflight.h`), called from `PreflightKtx2` before
 the valid BasisLZ sample are promoted into the generated smoke seeds, and
 `GltfFuzz` is now in the scheduled `fuzz-smoke` matrix (not yet a required merge
 gate; SEC-17 promotes the lane).
+
+SEC-17 adds `ProviderFuzz` (`tests/fuzz/ProviderFuzz.cpp`) over the provider
+boundary the worker targets do not reach: `BoundedStreamSource`, every family
+adapter, `DeterministicGeometrySampler`, and the real CPU tile rasterizer,
+selected by a 24-byte envelope (`Pipeline`/`Stream`/`Sampler`/`Raster` domains).
+It links the pinned third-party parsers but keeps `_DISABLE_STL_ANNOTATION`
+matching their non-ASan closure; see
+[ADR-0047](adr/0047-provider-pipeline-fuzz-and-surrogate-soak.md). SEC-17 also
+adds the Explorer-surrogate soak: `ProviderSmokeHost.exe --soak` drives
+concurrent STA apartments through the real `IThumbnailCache` path with
+`WTS_FORCEEXTRACTION`, asserting no failed thumbnail, no persistent `DllHost`
+surrogate after release, and bounded GDI/User/handle/thread/private-byte growth
+(`packaging/smoke/README.md`). A contained access violation must surface as a
+quarantine with later requests failing closed; a stack-overflow/`__fastfail`
+surrogate death is the documented allowed failure (see "End-to-end soak").
 
 ## Threat model
 

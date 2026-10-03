@@ -500,6 +500,8 @@ Explorer is allowed to fall back to the generic icon. Returning a fabricated “
 - STA parallel-host stress using multiple COM objects.
 - The COM host harness `Tests.ProviderHost.exe` (T17, [ADR-0019](adr/0019-provider-com-host-harness.md)) drives the Shell activation sequence per CLSID, compares a registered fixture rendered through the real pipeline against a tolerant PAM golden, and soaks repeated load/unload against GDI/User/private-byte/thread growth.
 - Truncation, archive bomb, adversarial count, non-seekable stream, timeout, OOM injection, and fuzz corpora.
+  `ProviderFuzz` (SEC-17, [ADR-0047](adr/0047-provider-pipeline-fuzz-and-surrogate-soak.md)) fuzzes the
+  bounded stream source, each family adapter, the sampler and the rasterizer under ASan/libFuzzer.
 - Containment policy: a contained access violation quarantines the surrogate and later requests
   fail closed (`[provider][threading][quarantine]`, `[provider][pipeline][quarantine]`,
   `[host][containment][quarantine]`), and two concurrent STEP requests in one surrogate do not race

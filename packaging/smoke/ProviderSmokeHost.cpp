@@ -35,6 +35,8 @@
 #include <thumbcache.h>
 #include <tlhelp32.h>
 
+#include "ProviderSoak.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -262,6 +264,9 @@ int wmain(int argc, wchar_t** argv)
     std::wstring stepPath;
     std::wstring outDir;
     unsigned cx = 256;
+    bool soak = false;
+    unsigned apartments = 4;
+    unsigned iterations = 200;
     for (int i = 1; i < argc; ++i) {
         const std::wstring arg = argv[i];
         auto next = [&]() -> std::wstring { return (i + 1 < argc) ? argv[++i] : std::wstring(); };
@@ -275,6 +280,42 @@ int wmain(int argc, wchar_t** argv)
         else if (arg == L"--step") stepPath = next();
         else if (arg == L"--out") outDir = next();
         else if (arg == L"--cx") cx = static_cast<unsigned>(_wtoi(next().c_str()));
+        else if (arg == L"--soak") soak = true;
+        else if (arg == L"--apartments") apartments = static_cast<unsigned>(_wtoi(next().c_str()));
+        else if (arg == L"--iterations") iterations = static_cast<unsigned>(_wtoi(next().c_str()));
+    }
+    if (outDir.empty()) outDir = L".";
+
+    // SEC-17 surrogate soak: many concurrent apartments force repeated
+    // activation, extraction and teardown in the real DllHost surrogate while
+    // the thumbnail cache is churned.
+    if (soak) {
+        provider_smoke::SoakOptions options;
+        options.dllPath = dllPath;
+        options.apartments = apartments;
+        options.iterations = iterations;
+        options.cx = cx;
+        options.outDir = outDir;
+        const auto addModel = [&options](const char* name, const CLSID& clsid,
+                                         const std::wstring& path) {
+            if (!path.empty()) {
+                options.models.push_back({name, clsid, path});
+            }
+        };
+        addModel("stl", kStlClsid, stlPath);
+        addModel("ply", kPlyClsid, plyPath);
+        addModel("gltf", kGltfClsid, gltfPath);
+        addModel("fbx", kFbxClsid, fbxPath);
+        addModel("3mf", kThreeMfClsid, mfPath);
+        addModel("usd", kUsdClsid, usdPath);
+        addModel("step", kStepClsid, stepPath);
+        if (options.dllPath.empty() || options.models.empty() || apartments == 0
+            || iterations == 0) {
+            std::printf("usage: ProviderSmokeHost.exe --soak --dll <path> --stl <path> [--ply ...] "
+                        "[--apartments 4] [--iterations 200] [--cx 256] [--out <dir>]\n");
+            return 2;
+        }
+        return provider_smoke::RunProviderSoak(options);
     }
     if (dllPath.empty() || (stlPath.empty() && plyPath.empty() && gltfPath.empty() && fbxPath.empty()
                             && mfPath.empty() && usdPath.empty() && stepPath.empty())) {

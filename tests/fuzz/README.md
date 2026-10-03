@@ -243,3 +243,53 @@ seeds, and the `Ktx2` domain drives the real ETC1S transcode for every accepted
 container. `GltfFuzz` is in the scheduled/nightly `fuzz-smoke` matrix in
 `.github/workflows/ci.yml` (one target per runner); it is not yet a required
 merge gate. The seed preparer refuses a non-empty directory.
+
+## Provider pipeline (SEC-17)
+
+`ProviderFuzz` instruments the provider-owned boundary the worker-format
+targets do not reach: `BoundedStreamSource` (SEC-07 stream hardening), every
+family adapter's normalization through the frozen `IFamilyAdapter` contract,
+`DeterministicGeometrySampler`, and the real `RenderCpuTileRaster` tile
+rasterizer. It creates no COM object, window, GPU device, file mapping or child
+process: the input is an in-process `IStream` double and the output image is
+discarded. The eight family adapters and the pinned third-party parsers are
+linked (fastgltf/ufbx/lib3mf/TinyUSDZ/OCCT/draco/ktx) but are **not**
+sanitizer-instrumented; ASan instruments the product-owned preflights, adapters,
+sampler and rasterizer and its allocator interceptor catches some third-party
+overwrites, exactly as `GltfFuzz` does. The real AppContainer/Job worker and the
+OCCT transfer boundary remain the process-containment evidence (SEC-08/09).
+
+A 24-byte envelope (magic, domain, family, flags, reserved, cx, reported size,
+payload length) selects one of four domains:
+
+- `Pipeline` — `RunThumbnailPipeline` over a memory-backed
+  `BoundedStreamSource` for the routed family, so registry → adapter → sampler →
+  rasterizer runs exactly as in `GetThumbnail`; the stream flags select hostile
+  `STATSTG`/seek/short-read behaviour;
+- `Stream` — `BoundedStreamSource` driven directly with fuzzed read ranges;
+- `Sampler` — fuzzed `TriangleSample`/`PointSample` records (NaN/Inf from raw bit
+  patterns) into the deterministic sampler;
+- `Raster` — fuzzed `SampledGeometry` (clipping math, degenerate transforms,
+  NaN/Inf coordinates, extreme aspect ratios, `cx == 0`/`0xFFFFFFFF`) into the
+  real tile rasterizer.
+
+```powershell
+python tests/fuzz/prepare_provider_seeds.py TestResults/security-t17/provider-seeds
+msbuild tests\fuzz\ProviderFuzz.vcxproj /p:Configuration=Release /p:Platform=x64 "/p:SolutionDir=<root>\" /m:1
+tests/fuzz/x64/Release/ProviderFuzz.exe TestResults/security-t17/provider-seeds -max_total_time=60 -timeout=10 -rss_limit_mb=2048 -max_len=2100000 -print_final_stats=1 -verbosity=0
+```
+
+The provider STEP manifest is isolated from the root manifest
+(`thumbnail-provider\step-occt\vcpkg.json`, ADR-0002), so a cold build needs
+both `vcpkg_installed` trees restored (the main CI `test` job already does
+this). The seed preparer refuses a non-empty directory because libFuzzer mutates
+its corpus in place. Measured Release smoke on the reference machine:
+30 s / 590 executions / 330 MiB peak RSS, and 60 s / 788 executions / 447 MiB
+peak RSS, with no crash, hang or ASan report on the 36 committed seeds. The
+target is not yet in the scheduled `fuzz-smoke` matrix because that job restores
+only the root vcpkg manifest; promoting it is a follow-up (restore the isolated
+`step-occt` manifest in that job first).
+
+The surrogate soak that proves Explorer stability across concurrent DllHost
+apartments, repeated load/unload and thumbnail-cache churn is documented in
+`packaging/smoke/README.md` (SEC-17 soak).

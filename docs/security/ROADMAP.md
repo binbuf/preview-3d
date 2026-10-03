@@ -43,7 +43,7 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [x] T15 — SEC-15 Fuzz targets: STL, PLY, OBJ → [15-fuzz-fast-path-parsers.md](15-fuzz-fast-path-parsers.md)
 - [~] T16 — SEC-16 Fuzz targets: glTF + compressed codecs → [16-fuzz-gltf-and-codecs.md](16-fuzz-gltf-and-codecs.md) ⟵ blocked
 - [x] T16b — SEC-16b KTX2/BasisLZ ETC1S decoder finding and GltfFuzz smoke promotion → [16b-fuzz-ktx-etc1s-finding.md](16b-fuzz-ktx-etc1s-finding.md)
-- [ ] T17 — SEC-17 Provider pipeline fuzz + surrogate soak → [17-fuzz-provider-and-soak.md](17-fuzz-provider-and-soak.md)
+- [x] T17 — SEC-17 Provider pipeline fuzz + surrogate soak → [17-fuzz-provider-and-soak.md](17-fuzz-provider-and-soak.md)
 
 ## Phase 4 — Documentation and release metadata
 
@@ -51,11 +51,11 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-02T23:58:44Z · 17/21 done
+**Pipeline status** — updated 2026-10-03T00:11:16Z · 18/21 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16b
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16b, T17
 - Blocked: T16
 - Failed: none
-- Remaining: T17, T18, T19
-- Last finished: T16b — done · ETC1S/BasisLZ global-data preflight closes both decoder crash classes, regressions added, GltfFuzz promoted to fuzz-smoke with promoted corpus; all acceptance checks green (unit, import-isolation, bounded smoke).
+- Remaining: T18, T19
+- Last finished: T17 — done · ProviderFuzz domain target (all 8 families + stream/sampler/rasterizer) and real-dllhost surrogate soak landed with green smokes, per-family restriction rerun, ADR-0047, and docs; remaining follow-ups are CI fuzz-smoke promotion and the hostile-input SEC-08 allowed-failure classification.
 <!-- /symphony:status -->

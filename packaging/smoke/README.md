@@ -86,3 +86,48 @@ to `Invoke-ProviderSmoke.ps1`, commit a small non-degenerate fixture, and re-run
 The verifier itself is family-agnostic; the CLSID and model path are the only family-specific values.
 T34 completed the eighth family (STEP/STP); T41 must still move these smoke identities to the real
 installer rules. The STEP DLL statically contains OCCT, so it stages no extra runtime DLL.
+
+## Surrogate soak (SEC-17)
+
+`ProviderSmokeHost.exe --soak` is the Explorer-stability soak. It repeatedly
+renders the smoke fixtures through the real Shell path
+(`IThumbnailCache::GetThumbnail` with `WTS_FORCEEXTRACTION`) from several
+concurrent STA apartments, so the provider is loaded, exercised and torn down in
+the real `DllHost.exe` surrogate many times while the thumbnail cache is churned.
+It asserts:
+
+- no crash/hang: every call must return a bitmap (a surrogate crash makes the
+  next `GetThumbnail` fail and is counted as a failure, never a pass);
+- no persistent surrogate after the last release: the `DllHost` hosting
+  `Preview3DThumbnailProvider.dll` must disappear within 30 s;
+- no monotonic growth on the surrogate process(es): GDI `+64`, User `+64`,
+  handles `+256`, threads `+8`, private bytes `+32 MiB` are the tolerances
+  (raw baseline/final numbers are written to `soak-report.txt`).
+
+```powershell
+# Stage and register exactly as the smoke above, then:
+x64\Release\ProviderSmokeHost.exe --soak ^
+  --dll artifacts\smoke\stage\Release\Preview3DThumbnailProvider.dll ^
+  --stl packaging\smoke\fixtures\smoke-cube.stl ^
+  --ply packaging\smoke\fixtures\smoke-cube.ply ^
+  --gltf packaging\smoke\fixtures\smoke-cube.glb ^
+  --fbx packaging\smoke\fixtures\smoke-cube.fbx ^
+  --mf packaging\smoke\fixtures\smoke-cube.3mf ^
+  --usd packaging\smoke\fixtures\smoke-cube.usda ^
+  --step packaging\smoke\fixtures\smoke-cube.stp ^
+  --apartments 4 --iterations 100 --cx 256 --out artifacts\smoke\evidence\Release\soak
+```
+
+The SoakHost is built with the verifier
+(`packaging\smoke\ProviderSmokeHost.vcxproj`, `ProviderSoak.{h,cpp}`). It is
+crash containment, not a security boundary (ADR-0005): the value is Explorer
+stability and leak detection. A stack-overflow/`__fastfail` surrogate death is
+an allowed failure under the SEC-08/ADR-0037 policy (fault code and input
+recorded, process restarted), while a contained access violation must surface as
+a quarantine and later requests failing closed - neither is masked as a pass.
+
+Measured Release reference run on the development machine (7 families, 4
+apartments x 100 iterations + 4 warm-up = 404 thumbnails): 0 failed, one
+`dllhost.exe` surrogate, GDI 0 -> 0, User 6 -> 8, handles 189 -> 207, threads
+10 -> 11, private bytes 4,665,344 -> 9,818,112 (+5.15 MiB), teardown in 5.1 s,
+no persistent surrogate.
