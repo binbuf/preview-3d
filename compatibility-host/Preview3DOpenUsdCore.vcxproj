@@ -23,7 +23,14 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\import-worker\src;src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <DisableSpecificWarnings>4100;4201;4244;4305;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <!-- 4244/4305 are scoped to the third-party OpenUSD includes with
+           push/disable/pop inside OpenUsdHost.cpp, not suppressed project-wide.
+           Only genuine project-code suppressions remain here: 4100
+           (unreferenced formal parameter in message/handler signatures) and 4201
+           (anonymous struct/union in the pinned platform headers). Re-audit a
+           suppression before widening it; do not hide narrowing conversions
+           project-wide (SEC-19/T19). -->
+      <DisableSpecificWarnings>4100;4201;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <!-- A static OpenUSD lib no longer carries its own system imports, so the

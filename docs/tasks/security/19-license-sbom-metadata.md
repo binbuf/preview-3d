@@ -53,4 +53,43 @@ unversioned, drifting notice file.
 - [ ] Hand-off lists the generated artifacts and the mapping file location.
 
 ## Hand-off
-_(filled in by the implementing session: what landed, what deviated and why, what the next task must know)_
+
+Landed:
+- `packaging/ReleaseMetadata.ps1` — shared logic: installed-closure parser across the root and both
+  isolated STEP vcpkg trees, fail-closed SPDX mapping gate, manifest-root check, release-version
+  consistency gate, and the `THIRD-PARTY-LICENSES.md`/baseline check.
+- `packaging/portable/dependency-licenses.json` — the reviewed SPDX table (22 target packages).
+- `packaging/portable/Create-PortableRelease.ps1` — removed the hardcoded `$thirdParty` array; the
+  SBOM components, `licenses\` copies, and the `THIRD-PARTY-NOTICES.txt` index are all generated
+  from the installed closure; packaging fails on an unmapped package or missing `copyright`.
+- `packaging/portable/THIRD-PARTY-NOTICES.txt` — now a template with `@LICENSE_LIST@` filled from the
+  closure.
+- `packaging/installer/Create-Installer.ps1` — version-consistency check (fast fail before build).
+- `vcpkg.json` version `0.1.0` → `0.5.0`.
+- `THIRD-PARTY-LICENSES.md` — versions column, `fast-float` and the other newly-covered packages,
+  and the pinned baseline commit link.
+- `compatibility-host/Preview3DOpenUsdCore.vcxproj` + `OpenUsdHost.cpp` — removed the project-wide
+  `4244;4305` suppression; scoped it with push/disable/pop to the OpenUSD translation unit. Audited
+  every emitted site: all in `pxr/base/gf/*` and `pxr/base/arch/timing.h`, none in project code.
+- `packaging/Test-ReleaseMetadata.ps1` + `tests/unit/ReleaseMetadataTests.cpp` — the packaging
+  self-test (negative cases must fail) run as part of the harness verify.
+- Docs: `docs/design/08-installation-and-registration.md` updated; `docs/design/adr/0049-generated-sbom-and-license-metadata.md` added.
+
+Generated artifacts: `<stage>\SBOM.cdx.json` (23 components: 22 closure + app-local CRT),
+`<stage>\licenses\*.txt` (22 files incl. `fast-float.txt`, `opencascade.txt`),
+`<stage>\THIRD-PARTY-NOTICES.txt`. Mapping file: `packaging/portable/dependency-licenses.json`.
+
+Deviation: the repo-root `THIRD-PARTY-LICENSES.md` is kept as a checked navigation aid rather than
+generated at build time (the authoritative versioned inventory ships inside each package); the check
+requires every mapped package name and the pinned baseline to appear.
+
+Checks (all run here, Release x64):
+- `pwsh packaging\Test-ReleaseMetadata.ps1 -SelfTest` → exit 0; expected failures for unmapped
+  dependency and version drift both fired; 22-package closure fully mapped with copyright files.
+- `Create-PortableRelease.ps1 -RepositoryRoot <repo> -Distribution Portable -Version 0.5.0`
+  (unsigned) → exit 0, 106 staged files, generated SBOM/licenses as above.
+- `Preview3DOpenUsdCore.vcxproj /t:Rebuild` Release → exit 0 with `4244;4305` scoped (no warnings).
+- Harness verify `x64\Release\Tests.Unit.exe "~[graphics]"` → 313 cases / 131559 assertions, all
+  pass (was 312/131557).
+
+Remaining/next: none. SEC-14 signing is unchanged and out of scope.

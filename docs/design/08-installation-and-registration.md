@@ -224,7 +224,7 @@ If a user had selected Preview 3D as default, Windows may show no current defaul
 - CI verifies signatures after packaging and again on an installed image.
 - Third-party versions/commits and licenses are pinned in a lock manifest; source/archive checksums are verified before build.
 - Release artifacts include SBOM, notices, reproducible build inputs, checksums, symbols, and format-limit documentation.
-- The third-party license notices (`THIRD-PARTY-LICENSES.md`) and the SBOM are maintained by hand today and are known to drift from the tree; SEC-19 ([T19](../tasks/security/19-license-sbom-metadata.md)) owns generating them from the lock manifest. Until that lands, the committed notices are not a verified inventory.
+- The SBOM, the copied license texts, and the `licenses/` index are generated from the installed vcpkg dependency closure (`vcpkg_installed/**/vcpkg/status` plus each isolated STEP tree), not a hand-maintained list. Packaging fails when an installed package has no reviewed SPDX entry in [`packaging/portable/dependency-licenses.json`](../../packaging/portable/dependency-licenses.json) or no upstream `copyright` file. `THIRD-PARTY-LICENSES.md` is a checked navigation aid (versions and the pinned baseline), and the release version is cross-checked across `vcpkg.json`, `Directory.Solution.targets`, and `Preview3D.nsi` so it cannot drift (SEC-19 / [T19](../tasks/security/19-license-sbom-metadata.md), [ADR-0049](adr/0049-generated-sbom-and-license-metadata.md)).
 - No install-time download or dynamic dependency fetching is allowed.
 
 ## Future MSI logging and rollback

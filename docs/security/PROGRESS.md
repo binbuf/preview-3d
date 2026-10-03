@@ -27,6 +27,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T16 - SEC-16 Fuzz targets: glTF + compressed codecs**: Reusable facts for later sessions:; **One target, seven domains.** `tests/fuzz/GltfFuzz.cpp` (+ `GltfFuzz.vcxproj`, GUID
 - **T16b — SEC-16b KTX2/BasisLZ ETC1S decoder finding and GltfFuzz smoke promotion**: Reusable facts for later sessions:; **Root cause (characterized).** KTX-Software 4.4.2's `ktxTexture2_transcodeLzEtc1s`
 - **T18 — SEC-18 Reconcile design docs with implemented controls**: Reusable facts for later sessions:; **Docs-only task.** No product code or tests changed; the harness verify is still
+- **T19 — SEC-19 License/SBOM/dependency metadata**: Reusable facts for later sessions:; **One generator, one mapping.** `packaging/ReleaseMetadata.ps1` holds the installed-closure
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -634,10 +635,11 @@ Reusable facts for later sessions:
   when next touched; all already default to Debug.
 - T09/SEC-10: process-mitigation attributes are untouched (out of T09 scope).
 
-- T18/SEC-19: `THIRD-PARTY-LICENSES.md` and the SBOM are hand-maintained and drift from
-  `vcpkg.json`; T18 annotated design/08 ("Signing and supply chain") and `SECURITY.md`, but the
-  files themselves must be generated and version-locked by T19. Do not treat the committed notices
-  as a verified inventory until then.
+- T18/SEC-19: **resolved by T19** — `THIRD-PARTY-LICENSES.md` now carries versions and
+  links the pinned baseline, and the portable/installer SBOM, notices, and `licenses/`
+  files are generated from the installed vcpkg closure with a fail-closed SPDX mapping
+  (`packaging/portable/dependency-licenses.json`). The dedicated baseline check in
+  `packaging/Test-ReleaseMetadata.ps1` keeps the doc from drifting again.
 
 - SEC-17: the real-dllhost soak now exists (`ProviderSmokeHost.exe --soak`); it counts a surrogate
   crash/hang as a hard failure and a persistent surrogate/growth as failures. Remaining: implement
@@ -998,3 +1000,47 @@ Reusable facts for later sessions:
   `docs/FORMAT-SUPPORT.md`.
 - **Legacy docs are deliberately untouched.** `docs/legacy/**` still mentions DirectXTex; the task
   out-of-scope says not to rewrite the legacy baseline. Grep hits there are expected, not drift.
+
+## T19 — SEC-19 License/SBOM/dependency metadata
+
+Reusable facts for later sessions:
+
+- **One generator, one mapping.** `packaging/ReleaseMetadata.ps1` holds the installed-closure
+  parser (`Get-InstalledDependencyClosure`), the fail-closed SPDX gate
+  (`Assert-LicenseMappingCoversClosure`), the manifest-root check
+  (`Assert-ManifestRootsPresent`), the version gate (`Assert-ReleaseVersionConsistency`), and the
+  doc check (`Assert-LicensesDocCoversMapping`). The reviewed SPDX table is
+  `packaging/portable/dependency-licenses.json` (22 target packages; host build tools
+  `vcpkg-cmake`/`vcpkg-cmake-config` are excluded by architecture). Adding a port fails packaging
+  until its SPDX expression is added here.
+- **Three vcpkg trees, one closure.** `Get-VcpkgInstallTree` reads the root tree
+  (`vcpkg_installed\x64-windows-static-md\{vcpkg\status, x64-windows-static-md\share}`), the
+  dedicated STEP host (`compatibility-host-step\vcpkg_installed\...`), and the provider STEP tree
+  (`thumbnail-provider\step-occt\vcpkg_installed\...`). Only packages whose status `Architecture`
+  is `x64-windows-static-md` enter the closure; `copyright` is read from the matching tree's
+  `share\<pkg>\copyright`.
+- **SBOM is generated, not a list.** `Create-PortableRelease.ps1` emits one CycloneDX component per
+  closure package with `licenses[].expression` from the mapping plus
+  `preview3d:{vcpkg-baseline,architecture,license-file,vcpkg-abi}`; OCCT now comes from its own tree
+  (`7.8.1#1`), not a special case. `THIRD-PARTY-NOTICES.txt` is a template whose `@LICENSE_LIST@`
+  is filled from the same closure, so the index and `licenses\` cannot disagree.
+- **Version cannot drift.** `vcpkg.json` (`0.5.0`, was `0.1.0`), `Directory.Solution.targets`, and
+  `Preview3D.nsi` `PRODUCT_VERSION` must match, and the packaging `-Version` argument is checked
+  against them in both packaging scripts.
+- **The packaging self-test is a Test.Unit case.** `tests/unit/ReleaseMetadataTests.cpp`
+  (`[security][release-metadata]`) shells out to
+  `pwsh packaging/Test-ReleaseMetadata.ps1 -RepositoryRoot <repo> -SelfTest`; the script's
+  `-SelfTest` proves an unmapped installed dependency and a version mismatch both fail, then runs
+  the real checks. It needs `pwsh` 7 and at least the root vcpkg tree present (CI restores all
+  three). `PREVIEW3D_REPO_ROOT` is baked into `Tests.Unit.vcxproj` from `$(SolutionDir)`.
+- **OpenUSD warning scope.** `compatibility-host\Preview3DOpenUsdCore.vcxproj` no longer suppresses
+  `4244;4305` project-wide (only `4100;4201` remain). `OpenUsdHost.cpp` wraps its `pxr` includes
+  and its whole body in `#pragma warning(push)` + `disable: 4244 4305` ... `pop`; every emitted
+  site is upstream `pxr/base/gf/*` / `pxr/base/arch/timing.h`, audited. Rebuild it Release: exit 0.
+- **Verified.** `packaging\Test-ReleaseMetadata.ps1 -SelfTest` exit 0 (22-package closure fully
+  mapped). A full `Create-PortableRelease.ps1 -Distribution Portable -Version 0.5.0` run (unsigned)
+  staged 106 files, generated 23 SBOM components (22 closure + CRT), and 22 `licenses\*.txt`
+  including `fast-float.txt`. Harness verify `x64\Release\Tests.Unit.exe "~[graphics]"`: 313 cases
+  / 131559 assertions, all pass.
+- **ADR.** [ADR-0049](../design/adr/0049-generated-sbom-and-license-metadata.md). Design/08
+  "Signing and supply chain" now describes the generated inventory.
