@@ -47,15 +47,15 @@ report. See [`README.md`](README.md) for the priority rationale, dependencies an
 
 ## Phase 4 — Documentation and release metadata
 
-- [ ] T18 — SEC-18 Reconcile design docs with implemented controls → [18-docs-reconciliation.md](18-docs-reconciliation.md)
+- [x] T18 — SEC-18 Reconcile design docs with implemented controls → [18-docs-reconciliation.md](18-docs-reconciliation.md)
 - [ ] T19 — SEC-19 License/SBOM/dependency metadata → [19-license-sbom-metadata.md](19-license-sbom-metadata.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-03T00:11:16Z · 18/21 done
+**Pipeline status** — updated 2026-10-03T00:14:18Z · 19/21 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16b, T17
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16b, T17, T18
 - Blocked: T16
 - Failed: none
-- Remaining: T18, T19
-- Last finished: T17 — done · ProviderFuzz domain target (all 8 families + stream/sampler/rasterizer) and real-dllhost surrogate soak landed with green smokes, per-family restriction rerun, ADR-0047, and docs; remaining follow-ups are CI fuzz-smoke promotion and the hostile-input SEC-08 allowed-failure classification.
+- Remaining: T19
+- Last finished: T18 — done · All nine audit divergences reconciled (handle-only broker objects, session-scoped worker + ADR-0031 limits, WIC-only drop of DirectXTex, InprocServer32 note, tracked fuzz state, task/ADR links), security invariants and SECURITY.md scope added, ADR-0048 written; verify green 312 cases/131557 assertions.
 <!-- /symphony:status -->

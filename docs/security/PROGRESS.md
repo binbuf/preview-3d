@@ -26,6 +26,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T15 — SEC-15 Fuzz targets: STL, PLY, OBJ**: Reusable facts for later sessions:; **Three targets, one convention.** `tests/fuzz/StlFuzz.cpp`, `PlyFuzz.cpp`, and `ObjFuzz.cpp`
 - **T16 - SEC-16 Fuzz targets: glTF + compressed codecs**: Reusable facts for later sessions:; **One target, seven domains.** `tests/fuzz/GltfFuzz.cpp` (+ `GltfFuzz.vcxproj`, GUID
 - **T16b — SEC-16b KTX2/BasisLZ ETC1S decoder finding and GltfFuzz smoke promotion**: Reusable facts for later sessions:; **Root cause (characterized).** KTX-Software 4.4.2's `ktxTexture2_transcodeLzEtc1s`
+- **T18 — SEC-18 Reconcile design docs with implemented controls**: Reusable facts for later sessions:; **Docs-only task.** No product code or tests changed; the harness verify is still
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -633,6 +634,11 @@ Reusable facts for later sessions:
   when next touched; all already default to Debug.
 - T09/SEC-10: process-mitigation attributes are untouched (out of T09 scope).
 
+- T18/SEC-19: `THIRD-PARTY-LICENSES.md` and the SBOM are hand-maintained and drift from
+  `vcpkg.json`; T18 annotated design/08 ("Signing and supply chain") and `SECURITY.md`, but the
+  files themselves must be generated and version-locked by T19. Do not treat the committed notices
+  as a verified inventory until then.
+
 - SEC-17: the real-dllhost soak now exists (`ProviderSmokeHost.exe --soak`); it counts a surrogate
   crash/hang as a hard failure and a persistent surrogate/growth as failures. Remaining: implement
   the SEC-08 allowed-failure *classification* - a stack-overflow or `__fastfail`/stack-cookie process
@@ -957,3 +963,38 @@ Reusable facts for later sessions:
   bounded `GltfFuzz` smoke over 38 seeds, 60 s, 55,945 units, exit 0, no ASan finding (a separate 180 s
   run did 187,491 units clean). The worker, thumbnail provider, fuzz target, unit and import-isolation
   projects all rebuilt Release.
+
+## T18 — SEC-18 Reconcile design docs with implemented controls
+
+Reusable facts for later sessions:
+
+- **Docs-only task.** No product code or tests changed; the harness verify is still
+  `x64\Release\Tests.Unit.exe "~[graphics]"` → 312 cases / 131,557 assertions, all pass.
+- **The audit's divergences partly self-resolved.** Four of the nine Context bullets were already
+  fixed by the code tasks before T18: safe DLL search for every child (SEC-09/T09,
+  `import-worker/src/main.cpp::HardenProcessDiscovery`), compiled-out developer/fault switches
+  (SEC-09 + SEC-11), the fuzz targets (SEC-15/16/16b/17), and CPU-time limits (SEC-03 gave ADR-0031).
+  T18 only reconciled the prose that was still stale.
+- **The broker objects really are handle-only.** `shared/import-broker/src/{WorkerPool,ImportSession,
+  SharedSection}.cpp` use empty `SECURITY_ATTRIBUTES`; no per-object DACL exists. Design/08 no longer
+  claims per-generation ACLs. See ADR-0048.
+- **The worker pool is session-scoped, not per-generation.** `ImportSession.cpp` `PrepareAsync` sets
+  `limits.processCpuTimeLimitMs = 0` with a comment that a cumulative cap would kill a reused worker;
+  `PrepareNow` (compatibility/STEP hosts) sets `kImportProcessCpuTimeLimitMs`. Design/02 wording now
+  matches (one profile/Job per session; per-generation wall-clock deadline instead).
+- **DirectXTex is not in the tree.** `vcpkg.json` has no DirectXTex dependency and there is no
+  DirectXTex source; only `import-worker/src/WicImageDecodeAdapter.cpp` (inbox WIC) and libwebp
+  exist. T18 dropped the claim from design/01,02,03,08,09,10,11 and recorded TGA/HDR/DDS as
+  unsupported. Recorded in ADR-0048; matches `docs/FORMAT-SUPPORT.md`.
+- **New ADR-0048** (`docs/design/adr/0048-handle-only-broker-objects-worker-reuse-and-directxtex-drop.md`)
+  is the binding record for the handle-only model, session-scoped pool, and no-DirectXTex. A future
+  task that wants a per-generation ACL, a CPU cap on the reused worker, or DirectXTex must supersede
+  it and re-justify against ADR-0031/ADR-0005.
+- **Security invariants are now in design/09's controls**: NUL/control + invalid-UTF-8 reference
+  rejection (ADR-0032), validate-before-decode preflights (ADR-0030/ADR-0046), provider AV
+  quarantine (ADR-0037), and an explicitly mandatory CI merge gate (ADR-0042). `SECURITY.md` scope
+  now names NUL/control reference handling and provider-surrogate escapes.
+- **Broken link fixed:** `SECURITY.md` pointed at `.docs/FORMAT-SUPPORT.md`; the real file is
+  `docs/FORMAT-SUPPORT.md`.
+- **Legacy docs are deliberately untouched.** `docs/legacy/**` still mentions DirectXTex; the task
+  out-of-scope says not to rewrite the legacy baseline. Grep hits there are expected, not drift.

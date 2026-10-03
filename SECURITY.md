@@ -39,7 +39,14 @@ include:
 - Memory-safety bugs reachable from parsing or decoding an untrusted model,
   including the compressed glTF (Draco, meshopt, KTX2/Basis, WebP) paths.
 - Broker or path-handling bugs that read files outside the approved local
-  sidecar set, follow traversal/UNC/ADS references, or fetch remote assets.
+  sidecar set, follow traversal/UNC/ADS references, mishandle NUL/control bytes
+  or invalid UTF-8 in a reference, or fetch remote assets.
+- A crafted model that makes the Explorer thumbnail provider escape its bounds
+  and affect `explorer.exe` or another process, rather than failing closed to
+  the generic icon or the documented surrogate crash. A contained access
+  violation is quarantined (later requests fail closed); a stack-overflow or
+  uncatchable `__fastfail` surrogate death is the documented allowed failure,
+  not a containment escape.
 - Activation or command-line handling that bypasses format admission or loads
   the wrong executable.
 
@@ -53,5 +60,6 @@ include:
   Preview 3D; report those to the upstream project.
 - Resource exhaustion or denial of service within the documented Tier B limits.
 - Missing features or format gaps that are already listed in
-  [Format support and limits](.docs/FORMAT-SUPPORT.md).
+  [Format support and limits](docs/FORMAT-SUPPORT.md), including the unsupported TGA/HDR/DDS
+  texture containers.
 - Model, texture, or screenshot licensing questions.

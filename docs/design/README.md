@@ -17,6 +17,14 @@ baseline and remain the authority for anything the thumbnail program does not ov
 - [`testing-strategy.md`](testing-strategy.md) — how the provider is built, hosted, fuzzed and
   qualified: COM host harness, golden images, surrogate soak, clean-machine verification.
 
+## Security hardening program
+
+The v0.5.0 security audit and the remediation tasks it produced live in [`../security/`](../security/)
+([`ROADMAP.md`](../security/ROADMAP.md), [`PROGRESS.md`](../security/PROGRESS.md),
+[`INDEX.md`](../security/INDEX.md)). The design documents here are updated to match the controls that
+program lands; when a control is still owed to a task, the document names that task rather than
+claiming it.
+
 ## Normative documents
 
 1. [`01-product-scope.md`](01-product-scope.md) — users, platform, requirements, exclusions, release acceptance.
