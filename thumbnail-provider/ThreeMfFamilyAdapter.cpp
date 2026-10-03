@@ -249,7 +249,7 @@ void Basis(Vec3 axis, Vec3& first, Vec3& second) noexcept
 }
 
 void AddSphere(std::vector<GenTriangle>& output, Vec3 center, double radius, Vec3 axis,
-               std::uint32_t radial, std::uint32_t latitude, const float color[4]) noexcept
+               std::uint32_t radial, std::uint32_t latitude, const float color[4])
 {
     Vec3 u{}, v{};
     axis = Normalized(axis);
@@ -294,7 +294,7 @@ void AddSphere(std::vector<GenTriangle>& output, Vec3 center, double radius, Vec
 
 void AddBeam(std::vector<GenTriangle>& output, Vec3 begin, Vec3 end, double radius0,
              double radius1, Lib3MF::eBeamLatticeCapMode cap0, Lib3MF::eBeamLatticeCapMode cap1,
-             const float color[4], std::uint32_t radial) noexcept
+             const float color[4], std::uint32_t radial)
 {
     const Vec3 delta = end - begin;
     const double length = Length(delta);
@@ -416,7 +416,7 @@ GenVertex Interpolate(const GenVertex& a, const GenVertex& b, double t) noexcept
     return result;
 }
 
-void ClipInside(std::vector<GenTriangle>& triangles, const Aabb& box) noexcept
+void ClipInside(std::vector<GenTriangle>& triangles, const Aabb& box)
 {
     for (std::uint32_t plane = 0; plane < 6; ++plane) {
         std::vector<GenTriangle> clipped;
@@ -480,7 +480,7 @@ bool AllowedNamespace(std::string_view uri) noexcept
 // Bounded byte-level scan of a root model part. Rejects a `requiredextensions`
 // entry whose prefix resolves to a namespace outside the allowlist, and any DTD
 // or entity declaration. This is deliberately not a general XML parser.
-ErrorCode ScanModelPart(std::span<const std::byte> part) noexcept
+ErrorCode ScanModelPart(std::span<const std::byte> part)
 {
     const char* data = reinterpret_cast<const char*>(part.data());
     const std::size_t size = part.size();

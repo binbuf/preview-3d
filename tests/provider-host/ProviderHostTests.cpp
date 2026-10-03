@@ -228,12 +228,14 @@ TEST_CASE("an adapter allocation failure is a typed OutOfMemory, not a process e
     using preview3d::provider::ProviderLimits;
 
     // One valid fixture per family whose adapter performs product-owned
-    // allocation (the STL/PLY/OBJ/glTF/FBX fast-path families). The
-    // library-backed 3MF/USD/STEP families allocate through their own C
-    // allocators, so this executable's operator-new replacement cannot reach
-    // them; their containment is proven by their own bad_alloc mapping.
-    const Family families[] = {Family::Stl, Family::Ply, Family::Obj, Family::Gltf,
-                               Family::Fbx};
+    // allocation. The fast-path STL/PLY/OBJ/glTF/FBX families allocate through
+    // product code; 3MF and USD allocate product-owned OPC/ZIP/attribute
+    // storage before they hand any bytes to lib3mf/TinyUSDZ. STEP is left to
+    // the SEC-17 soak: its product-owned allocations are interleaved with
+    // OCCT's own C allocator, which this executable's operator-new replacement
+    // cannot reach (see the T20 hand-off).
+    const Family families[] = {Family::Stl, Family::Ply,  Family::Obj,  Family::Gltf,
+                               Family::Fbx, Family::ThreeMf, Family::Usd};
 
     for (const Family family : families) {
         const GoldenFixture* fixture = nullptr;

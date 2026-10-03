@@ -524,57 +524,84 @@ int ResolveAsset(const char* assetName, const std::vector<std::string>&,
                  std::string* resolved, std::string*, void* userdata) noexcept
 {
     auto& context = *static_cast<UsdAssetContext*>(userdata);
-    const auto normalized = NormalizeAssetPath(
-        assetName ? std::string_view(assetName) : std::string_view{});
-    if (!normalized) {
-        context.error = ErrorCode::UnsafeReference;
+    try {
+        const auto normalized = NormalizeAssetPath(
+            assetName ? std::string_view(assetName) : std::string_view{});
+        if (!normalized) {
+            context.error = ErrorCode::UnsafeReference;
+            return -2;
+        }
+        if (context.Find(*normalized) == nullptr) {
+            context.error = ErrorCode::UnsafeReference;
+            return -2;
+        }
+        *resolved = *normalized;
+        return 0;
+    } catch (const std::bad_alloc&) {
+        // TinyUSDZ calls this through a plain function pointer; contain the
+        // product-owned allocation here rather than let it unwind through the
+        // vendored library.
+        context.error = ErrorCode::OutOfMemory;
+        return -2;
+    } catch (...) {
+        context.error = ErrorCode::InternalImporterFailure;
         return -2;
     }
-    if (context.Find(*normalized) == nullptr) {
-        context.error = ErrorCode::UnsafeReference;
-        return -2;
-    }
-    *resolved = *normalized;
-    return 0;
 }
 
 int SizeAsset(const char* resolvedName, std::uint64_t* bytes, std::string*,
               void* userdata) noexcept
 {
     auto& context = *static_cast<UsdAssetContext*>(userdata);
-    const std::string path = resolvedName ? resolvedName : "";
-    const auto* entry = context.Find(path);
-    if (entry == nullptr) {
-        return -1;
+    try {
+        const std::string path = resolvedName ? resolvedName : "";
+        const auto* entry = context.Find(path);
+        if (entry == nullptr) {
+            return -1;
+        }
+        *bytes = entry->byteSize;
+        return entry->byteSize != 0 ? 0 : -1;
+    } catch (const std::bad_alloc&) {
+        context.error = ErrorCode::OutOfMemory;
+        return -2;
+    } catch (...) {
+        context.error = ErrorCode::InternalImporterFailure;
+        return -2;
     }
-    *bytes = entry->byteSize;
-    return entry->byteSize != 0 ? 0 : -1;
 }
 
 int ReadAsset(const char* resolvedName, std::uint64_t requested, std::uint8_t* output,
               std::uint64_t* bytes, std::string*, void* userdata) noexcept
 {
     auto& context = *static_cast<UsdAssetContext*>(userdata);
-    const std::string path = resolvedName ? resolvedName : "";
-    const auto* entry = context.Find(path);
-    if (entry == nullptr) {
-        return -1;
-    }
-    if (entry->dataOffset > context.source.size()
-        || entry->byteSize > context.source.size() - entry->dataOffset) {
-        context.error = ErrorCode::ArchiveLimit;
+    try {
+        const std::string path = resolvedName ? resolvedName : "";
+        const auto* entry = context.Find(path);
+        if (entry == nullptr) {
+            return -1;
+        }
+        if (entry->dataOffset > context.source.size()
+            || entry->byteSize > context.source.size() - entry->dataOffset) {
+            context.error = ErrorCode::ArchiveLimit;
+            return -2;
+        }
+        if (requested < entry->byteSize) {
+            context.error = ErrorCode::ResourceLimit;
+            return -2;
+        }
+        if (entry->byteSize != 0) {
+            std::memcpy(output, context.source.data() + entry->dataOffset,
+                        static_cast<std::size_t>(entry->byteSize));
+        }
+        *bytes = entry->byteSize;
+        return 0;
+    } catch (const std::bad_alloc&) {
+        context.error = ErrorCode::OutOfMemory;
+        return -2;
+    } catch (...) {
+        context.error = ErrorCode::InternalImporterFailure;
         return -2;
     }
-    if (requested < entry->byteSize) {
-        context.error = ErrorCode::ResourceLimit;
-        return -2;
-    }
-    if (entry->byteSize != 0) {
-        std::memcpy(output, context.source.data() + entry->dataOffset,
-                    static_cast<std::size_t>(entry->byteSize));
-    }
-    *bytes = entry->byteSize;
-    return 0;
 }
 
 template <class T>

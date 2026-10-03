@@ -420,7 +420,11 @@ inside the T12 stream source and T15 rasterizer; the adapters (T21-T34) poll
 methods are `noexcept`, each of their allocating stages also runs its body through
 `thumbnail-provider/ContainmentStage.h` (`RunContainedStage`), so a product-owned `std::bad_alloc`
 is translated to `ErrorCode::OutOfMemory` before it can reach a `noexcept` frame
-([ADR-0034](adr/0034-provider-adapter-stage-containment.md)). The COM boundary runs the
+([ADR-0034](adr/0034-provider-adapter-stage-containment.md)). Internal allocating helpers are
+likewise not `noexcept`, so their throw still reaches that stage boundary; the one exception is a
+callback the vendored parser invokes directly (TinyUSDZ's asset resolver), whose `noexcept` body
+catches its own `bad_alloc` and returns the typed error rather than unwinding through third-party
+frames. The COM boundary runs the
 pipeline and the DIB conversion through `thumbnail-provider/Containment.{h,cpp}` (`RunContained`),
 the last-resort HRESULT boundary that translates a C++ exception (`std::bad_alloc` -> `E_OUTOFMEMORY`,
 anything else -> `E_FAIL`) and a contained structured exception (`E_FAIL`) to the T06 table. A call

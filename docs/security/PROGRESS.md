@@ -28,6 +28,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T16b — SEC-16b KTX2/BasisLZ ETC1S decoder finding and GltfFuzz smoke promotion**: Reusable facts for later sessions:; **Root cause (characterized).** KTX-Software 4.4.2's `ktxTexture2_transcodeLzEtc1s`
 - **T18 — SEC-18 Reconcile design docs with implemented controls**: Reusable facts for later sessions:; **Docs-only task.** No product code or tests changed; the harness verify is still
 - **T19 — SEC-19 License/SBOM/dependency metadata**: Reusable facts for later sessions:; **One generator, one mapping.** `packaging/ReleaseMetadata.ps1` holds the installed-closure
+- **Post-audit inline fixes (2026-10-03)**: A follow-up source audit of the whole security set found two small, self-contained; **SEC-12 mandatory label was `LW` (Low), not medium.** `SecurityForObject` in
+- **T20 — Close provider allocating-`noexcept` holes (SEC-06 completion)**: **Landed.** Every remaining product-owned allocating helper in the 3MF/USD/GeometrySampler; `thumbnail-provider/ThreeMfFamilyAdapter.cpp`: dropped `noexcept` from `AddSphere`, `AddBeam`,
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -663,6 +665,10 @@ Reusable facts for later sessions:
 - `ThreeMfFamilyAdapter.h` still declares `ErrorCode ScanRequiredExtensions();` with no definition
   anywhere in the provider (pre-existing dead declaration, carried through the T06 header edit).
   Remove it or implement the intended XML scan.
+- T20/SEC-06: the provider-host allocator seam now covers product-owned allocations in 3MF and USD,
+  but still not STEP: its product-owned allocations are interleaved with OCCT's own C allocator, so
+  the fault-injection case excludes it. The SEC-17 soak (→ T25) must cover 3MF/USD/STEP
+  library-allocator exhaustion and a genuinely over-committed ledger.
 - SEC-04 and later: the primary-path ADS check is a coarse `:` rule shared in spirit with the
   sidecar resolver; if `ResolveSidecarPath` ever adopts per-format rules, keep the primary rule at
   least as strict. (T04 did add per-format extension rules; the `:`/control rules stay at least as
@@ -1069,3 +1075,37 @@ findings are the new `T20`–`T27` tasks below.
 
 Next-task note: `T20`–`T27` below carry the audit evidence inline. Do not re-fix
 the two items above.
+
+## T20 — Close provider allocating-`noexcept` holes (SEC-06 completion)
+
+**Landed.** Every remaining product-owned allocating helper in the 3MF/USD/GeometrySampler
+provider code is no longer `noexcept`, so its `std::bad_alloc` reaches the existing
+`RunContainedStage` boundary (T06/ADR-0034) and becomes `ErrorCode::OutOfMemory`:
+- `thumbnail-provider/ThreeMfFamilyAdapter.cpp`: dropped `noexcept` from `AddSphere`, `AddBeam`,
+  `ClipInside`, `ScanModelPart` (all build `std::vector`/`std::string`). Genuinely non-allocating
+  helpers (`ReadCallback`/`SeekCallback`/`ProgressCallback`, the `Vec3` math, `SniffImage`,
+  `MapOpcError`/`MapLib3mfError`) stay `noexcept`.
+- `thumbnail-provider/UsdFamilyAdapter.cpp`: `ResolveAsset`/`SizeAsset`/`ReadAsset` keep `noexcept`
+  (TinyUSDZ calls them through a plain function pointer) but now wrap their allocating body in
+  `try/catch`, setting `UsdAssetContext::error` to `OutOfMemory`/`InternalImporterFailure` and
+  returning `-2` instead of unwinding through the vendored library.
+- `thumbnail-provider/GeometrySampler.cpp` + `GeometrySamplingPolicy.h`: dropped `noexcept` from
+  `StratifiedOffsets` (allocates), declaration and definition. `AddTriangle`/`AddPoint`/`OfferCell`
+  stay `noexcept`: the reservoir is reserved in `Begin`, so no `push_back` can allocate;
+  `BuildResult` already catches internally.
+- `tests/provider-host/ProviderHostTests.cpp` `[host][containment]`: added `Family::ThreeMf` and
+  `Family::Usd` to the fault-injection families; STEP stays excluded (see Hand-off).
+
+**Gotcha.** The fault injector is a global `operator new` replacement compiled into
+`Tests.ProviderHost.exe`, so it only sees product-owned C++ allocations — not the C allocators
+inside lib3mf/TinyUSDZ/OCCT. Adding 3MF/USD works because both adapters allocate product-owned
+ZIP/OPC/attribute storage before handing bytes to the vendored library; STEP does not have such a
+clean product-owned first allocation.
+
+**Docs.** `docs/design/05-thumbnail-provider.md` containment paragraph now states that internal
+allocating helpers must not be `noexcept` and that the TinyUSDZ resolver callback contains its own
+`bad_alloc`. No new ADR: the rule is already ADR-0034; this task closed the missed sites.
+
+**Checks.** `x64\Debug\Tests.ProviderHost.exe` 152 assertions / 8 cases pass; `x64\Release\`
+identical; `[host][containment]` 44 assertions / 2 cases; `x64\Release\Tests.Unit.exe "[provider]"`
+60934 assertions / 221 cases.
