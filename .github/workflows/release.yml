@@ -271,15 +271,6 @@ jobs:
             "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
           }
 
-      - name: Remove ephemeral NuGet credentials
-        if: always()
-        shell: pwsh
-        run: |
-          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
-          if (Test-Path -LiteralPath $configPath -PathType Leaf) {
-            Remove-Item -LiteralPath $configPath -Force
-          }
-
       - name: Restore vcpkg dependencies
         shell: pwsh
         env:
@@ -654,4 +645,18 @@ jobs:
           gh release edit $env:RELEASE_TAG --draft=false --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) {
             throw "Publishing the draft GitHub release failed with exit code $LASTEXITCODE."
+          }
+
+      # Final step: the ephemeral Packages config is needed through the restore
+      # (moving this cleanup after "Restore vcpkg dependencies" is what makes the
+      # durable feed usable at all — it used to be deleted first). `always()`
+      # removes it even when an earlier step failed. A tag release runs only
+      # trusted code, so the token is never exposed to PR-authored portfiles.
+      - name: Remove ephemeral NuGet credentials
+        if: always()
+        shell: pwsh
+        run: |
+          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
+          if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            Remove-Item -LiteralPath $configPath -Force
           }

@@ -76,6 +76,9 @@ jobs:
     uses: ./.github/workflows/dependencies-restore.yml
     with:
       feed-access: read
+      # Untrusted: never create the token-bearing NuGet config. `vcpkg install`
+      # runs PR-authored overlay portfiles, which could read it.
+      configure-feed: false
     secrets: inherit
 
   warm:
@@ -87,4 +90,5 @@ jobs:
     uses: ./.github/workflows/dependencies-restore.yml
     with:
       feed-access: readwrite
+      configure-feed: true
     secrets: inherit

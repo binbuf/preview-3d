@@ -2,11 +2,12 @@ name: Dependencies restore
 
 # Reusable half of dependencies.yml. The caller chooses the token permission and
 # the NuGet feed mode (see dependencies.yml): a pull_request calls this with
-# `packages: read` and `feed-access: read`, so PR-authored portfiles can only
-# restore the vcpkg binary cache and can never push a poisoned binary package to
-# the GitHub Packages feed that release.yml later restores. Trusted events
-# (push/schedule/workflow_dispatch) call it with `packages: write` and
-# `feed-access: readwrite` to warm that feed.
+# `packages: read`, `feed-access: read` and `configure-feed: false`, so
+# PR-authored portfiles can only restore the local files cache and can never
+# push a poisoned binary package to, or read the token for, the GitHub Packages
+# feed that release.yml later restores. Trusted events
+# (push/schedule/workflow_dispatch) call it with `packages: write`,
+# `feed-access: readwrite` and `configure-feed: true` to warm that feed.
 #
 # Do NOT set a `permissions:` block in this file: an unspecified permission is
 # treated as `none`, which would strip the caller's `packages: write` grant.
@@ -18,6 +19,14 @@ on:
         description: vcpkg NuGet feed mode, "read" or "readwrite".
         required: true
         type: string
+      configure-feed:
+        description: >-
+          Create the ephemeral GitHub Packages NuGet config. False for an
+          untrusted pull_request, which uses the local files cache alone so
+          PR-authored portfiles can never read the token.
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   restore:
@@ -34,6 +43,7 @@ jobs:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
       VCPKG_SCRATCH: ${{ github.workspace }}\..\.vcpkg-scratch
       FEED_ACCESS: ${{ inputs.feed-access }}
+      CONFIGURE_FEED: ${{ inputs.configure-feed }}
 
     steps:
       - name: Check out source
@@ -79,59 +89,59 @@ jobs:
           # takes `-Config`). Nothing is persisted in the user-profile
           # NuGet.Config, and the "Remove ephemeral NuGet credentials" step deletes
           # the file with `always()` even when a later step fails.
+          #
+          # An untrusted pull_request (configure-feed: false) never creates the
+          # config: `vcpkg install` runs PR-authored overlay portfiles, which
+          # could otherwise read the token. It uses the local files cache alone.
           $filesSource = "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
           $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
-          try {
-            $nuget = (& $vcpkg fetch nuget |
-              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-              Select-Object -Last 1).Trim()
-            if ([string]::IsNullOrWhiteSpace($nuget) -or -not (Test-Path -LiteralPath $nuget -PathType Leaf)) {
-              throw "vcpkg did not provide a usable nuget.exe (got '$nuget')."
-            }
-
-            $configLines = @(
-              '<?xml version="1.0" encoding="utf-8"?>',
-              '<configuration>',
-              '  <packageSources>',
-              '    <clear />',
-              '  </packageSources>',
-              '  <config>',
-              "    <add key=`"defaultPushSource`" value=`"$env:VCPKG_FEED_URL`" />",
-              '  </config>',
-              '</configuration>'
-            )
-            Set-Content -LiteralPath $configPath -Value $configLines -Encoding UTF8
-
-            & $nuget sources add `
-              -Source $env:VCPKG_FEED_URL `
-              -StorePasswordInClearText `
-              -Name GitHubPackages `
-              -UserName $env:VCPKG_FEED_OWNER `
-              -Password $env:GITHUB_TOKEN `
-              -ConfigFile $configPath
-            if ($LASTEXITCODE -ne 0) {
-              throw "nuget sources add failed with exit code $LASTEXITCODE."
-            }
-
-            & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL -ConfigFile $configPath
-            if ($LASTEXITCODE -ne 0) {
-              throw "nuget setapikey failed with exit code $LASTEXITCODE."
-            }
-
-            "VCPKG_BINARY_SOURCES=clear;nugetconfig,$configPath,$env:FEED_ACCESS;$filesSource" >> $env:GITHUB_ENV
-            Write-Host "vcpkg binary cache: ephemeral GitHub Packages config ($env:FEED_ACCESS) plus local files cache."
-          } catch {
-            Write-Warning "GitHub Packages binary cache unavailable; using the local files cache only. $_"
+          if ($env:CONFIGURE_FEED -ne 'true') {
             "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
-          }
+            Write-Host 'vcpkg binary cache: local files cache only (no Packages credentials for this run).'
+          } else {
+            try {
+              $nuget = (& $vcpkg fetch nuget |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Last 1).Trim()
+              if ([string]::IsNullOrWhiteSpace($nuget) -or -not (Test-Path -LiteralPath $nuget -PathType Leaf)) {
+                throw "vcpkg did not provide a usable nuget.exe (got '$nuget')."
+              }
 
-      - name: Remove ephemeral NuGet credentials
-        if: always()
-        shell: pwsh
-        run: |
-          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
-          if (Test-Path -LiteralPath $configPath -PathType Leaf) {
-            Remove-Item -LiteralPath $configPath -Force
+              $configLines = @(
+                '<?xml version="1.0" encoding="utf-8"?>',
+                '<configuration>',
+                '  <packageSources>',
+                '    <clear />',
+                '  </packageSources>',
+                '  <config>',
+                "    <add key=`"defaultPushSource`" value=`"$env:VCPKG_FEED_URL`" />",
+                '  </config>',
+                '</configuration>'
+              )
+              Set-Content -LiteralPath $configPath -Value $configLines -Encoding UTF8
+
+              & $nuget sources add `
+                -Source $env:VCPKG_FEED_URL `
+                -StorePasswordInClearText `
+                -Name GitHubPackages `
+                -UserName $env:VCPKG_FEED_OWNER `
+                -Password $env:GITHUB_TOKEN `
+                -ConfigFile $configPath
+              if ($LASTEXITCODE -ne 0) {
+                throw "nuget sources add failed with exit code $LASTEXITCODE."
+              }
+
+              & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL -ConfigFile $configPath
+              if ($LASTEXITCODE -ne 0) {
+                throw "nuget setapikey failed with exit code $LASTEXITCODE."
+              }
+
+              "VCPKG_BINARY_SOURCES=clear;nugetconfig,$configPath,$env:FEED_ACCESS;$filesSource" >> $env:GITHUB_ENV
+              Write-Host "vcpkg binary cache: ephemeral GitHub Packages config ($env:FEED_ACCESS) plus local files cache."
+            } catch {
+              Write-Warning "GitHub Packages binary cache unavailable; using the local files cache only. $_"
+              "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
+            }
           }
 
       - name: Restore vcpkg dependencies
@@ -208,3 +218,14 @@ jobs:
             throw "vcpkg thumbnail-provider STEP-manifest restore failed with exit code $LASTEXITCODE."
           }
           Show-Disk 'thumbnail-provider STEP manifest'
+
+      # Final step: the ephemeral config must survive the restore above; it is
+      # deleted here with `always()` even when an earlier step failed.
+      - name: Remove ephemeral NuGet credentials
+        if: always()
+        shell: pwsh
+        run: |
+          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
+          if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            Remove-Item -LiteralPath $configPath -Force
+          }

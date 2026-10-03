@@ -32,6 +32,8 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **T20 — Close provider allocating-`noexcept` holes (SEC-06 completion)**: **Landed.** Every remaining product-owned allocating helper in the 3MF/USD/GeometrySampler; `thumbnail-provider/ThreeMfFamilyAdapter.cpp`: dropped `noexcept` from `AddSphere`, `AddBeam`,
 - **T21 — Complete the SEC-01 sweep: worker USD primvar cap and provider glTF visit cap**: Reusable facts for later sessions:; **USD primvar sample cap.** `import-worker/src/UsdAdapter.h::PrimvarSampleLimit(samples)` is the
 - **T22 — Make the broker generation wall-clock deadline absolute (SEC-03 completion)**: Reusable facts for later sessions:; **The deadline is enforced at the loop boundary, not in the pipe wait.**
+- **T23 - Fix release/CI NuGet credential lifecycle and durable-cache restore (SEC-14 follow-up)**: Reusable facts for later sessions:; **The cleanup step was the bug.** In `ci.yml`, `release.yml` and
+- **Follow-ups**: Hosted verification of T23: confirm a `push`/`schedule`/tag run hits the GitHub Packages NuGet
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -723,7 +725,8 @@ Reusable facts for later sessions:
 - T14/SEC-14: `ci.yml` still declares workflow-level `packages: write`; its `test` job is a single
   reusable gate and cannot be split by event without duplicating the Debug/Release matrix. It is not
   a write vector today (`feed-access: read` off `push`), but a future refactor could split it the
-  same way `dependencies.yml` was.
+  same way `dependencies.yml` was. **Resolved by T23**: the shared matrix no longer warms and is now
+  workflow-level `packages: read` (ADR-0050).
 - **SEC-16 finding (KTX-Software 4.4.2 ETC1S/basisu) — resolved by SEC-16b.** `TranscodeKtx2BasisImage`
   (and therefore `ImportGltf` with an embedded `KHR_texture_basisu` image) reached a deterministic
   null-deref in `basist::basisu_lowlevel_etc1s_transcoder::transcode_slice` for a two-byte mutation of
@@ -1190,3 +1193,41 @@ Reusable facts for later sessions:
   / 5 skipped / 0 failed; `"[chunk-batch]"` 99 assertions / 21 cases. Debug full: 405 cases / 404
   passed / 1 skipped / 0 failed (no new failure). No ADR: this completes ADR 0031's already-recorded
   decision. Build command same as T21.
+
+## T23 - Fix release/CI NuGet credential lifecycle and durable-cache restore (SEC-14 follow-up)
+
+Reusable facts for later sessions:
+
+- **The cleanup step was the bug.** In `ci.yml`, `release.yml` and
+  `dependencies-restore.yml`, the `always()` step `Remove ephemeral NuGet credentials` sat *before*
+  `Restore vcpkg dependencies`. `VCPKG_BINARY_SOURCES` pointed at the deleted config, so every job
+  silently used the Actions files cache and never the durable GitHub Packages feed. The step is now
+  the final `always()` step of the job in all three. Do not move it back before the restore.
+- **PR-authored portfiles can read the token.** `vcpkg install` executes overlay portfiles from the
+  checkout, which are PR-authored on a `pull_request`. The token was written in clear text into
+  `$RUNNER_TEMP\preview3d-nuget.config`, so a same-repo PR could read it even with `feed-access:
+  read`. The fix is a trusted-event split: the config is created **only when
+  `github.event_name != 'pull_request'`** (`ci.yml`) or when `configure-feed: true`
+  (`dependencies-restore.yml`). A PR uses `VCPKG_BINARY_SOURCES=clear;files,<dir>,readwrite` alone.
+- **`ci.yml` is `packages: read` now.** The shared `test` matrix never warms the feed. Per-event job
+  permissions are static, so keeping `packages: write` for the push lane would also put it on the PR
+  lane (or force duplicating the whole Debug/Release matrix). The trusted `warm` job in
+  `dependencies.yml` is the only writer; its `push` trigger is already scoped to the dependency
+  manifest/port/triplet paths that change the cache key, so ci's push warming was redundant. ADR-0050
+  records this; do not restore `packages: write` on `ci.yml`.
+- **New reusable-workflow contract.** `dependencies-restore.yml` takes `configure-feed` (boolean,
+  default `true`) beside `feed-access`. `dependencies.yml`'s `restore-pr` passes `false`; `warm`
+  passes `true`. A future trusted read-only caller must pass `true`. A caller cannot elevate the
+  called workflow's permissions, only reduce them.
+- **Offline verification.** `actionlint` over all workflows (exit 0); 30 `run:` blocks across the
+  four changed workflows parse with `[System.Management.Automation.Language.Parser]::ParseInput`
+  after substituting `${{ ... }}` with `EXPR` (0 errors); verify
+  `x64\Release\Tests.Unit.exe "~[graphics]"` exit 0 (314 cases / 131561 assertions). The hosted
+  observation still owed: a trusted run must actually resolve packages from the GitHub Packages
+  NuGet source (not just the files cache), and a PR run must still restore from the files cache.
+
+## Follow-ups
+
+- Hosted verification of T23: confirm a `push`/`schedule`/tag run hits the GitHub Packages NuGet
+  source after the cleanup reorder, and that a `pull_request` restores from the files cache with no
+  `preview3d-nuget.config` created (no token in the PR lane).

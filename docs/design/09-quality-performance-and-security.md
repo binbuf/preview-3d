@@ -347,10 +347,15 @@ the whole job behind the required-reviewer `release` environment. It refuses to
 overwrite a published tag (draft, then un-draft). Every action is pinned to a
 commit SHA and tracked by `.github/dependabot.yml`. `dependencies.yml` splits its
 permissions by event: a `pull_request` runs the shared restore with
-`packages: read` and can only read the vcpkg binary-cache feed, while
-`push`/`schedule`/`workflow_dispatch` warm it with `packages: write`; the NuGet
-token is written to a throwaway config and cleared in an `always()` step rather
-than persisted to the user profile (ADR-0043).
+`packages: read`, `feed-access: read`, and `configure-feed: false`, so
+PR-authored portfiles can neither write the feed nor read the token; only the
+trusted `push`/`schedule`/`workflow_dispatch` lane warms it with
+`packages: write` and `feed-access: readwrite`. `ci.yml` is workflow-level
+`packages: read` (the shared test matrix never warms; the trusted `warm` job in
+`dependencies.yml` does) and configures the feed only off `pull_request`; the
+tag-only `release.yml` keeps `packages: write`. In every workflow the throwaway
+NuGet config must survive `Restore vcpkg dependencies` and is deleted by a final
+`always()` step, rather than persisted to the user profile (ADR-0043, ADR-0050).
 
 Nightly:
 

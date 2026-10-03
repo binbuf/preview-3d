@@ -60,7 +60,7 @@ not re-fix those. Each task below carries its audit evidence inline.
 - [x] T20 — Close provider allocating-`noexcept` holes (SEC-06 completion) → [20-provider-allocating-noexcept-closure.md](20-provider-allocating-noexcept-closure.md)
 - [x] T21 — Complete the SEC-01 sweep: USD primvar cap and provider glTF visit cap → [21-sec01-sweep-completion.md](21-sec01-sweep-completion.md)
 - [x] T22 — Make the broker generation wall-clock deadline absolute (SEC-03 completion) → [22-generation-deadline-absolute.md](22-generation-deadline-absolute.md)
-- [ ] T23 — Fix release/CI NuGet credential lifecycle and durable-cache restore (SEC-14 follow-up) → [23-ci-credential-lifecycle.md](23-ci-credential-lifecycle.md)
+- [x] T23 — Fix release/CI NuGet credential lifecycle and durable-cache restore (SEC-14 follow-up) → [23-ci-credential-lifecycle.md](23-ci-credential-lifecycle.md)
 - [ ] T24 — Bound provider allocations fed by library-supplied counts (3MF/USD) → [24-provider-library-count-bounds.md](24-provider-library-count-bounds.md)
 - [ ] T25 — Complete SEC-17: provider fuzz/soak promotion and hostile failure classification → [25-sec17-completion.md](25-sec17-completion.md)
 - [ ] T26 — Normalize untrusted paths before opening (remote UNC + absolute primary) → [26-path-normalization.md](26-path-normalization.md)
@@ -68,11 +68,11 @@ not re-fix those. Each task below carries its audit evidence inline.
 - [ ] T28 — Worker WIC native-copy buffer invariant → [28-wic-native-copy.md](28-wic-native-copy.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-03T02:17:17Z · 24/30 done
+**Pipeline status** — updated 2026-10-03T02:21:03Z · 25/30 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T16b, T17, T18, T19, T20, T21, T22
+- Completed: T01, T02, T03, T04, T05, T06, T06a, T07, T08, T09, T10, T11, T12, T13, T14, T15, T16, T16b, T17, T18, T19, T20, T21, T22, T23
 - Blocked: none
 - Failed: none
-- Remaining: T23, T24, T25, T26, T27, T28
-- Last finished: T22 — done · Made the broker generation deadline absolute (loop-boundary check + replay bounded by the deadline + checked texture accounting); new buffered-flood regression passes Release and Debug.
+- Remaining: T24, T25, T26, T27, T28
+- Last finished: T23 — done · Moved every NuGet cleanup after Restore vcpkg dependencies, made the feed config trusted-event-only (PR uses files cache), set ci.yml to packages: read; actionlint clean and verify passes.
 <!-- /symphony:status -->
