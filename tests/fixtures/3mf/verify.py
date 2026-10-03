@@ -108,6 +108,45 @@ def as_zip64(source: bytes) -> bytearray:
     return out
 
 
+def zip64_truncated_central_extra(source: bytes) -> bytes:
+    data = bytearray(source)
+    eocd = data.rfind(b'PK\x05\x06')
+    assert eocd >= 0
+    central = struct.unpack_from('<I', data, eocd + 16)[0]
+    assert data[central:central + 4] == b'PK\x01\x02'
+    name_length = struct.unpack_from('<H', data, central + 28)[0]
+    extra_length = struct.unpack_from('<H', data, central + 30)[0]
+    field = struct.pack('<HH', 1, 4) + b'\x00' * 4
+    extra = central + 46 + name_length + extra_length
+    data[extra:extra] = field
+    struct.pack_into('<I', data, central + 24, 0xffffffff)
+    struct.pack_into('<H', data, central + 30, extra_length + len(field))
+    moved = eocd + len(field)
+    struct.pack_into('<I', data, moved + 12,
+                     struct.unpack_from('<I', data, moved + 12)[0] + len(field))
+    return bytes(data)
+
+
+def zip64_truncated_local_extra(source: bytes) -> bytes:
+    data = bytearray(source)
+    eocd = data.rfind(b'PK\x05\x06')
+    assert eocd >= 0
+    central = struct.unpack_from('<I', data, eocd + 16)[0]
+    local = struct.unpack_from('<I', data, central + 42)[0]
+    assert data[local:local + 4] == b'PK\x03\x04'
+    name_length = struct.unpack_from('<H', data, local + 26)[0]
+    extra_length = struct.unpack_from('<H', data, local + 28)[0]
+    field = struct.pack('<HH', 1, 4) + b'\x00' * 4
+    extra = local + 30 + name_length + extra_length
+    data[extra:extra] = field
+    struct.pack_into('<I', data, local + 22, 0xffffffff)
+    struct.pack_into('<H', data, local + 28, extra_length + len(field))
+    moved = eocd + len(field)
+    struct.pack_into('<I', data, moved + 16,
+                     struct.unpack_from('<I', data, moved + 16)[0] + len(field))
+    return bytes(data)
+
+
 def zip64_locator_wrap(source: bytes) -> bytes:
     out = as_zip64(source)
     eocd = out.rfind(b'PK\x05\x06')
@@ -154,6 +193,10 @@ def derive(operation: str, source: bytes) -> bytes:
         return bytes(as_zip64(source))
     if operation == 'zip64-locator-wrap':
         return zip64_locator_wrap(source)
+    if operation == 'zip64-truncated-central-extra':
+        return zip64_truncated_central_extra(source)
+    if operation == 'zip64-truncated-local-extra':
+        return zip64_truncated_local_extra(source)
     raise ValueError(f'unknown operation: {operation}')
 
 

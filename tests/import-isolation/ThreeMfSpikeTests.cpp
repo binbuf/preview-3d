@@ -260,6 +260,60 @@ std::vector<std::byte> WithZip64LocatorOffset(std::span<const std::byte> source,
     return data;
 }
 
+// Insert a ZIP64 extra field (id 1) into the first central record whose declared
+// sub-record size is smaller than the eight bytes the uncompressed-size sentinel
+// selects.  A parser that trusts only the sentinel and reads past the sub-record
+// would consume the adjacent name/extra bytes; the preflight must bound the read
+// to the declared field and reject the malformed directory.
+std::vector<std::byte> WithTruncatedCentralZip64Extra(std::span<const std::byte> source,
+                                                      uint16_t declaredSize,
+                                                      bool compressSentinel = false)
+{
+    std::vector<std::byte> data(source.begin(), source.end());
+    const size_t eocd = FindEocd(data);
+    const size_t central = Read32(data, eocd + 16);
+    REQUIRE(Read32(data, central) == 0x02014b50u);
+    const uint16_t nl = Read16(data, central + 28);
+    const uint16_t xl = Read16(data, central + 30);
+    std::vector<std::byte> field;
+    Append16(field, 1);
+    Append16(field, declaredSize);
+    field.resize(field.size() + declaredSize, std::byte{0});
+    const size_t extra = central + 46 + nl + xl;
+    data.insert(data.begin() + extra, field.begin(), field.end());
+    Put32(data, central + 24, 0xffffffffu);
+    if (compressSentinel) Put32(data, central + 20, 0xffffffffu);
+    Put16(data, central + 30, uint16_t(xl + field.size()));
+    const size_t movedEocd = eocd + field.size();
+    Put32(data, movedEocd + 12, Read32(data, movedEocd + 12) + uint32_t(field.size()));
+    return data;
+}
+
+std::vector<std::byte> WithTruncatedLocalZip64Extra(std::span<const std::byte> source,
+                                                    uint16_t declaredSize,
+                                                    bool compressSentinel = false)
+{
+    std::vector<std::byte> data(source.begin(), source.end());
+    const size_t eocd = FindEocd(data);
+    const size_t central = Read32(data, eocd + 16);
+    const size_t local = Read32(data, central + 42);
+    REQUIRE(Read32(data, local) == 0x04034b50u);
+    const uint16_t nl = Read16(data, local + 26);
+    const uint16_t xl = Read16(data, local + 28);
+    std::vector<std::byte> field;
+    Append16(field, 1);
+    Append16(field, declaredSize);
+    field.resize(field.size() + declaredSize, std::byte{0});
+    const size_t extra = local + 30 + nl + xl;
+    data.insert(data.begin() + extra, field.begin(), field.end());
+    Put32(data, local + 22, 0xffffffffu);
+    if (compressSentinel) Put32(data, local + 18, 0xffffffffu);
+    Put16(data, local + 28, uint16_t(xl + field.size()));
+    const size_t movedEocd = eocd + field.size();
+    Put32(data, movedEocd + 16, Read32(data, movedEocd + 16) + uint32_t(field.size()));
+    return data;
+}
+
 std::vector<std::byte> RelocateZip(std::span<const std::byte> source, uint32_t prefix)
 {
     std::vector<std::byte> relocated(source.begin(), source.end());
@@ -1499,6 +1553,29 @@ TEST_CASE("3MF OPC preflight accepts spec ZIP64 and bounds the locator offset",
           == import_worker::ThreeMfOpcError::InvalidDirectory);
     const auto maxWrapped = WithZip64LocatorOffset(zip64, 0xffffffffffffffffull);
     CHECK(import_worker::InspectThreeMfOpc(maxWrapped)
+          == import_worker::ThreeMfOpcError::InvalidDirectory);
+
+    // A ZIP64 extra field whose declared size does not cover the
+    // sentinel-selected values is a malformed directory.  Reject it rather than
+    // reading into the adjacent name/extra bytes, so the preflight validates
+    // exactly the bytes the library consumes.
+    for (const uint16_t declared : { uint16_t{0}, uint16_t{4}, uint16_t{7} }) {
+        const auto centralTruncated = WithTruncatedCentralZip64Extra(valid, declared);
+        CAPTURE(declared, uint32_t(import_worker::InspectThreeMfOpc(centralTruncated)));
+        CHECK(import_worker::InspectThreeMfOpc(centralTruncated)
+              == import_worker::ThreeMfOpcError::InvalidDirectory);
+        const auto localTruncated = WithTruncatedLocalZip64Extra(valid, declared);
+        CHECK(import_worker::InspectThreeMfOpc(localTruncated)
+              == import_worker::ThreeMfOpcError::InvalidDirectory);
+    }
+    // The field covers the first sentinel value but not the second: the second
+    // read must be rejected at the field boundary, not continue into the next
+    // sub-record (which here holds the comment length and the next signature).
+    const auto centralUnderflow = WithTruncatedCentralZip64Extra(valid, 8, true);
+    CHECK(import_worker::InspectThreeMfOpc(centralUnderflow)
+          == import_worker::ThreeMfOpcError::InvalidDirectory);
+    const auto localUnderflow = WithTruncatedLocalZip64Extra(valid, 8, true);
+    CHECK(import_worker::InspectThreeMfOpc(localUnderflow)
           == import_worker::ThreeMfOpcError::InvalidDirectory);
 }
 
