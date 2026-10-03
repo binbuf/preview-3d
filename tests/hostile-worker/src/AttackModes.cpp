@@ -19,6 +19,7 @@
 #include <cstring>
 #include <optional>
 #include <span>
+#include <thread>
 #include <variant>
 #include <vector>
 #include <limits>
@@ -367,6 +368,29 @@ uint64_t BuildOneChunkSection(std::span<std::byte> destination, uint64_t generat
     return sectionLength;
 }
 
+// Writes a well-formed section that declares zero chunks -- header only. Such
+// a batch is individually valid, so the host accepts it and advances its
+// expected index; because the bytes never change, one write backs an unbounded
+// stream of them with no writer/validator race.
+uint64_t BuildEmptySection(std::span<std::byte> destination, uint64_t generationId)
+{
+    using namespace model_core;
+
+    SectionHeader header{};
+    header.magic = kSectionMagic;
+    header.protocolVersion = kCurrentProtocolVersion;
+    header.generationId = generationId;
+    header.scene.generationId = generationId;
+    header.sectionLength = kSectionHeaderSize;
+    header.chunkCount = 0;
+    header.reserved = 0;
+    header.sectionChecksum
+        = WireChecksum64(destination.subspan(kSectionHeaderSize, 0));
+
+    std::memcpy(destination.data(), &header, sizeof(header));
+    return kSectionHeaderSize;
+}
+
 bool SendBatchReady(uint64_t generationId, uint32_t batchIndex, uint32_t chunkCount,
                      uint64_t sectionBytesWritten)
 {
@@ -670,6 +694,52 @@ int RunUnboundedBatches()
             return 1;
         }
     }
+}
+
+int RunBufferedBatchFlood()
+{
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session) {
+        return 1;
+    }
+    auto& [request, view] = *session;
+
+    // One zero-chunk section, written once and never touched again.
+    BuildEmptySection(view.bytes(), request.generationId);
+
+    HANDLE stdIn = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE stdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (stdOut == nullptr || stdOut == INVALID_HANDLE_VALUE) {
+        return 1;
+    }
+
+    // Drain the host's ChunkBatchConsumed acks on a second thread. This mode
+    // deliberately does not wait for them -- the attack is a pipeline of
+    // already-buffered messages -- but the host blocks once its reply pipe
+    // fills, which would stop it before it could reach the deadline. Draining
+    // keeps the backlog the only variable.
+    std::thread drain([stdIn] {
+        if (stdIn == nullptr || stdIn == INVALID_HANDLE_VALUE) {
+            return;
+        }
+        for (;;) {
+            if (!model_core::ReadControlMessage(stdIn)) {
+                return;
+            }
+        }
+    });
+
+    // Never terminal: the host must stop this at the absolute generation
+    // deadline, not because the worker chose to end. The Job Object
+    // kill-on-close ends the process.
+    for (uint32_t batchIndex = 0;; ++batchIndex) {
+        if (!SendBatchReady(request.generationId, batchIndex, 0, model_core::kSectionHeaderSize)) {
+            break;
+        }
+    }
+
+    drain.detach();
+    return 1;
 }
 
 int RunWriteBeforeAck()

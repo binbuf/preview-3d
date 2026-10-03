@@ -31,6 +31,7 @@ things later tasks must know here; the harness maintains the "Key facts" digest 
 - **Post-audit inline fixes (2026-10-03)**: A follow-up source audit of the whole security set found two small, self-contained; **SEC-12 mandatory label was `LW` (Low), not medium.** `SecurityForObject` in
 - **T20 — Close provider allocating-`noexcept` holes (SEC-06 completion)**: **Landed.** Every remaining product-owned allocating helper in the 3MF/USD/GeometrySampler; `thumbnail-provider/ThreeMfFamilyAdapter.cpp`: dropped `noexcept` from `AddSphere`, `AddBeam`,
 - **T21 — Complete the SEC-01 sweep: worker USD primvar cap and provider glTF visit cap**: Reusable facts for later sessions:; **USD primvar sample cap.** `import-worker/src/UsdAdapter.h::PrimvarSampleLimit(samples)` is the
+- **T22 — Make the broker generation wall-clock deadline absolute (SEC-03 completion)**: Reusable facts for later sessions:; **The deadline is enforced at the loop boundary, not in the pipe wait.**
 <!-- symphony:digest:end -->
 
 ## T01 — SEC-01 Bound glTF traversal and fix worker limit ordering
@@ -1148,3 +1149,44 @@ Reusable facts for later sessions:
   so no new public/Tier/provider limit was introduced. Build with MSBuild at
   `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe` and
   `/p:SolutionDir=D:\repos\binbuf\preview-3d\\`.
+
+## T22 — Make the broker generation wall-clock deadline absolute (SEC-03 completion)
+
+Reusable facts for later sessions:
+
+- **The deadline is enforced at the loop boundary, not in the pipe wait.**
+  `WaitForBufferedBytes` (`shared/import-broker/src/ControlChannelWait.cpp`) deliberately checks
+  `available >= needed` *before* the deadline, so a complete buffered message is never dropped at the
+  exact deadline. The cost is that an already-buffered backlog makes `ReadControlMessageBounded`
+  return `Ready` forever, ignoring the deadline. `ImportSession.cpp`'s mid-generation reply loop
+  therefore checks `steady_clock::now() >= generationDeadline` at the top of every iteration for
+  every *non-terminal* message. Terminal `ChunksReady`/`GenerationError` are exempt so a legitimate
+  last reply buffered at/past the deadline still completes the generation; any further
+  mid-generation message (sidecar/batch/step-progress) after the deadline fails with
+  `ImportStage::GenerationDeadline` / `ErrorCode::ResourceLimit`. Do not "fix" this by moving the
+  deadline ahead of the `available` check in `WaitForBufferedBytes` — that reintroduces the lost
+  last message.
+- **The progressive-detail replay shares the same budget.** The `request.nextDetail` replay loop now
+  checks `generationDeadline` at its top (bounding the `nextDetail()==0` `Sleep(20)` spin), reads the
+  `RequestDetail` reply with `boundedReplyWait()` (not the raw `replyTimeout`), and maps a timeout
+  past the deadline to `GenerationDeadline`. Before this, each replay detail re-armed a full
+  `replyTimeout`, so the replay could stretch past the generation budget. This makes the code match
+  ADR 0031's `min(replyTimeout, ceil(remaining))` rule, which had only been applied to the forward
+  loop.
+- **Texture accounting is overflow-checked.** `BatchAcceptance::Record` uses
+  `platform::CheckedAdd` for `textureBytes` (`+header.pixelDataByteSize`) and `texturePixels`
+  (`+*rgbaBytes/4`), returning `false` on wrap; the caller already maps `false` to
+  `ValidateSection`/`MalformedData`. Previously an unchecked `+=` relied on the validator's aggregate
+  cap. `platform/CheckedMath.h` is now included by `ImportSession.cpp`.
+- **Buffered-flood regression seam.** `tests/hostile-worker` `--batches-buffered-flood` writes one
+  zero-chunk section once, drains acks on a helper thread (`<thread>`), and floods zero-chunk
+  `ChunkBatchReady` notices without waiting for replies. Zero chunks keep the chunk caps irrelevant
+  and the unchanged bytes avoid a writer/validator race, so the absolute deadline is the only limit.
+  Test: `ChunkBatchTests.cpp` `[chunk-batch]` "A worker that pipelines buffered batches still stops
+  at the generation deadline" (batch cap 1,000,000, `maxChunksPerGeneration` 1,000,000, 400 ms budget;
+  asserts `GenerationDeadline` / `ResourceLimit`, `elapsed < 20 s`). The existing ack-gated
+  `--batches-unbounded` deadline case is retained as the sibling.
+- **Verify (Release, exit 0).** `x64\Release\Tests.ImportIsolation.exe` full: 405 cases / 400 passed
+  / 5 skipped / 0 failed; `"[chunk-batch]"` 99 assertions / 21 cases. Debug full: 405 cases / 404
+  passed / 1 skipped / 0 failed (no new failure). No ADR: this completes ADR 0031's already-recorded
+  decision. Build command same as T21.

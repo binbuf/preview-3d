@@ -126,6 +126,10 @@ int main(int argc, char* argv[])
         return hostile_worker::RunUnboundedBatches();
     }
 
+    if (ArgEquals(argv[1], "--batches-buffered-flood")) {
+        return hostile_worker::RunBufferedBatchFlood();
+    }
+
     if (ArgEquals(argv[1], "--batches-write-before-ack")) {
         return hostile_worker::RunWriteBeforeAck();
     }

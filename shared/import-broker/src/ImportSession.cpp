@@ -12,6 +12,7 @@
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
 #include "platform/AppContainerSid.h"
+#include "platform/CheckedMath.h"
 #include "platform/MappedView.h"
 #include "platform/Win32Handle.h"
 
@@ -374,7 +375,18 @@ struct BatchAcceptance {
                 const auto rgbaBytes = model_core::ComputeImagePixelBytes(
                     model_core::PixelFormatId::RGBA8_UNORM,header.width,header.height,header.mipLevels);
                 if (!rgbaBytes) return false;
-                textureBytes+=header.pixelDataByteSize; texturePixels+=*rgbaBytes/4;
+                // Accumulate with checked arithmetic: the aggregate the
+                // validator caps today can never approach wrap, but this
+                // accounting must stay honest on its own rather than depend on
+                // the two callers never diverging. A wrap returns false and the
+                // caller reports MalformedData, exactly as for an unresolvable
+                // image header.
+                const auto newTextureBytes
+                    = platform::CheckedAdd(textureBytes,header.pixelDataByteSize);
+                const auto newTexturePixels
+                    = platform::CheckedAdd(texturePixels,*rgbaBytes/4);
+                if (!newTextureBytes || !newTexturePixels) return false;
+                textureBytes=*newTextureBytes; texturePixels=*newTexturePixels;
                 images.emplace(chunk.descriptor.chunkId,header);
                 if (header.reserved0) { auto latest=header;latest.reserved0=0; images[header.reserved0]=latest; }
             }
@@ -1221,6 +1233,22 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     while (outcome == ControlWaitOutcome::Ready && !failure) {
         const auto opcode = static_cast<model_core::ControlOpcode>(received.header.opcode);
 
+        // The generation deadline is absolute. ReadControlMessageBounded returns
+        // Ready for a message already buffered in the pipe *before* it consults
+        // the deadline, so a worker that pipelines mid-generation messages
+        // without waiting for their replies could otherwise keep this loop -- and
+        // the import thread -- serviced past the budget until a per-category cap
+        // happened to trip. Enforce the budget at the loop boundary instead:
+        // a complete terminal reply is still read and handled below (the only
+        // "legitimate last message" the first read can deliver), but no further
+        // mid-generation work is done once the deadline has passed.
+        const bool terminalReply = opcode == model_core::ControlOpcode::ChunksReady
+            || opcode == model_core::ControlOpcode::GenerationError;
+        if (!terminalReply && std::chrono::steady_clock::now() >= generationDeadline) {
+            failure = Fail(ImportStage::GenerationDeadline, model_core::ImportErrorCode::ResourceLimit);
+            break;
+        }
+
         if (opcode == model_core::ControlOpcode::RequestSidecarFile
             && received.payload.size() == sizeof(model_core::RequestSidecarFileNotice)) {
             model_core::RequestSidecarFileNotice sidecar{};
@@ -1529,6 +1557,11 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         // A single outstanding request owns the reused section. No new sidecar
         // requests are permitted: replay uses only the worker's pinned handles.
         for (;;) {
+            // The generation deadline covers the replay too. A worker that stalls
+            // (or that keeps returning 0 from nextDetail so the loop spins) must
+            // not outlive the same absolute budget the forward pass is held to.
+            if (std::chrono::steady_clock::now() >= generationDeadline)
+                return fail(ImportStage::GenerationDeadline, model_core::ImportErrorCode::ResourceLimit);
             if (cancelProbe()) {
                 model_core::ReceivedControlMessage cancellationReply{};
                 const auto grace = ReadControlMessageBounded(controlOutput, std::chrono::milliseconds(500),
@@ -1548,7 +1581,11 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             model_core::DetailRequest detail{request.generationId, region->second.scan};
             if (!model_core::WriteControlMessage(controlInput, model_core::ControlOpcode::RequestDetail, &detail, sizeof(detail)))
                 return fail(ImportStage::AwaitReply);
-            const auto detailOutcome = ReadControlMessageBounded(controlOutput, replyTimeout, received, cancelProbe);
+            // Bound the detail reply by what is left of the generation budget,
+            // not by the raw per-reply timeout: each detail re-arms a full
+            // replyTimeout, so the raw value would let a worker stretch the
+            // replay past the deadline one detail at a time.
+            const auto detailOutcome = ReadControlMessageBounded(controlOutput, boundedReplyWait(), received, cancelProbe);
             if (detailOutcome == ControlWaitOutcome::Cancelled) {
                 model_core::ReceivedControlMessage cancellationReply{};
                 const auto grace = ReadControlMessageBounded(controlOutput, std::chrono::milliseconds(500),
@@ -1558,7 +1595,13 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                     pooledLease->reusable = true;
                 return fail(ImportStage::Cancelled);
             }
-            if (detailOutcome != ControlWaitOutcome::Ready) return fail(ImportStage::AwaitReply);
+            if (detailOutcome != ControlWaitOutcome::Ready) {
+                // As in the forward loop: a timeout past the absolute deadline
+                // is the limit failure, not a per-message reply timeout.
+                if (std::chrono::steady_clock::now() >= generationDeadline)
+                    return fail(ImportStage::GenerationDeadline, model_core::ImportErrorCode::ResourceLimit);
+                return fail(ImportStage::AwaitReply);
+            }
             if (received.header.opcode == uint32_t(model_core::ControlOpcode::GenerationError)
                 && received.payload.size() == sizeof(model_core::GenerationErrorNotice)) {
                 model_core::GenerationErrorNotice error; std::memcpy(&error, received.payload.data(), sizeof(error));

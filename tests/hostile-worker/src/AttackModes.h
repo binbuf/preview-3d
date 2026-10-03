@@ -94,6 +94,15 @@ int RunReuseChunkIdAcrossBatches();
 // until the worker chooses to stop.
 int RunUnboundedBatches();
 
+// Sends well-formed zero-chunk batches as fast as it can WITHOUT waiting for
+// their acks, so the host always finds the next one already buffered in the
+// pipe. Proves an already-buffered message cannot be serviced past the absolute
+// generation deadline: the bounded read returns it as Ready before it consults
+// the deadline, so only the session's own loop-boundary check stops the
+// backlog. The chunk caps are irrelevant here (zero chunks), leaving the
+// deadline as the only limit.
+int RunBufferedBatchFlood();
+
 // Sends a batch and then, without waiting for its ack, immediately rewrites
 // the section underneath the host and sends the next one. Proves the host's
 // copy-then-validate snapshot of an accepted batch is unaffected -- the

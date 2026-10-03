@@ -202,6 +202,32 @@ TEST_CASE("A worker that keeps sending progress cannot extend the generation wal
     CHECK(elapsed < std::chrono::seconds(20));
 }
 
+TEST_CASE("A worker that pipelines buffered batches still stops at the generation deadline",
+          "[chunk-batch]")
+{
+    // The sibling of the case above. This worker does not wait for its acks, so
+    // the host always finds the next ChunkBatchReady already buffered in the
+    // pipe. ReadControlMessageBounded returns Ready for a buffered message
+    // before it consults the deadline, so only the session's own loop-boundary
+    // check can stop the backlog. Zero-chunk batches keep the chunk total at
+    // zero and the batch cap at 1,000,000, so the absolute deadline is the only
+    // limit that can fire.
+    auto request = MakeBatchRequest(L"--batches-buffered-flood", 1'000'000);
+    request.maxChunksPerGeneration = 1'000'000;
+    request.generationWallClockBudgetMs = 400;
+
+    const auto started = std::chrono::steady_clock::now();
+    auto result = import_broker::RunImportSession(request);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    REQUIRE_FALSE(result.ok);
+    CHECK(result.stage == import_broker::ImportStage::GenerationDeadline);
+    CHECK(result.errorCode == ImportErrorCode::ResourceLimit);
+    // Bounded by the deadline, not by a cap that could only trip after a very
+    // large (and worker-controlled) number of batches.
+    CHECK(elapsed < std::chrono::seconds(20));
+}
+
 TEST_CASE("A sidecar request carrying a stale generation is rejected before it is serviced",
           "[chunk-batch]")
 {
