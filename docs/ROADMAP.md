@@ -38,53 +38,53 @@ before it is built.
 
 ## Phase 1 — Prerequisites and de-risking
 
-- [x] T01 — Freeze the provider specification and eight-family roster → [tasks/01-freeze-provider-spec.md](tasks/01-freeze-provider-spec.md)
-- [x] T02 — SPIKE-8a: prototype the mesh and point CPU rasterizer → [tasks/02-spike-rasterizer-prototype.md](tasks/02-spike-rasterizer-prototype.md)
-- [x] T03 — SPIKE-8b: prove isolated Shell surrogate hosting → [tasks/03-spike-surrogate-hosting.md](tasks/03-spike-surrogate-hosting.md)
-- [x] T04 — Freeze provider interfaces and the shared model-core subset → [tasks/04-freeze-provider-interfaces.md](tasks/04-freeze-provider-interfaces.md)
-- [x] T05 — Scaffold the provider build and test integration → [tasks/05-provider-build-test-scaffold.md](tasks/05-provider-build-test-scaffold.md)
-- [x] T06 — Define budgets, deadlines, and HRESULT mapping → [tasks/06-budgets-deadlines-hresults.md](tasks/06-budgets-deadlines-hresults.md)
-- [x] T07 — Extract the provider-shared parser source subset → [tasks/07-extract-provider-shared-source.md](tasks/07-extract-provider-shared-source.md)
+- [x] T01 — Freeze the provider specification and eight-family roster → [tasks/mvp/01-freeze-provider-spec.md](tasks/mvp/01-freeze-provider-spec.md)
+- [x] T02 — SPIKE-8a: prototype the mesh and point CPU rasterizer → [tasks/mvp/02-spike-rasterizer-prototype.md](tasks/mvp/02-spike-rasterizer-prototype.md)
+- [x] T03 — SPIKE-8b: prove isolated Shell surrogate hosting → [tasks/mvp/03-spike-surrogate-hosting.md](tasks/mvp/03-spike-surrogate-hosting.md)
+- [x] T04 — Freeze provider interfaces and the shared model-core subset → [tasks/mvp/04-freeze-provider-interfaces.md](tasks/mvp/04-freeze-provider-interfaces.md)
+- [x] T05 — Scaffold the provider build and test integration → [tasks/mvp/05-provider-build-test-scaffold.md](tasks/mvp/05-provider-build-test-scaffold.md)
+- [x] T06 — Define budgets, deadlines, and HRESULT mapping → [tasks/mvp/06-budgets-deadlines-hresults.md](tasks/mvp/06-budgets-deadlines-hresults.md)
+- [x] T07 — Extract the provider-shared parser source subset → [tasks/mvp/07-extract-provider-shared-source.md](tasks/mvp/07-extract-provider-shared-source.md)
 
 ## Phase 2 — Shared foundation
 
-- [x] T11 — Implement the COM core and lifetime exports → [tasks/11-com-core-lifetime.md](tasks/11-com-core-lifetime.md)
-- [x] T12 — Implement bounded stream backing over IInitializeWithStream → [tasks/12-bounded-stream-backing.md](tasks/12-bounded-stream-backing.md)
-- [x] T13 — Implement family routing and the adapter interface → [tasks/13-family-routing-adapter-interface.md](tasks/13-family-routing-adapter-interface.md)
-- [x] T14 — Implement the deterministic geometry sampler → [tasks/14-geometry-sampler.md](tasks/14-geometry-sampler.md)
-- [x] T15 — Implement the CPU tile rasterizer and bitmap output → [tasks/15-cpu-tile-rasterizer.md](tasks/15-cpu-tile-rasterizer.md)
-- [x] T16 — Implement threading, deadline, and containment behavior → [tasks/16-threading-deadline-containment.md](tasks/16-threading-deadline-containment.md)
-- [x] T17 — Build the provider COM host test harness — E2E slice review → [tasks/17-provider-test-harness.md](tasks/17-provider-test-harness.md)
+- [x] T11 — Implement the COM core and lifetime exports → [tasks/mvp/11-com-core-lifetime.md](tasks/mvp/11-com-core-lifetime.md)
+- [x] T12 — Implement bounded stream backing over IInitializeWithStream → [tasks/mvp/12-bounded-stream-backing.md](tasks/mvp/12-bounded-stream-backing.md)
+- [x] T13 — Implement family routing and the adapter interface → [tasks/mvp/13-family-routing-adapter-interface.md](tasks/mvp/13-family-routing-adapter-interface.md)
+- [x] T14 — Implement the deterministic geometry sampler → [tasks/mvp/14-geometry-sampler.md](tasks/mvp/14-geometry-sampler.md)
+- [x] T15 — Implement the CPU tile rasterizer and bitmap output → [tasks/mvp/15-cpu-tile-rasterizer.md](tasks/mvp/15-cpu-tile-rasterizer.md)
+- [x] T16 — Implement threading, deadline, and containment behavior → [tasks/mvp/16-threading-deadline-containment.md](tasks/mvp/16-threading-deadline-containment.md)
+- [x] T17 — Build the provider COM host test harness — E2E slice review → [tasks/mvp/17-provider-test-harness.md](tasks/mvp/17-provider-test-harness.md)
 
 ## Phase 3 — First end-to-end slice: STL in Explorer
 
-- [x] T21 — Implement the STL thumbnail adapter → [tasks/21-stl-adapter.md](tasks/21-stl-adapter.md)
-- [x] T22 — First installed Release smoke in Windows Explorer — E2E slice review → [tasks/22-first-installed-release-smoke.md](tasks/22-first-installed-release-smoke.md)
+- [x] T21 — Implement the STL thumbnail adapter → [tasks/mvp/21-stl-adapter.md](tasks/mvp/21-stl-adapter.md)
+- [x] T22 — First installed Release smoke in Windows Explorer — E2E slice review → [tasks/mvp/22-first-installed-release-smoke.md](tasks/mvp/22-first-installed-release-smoke.md)
 
 ## Phase 4 — Tier A breadth
 
-- [x] T23 — Implement the PLY thumbnail adapter → [tasks/23-ply-adapter.md](tasks/23-ply-adapter.md)
-- [x] T24 — Implement the OBJ thumbnail adapter → [tasks/24-obj-adapter.md](tasks/24-obj-adapter.md)
-- [x] T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review → [tasks/25-gltf-adapter.md](tasks/25-gltf-adapter.md)
+- [x] T23 — Implement the PLY thumbnail adapter → [tasks/mvp/23-ply-adapter.md](tasks/mvp/23-ply-adapter.md)
+- [x] T24 — Implement the OBJ thumbnail adapter → [tasks/mvp/24-obj-adapter.md](tasks/mvp/24-obj-adapter.md)
+- [x] T25 — Implement the glTF/GLB thumbnail adapter — E2E slice review → [tasks/mvp/25-gltf-adapter.md](tasks/mvp/25-gltf-adapter.md)
 
 ## Phase 5 — Tier B breadth
 
-- [x] T31 — Implement the FBX thumbnail adapter → [tasks/31-fbx-adapter.md](tasks/31-fbx-adapter.md)
-- [x] T32 — Implement the 3MF thumbnail adapter → [tasks/32-3mf-adapter.md](tasks/32-3mf-adapter.md)
-- [x] T33 — Implement the USD/USDZ thumbnail adapter → [tasks/33-usd-adapter.md](tasks/33-usd-adapter.md)
-- [x] T34 — Implement the STEP/STP thumbnail adapter — E2E slice review → [tasks/34-step-adapter.md](tasks/34-step-adapter.md)
+- [x] T31 — Implement the FBX thumbnail adapter → [tasks/mvp/31-fbx-adapter.md](tasks/mvp/31-fbx-adapter.md)
+- [x] T32 — Implement the 3MF thumbnail adapter → [tasks/mvp/32-3mf-adapter.md](tasks/mvp/32-3mf-adapter.md)
+- [x] T33 — Implement the USD/USDZ thumbnail adapter → [tasks/mvp/33-usd-adapter.md](tasks/mvp/33-usd-adapter.md)
+- [x] T34 — Implement the STEP/STP thumbnail adapter — E2E slice review → [tasks/mvp/34-step-adapter.md](tasks/mvp/34-step-adapter.md)
 
 ## Phase 6 — Production hardening and full registration
 
-- [x] T41 — Register all eight CLSIDs and ShellEx handlers → [tasks/41-shell-registration.md](tasks/41-shell-registration.md)
-- [~] T42 — Package, sign, and audit the provider payload closure → [tasks/42-payload-closure-signing-sbom.md](tasks/42-payload-closure-signing-sbom.md) ⟵ failed
-- [ ] T43 — Harden with fuzz, ASan, and hostile corpora → [tasks/43-adversarial-hardening.md](tasks/43-adversarial-hardening.md)
-- [ ] T44 — Verify the actual surrogate, DPI, and clean-machine install — E2E slice review → [tasks/44-surrogate-dpi-install-verification.md](tasks/44-surrogate-dpi-install-verification.md)
+- [x] T41 — Register all eight CLSIDs and ShellEx handlers → [tasks/mvp/41-shell-registration.md](tasks/mvp/41-shell-registration.md)
+- [~] T42 — Package, sign, and audit the provider payload closure → [tasks/mvp/42-payload-closure-signing-sbom.md](tasks/mvp/42-payload-closure-signing-sbom.md) ⟵ failed
+- [ ] T43 — Harden with fuzz, ASan, and hostile corpora → [tasks/mvp/43-adversarial-hardening.md](tasks/mvp/43-adversarial-hardening.md)
+- [ ] T44 — Verify the actual surrogate, DPI, and clean-machine install — E2E slice review → [tasks/mvp/44-surrogate-dpi-install-verification.md](tasks/mvp/44-surrogate-dpi-install-verification.md)
 
 ## Phase 7 — Qualification and release
 
-- [ ] T51 — Qualify performance and memory against the provider budgets → [tasks/51-performance-memory-qualification.md](tasks/51-performance-memory-qualification.md)
-- [ ] T52 — Complete release acceptance and support documentation → [tasks/52-release-acceptance-docs.md](tasks/52-release-acceptance-docs.md)
+- [ ] T51 — Qualify performance and memory against the provider budgets → [tasks/mvp/51-performance-memory-qualification.md](tasks/mvp/51-performance-memory-qualification.md)
+- [ ] T52 — Complete release acceptance and support documentation → [tasks/mvp/52-release-acceptance-docs.md](tasks/mvp/52-release-acceptance-docs.md)
 
 <!-- symphony:status -->
 **Pipeline status** — updated 2026-09-30T05:29:45Z · 24/29 done

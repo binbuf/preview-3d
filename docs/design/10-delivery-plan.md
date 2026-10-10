@@ -143,7 +143,7 @@ Deliver, all of it running inside `Preview3DImportWorker.exe` behind the Gate 2 
 - bounded Draco geometry decode and KTX2/Basis transcode paths;
 - verified bounds, double-origin cluster normalization, normal/tangent policy;
 - meshoptimizer cluster LOD/proxy builder;
-- inbox WIC/DirectXTex/libwebp PNG/JPEG/BMP/TIFF/TGA/DDS/HDR/WebP and mip pipeline;
+- inbox WIC/libwebp PNG/JPEG/BMP/TIFF/GIF/WebP and mip pipeline (the planned DirectXTex TGA/DDS/HDR path was dropped; ADR-0048);
 - source-order-independent stratified first-proxy sampling;
 - persistent derived-cache production path (validated and written host-side from worker-produced chunks) plus transient Tier-A normalized store inside the worker where needed;
 - draw sorting/instancing and measured direct-versus-ExecuteIndirect threshold;

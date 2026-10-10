@@ -7,9 +7,10 @@
 // handle for the generation's lifetime with FILE_SHARE_READ only") and
 // "Mapped-file abstraction" ("the trusted process duplicates a read-only
 // handle across the process boundary"). Rejects remote/device paths,
-// nonregular and empty files. ImportSession verifies size/write-time again
-// through the pinned primary handle. Sidecar containment lives in its resolver;
-// this function does not claim a complete primary-path reparse policy.
+// alternate data streams and drive-relative paths, nonregular and empty files.
+// ImportSession verifies size/write-time again through the pinned primary
+// handle. Sidecar containment lives in its resolver; this function does not
+// claim a complete primary-path reparse policy.
 
 #include "platform/Win32Handle.h"
 #include "model_core/ImportError.h"

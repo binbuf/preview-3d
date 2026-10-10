@@ -131,7 +131,9 @@
     <ClInclude Include="ComCore.h" />
     <ClInclude Include="ModuleLifetime.h" />
     <ClInclude Include="Diagnostics.h" />
+    <ClInclude Include="DiagnosticStage.h" />
     <ClInclude Include="Containment.h" />
+    <ClInclude Include="ContainmentStage.h" />
     <ClInclude Include="StreamSource.h" />
     <!-- T13 routed pipeline, adapter registry and DIB/HBITMAP boundary. -->
     <ClInclude Include="ThumbnailPipeline.h" />

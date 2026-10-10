@@ -86,6 +86,10 @@ enum class ImportStage : uint32_t {
     MapOutputSection,
     ValidateSection,
     WorkerReportedError,
+    // The generation outlived ImportSessionRequest::generationWallClockBudgetMs.
+    // Distinct from ReplyTimedOut because progress messages may re-arm the
+    // per-reply timeout but never the whole-generation deadline.
+    GenerationDeadline,
     // Progressive delivery. Each is a distinct worker misbehavior the caller
     // reports differently, and none is reachable on a single-batch import.
     ChunkBatchLimit,      // more batches in one generation than the cap allows
@@ -129,6 +133,31 @@ constexpr uint64_t kImportWorkerCommitLimitBytes = 4ull * 1024 * 1024 * 1024;
 // worker stranding its import thread for the life of the process, which is
 // what an unbounded ReadControlMessage did before.
 constexpr uint32_t kWorkerReplyTimeoutMs = 120'000;
+
+// Absolute per-generation wall-clock ceiling, in milliseconds.
+//
+// kWorkerReplyTimeoutMs above is per message and is deliberately re-armed by
+// every accepted progress/batch/sidecar message, so on its own a compromised
+// child that keeps talking can hold one generation open indefinitely. This
+// bounds the whole generation regardless of how chatty the worker is; the
+// broker terminates the Job on expiry and reports a ResourceLimit, exactly as
+// a request cancellation tears the generation down.
+//
+// A backstop, not a latency gate. The largest measured import budget is the
+// dedicated STEP host's Ready <= 180 s (a 230 MiB / 4.06 M-triangle AP214
+// assembly, .docs/design/09-quality-performance-and-security.md:92), so 300 s
+// covers it with margin while still bounding a progress-spamming child.
+constexpr uint32_t kImportGenerationWallClockBudgetMs = 300'000;
+
+// Hard Job Object user-CPU ceiling for an import process that is NOT reused
+// across generations (the one-shot worker path and the per-generation
+// compatibility/STEP hosts). Also a backstop: sized well above the measured
+// STEP Ready <= 180 s wall budget so parallel OCCT tessellation CPU time fits,
+// while still terminating a child that spins forever. Deliberately not applied
+// to the reused general worker pool -- a cumulative per-process CPU limit
+// would eventually trip that healthy process; the generation wall-clock
+// deadline is that process's bound instead.
+constexpr uint64_t kImportProcessCpuTimeLimitMs = 15ull * 60 * 1000;
 
 struct ImportSessionRequest {
     // Keeps pinned source/approved sidecars in the same zero-capability worker.
@@ -191,6 +220,13 @@ struct ImportSessionRequest {
     // far below it for the accepted corpus and STEP-004 may lower it.
     uint64_t stepHostCommitLimitBytes = 0;
     uint32_t replyTimeoutMs = kWorkerReplyTimeoutMs;
+    // Absolute wall-clock ceiling for the whole generation, independent of
+    // how many progress/batch/sidecar messages the worker sends (each of
+    // which re-arms replyTimeoutMs). On expiry the Job is terminated and the
+    // session fails with ImportStage::GenerationDeadline / ResourceLimit.
+    // Injectable so a test can prove the bound with a deliberately chatty
+    // worker at a small, fast value.
+    uint32_t generationWallClockBudgetMs = kImportGenerationWallClockBudgetMs;
     // Polled while waiting on the worker. Return true to signal the request's
     // duplicated cancellation event. The worker acknowledges cooperatively;
     // a missed 500 ms grace terminates/replaces that pool slot. Must be cheap and

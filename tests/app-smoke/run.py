@@ -239,6 +239,12 @@ def main():
         raise C.WinError(C.get_last_error())
     if args.runs<1 or args.timeout<=0:
         parser.error('runs and timeout must be positive')
+    if args.configuration!='Debug':
+        # SEC-11 (T11): --app-smoke and the WM_APP+104/WM_COPYDATA control
+        # surface are compiled only into Debug developer/test builds, so a
+        # shipping Release viewer cannot be driven by this harness.
+        raise SystemExit('app-smoke requires --configuration Debug: the local control surface is '
+                         'compiled out of Release (SEC-11)')
     exe = ROOT/f'x64/{args.configuration}/Preview3D.exe'
     manifest = json.loads((args.corpus/'manifest.json').read_text())
     for entry in manifest['entries']:

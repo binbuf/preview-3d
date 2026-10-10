@@ -223,12 +223,13 @@ real adapter will use, without yet enabling `.3mf` to users.
 ### Work
 
 1. Add a product-owned 3MF/OPC preflight component. It must parse checked local
-   and central headers, ZIP64 records, streaming/data-descriptor forms, and OPC
+   and central headers and ZIP64 records, and OPC
    part/relationship names without extracting to disk. Permit only stored and
-   Deflate methods; reject encryption, multi-disk archives, ambiguous or
+   Deflate methods; reject encryption, general-purpose bit 3 (streaming/data-
+   descriptor) entries, multi-disk archives, ambiguous or
    overlapping records, duplicate canonical part names, traversal, absolute
    filesystem syntax, invalid UTF, excessive path depth, and inconsistent
-   header/directory metadata.
+   local/central directory metadata (CRC, sizes, and name bytes).
 2. Enforce explicit entry-count, relationship-count, model-part-count,
    per-entry expanded-size, aggregate 4 GiB/200:1 expansion, compressed-byte,
    and elapsed-work limits before general model construction. Checked addition
@@ -259,7 +260,8 @@ real adapter will use, without yet enabling `.3mf` to users.
 
 ### Verification
 
-- Valid stored, Deflate, ZIP64, and streaming-extension packages pass; the same
+- Valid stored, Deflate, and ZIP64 packages pass with reconciled local/central
+  headers; general-purpose bit-3 (streaming) encodings are rejected, and the same
   model normalizes identically across legal container encodings.
 - Bomb ratios, aggregate expansion, entry/model/relationship counts, encrypted
   or multi-disk input, duplicate/case-colliding names, percent-encoded

@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Chuỗi kết xuất đã dừng trong quá trình khởi tạo.",
   "failure.graphicsRecovery.summary": "Phục hồi đồ họa không thành công.",
   "cli.usage": "Cách sử dụng: Preview3D.exe [model-path]\n Preview3D.exe --open <model-path>",
-  "startup.smartAppControl": "Điều khiển ứng dụng thông minh đang hoạt động trên PC này và bản xem trước 3D này chưa được ký.\n@NL@@",
   "warning.optionalFeatures": "Một số tính năng glTF tùy chọn không được hỗ trợ. Đại diện dự phòng của họ được hiển thị.",
   "warning.textures": "Không thể tải một số kết cấu. Kết cấu dự phòng được hiển thị.",
   "warning.missingAssets": "Không thể tìm thấy một số nội dung được tham chiếu.",

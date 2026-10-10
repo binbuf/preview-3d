@@ -95,11 +95,21 @@ public:
     bool HasVertexColors() const noexcept { return hasVertexColors_; }
 
 private:
+    // Per-stage bodies, run under the T06 stage-containment shim
+    // (ContainmentStage.h). Non-noexcept so a product-owned `std::bad_alloc`
+    // (the backing copy, the material table/index map and the per-face index
+    // scratch) unwinds into the boundary instead of terminating at the frozen
+    // `noexcept` public method.
+    ErrorCode InitializeImpl(const AdapterInput& input);
+    ErrorCode ParseImpl();
+    ErrorCode EnumerateMaterialsImpl(IMaterialSink& sink);
+    ErrorCode EnumerateGeometryImpl(IGeometrySink& sink);
+
     ErrorCode SourceReadFailure() const noexcept;
-    ErrorCode LoadSourceBytes() noexcept;
+    ErrorCode LoadSourceBytes();
     ErrorCode EvaluateStaticPose() noexcept;
     ErrorCode Preflight() noexcept;
-    void BuildMaterials() noexcept;
+    void BuildMaterials();
     ErrorCode ValidateEmbeddedImages() noexcept;
     void FreeScene() noexcept;
 

@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "El hilo de renderizado se detuvo durante la inicialización.",
   "failure.graphicsRecovery.summary": "La recuperación de gráficos falló.",
   "cli.usage": "Uso: Preview3D.exe [ruta-modelo]\n Preview3D.exe --open <ruta-modelo>",
-  "startup.smartAppControl": "Smart App Control está activo en esta PC y esta versión preliminar 3D no está firmada.\n\n",
   "warning.optionalFeatures": "Algunas funciones glTF opcionales no son compatibles. Se muestra su representación alternativa.",
   "warning.textures": "Algunas texturas no se pudieron cargar. Se muestran texturas alternativas.",
   "warning.missingAssets": "No se pudieron encontrar algunos activos a los que se hace referencia.",

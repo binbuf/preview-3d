@@ -41,6 +41,11 @@ bool DecodePayload(CommandType type, const std::uint8_t* payload, std::size_t pa
     Command& command, std::wstring& error);
 bool NormalizeForwardPath(const std::wstring& input, std::wstring& absolutePath, std::wstring& error);
 
+// The peer-identity policy applied after a pipe client is impersonated. Exposed
+// so the rejection matrix (low integrity, AppContainer, impostor image) can be
+// unit tested without a second process.
+bool ClientIdentityAccepted(std::uint32_t integrityRid, bool appContainer, bool imageMatches, bool ownChild);
+
 class Coordinator
 {
 public:
@@ -56,6 +61,12 @@ public:
     bool Forward(const Command& command, std::wstring& error);
     std::vector<Command> Drain();
     void Stop();
+
+    // Derives the per-session mutex/ready/pipe names without creating anything,
+    // so tests can plant a squatter object under the real names. Returns false
+    // if the current identity cannot be read.
+    static bool SessionObjectNames(std::wstring& mutexName, std::wstring& readyName, std::wstring& pipeName,
+        std::wstring& error);
 
     const std::wstring& PipeNameForTesting() const noexcept { return pipeName_; }
 

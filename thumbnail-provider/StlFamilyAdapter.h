@@ -53,6 +53,15 @@ public:
 private:
     enum class Dialect : std::uint8_t { Unknown = 0, Ascii = 1, Binary = 2 };
 
+    // Per-stage bodies, run under the T06 stage-containment shim
+    // (ContainmentStage.h). They are non-noexcept so a `std::bad_alloc` from
+    // product-owned allocation unwinds into the boundary instead of terminating
+    // at the frozen `noexcept` public method.
+    ErrorCode InitializeImpl(const AdapterInput& input);
+    ErrorCode ParseImpl();
+    ErrorCode EnumerateMaterialsImpl(IMaterialSink& sink);
+    ErrorCode EnumerateGeometryImpl(IGeometrySink& sink);
+
     // Copies the bounded 84-byte prefix into `prefix_` (from the contiguous
     // view when available, otherwise a checked ReadAt) and classifies the
     // dialect. Fails closed on a short/unknown source.
@@ -62,8 +71,8 @@ private:
     // before any facet storage exists. Fills `header_`.
     ErrorCode ValidateBinaryHeader() noexcept;
 
-    ErrorCode EmitBinary(IGeometrySink& sink) noexcept;
-    ErrorCode EmitAscii(IGeometrySink& sink) noexcept;
+    ErrorCode EmitBinary(IGeometrySink& sink);
+    ErrorCode EmitAscii(IGeometrySink& sink);
 
     // Normalizes one facet and, when it survives, emits it. Returns false when
     // the sink asks the adapter to stop (cap reached).

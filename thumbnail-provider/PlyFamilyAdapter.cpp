@@ -3,6 +3,7 @@
 #include "PlyFamilyAdapter.h"
 
 #include "AllocationLedger.h"
+#include "ContainmentStage.h"
 #include "Deadline.h"
 #include "ProviderLimits.h"
 
@@ -100,6 +101,12 @@ void PlyAdapter::Reset() noexcept
 
 ErrorCode PlyAdapter::Initialize(const AdapterInput& input) noexcept
 {
+    return RunContainedStageMember([this, &input]() { return InitializeImpl(input); },
+                                   DiagnosticStage::AdapterInitialize);
+}
+
+ErrorCode PlyAdapter::InitializeImpl(const AdapterInput& input)
+{
     Reset();
     if (input.source == nullptr || input.limits == nullptr || input.deadline == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -116,7 +123,7 @@ ErrorCode PlyAdapter::SourceReadFailure() const noexcept
     return ErrorCode::MalformedData;
 }
 
-ErrorCode PlyAdapter::LoadHeader() noexcept
+ErrorCode PlyAdapter::LoadHeader()
 {
     // The bounded contiguous view is the whole source when it fits the 128 MiB
     // backing cap (T12); otherwise each read is a checked ranged read.
@@ -310,6 +317,11 @@ ErrorCode PlyAdapter::ComputeBinaryOffsets() noexcept
 
 ErrorCode PlyAdapter::Parse() noexcept
 {
+    return RunContainedStageMember([this]() { return ParseImpl(); }, DiagnosticStage::Parse);
+}
+
+ErrorCode PlyAdapter::ParseImpl()
+{
     if (!input_.deadline->Checkpoint()) {
         return ErrorCode::Cancelled;
     }
@@ -329,6 +341,12 @@ ErrorCode PlyAdapter::Parse() noexcept
 }
 
 ErrorCode PlyAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateMaterialsImpl(sink); },
+                                   DiagnosticStage::Materials);
+}
+
+ErrorCode PlyAdapter::EnumerateMaterialsImpl(IMaterialSink& sink)
 {
     // PLY carries vertex colors, not material records. The neutral palette is
     // emitted as material 1; when the vertex element carries colors, the base
@@ -544,7 +562,7 @@ bool PlyAdapter::EmitTriangle(const DecodedVertex& a, const DecodedVertex& b,
     return sink.OnTriangle(triangle);
 }
 
-ErrorCode PlyAdapter::EmitBinaryPoints(IGeometrySink& sink) noexcept
+ErrorCode PlyAdapter::EmitBinaryPoints(IGeometrySink& sink)
 {
     std::uint64_t cursor = bodyOffset_;
     if (sourceSize_ != 0 && bodyOffset_ > sourceSize_) {
@@ -635,7 +653,7 @@ ErrorCode PlyAdapter::EmitBinaryPoints(IGeometrySink& sink) noexcept
     return ErrorCode::None;
 }
 
-ErrorCode PlyAdapter::EmitBinaryMesh(IGeometrySink& sink) noexcept
+ErrorCode PlyAdapter::EmitBinaryMesh(IGeometrySink& sink)
 {
     if (schema_.stride == 0 || schema_.stride > kMaxVertexRecordBytes) {
         return ErrorCode::UnsupportedRequiredFeature;
@@ -845,7 +863,7 @@ ErrorCode PlyAdapter::EmitAsciiPoints(IGeometrySink& sink) noexcept
     return ErrorCode::None;
 }
 
-ErrorCode PlyAdapter::EmitAsciiMesh(IGeometrySink& sink) noexcept
+ErrorCode PlyAdapter::EmitAsciiMesh(IGeometrySink& sink)
 {
     if (contiguous_.empty()) {
         return ErrorCode::ResourceLimit;
@@ -1011,6 +1029,12 @@ ErrorCode PlyAdapter::EmitAsciiMesh(IGeometrySink& sink) noexcept
 }
 
 ErrorCode PlyAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateGeometryImpl(sink); },
+                                   DiagnosticStage::Geometry);
+}
+
+ErrorCode PlyAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
 {
     if (!parsed_) {
         return ErrorCode::InternalImporterFailure;

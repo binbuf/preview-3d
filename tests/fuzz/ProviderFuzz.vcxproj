@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SEC-17 provider pipeline fuzz target. An explicitly built libFuzzer + ASan
+  executable (not part of the shipping solution) that drives the real
+  thumbnail-provider sources: the bounded stream source, the eight family
+  adapters, the deterministic sampler and the CPU tile rasterizer. It creates
+  no COM object, window, GPU device, file mapping or child process.
+
+  The pinned third-party parsers are linked but not sanitizer-instrumented
+  (their vcpkg static libraries are built without ASan), so
+  _DISABLE_STL_ANNOTATION matches the prebuilt closure exactly as GltfFuzz
+  does. ASan still instruments the product-owned preflights, adapters, sampler
+  and rasterizer, and its allocator interceptor catches some third-party
+  overwrites.
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{A1B2C3D4-0017-4000-8000-000000000017}</ProjectGuid>
+    <RootNamespace>ProviderFuzz</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg"><VcpkgEnableManifest>true</VcpkgEnableManifest></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <EnableASAN>true</EnableASAN>
+    <OutDir>$(MSBuildProjectDirectory)\x64\$(Configuration)\</OutDir>
+    <!-- A distinct intermediate directory avoids the MSB8028 shared-object
+         hazard the other tests\fuzz projects have with this common output dir. -->
+    <IntDir>$(MSBuildProjectDirectory)\x64\$(Configuration)\obj\ProviderFuzz\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <OcctStaticLibDir>$(MSBuildThisFileDirectory)..\..\thumbnail-provider\step-occt\vcpkg_installed\x64-windows-static-md\debug\lib</OcctStaticLibDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <OcctStaticLibDir>$(MSBuildThisFileDirectory)..\..\thumbnail-provider\step-occt\vcpkg_installed\x64-windows-static-md\lib</OcctStaticLibDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>..\..\shared\model-core\include;..\..\shared\platform\include;..\..\shared\parser-core\include;..\..\shared\import-broker\include;..\..\thumbnail-provider;..\..\import-worker\src;..\..\compatibility-host-step\src;..\..\thumbnail-provider\step-occt\vcpkg_installed\x64-windows-static-md\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>FASTGLTF_ENABLE_DEPRECATED_EXT=1;OCCT_STATIC_BUILD;_DISABLE_STL_ANNOTATION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/fsanitize=fuzzer %(AdditionalOptions)</AdditionalOptions>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <AdditionalLibraryDirectories>$(OcctStaticLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>ole32.lib;user32.lib;gdi32.lib;psapi.lib;windowscodecs.lib;ws2_32.lib;iphlpapi.lib;advapi32.lib;shell32.lib;oleaut32.lib;TKernel.lib;TKMath.lib;TKG2d.lib;TKG3d.lib;TKGeomBase.lib;TKBRep.lib;TKTopAlgo.lib;TKPrim.lib;TKBO.lib;TKBool.lib;TKGeomAlgo.lib;TKShHealing.lib;TKMesh.lib;TKFeat.lib;TKFillet.lib;TKOffset.lib;TKHLR.lib;TKXSBase.lib;TKDESTEP.lib;TKDE.lib;TKCDF.lib;TKCAF.lib;TKLCAF.lib;TKVCAF.lib;TKXCAF.lib;TKXmlXCAF.lib;TKBinXCAF.lib;TKStd.lib;TKStdL.lib;TKXml.lib;TKXmlL.lib;TKBin.lib;TKBinL.lib;TKTObj.lib;TKBinTObj.lib;TKXmlTObj.lib;TKService.lib;TKV3d.lib;TKXMesh.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalOptions>/INFERASANLIBS %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="ProviderFuzz.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\ThumbnailPipeline.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\StreamSource.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\FamilyAdapterRegistry.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\StlFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\PlyFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\ObjFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\GltfFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\FbxFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\ThreeMfFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\import-worker\src\ThreeMfOpcPreflight.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\UsdFamilyAdapter.cpp">
+      <DisableSpecificWarnings>4702;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="..\..\import-worker\src\UsdZipPreflight.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\StepFamilyAdapter.cpp" />
+    <ClCompile Include="..\..\compatibility-host-step\src\StepPart21Preflight.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\Diagnostics.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\Containment.cpp">
+      <ExceptionHandling>Sync</ExceptionHandling>
+    </ClCompile>
+    <ClCompile Include="..\..\thumbnail-provider\GeometrySampler.cpp" />
+    <ClCompile Include="..\..\thumbnail-provider\CpuRasterizer.cpp" />
+    <ClCompile Include="..\..\shared\parser-core\src\AsciiTokenizer.cpp" />
+    <ClCompile Include="..\..\shared\parser-core\src\StlParserCore.cpp" />
+    <ClCompile Include="..\..\shared\parser-core\src\PlyParserCore.cpp" />
+  </ItemGroup>
+  <Target Name="CopyAddressSanitizerRuntime" AfterTargets="Build">
+    <Copy SourceFiles="$(VCToolsInstallDir)bin\Hostx64\x64\clang_rt.asan_dynamic-x86_64.dll"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true"
+          Condition="Exists('$(VCToolsInstallDir)bin\Hostx64\x64\clang_rt.asan_dynamic-x86_64.dll')" />
+  </Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

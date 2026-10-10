@@ -7,9 +7,11 @@
 #include "ThumbnailPipeline.h"
 
 #include "AllocationLedger.h"
+#include "Containment.h"
 #include "CpuRasterizerImpl.h"
 #include "Deadline.h"
 #include "DeterministicGeometrySampler.h"
+#include "Diagnostics.h"
 #include "FamilyAdapterRegistry.h"
 #include "ProviderLimits.h"
 
@@ -146,6 +148,22 @@ ProviderOutcome RunThumbnailPipeline(const ThumbnailRequest& request,
         request.deadline == nullptr || request.ledger == nullptr) {
         return ProviderOutcome::BadPointer;
     }
+
+    // SEC-08: a contained structured fault quarantined the surrogate. Refuse new
+    // work before any adapter or third-party parser runs; the faulting call has
+    // already drained. Emit the refusal so the policy is observable in a
+    // troubleshooting log, then fail closed (E_FAIL, no fabricated image).
+    if (ContainmentQuarantined()) {
+        DiagnosticEvent event{};
+        event.stage = DiagnosticStage::Containment;
+        event.outcome = ProviderOutcome::DecoderFailure;
+        event.structuredException = true;
+        event.structuredCode = ContainmentQuarantineCode();
+        event.quarantined = true;
+        Diagnostics::Emit(event);
+        return ProviderOutcome::DecoderFailure;
+    }
+
     if (!request.deadline->Checkpoint()) {
         return ProviderOutcome::Deadline;
     }

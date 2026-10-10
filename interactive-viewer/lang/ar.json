@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "توقف مؤشر ترابط العرض أثناء التهيئة.",
   "failure.graphicsRecovery.summary": "فشل استرداد الرسومات.",
   "cli.usage": "الاستخدام: Preview3D.exe [مسار النموذج]\n Preview3D.exe --فتح <مسار النموذج>",
-  "startup.smartAppControl": "التحكم الذكي في التطبيقات نشط على هذا الكمبيوتر، ونسخة المعاينة ثلاثية الأبعاد هذه غير موقعة.\n\n",
   "warning.optionalFeatures": "بعض ميزات glTF الاختيارية غير مدعومة. يظهر تمثيلهم الاحتياطي.",
   "warning.textures": "لا يمكن تحميل بعض الأنسجة. يتم عرض القوام الاحتياطي.",
   "warning.missingAssets": "لا يمكن العثور على بعض الأصول المشار إليها.",

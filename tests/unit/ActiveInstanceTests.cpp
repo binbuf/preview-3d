@@ -1,15 +1,38 @@
 #include "ActiveInstance.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <sddl.h>
 
 #include <chrono>
 #include <array>
 #include <filesystem>
+#include <string>
 #include <thread>
+#include <vector>
+
+#pragma comment(lib, "advapi32.lib")
 
 using namespace active_instance;
 
 namespace {
+std::wstring ObjectSddl(HANDLE object)
+{
+    const SECURITY_INFORMATION requested = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    DWORD bytes = 0;
+    GetKernelObjectSecurity(object, requested, nullptr, 0, &bytes);
+    if (!bytes) return {};
+    std::vector<std::uint8_t> buffer(bytes);
+    if (!GetKernelObjectSecurity(object, requested, buffer.data(), bytes, &bytes)) return {};
+    LPWSTR text = nullptr;
+    if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            reinterpret_cast<PSECURITY_DESCRIPTOR>(buffer.data()), SDDL_REVISION_1, requested, &text, nullptr)) {
+        return {};
+    }
+    std::wstring result(text);
+    LocalFree(text);
+    return result;
+}
+
 #pragma pack(push,1)
 struct RawHeader { std::uint32_t magic; std::uint16_t version; std::uint16_t type; std::uint32_t payloadBytes; GUID correlation; };
 #pragma pack(pop)
@@ -122,4 +145,54 @@ TEST_CASE("Session coordinator forwards and survives a close relaunch race", "[a
     Coordinator relaunched;
     REQUIRE(relaunched.Initialize(false,error)==Coordinator::Role::Primary);
     relaunched.Stop();
+}
+
+TEST_CASE("Client identity policy rejects low-integrity, sandboxed, and impostor peers", "[activation]")
+{
+    const std::uint32_t low=SECURITY_MANDATORY_LOW_RID;
+    const std::uint32_t medium=SECURITY_MANDATORY_MEDIUM_RID;
+    CHECK(ClientIdentityAccepted(medium,false,true,false));
+    CHECK(ClientIdentityAccepted(SECURITY_MANDATORY_HIGH_RID,false,true,false));
+    CHECK_FALSE(ClientIdentityAccepted(low,false,true,false));
+    CHECK_FALSE(ClientIdentityAccepted(medium,true,true,false));
+    CHECK_FALSE(ClientIdentityAccepted(medium,false,false,false));
+    CHECK(ClientIdentityAccepted(low,false,true,true));
+    CHECK_FALSE(ClientIdentityAccepted(low,true,true,true));
+    CHECK_FALSE(ClientIdentityAccepted(low,false,false,true));
+}
+
+TEST_CASE("Activation objects grant only the minimum rights", "[activation]")
+{
+    std::wstring error,mutexName,readyName,pipeName;
+    REQUIRE(Coordinator::SessionObjectNames(mutexName,readyName,pipeName,error));
+    Coordinator primary;
+    REQUIRE(primary.Initialize(false,error)==Coordinator::Role::Primary);
+    HANDLE mutex=OpenMutexW(READ_CONTROL,FALSE,mutexName.c_str());
+    REQUIRE(mutex!=nullptr);
+    const std::wstring sddl=ObjectSddl(mutex);
+    CloseHandle(mutex);
+    std::string narrowSddl; for(wchar_t ch:sddl) narrowSddl.push_back(ch<128?static_cast<char>(ch):'?');
+    INFO(narrowSddl);
+    REQUIRE_FALSE(sddl.empty());
+    CHECK(sddl.find(L"0x120001")!=std::wstring::npos);
+    CHECK(sddl.find(L"GA")==std::wstring::npos);
+    CHECK(sddl.find(L"FA")==std::wstring::npos);
+    CHECK(sddl.find(L"WD")==std::wstring::npos);
+    CHECK(sddl.find(L"WO")==std::wstring::npos);
+    CHECK(sddl.find(L"0x40000")==std::wstring::npos);
+    CHECK(sddl.find(L"0x80000")==std::wstring::npos);
+    primary.Stop();
+}
+
+TEST_CASE("A pre-created untrusted instance lock is rejected", "[activation]")
+{
+    std::wstring error,mutexName,readyName,pipeName;
+    REQUIRE(Coordinator::SessionObjectNames(mutexName,readyName,pipeName,error));
+    HANDLE squatter=CreateMutexW(nullptr,FALSE,mutexName.c_str());
+    REQUIRE(squatter!=nullptr);
+    REQUIRE(GetLastError()!=ERROR_ALREADY_EXISTS);
+    Coordinator victim;
+    CHECK(victim.Initialize(false,error)==Coordinator::Role::Failed);
+    victim.Stop();
+    CloseHandle(squatter);
 }

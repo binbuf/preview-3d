@@ -7,6 +7,7 @@
 // how import_broker::ValidateAndCopySection is already shared between the
 // real app and every test.
 
+#include "import_broker/ImportSession.h"
 #include "model_core/ControlProtocol.h"
 
 #include <cstdint>
@@ -34,11 +35,19 @@ namespace import_broker {
 // additionalSearchRoots is forwarded to ResolveSidecarPath's user-chosen
 // asset-root fallback (see that header). It is supplied only by the trusted
 // host after the user picks a folder.
+//
+// format is the trusted host's own ImportSessionRequest::format, forwarded so
+// ResolveSidecarPath applies the requesting format's allowed extension set.
+// The worker never supplies it. Before any resolution, the raw reference bytes
+// are rejected for an embedded NUL or other control character -- a first,
+// cheap layer standing in front of the resolver, which repeats both that check
+// and the UTF-8 validity check so a future caller cannot bypass them.
 std::variant<model_core::SidecarFileReadyNotice, model_core::SidecarFileUnavailableNotice>
 ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonicalPath,
                       const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes,
                       uint64_t remainingSourceBytes = UINT64_MAX,
                       bool allowPackageBasenameLookup = false,
-                      const std::vector<std::wstring>& additionalSearchRoots = {});
+                      const std::vector<std::wstring>& additionalSearchRoots = {},
+                      ImportFormat format = ImportFormat::Gltf);
 
 } // namespace import_broker

@@ -1,5 +1,4 @@
 // T25 glTF/GLB family adapter coverage.
-//
 // `GltfFamilyAdapter.cpp` and `FamilyAdapterRegistry.cpp` are compiled into
 // Tests.Unit.exe, so these cases exercise the real adapter contract directly
 // (Initialize -> Parse -> EnumerateMaterials -> EnumerateGeometry) and through
@@ -13,6 +12,13 @@
 // KTX2/Basis, WebP and sidecar/malformed cases; nothing in the provider opens a
 // path -- the tests hand the raw bytes to the adapter as a bounded source.
 
+// The shared Draco preflight header pulls in draco's core headers, which use
+// std::numeric_limits<T>::max(); windows.h's min/max macros must not be in
+// scope. Provider TUs define this in their pch; this test TU does not.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "AllocationLedger.h"
@@ -24,6 +30,9 @@
 #include "ProviderErrors.h"
 #include "ProviderLimits.h"
 #include "ThumbnailPipeline.h"
+
+#include "model_core/DracoPreflight.h"
+#include "model_core/Ktx2Preflight.h"
 
 #include <algorithm>
 #include <chrono>
@@ -370,6 +379,141 @@ std::string OverBudgetMaterialsJson()
     return json;
 }
 
+// SEC-01 sweep: a mesh-less doubling DAG. Each node under `levels` has two
+// identical children, so depth alone can be modest while the number of visits
+// doubles per level. No mesh is ever reached, so the instance cap cannot bound
+// it; only a total-visit budget stops it.
+std::string MeshlessDoublingDagJson(int levels)
+{
+    std::string nodes = "[";
+    for (int i = 0; i < levels; ++i) {
+        if (i != 0) {
+            nodes += ",";
+        }
+        if (i + 1 < levels) {
+            const std::string child = std::to_string(i + 1);
+            nodes += "{\"children\":[" + child + "," + child + "]}";
+        } else {
+            nodes += "{}";
+        }
+    }
+    nodes += "]";
+    return "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,"
+           "\"scenes\":[{\"nodes\":[0]}],\"nodes\":" + nodes + "}";
+}
+
+// --- SEC-02 hostile compressed payload fixtures -----------------------------
+
+void AppendVarint(std::vector<std::byte>& bytes, std::uint32_t value)
+{
+    do {
+        std::uint8_t byte = static_cast<std::uint8_t>(value & 0x7Fu);
+        value >>= 7;
+        if (value != 0) {
+            byte |= 0x80u;
+        }
+        bytes.push_back(static_cast<std::byte>(byte));
+    } while (value != 0);
+}
+
+// A well-formed Draco fixed header (v2.2, triangular edgebreaker, no metadata)
+// with a deliberately hostile declared connectivity preamble. Padding keeps the
+// glTF accessor ranges inside the buffer view without affecting the preflight.
+std::vector<std::byte> HostileDracoStream(std::uint32_t encodedVertices,
+                                          std::uint32_t faces)
+{
+    std::vector<std::byte> stream;
+    const char magic[] = "DRACO";
+    for (std::size_t i = 0; i < 5; ++i) {
+        stream.push_back(static_cast<std::byte>(magic[i]));
+    }
+    for (std::uint8_t byte : {2, 2, 1, 1, 0, 0}) { // version, type, method, flags
+        stream.push_back(static_cast<std::byte>(byte));
+    }
+    stream.push_back(std::byte{0}); // edgebreaker traversal decoder selector
+    AppendVarint(stream, encodedVertices);
+    AppendVarint(stream, faces);
+    stream.push_back(std::byte{0}); // num_attribute_data
+    AppendVarint(stream, faces == 0 ? 0 : 1); // num_encoded_symbols
+    AppendVarint(stream, 0); // num_encoded_split_symbols
+    stream.resize(256, std::byte{0});
+    return stream;
+}
+
+std::vector<std::byte> BuildDracoGlb(const std::vector<std::byte>& draco,
+                                     std::uint32_t vertexCount, std::uint32_t indexCount)
+{
+    const std::string json =
+        "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,"
+        "\"extensionsUsed\":[\"KHR_draco_mesh_compression\"],"
+        "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,"
+        "\"extensions\":{\"KHR_draco_mesh_compression\":{\"bufferView\":0,"
+        "\"attributes\":{\"POSITION\":0}}}}]}],"
+        "\"accessors\":["
+        "{\"bufferView\":0,\"componentType\":5126,\"count\":" + std::to_string(vertexCount)
+        + ",\"type\":\"VEC3\",\"min\":[0,0,0],\"max\":[1,1,0]},"
+        "{\"bufferView\":0,\"componentType\":5125,\"count\":" + std::to_string(indexCount)
+        + ",\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":"
+        + std::to_string(draco.size()) + "}],"
+        "\"buffers\":[{\"byteLength\":" + std::to_string(draco.size()) + "}]}";
+    return BuildGlb(json, draco);
+}
+
+// A syntactically valid KTX2 container whose header declares dimensions far
+// beyond the product texture cap.
+std::vector<std::byte> HostileKtx2Stream(std::uint32_t width, std::uint32_t height,
+                                         std::uint32_t levels)
+{
+    std::vector<std::byte> stream(80 + std::size_t(levels) * 24, std::byte{0});
+    const std::uint8_t magic[12]
+        = {0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A};
+    std::memcpy(stream.data(), magic, sizeof(magic));
+    auto put32 = [&stream](std::size_t offset, std::uint32_t value) {
+        std::memcpy(stream.data() + offset, &value, sizeof(value));
+    };
+    auto put64 = [&stream](std::size_t offset, std::uint64_t value) {
+        std::memcpy(stream.data() + offset, &value, sizeof(value));
+    };
+    put32(12, 0); // vkFormat: Basis
+    put32(16, 1); // typeSize
+    put32(20, width);
+    put32(24, height);
+    put32(36, 1); // faceCount
+    put32(40, levels);
+    for (std::uint32_t level = 0; level < levels; ++level) {
+        const std::size_t base = 80 + std::size_t(level) * 24;
+        put64(base, 80 + std::size_t(levels) * 24); // offset
+        put64(base + 8, 1);                         // length
+        put64(base + 16, 4);                        // uncompressed
+    }
+    return stream;
+}
+
+std::vector<std::byte> BuildTriangleGlbWithKtx2(const std::vector<std::byte>& ktx2)
+{
+    std::vector<std::byte> bin = TriangleBuffer();
+    const std::size_t imageOffset = bin.size();
+    bin.insert(bin.end(), ktx2.begin(), ktx2.end());
+    const std::string json =
+        "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,"
+        "\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+        "\"images\":[{\"bufferView\":2,\"mimeType\":\"image/ktx2\"}],"
+        "\"accessors\":["
+        "{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\","
+        "\"min\":[0,0,0],\"max\":[1,1,0]},"
+        "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":["
+        "{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12},"
+        "{\"buffer\":0,\"byteOffset\":" + std::to_string(imageOffset)
+        + ",\"byteLength\":" + std::to_string(ktx2.size()) + "}],"
+        "\"buffers\":[{\"byteLength\":" + std::to_string(bin.size()) + "}]}";
+    return BuildGlb(json, bin);
+}
+
 } // namespace
 
 // --- Geometry / transforms / materials --------------------------------------
@@ -569,6 +713,92 @@ TEST_CASE("a corrupt embedded KTX2 image falls back to the default material",
     CHECK(result.decodedImages == 0u);
 }
 
+// --- SEC-02 preflight evidence ----------------------------------------------
+
+TEST_CASE("the shared Draco preflight classifies hostile declared counts",
+          "[provider][gltf][security]")
+{
+    const std::vector<std::byte> overBudget = HostileDracoStream(20'000'000u, 1);
+    model_core::DracoDeclaredCounts counts;
+    const auto status = model_core::ValidateDracoCounts(
+        overBudget, /*expectedVertexCount=*/3, /*expectedIndexCount=*/3,
+        ProviderLimits::kDracoTrianglesMax, ProviderLimits::kDracoDecodedWorkingSetMaxBytes,
+        &counts);
+    CHECK(status == model_core::DracoPreflightStatus::OverLimit);
+    CHECK(counts.faces == 1u);
+    CHECK(counts.pointsUpperBound == 20'000'000ull);
+
+    const std::vector<std::byte> mismatched = HostileDracoStream(3, 100'000'000u);
+    CHECK(model_core::ValidateDracoCounts(mismatched, 3, 3,
+                                          ProviderLimits::kDracoTrianglesMax,
+                                          ProviderLimits::kDracoDecodedWorkingSetMaxBytes)
+          == model_core::DracoPreflightStatus::Malformed);
+}
+
+TEST_CASE("a Draco stream declaring counts inconsistent with its accessors is rejected before decode",
+          "[provider][gltf][security]")
+{
+    const std::uint64_t before = model_core::DracoDecoderInvocations().load();
+    ByteSource source(BuildDracoGlb(HostileDracoStream(/*encodedVertices=*/3,
+                                                       /*faces=*/100'000'000u),
+                                    /*vertexCount=*/3, /*indexCount=*/3));
+    Deadline deadline;
+    AllocationLedger ledger;
+    CollectSink sink;
+
+    GltfAdapter adapter;
+    const AdapterResult result = RunAdapter(adapter, source, deadline, ledger, sink);
+
+    CHECK(result.parse == ErrorCode::None);
+    CHECK(result.geometry == ErrorCode::MalformedData);
+    CHECK_FALSE(result.usedDraco);
+    CHECK(sink.triangles.empty());
+    // The third-party decoder was never reached: the reject happened in the
+    // preflight, before any corner-table allocation.
+    CHECK(model_core::DracoDecoderInvocations().load() == before);
+}
+
+TEST_CASE("a Draco stream declaring an over-budget vertex count is a typed limit before decode",
+          "[provider][gltf][security]")
+{
+    const std::uint64_t before = model_core::DracoDecoderInvocations().load();
+    ByteSource source(BuildDracoGlb(HostileDracoStream(/*encodedVertices=*/20'000'000u,
+                                                       /*faces=*/1),
+                                    /*vertexCount=*/3, /*indexCount=*/3));
+    Deadline deadline;
+    AllocationLedger ledger;
+    CollectSink sink;
+
+    GltfAdapter adapter;
+    const AdapterResult result = RunAdapter(adapter, source, deadline, ledger, sink);
+
+    CHECK(result.parse == ErrorCode::None);
+    CHECK(result.geometry == ErrorCode::DracoPrimitiveLimit);
+    CHECK_FALSE(result.usedDraco);
+    CHECK(sink.triangles.empty());
+    CHECK(model_core::DracoDecoderInvocations().load() == before);
+}
+
+TEST_CASE("a KTX2 image declaring extreme dimensions is rejected before the KTX library",
+          "[provider][gltf][security]")
+{
+    const std::uint64_t before = model_core::Ktx2DecoderInvocations().load();
+    ByteSource source(BuildTriangleGlbWithKtx2(HostileKtx2Stream(100'000u, 100'000u, 1)));
+    Deadline deadline;
+    AllocationLedger ledger;
+    CollectSink sink;
+
+    GltfAdapter adapter;
+    const AdapterResult result = RunAdapter(adapter, source, deadline, ledger, sink);
+
+    CHECK(result.parse == ErrorCode::None);
+    CHECK(result.geometry == ErrorCode::None);
+    CHECK_FALSE(sink.triangles.empty());
+    CHECK(result.decodedImages == 0u);
+    // The KTX library was never reached, so nothing expanded the declared size.
+    CHECK(model_core::Ktx2DecoderInvocations().load() == before);
+}
+
 // --- Isolation / typed failures ---------------------------------------------
 
 TEST_CASE("a sidecar-dependent glTF fails closed and never resolves a path",
@@ -625,6 +855,21 @@ TEST_CASE("a truncated GLB is a typed malformed-data failure", "[provider][gltf]
 TEST_CASE("a glTF over the material cap is a resource limit", "[provider][gltf]")
 {
     ByteSource source(AsBytes(OverBudgetMaterialsJson()));
+    Deadline deadline;
+    AllocationLedger ledger;
+    CollectSink sink;
+
+    GltfAdapter adapter;
+    const AdapterResult result = RunAdapter(adapter, source, deadline, ledger, sink);
+
+    CHECK(result.parse == ErrorCode::ResourceLimit);
+    CHECK(sink.triangles.empty());
+}
+
+TEST_CASE("a mesh-less doubling glTF DAG is bounded by the total-visit cap",
+          "[provider][gltf][security]")
+{
+    ByteSource source(AsBytes(MeshlessDoublingDagJson(40)));
     Deadline deadline;
     AllocationLedger ledger;
     CollectSink sink;

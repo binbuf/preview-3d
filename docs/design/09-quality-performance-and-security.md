@@ -141,6 +141,14 @@ An 8-hour scenario repeatedly opens mixed valid/malformed files through cold/cac
 - an import worker, compatibility host, STEP host, temporary cache write, or broker handle surviving its generation;
 - UI heartbeat or shutdown deadline violation.
 
+The soak's any-crash rule has one documented exception, defined by the SEC-08 policy
+([ADR-0037](./adr/0037-provider-containment-av-quarantine-and-occt-serialization.md)): a stack-overflow
+or uncatchable `__fastfail`/stack-cookie fault inside a third-party parser re-raises and kills the
+surrogate. That death is an *allowed* failure — the surrogate is the crash-containment boundary
+(ADR-0005) — provided the soak records the fault code and the input and the process restarts cleanly.
+A contained access violation is different: it must be quarantined (later requests fail closed, no
+fabricated thumbnail) rather than treated as a normal pass or silently ignored.
+
 ## Graphics validation
 
 Developer validation builds enable:
@@ -177,19 +185,70 @@ Tests enumerate adversarial interleavings. Thread termination, SuspendThread-bas
 Each format has a standalone, no-GPU fuzz target that accepts bytes plus a constrained virtual sidecar/archive map and runs through normalized metadata/chunk output. Additional targets cover:
 
 - GLB/glTF JSON/accessor/range validation;
-- binary/ASCII STL detection/tokenization;
-- binary/ASCII PLY header, endianness, scalar/list, point, and polygon normalization;
+- binary/ASCII STL detection/tokenization (`StlFuzz`);
+- binary/ASCII PLY header, endianness, scalar/list, point, and polygon normalization (`PlyFuzz`);
 - Draco bitstreams, KTX2/Basis level metadata/transcode boundary, WebP, and expanded texture metadata;
-- OBJ/MTL and FBX adapter options/callbacks;
+- OBJ/MTL and FBX adapter options/callbacks (`ObjFuzz`, `FbxFuzz`);
 - 3MF/USDZ archive directory and expansion accounting;
 - USDA/USDC object graphs;
 - import-worker and compatibility-host protocol/shared-section descriptors and broker dependency requests, including the wire-format header/chunk-descriptor decoder itself;
 - persistent-cache manifests, indexes, section tables, and normalized payloads;
 - image metadata/decode boundary;
 - IPC frame and JSON;
-- CPU thumbnail clipping/raster setup.
+- CPU thumbnail clipping/raster setup (`ProviderFuzz` `Raster` domain: clipping math,
+  degenerate transforms, NaN/Inf coordinates, extreme aspect ratios, `cx == 0`).
 
 Seed corpora include official conformance assets, product regressions, minimized crashes, unsupported feature examples, and cross-format mutations. Continuous fuzzing uses ASan/UBSan-compatible builds; every unique crash, timeout, excessive allocation, or assertion is minimized and becomes a regression test. Parser dependency updates must run the complete corpus before merge.
+
+Tracked state of the list above: `StlFuzz`, `PlyFuzz`, and `ObjFuzz` (ADR-0044), `FbxFuzz`,
+`StepFuzz`, `ThreeMfFuzz`, and `UsdFuzz` cover their format parser/adapter boundaries; `GltfFuzz`
+covers glTF JSON/accessor/node-graph plus the Draco/meshopt/KTX2/WebP/WIC decode boundaries
+(ADR-0045, ADR-0046); `ProviderFuzz` covers the provider pipeline, stream source, sampler, and
+rasterizer (ADR-0047). The remaining items — the import-worker/compatibility-host protocol and
+shared-section descriptor decoder, broker dependency requests, persistent-cache manifests/indexes,
+IPC frame/JSON, and a standalone image-metadata/decode target — are **not implemented** and must
+not be cited as shipped coverage until their targets land.
+
+SEC-16 adds `GltfFuzz` (`tests/fuzz/GltfFuzz.cpp`) for the GLB/glTF JSON,
+accessor/sparse/range, node-graph, and Draco/meshopt/KTX2/WebP/WIC adapter
+surfaces; see [ADR-0045](adr/0045-gltf-codec-fuzz-findings.md). Its first run
+found two deterministic crashes inside the pinned third-party decoders. The
+fastgltf 0.9.0 base64 data-URI overflow is fixed by the product-owned
+`model_core::ValidateGltfDataUri` preflight (`GltfDataUriPreflight.h`) run
+before `loadGltf`. The KTX-Software 4.4.2 ETC1S/BasisLZ transcode null-deref is
+fixed in SEC-16b by the product-owned `model_core::ValidateEtc1sGlobalData`
+preflight (`Etc1sTablePreflight.h`), called from `PreflightKtx2` before
+`ktxTexture2_TranscodeBasis`; see
+[ADR-0046](adr/0046-etc1s-global-data-preflight.md). Both minimized findings and
+the valid BasisLZ sample are promoted into the generated smoke seeds, and
+`GltfFuzz` is in the `fuzz-smoke` matrix (SEC-17/T25 promoted that lane into the
+required merge gate).
+
+SEC-17 adds `ProviderFuzz` (`tests/fuzz/ProviderFuzz.cpp`) over the provider
+boundary the worker targets do not reach: `BoundedStreamSource`, every family
+adapter, `DeterministicGeometrySampler`, and the real CPU tile rasterizer,
+selected by a 24-byte envelope (`Pipeline`/`Stream`/`Sampler`/`Raster` domains).
+It links the pinned third-party parsers but keeps `_DISABLE_STL_ANNOTATION`
+matching their non-ASan closure; see
+[ADR-0047](adr/0047-provider-pipeline-fuzz-and-surrogate-soak.md). SEC-17 also
+adds the Explorer-surrogate soak: `ProviderSmokeHost.exe --soak` drives
+concurrent STA apartments through the real `IThumbnailCache` path with
+`WTS_FORCEEXTRACTION`, asserting no failed thumbnail, no persistent `DllHost`
+surrogate after release, and bounded GDI/User/handle/thread/private-byte growth
+(`packaging/smoke/README.md`). A contained access violation must surface as a
+quarantine with later requests failing closed; a stack-overflow/`__fastfail`
+surrogate death is the documented allowed failure (see "End-to-end soak").
+
+SEC-17/T25 completes the lane. `ProviderFuzz` joins the `fuzz-smoke` matrix, and
+that target's runner restores the isolated `thumbnail-provider/step-occt`
+manifest it links (ADR-0002); `fuzz-smoke` now runs on every `pull_request`/`push`
+and in the `release.yml` gate instead of only the nightly schedule. The surrogate
+soak classifies hostile input rather than treating any failure as an anonymous
+crash: a contained access violation is recorded as a quarantine
+failure-with-reason (exit nonzero), a stack-overflow/`__fastfail` surrogate death
+is recorded as the documented *allowed* failure with its exit code (not a pass),
+and any other surrogate death fails the soak. `ProviderSmokeHost.exe
+--soak-classify-selftest` exercises the exit-code classifier deterministically.
 
 ## Threat model
 
@@ -212,19 +271,27 @@ Windows, the signed installed payload, and the graphics driver are trust depende
 
 ### Process and binary
 
-- DEP/NX, ASLR/high entropy VA, CFG, CET compatibility, SDL checks, and stack protection enabled.
-- Safe DLL search established before optional loads; current directory and model directory never enter DLL search.
+- DEP/NX, ASLR/high entropy VA, CFG, CET compatibility, SDL checks, and stack protection enabled for every product image by `Directory.Build.props` (`ControlFlowGuard`, `CETCompat`), verified with `dumpbin /headers` and `/loadconfig`. `/guard:ehcont` is wired but off by default: the pinned third-party static libraries were built without EH continuation metadata, so linking with it fails LNK1386/LNK2047; `Preview3DEnableGuardEhCont=true` turns it on once the vcpkg ports are rebuilt. `/Qspectre` is enabled automatically only when the optional MSVC Spectre-mitigated libraries component is present, because MSBuild raises MSB8040 otherwise ([ADR-0039](./adr/0039-build-and-process-mitigations.md)).
+- Every product executable enables heap-termination-on-corruption and disables extension points at startup, and turns on ACG (dynamic-code prohibition) where it parses untrusted data; the viewer withholds ACG until a GPU run validates the user-mode D3D runtime. The broker additionally applies a `PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY` to every import child at creation (CFG always-on, extension points disabled, ACG) and fails the launch closed if the attribute cannot be set. Microsoft-signed-image enforcement is deferred to SEC-14 because the images and app-local DLLs are not yet Authenticode-signed and the policy would make them unloadable ([ADR-0039](./adr/0039-build-and-process-mitigations.md)).
+- Every product image carries a shared application manifest (`shared/platform/app.manifest`, merged by `mt.exe`) with `longPathAware`, `activeCodePage UTF-8`, and an explicit Windows 10/11 `supportedOS` entry, alongside the segment heap.
+- Safe DLL search established before optional loads; current directory and model directory never enter DLL search. Every import child does this in-process (`SetDefaultDllDirectories` + one `AddDllDirectory` for its payload, then `SetCurrentDirectoryW` to that payload directory and an explicit plug-in/loader environment scrub) and the broker also launches each child with an explicit scrubbed environment block and payload working directory, so the viewer's CWD and environment never leak in ([ADR-0038](./adr/0038-child-loader-hardening-and-fault-harness-gating.md)).
 - The viewer loads no third-party format parser or decoder and no runtime plug-ins, scripts, shader compiler, environment-selected codecs, or product network stack; every such library loads only inside `Preview3DImportWorker.exe` (general formats), `Preview3DImportHost.exe` (OpenUSD), or `Preview3DStepHost.exe` (OCCT/STEP). The thumbnail provider loads its own bounded copies under Shell's process isolation, per [05-thumbnail-provider.md](./05-thumbnail-provider.md). Every import process loads only release-manifest-listed, signed app-local modules and hash-verified resources by absolute path after DLL search and plug-in discovery are locked down.
+- Fault/test switches (`hang`, `crash`, `overallocate`, `child-noop`, the import-fault and pool-fault modes, delayed-batch parsing) are compiled into Debug only; a Release import child rejects every one with a usage exit. Verification entry points the restriction suite needs (`probes`, normal `pool`, the spike qualification routes) remain in Release. See [ADR-0038](./adr/0038-child-loader-hardening-and-fault-harness-gating.md).
+- The viewer's own external test-control surface (`--app-smoke`, `--activation-smoke`, the other `--*-smoke` switches, `--benchmark-worker-budget-failure`, the `WM_APP+104` query/command handler, and `WM_COPYDATA` path injection) is compiled into Debug only; a Release viewer rejects those flags with the unknown-option usage exit and returns 0 for those messages, so a local process cannot drive a shipping binary. The viewer likewise links no in-process GLB/JSON parser or `ws2_32` ([ADR-0040](./adr/0040-viewer-local-attack-surface-reduction.md)).
 - Release loads only system components through documented mechanisms and product binaries by absolute installed path.
 - Authenticode and dependency/SBOM controls follow [08-installation-and-registration.md](./08-installation-and-registration.md).
 
 ### Files and archives
 
 - Handle-based canonical path checks and FILE_SHARE_READ-only lifetime policy reduce time-of-check/time-of-use changes.
+- The trusted viewer's open guard and the broker classify a primary path with `platform::ClassifySourcePath` *before* `CreateFileW`: UNC/device namespaces in either separator form (`//server/share`, `\\server\share`, `\\?\UNC\...`, `\\.\...`) and any non-drive-qualified (relative or drive-relative) path are rejected up front, so a crafted path cannot make a trusted process initiate an SMB/device connection that is only refused after it is already open. The post-open canonical containment check remains as defense in depth ([ADR-0053](./adr/0053-prebound-primary-path-classification.md)).
 - All sizes/counts use checked 64-bit math before conversion to size_t/D3D types.
 - Allocation, depth, object, dependency, time, decoded-pixel, and archive-ratio budgets are enforced through mandatory parser callbacks inside the owning import process and, independently, by that process's broker/Job Object limits — a callback bug in one layer does not remove the other.
 - Archive entry names are canonicalized as virtual relative paths; absolute, drive, device, alternate-stream, traversal, duplicate-conflicting, and symlink-like entries are rejected.
+- Sidecar/archive references are validated before use: any byte `< 0x20` or `0x7F` and any invalid UTF-8 sequence is rejected before a reference is constructed and re-checked after decoding, and the allowed sidecar extension set is per format (ADR-0032). These are security invariants, not best-effort normalization.
+- Compressed payloads are validated and count-preflighted before the third-party decoder is reached: `PreflightKtx2`/`ValidateDracoCounts`, the ETC1S/BasisLZ global-data preflight in `ValidateEtc1sGlobalData`, and the glTF data-URI preflight reject malformed or over-declared input before any allocation from a file-declared size (ADR-0030, ADR-0046). Tests assert a decoder-invocation counter proves the library was never entered.
 - Temporary normalized stores use random names, current-user-only ACLs, delete-on-close handles, and non-executable data.
+- Viewer-owned profile writes (settings, Open With cache) and the test-only DerivedCache always write through a GUID-named sibling opened with `CREATE_NEW | FILE_FLAG_OPEN_REPARSE_POINT`, revalidate the opened handle, and only then atomically replace the destination, so a planted symlink/hardlink or a fixed-name `.tmp` cannot redirect the write. The `--benchmark-result` target is additionally confined to an app-owned `.json` path under `%LOCALAPPDATA%\Binbuf\Preview 3D` with UNC/device/ADS/traversal rejected ([ADR-0040](./adr/0040-viewer-local-attack-surface-reduction.md)).
 - Persistent cache directories use current-user-only ACLs. Entries use opaque names, bounded manifests, checked section tables, and cryptographic checksums; data is revalidated as untrusted normalized input before upload.
 - Mapping/view access is contained by validated spans; product code does not dereference file-derived pointers outside a live lease.
 
@@ -237,7 +304,8 @@ Windows, the signed installed payload, and the graphics driver are trust depende
 
 ### Shell and IPC
 
-- The thumbnail provider observes the stricter policy in [05-thumbnail-provider.md](./05-thumbnail-provider.md), including no path/sidecar/network access, and depends on Shell's default surrogate-process isolation rather than any in-process mitigation; `DisableProcessIsolation` MUST NOT be set for its CLSIDs. That surrogate isolation is crash containment for Explorer, not the zero-capability AppContainer security boundary the import processes below provide — the provider's safety against a hostile file rests on its own bounded reads and checked parsing, not on the surrogate process.
+- The thumbnail provider observes the stricter policy in [05-thumbnail-provider.md](./05-thumbnail-provider.md), including no path/sidecar/network access, and depends on Shell's default surrogate-process isolation rather than any in-process mitigation; `DisableProcessIsolation` MUST NOT be set for its CLSIDs. That surrogate isolation is crash containment for Explorer, not the zero-capability AppContainer security boundary the import processes below provide — the provider's safety against a hostile file rests on its own bounded reads and checked parsing, not on the surrogate process. The `InprocServer32` registration means any local process can also activate the handler in-process (`CLSCTX_INPROC_SERVER`); the surrogate routing is Shell-path-specific (ADR-0008).
+- A contained structured exception inside the provider (for example an access violation in a third-party parser) quarantines the process: the boundary records the fault and every later request fails closed to `E_FAIL` with no fabricated bitmap before any adapter or parser runs, while requests already in flight drain (ADR-0037). A stack-overflow or uncatchable `__fastfail`/stack-cookie death is not contained and is the documented allowed failure of the surrogate soak; it is never counted as a pass.
 - Named objects use explicit current-user/session ACLs; clients are authenticated and payloads bounded.
 - The receiver never invokes a shell with model-derived text.
 - `Preview3DImportWorker.exe`, `Preview3DImportHost.exe`, and `Preview3DStepHost.exe` are launched with a zero-capability AppContainer token and assigned to a kill-on-close Job Object *before* they process any input — the broker launches suspended or assigns the job at process-creation time so no import code ever runs under a less-restricted intermediate state. None can access the network/model directory directly or create child processes, and each receives model dependencies only through the parent broker via an explicit `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, not broad handle inheritance. The parent rejects unexpected request order, unknown message/section versions, stale generations, and invalid ranges/checksums, and — because a shared section stays writable by the child for as long as it is mapped — never treats a chunk as trusted until it has copied the chunk's descriptor and bytes into its own memory and independently re-validated them; the shared section itself is never re-read afterward.
@@ -258,7 +326,7 @@ Every third-party component needs:
 - no unreviewed transitive dynamic dependency;
 - an upgrade/rollback record.
 
-Warnings and exceptions from dependency headers are contained at a dedicated build target boundary; product code remains warning-clean. Updating a parser is a behavior change requiring corpus, performance, memory, thumbnail-host, and installer license retest. Updating any import-worker or compatibility-host module — the boundary is symmetric between them — additionally requires broker/protocol, restriction, composed-stage/normalization, binary-size/startup, and signed-payload retesting. Updating Draco, KTX/Basis, libwebp, or DirectXTex requires compressed-expansion and image fuzz corpora plus cache-version review.
+Warnings and exceptions from dependency headers are contained at a dedicated build target boundary; product code remains warning-clean. Updating a parser is a behavior change requiring corpus, performance, memory, thumbnail-host, and installer license retest. Updating any import-worker or compatibility-host module — the boundary is symmetric between them — additionally requires broker/protocol, restriction, composed-stage/normalization, binary-size/startup, and signed-payload retesting. Updating Draco, KTX/Basis, or libwebp requires compressed-expansion and image fuzz corpora plus cache-version review. A KTX-Software/basisu update additionally re-validates `model_core::ValidateEtc1sGlobalData` (ADR-0046) against the new `decode_tables` and reruns the promoted `GltfFuzz` corpus.
 
 ## CI and release evidence
 
@@ -270,6 +338,37 @@ Per change:
 - headless adapter regression corpus;
 - short ASan/fuzz smoke;
 - package manifest validation.
+
+The `CI` workflow (`.github/workflows/ci.yml`; ADR-0042) is a **mandatory merge
+gate**: it enforces the per-change Debug/Release build and the unit,
+import-isolation and provider-host suites on every pull request and push to
+`main`, and a branch-protection rule must require both matrix checks before
+merge; `Release` will not package until the same gate passes. The `[graphics]` unit cases are excluded on the headless runner. The
+bounded libFuzzer smoke (`.github/workflows/ci.yml` job `fuzz-smoke`) is part of
+that required gate as of SEC-17/T25: it runs on every pull request and push, and
+`Release` waits for it. Lint/static analysis, the headless adapter
+corpus, and package-manifest validation remain manual per-change skills on top of
+the gate (release packaging already restores and validates the manifests).
+
+The `Release` workflow (`.github/workflows/release.yml`; ADR-0043) now fails
+closed when its signing secrets are absent — an unsigned artifact is a local
+engineering build, never a CI release. It attests the portable ZIP, the installer,
+both SBOMs, both `MANIFEST.json` files, and the combined `SHA256SUMS` with
+`actions/attest-build-provenance`; publishes the renamed SBOM/manifest copies,
+the checksums, and their detached PKCS#7 signatures as release assets; and gates
+the whole job behind the required-reviewer `release` environment. It refuses to
+overwrite a published tag (draft, then un-draft). Every action is pinned to a
+commit SHA and tracked by `.github/dependabot.yml`. `dependencies.yml` splits its
+permissions by event: a `pull_request` runs the shared restore with
+`packages: read`, `feed-access: read`, and `configure-feed: false`, so
+PR-authored portfiles can neither write the feed nor read the token; only the
+trusted `push`/`schedule`/`workflow_dispatch` lane warms it with
+`packages: write` and `feed-access: readwrite`. `ci.yml` is workflow-level
+`packages: read` (the shared test matrix never warms; the trusted `warm` job in
+`dependencies.yml` does) and configures the feed only off `pull_request`; the
+tag-only `release.yml` keeps `packages: write`. In every workflow the throwaway
+NuGet config must survive `Restore vcpkg dependencies` and is deleted by a final
+`always()` step, rather than persisted to the user profile (ADR-0043, ADR-0050).
 
 Nightly:
 

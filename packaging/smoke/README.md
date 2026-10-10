@@ -26,6 +26,7 @@ clean-machine/DPI acceptance (T44). See `docs/design/adr/0020-developer-local-in
 | `fixtures/smoke-cube.3mf` | The small Core 3MF unit cube from the 3MF corpus, used as the 3MF smoke model. |
 | `fixtures/smoke-cube.usda` | An original Preview3D ASCII USDA unit cube (12 triangles), used as the USD smoke model. |
 | `fixtures/smoke-cube.stp` | The committed AP214 analytic part with a through-hole and shape color, used as the STEP smoke model. |
+| `fixtures/hostile-truncated.stl` | A truncated binary STL (a declared facet count with no facet data) used as the SEC-08 hostile-input soak model; the provider must refuse it without crashing. |
 
 ## Run
 
@@ -86,3 +87,76 @@ to `Invoke-ProviderSmoke.ps1`, commit a small non-degenerate fixture, and re-run
 The verifier itself is family-agnostic; the CLSID and model path are the only family-specific values.
 T34 completed the eighth family (STEP/STP); T41 must still move these smoke identities to the real
 installer rules. The STEP DLL statically contains OCCT, so it stages no extra runtime DLL.
+
+## Surrogate soak (SEC-17)
+
+`ProviderSmokeHost.exe --soak` is the Explorer-stability soak. It repeatedly
+renders the smoke fixtures through the real Shell path
+(`IThumbnailCache::GetThumbnail` with `WTS_FORCEEXTRACTION`) from several
+concurrent STA apartments, so the provider is loaded, exercised and torn down in
+the real `DllHost.exe` surrogate many times while the thumbnail cache is churned.
+It asserts:
+
+- no crash/hang: every valid call must return a bitmap (a surrogate crash makes
+  the next `GetThumbnail` fail and is counted as a failure, never a pass);
+- no persistent surrogate after the last release: the `DllHost` hosting
+  `Preview3DThumbnailProvider.dll` must disappear within 30 s;
+- no monotonic growth on the surrogate process(es): GDI `+64`, User `+64`,
+  handles `+256`, threads `+8`, private bytes `+32 MiB` are the tolerances
+  (raw baseline/final numbers are written to `soak-report.txt`).
+
+SEC-17/T25 adds the SEC-08 hostile-input classification. The soak keeps a
+handle on every `dllhost` surrogate that hosts the provider and reads its exit
+code when it dies, so a fault is classified instead of reported as an anonymous
+crash:
+
+- a valid request refused while no surrogate died is a **contained access
+  violation / quarantine** — recorded as a failure-with-reason and the soak
+  exits nonzero (the process-global quarantine refuses later requests, so any
+  valid-phase failure is evidence of it);
+- a surrogate death with a re-raised stack overflow (`0xC00000FD`) or an
+  uncatchable `__fastfail`/stack-cookie fault (`0xC0000409`, `0xC0000602`) is
+  the documented SEC-08 **allowed** failure — recorded with its exit code, and
+  the run reports `ALLOWED`, not `PASS`;
+- any other surrogate death is an unexpected fault and fails the soak.
+
+```powershell
+# Stage and register exactly as the smoke above, then:
+x64\Release\ProviderSmokeHost.exe --soak ^
+  --dll artifacts\smoke\stage\Release\Preview3DThumbnailProvider.dll ^
+  --stl packaging\smoke\fixtures\smoke-cube.stl ^
+  --ply packaging\smoke\fixtures\smoke-cube.ply ^
+  --gltf packaging\smoke\fixtures\smoke-cube.glb ^
+  --fbx packaging\smoke\fixtures\smoke-cube.fbx ^
+  --mf packaging\smoke\fixtures\smoke-cube.3mf ^
+  --usd packaging\smoke\fixtures\smoke-cube.usda ^
+  --step packaging\smoke\fixtures\smoke-cube.stp ^
+  --hostile packaging\smoke\fixtures\hostile-truncated.stl ^
+  --apartments 4 --iterations 100 --cx 256 --out artifacts\smoke\evidence\Release\soak
+```
+
+`--hostile <path>` is repeatable and adds an expected-fail-closed lane: a
+refused thumbnail on a hostile input is counted as `rejected`, not a crash,
+while a valid input failing afterwards still surfaces a quarantine. The
+exit-code classifier has a deterministic self-check:
+
+```powershell
+x64\Release\ProviderSmokeHost.exe --soak-classify-selftest
+```
+
+The SoakHost is built with the verifier
+(`packaging\smoke\ProviderSmokeHost.vcxproj`, `ProviderSoak.{h,cpp}`). It is
+crash containment, not a security boundary (ADR-0005): the value is Explorer
+stability and leak detection.
+
+Measured Release reference run on the development machine (SEC-17: 7 families, 4
+apartments x 100 iterations + 4 warm-up = 404 thumbnails): 0 failed, one
+`dllhost.exe` surrogate, GDI 0 -> 0, User 6 -> 8, handles 189 -> 207, threads
+10 -> 11, private bytes 4,665,344 -> 9,818,112 (+5.15 MiB), teardown in 5.1 s,
+no persistent surrogate.
+
+T25 classification run (7 valid families, 2 apartments x 20 iterations, plus the
+hostile lane at 2 x 20): valid 40/40 pass, hostile `rejected=40`
+(`first_hostile_failure_hr=0x8004B200`), `quarantined=0`, `allowed_faults=0`,
+`unexpected_faults=0`, growth within tolerance, exit 0; elapsed 7.0 s, host peak
+working set 30.8 MB. `--soak-classify-selftest` passes all six exit-code cases.

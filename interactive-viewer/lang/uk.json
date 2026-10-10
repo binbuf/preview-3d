@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Потік візуалізації зупинено під час ініціалізації.",
   "failure.graphicsRecovery.summary": "Помилка відновлення графіки.",
   "cli.usage": "Використання: Preview3D.exe [шлях до моделі]\n Preview3D.exe --open <шлях до моделі>",
-  "startup.smartAppControl": "Smart App Control активний на цьому комп’ютері, і ця збірка Preview 3D не підписана.\n\n",
   "warning.optionalFeatures": "Деякі додаткові функції glTF не підтримуються. Показано їх резервне представлення.",
   "warning.textures": "Деякі текстури не вдалося завантажити. Показано запасні текстури.",
   "warning.missingAssets": "Деякі активи, на які посилаються, не вдалося знайти.",

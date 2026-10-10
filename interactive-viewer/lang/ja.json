@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "初期化中にレンダリング スレッドが停止しました。",
   "failure.graphicsRecovery.summary": "グラフィックスの回復に失敗しました。",
   "cli.usage": "使用法: Preview3D.exe [モデルパス]\n Preview3D.exe --open <モデルパス>",
-  "startup.smartAppControl": "この PC では Smart App Control がアクティブになっており、このプレビュー 3D ビルドは署名されていません。\n\n",
   "warning.optionalFeatures": "一部のオプションの glTF 機能はサポートされていません。それらのフォールバック表現が示されています。",
   "warning.textures": "一部のテクスチャを読み込めませんでした。フォールバック テクスチャが表示されます。",
   "warning.missingAssets": "一部の参照アセットが見つかりませんでした。",

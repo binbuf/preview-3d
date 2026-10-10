@@ -67,6 +67,15 @@ public:
     bool ExternalFileDenied() const noexcept { return externalFileDenied_; }
 
 private:
+    // Per-stage bodies, run under the T06 stage-containment shim
+    // (ContainmentStage.h). Non-noexcept so a product-owned `std::bad_alloc`
+    // (the checked backing copy and the per-face index scratch) unwinds into the
+    // boundary instead of terminating at the frozen `noexcept` public method.
+    ErrorCode InitializeImpl(const AdapterInput& input);
+    ErrorCode ParseImpl();
+    ErrorCode EnumerateMaterialsImpl(IMaterialSink& sink);
+    ErrorCode EnumerateGeometryImpl(IGeometrySink& sink);
+
     ErrorCode SourceReadFailure() const noexcept;
     void FreeScene() noexcept;
 

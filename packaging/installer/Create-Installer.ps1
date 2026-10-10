@@ -17,6 +17,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
+# Shared SEC-19/T19 metadata logic; the installer must not package a version
+# that disagrees with the manifest/solution/NSIS defaults.
+. (Join-Path $PSScriptRoot '..\ReleaseMetadata.ps1')
+
 function Resolve-FullPath([string]$Path) {
     return [System.IO.Path]::GetFullPath($Path)
 }
@@ -96,6 +100,7 @@ if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
     $RepositoryRoot = Join-Path $PSScriptRoot '..\..'
 }
 $repository = (Resolve-FullPath $RepositoryRoot).TrimEnd('\')
+Assert-ReleaseVersionConsistency -RepositoryRoot $repository -ExpectedVersion $Version | Out-Null
 $artifacts = Join-Path $repository 'artifacts\installer'
 $stage = Join-Path $artifacts 'stage'
 $installer = Join-Path $artifacts "Preview3D-$Version-x64-setup.exe"

@@ -15,6 +15,7 @@
 
 #include <windows.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -83,16 +84,24 @@ private:
     enum class Phase { Signature, Body, Ended, Failed };
 
     void Fail(StepPreflightStatus status);
+    bool DecideLeadingSignature();
     void Consume(std::byte value);
     void FinishRecord();
     void ParseRecord(std::string_view text);
     void ScanTokens(std::string_view text);
+
+    // Longest signature the leading probe must see whole: the ZIP local-file
+    // header is four bytes ("PK\x03\x04"); the others are <= 3.
+    static constexpr std::size_t kLeadingProbeBytes = 4;
 
     StepPreflightLimits limits_{};
     StepPreflightResult result_{};
     Phase phase_ = Phase::Signature;
     bool sawSignature_ = false;
     bool leadingChecked_ = false;
+    std::array<std::byte, kLeadingProbeBytes> leading_{};
+    std::uint32_t leadingBytes_ = 0;
+    std::uint32_t leadingStart_ = 0; // bytes of a transparent UTF-8 BOM to skip
     bool inHeader_ = false;
     bool inData_ = false;
     bool inString_ = false;

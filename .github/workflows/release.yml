@@ -11,15 +11,33 @@ permissions:
   # cache (10 GB/repo, evicted after 7 idle days) cannot durably hold a cold
   # OpenUSD + OCCT closure; the Packages NuGet feed can.
   packages: write
+  # actions/attest-build-provenance mints an OIDC token and writes build
+  # provenance to the repository's attestations store.
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # Fail closed: the package job cannot start until the reusable test gate
+  # (Debug and Release builds plus the unit, import-isolation, and provider-host
+  # suites) has passed on this tag. A red test therefore stops the release
+  # before any signed artifact is produced. See .github/workflows/ci.yml.
+  gate:
+    name: Test gate
+    uses: ./.github/workflows/ci.yml
+
   release:
     name: Build, package, and release
+    needs: gate
     runs-on: windows-2025
+    # A required-reviewer environment gates the whole job before it starts: the
+    # tag push alone cannot publish. The maintainer configures the `release`
+    # environment's protection rules (required reviewers, deployment branches =
+    # tags). Signing and attestation happen only after that approval.
+    environment: release
     # The root manifest (OpenUSD) and the isolated STEP manifest (OCCT) both
     # build from source on a cold runner; the binary cache below keeps repeat
     # releases fast, but the first cold build needs more than the old 90 min.
@@ -50,7 +68,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -65,7 +83,7 @@ jobs:
             }
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         # Best-effort: the durable cache is the GitHub Packages NuGet feed. If
         # this directory exceeds the 10 GB per-repo cache limit, the save must
         # not fail an otherwise successful release.
@@ -171,10 +189,27 @@ jobs:
             throw "Expected NSIS v$nsisVersion, but makensis reported '$detectedNsisVersion'."
           }
 
+          # Authenticode signer for the binary payload (through the packaging
+          # scripts) and for the detached PKCS#7 signatures of the checksum
+          # files. Mirror the packaging scripts' own discovery order.
+          $signTool = Get-ChildItem -LiteralPath (Join-Path $visualStudio 'Common7\Tools') -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+          if ([string]::IsNullOrWhiteSpace($signTool)) {
+            $windowsKits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+            $signTool = Get-ChildItem -LiteralPath $windowsKits -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if ([string]::IsNullOrWhiteSpace($signTool)) {
+            throw 'A signing certificate is required for a tag release, but signtool.exe was not found.'
+          }
+
           "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
           "nsis=$nsis" >> $env:GITHUB_OUTPUT
           "vcpkg=$vcpkg" >> $env:GITHUB_OUTPUT
           "vcpkg_root=$vcpkgRoot" >> $env:GITHUB_OUTPUT
+          "signtool=$signTool" >> $env:GITHUB_OUTPUT
 
       - name: Add NuGet binary-cache source
         shell: pwsh
@@ -182,15 +217,16 @@ jobs:
           VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Register the GitHub Packages NuGet feed with the nuget.exe that
-          # vcpkg itself uses, so its nuget binary-cache provider finds the
-          # credentials in the user-level NuGet.Config. `vcpkg fetch nuget`
-          # downloads that copy on first use and prints its path last.
+          # Register the GitHub Packages NuGet feed through a throwaway
+          # NuGet.Config under RUNNER_TEMP and vcpkg's `nugetconfig` source (the
+          # only provider that takes `-Config`). The token is never written to the
+          # user-profile NuGet.Config, and the always() cleanup step removes it.
           #
           # The binary source is published to later steps through GITHUB_ENV
           # rather than set up front, so a NuGet or GitHub Packages outage
           # degrades to the local files cache instead of failing the release.
           $filesSource = "files,$env:VCPKG_DEFAULT_BINARY_CACHE,readwrite"
+          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
           try {
             $nuget = (& $env:VCPKG_EXE fetch nuget |
               Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
@@ -199,23 +235,37 @@ jobs:
               throw "vcpkg did not provide a usable nuget.exe (got '$nuget')."
             }
 
+            $configLines = @(
+              '<?xml version="1.0" encoding="utf-8"?>',
+              '<configuration>',
+              '  <packageSources>',
+              '    <clear />',
+              '  </packageSources>',
+              '  <config>',
+              "    <add key=`"defaultPushSource`" value=`"$env:VCPKG_FEED_URL`" />",
+              '  </config>',
+              '</configuration>'
+            )
+            Set-Content -LiteralPath $configPath -Value $configLines -Encoding UTF8
+
             & $nuget sources add `
               -Source $env:VCPKG_FEED_URL `
               -StorePasswordInClearText `
               -Name GitHubPackages `
               -UserName $env:VCPKG_FEED_OWNER `
-              -Password $env:GITHUB_TOKEN
+              -Password $env:GITHUB_TOKEN `
+              -ConfigFile $configPath
             if ($LASTEXITCODE -ne 0) {
               throw "nuget sources add failed with exit code $LASTEXITCODE."
             }
 
-            & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL
+            & $nuget setapikey $env:GITHUB_TOKEN -Source $env:VCPKG_FEED_URL -ConfigFile $configPath
             if ($LASTEXITCODE -ne 0) {
               throw "nuget setapikey failed with exit code $LASTEXITCODE."
             }
 
-            "VCPKG_BINARY_SOURCES=clear;nuget,$env:VCPKG_FEED_URL,readwrite;$filesSource" >> $env:GITHUB_ENV
-            Write-Host 'vcpkg binary cache: GitHub Packages feed plus local files cache.'
+            "VCPKG_BINARY_SOURCES=clear;nugetconfig,$configPath,readwrite;$filesSource" >> $env:GITHUB_ENV
+            Write-Host 'vcpkg binary cache: ephemeral GitHub Packages config plus local files cache.'
           } catch {
             Write-Warning "GitHub Packages binary cache unavailable; using the local files cache only. $_"
             "VCPKG_BINARY_SOURCES=clear;$filesSource" >> $env:GITHUB_ENV
@@ -324,7 +374,7 @@ jobs:
           }
           Show-Disk 'thumbnail-provider STEP manifest'
 
-      - name: Import optional signing certificate
+      - name: Import signing certificate
         id: signing
         shell: pwsh
         env:
@@ -337,9 +387,14 @@ jobs:
             throw 'Configure both WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD, or neither.'
           }
           if (-not $hasCertificate) {
-            'thumbprint=' >> $env:GITHUB_OUTPUT
-            Write-Warning 'No signing certificate is configured; release artifacts will be unsigned.'
-            exit 0
+            # Fail closed. This workflow only runs for a v* tag, so there is no
+            # unsigned release path here: what would be published would be
+            # unsigned and unattested. An unsigned engineering build is still
+            # available locally from the packaging scripts
+            # (packaging/portable/Create-PortableRelease.ps1 and
+            # packaging/installer/Create-Installer.ps1, which warn and continue
+            # when no thumbprint is passed); it must never be published by CI.
+            throw 'Refusing to publish an unsigned release: set WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD in the release environment.'
           }
 
           $certificatePath = Join-Path $env:RUNNER_TEMP 'preview3d-release.pfx'
@@ -409,6 +464,107 @@ jobs:
             throw "Installer packaging failed with exit code $LASTEXITCODE."
           }
 
+      - name: Collect SBOM, manifest, and checksums
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          function Get-Sha256([string]$Path) {
+            return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+
+          $version = $env:RELEASE_VERSION
+          $meta = Join-Path $env:GITHUB_WORKSPACE 'artifacts\release'
+          New-Item -ItemType Directory -Force -Path $meta | Out-Null
+
+          # The SBOM and MANIFEST already ship inside each archive; publishing
+          # renamed copies as release assets makes them independently
+          # downloadable and independently attestable. Both distributions emit a
+          # file literally named SBOM.cdx.json / MANIFEST.json, so disambiguate.
+          $metadata = @(
+            @{ Source = 'artifacts/portable/stage/SBOM.cdx.json'; Destination = "Preview3D-$version-portable-x64.sbom.cdx.json" },
+            @{ Source = 'artifacts/portable/stage/MANIFEST.json'; Destination = "Preview3D-$version-portable-x64.manifest.json" },
+            @{ Source = 'artifacts/installer/stage/SBOM.cdx.json'; Destination = "Preview3D-$version-x64-setup.sbom.cdx.json" },
+            @{ Source = 'artifacts/installer/stage/MANIFEST.json'; Destination = "Preview3D-$version-x64-setup.manifest.json" }
+          )
+          foreach ($entry in $metadata) {
+            if (-not (Test-Path -LiteralPath $entry.Source -PathType Leaf)) {
+              throw "Expected release metadata is missing: $($entry.Source)"
+            }
+            Copy-Item -LiteralPath $entry.Source -Destination (Join-Path $meta $entry.Destination) -Force
+          }
+
+          foreach ($checksum in @(
+            "artifacts/portable/Preview3D-$version-portable-x64.zip.sha256",
+            "artifacts/installer/Preview3D-$version-x64-setup.exe.sha256"
+          )) {
+            if (-not (Test-Path -LiteralPath $checksum -PathType Leaf)) {
+              throw "Expected checksum is missing: $checksum"
+            }
+            Copy-Item -LiteralPath $checksum -Destination (Join-Path $meta ([IO.Path]::GetFileName($checksum))) -Force
+          }
+
+          # One combined manifest-of-checksums over the published binaries and
+          # their metadata. This is the aggregation the certificate signs.
+          $sums = Join-Path $meta "Preview3D-$version-SHA256SUMS"
+          $entries = @(
+            "artifacts/portable/Preview3D-$version-portable-x64.zip",
+            "artifacts/installer/Preview3D-$version-x64-setup.exe"
+          ) + @(Get-ChildItem -LiteralPath $meta -File -Filter 'Preview3D-*' |
+            Where-Object { $_.Name -notlike '*-SHA256SUMS' } |
+            ForEach-Object { $_.FullName })
+          $lines = foreach ($file in $entries) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Cannot checksum a missing file: $file"
+            }
+            '{0}  {1}' -f (Get-Sha256 $file), [IO.Path]::GetFileName($file)
+          }
+          Set-Content -LiteralPath $sums -Value $lines -Encoding ASCII
+
+      - name: Sign release metadata
+        shell: pwsh
+        env:
+          SIGNTOOL_PATH: ${{ steps.tools.outputs.signtool }}
+          SIGNING_THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
+          TIMESTAMP_URL: https://timestamp.digicert.com
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_THUMBPRINT)) {
+            throw 'The signing certificate was not imported; refusing to publish unsigned metadata.'
+          }
+
+          $meta = Join-Path $env:GITHUB_WORKSPACE 'artifacts\release'
+          # Authenticode embeds signatures only in PE/CAB/MSI/script files, so a
+          # text checksum file gets a detached PKCS#7 (SPC indirect data)
+          # signature instead: `signtool verify /p7 <file>.p7` validates it. The
+          # `.p7` sidecars are published alongside the files they cover.
+          $p7Directory = Join-Path $env:RUNNER_TEMP 'preview3d-p7'
+          if (Test-Path -LiteralPath $p7Directory) {
+            Remove-Item -LiteralPath $p7Directory -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $p7Directory -Force | Out-Null
+
+          $signables = @(Get-ChildItem -LiteralPath $meta -File |
+            Where-Object { $_.Name -like '*.sha256' -or $_.Name -like '*-SHA256SUMS' })
+          if ($signables.Count -eq 0) {
+            throw 'No checksum files were found to sign.'
+          }
+
+          & $env:SIGNTOOL_PATH sign /sha1 $env:SIGNING_THUMBPRINT /fd SHA256 `
+            /tr $env:TIMESTAMP_URL /td SHA256 `
+            /p7 $p7Directory /p7co 1.3.6.1.4.1.311.2.1.4 `
+            @($signables | ForEach-Object { $_.FullName })
+          if ($LASTEXITCODE -ne 0) {
+            throw "Signing the release checksums failed with exit code $LASTEXITCODE."
+          }
+
+          foreach ($signature in @(Get-ChildItem -LiteralPath $p7Directory -Filter '*.p7' -File)) {
+            & $env:SIGNTOOL_PATH verify /p7 $signature.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "PKCS#7 verification failed for '$($signature.Name)'."
+            }
+            Copy-Item -LiteralPath $signature.FullName -Destination (Join-Path $meta $signature.Name) -Force
+          }
+
       - name: Remove signing certificate
         if: always()
         shell: pwsh
@@ -419,6 +575,18 @@ jobs:
             Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:SIGNING_THUMBPRINT" -Force -ErrorAction SilentlyContinue
           }
           Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'preview3d-release.pfx') -Force -ErrorAction SilentlyContinue
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: |
+            artifacts/portable/Preview3D-${{ steps.version.outputs.version }}-portable-x64.zip
+            artifacts/installer/Preview3D-${{ steps.version.outputs.version }}-x64-setup.exe
+            artifacts/release/Preview3D-${{ steps.version.outputs.version }}-portable-x64.sbom.cdx.json
+            artifacts/release/Preview3D-${{ steps.version.outputs.version }}-portable-x64.manifest.json
+            artifacts/release/Preview3D-${{ steps.version.outputs.version }}-x64-setup.sbom.cdx.json
+            artifacts/release/Preview3D-${{ steps.version.outputs.version }}-x64-setup.manifest.json
+            artifacts/release/Preview3D-${{ steps.version.outputs.version }}-SHA256SUMS
 
       - name: Publish GitHub release
         shell: pwsh
@@ -433,30 +601,62 @@ jobs:
             "artifacts/portable/Preview3D-$env:RELEASE_VERSION-portable-x64.zip.sha256",
             "artifacts/installer/Preview3D-$env:RELEASE_VERSION-x64-setup.exe",
             "artifacts/installer/Preview3D-$env:RELEASE_VERSION-x64-setup.exe.sha256"
-          )
+          ) + @(Get-ChildItem -LiteralPath 'artifacts\release' -File | ForEach-Object { $_.FullName })
           foreach ($asset in $assets) {
             if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
               throw "Expected release artifact is missing: $asset"
             }
           }
 
-          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          # Never overwrite a published release: the workflow is gated by the
+          # `release` environment's required reviewers, and a re-run of a
+          # published tag is refused rather than `--clobber`ed. A leftover draft
+          # (a previous failed attempt) is deleted and recreated so no
+          # `--clobber` is needed, then the draft is published at the end.
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:RELEASE_TAG @assets --clobber --repo $env:GITHUB_REPOSITORY
-          } else {
-            $arguments = @(
-              'release', 'create', $env:RELEASE_TAG,
-              '--verify-tag',
-              '--generate-notes',
-              '--title', "Preview 3D $env:RELEASE_VERSION",
-              '--repo', $env:GITHUB_REPOSITORY
-            )
-            if ($env:IS_PRERELEASE -eq 'true') {
-              $arguments += '--prerelease'
+            $existing = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft | ConvertFrom-Json
+            if (-not $existing.isDraft) {
+              throw "Release '$env:RELEASE_TAG' is already published; refusing to overwrite it. Delete it deliberately to re-release."
             }
-            $arguments += $assets
-            & gh @arguments
+            gh release delete $env:RELEASE_TAG --yes --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not remove the stale draft release '$env:RELEASE_TAG'."
+            }
           }
+
+          $arguments = @(
+            'release', 'create', $env:RELEASE_TAG,
+            '--draft',
+            '--verify-tag',
+            '--generate-notes',
+            '--title', "Preview 3D $env:RELEASE_VERSION",
+            '--repo', $env:GITHUB_REPOSITORY
+          )
+          if ($env:IS_PRERELEASE -eq 'true') {
+            $arguments += '--prerelease'
+          }
+          $arguments += $assets
+          & gh @arguments
           if ($LASTEXITCODE -ne 0) {
-            throw "GitHub release publishing failed with exit code $LASTEXITCODE."
+            throw "Creating the draft GitHub release failed with exit code $LASTEXITCODE."
+          }
+
+          gh release edit $env:RELEASE_TAG --draft=false --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            throw "Publishing the draft GitHub release failed with exit code $LASTEXITCODE."
+          }
+
+      # Final step: the ephemeral Packages config is needed through the restore
+      # (moving this cleanup after "Restore vcpkg dependencies" is what makes the
+      # durable feed usable at all — it used to be deleted first). `always()`
+      # removes it even when an earlier step failed. A tag release runs only
+      # trusted code, so the token is never exposed to PR-authored portfiles.
+      - name: Remove ephemeral NuGet credentials
+        if: always()
+        shell: pwsh
+        run: |
+          $configPath = Join-Path $env:RUNNER_TEMP 'preview3d-nuget.config'
+          if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            Remove-Item -LiteralPath $configPath -Force
           }

@@ -9,6 +9,31 @@
   -->
 
   <!--
+    /Qspectre is enabled only when the optional "MSVC Spectre-mitigated
+    libraries" component is installed. MSBuild raises MSB8040 when
+    SpectreMitigation is set without those libraries, and most workstations
+    (including this repository's CI image) do not install them, so enabling it
+    unconditionally would break the documented build. The detection runs here
+    rather than in Directory.Build.props because VC_LibraryPath_* is not
+    computed until Microsoft.Cpp.props has been imported.
+
+    Preview3DSpectreMitigationEnabled records the measured outcome so the
+    hand-off and tests can assert which mitigations a given machine produced.
+  -->
+  <PropertyGroup>
+    <Preview3DSpectreLibsPresent Condition="Exists('$(VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre)')">true</Preview3DSpectreLibsPresent>
+    <Preview3DSpectreLibsPresent Condition="'$(Preview3DSpectreLibsPresent)' == ''">false</Preview3DSpectreLibsPresent>
+    <Preview3DSpectreMitigationEnabled Condition="'$(Preview3DSpectreLibsPresent)' == 'true' or '$(SpectreMitigation)' == 'Spectre'">true</Preview3DSpectreMitigationEnabled>
+    <Preview3DSpectreMitigationEnabled Condition="'$(Preview3DSpectreMitigationEnabled)' == ''">false</Preview3DSpectreMitigationEnabled>
+    <SpectreMitigation Condition="'$(Preview3DSpectreLibsPresent)' == 'true' and ('$(SpectreMitigation)' == '' or '$(SpectreMitigation)' == 'false')">Spectre</SpectreMitigation>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <SpectreMitigation Condition="'$(Preview3DSpectreLibsPresent)' == 'true' and ('%(ClCompile.SpectreMitigation)' == '' or '%(ClCompile.SpectreMitigation)' == 'false')">Spectre</SpectreMitigation>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <!--
     Re-sync the vcpkg app-local DLLs in $(OutDir) with the ones for the
     configuration actually being built.
 

@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "O thread de renderização parou durante a inicialização.",
   "failure.graphicsRecovery.summary": "A recuperação gráfica falhou.",
   "cli.usage": "Uso: Preview3D.exe [caminho do modelo]\n Preview3D.exe --open <caminho do modelo>",
-  "startup.smartAppControl": "O Smart App Control está ativo neste PC e esta versão do Preview 3D não está assinada.\n\n",
   "warning.optionalFeatures": "Alguns recursos glTF opcionais não são suportados. Sua representação substituta é mostrada.",
   "warning.textures": "Algumas texturas não puderam ser carregadas. Texturas substitutas são mostradas.",
   "warning.missingAssets": "Alguns ativos referenciados não foram encontrados.",

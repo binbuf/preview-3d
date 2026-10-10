@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Renderöintisäie pysähtyi alustuksen aikana.",
   "failure.graphicsRecovery.summary": "Grafiikkapalautus epäonnistui.",
   "cli.usage": "Käyttö: Preview3D.exe [mallipolku]\n Preview3D.exe --open <mallipolku>",
-  "startup.smartAppControl": "Smart App Control on aktiivinen tässä PC:ssä, ja tämä 3D-esikatseluversio on allekirjoittamaton.\n\n",
   "warning.optionalFeatures": "Joitakin valinnaisia ​​glTF-ominaisuuksia ei tueta. Niiden varaesitys näytetään.",
   "warning.textures": "Joitakin tekstuureja ei voitu ladata. Varatekstuurit näytetään.",
   "warning.missingAssets": "Joitakin viitattuja sisältöjä ei löytynyt.",

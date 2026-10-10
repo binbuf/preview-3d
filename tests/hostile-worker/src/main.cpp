@@ -126,12 +126,19 @@ int main(int argc, char* argv[])
         return hostile_worker::RunUnboundedBatches();
     }
 
+    if (ArgEquals(argv[1], "--batches-buffered-flood")) {
+        return hostile_worker::RunBufferedBatchFlood();
+    }
+
     if (ArgEquals(argv[1], "--batches-write-before-ack")) {
         return hostile_worker::RunWriteBeforeAck();
     }
 
     if (ArgEquals(argv[1], "--batches-after-terminal")) {
         return hostile_worker::RunBatchAfterTerminal();
+    }
+    if (ArgEquals(argv[1], "--sidecar-stale-generation")) {
+        return hostile_worker::RunStaleSidecarGeneration();
     }
     if (ArgEquals(argv[1], "--usd-fallback-after-batch")) {
         return hostile_worker::RunUsdFallbackAfterBatch();

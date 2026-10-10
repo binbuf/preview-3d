@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "preview3d",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Preview3D dependency manifest. See .docs/design/10-delivery-plan.md (Gate 0/Gate 2): dependency versions are exact-pinned and restored from this manifest, never fetched unpinned at release time. The pinned baseline lives in vcpkg-configuration.json's default-registry, not here, to avoid the two disagreeing.",
   "dependencies": [
     "catch2",

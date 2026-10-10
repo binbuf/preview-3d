@@ -169,6 +169,13 @@ two-symbol export surface:
   path-free numeric events). `ComCore.cpp` runs the pipeline and the DIB
   conversion through `RunContained`. See
   [ADR-0018](adr/0018-provider-threading-containment-and-diagnostics.md).
+- SEC-06 (T06) adds `thumbnail-provider/ContainmentStage.h` +
+  `DiagnosticStage.h` and `RunContainedStage` in `Containment.cpp`: the
+  Windows-free per-adapter stage shim that lets an adapter's allocating
+  `Initialize`/`Parse`/`Enumerate*` body run under the same boundary and return
+  `ErrorCode::OutOfMemory` for a product-owned `std::bad_alloc` instead of
+  terminating at the frozen `noexcept` method. Every family adapter uses it. See
+  [ADR-0034](adr/0034-provider-adapter-stage-containment.md).
 
 ## Routed thumbnail pipeline (T13)
 

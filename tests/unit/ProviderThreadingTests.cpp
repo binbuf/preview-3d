@@ -65,6 +65,13 @@ ProviderOutcome SuccessCall(void*)
     return ProviderOutcome::Success;
 }
 
+// Clears the SEC-08 quarantine before and after a case, so an injected fault
+// does not leak process state into the next case in Tests.Unit.exe.
+struct QuarantineReset {
+    QuarantineReset() noexcept { ResetContainmentQuarantineForTest(); }
+    ~QuarantineReset() noexcept { ResetContainmentQuarantineForTest(); }
+};
+
 } // namespace
 
 TEST_CASE("an in-flight call keeps the module from unloading", "[provider][threading]")
@@ -144,6 +151,7 @@ TEST_CASE("an injected allocation failure maps to E_OUTOFMEMORY",
 TEST_CASE("a raised structured exception is contained as a decoder failure",
           "[provider][threading]")
 {
+    QuarantineReset reset;
     const ContainmentResult result = RunContained(&RaisedStructuredCall, nullptr);
 
     CHECK(result.outcome == ProviderOutcome::DecoderFailure);
@@ -156,6 +164,7 @@ TEST_CASE("a raised structured exception is contained as a decoder failure",
 
 TEST_CASE("a genuine access violation is contained", "[provider][threading]")
 {
+    QuarantineReset reset;
     const ContainmentResult result = RunContained(&GenuineFaultCall, nullptr);
 
     CHECK(result.outcome == ProviderOutcome::DecoderFailure);
@@ -174,6 +183,33 @@ TEST_CASE("stack overflow and debugger exceptions are not swallowed",
 
     CHECK(ShouldContainStructuredCode(EXCEPTION_ACCESS_VIOLATION));
     CHECK(ShouldContainStructuredCode(EXCEPTION_INT_DIVIDE_BY_ZERO));
+}
+
+TEST_CASE("a contained structured fault quarantines the process until reset",
+          "[provider][threading][quarantine]")
+{
+    QuarantineReset reset;
+    CHECK_FALSE(ContainmentQuarantined());
+    CHECK(ContainmentQuarantineCode() == 0u);
+
+    const ContainmentResult result = RunContained(&RaisedStructuredCall, nullptr);
+    CHECK(result.structuredException);
+    CHECK(ContainmentQuarantined());
+    CHECK(ContainmentQuarantineCode() ==
+          static_cast<std::uint32_t>(EXCEPTION_ACCESS_VIOLATION));
+
+    // The first fault wins; a later fault code does not overwrite it.
+    MarkContainmentQuarantined(
+        static_cast<std::uint32_t>(EXCEPTION_INT_DIVIDE_BY_ZERO));
+    CHECK(ContainmentQuarantineCode() ==
+          static_cast<std::uint32_t>(EXCEPTION_ACCESS_VIOLATION));
+
+    // A code the boundary refuses to swallow never reaches the quarantine.
+    CHECK_FALSE(ShouldContainStructuredCode(EXCEPTION_STACK_OVERFLOW));
+
+    ResetContainmentQuarantineForTest();
+    CHECK_FALSE(ContainmentQuarantined());
+    CHECK(ContainmentQuarantineCode() == 0u);
 }
 
 TEST_CASE("a returned call past the stop point is rejected after the fact",

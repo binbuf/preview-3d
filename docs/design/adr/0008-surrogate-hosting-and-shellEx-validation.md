@@ -29,4 +29,9 @@ at both scopes. The surrogate loads the provider DLL from the absolute path stor
   the payload cannot rely on the surrogate's DLL search path.
 - T44 verifies the installed handler loads in `DllHost.exe` (not `explorer.exe`) with no
   `DisableProcessIsolation`, using the same `IThumbnailCache`/module-identity method as T03.
+- The `InprocServer32` registration remains activatable in-process by any local process through
+  `CLSCTX_INPROC_SERVER` (or by loading the DLL directly). The `AppID`/`DllSurrogate` routing is
+  specific to Explorer's Shell thumbnail path, so the provider must stay safe when hosted in-process:
+  its safety rests on bounded parsing and deadline/limit enforcement, not on the surrogate being the
+  only host (ADR-0005).
 - Crash containment comes from this surrogate boundary; it is not a security boundary (ADR-0005).

@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "เธรดการแสดงผลหยุดระหว่างการเตรียมใช้งาน",
   "failure.graphicsRecovery.summary": "การกู้คืนกราฟิกล้มเหลว",
   "cli.usage": "การใช้งาน: Preview3D.exe [model-path]\n Preview3D.exe --open <model-path>",
-  "startup.smartAppControl": "การควบคุมแอปอัจฉริยะทำงานอยู่บนพีซีเครื่องนี้ และบิลด์ตัวอย่าง 3 มิตินี้ไม่ได้ลงนาม\n\n",
   "warning.optionalFeatures": "ไม่รองรับฟีเจอร์เสริม glTF บางอย่าง การแสดงทางเลือกของพวกเขาจะปรากฏขึ้น",
   "warning.textures": "ไม่สามารถโหลดพื้นผิวบางส่วนได้ พื้นผิวสำรองจะแสดงขึ้น",
   "warning.missingAssets": "ไม่พบเนื้อหาที่อ้างอิงบางรายการ",
