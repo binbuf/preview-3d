@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Återgivningstråden stoppades under initiering.",
   "failure.graphicsRecovery.summary": "Grafikåterställning misslyckades.",
   "cli.usage": "Användning: Preview3D.exe [modellsökväg]\n Preview3D.exe --öppna <modellsökväg>",
-  "startup.smartAppControl": "Smart App Control är aktiv på den här datorn, och denna Preview 3D-version är osignerad.\n\n",
   "warning.optionalFeatures": "Vissa valfria glTF-funktioner stöds inte. Deras reservrepresentation visas.",
   "warning.textures": "Vissa texturer kunde inte laddas. Reservstrukturer visas.",
   "warning.missingAssets": "Några refererade tillgångar kunde inte hittas.",

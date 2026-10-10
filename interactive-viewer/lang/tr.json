@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "İşleme iş parçacığı başlatma sırasında durduruldu.",
   "failure.graphicsRecovery.summary": "Grafik kurtarma başarısız oldu.",
   "cli.usage": "Kullanım: Preview3D.exe [model-yolu]\n Preview3D.exe --open <model-path>",
-  "startup.smartAppControl": "Akıllı Uygulama Kontrolü bu bilgisayarda etkin ve bu Önizleme 3D yapısı imzasız.\n\n",
   "warning.optionalFeatures": "Bazı isteğe bağlı glTF özellikleri desteklenmez. Bunların geri dönüş temsili gösterilmektedir.",
   "warning.textures": "Bazı dokular yüklenemedi. Geri dönüş dokuları gösterilir.",
   "warning.missingAssets": "Başvurulan öğelerden bazıları bulunamadı.",

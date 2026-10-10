@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "De renderthread is gestopt tijdens de initialisatie.",
   "failure.graphicsRecovery.summary": "Grafisch herstel mislukt.",
   "cli.usage": "Gebruik: Preview3D.exe [modelpad]\n Preview3D.exe --open <modelpad>",
-  "startup.smartAppControl": "Smart App Control is actief op deze pc en deze Preview 3D-build is niet ondertekend.\n\n",
   "warning.optionalFeatures": "Sommige optionele glTF-functies worden niet ondersteund. Hun fallback-weergave wordt getoond.",
   "warning.textures": "Sommige texturen konden niet worden geladen. Fallback-texturen worden weergegeven.",
   "warning.missingAssets": "Sommige items waarnaar wordt verwezen, kunnen niet worden gevonden.",

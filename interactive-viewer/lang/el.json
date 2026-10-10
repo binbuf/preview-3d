@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Το νήμα απόδοσης σταμάτησε κατά την προετοιμασία.",
   "failure.graphicsRecovery.summary": "Η ανάκτηση γραφικών απέτυχε.",
   "cli.usage": "Χρήση: Preview3D.exe [model-path]\n Preview3D.exe --άνοιγμα <model-path>",
-  "startup.smartAppControl": "Το Smart App Control είναι ενεργό σε αυτόν τον υπολογιστή και αυτή η έκδοση 3D προεπισκόπησης δεν είναι υπογεγραμμένη.\n\n",
   "warning.optionalFeatures": "Ορισμένες προαιρετικές δυνατότητες glTF δεν υποστηρίζονται. Εμφανίζεται η εναλλακτική τους αναπαράσταση.",
   "warning.textures": "Δεν ήταν δυνατή η φόρτωση ορισμένων υφών. Εμφανίζονται εναλλακτικές υφές.",
   "warning.missingAssets": "Δεν ήταν δυνατή η εύρεση ορισμένων στοιχείων που αναφέρονται.",

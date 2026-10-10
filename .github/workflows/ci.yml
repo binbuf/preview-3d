@@ -52,7 +52,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        configuration: [Debug, Release]
+        # cache_suffix separates the two configurations' vcpkg Actions caches.
+        # The durable Packages feed is warmed release-only, so the Debug half of
+        # the closure (packaging/triplets/ci-debug) has no other way to stay warm
+        # and would rebuild from source on every run if both configs shared one
+        # immutable cache key. Release keeps the bare key so a warm-up in
+        # dependencies.yml/release.yml still matches.
+        include:
+          - configuration: Debug
+            cache_suffix: debug-
+          - configuration: Release
+            cache_suffix: ''
 
     env:
       VCPKG_FEED_OWNER: ${{ github.repository_owner }}
@@ -83,8 +93,9 @@ jobs:
         continue-on-error: true
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
+          key: vcpkg-binary-${{ runner.os }}-${{ matrix.cache_suffix }}${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
           restore-keys: |
+            vcpkg-binary-${{ runner.os }}-${{ matrix.cache_suffix }}
             vcpkg-binary-${{ runner.os }}-
 
       - name: Locate build tools
@@ -196,6 +207,7 @@ jobs:
         env:
           VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
           VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
+          CONFIGURATION: ${{ matrix.configuration }}
         run: |
           function Show-Disk([string] $label) {
             Write-Host "--- disk after $label ---"
@@ -219,9 +231,21 @@ jobs:
             New-Item -ItemType Directory -Force -Path $path | Out-Null
           }
 
+          # This lane builds Debug and Release, so restore the configuration's
+          # half of the static closure: the scripts-pinned overlay triplets are
+          # single-configuration (Release uses packaging\triplets, Debug uses its
+          # ci-debug\ subfolder), unlike the stock debug+release triplet a local
+          # `vcpkg install` uses. A whole solution build links the installed
+          # half for its configuration, so the overlay must match the matrix.
+          $overlayTriplets = if ($env:CONFIGURATION -eq 'Debug') {
+            Join-Path $env:GITHUB_WORKSPACE 'packaging\triplets\ci-debug'
+          } else {
+            Join-Path $env:GITHUB_WORKSPACE 'packaging\triplets'
+          }
+
           $common = @(
             '--triplet', 'x64-windows-static-md',
-            "--overlay-triplets=$env:GITHUB_WORKSPACE\packaging\triplets",
+            "--overlay-triplets=$overlayTriplets",
             "--vcpkg-root=$env:VCPKG_ROOT",
             "--x-buildtrees-root=$buildtreesRoot",
             "--x-packages-root=$packagesRoot",
@@ -463,11 +487,64 @@ jobs:
           "vcpkg=$(Join-Path $vcpkgRoot 'vcpkg.exe')" >> $env:GITHUB_OUTPUT
           "vcpkg_root=$vcpkgRoot" >> $env:GITHUB_OUTPUT
 
+      - name: Restore vcpkg dependencies
+        # The STEP/STL/PLY fast-path targets compile only parser-core and take
+        # no vcpkg dependency, so they skip the root manifest (which carries
+        # OpenUSD) rather than spend the 120-minute budget rebuilding it.
+        if: matrix.target != 'STEP' && matrix.target != 'STL' && matrix.target != 'PLY'
+        shell: pwsh
+        env:
+          VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
+          VCPKG_ROOT: ${{ steps.tools.outputs.vcpkg_root }}
+        run: |
+          # The root manifest supplies the pinned parsers these targets compile
+          # against (fastgltf/draco/meshoptimizer/ktx/webp, zlib/lib3mf, ufbx).
+          # MSBuild's own manifest mode would install it on every invocation with
+          # the stock debug+release triplet; restore it once with the CI
+          # release-only overlay and tell MSBuild the tree is already present,
+          # exactly as the test lane and release.yml do.
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          $buildtreesRoot = Join-Path $env:VCPKG_SCRATCH 'buildtrees'
+          $packagesRoot = Join-Path $env:VCPKG_SCRATCH 'packages'
+          $downloadsRoot = Join-Path $env:VCPKG_SCRATCH 'downloads'
+          foreach ($path in @($buildtreesRoot, $packagesRoot, $downloadsRoot)) {
+            New-Item -ItemType Directory -Force -Path $path | Out-Null
+          }
+          $common = @(
+            '--triplet', 'x64-windows-static-md',
+            "--overlay-triplets=$env:GITHUB_WORKSPACE\packaging\triplets",
+            "--vcpkg-root=$env:VCPKG_ROOT",
+            "--x-buildtrees-root=$buildtreesRoot",
+            "--x-packages-root=$packagesRoot",
+            "--downloads-root=$downloadsRoot",
+            '--clean-buildtrees-after-build',
+            '--clean-packages-after-build',
+            '--x-wait-for-lock'
+          )
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows-static-md'
+          & $env:VCPKG_EXE install @common `
+            "--x-manifest-root=$env:GITHUB_WORKSPACE" `
+            "--x-install-root=$installRoot"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg root-manifest restore failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Register vcpkg MSBuild integration
+        shell: pwsh
+        env:
+          VCPKG_EXE: ${{ steps.tools.outputs.vcpkg }}
+        run: |
+          & $env:VCPKG_EXE integrate install
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg MSBuild integration failed with exit code $LASTEXITCODE."
+          }
+
       - name: Restore isolated provider STEP manifest
         # ProviderFuzz compiles the STEP adapter, which needs the OCCT static
         # closure from the isolated thumbnail-provider manifest. The root
-        # manifest is installed by MSBuild's manifest mode for every target; this
-        # second tree is not discoverable that way (ADR-0002/0047).
+        # manifest is restored above with the release overlay; this second tree
+        # is not discoverable by MSBuild's manifest mode and is installed here
+        # for the one target that compiles the STEP adapter (ADR-0002/0047).
         if: matrix.target == 'Provider'
         shell: pwsh
         env:
@@ -509,7 +586,7 @@ jobs:
           & $env:MSBUILD_PATH ${{ matrix.project }} `
             /p:Configuration=Release /p:Platform=x64 `
             "/p:SolutionDir=$env:GITHUB_WORKSPACE\\" `
-            "/p:VcpkgRoot=$env:VCPKG_ROOT" /m:1 /v:minimal
+            "/p:VcpkgRoot=$env:VCPKG_ROOT" /p:VcpkgManifestInstall=false /m:1 /v:minimal
           if ($LASTEXITCODE -ne 0) {
             throw "${{ matrix.target }} fuzz build failed with exit code $LASTEXITCODE."
           }

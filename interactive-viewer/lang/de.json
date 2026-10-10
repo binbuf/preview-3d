@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Der Render-Thread wurde während der Initialisierung angehalten.",
   "failure.graphicsRecovery.summary": "Die Wiederherstellung der Grafik ist fehlgeschlagen.",
   "cli.usage": "Verwendung: Preview3D.exe [Modellpfad]\n Preview3D.exe --open <Modellpfad>",
-  "startup.smartAppControl": "Smart App Control ist auf diesem PC aktiv und dieser Vorschau-3D-Build ist nicht signiert.\n\n",
   "warning.optionalFeatures": "Einige optionale glTF-Funktionen werden nicht unterstützt. Ihre Fallback-Darstellung wird angezeigt.",
   "warning.textures": "Einige Texturen konnten nicht geladen werden. Fallback-Texturen werden angezeigt.",
   "warning.missingAssets": "Einige referenzierte Assets konnten nicht gefunden werden.",

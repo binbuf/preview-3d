@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Atvaizdavimo gija sustojo inicijuojant.",
   "failure.graphicsRecovery.summary": "Grafikos atkūrimas nepavyko.",
   "cli.usage": "Naudojimas: Preview3D.exe [modelio kelias]\n Preview3D.exe --atidaryti <modelio kelias>",
-  "startup.smartAppControl": "Šiame kompiuteryje aktyvus išmaniųjų programų valdymas, o ši peržiūros 3D versija nepasirašyta.\n\n",
   "warning.optionalFeatures": "Kai kurios pasirenkamos glTF funkcijos nepalaikomos. Rodomas jų atsarginis vaizdas.",
   "warning.textures": "Kai kurių tekstūrų nepavyko įkelti. Rodomos atsarginės tekstūros.",
   "warning.missingAssets": "Kai kurių nurodytų išteklių nepavyko rasti.",

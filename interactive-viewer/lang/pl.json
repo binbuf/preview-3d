@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Wątek renderujący zatrzymał się podczas inicjalizacji.",
   "failure.graphicsRecovery.summary": "Odzyskiwanie grafiki nie powiodło się.",
   "cli.usage": "Użycie: Preview3D.exe [ścieżka-modelu]\n Preview3D.exe --open <ścieżka-modelu>",
-  "startup.smartAppControl": "Na tym komputerze jest aktywna funkcja Smart App Control, a wersja Preview 3D jest niepodpisana.\n\n",
   "warning.optionalFeatures": "Niektóre opcjonalne funkcje glTF nie są obsługiwane. Pokazano ich reprezentację zastępczą.",
   "warning.textures": "Nie udało się załadować niektórych tekstur. Wyświetlane są tekstury zastępcze.",
   "warning.missingAssets": "Nie udało się znaleźć niektórych zasobów odniesienia.",

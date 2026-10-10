@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Nit renderiranja zaustavljena je tijekom inicijalizacije.",
   "failure.graphicsRecovery.summary": "Oporavak grafike nije uspio.",
   "cli.usage": "Upotreba: Preview3D.exe [model-path]\n Preview3D.exe --open <model-path>",
-  "startup.smartAppControl": "Smart App Control aktivan je na ovom računalu, a ova verzija Preview 3D nije potpisana.\n\n",
   "warning.optionalFeatures": "Neke dodatne glTF značajke nisu podržane. Prikazan je njihov rezervni prikaz.",
   "warning.textures": "Neke se teksture nisu mogle učitati. Prikazane su rezervne teksture.",
   "warning.missingAssets": "Neka navedena sredstva nisu pronađena.",

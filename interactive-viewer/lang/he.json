@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "שרשור העיבוד נעצר במהלך האתחול.",
   "failure.graphicsRecovery.summary": "שחזור גרפיקה נכשל.",
   "cli.usage": "שימוש: Preview3D.exe [model-path]\n Preview3D.exe --פתח <model-path>",
-  "startup.smartAppControl": "בקרת אפליקציות חכמה פעילה במחשב זה, ובניית תלת-ממד מקדימה זו אינה חתומה.\n\n",
   "warning.optionalFeatures": "חלק מתכונות glTF אופציונליות אינן נתמכות. ייצוג החזרה שלהם מוצג.",
   "warning.textures": "לא ניתן היה לטעון חלק מהמרקמים. מוצגים טקסטורות סתירה.",
   "warning.missingAssets": "לא ניתן היה למצוא כמה נכסים שהוזכרו.",

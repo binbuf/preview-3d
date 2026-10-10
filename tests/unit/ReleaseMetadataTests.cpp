@@ -24,8 +24,20 @@ std::string Quote(const std::filesystem::path& path)
 
 TEST_CASE("release metadata gate passes and rejects drift", "[security][release-metadata]")
 {
-    const std::filesystem::path repository = std::filesystem::path(PREVIEW3D_REPO_ROOT);
-    const auto script = repository / "packaging" / "Test-ReleaseMetadata.ps1";
+    // PREVIEW3D_REPO_ROOT is defined from $(SolutionDir), which ends with a
+    // directory separator. A path whose final character is '\' inside a quoted
+    // Windows command line escapes the closing quote, so PowerShell would parse
+    // "...\preview-3d\" as an unterminated argument and reject the path with
+    // "Illegal characters in path". Strip the trailing separator before the
+    // argument is assembled.
+    std::string repository = PREVIEW3D_REPO_ROOT;
+    while (!repository.empty() && (repository.back() == '\\' || repository.back() == '/'))
+    {
+        repository.pop_back();
+    }
+
+    const std::filesystem::path repositoryPath(repository);
+    const auto script = repositoryPath / "packaging" / "Test-ReleaseMetadata.ps1";
     REQUIRE(std::filesystem::exists(script));
 
     // -SelfTest runs the real checks plus two negative cases: an installed
@@ -34,7 +46,7 @@ TEST_CASE("release metadata gate passes and rejects drift", "[security][release-
     // targets use, so the gate is proven on the shipping interpreter.
     const std::string command =
         "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File " + Quote(script) +
-        " -RepositoryRoot " + Quote(repository) + " -SelfTest";
+        " -RepositoryRoot " + Quote(repositoryPath) + " -SelfTest";
 
     const int result = std::system(command.c_str());
     INFO("command: " << command);
