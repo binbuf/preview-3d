@@ -91,19 +91,13 @@ jobs:
         # The reusable-workflow/manual-dispatch inputs narrow this list; a
         # normal pull_request or push has no inputs, so the fallback keeps the
         # full Debug + Release matrix. `release.yml` passes ["Release"].
+        #
+        # Do not express the extra per-configuration values (cache_suffix) as
+        # matrix `include:` entries: an include row that cannot merge into the
+        # narrowed list (because it sets `configuration: Debug`) creates a new
+        # combination, so a Release-only call would silently run Debug again.
+        # The cache key derives the suffix from `matrix.configuration` instead.
         configuration: ${{ fromJSON(inputs.configurations || '["Debug","Release"]') }}
-        # cache_suffix separates the two configurations' vcpkg Actions caches.
-        # Release restores the release-only overlay triplet, matching the
-        # durable Packages feed that dependencies.yml/release.yml warm, so it
-        # keeps the bare key. Debug restores the stock debug+release triplet
-        # (vcpkg ports are not debug-only-clean; see the restore step), whose
-        # ABI the Packages feed never contains, so it keeps its own immutable
-        # Actions cache warm instead.
-        include:
-          - configuration: Debug
-            cache_suffix: debug-
-          - configuration: Release
-            cache_suffix: ''
 
     env:
       VCPKG_FEED_OWNER: ${{ github.repository_owner }}
@@ -131,12 +125,20 @@ jobs:
         # Best-effort: the durable cache is the GitHub Packages NuGet feed. The
         # key matches dependencies.yml and release.yml so a warm-up there is
         # reused here.
+        #
+        # The `debug-` suffix separates the two configurations' vcpkg Actions
+        # caches. Release restores the release-only overlay triplet, matching the
+        # durable Packages feed that dependencies.yml/release.yml warm, so it
+        # keeps the bare key. Debug restores the stock debug+release triplet
+        # (vcpkg ports are not debug-only-clean; see the restore step), whose
+        # ABI the Packages feed never contains, so it keeps its own immutable
+        # Actions cache warm instead.
         continue-on-error: true
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
-          key: vcpkg-binary-${{ runner.os }}-${{ matrix.cache_suffix }}${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
+          key: vcpkg-binary-${{ runner.os }}-${{ matrix.configuration == 'Debug' && 'debug-' || '' }}${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'compatibility-host-step/vcpkg.json', 'compatibility-host-step/vcpkg-configuration.json', 'thumbnail-provider/step-occt/vcpkg.json', 'thumbnail-provider/step-occt/vcpkg-configuration.json', 'packaging/vcpkg-ports/**', 'packaging/triplets/**') }}
           restore-keys: |
-            vcpkg-binary-${{ runner.os }}-${{ matrix.cache_suffix }}
+            vcpkg-binary-${{ runner.os }}-${{ matrix.configuration == 'Debug' && 'debug-' || '' }}
             vcpkg-binary-${{ runner.os }}-
 
       - name: Locate build tools
