@@ -627,6 +627,14 @@ void Camera::Update(double deltaTime)
         }
     }
 
+    // Turntable auto-orbit (Orbit toolbar button). Apply after manual input so
+    // a drag still adds to the rotation, and skip while a Reset/Fit orientation
+    // glide owns the quaternion -- otherwise ApplyOrbitAngles would cancel it.
+    if (turntableSpeed != 0.0 && !orientationAnimating)
+    {
+        ApplyOrbitAngles(static_cast<float>(turntableSpeed * deltaTime), 0.0f);
+    }
+
     // Perspective <-> orthographic cross-fade. Blending the two projection
     // matrices per element reads as a short dolly-zoom instead of a hard cut.
     {
@@ -694,6 +702,7 @@ bool Camera::HasMotion() const
     if (inertiaX != 0.0 || inertiaY != 0.0) return true;
     if (panInertiaX != 0.0 || panInertiaY != 0.0) return true;
     if (pivotAnimating || orientationAnimating) return true;
+    if (turntableSpeed != 0.0) return true;
     if (distance != targetDistance) return true;
     if (projectionBlend != (projection == ProjectionMode::Orthographic ? 1.0 : 0.0)) return true;
     return false;

@@ -410,5 +410,12 @@
   "infopanel.unknown": "Neznámý",
   "infopanel.units": "Jednotky",
   "infopanel.metres": "metrů",
-  "infopanel.unspecified": "Nespecifikováno"
+  "infopanel.unspecified": "Nespecifikováno",
+  "tooltip.orbit": "Model oběžné dráhy (automatické otáčení)",
+  "chrome.orbitSpeed": "Rychlost oběžné dráhy",
+  "a11y.orbit": "Orbitální model",
+  "a11y.orbitDesc": "Průběžně otáčejte modelem; najeďte na rychlost",
+  "a11y.orbitSliderDesc": "Upravte rychlost automatického oběhu",
+  "hud.orbitOn": "Na oběžné dráze",
+  "hud.orbitOff": "Orbit pryč"
 }

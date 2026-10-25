@@ -410,5 +410,12 @@
   "infopanel.unknown": "مجهول",
   "infopanel.units": "الوحدات",
   "infopanel.metres": "متر",
-  "infopanel.unspecified": "غير محدد"
+  "infopanel.unspecified": "غير محدد",
+  "tooltip.orbit": "تدوير النموذج (تدوير تلقائي)",
+  "chrome.orbitSpeed": "سرعة التدوير",
+  "a11y.orbit": "تدوير النموذج",
+  "a11y.orbitDesc": "دوّر النموذج باستمرار؛ مرّر المؤشر للسرعة",
+  "a11y.orbitSliderDesc": "اضبط سرعة التدوير التلقائي",
+  "hud.orbitOn": "التدوير مفعّل",
+  "hud.orbitOff": "التدوير متوقف"
 }

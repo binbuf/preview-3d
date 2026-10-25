@@ -410,5 +410,12 @@
   "infopanel.unknown": "Necunoscut",
   "infopanel.units": "Unități",
   "infopanel.metres": "Contoare",
-  "infopanel.unspecified": "Nespecificat"
+  "infopanel.unspecified": "Nespecificat",
+  "tooltip.orbit": "Model de orbită (rotire automată)",
+  "chrome.orbitSpeed": "Viteza orbitei",
+  "a11y.orbit": "Modelul orbitei",
+  "a11y.orbitDesc": "Rotiți continuu modelul; plutește pentru viteză",
+  "a11y.orbitSliderDesc": "Reglați viteza de auto-orbita",
+  "hud.orbitOn": "Orbită pe",
+  "hud.orbitOff": "Orbită oprită"
 }

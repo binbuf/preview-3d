@@ -410,5 +410,12 @@
   "infopanel.unknown": "Nežinoma",
   "infopanel.units": "Vienetai",
   "infopanel.metres": "Metrai",
-  "infopanel.unspecified": "Nenurodyta"
+  "infopanel.unspecified": "Nenurodyta",
+  "tooltip.orbit": "Orbitos modelis (automatinis pasukimas)",
+  "chrome.orbitSpeed": "Orbitos greitis",
+  "a11y.orbit": "Orbitos modelis",
+  "a11y.orbitDesc": "Nuolat sukite modelį; užveskite pelės žymeklį dėl greičio",
+  "a11y.orbitSliderDesc": "Sureguliuokite automatinės orbitos greitį",
+  "hud.orbitOn": "Orbita įjungta",
+  "hud.orbitOff": "Orbita"
 }

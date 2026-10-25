@@ -410,5 +410,12 @@
   "infopanel.unknown": "Tuntematon",
   "infopanel.units": "Yksiköt",
   "infopanel.metres": "Metriä",
-  "infopanel.unspecified": "Määrittelemätön"
+  "infopanel.unspecified": "Määrittelemätön",
+  "tooltip.orbit": "Ratamalli (automaattinen kierto)",
+  "chrome.orbitSpeed": "Ratanopeus",
+  "a11y.orbit": "Orbit malli",
+  "a11y.orbitDesc": "Pyöritä mallia jatkuvasti; leijuu nopeuden saamiseksi",
+  "a11y.orbitSliderDesc": "Säädä automaattisen kiertoradan nopeutta",
+  "hud.orbitOn": "Rata päällä",
+  "hud.orbitOff": "Rata pois"
 }

@@ -410,5 +410,12 @@
   "infopanel.unknown": "Ismeretlen",
   "infopanel.units": "Egységek",
   "infopanel.metres": "Mérők",
-  "infopanel.unspecified": "Meghatározatlan"
+  "infopanel.unspecified": "Meghatározatlan",
+  "tooltip.orbit": "Pályamodell (automatikus forgatás)",
+  "chrome.orbitSpeed": "Keringési sebesség",
+  "a11y.orbit": "Orbit modell",
+  "a11y.orbitDesc": "Folyamatosan forgassa a modellt; lebeg a sebességért",
+  "a11y.orbitSliderDesc": "Állítsa be az automatikus keringési sebességet",
+  "hud.orbitOn": "Keringés be",
+  "hud.orbitOff": "Kerüljön el"
 }

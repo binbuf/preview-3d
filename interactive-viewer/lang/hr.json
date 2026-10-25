@@ -410,5 +410,12 @@
   "infopanel.unknown": "Nepoznato",
   "infopanel.units": "jedinice",
   "infopanel.metres": "Metri",
-  "infopanel.unspecified": "Neodređeno"
+  "infopanel.unspecified": "Neodređeno",
+  "tooltip.orbit": "Model orbite (automatsko zakretanje)",
+  "chrome.orbitSpeed": "Brzina orbite",
+  "a11y.orbit": "Model orbite",
+  "a11y.orbitDesc": "Kontinuirano rotirajte model; lebdite za brzinu",
+  "a11y.orbitSliderDesc": "Podesite brzinu auto-orbite",
+  "hud.orbitOn": "Orbita uključena",
+  "hud.orbitOff": "Orbita isključena"
 }

@@ -410,5 +410,12 @@
   "infopanel.unknown": "Αγνωστος",
   "infopanel.units": "Μονάδες",
   "infopanel.metres": "Μετρητές",
-  "infopanel.unspecified": "Απροσδιόριστος"
+  "infopanel.unspecified": "Απροσδιόριστος",
+  "tooltip.orbit": "Μοντέλο τροχιάς (αυτόματη περιστροφή)",
+  "chrome.orbitSpeed": "Ταχύτητα τροχιάς",
+  "a11y.orbit": "Μοντέλο τροχιάς",
+  "a11y.orbitDesc": "Περιστρέφετε συνεχώς το μοντέλο. τοποθετήστε το δείκτη του ποντικιού για ταχύτητα",
+  "a11y.orbitSliderDesc": "Ρυθμίστε την ταχύτητα αυτόματης τροχιάς",
+  "hud.orbitOn": "Σε τροχιά",
+  "hud.orbitOff": "Διακοπή τροχιάς"
 }

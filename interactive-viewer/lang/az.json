@@ -410,5 +410,12 @@
   "infopanel.unknown": "Naməlum",
   "infopanel.units": "Vahidlər",
   "infopanel.metres": "Metr",
-  "infopanel.unspecified": "Müəyyən edilməmiş"
+  "infopanel.unspecified": "Müəyyən edilməmiş",
+  "tooltip.orbit": "Orbit modeli (avtomatik dönmə)",
+  "chrome.orbitSpeed": "Orbit sürəti",
+  "a11y.orbit": "Orbit modeli",
+  "a11y.orbitDesc": "Modeli davamlı olaraq döndərin; sürət üçün sürüşdürün",
+  "a11y.orbitSliderDesc": "Avtomatik orbit sürətini tənzimləyin",
+  "hud.orbitOn": "Orbitdə",
+  "hud.orbitOff": "Orbitdən çıxın"
 }

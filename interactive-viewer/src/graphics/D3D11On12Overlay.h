@@ -129,6 +129,9 @@ private:
     static D2D1_RECT_F ToRectF(RECT rect);
     void DrawTitleBar(const OverlayInfo& overlay, const Chrome& chrome, float clientWidth, float scale);
     void DrawSpeedFlyout(const OverlayInfo& overlay, float scale);
+    void DrawSliderFlyout(bool open, const RECT& panelRect, const RECT& trackRect, float sliderT,
+        const std::wstring& title, const std::wstring& value, float scale);
+    void DrawOrbitFlyout(const OverlayInfo& overlay, float scale);
     void DrawToggleRow(const D2D1_RECT_F& rowRect, const D2D1_RECT_F& switchRect,
         const std::wstring& label, bool on, float scale);
     void DrawSettingsPanel(const OverlayInfo& overlay, float scale);

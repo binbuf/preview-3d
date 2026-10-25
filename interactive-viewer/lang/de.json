@@ -410,5 +410,12 @@
   "infopanel.unknown": "Unbekannt",
   "infopanel.units": "Einheiten",
   "infopanel.metres": "Meter",
-  "infopanel.unspecified": "Nicht spezifiziert"
+  "infopanel.unspecified": "Nicht spezifiziert",
+  "tooltip.orbit": "Orbitmodell (automatisch drehen)",
+  "chrome.orbitSpeed": "Umlaufgeschwindigkeit",
+  "a11y.orbit": "Orbit-Modell",
+  "a11y.orbitDesc": "Drehen Sie das Modell kontinuierlich; Schweben Sie für Geschwindigkeit",
+  "a11y.orbitSliderDesc": "Passen Sie die Auto-Orbit-Geschwindigkeit an",
+  "hud.orbitOn": "Orbit an",
+  "hud.orbitOff": "Orbit aus"
 }

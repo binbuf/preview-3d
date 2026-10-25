@@ -127,6 +127,14 @@ struct OverlayInfo
     RECT speedFlyoutTrackRect{};   // the draggable track within it
     float speedSliderT = 0.0f;     // 0..1 normalized thumb position
     std::wstring speedValueText;   // e.g. "×1.00"
+    // Orbit (turntable auto-rotate) state plus the speed flyout that appears
+    // while hovering the Orbit button with auto-orbit enabled.
+    bool orbitEnabled = false;
+    bool orbitFlyoutOpen = false;
+    RECT orbitFlyoutRect{};        // client px, valid only while orbitFlyoutOpen
+    RECT orbitFlyoutTrackRect{};
+    float orbitSliderT = 0.0f;
+    std::wstring orbitValueText;   // e.g. "30°/s"
     bool settingsPanelOpen = false;
     RECT settingsPanelRect{};        // client px, valid only while settingsPanelOpen
     RECT nativeOrientationRowRect{};
@@ -141,6 +149,7 @@ struct OverlayInfo
     // OverlayInfo snapshot each frame. See Localization.h.
     std::wstring statsPanelTitle;
     std::wstring speedFlyoutTitle;
+    std::wstring orbitFlyoutTitle;
     std::wstring nativeOrientationLabel;
     std::wstring hideCursorLabel;
     std::wstring languageLabel;
@@ -248,6 +257,7 @@ struct Camera
     double panInertiaY = 0.0;
     double lastViewportHeight = 0.0;
     double flySpeedScale = 1.0;
+    double turntableSpeed = 0.0;
     FlightInput input{};
     // Raw mouse-look deltas queued by WM_INPUT since the last Update(), so
     // look and WASD translation are integrated together on the same tick
@@ -289,6 +299,10 @@ struct Camera
     ProjectionMode Projection() const { return projection; }
     void SetFlySpeedScale(double scale);
     double FlySpeedScale() const { return flySpeedScale; }
+    // Continuous turntable auto-orbit, in radians per second about world up.
+    // Zero means off. The UI toggles this from the Orbit toolbar button.
+    void SetTurntableSpeed(double radiansPerSecond) { turntableSpeed = radiansPerSecond; }
+    double TurntableSpeed() const { return turntableSpeed; }
 
     DirectX::XMVECTOR Orientation() const;
     DirectX::XMVECTOR EyePosition() const;

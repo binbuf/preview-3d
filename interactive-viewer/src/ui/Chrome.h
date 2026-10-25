@@ -15,7 +15,7 @@
 // input. All rects are in client pixel coordinates.
 //
 // Layout, left to right: the navigation action buttons (Grid/Ground axis/Ground
-// direction/Snap/Speed/Fit/Reset/Share/Overflow), an empty drag strip, the centered filename, more
+// direction/Snap/Speed/Orbit/Fit/Reset/Share/Overflow), an empty drag strip, the centered filename, more
 // empty drag strip, then Open With and the system min/max/close.
 class Chrome
 {
@@ -29,6 +29,7 @@ public:
         GroundDirection,
         AxisSnap,
         Speed,
+        Orbit,
         Fit,
         Reset,
         Share,
@@ -78,6 +79,7 @@ private:
     ButtonState groundDirection_;
     ButtonState axisSnap_;
     ButtonState speed_;
+    ButtonState orbit_;
     ButtonState fit_;
     ButtonState reset_;
     ButtonState share_;

@@ -410,5 +410,12 @@
   "infopanel.unknown": "অজানা",
   "infopanel.units": "ইউনিট",
   "infopanel.metres": "মিটার",
-  "infopanel.unspecified": "অনির্দিষ্ট"
+  "infopanel.unspecified": "অনির্দিষ্ট",
+  "tooltip.orbit": "অরবিট মডেল (স্বয়ংক্রিয়ভাবে ঘোরানো)",
+  "chrome.orbitSpeed": "কক্ষপথ গতি",
+  "a11y.orbit": "কক্ষপথ মডেল",
+  "a11y.orbitDesc": "ক্রমাগত মডেল ঘোরানো; গতির জন্য হোভার করুন",
+  "a11y.orbitSliderDesc": "স্বয়ংক্রিয় কক্ষপথের গতি সামঞ্জস্য করুন",
+  "hud.orbitOn": "কক্ষপথ চালু",
+  "hud.orbitOff": "কক্ষপথ বন্ধ"
 }

@@ -410,5 +410,12 @@
   "infopanel.unknown": "未知",
   "infopanel.units": "單位",
   "infopanel.metres": "米",
-  "infopanel.unspecified": "未指定"
+  "infopanel.unspecified": "未指定",
+  "tooltip.orbit": "軌道模型（自動旋轉）",
+  "chrome.orbitSpeed": "軌道速度",
+  "a11y.orbit": "軌道模型",
+  "a11y.orbitDesc": "不斷旋轉模型；懸停以獲取速度",
+  "a11y.orbitSliderDesc": "調整自動軌道速度",
+  "hud.orbitOn": "軌道上",
+  "hud.orbitOff": "軌道關閉"
 }

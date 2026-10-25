@@ -410,5 +410,12 @@
   "infopanel.unknown": "Tidak dikenal",
   "infopanel.units": "Satuan",
   "infopanel.metres": "Meter",
-  "infopanel.unspecified": "Tidak ditentukan"
+  "infopanel.unspecified": "Tidak ditentukan",
+  "tooltip.orbit": "Model orbit (putar otomatis)",
+  "chrome.orbitSpeed": "Kecepatan orbit",
+  "a11y.orbit": "Model orbit",
+  "a11y.orbitDesc": "Putar model secara terus menerus; melayang untuk kecepatan",
+  "a11y.orbitSliderDesc": "Sesuaikan kecepatan orbit otomatis",
+  "hud.orbitOn": "Orbit aktif",
+  "hud.orbitOff": "Mengorbit"
 }

@@ -410,5 +410,12 @@
   "infopanel.unknown": "ناشناس",
   "infopanel.units": "واحدها",
   "infopanel.metres": "متر",
-  "infopanel.unspecified": "نامشخص"
+  "infopanel.unspecified": "نامشخص",
+  "tooltip.orbit": "مدل مدار (چرخش خودکار)",
+  "chrome.orbitSpeed": "سرعت مدار",
+  "a11y.orbit": "مدل مدار",
+  "a11y.orbitDesc": "به طور مداوم مدل را بچرخانید. برای سرعت شناور",
+  "a11y.orbitSliderDesc": "سرعت مدار خودکار را تنظیم کنید",
+  "hud.orbitOn": "مدار روشن است",
+  "hud.orbitOff": "مدار خاموش است"
 }

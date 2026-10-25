@@ -410,5 +410,12 @@
   "infopanel.unknown": "Không xác định",
   "infopanel.units": "Đơn vị",
   "infopanel.metres": "Mét",
-  "infopanel.unspecified": "Không xác định"
+  "infopanel.unspecified": "Không xác định",
+  "tooltip.orbit": "Mô hình quỹ đạo (tự động xoay)",
+  "chrome.orbitSpeed": "Tốc độ quỹ đạo",
+  "a11y.orbit": "Mô hình quỹ đạo",
+  "a11y.orbitDesc": "Xoay mô hình liên tục; di chuột để tăng tốc",
+  "a11y.orbitSliderDesc": "Điều chỉnh tốc độ quỹ đạo tự động",
+  "hud.orbitOn": "Bật quỹ đạo",
+  "hud.orbitOff": "Tắt quỹ đạo"
 }

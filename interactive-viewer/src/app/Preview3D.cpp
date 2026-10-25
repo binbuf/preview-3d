@@ -132,6 +132,12 @@ struct ViewerApp
     float infoPanelScrollOffset = 0.0f;   // logical px, clamped against content on wheel input
     bool speedFlyoutOpen = false;
     bool speedSliderDragging = false;
+    // Orbit (turntable auto-rotate): while enabled, hovering the Orbit toolbar
+    // button reveals a speed slider (see OrbitFlyoutRect / OrbitSpeedFlyoutVisible).
+    bool orbitEnabled = false;
+    double orbitSpeedDegreesPerSecond = 30.0;
+    bool orbitSpeedFlyoutHover = false;
+    bool orbitSpeedSliderDragging = false;
     bool zoomSliderDragging = false;
     bool infoButtonHover = false;
     bool infoButtonPressed = false;
@@ -806,6 +812,47 @@ void StopNavigation(ViewerApp& app)
     app.renderThread.LockCamera()->StopMotion();
 }
 
+// Turntable auto-orbit (Orbit toolbar button). Speed is stored in degrees per
+// second for the UI and handed to the camera in radians per second.
+constexpr double kOrbitSliderMax = 100.0;
+constexpr double kOrbitSpeedMinDegrees = 5.0;
+constexpr double kOrbitSpeedMaxDegrees = 180.0;
+constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
+
+void ApplyOrbitRate(ViewerApp& app)
+{
+    app.renderThread.LockCamera()->SetTurntableSpeed(
+        app.orbitEnabled ? app.orbitSpeedDegreesPerSecond * kDegreesToRadians : 0.0);
+}
+
+void SetOrbitEnabled(ViewerApp& app, bool enabled)
+{
+    app.orbitEnabled = enabled;
+    if (!enabled)
+    {
+        app.orbitSpeedFlyoutHover = false;
+        app.orbitSpeedSliderDragging = false;
+    }
+    ApplyOrbitRate(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void AdjustOrbitSpeed(ViewerApp& app, double deltaDegrees)
+{
+    app.orbitSpeedDegreesPerSecond = std::clamp(app.orbitSpeedDegreesPerSecond + deltaDegrees,
+        kOrbitSpeedMinDegrees, kOrbitSpeedMaxDegrees);
+    ApplyOrbitRate(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void ToggleOrbit(ViewerApp& app)
+{
+    if (!CanNavigate(app)) return;
+    SetOrbitEnabled(app, !app.orbitEnabled);
+    ShowModeHud(app, app.orbitEnabled ? Loc("hud.orbitOn", L"Orbit on")
+                                      : Loc("hud.orbitOff", L"Orbit off"));
+}
+
 bool SetNavigationKey(ViewerApp& app, WPARAM key, bool pressed)
 {
     bool* state = nullptr;
@@ -868,6 +915,68 @@ RECT SpeedFlyoutTrackRect(const ViewerApp& app)
     const int trackCenterY = panel.top + Scale(app, 44);
     const int halfHeight = Scale(app, 8);
     return RECT{ panel.left + marginX, trackCenterY - halfHeight, panel.right - marginX, trackCenterY + halfHeight };
+}
+
+// Orbit speed flyout: same geometry as the Speed flyout, anchored under the
+// Orbit button. Only visible while auto-orbit is on and the pointer is over
+// the button or the panel itself.
+RECT OrbitFlyoutRect(const ViewerApp& app)
+{
+    const RECT orbitButton = app.chrome.Button(Chrome::Part::Orbit).rect;
+    const int width = Scale(app, 220);
+    const int height = Scale(app, 64);
+    const int gap = Scale(app, 6);
+    RECT client{};
+    GetClientRect(app.window, &client);
+    int left = std::min(orbitButton.left, client.right - Scale(app, 8) - width);
+    left = std::max(left, Scale(app, 8));
+    const int top = app.toolbarHeight + gap;
+    return RECT{ left, top, left + width, top + height };
+}
+
+RECT OrbitFlyoutTrackRect(const ViewerApp& app)
+{
+    const RECT panel = OrbitFlyoutRect(app);
+    const int marginX = Scale(app, 16);
+    const int trackCenterY = panel.top + Scale(app, 44);
+    const int halfHeight = Scale(app, 8);
+    return RECT{ panel.left + marginX, trackCenterY - halfHeight, panel.right - marginX, trackCenterY + halfHeight };
+}
+
+// Extends the panel up to the title bar so moving the pointer from the Orbit
+// button down into the slider never crosses a hover gap that would close it.
+RECT OrbitFlyoutHoverRect(const ViewerApp& app)
+{
+    RECT rect = OrbitFlyoutRect(app);
+    rect.top = std::min<LONG>(rect.top, app.toolbarHeight);
+    return rect;
+}
+
+bool OrbitSpeedFlyoutVisible(const ViewerApp& app)
+{
+    if (!app.orbitEnabled || !HasNavigableModel(app)) return false;
+    return app.chrome.hover == Chrome::Part::Orbit || app.orbitSpeedFlyoutHover || app.orbitSpeedSliderDragging;
+}
+
+int OrbitSliderPositionFor(double degreesPerSecond)
+{
+    const double t = (std::clamp(degreesPerSecond, kOrbitSpeedMinDegrees, kOrbitSpeedMaxDegrees)
+        - kOrbitSpeedMinDegrees) / (kOrbitSpeedMaxDegrees - kOrbitSpeedMinDegrees);
+    return static_cast<int>(std::lround(t * kOrbitSliderMax));
+}
+
+double OrbitSpeedForSliderPosition(int position)
+{
+    const double t = std::clamp(static_cast<double>(position), 0.0, kOrbitSliderMax) / kOrbitSliderMax;
+    return kOrbitSpeedMinDegrees + t * (kOrbitSpeedMaxDegrees - kOrbitSpeedMinDegrees);
+}
+
+void SetOrbitSpeedFromFlyoutX(ViewerApp& app, int clientX)
+{
+    const RECT track = OrbitFlyoutTrackRect(app);
+    const float t = std::clamp(static_cast<float>(clientX - track.left) / static_cast<float>(std::max(1L, track.right - track.left)), 0.0f, 1.0f);
+    app.orbitSpeedDegreesPerSecond = OrbitSpeedForSliderPosition(static_cast<int>(std::lround(t * kOrbitSliderMax)));
+    ApplyOrbitRate(app);
 }
 
 // Settings popup panel/row/switch geometry, shared by drawing (BuildOverlayInfo)
@@ -1349,7 +1458,7 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     // never appears over something the user is actively using.
     if (app.chrome.pressed != Chrome::Part::None || app.infoButtonPressed || app.infoPanelCloseButtonPressed ||
         app.fullscreenButtonPressed || app.speedSliderDragging || app.zoomSliderDragging ||
-        app.lightingButtonPressed>=0 ||
+        app.lightingButtonPressed>=0 || app.orbitSpeedSliderDragging || OrbitSpeedFlyoutVisible(app) ||
         app.speedFlyoutOpen || app.settingsPanelOpen)
     {
         return {};
@@ -1379,6 +1488,7 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
         { Chrome::Part::Grid, "tooltip.grid", L"Toggle ground grid" },
         { Chrome::Part::AxisSnap, "tooltip.axisSnap", L"Snap truck to axis" },
         { Chrome::Part::Speed, "tooltip.speed", L"Flight speed" },
+        { Chrome::Part::Orbit, "tooltip.orbit", L"Orbit model (auto-rotate)" },
         { Chrome::Part::Fit, "tooltip.fit", L"Frame model in view" },
         { Chrome::Part::Reset, "tooltip.reset", L"Reset view" },
         { Chrome::Part::Share, "tooltip.share", L"Share" },
@@ -1777,6 +1887,7 @@ void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring&
     app.errorStage = stage;
     app.errorPhase = phase;
     StopNavigation(app);
+    SetOrbitEnabled(app, false);
     EndPointer(app);
     UpdateButtonAvailability(app);
     LayoutControls(app);
@@ -1853,6 +1964,7 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     app.renderDurationText.clear();
     app.renderThread.NotifyLoadingStarted(app.generation);
     StopNavigation(app);
+    SetOrbitEnabled(app, false);
     EndPointer(app);
     app.failedPath.clear();
     app.errorSummary.clear();
@@ -2419,6 +2531,7 @@ void HandleChromeAction(ViewerApp& app, Chrome::Part part)
     case Chrome::Part::GroundDirection: HandleCommand(app, ID_VIEW_GROUND_DIRECTION); break;
     case Chrome::Part::AxisSnap: HandleCommand(app, ID_VIEW_AXIS_SNAP); break;
     case Chrome::Part::Speed: ToggleSpeedFlyout(app); break;
+    case Chrome::Part::Orbit: ToggleOrbit(app); break;
     case Chrome::Part::Fit: HandleCommand(app, ID_VIEW_FIT); break;
     case Chrome::Part::Reset: HandleCommand(app, ID_VIEW_RESET); break;
     case Chrome::Part::Share: DoShare(app); break;
@@ -2463,6 +2576,7 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     }
     case Control::AxisSnap: chrome(Chrome::Part::AxisSnap, Loc("a11y.axisSnap", L"Axis snap"), Loc("a11y.axisSnapDesc", L"Snap truck movement to the nearest world axis")); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.axisSnapEnabled; break;
     case Control::Speed: chrome(Chrome::Part::Speed, Loc("chrome.travelSpeed", L"Travel speed"), Loc("a11y.speedDesc", L"Open the flight-speed control")); break;
+    case Control::Orbit: chrome(Chrome::Part::Orbit, Loc("a11y.orbit", L"Orbit model"), Loc("a11y.orbitDesc", L"Continuously rotate the model; hover for speed")); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.orbitEnabled; break;
     case Control::Fit: chrome(Chrome::Part::Fit, Loc("a11y.fit", L"Fit selection or model")); break;
     case Control::Reset: chrome(Chrome::Part::Reset, Loc("a11y.reset", L"Reset view")); break;
     case Control::Share: chrome(Chrome::Part::Share, Loc("a11y.share", L"Share")); break;
@@ -2533,6 +2647,12 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.name=Loc("chrome.travelSpeed", L"Travel speed"); info.description=Loc("a11y.speedSliderDesc", L"Adjust flight speed"); info.rect=SpeedFlyoutTrackRect(app);
         info.visible=app.speedFlyoutOpen; info.role=ROLE_SYSTEM_SLIDER;
         auto camera=app.renderThread.LockCamera(); info.value=LocFormat("a11y.times", L"times {0}", { FormatMultiplier(camera->FlySpeedScale()) }); break;
+    }
+    case Control::OrbitSlider:
+    {
+        info.name=Loc("chrome.orbitSpeed", L"Orbit speed"); info.description=Loc("a11y.orbitSliderDesc", L"Adjust the auto-orbit speed");
+        info.rect=OrbitFlyoutTrackRect(app); info.visible=OrbitSpeedFlyoutVisible(app); info.role=ROLE_SYSTEM_SLIDER;
+        info.value=std::to_wstring(static_cast<int>(std::lround(app.orbitSpeedDegreesPerSecond)))+L"\u00B0/s"; break;
     }
     case Control::NativeOrientation:
         info.name=Loc("settings.nativeOrientation", L"Show model in its original orientation"); info.rect=SettingsToggleRowRect(app);
@@ -2622,6 +2742,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::GroundDirection: HandleCommand(app,ID_VIEW_GROUND_DIRECTION); break;
     case Control::AxisSnap: HandleCommand(app,ID_VIEW_AXIS_SNAP); break;
     case Control::Speed: ToggleSpeedFlyout(app); break;
+    case Control::Orbit: ToggleOrbit(app); break;
     case Control::Fit: HandleCommand(app,ID_VIEW_FIT); break;
     case Control::Reset: HandleCommand(app,ID_VIEW_RESET); break;
     case Control::Share: DoShare(app); break;
@@ -2690,6 +2811,16 @@ bool HandleAccessibleKey(ViewerApp& app, WPARAM key)
         InvalidateRect(app.window,nullptr,FALSE); return true;
     }
     if (app.keyboardControl==Control::SpeedSlider) { AdjustFlySpeed(app,static_cast<float>(direction)); return true; }
+    if (app.keyboardControl==Control::OrbitSlider)
+    {
+        AdjustOrbitSpeed(app,direction*5.0); return true;
+    }
+    if (app.keyboardControl==Control::Orbit && app.orbitEnabled)
+    {
+        // The slider is hover-only; while the Orbit button itself has keyboard
+        // focus, arrows still let a keyboard user tune the speed.
+        AdjustOrbitSpeed(app,direction*5.0); return true;
+    }
     if (app.keyboardControl==Control::DirectionalLightAngle)
     {
         app.directionalLightAngle=std::clamp(app.directionalLightAngle+direction/36.0f,0.0f,1.0f);
@@ -2886,11 +3017,21 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.speedSliderT = static_cast<float>(SpeedSliderPositionFor(app.renderThread.LockCamera()->FlySpeedScale())) / kSpeedSliderMax;
         overlay.speedValueText = L"×" + FormatMultiplier(app.renderThread.LockCamera()->FlySpeedScale());
     }
+    overlay.orbitEnabled = app.orbitEnabled;
+    overlay.orbitFlyoutOpen = OrbitSpeedFlyoutVisible(app);
+    if (overlay.orbitFlyoutOpen)
+    {
+        overlay.orbitFlyoutRect = OrbitFlyoutRect(app);
+        overlay.orbitFlyoutTrackRect = OrbitFlyoutTrackRect(app);
+        overlay.orbitSliderT = static_cast<float>(OrbitSliderPositionFor(app.orbitSpeedDegreesPerSecond)) / static_cast<float>(kOrbitSliderMax);
+        overlay.orbitValueText = std::to_wstring(static_cast<int>(std::lround(app.orbitSpeedDegreesPerSecond))) + L"\u00B0/s";
+    }
     overlay.settingsPanelOpen = app.settingsPanelOpen;
     overlay.showNativeOrientation = app.showNativeOrientation;
     overlay.hideCursorWhileDragging = app.hideCursorWhileDragging;
     overlay.statsPanelTitle = Loc("info.statsShading", L"Stats & Shading");
     overlay.speedFlyoutTitle = Loc("chrome.travelSpeed", L"Travel speed");
+    overlay.orbitFlyoutTitle = Loc("chrome.orbitSpeed", L"Orbit speed");
     overlay.nativeOrientationLabel = Loc("settings.nativeOrientation", L"Show model in its original orientation");
     overlay.hideCursorLabel = Loc("settings.hideCursor", L"Hide cursor while dragging");
     overlay.languageLabel = Loc("settings.language", L"Language");
@@ -3518,7 +3659,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 return TRUE;
             }
             if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover
-                || app->warningButtonHover || app->lightingButtonHover>=0)
+                || app->warningButtonHover || app->lightingButtonHover>=0 || app->orbitSpeedFlyoutHover)
             {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
@@ -3547,11 +3688,30 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             app->lightingButtonHover = -1;
             InvalidateRect(window, nullptr, FALSE);
         }
+        app->orbitSpeedFlyoutHover = false;
         UpdateTooltipTracking(*app);
         return 0;
     case WM_LBUTTONDOWN:
     {
         const POINT downPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (OrbitSpeedFlyoutVisible(*app))
+        {
+            RECT hitTrack = OrbitFlyoutTrackRect(*app);
+            InflateRect(&hitTrack, 0, Scale(*app, 8));
+            if (PtInRect(&hitTrack, downPoint))
+            {
+                SetCapture(window);
+                app->orbitSpeedSliderDragging = true;
+                SetOrbitSpeedFromFlyoutX(*app, downPoint.x);
+                InvalidateRect(window, nullptr, FALSE);
+                UpdateTooltipTracking(*app);
+                return 0;
+            }
+            // Consume clicks on the panel body so it never reaches the
+            // viewport behind it and starts an orbit drag.
+            const RECT panel = OrbitFlyoutRect(*app);
+            if (PtInRect(&panel, downPoint)) return 0;
+        }
         if (app->speedFlyoutOpen)
         {
             const RECT track = SpeedFlyoutTrackRect(*app);
@@ -3774,6 +3934,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         }
+        if (app->orbitSpeedSliderDragging)
+        {
+            if (GetCapture() == window) SetOrbitSpeedFromFlyoutX(*app, movePoint.x);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
         if (app->zoomSliderDragging)
         {
             if (GetCapture() == window) SetZoomFromTrackX(*app, movePoint.x);
@@ -3785,6 +3951,21 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             || app->warningButtonPressed || app->lightingButtonPressed>=0) return 0;
         if (app->pointerMode == PointerMode::None)
         {
+            // Orbit speed flyout: shown while hovering the Orbit button, and
+            // kept open while the pointer moves down into the panel itself.
+            RECT orbitHoverRect = OrbitFlyoutHoverRect(*app);
+            const bool overOrbitFlyout = app->orbitEnabled && HasNavigableModel(*app)
+                && PtInRect(&orbitHoverRect, movePoint) != FALSE;
+            if (overOrbitFlyout != app->orbitSpeedFlyoutHover)
+            {
+                app->orbitSpeedFlyoutHover = overOrbitFlyout;
+                if (overOrbitFlyout)
+                {
+                    TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, window, 0 };
+                    TrackMouseEvent(&track);
+                }
+                InvalidateRect(window, nullptr, FALSE);
+            }
             const RECT panelCloseButton = InfoPanelCloseButtonRect(*app);
             const bool overPanelClose = app->infoPanelVisible && PtInRect(&panelCloseButton, movePoint) != FALSE;
             if (overPanelClose != app->infoPanelCloseButtonHover)
@@ -3808,6 +3989,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 if (effective != app->chrome.hover)
                 {
                     app->chrome.hover = effective;
+                    // The two flyouts share the same column below the title
+                    // bar; don't let the hover-only Orbit slider cover an
+                    // explicitly opened Travel speed panel.
+                    if (effective == Chrome::Part::Orbit && app->speedFlyoutOpen)
+                        app->speedFlyoutOpen = false;
                     if (effective != Chrome::Part::None)
                     {
                         TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, window, 0 };
@@ -3954,6 +4140,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (app->speedSliderDragging)
         {
             app->speedSliderDragging = false;
+            if (GetCapture() == window) ReleaseCapture();
+            UpdateTooltipTracking(*app);
+            return 0;
+        }
+        if (app->orbitSpeedSliderDragging)
+        {
+            app->orbitSpeedSliderDragging = false;
             if (GetCapture() == window) ReleaseCapture();
             UpdateTooltipTracking(*app);
             return 0;
@@ -4145,6 +4338,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         EndPointer(*app);
         if (app->speedFlyoutOpen) { app->speedFlyoutOpen = false; InvalidateRect(window, nullptr, FALSE); }
         if (app->settingsPanelOpen) { app->settingsPanelOpen = false; InvalidateRect(window, nullptr, FALSE); }
+        app->orbitSpeedFlyoutHover = false;
+        app->orbitSpeedSliderDragging = false;
         return 0;
     case WM_CONTEXTMENU:
         return 0;

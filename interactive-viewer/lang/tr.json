@@ -410,5 +410,12 @@
   "infopanel.unknown": "Bilinmiyor",
   "infopanel.units": "Birimler",
   "infopanel.metres": "Metre",
-  "infopanel.unspecified": "belirtilmemiş"
+  "infopanel.unspecified": "belirtilmemiş",
+  "tooltip.orbit": "Yörünge modeli (otomatik döndürme)",
+  "chrome.orbitSpeed": "Yörünge hızı",
+  "a11y.orbit": "Yörünge modeli",
+  "a11y.orbitDesc": "Modeli sürekli olarak döndürün; hız için üzerine gelin",
+  "a11y.orbitSliderDesc": "Otomatik yörünge hızını ayarlayın",
+  "hud.orbitOn": "Yörünge açık",
+  "hud.orbitOff": "Yörünge kapalı"
 }

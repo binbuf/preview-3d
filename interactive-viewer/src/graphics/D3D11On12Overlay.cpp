@@ -22,6 +22,7 @@ enum class OverlayIconKind
     GroundDirectionNegative,
     AxisSnap,
     Speed,
+    Orbit,
     Fit,
     Reset,
     Share,
@@ -251,6 +252,40 @@ void DrawIcon(ID2D1RenderTarget* target, ID2D1SolidColorBrush* brush,
             D2D1::Point2F(cx + std::cos(needleAngle) * radius * 0.8f, baseY + std::sin(needleAngle) * radius * 0.8f),
             brush, stroke);
         target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, baseY), Scale(1.3f, scale), Scale(1.3f, scale)), brush);
+        break;
+    }
+    case OverlayIconKind::Orbit:
+    {
+        // Auto-orbit: a circular arrow around a small diamond "model", so it
+        // reads as rotation about the subject rather than the Reset refresh
+        // glyph or the wireframe globe.
+        const float radius = Scale(7.0f, scale);
+        constexpr int segments = 14;
+        constexpr float startAngle = -XM_PIDIV2 + 0.5f;
+        constexpr float sweep = XM_2PI * 0.72f;
+        D2D1_POINT_2F previous{};
+        D2D1_POINT_2F tip{};
+        float tipAngle = 0.0f;
+        for (int i = 0; i <= segments; ++i)
+        {
+            const float t = static_cast<float>(i) / segments;
+            const float angle = startAngle + t * sweep;
+            const D2D1_POINT_2F point{ cx + std::cos(angle) * radius, cy + std::sin(angle) * radius };
+            if (i > 0) target->DrawLine(previous, point, brush, stroke);
+            previous = point;
+            tip = point;
+            tipAngle = angle;
+        }
+        const float head = Scale(3.0f, scale);
+        target->DrawLine(tip, D2D1::Point2F(tip.x + std::cos(tipAngle + 2.5f) * head,
+            tip.y + std::sin(tipAngle + 2.5f) * head), brush, stroke);
+        target->DrawLine(tip, D2D1::Point2F(tip.x + std::cos(tipAngle - 2.5f) * head,
+            tip.y + std::sin(tipAngle - 2.5f) * head), brush, stroke);
+        const float half = Scale(2.7f, scale);
+        target->DrawLine(D2D1::Point2F(cx, cy - half), D2D1::Point2F(cx + half, cy), brush, stroke);
+        target->DrawLine(D2D1::Point2F(cx + half, cy), D2D1::Point2F(cx, cy + half), brush, stroke);
+        target->DrawLine(D2D1::Point2F(cx, cy + half), D2D1::Point2F(cx - half, cy), brush, stroke);
+        target->DrawLine(D2D1::Point2F(cx - half, cy), D2D1::Point2F(cx, cy - half), brush, stroke);
         break;
     }
     case OverlayIconKind::Fit:
@@ -1079,6 +1114,7 @@ void D3D11On12Overlay::DrawTitleBar(const OverlayInfo& overlay, const Chrome& ch
         overlay.groundAxisInverted);
     drawActionButton(Chrome::Part::AxisSnap, OverlayIconKind::AxisSnap, overlay.axisSnapEnabled);
     drawActionButton(Chrome::Part::Speed, OverlayIconKind::Speed, false);
+    drawActionButton(Chrome::Part::Orbit, OverlayIconKind::Orbit, overlay.orbitEnabled);
     drawActionButton(Chrome::Part::Fit, OverlayIconKind::Fit, false);
     drawActionButton(Chrome::Part::Reset, OverlayIconKind::Reset, false);
     drawActionButton(Chrome::Part::Share, OverlayIconKind::Share, false);
@@ -1130,34 +1166,47 @@ void D3D11On12Overlay::DrawTitleBar(const OverlayInfo& overlay, const Chrome& ch
 }
 
 // Photos-style "drop-down under the button with a slider and a number
-// value" for travel speed — a small floating panel below the Speed
-// button, drawn on top of the viewport. The app owns the panel/track
-// rects and drag math (Preview3D.cpp); this only draws them.
-void D3D11On12Overlay::DrawSpeedFlyout(const OverlayInfo& overlay, float scale)
+// value" — a small floating panel below a toolbar button, drawn on top of the
+// viewport. The app owns the panel/track rects and drag math (Preview3D.cpp);
+// this only draws them. Shared by Travel speed and Orbit speed.
+void D3D11On12Overlay::DrawSliderFlyout(bool open, const RECT& panelRect, const RECT& trackRect, float sliderT,
+    const std::wstring& title, const std::wstring& value, float scale)
 {
-    if (!overlay.speedFlyoutOpen) return;
-    const D2D1_RECT_F panel = ToRectF(overlay.speedFlyoutRect);
+    if (!open) return;
+    const D2D1_RECT_F panel = ToRectF(panelRect);
     SetBrush(D2D1::ColorF(0x242426, 0.98f));
     d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(panel, Scale(10, scale), Scale(10, scale)), overlayBrush.Get());
     SetBrush(D2D1::ColorF(0x3A3A3C));
     d2dContext_->DrawRoundedRectangle(D2D1::RoundedRect(panel, Scale(10, scale), Scale(10, scale)), overlayBrush.Get(), 1.0f);
 
-    DrawText(overlay.speedFlyoutTitle, smallFormat.Get(),
+    DrawText(title, smallFormat.Get(),
         D2D1::RectF(panel.left + Scale(16, scale), panel.top + Scale(8, scale), panel.right - Scale(16, scale), panel.top + Scale(26, scale)),
         D2D1::ColorF(0xA1A1A6));
-    DrawText(overlay.speedValueText, smallFormat.Get(),
+    DrawText(value, smallFormat.Get(),
         D2D1::RectF(panel.left + Scale(16, scale), panel.top + Scale(8, scale), panel.right - Scale(16, scale), panel.top + Scale(26, scale)),
         D2D1::ColorF(0xF5F5F7), DWRITE_TEXT_ALIGNMENT_TRAILING);
 
-    const D2D1_RECT_F track = ToRectF(overlay.speedFlyoutTrackRect);
+    const D2D1_RECT_F track = ToRectF(trackRect);
     const float trackY = (track.top + track.bottom) * 0.5f;
     SetBrush(D2D1::ColorF(0x48484C));
     d2dContext_->DrawLine(D2D1::Point2F(track.left, trackY), D2D1::Point2F(track.right, trackY), overlayBrush.Get(), Scale(3, scale));
-    const float thumbX = track.left + (track.right - track.left) * std::clamp(overlay.speedSliderT, 0.0f, 1.0f);
+    const float thumbX = track.left + (track.right - track.left) * std::clamp(sliderT, 0.0f, 1.0f);
     SetBrush(D2D1::ColorF(0x0A84FF));
     d2dContext_->DrawLine(D2D1::Point2F(track.left, trackY), D2D1::Point2F(thumbX, trackY), overlayBrush.Get(), Scale(3, scale));
     SetBrush(D2D1::ColorF(0xF5F5F7));
     d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(thumbX, trackY), Scale(7, scale), Scale(7, scale)), overlayBrush.Get());
+}
+
+void D3D11On12Overlay::DrawSpeedFlyout(const OverlayInfo& overlay, float scale)
+{
+    DrawSliderFlyout(overlay.speedFlyoutOpen, overlay.speedFlyoutRect, overlay.speedFlyoutTrackRect,
+        overlay.speedSliderT, overlay.speedFlyoutTitle, overlay.speedValueText, scale);
+}
+
+void D3D11On12Overlay::DrawOrbitFlyout(const OverlayInfo& overlay, float scale)
+{
+    DrawSliderFlyout(overlay.orbitFlyoutOpen, overlay.orbitFlyoutRect, overlay.orbitFlyoutTrackRect,
+        overlay.orbitSliderT, overlay.orbitFlyoutTitle, overlay.orbitValueText, scale);
 }
 
 // Reusable "label + switch" row: a leading text label and a trailing
@@ -1409,6 +1458,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
         DrawGizmo(orientation, gizmo, overlay, scale);
     }
     DrawSpeedFlyout(overlay, scale);
+    DrawOrbitFlyout(overlay, scale);
     DrawSettingsPanel(overlay, scale);
     DrawTooltip(overlay, clientWidth, scale);
     if (overlay.keyboardFocusVisible)

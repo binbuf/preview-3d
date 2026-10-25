@@ -410,5 +410,12 @@
   "infopanel.unknown": "ไม่ทราบ",
   "infopanel.units": "หน่วย",
   "infopanel.metres": "เมตร",
-  "infopanel.unspecified": "ไม่ระบุ"
+  "infopanel.unspecified": "ไม่ระบุ",
+  "tooltip.orbit": "แบบจำลองวงโคจร (หมุนอัตโนมัติ)",
+  "chrome.orbitSpeed": "ความเร็ววงโคจร",
+  "a11y.orbit": "แบบจำลองวงโคจร",
+  "a11y.orbitDesc": "หมุนโมเดลอย่างต่อเนื่อง โฮเวอร์เพื่อดูความเร็ว",
+  "a11y.orbitSliderDesc": "ปรับความเร็ววงโคจรอัตโนมัติ",
+  "hud.orbitOn": "วงโคจรบน",
+  "hud.orbitOff": "ปิดวงโคจร"
 }

@@ -410,5 +410,12 @@
   "infopanel.unknown": "अज्ञात",
   "infopanel.units": "इकाइयों",
   "infopanel.metres": "एम-eters",
-  "infopanel.unspecified": "अनिर्दिष्ट"
+  "infopanel.unspecified": "अनिर्दिष्ट",
+  "tooltip.orbit": "कक्षा मॉडल (स्वचालित-घुमाएँ)",
+  "chrome.orbitSpeed": "कक्षा की गति",
+  "a11y.orbit": "कक्षा मॉडल",
+  "a11y.orbitDesc": "मॉडल को लगातार घुमाएँ; गति के लिए होवर करें",
+  "a11y.orbitSliderDesc": "ऑटो-ऑर्बिट गति को समायोजित करें",
+  "hud.orbitOn": "कक्षा चालू",
+  "hud.orbitOff": "कक्षा बंद"
 }

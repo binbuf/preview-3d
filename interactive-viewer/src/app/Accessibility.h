@@ -58,6 +58,10 @@ enum class Control
     Wireframe,
     // Appended after Wireframe so its numeric runtime ID stays stable.
     DirectionalLightElevation,
+    // Appended after DirectionalLightElevation so earlier numeric runtime IDs
+    // stay stable.
+    Orbit,
+    OrbitSlider,
     Count,
 };
 

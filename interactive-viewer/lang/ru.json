@@ -410,5 +410,12 @@
   "infopanel.unknown": "Неизвестный",
   "infopanel.units": "Единицы",
   "infopanel.metres": "Метры",
-  "infopanel.unspecified": "Не указано"
+  "infopanel.unspecified": "Не указано",
+  "tooltip.orbit": "Модель орбиты (автоповорот)",
+  "chrome.orbitSpeed": "Скорость орбиты",
+  "a11y.orbit": "Модель орбиты",
+  "a11y.orbitDesc": "Постоянно вращайте модель; парить ради скорости",
+  "a11y.orbitSliderDesc": "Отрегулируйте скорость автоорбиты",
+  "hud.orbitOn": "Орбита на",
+  "hud.orbitOff": "Орбита выключена"
 }

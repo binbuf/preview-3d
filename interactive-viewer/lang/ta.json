@@ -410,5 +410,12 @@
   "infopanel.unknown": "தெரியவில்லை",
   "infopanel.units": "அலகுகள்",
   "infopanel.metres": "மீட்டர்கள்",
-  "infopanel.unspecified": "குறிப்பிடப்படாதது"
+  "infopanel.unspecified": "குறிப்பிடப்படாதது",
+  "tooltip.orbit": "சுற்றுப்பாதை மாதிரி (தானாகச் சுழலும்)",
+  "chrome.orbitSpeed": "சுற்றுப்பாதை வேகம்",
+  "a11y.orbit": "சுற்றுப்பாதை மாதிரி",
+  "a11y.orbitDesc": "மாதிரியை தொடர்ந்து சுழற்றவும்; வேகத்திற்கு வட்டமிடுங்கள்",
+  "a11y.orbitSliderDesc": "தானியங்கு சுற்றுப்பாதை வேகத்தை சரிசெய்யவும்",
+  "hud.orbitOn": "சுற்றுப்பாதையில்",
+  "hud.orbitOff": "ஆர்பிட் ஆஃப்"
 }

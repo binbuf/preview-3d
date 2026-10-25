@@ -410,5 +410,12 @@
   "infopanel.unknown": "Okänd",
   "infopanel.units": "Enheter",
   "infopanel.metres": "Meter",
-  "infopanel.unspecified": "Ospecificerad"
+  "infopanel.unspecified": "Ospecificerad",
+  "tooltip.orbit": "Orbit modell (autorotera)",
+  "chrome.orbitSpeed": "Omloppshastighet",
+  "a11y.orbit": "Orbit modell",
+  "a11y.orbitDesc": "Rotera modellen kontinuerligt; sväva för hastighet",
+  "a11y.orbitSliderDesc": "Justera den automatiska omloppshastigheten",
+  "hud.orbitOn": "Bana på",
+  "hud.orbitOff": "Bana av"
 }

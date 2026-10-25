@@ -410,5 +410,12 @@
   "infopanel.unknown": "نەزانراو",
   "infopanel.units": "یەکەکان",
   "infopanel.metres": "مەتر",
-  "infopanel.unspecified": "دیاری نەکراوە"
+  "infopanel.unspecified": "دیاری نەکراوە",
+  "tooltip.orbit": "مۆدێلی خولگە (ئۆتۆماتیکی سوڕانەوە)",
+  "chrome.orbitSpeed": "خێرایی خولگە",
+  "a11y.orbit": "مۆدێلی خولگە",
+  "a11y.orbitDesc": "بەردەوام مۆدێلەکە بسووڕێنە؛ بۆ خێرایی پەنجە بنێ",
+  "a11y.orbitSliderDesc": "خێرایی خولگەی ئۆتۆماتیکی ڕێکبخە",
+  "hud.orbitOn": "خولگە لەسەر",
+  "hud.orbitOff": "خولگە کوژاوەتەوە"
 }

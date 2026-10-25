@@ -410,5 +410,12 @@
   "infopanel.unknown": "未知",
   "infopanel.units": "単位",
   "infopanel.metres": "メートル",
-  "infopanel.unspecified": "不特定"
+  "infopanel.unspecified": "不特定",
+  "tooltip.orbit": "軌道モデル（自動回転）",
+  "chrome.orbitSpeed": "軌道速度",
+  "a11y.orbit": "軌道モデル",
+  "a11y.orbitDesc": "モデルを継続的に回転させます。スピードを上げるためにホバリングする",
+  "a11y.orbitSliderDesc": "自動周回速度を調整する",
+  "hud.orbitOn": "オービットオン",
+  "hud.orbitOff": "オービットオフ"
 }

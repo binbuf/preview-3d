@@ -410,5 +410,12 @@
   "infopanel.unknown": "לֹא יְדוּעַ",
   "infopanel.units": "יחידות",
   "infopanel.metres": "מטרים",
-  "infopanel.unspecified": "לא מצוין"
+  "infopanel.unspecified": "לא מצוין",
+  "tooltip.orbit": "דגם מסלול (סיבוב אוטומטי)",
+  "chrome.orbitSpeed": "מהירות מסלול",
+  "a11y.orbit": "דגם מסלול",
+  "a11y.orbitDesc": "סובב ברציפות את הדגם; לרחף למהירות",
+  "a11y.orbitSliderDesc": "התאם את מהירות המסלול האוטומטי",
+  "hud.orbitOn": "מסלול על",
+  "hud.orbitOff": "מסלול כבוי"
 }

@@ -410,5 +410,12 @@
   "infopanel.unknown": "알려지지 않은",
   "infopanel.units": "단위",
   "infopanel.metres": "미터",
-  "infopanel.unspecified": "지정되지 않음"
+  "infopanel.unspecified": "지정되지 않음",
+  "tooltip.orbit": "궤도 모델(자동 회전)",
+  "chrome.orbitSpeed": "궤도 속도",
+  "a11y.orbit": "궤도 모델",
+  "a11y.orbitDesc": "모델을 지속적으로 회전합니다. 속도를 위해 호버링",
+  "a11y.orbitSliderDesc": "자동 궤도 속도 조정",
+  "hud.orbitOn": "궤도 켜기",
+  "hud.orbitOff": "궤도 꺼짐"
 }

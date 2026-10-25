@@ -410,5 +410,12 @@
   "infopanel.unknown": "Onbekend",
   "infopanel.units": "Eenheden",
   "infopanel.metres": "Meters",
-  "infopanel.unspecified": "Niet gespecificeerd"
+  "infopanel.unspecified": "Niet gespecificeerd",
+  "tooltip.orbit": "Baanmodel (automatisch roteren)",
+  "chrome.orbitSpeed": "Baansnelheid",
+  "a11y.orbit": "Baanmodel",
+  "a11y.orbitDesc": "Roteer het model continu; zweef voor snelheid",
+  "a11y.orbitSliderDesc": "Pas de automatische baansnelheid aan",
+  "hud.orbitOn": "Baan aan",
+  "hud.orbitOff": "Draai weg"
 }
