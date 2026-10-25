@@ -242,7 +242,8 @@ surrogate death is the documented allowed failure (see "End-to-end soak").
 SEC-17/T25 completes the lane. `ProviderFuzz` joins the `fuzz-smoke` matrix, and
 that target's runner restores the isolated `thumbnail-provider/step-occt`
 manifest it links (ADR-0002); `fuzz-smoke` now runs on every `pull_request`/`push`
-and in the `release.yml` gate instead of only the nightly schedule. The surrogate
+and on a manual `CI` dispatch instead of only the nightly schedule (the tag gate
+does not repeat it — see ADR-0042). The surrogate
 soak classifies hostile input rather than treating any failure as an anonymous
 crash: a contained access violation is recorded as a quarantine
 failure-with-reason (exit nonzero), a stack-overflow/`__fastfail` surrogate death
@@ -352,12 +353,16 @@ The `CI` workflow (`.github/workflows/ci.yml`; ADR-0042) is a **mandatory merge
 gate**: it enforces the per-change Debug/Release build and the unit,
 import-isolation and provider-host suites on every pull request and push to
 `main`, and a branch-protection rule must require both matrix checks before
-merge; `Release` will not package until the same gate passes. The `[graphics]` unit cases are excluded on the headless runner. The
-bounded libFuzzer smoke (`.github/workflows/ci.yml` job `fuzz-smoke`) is part of
-that required gate as of SEC-17/T25: it runs on every pull request and push, and
-`Release` waits for it. Lint/static analysis, the headless adapter
-corpus, and package-manifest validation remain manual per-change skills on top of
-the gate (release packaging already restores and validates the manifests).
+merge. `Release` calls the same workflow with a Release-only matrix and fuzz
+disabled and will not package until it passes; the tagged commit has already
+carried the full matrix on `main`, and a manual `CI` dispatch can re-run it
+against a candidate or tag. The `[graphics]` unit cases are excluded on the
+headless runner. The bounded libFuzzer smoke (`.github/workflows/ci.yml` job
+`fuzz-smoke`) is part of that required merge gate as of SEC-17/T25: it runs on
+every pull request, every push, and a manual dispatch. Lint/static analysis, the
+headless adapter corpus, and package-manifest validation remain manual
+per-change skills on top of the gate (release packaging already restores and
+validates the manifests).
 
 The `Release` workflow (`.github/workflows/release.yml`; ADR-0043) now fails
 closed when its signing secrets are absent — an unsigned artifact is a local

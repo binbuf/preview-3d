@@ -22,12 +22,23 @@ concurrency:
 
 jobs:
   # Fail closed: the package job cannot start until the reusable test gate
-  # (Debug and Release builds plus the unit, import-isolation, and provider-host
-  # suites) has passed on this tag. A red test therefore stops the release
-  # before any signed artifact is produced. See .github/workflows/ci.yml.
+  # (Release build plus the unit, import-isolation, and provider-host suites)
+  # has passed on this tag. A red test therefore stops the release before any
+  # signed artifact is produced. See .github/workflows/ci.yml.
+  #
+  # The tag gate deliberately runs the Release configuration only and disables
+  # the seven-runner fuzz matrix. A tag normally points at a commit that already
+  # ran the full Debug + Release + fuzz lane on main (branch protection requires
+  # those checks), and rebuilding all of it at tag time only lengthens the
+  # release. The Release build and all three suites still run against the exact
+  # tagged source. To re-run the full matrix on a release candidate, dispatch
+  # the CI workflow on the candidate ref manually.
   gate:
     name: Test gate
     uses: ./.github/workflows/ci.yml
+    with:
+      configurations: '["Release"]'
+      fuzz: false
 
   release:
     name: Build, package, and release

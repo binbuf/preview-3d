@@ -25,12 +25,21 @@ lane had to reuse the pinned vcpkg restore/cache pattern rather than invent one.
   (root, STEP, provider STEP) restored before the build. The build passes
   `VcpkgManifestInstall=false`, matching `release.yml`.
 - Gate the release with a reusable-workflow call: `release.yml` job `gate` uses
-  `./.github/workflows/ci.yml`, and the `release` job declares `needs: gate`, so a
-  red test fails closed before packaging.
+  `./.github/workflows/ci.yml` with `configurations: '["Release"]'` and
+  `fuzz: false`, and the `release` job declares `needs: gate`, so a red test
+  fails closed before packaging.
 - Keep a bounded libFuzzer smoke as a job. It started as an opt-in/nightly
   `StepFuzz`/`ThreeMfFuzz` job; SEC-15/16/16b extended it and SEC-17/T25
   promoted it into the required gate (ADR-0052), so it now runs on every
-  `pull_request`/`push` and in `release.yml`.
+  `pull_request`/`push` and on a manual dispatch. The run body is
+  `tests/fuzz/Invoke-FuzzSmoke.ps1`.
+- Do not repeat the Debug build or the fuzz matrix on a tag. A release tag
+  normally points at a commit that already passed the full matrix on `main`, so
+  the tag gate runs only the Release build and the three suites against the
+  exact tagged source. This keeps the signed-release gate from paying for
+  duplicated evidence while still failing closed on the configuration that is
+  actually packaged. `workflow_dispatch` on `ci.yml` can re-run the full matrix
+  against a release candidate or tag when a maintainer wants that evidence.
 - Exclude `[graphics]` unit cases: they require a real D3D12 device the hosted
   runner does not have. This is the same filter as the harness verify command.
 
@@ -43,9 +52,12 @@ same job); a single-config lane (the design promises Debug *and* Release).
 - A maintainer must set branch protection to require the `CI` checks
   (`Build and test (Debug)`, `Build and test (Release)`) on `main`; repository
   code cannot do this. GitHub settings are out of band per the task hand-off.
+  The tag gate reports only `Build and test (Release)` and no `fuzz-smoke`
+  checks; that is intentional, and the full matrix remains the merge gate.
 - Cold restores are still bounded by the 360-minute job limit; warm runs rely on
   the GitHub Packages feed and the Actions cache being populated by
-  `dependencies.yml`/`release.yml`.
+  `dependencies.yml`/`release.yml`. Removing the Debug and fuzz lanes from the
+  tag path does not change the cold-restore risk in the Release lane itself.
 - The lane assumes `windows-2025` accepts AppContainer/Job child processes and
   has the `v145` toolset; this is the same image the release workflow already
   uses. If a suite proves environment-sensitive on the runner, fix or scope it

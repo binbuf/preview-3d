@@ -65,8 +65,11 @@ request and every push to `main`: it builds the solution in Debug and Release
 x64, then runs `Tests.Unit.exe "~[graphics]"`, `Tests.ImportIsolation.exe`, and
 `Tests.ProviderHost.exe`, failing on any nonzero exit. The `[graphics]` cases
 are excluded because the hosted runner has no GPU; run them locally when a change
-touches rendering. The `Release` workflow calls the same gate and will not
-package until it passes. See `docs/design/adr/0042-ci-test-gate.md`.
+touches rendering. The `Release` workflow reuses the same workflow as a
+Release-only gate (no Debug build and no fuzz matrix) and will not package until
+it passes; the tagged commit has already carried the full matrix on `main`. To
+re-run the full gate against a release candidate or tag, dispatch `CI` from the
+Actions tab with the default inputs. See `docs/design/adr/0042-ci-test-gate.md`.
 
 - **Fixture and app-smoke lanes:** [tests/fixtures/README.md](tests/fixtures/README.md).
   App smoke needs an interactive desktop (not a locked, minimized, or occluded
@@ -74,7 +77,10 @@ package until it passes. See `docs/design/adr/0042-ci-test-gate.md`.
 - **Fuzz targets:** [tests/fuzz/README.md](tests/fuzz/README.md). These are
   explicitly built sanitizer targets, not part of the shipping solution. A
   bounded smoke is part of the required `CI` gate as of SEC-17/T25: it runs on
-  every pull request and push (and the `Release` workflow waits for it).
+  every pull request, every push, and a manual `CI` dispatch. The tag gate does
+  not repeat it, because the tagged commit already ran it on `main`; dispatch
+  `CI` on the tag to re-run it. The smoke body is
+  [tests/fuzz/Invoke-FuzzSmoke.ps1](tests/fuzz/Invoke-FuzzSmoke.ps1).
 - **Performance qualification:** `tests/performance/qualify.py` with the options
   and limits in [.docs/TSK-302_VERIFICATION.md](.docs/TSK-302_VERIFICATION.md).
 

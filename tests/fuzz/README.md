@@ -1,5 +1,11 @@
 # No-GPU format fuzz targets
 
+`tests/fuzz/Invoke-FuzzSmoke.ps1` wraps a seed-preparation script and the
+bounded libFuzzer run for one target. The `CI` workflow's `fuzz-smoke` matrix
+calls it; invoke it locally with the same `-Target`, `-Executable`,
+`-PrepareScript`, `-Seeds`, and optional `-Timeout` arguments to reproduce a CI
+smoke.
+
 ## STEP
 
 `StepFuzz` is an explicitly built sanitizer target for the bounded static
