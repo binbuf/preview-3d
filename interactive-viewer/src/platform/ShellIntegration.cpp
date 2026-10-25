@@ -1,8 +1,10 @@
 #include "framework.h"
 #include "ShellIntegration.h"
 #include "OpenWithCache.h"
+#include "SafeFileOps.h"
 
 #include <shlobj.h>
+#include <span>
 #include <shobjidl.h>
 #include <wrl/client.h>
 
@@ -177,17 +179,8 @@ void SaveCache(const open_with::CacheState& state)
     if (!open_with::EncodeCache(state, bytes)) return;
     std::wstring finalPath;
     if (!CachePath(finalPath)) return;
-    const std::wstring tempPath = finalPath + L".tmp";
-    HANDLE file = CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return;
-    DWORD written = 0;
-    const BOOL ok = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
-    FlushFileBuffers(file);
-    CloseHandle(file);
-    if (!ok || written != bytes.size() ||
-        !MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-        DeleteFileW(tempPath.c_str());
+    std::wstring error;
+    preview3d::safeio::WriteFileAtomically(finalPath, std::as_bytes(std::span(bytes)), true, error);
 }
 
 ComPtr<IDataObject> CreateFileDataObject(const std::wstring& path)

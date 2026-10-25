@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "موضوع رندر در طول مقداردهی اولیه متوقف شد.",
   "failure.graphicsRecovery.summary": "بازیابی گرافیک انجام نشد.",
   "cli.usage": "استفاده: Preview3D.exe [model-path]\n Preview3D.exe --باز کردن <model-path>",
-  "startup.smartAppControl": "Smart App Control در این رایانه شخصی فعال است و این ساخت پیش نمایش سه بعدی بدون امضا است.\n\n",
   "warning.optionalFeatures": "برخی از ویژگی های اختیاری glTF پشتیبانی نمی شوند. بازنمایی مجدد آنها نشان داده شده است.",
   "warning.textures": "برخی از بافت ها بارگیری نشدند. بافت های بازگشتی نشان داده شده است.",
   "warning.missingAssets": "برخی از دارایی های ارجاع شده یافت نشد.",

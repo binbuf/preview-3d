@@ -21,24 +21,13 @@
 // This header/free source pair is PCH/COM-free so Tests.Unit.exe compiles the
 // same code.
 
+#include "DiagnosticStage.h"
 #include "ProviderErrors.h"
 
 #include <cstddef>
 #include <cstdint>
 
 namespace preview3d::provider {
-
-// Which bounded stage produced the event. Values are stable for log parsing.
-enum class DiagnosticStage : std::uint32_t {
-    Stream = 0,
-    AdapterInitialize = 1,
-    Parse = 2,
-    Materials = 3,
-    Geometry = 4,
-    Render = 5,
-    Bitmap = 6,
-    Unload = 7,
-};
 
 // A path-redacted diagnostic event: numeric/enum fields only.
 struct DiagnosticEvent {
@@ -49,6 +38,7 @@ struct DiagnosticEvent {
     bool cppException = false;       // a C++ exception was translated
     bool structuredException = false;// a structured exception was translated
     std::uint32_t structuredCode = 0;// SEH code when structuredException
+    bool quarantined = false;        // SEC-08 policy transition (set or refused)
 };
 
 namespace Diagnostics {

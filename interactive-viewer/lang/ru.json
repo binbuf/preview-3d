@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Поток рендеринга остановился во время инициализации.",
   "failure.graphicsRecovery.summary": "Восстановление графики не удалось.",
   "cli.usage": "Использование: Preview3D.exe [путь-модели]\n Preview3D.exe --open <путь-модели>",
-  "startup.smartAppControl": "Smart App Control активен на этом компьютере, и эта сборка Preview 3D не подписана.\n\n",
   "warning.optionalFeatures": "Некоторые дополнительные функции glTF не поддерживаются. Показано их резервное представление.",
   "warning.textures": "Некоторые текстуры не удалось загрузить. Показаны резервные текстуры.",
   "warning.missingAssets": "Не удалось найти некоторые указанные активы.",

@@ -3,27 +3,10 @@ Preview3D third-party notices
 
 This distribution contains components restored from the vcpkg baseline recorded
 in SBOM.cdx.json and MANIFEST.json. The complete upstream notices/license texts
-installed by those pinned ports are preserved in licenses\:
+installed by those pinned ports are preserved in licenses\; the index below is
+generated from the installed dependency closure at packaging time:
 
-  basisu.txt       Basis Universal transcoder code used by KTX-Software
-  bzip2.txt        bzip2 compression library used by libzip
-  draco.txt        Google Draco
-  fastgltf.txt     fastgltf
-  ktx.txt          Khronos KTX-Software
-  lib3mf.txt       lib3mf 3MF reader and bundled dependency notices
-  libwebp.txt      WebP codec and libsharpyuv
-  libzip.txt       libzip archive reader used by lib3mf
-  meshoptimizer.txt meshoptimizer
-  opencascade.txt   Open CASCADE Technology (OCCT) CAD kernel used by the
-                    isolated STEP host and, statically linked, by the Explorer
-                    thumbnail provider's constrained STEP adapter
-  openusd.txt       Pixar OpenUSD
-  simdjson.txt     simdjson
-  tbb.txt          Intel oneAPI Threading Building Blocks
-  tinyusdz.txt     TinyUSDZ and its enabled vendored reader/render-data code
-  ufbx.txt         ufbx FBX and OBJ/MTL loader
-  zlib.txt         zlib compression library used by the worker and libzip
-  zstd.txt         Zstandard
+@LICENSE_LIST@
 
 The installed distribution also contains Preview3DThumbnailProvider.dll, the
 Explorer thumbnail provider. Its upstream parser/decoder/codec and constrained

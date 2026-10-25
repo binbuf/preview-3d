@@ -17,6 +17,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "AllocationLedger.h"
+#include "Containment.h"
 #include "Deadline.h"
 #include "FamilyRouting.h"
 #include "ProviderErrors.h"
@@ -448,6 +449,38 @@ TEST_CASE("bad pointers, an expired deadline and a full ledger fail closed",
               ProviderOutcome::LimitExceeded);
         CHECK(RasterIsEmpty(out));
     }
+}
+
+TEST_CASE("a quarantined process refuses a new request before any adapter runs",
+          "[provider][pipeline][quarantine]")
+{
+    // SEC-08: after a contained structured fault the pipeline must refuse new
+    // work with the tabulated failure and never reach an adapter or fabricate an
+    // image. The quarantine is process-global, so clear it before and after.
+    ResetContainmentQuarantineForTest();
+    MarkContainmentQuarantined(static_cast<std::uint32_t>(EXCEPTION_ACCESS_VIOLATION));
+
+    ScriptedDependencies dependencies;
+    dependencies.adapter.triangleCount = 1;
+    dependencies.renderImage = MakeImage(4, 4);
+
+    MemorySource source(4096);
+    Deadline deadline;
+    AllocationLedger ledger;
+    ThumbnailRequest request = MakeRequest(Family::Stl, source, deadline, ledger);
+    RasterImage out;
+
+    const ProviderOutcome outcome = RunThumbnailPipeline(request, dependencies, out);
+
+    CHECK(outcome == ProviderOutcome::DecoderFailure);
+    CHECK(HresultFor(outcome) == E_FAIL);
+    CHECK(RasterIsEmpty(out));
+    CHECK(dependencies.adapter.initializeCalls == 0);
+    CHECK_FALSE(dependencies.adapter.resetCalled);
+    CHECK(dependencies.renderCalls == 0);
+
+    ResetContainmentQuarantineForTest();
+    CHECK_FALSE(ContainmentQuarantined());
 }
 
 TEST_CASE("the source seed is stable per family and size", "[provider][pipeline]")

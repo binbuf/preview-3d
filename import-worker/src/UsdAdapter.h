@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model_core/ImportError.h"
+#include "model_core/TierALimits.h"
 #include "model_core/WireFormat.h"
 
 #include <cstddef>
@@ -10,6 +11,33 @@
 #include <variant>
 
 namespace import_worker {
+
+// Admits a face-varying primvar expansion only if its corner count fits the
+// Tier B per-scene triangle/vertex caps. The adapter calls this before it
+// reserves the expanded buffer; EmitMesh re-checks the cumulative budget after
+// the writer exists, but that is too late to bound the allocation. Kept here
+// (header, no allocation) so the boundary is unit-testable without a fixture
+// large enough to exceed 20M triangles.
+inline model_core::ImportErrorCode PrimvarExpansionLimit(uint64_t corners)
+{
+    if (corners / 3 > model_core::kTierBTriangleLimit
+        || corners > model_core::kTierBVertexLimit)
+        return model_core::ImportErrorCode::ResourceLimit;
+    return model_core::ImportErrorCode::None;
+}
+
+// Admits a flattened texture-coordinate primvar only if its sample count fits
+// the Tier B vertex budget. PrimvarExpansionLimit bounds the expanded corner
+// buffer, but that cap keys on the mesh corner count: a small mesh can carry an
+// indexed or Varying primvar whose flattened sample count dwarfs its corners, so
+// the sample buffer itself needs this pre-resize admission check. Reuses
+// kTierBVertexLimit (no new public limit).
+inline model_core::ImportErrorCode PrimvarSampleLimit(uint64_t samples)
+{
+    if (samples > model_core::kTierBVertexLimit)
+        return model_core::ImportErrorCode::ResourceLimit;
+    return model_core::ImportErrorCode::None;
+}
 
 class ChunkBatchSink;
 class SidecarFileClient;

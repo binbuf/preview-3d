@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "সূচনা করার সময় রেন্ডার থ্রেড বন্ধ হয়ে গেছে।",
   "failure.graphicsRecovery.summary": "গ্রাফিক্স পুনরুদ্ধার ব্যর্থ হয়েছে.",
   "cli.usage": "ব্যবহার: Preview3D.exe [model-path]\n Preview3D.exe --open <model-path>",
-  "startup.smartAppControl": "স্মার্ট অ্যাপ কন্ট্রোল এই পিসিতে সক্রিয় আছে, এবং এই প্রিভিউ 3D বিল্ডটি স্বাক্ষরবিহীন।\n\n",
   "warning.optionalFeatures": "কিছু ঐচ্ছিক glTF বৈশিষ্ট্য সমর্থিত নয়। তাদের ফলব্যাক প্রতিনিধিত্ব দেখানো হয়.",
   "warning.textures": "কিছু টেক্সচার লোড করা যায়নি। ফলব্যাক টেক্সচার দেখানো হয়.",
   "warning.missingAssets": "কিছু উল্লেখ করা সম্পদ খুঁজে পাওয়া যায়নি.",

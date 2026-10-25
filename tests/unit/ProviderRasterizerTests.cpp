@@ -569,6 +569,59 @@ TEST_CASE("null or empty geometry fails without an image", "[provider][rasterize
     CHECK(out.bgraPremultiplied.empty());
 }
 
+TEST_CASE("a near-INT_MAX triangle coordinate is clamped, not converted out of range",
+          "[provider][rasterizer]")
+{
+    // The framing bounds describe a unit object, but one vertex projects far
+    // beyond the frame so `minX`/`maxX` exceed int's range. The extent clamp
+    // must bound the loop instead of executing an out-of-range double->int
+    // conversion (undefined behavior).
+    TriangleSample triangle =
+        MakeTriangle(-1.0, -1.0, 0.0, 1.0, -1.0, 0.0, 1.0, 1.0, 0.0, kMaterialGolden, 1.0f);
+    triangle.vertices[0].position[0] = 3.0e9f; // finite, far outside the frame
+
+    std::vector<TriangleSample> triangles{triangle};
+    SampledGeometry geometry{};
+    geometry.triangles = triangles;
+    geometry.points = kNoPoints;
+    Bounds bounds{};
+    bounds.valid = true;
+    bounds.min[0] = bounds.min[1] = bounds.min[2] = -1.0;
+    bounds.max[0] = bounds.max[1] = bounds.max[2] = 1.0;
+    geometry.bounds = bounds;
+
+    const std::vector<model_core::MaterialPayload> materials = GoldenMaterials();
+    const RasterImage image = RenderScene(geometry, materials, 256);
+    CHECK(image.width == 256u);
+    CHECK(image.height == 256u);
+    CHECK(image.bgraPremultiplied.size() == 256u * 256u * 4u);
+}
+
+TEST_CASE("a far out-of-frame point is clamped to the raster extent",
+          "[provider][rasterizer]")
+{
+    PointSample point{};
+    SetVertex(point.vertex, 3.0e9, 3.0e9, 3.0e9, Gradient{0.7f, 0.7f, 0.7f});
+    point.radius = 0.02f;
+    point.materialIndex = kMaterialGolden;
+
+    std::vector<PointSample> points{point};
+    SampledGeometry geometry{};
+    geometry.triangles = kNoTriangles;
+    geometry.points = points;
+    Bounds bounds{};
+    bounds.valid = true;
+    bounds.min[0] = bounds.min[1] = bounds.min[2] = -1.0;
+    bounds.max[0] = bounds.max[1] = bounds.max[2] = 1.0;
+    geometry.bounds = bounds;
+
+    const std::vector<model_core::MaterialPayload> materials = GoldenMaterials();
+    const RasterImage image = RenderScene(geometry, materials, 256);
+    CHECK(image.width == 256u);
+    CHECK(image.height == 256u);
+    CHECK(image.bgraPremultiplied.size() == 256u * 256u * 4u);
+}
+
 TEST_CASE("the ICpuRasterizer adapter and a null ledger still render",
           "[provider][rasterizer]")
 {

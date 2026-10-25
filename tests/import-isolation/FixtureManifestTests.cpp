@@ -110,7 +110,9 @@ TEST_CASE("Manifest hostile sidecars and over-limit headers fail while approved 
     CHECK(Import(L"corpus/sidecar-approved.gltf",import_broker::ImportFormat::Gltf).ok);
     for (const auto* path : {L"corpus/sidecar-missing.gltf",L"corpus/sidecar-traversal.gltf",
              L"corpus/sidecar-encoded-traversal.gltf",L"corpus/sidecar-absolute.gltf",L"corpus/sidecar-network.gltf",
-             L"corpus/sidecar-unc.gltf",L"corpus/sidecar-ads.gltf",L"corpus/truncated.glb"}) {
+             L"corpus/sidecar-unc.gltf",L"corpus/sidecar-ads.gltf",
+             L"corpus/sidecar-nul-extension.gltf",L"corpus/sidecar-nul-trailing.gltf",
+             L"corpus/truncated.glb"}) {
         CHECK_FALSE(Import(path,import_broker::ImportFormat::Gltf).ok);
     }
     CHECK_FALSE(Import(L"corpus/over-limit.stl",import_broker::ImportFormat::Stl).ok);

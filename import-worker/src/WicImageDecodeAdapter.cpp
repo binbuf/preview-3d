@@ -118,7 +118,16 @@ std::optional<DecodedRasterImage> DecodeRasterImageWic(std::span<const std::byte
                 || nativeFormat==GUID_WICPixelFormat24bppBGR)) {
             nativeDecoded=true;
             const UINT channels=nativeFormat==GUID_WICPixelFormat24bppBGR ? 3u : 4u;
-            std::vector<BYTE> tile(size_t(outputW)*channels*32);
+            // WIC contract decision: IWICBitmapSourceTransform::CopyPixels requires
+            // uiWidth/uiHeight to be the *scaled full-image* size (verified against
+            // GetClosestSize above); prc then clips that already-scaled image to the
+            // rows this iteration writes. To make the buffer invariant independent of
+            // the codec honoring cbBufferSize or the prc clip, the scratch is sized for
+            // the full requested uiWidth*uiHeight extent rather than one 32-row tile: a
+            // codec that writes the whole requested extent still cannot overrun it. The
+            // per-iteration loop remains only to bound cancellation latency. channels<=4
+            // keeps this <= the RGBA chain checked above, so it stays <= maxDecodedBytes.
+            std::vector<BYTE> tile(size_t(outputW)*channels*outputH);
             for (UINT y=0;y<outputH;y+=32) {
                 if (options.Cancelled()) return std::nullopt;
                 const UINT rows=(std::min)(32u,outputH-y);

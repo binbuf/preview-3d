@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "The render thread stopped during initialization.",
   "failure.graphicsRecovery.summary": "Graphics recovery failed.",
   "cli.usage": "Usage: Preview3D.exe [model-path]\n       Preview3D.exe --open <model-path>",
-  "startup.smartAppControl": "Smart App Control is active on this PC, and this Preview 3D build is unsigned.\n\n",
   "warning.optionalFeatures": "Some optional glTF features are not supported. Their fallback representation is shown.",
   "warning.textures": "Some textures could not be loaded. Fallback textures are shown.",
   "warning.missingAssets": "Some referenced assets could not be found.",

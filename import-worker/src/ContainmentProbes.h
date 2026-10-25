@@ -36,6 +36,11 @@ void RunOverallocateProbe();
 // kill-on-close against a hung worker.
 void RunHangProbe();
 
+// Reports readiness, then spins in user mode forever so the parent can prove
+// the Job Object's JOB_OBJECT_LIMIT_PROCESS_TIME terminates a process that
+// burns CPU without ever blocking.
+void RunCpuSpinProbe();
+
 // Writes the terminating "DONE" line.
 void ReportDone();
 

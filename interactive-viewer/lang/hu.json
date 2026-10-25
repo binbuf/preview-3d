@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "A renderelési szál leállt az inicializálás során.",
   "failure.graphicsRecovery.summary": "A grafika helyreállítása nem sikerült.",
   "cli.usage": "Használat: Preview3D.exe [modell-útvonal]\n Preview3D.exe --open <modell-útvonal>",
-  "startup.smartAppControl": "Az intelligens alkalmazásvezérlés aktív ezen a számítógépen, és ez a 3D előnézeti összeállítás aláírás nélkül.\n\n",
   "warning.optionalFeatures": "Egyes opcionális glTF-funkciók nem támogatottak. A tartalék reprezentációjuk látható.",
   "warning.textures": "Egyes textúrákat nem lehetett betölteni. A tartalék textúrák megjelennek.",
   "warning.missingAssets": "Néhány hivatkozott elem nem található.",

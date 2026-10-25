@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "../../interactive-viewer/src/app/D3D12ImportBridge.h"
+#include "SandboxTestSupport.h"
 #include "import_broker/ImportSession.h"
 #include "import_broker/SandboxLauncher.h"
 #include "model_core/ImportError.h"
@@ -240,6 +241,7 @@ TEST_CASE("STEP-002 host observes cancellation", "[step-002][step-host][cancel]"
 TEST_CASE("STEP-002 host faults are typed and a later import recovers",
           "[step-002][step-host][recovery]")
 {
+    if (!sandbox_test_support::FaultHarnessEnabled()) SKIP("fault harness compiled out of Release");
     struct Fault { const wchar_t* flag; const char* label; model_core::ImportErrorCode expected; };
     const Fault faults[] = {
         {L"--pool-crash", "crash", model_core::ImportErrorCode::StepHostFailure},

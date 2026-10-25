@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Firul de randare sa oprit în timpul inițializării.",
   "failure.graphicsRecovery.summary": "Recuperarea grafică a eșuat.",
   "cli.usage": "Utilizare: Preview3D.exe [model-path]\n Preview3D.exe --open <model-path>",
-  "startup.smartAppControl": "Smart App Control este activ pe acest computer, iar această versiune de Preview 3D este nesemnată.\n\n",
   "warning.optionalFeatures": "Unele caracteristici opționale glTF nu sunt acceptate. Este afișată reprezentarea lor de rezervă.",
   "warning.textures": "Unele texturi nu au putut fi încărcate. Sunt afișate texturi de rezervă.",
   "warning.missingAssets": "Unele materiale la care se face referire nu au putut fi găsite.",

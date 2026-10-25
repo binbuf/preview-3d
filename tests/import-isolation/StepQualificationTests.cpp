@@ -53,6 +53,20 @@ step_host::StepPreflightResult Preflight(std::string_view text,
     return step_host::StepPreflightBytes(AsBytes(text), limits);
 }
 
+// Drives the streaming scanner one caller-supplied chunk at a time so a
+// signature split across Feed calls is exercised the same way the handle path
+// delivers it.
+step_host::StepPreflightResult PreflightChunks(const std::vector<std::string>& chunks,
+                                               step_host::StepPreflightLimits limits = {})
+{
+    step_host::StepPart21Scanner scanner(limits);
+    for (const std::string& chunk : chunks) {
+        if (!scanner.Feed(AsBytes(chunk))) return scanner.Result();
+    }
+    scanner.Finish();
+    return scanner.Result();
+}
+
 // A syntactically valid Part-21 file whose DATA section holds `records`.
 std::string Part21(std::string_view records)
 {
@@ -151,6 +165,58 @@ TEST_CASE("STEP-008 admission gives every malformed or unsupported family a type
         INFO(item.name << " -> " << uint32_t(result.status));
         CHECK(result.status == item.status);
     }
+}
+
+// Control bytes are rejected everywhere in the Part-21 clear-text stream,
+// including inside quoted strings and /* */ comments, so an embedded NUL can
+// never reach OCCT as a truncated or ambiguous literal.
+TEST_CASE("STEP-008 admission rejects control bytes inside strings and comments",
+          "[step-008][preflight-control][security]")
+{
+    using step_host::StepPreflightStatus;
+    std::string nulInString = "#1=PRODUCT('a";
+    nulInString.push_back('\0');
+    nulInString += "b');";
+    CHECK(Preflight(Part21(nulInString)).status == StepPreflightStatus::UnsupportedEncoding);
+
+    std::string nulInComment = "#1=A; /* c";
+    nulInComment.push_back('\0');
+    nulInComment += "omment */";
+    CHECK(Preflight(Part21(nulInComment)).status == StepPreflightStatus::UnsupportedEncoding);
+
+    std::string unitSeparatorInString = "#1=PRODUCT('a";
+    unitSeparatorInString.push_back(static_cast<char>(0x1F));
+    unitSeparatorInString += "b');";
+    CHECK(Preflight(Part21(unitSeparatorInString)).status
+          == StepPreflightStatus::UnsupportedEncoding);
+
+    // Legal whitespace inside a string stays admitted.
+    CHECK(Preflight(Part21("#1=PRODUCT('a\tb c');")).status == StepPreflightStatus::Ok);
+}
+
+// A BOM or binary/XML signature that is split across Feed calls must still be
+// detected; the leading probe buffer holds the full signature window.
+TEST_CASE("STEP-008 admission detects a signature split across Feed calls",
+          "[step-008][preflight-split][security]")
+{
+    using step_host::StepPreflightStatus;
+    const std::string body = "#1=CARTESIAN_POINT('',(0.,0.,0.));";
+    const std::string valid = Part21(body);
+
+    // UTF-8 BOM split one byte per Feed: transparent, still admitted.
+    CHECK(PreflightChunks({"\xef", "\xbb", "\xbf", valid}).status == StepPreflightStatus::Ok);
+    // UTF-16 BOM split across the first two feeds.
+    CHECK(PreflightChunks({"\xff", "\xfe", valid}).status
+          == StepPreflightStatus::UnsupportedEncoding);
+    // ZIP local-file header split 3 + 1.
+    CHECK(PreflightChunks({"PK\x03", "\x04", valid}).status
+          == StepPreflightStatus::UnsupportedEncoding);
+    // Gzip magic split 1 + 1.
+    CHECK(PreflightChunks({"\x1f", "\x8b", valid}).status
+          == StepPreflightStatus::UnsupportedEncoding);
+    // XML declaration split after the opening '<'.
+    CHECK(PreflightChunks({"<", "?xml version=\"1.0\"?><x/>"}).status
+          == StepPreflightStatus::UnsupportedEncoding);
 }
 
 TEST_CASE("STEP-008 admission caps are exact at the boundary and typed just over",

@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Thread render berhenti selama inisialisasi.",
   "failure.graphicsRecovery.summary": "Pemulihan grafis gagal.",
   "cli.usage": "Penggunaan: Pratinjau3D.exe [jalur model]\n Pratinjau3D.exe --buka <jalur-model>",
-  "startup.smartAppControl": "Kontrol Aplikasi Cerdas aktif di PC ini, dan versi Pratinjau 3D ini tidak ditandatangani.\n\n",
   "warning.optionalFeatures": "Beberapa fitur glTF opsional tidak didukung. Representasi fallback mereka ditampilkan.",
   "warning.textures": "Beberapa tekstur tidak dapat dimuat. Tekstur fallback ditampilkan.",
   "warning.missingAssets": "Beberapa aset yang direferensikan tidak dapat ditemukan.",

@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "تەوەرەی ڕەندەر لە کاتی دەستپێکردندا وەستا.",
   "failure.graphicsRecovery.summary": "گەڕانەوەی گرافیک شکستی هێنا.",
   "cli.usage": "بەکارهێنان: Preview3D.exe [ڕێڕەوی مۆدێل]\n Preview3D.exe --open <ڕێڕەوی مۆدێل>",
-  "startup.smartAppControl": "Smart App Control لەم کۆمپیوتەرەدا چالاکە، و ئەم Preview 3D build واژۆ نەکراوە.\n\n",
   "warning.optionalFeatures": "هەندێک لە تایبەتمەندییە هەڵبژاردەکانی glTF پشتگیری ناکرێت. نوێنەرایەتی فاڵباکیان نیشان دەدرێت.",
   "warning.textures": "هەندێک لە پێکهاتەکان نەتوانرا باربکرێن. پێکهاتەکانی فۆڵباک نیشان دەدرێن.",
   "warning.missingAssets": "هەندێک لە سەروەت و سامانی ئاماژەپێکراو نەتوانرا بدۆزرێتەوە.",

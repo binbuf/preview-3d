@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Le thread de rendu s'est arrêté lors de l'initialisation.",
   "failure.graphicsRecovery.summary": "La récupération graphique a échoué.",
   "cli.usage": "Utilisation : Preview3D.exe [chemin-modèle]\n Preview3D.exe --open <chemin-modèle>",
-  "startup.smartAppControl": "Smart App Control est actif sur ce PC et cette version Preview 3D n'est pas signée.\n\n",
   "warning.optionalFeatures": "Certaines fonctionnalités facultatives de glTF ne sont pas prises en charge. Leur représentation de secours est affichée.",
   "warning.textures": "Certaines textures n'ont pas pu être chargées. Les textures de repli sont affichées.",
   "warning.missingAssets": "Certains actifs référencés sont introuvables.",

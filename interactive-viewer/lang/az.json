@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Render mövzusu başlatma zamanı dayandı.",
   "failure.graphicsRecovery.summary": "Qrafikin bərpası uğursuz oldu.",
   "cli.usage": "İstifadə: Preview3D.exe [model-path]\n Preview3D.exe --açıq <model-yolu>",
-  "startup.smartAppControl": "Smart App Control bu kompüterdə aktivdir və bu Preview 3D quruluşu imzasızdır.\n\n",
   "warning.optionalFeatures": "Bəzi isteğe bağlı glTF xüsusiyyətləri dəstəklənmir. Onların əks göstərişi göstərilir.",
   "warning.textures": "Bəzi fakturaları yükləmək mümkün olmadı. Fallback fakturaları göstərilir.",
   "warning.missingAssets": "İstinad edilən bəzi aktivləri tapmaq mümkün olmadı.",

@@ -25,10 +25,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <span>
 #include <string>
@@ -40,11 +42,20 @@
 #error "PREVIEW3D_TEST_ASSETS_DIR must be defined by Tests.ImportIsolation.vcxproj"
 #endif
 
+#ifndef PREVIEW3D_FUZZ_CORPUS_DIR
+#error "PREVIEW3D_FUZZ_CORPUS_DIR must be defined by Tests.ImportIsolation.vcxproj"
+#endif
+
 namespace {
 
 std::wstring TestAssetPath(const wchar_t* fileName)
 {
     return std::wstring(PREVIEW3D_TEST_ASSETS_DIR) + fileName;
+}
+
+std::wstring FuzzCorpusPath(const wchar_t* fileName)
+{
+    return std::wstring(PREVIEW3D_FUZZ_CORPUS_DIR) + fileName;
 }
 
 std::optional<std::vector<std::byte>> ReadFileBytes(const std::wstring& path)
@@ -670,6 +681,24 @@ TEST_CASE("Truncated GLB bytes are rejected as a clean GenerationError, not a cr
     CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
 }
 
+TEST_CASE("a malformed base64 data URI buffer is rejected before fastgltf (SEC-16)",
+          "[gltf-import][security]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // The minimized SEC-16 fastgltf 0.9.0 finding: the base64 payload length is
+    // not a multiple of four. The adapter's simdjson preflight must reject this
+    // as MalformedData before loadGltf reaches the fallback decoder.
+    const std::string json
+        = R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":3,"uri":"data:application/octet-stream;base64,AAAAA"}]})";
+    std::vector<std::byte> bytes(reinterpret_cast<const std::byte*>(json.data()),
+                                 reinterpret_cast<const std::byte*>(json.data()) + json.size());
+
+    auto run = RunGltfImport(fixture.sid, bytes, /*generationId=*/2110, /*maxChunkCount=*/8);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+
 TEST_CASE("A file requiring an unrecognized extension is rejected as a clean GenerationError",
           "[gltf-import]")
 {
@@ -1176,6 +1205,64 @@ TEST_CASE("basisu_corrupt_ktx2.glb (valid KHR_texture_basisu reference, garbage 
     CHECK(materialChunk->descriptor.dependencyCount == 1);
 }
 
+TEST_CASE("basislz-etc1s-crash.env (embedded KHR_texture_basisu with malformed ETC1S tables) "
+          "soft-fails without crashing the worker (SEC-16b)",
+          "[gltf-import][texture][security]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    // The minimized SEC-16 finding, stored as a GltfFuzz Adapter-domain
+    // envelope: an 8-byte header (magic/domain/flags/reserved) followed by the
+    // real GLB. Strip the envelope and drive the real worker.
+    auto envelope = ReadFileBytes(FuzzCorpusPath(L"basislz-etc1s-crash.env"));
+    REQUIRE(envelope.has_value());
+    REQUIRE(envelope->size() > 8);
+    std::vector<std::byte> bytes(envelope->begin() + 8, envelope->end());
+
+    auto run = RunGltfImport(fixture.sid, bytes, /*generationId=*/2111, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    // geometry + material + checker fallback + bounded warning
+    CHECK(run.validation.chunks.size() == 4);
+}
+
+TEST_CASE("A primitive material index outside the parsed materials array soft-fails instead of "
+          "indexing an empty array (SEC-16b promoted fuzz finding)",
+          "[gltf-import][security]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto bytes = ReadFileBytes(TestAssetPath(L"basisu_textured_triangle.glb"));
+    REQUIRE(bytes.has_value());
+
+    // fastgltf keeps a primitive's `material` index even when the top-level
+    // `materials` array is absent (a corrupted JSON key is enough). Equal-length
+    // mutation keeps the GLB chunk lengths valid.
+    constexpr std::string_view materialsKey = "\"materials\"";
+    constexpr std::string_view brokenKey = "\"xxxxxxxxx\"";
+    static_assert(materialsKey.size() == brokenKey.size());
+    auto chars = std::span(reinterpret_cast<char*>(bytes->data()), bytes->size());
+    bool mutated = false;
+    for (size_t offset = 0; offset + materialsKey.size() <= chars.size(); ++offset) {
+        if (std::memcmp(chars.data() + offset, materialsKey.data(), materialsKey.size()) == 0) {
+            std::memcpy(chars.data() + offset, brokenKey.data(), brokenKey.size());
+            mutated = true;
+        }
+    }
+    REQUIRE(mutated);
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/2112, /*maxChunkCount=*/8);
+    // The old adapter indexed an empty materials array at ConvertPrimitive and
+    // null-derefed; the fixed adapter either soft-fails the out-of-range
+    // material or rejects the file cleanly -- never a worker fault/crash.
+    if (run.ready) {
+        CHECK(run.validation.ok);
+    } else {
+        CHECK(run.errorNotice.errorCode
+              == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+    }
+}
+
 TEST_CASE("A real on-disk GLB file reaches the sandboxed worker via a duplicated handle and parses "
           "successfully, with no in-memory shortcut anywhere on the input path",
           "[gltf-import]")
@@ -1342,4 +1429,107 @@ TEST_CASE("A glTF image in a textures/ subdirectory resolves through the brokere
     CHECK(header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Srgb));
     CHECK(material->descriptor.dependencyCount == 1);
     CHECK(material->descriptor.dependencyIds[0] == image->descriptor.chunkId);
+}
+
+namespace {
+
+// Wraps JSON (and optional BIN) in the glTF 2.0 container framing. Mirrors
+// the inline builder KHR_mesh_quantization's case uses above.
+std::vector<std::byte> BuildGlb(std::string json, std::span<const std::byte> bin = {})
+{
+    while (json.size() % 4) json.push_back(' ');
+    std::vector<std::byte> binPadded(bin.begin(), bin.end());
+    while (binPadded.size() % 4) binPadded.push_back(std::byte{0});
+    std::vector<std::byte> glb;
+    auto push32 = [&](uint32_t value) {
+        for (unsigned i = 0; i < 4; ++i)
+            glb.push_back(std::byte((value >> (i * 8)) & 0xff));
+    };
+    const uint32_t total = static_cast<uint32_t>(12 + 8 + json.size()
+        + (binPadded.empty() ? 0 : 8 + binPadded.size()));
+    push32(0x46546c67); push32(2); push32(total);
+    push32(static_cast<uint32_t>(json.size())); push32(0x4e4f534a);
+    for (const char value : json) glb.push_back(std::byte(static_cast<unsigned char>(value)));
+    if (!binPadded.empty()) {
+        push32(static_cast<uint32_t>(binPadded.size())); push32(0x004e4942);
+        glb.insert(glb.end(), binPadded.begin(), binPadded.end());
+    }
+    return glb;
+}
+
+// A 40-level doubling DAG: node i has children {i+1, i+1}. A depth-first walk
+// that reprocesses shared subtrees (the interactive-viewer DAG-diamond rule)
+// would take 2^40 visits if left unbounded. The adapter must stop at the
+// Tier A object budget instead.
+std::string DoublingDagJson(bool meshBearing)
+{
+    constexpr int kLevels = 40;
+    std::string json = "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}]";
+    if (meshBearing) {
+        json += ",\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}]"
+                ",\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+                "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}]"
+                ",\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+                "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}]"
+                ",\"buffers\":[{\"byteLength\":48}]";
+    }
+    json += ",\"nodes\":[";
+    for (int i = 0; i <= kLevels; ++i) {
+        if (i) json += ',';
+        if (i < kLevels)
+            json += "{\"children\":[" + std::to_string(i + 1) + "," + std::to_string(i + 1) + "]}";
+        else
+            json += meshBearing ? "{\"mesh\":0}" : "{}";
+    }
+    json += "]}";
+    return json;
+}
+
+std::vector<std::byte> TriangleBin()
+{
+    const float positions[9] = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+    const uint32_t indices[3] = {0, 1, 2};
+    std::vector<std::byte> bytes(48);
+    std::memcpy(bytes.data(), positions, sizeof(positions));
+    std::memcpy(bytes.data() + 36, indices, sizeof(indices));
+    return bytes;
+}
+
+} // namespace
+
+TEST_CASE("A mesh-less doubling DAG fails fast with ResourceLimit instead of exponential traversal",
+          "[gltf-import][resource-limit][dag]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    const auto glb = BuildGlb(DoublingDagJson(/*meshBearing=*/false));
+
+    const auto start = std::chrono::steady_clock::now();
+    auto run = RunGltfImport(fixture.sid, glb, 3101, 8);
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::ResourceLimit));
+    std::cout << "SEC-01 mesh-less doubling-DAG elapsed-ms=" << elapsedMs << '\n';
+    CHECK(elapsedMs < 5000);
+}
+
+TEST_CASE("A mesh-bearing doubling DAG fails fast with ResourceLimit instead of exponential traversal",
+          "[gltf-import][resource-limit][dag]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    const auto bin = TriangleBin();
+    const auto glb = BuildGlb(DoublingDagJson(/*meshBearing=*/true), bin);
+
+    const auto start = std::chrono::steady_clock::now();
+    auto run = RunGltfImport(fixture.sid, glb, 3102, 8);
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::ResourceLimit));
+    std::cout << "SEC-01 mesh-bearing doubling-DAG elapsed-ms=" << elapsedMs << '\n';
+    CHECK(elapsedMs < 5000);
 }

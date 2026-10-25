@@ -71,6 +71,7 @@ TEST_CASE("Status facts reject unknown flags excessive counts reserved values an
 }
 
 TEST_CASE("Worker hang and crash return typed failures and permit a valid reopen", "[recovery]") {
+    if (!sandbox_test_support::FaultHarnessEnabled()) SKIP("fault harness compiled out of Release");
     auto request=Request(Triangle()); request.workerArgumentsOverride=L"--test-hang-import"; request.replyTimeoutMs=200;
     auto result=import_broker::RunImportSession(request);
     CHECK(result.stage==import_broker::ImportStage::ReplyTimedOut); CHECK(result.errorCode==model_core::ImportErrorCode::WorkerTimedOut);

@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "渲染线程在初始化期间停止。",
   "failure.graphicsRecovery.summary": "图形恢复失败。",
   "cli.usage": "用法：Preview3D.exe [模型路径]\n Preview3D.exe --open <模型路径>",
-  "startup.smartAppControl": "智能应用程序控制在此 PC 上处于活动状态，并且此预览版 3D 版本未签名。\n\n",
   "warning.optionalFeatures": "不支持某些可选的 glTF 功能。显示了它们的后备表示。",
   "warning.textures": "某些纹理无法加载。显示后备纹理。",
   "warning.missingAssets": "无法找到某些引用的资产。",

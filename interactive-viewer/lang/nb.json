@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Gjengivelsestråden stoppet under initialisering.",
   "failure.graphicsRecovery.summary": "Gjenoppretting av grafikk mislyktes.",
   "cli.usage": "Bruk: Preview3D.exe [modellbane]\n Preview3D.exe --åpne <modellbane>",
-  "startup.smartAppControl": "Smart App Control er aktiv på denne PC-en, og denne Preview 3D-bygningen er usignert.\n\n",
   "warning.optionalFeatures": "Noen valgfrie glTF-funksjoner støttes ikke. Reserverepresentasjonen deres vises.",
   "warning.textures": "Noen teksturer kunne ikke lastes inn. Reserveteksturer vises.",
   "warning.missingAssets": "Noen refererte ressurser ble ikke funnet.",

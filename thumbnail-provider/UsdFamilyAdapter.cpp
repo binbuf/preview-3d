@@ -9,6 +9,7 @@
 
 #include "UsdFamilyAdapter.h"
 
+#include "ContainmentStage.h"
 #include "Deadline.h"
 #include "ProviderLimits.h"
 #include "UsdZipPreflight.h"
@@ -330,8 +331,14 @@ StagePolicy ClassifyStage(const tinyusdz::Stage& stage, double time)
 // meaningful static geometry. Clear each mesh's skeleton binding so TinyUSDZ's
 // render-scene converter treats the mesh as static instead of failing on rigs
 // it cannot build.
-std::uint32_t StripSkeletonBindings(Prim& prim)
+std::uint32_t StripSkeletonBindings(Prim& prim, std::uint32_t depth)
 {
+    // This walk runs before ClassifyStage enforces kMaxHierarchyDepth, so bound
+    // it here too: a deeply nested stage must not overflow the stack on the way
+    // to the classification pass that rejects it.
+    if (depth > kMaxHierarchyDepth) {
+        return 0;
+    }
     std::uint32_t cleared = 0;
     if (auto* mesh = prim.get_data().as<GeomMesh>(/*strict_cast=*/true)) {
         if (mesh->skeleton.has_value()) {
@@ -345,7 +352,7 @@ std::uint32_t StripSkeletonBindings(Prim& prim)
         mesh->props.erase("skel:skeleton");
     }
     for (Prim& child : prim.children()) {
-        cleared += StripSkeletonBindings(child);
+        cleared += StripSkeletonBindings(child, depth + 1);
     }
     return cleared;
 }
@@ -517,57 +524,84 @@ int ResolveAsset(const char* assetName, const std::vector<std::string>&,
                  std::string* resolved, std::string*, void* userdata) noexcept
 {
     auto& context = *static_cast<UsdAssetContext*>(userdata);
-    const auto normalized = NormalizeAssetPath(
-        assetName ? std::string_view(assetName) : std::string_view{});
-    if (!normalized) {
-        context.error = ErrorCode::UnsafeReference;
+    try {
+        const auto normalized = NormalizeAssetPath(
+            assetName ? std::string_view(assetName) : std::string_view{});
+        if (!normalized) {
+            context.error = ErrorCode::UnsafeReference;
+            return -2;
+        }
+        if (context.Find(*normalized) == nullptr) {
+            context.error = ErrorCode::UnsafeReference;
+            return -2;
+        }
+        *resolved = *normalized;
+        return 0;
+    } catch (const std::bad_alloc&) {
+        // TinyUSDZ calls this through a plain function pointer; contain the
+        // product-owned allocation here rather than let it unwind through the
+        // vendored library.
+        context.error = ErrorCode::OutOfMemory;
+        return -2;
+    } catch (...) {
+        context.error = ErrorCode::InternalImporterFailure;
         return -2;
     }
-    if (context.Find(*normalized) == nullptr) {
-        context.error = ErrorCode::UnsafeReference;
-        return -2;
-    }
-    *resolved = *normalized;
-    return 0;
 }
 
 int SizeAsset(const char* resolvedName, std::uint64_t* bytes, std::string*,
               void* userdata) noexcept
 {
     auto& context = *static_cast<UsdAssetContext*>(userdata);
-    const std::string path = resolvedName ? resolvedName : "";
-    const auto* entry = context.Find(path);
-    if (entry == nullptr) {
-        return -1;
+    try {
+        const std::string path = resolvedName ? resolvedName : "";
+        const auto* entry = context.Find(path);
+        if (entry == nullptr) {
+            return -1;
+        }
+        *bytes = entry->byteSize;
+        return entry->byteSize != 0 ? 0 : -1;
+    } catch (const std::bad_alloc&) {
+        context.error = ErrorCode::OutOfMemory;
+        return -2;
+    } catch (...) {
+        context.error = ErrorCode::InternalImporterFailure;
+        return -2;
     }
-    *bytes = entry->byteSize;
-    return entry->byteSize != 0 ? 0 : -1;
 }
 
 int ReadAsset(const char* resolvedName, std::uint64_t requested, std::uint8_t* output,
               std::uint64_t* bytes, std::string*, void* userdata) noexcept
 {
     auto& context = *static_cast<UsdAssetContext*>(userdata);
-    const std::string path = resolvedName ? resolvedName : "";
-    const auto* entry = context.Find(path);
-    if (entry == nullptr) {
-        return -1;
-    }
-    if (entry->dataOffset > context.source.size()
-        || entry->byteSize > context.source.size() - entry->dataOffset) {
-        context.error = ErrorCode::ArchiveLimit;
+    try {
+        const std::string path = resolvedName ? resolvedName : "";
+        const auto* entry = context.Find(path);
+        if (entry == nullptr) {
+            return -1;
+        }
+        if (entry->dataOffset > context.source.size()
+            || entry->byteSize > context.source.size() - entry->dataOffset) {
+            context.error = ErrorCode::ArchiveLimit;
+            return -2;
+        }
+        if (requested < entry->byteSize) {
+            context.error = ErrorCode::ResourceLimit;
+            return -2;
+        }
+        if (entry->byteSize != 0) {
+            std::memcpy(output, context.source.data() + entry->dataOffset,
+                        static_cast<std::size_t>(entry->byteSize));
+        }
+        *bytes = entry->byteSize;
+        return 0;
+    } catch (const std::bad_alloc&) {
+        context.error = ErrorCode::OutOfMemory;
+        return -2;
+    } catch (...) {
+        context.error = ErrorCode::InternalImporterFailure;
         return -2;
     }
-    if (requested < entry->byteSize) {
-        context.error = ErrorCode::ResourceLimit;
-        return -2;
-    }
-    if (entry->byteSize != 0) {
-        std::memcpy(output, context.source.data() + entry->dataOffset,
-                    static_cast<std::size_t>(entry->byteSize));
-    }
-    *bytes = entry->byteSize;
-    return 0;
 }
 
 template <class T>
@@ -794,6 +828,12 @@ void UsdAdapter::Reset() noexcept { ResetState(); }
 
 ErrorCode UsdAdapter::Initialize(const AdapterInput& input) noexcept
 {
+    return RunContainedStageMember([this, &input]() { return InitializeImpl(input); },
+                                   DiagnosticStage::AdapterInitialize);
+}
+
+ErrorCode UsdAdapter::InitializeImpl(const AdapterInput& input)
+{
     ResetState();
     if (input.source == nullptr || input.limits == nullptr || input.deadline == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -810,7 +850,7 @@ ErrorCode UsdAdapter::SourceReadFailure() const noexcept
     return ErrorCode::MalformedData;
 }
 
-ErrorCode UsdAdapter::LoadSourceBytes() noexcept
+ErrorCode UsdAdapter::LoadSourceBytes()
 {
     bytes_ = input_.source->ContiguousView();
     if (!bytes_.empty()) {
@@ -839,7 +879,7 @@ ErrorCode UsdAdapter::LoadSourceBytes() noexcept
     return ErrorCode::None;
 }
 
-ErrorCode UsdAdapter::SniffContainer() noexcept
+ErrorCode UsdAdapter::SniffContainer()
 {
     const auto* data = reinterpret_cast<const std::uint8_t*>(bytes_.data());
     const std::size_t size = bytes_.size();
@@ -867,7 +907,7 @@ ErrorCode UsdAdapter::SniffContainer() noexcept
     return ErrorCode::MalformedData;
 }
 
-ErrorCode UsdAdapter::PreflightArchive() noexcept
+ErrorCode UsdAdapter::PreflightArchive()
 {
     if (!usedUsdz_) {
         return ErrorCode::None;
@@ -894,7 +934,7 @@ ErrorCode UsdAdapter::PreflightArchive() noexcept
     return ErrorCode::None;
 }
 
-ErrorCode UsdAdapter::LoadStage() noexcept
+ErrorCode UsdAdapter::LoadStage()
 {
     try {
         tinyusdz::USDLoadOptions options{};
@@ -929,7 +969,7 @@ ErrorCode UsdAdapter::LoadStage() noexcept
     }
 }
 
-ErrorCode UsdAdapter::BuildScene() noexcept
+ErrorCode UsdAdapter::BuildScene()
 {
     if (holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -959,7 +999,7 @@ ErrorCode UsdAdapter::BuildScene() noexcept
     // precede classification and conversion.
     std::uint32_t skeletonBindings = 0;
     for (Prim& root : stage.root_prims()) {
-        skeletonBindings += StripSkeletonBindings(root);
+        skeletonBindings += StripSkeletonBindings(root, 1);
     }
 
     StagePolicy policy = ClassifyStage(stage, time);
@@ -1026,7 +1066,7 @@ ErrorCode UsdAdapter::BuildScene() noexcept
     return ErrorCode::None;
 }
 
-ErrorCode UsdAdapter::ValidateScene() noexcept
+ErrorCode UsdAdapter::ValidateScene()
 {
     if (holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
@@ -1093,8 +1133,18 @@ ErrorCode UsdAdapter::ValidateScene() noexcept
         std::vector<int32_t> protoIndices;
         std::vector<tinyusdz::value::point3f> positions;
         if (!Evaluate(instancer->protoIndices, time, protoIndices)
-            || !Evaluate(instancer->positions, time, positions)
-            || protoIndices.size() != positions.size()) {
+            || !Evaluate(instancer->positions, time, positions)) {
+            return ErrorCode::MalformedData;
+        }
+        // TinyUSDZ exposes no element-count accessor before Evaluate copies the
+        // authored array, so cap the result immediately. A point instancer can
+        // contribute at most kMaxPrimCount instances, and each instance needs a
+        // matching proto/position/id, so anything larger is ResourceLimit (not
+        // OutOfMemory) and must not be absorbed into the ledger.
+        if (protoIndices.size() > kMaxPrimCount || positions.size() > kMaxPrimCount) {
+            return ErrorCode::ResourceLimit;
+        }
+        if (protoIndices.size() != positions.size()) {
             return ErrorCode::MalformedData;
         }
         std::vector<int64_t> ids;
@@ -1125,6 +1175,11 @@ ErrorCode UsdAdapter::ValidateScene() noexcept
         if (instancer->invisibleIds.authored()
             && !Evaluate(instancer->invisibleIds, time, invisibleValues)) {
             return ErrorCode::MalformedData;
+        }
+        // Bound the id set before it is materialized: it is file-count-driven
+        // and unrelated to positions.size().
+        if (invisibleValues.size() > kMaxPrimCount) {
+            return ErrorCode::ResourceLimit;
         }
         const std::unordered_set<int64_t> invisible(invisibleValues.begin(), invisibleValues.end());
         const auto prototypePaths = PrototypePaths(*instancer);
@@ -1319,6 +1374,11 @@ ErrorCode UsdAdapter::ValidateScene() noexcept
 
 ErrorCode UsdAdapter::Parse() noexcept
 {
+    return RunContainedStageMember([this]() { return ParseImpl(); }, DiagnosticStage::Parse);
+}
+
+ErrorCode UsdAdapter::ParseImpl()
+{
     try {
         if (input_.deadline == nullptr || !input_.deadline->Checkpoint()) {
             return ErrorCode::Cancelled;
@@ -1369,6 +1429,12 @@ ErrorCode UsdAdapter::Parse() noexcept
 
 ErrorCode UsdAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 {
+    return RunContainedStageMember([this, &sink]() { return EnumerateMaterialsImpl(sink); },
+                                   DiagnosticStage::Materials);
+}
+
+ErrorCode UsdAdapter::EnumerateMaterialsImpl(IMaterialSink& sink)
+{
     if (!parsed_ || holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;
     }
@@ -1381,6 +1447,12 @@ ErrorCode UsdAdapter::EnumerateMaterials(IMaterialSink& sink) noexcept
 }
 
 ErrorCode UsdAdapter::EnumerateGeometry(IGeometrySink& sink) noexcept
+{
+    return RunContainedStageMember([this, &sink]() { return EnumerateGeometryImpl(sink); },
+                                   DiagnosticStage::Geometry);
+}
+
+ErrorCode UsdAdapter::EnumerateGeometryImpl(IGeometrySink& sink)
 {
     if (!parsed_ || holder_ == nullptr) {
         return ErrorCode::InternalImporterFailure;

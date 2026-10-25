@@ -15,6 +15,8 @@
     <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)'==''">10.0</WindowsTargetPlatformVersion>
     <PlatformToolset Condition="'$(PlatformToolset)'==''">v145</PlatformToolset>
     <CharacterSet Condition="'$(CharacterSet)'==''">Unicode</CharacterSet>
+    <!-- EH continuation metadata is off until the pinned libraries ship it. -->
+    <Preview3DEnableGuardEhCont Condition="'$(Preview3DEnableGuardEhCont)'==''">false</Preview3DEnableGuardEhCont>
   </PropertyGroup>
 
   <!--
@@ -99,9 +101,74 @@
            property, which has no effect on VC++ ClCompile) is the actual
            /WX switch here. -->
       <TreatWarningAsError Condition="'$(IsHostileTestBinary)'!='true'">true</TreatWarningAsError>
+      <!--
+        Process-wide and per-image hardening for every product binary
+        (viewer, worker, both import hosts, Preview3DOpenUsdCore.dll, the
+        thumbnail provider, and the test executables that link the same
+        sources). The thumbnail provider previously set CFG and CET itself;
+        those settings are now the shared default and the provider keeps them
+        only for documentation. See ADR-0039.
+
+        /guard:cf (ControlFlowGuard) and /guard:ehcont (GuardEHContMetadata)
+        are compiler switches; Microsoft.CppCommon.targets derives the matching
+        linker /GUARD:CF and /GUARD:EHCONT from the ClCompile metadata, so no
+        explicit linker property is needed.
+      -->
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <!--
+        /guard:ehcont is opt-in because the linker refuses to emit an image
+        whose imported objects lack EH continuation metadata (LNK1386/LNK2047),
+        and the pinned third-party static libraries (TinyUSDZ, ufbx, zip, zstd,
+        draco, ktx, lib3mf, libwebp, meshoptimizer, simdjson, tbb, OpenUSD, ...)
+        were built without it. Measured with this toolset: the worker, the
+        viewer, and the provider all fail to link with those errors, so the
+        policy cannot be part of the shared default yet. Set
+        Preview3DEnableGuardEhCont=true once the vcpkg ports are rebuilt with
+        /guard:ehcont; the switch then flows to the compiler and the linker
+        exactly as CFG does. See ADR-0039.
+      -->
+      <GuardEHContMetadata Condition="'$(Preview3DEnableGuardEhCont)' == 'true'">true</GuardEHContMetadata>
     </ClCompile>
+    <Link>
+      <!-- /CETCOMPAT: mark the image compatible with CET shadow stacks. -->
+      <CETCompat>true</CETCompat>
+    </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
+      <!--
+        longPathAware, activeCodePage UTF-8, and explicit supportedOS entries.
+        mt.exe merges this with the linker-generated manifest, so the segment
+        heap, UAC trustInfo, and this file's WindowsSettings coexist.
+      -->
+      <AdditionalManifestFiles>$(MSBuildThisFileDirectory)shared\platform\app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
+  </ItemDefinitionGroup>
+
+  <!--
+    Fault/harness hooks (hang, crash, overallocate, child-noop, test-import
+    fault modes, delayed-batch parsing, ...) ship only in Debug. A Release
+    build is a production binary: it rejects every fault mode with a usage
+    exit, because the code paths are not compiled in. The restriction and
+    fault-recovery tests that need these modes are gated on the same macro and
+    are skipped (not failed) in Release; a Release-only test asserts the
+    rejection. See T09 (SEC-09) and ADR-0038.
+
+    PREVIEW3D_ENABLE_TEST_CONTROL additionally gates the viewer's external
+    local control surface (the app-smoke and activation-smoke flags, the other
+    smoke flags, the WM_APP+104 query/command handler, and WM_COPYDATA path
+    injection, plus the benchmark-worker-budget-failure fault switch). It ships
+    only in Debug so a shipping Release binary cannot be driven by a local
+    process. See T11 (SEC-11) and ADR-0040.
+  -->
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Debug'">
+    <ClCompile>
+      <PreprocessorDefinitions>PREVIEW3D_ENABLE_FAULT_HARNESS;PREVIEW3D_ENABLE_TEST_CONTROL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- /guard:cf is incompatible with /ZI (Edit and Continue). The MSBuild
+           default is already /Zi (ProgramDatabase), but state it explicitly so
+           a future project template cannot reintroduce /ZI and break the
+           shared CFG policy. The thumbnail provider documented this
+           interaction before CFG moved here. -->
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
   </ItemDefinitionGroup>
 </Project>

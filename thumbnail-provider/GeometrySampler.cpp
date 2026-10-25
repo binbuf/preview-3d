@@ -641,7 +641,7 @@ const SampledGeometry& DeterministicGeometrySampler::Result() const noexcept
 }
 
 std::vector<std::uint64_t> StratifiedOffsets(std::uint64_t count,
-                                             std::uint32_t strata) noexcept
+                                             std::uint32_t strata)
 {
     std::vector<std::uint64_t> offsets;
     if (count == 0 || strata == 0) {

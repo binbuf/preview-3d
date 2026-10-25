@@ -72,6 +72,9 @@ public:
         hasSeekEndSize_ = true;
     }
     void SetShortReadLimit(std::uint64_t limit) noexcept { shortReadLimit_ = limit; }
+    // A hostile stream may report an arbitrary raw ULARGE_INTEGER from
+    // STREAM_SEEK_END without going through signed position arithmetic.
+    void SetSeekEndReportOnly(bool value) noexcept { seekEndReportOnly_ = value; }
 
     // IUnknown
     HRESULT WINAPI QueryInterface(REFIID riid, void** ppvObject) noexcept override
@@ -143,6 +146,14 @@ public:
             case STREAM_SEEK_SET: base = 0; break;
             case STREAM_SEEK_CUR: base = static_cast<std::int64_t>(position_); break;
             case STREAM_SEEK_END:
+                if (seekEndReportOnly_) {
+                    if (newPosition != nullptr) {
+                        newPosition->QuadPart =
+                            hasSeekEndSize_ ? seekEndSize_
+                                            : static_cast<ULONGLONG>(data_.size());
+                    }
+                    return S_OK;
+                }
                 base = static_cast<std::int64_t>(hasSeekEndSize_ ? seekEndSize_
                                                                  : data_.size());
                 break;
@@ -209,6 +220,7 @@ private:
     std::uint64_t statSize_ = 0;
     bool hasSeekEndSize_ = false;
     std::uint64_t seekEndSize_ = 0;
+    bool seekEndReportOnly_ = false;
     std::uint64_t shortReadLimit_ = UINT64_MAX;
 };
 
@@ -343,6 +355,37 @@ TEST_CASE("an oversized STATSTG size hint fails fast", "[provider][stream]")
 
     CHECK(BoundedStreamSource::Create(&stream, Deadline{}, ledger, outcome) ==
           nullptr);
+    CHECK(outcome == ProviderOutcome::LimitExceeded);
+    CHECK(ledger.Reserved() == 0);
+}
+
+TEST_CASE("a negative STATSTG size sentinel is rejected", "[provider][stream]")
+{
+    // A hostile Stat may report -1 as a signed LONGLONG. Reinterpreted unsigned
+    // that is UINT64_MAX; it must fail closed, never become a validated size.
+    MemoryStream stream(MakeData(64));
+    stream.SetSeekable(false);
+    stream.SetStatSize(static_cast<std::uint64_t>(-1));
+    AllocationLedger ledger;
+    ProviderOutcome outcome = ProviderOutcome::Success;
+
+    CHECK(BoundedStreamSource::Create(&stream, Deadline{}, ledger, outcome) == nullptr);
+    CHECK(outcome == ProviderOutcome::LimitExceeded);
+    CHECK(ledger.Reserved() == 0);
+}
+
+TEST_CASE("a negative seek-end size sentinel is rejected", "[provider][stream]")
+{
+    // The STATSTG preflight is skipped, so the Seek(END) probe is the only size
+    // source; it too must reject the -1/unknown sentinel explicitly.
+    MemoryStream stream(MakeData(64));
+    stream.SetStatSupported(false);
+    stream.SetSeekEndSize(static_cast<std::uint64_t>(-1));
+    stream.SetSeekEndReportOnly(true);
+    AllocationLedger ledger;
+    ProviderOutcome outcome = ProviderOutcome::Success;
+
+    CHECK(BoundedStreamSource::Create(&stream, Deadline{}, ledger, outcome) == nullptr);
     CHECK(outcome == ProviderOutcome::LimitExceeded);
     CHECK(ledger.Reserved() == 0);
 }

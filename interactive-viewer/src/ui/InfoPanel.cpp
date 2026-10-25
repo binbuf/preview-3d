@@ -40,8 +40,8 @@ std::wstring FormatDimension(double value, double metersPerUnit)
 {
     std::wostringstream text;
     if (metersPerUnit > 0) value *= metersPerUnit;
-    if (value && std::abs(value) < 0.001) text << std::scientific << std::setprecision(3);
-    else text << std::fixed << std::setprecision(3);
+    if (value && std::abs(value) < 0.001) text << std::scientific << std::setprecision(3) << value;
+    else text << std::fixed << std::setprecision(3) << value;
     const std::wstring unit = metersPerUnit > 0
         ? Loc("infopanel.metreSuffix", L"m")
         : Loc("infopanel.unitSuffix", L"units");

@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Vlákno vykresľovania sa zastavilo počas inicializácie.",
   "failure.graphicsRecovery.summary": "Obnova grafiky zlyhala.",
   "cli.usage": "Použitie: Preview3D.exe [cesta k modelu]\n Preview3D.exe --open <cesta k modelu>",
-  "startup.smartAppControl": "Smart App Control je na tomto počítači aktívny a táto ukážková 3D zostava je nepodpísaná.\n\n",
   "warning.optionalFeatures": "Niektoré voliteľné funkcie glTF nie sú podporované. Je zobrazená ich záložná reprezentácia.",
   "warning.textures": "Niektoré textúry sa nepodarilo načítať. Zobrazia sa záložné textúry.",
   "warning.missingAssets": "Niektoré odkazované diela sa nepodarilo nájsť.",

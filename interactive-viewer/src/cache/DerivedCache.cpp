@@ -1,5 +1,6 @@
 #include "DerivedCache.h"
 
+#include <SafeFileOps.h>
 #include <platform/Sha256.h>
 #include <platform/Win32Handle.h>
 
@@ -7,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <span>
 
 namespace {
 
@@ -186,37 +188,15 @@ bool DerivedCache::Put(const CacheEntryKey& key, std::span<const std::byte> payl
     EvictUntilFits(sizeof(header) + payload.size());
 
     std::wstring finalPath = EntryPath(key);
-    std::wstring tempPath = finalPath + L".tmp";
 
-    bool ok;
-    {
-        platform::Win32Handle file(CreateFileW(tempPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                                FILE_ATTRIBUTE_NORMAL, nullptr));
-        if (!file) {
-            error = L"The temporary cache file could not be created.";
-            return false;
-        }
-
-        DWORD written = 0;
-        ok = WriteFile(file.get(), &header, sizeof(header), &written, nullptr) && written == sizeof(header);
-        if (ok && !payload.empty()) {
-            ok = WriteFile(file.get(), payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr)
-                && written == payload.size();
-        }
-        if (ok) {
-            ok = FlushFileBuffers(file.get()) != 0;
-        }
-    } // file closed before rename
-
-    if (!ok) {
-        DeleteFileW(tempPath.c_str());
-        error = L"Writing the cache entry failed.";
-        return false;
+    std::vector<std::byte> entry(sizeof(header) + payload.size());
+    std::memcpy(entry.data(), &header, sizeof(header));
+    if (!payload.empty()) {
+        std::memcpy(entry.data() + sizeof(header), payload.data(), payload.size());
     }
 
-    if (!MoveFileExW(tempPath.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-        DeleteFileW(tempPath.c_str());
-        error = L"The cache entry could not be committed.";
+    if (!preview3d::safeio::WriteFileAtomically(finalPath, std::span<const std::byte>(entry), true, error)) {
+        if (error.empty()) error = L"Writing the cache entry failed.";
         return false;
     }
     return true;

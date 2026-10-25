@@ -145,7 +145,35 @@ bool PickMesh(
 // new axis-aligned box enclosing them. Used to re-derive display/camera
 // bounds whenever the active root transform (ModelData::upAxisCorrection vs.
 // identity) changes, without touching the baked vertex data.
-void TransformBounds(
+//
+// Header-inline on purpose: the trusted viewer uses only this helper and the
+// ModelData types from this header, while the in-process GLB parser in
+// Model.cpp is no longer linked into the shipping executable (SEC-11). Keep
+// the body here so removing Model.cpp from Preview3D.vcxproj cannot leave an
+// unresolved symbol.
+inline void TransformBounds(
     const DirectX::XMFLOAT3& minimum, const DirectX::XMFLOAT3& maximum,
     DirectX::FXMMATRIX transform,
-    DirectX::XMFLOAT3& outMinimum, DirectX::XMFLOAT3& outMaximum);
+    DirectX::XMFLOAT3& outMinimum, DirectX::XMFLOAT3& outMaximum)
+{
+    const DirectX::XMVECTOR corners[8] = {
+        DirectX::XMVectorSet(minimum.x, minimum.y, minimum.z, 1.0f),
+        DirectX::XMVectorSet(maximum.x, minimum.y, minimum.z, 1.0f),
+        DirectX::XMVectorSet(minimum.x, maximum.y, minimum.z, 1.0f),
+        DirectX::XMVectorSet(maximum.x, maximum.y, minimum.z, 1.0f),
+        DirectX::XMVectorSet(minimum.x, minimum.y, maximum.z, 1.0f),
+        DirectX::XMVectorSet(maximum.x, minimum.y, maximum.z, 1.0f),
+        DirectX::XMVectorSet(minimum.x, maximum.y, maximum.z, 1.0f),
+        DirectX::XMVectorSet(maximum.x, maximum.y, maximum.z, 1.0f),
+    };
+    DirectX::XMVECTOR minAccum = DirectX::g_XMFltMax;
+    DirectX::XMVECTOR maxAccum = -DirectX::g_XMFltMax;
+    for (const DirectX::XMVECTOR& corner : corners)
+    {
+        const DirectX::XMVECTOR transformed = DirectX::XMVector3TransformCoord(corner, transform);
+        minAccum = DirectX::XMVectorMin(minAccum, transformed);
+        maxAccum = DirectX::XMVectorMax(maxAccum, transformed);
+    }
+    DirectX::XMStoreFloat3(&outMinimum, minAccum);
+    DirectX::XMStoreFloat3(&outMaximum, maxAccum);
+}

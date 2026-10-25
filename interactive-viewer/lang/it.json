@@ -286,7 +286,6 @@
   "failure.renderInit.summary": "Il thread di rendering si è interrotto durante l'inizializzazione.",
   "failure.graphicsRecovery.summary": "Il ripristino della grafica non è riuscito.",
   "cli.usage": "Utilizzo: Preview3D.exe [percorso-modello]\n Preview3D.exe --open <percorso-modello>",
-  "startup.smartAppControl": "Smart App Control è attivo su questo PC e questa build di anteprima 3D non è firmata.\n\n",
   "warning.optionalFeatures": "Alcune funzionalità glTF opzionali non sono supportate. Viene mostrata la loro rappresentazione di fallback.",
   "warning.textures": "Impossibile caricare alcune texture. Vengono mostrate le texture di fallback.",
   "warning.missingAssets": "Impossibile trovare alcune risorse a cui si fa riferimento.",

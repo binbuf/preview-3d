@@ -17,6 +17,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
+# Shared SEC-19/T19 metadata logic: installed-closure parsing, the SPDX license
+# mapping gate, and the release-version consistency gate.
+. (Join-Path $PSScriptRoot '..\ReleaseMetadata.ps1')
+
 function Resolve-FullPath([string]$Path) {
     return [System.IO.Path]::GetFullPath($Path)
 }
@@ -116,27 +120,6 @@ function Get-PeDependencies([string]$Dumpbin, [string]$Path) {
     } | Sort-Object -Unique)
 }
 
-function Read-VcpkgStatus([string]$StatusPath) {
-    $result = @{}
-    $current = @{}
-    foreach ($line in (Get-Content -LiteralPath $StatusPath)) {
-        if ([string]::IsNullOrWhiteSpace($line)) {
-            if ($current.ContainsKey('Package') -and -not $result.ContainsKey($current.Package)) {
-                $result[$current.Package] = $current
-            }
-            $current = @{}
-            continue
-        }
-        if ($line -match '^([^:]+):\s*(.*)$') {
-            $current[$matches[1]] = $matches[2]
-        }
-    }
-    if ($current.ContainsKey('Package') -and -not $result.ContainsKey($current.Package)) {
-        $result[$current.Package] = $current
-    }
-    return $result
-}
-
 function Get-Sha256([string]$Path) {
     $stream = [System.IO.File]::OpenRead($Path)
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -150,6 +133,11 @@ function Get-Sha256([string]$Path) {
 }
 
 $repository = (Resolve-FullPath $RepositoryRoot).TrimEnd('\')
+
+# SEC-19/T19: fail before any staging if vcpkg.json, Directory.Solution.targets,
+# Preview3D.nsi, and the requested -Version disagree.
+Assert-ReleaseVersionConsistency -RepositoryRoot $repository -ExpectedVersion $Version | Out-Null
+
 $buildOutput = Join-Path $repository 'x64\Release'
 $distributionDirectory = $Distribution.ToLowerInvariant()
 $artifacts = Join-Path $repository "artifacts\$distributionDirectory"
@@ -274,18 +262,19 @@ foreach ($name in $stepHostCrt) {
     Copy-RequiredFile (Join-Path $crtDirectory $name) (Join-Path $stepHostStage $name)
 }
 
-$thirdParty = @('basisu', 'bzip2', 'draco', 'fastgltf', 'ktx', 'lib3mf', 'libwebp', 'libzip', 'meshoptimizer', 'opencascade', 'openusd', 'simdjson', 'tbb', 'tinyusdz', 'ufbx', 'zlib', 'zstd')
-$vcpkgTripletRoot = Join-Path $repository 'vcpkg_installed\x64-windows-static-md\x64-windows-static-md'
-$vcpkgStatusPath = Join-Path $repository 'vcpkg_installed\x64-windows-static-md\vcpkg\status'
-# OCCT is deliberately installed only for the dedicated STEP host, so its
-# license and metadata come from that manifest's separate vcpkg tree.
-$stepVcpkgRoot = Join-Path $repository 'compatibility-host-step\vcpkg_installed\x64-windows-static-md'
-foreach ($name in $thirdParty) {
-    if ($name -eq 'opencascade') {
-        Copy-RequiredFile (Join-Path $stepVcpkgRoot 'share\opencascade\copyright') (Join-Path $licensesStage "$name.txt")
-    } else {
-        Copy-RequiredFile (Join-Path $vcpkgTripletRoot "share\$name\copyright") (Join-Path $licensesStage "$name.txt")
-    }
+# SEC-19/T19: the shipped license set is generated from the installed vcpkg
+# closure (root manifest plus each isolated STEP tree), not a hand-maintained
+# array. Packaging fails if any installed target package has no reviewed SPDX
+# mapping or no upstream copyright file, so a newly added port cannot silently
+# omit its notice.
+$licenseMapping = Import-DependencyLicenseMapping $repository
+$closure = Get-InstalledDependencyClosure $repository
+Assert-ManifestRootsPresent -RepositoryRoot $repository -Closure $closure
+Assert-LicenseMappingCoversClosure -Closure $closure -Mapping $licenseMapping
+Assert-CopyrightFilesExist -Closure $closure
+$closureNames = @($closure.Keys | Sort-Object)
+foreach ($name in $closureNames) {
+    Copy-RequiredFile $closure[$name]['copyrightPath'] (Join-Path $licensesStage "$name.txt")
 }
 if ($Distribution -eq 'Portable') {
     Copy-RequiredFile (Join-Path $repository 'LICENSE') (Join-Path $stage 'LICENSE.txt')
@@ -293,7 +282,15 @@ if ($Distribution -eq 'Portable') {
     Copy-RequiredFile (Join-Path $repository 'LICENSE') (Join-Path $stage 'LICENSE')
 }
 Copy-RequiredFile (Join-Path $repository 'NOTICE') (Join-Path $stage 'NOTICE')
-Copy-RequiredFile (Join-Path $repository 'packaging\portable\THIRD-PARTY-NOTICES.txt') (Join-Path $stage 'THIRD-PARTY-NOTICES.txt')
+# The component index is generated from the same closure that produced the
+# licenses\ files, so the two cannot disagree.
+$noticeTemplate = Get-Content -LiteralPath (Join-Path $repository 'packaging\portable\THIRD-PARTY-NOTICES.txt') -Raw
+$noticeIndex = @($closureNames | ForEach-Object {
+    $entry = $closure[$_]
+    '  {0,-18} {1} {2}' -f "$_.txt", $_, $entry['version']
+}) -join [Environment]::NewLine
+$noticeTemplate.Replace('@LICENSE_LIST@', $noticeIndex) |
+    Set-Content -LiteralPath (Join-Path $stage 'THIRD-PARTY-NOTICES.txt') -Encoding UTF8
 if ($Distribution -eq 'Portable') {
     Copy-RequiredFile (Join-Path $repository 'packaging\portable\PORTABLE-README.txt') (Join-Path $stage 'README.txt')
     Copy-RequiredFile (Join-Path $repository 'packaging\portable\Remove-Preview3DProfile.ps1') (Join-Path $stage 'Remove-Preview3DProfile.ps1')
@@ -420,40 +417,25 @@ if ($Distribution -eq 'Installer') {
 }
 
 $baseline = (Get-Content -LiteralPath (Join-Path $repository 'vcpkg-configuration.json') -Raw | ConvertFrom-Json).'default-registry'.baseline
-$status = Read-VcpkgStatus $vcpkgStatusPath
-# OCCT is absent from the root status because only the dedicated STEP host
-# manifest installs it; take its version/ABI from that tree's SPDX record.
-$stepSpdx = Get-Content -LiteralPath (Join-Path $stepVcpkgRoot 'share\opencascade\vcpkg.spdx.json') -Raw | ConvertFrom-Json
-$occtPackage = $stepSpdx.packages | Where-Object { $_.name -eq 'opencascade' } | Select-Object -First 1
-$occtAbiPackage = $stepSpdx.packages | Where-Object { $_.name -eq 'opencascade:x64-windows-static-md' } | Select-Object -First 1
-if ($null -eq $occtPackage) { throw 'The STEP-host OCCT SPDX record has no opencascade package.' }
 $components = @()
-foreach ($name in $thirdParty) {
-    $entry = $null
-    $abi = $null
-    if ($name -eq 'opencascade') {
-        $packageVersion = $occtPackage.versionInfo
-        if ($null -ne $occtAbiPackage) { $abi = $occtAbiPackage.versionInfo }
-    } else {
-        if (-not $status.ContainsKey($name)) { throw "vcpkg status has no entry for '$name'." }
-        $entry = $status[$name]
-        $packageVersion = if ($entry.ContainsKey('Version')) { $entry.Version } elseif ($entry.ContainsKey('Version-Semver')) { $entry.'Version-Semver' } else { 'unknown' }
-        if ($entry.ContainsKey('Port-Version') -and $entry.'Port-Version' -ne '0') { $packageVersion = "$packageVersion#$($entry.'Port-Version')" }
-        if ($entry.ContainsKey('Abi')) { $abi = $entry.Abi }
-    }
+foreach ($name in $closureNames) {
+    $entry = $closure[$name]
+    $packageVersion = $entry['version']
+    $spdx = $licenseMapping[$name]['spdx']
     $component = [ordered]@{
         type = 'library'
         name = $name
         version = $packageVersion
         'bom-ref' = "pkg:vcpkg/$name@${packageVersion}?triplet=x64-windows-static-md"
-        licenses = @(@{ license = @{ name = "See licenses/$name.txt" } })
+        licenses = @(@{ expression = $spdx })
         properties = @(
             @{ name = 'preview3d:vcpkg-baseline'; value = $baseline },
-            @{ name = 'preview3d:architecture'; value = 'x64-windows-static-md' }
+            @{ name = 'preview3d:architecture'; value = 'x64-windows-static-md' },
+            @{ name = 'preview3d:license-file'; value = "licenses/$name.txt" }
         )
     }
-    if ($abi) {
-        $component.properties += @{ name = 'preview3d:vcpkg-abi'; value = $abi }
+    if ($entry['abi']) {
+        $component.properties += @{ name = 'preview3d:vcpkg-abi'; value = $entry['abi'] }
     }
     $components += $component
 }

@@ -133,6 +133,18 @@ void RunHangProbe()
     WaitForSingleObject(neverSignaled, INFINITE);
 }
 
+void RunCpuSpinProbe()
+{
+    Report("CPU_PROBE", "PASS", 0);
+    // A volatile accumulator keeps the loop from being optimized away and
+    // consumes user-mode CPU without ever yielding, so a Job CPU-time limit
+    // (not a wall-clock timer) is what must terminate this process.
+    volatile unsigned long long accumulator = 0;
+    for (;;) {
+        accumulator = accumulator * 1103515245ull + 12345ull;
+    }
+}
+
 void ReportDone()
 {
     ReportLine("DONE\n", 5);
