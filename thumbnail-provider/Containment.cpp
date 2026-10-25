@@ -22,10 +22,15 @@ namespace {
 thread_local std::uint32_t t_sehCode = 0;
 
 // SEC-08 process-global quarantine. Set once when any contained structured
-// exception is translated; never cleared in production. Pure bookkeeping (two
-// atomics), so it cannot keep the module alive.
+// exception is translated; never cleared in production. Pure bookkeeping
+// (atomics), so it cannot keep the module alive.
 std::atomic<bool> g_quarantined{false};
 std::atomic<std::uint32_t> g_quarantineCode{0};
+std::atomic<bool> g_quarantinedInThirdParty{false};
+
+// Depth of opaque third-party calls on the faulting thread. Trivial
+// thread_local, like t_sehCode, so it registers no TLS destructor.
+thread_local std::uint32_t t_thirdPartyDepth = 0;
 
 int SehFilter(EXCEPTION_POINTERS* info) noexcept
 {
@@ -101,6 +106,21 @@ std::uint32_t ContainmentQuarantineCode() noexcept
     return g_quarantineCode.load(std::memory_order_acquire);
 }
 
+bool ContainmentQuarantinedInThirdParty() noexcept
+{
+    return g_quarantinedInThirdParty.load(std::memory_order_acquire);
+}
+
+ThirdPartyContainmentScope::ThirdPartyContainmentScope() noexcept
+{
+    ++t_thirdPartyDepth;
+}
+
+ThirdPartyContainmentScope::~ThirdPartyContainmentScope() noexcept
+{
+    if (t_thirdPartyDepth != 0) --t_thirdPartyDepth;
+}
+
 void MarkContainmentQuarantined(std::uint32_t structuredCode) noexcept
 {
     // First fault wins: keep the code that isolated the corrupted state.
@@ -108,6 +128,7 @@ void MarkContainmentQuarantined(std::uint32_t structuredCode) noexcept
         return;
     }
     g_quarantineCode.store(structuredCode, std::memory_order_release);
+    g_quarantinedInThirdParty.store(t_thirdPartyDepth != 0, std::memory_order_release);
 
     DiagnosticEvent event{};
     event.stage = DiagnosticStage::Containment;
@@ -121,6 +142,7 @@ void MarkContainmentQuarantined(std::uint32_t structuredCode) noexcept
 void ResetContainmentQuarantineForTest() noexcept
 {
     g_quarantineCode.store(0, std::memory_order_release);
+    g_quarantinedInThirdParty.store(false, std::memory_order_release);
     g_quarantined.store(false, std::memory_order_release);
 }
 

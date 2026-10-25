@@ -68,6 +68,10 @@ def derive(operation: str, data: bytes) -> bytes:
         return insert_before_data_end(data, b"#999999=PRODUCT('oops;\n")
     if operation == 'unterminated-comment':
         return insert_before_data_end(data, b'/* oops\n')
+    if operation == 'nested-empty-list':
+        # SEC-17: an omitted parameter inside a nested aggregate faults OCCT
+        # 7.8.1 StepData_StepReaderData::SetEntityNumbers; admission rejects it.
+        return insert_before_data_end(data, b"#999999=T('',((,())));\n")
     raise ValueError(f'unknown operation: {operation}')
 
 

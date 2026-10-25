@@ -63,3 +63,15 @@ restored.
   surrogate death is the recorded allowed failure, and any other surrogate death
   fails the soak; `ProviderSmokeHost.exe --soak-classify-selftest` covers the
   exit-code classifier.
+- **SEC-17 follow-up (2026-10-25).** The promoted lane exposed contained OCCT
+  7.8.1 faults on malformed STEP records. Two are now refused before the kernel:
+  the Part-21 scanner rejects an omitted parameter inside a nested aggregate
+  (`SetEntityNumbers`), and the adapter rejects any `StepData_UndefinedEntity`
+  after the read and before XDE `Transfer` (color styles null-deref on an
+  unknown type). Remaining null mandatory handles inside OCCT translation are
+  converted to `MalformedData` by containment; `ProviderFuzz` records a
+  structured fault as `contained third-party fault` and resets the quarantine
+  when it was raised inside an opaque `ThirdPartyContainmentScope` call, while a
+  product-owned fault still aborts. The minimal nested-aggregate input is a
+  committed provider seed; patching the pinned OCCT kernel is an upstream
+  follow-up, not a product fix.

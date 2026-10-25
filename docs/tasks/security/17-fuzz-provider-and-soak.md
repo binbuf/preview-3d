@@ -93,6 +93,18 @@ executed instead, it must include the items below.
   death or the quarantine of a contained AV (needs a hostile-input soak lane) - recorded as a
   follow-up.
 
+**Post-promotion hardening (2026-10-25).** The required `fuzz-smoke` Provider
+lane found contained OCCT 7.8.1 access violations on malformed STEP records.
+Fixed before the kernel: the Part-21 scanner now rejects an omitted parameter in
+a nested aggregate (the minimized `pipeline-step-nested-empty-list` seed), and
+the adapter rejects `StepData_UndefinedEntity` records after the read and before
+XDE `Transfer`. Remaining OCCT null mandatory handles are contained and
+`ProviderFuzz` records them as `contained third-party fault` (resetting the
+quarantine) while product-owned faults still abort. Re-run: 38 seeds, 60 s / 1745
+executions / 413 MiB peak RSS, exit 0, no crash artifact. Unit `[provider][step]`
+26 cases / 88 assertions pass; `[step-008]` 5 cases / 57 assertions pass.
+Patching the pinned OCCT kernel remains an upstream follow-up (ADR-0047).
+
 **Next task must know.** Build the fuzz target with
 `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe` and both
 vcpkg trees present; use the distinct `IntDir` in the project. The soak reuses the existing

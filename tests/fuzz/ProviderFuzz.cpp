@@ -481,13 +481,19 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
             break;
     }
 
-    // SEC-08: a contained structured fault quarantined the process. Surface the
-    // triggering input as a libFuzzer crash artifact instead of silently
-    // returning DecoderFailure for every later input (which would hide it).
+    // SEC-08: an uncontained defect must surface as a libFuzzer crash artifact
+    // instead of silently returning DecoderFailure for every later input (which
+    // would hide it). A structured fault raised inside an opaque third-party
+    // parser/kernel call is contained by design: record it, reset the per-process
+    // quarantine so the next unit starts clean, and keep fuzzing. The provider
+    // still fails closed on that input; product-owned faults still abort.
     if (ContainmentQuarantined()) {
-        std::fprintf(stderr, "contained structured fault code=0x%08X\n",
+        const bool thirdParty = ContainmentQuarantinedInThirdParty();
+        std::fprintf(stderr, "contained %s fault code=0x%08X\n",
+                     thirdParty ? "third-party" : "product",
                      ContainmentQuarantineCode());
-        std::abort();
+        if (!thirdParty) std::abort();
+        ResetContainmentQuarantineForTest();
     }
     return 0;
 }

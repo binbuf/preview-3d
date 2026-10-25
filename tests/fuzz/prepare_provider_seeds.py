@@ -184,6 +184,14 @@ def main():
         envelope(PIPELINE, read(glb)[:32], family=GLTF))
     add('pipeline-step-truncated.pipeline.seed',
         envelope(PIPELINE, read(step)[:64], family=STEP))
+    # SEC-17 regression: OCCT 7.8.1 faults in SetEntityNumbers on an omitted
+    # parameter inside a nested aggregate. Admission now rejects it, so this
+    # stays a safe no-crash seed that still exercises the preflight path.
+    add('pipeline-step-nested-empty-list.pipeline.seed',
+        envelope(PIPELINE,
+                 b"ISO-10303-21;HEADER;ENDSEC;DATA;#1=T('',((,())));"
+                 b"ENDSEC;END-ISO-10303-21;",
+                 family=STEP))
     add('pipeline-stl-nonseekable.pipeline.seed',
         envelope(PIPELINE, stl, family=STL, flags=NON_SEEKABLE))
     add('pipeline-gltf-statfail.pipeline.seed',

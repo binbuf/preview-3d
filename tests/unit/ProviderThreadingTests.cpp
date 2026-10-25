@@ -190,11 +190,13 @@ TEST_CASE("a contained structured fault quarantines the process until reset",
 {
     QuarantineReset reset;
     CHECK_FALSE(ContainmentQuarantined());
+    CHECK_FALSE(ContainmentQuarantinedInThirdParty());
     CHECK(ContainmentQuarantineCode() == 0u);
 
     const ContainmentResult result = RunContained(&RaisedStructuredCall, nullptr);
     CHECK(result.structuredException);
     CHECK(ContainmentQuarantined());
+    CHECK_FALSE(ContainmentQuarantinedInThirdParty());
     CHECK(ContainmentQuarantineCode() ==
           static_cast<std::uint32_t>(EXCEPTION_ACCESS_VIOLATION));
 
@@ -209,7 +211,25 @@ TEST_CASE("a contained structured fault quarantines the process until reset",
 
     ResetContainmentQuarantineForTest();
     CHECK_FALSE(ContainmentQuarantined());
+    CHECK_FALSE(ContainmentQuarantinedInThirdParty());
     CHECK(ContainmentQuarantineCode() == 0u);
+}
+
+TEST_CASE("a fault inside a third-party scope is marked as third-party",
+          "[provider][threading][quarantine]")
+{
+    QuarantineReset reset;
+    {
+        ThirdPartyContainmentScope thirdParty;
+        const ContainmentResult result = RunContained(&RaisedStructuredCall, nullptr);
+        CHECK(result.structuredException);
+    }
+    CHECK(ContainmentQuarantined());
+    CHECK(ContainmentQuarantinedInThirdParty());
+
+    ResetContainmentQuarantineForTest();
+    CHECK_FALSE(ContainmentQuarantined());
+    CHECK_FALSE(ContainmentQuarantinedInThirdParty());
 }
 
 TEST_CASE("a returned call past the stop point is rejected after the fact",

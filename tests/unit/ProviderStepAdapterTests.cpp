@@ -203,6 +203,18 @@ std::vector<std::byte> Ascii(std::string_view text)
     return bytes;
 }
 
+std::vector<std::byte> ReplaceOnce(std::vector<std::byte> bytes, std::string_view from,
+                                   std::string_view to)
+{
+    std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    const std::size_t position = text.find(from);
+    if (position == std::string::npos) {
+        return {};
+    }
+    text.replace(position, from.size(), to);
+    return Ascii(text);
+}
+
 bool AllFinite(const CollectSink& sink)
 {
     for (const TriangleSample& triangle : sink.triangles) {
@@ -473,6 +485,44 @@ TEST_CASE("invalid faceted topology is a typed failure", "[provider][step]")
     // or a contained decode fault), never a fabricated success bitmap.
     const ProviderOutcome outcome = RunPipeline(source);
     CHECK((outcome == ProviderOutcome::BadFormat || outcome == ProviderOutcome::DecoderFailure));
+}
+
+TEST_CASE("an omitted parameter in a nested STEP aggregate is rejected by admission",
+          "[provider][step][security]")
+{
+    // SEC-17: OCCT 7.8.1 StepData_StepReaderData::SetEntityNumbers faults on
+    // this shape. The product-owned scanner must reject it before ReadStream.
+    ByteSource source(Ascii("ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n"
+                            "#1=T('',((,())));\n"
+                            "ENDSEC;\nEND-ISO-10303-21;\n"));
+    Deadline deadline;
+    AllocationLedger ledger;
+    CollectSink sink;
+
+    StepAdapter adapter;
+    const AdapterResult result = RunAdapter(adapter, source, deadline, ledger, sink);
+    CHECK(result.parse == ErrorCode::MalformedData);
+    CHECK(result.admissionRejected);
+}
+
+TEST_CASE("an unknown STEP entity type fails before XDE color transfer",
+          "[provider][step][security]")
+{
+    // SEC-17: a one-bit type-name typo in SURFACE_SIDE_STYLE left an undefined
+    // entity that OCCT's XDE color transfer dereferenced. The adapter rejects
+    // any StepData_UndefinedEntity after the read and before Transfer.
+    std::vector<std::byte> bytes = ReplaceOnce(Fixture("part_ap214.stp"),
+                                               "SURFACE_SIDE_STYLE", "SURFACE_SADE_STYLE");
+    REQUIRE_FALSE(bytes.empty());
+    ByteSource source(std::move(bytes));
+    Deadline deadline;
+    AllocationLedger ledger;
+    CollectSink sink;
+
+    StepAdapter adapter;
+    const AdapterResult result = RunAdapter(adapter, source, deadline, ledger, sink);
+    CHECK(result.parse == ErrorCode::MalformedData);
+    CHECK_FALSE(result.admissionRejected);
 }
 
 TEST_CASE("non-Part-21 bytes are rejected by admission", "[provider][step]")

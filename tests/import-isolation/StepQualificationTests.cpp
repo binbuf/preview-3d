@@ -153,6 +153,20 @@ TEST_CASE("STEP-008 admission gives every malformed or unsupported family a type
         {"duplicate-entity", Part21("#1=A;\n#1=B;\n"), StepPreflightStatus::DuplicateEntity},
         {"zero-entity-id", Part21("#0=A;\n"), StepPreflightStatus::DuplicateEntity},
         {"impossible-entity-id", Part21("#99999999999=A;\n"), StepPreflightStatus::DuplicateEntity},
+        // SEC-17 finding: OCCT 7.8.1 StepData_StepReaderData::SetEntityNumbers
+        // faults on an omitted parameter inside a nested aggregate. Admission
+        // must reject the shape before ReadStream.
+        {"nested-empty-list", Part21("#1=T('',((,())));\n"),
+         StepPreflightStatus::MalformedSyntax},
+        {"nested-empty-list-trailing", Part21("#1=T('',((,()),));\n"),
+         StepPreflightStatus::MalformedSyntax},
+        {"nested-empty-list-deep", Part21("#1=T('',(((,()))));\n"),
+         StepPreflightStatus::MalformedSyntax},
+        // A top-level omitted attribute and empty/nested lists without an
+        // omitted element remain admitted.
+        {"top-level-omitted", Part21("#1=T('',,());\n"), StepPreflightStatus::Ok},
+        {"nested-list-values", Part21("#1=T('',((0.,0.),(0.,0.)));\n"),
+         StepPreflightStatus::Ok},
         {"external-file-population",
          Part21("#1=FILE_POPULATION(('AP214'),('x'),($),$);\n"),
          StepPreflightStatus::ExternalDocument},

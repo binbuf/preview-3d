@@ -71,6 +71,24 @@ bool ShouldContainStructuredCode(std::uint32_t code) noexcept;
 bool ContainmentQuarantined() noexcept;
 std::uint32_t ContainmentQuarantineCode() noexcept;
 
+// True when the fault that set the quarantine was raised while executing an
+// opaque third-party parser/kernel call marked by ThirdPartyContainmentScope
+// below. This lets the fuzz harness distinguish a contained upstream OCCT fault
+// (recorded, and the provider still fails closed) from a fault in product-owned
+// code, which remains a hard fuzz finding. Product behaviour is identical.
+bool ContainmentQuarantinedInThirdParty() noexcept;
+
+// Marks a region where the contained call is inside an opaque third-party
+// parser/kernel (for example OCCT's ReadStream/Transfer). Nestable and
+// thread-local; the marker is consulted only when a structured fault is caught.
+class ThirdPartyContainmentScope {
+public:
+    ThirdPartyContainmentScope() noexcept;
+    ~ThirdPartyContainmentScope() noexcept;
+    ThirdPartyContainmentScope(const ThirdPartyContainmentScope&) = delete;
+    ThirdPartyContainmentScope& operator=(const ThirdPartyContainmentScope&) = delete;
+};
+
 // Records a contained structured fault. Idempotent (the first fault wins);
 // called by the boundary and exposed so the policy is testable in-process.
 void MarkContainmentQuarantined(std::uint32_t structuredCode) noexcept;

@@ -342,6 +342,8 @@ void StepPart21Scanner::ScanTokens(std::string_view text)
     char quote = '\'';
     bool pendingQuoteEnd = false;
     bool previousSlash = false;
+    std::uint32_t depth = 0;
+    char previousSignificant = '\0';
 
     for (std::size_t i = 0; i < text.size(); ++i) {
         const char c = text[i];
@@ -355,6 +357,7 @@ void StepPart21Scanner::ScanTokens(std::string_view text)
                 if (c == quote) { pendingQuoteEnd = false; continue; }
                 pendingQuoteEnd = false;
                 inString = false;
+                previousSignificant = quote;
                 // fall through to process c outside the string
             } else if (c == quote) {
                 pendingQuoteEnd = true;
@@ -370,7 +373,40 @@ void StepPart21Scanner::ScanTokens(std::string_view text)
             if (previousSlash && c == '*') { previousSlash = false; inComment = true; continue; }
             previousSlash = false;
         }
-        if (c == '\'' || c == '"') { inString = true; quote = c; continue; }
+        if (c == '\'' || c == '"') { inString = true; quote = c; previousSignificant = c; continue; }
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v') {
+            continue;
+        }
+        // An omitted parameter inside a nested aggregate is not a legal list
+        // element. OCCT 7.8.1 StepData_StepReaderData::SetEntityNumbers walks
+        // its sublist table with an unchecked index on that shape and faults
+        // inside ReadStream (SEC-17 finding). Reject it at admission, before
+        // the kernel sees the file: a comma at depth >= 2 with no value before
+        // it (or before the closing parenthesis) means an empty nested element.
+        if (c == '(') {
+            ++depth;
+            previousSignificant = c;
+            continue;
+        }
+        if (c == ')') {
+            if (depth >= 2 && previousSignificant == ',') {
+                Fail(StepPreflightStatus::MalformedSyntax);
+                return;
+            }
+            if (depth > 0) --depth;
+            previousSignificant = c;
+            continue;
+        }
+        if (c == ',') {
+            if (depth >= 2
+                && (previousSignificant == '(' || previousSignificant == ',')) {
+                Fail(StepPreflightStatus::MalformedSyntax);
+                return;
+            }
+            previousSignificant = c;
+            continue;
+        }
+        previousSignificant = c;
         if (c == '#') {
             std::size_t index = i + 1;
             while (index < text.size() && IsDigitByte(text[index])) ++index;

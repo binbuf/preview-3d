@@ -291,7 +291,37 @@ release gate (SEC-13/T13). The seed preparer refuses a non-empty directory
 because libFuzzer mutates its corpus in place. Measured Release smoke on the
 reference machine: 30 s / 590 executions / 330 MiB peak RSS, and 60 s / 788
 executions / 447 MiB peak RSS on 36 seeds (SEC-17); re-run by T25, 30 s / 580
-executions / 338 MiB peak RSS on 37 seeds, exit 0, no crash/ASan report.
+executions / 338 MiB peak RSS on 37 seeds, exit 0, no crash/ASan report. The
+SEC-17 hardening re-run: 60 s / 1745 executions / 413 MiB peak RSS on 38 seeds,
+exit 0, no crash artifact (contained third-party faults recorded).
+
+A contained structured fault raised inside an opaque third-party parser/kernel
+call (marked by `ThirdPartyContainmentScope`) is recorded as
+`contained third-party fault code=...` and the harness resets the quarantine so
+the next unit starts clean; the provider still fails closed on that input. A
+contained fault in product-owned code still aborts and produces a crash
+artifact. This keeps the required gate from going red on the pinned OCCT
+kernel's null-handle faults on malformed records, while product defects remain
+hard findings.
+
+**SEC-17 fuzz findings.** The post-promotion run found three contained OCCT
+7.8.1 faults on malformed STEP inputs:
+
+- `StepData_StepReaderData::SetEntityNumbers` writes with an unchecked sublist
+  index for an omitted parameter inside a nested aggregate (`#1=T('',((,())));`).
+  `StepPart21Preflight` now rejects that shape as `MalformedSyntax`; the
+  minimized input is the `pipeline-step-nested-empty-list` seed.
+- XDE color transfer (`STEPConstruct_Styles` -> `StepVisual_SurfaceSideStyle::
+  NbStyles`) null-derefs when a referenced style entity has an unknown type
+  (one-bit `SURFACE_SIDE_STYLE` -> `SURFACE_SADE_STYLE` typo). The STEP adapter
+  now rejects any `StepData_UndefinedEntity` after the read and before
+  `Transfer`.
+- Translation of malformed records can still construct typed OCCT objects with
+  null mandatory handles (`StepGeom_Vector::Orientation`,
+  `StepGeom_CartesianPoint::NbCoordinates`); the containment boundary converts
+  those to `MalformedData` and the harness records the third-party fault.
+  Patching the pinned OCCT kernel itself is tracked as an upstream follow-up
+  (ADR-0047).
 
 The surrogate soak that proves Explorer stability across concurrent DllHost
 apartments, repeated load/unload and thumbnail-cache churn is documented in

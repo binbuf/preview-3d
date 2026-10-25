@@ -250,6 +250,15 @@ is recorded as the documented *allowed* failure with its exit code (not a pass),
 and any other surrogate death fails the soak. `ProviderSmokeHost.exe
 --soak-classify-selftest` exercises the exit-code classifier deterministically.
 
+The SEC-17 fuzz harness distinguishes the origin of a contained fault. A fault
+raised inside an opaque third-party parser/kernel scope is recorded as
+`contained third-party fault` and the harness clears the per-input quarantine so
+fuzzing continues; the provider still fails closed for that input. A contained
+fault in product-owned code aborts and produces a crash artifact. Two STEP
+malformed-record classes are additionally refused before OCCT (nested omitted
+parameters and undefined entity types), and the remaining pinned-kernel null
+handles are an upstream follow-up (ADR-0047).
+
 ## Threat model
 
 An attacker may control:

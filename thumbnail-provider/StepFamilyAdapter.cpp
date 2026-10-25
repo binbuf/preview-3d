@@ -29,9 +29,13 @@
 #include <Bnd_Box.hxx>
 #include <IMeshTools_Parameters.hxx>
 #include <IFSelect_ReturnStatus.hxx>
+#include <Interface_InterfaceModel.hxx>
+#include <Interface_ReportEntity.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Quantity_Color.hxx>
 #include <Quantity_ColorRGBA.hxx>
+#include <Standard_Type.hxx>
+#include <StepData_UndefinedEntity.hxx>
 #include <STEPCAFControl_Reader.hxx>
 #include <Standard_Failure.hxx>
 #include <TColStd_SequenceOfAsciiString.hxx>
@@ -582,6 +586,7 @@ struct StepAdapter::Impl {
 
         IFSelect_ReturnStatus readStatus = IFSelect_RetFail;
         try {
+            ThirdPartyContainmentScope thirdParty;
             readStatus = reader.ReadStream("preview3d.step", stream);
         } catch (const Standard_Failure&) {
             // An adversarial Part-21 topology can make OCCT raise while building
@@ -593,8 +598,33 @@ struct StepAdapter::Impl {
         if (deadline != nullptr && !deadline->Checkpoint()) return ErrorCode::Cancelled;
         if (reader.ChangeReader().NbRootsForTransfer() <= 0) return ErrorCode::EmptyGeometry;
 
+        // Unknown STEP entity types are represented as StepData_UndefinedEntity.
+        // OCCT 7.8.1 XDE color transfer assumes a referenced style entity has
+        // its declared type and null-derefs when it is actually undefined
+        // (SEC-17: a one-bit type-name typo in SURFACE_SIDE_STYLE faulted in
+        // StepVisual_SurfaceSideStyle::NbStyles during ReadColors). Reject the
+        // file before Transfer instead of relying on the containment boundary.
+        {
+            const Handle(Interface_InterfaceModel) model = reader.ChangeReader().Model();
+            if (!model.IsNull()) {
+                for (Standard_Integer index = 1; index <= model->NbEntities(); ++index) {
+                    Handle(Standard_Transient) entity = model->Value(index);
+                    if (model->IsReportEntity(index, Standard_False)) {
+                        const Handle(Interface_ReportEntity) report =
+                            model->ReportEntity(index, Standard_False);
+                        if (!report.IsNull()) entity = report->Concerned();
+                    }
+                    if (!entity.IsNull()
+                        && entity->IsKind(STANDARD_TYPE(StepData_UndefinedEntity))) {
+                        return ErrorCode::MalformedData;
+                    }
+                }
+            }
+        }
+
         bool transferred = false;
         try {
+            ThirdPartyContainmentScope thirdParty;
             transferred = reader.Transfer(document);
         } catch (const Standard_Failure&) {
             return ErrorCode::MalformedData;

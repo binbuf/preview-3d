@@ -41,8 +41,12 @@ surrogate as crash containment, not a security boundary.
   `[host][containment][quarantine]` injects a real access violation through the shipped boundary and
   asserts the refusal; `[host][step][concurrency]` drives two STEP requests in one surrogate.
 - A fault that quarantines the surrogate is still fuzzed and fixed (SEC-17/T43); containment and
-  quarantine are last-resort resilience, never a correctness mechanism.
-- The quarantine adds two process-global atomics and the OCCT lock adds no import; the two-symbol
+  quarantine are last-resort resilience, never a correctness mechanism. Exception: the fuzz harness
+  records a fault raised inside an opaque third-party parser/kernel scope as `contained
+  third-party fault` and clears the per-input quarantine, because the pinned OCCT kernel's null
+  handles on malformed records are an upstream follow-up (ADR-0047); a product-owned contained fault
+  still aborts. The provider still fails closed either way.
+- The quarantine adds three process-global atomics and the OCCT lock adds no import; the two-symbol
   `PRIVATE` export surface and the dependency-closure rule are unchanged.
 - Rejected: fail-fast (drops unrelated in-flight work and cannot be positively asserted in the
   in-process harness); a `std::mutex` (can throw at a `noexcept` acquisition site); leaving the
