@@ -8,6 +8,77 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.5.1] - 2026-10-24
+
+### Added
+
+- **Auto-orbit.** The title bar's new Orbit button continuously turns the model
+  around its vertical axis. Hovering the button opens a speed slider
+  (5–180°/s), the HUD confirms **Orbit on**/**Orbit off**, and the control is
+  exposed to screen readers as a check button with an adjacent slider. Orbit
+  stops when a new model starts loading.
+- **Floating Reset-view button.** After the camera has moved, a Reset button
+  fades in at the top-left of the viewport, animates the camera back to its
+  home framing, and fades out when it arrives. It has its own tooltip and
+  accessibility entry, and skips the animation when reduced motion is enabled.
+- **Signed, attested releases.** The release workflow now signs the installer
+  and portable artifacts fail-closed, publishes GitHub build-provenance
+  attestations, and attaches an SPDX SBOM, a component manifest, and
+  PKCS#7-signed SHA-256 checksums. Publishing is draft-only and no-clobber, and
+  all third-party actions are pinned and kept current by Dependabot.
+- **Required CI and fuzz gates.** Pull requests and releases now run the unit,
+  import-isolation, and provider-host suites, plus `fuzz-smoke` lanes for STL,
+  PLY, OBJ, glTF, and the full thumbnail-provider pipeline, including a real
+  `dllhost.exe` surrogate soak.
+
+### Changed
+
+- **Streamlined viewport chrome.** The title bar's Fit button is hidden for now
+  (framing remains on `F`, Numpad `.`, and double-click), and Reset moved from
+  the title bar to the viewport button that appears only when there is
+  something to reset.
+- **Version and license metadata are generated and checked.** `vcpkg.json`,
+  `Directory.Solution.targets`, the installer defaults, and the packaging
+  scripts must agree, and the installed vcpkg closure must be covered by
+  `THIRD-PARTY-LICENSES.md` and the generated SPDX SBOM; both checks fail the
+  build rather than drifting.
+
+### Fixed
+
+- **Import and decode hardening.** glTF node traversal, USD primvar expansion
+  and instancer counts, 3MF composite/lattice and ZIP64 directory reads, and
+  Draco/KTX2/BasisLZ declarations are now bounded before library allocation.
+  Sidecar references reject NUL/control bytes and invalid UTF-8, use a
+  per-format extension allowlist, and primary paths resolve through a shared
+  policy that rejects remote UNC, device, and relative sources. The KTX2/BasisLZ
+  ETC1S and glTF base64 data-URI decoder crashes found by fuzzing are closed by
+  preflight checks.
+- **Sandbox and broker hardening.** Job CPU limits, an absolute per-generation
+  wall-clock deadline, checked texture accounting, fail-closed null-SID and
+  handle checks, and stale-generation rejection are enforced, and the broker no
+  longer accepts host-supplied counts without bounds.
+- **Thumbnail-provider containment.** Adapters contain structured exceptions and
+  allocation failures, stream and raster sizes are clamped, OCCT access is
+  serialized, and contained faults quarantine the provider rather than
+  crashing Explorer. The WIC native-copy path is sized to the full requested
+  extent, fixing tall JPEG thumbnails.
+- **Viewer and IPC hardening.** Benchmark results are confined and
+  reparse-safe, asset text is sanitized, the Debug-only app-smoke control
+  surface is compiled out of Release, and the active-instance pipe uses
+  minimum-rights DACLs, a mandatory label, integrity/AppContainer/image-client
+  authentication, `FIRST_PIPE_INSTANCE`, and fail-closed squatter rejection.
+  `Model.cpp` and the unused `ws2_32` link are gone.
+- **Process and loader mitigations.** Control Flow Guard, CET, per-EXE process
+  mitigations, and an application manifest are enabled, and every child process
+  establishes safe loader/CWD/environment state and rejects compiled-out fault
+  flags. STEP preflight also rejects control bytes and split signatures.
+- **Release credential lifecycle.** NuGet tokens are no longer persisted,
+  package-feed configuration is trusted-event-only, and pull-request restores
+  use the files cache, so CI and release jobs cannot reuse or leak credentials.
+- **Documentation.** Design docs were reconciled with the controls actually
+  implemented, including handle-only broker objects, the session-scoped worker,
+  the WIC-only image path, and the tracked fuzz state.
+
 ## [0.5.0] - 2026-10-01
 
 ### Added
