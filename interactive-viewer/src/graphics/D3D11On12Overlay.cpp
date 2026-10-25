@@ -1058,6 +1058,35 @@ void D3D11On12Overlay::DrawInfoPanel(const OverlayInfo& overlay, float clientWid
     }
 }
 
+// Floating Reset-view affordance in the top-left of the viewport. It is only
+// passed a rect while it is fading in, visible, or fading out, so it never
+// competes with the model when the camera is still at its home framing. The
+// circular semi-transparent backdrop keeps the glyph legible over any scene
+// content; every layer is multiplied by the shared fade alpha.
+void D3D11On12Overlay::DrawResetViewButton(const OverlayInfo& overlay, float scale)
+{
+    const float alpha = std::clamp(overlay.resetViewButtonAlpha, 0.0f, 1.0f);
+    if (alpha <= 0.001f) return;
+    const RECT rectI = overlay.resetViewButtonRect;
+    if (rectI.right <= rectI.left || rectI.bottom <= rectI.top) return;
+
+    const D2D1_RECT_F rect = ToRectF(rectI);
+    const D2D1_ELLIPSE circle = D2D1::Ellipse(
+        D2D1::Point2F((rect.left + rect.right) * 0.5f, (rect.top + rect.bottom) * 0.5f),
+        (rect.right - rect.left) * 0.5f, (rect.bottom - rect.top) * 0.5f);
+
+    const float fillAlpha = (overlay.resetViewButtonPressed ? 0.82f
+        : overlay.resetViewButtonHover ? 0.68f : 0.52f) * alpha;
+    SetBrush(D2D1::ColorF(0x1C1C1E, fillAlpha));
+    d2dContext_->FillEllipse(circle, overlayBrush.Get());
+    SetBrush(D2D1::ColorF(0xFFFFFF, (overlay.resetViewButtonHover ? 0.34f : 0.22f) * alpha));
+    d2dContext_->DrawEllipse(circle, overlayBrush.Get(), Scale(1.0f, scale));
+
+    SetBrush(D2D1::ColorF(0xF5F5F7, alpha));
+    DrawIcon(d2dContext_.Get(), overlayBrush.Get(), studioLitGeometry.Get(), dashedStroke.Get(),
+        OverlayIconKind::Reset, rect, scale);
+}
+
 D2D1_RECT_F D3D11On12Overlay::ToRectF(RECT rect)
 {
     return D2D1::RectF(static_cast<float>(rect.left), static_cast<float>(rect.top),
@@ -1116,7 +1145,6 @@ void D3D11On12Overlay::DrawTitleBar(const OverlayInfo& overlay, const Chrome& ch
     drawActionButton(Chrome::Part::Speed, OverlayIconKind::Speed, false);
     drawActionButton(Chrome::Part::Orbit, OverlayIconKind::Orbit, overlay.orbitEnabled);
     drawActionButton(Chrome::Part::Fit, OverlayIconKind::Fit, false);
-    drawActionButton(Chrome::Part::Reset, OverlayIconKind::Reset, false);
     drawActionButton(Chrome::Part::Share, OverlayIconKind::Share, false);
     drawActionButton(Chrome::Part::Overflow, OverlayIconKind::Overflow, false);
     drawActionButton(Chrome::Part::OpenWith, OverlayIconKind::OpenWith, false);
@@ -1450,6 +1478,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
 
     DrawBottomBar(overlay, clientWidth, clientHeight, scale);
     DrawInfoPanel(overlay, clientWidth, clientHeight, scale);
+    DrawResetViewButton(overlay, scale);
 
     // Navigation gizmo on top of everything else, except a floating
     // flyout (Speed, Settings), which floats above even that.

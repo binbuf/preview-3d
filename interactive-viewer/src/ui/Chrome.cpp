@@ -5,6 +5,10 @@
 
 namespace
 {
+// Feature flag: the title-bar "Frame model in view" button is intentionally
+// off for now. Framing still works through F, Numpad ., and double-click.
+constexpr bool kShowFitButton = false;
+
 int Scale(int logical, float dpiScale)
 {
     return static_cast<int>(std::lround(logical * std::max(0.75f, dpiScale)));
@@ -65,21 +69,30 @@ void Chrome::UpdateLayout(int clientWidth, int titleBarHeight, float dpiScale, b
     const int rightGroupStart = right - margin;
 
     // Left-anchored group: Grid, Ground axis, Ground direction, Snap, Speed,
-    // Orbit, Fit, Reset, Share, Overflow —
-    // small square icon buttons, in that order.
-    struct Entry { ButtonState* state; int width; };
+    // Orbit, Fit (behind kShowFitButton), Share, Overflow —
+    // small square icon buttons, in that order. Reset is drawn separately at
+    // the top-left of the viewport (D3D11On12Overlay::DrawResetViewButton).
+    struct Entry { ButtonState* state; int width; bool shown; };
     const int iconButtonWidth = Scale(40, dpiScale);
     const int overflowWidth = Scale(34, dpiScale);
     const Entry entries[] = {
-        { &grid_, iconButtonWidth }, { &groundAxis_, iconButtonWidth }, { &groundDirection_, iconButtonWidth },
-        { &axisSnap_, iconButtonWidth }, { &speed_, iconButtonWidth },
-        { &orbit_, iconButtonWidth },
-        { &fit_, iconButtonWidth }, { &reset_, iconButtonWidth }, { &share_, iconButtonWidth },
-        { &overflow_, overflowWidth },
+        { &grid_, iconButtonWidth, true }, { &groundAxis_, iconButtonWidth, true },
+        { &groundDirection_, iconButtonWidth, true }, { &axisSnap_, iconButtonWidth, true },
+        { &speed_, iconButtonWidth, true }, { &orbit_, iconButtonWidth, true },
+        { &fit_, iconButtonWidth, kShowFitButton }, { &share_, iconButtonWidth, true },
+        { &overflow_, overflowWidth, true },
     };
     int left = margin;
     for (const Entry& entry : entries)
     {
+        if (!entry.shown)
+        {
+            // No rect and no reserved width, so hiding Fit leaves the rest of
+            // the toolbar packed exactly as if the button did not exist.
+            entry.state->rect = RECT{};
+            entry.state->enabled = entry.state->visible = false;
+            continue;
+        }
         entry.state->rect = MakeRect(left, actionY, entry.width, actionHeight);
         left += entry.width + actionGap;
         entry.state->enabled = entry.state->visible = hasModel;
@@ -96,7 +109,7 @@ Chrome::Part Chrome::HitTest(POINT clientPoint) const
     const struct { Part part; const ButtonState* state; } candidates[] = {
         { Part::Close, &close_ }, { Part::Maximize, &maximize_ }, { Part::Minimize, &minimize_ },
         { Part::OpenWith, &openWith_ }, { Part::Overflow, &overflow_ }, { Part::Share, &share_ },
-        { Part::Reset, &reset_ }, { Part::Fit, &fit_ }, { Part::Orbit, &orbit_ }, { Part::Speed, &speed_ },
+        { Part::Fit, &fit_ }, { Part::Orbit, &orbit_ }, { Part::Speed, &speed_ },
         { Part::AxisSnap, &axisSnap_ }, { Part::GroundDirection, &groundDirection_ },
         { Part::GroundAxis, &groundAxis_ }, { Part::Grid, &grid_ },
     };
@@ -121,7 +134,6 @@ const Chrome::ButtonState& Chrome::Button(Part part) const
     case Part::Speed: return speed_;
     case Part::Orbit: return orbit_;
     case Part::Fit: return fit_;
-    case Part::Reset: return reset_;
     case Part::Share: return share_;
     case Part::Overflow: return overflow_;
     case Part::OpenWith: return openWith_;

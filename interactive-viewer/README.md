@@ -129,7 +129,7 @@ separate deliverable.
 | Front / Right / Top view | Numpad `1` / `3` / `7` (Ctrl for reverse) |
 | Perspective / Orthographic | Numpad `5` |
 | Gizmo view snap | Click an axis ball in the corner gizmo |
-| Frame model / selection | `F`, Numpad `.`, the title bar's Fit button, or double-click |
+| Frame model / selection | `F`, Numpad `.`, or double-click |
 | Ground grid | `G` / `Shift+Alt+G` / the title bar's Grid button |
 | Axis-snap truck | The title bar's Snap button |
 | Model information | The bottom bar's Info button (opens the Stats & Shading side panel) |
@@ -138,7 +138,7 @@ separate deliverable.
 | Wireframe | The mesh icon beside the lighting modes; hides all triangle surfaces |
 | Share the open file | The title bar's Share button (Windows Share) |
 | Open the file in another app | The title bar's Open With dropdown |
-| Reset view | `Home` or `R`, or the title bar's Reset button |
+| Reset view | `Home` or `R`, or the button that appears at the top-left of the viewport once the camera has moved |
 | Open | `Ctrl+O` (primarily launched via file-type registration or drag/drop instead) |
 | Fullscreen | `F11` or the bottom bar's Fullscreen button |
 | Cancel open / exit fullscreen | `Esc` |

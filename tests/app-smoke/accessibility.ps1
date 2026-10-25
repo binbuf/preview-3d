@@ -56,7 +56,7 @@ try {
     $during=Children $loading
     $grid=Find-Control $during 'Ground grid'
     ([System.Windows.Automation.TogglePattern]$grid.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
-    ([System.Windows.Automation.InvokePattern](Find-Control $during 'Fit selection or model').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    ([System.Windows.Automation.InvokePattern](Find-Control $during 'View from positive X').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
     $checks.Add('existing controls remain callable while replacement work is active')
 } finally {
     if(!$loading.HasExited){[Preview3DNative]::PostMessage($loading.MainWindowHandle,0x10,[UIntPtr]0,[IntPtr]0)|Out-Null;$loading.WaitForExit(12000)|Out-Null}
@@ -64,8 +64,12 @@ try {
 }
 $viewer=Start-Viewer $good
 try {
+    # Reset is a floating viewport button that is deliberately absent at the
+    # home framing; move the camera so it is present for the control sweep.
+    ([System.Windows.Automation.InvokePattern](Find-Control (Children $viewer) 'View from positive X').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    Start-Sleep -Milliseconds 300
     $controls=Children $viewer
-    foreach($expected in @('Ground grid','Model ground axis','Ground direction','Axis snap','Travel speed','Fit selection or model','Reset view','Share','More options','Open with','Minimize','Maximize','Close','Model information','Studio lighting','Clay or solid shading','Directional lighting','Wireframe','Zoom','Fullscreen','View from positive X','View from negative Z')){
+    foreach($expected in @('Ground grid','Model ground axis','Ground direction','Axis snap','Travel speed','Reset view','Share','More options','Open with','Minimize','Maximize','Close','Model information','Studio lighting','Clay or solid shading','Directional lighting','Wireframe','Zoom','Fullscreen','View from positive X','View from negative Z')){
         $control=Find-Control $controls $expected
         Assert $control.Current.IsKeyboardFocusable "$expected is not keyboard focusable"
     }
@@ -118,7 +122,6 @@ try {
     $before=$toggle.Current.ToggleState; $toggle.Toggle(); Start-Sleep -Milliseconds 100
     $after=([System.Windows.Automation.TogglePattern]$grid.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Current.ToggleState
     Assert ($before -ne $after) 'Grid Toggle pattern did not change state'
-    ([System.Windows.Automation.InvokePattern](Find-Control $controls 'Fit selection or model').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
     ([System.Windows.Automation.InvokePattern](Find-Control $controls 'View from positive X').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
     $checks.Add('UIA focus, Toggle, and Invoke patterns')
 

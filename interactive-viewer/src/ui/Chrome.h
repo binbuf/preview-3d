@@ -15,8 +15,11 @@
 // input. All rects are in client pixel coordinates.
 //
 // Layout, left to right: the navigation action buttons (Grid/Ground axis/Ground
-// direction/Snap/Speed/Orbit/Fit/Reset/Share/Overflow), an empty drag strip, the centered filename, more
-// empty drag strip, then Open With and the system min/max/close.
+// direction/Snap/Speed/Orbit/Share/Overflow), an empty drag strip, the centered
+// filename, more empty drag strip, then Open With and the system min/max/close.
+// Fit is laid out but currently hidden behind Chrome.cpp's kShowFitButton flag;
+// Reset has moved out of the title bar to a floating viewport button that only
+// appears once the camera has left its home framing.
 class Chrome
 {
 public:
@@ -31,7 +34,6 @@ public:
         Speed,
         Orbit,
         Fit,
-        Reset,
         Share,
         Overflow,      // "..." menu (Controls/warnings/About)
         OpenWith,
@@ -48,8 +50,8 @@ public:
     };
 
     // Recomputes every button rect for the current client width and DPI.
-    // `hasModel` hides the navigation-only buttons (Grid/Snap/Speed/Fit/Reset/
-    // Share/Overflow) the same way the old toolbar disabled them with nothing
+    // `hasModel` hides the navigation-only buttons (Grid/Snap/Speed/Fit/Share/
+    // Overflow) the same way the old toolbar disabled them with nothing
     // loaded. `isFullscreen` additionally hides Minimize/Maximize/Close/Open
     // With, which don't apply to the topmost, monitor-filling window the
     // floating toolbar overlays there (see Preview3D.cpp's ToggleFullscreen).
@@ -81,7 +83,6 @@ private:
     ButtonState speed_;
     ButtonState orbit_;
     ButtonState fit_;
-    ButtonState reset_;
     ButtonState share_;
     ButtonState overflow_;
     ButtonState openWith_;

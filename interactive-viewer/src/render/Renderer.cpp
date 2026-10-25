@@ -196,6 +196,9 @@ void Camera::SetBounds(const XMFLOAT3& minimum, const XMFLOAT3& maximum, float a
     targetX = homeX;
     targetY = homeY;
     targetZ = homeZ;
+    desiredX = homeX;
+    desiredY = homeY;
+    desiredZ = homeZ;
     homeOrientation = DefaultOrientation();
     orientation = homeOrientation;
     desiredOrientation = homeOrientation;
@@ -265,6 +268,41 @@ void Camera::Reset(float aspect)
     }
     // Reset also restores the cached default projection mode.
     SetProjection(ProjectionMode::Perspective);
+}
+
+bool Camera::ViewMoved() const
+{
+    // A projection change is part of what Reset restores, so it counts too.
+    if (projection != ProjectionMode::Perspective) return true;
+
+    // Scale the tolerances to the scene so a tiny model and a huge one both
+    // treat visually indistinguishable drift as "still at home".
+    const double targetTolerance = std::max(1e-9, sceneRadius * 1e-5);
+    if (std::abs(targetX - homeX) > targetTolerance ||
+        std::abs(targetY - homeY) > targetTolerance ||
+        std::abs(targetZ - homeZ) > targetTolerance ||
+        std::abs(desiredX - homeX) > targetTolerance ||
+        std::abs(desiredY - homeY) > targetTolerance ||
+        std::abs(desiredZ - homeZ) > targetTolerance)
+    {
+        return true;
+    }
+    const double distanceTolerance = std::max(1e-9, homeDistance * 1e-4);
+    if (std::abs(distance - homeDistance) > distanceTolerance ||
+        std::abs(targetDistance - homeDistance) > distanceTolerance)
+    {
+        return true;
+    }
+
+    // Include the in-flight target orientation so a Snap/Fit command starts
+    // the button's fade immediately instead of waiting for the camera's first
+    // animated tick (the UI thread may otherwise go back to sleep).
+    const XMVECTOR current = XMQuaternionNormalize(XMLoadFloat4(&orientation));
+    const XMVECTOR desired = XMQuaternionNormalize(XMLoadFloat4(&desiredOrientation));
+    const XMVECTOR home = XMQuaternionNormalize(XMLoadFloat4(&homeOrientation));
+    const float currentAlignment = std::abs(XMVectorGetX(XMVector4Dot(current, home)));
+    const float desiredAlignment = std::abs(XMVectorGetX(XMVector4Dot(desired, home)));
+    return currentAlignment < 0.999999f || desiredAlignment < 0.999999f;
 }
 
 void Camera::SnapToView(XMVECTOR viewOrientation)

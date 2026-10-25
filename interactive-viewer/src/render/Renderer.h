@@ -56,6 +56,13 @@ struct OverlayInfo
     RECT warningButtonRect{};
     bool warningButtonHover = false;
     bool warningButtonPressed = false;
+    // Floating "Reset view" button at the top-left of the viewport. It only
+    // appears once the camera has left the model's home framing, fades in and
+    // out with that state, and is fully hidden again once Reset returns home.
+    float resetViewButtonAlpha = 0.0f;   // 0 hidden, 1 fully opaque
+    RECT resetViewButtonRect{};          // client px, valid while alpha > 0
+    bool resetViewButtonHover = false;
+    bool resetViewButtonPressed = false;
     // True when the warning badge stands for unresolved sidecar assets, so the
     // activation path offers a folder picker instead of only an explanation.
     bool warningHasMissingAssets = false;
@@ -270,6 +277,11 @@ struct Camera
     // Frames an arbitrary world-space box (used for "frame selected").
     void FrameBox(const DirectX::XMFLOAT3& minimum, const DirectX::XMFLOAT3& maximum, float aspect);
     void Reset(float aspect);
+    // True when the live camera differs from the home framing captured by
+    // SetBounds (target, distance, orientation, or projection), including an
+    // in-flight target so a command reports the move immediately. Drives the
+    // floating Reset-view button's visibility.
+    bool ViewMoved() const;
     void Orbit(float deltaX, float deltaY);
     void Look(float deltaX, float deltaY);
     // Queues a raw mouse-look delta to be applied on the next Update() tick,

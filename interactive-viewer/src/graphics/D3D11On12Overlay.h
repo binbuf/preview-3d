@@ -126,6 +126,7 @@ private:
     void DrawIconButton(const RECT& rectI, OverlayIconKind icon, bool visible, bool enabled, bool active,
         bool hovered, bool pressedNow, float scale);
     void DrawInfoPanel(const OverlayInfo& overlay, float clientWidth, float clientHeight, float scale);
+    void DrawResetViewButton(const OverlayInfo& overlay, float scale);
     static D2D1_RECT_F ToRectF(RECT rect);
     void DrawTitleBar(const OverlayInfo& overlay, const Chrome& chrome, float clientWidth, float scale);
     void DrawSpeedFlyout(const OverlayInfo& overlay, float scale);

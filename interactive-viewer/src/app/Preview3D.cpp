@@ -147,6 +147,18 @@ struct ViewerApp
     bool fullscreenButtonPressed = false;
     bool warningButtonHover = false;
     bool warningButtonPressed = false;
+    // Floating top-left viewport Reset button. `resetViewPending` keeps the UI
+    // loop polling while the camera animates back home; `resetViewButtonAlpha`
+    // fades the button in/out around ViewMoved(), and `resetViewButtonFading`
+    // keeps polling until the fade has actually reached its target.
+    bool resetViewButtonHover = false;
+    bool resetViewButtonPressed = false;
+    bool resetViewPending = false;
+    float resetViewButtonAlpha = 0.0f;
+    bool resetViewButtonFading = false;
+    bool resetViewButtonFadeInitialized = false;
+    float resetViewButtonFadeTarget = 0.0f;
+    double lastResetViewFadeSeconds = 0.0;
     LightingMode lightingMode = LightingMode::Studio;
     float directionalLightAngle = 0.875f;
     // Elevation above the horizon in radians; atan(0.55) matches the previous
@@ -1341,6 +1353,22 @@ RECT WarningButtonRect(const ViewerApp& app)
                  contentRight - margin, contentBottom - margin };
 }
 
+// Floating Reset-view button pinned to the top-left of the 3D viewport (not
+// the title bar). Shared by drawing (BuildOverlayInfo), input handling, and
+// accessibility, so all three agree on the circle's bounds.
+RECT ResetViewButtonRect(const ViewerApp& app)
+{
+    if (!HasNavigableModel(app)) return RECT{};
+    const RECT viewport = ViewportRect(app);
+    const int size = Scale(app, 38);
+    const int margin = Scale(app, 14);
+    const int left = viewport.left + margin;
+    // In Fullscreen the viewport starts at y=0 but the floating title-bar
+    // buttons still occupy their usual strip, so stay below it there too.
+    const int top = static_cast<int>(std::max<LONG>(viewport.top, app.toolbarHeight)) + margin;
+    return RECT{ left, top, left + size, top + size };
+}
+
 struct LightingToolbarLayout
 {
     RECT bounds{};
@@ -1457,9 +1485,9 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     // pressed, the Speed flyout open) rather than just delayed, so a tooltip
     // never appears over something the user is actively using.
     if (app.chrome.pressed != Chrome::Part::None || app.infoButtonPressed || app.infoPanelCloseButtonPressed ||
-        app.fullscreenButtonPressed || app.speedSliderDragging || app.zoomSliderDragging ||
-        app.lightingButtonPressed>=0 || app.orbitSpeedSliderDragging || OrbitSpeedFlyoutVisible(app) ||
-        app.speedFlyoutOpen || app.settingsPanelOpen)
+        app.fullscreenButtonPressed || app.resetViewButtonPressed || app.speedSliderDragging ||
+        app.zoomSliderDragging || app.lightingButtonPressed>=0 || app.orbitSpeedSliderDragging ||
+        OrbitSpeedFlyoutVisible(app) || app.speedFlyoutOpen || app.settingsPanelOpen)
     {
         return {};
     }
@@ -1490,7 +1518,6 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
         { Chrome::Part::Speed, "tooltip.speed", L"Flight speed" },
         { Chrome::Part::Orbit, "tooltip.orbit", L"Orbit model (auto-rotate)" },
         { Chrome::Part::Fit, "tooltip.fit", L"Frame model in view" },
-        { Chrome::Part::Reset, "tooltip.reset", L"Reset view" },
         { Chrome::Part::Share, "tooltip.share", L"Share" },
         { Chrome::Part::Overflow, "tooltip.more", L"More options" },
         { Chrome::Part::OpenWith, "tooltip.openWith", L"Open with" },
@@ -1502,6 +1529,7 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
             return { static_cast<int>(entry.part) + 1, app.chrome.Button(entry.part).rect, Loc(entry.key, entry.text), true };
         }
     }
+    if (app.resetViewButtonHover) return { 104, ResetViewButtonRect(app), Loc("tooltip.reset", L"Reset view"), true };
     if (app.infoButtonHover) return { 100, InfoButtonRect(app), Loc("tooltip.info", L"Model information"), false };
     if (app.fullscreenButtonHover) return { 101, FullscreenButtonRect(app), Loc("tooltip.fullscreen", L"Fullscreen"), false };
     if (app.infoPanelCloseButtonHover) return { 102, InfoPanelCloseButtonRect(app), Loc("tooltip.infoClose", L"Close information panel"), true };
@@ -2415,6 +2443,9 @@ void HandleCommand(ViewerApp& app, int id)
         if (app.renderThread.HasModel())
         {
             app.renderThread.LockCamera()->Reset(ViewportAspect(app));
+            // Keep the UI loop polling until the camera actually reaches home,
+            // so the floating Reset button can vanish on the frame it does.
+            app.resetViewPending = true;
             InvalidateRect(app.window, nullptr, FALSE);
         }
         break;
@@ -2533,7 +2564,6 @@ void HandleChromeAction(ViewerApp& app, Chrome::Part part)
     case Chrome::Part::Speed: ToggleSpeedFlyout(app); break;
     case Chrome::Part::Orbit: ToggleOrbit(app); break;
     case Chrome::Part::Fit: HandleCommand(app, ID_VIEW_FIT); break;
-    case Chrome::Part::Reset: HandleCommand(app, ID_VIEW_RESET); break;
     case Chrome::Part::Share: DoShare(app); break;
     case Chrome::Part::Overflow: HandleCommand(app, ID_VIEW_MENU); break;
     case Chrome::Part::OpenWith: ShowOpenWithMenu(app); break;
@@ -2578,7 +2608,12 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     case Control::Speed: chrome(Chrome::Part::Speed, Loc("chrome.travelSpeed", L"Travel speed"), Loc("a11y.speedDesc", L"Open the flight-speed control")); break;
     case Control::Orbit: chrome(Chrome::Part::Orbit, Loc("a11y.orbit", L"Orbit model"), Loc("a11y.orbitDesc", L"Continuously rotate the model; hover for speed")); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.orbitEnabled; break;
     case Control::Fit: chrome(Chrome::Part::Fit, Loc("a11y.fit", L"Fit selection or model")); break;
-    case Control::Reset: chrome(Chrome::Part::Reset, Loc("a11y.reset", L"Reset view")); break;
+    case Control::Reset:
+        info.name = Loc("a11y.reset", L"Reset view");
+        info.rect = ResetViewButtonRect(app);
+        info.visible = model && app.renderThread.LockCamera()->ViewMoved();
+        info.enabled = info.visible;
+        break;
     case Control::Share: chrome(Chrome::Part::Share, Loc("a11y.share", L"Share")); break;
     case Control::More: chrome(Chrome::Part::Overflow, Loc("tooltip.more", L"More options")); break;
     case Control::OpenWith: chrome(Chrome::Part::OpenWith, Loc("a11y.openWith", L"Open with")); break;
@@ -2867,6 +2902,45 @@ FlightInput BuildFlightInput(const ViewerApp& app)
     return input;
 }
 
+// Advances the floating Reset button's fade toward its current target
+// (visible while the camera is away from home, hidden at home). Capped dt so
+// returning from a modal or a suspended frame doesn't pop the alpha.
+void UpdateResetViewButtonFade(ViewerApp& app)
+{
+    constexpr double kFadeSeconds = 0.18;
+    const double now = NowSeconds();
+    const bool targetVisible = HasNavigableModel(app) && app.renderThread.LockCamera()->ViewMoved();
+    const float target = targetVisible ? 1.0f : 0.0f;
+
+    // Start the fade at the frame the target flips, rather than measuring
+    // from the last idle wake-up (which could be minutes ago and make the
+    // first step jump most of the way).
+    if (!app.resetViewButtonFadeInitialized || target != app.resetViewButtonFadeTarget)
+    {
+        app.resetViewButtonFadeInitialized = true;
+        app.resetViewButtonFadeTarget = target;
+        app.lastResetViewFadeSeconds = now;
+        if (app.reduceMotion) app.resetViewButtonAlpha = target;
+        app.resetViewButtonFading = std::abs(app.resetViewButtonAlpha - target) > 0.001f;
+        return;
+    }
+
+    const double elapsed = std::clamp(now - app.lastResetViewFadeSeconds, 0.0, 0.1);
+    app.lastResetViewFadeSeconds = now;
+    if (app.reduceMotion)
+    {
+        app.resetViewButtonAlpha = target;
+    }
+    else
+    {
+        const float step = static_cast<float>(elapsed / kFadeSeconds);
+        app.resetViewButtonAlpha = target > app.resetViewButtonAlpha
+            ? std::min(target, app.resetViewButtonAlpha + step)
+            : std::max(target, app.resetViewButtonAlpha - step);
+    }
+    app.resetViewButtonFading = std::abs(app.resetViewButtonAlpha - target) > 0.001f;
+}
+
 // Everything in IsAnimating that is UI-owned state. The render thread ORs
 // this with the camera's own motion, which it can see directly under the
 // camera lock -- so the UI thread does not have to take that lock just to
@@ -2875,8 +2949,8 @@ bool IsAnimatingWithoutCamera(const ViewerApp& app)
 {
     const double now = NowSeconds();
     return (app.state == ViewerState::Loading && !app.reduceMotion) || app.renderPresentationPending
-        || HasNavigationInput(app) || now < app.speedHudUntil
-        || now < app.modeHudUntil;
+        || HasNavigationInput(app) || app.resetViewPending || app.resetViewButtonFading
+        || now < app.speedHudUntil || now < app.modeHudUntil;
 }
 
 // Keep the UI's loading loop alive until the render thread has presented the
@@ -3001,6 +3075,13 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.directionalLightElevation=app.directionalLightElevation;
     overlay.lightDragging=app.pointerMode==PointerMode::LightDrag;
     overlay.hasModel = app.renderThread.HasModel();
+    overlay.resetViewButtonAlpha = app.resetViewButtonAlpha;
+    if (overlay.resetViewButtonAlpha > 0.001f)
+    {
+        overlay.resetViewButtonRect = ResetViewButtonRect(app);
+        overlay.resetViewButtonHover = app.resetViewButtonHover;
+        overlay.resetViewButtonPressed = app.resetViewButtonPressed;
+    }
     overlay.gridVisible = app.gridVisible;
     overlay.axisSnapEnabled = app.axisSnapEnabled;
     overlay.groundAxis = app.groundAxis;
@@ -3659,7 +3740,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 return TRUE;
             }
             if (app->infoButtonHover || app->infoPanelCloseButtonHover || app->fullscreenButtonHover
-                || app->warningButtonHover || app->lightingButtonHover>=0 || app->orbitSpeedFlyoutHover)
+                || app->warningButtonHover || app->resetViewButtonHover || app->lightingButtonHover>=0
+                || app->orbitSpeedFlyoutHover)
             {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
@@ -3689,6 +3771,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             InvalidateRect(window, nullptr, FALSE);
         }
         app->orbitSpeedFlyoutHover = false;
+        app->resetViewButtonHover = false;
         UpdateTooltipTracking(*app);
         return 0;
     case WM_LBUTTONDOWN:
@@ -3785,6 +3868,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             {
                 SetCapture(window);
                 app->chrome.pressed = part;
+                InvalidateRect(window, nullptr, FALSE);
+                UpdateTooltipTracking(*app);
+                return 0;
+            }
+        }
+        if (CanNavigate(*app) && app->renderThread.LockCamera()->ViewMoved())
+        {
+            const RECT resetButton = ResetViewButtonRect(*app);
+            if (PtInRect(&resetButton, downPoint))
+            {
+                SetCapture(window);
+                app->resetViewButtonPressed = true;
                 InvalidateRect(window, nullptr, FALSE);
                 UpdateTooltipTracking(*app);
                 return 0;
@@ -3948,7 +4043,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (app->chrome.pressed != Chrome::Part::None) return 0;
         if (app->infoButtonPressed || app->infoPanelCloseButtonPressed || app->fullscreenButtonPressed
-            || app->warningButtonPressed || app->lightingButtonPressed>=0) return 0;
+            || app->warningButtonPressed || app->resetViewButtonPressed || app->lightingButtonPressed>=0) return 0;
         if (app->pointerMode == PointerMode::None)
         {
             // Orbit speed flyout: shown while hovering the Orbit button, and
@@ -4063,6 +4158,21 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     }
                     InvalidateRect(window, nullptr, FALSE);
                 }
+                // Floating Reset button: only hoverable while the camera is
+                // actually away from home (matching its drawn visibility).
+                const bool resetVisible = app->renderThread.LockCamera()->ViewMoved();
+                const RECT resetButton = ResetViewButtonRect(*app);
+                const bool overReset = resetVisible && PtInRect(&resetButton, movePoint) != FALSE;
+                if (overReset != app->resetViewButtonHover)
+                {
+                    app->resetViewButtonHover = overReset;
+                    if (overReset)
+                    {
+                        TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, window, 0 };
+                        TrackMouseEvent(&track);
+                    }
+                    InvalidateRect(window, nullptr, FALSE);
+                }
             }
             if (CanNavigate(*app) && PointInViewport(*app, movePoint))
             {
@@ -4155,6 +4265,20 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             app->zoomSliderDragging = false;
             if (GetCapture() == window) ReleaseCapture();
+            UpdateTooltipTracking(*app);
+            return 0;
+        }
+        if (app->resetViewButtonPressed)
+        {
+            const POINT upPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            app->resetViewButtonPressed = false;
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+            const RECT resetButton = ResetViewButtonRect(*app);
+            if (app->renderThread.LockCamera()->ViewMoved() && PtInRect(&resetButton, upPoint))
+            {
+                HandleCommand(*app, ID_VIEW_RESET);
+            }
             UpdateTooltipTracking(*app);
             return 0;
         }
@@ -4259,6 +4383,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_CANCELMODE:
         app->lightingButtonPressed=-1;
         app->warningButtonPressed=false;
+        app->resetViewButtonPressed=false;
         EndPointer(*app);
         return 0;
     case WM_LBUTTONDBLCLK:
@@ -4340,6 +4465,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (app->settingsPanelOpen) { app->settingsPanelOpen = false; InvalidateRect(window, nullptr, FALSE); }
         app->orbitSpeedFlyoutHover = false;
         app->orbitSpeedSliderDragging = false;
+        app->resetViewButtonHover = false;
+        app->resetViewButtonPressed = false;
         return 0;
     case WM_CONTEXTMENU:
         return 0;
@@ -4793,6 +4920,18 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         if (gMainWindow && app.rendererReady)
         {
             FinishRenderTimerIfPresented(app);
+            if (app.resetViewPending && !app.renderThread.LockCamera()->ViewMoved())
+            {
+                app.resetViewPending = false;
+                // The button is fading out under a possibly stationary cursor;
+                // drop its hover state so no stale tooltip pops up.
+                if (app.resetViewButtonHover)
+                {
+                    app.resetViewButtonHover = false;
+                    UpdateTooltipTracking(app);
+                }
+            }
+            UpdateResetViewButtonFade(app);
             uiAnimating = !IsIconic(gMainWindow) && IsAnimatingWithoutCamera(app);
             auto overlay = std::make_shared<OverlayFrame>();
             overlay->info = BuildOverlayInfo(app);
