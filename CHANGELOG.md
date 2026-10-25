@@ -8,6 +8,23 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.5.3] - 2026-10-25
+
+### Fixed
+
+- **Provider fuzz gate no longer fails on contained OCCT faults.** The required
+  `fuzz-smoke` Provider lane hit contained OCCT 7.8.1 access violations on
+  malformed STEP records. `StepPart21Preflight` now rejects an omitted parameter
+  inside a nested aggregate before `StepData_StepReaderData::SetEntityNumbers`,
+  and the STEP adapter rejects unknown `StepData_UndefinedEntity` records before
+  XDE color transfer. Remaining OCCT null mandatory handles are contained and
+  recorded by `ProviderFuzz` as third-party faults; product-owned contained
+  faults still fail the lane. Regression seeds and unit cases cover the new
+  admission and transfer guards.
+- **STEP corpus verify passes again.** The `faceted_invalid_ap242.stp` manifest
+  entry now records its committed size and SHA-256, so
+  `python tests/fixtures/step/verify.py` succeeds.
+
 ## [0.5.2] - 2026-10-25
 
 ### Fixed
