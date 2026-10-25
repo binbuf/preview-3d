@@ -131,6 +131,21 @@ TEST_CASE("OBJ missing MTL remains visible with a bounded warning", "[obj][mtl][
     CHECK(status);
 }
 
+TEST_CASE("OBJ mtllib that is only separators is ignored instead of faulting", "[obj][mtl][security][recovery]")
+{
+    // ufbx resolves a `mtllib` value made only of separators (here `/`) to an
+    // empty path and then formats the missing-sidecar warning with its null
+    // data pointer. The overlay ufbx patch must skip that open/warning pair, so
+    // the geometry still imports. ObjFuzz found the null dereference.
+    ScratchObj source;
+    source.Write(source.obj,
+        "mtllib /\n"
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    const auto result = import_broker::RunImportSession(Request(source.obj));
+    CAPTURE(result.stage, result.errorCode, result.chunks.size());
+    REQUIRE(result.ok);
+}
+
 TEST_CASE("OBJ sidecars cannot escape the primary directory", "[obj][mtl][security]")
 {
     ScratchObj source;

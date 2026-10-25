@@ -1,0 +1,26 @@
+diff --git a/ufbx.c b/ufbx.c
+index 70dce03..c1470a0 100644
+--- a/ufbx.c
++++ b/ufbx.c
+@@ -17976,11 +17976,16 @@ ufbxi_nodiscard static ufbxi_noinline int ufbxi_obj_load_mtl(ufbxi_context *uc)
+ 		if (!has_stream && uc->opts.load_external_files && uc->obj.mtllib_relative_path.size > 0) {
+ 			ufbx_blob dst; // ufbxi_uninit
+ 			ufbxi_check(ufbxi_resolve_relative_filename(uc, (ufbxi_strblob*)&dst, (const ufbxi_strblob*)&uc->obj.mtllib_relative_path, true));
+-			has_stream = ufbxi_open_file(&uc->opts.open_file_cb, &stream, (const char*)dst.data, dst.size, &uc->obj.mtllib_relative_path, &uc->ator_tmp, UFBX_OPEN_FILE_OBJ_MTL);
+-			stream_path = uc->obj.mtllib_relative_path;
+-			needs_stream = true;
+-			if (!has_stream) {
+-				ufbxi_check(ufbxi_warnf(UFBX_WARNING_MISSING_EXTERNAL_FILE, "Could not open .mtl file: %s", dst.data));
++			// A relative path consisting only of separators resolves to an empty
++			// blob: there is no file to open, and formatting it with `%s` would
++			// dereference a null pointer.
++			if (dst.size > 0) {
++				has_stream = ufbxi_open_file(&uc->opts.open_file_cb, &stream, (const char*)dst.data, dst.size, &uc->obj.mtllib_relative_path, &uc->ator_tmp, UFBX_OPEN_FILE_OBJ_MTL);
++				stream_path = uc->obj.mtllib_relative_path;
++				needs_stream = true;
++				if (!has_stream) {
++					ufbxi_check(ufbxi_warnf(UFBX_WARNING_MISSING_EXTERNAL_FILE, "Could not open .mtl file: %s", dst.data));
++				}
+ 			}
+ 		}
+ 

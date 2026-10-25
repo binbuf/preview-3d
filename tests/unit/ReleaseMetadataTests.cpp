@@ -15,12 +15,12 @@
 
 namespace {
 
-std::string Quote(const std::filesystem::path& path)
+std::wstring Quote(const std::filesystem::path& path)
 {
-    return "\"" + path.string() + "\"";
+    return L"\"" + path.wstring() + L"\"";
 }
 
-}
+} // namespace
 
 TEST_CASE("release metadata gate passes and rejects drift", "[security][release-metadata]")
 {
@@ -30,8 +30,8 @@ TEST_CASE("release metadata gate passes and rejects drift", "[security][release-
     // "...\preview-3d\" as an unterminated argument and reject the path with
     // "Illegal characters in path". Strip the trailing separator before the
     // argument is assembled.
-    std::string repository = PREVIEW3D_REPO_ROOT;
-    while (!repository.empty() && (repository.back() == '\\' || repository.back() == '/'))
+    std::wstring repository = PREVIEW3D_REPO_ROOT;
+    while (!repository.empty() && (repository.back() == L'\\' || repository.back() == L'/'))
     {
         repository.pop_back();
     }
@@ -44,11 +44,11 @@ TEST_CASE("release metadata gate passes and rejects drift", "[security][release-
     // dependency with no SPDX mapping, and a manifest/installer version drift.
     // Invoke the same Windows PowerShell interpreter the MSBuild packaging
     // targets use, so the gate is proven on the shipping interpreter.
-    const std::string command =
-        "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File " + Quote(script) +
-        " -RepositoryRoot " + Quote(repositoryPath) + " -SelfTest";
+    const std::wstring command =
+        L"powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File " + Quote(script) +
+        L" -RepositoryRoot " + Quote(repositoryPath) + L" -SelfTest";
 
-    const int result = std::system(command.c_str());
-    INFO("command: " << command);
+    const int result = _wsystem(command.c_str());
+    INFO("release metadata gate exit code: " << result);
     REQUIRE(result == 0);
 }

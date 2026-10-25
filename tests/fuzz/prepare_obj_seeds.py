@@ -104,6 +104,13 @@ def main() -> None:
         ('obj-malformed.adapter.seed', envelope(OBJ_MALFORMED)),
         # A wider triangulation sample.
         ('obj-many-faces.adapter.seed', envelope(OBJ_MANY)),
+        # A `mtllib` value made only of separators resolves to an empty path;
+        # ufbx must skip the open and the missing-file warning rather than
+        # formatting the null resolved path (ObjFuzz regression).
+        ('obj-mtllib-separators.adapter.seed',
+         envelope(b'mtllib /\n'
+                  b'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n',
+                  EXTERNAL_FILES, b'material.mtl', b'')),
         # Cancellation request during load.
         ('obj-cancel.seed',
          envelope(OBJ_HAPPY, EXTERNAL_FILES | CANCEL, b'material.mtl', MTL_HAPPY,

@@ -53,11 +53,12 @@ jobs:
       fail-fast: false
       matrix:
         # cache_suffix separates the two configurations' vcpkg Actions caches.
-        # The durable Packages feed is warmed release-only, so the Debug half of
-        # the closure (packaging/triplets/ci-debug) has no other way to stay warm
-        # and would rebuild from source on every run if both configs shared one
-        # immutable cache key. Release keeps the bare key so a warm-up in
-        # dependencies.yml/release.yml still matches.
+        # Release restores the release-only overlay triplet, matching the
+        # durable Packages feed that dependencies.yml/release.yml warm, so it
+        # keeps the bare key. Debug restores the stock debug+release triplet
+        # (vcpkg ports are not debug-only-clean; see the restore step), whose
+        # ABI the Packages feed never contains, so it keeps its own immutable
+        # Actions cache warm instead.
         include:
           - configuration: Debug
             cache_suffix: debug-
@@ -231,21 +232,22 @@ jobs:
             New-Item -ItemType Directory -Force -Path $path | Out-Null
           }
 
-          # This lane builds Debug and Release, so restore the configuration's
-          # half of the static closure: the scripts-pinned overlay triplets are
-          # single-configuration (Release uses packaging\triplets, Debug uses its
-          # ci-debug\ subfolder), unlike the stock debug+release triplet a local
-          # `vcpkg install` uses. A whole solution build links the installed
-          # half for its configuration, so the overlay must match the matrix.
-          $overlayTriplets = if ($env:CONFIGURATION -eq 'Debug') {
-            Join-Path $env:GITHUB_WORKSPACE 'packaging\triplets\ci-debug'
-          } else {
-            Join-Path $env:GITHUB_WORKSPACE 'packaging\triplets'
-          }
+          # Release restores the release half of the static closure through the
+          # scripts-pinned overlay triplet (packaging\triplets sets
+          # VCPKG_BUILD_TYPE=release), so it never pays to build the debug half
+          # it does not package.
+          #
+          # Debug keeps the stock x64-windows-static-md triplet. vcpkg's ports
+          # are not clean under VCPKG_BUILD_TYPE=debug: zstd/zlib/tbb/catch2 run
+          # post-install reads against the release tree (for example
+          # `share/zstd/zstdTargets.cmake`) that a debug-only install never
+          # creates, so the restore dies with a CMake "file failed to open"
+          # error. The stock triplet builds both halves, exactly like a local
+          # `vcpkg install`; the matrix's debug- Actions cache keeps them warm.
+          $overlayTriplets = Join-Path $env:GITHUB_WORKSPACE 'packaging\triplets'
 
           $common = @(
             '--triplet', 'x64-windows-static-md',
-            "--overlay-triplets=$overlayTriplets",
             "--vcpkg-root=$env:VCPKG_ROOT",
             "--x-buildtrees-root=$buildtreesRoot",
             "--x-packages-root=$packagesRoot",
@@ -254,6 +256,9 @@ jobs:
             '--clean-packages-after-build',
             '--x-wait-for-lock'
           )
+          if ($env:CONFIGURATION -eq 'Release') {
+            $common += "--overlay-triplets=$overlayTriplets"
+          }
 
           # Root manifest: viewer/worker, OpenUSD compatibility host and tests.
           $installRoot = Join-Path $env:GITHUB_WORKSPACE 'vcpkg_installed\x64-windows-static-md'
