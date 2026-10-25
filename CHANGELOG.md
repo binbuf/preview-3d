@@ -8,6 +8,27 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.5.2] - 2026-10-25
+
+### Fixed
+
+- **Release builds again.** The release-metadata unit case assigned the wide
+  `PREVIEW3D_REPO_ROOT` define to `std::string`, so the Release configuration
+  failed to compile (C2440) and the `v0.5.1` test gate never packaged. The case
+  now keeps the wide path and invokes PowerShell through `_wsystem`.
+- **Debug CI restores vcpkg again.** The Debug lane restored a debug-only
+  overlay triplet, but vcpkg's zstd/zlib/tbb/catch2 portfiles read release-tree
+  files after install that a debug-only install never creates, so the restore
+  failed with a CMake "file failed to open" error. The lane now restores the
+  stock `x64-windows-static-md` triplet (both halves, like a local build); its
+  own Actions cache keeps the closure warm.
+- **OBJ `mtllib` null dereference.** A `mtllib` value made only of separators
+  (for example `mtllib /`) resolves to an empty path, and ufbx formatted the
+  missing-MTL warning with that null pointer, faulting the import worker and
+  `ObjFuzz`. The pinned ufbx 0.23.0 source now carries an overlay patch that
+  skips the open/warning pair; a fuzz seed and an import-isolation case cover
+  the regression.
+
 ## [0.5.1] - 2026-10-24
 
 ### Added
