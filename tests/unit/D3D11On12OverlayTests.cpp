@@ -23,10 +23,12 @@
 
 #include <cstddef>
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -782,4 +784,247 @@ TEST_CASE("The light ring reaches every angle from a level camera", "[graphics][
         CHECK(positiveY);
         CHECK(negativeY);
     }
+}
+
+TEST_CASE("Gizmo roll turns preserve the view direction exactly", "[graphics][gizmo]")
+{
+    using namespace DirectX;
+    const auto forward = [](XMVECTOR q)
+    {
+        return XMVector3Rotate(XMVectorSet(0, 0, -1, 0), XMQuaternionNormalize(q));
+    };
+    const auto aligned = [](XMVECTOR a, XMVECTOR b, float epsilon = 0.0001f)
+    {
+        return std::abs(XMVectorGetX(XMVector3Dot(XMVector3Normalize(a), XMVector3Normalize(b)))) > 1.0f - epsilon;
+    };
+    const auto sameOrientation = [](XMVECTOR a, XMVECTOR b, float epsilon = 0.0001f)
+    {
+        return std::abs(XMVectorGetX(XMVector4Dot(XMQuaternionNormalize(a), XMQuaternionNormalize(b)))) > 1.0f - epsilon;
+    };
+
+    const XMVECTOR front = CanonicalViewOrientation(ViewDir::Front);
+    const XMVECTOR right = XMVectorSet(1, 0, 0, 0);
+    const XMVECTOR worldUp = XMVectorSet(0, 0, 1, 0);
+
+    // Rolling never changes which face is being looked at.
+    for (const ViewTurn turn : { ViewTurn::RollClockwise, ViewTurn::RollCounterClockwise })
+    {
+        const XMVECTOR rolled = TurnViewOrientation(front, turn);
+        CHECK(aligned(forward(front), forward(rolled)));
+        CHECK(!sameOrientation(front, rolled));
+    }
+
+    // Roll is exactly invertible.
+    const XMVECTOR clockwise = TurnViewOrientation(front, ViewTurn::RollClockwise);
+    CHECK(sameOrientation(front, TurnViewOrientation(clockwise, ViewTurn::RollCounterClockwise)));
+
+    // Clockwise roll turns the world-up direction onto screen-right (+X),
+    // which is what makes the model itself appear to rotate clockwise.
+    const XMVECTOR cameraUp = XMVector3Rotate(XMVectorSet(0, 1, 0, 0), clockwise);
+    CHECK(aligned(cameraUp, XMVectorNegate(right)));
+    CHECK(aligned(XMVector3Rotate(XMVectorSet(1, 0, 0, 0), clockwise), worldUp));
+
+    // Four rolls return to the exact starting orientation rather than
+    // accumulating drift, without ever changing the looked-at face.
+    XMVECTOR rolled = front;
+    for (int step = 0; step < 4; ++step)
+    {
+        rolled = TurnViewOrientation(rolled, ViewTurn::RollClockwise);
+        CHECK(aligned(forward(front), forward(rolled)));
+    }
+    CHECK(sameOrientation(front, rolled));
+}
+
+TEST_CASE("Face-to-face view snaps use a single rotation axis", "[graphics][gizmo]")
+{
+    using namespace DirectX;
+    const auto forward = [](XMVECTOR q)
+    {
+        return XMVector3Rotate(XMVectorSet(0, 0, -1, 0), XMQuaternionNormalize(q));
+    };
+    const auto cameraUp = [](XMVECTOR q)
+    {
+        return XMVector3Rotate(XMVectorSet(0, 1, 0, 0), XMQuaternionNormalize(q));
+    };
+    const auto aligned = [](XMVECTOR a, XMVECTOR b)
+    {
+        return std::abs(XMVectorGetX(XMVector3Dot(XMVector3Normalize(a), XMVector3Normalize(b)))) > 0.9999f;
+    };
+
+    const XMVECTOR front = CanonicalViewOrientation(ViewDir::Front);
+    const XMVECTOR top = CanonicalViewOrientation(ViewDir::Top);
+
+    // The top face is framed X-right / Y-up, like the reference screenshots.
+    CHECK(aligned(forward(top), XMVectorSet(0, 0, -1, 0)));
+    CHECK(aligned(cameraUp(top), XMVectorSet(0, 1, 0, 0)));
+    CHECK(IsCardinalView(top));
+
+    // Z -> X from Top is one turn about the vertical (Y) axis: the view
+    // direction becomes -X and the current up stays +Y instead of tumbling
+    // diagonally to the canonical X view.
+    const XMVECTOR topToX = ViewOrientationFrom(top, ViewDir::Right);
+    CHECK(aligned(forward(topToX), XMVectorSet(-1, 0, 0, 0)));
+    CHECK(aligned(cameraUp(topToX), XMVectorSet(0, 1, 0, 0)));
+
+    // Z -> Y is one turn about the horizontal (X) axis.
+    const XMVECTOR topToY = ViewOrientationFrom(top, ViewDir::Back);
+    CHECK(aligned(forward(topToY), XMVectorSet(0, -1, 0, 0)));
+    CHECK(aligned(cameraUp(topToY), XMVectorSet(0, 0, -1, 0)));
+
+    // Opposite faces flip about one axis and remain canonically upright.
+    const XMVECTOR topToBottom = ViewOrientationFrom(top, ViewDir::Bottom);
+    CHECK(aligned(forward(topToBottom), XMVectorSet(0, 0, 1, 0)));
+    CHECK(aligned(cameraUp(topToBottom), XMVectorSet(0, -1, 0, 0)));
+
+    // From Front, adjacent and opposite snaps are still one-axis turns and
+    // land on the canonical orientations.
+    CHECK(aligned(forward(ViewOrientationFrom(front, ViewDir::Right)), XMVectorSet(-1, 0, 0, 0)));
+    CHECK(aligned(forward(ViewOrientationFrom(front, ViewDir::Top)), XMVectorSet(0, 0, -1, 0)));
+    CHECK(aligned(forward(ViewOrientationFrom(front, ViewDir::Bottom)), XMVectorSet(0, 0, 1, 0)));
+    CHECK(aligned(forward(ViewOrientationFrom(front, ViewDir::Back)), XMVectorSet(0, -1, 0, 0)));
+
+    // A non-cardinal starting view still settles on the canonical orientation.
+    const XMVECTOR isometric = OrientationFromForwardUp(
+        XMVector3Normalize(XMVectorSet(1, 1, 1, 0)), XMVectorSet(0, 0, 1, 0));
+    const XMVECTOR settled = ViewOrientationFrom(isometric, ViewDir::Top);
+    CHECK(aligned(forward(settled), XMVectorSet(0, 0, -1, 0)));
+    CHECK(aligned(cameraUp(settled), XMVectorSet(0, 1, 0, 0)));
+}
+
+TEST_CASE("The nav gizmo roll glyphs match Fusion's face-view arrows", "[graphics][gizmo]")
+{
+    using namespace DirectX;
+    NavGizmo gizmo;
+    gizmo.UpdateLayout(800, 600, 40, 40, 1.0f);
+    const XMVECTOR identity = XMQuaternionIdentity();
+    const auto geometry = gizmo.ComputeDraw(identity);
+
+    REQUIRE(geometry.showRotationControls);
+    CHECK(IsCardinalView(identity));
+    CHECK(IsFaceView(identity));
+
+    // Just off a face view is still cardinal enough for a single-axis snap,
+    // but the roll arrows stay hidden until the camera is fully aligned.
+    const XMVECTOR slightlyOffFace = XMQuaternionRotationAxis(
+        XMVectorSet(1, 0, 0, 0), XMConvertToRadians(0.5f));
+    CHECK(IsCardinalView(slightlyOffFace));
+    CHECK_FALSE(IsFaceView(slightlyOffFace));
+    const auto nearFaceGeometry = gizmo.ComputeDraw(slightlyOffFace);
+    CHECK_FALSE(nearFaceGeometry.showRotationControls);
+
+    struct Bounds
+    {
+        float minX = 0.0f, maxX = 0.0f, minY = 0.0f, maxY = 0.0f;
+        float minRadius = 0.0f, maxRadius = 0.0f;
+    };
+    const auto bounds = [](const NavGizmo::DrawGeometry::RotationGlyph& glyph)
+    {
+        REQUIRE(glyph.pointCount >= 3);
+        Bounds b;
+        b.minX = b.maxX = glyph.points[0].x;
+        b.minY = b.maxY = glyph.points[0].y;
+        b.minRadius = b.maxRadius = std::sqrt(
+            glyph.points[0].x * glyph.points[0].x + glyph.points[0].y * glyph.points[0].y);
+        for (int point = 1; point < glyph.pointCount; ++point)
+        {
+            const auto& p = glyph.points[point];
+            b.minX = std::min(b.minX, p.x);
+            b.maxX = std::max(b.maxX, p.x);
+            b.minY = std::min(b.minY, p.y);
+            b.maxY = std::max(b.maxY, p.y);
+            const float radius = std::sqrt(p.x * p.x + p.y * p.y);
+            b.minRadius = std::min(b.minRadius, radius);
+            b.maxRadius = std::max(b.maxRadius, radius);
+        }
+        return b;
+    };
+    const Bounds ccw = bounds(geometry.rollCounterClockwise);
+    const Bounds cw = bounds(geometry.rollClockwise);
+
+    // Each glyph is the asset's arrow: a barbed head, a tapering shaft and a
+    // blunt tail, closed as one outline.
+    CHECK(geometry.rollCounterClockwise.pointCount >= 24);
+    REQUIRE(geometry.rollClockwise.pointCount == geometry.rollCounterClockwise.pointCount);
+
+    // The pair is exactly mirror-symmetric about the upper-right diagonal,
+    // matching the reference: the counter-clockwise head is above that line
+    // and the clockwise head below it, with a small gap between their tails.
+    for (int point = 0; point < geometry.rollCounterClockwise.pointCount; ++point)
+    {
+        const auto& a = geometry.rollCounterClockwise.points[point];
+        const auto& b = geometry.rollClockwise.points[point];
+        CHECK(std::abs(b.x + a.y) < 0.001f);
+        CHECK(std::abs(b.y + a.x) < 0.001f);
+    }
+    CHECK(ccw.maxY < 0.0f);
+    CHECK(cw.minX > 0.0f);
+
+    // The artwork is level: the counter-clockwise head points exactly left and
+    // the clockwise head exactly down, so each tip is its glyph's extreme point.
+    CHECK(geometry.rollCounterClockwise.points[0].x == ccw.minX);
+    CHECK(geometry.rollClockwise.points[0].y == cw.maxY);
+
+    // Both arrows sit entirely past the light ring, so they never cover the
+    // ball or its nodes, and inside the reserved footprint.
+    CHECK(ccw.minRadius > geometry.outerRadius);
+    CHECK(cw.minRadius > geometry.outerRadius);
+    CHECK(ccw.maxRadius <= geometry.glyphReserveRadius);
+    CHECK(cw.maxRadius <= geometry.glyphReserveRadius);
+    CHECK(ccw.maxRadius > geometry.outerRadius * 1.5f);
+    CHECK(cw.maxRadius > geometry.outerRadius * 1.5f);
+    CHECK(cw.maxRadius < geometry.outerRadius * 1.7f);
+    CHECK(geometry.glyphStrokeWidth < 2.0f);
+
+    struct GlyphCase
+    {
+        const NavGizmo::DrawGeometry::RotationGlyph* glyph;
+        NavGizmo::Part part;
+        float insideX;  // body sample in gizmo-local pixels
+        float insideY;
+    };
+    // Interior samples of each arrow's body.
+    const GlyphCase rolls[] = {
+        { &geometry.rollCounterClockwise, NavGizmo::Part::RollCounterClockwise, 21.6f, -66.6f },
+        { &geometry.rollClockwise, NavGizmo::Part::RollClockwise, 66.6f, -21.6f },
+    };
+    for (const GlyphCase& glyph : rolls)
+    {
+        CHECK(glyph.glyph->pointCount >= 3);
+        CHECK(gizmo.HitTest(identity, geometry.centerX + glyph.insideX,
+            geometry.centerY + glyph.insideY, false) == glyph.part);
+        CHECK(gizmo.HitTest(identity, geometry.centerX + glyph.insideX,
+            geometry.centerY + glyph.insideY, true) == glyph.part);
+    }
+
+    // The arrows are not hit-testable while the camera is merely near a face.
+    CHECK(gizmo.HitTest(slightlyOffFace, geometry.centerX + rolls[0].insideX,
+        geometry.centerY + rolls[0].insideY, false) != NavGizmo::Part::RollCounterClockwise);
+
+    // The center still orbits, the light-ring outline still owns the light in
+    // Directional mode, and empty space beyond the glyphs is not a control.
+    CHECK(gizmo.HitTest(identity, geometry.centerX + 20.0f, geometry.centerY + 20.0f, false)
+        == NavGizmo::Part::Ball);
+    CHECK(gizmo.HitTest(identity, geometry.centerX + geometry.outerRadius, geometry.centerY, true)
+        == NavGizmo::Part::Light);
+    CHECK(gizmo.HitTest(identity, geometry.centerX,
+        geometry.centerY + geometry.glyphReserveRadius + 20.0f, false) == NavGizmo::Part::None);
+
+    // An isometric (non-face) view hides and disables the roll glyphs, just
+    // like Fusion's ViewCube.
+    const XMVECTOR isometric = OrientationFromForwardUp(
+        XMVector3Normalize(XMVectorSet(1, 1, 1, 0)), XMVectorSet(0, 0, 1, 0));
+    CHECK_FALSE(IsCardinalView(isometric));
+    const auto isoGeometry = gizmo.ComputeDraw(isometric);
+    CHECK_FALSE(isoGeometry.showRotationControls);
+    CHECK(gizmo.HitTest(isometric, geometry.centerX + rolls[1].insideX,
+        geometry.centerY + rolls[1].insideY, false) != NavGizmo::Part::RollClockwise);
+
+    // The reserved footprint keeps the arrows inside a narrow viewport: the
+    // ball moves in from the corner rather than letting the glyphs clip.
+    gizmo.UpdateLayout(240, 240, 40, 40, 1.0f);
+    const auto narrow = gizmo.ComputeDraw(identity);
+    CHECK(narrow.centerX + narrow.glyphReserveRadius <= 240.01f);
+    CHECK(narrow.centerY - narrow.glyphReserveRadius >= 39.99f);
+    CHECK(narrow.centerX - narrow.outerRadius >= 0.0f);
+    CHECK(narrow.centerX + bounds(narrow.rollClockwise).maxX <= 240.01f);
 }

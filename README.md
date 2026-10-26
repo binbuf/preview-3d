@@ -14,7 +14,7 @@
 ## Highlights
 
 - Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, and STEP/STP** files locally.
-- Navigate with familiar Blender-style orbit, pan, and frame controls, plus Unreal-style right-mouse fly, a navigation gizmo, and a keyboard-friendly command set.
+- Navigate with familiar Blender-style orbit, pan, and frame controls, plus Unreal-style right-mouse fly, a navigation gizmo with 90° roll controls, and a keyboard-friendly command set.
 - Inspect models with Studio, Clay, and rotatable Directional lighting, Wireframe mode, an information panel, and point-cloud rendering.
 - Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration.
 - Parse and decode in a zero-capability AppContainer worker: models stay local, are never modified, and nothing is uploaded.
@@ -104,7 +104,7 @@ Tests, fixture lanes, and fuzz targets are described in [CONTRIBUTING.md](CONTRI
 
 ## Credits
 
-Interface icons: [Magnific](https://www.flaticon.com/free-icons/geometric), [Iconir](https://www.flaticon.com/free-icons/perspective), [Magnific](https://www.flaticon.com/free-icons/grid), and [Magnific](https://www.flaticon.com/free-icons/speed) via Flaticon.
+App icon: [Magnific](https://www.flaticon.com/free-icons/geometric) via Flaticon.
 
 ## License
 

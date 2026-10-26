@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "不斷旋轉模型；懸停以獲取速度",
   "a11y.orbitSliderDesc": "調整自動軌道速度",
   "hud.orbitOn": "軌道上",
-  "hud.orbitOff": "軌道關閉"
+  "hud.orbitOff": "軌道關閉",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }

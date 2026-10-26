@@ -63,6 +63,9 @@ struct OverlayInfo
     RECT resetViewButtonRect{};          // client px, valid while alpha > 0
     bool resetViewButtonHover = false;
     bool resetViewButtonPressed = false;
+    // NavGizmo roll arrows, shown only in a face view. They fade in and out
+    // with that state the same way the Reset button does.
+    float rollGlyphAlpha = 0.0f;          // 0 hidden, 1 fully opaque
     // True when the warning badge stands for unresolved sidecar assets, so the
     // activation path offers a folder picker instead of only an explanation.
     bool warningHasMissingAssets = false;
@@ -317,6 +320,11 @@ struct Camera
     double TurntableSpeed() const { return turntableSpeed; }
 
     DirectX::XMVECTOR Orientation() const;
+    // The orientation the camera is heading toward: the in-flight target while
+    // a SnapToView glide is running, otherwise the live orientation. Incremental
+    // gizmo turns compose on this so rapid clicks accumulate exact 90-degree
+    // steps instead of restarting from a mid-animation frame.
+    DirectX::XMVECTOR TargetOrientation() const;
     DirectX::XMVECTOR EyePosition() const;
     DirectX::XMMATRIX ViewMatrix() const;
     // Blends perspective and orthographic according to projectionBlend.

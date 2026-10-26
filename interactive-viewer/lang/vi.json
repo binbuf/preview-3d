@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "Xoay mô hình liên tục; di chuột để tăng tốc",
   "a11y.orbitSliderDesc": "Điều chỉnh tốc độ quỹ đạo tự động",
   "hud.orbitOn": "Bật quỹ đạo",
-  "hud.orbitOff": "Tắt quỹ đạo"
+  "hud.orbitOff": "Tắt quỹ đạo",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }

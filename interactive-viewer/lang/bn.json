@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "ক্রমাগত মডেল ঘোরানো; গতির জন্য হোভার করুন",
   "a11y.orbitSliderDesc": "স্বয়ংক্রিয় কক্ষপথের গতি সামঞ্জস্য করুন",
   "hud.orbitOn": "কক্ষপথ চালু",
-  "hud.orbitOff": "কক্ষপথ বন্ধ"
+  "hud.orbitOff": "কক্ষপথ বন্ধ",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }

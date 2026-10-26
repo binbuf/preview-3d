@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "மாதிரியை தொடர்ந்து சுழற்றவும்; வேகத்திற்கு வட்டமிடுங்கள்",
   "a11y.orbitSliderDesc": "தானியங்கு சுற்றுப்பாதை வேகத்தை சரிசெய்யவும்",
   "hud.orbitOn": "சுற்றுப்பாதையில்",
-  "hud.orbitOff": "ஆர்பிட் ஆஃப்"
+  "hud.orbitOff": "ஆர்பிட் ஆஃப்",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }

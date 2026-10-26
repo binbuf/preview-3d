@@ -62,6 +62,9 @@ enum class Control
     // stay stable.
     Orbit,
     OrbitSlider,
+    // Appended after OrbitSlider so earlier numeric runtime IDs stay stable.
+    GizmoRollCounterClockwise,
+    GizmoRollClockwise,
     Count,
 };
 

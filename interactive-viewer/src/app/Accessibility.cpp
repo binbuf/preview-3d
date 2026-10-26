@@ -349,6 +349,7 @@ std::vector<Control> VisibleControls(const Query& query)
         Control::GizmoPositiveX, Control::GizmoNegativeX,
         Control::GizmoPositiveY, Control::GizmoNegativeY,
         Control::GizmoPositiveZ, Control::GizmoNegativeZ,
+        Control::GizmoRollCounterClockwise, Control::GizmoRollClockwise,
         Control::ErrorRetry, Control::ErrorOpenAnother, Control::ErrorCopyDetails,
     };
     for (const Control control : ordered) {

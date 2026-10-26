@@ -159,6 +159,13 @@ struct ViewerApp
     bool resetViewButtonFadeInitialized = false;
     float resetViewButtonFadeTarget = 0.0f;
     double lastResetViewFadeSeconds = 0.0;
+    // The gizmo's roll arrows fade in/out with the face-view state, using the
+    // same timing as the Reset button above.
+    float rollGlyphAlpha = 0.0f;
+    bool rollGlyphFading = false;
+    bool rollGlyphFadeInitialized = false;
+    float rollGlyphFadeTarget = 0.0f;
+    double lastRollGlyphFadeSeconds = 0.0;
     LightingMode lightingMode = LightingMode::Studio;
     float directionalLightAngle = 0.875f;
     // Elevation above the horizon in radians; atan(0.55) matches the previous
@@ -1705,7 +1712,19 @@ void SnapViewCommand(ViewerApp& app, ViewDir view)
         else if (view == ViewDir::Right) view = ViewDir::Left;
         else if (view == ViewDir::Top) view = ViewDir::Bottom;
     }
-    app.renderThread.LockCamera()->SnapToView(CanonicalViewOrientation(view));
+    auto camera = app.renderThread.LockCamera();
+    camera->SnapToView(ViewOrientationFrom(camera->TargetOrientation(), view));
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+// Applies one incremental 90-degree turn from the gizmo's outer glyphs. It
+// composes on the in-flight target so clicking faster than the snap animation
+// still accumulates exact quarter turns rather than drifting.
+void TurnViewCommand(ViewerApp& app, ViewTurn turn)
+{
+    if (!CanNavigate(app)) return;
+    auto camera = app.renderThread.LockCamera();
+    camera->SnapToView(TurnViewOrientation(camera->TargetOrientation(), turn));
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
@@ -2715,6 +2734,36 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
             LONG(geometry.centerX+node.x+radius),LONG(geometry.centerY+node.y+radius)};
         break;
     }
+    case Control::GizmoRollCounterClockwise: case Control::GizmoRollClockwise:
+    {
+        info.name = control == Control::GizmoRollClockwise
+            ? Loc("a11y.rollClockwise", L"Roll view clockwise 90 degrees")
+            : Loc("a11y.rollCounterClockwise", L"Roll view counter-clockwise 90 degrees");
+        info.description = Loc("a11y.rollDesc", L"Rotate the view 90 degrees in its own plane");
+
+        DirectX::XMFLOAT4 orientation{}; { auto camera=app.renderThread.LockCamera(); orientation=camera->orientation; }
+        const auto geometry=app.gizmo.ComputeDraw(DirectX::XMLoadFloat4(&orientation));
+        info.visible = model && geometry.showRotationControls;
+        const auto& glyph = control == Control::GizmoRollClockwise
+            ? geometry.rollClockwise : geometry.rollCounterClockwise;
+        const float pad = geometry.glyphStrokeWidth * 0.5f + 2.0f;
+        float minX = 0.0f, maxX = 0.0f, minY = 0.0f, maxY = 0.0f;
+        if (glyph.pointCount > 0)
+        {
+            minX = maxX = glyph.points[0].x;
+            minY = maxY = glyph.points[0].y;
+            for (int point = 1; point < glyph.pointCount; ++point)
+            {
+                minX = std::min(minX, glyph.points[point].x);
+                maxX = std::max(maxX, glyph.points[point].x);
+                minY = std::min(minY, glyph.points[point].y);
+                maxY = std::max(maxY, glyph.points[point].y);
+            }
+        }
+        info.rect = { LONG(geometry.centerX + minX - pad), LONG(geometry.centerY + minY - pad),
+            LONG(geometry.centerX + maxX + pad), LONG(geometry.centerY + maxY + pad) };
+        break;
+    }
     case Control::ErrorRetry: case Control::ErrorOpenAnother: case Control::ErrorCopyDetails:
     {
         HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton:app.copyButton;
@@ -2801,6 +2850,8 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::GizmoNegativeY: SnapViewCommand(app,ViewDir::Front); break;
     case Control::GizmoPositiveZ: SnapViewCommand(app,ViewDir::Top); break;
     case Control::GizmoNegativeZ: SnapViewCommand(app,ViewDir::Bottom); break;
+    case Control::GizmoRollCounterClockwise: TurnViewCommand(app,ViewTurn::RollCounterClockwise); break;
+    case Control::GizmoRollClockwise: TurnViewCommand(app,ViewTurn::RollClockwise); break;
     case Control::ErrorRetry: HandleCommand(app,ID_VIEW_RETRY); break;
     case Control::ErrorOpenAnother: HandleCommand(app,ID_VIEW_OPEN_ANOTHER); break;
     case Control::ErrorCopyDetails: HandleCommand(app,ID_VIEW_COPY_DETAILS); break;
@@ -2902,43 +2953,79 @@ FlightInput BuildFlightInput(const ViewerApp& app)
     return input;
 }
 
-// Advances the floating Reset button's fade toward its current target
-// (visible while the camera is away from home, hidden at home). Capped dt so
-// returning from a modal or a suspended frame doesn't pop the alpha.
-void UpdateResetViewButtonFade(ViewerApp& app)
+// Advances one UI fade toward its current target. Capped dt so returning from
+// a modal or a suspended frame doesn't pop the alpha.
+void UpdateFade(float& alpha, bool& fading, bool& initialized, float& target,
+    double& lastSeconds, float newTarget, bool reduceMotion)
 {
     constexpr double kFadeSeconds = 0.18;
     const double now = NowSeconds();
-    const bool targetVisible = HasNavigableModel(app) && app.renderThread.LockCamera()->ViewMoved();
-    const float target = targetVisible ? 1.0f : 0.0f;
 
     // Start the fade at the frame the target flips, rather than measuring
     // from the last idle wake-up (which could be minutes ago and make the
     // first step jump most of the way).
-    if (!app.resetViewButtonFadeInitialized || target != app.resetViewButtonFadeTarget)
+    if (!initialized || newTarget != target)
     {
-        app.resetViewButtonFadeInitialized = true;
-        app.resetViewButtonFadeTarget = target;
-        app.lastResetViewFadeSeconds = now;
-        if (app.reduceMotion) app.resetViewButtonAlpha = target;
-        app.resetViewButtonFading = std::abs(app.resetViewButtonAlpha - target) > 0.001f;
+        initialized = true;
+        target = newTarget;
+        lastSeconds = now;
+        if (reduceMotion) alpha = target;
+        fading = std::abs(alpha - target) > 0.001f;
         return;
     }
 
-    const double elapsed = std::clamp(now - app.lastResetViewFadeSeconds, 0.0, 0.1);
-    app.lastResetViewFadeSeconds = now;
-    if (app.reduceMotion)
+    const double elapsed = std::clamp(now - lastSeconds, 0.0, 0.1);
+    lastSeconds = now;
+    if (reduceMotion)
     {
-        app.resetViewButtonAlpha = target;
+        alpha = target;
     }
     else
     {
         const float step = static_cast<float>(elapsed / kFadeSeconds);
-        app.resetViewButtonAlpha = target > app.resetViewButtonAlpha
-            ? std::min(target, app.resetViewButtonAlpha + step)
-            : std::max(target, app.resetViewButtonAlpha - step);
+        alpha = target > alpha
+            ? std::min(target, alpha + step)
+            : std::max(target, alpha - step);
     }
-    app.resetViewButtonFading = std::abs(app.resetViewButtonAlpha - target) > 0.001f;
+    fading = std::abs(alpha - target) > 0.001f;
+}
+
+// Fades the floating Reset button (visible while the camera is away from home,
+// hidden at home).
+void UpdateResetViewButtonFade(ViewerApp& app)
+{
+    const bool targetVisible = HasNavigableModel(app) && app.renderThread.LockCamera()->ViewMoved();
+    UpdateFade(app.resetViewButtonAlpha, app.resetViewButtonFading,
+        app.resetViewButtonFadeInitialized, app.resetViewButtonFadeTarget,
+        app.lastResetViewFadeSeconds, targetVisible ? 1.0f : 0.0f, app.reduceMotion);
+}
+
+// Fades the gizmo's outer roll arrows with the face-view state, matching the
+// Reset button's timing.
+void UpdateRollGlyphFade(ViewerApp& app)
+{
+    auto camera = app.renderThread.LockCamera();
+    const bool hasModel = HasNavigableModel(app);
+    const bool currentFace = hasModel && IsFaceView(camera->Orientation());
+    const bool targetFace = hasModel && IsFaceView(camera->TargetOrientation());
+    // A gizmo-driven turn from one face view to another passes through
+    // non-cardinal orientations on the way. If the arrows were already up
+    // (previous target 1) and the glide is heading to another face, keep them
+    // up for the whole transition instead of fading out and back in. A glide
+    // from an oblique view only shows them once the face is actually reached.
+    const bool targetVisible = currentFace
+        || (targetFace && app.rollGlyphFadeTarget > 0.5f);
+    UpdateFade(app.rollGlyphAlpha, app.rollGlyphFading, app.rollGlyphFadeInitialized,
+        app.rollGlyphFadeTarget, app.lastRollGlyphFadeSeconds,
+        targetVisible ? 1.0f : 0.0f, app.reduceMotion);
+
+    // Drop a hover left over from the frame the arrows started fading out.
+    if (app.rollGlyphFadeTarget == 0.0f
+        && (app.gizmo.hover == NavGizmo::Part::RollCounterClockwise
+            || app.gizmo.hover == NavGizmo::Part::RollClockwise))
+    {
+        app.gizmo.hover = NavGizmo::Part::None;
+    }
 }
 
 // Everything in IsAnimating that is UI-owned state. The render thread ORs
@@ -2950,6 +3037,7 @@ bool IsAnimatingWithoutCamera(const ViewerApp& app)
     const double now = NowSeconds();
     return (app.state == ViewerState::Loading && !app.reduceMotion) || app.renderPresentationPending
         || HasNavigationInput(app) || app.resetViewPending || app.resetViewButtonFading
+        || app.rollGlyphFading
         || now < app.speedHudUntil || now < app.modeHudUntil;
 }
 
@@ -3082,6 +3170,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.resetViewButtonHover = app.resetViewButtonHover;
         overlay.resetViewButtonPressed = app.resetViewButtonPressed;
     }
+    overlay.rollGlyphAlpha = app.rollGlyphAlpha;
     overlay.gridVisible = app.gridVisible;
     overlay.axisSnapEnabled = app.axisSnapEnabled;
     overlay.groundAxis = app.groundAxis;
@@ -3943,6 +4032,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             const NavGizmo::Part part = app->gizmo.HitTest(app->renderThread.LockCamera()->Orientation(),
                 static_cast<float>(point.x), static_cast<float>(point.y), lightRing,
                 app->directionalLightAngle, app->directionalLightElevation);
+            ViewTurn turn{};
             if (part == NavGizmo::Part::Light)
             {
                 // Outer light ring: drag the sun to rotate (and raise/lower) the
@@ -3962,10 +4052,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 app->orbitVelocityY = 0.0;
                 app->lastOrbitMoveSeconds = NowSeconds();
             }
+            else if (NavGizmo::TurnFor(part, turn))
+            {
+                // Outer roll glyphs: apply one exact 90-degree turn on press,
+                // like an axis snap, so no drag capture is needed.
+                TurnViewCommand(*app, turn);
+            }
             else if (part != NavGizmo::Part::None)
             {
-                // Axis node/stem: snap immediately on press.
-                app->renderThread.LockCamera()->SnapToView(CanonicalViewOrientation(app->gizmo.ViewFor(part)));
+                // Axis node/stem: snap immediately on press. From another face
+                // view this is one 90/180-degree turn about a single axis.
+                auto camera = app->renderThread.LockCamera();
+                camera->SnapToView(ViewOrientationFrom(camera->TargetOrientation(), app->gizmo.ViewFor(part)));
                 InvalidateRect(window, nullptr, FALSE);
             }
             else
@@ -4932,6 +5030,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
                 }
             }
             UpdateResetViewButtonFade(app);
+            UpdateRollGlyphFade(app);
             uiAnimating = !IsIconic(gMainWindow) && IsAnimatingWithoutCamera(app);
             auto overlay = std::make_shared<OverlayFrame>();
             overlay->info = BuildOverlayInfo(app);

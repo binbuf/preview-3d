@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 
 using namespace DirectX;
@@ -26,6 +27,66 @@ constexpr float kSunOuterLogical = 7.3f;
 // enough to grab comfortably, narrow enough that the inner disc still reads
 // as the orbit target.
 constexpr float kLightRingBandLogical = 6.0f;
+
+// Roll glyphs, shown only in a face view. The artwork is a single left-hand
+// arc arrow traced from the reference ViewCube, filled solid white over its
+// grey hairline outline. Each arrow is scaled about its own centre and set
+// level on a 70-pixel orbit, so the left arrow points exactly left at the top
+// of the circle and the clockwise arrow is its mirror, pointing exactly down
+// at the right. Both stay the same distance from the light ring, with their
+// tails split on the upper-right diagonal.
+constexpr float kRollArrowScale = 0.8f;          // logical pixels per SVG unit
+constexpr float kRollArrowCenterRadius = 70.0f;  // orbit radius, from the centre
+constexpr float kRollArrowCenterAngle = 72.0f;   // degrees, counter-clockwise arrow
+constexpr float kRollArrowPivotX = 23.69f;       // SVG bounding-box centre
+constexpr float kRollArrowPivotY = 15.49f;
+// The arrows' outermost point, head barbs included, is 78.8 pixels from the
+// centre with the outline; the reserved disc rounds that up.
+constexpr float kGlyphReserveLogical = 79.0f;
+constexpr float kGlyphStrokeLogical = 1.4f;
+constexpr float kGlyphHitSlopLogical = 3.0f;
+// A cardinal view is within about 1.8 degrees of a world axis. This loose
+// tolerance is only for single-axis snap decisions; the roll arrows use the
+// exact face-view test below.
+constexpr float kCardinalTolerance = 0.9995f;
+// About 0.08 degrees: close enough that only an exact snap (or floating-point
+// round-off in one) counts as a face view.
+constexpr float kFaceViewTolerance = 0.999999f;
+
+// The left arrow's closed outline in SVG units (x right, y down), flattened
+// from the asset's two cubic segments. The renderer fills it white and strokes
+// the same loop grey.
+constexpr float kRollArrowOutline[][2] = {
+    { 0.990f, 14.340f },  // head tip
+    { 13.640f, 1.690f },  // outer barb
+    { 13.640f, 7.440f },  // barb notch
+    { 16.613f, 7.781f },
+    { 19.597f, 8.179f },
+    { 22.575f, 8.635f },
+    { 25.531f, 9.149f },
+    { 28.447f, 9.724f },
+    { 31.309f, 10.359f },
+    { 34.098f, 11.055f },
+    { 36.799f, 11.814f },
+    { 39.395f, 12.636f },
+    { 41.870f, 13.522f },
+    { 44.207f, 14.473f },
+    { 46.390f, 15.490f },  // tail, outer corner
+    { 42.390f, 29.290f },  // tail, inner corner
+    { 40.353f, 28.418f },
+    { 38.201f, 27.511f },
+    { 35.950f, 26.587f },
+    { 33.614f, 25.660f },
+    { 31.208f, 24.748f },
+    { 28.746f, 23.865f },
+    { 26.244f, 23.028f },
+    { 23.716f, 22.253f },
+    { 21.177f, 21.556f },
+    { 18.641f, 20.952f },
+    { 16.124f, 20.458f },
+    { 13.640f, 20.090f },  // inner barb notch
+    { 13.640f, 26.990f },  // inner barb
+};
 
 void AxisDirections(XMVECTOR cameraOrientation, XMVECTOR (&axes)[3])
 {
@@ -68,6 +129,70 @@ int PartIndex(int axis, bool positive)
 {
     return static_cast<int>(NavGizmo::Part::PosX) + axis + (positive ? 0 : 3);
 }
+
+using RollGlyph = NavGizmo::DrawGeometry::RotationGlyph;
+
+// Places the traced arrow at the current DPI: scale about its SVG bounding-box
+// centre, then translate it onto its spot on the orbit. The drawing is level,
+// so the counter-clockwise arrow faces exactly left and the clockwise one is
+// its mirror, facing exactly down, with both the same distance from the ring.
+template <size_t Count>
+void BuildRollGlyph(const float (&outline)[Count][2], bool mirror, float scale, RollGlyph& glyph)
+{
+    const float angle = XMConvertToRadians(kRollArrowCenterAngle);
+    const float centerX = kRollArrowCenterRadius * std::cos(angle) * scale;
+    const float centerY = -kRollArrowCenterRadius * std::sin(angle) * scale;
+    const float unit = kRollArrowScale * scale;
+    glyph.pointCount = 0;
+    for (const auto& point : outline)
+    {
+        const float placedX = centerX + (point[0] - kRollArrowPivotX) * unit;
+        const float placedY = centerY + (point[1] - kRollArrowPivotY) * unit;
+        glyph.points[glyph.pointCount++] = mirror
+            ? DirectX::XMFLOAT2{ -placedY, -placedX }
+            : DirectX::XMFLOAT2{ placedX, placedY };
+    }
+}
+
+// Even-odd containment for the arrow's solid body. The outline is a simple
+// closed polygon even though the barb notches make it concave.
+bool PointInGlyph(const RollGlyph& glyph, float x, float y)
+{
+    bool inside = false;
+    for (int i = 0, j = glyph.pointCount - 1; i < glyph.pointCount; j = i++)
+    {
+        const DirectX::XMFLOAT2 a = glyph.points[i];
+        const DirectX::XMFLOAT2 b = glyph.points[j];
+        if (((a.y > y) != (b.y > y)) &&
+            (x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x))
+        {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+// Squared distance from a point to the outline, so the stroke and its slop
+// still grab clicks that land just outside the drawn band.
+float GlyphEdgeDistanceSq(const RollGlyph& glyph, float x, float y)
+{
+    float best = std::numeric_limits<float>::infinity();
+    for (int i = 0, j = glyph.pointCount - 1; i < glyph.pointCount; j = i++)
+    {
+        const DirectX::XMFLOAT2 a = glyph.points[j];
+        const DirectX::XMFLOAT2 b = glyph.points[i];
+        const float dx = b.x - a.x;
+        const float dy = b.y - a.y;
+        const float lengthSq = dx * dx + dy * dy;
+        const float t = lengthSq > 0.0f
+            ? std::clamp(((x - a.x) * dx + (y - a.y) * dy) / lengthSq, 0.0f, 1.0f)
+            : 0.0f;
+        const float px = x - (a.x + dx * t);
+        const float py = y - (a.y + dy * t);
+        best = std::min(best, px * px + py * py);
+    }
+    return best;
+}
 }
 
 XMVECTOR OrientationFromForwardUp(XMVECTOR forward, XMVECTOR up)
@@ -106,10 +231,90 @@ XMVECTOR CanonicalViewOrientation(ViewDir view)
     case ViewDir::Back: return OrientationFromForwardUp(worldBack, worldUp);
     case ViewDir::Right: return OrientationFromForwardUp(XMVectorSet(-1, 0, 0, 0), worldUp);
     case ViewDir::Left: return OrientationFromForwardUp(XMVectorSet(1, 0, 0, 0), worldUp);
-    case ViewDir::Top: return OrientationFromForwardUp(XMVectorSet(0, 0, -1, 0), XMVectorSet(0, -1, 0, 0));
+    // Top keeps +Y up so the top view matches the conventional X-right /
+    // Y-up framing (and the ViewCube screenshots); Bottom mirrors it.
+    case ViewDir::Top: return OrientationFromForwardUp(XMVectorSet(0, 0, -1, 0), XMVectorSet(0, 1, 0, 0));
     case ViewDir::Bottom: return OrientationFromForwardUp(XMVectorSet(0, 0, 1, 0), XMVectorSet(0, -1, 0, 0));
     }
     return XMQuaternionIdentity();
+}
+
+bool IsCardinalView(XMVECTOR orientation)
+{
+    const XMVECTOR forward = XMVector3Rotate(XMVectorSet(0, 0, -1, 0),
+        XMQuaternionNormalize(orientation));
+    const float ax = std::abs(XMVectorGetX(forward));
+    const float ay = std::abs(XMVectorGetY(forward));
+    const float az = std::abs(XMVectorGetZ(forward));
+    return std::max(ax, std::max(ay, az)) >= kCardinalTolerance;
+}
+
+bool IsFaceView(XMVECTOR orientation)
+{
+    const XMVECTOR forward = XMVector3Rotate(XMVectorSet(0, 0, -1, 0),
+        XMQuaternionNormalize(orientation));
+    const float ax = std::abs(XMVectorGetX(forward));
+    const float ay = std::abs(XMVectorGetY(forward));
+    const float az = std::abs(XMVectorGetZ(forward));
+    return std::max(ax, std::max(ay, az)) >= kFaceViewTolerance;
+}
+
+XMVECTOR ViewOrientationFrom(XMVECTOR currentOrientation, ViewDir view)
+{
+    const XMVECTOR canonical = CanonicalViewOrientation(view);
+    if (!IsCardinalView(currentOrientation)) return canonical;
+
+    const XMVECTOR current = XMQuaternionNormalize(currentOrientation);
+    const XMVECTOR currentForward = XMVector3Rotate(XMVectorSet(0, 0, -1, 0), current);
+    const XMVECTOR targetForward = XMVector3Rotate(XMVectorSet(0, 0, -1, 0), canonical);
+    const float alignment = XMVectorGetX(XMVector3Dot(currentForward, targetForward));
+
+    if (alignment > 0.9999f)
+    {
+        // Already looking at the requested face. Settling any roll difference
+        // is a single rotation about the view axis.
+        return canonical;
+    }
+
+    XMVECTOR axis;
+    float angle;
+    if (alignment < -0.9999f)
+    {
+        // Opposite face: a 180-degree turn about X flips top/bottom, while a
+        // turn about Z flips the side views. Both keep the canonical upright
+        // framing and still use one axis.
+        axis = std::abs(XMVectorGetZ(currentForward)) > 0.9999f
+            ? XMVectorSet(1, 0, 0, 0) : XMVectorSet(0, 0, 1, 0);
+        angle = XM_PI;
+    }
+    else
+    {
+        // Adjacent face: the cross product is one world axis, and a +90-degree
+        // turn about it maps the current forward direction onto the target.
+        axis = XMVector3Normalize(XMVector3Cross(currentForward, targetForward));
+        angle = XM_PIDIV2;
+    }
+    return XMQuaternionNormalize(XMQuaternionMultiply(
+        current, XMQuaternionRotationAxis(axis, angle)));
+}
+
+XMVECTOR TurnViewOrientation(XMVECTOR orientation, ViewTurn turn)
+{
+    // The view axis is camera +z (the back of the camera). Rolling about it by
+    // +90 degrees turns the world content clockwise on screen while leaving
+    // the face being looked at unchanged.
+    const XMVECTOR base = XMQuaternionNormalize(orientation);
+    XMVECTOR axis = XMVectorSet(0, 0, 1, 0);
+    float angle = 0.0f;
+    switch (turn)
+    {
+    case ViewTurn::RollCounterClockwise: axis = XMVectorSet(0, 0, 1, 0); angle = -XM_PIDIV2; break;
+    case ViewTurn::RollClockwise: axis = XMVectorSet(0, 0, 1, 0); angle = XM_PIDIV2; break;
+    }
+    // XMQuaternionMultiply(Q1, Q2) concatenates Q1 then Q2, so passing the
+    // local rotation first applies it before the camera's world orientation.
+    return XMQuaternionNormalize(XMQuaternionMultiply(
+        XMQuaternionRotationAxis(axis, angle), base));
 }
 
 void NavGizmo::UpdateLayout(int viewportWidth, int viewportHeight, int topInset, int bottomInset, float dpiScale)
@@ -124,18 +329,49 @@ void NavGizmo::UpdateLayout(int viewportWidth, int viewportHeight, int topInset,
     hitSlop_ = kHitSlopLogical * scale;
     ringBand_ = kLightRingBandLogical * scale;
     sun_ = kSunOuterLogical * scale;
+    glyphReserve_ = kGlyphReserveLogical * scale;
+    glyphStroke_ = kGlyphStrokeLogical * scale;
+    glyphHitSlop_ = kGlyphHitSlopLogical * scale;
+    BuildRollGlyph(kRollArrowOutline, false, scale, rollCounterClockwiseGlyph_);
+    BuildRollGlyph(kRollArrowOutline, true, scale, rollClockwiseGlyph_);
     const float margin = kCornerMarginLogical * scale;
     const float width = std::max(1.0f, static_cast<float>(viewportWidth));
     const float top = static_cast<float>(topInset);
     const float bottom = std::max(top + 1.0f, static_cast<float>(viewportHeight) - static_cast<float>(bottomInset));
-    centerX_ = std::max(outer_ + margin, width - margin - outer_);
+    // Reserve room for the outer rotation glyphs, not just the light ring, so
+    // the new controls never clip against the viewport edge. On a viewport too
+    // narrow for the full footprint, keep the ball on screen and let the empty
+    // part of the reserved circle fall off the left edge instead of clipping
+    // the arrows.
+    const float reserved = std::max(outer_, glyphReserve_);
+    centerX_ = std::max(margin + outer_, width - margin - reserved);
     // Keep the gizmo inside short viewports rather than overlapping the
     // status area, falling back to the top-bar/bottom-bar edges if space
     // runs out.
-    const float highest = top + margin + outer_;
-    const float lowest = std::max(top + outer_, bottom - margin - outer_);
+    const float highest = top + margin + reserved;
+    const float lowest = std::max(top + reserved, bottom - margin - reserved);
     centerY_ = std::min(highest, lowest);
     hover = Part::None;
+}
+
+NavGizmo::Part NavGizmo::GlyphAt(float gx, float gy, XMVECTOR cameraOrientation) const
+{
+    if (!IsFaceView(cameraOrientation)) return Part::None;
+
+    // The arrows are solid closed outlines, so any point inside either one is
+    // a hit; a small slop around the stroked edge makes fine outlines easy to
+    // grab without turning the surrounding empty space into a control.
+    const float edgeSlop = glyphStroke_ * 0.5f + glyphHitSlop_;
+    const float edgeSlopSq = edgeSlop * edgeSlop;
+    const Part parts[] = { Part::RollCounterClockwise, Part::RollClockwise };
+    const RollGlyph* glyphs[] = { &rollCounterClockwiseGlyph_, &rollClockwiseGlyph_ };
+    for (int i = 0; i < 2; ++i)
+    {
+        if (glyphs[i]->pointCount < 3) continue;
+        if (PointInGlyph(*glyphs[i], gx, gy)) return parts[i];
+        if (GlyphEdgeDistanceSq(*glyphs[i], gx, gy) <= edgeSlopSq) return parts[i];
+    }
+    return Part::None;
 }
 
 NavGizmo::Part NavGizmo::HitTest(XMVECTOR cameraOrientation, float pointerX, float pointerY,
@@ -144,7 +380,8 @@ NavGizmo::Part NavGizmo::HitTest(XMVECTOR cameraOrientation, float pointerX, flo
     const float gx = pointerX - centerX_;
     const float gy = pointerY - centerY_;
     const float distanceSq = gx * gx + gy * gy;
-    const float reach = outer_ + (lightRing ? std::max(hitSlop_, ringBand_) : hitSlop_);
+    const float ringReach = outer_ + (lightRing ? std::max(hitSlop_, ringBand_) : hitSlop_);
+    const float reach = std::max(ringReach, glyphReserve_ + glyphHitSlop_);
     if (distanceSq > reach * reach) return Part::None;
 
     // The sun marker is its own drag handle wherever elevation has moved it to,
@@ -159,6 +396,11 @@ NavGizmo::Part NavGizmo::HitTest(XMVECTOR cameraOrientation, float pointerX, flo
         const float sunReach = sun_ + hitSlop_;
         if (sunDx * sunDx + sunDy * sunDy <= sunReach * sunReach) return Part::Light;
     }
+
+    // Rotation glyphs win over the ball and the nodes so their whole body is
+    // grabbable; the sun above wins over both.
+    const Part glyph = GlyphAt(gx, gy, cameraOrientation);
+    if (glyph != Part::None) return glyph;
 
     XMVECTOR axes[3]{};
     AxisDirections(cameraOrientation, axes);
@@ -256,6 +498,11 @@ NavGizmo::DrawGeometry NavGizmo::ComputeDraw(XMVECTOR cameraOrientation) const
     geometry.nodeRadius = node_;
     geometry.dotRadius = dot_;
     geometry.stemWidth = stemWidth_;
+    geometry.glyphStrokeWidth = glyphStroke_;
+    geometry.glyphReserveRadius = glyphReserve_;
+    geometry.rollCounterClockwise = rollCounterClockwiseGlyph_;
+    geometry.rollClockwise = rollClockwiseGlyph_;
+    geometry.showRotationControls = IsFaceView(cameraOrientation);
     geometry.hover = hover;
 
     XMVECTOR axes[3]{};
@@ -366,5 +613,15 @@ ViewDir NavGizmo::ViewFor(Part part) const
     case Part::PosZ: return ViewDir::Top;
     case Part::NegZ: return ViewDir::Bottom;
     default: return ViewDir::Front;
+    }
+}
+
+bool NavGizmo::TurnFor(Part part, ViewTurn& turn)
+{
+    switch (part)
+    {
+    case Part::RollCounterClockwise: turn = ViewTurn::RollCounterClockwise; return true;
+    case Part::RollClockwise: turn = ViewTurn::RollClockwise; return true;
+    default: return false;
     }
 }

@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "モデルを継続的に回転させます。スピードを上げるためにホバリングする",
   "a11y.orbitSliderDesc": "自動周回速度を調整する",
   "hud.orbitOn": "オービットオン",
-  "hud.orbitOff": "オービットオフ"
+  "hud.orbitOff": "オービットオフ",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }

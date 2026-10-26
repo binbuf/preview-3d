@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "Постоянно вращайте модель; парить ради скорости",
   "a11y.orbitSliderDesc": "Отрегулируйте скорость автоорбиты",
   "hud.orbitOn": "Орбита на",
-  "hud.orbitOff": "Орбита выключена"
+  "hud.orbitOff": "Орбита выключена",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }

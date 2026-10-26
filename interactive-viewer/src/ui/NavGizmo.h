@@ -18,6 +18,17 @@ enum class ViewDir
     Bottom
 };
 
+// Incremental 90-degree camera turns exposed by the gizmo's roll glyphs.
+// Roll turns about the camera's own view axis (the screen normal), so the face
+// being looked at stays put while the view spins in its own plane. The glyphs
+// appear only while the camera is in a face view, matching Fusion's ViewCube;
+// the axis nodes remain the controls for changing faces.
+enum class ViewTurn
+{
+    RollCounterClockwise,
+    RollClockwise
+};
+
 // Builds the camera orientation quaternion that looks along `forward` with
 // `up` pointing up the screen. The rotation rows are (right, up, back), which
 // matches this viewer's camera basis: eye = pivot + rotate((0, 0, distance), q),
@@ -26,6 +37,30 @@ enum class ViewDir
 // so the result is never degenerate.
 DirectX::XMVECTOR OrientationFromForwardUp(DirectX::XMVECTOR forward, DirectX::XMVECTOR up);
 DirectX::XMVECTOR CanonicalViewOrientation(ViewDir view);
+
+// Composes one exact 90-degree turn onto an existing orientation. The turn
+// axes are camera-local and post-multiplied, so rolling preserves the view
+// direction, tipping changes it by exactly 90 degrees, and neither suffers
+// gimbal lock at the poles.
+DirectX::XMVECTOR TurnViewOrientation(DirectX::XMVECTOR orientation, ViewTurn turn);
+
+// True when the camera is looking approximately straight down one of the six
+// world axes (within a small tolerance). Used when deciding whether a canonical
+// view request can turn about a single world axis while preserving roll.
+bool IsCardinalView(DirectX::XMVECTOR orientation);
+
+// True when the camera is aligned exactly (within floating-point error) with
+// one of the six world axes. The roll arrows are only shown and hit-tested in
+// this state, mirroring Fusion's ViewCube; a free orbit merely near an axis is
+// not enough.
+bool IsFaceView(DirectX::XMVECTOR orientation);
+
+// Chooses the orientation for a canonical-view request. From a non-cardinal
+// view this is CanonicalViewOrientation(view). From a face view it returns the
+// equivalent orientation reached by a single 90-degree (or 180-degree) turn
+// about one world axis, preserving the current roll, so face-to-face snaps do
+// not tumble diagonally through a compound rotation.
+DirectX::XMVECTOR ViewOrientationFrom(DirectX::XMVECTOR currentOrientation, ViewDir view);
 
 // Blender-style navigation gizmo drawn in the top-right corner of the 3D
 // viewport. This is pure layout/geometry state with no drawing or window
@@ -46,7 +81,11 @@ public:
         NegZ,
         // The outer light ring (Directional mode only). Kept after the axis
         // parts so PartIndex's PosX-relative arithmetic is unaffected.
-        Light
+        Light,
+        // Outer 90-degree roll glyphs. Kept after Light so the existing
+        // PartIndex arithmetic is still untouched.
+        RollCounterClockwise,
+        RollClockwise
     };
 
     struct NodeGeometry
@@ -67,6 +106,26 @@ public:
         float stemWidth = 0.0f;
         NodeGeometry positive[3]{};  // +X, +Y, +Z tips
         NodeGeometry negative[3]{};  // -X, -Y, -Z tails
+
+        // Closed outline for one roll arrow, in gizmo-local pixels (screen x
+        // right, y down), already flattened and scaled for the current DPI.
+        // The first point is not repeated at the end; the renderer fills the
+        // loop white and strokes it with the grey hairline. Coordinates are
+        // screen fixed, so rolling the camera spins the axes underneath the
+        // arrows rather than moving the controls.
+        struct RotationGlyph
+        {
+            static constexpr int kMaxPoints = 208;
+            int pointCount = 0;
+            DirectX::XMFLOAT2 points[kMaxPoints]{};
+        } rollCounterClockwise, rollClockwise;
+
+        float glyphStrokeWidth = 0.0f;
+        float glyphReserveRadius = 0.0f;  // full outer footprint
+
+        // Roll glyphs are only shown in a face view; the axis nodes, ball, and
+        // light ring are always drawn.
+        bool showRotationControls = false;
         Part hover = Part::None;
     };
 
@@ -143,9 +202,15 @@ public:
     // The orthographic view the camera should animate to when `part` is used.
     ViewDir ViewFor(Part part) const;
 
+    // Maps a rotation glyph part to its 90-degree turn. Returns false for every
+    // non-rotation part (ball, axes, light ring, none).
+    static bool TurnFor(Part part, ViewTurn& turn);
+
     Part hover = Part::None;
 
 private:
+    Part GlyphAt(float gx, float gy, DirectX::XMVECTOR cameraOrientation) const;
+
     float centerX_ = 0.0f;
     float centerY_ = 0.0f;
     float outer_ = 0.0f;
@@ -157,4 +222,9 @@ private:
     float hitSlop_ = 0.0f;
     float ringBand_ = 0.0f;
     float sun_ = 0.0f;
+    float glyphReserve_ = 0.0f;
+    float glyphStroke_ = 0.0f;
+    float glyphHitSlop_ = 0.0f;
+    DrawGeometry::RotationGlyph rollCounterClockwiseGlyph_;
+    DrawGeometry::RotationGlyph rollClockwiseGlyph_;
 };

@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "Drehen Sie das Modell kontinuierlich; Schweben Sie für Geschwindigkeit",
   "a11y.orbitSliderDesc": "Passen Sie die Auto-Orbit-Geschwindigkeit an",
   "hud.orbitOn": "Orbit an",
-  "hud.orbitOff": "Orbit aus"
+  "hud.orbitOff": "Orbit aus",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }

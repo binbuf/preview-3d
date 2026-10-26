@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "بەردەوام مۆدێلەکە بسووڕێنە؛ بۆ خێرایی پەنجە بنێ",
   "a11y.orbitSliderDesc": "خێرایی خولگەی ئۆتۆماتیکی ڕێکبخە",
   "hud.orbitOn": "خولگە لەسەر",
-  "hud.orbitOff": "خولگە کوژاوەتەوە"
+  "hud.orbitOff": "خولگە کوژاوەتەوە",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }

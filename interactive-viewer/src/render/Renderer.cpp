@@ -751,6 +751,13 @@ XMVECTOR Camera::Orientation() const
     return LoadOrientation(*this);
 }
 
+XMVECTOR Camera::TargetOrientation() const
+{
+    return orientationAnimating
+        ? XMQuaternionNormalize(XMLoadFloat4(&desiredOrientation))
+        : LoadOrientation(*this);
+}
+
 XMVECTOR Camera::EyePosition() const
 {
     const XMVECTOR pivot = XMVectorSet(static_cast<float>(targetX), static_cast<float>(targetY),

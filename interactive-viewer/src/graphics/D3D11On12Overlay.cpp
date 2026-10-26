@@ -817,6 +817,46 @@ void D3D11On12Overlay::DrawGizmo(const DirectX::XMFLOAT4& orientation, const Nav
         }
     }
 
+    // Roll glyphs, shown only in a face view. Each is one closed filled shape:
+    // solid white over the asset's grey hairline outline, screen-fixed around
+    // the upper-right of the ball. A soft halo marks the hover target without
+    // changing the fill colour. The whole pair fades with rollGlyphAlpha as
+    // the camera enters and leaves a face view.
+    const float rollAlpha = std::clamp(overlay.rollGlyphAlpha, 0.0f, 1.0f);
+    if (rollAlpha > 0.001f)
+    {
+        auto drawRollGlyph = [&](const NavGizmo::DrawGeometry::RotationGlyph& glyph,
+            NavGizmo::Part part, float alpha)
+        {
+            if (glyph.pointCount < 3 || !d2dFactory_) return;
+            Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
+            Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+            if (FAILED(d2dFactory_->CreatePathGeometry(&path)) || FAILED(path->Open(&sink))) return;
+            sink->BeginFigure(
+                D2D1::Point2F(center.x + glyph.points[0].x, center.y + glyph.points[0].y),
+                D2D1_FIGURE_BEGIN_FILLED);
+            for (int point = 1; point < glyph.pointCount; ++point)
+            {
+                sink->AddLine(
+                    D2D1::Point2F(center.x + glyph.points[point].x, center.y + glyph.points[point].y));
+            }
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            if (FAILED(sink->Close())) return;
+
+            if (g.hover == part)
+            {
+                SetBrush(D2D1::ColorF(0xFFFFFF, 0.28f * alpha));
+                d2dContext_->DrawGeometry(path.Get(), overlayBrush.Get(), Scale(3.0f, scale));
+            }
+            SetBrush(D2D1::ColorF(0xFFFFFF, alpha));
+            d2dContext_->FillGeometry(path.Get(), overlayBrush.Get());
+            SetBrush(D2D1::ColorF(0x8A8A8A, alpha));
+            d2dContext_->DrawGeometry(path.Get(), overlayBrush.Get(), g.glyphStrokeWidth);
+        };
+        drawRollGlyph(g.rollCounterClockwise, NavGizmo::Part::RollCounterClockwise, rollAlpha);
+        drawRollGlyph(g.rollClockwise, NavGizmo::Part::RollClockwise, rollAlpha);
+    }
+
     // Directional-light sun marker: a small sun riding the white outer ring at
     // the compass bearing of the key light. Always full opacity so it stays
     // easy to see and grab.

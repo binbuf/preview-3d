@@ -129,6 +129,7 @@ separate deliverable.
 | Front / Right / Top view | Numpad `1` / `3` / `7` (Ctrl for reverse) |
 | Perspective / Orthographic | Numpad `5` |
 | Gizmo view snap | Click an axis ball in the corner gizmo |
+| Roll view 90° | In a face view, click either curved arrow at the upper-right of the corner gizmo |
 | Frame model / selection | `F`, Numpad `.`, or double-click |
 | Ground grid | `G` / `Shift+Alt+G` / the title bar's Grid button |
 | Axis-snap truck | The title bar's Snap button |

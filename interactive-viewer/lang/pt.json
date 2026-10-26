@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "Rode continuamente o modelo; pairar para velocidade",
   "a11y.orbitSliderDesc": "Ajustar a velocidade de órbita automática",
   "hud.orbitOn": "Órbita ativada",
-  "hud.orbitOff": "Órbita fora"
+  "hud.orbitOff": "Órbita fora",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }

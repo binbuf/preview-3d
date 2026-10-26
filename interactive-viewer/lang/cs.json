@@ -417,5 +417,8 @@
   "a11y.orbitDesc": "Průběžně otáčejte modelem; najeďte na rychlost",
   "a11y.orbitSliderDesc": "Upravte rychlost automatického oběhu",
   "hud.orbitOn": "Na oběžné dráze",
-  "hud.orbitOff": "Orbit pryč"
+  "hud.orbitOff": "Orbit pryč",
+  "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
+  "a11y.rollClockwise": "Roll view clockwise 90 degrees",
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
 }
