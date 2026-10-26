@@ -8,6 +8,19 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.6.1] - 2026-10-26
+
+### Changed
+
+- **Releases are published unsigned when no signing certificate is configured.**
+  The release workflow previously aborted at "Import signing certificate" when
+  the `WINDOWS_CERTIFICATE_BASE64`/`WINDOWS_CERTIFICATE_PASSWORD` secrets were
+  absent, so `v0.5.1`, `v0.5.2`, and `v0.6.0` produced no release. It now
+  publishes an unsigned, checksummed, and attested release in that case, and
+  still Authenticode-signs the payload and checksum files when both secrets are
+  configured. Windows may warn about an unsigned release; see
+  [Windows security help](docs/WINDOWS-SECURITY.md).
+
 ## [0.6.0] - 2026-10-26
 
 ### Added
