@@ -37,6 +37,7 @@ public:
         Share,
         Overflow,      // "..." menu (Controls/warnings/About)
         OpenWith,
+        Update,        // circular up-arrow shown when a newer release exists
         Minimize,
         Maximize,
         Close
@@ -56,7 +57,7 @@ public:
     // With, which don't apply to the topmost, monitor-filling window the
     // floating toolbar overlays there (see Preview3D.cpp's ToggleFullscreen).
     void UpdateLayout(int clientWidth, int titleBarHeight, float dpiScale, bool hasModel, bool isMaximized,
-        bool isFullscreen);
+        bool isFullscreen, bool updateAvailable);
 
     // Hit-tests a CLIENT-coordinate point (already converted from screen
     // coordinates by the caller) against every button, falling back to
@@ -86,6 +87,7 @@ private:
     ButtonState share_;
     ButtonState overflow_;
     ButtonState openWith_;
+    ButtonState update_;
     ButtonState minimize_;
     ButtonState maximize_;
     ButtonState close_;

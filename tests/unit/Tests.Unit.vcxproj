@@ -76,7 +76,9 @@
     <ClCompile Include="..\..\interactive-viewer\src\ui\NavGizmo.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\ui\InfoPanel.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\app\Localization.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\platform\VersionCompare.cpp" />
     <ClCompile Include="LocalizationTests.cpp" />
+    <ClCompile Include="VersionCompareTests.cpp" />
     <ClCompile Include="HarnessSmokeTests.cpp" />
     <!-- SEC-19/T19 release SBOM/license/version metadata gate. -->
     <ClCompile Include="ReleaseMetadataTests.cpp" />

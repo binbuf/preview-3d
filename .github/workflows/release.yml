@@ -490,6 +490,13 @@ jobs:
           $meta = Join-Path $env:GITHUB_WORKSPACE 'artifacts\release'
           New-Item -ItemType Directory -Force -Path $meta | Out-Null
 
+          # The stable update-check endpoint is
+          # releases/latest/download/version.txt. Publish the repository's
+          # version.txt (already validated against every other version source
+          # by packaging/ReleaseMetadata.ps1) as an asset on every release.
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'version.txt') `
+            -Destination (Join-Path $meta 'version.txt') -Force
+
           # The SBOM and MANIFEST already ship inside each archive; publishing
           # renamed copies as release assets makes them independently
           # downloadable and independently attestable. Both distributions emit a
@@ -528,7 +535,8 @@ jobs:
             "artifacts/portable/Preview3D-$version-portable-x64.zip",
             "artifacts/portable/Preview3D-$version-portable-x64.zip.sha256",
             "artifacts/installer/Preview3D-$version-x64-setup.exe",
-            "artifacts/installer/Preview3D-$version-x64-setup.exe.sha256"
+            "artifacts/installer/Preview3D-$version-x64-setup.exe.sha256",
+            "artifacts/release/version.txt"
           ) + @(Get-ChildItem -LiteralPath $meta -File -Filter 'Preview3D-*' |
             Where-Object { $_.Name -notlike '*-SHA256SUMS' } |
             ForEach-Object { $_.FullName })
@@ -607,6 +615,7 @@ jobs:
             artifacts/release/Preview3D-${{ steps.version.outputs.version }}-x64-setup.sbom.cdx.json
             artifacts/release/Preview3D-${{ steps.version.outputs.version }}-x64-setup.manifest.json
             artifacts/release/Preview3D-${{ steps.version.outputs.version }}-SHA256SUMS
+            artifacts/release/version.txt
 
       - name: Publish GitHub release
         shell: pwsh

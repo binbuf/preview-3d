@@ -1226,6 +1226,36 @@ void D3D11On12Overlay::DrawTitleBar(const OverlayInfo& overlay, const Chrome& ch
     drawActionButton(Chrome::Part::Overflow, OverlayIconKind::Overflow, false);
     drawActionButton(Chrome::Part::OpenWith, OverlayIconKind::OpenWith, overlay.openWithOpen);
 
+    // Update badge: a small circled up-arrow between Open With and Minimize.
+    // Layout hides its rect entirely when no newer release is known.
+    const Chrome::ButtonState& updateBadge = chrome.Button(Chrome::Part::Update);
+    if (updateBadge.visible && updateBadge.enabled)
+    {
+        const D2D1_RECT_F rect = ToRectF(updateBadge.rect);
+        const bool hovered = chrome.hover == Chrome::Part::Update;
+        const bool pressedNow = chrome.pressed == Chrome::Part::Update;
+        const float cx = (rect.left + rect.right) * 0.5f;
+        const float cy = (rect.top + rect.bottom) * 0.5f;
+        const float radius = Scale(11, scale);
+        if (pressedNow || hovered)
+        {
+            SetBrush(pressedNow ? D2D1::ColorF(0x1F5FA8) : D2D1::ColorF(0x244E7D));
+            d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius), overlayBrush.Get());
+        }
+        SetBrush(D2D1::ColorF(0x6CB6FF));
+        d2dContext_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius),
+            overlayBrush.Get(), Scale(1.25f, scale));
+        const float arrowHalf = Scale(3.5f, scale);
+        const float arrowTop = cy - Scale(5, scale);
+        const float arrowBottom = cy + Scale(5, scale);
+        d2dContext_->DrawLine(D2D1::Point2F(cx, arrowBottom), D2D1::Point2F(cx, arrowTop),
+            overlayBrush.Get(), Scale(1.5f, scale));
+        d2dContext_->DrawLine(D2D1::Point2F(cx, arrowTop), D2D1::Point2F(cx - arrowHalf, arrowTop + arrowHalf),
+            overlayBrush.Get(), Scale(1.5f, scale));
+        d2dContext_->DrawLine(D2D1::Point2F(cx, arrowTop), D2D1::Point2F(cx + arrowHalf, arrowTop + arrowHalf),
+            overlayBrush.Get(), Scale(1.5f, scale));
+    }
+
     // System caption buttons: simple vector glyphs, matching Windows 11's
     // minimize/maximize-or-restore/close. DWM (via DwmDefWindowProc,
     // Preview3D.cpp) draws the hover/press background for these — the

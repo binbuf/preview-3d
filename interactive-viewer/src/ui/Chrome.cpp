@@ -26,7 +26,7 @@ bool PtInRectValue(const RECT& rect, POINT point)
 }
 
 void Chrome::UpdateLayout(int clientWidth, int titleBarHeight, float dpiScale, bool hasModel, bool isMaximized,
-    bool isFullscreen)
+    bool isFullscreen, bool updateAvailable)
 {
     titleBarRect_ = RECT{ 0, 0, clientWidth, titleBarHeight };
     isMaximized_ = isMaximized;
@@ -63,8 +63,25 @@ void Chrome::UpdateLayout(int clientWidth, int titleBarHeight, float dpiScale, b
     // Also hidden in Fullscreen — opening a different app to handle the file
     // would leave the topmost fullscreen window stranded above it.
     const int openWithWidth = Scale(72, dpiScale);
-    openWith_.rect = MakeRect(right - openWithWidth, actionY, openWithWidth, actionHeight); right -= openWithWidth;
+    openWith_.rect = MakeRect(right - openWithWidth, actionY, openWithWidth, actionHeight);
     openWith_.enabled = openWith_.visible = hasModel && !isFullscreen;
+    if (openWith_.visible) right -= openWithWidth + actionGap;
+
+    // Update badge: a small circle. When Open With is present it sits to its
+    // left; otherwise it takes the spot immediately left of Minimize. It is
+    // hidden in Fullscreen along with the caption buttons and reserves no
+    // width when no newer release is known.
+    const int updateWidth = Scale(38, dpiScale);
+    update_.enabled = update_.visible = updateAvailable && !isFullscreen;
+    if (update_.visible)
+    {
+        update_.rect = MakeRect(right - updateWidth, actionY, updateWidth, actionHeight);
+        right -= updateWidth;
+    }
+    else
+    {
+        update_.rect = RECT{};
+    }
 
     const int rightGroupStart = right - margin;
 
@@ -108,7 +125,8 @@ Chrome::Part Chrome::HitTest(POINT clientPoint) const
 
     const struct { Part part; const ButtonState* state; } candidates[] = {
         { Part::Close, &close_ }, { Part::Maximize, &maximize_ }, { Part::Minimize, &minimize_ },
-        { Part::OpenWith, &openWith_ }, { Part::Overflow, &overflow_ }, { Part::Share, &share_ },
+        { Part::Update, &update_ }, { Part::OpenWith, &openWith_ },
+        { Part::Overflow, &overflow_ }, { Part::Share, &share_ },
         { Part::Fit, &fit_ }, { Part::Orbit, &orbit_ }, { Part::Speed, &speed_ },
         { Part::AxisSnap, &axisSnap_ }, { Part::GroundDirection, &groundDirection_ },
         { Part::GroundAxis, &groundAxis_ }, { Part::Grid, &grid_ },
@@ -137,6 +155,7 @@ const Chrome::ButtonState& Chrome::Button(Part part) const
     case Part::Share: return share_;
     case Part::Overflow: return overflow_;
     case Part::OpenWith: return openWith_;
+    case Part::Update: return update_;
     case Part::Minimize: return minimize_;
     case Part::Maximize: return maximize_;
     case Part::Close: return close_;

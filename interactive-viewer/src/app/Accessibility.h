@@ -79,6 +79,9 @@ enum class Control
     OpenWithTile6,
     OpenWithTile7,
     OpenWithMoreApps,
+    // Appended after OpenWithMoreApps so earlier numeric runtime IDs stay
+    // stable. Visible only while a newer release is known.
+    UpdateAvailable,
     Count,
 };
 

@@ -429,5 +429,9 @@
   "a11y.openWithChooseAnother": "Choose another app",
   "openWith.moreApps": "More apps…",
   "openWith.looking": "Looking for installed apps…",
-  "openWith.none": "No other apps for {0}"
+  "openWith.none": "No other apps for {0}",
+  "a11y.updateAvailable": "Update available",
+  "a11y.updateVersion": "Update {0} is available",
+  "a11y.updateDesc": "Open the release page to download the newer version",
+  "tooltip.update": "Update {0} is available!"
 }

@@ -345,6 +345,7 @@ std::vector<Control> VisibleControls(const Query& query)
         Control::OpenWithTile0, Control::OpenWithTile1, Control::OpenWithTile2, Control::OpenWithTile3,
         Control::OpenWithTile4, Control::OpenWithTile5, Control::OpenWithTile6, Control::OpenWithTile7,
         Control::OpenWithMoreApps,
+        Control::UpdateAvailable,
         Control::Minimize, Control::Maximize, Control::Close,
         Control::Info, Control::InfoPanelClose, Control::LightingStudio, Control::LightingClay,
         Control::LightingDirectional, Control::DirectionalLightAngle, Control::DirectionalLightElevation, Control::Wireframe,

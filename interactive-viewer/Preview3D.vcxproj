@@ -54,7 +54,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
       <Message>Deploying UI language packs to $(OutDir)lang</Message>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;d2d1.lib;dwrite.lib;dwmapi.lib;comctl32.lib;shell32.lib;ole32.lib;oleacc.lib;uiautomationcore.lib;advapi32.lib;bcrypt.lib;runtimeobject.lib;d3d12.lib;dxguid.lib;userenv.lib;windowscodecs.lib;version.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;d2d1.lib;dwrite.lib;dwmapi.lib;comctl32.lib;shell32.lib;ole32.lib;oleacc.lib;uiautomationcore.lib;advapi32.lib;bcrypt.lib;runtimeobject.lib;d3d12.lib;dxguid.lib;userenv.lib;windowscodecs.lib;version.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -91,8 +91,11 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="src\app\Resource.h" />
     <ClInclude Include="src\app\Settings.h" />
     <ClInclude Include="src\app\Localization.h" />
+    <ClInclude Include="src\app\Version.h" />
     <ClInclude Include="src\app\GroundAxis.h" />
     <ClInclude Include="src\platform\ShellIntegration.h" />
+    <ClInclude Include="src\platform\UpdateCheck.h" />
+    <ClInclude Include="src\platform\VersionCompare.h" />
     <ClInclude Include="src\platform\OpenWithCache.h" />
     <ClInclude Include="src\platform\OpenWithIcon.h" />
     <ClInclude Include="src\platform\OpenWithNaming.h" />
@@ -149,6 +152,8 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClCompile Include="src\platform\OpenWithRanking.cpp" />
     <ClCompile Include="src\ui\OpenWithPopup.cpp" />
     <ClCompile Include="src\platform\SafeFileOps.cpp" />
+    <ClCompile Include="src\platform\UpdateCheck.cpp" />
+    <ClCompile Include="src\platform\VersionCompare.cpp" />
     <ClCompile Include="src\app\D3D12ViewerPath.cpp" />
     <ClCompile Include="src\graphics\D3D12Device.cpp" />
     <ClCompile Include="src\graphics\D3D12CommandQueue.cpp" />

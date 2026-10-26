@@ -436,7 +436,7 @@ TEST_CASE("Real chrome paints the bars, information panel and navigation gizmo a
         frame.info.infoButtonRect = { 8, height - 36, 40, height - 4 };
         frame.info.fullscreenButtonRect = { width - 40, height - 36, width - 8, height - 4 };
         frame.info.zoomTrackRect = { width - 250, height - 21, width - 120, height - 19 };
-        frame.chrome.UpdateLayout(width, frame.info.barToolbarHeight, scale, true, false, false);
+        frame.chrome.UpdateLayout(width, frame.info.barToolbarHeight, scale, true, false, false, false);
         frame.gizmo.UpdateLayout(width - 200, height, frame.info.barToolbarHeight, frame.info.barBottomBarHeight, scale);
 
         const auto pixels = harness.DrawChromeAndReadback(frame, static_cast<UINT>(pass) % D3D12SwapChain::kBufferCount);
@@ -482,7 +482,7 @@ TEST_CASE("The directional sun highlights on hover and gains an opaque drag back
         frame.info.lightingMode = LightingMode::Directional;
         frame.info.directionalLightAngle = 0.0f;
         frame.info.directionalLightElevation = 0.0f;
-        frame.chrome.UpdateLayout(width, 40, 1.0f, true, false, false);
+        frame.chrome.UpdateLayout(width, 40, 1.0f, true, false, false, false);
         frame.gizmo.UpdateLayout(width, height, 40, 0, 1.0f);
         return frame;
     };
@@ -534,7 +534,7 @@ TEST_CASE("The bottom bar animates while the render timer runs and then shows it
     frame.info.fullscreenButtonRect = { width - 40, height - 36, width - 8, height - 4 };
     frame.info.zoomTrackRect = { width - 250, height - 21, width - 120, height - 19 };
     frame.info.renderTimerRunning = true;
-    frame.chrome.UpdateLayout(width, frame.info.barToolbarHeight, 1.0f, true, false, false);
+    frame.chrome.UpdateLayout(width, frame.info.barToolbarHeight, 1.0f, true, false, false, false);
 
     frame.info.animationPhase = 0.0f;
     const auto firstSpinner = harness.DrawChromeAndReadback(frame);
@@ -568,7 +568,7 @@ TEST_CASE("Loading and failure cards release the wrapped buffer and keep caption
         frame.info.state = state;
         frame.info.errorSummary = L"Could not open this model.";
         frame.info.errorDetails = L"The file is not supported.";
-        frame.chrome.UpdateLayout(640, 40, 1.0f, false, false, false);
+        frame.chrome.UpdateLayout(640, 40, 1.0f, false, false, false, false);
         frame.chrome.hover = Chrome::Part::Close;
         const auto pixels = harness.DrawChromeAndReadback(frame);
         const RECT close = frame.chrome.Button(Chrome::Part::Close).rect;
@@ -612,7 +612,7 @@ TEST_CASE("The four lighting-mode buttons paint distinct glyphs", "[graphics][ch
     frame.info.directionalButtonRect = { left, top, left + size, bottom }; left += size + gap;
     frame.info.wireframeButtonRect = { left, top, left + size, bottom };
     frame.info.lightingMode = LightingMode::Studio;
-    frame.chrome.UpdateLayout(width, frame.info.barToolbarHeight, 1.0f, true, false, false);
+    frame.chrome.UpdateLayout(width, frame.info.barToolbarHeight, 1.0f, true, false, false, false);
     frame.gizmo.UpdateLayout(width - 200, height, frame.info.barToolbarHeight, frame.info.barBottomBarHeight, 1.0f);
 
     const auto pixels = harness.DrawChromeAndReadback(frame);

@@ -201,6 +201,26 @@ function Get-InstallerDefaultVersion {
     return $matches[1]
 }
 
+function Get-UpdateVersionFile {
+    param([string]$RepositoryRoot)
+    $path = Join-Path $RepositoryRoot 'version.txt'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing update version file: $path" }
+    $version = (Get-Content -LiteralPath $path -Raw).Trim()
+    if ([string]::IsNullOrWhiteSpace($version)) { throw "Update version file is empty: $path" }
+    return $version
+}
+
+function Get-CompiledViewerVersion {
+    param([string]$RepositoryRoot)
+    $path = Join-Path $RepositoryRoot 'interactive-viewer\src\app\Version.h'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing viewer version header: $path" }
+    $text = Get-Content -LiteralPath $path -Raw
+    if ($text -notmatch 'PREVIEW3D_VERSION\s+L"([^"]+)"') {
+        throw "Version.h has no PREVIEW3D_VERSION string to check."
+    }
+    return $matches[1]
+}
+
 function Get-ReleaseVersionSources {
     param([string]$RepositoryRoot, [string]$ExpectedVersion = '')
 
@@ -208,6 +228,8 @@ function Get-ReleaseVersionSources {
         'vcpkg.json'                          = Get-ManifestVersion $RepositoryRoot
         'Directory.Solution.targets'          = Get-TargetsReleaseVersion $RepositoryRoot
         'packaging/installer/Preview3D.nsi'   = Get-InstallerDefaultVersion $RepositoryRoot
+        'version.txt'                         = Get-UpdateVersionFile $RepositoryRoot
+        'interactive-viewer/src/app/Version.h' = Get-CompiledViewerVersion $RepositoryRoot
     }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion)) {
         $versions['packaging -Version'] = $ExpectedVersion
@@ -216,8 +238,8 @@ function Get-ReleaseVersionSources {
 }
 
 # The version cannot drift between the dependency manifest, the solution-level
-# release default, the installer's fallback, and the version passed to the
-# packaging script.
+# release default, the installer's fallback, the published update feed, the
+# compiled viewer, and the version passed to the packaging script.
 function Assert-ReleaseVersionConsistency {
     param([string]$RepositoryRoot, [string]$ExpectedVersion = '')
 

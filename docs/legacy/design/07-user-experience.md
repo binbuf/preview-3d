@@ -10,7 +10,7 @@ The viewer should feel like a small, fast, native tool: a custom dark window wit
 
 ## Window
 
-The window opens at 1000 × 720 logical pixels, centered on the primary monitor's work area, with a 480 × 360 logical-pixel minimum enforced through `WM_GETMINMAXINFO`. Size/position is not persisted between launches. DPI awareness is per-monitor-v2; `WM_DPICHANGED` resizes to the suggested rect and rebuilds the chrome font and layout.
+The window opens at 1200 × 864 logical pixels, centered on the primary monitor's work area, with a 480 × 360 logical-pixel minimum enforced through `WM_GETMINMAXINFO`. Size/position is not persisted between launches. DPI awareness is per-monitor-v2; `WM_DPICHANGED` resizes to the suggested rect and rebuilds the chrome font and layout.
 
 The window background — both the window-class brush shown before the first swap-chain frame and the D3D12 clear color — is **#1C1C1E**, not a lighter neutral. There is no visible flash between the native background and the first rendered frame.
 

@@ -54,6 +54,9 @@
     <ClInclude Include="src\app\Settings.h">
       <Filter>Header Files\app</Filter>
     </ClInclude>
+    <ClInclude Include="src\app\Version.h">
+      <Filter>Header Files\app</Filter>
+    </ClInclude>
     <ClInclude Include="src\render\Model.h">
       <Filter>Header Files\render</Filter>
     </ClInclude>
@@ -73,6 +76,12 @@
       <Filter>Header Files\ui</Filter>
     </ClInclude>
     <ClInclude Include="src\platform\ShellIntegration.h">
+      <Filter>Header Files\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="src\platform\UpdateCheck.h">
+      <Filter>Header Files\platform</Filter>
+    </ClInclude>
+    <ClInclude Include="src\platform\VersionCompare.h">
       <Filter>Header Files\platform</Filter>
     </ClInclude>
   </ItemGroup>
@@ -102,6 +111,12 @@
       <Filter>Source Files\platform</Filter>
     </ClCompile>
     <ClCompile Include="src\platform\SafeFileOps.cpp">
+      <Filter>Source Files\platform</Filter>
+    </ClCompile>
+    <ClCompile Include="src\platform\UpdateCheck.cpp">
+      <Filter>Source Files\platform</Filter>
+    </ClCompile>
+    <ClCompile Include="src\platform\VersionCompare.cpp">
       <Filter>Source Files\platform</Filter>
     </ClCompile>
   </ItemGroup>

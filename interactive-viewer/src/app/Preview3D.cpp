@@ -15,6 +15,9 @@
 #include "Settings.h"
 #include "ShellIntegration.h"
 #include "SafeFileOps.h"
+#include "UpdateCheck.h"
+#include "Version.h"
+#include "VersionCompare.h"
 #include "platform/ProcessMitigations.h"
 #include "platform/SourcePathPolicy.h"
 
@@ -52,6 +55,7 @@ constexpr UINT kAccessibilityStatusMessage = WM_APP + 12;
 constexpr UINT kOpenWithLaunchFailedMessage = WM_APP + 13;
 constexpr UINT kOpenWithCatalogChangedMessage = WM_APP + 14;
 constexpr UINT kOpenWithIconsReadyMessage = WM_APP + 15;
+constexpr UINT kUpdateCheckCompleteMessage = WM_APP + 16;
 constexpr float kArrowPixelsPerSecond = 340.0f;
 constexpr double kHudVisibleSeconds = 1.3;
 constexpr double kHudFadeSeconds = 0.30;
@@ -348,6 +352,11 @@ struct ViewerApp
     // cooperative grace/worker replacement contract, so close cannot leave
     // detached threads referring to HWND or app state after destruction.
     std::vector<std::jthread> importThreads;
+    // Non-empty only when the background release check found a version newer
+    // than PREVIEW3D_VERSION. Drawing, hit-testing, the tooltip, and the
+    // accessibility tree all key the update badge off this one field.
+    std::wstring updateVersion;
+    std::jthread updateCheckThread;
 };
 
 std::wstring AccessibilityStatus(const ViewerApp& app);
@@ -942,7 +951,8 @@ void UpdateChromeLayout(ViewerApp& app)
     RECT client{};
     GetClientRect(app.window, &client);
     app.chrome.UpdateLayout(client.right, app.toolbarHeight, app.dpiScale,
-        HasNavigableModel(app), IsZoomed(app.window) != FALSE, app.isFullscreen);
+        HasNavigableModel(app), IsZoomed(app.window) != FALSE, app.isFullscreen,
+        !app.updateVersion.empty());
 }
 
 // Speed flyout panel/track geometry, shared by drawing (BuildOverlayInfo) and
@@ -1568,6 +1578,11 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
             app.chrome.Button(Chrome::Part::GroundDirection).rect,
             LocFormat("tooltip.groundDirection", L"{0}{1} is up; click for {2}{3}",
                 { std::wstring(currentSign), axisName, std::wstring(nextSign), axisName }), true };
+    }
+    if (app.chrome.hover == Chrome::Part::Update && !app.updateVersion.empty())
+    {
+        return { 120, app.chrome.Button(Chrome::Part::Update).rect,
+            LocFormat("tooltip.update", L"Update {0} is available!", { L"v" + app.updateVersion }), true };
     }
     struct Entry { Chrome::Part part; const char* key; const wchar_t* text; };
     static constexpr Entry kEntries[] = {
@@ -2995,6 +3010,11 @@ void HandleChromeAction(ViewerApp& app, Chrome::Part part)
     case Chrome::Part::Share: DoShare(app); break;
     case Chrome::Part::Overflow: HandleCommand(app, ID_VIEW_MENU); break;
     case Chrome::Part::OpenWith: ToggleOpenWithPopup(app, false); break;
+    case Chrome::Part::Update:
+        // Always open the fixed project releases URL, never anything supplied
+        // by the update response.
+        ShellExecuteW(app.window, L"open", preview3d_update::kReleasesPageUrl, nullptr, nullptr, SW_SHOWNORMAL);
+        break;
     default: break;
     }
 }
@@ -3045,6 +3065,12 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     case Control::Share: chrome(Chrome::Part::Share, Loc("a11y.share", L"Share")); break;
     case Control::More: chrome(Chrome::Part::Overflow, Loc("tooltip.more", L"More options")); break;
     case Control::OpenWith: chrome(Chrome::Part::OpenWith, Loc("a11y.openWith", L"Open with")); break;
+    case Control::UpdateAvailable:
+        chrome(Chrome::Part::Update,
+            app.updateVersion.empty() ? Loc("a11y.updateAvailable", L"Update available")
+                : LocFormat("a11y.updateVersion", L"Update {0} is available", { L"v" + app.updateVersion }),
+            Loc("a11y.updateDesc", L"Open the release page to download the newer version"));
+        break;
     case Control::Minimize: chrome(Chrome::Part::Minimize, Loc("a11y.minimize", L"Minimize")); break;
     case Control::Maximize: chrome(Chrome::Part::Maximize, IsZoomed(app.window) ? Loc("a11y.restore", L"Restore") : Loc("a11y.maximize", L"Maximize")); break;
     case Control::Close: chrome(Chrome::Part::Close, Loc("a11y.close", L"Close")); break;
@@ -3299,6 +3325,9 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     }
     case Control::OpenWithMoreApps:
         InvokeOpenWithItem(app, static_cast<int>(app.openWith.apps.size()));
+        break;
+    case Control::UpdateAvailable:
+        ShellExecuteW(app.window, L"open", preview3d_update::kReleasesPageUrl, nullptr, nullptr, SW_SHOWNORMAL);
         break;
     case Control::Minimize: ShowWindow(app.window,SW_MINIMIZE); break;
     case Control::Maximize: ShowWindow(app.window,IsZoomed(app.window)?SW_RESTORE:SW_MAXIMIZE); break;
@@ -5254,6 +5283,22 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_SYSKEYDOWN:
         if (wParam == 'M' && (lParam & (1u << 29))) { ShowMoreMenu(*app); return 0; }
         break;
+    case kUpdateCheckCompleteMessage:
+    {
+        std::unique_ptr<std::wstring> version(reinterpret_cast<std::wstring*>(lParam));
+        if (!version || version->empty()) return 0;
+        if (!preview3d_update::IsVersionNewer(*version, PREVIEW3D_VERSION)) return 0;
+        if (app->updateVersion != *version)
+        {
+            app->updateVersion = *version;
+            UpdateChromeLayout(*app);
+            UpdateTooltipTracking(*app);
+            InvalidateRect(window, nullptr, FALSE);
+            viewer_accessibility::Announce(window, app->uiaAccessible,
+                LocFormat("a11y.updateVersion", L"Update {0} is available", { L"v" + app->updateVersion }));
+        }
+        return 0;
+    }
     case kD3D12ImportCompleteMessage:
     {
         std::unique_ptr<D3D12CompleteMessage> complete(reinterpret_cast<D3D12CompleteMessage*>(lParam));
@@ -5352,6 +5397,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         break;
     case WM_DESTROY:
         app->closing = true;
+        app->updateCheckThread.request_stop();
         app->alive->store(false, std::memory_order_relaxed);
         if(app->uiaAccessible) UiaDisconnectProvider(app->uiaAccessible);
         app->activeInstance.Stop();
@@ -5387,7 +5433,7 @@ ATOM RegisterViewerClass(HINSTANCE instance)
 bool CreateMainWindow(ViewerApp& app, int showCommand)
 {
     const UINT dpi = GetDpiForSystem();
-    RECT windowBounds{ 0, 0, MulDiv(1000, dpi, 96), MulDiv(720, dpi, 96) };
+    RECT windowBounds{ 0, 0, MulDiv(1200, dpi, 96), MulDiv(864, dpi, 96) };
     AdjustWindowRectExForDpi(&windowBounds, WS_OVERLAPPEDWINDOW, FALSE, WS_EX_ACCEPTFILES | WS_EX_CONTROLPARENT, dpi);
     const int width = windowBounds.right - windowBounds.left;
     const int height = windowBounds.bottom - windowBounds.top;
@@ -5401,6 +5447,32 @@ bool CreateMainWindow(ViewerApp& app, int showCommand)
     ShowWindow(gMainWindow, showCommand);
     UpdateWindow(gMainWindow);
     return true;
+}
+
+// Runs exactly one release lookup off the UI thread. The worker only posts a
+// validated version string back; it never touches app state, the window, or
+// the renderer. Failure is silent by design: no toast, no modal, no retry loop.
+void StartUpdateCheck(ViewerApp& app)
+{
+    if (!app.updateVersion.empty()) return;
+    const HWND window = app.window;
+    const std::shared_ptr<std::atomic_bool> alive = app.alive;
+    app.updateCheckThread = std::jthread([window, alive](std::stop_token stop)
+    {
+        std::wstring version;
+        std::wstring error;
+        if (!preview3d_update::FetchLatestVersion(version, error)) return;
+        if (stop.stop_requested() || !alive || !alive->load(std::memory_order_relaxed)) return;
+        if (!preview3d_update::IsVersionNewer(version, PREVIEW3D_VERSION)) return;
+
+        auto payload = std::make_unique<std::wstring>(std::move(version));
+        if (!PostMessageW(window, kUpdateCheckCompleteMessage, 0,
+                reinterpret_cast<LPARAM>(payload.get())))
+        {
+            return;
+        }
+        payload.release();
+    });
 }
 
 // Smart App Control evaluates every executable image separately and has no
@@ -5471,6 +5543,21 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             // fall through to the unknown-flag branch and are rejected with a
             // usage exit, so a local process cannot drive the product.
 #if defined(PREVIEW3D_ENABLE_TEST_CONTROL)
+            // Debug-only visual preview of the update badge: skips the live
+            // check and presents a synthetic newer version so the icon,
+            // tooltip, and click-through can be exercised offline.
+            else if (_wcsicmp(arguments[i], L"--update-preview") == 0) app.updateVersion = L"1.2.3";
+            else if (_wcsnicmp(arguments[i], L"--update-preview=", 17) == 0)
+            {
+                const std::wstring previewVersion =
+                    preview3d_update::NormalizeVersion(arguments[i] + 17);
+                if (previewVersion.empty() ||
+                    !preview3d_update::IsVersionNewer(previewVersion, PREVIEW3D_VERSION))
+                {
+                    commandLineInvalid = true;
+                }
+                else app.updateVersion = previewVersion;
+            }
             else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
             else if (_wcsicmp(arguments[i], L"--activation-smoke") == 0) {
                 app.appSmoke = true;
@@ -5649,6 +5736,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     }
     InitializeOpenWithCatalog(gMainWindow, OpenWithNotifications{
         kOpenWithLaunchFailedMessage, kOpenWithCatalogChangedMessage, kOpenWithIconsReadyMessage });
+    // Automation and performance runs must stay deterministic and offline.
+    if (!app.appSmoke && !app.benchmarkMode && app.benchFrames == 0) StartUpdateCheck(app);
 
     HACCEL accelerators = LoadAcceleratorsW(instance, MAKEINTRESOURCEW(IDC_PREVIEW3D));
     MSG message{};
