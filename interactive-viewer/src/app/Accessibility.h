@@ -67,6 +67,18 @@ enum class Control
     GizmoRollClockwise,
     // Appended after GizmoRollClockwise so earlier numeric runtime IDs stay stable.
     HideModelUntilComplete,
+    // Appended after HideModelUntilComplete so earlier numeric runtime IDs stay
+    // stable. The popup exposes its visible app tiles through fixed slots plus
+    // the pinned More apps tile.
+    OpenWithTile0,
+    OpenWithTile1,
+    OpenWithTile2,
+    OpenWithTile3,
+    OpenWithTile4,
+    OpenWithTile5,
+    OpenWithTile6,
+    OpenWithTile7,
+    OpenWithMoreApps,
     Count,
 };
 

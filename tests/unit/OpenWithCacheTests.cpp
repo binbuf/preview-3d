@@ -11,8 +11,10 @@ TEST_CASE("Open With cache round-trips bounded Unicode handler metadata", "[open
     source.catalogRevision = 7;
     source.lastDiscoveryFileTime = 123456789;
     source.handlers = {
-        CachedHandler{ L".stl", L"Applications\\blender.exe", L"Blender", L"blender" },
-        CachedHandler{ L".ply", L"Vendor.雪.Modeler", L"Modeler 雪", L"" },
+        CachedHandler{ L".stl", L"Applications\\blender.exe", L"Blender", L"blender",
+            L"C:\\Program Files\\Blender\\blender.exe", 3, true },
+        CachedHandler{ L".ply", L"Vendor.雪.Modeler", L"Modeler 雪", L"",
+            L"C:\\Program Files\\Vendor\\modeler.exe", 0, false },
     };
 
     std::vector<std::byte> bytes;
@@ -61,4 +63,28 @@ TEST_CASE("Open With cache rejects invalid UTF-8 and oversized fields", "[open-w
     source.handlers.front().displayName.assign(2000, L'x');
     CHECK_FALSE(open_with::EncodeCache(source, bytes));
     CHECK(bytes.empty());
+
+    source.handlers.front().displayName = L"Display";
+    source.handlers.front().iconPath.assign(2000, L'x');
+    CHECK_FALSE(open_with::EncodeCache(source, bytes));
+    CHECK(bytes.empty());
+
+    source.handlers.front().iconPath = L"C:\\Apps\\viewer.exe";
+    source.handlers.front().iconIndex = 40000;
+    CHECK_FALSE(open_with::EncodeCache(source, bytes));
+    CHECK(bytes.empty());
+}
+
+TEST_CASE("Open With cache version 1 is rejected cleanly", "[open-with]")
+{
+    CacheState source;
+    source.handlers = { CachedHandler{ L".glb", L"handler", L"Display", L"" } };
+    std::vector<std::byte> bytes;
+    REQUIRE(open_with::EncodeCache(source, bytes));
+    REQUIRE(bytes.size() > 5);
+    bytes[4] = std::byte{ 1 };
+    bytes[5] = std::byte{ 0 };
+    CacheState decoded;
+    CHECK_FALSE(open_with::DecodeCache(bytes, decoded));
+    CHECK(decoded.handlers.empty());
 }

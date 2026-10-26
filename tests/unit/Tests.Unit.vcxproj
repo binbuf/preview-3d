@@ -157,6 +157,12 @@
     <ClCompile Include="ActiveInstanceTests.cpp" />
     <ClCompile Include="OpenWithCacheTests.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\platform\OpenWithCache.cpp" />
+    <ClCompile Include="OpenWithNamingTests.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\platform\OpenWithNaming.cpp" />
+    <ClCompile Include="OpenWithRankingTests.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\platform\OpenWithRanking.cpp" />
+    <ClCompile Include="OpenWithPopupTests.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\ui\OpenWithPopup.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\app\ActiveInstance.cpp" />
     <ClCompile Include="UploadRingTests.cpp" />
     <!-- Worker adapters linked only to this test executable for decode-to-GPU goldens. -->

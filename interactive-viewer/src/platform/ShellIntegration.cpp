@@ -1,11 +1,15 @@
 #include "framework.h"
 #include "ShellIntegration.h"
 #include "OpenWithCache.h"
+#include "OpenWithNaming.h"
 #include "SafeFileOps.h"
 
+#include <shellapi.h>
 #include <shlobj.h>
 #include <span>
 #include <shobjidl.h>
+#include <wincodec.h>
+#include <winver.h>
 #include <wrl/client.h>
 
 #include <winrt/base.h>
@@ -29,7 +33,7 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
-constexpr std::uint32_t kCatalogRevision = 7;
+constexpr std::uint32_t kCatalogRevision = 8;
 constexpr std::uint64_t kDiscoveryInterval = 7ull * 24 * 60 * 60 * 10'000'000;
 constexpr std::size_t kMaximumCacheBytes = 256 * 1024;
 constexpr wchar_t kCacheFileName[] = L"open-with-apps-v1.dat";
@@ -134,6 +138,142 @@ std::uint64_t CurrentFileTime()
     return value.QuadPart;
 }
 
+bool IsLocalAbsolutePath(const std::wstring& path)
+{
+    if (path.size() < 3) return false;
+    if (!iswalpha(path[0]) || path[1] != L':') return false;
+    return path[2] == L'\\' || path[2] == L'/';
+}
+
+std::wstring ModulePath()
+{
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;)
+    {
+        const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0) return {};
+        if (length < buffer.size())
+        {
+            buffer.resize(length);
+            return buffer;
+        }
+        if (buffer.size() >= 32768) return {};
+        buffer.resize(buffer.size() * 2);
+    }
+}
+
+std::wstring CanonicalIdentity(const std::wstring& path)
+{
+    if (path.empty()) return {};
+    std::wstring full = path;
+    if (IsLocalAbsolutePath(path))
+    {
+        std::wstring buffer(MAX_PATH, L'\0');
+        const DWORD length = GetFullPathNameW(path.c_str(), static_cast<DWORD>(buffer.size()),
+            buffer.data(), nullptr);
+        if (length > 0 && length < buffer.size())
+        {
+            buffer.resize(length);
+            full = std::move(buffer);
+        }
+    }
+    return Fold(full);
+}
+
+// Reads FileDescription/ProductName from an executable's version resource.
+// Used only to clean filename-like shell UI names; failure is normal.
+void ReadVersionStrings(const std::wstring& path, std::wstring& description, std::wstring& product)
+{
+    description.clear();
+    product.clear();
+    if (!IsLocalAbsolutePath(path)) return;
+
+    DWORD ignored = 0;
+    const DWORD size = GetFileVersionInfoSizeW(path.c_str(), &ignored);
+    if (size == 0 || size > 1024 * 1024) return;
+    std::vector<std::byte> data(size);
+    if (!GetFileVersionInfoW(path.c_str(), 0, size, data.data())) return;
+
+    struct Translation { WORD language; WORD codePage; };
+    Translation* translations = nullptr;
+    UINT translationBytes = 0;
+    std::wstring prefix = L"\\StringFileInfo\\040904B0\\";
+    if (VerQueryValueW(data.data(), L"\\VarFileInfo\\Translation",
+        reinterpret_cast<void**>(&translations), &translationBytes) &&
+        translations && translationBytes >= sizeof(Translation))
+    {
+        wchar_t buffer[32]{};
+        swprintf_s(buffer, L"\\StringFileInfo\\%04x%04x\\", translations[0].language, translations[0].codePage);
+        prefix = buffer;
+    }
+
+    auto query = [&](const wchar_t* name) -> std::wstring
+    {
+        const std::wstring key = prefix + name;
+        wchar_t* value = nullptr;
+        UINT bytes = 0;
+        if (!VerQueryValueW(data.data(), key.c_str(), reinterpret_cast<void**>(&value), &bytes) ||
+            !value || bytes < sizeof(wchar_t)) return {};
+        const std::size_t length = bytes / sizeof(wchar_t);
+        std::wstring result(value, wcsnlen(value, length));
+        return result;
+    };
+    description = query(L"FileDescription");
+    product = query(L"ProductName");
+}
+
+bool ExtractIconPixels(const std::wstring& iconPath, int iconIndex, int pixelSize,
+    open_with::IconPixels& output)
+{
+    output = {};
+    if (!IsLocalAbsolutePath(iconPath) || pixelSize < 16 || pixelSize > 64) return false;
+
+    HICON icon = nullptr;
+    const UINT size = static_cast<UINT>(pixelSize);
+    if (FAILED(SHDefExtractIconW(iconPath.c_str(), iconIndex, 0, &icon, nullptr, MAKELONG(size, size))) ||
+        !icon) return false;
+
+    ComPtr<IWICImagingFactory> factory;
+    const HRESULT created = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory));
+    if (FAILED(created))
+    {
+        DestroyIcon(icon);
+        return false;
+    }
+
+    ComPtr<IWICBitmap> bitmap;
+    ComPtr<IWICFormatConverter> converter;
+    bool ok = SUCCEEDED(factory->CreateBitmapFromHICON(icon, &bitmap)) && bitmap &&
+        SUCCEEDED(factory->CreateFormatConverter(&converter)) && converter &&
+        SUCCEEDED(converter->Initialize(bitmap.Get(), GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom));
+    DestroyIcon(icon);
+    if (!ok) return false;
+
+    UINT width = 0;
+    UINT height = 0;
+    if (FAILED(bitmap->GetSize(&width, &height)) || width == 0 || height == 0 ||
+        width > 64 || height > 64) return false;
+
+    output.width = static_cast<int>(width);
+    output.height = static_cast<int>(height);
+    output.bgra.resize(static_cast<std::size_t>(width) * height * 4);
+    const UINT stride = width * 4;
+    if (FAILED(converter->CopyPixels(nullptr, stride, static_cast<UINT>(output.bgra.size()),
+        output.bgra.data())))
+    {
+        output = {};
+        return false;
+    }
+    return true;
+}
+
+std::wstring IconCacheKey(const std::wstring& handlerKey, int pixelSize)
+{
+    return Fold(handlerKey) + L"\n" + std::to_wstring(pixelSize);
+}
+
 bool CachePath(std::wstring& path)
 {
     PWSTR localAppData = nullptr;
@@ -183,27 +323,24 @@ void SaveCache(const open_with::CacheState& state)
     preview3d::safeio::WriteFileAtomically(finalPath, std::as_bytes(std::span(bytes)), true, error);
 }
 
-ComPtr<IDataObject> CreateFileDataObject(const std::wstring& path)
+// Launches the handler's executable directly with the model path as its
+// argument. The shell's IAssocHandler::Invoke path is deliberately avoided:
+// when the extension has a UserChoice, invoking a non-default handler shows the
+// OS "How do you want to open this file?" picker instead of launching it.
+bool LaunchExecutableWithFile(const std::wstring& executable, const std::wstring& path)
 {
-    ComPtr<IShellItem> item;
-    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&item)))) return nullptr;
-    ComPtr<IDataObject> dataObject;
-    if (FAILED(item->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&dataObject)))) return nullptr;
-    return dataObject;
-}
-
-bool InvokeAssocHandler(const ComPtr<IAssocHandler>& handler, const std::wstring& path)
-{
-    ComPtr<IDataObject> dataObject = CreateFileDataObject(path);
-    return dataObject && SUCCEEDED(handler->Invoke(dataObject.Get()));
-}
-
-bool ShowOpenWithDialog(const std::wstring& path)
-{
-    OPENASINFO info{};
-    info.pcszFile = path.c_str();
-    info.oaifInFlags = OAIF_EXEC | OAIF_HIDE_REGISTRATION;
-    return SUCCEEDED(SHOpenWithDialog(nullptr, &info));
+    if (!IsLocalAbsolutePath(executable) || path.empty()) return false;
+    const std::wstring parameters = L"\"" + path + L"\"";
+    SHELLEXECUTEINFOW info{};
+    info.cbSize = sizeof(info);
+    info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI | SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = L"open";
+    info.lpFile = executable.c_str();
+    info.lpParameters = parameters.c_str();
+    info.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&info)) return false;
+    if (info.hProcess) CloseHandle(info.hProcess);
+    return true;
 }
 
 void AddDiscoveredHandlers(const wchar_t* extension, ASSOC_FILTER filter, bool popularOnly,
@@ -217,23 +354,58 @@ void AddDiscoveredHandlers(const wchar_t* extension, ASSOC_FILTER filter, bool p
     {
         PWSTR rawName = nullptr;
         PWSTR rawDisplayName = nullptr;
+        PWSTR rawIconPath = nullptr;
+        int rawIconIndex = 0;
         const HRESULT nameResult = handler->GetName(&rawName);
         const HRESULT displayResult = handler->GetUIName(&rawDisplayName);
-        if (SUCCEEDED(nameResult) && rawName && *rawName && SUCCEEDED(displayResult) && rawDisplayName && *rawDisplayName)
+        if (SUCCEEDED(nameResult) && rawName && *rawName &&
+            SUCCEEDED(displayResult) && rawDisplayName && *rawDisplayName &&
+            // Only executable-path handlers can be launched directly. Package
+            // (AUMID) and legacy OpenWithList handlers expose a friendly name
+            // here and can only be started through the OS picker, so they are
+            // not offered as tiles.
+            IsLocalAbsolutePath(rawName))
         {
-            open_with::CachedHandler record{ extension, rawName, rawDisplayName, {} };
+            if (FAILED(handler->GetIconLocation(&rawIconPath, &rawIconIndex)))
+            {
+                rawIconPath = nullptr;
+                rawIconIndex = 0;
+            }
+            const HRESULT recommendedResult = handler->IsRecommended();
+
+            std::wstring description;
+            std::wstring product;
+            ReadVersionStrings(rawName, description, product);
+
+            open_with::CachedHandler record{};
+            record.extension = extension;
+            record.handlerName = rawName;
+            record.displayName = SafeMenuLabel(open_with::NormalizeDisplayName(
+                rawDisplayName, rawName, description, product));
+            record.iconPath = rawIconPath ? rawIconPath : L"";
+            record.iconIndex = std::clamp(rawIconIndex, -32768, 32767);
+            record.recommended = recommendedResult == S_OK;
+            if (!IsLocalAbsolutePath(record.iconPath))
+            {
+                record.iconPath = record.handlerName;
+                record.iconIndex = 0;
+            }
+            if (record.displayName.empty()) record.displayName = L"Unknown app";
+
             const CatalogApp* catalog = MatchCatalog(record.handlerName, record.displayName);
             if (catalog) record.catalogId = catalog->id;
             if (!popularOnly || catalog)
             {
                 const std::wstring key = HandlerKey(record.extension, record.handlerName);
                 auto found = discovered.find(key);
-                if (found == discovered.end() || (!record.catalogId.empty() && found->second.catalogId.empty()))
+                if (found == discovered.end() ||
+                    (!record.catalogId.empty() && found->second.catalogId.empty()))
                     discovered[key] = std::move(record);
             }
         }
         if (rawName) CoTaskMemFree(rawName);
         if (rawDisplayName) CoTaskMemFree(rawDisplayName);
+        if (rawIconPath) CoTaskMemFree(rawIconPath);
         handler.Reset();
     }
 }
@@ -274,10 +446,17 @@ struct CatalogRuntime
     bool rescanRequested = false;
     bool stopping = false;
     HWND notificationWindow = nullptr;
-    UINT launchFailureMessage = 0;
+    OpenWithNotifications notifications;
+    std::wstring selfIdentity;
+    std::wstring selfFileName;
+    std::vector<std::wstring> selfNames;
     std::jthread worker;
     std::unordered_set<std::wstring> failedHandlers;
     std::deque<Invocation> invocations;
+    std::deque<OpenWithIconRequest> iconRequests;
+    std::unordered_set<std::wstring> iconInFlight;
+    std::unordered_map<std::wstring, open_with::IconPixels> iconCache;
+    std::vector<OpenWithIconResult> readyIcons;
 };
 
 CatalogRuntime& Runtime()
@@ -309,51 +488,90 @@ void MergeNewHandlers(open_with::CacheState& cache, std::vector<open_with::Cache
             known.emplace(key, cache.handlers.size());
             cache.handlers.push_back(std::move(handler));
         }
-        else if (found != known.end() && cache.handlers[found->second].catalogId.empty() && !handler.catalogId.empty())
+        else if (found != known.end())
         {
-            cache.handlers[found->second].catalogId = std::move(handler.catalogId);
+            auto& existing = cache.handlers[found->second];
+            if (existing.catalogId.empty() && !handler.catalogId.empty())
+                existing.catalogId = std::move(handler.catalogId);
+            if (!handler.displayName.empty()) existing.displayName = std::move(handler.displayName);
+            if (!handler.iconPath.empty())
+            {
+                existing.iconPath = std::move(handler.iconPath);
+                existing.iconIndex = handler.iconIndex;
+            }
+            existing.recommended = existing.recommended || handler.recommended;
         }
     }
     cache.catalogRevision = kCatalogRevision;
     cache.lastDiscoveryFileTime = CurrentFileTime();
 }
 
-bool InvokeNamedHandler(std::unordered_map<std::wstring, ComPtr<IAssocHandler>>& liveHandlers,
-    const std::wstring& extension, const std::wstring& handlerName, const std::wstring& path);
+bool InvokeNamedHandler(const std::wstring& handlerName, const std::wstring& path);
 
 void DiscoveryWorker()
 {
-    // Keep handler enumeration and invocation on one dedicated STA. Some Shell
-    // handlers are apartment-bound; none of their work belongs on the UI STA.
+    // Shell handler enumeration and icon extraction stay off the UI thread.
+    // Launching a resolved executable is a direct process start, not a shell
+    // handler invocation.
     const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     open_with::CacheState loaded;
     LoadCache(loaded);
     bool sanitized = false;
     std::erase_if(loaded.handlers, [&](auto& handler) {
         if (!SupportedExtension(handler.extension)) { sanitized = true; return true; }
+        if (!IsLocalAbsolutePath(handler.handlerName))
+        {
+            // Legacy caches may hold package-style or OpenWithList identities
+            // that cannot be launched directly; drop them before ranking.
+            sanitized = true;
+            return true;
+        }
         if (!handler.catalogId.empty() && !CatalogById(handler.catalogId))
         {
             handler.catalogId.clear();
+            sanitized = true;
+        }
+        if (open_with::LooksLikeFileName(handler.displayName, handler.handlerName))
+        {
+            handler.displayName = SafeMenuLabel(open_with::NormalizeDisplayName(
+                handler.displayName, handler.handlerName, {}, {}));
+            sanitized = true;
+        }
+        if (!handler.iconPath.empty() && !IsLocalAbsolutePath(handler.iconPath))
+        {
+            handler.iconPath.clear();
+            handler.iconIndex = 0;
+            sanitized = true;
+        }
+        if (handler.iconIndex < -32768 || handler.iconIndex > 32767)
+        {
+            handler.iconIndex = 0;
             sanitized = true;
         }
         return false;
     });
     if (sanitized) loaded.lastDiscoveryFileTime = 0;
     auto& runtime = Runtime();
+    HWND loadedNotificationWindow = nullptr;
+    UINT loadedChangedMessage = 0;
     {
         std::lock_guard lock(runtime.mutex);
         runtime.cache = std::move(loaded);
         runtime.loaded = true;
         runtime.rescanRequested = DiscoveryDue(runtime.cache);
+        loadedNotificationWindow = runtime.notificationWindow;
+        loadedChangedMessage = runtime.notifications.catalogChanged;
         runtime.condition.notify_all();
     }
+    if (loadedNotificationWindow && loadedChangedMessage)
+        PostMessageW(loadedNotificationWindow, loadedChangedMessage, 0, 0);
 
-    std::unordered_map<std::wstring, ComPtr<IAssocHandler>> liveHandlers;
     std::unique_lock lock(runtime.mutex);
     while (!runtime.stopping)
     {
         runtime.condition.wait(lock, [&] {
-            return runtime.stopping || !runtime.invocations.empty() || runtime.rescanRequested;
+            return runtime.stopping || !runtime.invocations.empty() || !runtime.iconRequests.empty() ||
+                runtime.rescanRequested;
         });
         if (runtime.stopping) break;
         if (!runtime.invocations.empty())
@@ -361,8 +579,7 @@ void DiscoveryWorker()
             auto invocation = std::move(runtime.invocations.front());
             runtime.invocations.pop_front();
             lock.unlock();
-            const bool invoked = InvokeNamedHandler(liveHandlers, invocation.extension,
-                invocation.handlerName, invocation.path);
+            const bool invoked = InvokeNamedHandler(invocation.handlerName, invocation.path);
             lock.lock();
             if (!invoked)
             {
@@ -374,13 +591,50 @@ void DiscoveryWorker()
                 runtime.rescanRequested = true;
                 const auto invalidated = runtime.cache;
                 const HWND notificationWindow = runtime.notificationWindow;
-                const UINT failureMessage = runtime.launchFailureMessage;
+                const UINT failureMessage = runtime.notifications.launchFailed;
+                const UINT changedMessage = runtime.notifications.catalogChanged;
                 lock.unlock();
                 SaveCache(invalidated);
                 if (notificationWindow && failureMessage)
                     PostMessageW(notificationWindow, failureMessage, 0, 0);
+                if (notificationWindow && changedMessage)
+                    PostMessageW(notificationWindow, changedMessage, 0, 0);
                 lock.lock();
             }
+            continue;
+        }
+        if (!runtime.iconRequests.empty())
+        {
+            auto request = std::move(runtime.iconRequests.front());
+            runtime.iconRequests.pop_front();
+            const std::wstring key = IconCacheKey(request.handlerKey, request.pixelSize);
+            if (const auto cached = runtime.iconCache.find(key); cached != runtime.iconCache.end())
+            {
+                runtime.readyIcons.push_back({ request.handlerKey, cached->second });
+                runtime.iconInFlight.erase(key);
+                const HWND notificationWindow = runtime.notificationWindow;
+                const UINT iconsMessage = runtime.notifications.iconsReady;
+                lock.unlock();
+                if (notificationWindow && iconsMessage)
+                    PostMessageW(notificationWindow, iconsMessage, 0, 0);
+                lock.lock();
+                continue;
+            }
+            lock.unlock();
+            open_with::IconPixels pixels;
+            ExtractIconPixels(request.iconPath, request.iconIndex, request.pixelSize, pixels);
+            lock.lock();
+            if (runtime.stopping) break;
+            if (runtime.iconCache.size() >= 64) runtime.iconCache.erase(runtime.iconCache.begin());
+            runtime.iconCache[key] = pixels;
+            runtime.iconInFlight.erase(key);
+            runtime.readyIcons.push_back({ request.handlerKey, std::move(pixels) });
+            const HWND notificationWindow = runtime.notificationWindow;
+            const UINT iconsMessage = runtime.notifications.iconsReady;
+            lock.unlock();
+            if (notificationWindow && iconsMessage)
+                PostMessageW(notificationWindow, iconsMessage, 0, 0);
+            lock.lock();
             continue;
         }
         runtime.rescanRequested = false;
@@ -394,48 +648,22 @@ void DiscoveryWorker()
         MergeNewHandlers(runtime.cache, std::move(discovered), runtime.failedHandlers);
         runtime.scanning = false;
         const auto afterScan = runtime.cache;
+        const HWND notificationWindow = runtime.notificationWindow;
+        const UINT changedMessage = runtime.notifications.catalogChanged;
         lock.unlock();
         SaveCache(afterScan);
+        if (notificationWindow && changedMessage)
+            PostMessageW(notificationWindow, changedMessage, 0, 0);
         lock.lock();
     }
     runtime.scanning = false;
     lock.unlock();
-    liveHandlers.clear();
     if (SUCCEEDED(com)) CoUninitialize();
 }
 
-bool InvokeNamedHandler(std::unordered_map<std::wstring, ComPtr<IAssocHandler>>& liveHandlers,
-    const std::wstring& extension, const std::wstring& handlerName, const std::wstring& path)
+bool InvokeNamedHandler(const std::wstring& handlerName, const std::wstring& path)
 {
-    const std::wstring key = HandlerKey(extension, handlerName);
-    ComPtr<IAssocHandler> selected;
-    const auto found = liveHandlers.find(key);
-    if (found != liveHandlers.end()) selected = found->second;
-    if (!selected)
-    {
-        ComPtr<IEnumAssocHandlers> enumeration;
-        if (SUCCEEDED(SHAssocEnumHandlers(extension.c_str(), ASSOC_FILTER_NONE, &enumeration)) && enumeration)
-        {
-            ComPtr<IAssocHandler> candidate;
-            ULONG fetched = 0;
-            while (enumeration->Next(1, &candidate, &fetched) == S_OK && fetched == 1)
-            {
-                PWSTR rawName = nullptr;
-                if (SUCCEEDED(candidate->GetName(&rawName)) && rawName)
-                {
-                    const bool matches = _wcsicmp(rawName, handlerName.c_str()) == 0;
-                    CoTaskMemFree(rawName);
-                    if (matches) { selected = candidate; break; }
-                }
-                candidate.Reset();
-            }
-        }
-        if (selected)
-            liveHandlers[key] = selected;
-    }
-    if (selected && InvokeAssocHandler(selected, path)) return true;
-    liveHandlers.erase(key);
-    return false;
+    return LaunchExecutableWithFile(handlerName, path);
 }
 
 bool QueueHandlerInvocation(const std::wstring& extension, const std::wstring& handlerName,
@@ -450,7 +678,7 @@ bool QueueHandlerInvocation(const std::wstring& extension, const std::wstring& h
 }
 }
 
-void InitializeOpenWithCatalog(HWND notificationWindow, UINT launchFailureMessage)
+void InitializeOpenWithCatalog(HWND notificationWindow, OpenWithNotifications notifications)
 {
     auto& runtime = Runtime();
     std::lock_guard lock(runtime.mutex);
@@ -458,7 +686,11 @@ void InitializeOpenWithCatalog(HWND notificationWindow, UINT launchFailureMessag
     runtime.initialized = true;
     runtime.stopping = false;
     runtime.notificationWindow = notificationWindow;
-    runtime.launchFailureMessage = launchFailureMessage;
+    runtime.notifications = notifications;
+    const std::wstring selfPath = ModulePath();
+    runtime.selfIdentity = CanonicalIdentity(selfPath);
+    runtime.selfFileName = Fold(open_with::FileNameOf(selfPath));
+    runtime.selfNames = { L"Preview 3D", L"3D Preview" };
     runtime.worker = std::jthread(DiscoveryWorker);
 }
 
@@ -477,75 +709,142 @@ void ShutdownOpenWithCatalog()
     std::lock_guard lock(runtime.mutex);
     runtime.failedHandlers.clear();
     runtime.invocations.clear();
+    runtime.iconRequests.clear();
+    runtime.iconInFlight.clear();
+    runtime.iconCache.clear();
+    runtime.readyIcons.clear();
     runtime.notificationWindow = nullptr;
-    runtime.launchFailureMessage = 0;
+    runtime.notifications = {};
+    runtime.selfIdentity.clear();
+    runtime.selfFileName.clear();
+    runtime.selfNames.clear();
     runtime.initialized = false;
 }
 
-std::vector<OpenWithEntry> EnumerateOpenWithHandlers(const std::wstring& path)
+OpenWithCatalog EnumerateOpenWithHandlers(const std::wstring& path)
 {
     const std::wstring extension = ExtensionOf(path);
     std::vector<open_with::CachedHandler> records;
+    open_with::RankOptions options;
     bool waiting = false;
     {
         auto& runtime = Runtime();
         std::lock_guard lock(runtime.mutex);
         waiting = !runtime.loaded || runtime.scanning;
+        options.selfIdentity = runtime.selfIdentity;
+        options.selfFileName = runtime.selfFileName;
+        options.selfNames = runtime.selfNames;
         for (const auto& record : runtime.cache.handlers)
             if (_wcsicmp(record.extension.c_str(), extension.c_str()) == 0)
                 records.push_back(record);
     }
 
-    auto catalogOrder = [](const std::wstring& id) {
-        const auto& catalog = CuratedCatalog();
-        for (std::size_t index = 0; index < catalog.size(); ++index)
-            if (_wcsicmp(catalog[index].id, id.c_str()) == 0) return index;
-        return catalog.size();
-    };
-    std::ranges::stable_sort(records, [&](const auto& left, const auto& right) {
-        const bool leftPopular = !left.catalogId.empty();
-        const bool rightPopular = !right.catalogId.empty();
-        if (leftPopular != rightPopular) return leftPopular;
-        if (leftPopular) return catalogOrder(left.catalogId) < catalogOrder(right.catalogId);
-        return _wcsicmp(left.displayName.c_str(), right.displayName.c_str()) < 0;
-    });
-
-    std::vector<OpenWithEntry> entries;
-    std::unordered_set<std::wstring> names;
-    for (const auto& record : records)
+    std::vector<open_with::RankedHandler> candidates;
+    candidates.reserve(records.size());
+    for (auto& record : records)
     {
-        if (!names.insert(Fold(record.displayName)).second) continue;
-        OpenWithEntry entry;
+        open_with::RankedHandler candidate;
+        candidate.extension = record.extension;
+        candidate.handlerName = record.handlerName;
+        candidate.displayName = SafeMenuLabel(record.displayName);
+        candidate.catalogId = record.catalogId;
+        candidate.identity = CanonicalIdentity(record.handlerName);
+        candidate.iconPath = record.iconPath;
+        candidate.iconIndex = record.iconIndex;
+        candidate.recommended = record.recommended;
         if (const auto* catalog = CatalogById(record.catalogId))
         {
-            entry.displayName = catalog->displayName;
-            entry.group = catalog->group;
+            candidate.curated = true;
+            candidate.group = catalog->group;
+            candidate.displayName = catalog->displayName;
+            candidate.affinity = open_with::ExtensionAffinity(extension, catalog->group);
+            const auto& curated = CuratedCatalog();
+            for (std::size_t index = 0; index < curated.size(); ++index)
+                if (_wcsicmp(curated[index].id, catalog->id) == 0)
+                {
+                    candidate.catalogOrder = static_cast<int>(index);
+                    break;
+                }
         }
         else
         {
-            entry.displayName = SafeMenuLabel(record.displayName);
-            entry.group = OpenWithGroup::Recommended;
+            candidate.curated = false;
+            candidate.group = OpenWithGroup::Recommended;
+            candidate.affinity = 1;
+            candidate.catalogOrder = INT_MAX;
         }
-        const auto handlerName = record.handlerName;
+        candidates.push_back(std::move(candidate));
+    }
+
+    auto ranked = open_with::RankHandlers(std::move(candidates), options);
+    OpenWithCatalog result;
+    result.loading = ranked.empty() && waiting;
+    result.apps.reserve(ranked.size());
+    for (auto& handler : ranked)
+    {
+        OpenWithEntry entry;
+        entry.displayName = SafeMenuLabel(handler.displayName);
+        entry.handlerKey = handler.identity.empty() ? Fold(handler.handlerName) : handler.identity;
+        entry.iconPath = handler.iconPath;
+        entry.iconIndex = handler.iconIndex;
+        entry.group = handler.group;
+        entry.recommended = handler.recommended;
+        const auto handlerName = handler.handlerName;
         entry.invoke = [extension, handlerName](const std::wstring& filePath) {
             return QueueHandlerInvocation(extension, handlerName, filePath);
         };
-        entries.push_back(std::move(entry));
+        result.apps.push_back(std::move(entry));
     }
-    if (entries.empty() && waiting)
+    return result;
+}
+
+void RequestOpenWithIcons(std::vector<OpenWithIconRequest> requests)
+{
+    auto& runtime = Runtime();
+    bool notify = false;
+    HWND notificationWindow = nullptr;
+    UINT iconsMessage = 0;
     {
-        OpenWithEntry status;
-        status.displayName = L"Looking for installed apps…";
-        status.group = OpenWithGroup::Status;
-        status.enabled = false;
-        entries.push_back(std::move(status));
+        std::lock_guard lock(runtime.mutex);
+        if (!runtime.initialized || runtime.stopping) return;
+        notificationWindow = runtime.notificationWindow;
+        iconsMessage = runtime.notifications.iconsReady;
+        for (auto& request : requests)
+        {
+            if (request.handlerKey.empty() || request.iconPath.empty() ||
+                request.pixelSize < 16 || request.pixelSize > 64) continue;
+            const std::wstring key = IconCacheKey(request.handlerKey, request.pixelSize);
+            if (runtime.iconInFlight.contains(key)) continue;
+            if (const auto cached = runtime.iconCache.find(key); cached != runtime.iconCache.end())
+            {
+                runtime.readyIcons.push_back({ request.handlerKey, cached->second });
+                notify = true;
+                continue;
+            }
+            runtime.iconInFlight.insert(key);
+            runtime.iconRequests.push_back(std::move(request));
+        }
+        if (!runtime.iconRequests.empty()) runtime.condition.notify_one();
     }
-    OpenWithEntry chooseAnother;
-    chooseAnother.displayName = L"Choose another app…";
-    chooseAnother.group = OpenWithGroup::Fallback;
-    chooseAnother.invoke = [](const std::wstring& filePath) { return ShowOpenWithDialog(filePath); };
-    entries.push_back(std::move(chooseAnother));
-    return entries;
+    if (notify && notificationWindow && iconsMessage)
+        PostMessageW(notificationWindow, iconsMessage, 0, 0);
+}
+
+std::vector<OpenWithIconResult> TakeReadyOpenWithIcons()
+{
+    auto& runtime = Runtime();
+    std::lock_guard lock(runtime.mutex);
+    std::vector<OpenWithIconResult> result;
+    result.swap(runtime.readyIcons);
+    return result;
+}
+
+bool ShowOpenWithDialog(const std::wstring& path)
+{
+    OPENASINFO info{};
+    info.pcszFile = path.c_str();
+    info.oaifInFlags = OAIF_EXEC | OAIF_HIDE_REGISTRATION;
+    return SUCCEEDED(SHOpenWithDialog(nullptr, &info));
 }
 
 bool ShowWindowsShare(HWND window, const std::wstring& path, std::wstring& error)

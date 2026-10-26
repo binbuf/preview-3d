@@ -21,6 +21,19 @@ the whole pre-release build-up as well as the changes made in that tag.
   indicator remains visible through the final refinement instead of leaving a
   blank viewport.
 
+### Changed
+
+- **Open With is now a custom horizontal app strip.** The title-bar action opens
+  a Direct2D popup of ranked application tiles with shell icons, instead of a
+  native Windows context menu. Handlers are ordered by relevance to the current
+  extension, the viewer's own builds and duplicate handlers are removed, raw
+  executable names are cleaned up (for example `f3d.exe` becomes `F3D`), and the
+  pinned **More apps…** tile retains the system picker as a fallback. Selecting
+  a tile launches that app's executable directly with the model path, so the
+  OS "How do you want to open this file?" picker appears only from **More
+  apps…**. The strip scrolls horizontally when more apps are registered than
+  fit.
+
 ## [0.5.3] - 2026-10-25
 
 ### Fixed

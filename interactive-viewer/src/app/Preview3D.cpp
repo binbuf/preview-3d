@@ -11,6 +11,7 @@
 #include "Model.h"
 #include "Renderer.h"
 #include "NavGizmo.h"
+#include "OpenWithPopup.h"
 #include "Settings.h"
 #include "ShellIntegration.h"
 #include "SafeFileOps.h"
@@ -30,6 +31,8 @@
 #include <atomic>
 #include <cstddef>
 #include <deque>
+#include <functional>
+#include <memory>
 #include <span>
 #include <string_view>
 
@@ -47,6 +50,8 @@ constexpr UINT kAccessibilityActionMessage = WM_APP + 10;
 constexpr UINT kAccessibilityFocusMessage = WM_APP + 11;
 constexpr UINT kAccessibilityStatusMessage = WM_APP + 12;
 constexpr UINT kOpenWithLaunchFailedMessage = WM_APP + 13;
+constexpr UINT kOpenWithCatalogChangedMessage = WM_APP + 14;
+constexpr UINT kOpenWithIconsReadyMessage = WM_APP + 15;
 constexpr float kArrowPixelsPerSecond = 340.0f;
 constexpr double kHudVisibleSeconds = 1.3;
 constexpr double kHudFadeSeconds = 0.30;
@@ -110,6 +115,32 @@ struct D3D12CompleteMessage
     std::uint64_t generation = 0;
     std::wstring path;
     d3d12_import_bridge::ImportResult result;
+};
+
+struct OpenWithItem
+{
+    std::wstring displayName;
+    std::wstring handlerKey;
+    std::wstring iconPath;
+    int iconIndex = 0;
+    OpenWithGroup group = OpenWithGroup::Recommended;
+    bool recommended = false;
+    std::shared_ptr<const open_with::IconPixels> icon;
+    std::function<bool(const std::wstring& path)> invoke;
+};
+
+struct OpenWithPopupState
+{
+    bool open = false;
+    bool loading = false;
+    std::wstring extension;
+    std::vector<OpenWithItem> apps;
+    open_with_ui::Layout layout{};
+    int hovered = -1;   // app index, or apps.size() for the fallback tile
+    int focused = -1;
+    int pressed = -1;
+    int scrollOffset = 0;
+    std::vector<std::wstring> requestedIcons;
 };
 
 struct ViewerApp
@@ -224,6 +255,7 @@ struct ViewerApp
     RenderThread renderThread{ sharedCamera };
     NavGizmo gizmo;
     Chrome chrome;
+    OpenWithPopupState openWith;
     ViewerState state = ViewerState::Empty;
     PointerMode pointerMode = PointerMode::None;
     POINT lastPointer{};
@@ -1583,6 +1615,15 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
 // without needing its own dedicated mouse-tracking.
 void UpdateTooltipTracking(ViewerApp& app)
 {
+    if (app.openWith.open)
+    {
+        const bool wasVisible = app.tooltipVisible;
+        app.tooltipTargetId = 0;
+        app.tooltipVisible = false;
+        KillTimer(app.window, kTooltipTimerId);
+        if (wasVisible) InvalidateRect(app.window, nullptr, FALSE);
+        return;
+    }
     const TooltipInfo info = ComputeTooltipInfo(app);
     if (info.id == app.tooltipTargetId) return;
     const bool wasVisible = app.tooltipVisible;
@@ -1829,9 +1870,12 @@ void CloseInfoPanel(ViewerApp& app)
 // instead snaps to the work area, keeps the taskbar and our chrome visible,
 // and never goes topmost, so the two stay distinct. Independent of whether a
 // model is loaded, same as the caption buttons (while windowed).
+void CloseOpenWithPopup(ViewerApp& app);
+
 void ToggleFullscreen(ViewerApp& app)
 {
     if (!ConsumeToggleCommand(app, ID_VIEW_FULLSCREEN)) return;
+    CloseOpenWithPopup(app);
     if (!app.isFullscreen)
     {
         app.savedWindowPlacement.length = sizeof(WINDOWPLACEMENT);
@@ -1994,6 +2038,7 @@ void CancelOpen(ViewerApp& app)
 void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> assetSearchRoots = {})
 {
     if (path.empty()) return;
+    CloseOpenWithPopup(app);
     app.assetSearchRoots = assetSearchRoots;
     ++app.generation;
     if (app.cancellation)
@@ -2238,6 +2283,7 @@ void ShowMoreMenu(ViewerApp& app)
 // needed (unlike ToggleGrid/ToggleAxisSnap).
 void ToggleSettingsPanel(ViewerApp& app)
 {
+    CloseOpenWithPopup(app);
     app.settingsPanelOpen = !app.settingsPanelOpen;
     InvalidateRect(app.window, nullptr, FALSE);
 }
@@ -2525,58 +2571,391 @@ void HandleCommand(ViewerApp& app, int id)
     }
 }
 
-// Builds a categorized Open With menu from the cached/incrementally refreshed
-// Shell catalog, plus the trailing system-picker fallback.
-void ShowOpenWithMenu(ViewerApp& app)
+std::wstring OpenWithExtension(const std::wstring& path)
 {
-    if (app.currentPath.empty()) return;
-    std::vector<OpenWithEntry> entries = EnumerateOpenWithHandlers(app.currentPath);
-    HMENU menu = CreatePopupMenu();
-    constexpr UINT kBaseId = 40000;
-    OpenWithGroup currentGroup = OpenWithGroup::Status;
-    bool hasHeading = false;
-    bool hasMenuItem = false;
-    auto heading = [](OpenWithGroup group) -> std::wstring {
-        switch (group)
-        {
-        case OpenWithGroup::Cad: return Loc("openWith.cad", L"CAD");
-        case OpenWithGroup::Modeling: return Loc("openWith.modeling", L"Modeling");
-        case OpenWithGroup::Printing: return Loc("openWith.printing", L"3D printing");
-        case OpenWithGroup::Recommended: return Loc("openWith.recommended", L"Recommended by Windows");
-        default: return {};
-        }
-    };
-    for (std::size_t index = 0; index < entries.size(); ++index)
+    const std::size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring::npos || dot + 1 >= path.size()) return {};
+    std::wstring extension = path.substr(dot);
+    for (auto& character : extension)
+        character = static_cast<wchar_t>(towlower(character));
+    return extension;
+}
+
+wchar_t OpenWithMonogram(const std::wstring& name)
+{
+    for (wchar_t character : name)
     {
-        const auto& entry = entries[index];
-        const std::wstring label = heading(entry.group);
-        if (!label.empty() && (!hasHeading || currentGroup != entry.group))
-        {
-            if (hasMenuItem) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(menu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, label.c_str());
-            currentGroup = entry.group;
-            hasHeading = true;
-        }
-        else if (entry.group == OpenWithGroup::Fallback && hasMenuItem)
-        {
-            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        }
-        const UINT flags = entry.enabled ? MF_STRING : MF_STRING | MF_DISABLED | MF_GRAYED;
-        AppendMenuW(menu, flags, entry.enabled ? kBaseId + static_cast<UINT>(index) : 0,
-            entry.displayName.c_str());
-        hasMenuItem = true;
+        if (character <= L' ') continue;
+        return static_cast<wchar_t>(towupper(character));
     }
-    RECT button = app.chrome.Button(Chrome::Part::OpenWith).rect;
-    POINT anchor{ button.left, button.bottom };
-    ClientToScreen(app.window, &anchor);
-    const int selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
-        anchor.x, anchor.y, 0, app.window, nullptr);
-    DestroyMenu(menu);
-    if (selected >= static_cast<int>(kBaseId) && static_cast<std::size_t>(selected - kBaseId) < entries.size())
+    return L'?';
+}
+
+std::wstring OpenWithGroupDescription(OpenWithGroup group)
+{
+    switch (group)
     {
-        const auto& entry = entries[selected - kBaseId];
-        if (entry.invoke && !entry.invoke(app.currentPath))
-            ShowModeHud(app, Loc("hud.appUnavailable", L"That app is no longer available"));
+    case OpenWithGroup::Cad: return Loc("openWith.cad", L"CAD");
+    case OpenWithGroup::Modeling: return Loc("openWith.modeling", L"Modeling");
+    case OpenWithGroup::Printing: return Loc("openWith.printing", L"3D printing");
+    case OpenWithGroup::Recommended: return Loc("openWith.recommended", L"Recommended by Windows");
+    default: return {};
+    }
+}
+
+int OpenWithItemCount(const ViewerApp& app)
+{
+    return static_cast<int>(app.openWith.apps.size()) + 1; // apps plus fallback
+}
+
+void UpdateOpenWithLayout(ViewerApp& app)
+{
+    RECT client{};
+    GetClientRect(app.window, &client);
+    open_with_ui::LayoutInput input;
+    input.anchor = app.chrome.Button(Chrome::Part::OpenWith).rect;
+    input.client = client;
+    input.toolbarHeight = app.toolbarHeight;
+    input.scale = app.dpiScale;
+    input.appCount = static_cast<int>(app.openWith.apps.size());
+    input.loading = app.openWith.loading;
+    input.scrollOffset = app.openWith.scrollOffset;
+    app.openWith.layout = open_with_ui::ComputeLayout(input);
+    app.openWith.scrollOffset = app.openWith.layout.scrollOffset;
+}
+
+int OpenWithIndexAtPoint(const ViewerApp& app, POINT point)
+{
+    if (!app.openWith.open) return -1;
+    if (PtInRect(&app.openWith.layout.fallback, point))
+        return static_cast<int>(app.openWith.apps.size());
+    return open_with_ui::AppTileAtPoint(app.openWith.layout, point);
+}
+
+bool OpenWithPointInPanel(const ViewerApp& app, POINT point)
+{
+    return app.openWith.open && PtInRect(&app.openWith.layout.panel, point);
+}
+
+void RequestOpenWithIconsForVisible(ViewerApp& app)
+{
+    const int pixelSize = std::clamp(Scale(app, 32), 16, 64);
+    std::vector<OpenWithIconRequest> requests;
+    for (const auto& item : app.openWith.apps)
+    {
+        if (item.icon || item.iconPath.empty() || item.handlerKey.empty()) continue;
+        if (std::find(app.openWith.requestedIcons.begin(), app.openWith.requestedIcons.end(),
+            item.handlerKey) != app.openWith.requestedIcons.end()) continue;
+        app.openWith.requestedIcons.push_back(item.handlerKey);
+        requests.push_back({ item.handlerKey, item.iconPath, item.iconIndex, pixelSize });
+    }
+    if (!requests.empty()) RequestOpenWithIcons(std::move(requests));
+}
+
+void DrainOpenWithIcons(ViewerApp& app)
+{
+    const auto results = TakeReadyOpenWithIcons();
+    if (results.empty()) return;
+    bool changed = false;
+    for (const auto& result : results)
+    {
+        if (result.pixels.Empty()) continue;
+        for (auto& item : app.openWith.apps)
+        {
+            if (item.handlerKey != result.handlerKey) continue;
+            item.icon = std::make_shared<open_with::IconPixels>(result.pixels);
+            changed = true;
+            break;
+        }
+    }
+    if (changed && app.openWith.open) InvalidateRect(app.window, nullptr, FALSE);
+}
+
+constexpr int kOpenWithTileSlots = 8;
+
+int OpenWithSlotForApp(const ViewerApp& app, int appIndex)
+{
+    const auto& visible = app.openWith.layout.visibleTiles;
+    for (std::size_t index = 0; index < visible.size() && index < kOpenWithTileSlots; ++index)
+        if (visible[index] == appIndex) return static_cast<int>(index);
+    return -1;
+}
+
+int OpenWithAppForSlot(const ViewerApp& app, int slot)
+{
+    if (slot < 0 || slot >= kOpenWithTileSlots) return -1;
+    const auto& visible = app.openWith.layout.visibleTiles;
+    if (static_cast<std::size_t>(slot) >= visible.size()) return -1;
+    return visible[static_cast<std::size_t>(slot)];
+}
+
+void FocusOpenWithItem(ViewerApp& app, int index)
+{
+    const int count = OpenWithItemCount(app);
+    if (count <= 0) return;
+    app.openWith.focused = std::clamp(index, 0, count - 1);
+    if (app.openWith.focused < static_cast<int>(app.openWith.apps.size()))
+    {
+        app.openWith.scrollOffset = open_with_ui::ScrollToRevealTile(
+            app.openWith.layout, app.openWith.scrollOffset, app.openWith.focused);
+        UpdateOpenWithLayout(app);
+    }
+    app.keyboardControl = viewer_accessibility::Control::OpenWith;
+    if (app.openWith.focused == static_cast<int>(app.openWith.apps.size()))
+        app.keyboardControl = viewer_accessibility::Control::OpenWithMoreApps;
+    else
+    {
+        const int slot = OpenWithSlotForApp(app, app.openWith.focused);
+        if (slot >= 0)
+            app.keyboardControl = static_cast<viewer_accessibility::Control>(
+                static_cast<int>(viewer_accessibility::Control::OpenWithTile0) + slot);
+    }
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void CloseOpenWithPopup(ViewerApp& app)
+{
+    if (!app.openWith.open) return;
+    app.openWith.open = false;
+    app.openWith.hovered = -1;
+    app.openWith.focused = -1;
+    app.openWith.pressed = -1;
+    app.openWith.requestedIcons.clear();
+    app.openWith.apps.clear();
+    app.openWith.loading = false;
+    app.openWith.scrollOffset = 0;
+    const int control = static_cast<int>(app.keyboardControl);
+    const int tileStart = static_cast<int>(viewer_accessibility::Control::OpenWithTile0);
+    const int tileEnd = static_cast<int>(viewer_accessibility::Control::OpenWithTile7);
+    if ((control >= tileStart && control <= tileEnd) ||
+        app.keyboardControl == viewer_accessibility::Control::OpenWithMoreApps)
+        app.keyboardControl = viewer_accessibility::Control::OpenWith;
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void ShowOpenWithPopup(ViewerApp& app, bool keyboard)
+{
+    if (app.currentPath.empty() || app.isFullscreen || !HasNavigableModel(app)) return;
+    DrainOpenWithIcons(app);
+    OpenWithCatalog catalog = EnumerateOpenWithHandlers(app.currentPath);
+
+    std::vector<OpenWithItem> previous = std::move(app.openWith.apps);
+    auto previousIcon = [&](const std::wstring& key) -> std::shared_ptr<const open_with::IconPixels> {
+        for (const auto& item : previous)
+            if (item.handlerKey == key) return item.icon;
+        return {};
+    };
+
+    app.openWith.apps.clear();
+    app.openWith.apps.reserve(catalog.apps.size());
+    for (auto& entry : catalog.apps)
+    {
+        OpenWithItem item;
+        item.displayName = std::move(entry.displayName);
+        item.handlerKey = std::move(entry.handlerKey);
+        item.iconPath = std::move(entry.iconPath);
+        item.iconIndex = entry.iconIndex;
+        item.group = entry.group;
+        item.recommended = entry.recommended;
+        item.icon = previousIcon(item.handlerKey);
+        item.invoke = std::move(entry.invoke);
+        app.openWith.apps.push_back(std::move(item));
+    }
+    app.openWith.loading = catalog.loading;
+    app.openWith.extension = OpenWithExtension(app.currentPath);
+    app.speedFlyoutOpen = false;
+    app.settingsPanelOpen = false;
+    app.openWith.open = true;
+    app.openWith.hovered = -1;
+    app.openWith.pressed = -1;
+    app.openWith.scrollOffset = 0;
+    app.openWith.requestedIcons.clear();
+    UpdateOpenWithLayout(app);
+    RequestOpenWithIconsForVisible(app);
+    app.openWith.focused = -1;
+    if (keyboard)
+        FocusOpenWithItem(app, 0);
+    if (app.uiaAccessible)
+        viewer_accessibility::Announce(app.window, app.uiaAccessible,
+            LocFormat("a11y.openWithList", L"Open with, {0} apps",
+                { std::to_wstring(app.openWith.apps.size()) }));
+    UpdateTooltipTracking(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void ToggleOpenWithPopup(ViewerApp& app, bool keyboard)
+{
+    if (app.openWith.open) CloseOpenWithPopup(app);
+    else ShowOpenWithPopup(app, keyboard);
+}
+
+void RefreshOpenWithPopup(ViewerApp& app)
+{
+    if (!app.openWith.open) return;
+    if (app.currentPath.empty() || app.isFullscreen || !HasNavigableModel(app))
+    {
+        CloseOpenWithPopup(app);
+        return;
+    }
+
+    std::wstring focusedKey;
+    if (app.openWith.focused >= 0 &&
+        app.openWith.focused < static_cast<int>(app.openWith.apps.size()))
+        focusedKey = app.openWith.apps[app.openWith.focused].handlerKey;
+    const bool focusWasFallback = app.openWith.focused == static_cast<int>(app.openWith.apps.size()) &&
+        app.keyboardControl == viewer_accessibility::Control::OpenWithMoreApps;
+
+    OpenWithCatalog catalog = EnumerateOpenWithHandlers(app.currentPath);
+    std::vector<OpenWithItem> previous = std::move(app.openWith.apps);
+    auto previousIcon = [&](const std::wstring& key) -> std::shared_ptr<const open_with::IconPixels> {
+        for (const auto& item : previous)
+            if (item.handlerKey == key) return item.icon;
+        return {};
+    };
+
+    app.openWith.apps.clear();
+    app.openWith.apps.reserve(catalog.apps.size());
+    for (auto& entry : catalog.apps)
+    {
+        OpenWithItem item;
+        item.displayName = std::move(entry.displayName);
+        item.handlerKey = std::move(entry.handlerKey);
+        item.iconPath = std::move(entry.iconPath);
+        item.iconIndex = entry.iconIndex;
+        item.group = entry.group;
+        item.recommended = entry.recommended;
+        item.icon = previousIcon(item.handlerKey);
+        item.invoke = std::move(entry.invoke);
+        app.openWith.apps.push_back(std::move(item));
+    }
+    app.openWith.loading = catalog.loading;
+    app.openWith.hovered = -1;
+    app.openWith.pressed = -1;
+
+    app.openWith.focused = -1;
+    if (!focusedKey.empty())
+        for (std::size_t index = 0; index < app.openWith.apps.size(); ++index)
+            if (app.openWith.apps[index].handlerKey == focusedKey)
+            {
+                app.openWith.focused = static_cast<int>(index);
+                break;
+            }
+
+    UpdateOpenWithLayout(app);
+    RequestOpenWithIconsForVisible(app);
+    if (focusWasFallback && focusedKey.empty() && !app.openWith.apps.empty())
+    {
+        // The loading state became a real list; move keyboard focus to the
+        // first app instead of leaving it on the fallback tile.
+        FocusOpenWithItem(app, 0);
+    }
+    else if (focusWasFallback && app.openWith.apps.empty())
+    {
+        app.openWith.focused = static_cast<int>(app.openWith.apps.size());
+        app.keyboardControl = viewer_accessibility::Control::OpenWithMoreApps;
+    }
+    else if (app.openWith.focused < 0 && !focusedKey.empty())
+    {
+        // The focused app disappeared; move to the first surviving item.
+        FocusOpenWithItem(app, 0);
+    }
+    else if (app.openWith.focused >= 0)
+    {
+        const int slot = OpenWithSlotForApp(app, app.openWith.focused);
+        if (slot >= 0)
+            app.keyboardControl = static_cast<viewer_accessibility::Control>(
+                static_cast<int>(viewer_accessibility::Control::OpenWithTile0) + slot);
+        else if (app.openWith.focused == static_cast<int>(app.openWith.apps.size()))
+            app.keyboardControl = viewer_accessibility::Control::OpenWithMoreApps;
+        else
+            app.keyboardControl = viewer_accessibility::Control::OpenWith;
+    }
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void InvokeOpenWithItem(ViewerApp& app, int index)
+{
+    if (index < 0) return;
+    if (index >= static_cast<int>(app.openWith.apps.size()))
+    {
+        const std::wstring path = app.currentPath;
+        CloseOpenWithPopup(app);
+        if (!ShowOpenWithDialog(path))
+            ShowModeHud(app, Loc("hud.openWithUnavailable", L"Open with isn't available right now"));
+        return;
+    }
+
+    OpenWithItem item = std::move(app.openWith.apps[static_cast<std::size_t>(index)]);
+    const std::wstring path = app.currentPath;
+    CloseOpenWithPopup(app);
+    if (item.invoke && !item.invoke(path))
+        ShowModeHud(app, Loc("hud.appUnavailable", L"That app is no longer available"));
+}
+
+void ScrollOpenWith(ViewerApp& app, int direction)
+{
+    if (!app.openWith.open || app.openWith.layout.maxScroll <= 0) return;
+    const int step = Scale(app, 100) * direction;
+    app.openWith.scrollOffset = open_with_ui::ClampScrollOffset(
+        app.openWith.layout, app.openWith.scrollOffset + step);
+    UpdateOpenWithLayout(app);
+    if (app.openWith.focused >= 0 &&
+        std::find(app.openWith.layout.visibleTiles.begin(), app.openWith.layout.visibleTiles.end(),
+            app.openWith.focused) == app.openWith.layout.visibleTiles.end())
+    {
+        app.openWith.focused = app.openWith.layout.visibleTiles.empty()
+            ? -1 : app.openWith.layout.visibleTiles.front();
+        if (app.openWith.focused >= 0)
+        {
+            const int slot = OpenWithSlotForApp(app, app.openWith.focused);
+            if (slot >= 0)
+                app.keyboardControl = static_cast<viewer_accessibility::Control>(
+                    static_cast<int>(viewer_accessibility::Control::OpenWithTile0) + slot);
+            else if (app.openWith.focused == static_cast<int>(app.openWith.apps.size()))
+                app.keyboardControl = viewer_accessibility::Control::OpenWithMoreApps;
+            else
+                app.keyboardControl = viewer_accessibility::Control::OpenWith;
+        }
+    }
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+bool HandleOpenWithKey(ViewerApp& app, WPARAM key)
+{
+    if (!app.openWith.open) return false;
+    const int count = OpenWithItemCount(app);
+    switch (key)
+    {
+    case VK_ESCAPE:
+        CloseOpenWithPopup(app);
+        app.keyboardControl = viewer_accessibility::Control::OpenWith;
+        return true;
+    case VK_LEFT:
+    case VK_UP:
+        if (count > 0)
+            FocusOpenWithItem(app, app.openWith.focused <= 0 ? count - 1 : app.openWith.focused - 1);
+        return true;
+    case VK_RIGHT:
+    case VK_DOWN:
+        if (count > 0)
+            FocusOpenWithItem(app, app.openWith.focused < 0 ? 0 : (app.openWith.focused + 1) % count);
+        return true;
+    case VK_HOME:
+        if (count > 0) FocusOpenWithItem(app, 0);
+        return true;
+    case VK_END:
+        if (count > 0) FocusOpenWithItem(app, count - 1);
+        return true;
+    case VK_RETURN:
+    case VK_SPACE:
+        if (app.openWith.focused >= 0) InvokeOpenWithItem(app, app.openWith.focused);
+        return true;
+    case VK_TAB:
+        CloseOpenWithPopup(app);
+        app.keyboardControl = viewer_accessibility::Control::OpenWith;
+        return false;
+    default:
+        return false;
     }
 }
 
@@ -2593,6 +2972,7 @@ void DoShare(ViewerApp& app)
 void ToggleSpeedFlyout(ViewerApp& app)
 {
     if (!CanNavigate(app)) return;
+    CloseOpenWithPopup(app);
     app.speedFlyoutOpen = !app.speedFlyoutOpen;
     InvalidateRect(app.window, nullptr, FALSE);
 }
@@ -2614,7 +2994,7 @@ void HandleChromeAction(ViewerApp& app, Chrome::Part part)
     case Chrome::Part::Fit: HandleCommand(app, ID_VIEW_FIT); break;
     case Chrome::Part::Share: DoShare(app); break;
     case Chrome::Part::Overflow: HandleCommand(app, ID_VIEW_MENU); break;
-    case Chrome::Part::OpenWith: ShowOpenWithMenu(app); break;
+    case Chrome::Part::OpenWith: ToggleOpenWithPopup(app, false); break;
     default: break;
     }
 }
@@ -2798,6 +3178,30 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
             LONG(geometry.centerX + maxX + pad), LONG(geometry.centerY + maxY + pad) };
         break;
     }
+    case Control::OpenWithTile0: case Control::OpenWithTile1: case Control::OpenWithTile2:
+    case Control::OpenWithTile3: case Control::OpenWithTile4: case Control::OpenWithTile5:
+    case Control::OpenWithTile6: case Control::OpenWithTile7:
+    {
+        const int slot = static_cast<int>(control) - static_cast<int>(Control::OpenWithTile0);
+        const int appIndex = OpenWithAppForSlot(app, slot);
+        info.visible = app.openWith.open && appIndex >= 0;
+        if (info.visible)
+        {
+            const auto& item = app.openWith.apps[static_cast<std::size_t>(appIndex)];
+            info.name = LocFormat("a11y.openWithApp", L"Open with {0}", { item.displayName });
+            info.description = OpenWithGroupDescription(item.group);
+            info.rect = app.openWith.layout.tiles[static_cast<std::size_t>(appIndex)];
+            info.role = ROLE_SYSTEM_PUSHBUTTON;
+        }
+        break;
+    }
+    case Control::OpenWithMoreApps:
+        info.name = Loc("a11y.openWithChooseAnother", L"Choose another app");
+        info.rect = app.openWith.layout.fallback;
+        info.visible = app.openWith.open;
+        info.enabled = app.openWith.open;
+        info.role = ROLE_SYSTEM_PUSHBUTTON;
+        break;
     case Control::ErrorRetry: case Control::ErrorOpenAnother: case Control::ErrorCopyDetails:
     {
         HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton:app.copyButton;
@@ -2816,6 +3220,24 @@ void FocusAccessible(ViewerApp& app, viewer_accessibility::Control control)
 {
     app.keyboardControl = control;
     SetFocus(app.window);
+    const int tileStart = static_cast<int>(viewer_accessibility::Control::OpenWithTile0);
+    const int tileEnd = static_cast<int>(viewer_accessibility::Control::OpenWithTile7);
+    const int controlValue = static_cast<int>(control);
+    if (controlValue >= tileStart && controlValue <= tileEnd)
+    {
+        const int appIndex = OpenWithAppForSlot(app, controlValue - tileStart);
+        if (appIndex >= 0)
+        {
+            app.openWith.focused = appIndex;
+            app.openWith.scrollOffset = open_with_ui::ScrollToRevealTile(
+                app.openWith.layout, app.openWith.scrollOffset, appIndex);
+            UpdateOpenWithLayout(app);
+        }
+    }
+    else if (control == viewer_accessibility::Control::OpenWithMoreApps)
+    {
+        app.openWith.focused = static_cast<int>(app.openWith.apps.size());
+    }
     if (control==viewer_accessibility::Control::ErrorRetry) SetFocus(app.retryButton);
     else if (control==viewer_accessibility::Control::ErrorOpenAnother) SetFocus(app.openAnotherButton);
     else if (control==viewer_accessibility::Control::ErrorCopyDetails) SetFocus(app.copyButton);
@@ -2865,7 +3287,19 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::Reset: HandleCommand(app,ID_VIEW_RESET); break;
     case Control::Share: DoShare(app); break;
     case Control::More: ShowMoreMenu(app); break;
-    case Control::OpenWith: ShowOpenWithMenu(app); break;
+    case Control::OpenWith: ToggleOpenWithPopup(app, true); break;
+    case Control::OpenWithTile0: case Control::OpenWithTile1: case Control::OpenWithTile2:
+    case Control::OpenWithTile3: case Control::OpenWithTile4: case Control::OpenWithTile5:
+    case Control::OpenWithTile6: case Control::OpenWithTile7:
+    {
+        const int slot = static_cast<int>(control) - static_cast<int>(Control::OpenWithTile0);
+        const int appIndex = OpenWithAppForSlot(app, slot);
+        if (appIndex >= 0) InvokeOpenWithItem(app, appIndex);
+        break;
+    }
+    case Control::OpenWithMoreApps:
+        InvokeOpenWithItem(app, static_cast<int>(app.openWith.apps.size()));
+        break;
     case Control::Minimize: ShowWindow(app.window,SW_MINIMIZE); break;
     case Control::Maximize: ShowWindow(app.window,IsZoomed(app.window)?SW_RESTORE:SW_MAXIMIZE); break;
     case Control::Close: PostMessageW(app.window,WM_CLOSE,0,0); break;
@@ -3115,6 +3549,74 @@ std::wstring StepProgressText(std::uint32_t phase, std::uint32_t done, std::uint
 }
 
 // Builds the UI snapshot for the render thread's Direct2D chrome pass.
+OverlayColor OverlayColorFromRgb(unsigned rgb, float alpha = 1.0f)
+{
+    return OverlayColor{
+        static_cast<float>((rgb >> 16) & 0xff) / 255.0f,
+        static_cast<float>((rgb >> 8) & 0xff) / 255.0f,
+        static_cast<float>(rgb & 0xff) / 255.0f,
+        alpha
+    };
+}
+
+OverlayColor OverlayColorFromSystem(int index, float alpha = 1.0f)
+{
+    const COLORREF color = GetSysColor(index);
+    return OverlayColor{ GetRValue(color) / 255.0f, GetGValue(color) / 255.0f,
+        GetBValue(color) / 255.0f, alpha };
+}
+
+OpenWithPopupPalette BuildOpenWithPalette(const ViewerApp& app)
+{
+    OpenWithPopupPalette palette;
+    if (app.highContrast)
+    {
+        palette.surface = OverlayColorFromSystem(COLOR_WINDOW, 0.98f);
+        palette.border = OverlayColorFromSystem(COLOR_WINDOWTEXT);
+        palette.text = OverlayColorFromSystem(COLOR_WINDOWTEXT);
+        palette.secondary = OverlayColorFromSystem(COLOR_WINDOWTEXT);
+        palette.hover = OverlayColorFromSystem(COLOR_HIGHLIGHT);
+        palette.pressed = OverlayColorFromSystem(COLOR_HIGHLIGHT);
+        palette.divider = OverlayColorFromSystem(COLOR_WINDOWTEXT);
+        palette.focus = OverlayColorFromSystem(COLOR_HIGHLIGHT);
+        palette.monogram = OverlayColorFromSystem(COLOR_WINDOW);
+        palette.shadow = OverlayColor{ 0.0f, 0.0f, 0.0f, 0.0f };
+        return palette;
+    }
+
+    // The window opts into immersive dark mode today. The light tokens are
+    // kept here so the popup follows the window automatically when a light
+    // chrome theme is added.
+    constexpr bool windowDarkTheme = true;
+    if (windowDarkTheme)
+    {
+        palette.surface = OverlayColorFromRgb(0x242426, 0.98f);
+        palette.border = OverlayColorFromRgb(0x3A3A3C);
+        palette.text = OverlayColorFromRgb(0xF5F5F7);
+        palette.secondary = OverlayColorFromRgb(0xA1A1A6);
+        palette.hover = OverlayColorFromRgb(0x3A3A3C);
+        palette.pressed = OverlayColorFromRgb(0x3F3F42);
+        palette.divider = OverlayColorFromRgb(0x3A3A3C);
+        palette.focus = OverlayColorFromRgb(0x0A84FF);
+        palette.monogram = OverlayColorFromRgb(0x3A3A3C);
+        palette.shadow = OverlayColor{ 0.0f, 0.0f, 0.0f, 0.30f };
+    }
+    else
+    {
+        palette.surface = OverlayColorFromRgb(0xF9F9F9, 0.98f);
+        palette.border = OverlayColorFromRgb(0xE2E2E2);
+        palette.text = OverlayColorFromRgb(0x1A1A1A);
+        palette.secondary = OverlayColorFromRgb(0x5F5F5F);
+        palette.hover = OverlayColorFromRgb(0xEEEEEE);
+        palette.pressed = OverlayColorFromRgb(0xE2E2E2);
+        palette.divider = OverlayColorFromRgb(0xE2E2E2);
+        palette.focus = OverlayColorFromRgb(0x0067C0);
+        palette.monogram = OverlayColorFromRgb(0xE8E8E8);
+        palette.shadow = OverlayColor{ 0.0f, 0.0f, 0.0f, 0.16f };
+    }
+    return palette;
+}
+
 OverlayInfo BuildOverlayInfo(ViewerApp& app)
 {
     OverlayInfo overlay;
@@ -3256,6 +3758,53 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.hideUntilCompleteSwitchRect = SettingsHideUntilCompleteSwitchRect(app);
         overlay.languageRowRect = SettingsLanguageRowRect(app);
     }
+
+    overlay.openWithOpen = app.openWith.open && HasNavigableModel(app) && !app.isFullscreen;
+    if (overlay.openWithOpen)
+    {
+        const auto& layout = app.openWith.layout;
+        overlay.openWithPanelRect = layout.panel;
+        overlay.openWithStripRect = layout.strip;
+        overlay.openWithFallbackRect = layout.fallback;
+        overlay.openWithDividerRect = layout.divider;
+        overlay.openWithScrollTrackRect = layout.scrollTrack;
+        overlay.openWithScrollThumbRect = layout.scrollThumb;
+        overlay.openWithScrollbarVisible = layout.scrollbarVisible;
+        overlay.openWithStatusVisible = layout.statusVisible;
+        overlay.openWithStatusLoading = app.openWith.loading;
+        overlay.openWithStatusRect = layout.status;
+        overlay.openWithPalette = BuildOpenWithPalette(app);
+        overlay.openWithMoreAppsLabel = Loc("openWith.moreApps", L"More apps…");
+        if (layout.statusVisible)
+        {
+            overlay.openWithStatusText = app.openWith.loading
+                ? Loc("openWith.looking", L"Looking for installed apps…")
+                : LocFormat("openWith.none", L"No other apps for {0}", { app.openWith.extension });
+        }
+        overlay.openWithTiles.reserve(app.openWith.apps.size() + 1);
+        for (std::size_t index = 0; index < app.openWith.apps.size(); ++index)
+        {
+            const auto& item = app.openWith.apps[index];
+            OpenWithTileOverlay tile;
+            tile.label = item.displayName;
+            tile.handlerKey = item.handlerKey;
+            tile.icon = item.icon;
+            tile.monogram = OpenWithMonogram(item.displayName);
+            if (index < layout.tiles.size()) tile.rect = layout.tiles[index];
+            tile.hovered = app.openWith.hovered == static_cast<int>(index);
+            tile.pressed = app.openWith.pressed == static_cast<int>(index);
+            tile.focused = app.openWith.focused == static_cast<int>(index);
+            overlay.openWithTiles.push_back(std::move(tile));
+        }
+        OpenWithTileOverlay fallback;
+        fallback.label = overlay.openWithMoreAppsLabel;
+        fallback.rect = layout.fallback;
+        fallback.fallback = true;
+        fallback.hovered = app.openWith.hovered == static_cast<int>(app.openWith.apps.size());
+        fallback.pressed = app.openWith.pressed == static_cast<int>(app.openWith.apps.size());
+        fallback.focused = app.openWith.focused == static_cast<int>(app.openWith.apps.size());
+        overlay.openWithTiles.push_back(std::move(fallback));
+    }
     overlay.selectionAmount = app.meshSelected ? 1.0f : 0.0f;
     const double now = NowSeconds();
     overlay.speedHud = app.speedHudText;
@@ -3270,7 +3819,12 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     if (app.keyboardControl != viewer_accessibility::Control::None)
     {
         const auto focused = AccessibleInfo(app, app.keyboardControl);
-        overlay.keyboardFocusVisible = focused.visible && GetFocus() == app.window;
+        const int control = static_cast<int>(app.keyboardControl);
+        const int tileStart = static_cast<int>(viewer_accessibility::Control::OpenWithTile0);
+        const int tileEnd = static_cast<int>(viewer_accessibility::Control::OpenWithTile7);
+        const bool openWithControl = (control >= tileStart && control <= tileEnd) ||
+            app.keyboardControl == viewer_accessibility::Control::OpenWithMoreApps;
+        overlay.keyboardFocusVisible = !openWithControl && focused.visible && GetFocus() == app.window;
         overlay.keyboardFocusRect = focused.rect;
     }
     UpdateChromeLayout(app);
@@ -3323,6 +3877,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     case kOpenWithLaunchFailedMessage:
         ShowModeHud(*app, Loc("hud.appUnavailable", L"That app is no longer available"));
+        return 0;
+    case kOpenWithCatalogChangedMessage:
+        RefreshOpenWithPopup(*app);
+        return 0;
+    case kOpenWithIconsReadyMessage:
+        DrainOpenWithIcons(*app);
         return 0;
     case kActivationMessage:
         for (auto& command : app->activeInstance.Drain())
@@ -3730,6 +4290,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     }
     case WM_SIZE:
+        if (app->openWith.open && wParam != SIZE_MINIMIZED) CloseOpenWithPopup(*app);
         LayoutControls(*app);
         UpdateGizmoLayout(*app);
         UpdateChromeLayout(*app);
@@ -3745,6 +4306,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     case WM_DPICHANGED:
     {
+        if (app->openWith.open) CloseOpenWithPopup(*app);
         app->dpi = HIWORD(wParam);
         app->dpiScale = static_cast<float>(app->dpi) / 96.0f;
         app->toolbarHeight = Scale(*app, 52);
@@ -3857,6 +4419,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 SetCursor(nullptr);
                 return TRUE;
             }
+            if (app->openWith.open && app->openWith.hovered >= 0)
+            {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
             if (app->gizmo.hover != NavGizmo::Part::None && app->pointerMode == PointerMode::None && CanNavigate(*app))
             {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
@@ -3877,6 +4444,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         break;
     case WM_MOUSELEAVE:
+        if (app->openWith.hovered >= 0)
+        {
+            app->openWith.hovered = -1;
+            InvalidateRect(window, nullptr, FALSE);
+        }
         if (app->gizmo.hover != NavGizmo::Part::None)
         {
             app->gizmo.hover = NavGizmo::Part::None;
@@ -3905,6 +4477,28 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_LBUTTONDOWN:
     {
         const POINT downPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (app->openWith.open)
+        {
+            const int hit = OpenWithIndexAtPoint(*app, downPoint);
+            if (hit >= 0)
+            {
+                SetCapture(window);
+                app->openWith.pressed = hit;
+                app->openWith.hovered = hit;
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            const RECT openWithButton = app->chrome.Button(Chrome::Part::OpenWith).rect;
+            if (PtInRect(&openWithButton, downPoint))
+            {
+                CloseOpenWithPopup(*app);
+                return 0;
+            }
+            if (OpenWithPointInPanel(*app, downPoint)) return 0;
+            CloseOpenWithPopup(*app);
+            // Outside clicks close the popup and still fall through to the
+            // control under the pointer, matching the other flyouts.
+        }
         if (OrbitSpeedFlyoutVisible(*app))
         {
             RECT hitTrack = OrbitFlyoutTrackRect(*app);
@@ -4166,6 +4760,20 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_MOUSEMOVE:
     {
         const POINT movePoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (app->openWith.open)
+        {
+            const int hit = OpenWithIndexAtPoint(*app, movePoint);
+            if (hit != app->openWith.hovered)
+            {
+                app->openWith.hovered = hit;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            if (OpenWithPointInPanel(*app, movePoint))
+            {
+                UpdateTooltipTracking(*app);
+                return 0;
+            }
+        }
         if (app->speedSliderDragging)
         {
             if (GetCapture() == window) SetFlySpeedFromFlyoutX(*app, movePoint.x);
@@ -4390,6 +4998,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     }
     case WM_LBUTTONUP:
+        if (app->openWith.pressed >= 0)
+        {
+            const POINT upPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            const int pressed = app->openWith.pressed;
+            app->openWith.pressed = -1;
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+            if (OpenWithIndexAtPoint(*app, upPoint) == pressed)
+                InvokeOpenWithItem(*app, pressed);
+            UpdateTooltipTracking(*app);
+            return 0;
+        }
         if (app->speedSliderDragging)
         {
             app->speedSliderDragging = false;
@@ -4535,11 +5155,27 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             FrameSelectedOrAll(*app);
         }
         return 0;
+    case WM_MOUSEHWHEEL:
+    {
+        POINT wheelPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };   // screen coords for this message
+        ScreenToClient(window, &wheelPoint);
+        if (app->openWith.open && OpenWithPointInPanel(*app, wheelPoint))
+        {
+            ScrollOpenWith(*app, GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? 1 : -1);
+            return 0;
+        }
+        break;
+    }
     case WM_MOUSEWHEEL:
     {
         POINT wheelPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };   // screen coords for this message
         ScreenToClient(window, &wheelPoint);
         const float steps = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
+        if (app->openWith.open && OpenWithPointInPanel(*app, wheelPoint))
+        {
+            ScrollOpenWith(*app, GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? -1 : 1);
+            return 0;
+        }
         const RECT infoPanel = InfoPanelRect(*app);
         if (app->infoPanelVisible && PtInRect(&infoPanel, wheelPoint))
         {
@@ -4582,6 +5218,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         return DefWindowProcW(window, message, wParam, lParam);
     case WM_KEYDOWN:
+        if (HandleOpenWithKey(*app, wParam)) return 0;
         if (wParam == VK_OEM_2 && GetKeyState(VK_SHIFT) < 0) { ShowControlsDialog(window); return 0; }
         if (wParam == VK_F11) { ToggleFullscreen(*app); return 0; }
         if (wParam == VK_ESCAPE)
@@ -4604,6 +5241,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_KILLFOCUS:
         StopNavigation(*app);
         EndPointer(*app);
+        if (app->openWith.open) CloseOpenWithPopup(*app);
         if (app->speedFlyoutOpen) { app->speedFlyoutOpen = false; InvalidateRect(window, nullptr, FALSE); }
         if (app->settingsPanelOpen) { app->settingsPanelOpen = false; InvalidateRect(window, nullptr, FALSE); }
         app->orbitSpeedFlyoutHover = false;
@@ -5009,7 +5647,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         if (SUCCEEDED(comResult)) CoUninitialize();
         return 1;
     }
-    InitializeOpenWithCatalog(gMainWindow, kOpenWithLaunchFailedMessage);
+    InitializeOpenWithCatalog(gMainWindow, OpenWithNotifications{
+        kOpenWithLaunchFailedMessage, kOpenWithCatalogChangedMessage, kOpenWithIconsReadyMessage });
 
     HACCEL accelerators = LoadAcceleratorsW(instance, MAKEINTRESOURCEW(IDC_PREVIEW3D));
     MSG message{};

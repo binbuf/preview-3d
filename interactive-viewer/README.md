@@ -32,9 +32,10 @@ persistent caching, and intermediate LOD construction remain separate work.
   the whole screen — distinct from Maximize, which snaps to the work area and keeps the taskbar and
   our own chrome visible; `Esc` (or `F11` again) restores the window; live-updating "Stats & Shading"
   Information side panel (mesh/texture/animation/performance/scene counts scanned from the glTF JSON)
-- Open With (cached Windows handlers, with installed CAD/modeling/3D-printing apps
-  promoted into purpose-based groups, plus "Choose another app...")
-  and Windows Share (`DataTransferManager`/C++WinRT) for the currently open file
+- Open With (a custom horizontal strip of cached Windows handlers, ranked by
+  relevance to the current extension, with icons, self/duplicate filtering, and
+  a pinned "More apps..." system-picker fallback) and Windows Share
+  (`DataTransferManager`/C++WinRT) for the currently open file
 
 ## Rendering and imports
 
@@ -138,7 +139,7 @@ separate deliverable.
 | Rotate directional light | Drag the sun around the navigation gizmo's outer ring in Directional mode |
 | Wireframe | The mesh icon beside the lighting modes; hides all triangle surfaces |
 | Share the open file | The title bar's Share button (Windows Share) |
-| Open the file in another app | The title bar's Open With dropdown |
+| Open the file in another app | The title bar's Open With strip |
 | Reset view | `Home` or `R`, or the button that appears at the top-left of the viewport once the camera has moved |
 | Open | `Ctrl+O` (primarily launched via file-type registration or drag/drop instead) |
 | Fullscreen | `F11` or the bottom bar's Fullscreen button |

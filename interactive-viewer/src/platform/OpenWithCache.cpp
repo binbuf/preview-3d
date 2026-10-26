@@ -12,7 +12,7 @@ namespace open_with
 namespace
 {
 constexpr std::uint32_t kMagic = 0x3143574f; // "OWC1" in little endian.
-constexpr std::uint16_t kVersion = 1;
+constexpr std::uint16_t kVersion = 2;
 constexpr std::size_t kHeaderBytes = 24;
 constexpr std::size_t kMaximumCacheBytes = 256 * 1024;
 constexpr std::size_t kMaximumHandlers = 256;
@@ -20,6 +20,9 @@ constexpr std::size_t kMaximumExtensionBytes = 16;
 constexpr std::size_t kMaximumHandlerNameBytes = 2048;
 constexpr std::size_t kMaximumDisplayNameBytes = 1024;
 constexpr std::size_t kMaximumCatalogIdBytes = 128;
+constexpr std::size_t kMaximumIconPathBytes = 1024;
+constexpr std::int32_t kMinimumIconIndex = -32768;
+constexpr std::int32_t kMaximumIconIndex = 32767;
 
 void AppendU16(std::vector<std::byte>& bytes, std::uint16_t value)
 {
@@ -138,14 +141,18 @@ bool EncodeCache(const CacheState& state, std::vector<std::byte>& output)
     for (const auto& handler : state.handlers)
     {
         if (handler.extension.empty() || handler.handlerName.empty() || handler.displayName.empty() ||
+            handler.iconIndex < kMinimumIconIndex || handler.iconIndex > kMaximumIconIndex ||
             !AppendString(output, handler.extension, kMaximumExtensionBytes) ||
             !AppendString(output, handler.handlerName, kMaximumHandlerNameBytes) ||
             !AppendString(output, handler.displayName, kMaximumDisplayNameBytes) ||
-            !AppendString(output, handler.catalogId, kMaximumCatalogIdBytes))
+            !AppendString(output, handler.catalogId, kMaximumCatalogIdBytes) ||
+            !AppendString(output, handler.iconPath, kMaximumIconPathBytes))
         {
             output.clear();
             return false;
         }
+        AppendU32(output, static_cast<std::uint32_t>(static_cast<std::int32_t>(handler.iconIndex)));
+        AppendU32(output, handler.recommended ? 1u : 0u);
     }
     if (output.size() > kMaximumCacheBytes || output.size() > (std::numeric_limits<std::uint32_t>::max)())
     {
@@ -180,12 +187,22 @@ bool DecodeCache(std::span<const std::byte> bytes, CacheState& output)
     for (std::uint16_t index = 0; index < count; ++index)
     {
         CachedHandler handler;
+        std::uint32_t iconIndex = 0;
+        std::uint32_t recommended = 0;
         if (!ReadString(bytes, cursor, kMaximumExtensionBytes, handler.extension) ||
             !ReadString(bytes, cursor, kMaximumHandlerNameBytes, handler.handlerName) ||
             !ReadString(bytes, cursor, kMaximumDisplayNameBytes, handler.displayName) ||
             !ReadString(bytes, cursor, kMaximumCatalogIdBytes, handler.catalogId) ||
+            !ReadString(bytes, cursor, kMaximumIconPathBytes, handler.iconPath) ||
+            !ReadU32(bytes, cursor, iconIndex) ||
+            !ReadU32(bytes, cursor, recommended) ||
             handler.extension.empty() || handler.extension.front() != L'.' ||
-            handler.handlerName.empty() || handler.displayName.empty()) return false;
+            handler.handlerName.empty() || handler.displayName.empty() ||
+            static_cast<std::int32_t>(iconIndex) < kMinimumIconIndex ||
+            static_cast<std::int32_t>(iconIndex) > kMaximumIconIndex ||
+            recommended > 1) return false;
+        handler.iconIndex = static_cast<std::int32_t>(iconIndex);
+        handler.recommended = recommended != 0;
         const std::wstring identity = Fold(handler.extension) + L"\n" + Fold(handler.handlerName);
         if (!identities.insert(identity).second) return false;
         decoded.handlers.push_back(std::move(handler));

@@ -17,6 +17,9 @@ struct CachedHandler
     std::wstring handlerName;
     std::wstring displayName;
     std::wstring catalogId;
+    std::wstring iconPath;
+    std::int32_t iconIndex = 0;
+    bool recommended = false;
 
     bool operator==(const CachedHandler&) const = default;
 };

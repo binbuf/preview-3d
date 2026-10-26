@@ -422,5 +422,12 @@
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
   "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
   "settings.hideUntilComplete": "Näytä malli vasta, kun se on ladattu kokonaan",
-  "a11y.hideUntilCompleteDesc": "Piilota malli, kunnes lataus ja tarkennus ovat valmiit"
+  "a11y.hideUntilCompleteDesc": "Piilota malli, kunnes lataus ja tarkennus ovat valmiit",
+  "a11y.openWithList": "Open with, {0} apps",
+  "hud.openWithUnavailable": "Open with isn't available right now",
+  "a11y.openWithApp": "Open with {0}",
+  "a11y.openWithChooseAnother": "Choose another app",
+  "openWith.moreApps": "More apps…",
+  "openWith.looking": "Looking for installed apps…",
+  "openWith.none": "No other apps for {0}"
 }

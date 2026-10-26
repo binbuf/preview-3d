@@ -422,5 +422,12 @@
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
   "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
   "settings.hideUntilComplete": "모델을 완전히 로드한 후에만 표시",
-  "a11y.hideUntilCompleteDesc": "로드 및 세부 조정이 완료될 때까지 모델 숨기기"
+  "a11y.hideUntilCompleteDesc": "로드 및 세부 조정이 완료될 때까지 모델 숨기기",
+  "a11y.openWithList": "Open with, {0} apps",
+  "hud.openWithUnavailable": "Open with isn't available right now",
+  "a11y.openWithApp": "Open with {0}",
+  "a11y.openWithChooseAnother": "Choose another app",
+  "openWith.moreApps": "More apps…",
+  "openWith.looking": "Looking for installed apps…",
+  "openWith.none": "No other apps for {0}"
 }

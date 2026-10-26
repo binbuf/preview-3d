@@ -625,6 +625,7 @@ void D3D11On12Overlay::Shutdown()
     spinnerStroke.Reset();
     studioLitGeometry.Reset();
     headingFormat.Reset(); bodyFormat.Reset(); smallFormat.Reset(); filenameFormat.Reset(); gizmoFormat.Reset();
+    openWithIcons_.clear();
     textScale = 0.0f;
     targetsRecreated_ = false;
     writeFactory_.Reset();
@@ -712,6 +713,28 @@ void D3D11On12Overlay::DrawText(const std::wstring& text, IDWriteTextFormat* for
     SetBrush(color);
     d2dContext_->DrawTextW(text.c_str(), static_cast<UINT32>(text.size()), format, rectangle, overlayBrush.Get(),
         D2D1_DRAW_TEXT_OPTIONS_CLIP);
+}
+
+void D3D11On12Overlay::DrawTextEllipsized(const std::wstring& text, IDWriteTextFormat* format,
+    D2D1_RECT_F rectangle, D2D1_COLOR_F color, DWRITE_TEXT_ALIGNMENT alignment)
+{
+    if (text.empty() || !format || !writeFactory_) return;
+    const float width = std::max(1.0f, rectangle.right - rectangle.left);
+    const float height = std::max(1.0f, rectangle.bottom - rectangle.top);
+    ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(writeFactory_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()),
+        format, width, height, &layout)) || !layout) return;
+    layout->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    layout->SetTextAlignment(alignment);
+    layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    ComPtr<IDWriteInlineObject> ellipsis;
+    if (SUCCEEDED(writeFactory_->CreateEllipsisTrimmingSign(format, &ellipsis)) && ellipsis)
+    {
+        DWRITE_TRIMMING trimming{ DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0 };
+        layout->SetTrimming(&trimming, ellipsis.Get());
+    }
+    overlayBrush->SetColor(color);
+    d2dContext_->DrawTextLayout(D2D1::Point2F(rectangle.left, rectangle.top), layout.Get(), overlayBrush.Get());
 }
 
 void D3D11On12Overlay::DrawSpinner(D2D1_POINT_2F center, float animationPhase, float innerRadius,
@@ -1133,6 +1156,20 @@ D2D1_RECT_F D3D11On12Overlay::ToRectF(RECT rect)
         static_cast<float>(rect.right), static_cast<float>(rect.bottom));
 }
 
+namespace
+{
+D2D1_COLOR_F ToD2DColor(const OverlayColor& color)
+{
+    return D2D1::ColorF(color.r, color.g, color.b, color.a);
+}
+
+bool RectsIntersect(const RECT& left, const RECT& right)
+{
+    return left.left < right.right && left.right > right.left &&
+        left.top < right.bottom && left.bottom > right.top;
+}
+}
+
 // Windows-11-Photos-style unified title bar: action buttons, centered
 // filename, Open With, and the (D2D-drawn, NC-hit-tested) system
 // min/max/close — all laid out by Chrome::UpdateLayout.
@@ -1187,7 +1224,7 @@ void D3D11On12Overlay::DrawTitleBar(const OverlayInfo& overlay, const Chrome& ch
     drawActionButton(Chrome::Part::Fit, OverlayIconKind::Fit, false);
     drawActionButton(Chrome::Part::Share, OverlayIconKind::Share, false);
     drawActionButton(Chrome::Part::Overflow, OverlayIconKind::Overflow, false);
-    drawActionButton(Chrome::Part::OpenWith, OverlayIconKind::OpenWith, false);
+    drawActionButton(Chrome::Part::OpenWith, OverlayIconKind::OpenWith, overlay.openWithOpen);
 
     // System caption buttons: simple vector glyphs, matching Windows 11's
     // minimize/maximize-or-restore/close. DWM (via DwmDefWindowProc,
@@ -1321,6 +1358,176 @@ void D3D11On12Overlay::DrawSettingsPanel(const OverlayInfo& overlay, float scale
     DrawText(overlay.languageValue, smallFormat.Get(),
         D2D1::RectF(languageRow.left, languageRow.top, languageRow.right, languageRow.bottom),
         D2D1::ColorF(0x0A84FF), DWRITE_TEXT_ALIGNMENT_TRAILING);
+}
+
+ID2D1Bitmap* D3D11On12Overlay::OpenWithIconBitmap(const OpenWithTileOverlay& tile)
+{
+    if (!d2dContext_ || !tile.icon || tile.icon->Empty() || !tile.icon->bgra.data()) return nullptr;
+    const std::wstring key = tile.handlerKey + L"|" +
+        std::to_wstring(tile.icon->width) + L"x" + std::to_wstring(tile.icon->height);
+    const auto found = openWithIcons_.find(key);
+    if (found != openWithIcons_.end()) return found->second.Get();
+    if (openWithIcons_.size() >= 64) openWithIcons_.clear();
+
+    const D2D1_BITMAP_PROPERTIES properties = D2D1::BitmapProperties(
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    ComPtr<ID2D1Bitmap> bitmap;
+    if (FAILED(d2dContext_->CreateBitmap(
+        D2D1::SizeU(static_cast<UINT32>(tile.icon->width), static_cast<UINT32>(tile.icon->height)),
+        tile.icon->bgra.data(), static_cast<UINT32>(tile.icon->width * 4), &properties, &bitmap)) || !bitmap)
+        return nullptr;
+    openWithIcons_[key] = bitmap;
+    return bitmap.Get();
+}
+
+void D3D11On12Overlay::DrawOpenWithTile(const OpenWithTileOverlay& tile, const OverlayInfo& overlay, float scale)
+{
+    const auto& palette = overlay.openWithPalette;
+    const D2D1_RECT_F rect = ToRectF(tile.rect);
+    const float radius = Scale(6, scale);
+    if (tile.hovered || tile.pressed)
+    {
+        D2D1_COLOR_F fill = ToD2DColor(tile.pressed ? palette.pressed : palette.hover);
+        if (overlay.highContrast) fill.a = tile.pressed ? 0.45f : 0.30f;
+        overlayBrush->SetColor(fill);
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(rect, radius, radius), overlayBrush.Get());
+    }
+
+    const float iconSize = Scale(32, scale);
+    const D2D1_RECT_F iconRect = D2D1::RectF(
+        (rect.left + rect.right) * 0.5f - iconSize * 0.5f,
+        rect.top + Scale(18, scale),
+        (rect.left + rect.right) * 0.5f + iconSize * 0.5f,
+        rect.top + Scale(18, scale) + iconSize);
+
+    if (tile.fallback)
+    {
+        overlayBrush->SetColor(ToD2DColor(palette.monogram));
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(iconRect, Scale(6, scale), Scale(6, scale)),
+            overlayBrush.Get());
+        overlayBrush->SetColor(ToD2DColor(palette.secondary));
+        const float cy = (iconRect.top + iconRect.bottom) * 0.5f;
+        const float cx = (iconRect.left + iconRect.right) * 0.5f;
+        for (int dot = -1; dot <= 1; ++dot)
+        {
+            d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx + dot * Scale(6, scale), cy),
+                Scale(1.8f, scale), Scale(1.8f, scale)), overlayBrush.Get());
+        }
+    }
+    else if (ID2D1Bitmap* bitmap = OpenWithIconBitmap(tile))
+    {
+        d2dContext_->DrawBitmap(bitmap, iconRect, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    }
+    else
+    {
+        overlayBrush->SetColor(ToD2DColor(palette.monogram));
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(iconRect, Scale(6, scale), Scale(6, scale)),
+            overlayBrush.Get());
+        const std::wstring mark(1, tile.monogram);
+        DrawTextEllipsized(mark, filenameFormat.Get(), iconRect, ToD2DColor(palette.text),
+            DWRITE_TEXT_ALIGNMENT_CENTER);
+    }
+
+    const D2D1_RECT_F labelRect = D2D1::RectF(
+        rect.left + Scale(4, scale),
+        iconRect.bottom + Scale(2, scale),
+        rect.right - Scale(4, scale),
+        rect.bottom - Scale(4, scale));
+    DrawTextEllipsized(tile.label, smallFormat.Get(), labelRect,
+        ToD2DColor(tile.fallback ? palette.secondary : palette.text), DWRITE_TEXT_ALIGNMENT_CENTER);
+
+    if (tile.focused)
+    {
+        overlayBrush->SetColor(ToD2DColor(palette.focus));
+        const D2D1_RECT_F focus = D2D1::RectF(rect.left + 1.0f, rect.top + 1.0f,
+            rect.right - 1.0f, rect.bottom - 1.0f);
+        d2dContext_->DrawRoundedRectangle(D2D1::RoundedRect(focus, radius, radius), overlayBrush.Get(),
+            Scale(1.5f, scale));
+    }
+}
+
+void D3D11On12Overlay::DrawOpenWithPopup(const OverlayInfo& overlay, float scale)
+{
+    if (!overlay.openWithOpen) return;
+    const auto& palette = overlay.openWithPalette;
+    const D2D1_RECT_F panel = ToRectF(overlay.openWithPanelRect);
+    const float radius = Scale(8, scale);
+
+    if (palette.shadow.a > 0.0f)
+    {
+        for (int layer = 3; layer >= 1; --layer)
+        {
+            const float grow = Scale(static_cast<float>(layer) * 2.0f, scale);
+            const D2D1_RECT_F shadow = D2D1::RectF(panel.left - grow, panel.top + Scale(2, scale),
+                panel.right + grow, panel.bottom + Scale(2, scale) + grow);
+            overlayBrush->SetColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, palette.shadow.a * 0.10f));
+            d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(shadow, radius + grow, radius + grow),
+                overlayBrush.Get());
+        }
+    }
+
+    overlayBrush->SetColor(ToD2DColor(palette.surface));
+    d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(panel, radius, radius), overlayBrush.Get());
+    overlayBrush->SetColor(ToD2DColor(palette.border));
+    d2dContext_->DrawRoundedRectangle(D2D1::RoundedRect(panel, radius, radius), overlayBrush.Get(),
+        Scale(1.0f, scale));
+
+    if (overlay.openWithStatusVisible)
+    {
+        const D2D1_RECT_F status = ToRectF(overlay.openWithStatusRect);
+        if (overlay.openWithStatusLoading)
+        {
+            const float cy = (status.top + status.bottom) * 0.5f;
+            DrawSpinner(D2D1::Point2F(status.left + Scale(24, scale), cy),
+                overlay.animationPhase, Scale(6, scale), Scale(10, scale), Scale(1.8f, scale));
+            DrawTextEllipsized(overlay.openWithStatusText, smallFormat.Get(),
+                D2D1::RectF(status.left + Scale(48, scale), status.top, status.right - Scale(8, scale), status.bottom),
+                ToD2DColor(palette.secondary));
+        }
+        else
+        {
+            DrawTextEllipsized(overlay.openWithStatusText, smallFormat.Get(), status,
+                ToD2DColor(palette.secondary), DWRITE_TEXT_ALIGNMENT_CENTER);
+        }
+    }
+
+    const RECT& stripRect = overlay.openWithStripRect;
+    if (!overlay.openWithTiles.empty())
+    {
+        d2dContext_->PushAxisAlignedClip(ToRectF(stripRect), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        for (const auto& tile : overlay.openWithTiles)
+        {
+            if (tile.fallback || !RectsIntersect(tile.rect, stripRect)) continue;
+            DrawOpenWithTile(tile, overlay, scale);
+        }
+        d2dContext_->PopAxisAlignedClip();
+    }
+
+    overlayBrush->SetColor(ToD2DColor(palette.divider));
+    const D2D1_RECT_F divider = ToRectF(overlay.openWithDividerRect);
+    d2dContext_->FillRectangle(divider, overlayBrush.Get());
+
+    for (const auto& tile : overlay.openWithTiles)
+    {
+        if (!tile.fallback) continue;
+        DrawOpenWithTile(tile, overlay, scale);
+        break;
+    }
+
+    if (overlay.openWithScrollbarVisible)
+    {
+        const D2D1_RECT_F track = ToRectF(overlay.openWithScrollTrackRect);
+        const float line = std::max(1.0f, (track.bottom - track.top));
+        D2D1_COLOR_F trackColor = ToD2DColor(palette.divider);
+        trackColor.a = 0.45f;
+        overlayBrush->SetColor(trackColor);
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(track, line * 0.5f, line * 0.5f),
+            overlayBrush.Get());
+        const D2D1_RECT_F thumb = ToRectF(overlay.openWithScrollThumbRect);
+        overlayBrush->SetColor(ToD2DColor(palette.secondary));
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(thumb, line * 0.5f, line * 0.5f),
+            overlayBrush.Get());
+    }
 }
 
 // A small dark bubble naming the button under the cursor, shown once
@@ -1540,6 +1747,9 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
         d2dContext_->DrawRectangle(focus, overlayBrush.Get(), Scale(2.0f, scale), dashedStroke.Get());
     }
 
+    // The Open With strip floats above the viewport and all other chrome,
+    // including the legacy keyboard focus rectangle.
+    DrawOpenWithPopup(overlay, scale);
 }
 
 

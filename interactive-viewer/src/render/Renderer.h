@@ -5,6 +5,7 @@
 #include "InfoPanel.h"
 #include "Model.h"
 #include "NavGizmo.h"
+#include "OpenWithIcon.h"
 
 #include <DirectXMath.h>
 #include <windows.h>
@@ -41,6 +42,42 @@ enum class LightingMode
     Clay,
     Directional,
     Wireframe
+};
+
+struct OverlayColor
+{
+    float r = 0.0f;
+    float g = 0.0f;
+    float b = 0.0f;
+    float a = 1.0f;
+};
+
+struct OpenWithPopupPalette
+{
+    OverlayColor surface;
+    OverlayColor border;
+    OverlayColor text;
+    OverlayColor secondary;
+    OverlayColor hover;
+    OverlayColor pressed;
+    OverlayColor divider;
+    OverlayColor focus;
+    OverlayColor monogram;
+    OverlayColor shadow;
+};
+
+struct OpenWithTileOverlay
+{
+    std::wstring label;
+    std::wstring handlerKey;
+    std::shared_ptr<const open_with::IconPixels> icon;
+    wchar_t monogram = L'?';
+    RECT rect{};
+    bool hovered = false;
+    bool pressed = false;
+    bool focused = false;
+    bool fallback = false;
+    bool enabled = true;
 };
 
 struct OverlayInfo
@@ -145,6 +182,21 @@ struct OverlayInfo
     RECT orbitFlyoutTrackRect{};
     float orbitSliderT = 0.0f;
     std::wstring orbitValueText;   // e.g. "30°/s"
+    bool openWithOpen = false;
+    RECT openWithPanelRect{};
+    RECT openWithStripRect{};
+    RECT openWithFallbackRect{};
+    RECT openWithDividerRect{};
+    RECT openWithScrollTrackRect{};
+    RECT openWithScrollThumbRect{};
+    RECT openWithStatusRect{};
+    bool openWithScrollbarVisible = false;
+    bool openWithStatusVisible = false;
+    bool openWithStatusLoading = false;
+    std::wstring openWithStatusText;
+    std::wstring openWithMoreAppsLabel;
+    std::vector<OpenWithTileOverlay> openWithTiles;
+    OpenWithPopupPalette openWithPalette{};
     bool settingsPanelOpen = false;
     RECT settingsPanelRect{};        // client px, valid only while settingsPanelOpen
     RECT nativeOrientationRowRect{};

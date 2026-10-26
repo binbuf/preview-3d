@@ -422,5 +422,12 @@
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
   "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
   "settings.hideUntilComplete": "A modell megjelenítése csak teljes betöltés után",
-  "a11y.hideUntilCompleteDesc": "A modell elrejtése a betöltés és a finomítás befejezéséig"
+  "a11y.hideUntilCompleteDesc": "A modell elrejtése a betöltés és a finomítás befejezéséig",
+  "a11y.openWithList": "Open with, {0} apps",
+  "hud.openWithUnavailable": "Open with isn't available right now",
+  "a11y.openWithApp": "Open with {0}",
+  "a11y.openWithChooseAnother": "Choose another app",
+  "openWith.moreApps": "More apps…",
+  "openWith.looking": "Looking for installed apps…",
+  "openWith.none": "No other apps for {0}"
 }

@@ -48,6 +48,7 @@
 #include <wrl/client.h>
 
 #include <string>
+#include <unordered_map>
 
 // Immutable UI snapshot, published to the render thread. No HWND calls or
 // UI-owned objects are consulted while painting.
@@ -136,6 +137,11 @@ private:
     void DrawToggleRow(const D2D1_RECT_F& rowRect, const D2D1_RECT_F& switchRect,
         const std::wstring& label, bool on, float scale);
     void DrawSettingsPanel(const OverlayInfo& overlay, float scale);
+    void DrawOpenWithPopup(const OverlayInfo& overlay, float scale);
+    void DrawOpenWithTile(const OpenWithTileOverlay& tile, const OverlayInfo& overlay, float scale);
+    ID2D1Bitmap* OpenWithIconBitmap(const OpenWithTileOverlay& tile);
+    void DrawTextEllipsized(const std::wstring& text, IDWriteTextFormat* format, D2D1_RECT_F rectangle,
+        D2D1_COLOR_F color, DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING);
     void DrawTooltip(const OverlayInfo& overlay, float clientWidth, float scale);
     void DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome);
 
@@ -151,6 +157,7 @@ private:
     Microsoft::WRL::ComPtr<ID2D1PathGeometry> studioLitGeometry;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> headingFormat, bodyFormat, smallFormat, filenameFormat, gizmoFormat;
     float textScale = 0.0f;
+    std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<ID2D1Bitmap>> openWithIcons_;
 
     Microsoft::WRL::ComPtr<ID3D11Device> d3d11Device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3d11Context_;

@@ -50,7 +50,7 @@ A speed HUD ("Travel speed ×1.20") and a mode HUD ("Ground grid shown", "Ground
 
 ### Color palette
 
-Panel/bar fill #2C2C2E / #242426; borders #3A3A3C / #48484C; primary text #F5F5F7; secondary text #A1A1A6; accent/active #0A84FF; disabled fill/text #2C2C2E / #707075; Close-button hover/press #E81123 / #C42B1C; warning #FF9F0A; error #FF453A. Chrome text uses "Segoe UI Variable Text" semibold.
+Panel/bar fill #2C2C2E / #242426; borders #3A3A3C / #48484C; primary text #F5F5F7; secondary text #A1A1A6; accent/active #0A84FF; disabled fill/text #2C2C2E / #707075; Close-button hover/press #E81123 / #C42B1C; warning #FF9F0A; error #FF453A. The Open With strip uses #242426 at 98% surface, #3A3A3C border/hover, #3F3F42 pressed, #0A84FF focus, and the light equivalents #F9F9F9 / #E2E2E2 / #EEEEEE / #0067C0 when the window gains a light theme. Chrome text uses "Segoe UI Variable Text" semibold.
 
 ## Application states
 
@@ -126,23 +126,37 @@ Native-orientation display and an explicit model ground-axis and signed-directio
 
 Two on-demand, title-bar-triggered integrations exist, both invoked by the user rather than passive Explorer registration:
 
-- **Open With**: loads a bounded local catalog of Windows handler identities and
-  displays recognized CAD, modeling, and 3D-printing applications first, grouped
-  by purpose, followed by other Windows-recommended handlers. The curated set is
-  FreeCAD, OpenSCAD, Autodesk Fusion, Rhino, SOLIDWORKS, Autodesk Inventor,
-  Blender, SketchUp, Autodesk 3ds Max, Autodesk Maya, ZBrush, MeshLab,
-  Plasticity, PrusaSlicer, OrcaSlicer, Bambu Studio, UltiMaker Cura, Lychee
-  Slicer, CHITUBOX, and Simplify3D. An app is shown only when Windows
-  registers it as a handler for the current extension; the viewer does not guess
-  vendor command lines. Discovery uses `SHAssocEnumHandlers` off the UI thread,
-  adds newly found handlers no more than once every seven days, and caches only
-  extension/handler/display/catalog metadata in
+- **Open With**: opens a custom Direct2D strip anchored below the title-bar
+  button. It presents one horizontal row of app tiles (32 px icon above a label),
+  ordered left to right by relevance to the current extension, with no category
+  headings. Curated CAD, modeling, and 3D-printing apps rank by the extension's
+  affinity for their purpose; the Windows recommendation flag and curated
+  catalog order break ties. The curated set is FreeCAD, OpenSCAD, Autodesk
+  Fusion, Rhino, SOLIDWORKS, Autodesk Inventor, Blender, SketchUp, Autodesk 3ds
+  Max, Autodesk Maya, ZBrush, MeshLab, Plasticity, PrusaSlicer, OrcaSlicer,
+  Bambu Studio, UltiMaker Cura, Lychee Slicer, CHITUBOX, and Simplify3D. An app
+  is shown only when Windows registers an executable-path handler for the
+  current extension; package (AUMID) and legacy OpenWithList identities that
+  cannot be launched directly are excluded. Selecting a tile starts that
+  executable with the model path as its argument, so no OS picker appears. The
+  viewer does not synthesize vendor-specific flags. The viewer's own
+  handler is removed by executable path, executable name, and product name, so
+  debug builds, older installs, and package-style registrations never appear.
+  Duplicate handlers are collapsed by canonical path and visible name. Raw
+  filename UI names (`f3d.exe`) are replaced by a version-resource description
+  or a cleaned label (`F3D`); each tile uses the shell icon with a monogram
+  fallback. Discovery uses `SHAssocEnumHandlers` off the UI thread, adds newly
+  found handlers no more than once every seven days, and caches only
+  extension/handler/display/catalog/icon metadata in
   `%LOCALAPPDATA%\Binbuf\Preview 3D\open-with-apps-v1.dat`—never model paths or
-  launch history. Selection queues registered-handler resolution and invocation
-  on the discovery thread; failure removes the stale entry, notifies the UI, and
-  requests an immediate background rescan. A session keeps a
-  successfully resolved handler in memory. `SHOpenWithDialog` remains available
-  as "Choose another app…".
+  launch history. Selection queues a direct executable launch with the model
+  path as its argument on the discovery thread; unlike
+  `IAssocHandler::Invoke`, a direct launch bypasses the OS picker when the
+  extension already has a `UserChoice`. Failure removes the stale entry,
+  notifies the UI, and requests an immediate background rescan. When more apps
+  are registered than fit, the strip
+  scrolls horizontally with the wheel or Left/Right; the pinned "More apps…"
+  tile opens `SHOpenWithDialog`, the only remaining OS picker surface.
 - **Share**: shares the current file as a `StorageFile` through `IDataTransferManagerInterop`/`DataTransferManager`.
 
 The NSIS installer registers only interactive Open With/Default Apps entries for
