@@ -8,6 +8,30 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.6.4] - 2026-10-26
+
+### Added
+
+- **Newer-release badge.** The viewer now checks once per launch, in the
+  background, for a newer published version and shows a small circled
+  up-arrow in the title bar when one is available. Hovering for a moment shows
+  **"Update vX.Y.Z is available!"**, and clicking the badge opens the GitHub
+  releases page. Checks use a bounded HTTPS request with a short timeout;
+  failures are silent and never interrupt opening a model, and automation runs
+  (`--app-smoke`, `--benchmark`) skip the check entirely.
+- **Stable release version feed.** Each non-prerelease GitHub release now
+  publishes `version.txt` as an asset, so
+  `releases/latest/download/version.txt` can be read without the GitHub API
+  rate limit. The API remains a fallback for older releases. The release gate
+  also verifies that `version.txt`, the compiled viewer version, the manifest,
+  solution targets, and installer defaults all agree.
+
+### Changed
+
+- **Update badge placement.** When a model is open, the badge sits to the left
+  of **Open With**; without a model it takes the space immediately left of
+  Minimize. It is hidden in Fullscreen with the other caption controls.
+
 ## [0.6.3] - 2026-10-26
 
 ### Fixed
