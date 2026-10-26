@@ -722,10 +722,10 @@ Reusable facts for later sessions:
 - T13 (branch protection): a maintainer must require the `CI` checks `Build and test (Debug)` and
   `Build and test (Release)` on `main`; GitHub repository settings cannot be changed from the repo.
 - T14/SEC-14: the first maintainer tag run must configure the `release` environment (required
-  reviewers, tags-only deployment), the `WINDOWS_CERTIFICATE_BASE64`/`WINDOWS_CERTIFICATE_PASSWORD`
-  secrets, and a `v*` tag protection rule, then confirm `gh attestation verify` and
-  `signtool verify /p7` succeed. The `/p7` checksum-signing step and attestation are unverified
-  offline.
+  reviewers, tags-only deployment) and a `v*` tag protection rule. The
+  `WINDOWS_CERTIFICATE_BASE64`/`WINDOWS_CERTIFICATE_PASSWORD` secrets are optional as of
+  ADR-0055; when they are configured, confirm `gh attestation verify` and `signtool verify /p7`
+  succeed. The `/p7` checksum-signing step and attestation are unverified offline.
 - T14/SEC-14: `ci.yml` still declares workflow-level `packages: write`; its `test` job is a single
   reusable gate and cannot be split by event without duplicating the Debug/Release matrix. It is not
   a write vector today (`feed-access: read` off `push`), but a future refactor could split it the
@@ -837,16 +837,17 @@ Reusable facts for later sessions:
   `0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0`, `actions/attest-build-provenance`
   `e8998f949152b193b063cb0ec769d69d929409be # v2.4.0`. `.github/dependabot.yml` (github-actions,
   weekly) keeps them current. `git ls-remote --tags <url> 'refs/tags/vN*'` gives the peeled SHAs.
-- **Signing is mandatory for a tag.** `release.yml`'s "Import signing certificate" throws when
-  `WINDOWS_CERTIFICATE_BASE64`/`WINDOWS_CERTIFICATE_PASSWORD` are absent. The unsigned path is the
-  local packaging scripts only (`Create-PortableRelease.ps1`/`Create-Installer.ps1` warn and
-  continue without a thumbprint). The `release` job also has `environment: release` (required
-  reviewers, tags-only deployment) and needs `id-token: write` + `attestations: write`.
-- **Checksum signing is detached PKCS#7.** Authenticode cannot embed a signature in a text file, so
-  `Sign release metadata` runs
+- **Signing is optional (ADR-0055).** `release.yml`'s "Import signing certificate" signs when
+  `WINDOWS_CERTIFICATE_BASE64`/`WINDOWS_CERTIFICATE_PASSWORD` are present and otherwise warns and
+  publishes an unsigned, checksummed, attested release. Configuring only one secret still fails.
+  The packaging scripts keep their local unsigned-warning path. The `release` job also has
+  `environment: release` (required reviewers, tags-only deployment) and needs `id-token: write` +
+  `attestations: write`.
+- **Checksum signing is detached PKCS#7 when a certificate is configured.** Authenticode cannot
+  embed a signature in a text file, so `Sign release metadata` runs
   `signtool sign /sha1 <tp> /fd SHA256 /tr <ts> /td SHA256 /p7 <dir> /p7co 1.3.6.1.4.1.311.2.1.4 <checksums>`
   and verifies each output with `signtool verify /p7`. Outputs are `<file>.p7`. Untested offline (no
-  cert/signtool here).
+  cert/signtool here). Without a certificate the step skips and no `.p7` assets are published.
 - **Draft-then-publish, no clobber.** "Publish GitHub release" refuses an already **published** tag,
   deletes a leftover draft, `gh release create --draft --verify-tag`, uploads (no `--clobber`), then
   `gh release edit <tag> --draft=false`. Assets = the four binaries/checksums plus everything in
@@ -858,10 +859,10 @@ Reusable facts for later sessions:
   (`C:\Users\dan\go\bin\actionlint.exe`); PowerShell does not glob for native commands, so pass
   files explicitly: `$files = Get-ChildItem .github/workflows -Filter *.yml | % FullName; actionlint @files`.
   It resolves the local `uses: ./.github/workflows/dependencies-restore.yml` reference.
-- **Policy doc.** `docs/WINDOWS-SECURITY.md` "What we are doing"/"Verifying a release" is now the
+- **Policy doc.** `docs/WINDOWS-SECURITY.md` "What we are doing"/"Verifying a release" is the
   user-visible tag-protection/signing policy; `docs/design/adr/0043-signed-attested-release-supply-chain.md`
-  records the decision; design/09 "CI and release evidence" links them. The README no longer says
-  releases are unsigned.
+  and `docs/design/adr/0055-unsigned-release-when-no-certificate.md` record the decisions;
+  design/09 "CI and release evidence" links them. The README documents the optional signature.
 
 ## T15 — SEC-15 Fuzz targets: STL, PLY, OBJ
 

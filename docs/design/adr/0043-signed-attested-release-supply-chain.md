@@ -1,7 +1,7 @@
 # 0043 — Signed, attested releases from an unpoisonable binary cache
 
 ## Status
-accepted
+superseded in part by 0055 (the mandatory-signing decision only)
 
 ## Context
 The release lane built and published on a `v*` tag, but the supply chain around it
@@ -27,7 +27,9 @@ published assets.
 - Make signing mandatory for a tag: the release job fails closed when
   `WINDOWS_CERTIFICATE_BASE64`/`WINDOWS_CERTIFICATE_PASSWORD` are absent. The
   unsigned path stays local in the packaging scripts (they warn and continue
-  without a thumbprint) and is never published by CI.
+  without a thumbprint) and is never published by CI. *(Superseded by
+  ADR-0055: signing is optional and an unsigned release is published when the
+  secrets are absent.)*
 - Gate `release` behind the required-reviewer `release` environment, publish to a
   draft, and only then un-draft. A published tag is refused instead of
   `--clobber`ed; a leftover draft is deleted and recreated.
@@ -55,9 +57,9 @@ publishing without a draft (would require `--clobber` to recover a failed run).
   `v*`. Repository code cannot set these.
 - A `pull_request` cannot write the binary-cache feed even for a same-repo
   branch; the feed is only warmed by trusted events.
-- A tag with no certificate produces no release at all. This is intentional:
-  `gh attestation verify` and Smart App Control only have value if the workflow
-  is trusted and the artifact is signed.
+- A tag with no certificate produces an unsigned, attested release (ADR-0055).
+  When a certificate is configured, `gh attestation verify` and Smart App
+  Control only have value if the workflow is trusted and the artifact is signed.
 - Dependabot must keep the SHA pins and their version comments in sync; a manual
   bump must update both.
 - The `gate` (`needs: gate`) fail-closed property from ADR-0042 is unchanged.

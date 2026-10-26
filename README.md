@@ -45,7 +45,7 @@ For the exact supported subset, resource ceilings, and known limitations of each
 The installer adds Preview 3D to **Open with** and **Default apps** for the supported extensions. Windows keeps existing default-app choices; confirm any changes in Default apps after installation.
 
 > [!IMPORTANT]
-> Official releases are Authenticode-signed and carry a GitHub build-provenance attestation. Only download from this repository's Releases page and verify the supplied SHA-256 checksum; you can additionally run `gh attestation verify <file> --repo binbuf/preview-3d` to confirm the artifact was built by this repository's release workflow. Unsigned builds are engineering candidates produced from a local source build and are never published here. If Windows still warns about a signed release — for example the Bad Image status `0xC0E90002` when Smart App Control evaluates a bundled DLL — see [Windows security help](docs/WINDOWS-SECURITY.md) for the specific, safe steps to allow a release you have verified.
+> Official releases carry a GitHub build-provenance attestation. Only download from this repository's Releases page and verify the supplied SHA-256 checksum; you can additionally run `gh attestation verify <file> --repo binbuf/preview-3d` to confirm the artifact was built by this repository's release workflow. Releases are Authenticode-signed when a code-signing certificate is configured; otherwise they are published unsigned, so Windows may show a SmartScreen or Smart App Control warning. If Windows warns about a release you have verified — for example the Bad Image status `0xC0E90002` when Smart App Control evaluates a bundled DLL — see [Windows security help](docs/WINDOWS-SECURITY.md) for the specific, safe steps to allow it.
 
 ## Build from source
 

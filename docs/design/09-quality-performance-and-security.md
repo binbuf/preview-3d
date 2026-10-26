@@ -364,12 +364,13 @@ headless adapter corpus, and package-manifest validation remain manual
 per-change skills on top of the gate (release packaging already restores and
 validates the manifests).
 
-The `Release` workflow (`.github/workflows/release.yml`; ADR-0043) now fails
-closed when its signing secrets are absent — an unsigned artifact is a local
-engineering build, never a CI release. It attests the portable ZIP, the installer,
-both SBOMs, both `MANIFEST.json` files, and the combined `SHA256SUMS` with
-`actions/attest-build-provenance`; publishes the renamed SBOM/manifest copies,
-the checksums, and their detached PKCS#7 signatures as release assets; and gates
+The `Release` workflow (`.github/workflows/release.yml`; ADR-0043, ADR-0055)
+publishes an unsigned release when its signing secrets are absent, and
+Authenticode-signs the payload plus the checksums when they are configured. It
+attests the portable ZIP, the installer, both SBOMs, both `MANIFEST.json` files,
+and the combined `SHA256SUMS` with `actions/attest-build-provenance`; publishes
+the renamed SBOM/manifest copies, the checksums, and (when signed) their detached
+PKCS#7 signatures as release assets; and gates
 the whole job behind the required-reviewer `release` environment. It refuses to
 overwrite a published tag (draft, then un-draft). Every action is pinned to a
 commit SHA and tracked by `.github/dependabot.yml`. `dependencies.yml` splits its

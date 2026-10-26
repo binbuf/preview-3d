@@ -24,7 +24,7 @@ jobs:
   # Fail closed: the package job cannot start until the reusable test gate
   # (Release build plus the unit, import-isolation, and provider-host suites)
   # has passed on this tag. A red test therefore stops the release before any
-  # signed artifact is produced. See .github/workflows/ci.yml.
+  # release artifact is produced. See .github/workflows/ci.yml.
   #
   # The tag gate deliberately runs the Release configuration only and disables
   # the seven-runner fuzz matrix. A tag normally points at a commit that already
@@ -213,7 +213,7 @@ jobs:
               Select-Object -First 1 -ExpandProperty FullName
           }
           if ([string]::IsNullOrWhiteSpace($signTool)) {
-            throw 'A signing certificate is required for a tag release, but signtool.exe was not found.'
+            Write-Warning 'signtool.exe was not found; signing will be skipped unless a certificate is configured.'
           }
 
           "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
@@ -391,6 +391,7 @@ jobs:
         env:
           CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          SIGNTOOL_PATH: ${{ steps.tools.outputs.signtool }}
         run: |
           $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_BASE64)
           $hasPassword = -not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)
@@ -398,14 +399,15 @@ jobs:
             throw 'Configure both WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD, or neither.'
           }
           if (-not $hasCertificate) {
-            # Fail closed. This workflow only runs for a v* tag, so there is no
-            # unsigned release path here: what would be published would be
-            # unsigned and unattested. An unsigned engineering build is still
-            # available locally from the packaging scripts
-            # (packaging/portable/Create-PortableRelease.ps1 and
-            # packaging/installer/Create-Installer.ps1, which warn and continue
-            # when no thumbprint is passed); it must never be published by CI.
-            throw 'Refusing to publish an unsigned release: set WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD in the release environment.'
+            # Signing is optional. When the secrets are configured, every image
+            # and the checksum files are signed; otherwise the release is
+            # published unsigned but still checksummed and attested.
+            Write-Warning 'No signing certificate is configured; publishing an unsigned release. Set WINDOWS_CERTIFICATE_BASE64 and WINDOWS_CERTIFICATE_PASSWORD to sign it.'
+            "thumbprint=" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNTOOL_PATH)) {
+            throw 'A signing certificate is configured, but signtool.exe was not found.'
           }
 
           $certificatePath = Join-Path $env:RUNNER_TEMP 'preview3d-release.pfx'
@@ -540,7 +542,8 @@ jobs:
           TIMESTAMP_URL: https://timestamp.digicert.com
         run: |
           if ([string]::IsNullOrWhiteSpace($env:SIGNING_THUMBPRINT)) {
-            throw 'The signing certificate was not imported; refusing to publish unsigned metadata.'
+            Write-Warning 'No signing certificate is configured; skipping the detached checksum signatures. The checksums and the build-provenance attestation are still published.'
+            exit 0
           }
 
           $meta = Join-Path $env:GITHUB_WORKSPACE 'artifacts\release'

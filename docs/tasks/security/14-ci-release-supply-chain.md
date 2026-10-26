@@ -30,7 +30,7 @@ can no longer write the vcpkg binary-cache feed that releases consume.
       `github-actions`.
 - [x] Make signing mandatory for a tagged release: fail closed when the certificate secrets are
       absent (keep an explicit, clearly named unsigned engineering path for non-tag builds if the
-      project needs it).
+      project needs it). *(Reversed by ADR-0055: signing is now optional; see the Hand-off.)*
 - [x] Add GitHub build-provenance attestation (`actions/attest-build-provenance`) and upload the
       SBOM and `MANIFEST.json`/checksum files as release assets; sign the checksum files with the
       same certificate.
@@ -96,7 +96,8 @@ Changed:
   release guidance and the `gh attestation verify` command.
 - `docs/WINDOWS-SECURITY.md` — new "What we are doing" policy: signing is mandatory for a release,
   attestation + checksum signing, draft-then-publish, no overwrite, and the tag-protection/`release`
-  environment a maintainer must configure; added a "Verifying a release" walkthrough.
+  environment a maintainer must configure; added a "Verifying a release" walkthrough. *(Signing is
+  now optional per ADR-0055; the doc describes both states.)*
 - `SECURITY.md` — out-of-scope line now says published artifacts are signed/attested and fixes the
   `docs/` link path.
 - `docs/design/09-quality-performance-and-security.md` — "CI and release evidence" records the
@@ -142,14 +143,16 @@ Maintainer must configure (cannot be set from repository code):
 - Environment `release` with required reviewers and a deployment branch/tag rule allowing only
   `v*` tags (Settings → Environments).
 - Environment (or repository) secrets `WINDOWS_CERTIFICATE_BASE64` and
-  `WINDOWS_CERTIFICATE_PASSWORD`; the workflow now fails closed without them.
+  `WINDOWS_CERTIFICATE_PASSWORD` are optional as of ADR-0055; configure both to sign, or neither to
+  publish unsigned.
 - A tag protection rule or ruleset for `v*` so only authorized users can create release tags.
 - Artifact attestations enabled for the repository (public repos have them on by default).
 - Expected verification: on a practice tag, `gh attestation verify <asset> --repo binbuf/preview-3d`
   succeeds, and `signtool verify /p7 Preview3D-<v>-SHA256SUMS.p7` succeeds.
 
-Next task must know: `release.yml` now depends on the `release` environment and signing secrets, so
-any local reproduction of the release path must pass a thumbprint to the packaging scripts. Do not
+Next task must know: ADR-0055 makes the signing secrets optional, so `release.yml` now publishes an
+unsigned, checksummed, attested release when they are absent and signs when they are configured. Any
+local reproduction of the signed path must still pass a thumbprint to the packaging scripts. Do not
 re-introduce `--clobber` or `nuget,<url>` (the token-persisting form); use `nugetconfig` with the
 `RUNNER_TEMP` file. SEC-15/16/17 extend the `fuzz-smoke` matrix in `ci.yml` and must keep the SHA
 pins (Dependabot comment form `# vX.Y.Z`).

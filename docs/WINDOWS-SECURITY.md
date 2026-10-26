@@ -1,6 +1,6 @@
 # Windows download and protection guidance
 
-Preview 3D is distributed through this repository’s [GitHub Releases](https://github.com/binbuf/preview-3d/releases). Official release artifacts are Authenticode-signed and carry a GitHub build-provenance attestation, so Windows should recognize a genuine download. An older release, or an unsigned engineering build you made from source, may still trigger a warning. A warning does not establish that a file is unsafe, but it does mean you should verify it before running it.
+Preview 3D is distributed through this repository’s [GitHub Releases](https://github.com/binbuf/preview-3d/releases). Official release artifacts carry a GitHub build-provenance attestation and are Authenticode-signed when a code-signing certificate is configured. When no certificate is configured, releases are published unsigned, so Windows may warn about them. A warning does not establish that a file is unsafe, but it does mean you should verify it before running it.
 
 ## Verify the download first
 
@@ -45,16 +45,16 @@ Turning off SAC lowers protection for all apps, not just Preview 3D. Do this onl
 
 ## What we are doing
 
-The project signs its release artifacts. A release is built only from a `v*` tag on `main`, by a workflow that (a) runs the full test gate first, (b) requires a reviewer-held deployment approval, (c) fails closed if the signing certificate is not configured, (d) Authenticode-signs every executable image in the payload with a timestamp, (e) signs the checksum files with a detached PKCS#7 signature, and (f) publishes a GitHub build-provenance attestation for the archives and their SBOM/manifest metadata. The release is uploaded to a draft and only then published; a published tag is never overwritten.
+The project signs its release artifacts when a code-signing certificate is configured. A release is built only from a `v*` tag on `main`, by a workflow that (a) runs the full test gate first, (b) requires a reviewer-held deployment approval, (c) Authenticode-signs every executable image in the payload with a timestamp and signs the checksum files with a detached PKCS#7 signature when the certificate secrets are configured, and (d) publishes a GitHub build-provenance attestation for the archives and their SBOM/manifest metadata. When no certificate is configured, the artifacts are published unsigned but still checksummed and attested. The release is uploaded to a draft and only then published; a published tag is never overwritten.
 
 ### Verifying a release
 
 1. Download only from the Releases page.
 2. Compare the download’s SHA-256 with the matching `.sha256` asset: `Get-FileHash .\Preview3D-<version>-x64-setup.exe -Algorithm SHA256`. The combined `Preview3D-<version>-SHA256SUMS` asset lists every published file.
 3. If you use the GitHub CLI, confirm provenance: `gh attestation verify .\Preview3D-<version>-x64-setup.exe --repo binbuf/preview-3d`. This checks that the file was produced by this repository’s release workflow.
-4. Inspect the Authenticode signature with `Get-AuthenticodeSignature` or the file’s **Digital Signatures** tab; the installed payload’s images are signed with a timestamp.
+4. Inspect the Authenticode signature with `Get-AuthenticodeSignature` or the file’s **Digital Signatures** tab. When the release was published with a certificate, the installed payload’s images are signed with a timestamp; when no certificate was configured, the release is unsigned and only the checksum and attestation can be verified.
 
-The unsigned path is an engineering-only local build: the packaging scripts (`packaging/portable/Create-PortableRelease.ps1`, `packaging/installer/Create-Installer.ps1`) warn and continue when no certificate thumbprint is passed. Those artifacts are never published by the release workflow. If a signature is missing or does not validate, treat the file as untrusted.
+The release workflow signs the artifacts when `WINDOWS_CERTIFICATE_BASE64`/`WINDOWS_CERTIFICATE_PASSWORD` are configured and otherwise publishes them unsigned. The local packaging scripts (`packaging/portable/Create-PortableRelease.ps1`, `packaging/installer/Create-Installer.ps1`) likewise warn and continue when no certificate thumbprint is passed. If a signature is missing or does not validate, treat the file as untrusted unless its checksum and attestation match.
 
 The release tag itself must be protected. Maintainers configure a tag protection rule (or ruleset) for `v*` on GitHub so only authorized users can create release tags, and a `release` environment with required reviewers and a tags-only deployment rule. Repository workflow code cannot enforce those settings; they are repository configuration.
 
