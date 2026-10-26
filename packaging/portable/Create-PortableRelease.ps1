@@ -346,7 +346,7 @@ $systemDlls = @(
     'd3dcompiler_47.dll', 'dwrite.dll', 'dwmapi.dll', 'dxgi.dll', 'gdi32.dll',
     'kernel32.dll', 'ole32.dll', 'oleacc.dll', 'oleaut32.dll', 'runtimeobject.dll',
     'shell32.dll', 'shlwapi.dll', 'uiautomationcore.dll', 'user32.dll', 'userenv.dll',
-    'version.dll', 'windowscodecs.dll', 'winmm.dll', 'ws2_32.dll', 'wsock32.dll', 'xmllite.dll'
+    'version.dll', 'windowscodecs.dll', 'winhttp.dll', 'winmm.dll', 'ws2_32.dll', 'wsock32.dll', 'xmllite.dll'
 )
 $peFiles = Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.Extension -in @('.exe', '.dll') }
 foreach ($pe in $peFiles) {

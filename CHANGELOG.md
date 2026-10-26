@@ -32,6 +32,13 @@ the whole pre-release build-up as well as the changes made in that tag.
   of **Open With**; without a model it takes the space immediately left of
   Minimize. It is hidden in Fullscreen with the other caption controls.
 
+### Fixed
+
+- **Portable packaging accepts `winhttp.dll`.** The new update check imports
+  the Windows `winhttp.dll`, so the portable payload's closed system-DLL
+  allowlist now includes it. The release build had aborted before producing a
+  package.
+
 ## [0.6.3] - 2026-10-26
 
 ### Fixed
