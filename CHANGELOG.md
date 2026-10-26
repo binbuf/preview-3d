@@ -8,6 +8,16 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.6.2] - 2026-10-26
+
+### Fixed
+
+- **Portable packaging accepts `version.dll`.** The Open With app strip added
+  `GetFileVersionInfoW`/`VerQueryValueW`, so `Preview3D.exe` now imports the
+  Windows `version.dll`. The packaging dependency allowlist did not include it
+  and aborted the release before producing a package. It is now classified as a
+  system DLL like the other Windows imports.
+
 ## [0.6.1] - 2026-10-26
 
 ### Changed

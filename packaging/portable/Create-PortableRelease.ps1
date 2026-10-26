@@ -8,7 +8,7 @@ param(
     [string]$TimestampUrl = 'https://timestamp.digicert.com',
 
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')]
-    [string]$Version = '0.6.1',
+    [string]$Version = '0.6.2',
 
     [ValidateSet('Portable', 'Installer')]
     [string]$Distribution = 'Portable'
@@ -346,7 +346,7 @@ $systemDlls = @(
     'd3dcompiler_47.dll', 'dwrite.dll', 'dwmapi.dll', 'dxgi.dll', 'gdi32.dll',
     'kernel32.dll', 'ole32.dll', 'oleacc.dll', 'oleaut32.dll', 'runtimeobject.dll',
     'shell32.dll', 'shlwapi.dll', 'uiautomationcore.dll', 'user32.dll', 'userenv.dll',
-    'windowscodecs.dll', 'winmm.dll', 'ws2_32.dll', 'wsock32.dll', 'xmllite.dll'
+    'version.dll', 'windowscodecs.dll', 'winmm.dll', 'ws2_32.dll', 'wsock32.dll', 'xmllite.dll'
 )
 $peFiles = Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.Extension -in @('.exe', '.dll') }
 foreach ($pe in $peFiles) {
