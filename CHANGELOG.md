@@ -8,6 +8,19 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.6.3] - 2026-10-26
+
+### Fixed
+
+- **Release assets no longer collide on upload.** The publish step built its
+  asset list from both the build outputs and `artifacts/release`, but the
+  checksum step had copied the two `.sha256` sidecars into `artifacts/release`
+  as well, so `gh release create` tried to upload each sidecar twice and failed
+  with HTTP 422 `ReleaseAsset.name already exists`. The sidecars are now
+  published only from their build directories, remain listed in
+  `SHA256SUMS`, and the workflow rejects duplicate asset names before calling
+  `gh`.
+
 ## [0.6.2] - 2026-10-26
 
 ### Fixed

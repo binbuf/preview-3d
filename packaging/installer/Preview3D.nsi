@@ -7,10 +7,10 @@ Unicode true
   !error "OUTPUT_FILE must identify the setup executable to create."
 !endif
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.6.2"
+  !define PRODUCT_VERSION "0.6.3"
 !endif
 !ifndef PRODUCT_FILE_VERSION
-  !define PRODUCT_FILE_VERSION "0.6.2.0"
+  !define PRODUCT_FILE_VERSION "0.6.3.0"
 !endif
 
 !define PRODUCT_NAME "Preview 3D"

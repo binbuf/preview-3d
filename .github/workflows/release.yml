@@ -507,6 +507,10 @@ jobs:
             Copy-Item -LiteralPath $entry.Source -Destination (Join-Path $meta $entry.Destination) -Force
           }
 
+          # The per-file .sha256 sidecars are published from their original
+          # build directories. Do not also copy them here: the upload list is
+          # built from this directory, and GitHub rejects a second asset with
+          # the same name (HTTP 422 "ReleaseAsset.name already exists").
           foreach ($checksum in @(
             "artifacts/portable/Preview3D-$version-portable-x64.zip.sha256",
             "artifacts/installer/Preview3D-$version-x64-setup.exe.sha256"
@@ -514,15 +518,17 @@ jobs:
             if (-not (Test-Path -LiteralPath $checksum -PathType Leaf)) {
               throw "Expected checksum is missing: $checksum"
             }
-            Copy-Item -LiteralPath $checksum -Destination (Join-Path $meta ([IO.Path]::GetFileName($checksum))) -Force
           }
 
-          # One combined manifest-of-checksums over the published binaries and
-          # their metadata. This is the aggregation the certificate signs.
+          # One combined manifest-of-checksums over the published binaries,
+          # their sidecars, and their metadata. This is the aggregation the
+          # certificate signs.
           $sums = Join-Path $meta "Preview3D-$version-SHA256SUMS"
           $entries = @(
             "artifacts/portable/Preview3D-$version-portable-x64.zip",
-            "artifacts/installer/Preview3D-$version-x64-setup.exe"
+            "artifacts/portable/Preview3D-$version-portable-x64.zip.sha256",
+            "artifacts/installer/Preview3D-$version-x64-setup.exe",
+            "artifacts/installer/Preview3D-$version-x64-setup.exe.sha256"
           ) + @(Get-ChildItem -LiteralPath $meta -File -Filter 'Preview3D-*' |
             Where-Object { $_.Name -notlike '*-SHA256SUMS' } |
             ForEach-Object { $_.FullName })
@@ -616,10 +622,16 @@ jobs:
             "artifacts/installer/Preview3D-$env:RELEASE_VERSION-x64-setup.exe",
             "artifacts/installer/Preview3D-$env:RELEASE_VERSION-x64-setup.exe.sha256"
           ) + @(Get-ChildItem -LiteralPath 'artifacts\release' -File | ForEach-Object { $_.FullName })
+          $assetNames = @{}
           foreach ($asset in $assets) {
             if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
               throw "Expected release artifact is missing: $asset"
             }
+            $name = [IO.Path]::GetFileName($asset)
+            if ($assetNames.ContainsKey($name)) {
+              throw "Two release artifacts share the name '$name': '$($assetNames[$name])' and '$asset'."
+            }
+            $assetNames[$name] = $asset
           }
 
           # Never overwrite a published release: the workflow is gated by the
