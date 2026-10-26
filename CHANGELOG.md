@@ -8,10 +8,17 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
-## [Unreleased]
+## [0.6.0] - 2026-10-26
 
 ### Added
 
+- **Roll controls on the navigation gizmo.** In a face view, two curved arrows
+  appear just outside the upper-right of the gizmo and turn the camera exactly
+  90° clockwise or counter-clockwise about the screen normal, spinning the view
+  in its own plane while keeping the face that is being looked at. Like the axis
+  nodes, they act on press and animate through the existing snap glide, fade in
+  with face alignment and out when the camera leaves a face view, stay visible
+  through a gizmo-driven turn between faces, and are exposed to screen readers.
 - **Show models only when fully loaded (default).** A new Settings switch keeps
   a newly opened model out of the viewport until its import has finished and
   the visible refinement pass has drained, instead of showing coarse chunks as
@@ -23,6 +30,10 @@ the whole pre-release build-up as well as the changes made in that tag.
 
 ### Changed
 
+- **Face-to-face snaps turn about one world axis.** Canonical-view snaps made
+  from another face view (gizmo axis nodes or keyboard shortcuts) now rotate
+  about the single world axis separating the two faces, preserving the current
+  roll instead of tumbling diagonally through a compound rotation.
 - **Open With is now a custom horizontal app strip.** The title-bar action opens
   a Direct2D popup of ranked application tiles with shell icons, instead of a
   native Windows context menu. Handlers are ordered by relevance to the current
@@ -33,6 +44,11 @@ the whole pre-release build-up as well as the changes made in that tag.
   OS "How do you want to open this file?" picker appears only from **More
   apps…**. The strip scrolls horizontally when more apps are registered than
   fit.
+- **Faster release tag gate.** A release tag now reuses the CI workflow in
+  Release-only mode instead of repeating the Debug and fuzz lanes, because the
+  tagged commit has already run the full matrix on `main`. The bounded fuzz
+  smoke moved to `tests/fuzz/Invoke-FuzzSmoke.ps1`, so it can be reproduced
+  locally or dispatched on demand.
 
 ## [0.5.3] - 2026-10-25
 
