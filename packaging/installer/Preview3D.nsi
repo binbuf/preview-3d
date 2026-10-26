@@ -32,12 +32,18 @@ Unicode true
 !define SHELL_NOTIFICATION_SCRIPT "Notify-Preview3DShellChanged.ps1"
 !define THUMBNAIL_PROVIDER_DLL "Preview3DThumbnailProvider.dll"
 
+; Common PowerShell invocation for the staged helper scripts (the uninstaller
+; also passes -KeepDirectoryAcls to Remove-Preview3DProfile.ps1 so setup's
+; silent upgrade removal cannot fail on AppContainer ACE edits).
+!define PSCALL '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File'
+
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "WinVer.nsh"
 !include "FileFunc.nsh"
 !include "Integration.nsh"
+!include "nsDialogs.nsh"
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT_FILE}"
@@ -74,12 +80,21 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright (c) 2026 Binbuf"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${STAGE_DIR}\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
+Page custom PreviousVersionPageCreate PreviousVersionPageLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
+
+; Previous installation carried from .onInit to the previous-version page and
+; the install section. These use their own registers because $R0-$R9 are
+; scratch space for nsDialogs, ${GetParent}, and other macros that run between
+; the detection and the removal.
+!define PREV_VERSION $4
+!define PREV_LOCATION $5
+!define PREV_UNINSTALLSTR $6
 
 !insertmacro MUI_LANGUAGE "English"
 
@@ -94,6 +109,46 @@ Function .onInit
   ${EndIf}
   SetRegView 64
   SetShellVarContext all
+  ; Upgrades are the common case, so the previous installation is detected
+  ; once here and removed/replaced by the install section; the dedicated page
+  ; below only reports where. An existing installation owns its uninstaller
+  ; and its own version; its location is never copied from the requested
+  ; $INSTDIR, which the user may point elsewhere.
+  StrCpy ${PREV_LOCATION} ""
+  StrCpy ${PREV_VERSION} ""
+  StrCpy ${PREV_UNINSTALLSTR} ""
+  ReadRegStr ${PREV_VERSION} HKLM "${PRODUCT_KEY}" "Version"
+  ReadRegStr ${PREV_UNINSTALLSTR} HKLM "${UNINSTALL_KEY}" "UninstallString"
+  ${If} ${PREV_UNINSTALLSTR} == ""
+    ReadRegStr ${PREV_UNINSTALLSTR} HKLM "${UNINSTALL_KEY}" "QuietUninstallString"
+  ${EndIf}
+  ReadRegStr ${PREV_LOCATION} HKLM "${UNINSTALL_KEY}" "InstallLocation"
+  ${If} ${PREV_LOCATION} == ""
+    ReadRegStr ${PREV_LOCATION} HKLM "${PRODUCT_KEY}" "InstallLocation"
+  ${EndIf}
+  ${If} ${PREV_LOCATION} == ""
+    ${If} ${PREV_UNINSTALLSTR} != ""
+      StrCpy ${PREV_LOCATION} "${PREV_UNINSTALLSTR}"
+      ${GetParent} "${PREV_LOCATION}" ${PREV_LOCATION}
+    ${EndIf}
+  ${EndIf}
+  ${If} ${PREV_LOCATION} != ""
+    ${IfNot} ${FileExists} "${PREV_LOCATION}\Uninstall.exe"
+      ; A previous version too old to record its own location still lives at
+      ; the product's default directory, identified by the product executable.
+      ${If} ${PREV_VERSION} == ""
+      ${AndIf} ${FileExists} "$PROGRAMFILES64\Binbuf\Preview 3D\${PRODUCT_EXE}"
+        StrCpy ${PREV_LOCATION} "$PROGRAMFILES64\Binbuf\Preview 3D"
+      ${Else}
+        ; A leftover version entry with no uninstaller cannot be removed, so
+        ; it is not reported as one.
+        StrCpy ${PREV_LOCATION} ""
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  ${If} ${PREV_VERSION} == ""
+    StrCpy ${PREV_VERSION} "an earlier version"
+  ${EndIf}
   ; This engineering build is unsigned, and Smart App Control has no per-app
   ; exception. It evaluates every executable image separately, so an unsigned
   ; payload can install cleanly and then fail at run time when the worker loads
@@ -132,6 +187,84 @@ FunctionEnd
 Function LaunchDefaultApps
   ExecShell "open" "ms-settings:defaultapps?registeredAppMachine=Preview%203D"
 FunctionEnd
+
+; Previous-version page. It appears only when .onInit found an installation
+; (${PREV_LOCATION}), and it is deliberately informational: there is no choice
+; to make, because the existing installation owns the location it is removed
+; from and the user picks where the new version goes on the later directory
+; page. Keeping it passive keeps the usual Welcome/License/Install/Finish
+; rhythm for new installs and adds exactly one "what will be replaced" page to
+; an update.
+Var PrevPageText
+Var PrevPageLocation
+
+Function PreviousVersionPageCreate
+  ${If} ${PREV_LOCATION} == ""
+    Abort
+  ${EndIf}
+  !insertmacro MUI_HEADER_TEXT "Preview 3D is already installed" "Setup will replace the previous version."
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 30u "Preview 3D found an existing installation and will remove it before installing Preview 3D ${PRODUCT_VERSION}. Your files and settings are kept."
+  Pop $PrevPageText
+  ${NSD_CreateLabel} 0 34u 100% 10u "Previous version:"
+  Pop $0
+  ${NSD_CreateLabel} 24u 34u -24u 10u "${PREV_VERSION}"
+  Pop $0
+  ${NSD_CreateLabel} 0 46u 100% 10u "Location:"
+  Pop $0
+  ${NSD_CreateDirRequest} 24u 45u -24u 12u "${PREV_LOCATION}"
+  Pop $PrevPageLocation
+  ; Read-only: the shown location belongs to the existing installation, and
+  ; that installation's own uninstaller performs the removal.
+  SendMessage $PrevPageLocation ${EM_SETREADONLY} 1 0
+
+  ${NSD_CreateLabel} 0 62u 100% -62u "Removing the previous version also removes its Start menu shortcuts, file-type registration, and Explorer thumbnails. Source models, your default app choices, and settings under your user profile are not touched."
+
+  nsDialogs::Show
+FunctionEnd
+
+Function PreviousVersionPageLeave
+FunctionEnd
+
+!macro UpdateExistingInstallation
+  ; Every install replaces whatever is registered, so a leftover previous
+  ; version can never keep old binaries, registration, or shortcuts alive.
+  ${If} ${PREV_LOCATION} != ""
+    ; Never let an existing installation remove this copy: if the user chose
+    ; the same directory, delete only the stale uninstaller and state.
+    ${If} ${PREV_LOCATION} == $INSTDIR
+      Delete "$INSTDIR\Uninstall.exe"
+      DeleteRegKey HKLM "${UNINSTALL_KEY}"
+      DeleteRegKey HKLM "${PRODUCT_KEY}"
+      DetailPrint "Removed the in-place Preview 3D ${PREV_VERSION} registry state from $INSTDIR."
+    ${Else}
+      DetailPrint "Removing previous Preview 3D ${PREV_VERSION} from ${PREV_LOCATION}..."
+      ; Run the existing uninstaller rather than mirroring its removal list
+      ; here: its payload list is the authority for that version, it elevates
+      ; itself (RequestExecutionLevel admin), and /S makes the update silent.
+      ; _?= makes it delete itself in place (no self-copy, no directory move).
+      ; A failure is reported but never blocks the new install, which
+      ; overwrites its own files and product registration below.
+      ExecWait '"${PREV_LOCATION}\Uninstall.exe" /S _?=${PREV_LOCATION}' $2
+      ClearErrors
+      Rename "${PREV_LOCATION}\Uninstall.exe" "${PREV_LOCATION}\Uninstall.exe.tmp"
+      ${If} ${Errors}
+        DetailPrint "The previous version did not uninstall (exit code $2); its remaining files will be overwritten."
+      ${Else}
+        Delete "${PREV_LOCATION}\Uninstall.exe.tmp"
+      ${EndIf}
+      ; The old uninstaller removes the whole ${PRODUCT_KEY} root. Re-create it
+      ; now so the section below writes into the new copy instead of a key
+      ; that Windows has since deleted underneath it.
+      WriteRegStr HKLM "${PRODUCT_KEY}" "InstallLocation" "$INSTDIR"
+    ${EndIf}
+  ${EndIf}
+!macroend
 
 !macro NotifyPreview3DShellChangedBody
   ; Best-effort non-elevated notification (design 08 step 5). runas
@@ -178,6 +311,8 @@ Section "Preview 3D" SEC_MAIN
   SetOutPath "$INSTDIR"
   SetOverwrite on
 
+  !insertmacro UpdateExistingInstallation
+
   File "${STAGE_DIR}\Preview3D.exe"
   File "${STAGE_DIR}\concrt140.dll"
   File "${STAGE_DIR}\msvcp140.dll"
@@ -206,7 +341,7 @@ Section "Preview 3D" SEC_MAIN
   File /r "${STAGE_DIR}\StepHost"
 
   DetailPrint "Provisioning the isolated importer payload ACLs..."
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\Provision-Preview3DWorkerAcl.ps1" -WorkerDirectory "$INSTDIR\worker" -OpenUsdHostDirectory "$INSTDIR\OpenUsdHost" -StepHostDirectory "$INSTDIR\StepHost"'
+  nsExec::ExecToStack '${PSCALL} "$INSTDIR\Provision-Preview3DWorkerAcl.ps1" -WorkerDirectory "$INSTDIR\worker" -OpenUsdHostDirectory "$INSTDIR\OpenUsdHost" -StepHostDirectory "$INSTDIR\StepHost"'
   Pop $0
   Pop $1
   ${If} $0 != 0
@@ -275,7 +410,7 @@ Section "Preview 3D" SEC_MAIN
   ; with non-clobber conflict handling. The DLL payload itself is added by T42;
   ; a registration failure is reported but does not abort the Open With install.
   DetailPrint "Registering the Explorer thumbnail provider..."
-  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}" -Action Install -Scope HKLM -DllPath "$INSTDIR\${THUMBNAIL_PROVIDER_DLL}"'
+  nsExec::ExecToLog '${PSCALL} "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}" -Action Install -Scope HKLM -DllPath "$INSTDIR\${THUMBNAIL_PROVIDER_DLL}"'
   Pop $0
   Pop $1
   ${If} $0 != 0
@@ -293,14 +428,28 @@ Section "Uninstall"
   ; Best-effort cleanup for the uninstalling user's AppContainer profile and
   ; its worker-directory ACE. Other users' now-inert profiles cannot access a
   ; payload after the files below are removed.
-  IfFileExists "$INSTDIR\Remove-Preview3DProfile.ps1" 0 profile_cleanup_done
-  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\Remove-Preview3DProfile.ps1"'
-profile_cleanup_done:
+  ; -KeepDirectoryAcls is what setup's upgrade removal passes: the directory is
+  ; defined as about to be replaced (or already replaced, for an in-place
+  ; install), so keeping the AppContainer ACEs is semantically a no-op and a
+  ; failed ACE edit cannot make the whole existing uninstaller fail.
+  ; The exit code is kept because an NSIS uninstaller normally exits 0 even
+  ; after a failure, and an upgrade relies on it to know whether the previous
+  ; version is really gone.
+  StrCpy $0 0
+  IfFileExists "$INSTDIR\Remove-Preview3DProfile.ps1" 0 profile_cleanup_abort
+  ${If} $1 == "silent"
+    nsExec::ExecToStack '${PSCALL} "$INSTDIR\Remove-Preview3DProfile.ps1" -KeepDirectoryAcls'
+  ${Else}
+    nsExec::ExecToStack '${PSCALL} "$INSTDIR\Remove-Preview3DProfile.ps1"'
+  ${EndIf}
+  Pop $0
+  Pop $1
+profile_cleanup_abort:
 
   ; T41: remove only product-owned thumbnail keys; a foreign handler in an
   ; extension ShellEx value is preserved. Then announce the change.
   IfFileExists "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}" 0 thumbnail_unregister_done
-  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}" -Action Uninstall -Scope HKLM -DllPath "$INSTDIR\${THUMBNAIL_PROVIDER_DLL}"'
+  nsExec::ExecToLog '${PSCALL} "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}" -Action Uninstall -Scope HKLM -DllPath "$INSTDIR\${THUMBNAIL_PROVIDER_DLL}"'
   Pop $0
   Pop $1
 thumbnail_unregister_done:
@@ -405,4 +554,11 @@ thumbnail_unregister_done:
   RMDir "$PROGRAMFILES64\Binbuf"
 
   ${NotifyShell_AssocChanged}
+
+  ; Silent removal reports the profile-cleanup failure through the exit code;
+  ; the interactive uninstaller keeps its log-only behavior.
+  ${If} $1 == "silent"
+  ${AndIf} $0 != "0"
+    SetErrorLevel 1
+  ${EndIf}
 SectionEnd

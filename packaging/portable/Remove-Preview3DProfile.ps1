@@ -1,5 +1,11 @@
 [CmdletBinding()]
-param()
+param(
+    # Setup passes this while replacing an existing installation: the worker
+    # directories are being replaced or re-provisioned, so removing their
+    # AppContainer ACEs is unnecessary and a failed ACL edit must not abort
+    # the rest of the removal. The AppContainer profiles are still deleted.
+    [switch]$KeepDirectoryAcls
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
@@ -52,11 +58,13 @@ function Get-ProfileSid([string]$ProfileName) {
 }
 
 function Remove-Profile([string]$ProfileName, $Identity) {
-    foreach ($directory in @((Join-Path $PSScriptRoot 'worker'), (Join-Path $PSScriptRoot 'OpenUsdHost'), (Join-Path $PSScriptRoot 'StepHost'))) {
-        if (Test-Path -LiteralPath $directory -PathType Container) {
-            $acl = Get-Acl -LiteralPath $directory
-            $acl.PurgeAccessRules($Identity)
-            Set-Acl -LiteralPath $directory -AclObject $acl
+    if (-not $KeepDirectoryAcls) {
+        foreach ($directory in @((Join-Path $PSScriptRoot 'worker'), (Join-Path $PSScriptRoot 'OpenUsdHost'), (Join-Path $PSScriptRoot 'StepHost'))) {
+            if (Test-Path -LiteralPath $directory -PathType Container) {
+                $acl = Get-Acl -LiteralPath $directory
+                $acl.PurgeAccessRules($Identity)
+                Set-Acl -LiteralPath $directory -AclObject $acl
+            }
         }
     }
     $deleteHr = [Preview3DProfileNative]::DeleteAppContainerProfile($ProfileName)

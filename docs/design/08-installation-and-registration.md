@@ -17,6 +17,22 @@ vehicle. The MSI and transactional repair sections below remain future design ta
 path for this program is an idempotent rerun of the same signed installer; its ARP entry currently
 advertises `NoRepair=1`.
 
+Current NSIS upgrade behavior (implemented in `packaging/installer/Preview3D.nsi`): every setup run
+replaces any installed version, including one installed in a different directory, so an update never
+leaves two copies registered. `.onInit` locates the existing installation from that installation's own
+`InstallLocation`/`UninstallString` (falling back to `Software\Binbuf\Preview3D`), never from the
+requested `$INSTDIR`; a setup version too old to record a location is recognized only at the default
+directory. When an installation is found, one informational page after the directory page shows its
+version and the exact location that will be removed, as a read-only field; it has no choice to make
+(the new location is chosen on the directory page) and is skipped entirely for a clean install. The
+install section then runs the previous version's own `Uninstall.exe` with `/S _?=<location>` (that
+uninstaller owns its payload list and elevates itself), reports a failed removal without blocking the
+new install, and re-creates the product key the old uninstaller deletes. The old uninstaller accepts
+`/S` and exits 1 when its AppContainer profile cleanup fails; a same-directory upgrade removes only the
+stale uninstaller and registry state, never running an uninstaller that could delete the new copy.
+Source models, user defaults, and per-user settings are untouched. Contract:
+`tests/app-smoke/installer_upgrade.py`.
+
 ## Future WiX/MSI package contract
 
 The eventual WiX vehicle is a signed, per-machine x64 MSI for Windows 11. Its planned identity is:

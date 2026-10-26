@@ -70,6 +70,11 @@ and attempts to remove the uninstalling user's AppContainer profile. It removes
 only product-owned registration; source models and unrelated file associations
 are not touched.
 
+Updating is the same download-and-run as a first install: setup reports the
+version and location of the installed copy on one page, then removes it (using
+its own uninstaller) before installing the new version. Simultaneous versions
+are not kept, and no uninstall step is required before updating.
+
 Windows may block this build
 ----------------------------
 
