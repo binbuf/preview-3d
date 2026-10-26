@@ -420,5 +420,7 @@
   "hud.orbitOff": "궤도 꺼짐",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "모델을 완전히 로드한 후에만 표시",
+  "a11y.hideUntilCompleteDesc": "로드 및 세부 조정이 완료될 때까지 모델 숨기기"
 }

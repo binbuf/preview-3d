@@ -1309,6 +1309,8 @@ void D3D11On12Overlay::DrawSettingsPanel(const OverlayInfo& overlay, float scale
         overlay.nativeOrientationLabel, overlay.showNativeOrientation, scale);
     DrawToggleRow(ToRectF(overlay.hideCursorRowRect), ToRectF(overlay.hideCursorSwitchRect),
         overlay.hideCursorLabel, overlay.hideCursorWhileDragging, scale);
+    DrawToggleRow(ToRectF(overlay.hideUntilCompleteRowRect), ToRectF(overlay.hideUntilCompleteSwitchRect),
+        overlay.hideUntilCompleteLabel, overlay.hideModelUntilComplete, scale);
 
     // Language row: label on the left, current pack endonym trailing on the
     // right (the whole row is the click target — see ShowLanguageMenu).
@@ -1395,11 +1397,12 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     // above) keeps its real value so the bar still draws and its buttons
     // still hit-test as ordinary client-area ones.
     DrawTitleBar(overlay, chrome, clientWidth, scale);
-    if (overlay.state == ViewerState::Loading || overlay.state == ViewerState::Partial)
+    if (overlay.state == ViewerState::Loading || overlay.state == ViewerState::Partial
+        || overlay.renderTimerRunning)
     {
         const float centerX = clientWidth * 0.5f;
         const float centerY = clientHeight * 0.5f;
-        if (overlay.state == ViewerState::Loading)
+        if (overlay.state == ViewerState::Loading || overlay.renderTimerRunning)
             DrawSpinner(D2D1::Point2F(centerX, centerY), overlay.animationPhase,
                 Scale(10.0f, scale), Scale(17.0f, scale), Scale(2.4f, scale));
         DrawText(overlay.loadingStatus, smallFormat.Get(), D2D1::RectF(centerX - Scale(240, scale),

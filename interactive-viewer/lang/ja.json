@@ -420,5 +420,7 @@
   "hud.orbitOff": "オービットオフ",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "モデルを完全に読み込んだ後に表示",
+  "a11y.hideUntilCompleteDesc": "読み込みと調整が完了するまでモデルを非表示にする"
 }

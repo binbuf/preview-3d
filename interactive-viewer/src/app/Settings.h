@@ -12,7 +12,7 @@
 // and this is never surfaced to the user as an error.
 struct ViewerSettings
 {
-    static constexpr int kCurrentVersion = 4;
+    static constexpr int kCurrentVersion = 5;
     int version = kCurrentVersion;
 
     // Display the model in the orientation its source file authored (true)
@@ -29,6 +29,12 @@ struct ViewerSettings
     // Hide the pointer during viewport mouse drags so wrapped/infinite
     // camera gestures do not show the cursor jumping across the screen.
     bool hideCursorWhileDragging = true;
+
+    // Keep a newly opened model out of the viewport until its import has
+    // finished and the visible refinement pass has drained (true, the
+    // default), instead of showing coarse chunks as they stream in. Turning
+    // this off restores the progressive build-up.
+    bool hideModelUntilComplete = true;
 
     // UI language pack code (e.g. "fr", "pt-BR", "zh_Hans"). Empty means
     // "follow the Windows display language".

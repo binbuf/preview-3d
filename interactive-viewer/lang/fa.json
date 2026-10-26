@@ -420,5 +420,7 @@
   "hud.orbitOff": "مدار خاموش است",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "نمایش مدل فقط پس از بارگذاری کامل",
+  "a11y.hideUntilCompleteDesc": "پنهان نگه داشتن مدل تا تکمیل بارگذاری و پالایش"
 }

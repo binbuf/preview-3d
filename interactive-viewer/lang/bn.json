@@ -420,5 +420,7 @@
   "hud.orbitOff": "কক্ষপথ বন্ধ",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "মডেলটি শুধুমাত্র সম্পূর্ণ লোড হলে দেখান",
+  "a11y.hideUntilCompleteDesc": "লোডিং ও পরিমার্জন সম্পন্ন না হওয়া পর্যন্ত মডেলটি লুকিয়ে রাখুন"
 }

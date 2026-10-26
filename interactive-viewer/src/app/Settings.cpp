@@ -112,6 +112,10 @@ ViewerSettings LoadSettings()
     if (hideCursorText == "true") settings.hideCursorWhileDragging = true;
     else if (hideCursorText == "false") settings.hideCursorWhileDragging = false;
 
+    const std::string hideUntilCompleteText = FindJsonValue(content, "hideModelUntilComplete");
+    if (hideUntilCompleteText == "true") settings.hideModelUntilComplete = true;
+    else if (hideUntilCompleteText == "false") settings.hideModelUntilComplete = false;
+
     const std::string languageText = FindJsonValue(content, "language");
     if (languageText.size() >= 2 && languageText.front() == '"' && languageText.back() == '"')
     {
@@ -157,6 +161,7 @@ void SaveSettings(const ViewerSettings& settings)
         ",\n  \"groundAxis\": \"" + groundAxis + "\"" +
         ",\n  \"groundAxisInverted\": " + (settings.groundAxisInverted ? "true" : "false") +
         ",\n  \"hideCursorWhileDragging\": " + (settings.hideCursorWhileDragging ? "true" : "false") +
+        ",\n  \"hideModelUntilComplete\": " + (settings.hideModelUntilComplete ? "true" : "false") +
         ",\n  \"language\": \"" + escapedLanguage + "\"\n}\n";
 
     std::wstring writeError;

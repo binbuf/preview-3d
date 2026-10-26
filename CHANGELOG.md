@@ -8,6 +8,19 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [Unreleased]
+
+### Added
+
+- **Show models only when fully loaded (default).** A new Settings switch keeps
+  a newly opened model out of the viewport until its import has finished and
+  the visible refinement pass has drained, instead of showing coarse chunks as
+  they stream in. Turning the switch off restores the progressive build-up.
+  Cancelling a load still reveals whatever incomplete geometry is available.
+  While a model is hidden by this preference, the center-of-viewport loading
+  indicator remains visible through the final refinement instead of leaving a
+  blank viewport.
+
 ## [0.5.3] - 2026-10-25
 
 ### Fixed

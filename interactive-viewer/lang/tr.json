@@ -420,5 +420,7 @@
   "hud.orbitOff": "Yörünge kapalı",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "Modeli yalnızca tamamen yüklendiğinde göster",
+  "a11y.hideUntilCompleteDesc": "Yükleme ve iyileştirme tamamlanana kadar modeli gizle"
 }

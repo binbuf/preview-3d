@@ -158,6 +158,7 @@ void RenderThread::NotifyLoadingStarted(std::uint64_t generation)
     completeModelAwaitingPresentGeneration_.store(0, std::memory_order_release);
     completeModelPresentedGeneration_.store(0, std::memory_order_release);
     completeModelPresentedUs_.store(0, std::memory_order_release);
+    revealIncompleteModel_.store(false, std::memory_order_release);
     loadingUiUs_.store(0, std::memory_order_release);
     coarseUs_.store(0, std::memory_order_release);
     verifiedBoundsUs_.store(0, std::memory_order_release);
@@ -1116,7 +1117,26 @@ void RenderThread::RenderOneFrame()
     const bool visibleDetailPending = RequestVisibleDetail(viewProjection, cameraTarget, modelTransform);
     const auto framesBefore = path_.frameStats.PresentedFrames();
     path_.lastPresentResult = E_PENDING;
-    if (hasModel_.load(std::memory_order_acquire)) {
+    bool displayModel = hasModel_.load(std::memory_order_acquire);
+    if (displayModel && hideModelUntilComplete_.load(std::memory_order_acquire)
+        && !revealIncompleteModel_.load(std::memory_order_acquire)
+        && modelGeneration_ == loadingGeneration_.load(std::memory_order_acquire)) {
+        // A generation becomes drawable as soon as its first chunk uploads, so
+        // progressive imports visibly build up. The default instead waits for
+        // the terminal import marker AND the visible refinement it triggered:
+        // `completeModelAwaitingPresentGeneration_` is set by that terminal
+        // publication, and `visibleDetailPending` covers detail requests still
+        // in flight. `completeModelPresentedGeneration_` keeps an already
+        // finished model drawable if the user turns this preference on later.
+        // While a different generation is still the drawable one, draw it as
+        // before so the previous model stays up until the new upload replaces
+        // it.
+        const bool complete = completeModelPresentedGeneration_.load(std::memory_order_acquire) == modelGeneration_
+            || (completeModelAwaitingPresentGeneration_.load(std::memory_order_acquire) == modelGeneration_
+                && !visibleDetailPending);
+        displayModel = complete;
+    }
+    if (displayModel) {
         path_.RenderFrame(viewProjection, orientation, *overlay, cameraTarget, eyeSelection);
     } else {
         path_.RenderClearFrame(orientation, *overlay);

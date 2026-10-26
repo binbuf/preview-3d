@@ -420,5 +420,7 @@
   "hud.orbitOff": "Διακοπή τροχιάς",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "Εμφάνιση μοντέλου μόνο όταν έχει φορτωθεί πλήρως",
+  "a11y.hideUntilCompleteDesc": "Απόκρυψη του μοντέλου μέχρι να ολοκληρωθούν η φόρτωση και η βελτίωση"
 }

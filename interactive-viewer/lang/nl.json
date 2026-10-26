@@ -420,5 +420,7 @@
   "hud.orbitOff": "Draai weg",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "Model pas weergeven als deze volledig is geladen",
+  "a11y.hideUntilCompleteDesc": "Model verbergen tot laden en verfijnen zijn voltooid"
 }

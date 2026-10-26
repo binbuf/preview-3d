@@ -420,5 +420,7 @@
   "hud.orbitOff": "מסלול כבוי",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "הצג את המודל רק לאחר טעינה מלאה",
+  "a11y.hideUntilCompleteDesc": "הסתר את המודל עד להשלמת הטעינה והעדון"
 }

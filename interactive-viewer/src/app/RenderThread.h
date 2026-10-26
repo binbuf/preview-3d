@@ -224,6 +224,23 @@ public:
     uint64_t SmokeSectionBytes() const { return smokeSectionBytes_; }
     bool DelayBatches() const { return delayBatches_; }
     void RequestClearModel();
+    // When true (the default), a model that is still importing is uploaded and
+    // prepared as usual but is not presented until the terminal import and its
+    // visible refinement have completed; the previous model stays up until the
+    // new upload replaces it, then the background shows until the new model is
+    // complete. False restores the progressive build-up where coarse chunks
+    // appear as they stream in.
+    void SetHideModelUntilComplete(bool hide) {
+        hideModelUntilComplete_.store(hide, std::memory_order_release);
+        Invalidate();
+    }
+    // Cancelling a load can leave usable but incomplete geometry in place. The
+    // UI keeps presenting it (and says so), so reveal it even while
+    // SetHideModelUntilComplete is on. Cleared by NotifyLoadingStarted.
+    void RevealIncompleteModel() {
+        revealIncompleteModel_.store(true, std::memory_order_release);
+        Invalidate();
+    }
     // Marks the next frame as needed and wakes the thread.
     void Invalidate();
 
@@ -319,6 +336,8 @@ private:
     std::atomic<bool> invalidated_{ true };
     std::atomic<bool> uiAnimating_{ false };
     std::atomic<bool> hasModel_{ false };
+    std::atomic<bool> hideModelUntilComplete_{ true };
+    std::atomic<bool> revealIncompleteModel_{ false };
     std::atomic<std::shared_ptr<const RenderDisplaySnapshot>> displaySnapshot_;
     std::atomic<bool> benchComplete_{ false };
     std::atomic<std::uint64_t> firstBackgroundUs_{ 0 };

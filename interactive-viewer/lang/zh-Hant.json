@@ -420,5 +420,7 @@
   "hud.orbitOff": "軌道關閉",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "僅在模型完整載入後顯示",
+  "a11y.hideUntilCompleteDesc": "在載入與細化完成前隱藏模型"
 }

@@ -420,5 +420,7 @@
   "hud.orbitOff": "Kerüljön el",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "A modell megjelenítése csak teljes betöltés után",
+  "a11y.hideUntilCompleteDesc": "A modell elrejtése a betöltés és a finomítás befejezéséig"
 }

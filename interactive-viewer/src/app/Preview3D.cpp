@@ -291,6 +291,8 @@ struct ViewerApp
     GroundAxis groundAxis = GroundAxis::Automatic;
     bool groundAxisInverted = false;
     bool hideCursorWhileDragging = true;
+    // Persisted via Settings.h; mirrors RenderThread::SetHideModelUntilComplete.
+    bool hideModelUntilComplete = true;
     bool settingsPanelOpen = false;
     // Active UI language pack code ("" == follow the Windows display language),
     // mirrored from ViewerSettings so the Settings panel can show and change it.
@@ -1006,7 +1008,7 @@ RECT SettingsPanelRect(const ViewerApp& app)
 {
     const RECT overflowButton = app.chrome.Button(Chrome::Part::Overflow).rect;
     const int width = Scale(app, 280);
-    const int height = Scale(app, 156);
+    const int height = Scale(app, 200);
     const int gap = Scale(app, 6);
     RECT client{};
     GetClientRect(app.window, &client);
@@ -1050,15 +1052,32 @@ RECT SettingsCursorSwitchRect(const ViewerApp& app)
     return RECT{ row.right - switchWidth, centerY - switchHeight / 2, row.right, centerY + switchHeight / 2 };
 }
 
-// Third row: a language selector. Unlike the two on/off switches above it, the
-// whole row is a button that opens a native popup menu of installed packs
+RECT SettingsHideUntilCompleteRowRect(const ViewerApp& app)
+{
+    const RECT panel = SettingsPanelRect(app);
+    const int marginX = Scale(app, 16);
+    return RECT{ panel.left + marginX, panel.top + Scale(app, 104),
+        panel.right - marginX, panel.top + Scale(app, 148) };
+}
+
+RECT SettingsHideUntilCompleteSwitchRect(const ViewerApp& app)
+{
+    const RECT row = SettingsHideUntilCompleteRowRect(app);
+    const int switchWidth = Scale(app, 36);
+    const int switchHeight = Scale(app, 20);
+    const int centerY = (row.top + row.bottom) / 2;
+    return RECT{ row.right - switchWidth, centerY - switchHeight / 2, row.right, centerY + switchHeight / 2 };
+}
+
+// Fourth row: a language selector. Unlike the three on/off switches above it,
+// the whole row is a button that opens a native popup menu of installed packs
 // (TrackPopupMenu scales to dozens of entries far better than a custom-drawn
 // dropdown would).
 RECT SettingsLanguageRowRect(const ViewerApp& app)
 {
     const RECT panel = SettingsPanelRect(app);
     const int marginX = Scale(app, 16);
-    return RECT{ panel.left + marginX, panel.top + Scale(app, 104),
+    return RECT{ panel.left + marginX, panel.top + Scale(app, 152),
         panel.right - marginX, panel.bottom - Scale(app, 8) };
 }
 
@@ -1635,6 +1654,7 @@ void SaveViewerPreferences(const ViewerApp& app)
     settings.groundAxis = app.groundAxis;
     settings.groundAxisInverted = app.groundAxisInverted;
     settings.hideCursorWhileDragging = app.hideCursorWhileDragging;
+    settings.hideModelUntilComplete = app.hideModelUntilComplete;
     settings.language = app.language;
     SaveSettings(settings);
 }
@@ -1698,6 +1718,14 @@ void ToggleShowNativeOrientation(ViewerApp& app)
 void ToggleHideCursorWhileDragging(ViewerApp& app)
 {
     app.hideCursorWhileDragging = !app.hideCursorWhileDragging;
+    InvalidateRect(app.window, nullptr, FALSE);
+    SaveViewerPreferences(app);
+}
+
+void ToggleHideModelUntilComplete(ViewerApp& app)
+{
+    app.hideModelUntilComplete = !app.hideModelUntilComplete;
+    app.renderThread.SetHideModelUntilComplete(app.hideModelUntilComplete);
     InvalidateRect(app.window, nullptr, FALSE);
     SaveViewerPreferences(app);
 }
@@ -1948,6 +1976,7 @@ void CancelOpen(ViewerApp& app)
     if (app.cancellation) app.cancellation->store(true, std::memory_order_relaxed);
     ++app.generation;
     app.renderThread.CancelUploads();
+    app.renderThread.RevealIncompleteModel();
     app.cancellation.reset();
     SyncDisplayedModel(app);
     app.state = app.renderThread.HasModel()
@@ -2715,6 +2744,11 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.name=Loc("settings.hideCursor", L"Hide cursor while dragging"); info.description=Loc("a11y.hideCursorDesc", L"Hide the mouse pointer during viewport camera drags");
         info.rect=SettingsCursorToggleRowRect(app); info.visible=app.settingsPanelOpen;
         info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.hideCursorWhileDragging; break;
+    case Control::HideModelUntilComplete:
+        info.name=Loc("settings.hideUntilComplete", L"Show model only when fully loaded");
+        info.description=Loc("a11y.hideUntilCompleteDesc", L"Keep the model hidden until loading and refinement complete");
+        info.rect=SettingsHideUntilCompleteRowRect(app); info.visible=app.settingsPanelOpen;
+        info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.hideModelUntilComplete; break;
     case Control::GizmoPositiveX: case Control::GizmoNegativeX: case Control::GizmoPositiveY:
     case Control::GizmoNegativeY: case Control::GizmoPositiveZ: case Control::GizmoNegativeZ:
     {
@@ -2844,6 +2878,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::Wireframe: SetLightingMode(app,LightingMode::Wireframe); break;
     case Control::NativeOrientation: ToggleShowNativeOrientation(app); break;
     case Control::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
+    case Control::HideModelUntilComplete: ToggleHideModelUntilComplete(app); break;
     case Control::GizmoPositiveX: SnapViewCommand(app,ViewDir::Right); break;
     case Control::GizmoNegativeX: SnapViewCommand(app,ViewDir::Left); break;
     case Control::GizmoPositiveY: SnapViewCommand(app,ViewDir::Back); break;
@@ -3199,11 +3234,13 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.settingsPanelOpen = app.settingsPanelOpen;
     overlay.showNativeOrientation = app.showNativeOrientation;
     overlay.hideCursorWhileDragging = app.hideCursorWhileDragging;
+    overlay.hideModelUntilComplete = app.hideModelUntilComplete;
     overlay.statsPanelTitle = Loc("info.statsShading", L"Stats & Shading");
     overlay.speedFlyoutTitle = Loc("chrome.travelSpeed", L"Travel speed");
     overlay.orbitFlyoutTitle = Loc("chrome.orbitSpeed", L"Orbit speed");
     overlay.nativeOrientationLabel = Loc("settings.nativeOrientation", L"Show model in its original orientation");
     overlay.hideCursorLabel = Loc("settings.hideCursor", L"Hide cursor while dragging");
+    overlay.hideUntilCompleteLabel = Loc("settings.hideUntilComplete", L"Show model only when fully loaded");
     overlay.languageLabel = Loc("settings.language", L"Language");
     overlay.languageValue = LocalizationDisplayName(LocalizationLanguage());
     overlay.emptyDropTitle = Loc("empty.dropTitle", L"Drop a 3D model here");
@@ -3215,6 +3252,8 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.nativeOrientationSwitchRect = SettingsSwitchRect(app);
         overlay.hideCursorRowRect = SettingsCursorToggleRowRect(app);
         overlay.hideCursorSwitchRect = SettingsCursorSwitchRect(app);
+        overlay.hideUntilCompleteRowRect = SettingsHideUntilCompleteRowRect(app);
+        overlay.hideUntilCompleteSwitchRect = SettingsHideUntilCompleteSwitchRect(app);
         overlay.languageRowRect = SettingsLanguageRowRect(app);
     }
     overlay.selectionAmount = app.meshSelected ? 1.0f : 0.0f;
@@ -3910,6 +3949,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             const RECT switchRect = SettingsSwitchRect(*app);
             const RECT cursorSwitchRect = SettingsCursorSwitchRect(*app);
+            const RECT hideUntilCompleteSwitchRect = SettingsHideUntilCompleteSwitchRect(*app);
             const RECT languageRowRect = SettingsLanguageRowRect(*app);
             const RECT panel = SettingsPanelRect(*app);
             if (PtInRect(&switchRect, downPoint))
@@ -3920,6 +3960,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (PtInRect(&cursorSwitchRect, downPoint))
             {
                 ToggleHideCursorWhileDragging(*app);
+                return 0;
+            }
+            if (PtInRect(&hideUntilCompleteSwitchRect, downPoint))
+            {
+                ToggleHideModelUntilComplete(*app);
                 return 0;
             }
             if (PtInRect(&languageRowRect, downPoint))
@@ -4762,6 +4807,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.groundAxis = settings.groundAxis;
     app.groundAxisInverted = settings.groundAxisInverted;
     app.hideCursorWhileDragging = settings.hideCursorWhileDragging;
+    app.hideModelUntilComplete = settings.hideModelUntilComplete;
+    app.renderThread.SetHideModelUntilComplete(app.hideModelUntilComplete);
     bool commandLineInvalid = false;
     bool bypassSingleInstance = false;
     bool activationSmoke = false;

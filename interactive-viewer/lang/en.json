@@ -257,6 +257,8 @@
   "settings.nativeOrientation": "Show model in its original orientation",
   "settings.hideCursor": "Hide cursor while dragging",
   "a11y.hideCursorDesc": "Hide the mouse pointer during viewport camera drags",
+  "settings.hideUntilComplete": "Show model only when fully loaded",
+  "a11y.hideUntilCompleteDesc": "Keep the model hidden until loading and refinement complete",
   "a11y.viewPosX": "View from positive X",
   "a11y.viewNegX": "View from negative X",
   "a11y.viewPosY": "View from positive Y",

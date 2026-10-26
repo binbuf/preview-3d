@@ -151,9 +151,12 @@ struct OverlayInfo
     RECT nativeOrientationSwitchRect{};
     RECT hideCursorRowRect{};
     RECT hideCursorSwitchRect{};
+    RECT hideUntilCompleteRowRect{};
+    RECT hideUntilCompleteSwitchRect{};
     RECT languageRowRect{};
     bool showNativeOrientation = false;   // current value, for drawing the switch's on/off state
     bool hideCursorWhileDragging = true;
+    bool hideModelUntilComplete = true;
     // Localized strings for the D2D-drawn chrome. The render thread must never
     // call Loc() itself, so the UI thread resolves these when it builds the
     // OverlayInfo snapshot each frame. See Localization.h.
@@ -162,6 +165,7 @@ struct OverlayInfo
     std::wstring orbitFlyoutTitle;
     std::wstring nativeOrientationLabel;
     std::wstring hideCursorLabel;
+    std::wstring hideUntilCompleteLabel;
     std::wstring languageLabel;
     std::wstring languageValue;
     std::wstring emptyDropTitle;

@@ -420,5 +420,7 @@
   "hud.orbitOff": "ஆர்பிட் ஆஃப்",
   "a11y.rollCounterClockwise": "Roll view counter-clockwise 90 degrees",
   "a11y.rollClockwise": "Roll view clockwise 90 degrees",
-  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane"
+  "a11y.rollDesc": "Rotate the view 90 degrees in its own plane",
+  "settings.hideUntilComplete": "மாடல் முழுமையாக ஏற்றப்பட்ட பிறகே காட்டு",
+  "a11y.hideUntilCompleteDesc": "ஏற்றுதல் மற்றும் செம்மையாக்கம் முடியும் வரை மாடலை மறை"
 }
