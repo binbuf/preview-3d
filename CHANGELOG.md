@@ -8,6 +8,29 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.6.5] - 2026-10-26
+
+### Added
+
+- **Upgrades replace the installed copy.** Running setup now detects the
+  existing installation from its own registry state (even when it lives in a
+  different directory), shows one read-only page with its version and location,
+  and removes it with its own uninstaller before writing the new payload. The
+  same-directory case removes only the stale uninstaller and registry entries,
+  so an upgrade never leaves two registered copies or deletes the new one.
+  Source models, default-app choices, and per-user settings are untouched.
+  Contract: `tests/app-smoke/installer_upgrade.py`.
+
+### Fixed
+
+- **A failed silent uninstall is reported.** The uninstaller now turns a failed
+  AppContainer profile cleanup into exit code 1 when run with `/S`, instead of
+  exiting 0 and making an upgrade believe the previous version was gone.
+- **Upgrade removal tolerates AppContainer ACE failures.** Setup passes
+  `-KeepDirectoryAcls` to the profile cleanup script because the worker
+  directories are about to be replaced; a failed ACL edit can no longer abort
+  the rest of the removal.
+
 ## [0.6.4] - 2026-10-26
 
 ### Added

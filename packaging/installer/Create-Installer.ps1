@@ -7,7 +7,7 @@ param(
     [string]$TimestampUrl = 'https://timestamp.digicert.com',
 
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')]
-    [string]$Version = '0.6.4',
+    [string]$Version = '0.6.5',
 
     [string]$NsisPath = '',
 
