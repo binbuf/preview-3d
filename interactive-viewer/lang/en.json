@@ -432,6 +432,12 @@
   "infopanel.unspecified": "Unspecified",
   "a11y.updateAvailable": "Update available",
   "a11y.updateVersion": "Update {0} is available",
-  "a11y.updateDesc": "Open the release page to download the newer version",
-  "tooltip.update": "Update {0} is available!"
+  "a11y.updateDesc": "Download and install the newer version",
+  "tooltip.update": "Update {0} is available!",
+  "update.caption": "Preview 3D update",
+  "update.confirmRestart": "Preview 3D {0} will close, install the update, and reopen your current file.",
+  "update.downloadFailed": "The update could not be downloaded. Please try again later.",
+  "update.applyFailed": "The update could not be started. Please try again later.",
+  "hud.updateDownloading": "Downloading update {0}...",
+  "hud.updateRestarting": "Restarting to install update {0}..."
 }

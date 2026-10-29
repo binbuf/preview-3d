@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <string>
 
 namespace platform {
 
@@ -18,5 +19,10 @@ namespace platform {
 // to open/hash -- not expected in practice on any supported Windows
 // version, since BCRYPT_SHA256_ALGORITHM is a mandatory inbox provider.
 std::optional<std::array<std::byte, 32>> ComputeSha256(std::span<const std::byte> data);
+
+// Streams a file through the same provider so release downloads can be
+// verified without holding the whole installer in memory. Returns nullopt if
+// the file cannot be opened or read, or if the provider itself fails.
+std::optional<std::array<std::byte, 32>> ComputeFileSha256(const std::wstring& path);
 
 } // namespace platform

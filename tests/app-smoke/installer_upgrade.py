@@ -17,7 +17,9 @@ Checked here (static; this does not replace the clean-VM upgrade run):
   * the previous-version uninstaller is invoked the way an NSIS uninstaller
     must be invoked for an unattended run (/S and _?=), and the profile script
     it calls accepts the switch setup passes;
-  * the normally silent removal reports a real failure instead of exiting 0.
+  * the normally silent removal reports a real failure instead of exiting 0;
+  * `/S` does not block on interactive dialogs, and the installed update helper
+    is staged and removed with the rest of the payload.
 
 Exit 0 means every check passed.
 """
@@ -115,6 +117,30 @@ def check_removal(nsi):
     assert 'MessageBox' not in macro and 'Abort' not in macro
 
 
+def check_unattended(nsi):
+    init = section(nsi, 'Function .onInit', 'Function un.onInit')
+    uninit = section(nsi, 'Function un.onInit', 'Function LaunchDefaultApps')
+    main = section(nsi, 'Section "Preview 3D" SEC_MAIN', 'Section "Uninstall"')
+    uninstall = section(nsi, 'Section "Uninstall"')
+
+    # /S may not stop on the Smart App Control warning or the "close the
+    # viewer" retry dialog; a still-running window is a bounded timeout.
+    assert 'IfSilent sac_policy_ok' in init
+    assert 'IfSilent silent_wait_for_viewer' in init and 'IfSilent silent_wait_for_viewer' in uninit
+    assert 'silent_viewer_timeout:' in init and 'SetErrorLevel 2' in init
+    assert 'silent_viewer_timeout:' in uninit and 'SetErrorLevel 2' in uninit
+
+    # A provisioning failure must not show a blocking dialog under /S.
+    assert 'IfSilent acl_failed_silent' in main
+    assert re.search(r'acl_failed_silent:\s*\n\s*SetErrorLevel 3\s*\n\s*Abort', main)
+
+    # The viewer's updater needs its helper in the installed payload, and the
+    # uninstaller must remove it with the rest of the product scripts.
+    assert 'File "${STAGE_DIR}\\${APPLY_UPDATE_SCRIPT}"' in main
+    assert 'Delete "$INSTDIR\\${APPLY_UPDATE_SCRIPT}"' in uninstall
+    assert '!define APPLY_UPDATE_SCRIPT "Apply-Preview3DUpdate.ps1"' in nsi
+
+
 def check_uninstaller(nsi, profile):
     uninstall = section(nsi, 'Section "Uninstall"')
     assert '-KeepDirectoryAcls' in uninstall, \
@@ -122,8 +148,12 @@ def check_uninstaller(nsi, profile):
     # The script's exit code is captured (not just logged) and, only for a
     # silent run, turned into the uninstaller's exit code: an NSIS uninstaller
     # otherwise exits 0 after a failure, which is what upgrade detection reads.
-    assert re.search(r"nsExec::ExecToStack '\$\{PSCALL\} \"\$INSTDIR\\Remove-Preview3DProfile\.ps1\"", uninstall)
-    assert re.search(r'\$\{If\} \$1 == "silent"\s*\n\s*\$\{AndIf\} \$0 != "0"\s*\n\s*SetErrorLevel 1', uninstall), \
+    assert re.search(r"IfSilent profile_cleanup_silent\s*\n\s*nsExec::ExecToStack '\$\{PSCALL\} \"\$INSTDIR\\Remove-Preview3DProfile\.ps1\"", uninstall)
+    assert re.search(r"profile_cleanup_silent:\s*\n\s*nsExec::ExecToStack '.*-KeepDirectoryAcls'", uninstall), \
+        'the silent upgrade removal must pass -KeepDirectoryAcls'
+    assert re.search(r"StrCpy \$ProfileCleanupExitCode \$0", uninstall), \
+        'the cleanup exit code must survive the notification helper'
+    assert re.search(r"IfSilent uninstall_silent_result\s*\n\s*Goto uninstall_done\s*\nuninstall_silent_result:\s*\n\s*\$\{If\} \$ProfileCleanupExitCode != \"0\"\s*\n\s*SetErrorLevel 1", uninstall), \
         'a silent uninstall must report a failed profile cleanup'
     assert 'nsExec::ExecToError' not in uninstall
     assert re.search(r'\[switch\]\$KeepDirectoryAcls', profile), \
@@ -140,6 +170,7 @@ if __name__ == '__main__':
     check_detection(nsi)
     check_page(nsi)
     check_removal(nsi)
+    check_unattended(nsi)
     check_uninstaller(nsi, profile)
     print('installer upgrade contract passed: detection, read-only previous-version page, '
-          'silent in-place previous uninstaller, key re-creation')
+          'silent in-place previous uninstaller, key re-creation, unattended /S path')

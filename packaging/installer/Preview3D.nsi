@@ -7,10 +7,10 @@ Unicode true
   !error "OUTPUT_FILE must identify the setup executable to create."
 !endif
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.6.5"
+  !define PRODUCT_VERSION "0.6.6"
 !endif
 !ifndef PRODUCT_FILE_VERSION
-  !define PRODUCT_FILE_VERSION "0.6.5.0"
+  !define PRODUCT_FILE_VERSION "0.6.6.0"
 !endif
 
 !define PRODUCT_NAME "Preview 3D"
@@ -30,6 +30,7 @@ Unicode true
 
 !define THUMBNAIL_REGISTRATION_SCRIPT "Preview3DThumbnailRegistration.ps1"
 !define SHELL_NOTIFICATION_SCRIPT "Notify-Preview3DShellChanged.ps1"
+!define APPLY_UPDATE_SCRIPT "Apply-Preview3DUpdate.ps1"
 !define THUMBNAIL_PROVIDER_DLL "Preview3DThumbnailProvider.dll"
 
 ; Common PowerShell invocation for the staged helper scripts (the uninstaller
@@ -155,7 +156,9 @@ Function .onInit
   ; a bundled DLL (a Bad Image error naming, for example, worker\zstd.dll with
   ; status 0xC0E90002). Surface that here, before install, instead of after.
   ; VerifiedAndReputablePolicyState is 0 when Smart App Control is off; any
-  ; other value means it is active (enforcing or evaluating).
+  ; other value means it is active (enforcing or evaluating). The unattended
+  ; /S path cannot answer a warning, so it proceeds without one.
+  IfSilent sac_policy_ok
   StrCpy $1 0
   ReadRegDWORD $1 HKLM "SYSTEM\CurrentControlSet\Control\CI\Policy" "VerifiedAndReputablePolicyState"
   StrCmp $1 0 sac_policy_ok
@@ -168,7 +171,23 @@ sac_policy_ok:
 check_viewer_closed:
   FindWindow $0 "Preview3DWindow"
   StrCmp $0 0 viewer_closed
+  ; The self-updater launches setup and then closes; give a slow shutdown a
+  ; bounded chance to release the window instead of blocking on a dialog that
+  ; /S cannot answer.
+  IfSilent silent_wait_for_viewer
   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Close Preview 3D before installing or upgrading, then choose Retry." IDRETRY check_viewer_closed
+  Abort
+silent_wait_for_viewer:
+  StrCpy $3 0
+silent_wait_loop:
+  Sleep 250
+  FindWindow $0 "Preview3DWindow"
+  StrCmp $0 0 viewer_closed
+  IntOp $3 $3 + 1
+  IntCmp $3 120 silent_viewer_timeout
+  Goto silent_wait_loop
+silent_viewer_timeout:
+  SetErrorLevel 2
   Abort
 viewer_closed:
 FunctionEnd
@@ -179,7 +198,20 @@ Function un.onInit
 check_viewer_closed:
   FindWindow $0 "Preview3DWindow"
   StrCmp $0 0 viewer_closed
+  IfSilent silent_wait_for_viewer
   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Close Preview 3D before uninstalling, then choose Retry." IDRETRY check_viewer_closed
+  Abort
+silent_wait_for_viewer:
+  StrCpy $3 0
+silent_wait_loop:
+  Sleep 250
+  FindWindow $0 "Preview3DWindow"
+  StrCmp $0 0 viewer_closed
+  IntOp $3 $3 + 1
+  IntCmp $3 120 silent_viewer_timeout
+  Goto silent_wait_loop
+silent_viewer_timeout:
+  SetErrorLevel 2
   Abort
 viewer_closed:
 FunctionEnd
@@ -197,6 +229,9 @@ FunctionEnd
 ; an update.
 Var PrevPageText
 Var PrevPageLocation
+; Uninstaller-only: the profile-cleanup exit code has to survive the shell
+; notification helper, which itself uses $0/$1 as scratch registers.
+Var ProfileCleanupExitCode
 
 Function PreviousVersionPageCreate
   ${If} ${PREV_LOCATION} == ""
@@ -333,6 +368,7 @@ Section "Preview 3D" SEC_MAIN
   File "${STAGE_DIR}\Provision-Preview3DWorkerAcl.ps1"
   File "${STAGE_DIR}\${THUMBNAIL_REGISTRATION_SCRIPT}"
   File "${STAGE_DIR}\${SHELL_NOTIFICATION_SCRIPT}"
+  File "${STAGE_DIR}\${APPLY_UPDATE_SCRIPT}"
   File /r "${STAGE_DIR}\licenses"
   ; UI language packs (UTF-8 JSON, resolved by the viewer from lang\ beside it).
   File /r "${STAGE_DIR}\lang"
@@ -346,7 +382,11 @@ Section "Preview 3D" SEC_MAIN
   Pop $1
   ${If} $0 != 0
     DetailPrint "$1"
+    IfSilent acl_failed_silent
     MessageBox MB_OK|MB_ICONSTOP "The importer sandboxes could not be provisioned. Setup cannot continue."
+    Abort
+  acl_failed_silent:
+    SetErrorLevel 3
     Abort
   ${EndIf}
 
@@ -436,14 +476,17 @@ Section "Uninstall"
   ; after a failure, and an upgrade relies on it to know whether the previous
   ; version is really gone.
   StrCpy $0 0
+  StrCpy $ProfileCleanupExitCode 0
   IfFileExists "$INSTDIR\Remove-Preview3DProfile.ps1" 0 profile_cleanup_abort
-  ${If} $1 == "silent"
-    nsExec::ExecToStack '${PSCALL} "$INSTDIR\Remove-Preview3DProfile.ps1" -KeepDirectoryAcls'
-  ${Else}
-    nsExec::ExecToStack '${PSCALL} "$INSTDIR\Remove-Preview3DProfile.ps1"'
-  ${EndIf}
+  IfSilent profile_cleanup_silent
+  nsExec::ExecToStack '${PSCALL} "$INSTDIR\Remove-Preview3DProfile.ps1"'
+  Goto profile_cleanup_ran
+profile_cleanup_silent:
+  nsExec::ExecToStack '${PSCALL} "$INSTDIR\Remove-Preview3DProfile.ps1" -KeepDirectoryAcls'
+profile_cleanup_ran:
   Pop $0
   Pop $1
+  StrCpy $ProfileCleanupExitCode $0
 profile_cleanup_abort:
 
   ; T41: remove only product-owned thumbnail keys; a foreign handler in an
@@ -549,6 +592,7 @@ thumbnail_unregister_done:
   Delete "$INSTDIR\Provision-Preview3DWorkerAcl.ps1"
   Delete "$INSTDIR\${THUMBNAIL_REGISTRATION_SCRIPT}"
   Delete "$INSTDIR\${SHELL_NOTIFICATION_SCRIPT}"
+  Delete "$INSTDIR\${APPLY_UPDATE_SCRIPT}"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
   RMDir "$PROGRAMFILES64\Binbuf"
@@ -557,8 +601,11 @@ thumbnail_unregister_done:
 
   ; Silent removal reports the profile-cleanup failure through the exit code;
   ; the interactive uninstaller keeps its log-only behavior.
-  ${If} $1 == "silent"
-  ${AndIf} $0 != "0"
+  IfSilent uninstall_silent_result
+  Goto uninstall_done
+uninstall_silent_result:
+  ${If} $ProfileCleanupExitCode != "0"
     SetErrorLevel 1
   ${EndIf}
+uninstall_done:
 SectionEnd

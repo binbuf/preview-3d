@@ -73,7 +73,11 @@ are not touched.
 Updating is the same download-and-run as a first install: setup reports the
 version and location of the installed copy on one page, then removes it (using
 its own uninstaller) before installing the new version. Simultaneous versions
-are not kept, and no uninstall step is required before updating.
+are not kept, and no uninstall step is required before updating. Installed
+copies can also update from the viewer's newer-release badge: it downloads and
+verifies the setup, runs it with the standard NSIS `/S` silent switch, and
+reopens the app with the previous model. An unattended manual upgrade is the
+same command line: `Preview3D-<version>-x64-setup.exe /S`.
 
 Windows may block this build
 ----------------------------

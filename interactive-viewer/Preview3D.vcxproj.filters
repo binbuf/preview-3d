@@ -78,6 +78,9 @@
     <ClInclude Include="src\platform\ShellIntegration.h">
       <Filter>Header Files\platform</Filter>
     </ClInclude>
+    <ClInclude Include="src\platform\UpdateApply.h">
+      <Filter>Header Files\platform</Filter>
+    </ClInclude>
     <ClInclude Include="src\platform\UpdateCheck.h">
       <Filter>Header Files\platform</Filter>
     </ClInclude>
@@ -111,6 +114,9 @@
       <Filter>Source Files\platform</Filter>
     </ClCompile>
     <ClCompile Include="src\platform\SafeFileOps.cpp">
+      <Filter>Source Files\platform</Filter>
+    </ClCompile>
+    <ClCompile Include="src\platform\UpdateApply.cpp">
       <Filter>Source Files\platform</Filter>
     </ClCompile>
     <ClCompile Include="src\platform\UpdateCheck.cpp">

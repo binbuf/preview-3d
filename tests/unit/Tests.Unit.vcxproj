@@ -56,7 +56,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(OcctStaticLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;windowscodecs.lib;ole32.lib;advapi32.lib;bcrypt.lib;gdi32.lib;TKernel.lib;TKMath.lib;TKG2d.lib;TKG3d.lib;TKGeomBase.lib;TKBRep.lib;TKTopAlgo.lib;TKPrim.lib;TKBO.lib;TKBool.lib;TKGeomAlgo.lib;TKShHealing.lib;TKMesh.lib;TKFeat.lib;TKFillet.lib;TKOffset.lib;TKHLR.lib;TKXSBase.lib;TKDESTEP.lib;TKDE.lib;TKCDF.lib;TKCAF.lib;TKLCAF.lib;TKVCAF.lib;TKXCAF.lib;TKXmlXCAF.lib;TKBinXCAF.lib;TKStd.lib;TKStdL.lib;TKXml.lib;TKXmlL.lib;TKBin.lib;TKBinL.lib;TKTObj.lib;TKBinTObj.lib;TKXmlTObj.lib;TKService.lib;TKV3d.lib;TKXMesh.lib;ws2_32.lib;iphlpapi.lib;psapi.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;windowscodecs.lib;ole32.lib;advapi32.lib;bcrypt.lib;winhttp.lib;gdi32.lib;TKernel.lib;TKMath.lib;TKG2d.lib;TKG3d.lib;TKGeomBase.lib;TKBRep.lib;TKTopAlgo.lib;TKPrim.lib;TKBO.lib;TKBool.lib;TKGeomAlgo.lib;TKShHealing.lib;TKMesh.lib;TKFeat.lib;TKFillet.lib;TKOffset.lib;TKHLR.lib;TKXSBase.lib;TKDESTEP.lib;TKDE.lib;TKCDF.lib;TKCAF.lib;TKLCAF.lib;TKVCAF.lib;TKXCAF.lib;TKXmlXCAF.lib;TKBinXCAF.lib;TKStd.lib;TKStdL.lib;TKXml.lib;TKXmlL.lib;TKBin.lib;TKBinL.lib;TKTObj.lib;TKBinTObj.lib;TKXmlTObj.lib;TKService.lib;TKV3d.lib;TKXMesh.lib;ws2_32.lib;iphlpapi.lib;psapi.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -77,8 +77,11 @@
     <ClCompile Include="..\..\interactive-viewer\src\ui\InfoPanel.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\app\Localization.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\platform\VersionCompare.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\platform\UpdateCheck.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\platform\UpdateApply.cpp" />
     <ClCompile Include="LocalizationTests.cpp" />
     <ClCompile Include="VersionCompareTests.cpp" />
+    <ClCompile Include="UpdateFlowTests.cpp" />
     <ClCompile Include="HarnessSmokeTests.cpp" />
     <!-- SEC-19/T19 release SBOM/license/version metadata gate. -->
     <ClCompile Include="ReleaseMetadataTests.cpp" />

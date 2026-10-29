@@ -8,6 +8,23 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.6.6] - 2026-10-29
+
+### Added
+
+- **In-app updates for installed copies.** Clicking the newer-release badge now
+  downloads the published `Preview3D-<version>-x64-setup.exe`, verifies it
+  against the release's adjacent SHA-256 sidecar, closes the viewer, runs setup
+  with `/S`, and reopens the app with the model that was open before the
+  update. The non-elevated handoff re-checks the digest immediately before UAC,
+  and portable copies keep the existing Releases-page behavior.
+
+### Fixed
+
+- **Silent uninstall reports profile-cleanup failures.** The uninstaller now
+  uses NSIS's actual silent-mode state instead of an unset scratch register, so
+  a `/S` upgrade can detect a failed AppContainer cleanup.
+
 ## [0.6.5] - 2026-10-26
 
 ### Added

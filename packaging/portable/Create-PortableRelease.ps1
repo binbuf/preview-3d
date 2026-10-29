@@ -8,7 +8,7 @@ param(
     [string]$TimestampUrl = 'https://timestamp.digicert.com',
 
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')]
-    [string]$Version = '0.6.5',
+    [string]$Version = '0.6.6',
 
     [ValidateSet('Portable', 'Installer')]
     [string]$Distribution = 'Portable'
@@ -300,6 +300,7 @@ if ($Distribution -eq 'Portable') {
     Copy-RequiredFile (Join-Path $repository 'packaging\installer\Provision-Preview3DWorkerAcl.ps1') (Join-Path $stage 'Provision-Preview3DWorkerAcl.ps1')
     Copy-RequiredFile (Join-Path $repository 'packaging\installer\Preview3DThumbnailRegistration.ps1') (Join-Path $stage 'Preview3DThumbnailRegistration.ps1')
     Copy-RequiredFile (Join-Path $repository 'packaging\installer\Notify-Preview3DShellChanged.ps1') (Join-Path $stage 'Notify-Preview3DShellChanged.ps1')
+    Copy-RequiredFile (Join-Path $repository 'packaging\installer\Apply-Preview3DUpdate.ps1') (Join-Path $stage 'Apply-Preview3DUpdate.ps1')
 }
 $stagedReadme = Join-Path $stage 'README.txt'
 (Get-Content -LiteralPath $stagedReadme -Raw).Replace('@VERSION@', $Version) |

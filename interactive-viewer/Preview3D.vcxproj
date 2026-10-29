@@ -94,6 +94,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="src\app\Version.h" />
     <ClInclude Include="src\app\GroundAxis.h" />
     <ClInclude Include="src\platform\ShellIntegration.h" />
+    <ClInclude Include="src\platform\UpdateApply.h" />
     <ClInclude Include="src\platform\UpdateCheck.h" />
     <ClInclude Include="src\platform\VersionCompare.h" />
     <ClInclude Include="src\platform\OpenWithCache.h" />
@@ -152,6 +153,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClCompile Include="src\platform\OpenWithRanking.cpp" />
     <ClCompile Include="src\ui\OpenWithPopup.cpp" />
     <ClCompile Include="src\platform\SafeFileOps.cpp" />
+    <ClCompile Include="src\platform\UpdateApply.cpp" />
     <ClCompile Include="src\platform\UpdateCheck.cpp" />
     <ClCompile Include="src\platform\VersionCompare.cpp" />
     <ClCompile Include="src\app\D3D12ViewerPath.cpp" />
@@ -167,6 +169,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClCompile Include="..\shared\platform\src\AppContainerSid.cpp" />
     <ClCompile Include="..\shared\platform\src\ProcThreadAttributeList.cpp" />
     <ClCompile Include="..\shared\platform\src\MappedView.cpp" />
+    <ClCompile Include="..\shared\platform\src\Sha256.cpp" />
     <ClCompile Include="..\shared\import-broker\src\ControlChannelWait.cpp" />
     <ClCompile Include="..\shared\import-broker\src\ImportSession.cpp" />
     <ClCompile Include="..\shared\import-broker\src\WorkerPool.cpp" />

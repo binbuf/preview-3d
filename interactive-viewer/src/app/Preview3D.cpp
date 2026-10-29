@@ -15,6 +15,7 @@
 #include "Settings.h"
 #include "ShellIntegration.h"
 #include "SafeFileOps.h"
+#include "UpdateApply.h"
 #include "UpdateCheck.h"
 #include "Version.h"
 #include "VersionCompare.h"
@@ -56,6 +57,7 @@ constexpr UINT kOpenWithLaunchFailedMessage = WM_APP + 13;
 constexpr UINT kOpenWithCatalogChangedMessage = WM_APP + 14;
 constexpr UINT kOpenWithIconsReadyMessage = WM_APP + 15;
 constexpr UINT kUpdateCheckCompleteMessage = WM_APP + 16;
+constexpr UINT kUpdateDownloadCompleteMessage = WM_APP + 17;
 constexpr float kArrowPixelsPerSecond = 340.0f;
 constexpr double kHudVisibleSeconds = 1.3;
 constexpr double kHudFadeSeconds = 0.30;
@@ -82,6 +84,14 @@ constexpr DWORD kBenchPollIntervalMs = 100;
 // clicking, but still short enough to answer "what does this button do?".
 constexpr UINT_PTR kTooltipTimerId = 1;
 constexpr UINT kTooltipDelayMs = 1500;
+
+struct UpdateDownloadResult
+{
+    bool ok = false;
+    std::wstring installerPath;
+    std::wstring expectedSha256;
+    std::wstring error;
+};
 
 // Exclusive pointer state machine. Exactly one mode owns camera/selection
 // input at a time; the mode is chosen at button-down and stays locked for the
@@ -357,6 +367,11 @@ struct ViewerApp
     // accessibility tree all key the update badge off this one field.
     std::wstring updateVersion;
     std::jthread updateCheckThread;
+    // One download at a time. The worker only downloads and verifies; the UI
+    // thread owns the confirmation, handoff, and shutdown.
+    std::jthread updateDownloadThread;
+    bool updateDownloading = false;
+    bool updateRestartPending = false;
 };
 
 std::wstring AccessibilityStatus(const ViewerApp& app);
@@ -2992,6 +3007,70 @@ void ToggleSpeedFlyout(ViewerApp& app)
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
+// Clicking the badge used to open the Releases page. For a per-machine
+// install it now downloads the published setup, verifies its SHA-256 against
+// the adjacent release asset, and hands the restart to a non-elevated helper
+// so setup can run with /S and the app can reopen the current file afterwards.
+// Portable copies keep the browser fallback because there is no installer
+// registration to replace.
+void BeginUpdateFromBadge(ViewerApp& app)
+{
+    if (app.updateVersion.empty()) return;
+    if (app.updateDownloading || app.updateRestartPending) return;
+
+    std::wstring installDirectory;
+    std::wstring installError;
+    if (!preview3d_update::IsInstalledCopy(installDirectory, installError))
+    {
+        // Always open the fixed project releases URL, never anything supplied
+        // by the update response.
+        ShellExecuteW(app.window, L"open", preview3d_update::kReleasesPageUrl, nullptr, nullptr, SW_SHOWNORMAL);
+        return;
+    }
+
+    const std::wstring message = LocFormat("update.confirmRestart",
+        L"Preview 3D {0} will close, install the update, and reopen your current file.",
+        { L"v" + app.updateVersion });
+    if (MessageBoxW(app.window, message.c_str(),
+            Loc("update.caption", L"Preview 3D update").c_str(),
+            MB_OKCANCEL | MB_ICONINFORMATION | MB_DEFBUTTON1) != IDOK)
+    {
+        return;
+    }
+
+    app.updateDownloading = true;
+    ShowModeHud(app, LocFormat("hud.updateDownloading", L"Downloading update {0}...",
+        { L"v" + app.updateVersion }));
+
+    const HWND window = app.window;
+    const std::wstring version = app.updateVersion;
+    const std::shared_ptr<std::atomic_bool> alive = app.alive;
+    app.updateDownloadThread = std::jthread([window, version, alive](std::stop_token stop)
+    {
+        auto result = std::make_unique<UpdateDownloadResult>();
+        std::wstring directory;
+        if (preview3d::safeio::AppDataDirectory(directory))
+        {
+            directory += L"\\Updates";
+            result->ok = preview3d_update::DownloadInstaller(
+                version, directory, result->installerPath,
+                result->expectedSha256, result->error, stop);
+        }
+        else
+        {
+            result->error = L"the application data directory is unavailable";
+        }
+
+        if (stop.stop_requested() || !alive || !alive->load(std::memory_order_relaxed)) return;
+        if (!PostMessageW(window, kUpdateDownloadCompleteMessage, 0,
+                reinterpret_cast<LPARAM>(result.get())))
+        {
+            return;
+        }
+        result.release();
+    });
+}
+
 // Dispatches a click on one of the D2D-drawn title-bar buttons (Chrome +
 // D3D11On12Overlay::DrawTitleBar). Reuses HandleCommand for the actions that already
 // have a command ID (kept working via Ctrl+O/accelerators too); the rest
@@ -3010,11 +3089,7 @@ void HandleChromeAction(ViewerApp& app, Chrome::Part part)
     case Chrome::Part::Share: DoShare(app); break;
     case Chrome::Part::Overflow: HandleCommand(app, ID_VIEW_MENU); break;
     case Chrome::Part::OpenWith: ToggleOpenWithPopup(app, false); break;
-    case Chrome::Part::Update:
-        // Always open the fixed project releases URL, never anything supplied
-        // by the update response.
-        ShellExecuteW(app.window, L"open", preview3d_update::kReleasesPageUrl, nullptr, nullptr, SW_SHOWNORMAL);
-        break;
+    case Chrome::Part::Update: BeginUpdateFromBadge(app); break;
     default: break;
     }
 }
@@ -3069,7 +3144,7 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         chrome(Chrome::Part::Update,
             app.updateVersion.empty() ? Loc("a11y.updateAvailable", L"Update available")
                 : LocFormat("a11y.updateVersion", L"Update {0} is available", { L"v" + app.updateVersion }),
-            Loc("a11y.updateDesc", L"Open the release page to download the newer version"));
+            Loc("a11y.updateDesc", L"Download and install the newer version"));
         break;
     case Control::Minimize: chrome(Chrome::Part::Minimize, Loc("a11y.minimize", L"Minimize")); break;
     case Control::Maximize: chrome(Chrome::Part::Maximize, IsZoomed(app.window) ? Loc("a11y.restore", L"Restore") : Loc("a11y.maximize", L"Maximize")); break;
@@ -3326,9 +3401,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::OpenWithMoreApps:
         InvokeOpenWithItem(app, static_cast<int>(app.openWith.apps.size()));
         break;
-    case Control::UpdateAvailable:
-        ShellExecuteW(app.window, L"open", preview3d_update::kReleasesPageUrl, nullptr, nullptr, SW_SHOWNORMAL);
-        break;
+    case Control::UpdateAvailable: BeginUpdateFromBadge(app); break;
     case Control::Minimize: ShowWindow(app.window,SW_MINIMIZE); break;
     case Control::Maximize: ShowWindow(app.window,IsZoomed(app.window)?SW_RESTORE:SW_MAXIMIZE); break;
     case Control::Close: PostMessageW(app.window,WM_CLOSE,0,0); break;
@@ -5299,6 +5372,42 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         return 0;
     }
+    case kUpdateDownloadCompleteMessage:
+    {
+        std::unique_ptr<UpdateDownloadResult> result(
+            reinterpret_cast<UpdateDownloadResult*>(lParam));
+        app->updateDownloading = false;
+        if (!result) return 0;
+        if (!result->ok)
+        {
+            MessageBoxW(window,
+                Loc("update.downloadFailed",
+                    L"The update could not be downloaded. Please try again later.").c_str(),
+                Loc("update.caption", L"Preview 3D update").c_str(),
+                MB_OK | MB_ICONERROR);
+            return 0;
+        }
+
+        const std::wstring openPath = app->currentPath.empty()
+            ? app->initialPath : app->currentPath;
+        std::wstring handoffError;
+        if (!preview3d_update::StartInstallerHandoff(
+                result->installerPath, result->expectedSha256, openPath, handoffError))
+        {
+            MessageBoxW(window,
+                Loc("update.applyFailed",
+                    L"The update could not be started. Please try again later.").c_str(),
+                Loc("update.caption", L"Preview 3D update").c_str(),
+                MB_OK | MB_ICONERROR);
+            return 0;
+        }
+
+        app->updateRestartPending = true;
+        ShowModeHud(*app, LocFormat("hud.updateRestarting",
+            L"Restarting to install update {0}...", { L"v" + app->updateVersion }));
+        PostMessageW(window, WM_CLOSE, 0, 0);
+        return 0;
+    }
     case kD3D12ImportCompleteMessage:
     {
         std::unique_ptr<D3D12CompleteMessage> complete(reinterpret_cast<D3D12CompleteMessage*>(lParam));
@@ -5398,6 +5507,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_DESTROY:
         app->closing = true;
         app->updateCheckThread.request_stop();
+        app->updateDownloadThread.request_stop();
         app->alive->store(false, std::memory_order_relaxed);
         if(app->uiaAccessible) UiaDisconnectProvider(app->uiaAccessible);
         app->activeInstance.Stop();
