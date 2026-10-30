@@ -56,14 +56,14 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 
 ## Phase 5 — Qualify
 
-- [ ] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
+- [x] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T14:35:45Z · 19/20 done
+**Pipeline status** — updated 2026-10-30T15:24:52Z · 20/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
 - Blocked: none
 - Failed: none
-- Remaining: T19
-- Last finished: T18 — done · Protocol-v12 material lobes, layered shader, sorted HDR transparency, validator/hostile/cache coverage, fixtures, tests, docs and ADR-0074 are committed; OIT and inspection modes remain documented deferrals.
+- Remaining: none
+- Last finished: T19 — done · 0.7.0 corpus, unit/import-isolation, visual/app-smoke, installer/SBOM and dependency checks pass; evidence/docs/ADR written and committed, with corpus extension, flake reruns and reference-hardware timing left as recorded follow-ups.
 <!-- /symphony:status -->
