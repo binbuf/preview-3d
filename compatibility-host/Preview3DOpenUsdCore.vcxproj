@@ -60,6 +60,9 @@
     <ClCompile Include="..\import-worker\src\TextureTranscodeAdapter.cpp" />
     <ClCompile Include="..\import-worker\src\DdsImageDecode.cpp" />
     <ClCompile Include="..\import-worker\src\TgaImageDecode.cpp" />
+    <ClCompile Include="..\import-worker\src\HdrFloatDecode.cpp" />
+    <ClCompile Include="..\import-worker\src\RadianceHdrDecode.cpp" />
+    <ClCompile Include="..\import-worker\src\OpenExrDecode.cpp" />
     <ClCompile Include="..\import-worker\src\UsdZipPreflight.cpp" />
     <ClCompile Include="..\import-worker\src\WebpDecodeAdapter.cpp" />
     <ClCompile Include="..\import-worker\src\WicImageDecodeAdapter.cpp" />

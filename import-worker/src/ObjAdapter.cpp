@@ -3,6 +3,8 @@
 #include "BoundedChunkWriter.h"
 #include "ImageFormatSniff.h"
 #include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
 #include "TgaImageDecode.h"
 #include "SidecarFileClient.h"
 #include "TextureTranscodeAdapter.h"
@@ -225,6 +227,16 @@ std::optional<DecodedImage> DecodeTexture(BrokerContext& context, const ufbx_tex
         if (auto decoded = SniffImageFormat(encoded) == SniffedImageFormat::Tga
                 ? DecodeTgaImage(encoded, space, options)
                 : DecodeDdsImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = space;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Hdr:
+    case SniffedImageFormat::Exr:
+        if (auto decoded = SniffImageFormat(encoded) == SniffedImageFormat::Hdr
+                ? DecodeRadianceHdrImage(encoded, space, options)
+                : DecodeOpenExrImage(encoded, space, options)) {
             image.format = decoded->pixelFormat; image.space = space;
             image.width = decoded->width; image.height = decoded->height;
             image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);

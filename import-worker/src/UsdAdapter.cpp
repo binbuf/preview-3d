@@ -10,6 +10,8 @@
 #include "BoundedChunkWriter.h"
 #include "ImageFormatSniff.h"
 #include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
 #include "TgaImageDecode.h"
 #include "SidecarFileClient.h"
 #include "TextureDecodePolicy.h"
@@ -850,6 +852,8 @@ bool ImageExtensionMatches(std::string_view path, SniffedImageFormat format)
     case SniffedImageFormat::Ktx2: return extension == ".ktx2";
     case SniffedImageFormat::Dds: return extension == ".dds";
     case SniffedImageFormat::Tga: return extension == ".tga";
+    case SniffedImageFormat::Hdr: return extension == ".hdr";
+    case SniffedImageFormat::Exr: return extension == ".exr";
     // An unrecognized/corrupt payload is an optional-texture decode failure.
     // Only a positively identified format that disagrees with the authored
     // extension is a terminal type-mismatch classification.
@@ -905,6 +909,16 @@ std::optional<DecodedUsdImage> DecodeImage(MaterialContext& context, int64_t ima
         if (auto decoded = sniffed == SniffedImageFormat::Tga
                 ? DecodeTgaImage(encoded, space, options)
                 : DecodeDdsImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = space;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Hdr:
+    case SniffedImageFormat::Exr:
+        if (auto decoded = sniffed == SniffedImageFormat::Hdr
+                ? DecodeRadianceHdrImage(encoded, space, options)
+                : DecodeOpenExrImage(encoded, space, options)) {
             image.format = decoded->pixelFormat; image.space = space;
             image.width = decoded->width; image.height = decoded->height;
             image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);

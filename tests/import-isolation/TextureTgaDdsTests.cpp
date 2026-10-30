@@ -112,7 +112,8 @@ TEST_CASE("TGA true-color uncompressed and RLE decode with origin and alpha", "[
     CHECK(SniffImageFormat(ReadFixture(L"tga24_uncompressed.tga")) == SniffedImageFormat::Tga);
     CHECK(HasDecodableImageExtension("Textures/albedo.TGA"));
     CHECK(HasDecodableImageExtension("tex/a.dds:stream"));
-    CHECK_FALSE(HasDecodableImageExtension("tex/a.exr"));
+    CHECK(HasDecodableImageExtension("tex/a.exr"));
+    CHECK(HasDecodableImageExtension("tex/a.hdr"));
 }
 
 TEST_CASE("TGA malformed forms are rejected typed and observe budgets and cancellation", "[texture-tga]")

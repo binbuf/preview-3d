@@ -8,8 +8,8 @@ For install and build instructions, see the [README](../README.md).
 
 | Format | Support |
 | --- | --- |
-| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, bounded Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP/TGA/DDS textures, material texture slots, texture transforms, `KHR_materials_pbrSpecularGlossiness` approximated as diffuse albedo plus a dielectric response, and `KHR_materials_transmission`/`KHR_materials_ior` approximated as Fresnel-weighted glass (an authored index of refraction at or below 1 keeps the surface opaque, since there is no optical interface). Visual/scene extensions that are parsed but not rendered (`KHR_materials_clearcoat`, `sheen`, `specular`, `iridescence`, `anisotropy`, `volume`, `dispersion`, `diffuse_transmission`, `emissive_strength`, `KHR_materials_variants`, `KHR_lights_punctual`) open with core PBR and a specific compatibility warning. A truly unknown required extension keeps the core scene and is reported as degraded. Core geometry wins: only a required geometry/decoding extension that cannot be decoded (`KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `KHR_mesh_quantization`, `KHR_implicit_shapes`, `KHR_accessor_float64`) fails the import, and a missing optional/required texture never removes usable geometry. `MSFT_texture_dds` alternate image indexing is not enabled; DDS files are decoded as direct image sidecars. |
-| Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars; ufbx polygon triangulation, smoothing/generated normals, UVs, vertex colors, object/group meshes, MTL material factors, and broker-approved base-color, normal/bump, and emissive maps (PNG/JPEG/BMP/TIFF/WebP/KTX2/TGA/DDS) |
+| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, bounded Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP/TGA/DDS/HDR/EXR textures, material texture slots, texture transforms, `KHR_materials_pbrSpecularGlossiness` approximated as diffuse albedo plus a dielectric response, and `KHR_materials_transmission`/`KHR_materials_ior` approximated as Fresnel-weighted glass (an authored index of refraction at or below 1 keeps the surface opaque, since there is no optical interface). Visual/scene extensions that are parsed but not rendered (`KHR_materials_clearcoat`, `sheen`, `specular`, `iridescence`, `anisotropy`, `volume`, `dispersion`, `diffuse_transmission`, `emissive_strength`, `KHR_materials_variants`, `KHR_lights_punctual`) open with core PBR and a specific compatibility warning. A truly unknown required extension keeps the core scene and is reported as degraded. Core geometry wins: only a required geometry/decoding extension that cannot be decoded (`KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `KHR_mesh_quantization`, `KHR_implicit_shapes`, `KHR_accessor_float64`) fails the import, and a missing optional/required texture never removes usable geometry. `MSFT_texture_dds` alternate image indexing is not enabled; DDS files are decoded as direct image sidecars. |
+| Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars; ufbx polygon triangulation, smoothing/generated normals, UVs, vertex colors, object/group meshes, MTL material factors, and broker-approved base-color, normal/bump, and emissive maps (PNG/JPEG/BMP/TIFF/WebP/KTX2/TGA/DDS/HDR/EXR) |
 | FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose; supported skin and blend deformation is baked. Image references that carry the authoring machine's absolute path are reduced to their file name and resolve through the package lookup below |
 | STL | ASCII and binary |
 | PLY | ASCII and binary triangle meshes and point clouds |
@@ -107,7 +107,7 @@ directly is looked up, in this exact order:
 The first directory with a matching image wins, so the closest copy is
 preferred and two model packages in the same parent cannot collide. The search
 is **image-only** (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff`, `.webp`,
-`.ktx2`, `.tga`, `.dds`); a missing `.bin` buffer, `.mtl`, or USD layer is never resolved this
+`.ktx2`, `.tga`, `.dds`, `.hdr`, `.exr`); a missing `.bin` buffer, `.mtl`, or USD layer is never resolved this
 way. Names are matched exactly first, then with case, space/underscore, and
 `jpg`/`jpeg`/`tif`/`tiff` spelling normalized, plus material-role
 abbreviations (`_BaseColor`/`_B`, `_Normal`/`_N`, `_Roughness`/`_R`,
@@ -162,6 +162,39 @@ worker; no DirectXTex or new third-party codec is linked.
   diffuse and environment lighting only; direct-light specular is unchanged.
   The material wire record stays at 72 bytes, so no authored
   `occlusionStrength` is carried and R is applied at full strength.
+
+## HDR and EXR texture subsets
+
+Radiance HDR and OpenEXR are decoded only in the import worker; the viewer never
+links a decoder. Both produce scene-linear float internally and convert to the
+existing RGBA8 material contract on the CPU (no new `PixelFormatId`, so the
+shared-section validator and GPU format table are unchanged).
+
+- **Radiance HDR (`.hdr`)** — product-owned decoder. Accepts `#?RADIANCE` or
+  `#?RGBE` with one `FORMAT=32-bit_rle_rgbe` header and a `-Y <h> +X <w>`
+  resolution line (both sign bits are honored; XYZE and X-first layouts are
+  rejected). New-style per-channel RLE and flat RGBE scanlines decode; old-style
+  `0x01 0x01 0x01` RLE is not implemented. Header length, resolution, RLE packet
+  bounds, encoded bytes, decoded bytes, pixels and `maxDimension` are checked
+  before/while allocating.
+- **OpenEXR (`.exr`)** — pinned tinyexr (BSD-3-Clause, vendored from the
+  TinyUSDZ closure) behind a product preflight. Only single-part, non-tiled,
+  non-deep scanline images are accepted. Compression is limited to NONE, RLE,
+  ZIPS, ZIP and PIZ; B44/B44A/DWAA/DWAB/ZFP and unknown values are rejected
+  before the decoder allocates. Channels must be HALF or FLOAT with x/y sampling
+  1 (UINT rejected). R/G/B/A and Y channel names work, including layered
+  `layer.R` names, with a first-three/single-channel fallback. Tile, deep,
+  multipart and data-window/channel/pixel/byte over-budget files soft-fail.
+- **Color policy** — the source is linear. Color and emissive slots use a
+  deterministic Reinhard curve (`c / (1 + c)`, exposure 1.0) then the slot's
+  sRGB transfer; normal and data slots are clamped only and stay linear. An
+  EXR normal/roughness map is therefore used, not skipped. Over-budget or
+  malformed files fall back with one texture warning and never fail the model.
+- **Environment hook** — `LoadEnvironmentAsset` in the import worker returns a
+  bounded linear equirectangular RGBA-float image (not a `Material` image
+  chunk) from HDR or EXR bytes. It takes bytes only, never a path/URI, and uses
+  the same encoded/decoded/pixel/dimension budgets. T14's procedural Studio
+  environment needs no decode; an embedded HDRI would use this hook.
 
 ## Isolation model
 
@@ -265,9 +298,9 @@ Studio/OrcaSlicer/Cura private namespaces, never fail an otherwise valid Core
 model.
 
 FBX geometry caches, dynamic constraints, NURBS/subdivision tessellation,
-cameras, and lights are outside the supported static subset. TGA/DDS/HDR,
-animation playback, advanced material lobes, meshoptimizer-built LOD/hierarchies,
-and the persistent derived cache remain deferred work.
+cameras, and lights are outside the supported static subset. Animation playback,
+advanced material lobes, meshoptimizer-built LOD/hierarchies, and the persistent
+derived cache remain deferred work.
 
 ## Tier B ceilings
 

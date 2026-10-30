@@ -103,6 +103,17 @@ SniffedImageFormat SniffImageFormat(std::span<const std::byte> bytes) noexcept
     if (StartsWith(bytes, { 0x44, 0x44, 0x53, 0x20 })) {
         return SniffedImageFormat::Dds;
     }
+    // Radiance HDR: ASCII signature line. The decoder validates the whole
+    // header and resolution before allocating.
+    if (StartsWith(bytes, { 0x23, 0x3F, 0x52, 0x41, 0x44, 0x49, 0x41, 0x4E, 0x43, 0x45 }) // "#?RADIANCE"
+        || StartsWith(bytes, { 0x23, 0x3F, 0x52, 0x47, 0x42, 0x45 })) {                   // "#?RGBE"
+        return SniffedImageFormat::Hdr;
+    }
+    // OpenEXR: little-endian magic 20000630 (0x01312F76) then the version field.
+    // Tiled/deep/multipart flags are rejected by the decoder before allocation.
+    if (StartsWith(bytes, { 0x76, 0x2F, 0x31, 0x01 })) {
+        return SniffedImageFormat::Exr;
+    }
     // TGA: no magic; a strict fixed-header candidate check. Callers still use
     // the extension allowlist to decide whether TGA is worth attempting.
     if (LooksLikeTga(bytes)) {
@@ -141,7 +152,7 @@ bool HasDecodableImageExtension(std::string_view path) noexcept
     const std::string_view lower(folded, extension.size());
     return lower == "png" || lower == "jpg" || lower == "jpeg" || lower == "bmp"
         || lower == "tif" || lower == "tiff" || lower == "webp" || lower == "ktx2"
-        || lower == "tga" || lower == "dds";
+        || lower == "tga" || lower == "dds" || lower == "hdr" || lower == "exr";
 }
 
 } // namespace import_worker

@@ -31,6 +31,8 @@ WIC_RASTER = 5
 SNIFF = 6
 TGA = 7
 DDS = 8
+HDR = 9
+EXR = 10
 
 # Adapter / texture-domain flags (domain-specific below the shared bits).
 SMALL_DIMENSION = 1 << 1
@@ -320,6 +322,23 @@ def main() -> None:
         ('dds-bc7.seed', envelope(DDS, read_texture('dds_bc7.dds'))),
         ('dds-truncated.seed', envelope(DDS, read_texture('dds_truncated.dds'))),
         ('dds-rgba8.seed', envelope(DDS, read_texture('dds_rgba8.dds'))),
+        # --- HDR/EXR domains: header, resolution, RLE and EXR preflight ---
+        ('hdr-color.seed', envelope(HDR, read_texture('hdr_color.hdr'))),
+        ('hdr-flat.seed', envelope(HDR, read_texture('hdr_flat.hdr'))),
+        ('hdr-bad-magic.seed', envelope(HDR, read_texture('hdr_bad_magic.hdr'))),
+        ('hdr-bad-format.seed', envelope(HDR, read_texture('hdr_bad_format.hdr'))),
+        ('hdr-bad-resolution.seed', envelope(HDR, read_texture('hdr_bad_resolution.hdr'))),
+        ('hdr-truncated.seed', envelope(HDR, read_texture('hdr_truncated.hdr'))),
+        ('exr-color.seed', envelope(EXR, read_texture('exr_color.exr'))),
+        ('exr-float-rgba.seed', envelope(EXR, read_texture('exr_float_rgba.exr'))),
+        ('exr-normal.seed', envelope(EXR, read_texture('exr_normal.exr'))),
+        ('exr-roughness.seed', envelope(EXR, read_texture('exr_roughness.exr'))),
+        ('exr-truncated.seed', envelope(EXR, read_texture('exr_truncated.exr'))),
+        ('exr-tiled.seed', envelope(EXR, read_texture('exr_tiled.exr'))),
+        ('exr-deep.seed', envelope(EXR, read_texture('exr_deep.exr'))),
+        ('exr-multipart.seed', envelope(EXR, read_texture('exr_multipart.exr'))),
+        ('exr-piz.seed', envelope(EXR, read_texture('exr_piz.exr'))),
+        ('exr-uint-channel.seed', envelope(EXR, read_texture('exr_uint_channel.exr'))),
     ]
     for name, blob in seeds:
         (args.output / name).write_bytes(blob)

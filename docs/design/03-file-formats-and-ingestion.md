@@ -379,7 +379,21 @@ The texture layer accepts format/container combinations explicitly enabled by th
   uncompressed DDS level 0 is converted to RGBA8 and mip-generated. Declared
   sizes are never trusted: block/level byte counts are cross-checked against the
   actual payload;
+- product-owned Radiance HDR (`#?RADIANCE`/`#?RGBE`, `32-bit_rle_rgbe`) with
+  strict header/resolution validation; new-style per-channel RLE and flat RGBE
+  scanlines (ADR-0069);
+- pinned tinyexr (BSD-3-Clause, vendored from the TinyUSDZ closure) for
+  single-part scanline OpenEXR with NONE/RLE/ZIPS/ZIP/PIZ compression, HALF/FLOAT
+  channels and sampling 1. Tiled, deep, multipart, UINT channels and every
+  other compression are rejected before the decoder allocates (ADR-0069);
 - KTX-Software/Basis transcoding for KTX2 and `KHR_texture_basisu`.
+
+HDR and EXR stay linear internally and are converted on the CPU to the existing
+RGBA8 contract: color/emissive slots use a Reinhard curve (exposure 1.0) then
+sRGB, while normal/data slots are clamped and remain linear. No float pixel
+format is added; the environment hook keeps a separate linear equirect float
+buffer for Studio IBL work. The pinned TinyUSDZ copy of tinyexr is built in the
+import-worker translation unit (never the viewer) and needs no new vcpkg port.
 
 It does not enumerate or invoke arbitrary installed WIC codecs. Encoded type is verified from bytes and declared MIME/container metadata rather than extension alone; TGA is selected by the decodable-extension candidate filter because it has no magic, then every header field is validated from bytes. Color textures are sRGB; data/normal textures remain linear. Dimensions, row pitch, mip/array/depth counts, multiplication, total pixels, and compressed input size are checked before decode or direct upload. A texture over the decoded budget, or a TGA beyond the non-scalable source allocation bound, uses the deterministic fallback with one warning.
 

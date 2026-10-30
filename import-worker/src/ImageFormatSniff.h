@@ -21,15 +21,18 @@ enum class SniffedImageFormat {
     Ktx2,
     Dds,
     Tga,
+    Hdr,
+    Exr,
 };
 
 SniffedImageFormat SniffImageFormat(std::span<const std::byte> bytes) noexcept;
 
 // True when an asset reference names an encoded image container the decode
-// path can attempt (PNG/JPEG/BMP/TIFF/WebP/KTX2/TGA/DDS). This is a request filter, not
-// a type decision: it lets callers skip sidecar requests for formats no decoder
-// handles (for example EXR normal/roughness maps) instead of surfacing the
-// sidecar resolver's disallowed-extension rejection as a fatal import error.
+// path can attempt (PNG/JPEG/BMP/TIFF/WebP/KTX2/TGA/DDS/HDR/EXR). This is a
+// request filter, not a type decision: the actual container is still verified
+// from bytes by SniffImageFormat. Unknown optional formats are skipped without
+// surfacing the sidecar resolver's disallowed-extension rejection as a fatal
+// import error.
 // The actual container is still verified from bytes by SniffImageFormat.
 bool HasDecodableImageExtension(std::string_view path) noexcept;
 

@@ -276,6 +276,8 @@ $closureNames = @($closure.Keys | Sort-Object)
 foreach ($name in $closureNames) {
     Copy-RequiredFile $closure[$name]['copyrightPath'] (Join-Path $licensesStage "$name.txt")
 }
+# Repository-vendored source components that are not separate vcpkg ports.
+Copy-RequiredFile (Join-Path $repository 'third_party\tinyexr\LICENSE') (Join-Path $licensesStage 'tinyexr.txt')
 if ($Distribution -eq 'Portable') {
     Copy-RequiredFile (Join-Path $repository 'LICENSE') (Join-Path $stage 'LICENSE.txt')
 } else {
@@ -285,10 +287,11 @@ Copy-RequiredFile (Join-Path $repository 'NOTICE') (Join-Path $stage 'NOTICE')
 # The component index is generated from the same closure that produced the
 # licenses\ files, so the two cannot disagree.
 $noticeTemplate = Get-Content -LiteralPath (Join-Path $repository 'packaging\portable\THIRD-PARTY-NOTICES.txt') -Raw
-$noticeIndex = @($closureNames | ForEach-Object {
+$noticeIndex = @(@($closureNames | ForEach-Object {
     $entry = $closure[$_]
     '  {0,-18} {1} {2}' -f "$_.txt", $_, $entry['version']
-}) -join [Environment]::NewLine
+}) + '  tinyexr.txt        tinyexr (vendored from TinyUSDZ 0.9.1) BSD-3-Clause') `
+    -join [Environment]::NewLine
 $noticeTemplate.Replace('@LICENSE_LIST@', $noticeIndex) |
     Set-Content -LiteralPath (Join-Path $stage 'THIRD-PARTY-NOTICES.txt') -Encoding UTF8
 if ($Distribution -eq 'Portable') {
@@ -443,6 +446,19 @@ foreach ($name in $closureNames) {
 $crtVersion = (Get-Item -LiteralPath (Join-Path $crtDirectory 'vcruntime140.dll')).VersionInfo.ProductVersion
 $crtToolsetDirectory = Split-Path (Split-Path $crtDirectory -Parent) -Parent
 $crtToolsetVersion = Split-Path $crtToolsetDirectory -Leaf
+# Repository-vendored decoder header, not a vcpkg port. It is built into the
+# import worker and the OpenUSD compatibility host.
+$components += [ordered]@{
+    type = 'library'
+    name = 'tinyexr'
+    version = 'vendored-tinyusdz-0.9.1'
+    'bom-ref' = 'pkg:github/syoyo/tinyexr@vendored-tinyusdz-0.9.1'
+    licenses = @(@{ expression = 'BSD-3-Clause' })
+    properties = @(
+        @{ name = 'preview3d:provenance'; value = 'third_party/tinyexr single header from the pinned TinyUSDZ closure' },
+        @{ name = 'preview3d:license-file'; value = 'licenses/tinyexr.txt' }
+    )
+}
 $components += [ordered]@{
     type = 'library'
     name = 'Microsoft Visual C++ Runtime'

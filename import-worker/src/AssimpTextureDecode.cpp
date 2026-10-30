@@ -2,6 +2,8 @@
 
 #include "ImageFormatSniff.h"
 #include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
 #include "TgaImageDecode.h"
 #include "TextureTranscodeAdapter.h"
 #include "WebpDecodeAdapter.h"
@@ -34,6 +36,19 @@ std::optional<AssimpDecodedImage> DecodeAssimpTexture(
         if (auto decoded = SniffImageFormat(encoded) == SniffedImageFormat::Tga
                 ? DecodeTgaImage(encoded, space, local)
                 : DecodeDdsImage(encoded, space, local)) {
+            image.format = decoded->pixelFormat;
+            image.space = space;
+            image.width = decoded->width;
+            image.height = decoded->height;
+            image.levels = decoded->mipLevels;
+            image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Hdr:
+    case SniffedImageFormat::Exr:
+        if (auto decoded = SniffImageFormat(encoded) == SniffedImageFormat::Hdr
+                ? DecodeRadianceHdrImage(encoded, space, local)
+                : DecodeOpenExrImage(encoded, space, local)) {
             image.format = decoded->pixelFormat;
             image.space = space;
             image.width = decoded->width;

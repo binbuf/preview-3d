@@ -1,0 +1,5 @@
+# Repository-owned fixture: EXR base colour and normal maps.
+newmtl Material
+Kd 1 1 1
+map_Kd albedo.exr
+norm normal.exr

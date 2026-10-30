@@ -7,6 +7,8 @@
 #include "ChunkBatchSink.h"
 #include "ImageFormatSniff.h"
 #include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
 #include "TgaImageDecode.h"
 #include "SidecarFileClient.h"
 #include "TextureDecodePolicy.h"
@@ -964,6 +966,16 @@ struct MaterialEmitter {
             if (auto decoded = imageFormat == import_worker::SniffedImageFormat::Tga
                     ? import_worker::DecodeTgaImage(encoded, colorSpace, options)
                     : import_worker::DecodeDdsImage(encoded, colorSpace, options)) {
+                pixelFormat = decoded->pixelFormat; decodedColorSpace = colorSpace;
+                width = decoded->width; height = decoded->height;
+                mipLevels = decoded->mipLevels; pixelBytes = std::move(decoded->pixelBytes);
+            }
+            break;
+        case import_worker::SniffedImageFormat::Hdr:
+        case import_worker::SniffedImageFormat::Exr:
+            if (auto decoded = imageFormat == import_worker::SniffedImageFormat::Hdr
+                    ? import_worker::DecodeRadianceHdrImage(encoded, colorSpace, options)
+                    : import_worker::DecodeOpenExrImage(encoded, colorSpace, options)) {
                 pixelFormat = decoded->pixelFormat; decodedColorSpace = colorSpace;
                 width = decoded->width; height = decoded->height;
                 mipLevels = decoded->mipLevels; pixelBytes = std::move(decoded->pixelBytes);

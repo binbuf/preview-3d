@@ -99,6 +99,10 @@
     <ClCompile Include="src\TextureTranscodeAdapter.cpp" />
     <ClCompile Include="src\DdsImageDecode.cpp" />
     <ClCompile Include="src\TgaImageDecode.cpp" />
+    <ClCompile Include="src\HdrFloatDecode.cpp" />
+    <ClCompile Include="src\RadianceHdrDecode.cpp" />
+    <ClCompile Include="src\OpenExrDecode.cpp" />
+    <ClCompile Include="src\EnvironmentAssetDecode.cpp" />
     <ClCompile Include="src\ImageFormatSniff.cpp" />
     <ClCompile Include="src\WebpDecodeAdapter.cpp" />
     <ClCompile Include="src\WicImageDecodeAdapter.cpp" />
@@ -147,6 +151,10 @@
     <ClInclude Include="src\TextureTranscodeAdapter.h" />
     <ClInclude Include="src\DdsImageDecode.h" />
     <ClInclude Include="src\TgaImageDecode.h" />
+    <ClInclude Include="src\HdrFloatDecode.h" />
+    <ClInclude Include="src\RadianceHdrDecode.h" />
+    <ClInclude Include="src\OpenExrDecode.h" />
+    <ClInclude Include="src\EnvironmentAssetDecode.h" />
     <ClInclude Include="src\RasterRgbaSupport.h" />
     <ClInclude Include="src\ImageFormatSniff.h" />
     <ClInclude Include="src\WebpDecodeAdapter.h" />

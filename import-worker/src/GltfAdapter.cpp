@@ -6,6 +6,8 @@
 #include "DracoDecodeAdapter.h"
 #include "ImageFormatSniff.h"
 #include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
 #include "TgaImageDecode.h"
 #include "MeshoptDecodeAdapter.h"
 #include "SidecarFileClient.h"
@@ -1005,6 +1007,23 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
         auto transcoded = SniffImageFormat(*encodedBytes) == SniffedImageFormat::Tga
             ? DecodeTgaImage(*encodedBytes, colorSpace, options)
             : DecodeDdsImage(*encodedBytes, colorSpace, options);
+        if (transcoded) {
+            PendingImage pending;
+            pending.pixelFormat = transcoded->pixelFormat;
+            pending.mipLevels = transcoded->mipLevels;
+            pending.width = transcoded->width;
+            pending.height = transcoded->height;
+            pending.colorSpace = colorSpace;
+            pending.pixelBytes = std::move(transcoded->pixelBytes);
+            decoded = std::move(pending);
+        }
+        break;
+    }
+    case SniffedImageFormat::Hdr:
+    case SniffedImageFormat::Exr: {
+        auto transcoded = SniffImageFormat(*encodedBytes) == SniffedImageFormat::Hdr
+            ? DecodeRadianceHdrImage(*encodedBytes, colorSpace, options)
+            : DecodeOpenExrImage(*encodedBytes, colorSpace, options);
         if (transcoded) {
             PendingImage pending;
             pending.pixelFormat = transcoded->pixelFormat;

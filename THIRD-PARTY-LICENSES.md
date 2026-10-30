@@ -58,6 +58,9 @@ This table is a navigation aid, not a replacement for the complete license
 texts. Before redistributing a modified build, regenerate the release package
 from the pinned manifest and preserve its notices and license files.
 
-The TGA and DDS decoding paths added in T12 are product-owned code (see
-ADR-0068) and link no new third-party decoder, so they add no SBOM component or
-license row. The SBOM still derives solely from the installed vcpkg closure.
+The TGA, DDS and Radiance HDR decoding paths are product-owned code (see
+ADR-0068 and ADR-0069) and link no new third-party decoder. OpenEXR uses a
+repository-vendored copy of the tinyexr single header from the pinned TinyUSDZ
+closure; it is recorded as a vendored component (BSD-3-Clause) with
+`licenses/tinyexr.txt` and `third_party/tinyexr/LICENSE`. The dependency table
+above still derives from the installed vcpkg closure.

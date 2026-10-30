@@ -153,6 +153,12 @@ The system does not promise full-detail simultaneous residency for an 8 GiB sour
 
 ## Textures
 
+HDR and EXR material textures arrive as CPU-tonemapped RGBA8 (color/emissive
+use Reinhard + sRGB; normal/data stay linear), so the GPU format contract does
+not grow for T13. A future IBL source uses the import worker's separate linear
+equirect float environment hook (bytes-only, budgeted) rather than a material
+image chunk.
+
 Validated KTX2/DDS mip tails and transcoded Basis mip levels are uploaded before higher-resolution mips. Compatible precompressed BC resources avoid RGBA expansion and runtime mip generation. Texture resources are created with copy-compatible layouts and immutable final content per published resource. The MVP does not overwrite a texture while it is sampled; a more detailed texture is a new handle swapped into a later material snapshot.
 
 Sampler count is bounded by a small static sampler set. Alpha mode, color space, normal/data usage, dimensions, source digest, transcode target, and transcode version are part of a texture cache key. Live GPU texture-cache scope remains one active document; eligible decoded/transcoded mip data may also use the persistent derived cache below.

@@ -23,6 +23,7 @@ The plan, ground rules and per-task verify commands are in
 - **T10b - 3MF best-effort compatibility**: Required-extension policy lives in; Supported: Core, Materials, Production, Beam, Ball.
 - **T11 — USD primitives, points and crease tolerance**: **Fast-path classification.** `import-worker/src/UsdAdapter.cpp` adds; **Preserve fast path.** TinyUSDZ reports an unauthored `subdivisionScheme` as
 - **T12 — TGA/DDS textures and ORM ambient occlusion**: **Decoders (product-owned, no new third-party code).**; `import-worker/src/TgaImageDecode.{h,cpp}` — type 2/10 true-color,
+- **T13 — HDR/EXR textures and environment assets**: **HDR decoder (product-owned).** `import-worker/src/RadianceHdrDecode.{h,cpp}`:; **EXR decoder.** `import-worker/src/OpenExrDecode.{h,cpp}` compiles the
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -39,4 +40,5 @@ The plan, ground rules and per-task verify commands are in
 - [T10b](progress/T10b.md) — Required-extension policy lives in
 - [T11](progress/T11.md) — **Fast-path classification.** `import-worker/src/UsdAdapter.cpp` adds
 - [T12](progress/T12.md) — **Decoders (product-owned, no new third-party code).**
+- [T13](progress/T13.md) — **HDR decoder (product-owned).** `import-worker/src/RadianceHdrDecode.{h,cpp}`:
 <!-- symphony:digest:end -->

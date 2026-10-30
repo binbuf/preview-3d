@@ -43,6 +43,8 @@
 #include "WebpDecodeAdapter.h"
 #include "WicImageDecodeAdapter.h"
 #include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
 #include "TgaImageDecode.h"
 
 #include <cstddef>
@@ -81,7 +83,9 @@ enum class Domain : uint8_t {
     Sniff = 6,
     Tga = 7,
     Dds = 8,
-    Count = 9,
+    Hdr = 9,
+    Exr = 10,
+    Count = 11,
 };
 
 enum : uint8_t {
@@ -241,6 +245,27 @@ void RunDds(const Input& input)
         MakeTextureOptions(input, SemanticFor(static_cast<uint8_t>(input.flags >> 2))));
 }
 
+// Radiance HDR: header/format/resolution parsing and per-channel RLE bounds.
+void RunHdr(const Input& input)
+{
+    const auto colorSpace = (input.flags & kSrgb) ? model_core::ColorSpaceId::Srgb
+                                                  : model_core::ColorSpaceId::Linear;
+    (void)import_worker::DecodeRadianceHdrImage(
+        input.payload, colorSpace,
+        MakeTextureOptions(input, SemanticFor(static_cast<uint8_t>(input.flags >> 2))));
+}
+
+// OpenEXR through the pinned tinyexr copy. The product preflight rejects
+// tiled/deep/multipart/unsupported compression before tinyexr allocates.
+void RunExr(const Input& input)
+{
+    const auto colorSpace = (input.flags & kSrgb) ? model_core::ColorSpaceId::Srgb
+                                                  : model_core::ColorSpaceId::Linear;
+    (void)import_worker::DecodeOpenExrImage(
+        input.payload, colorSpace,
+        MakeTextureOptions(input, SemanticFor(static_cast<uint8_t>(input.flags >> 2))));
+}
+
 void RunSniff(const Input& input)
 {
     (void)import_worker::SniffImageFormat(input.payload);
@@ -278,6 +303,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
         case Domain::Sniff: RunSniff(input); break;
         case Domain::Tga: RunTga(input); break;
         case Domain::Dds: RunDds(input); break;
+        case Domain::Hdr: RunHdr(input); break;
+        case Domain::Exr: RunExr(input); break;
         }
     } catch (...) {
         // Product code must not throw past its boundaries; a throw here is a

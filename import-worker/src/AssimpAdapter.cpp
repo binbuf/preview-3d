@@ -76,7 +76,8 @@ bool IsImageExtension(std::string_view lowerExtension)
 {
     return lowerExtension == ".png" || lowerExtension == ".jpg" || lowerExtension == ".jpeg"
         || lowerExtension == ".bmp" || lowerExtension == ".tif" || lowerExtension == ".tiff"
-        || lowerExtension == ".webp" || lowerExtension == ".ktx2";
+        || lowerExtension == ".webp" || lowerExtension == ".ktx2" || lowerExtension == ".tga"
+        || lowerExtension == ".dds" || lowerExtension == ".hdr" || lowerExtension == ".exr";
 }
 
 std::string LowerAscii(std::string_view text)
