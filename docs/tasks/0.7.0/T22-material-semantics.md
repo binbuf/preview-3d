@@ -138,11 +138,11 @@ readback and the Car/Camera/Suit/microscope survey.
   authored factor; MASK coverage 0.3499; IOR=1 transmission 0.0 and IOR=1.5
   0.8999; mirrored tangent deviation 0.058; double-sided back-face shading
   normal is exactly the reversed geometric normal.
-- External survey: Car 139 materials (normal scales 0.3703/0.4495/1.0, 10
-  occlusion-bound, 102 opaque / 0 mask / 37 blend / 23 transmissive); Camera 5
-  materials (1 transmissive, lens nonregression); Suit 14 materials (all IOR=1
-  suppression, no transmission bucket); microscope 9 materials (known T23
-  ResourceLimit).
+- External survey (per-draw records): Car 139 records / 39 material chunks
+  (normal scales 0.3703/0.4495/1.0, 10 occlusion-bound, 102 opaque / 0 mask /
+  37 blend / 23 transmissive); Camera 5 records / 4 chunks (1 transmissive,
+  lens nonregression); Suit 14 records (all IOR=1 suppression, no transmission
+  bucket); microscope 9 records (known T23 ResourceLimit).
 
 ### Evidence
 

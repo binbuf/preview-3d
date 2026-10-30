@@ -477,7 +477,7 @@ def write_report(output: Path, report):
             lines.append(f"- **{name}**: {survey.get('status')} — {survey.get('reason', '')}")
             continue
         lines.append(
-            f"- **{name}**: {survey['materialCount']} materials, "
+            f"- **{name}**: {survey['materialCount']} material draw records, "
             f"normalScale {survey['normalScale']}, "
             f"occlusion-bound {survey['occlusionBound']}, "
             f"opaque/mask/blend/transmissive "
