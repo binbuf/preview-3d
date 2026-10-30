@@ -67,7 +67,7 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 
 ## Phase 6 — Reproducible visual evidence
 
-- [ ] T20 — Deterministic visual comparison harness and observed baseline → [../tasks/0.7.0/T20-visual-comparison-harness.md](../tasks/0.7.0/T20-visual-comparison-harness.md)
+- [x] T20 — Deterministic visual comparison harness and observed baseline → [../tasks/0.7.0/T20-visual-comparison-harness.md](../tasks/0.7.0/T20-visual-comparison-harness.md)
 - [ ] T21 — Material and light-contribution diagnostics → [../tasks/0.7.0/T21-render-diagnostics.md](../tasks/0.7.0/T21-render-diagnostics.md)
 
 ## Phase 7 — Authored inputs and bounded complete loads
@@ -103,11 +103,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T35 — Independent visual release gate and final 0.7.0 evidence → [../tasks/0.7.0/T35-render-quality-release-gate.md](../tasks/0.7.0/T35-render-quality-release-gate.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T16:23:32Z · 20/36 done
+**Pipeline status** — updated 2026-10-30T18:20:38Z · 21/36 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20
 - Blocked: none
 - Failed: none
-- Remaining: T20, T21, T22, T23, T24, T25, T26, T27, T28, T29, T30, T31, T32, T33, T34, T35
-- Last finished: T19 — done · 0.7.0 corpus, unit/import-isolation, visual/app-smoke, installer/SBOM and dependency checks pass; evidence/docs/ADR written and committed, with corpus extension, flake reruns and reference-hardware timing left as recorded follow-ups.
+- Remaining: T21, T22, T23, T24, T25, T26, T27, T28, T29, T30, T31, T32, T33, T34, T35
+- Last finished: T20 — done · T20 harness, Debug capture controls, generated fixtures, corpus inventory, 53 actual captures, F3D references, reviewed observed baselines, accepted generated refs and defect hand-off are landed; the acceptance command passes.
 <!-- /symphony:status -->

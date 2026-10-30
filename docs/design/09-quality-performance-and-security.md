@@ -119,6 +119,11 @@ Property tests generate counts and ranges near 0, alignment boundaries, 32-bit/6
 - warm-cache hit, dependency change, corrupt entry, interrupted write, cap/free-space eviction, disable, and clear scenarios;
 - upload coordinator against WARP and hardware with copy/direct fence permutations;
 - renderer golden scenes and camera controls at multiple aspect ratios/DPI;
+- the manifest-driven render-quality lane (`tests/render-quality/verify.py`) with
+  Debug-only canonical camera/viewport control, capture-clean viewport masking,
+  post-load visible/textured settle, generated fixtures that do not need the
+  external corpus, and explicit accepted-reference promotion separated from
+  ordinary verification (ADR-0076);
 - device removal injection and one-shot recovery;
 - cancellation/reopen at every published pipeline checkpoint;
 - Shell provider hosted in an isolated COM test process and actual Explorer surrogate, with a post-install check that its CLSIDs load into the Shell thumbnail surrogate rather than `explorer.exe` and that no registered value sets `DisableProcessIsolation`;

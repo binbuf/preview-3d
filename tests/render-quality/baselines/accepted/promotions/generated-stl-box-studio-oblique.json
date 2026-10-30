@@ -1,0 +1,43 @@
+{
+  "before": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-oblique-before.png",
+  "beforeSha256": "2715e123e2b990d18c0c55f7118ba78b2cc8220f78d4d2294e9a6bad2ae48a55",
+  "camera": {
+    "distance": 4.866738448924756,
+    "distanceScale": 1.0,
+    "fovYDegrees": 45.0,
+    "homeDistance": 4.866738448924756,
+    "pitchDegrees": 60.0,
+    "projection": "perspective",
+    "yawDegrees": 30.0
+  },
+  "candidate": "TestResults\\render-quality\\T20\\images\\generated-stl-box-studio-oblique.png",
+  "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-oblique-candidate.png",
+  "candidateSha256": "2715e123e2b990d18c0c55f7118ba78b2cc8220f78d4d2294e9a6bad2ae48a55",
+  "case": "generated-stl-box-studio-oblique",
+  "crops": {
+    "hard-edge": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-oblique-crop-hard-edge.png"
+  },
+  "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-oblique-diff.png",
+  "image": "generated-stl-box-studio-oblique.png",
+  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "regions": {
+    "hard-edge": [
+      0.28,
+      0.18,
+      0.72,
+      0.82
+    ]
+  },
+  "review": "tests/render-quality/review/T20-review.json",
+  "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
+  "stats": {
+    "lumaStdDev": 40.253,
+    "meanLuma": 105.614,
+    "pixels": 886890,
+    "uniqueSampleColours": 256
+  },
+  "viewport": [
+    1258,
+    705
+  ]
+}

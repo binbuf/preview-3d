@@ -1,0 +1,57 @@
+{
+  "before": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-glass-reference-clay-front-before.png",
+  "beforeSha256": "6447f16e900dc2ea77655886ea24bd1ae5eda8c75573c216040ba5c99b8753ea",
+  "camera": {
+    "distance": 9.220082777575882,
+    "distanceScale": 1.0,
+    "fovYDegrees": 45.0,
+    "homeDistance": 9.220082777575882,
+    "pitchDegrees": 90.0,
+    "projection": "perspective",
+    "yawDegrees": 0.0
+  },
+  "candidate": "TestResults\\render-quality\\T20\\images\\generated-glass-reference-clay-front.png",
+  "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-glass-reference-clay-front-candidate.png",
+  "candidateSha256": "6447f16e900dc2ea77655886ea24bd1ae5eda8c75573c216040ba5c99b8753ea",
+  "case": "generated-glass-reference-clay-front",
+  "crops": {
+    "clear-lens": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-glass-reference-clay-front-crop-clear-lens.png",
+    "rough-panel": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-glass-reference-clay-front-crop-rough-panel.png",
+    "tinted-panel": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-glass-reference-clay-front-crop-tinted-panel.png"
+  },
+  "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-glass-reference-clay-front-diff.png",
+  "image": "generated-glass-reference-clay-front.png",
+  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "regions": {
+    "clear-lens": [
+      0.64,
+      0.22,
+      0.97,
+      0.88
+    ],
+    "rough-panel": [
+      0.34,
+      0.22,
+      0.66,
+      0.88
+    ],
+    "tinted-panel": [
+      0.03,
+      0.22,
+      0.36,
+      0.88
+    ]
+  },
+  "review": "tests/render-quality/review/T20-review.json",
+  "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
+  "stats": {
+    "lumaStdDev": 23.945,
+    "meanLuma": 88.404,
+    "pixels": 886890,
+    "uniqueSampleColours": 1515
+  },
+  "viewport": [
+    1258,
+    705
+  ]
+}

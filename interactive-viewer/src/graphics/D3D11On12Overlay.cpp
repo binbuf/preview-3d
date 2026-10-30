@@ -1603,7 +1603,7 @@ void D3D11On12Overlay::DrawTooltip(const OverlayInfo& overlay, float clientWidth
     d2dContext_->DrawTextLayout(D2D1::Point2F(left + paddingX, top + paddingY), layout.Get(), overlayBrush.Get());
 }
 
-void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome)
+void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome, bool captureClean)
 {
     if (!d2dContext_ || !overlayBrush) return;
     highContrastFrame_ = overlay.highContrast;
@@ -1634,8 +1634,8 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     // above) keeps its real value so the bar still draws and its buttons
     // still hit-test as ordinary client-area ones.
     DrawTitleBar(overlay, chrome, clientWidth, scale);
-    if (overlay.state == ViewerState::Loading || overlay.state == ViewerState::Partial
-        || overlay.renderTimerRunning)
+    if (!captureClean && (overlay.state == ViewerState::Loading || overlay.state == ViewerState::Partial
+        || overlay.renderTimerRunning))
     {
         const float centerX = clientWidth * 0.5f;
         const float centerY = clientHeight * 0.5f;
@@ -1685,7 +1685,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
             D2D1::ColorF(0x747B86), DWRITE_TEXT_ALIGNMENT_CENTER);
     }
 
-    if (overlay.state == ViewerState::Failed)
+    if (overlay.state == ViewerState::Failed && !captureClean)
     {
         SetBrush(D2D1::ColorF(0x0B0C0F, 0.40f));
         d2dContext_->FillRectangle(D2D1::RectF(0, toolbar, clientWidth, clientHeight), overlayBrush.Get());
@@ -1714,7 +1714,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
             right, static_cast<float>(cardPixels.bottom) - Scale(76, scale)), D2D1::ColorF(0x777F8B));
     }
 
-    if (!overlay.warning.empty() && overlay.hasModel)
+    if (!overlay.warning.empty() && overlay.hasModel && !captureClean)
     {
         const float size = Scale(30, scale);
         RECT badge = overlay.warningButtonRect;
@@ -1740,6 +1740,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     // Transient mode readouts (fly speed, grid/projection toggles).
     auto drawHud = [&](const std::wstring& text, float alpha, float bottomOffset)
     {
+        if (captureClean) return;
         if (alpha <= 0.01f || text.empty() || overlay.state != ViewerState::Ready) return;
         const float pillHeight = Scale(26, scale);
         const float pillWidth = std::min(contentRight - Scale(28, scale),
@@ -1757,6 +1758,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     drawHud(overlay.modeHud, overlay.modeHudAlpha, Scale(50, scale));
 
     DrawBottomBar(overlay, clientWidth, clientHeight, scale);
+    if (captureClean) return;
     DrawInfoPanel(overlay, clientWidth, clientHeight, scale);
     DrawResetViewButton(overlay, scale);
 
@@ -1787,6 +1789,6 @@ HRESULT D3D11On12Overlay::DrawChrome(UINT backBufferIndex, const DirectX::XMFLOA
                                     const OverlayFrame& frame)
 {
     if (BeginDraw(backBufferIndex) == nullptr) return E_FAIL;
-    DrawOverlay(orientation, frame.info, frame.gizmo, frame.chrome);
+    DrawOverlay(orientation, frame.info, frame.gizmo, frame.chrome, frame.info.captureClean);
     return EndDraw(backBufferIndex);
 }

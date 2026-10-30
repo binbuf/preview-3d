@@ -1,0 +1,57 @@
+{
+  "before": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-oblique-before.png",
+  "beforeSha256": "fd5ef6c4fdcc8febdf852670e3daed6d924be83bd076a4d7f1bd81522766a063",
+  "camera": {
+    "distance": 10.315955141194264,
+    "distanceScale": 1.0,
+    "fovYDegrees": 45.0,
+    "homeDistance": 10.315955141194264,
+    "pitchDegrees": 60.0,
+    "projection": "perspective",
+    "yawDegrees": 30.0
+  },
+  "candidate": "TestResults\\render-quality\\T20\\images\\generated-sphere-grid-studio-oblique.png",
+  "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-oblique-candidate.png",
+  "candidateSha256": "fd5ef6c4fdcc8febdf852670e3daed6d924be83bd076a4d7f1bd81522766a063",
+  "case": "generated-sphere-grid-studio-oblique",
+  "crops": {
+    "centre-metal": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-oblique-crop-centre-metal.png",
+    "left-glass": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-oblique-crop-left-glass.png",
+    "right-glass": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-oblique-crop-right-glass.png"
+  },
+  "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-oblique-diff.png",
+  "image": "generated-sphere-grid-studio-oblique.png",
+  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "regions": {
+    "centre-metal": [
+      0.35,
+      0.22,
+      0.66,
+      0.8
+    ],
+    "left-glass": [
+      0.04,
+      0.3,
+      0.34,
+      0.82
+    ],
+    "right-glass": [
+      0.66,
+      0.3,
+      0.97,
+      0.82
+    ]
+  },
+  "review": "tests/render-quality/review/T20-review.json",
+  "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
+  "stats": {
+    "lumaStdDev": 29.115,
+    "meanLuma": 87.482,
+    "pixels": 886890,
+    "uniqueSampleColours": 1902
+  },
+  "viewport": [
+    1258,
+    705
+  ]
+}

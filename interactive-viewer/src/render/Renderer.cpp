@@ -325,6 +325,69 @@ void Camera::SetProjection(ProjectionMode mode)
     if (reduceMotion) projectionBlend = projection == ProjectionMode::Orthographic ? 1.0 : 0.0;
 }
 
+void Camera::SetTestView(float yawDegrees, float pitchDegrees, double distanceScale)
+{
+    const XMVECTOR worldUp = XMVectorSet(0, 0, 1, 0);
+    XMVECTOR current = XMQuaternionIdentity();
+    current = XMQuaternionNormalize(XMQuaternionMultiply(current,
+        XMQuaternionRotationAxis(worldUp, XMConvertToRadians(yawDegrees))));
+    const XMVECTOR right = XMVector3Rotate(XMVectorSet(1, 0, 0, 0), current);
+    const XMVECTOR pitched = XMQuaternionNormalize(XMQuaternionMultiply(current,
+        XMQuaternionRotationAxis(right, XMConvertToRadians(pitchDegrees))));
+    const XMVECTOR forward = XMVector3Rotate(XMVectorSet(0, 0, -1, 0), pitched);
+    if (std::abs(XMVectorGetX(XMVector3Dot(forward, worldUp))) <= kPitchPoleLimit)
+        current = pitched;
+    XMStoreFloat4(&orientation, current);
+
+    targetX = homeX;
+    targetY = homeY;
+    targetZ = homeZ;
+    desiredX = homeX;
+    desiredY = homeY;
+    desiredZ = homeZ;
+    const double scale = std::clamp(distanceScale, 0.05, 20.0);
+    distance = std::clamp(homeDistance * scale, sceneRadius * 0.05, sceneRadius * 250.0);
+    targetDistance = distance;
+    pivotAnimating = false;
+    orientationAnimating = false;
+    StopMotion();
+}
+
+void Camera::ResetTestView(float aspect)
+{
+    const bool previousMotion = reduceMotion;
+    reduceMotion = true;
+    Reset(aspect);
+    reduceMotion = previousMotion;
+}
+
+float Camera::TestYawDegrees() const
+{
+    const XMVECTOR back = XMVector3Rotate(XMVectorSet(0, 0, 1, 0),
+        XMQuaternionNormalize(XMLoadFloat4(&orientation)));
+    float x = XMVectorGetX(back);
+    float y = XMVectorGetY(back);
+    float yaw = std::atan2(x, -y) * (180.0f / DirectX::XM_PI);
+    if (yaw < 0.0f) yaw += 360.0f;
+    return yaw;
+}
+
+float Camera::TestPitchDegrees() const
+{
+    const XMVECTOR back = XMVector3Rotate(XMVectorSet(0, 0, 1, 0),
+        XMQuaternionNormalize(XMLoadFloat4(&orientation)));
+    const float x = XMVectorGetX(back);
+    const float y = XMVectorGetY(back);
+    const float z = XMVectorGetZ(back);
+    return std::atan2(std::sqrt(x * x + y * y), z) * (180.0f / DirectX::XM_PI);
+}
+
+void Camera::SetTestProjection(ProjectionMode mode)
+{
+    projection = mode;
+    projectionBlend = mode == ProjectionMode::Orthographic ? 1.0 : 0.0;
+}
+
 void Camera::SetFlySpeedScale(double scale)
 {
     flySpeedScale = std::clamp(scale, kFlySpeedMin, kFlySpeedMax);

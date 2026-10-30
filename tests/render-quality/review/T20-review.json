@@ -1,0 +1,101 @@
+{
+  "schema": 1,
+  "task": "T20",
+  "date": "2026-10-30",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the PNG files listed below",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T20",
+  "imagesInspected": [
+    "TestResults/render-quality/T20/images/external-car-default.png",
+    "TestResults/render-quality/T20/images/external-car-studio-front.png",
+    "TestResults/render-quality/T20/images/external-car-studio-oblique.png",
+    "TestResults/render-quality/T20/images/external-car-studio-window.png",
+    "TestResults/render-quality/T20/images/external-car-clay-front.png",
+    "TestResults/render-quality/T20/images/external-car-directional-front.png",
+    "TestResults/render-quality/T20/images/external-camera-default.png",
+    "TestResults/render-quality/T20/images/external-camera-studio-front.png",
+    "TestResults/render-quality/T20/images/external-camera-studio-lens.png",
+    "TestResults/render-quality/T20/images/external-camera-clay-lens.png",
+    "TestResults/render-quality/T20/images/external-microscope-studio-front.png",
+    "TestResults/render-quality/T20/images/external-microscope-clay-front.png",
+    "TestResults/render-quality/T20/images/external-stl-studio-front.png",
+    "TestResults/render-quality/T20/images/external-stl-studio-oblique.png",
+    "TestResults/render-quality/T20/images/generated-sphere-grid-studio-front.png",
+    "TestResults/render-quality/T20/images/generated-sphere-grid-studio-oblique.png",
+    "TestResults/render-quality/T20/images/generated-glass-reference-studio-front.png",
+    "TestResults/render-quality/T20/images/generated-stl-box-studio-oblique.png"
+  ],
+  "referenceImagesInspected": [
+    "TestResults/render-quality/T20/reference/f3d-car-shipped-preset.png",
+    "TestResults/render-quality/T20/reference/f3d-car-controlled.png",
+    "TestResults/render-quality/T20/reference/f3d-camera-shipped-preset.png",
+    "TestResults/render-quality/T20/reference/f3d-camera-controlled.png"
+  ],
+  "defects": [
+    {
+      "id": "car-windshield-speckle",
+      "label": "known-defect",
+      "where": "external-car-studio-window.png; external-car-studio-oblique.png",
+      "description": "The windshield and side glass are bright and contain dotted/broken white speckles along the upper edge and wiper line. Authored alpha-BLEND coverage and transmission are not separated.",
+      "assignedTo": "T22/T26/T27"
+    },
+    {
+      "id": "car-glass-order-depth",
+      "label": "known-defect",
+      "where": "external-car-studio-oblique.png; external-car-studio-window.png",
+      "description": "Roof/window interpenetration reads as a single flat white plate rather than layered glass with depth; mesh-centre sorting cannot order the authored transparent surfaces.",
+      "assignedTo": "T26"
+    },
+    {
+      "id": "delayed-first-drawable-frame",
+      "label": "known-defect",
+      "where": "observed during T20 capture; see report captures loadSeconds and settle diagnostics",
+      "description": "Car reported a verified complete model near 5 s, but the viewport remained background-only until about 15 s on this machine. Texture counters were already stable at 30 textures. T20 waits for a non-blank, quiet frame; T23 must make complete-load readiness include that drawable/texture state.",
+      "assignedTo": "T23"
+    },
+    {
+      "id": "microscope-resource-limit",
+      "label": "known-defect",
+      "where": "TestResults/render-quality-review/preview-microscope-resource-limit.png (T19); T20 microscope loaded",
+      "description": "The terminal ResourceLimit after visible microscope geometry was recorded in T19 but did not reproduce in the T20 run. The label stays; a passing load here is not evidence that the intermittent failure is fixed.",
+      "assignedTo": "T23"
+    },
+    {
+      "id": "khronos-glass-roles-collapse",
+      "label": "known-defect",
+      "where": "generated-glass-reference-studio-front.png; generated-glass-reference-clay-front.png",
+      "description": "The generated Khronos-style tinted, rough and clear transmission spheres render almost identically as clear glass. KHR_materials_transmission, volume attenuation/color and IOR do not differentiate the three material roles; this is exactly the route the Khronos reference is meant to expose.",
+      "assignedTo": "T22/T25/T26/T27"
+    },
+    {
+      "id": "f3d-camera-gray-lens",
+      "label": "known-defect",
+      "where": "TestResults/render-quality/T20/reference/f3d-camera-shipped-preset.png",
+      "description": "Installed F3D 3.5.0 renders the Camera lens as a flat pale/gray disk in the shipped preset. This remains a reference observation, not an accepted glass target.",
+      "assignedTo": "T26/T27"
+    },
+    {
+      "id": "f3d-dpi-resolution",
+      "label": "limitation",
+      "where": "report.reference.f3d.renders",
+      "description": "The shipped preset produced 1920x1350 for a requested 1280x900 because the preset is DPI-aware; the no-config controlled run produced the requested 1280x900. These are different reference conditions and must not be numerically compared as matched frames.",
+      "assignedTo": "T34/T35"
+    }
+  ],
+  "positives": [
+    "Preview3D Camera lens remains dark with visible reflection and depth in Studio; it is not the gray F3D appearance.",
+    "Clay renders Car and Camera form without material distraction; Directional adds a visible raking light.",
+    "All 53 T20 captures passed the settled/complete/non-blank contract after the wait-for-visible fix.",
+    "F3D installed 3.5.0 rendered Car and Camera with both the shipped preset and recorded controlled settings."
+  ],
+  "acceptance": {
+    "observedBaselinesReviewed": true,
+    "acceptedReferencesPromotedBy": "promote.py (explicit, after this review)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "Accepted references defend the reviewed current behavior against regressions. They do not certify Studio/Clay/Directional quality; the defect list above remains open."
+  }
+}

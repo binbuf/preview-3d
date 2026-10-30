@@ -1,0 +1,525 @@
+{
+  "cases": {
+    "generated-glass-reference-clay-front": {
+      "camera": {
+        "distance": 9.220082777575882,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 9.220082777575882,
+        "pitchDegrees": 90.0,
+        "projection": "perspective",
+        "yawDegrees": 0.0
+      },
+      "image": "generated-glass-reference-clay-front.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-glass-reference-clay-front.json",
+      "regions": {
+        "clear-lens": [
+          0.64,
+          0.22,
+          0.97,
+          0.88
+        ],
+        "rough-panel": [
+          0.34,
+          0.22,
+          0.66,
+          0.88
+        ],
+        "tinted-panel": [
+          0.03,
+          0.22,
+          0.36,
+          0.88
+        ]
+      },
+      "sha256": "6447f16e900dc2ea77655886ea24bd1ae5eda8c75573c216040ba5c99b8753ea",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-glass-reference-directional-front": {
+      "camera": {
+        "distance": 9.220082777575882,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 9.220082777575882,
+        "pitchDegrees": 90.0,
+        "projection": "perspective",
+        "yawDegrees": 0.0
+      },
+      "image": "generated-glass-reference-directional-front.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-glass-reference-directional-front.json",
+      "regions": {
+        "clear-lens": [
+          0.64,
+          0.22,
+          0.97,
+          0.88
+        ],
+        "rough-panel": [
+          0.34,
+          0.22,
+          0.66,
+          0.88
+        ],
+        "tinted-panel": [
+          0.03,
+          0.22,
+          0.36,
+          0.88
+        ]
+      },
+      "sha256": "c0a65002903290a5dd81ac8ccc896d2a930fc16856bba185c49cd74e7635dc7e",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-glass-reference-studio-front": {
+      "camera": {
+        "distance": 9.220082777575882,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 9.220082777575882,
+        "pitchDegrees": 90.0,
+        "projection": "perspective",
+        "yawDegrees": 0.0
+      },
+      "image": "generated-glass-reference-studio-front.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-glass-reference-studio-front.json",
+      "regions": {
+        "clear-lens": [
+          0.64,
+          0.22,
+          0.97,
+          0.88
+        ],
+        "rough-panel": [
+          0.34,
+          0.22,
+          0.66,
+          0.88
+        ],
+        "tinted-panel": [
+          0.03,
+          0.22,
+          0.36,
+          0.88
+        ]
+      },
+      "sha256": "a3621d0bc790a99a6c9d89378df06f7307ed37449cf16716393ed8b3a1965603",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-sphere-grid-clay-front": {
+      "camera": {
+        "distance": 10.315955141194264,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 10.315955141194264,
+        "pitchDegrees": 90.0,
+        "projection": "perspective",
+        "yawDegrees": 0.0
+      },
+      "image": "generated-sphere-grid-clay-front.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-clay-front.json",
+      "regions": {
+        "centre-metal": [
+          0.35,
+          0.22,
+          0.66,
+          0.8
+        ],
+        "left-glass": [
+          0.04,
+          0.3,
+          0.34,
+          0.82
+        ],
+        "right-glass": [
+          0.66,
+          0.3,
+          0.97,
+          0.82
+        ]
+      },
+      "sha256": "2d1deab8ee90b52e00f2180c5f17efc03792975936c0b93e2522acc99c3b997c",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-sphere-grid-clay-oblique": {
+      "camera": {
+        "distance": 10.315955141194264,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 10.315955141194264,
+        "pitchDegrees": 60.0,
+        "projection": "perspective",
+        "yawDegrees": 30.0
+      },
+      "image": "generated-sphere-grid-clay-oblique.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-clay-oblique.json",
+      "regions": {
+        "centre-metal": [
+          0.35,
+          0.22,
+          0.66,
+          0.8
+        ],
+        "left-glass": [
+          0.04,
+          0.3,
+          0.34,
+          0.82
+        ],
+        "right-glass": [
+          0.66,
+          0.3,
+          0.97,
+          0.82
+        ]
+      },
+      "sha256": "9145655e155abef4a2ca8961a3d3fcfdffa1640c28b0c011b56841290c96e1a8",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-sphere-grid-directional-front": {
+      "camera": {
+        "distance": 10.315955141194264,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 10.315955141194264,
+        "pitchDegrees": 90.0,
+        "projection": "perspective",
+        "yawDegrees": 0.0
+      },
+      "image": "generated-sphere-grid-directional-front.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-directional-front.json",
+      "regions": {
+        "centre-metal": [
+          0.35,
+          0.22,
+          0.66,
+          0.8
+        ],
+        "left-glass": [
+          0.04,
+          0.3,
+          0.34,
+          0.82
+        ],
+        "right-glass": [
+          0.66,
+          0.3,
+          0.97,
+          0.82
+        ]
+      },
+      "sha256": "4c68b709bc7431961bd556dcd0f57dca207652995e9e246205a99ccc79439b31",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-sphere-grid-directional-oblique": {
+      "camera": {
+        "distance": 10.315955141194264,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 10.315955141194264,
+        "pitchDegrees": 60.0,
+        "projection": "perspective",
+        "yawDegrees": 30.0
+      },
+      "image": "generated-sphere-grid-directional-oblique.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-directional-oblique.json",
+      "regions": {
+        "centre-metal": [
+          0.35,
+          0.22,
+          0.66,
+          0.8
+        ],
+        "left-glass": [
+          0.04,
+          0.3,
+          0.34,
+          0.82
+        ],
+        "right-glass": [
+          0.66,
+          0.3,
+          0.97,
+          0.82
+        ]
+      },
+      "sha256": "96da45cdab64df74c17e09ca1edc1ce99c66b1a7849aa694357696362d554579",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-sphere-grid-studio-front": {
+      "camera": {
+        "distance": 10.315955141194264,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 10.315955141194264,
+        "pitchDegrees": 90.0,
+        "projection": "perspective",
+        "yawDegrees": 0.0
+      },
+      "image": "generated-sphere-grid-studio-front.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-front.json",
+      "regions": {
+        "centre-metal": [
+          0.35,
+          0.22,
+          0.66,
+          0.8
+        ],
+        "left-glass": [
+          0.04,
+          0.3,
+          0.34,
+          0.82
+        ],
+        "right-glass": [
+          0.66,
+          0.3,
+          0.97,
+          0.82
+        ]
+      },
+      "sha256": "6e2344278f4cac23942621a5a44a3b306931fac41008db8c2baf796f389e4ce1",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-sphere-grid-studio-oblique": {
+      "camera": {
+        "distance": 10.315955141194264,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 10.315955141194264,
+        "pitchDegrees": 60.0,
+        "projection": "perspective",
+        "yawDegrees": 30.0
+      },
+      "image": "generated-sphere-grid-studio-oblique.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-oblique.json",
+      "regions": {
+        "centre-metal": [
+          0.35,
+          0.22,
+          0.66,
+          0.8
+        ],
+        "left-glass": [
+          0.04,
+          0.3,
+          0.34,
+          0.82
+        ],
+        "right-glass": [
+          0.66,
+          0.3,
+          0.97,
+          0.82
+        ]
+      },
+      "sha256": "fd5ef6c4fdcc8febdf852670e3daed6d924be83bd076a4d7f1bd81522766a063",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-stl-box-clay-front": {
+      "camera": {
+        "distance": 4.866738448924756,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 4.866738448924756,
+        "pitchDegrees": 90.0,
+        "projection": "perspective",
+        "yawDegrees": 0.0
+      },
+      "image": "generated-stl-box-clay-front.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-clay-front.json",
+      "regions": {
+        "hard-edge": [
+          0.28,
+          0.18,
+          0.72,
+          0.82
+        ]
+      },
+      "sha256": "b0792dd71ac2cd721d7302ad4882709caf73f8c2b748b361ae12f2e09a608e8e",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-stl-box-clay-oblique": {
+      "camera": {
+        "distance": 4.866738448924756,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 4.866738448924756,
+        "pitchDegrees": 60.0,
+        "projection": "perspective",
+        "yawDegrees": 30.0
+      },
+      "image": "generated-stl-box-clay-oblique.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-clay-oblique.json",
+      "regions": {
+        "hard-edge": [
+          0.28,
+          0.18,
+          0.72,
+          0.82
+        ]
+      },
+      "sha256": "8fb94278c0beb37ffde3404ad7eeb68f28b44f9767217e2fa288e37641ea6b1c",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-stl-box-directional-front": {
+      "camera": {
+        "distance": 4.866738448924756,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 4.866738448924756,
+        "pitchDegrees": 90.0,
+        "projection": "perspective",
+        "yawDegrees": 0.0
+      },
+      "image": "generated-stl-box-directional-front.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-directional-front.json",
+      "regions": {
+        "hard-edge": [
+          0.28,
+          0.18,
+          0.72,
+          0.82
+        ]
+      },
+      "sha256": "0388c4ab87c0ef0490fb3d83f6bc28fa056f269efb3dd9b9d3d0117d51ca7ab7",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-stl-box-directional-oblique": {
+      "camera": {
+        "distance": 4.866738448924756,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 4.866738448924756,
+        "pitchDegrees": 60.0,
+        "projection": "perspective",
+        "yawDegrees": 30.0
+      },
+      "image": "generated-stl-box-directional-oblique.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-directional-oblique.json",
+      "regions": {
+        "hard-edge": [
+          0.28,
+          0.18,
+          0.72,
+          0.82
+        ]
+      },
+      "sha256": "db6d6d78149519558ece23e37bff6a980670adcd949d498af76687e3f5782cfd",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-stl-box-studio-front": {
+      "camera": {
+        "distance": 4.866738448924756,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 4.866738448924756,
+        "pitchDegrees": 90.0,
+        "projection": "perspective",
+        "yawDegrees": 0.0
+      },
+      "image": "generated-stl-box-studio-front.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-front.json",
+      "regions": {
+        "hard-edge": [
+          0.28,
+          0.18,
+          0.72,
+          0.82
+        ]
+      },
+      "sha256": "5678503df0827cd003d6da9fb711edf800464c198f0bb1e35abf44f8f67b24de",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    },
+    "generated-stl-box-studio-oblique": {
+      "camera": {
+        "distance": 4.866738448924756,
+        "distanceScale": 1.0,
+        "fovYDegrees": 45.0,
+        "homeDistance": 4.866738448924756,
+        "pitchDegrees": 60.0,
+        "projection": "perspective",
+        "yawDegrees": 30.0
+      },
+      "image": "generated-stl-box-studio-oblique.png",
+      "promotion": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-oblique.json",
+      "regions": {
+        "hard-edge": [
+          0.28,
+          0.18,
+          0.72,
+          0.82
+        ]
+      },
+      "sha256": "2715e123e2b990d18c0c55f7118ba78b2cc8220f78d4d2294e9a6bad2ae48a55",
+      "thresholds": null,
+      "viewport": [
+        1258,
+        705
+      ]
+    }
+  },
+  "note": "Accepted regression references. Ordinary verification never writes this file; use compare.py explicitly. These references defend reviewed current generated-fixture rendering against regressions; they do not certify material, lighting or glass quality.",
+  "provenance": {
+    "externalCorpusImages": "Not committed; restricted local evidence under TestResults/.",
+    "generatedBy": "tests/render-quality/fixtures.py in this repository",
+    "redistribution": "Generated in-repository; redistributable with the test tree.",
+    "review": "tests/render-quality/review/T20-review.json"
+  },
+  "schema": 1
+}

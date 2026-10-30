@@ -1,0 +1,43 @@
+{
+  "before": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-clay-front-before.png",
+  "beforeSha256": "b0792dd71ac2cd721d7302ad4882709caf73f8c2b748b361ae12f2e09a608e8e",
+  "camera": {
+    "distance": 4.866738448924756,
+    "distanceScale": 1.0,
+    "fovYDegrees": 45.0,
+    "homeDistance": 4.866738448924756,
+    "pitchDegrees": 90.0,
+    "projection": "perspective",
+    "yawDegrees": 0.0
+  },
+  "candidate": "TestResults\\render-quality\\T20\\images\\generated-stl-box-clay-front.png",
+  "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-clay-front-candidate.png",
+  "candidateSha256": "b0792dd71ac2cd721d7302ad4882709caf73f8c2b748b361ae12f2e09a608e8e",
+  "case": "generated-stl-box-clay-front",
+  "crops": {
+    "hard-edge": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-clay-front-crop-hard-edge.png"
+  },
+  "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-clay-front-diff.png",
+  "image": "generated-stl-box-clay-front.png",
+  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "regions": {
+    "hard-edge": [
+      0.28,
+      0.18,
+      0.72,
+      0.82
+    ]
+  },
+  "review": "tests/render-quality/review/T20-review.json",
+  "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
+  "stats": {
+    "lumaStdDev": 27.594,
+    "meanLuma": 94.899,
+    "pixels": 886890,
+    "uniqueSampleColours": 251
+  },
+  "viewport": [
+    1258,
+    705
+  ]
+}

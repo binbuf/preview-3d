@@ -35,6 +35,7 @@ The plan, ground rules and per-task verify commands are in
 - **T17 - Line/strip/fan/point topology**: **Wire version is 11** (`model_core::kCurrentProtocolVersion == 11`).; **LineList contract.** Payload is `[vertex bytes][uint32 indices]`, exactly
 - **T18 - Material lobes and transparency**: **Wire version is 12** (`model_core::kCurrentProtocolVersion == 12`). v11 and; Value-initialized `MaterialPayload{}` now supplies the pre-v12 defaults
 - **T19 - 0.7.0 compatibility qualification and docs**: **Evidence file:** `docs/0.7.0-QUALIFICATION.md`. Raw reports live in; **Corpus gate:** `x64\Release\Tests.ImportIsolation.exe "[compat]"` — 312
+- **T20 - deterministic visual comparison harness and observed baseline**: **Wrapper:** `python tests/render-quality/verify.py --task T20 --configuration Debug --output TestResults/render-quality/T20`.; **Bootstrap/research:** `--capture-only` collects candidates and skips
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -58,4 +59,5 @@ The plan, ground rules and per-task verify commands are in
 - [T17](progress/T17.md) — **Wire version is 11** (`model_core::kCurrentProtocolVersion == 11`).
 - [T18](progress/T18.md) — **Wire version is 12** (`model_core::kCurrentProtocolVersion == 12`). v11 and
 - [T19](progress/T19.md) — **Evidence file:** `docs/0.7.0-QUALIFICATION.md`. Raw reports live in
+- [T20](progress/T20.md) — **Wrapper:** `python tests/render-quality/verify.py --task T20 --configuration Debug --output TestResults/render-quality/T20`.
 <!-- symphony:digest:end -->

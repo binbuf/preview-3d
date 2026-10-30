@@ -143,7 +143,7 @@ private:
     void DrawTextEllipsized(const std::wstring& text, IDWriteTextFormat* format, D2D1_RECT_F rectangle,
         D2D1_COLOR_F color, DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING);
     void DrawTooltip(const OverlayInfo& overlay, float clientWidth, float scale);
-    void DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome);
+    void DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome, bool captureClean = false);
 
     bool CreateTargetsForBackBuffers(D3D12SwapChain& swapChain, std::wstring& error);
 

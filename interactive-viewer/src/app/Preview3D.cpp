@@ -276,6 +276,7 @@ struct ViewerApp
     bool benchmarkInputSent = false;
     std::jthread benchmarkSampler;
     bool appSmoke = false; // opt-in, bounded test commands; no normal activation IPC
+    bool captureClean = false; // T20: omit viewport overlays from capture evidence
     active_instance::Coordinator activeInstance;
     IAccessible* accessible = nullptr;
     IRawElementProviderSimple* uiaAccessible = nullptr;
@@ -4136,6 +4137,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.directionalLightElevation=app.directionalLightElevation;
     overlay.lightDragging=app.pointerMode==PointerMode::LightDrag;
     overlay.hasModel = app.renderThread.HasModel();
+    overlay.captureClean = app.captureClean;
     overlay.resetViewButtonAlpha = app.resetViewButtonAlpha;
     if (overlay.resetViewButtonAlpha > 0.001f)
     {
@@ -4340,7 +4342,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Shipping builds cannot be driven by local WM_APP messages.
         return 0;
 #else
-        if (!app->appSmoke || wParam > 104) return 0;
+        if (!app->appSmoke || wParam > 123) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -4390,6 +4392,75 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (wParam == 79) return app->groundAxisInverted;
         if (wParam == 34) return app->smokePickRequests;
+        // T20 deterministic capture controls. Fields 31/32/33/35/36 are free
+        // after the existing smoke surface; lParam == -1 reads the current
+        // canonical value. These remain inside the Debug-only block above.
+        if (wParam == 31 || wParam == 32 || wParam == 33 || wParam == 35 || wParam == 36) {
+            auto camera = app->renderThread.LockCamera();
+            constexpr LPARAM kRead = -1;
+            if (wParam == 31) {
+                if (lParam != kRead)
+                    camera->SetTestView(static_cast<float>(lParam) / 100.0f,
+                        camera->TestPitchDegrees(), camera->TestDistanceScale());
+                InvalidateRect(window, nullptr, FALSE);
+                return static_cast<LRESULT>(std::lround(camera->TestYawDegrees() * 100.0f));
+            }
+            if (wParam == 32) {
+                if (lParam != kRead)
+                    camera->SetTestView(camera->TestYawDegrees(),
+                        static_cast<float>(lParam) / 100.0f, camera->TestDistanceScale());
+                InvalidateRect(window, nullptr, FALSE);
+                return static_cast<LRESULT>(std::lround(camera->TestPitchDegrees() * 100.0f));
+            }
+            if (wParam == 33) {
+                if (lParam != kRead)
+                    camera->SetTestView(camera->TestYawDegrees(), camera->TestPitchDegrees(),
+                        static_cast<double>(lParam) / 1000.0);
+                InvalidateRect(window, nullptr, FALSE);
+                return static_cast<LRESULT>(std::lround(camera->TestDistanceScale() * 1000.0));
+            }
+            if (wParam == 35) {
+                if (lParam != kRead) {
+                    if (lParam != 0 && lParam != 1) return static_cast<LRESULT>(camera->Projection());
+                    camera->SetTestProjection(lParam ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
+                }
+                InvalidateRect(window, nullptr, FALSE);
+                return static_cast<LRESULT>(camera->Projection());
+            }
+            // 36: restore the captured first-open framing immediately.
+            if (lParam == kRead) return 1;
+            camera->ResetTestView(ViewportAspect(*app));
+            InvalidateRect(window, nullptr, FALSE);
+            return 1;
+        }
+        if (wParam == 105) {
+            app->captureClean = lParam != 0;
+            InvalidateRect(window, nullptr, FALSE);
+            return app->captureClean ? 1 : 0;
+        }
+        if (wParam == 106) {
+            // Force one render-thread pass and a synchronous WM_PAINT before a
+            // capture reads the swap chain. Returns the presented-frame count.
+            app->renderThread.Invalidate();
+            InvalidateRect(window, nullptr, FALSE);
+            UpdateWindow(window);
+            return static_cast<LRESULT>(app->renderThread.SmokeValue(7));
+        }
+        if (wParam == 107) {
+            // T20 capture capabilities: bit 0 canonical camera, bit 1
+            // capture-clean viewport, bit 2 forced present.
+            return 0x7;
+        }
+        if (wParam >= 108 && wParam <= 123) {
+            // T20 evidence: the effective source-to-viewer transform in row-major
+            // float order, one element per query. Recorded with every capture.
+            if (!app->loadedModel) return 0;
+            const DirectX::XMMATRIX transform = ActiveModelTransform(*app);
+            DirectX::XMFLOAT4X4 value{};
+            DirectX::XMStoreFloat4x4(&value, transform);
+            const float* elements = &value._11;
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(elements[wParam - 108]));
+        }
         if (wParam >= 13 && wParam <= 29) {
             if (!app->loadedModel) return 0;
             const auto& metadata = *app->loadedModel;

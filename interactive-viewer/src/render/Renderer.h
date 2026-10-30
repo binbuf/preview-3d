@@ -84,6 +84,9 @@ struct OpenWithTileOverlay
 struct OverlayInfo
 {
     ViewerState state = ViewerState::Empty;
+    // Debug capture evidence: suppress viewport overlays. Never set by the
+    // shipping UI; only the Debug test-control surface toggles it.
+    bool captureClean = false;
     std::wstring filename;
     std::wstring errorSummary;
     std::wstring errorDetails;
@@ -348,7 +351,6 @@ struct Camera
     // instead of look snapping ahead of movement (see AccumulateLook).
     double pendingLookX = 0.0;
     double pendingLookY = 0.0;
-
     void SetBounds(const DirectX::XMFLOAT3& minimum, const DirectX::XMFLOAT3& maximum, float aspect);
     void Fit(float aspect);
     // Frames an arbitrary world-space box (used for "frame selected").
@@ -386,6 +388,16 @@ struct Camera
     void SnapToView(DirectX::XMVECTOR viewOrientation);
     void SetProjection(ProjectionMode mode);
     ProjectionMode Projection() const { return projection; }
+    // Debug-only deterministic capture controls. Set a canonical orientation
+    // from world yaw/pitch (degrees) and a distance as a multiple of the home
+    // fit distance. The target is the home bounds centre, so two runs with the
+    // same values produce the same camera independent of interaction history.
+    void SetTestView(float yawDegrees, float pitchDegrees, double distanceScale);
+    void ResetTestView(float aspect);
+    void SetTestProjection(ProjectionMode mode);
+    float TestYawDegrees() const;
+    float TestPitchDegrees() const;
+    double TestDistanceScale() const { return homeDistance > 0.0 ? distance / homeDistance : 0.0; }
     void SetFlySpeedScale(double scale);
     double FlySpeedScale() const { return flySpeedScale; }
     // Continuous turntable auto-orbit, in radians per second about world up.

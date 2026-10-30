@@ -1,0 +1,43 @@
+{
+  "before": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-front-before.png",
+  "beforeSha256": "5678503df0827cd003d6da9fb711edf800464c198f0bb1e35abf44f8f67b24de",
+  "camera": {
+    "distance": 4.866738448924756,
+    "distanceScale": 1.0,
+    "fovYDegrees": 45.0,
+    "homeDistance": 4.866738448924756,
+    "pitchDegrees": 90.0,
+    "projection": "perspective",
+    "yawDegrees": 0.0
+  },
+  "candidate": "TestResults\\render-quality\\T20\\images\\generated-stl-box-studio-front.png",
+  "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-front-candidate.png",
+  "candidateSha256": "5678503df0827cd003d6da9fb711edf800464c198f0bb1e35abf44f8f67b24de",
+  "case": "generated-stl-box-studio-front",
+  "crops": {
+    "hard-edge": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-front-crop-hard-edge.png"
+  },
+  "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-front-diff.png",
+  "image": "generated-stl-box-studio-front.png",
+  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "regions": {
+    "hard-edge": [
+      0.28,
+      0.18,
+      0.72,
+      0.82
+    ]
+  },
+  "review": "tests/render-quality/review/T20-review.json",
+  "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
+  "stats": {
+    "lumaStdDev": 34.592,
+    "meanLuma": 98.974,
+    "pixels": 886890,
+    "uniqueSampleColours": 251
+  },
+  "viewport": [
+    1258,
+    705
+  ]
+}

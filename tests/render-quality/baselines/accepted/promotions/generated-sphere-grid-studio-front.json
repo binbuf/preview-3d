@@ -1,0 +1,57 @@
+{
+  "before": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-front-before.png",
+  "beforeSha256": "6e2344278f4cac23942621a5a44a3b306931fac41008db8c2baf796f389e4ce1",
+  "camera": {
+    "distance": 10.315955141194264,
+    "distanceScale": 1.0,
+    "fovYDegrees": 45.0,
+    "homeDistance": 10.315955141194264,
+    "pitchDegrees": 90.0,
+    "projection": "perspective",
+    "yawDegrees": 0.0
+  },
+  "candidate": "TestResults\\render-quality\\T20\\images\\generated-sphere-grid-studio-front.png",
+  "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-front-candidate.png",
+  "candidateSha256": "6e2344278f4cac23942621a5a44a3b306931fac41008db8c2baf796f389e4ce1",
+  "case": "generated-sphere-grid-studio-front",
+  "crops": {
+    "centre-metal": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-front-crop-centre-metal.png",
+    "left-glass": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-front-crop-left-glass.png",
+    "right-glass": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-front-crop-right-glass.png"
+  },
+  "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-studio-front-diff.png",
+  "image": "generated-sphere-grid-studio-front.png",
+  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "regions": {
+    "centre-metal": [
+      0.35,
+      0.22,
+      0.66,
+      0.8
+    ],
+    "left-glass": [
+      0.04,
+      0.3,
+      0.34,
+      0.82
+    ],
+    "right-glass": [
+      0.66,
+      0.3,
+      0.97,
+      0.82
+    ]
+  },
+  "review": "tests/render-quality/review/T20-review.json",
+  "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
+  "stats": {
+    "lumaStdDev": 26.989,
+    "meanLuma": 84.055,
+    "pixels": 886890,
+    "uniqueSampleColours": 1705
+  },
+  "viewport": [
+    1258,
+    705
+  ]
+}
