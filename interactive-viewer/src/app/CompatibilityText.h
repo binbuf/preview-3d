@@ -41,6 +41,18 @@ inline std::wstring CompatibilityFeatureText(uint32_t featureId)
     case model_core::kGltfFeatureDispersion:
         return Loc("compat.gltf.dispersion",
                    L"Material dispersion is not shown.");
+    case model_core::kGltfFeatureTransmissionNoInterfaceSuppressed:
+        return Loc("compat.gltf.transmissionNoInterface",
+                   L"A transmission value was authored with an index of refraction of 1, which "
+                   L"has no optical interface; it was kept opaque instead of becoming invisible.");
+    case model_core::kGltfFeatureDegenerateBlendRecovered:
+        return Loc("compat.gltf.degenerateBlend",
+                   L"A blend material had no alpha source anywhere; it was recovered as "
+                   L"transmissive instead of covering what is behind it.");
+    case model_core::kTextureFeatureUnsupportedUvSet:
+        return Loc("compat.texture.unsupportedUvSet",
+                   L"At least one texture references a UV set that this preview does not carry; "
+                   L"that texture is not shown rather than sampled with the wrong coordinates.");
     case model_core::kGltfFeatureUnspecifiedExtension:
         return Loc("compat.gltf.unspecifiedExtension",
                    L"An unsupported glTF extension was ignored; the preview may differ from the source.");

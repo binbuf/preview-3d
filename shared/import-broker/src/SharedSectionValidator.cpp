@@ -604,19 +604,26 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             if (descriptor.dependencyCount > model_core::kMaxDependencyIds) {
                 return Reject(ImportErrorCode::MalformedData, "material dependencyCount exceeds cap");
             }
-            // Unlike a mesh's single optional dependency, a material's 4
+            // Unlike a mesh's single optional dependency, a material's five
             // slots carry per-position semantic meaning
-            // (baseColor/metallicRoughness/normal/emissive per WireFormat.h)
-            // and may be sparsely populated -- e.g. a normal-map-only
-            // material has only slot 2 nonzero. Every slot is therefore
-            // checked independently (0 = no texture in that slot, always
-            // valid) rather than treating dependencyCount as a contiguous
-            // prefix length; dependencyCount itself is cross-checked
-            // against the actual count of nonzero slots so a lying worker
-            // can't understate it.
+            // (baseColor/metallicRoughness/normal/emissive/occlusion per
+            // WireFormat.h) and may be sparsely populated -- e.g. a
+            // normal-map-only material has only slot 2 nonzero. Every slot is
+            // therefore checked independently (0 = no texture in that slot,
+            // always valid) rather than treating dependencyCount as a
+            // contiguous prefix length; dependencyCount itself is
+            // cross-checked against the actual count of nonzero slots so a
+            // lying worker can't understate it. Slots beyond the semantic set
+            // stay zero.
             {
+                for (uint32_t d = model_core::kMaterialTextureSlotCount;
+                     d < model_core::kMaxDependencyIds; ++d) {
+                    if (descriptor.dependencyIds[d] != 0)
+                        return Reject(ImportErrorCode::MalformedData,
+                                      "material uses a dependency slot without a texture semantic");
+                }
                 uint32_t populatedCount = 0;
-                for (uint32_t d = 0; d < model_core::kMaxDependencyIds; ++d) {
+                for (uint32_t d = 0; d < model_core::kMaterialTextureSlotCount; ++d) {
                     if (descriptor.dependencyIds[d] == 0) {
                         continue;
                     }

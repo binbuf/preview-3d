@@ -19,11 +19,11 @@
 
 using namespace model_core;
 
-TEST_CASE("Protocol v12 MaterialPayload is a fixed 140-byte lobe record",
+TEST_CASE("Protocol v13 MaterialPayload is a fixed 244-byte lobe and texture record",
           "[material-lobes][wire-format]")
 {
-    REQUIRE(kCurrentProtocolVersion == 12);
-    REQUIRE(sizeof(MaterialPayload) == 140);
+    REQUIRE(kCurrentProtocolVersion == 13);
+    REQUIRE(sizeof(MaterialPayload) == 244);
     CHECK(offsetof(MaterialPayload, transmissionFactor) == 68);
     CHECK(offsetof(MaterialPayload, emissiveStrength) == 72);
     CHECK(offsetof(MaterialPayload, clearcoatFactor) == 76);
@@ -34,7 +34,7 @@ TEST_CASE("Protocol v12 MaterialPayload is a fixed 140-byte lobe record",
     CHECK(offsetof(MaterialPayload, specularColor) == 104);
     CHECK(offsetof(MaterialPayload, ior) == 116);
     CHECK(offsetof(MaterialPayload, occlusionStrength) == 120);
-    CHECK(offsetof(MaterialPayload, reserved) == 124);
+    CHECK(offsetof(MaterialPayload, reserved) == 228);
     CHECK(kMaterialReservedWordCount == 4);
 }
 
@@ -147,6 +147,56 @@ TEST_CASE("Lobe validation rejects out-of-range and reserved non-zero words",
     material = MaterialPayload{};
     material.emissiveStrength = std::numeric_limits<float>::quiet_NaN();
     CHECK(ValidateMaterialLobeFields(material) != nullptr);
+}
+
+TEST_CASE("T22 authored texture fields default to identity and validate their bounds",
+          "[material-lobes][material-semantics]")
+{
+    MaterialPayload material{};
+    CHECK(sizeof(MaterialPayload) == 244);
+    CHECK(offsetof(MaterialPayload, normalScale) == 124);
+    CHECK(offsetof(MaterialPayload, slotFlags) == 128);
+    CHECK(offsetof(MaterialPayload, slotUvOffset) == 148);
+    CHECK(offsetof(MaterialPayload, slotUvScale) == 180);
+    CHECK(offsetof(MaterialPayload, slotUvRotation) == 212);
+    CHECK(material.normalScale == 1.0f);
+    for (uint32_t slot = 0; slot < kMaterialTextureSlotCount; ++slot) {
+        CHECK(material.slotFlags[slot] == 0);
+    }
+    for (uint32_t slot = 0; slot < kMaterialTextureSlotCount - 1; ++slot) {
+        CHECK(material.slotUvOffset[slot][0] == 0.0f);
+        CHECK(material.slotUvScale[slot][0] == 1.0f);
+        CHECK(material.slotUvScale[slot][1] == 1.0f);
+        CHECK(material.slotUvRotation[slot] == 0.0f);
+    }
+    CHECK(kMaterialMaxSupportedUvSet == 0);
+
+    material.normalScale = 0.45f;
+    material.slotFlags[2] = MaterialSlotFlags(0, TextureAddressId::Clamp,
+                                              TextureAddressId::Mirror, true);
+    CHECK(MaterialSlotUvSet(material.slotFlags[2]) == 0);
+    CHECK(MaterialSlotUvSetSupported(material.slotFlags[2]));
+    CHECK(ValidateMaterialLobeFields(material) == nullptr);
+
+    material = MaterialPayload{};
+    material.normalScale = 17.0f;
+    CHECK(std::strcmp(ValidateMaterialLobeFields(material), "material normalScale out of range") == 0);
+
+    material = MaterialPayload{};
+    material.slotFlags[1] = 0x80000000u;
+    CHECK(std::strcmp(ValidateMaterialLobeFields(material), "material slot flags has unrecognized bits set") == 0);
+
+    material = MaterialPayload{};
+    material.slotFlags[1] = MaterialSlotFlags(16, TextureAddressId::Wrap, TextureAddressId::Wrap, false);
+    CHECK(std::strcmp(ValidateMaterialLobeFields(material), "material texture uv set out of range") == 0);
+
+    material = MaterialPayload{};
+    material.slotUvScale[3][1] = std::numeric_limits<float>::infinity();
+    CHECK(ValidateMaterialLobeFields(material) != nullptr);
+
+    material = MaterialPayload{};
+    material.slotUvRotation[0] = 100.0f;
+    CHECK(std::strcmp(ValidateMaterialLobeFields(material), "material slot uv transform out of range") == 0);
 }
 
 TEST_CASE("Textured shader applies the layered lobes before the HDR resolve",

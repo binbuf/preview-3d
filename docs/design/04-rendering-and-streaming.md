@@ -401,3 +401,12 @@ Developer builds assert queue ownership, generation identity, legal resource-sta
 Release logging contains no model data or full paths by default.
 
 Primary references: [D3D12 fence-based resource management](https://learn.microsoft.com/windows/win32/direct3d12/fence-based-resource-management), [resource barriers](https://learn.microsoft.com/windows/win32/direct3d12/using-resource-barriers-to-synchronize-resource-states-in-direct3d-12), [multi-engine synchronization](https://learn.microsoft.com/windows/win32/direct3d12/user-mode-heap-synchronization), [DXGI video-memory reservation](https://learn.microsoft.com/windows/win32/direct3d12/residency), [D3D12 root signature limits](https://learn.microsoft.com/windows/win32/direct3d12/root-signature-limits), [DirectX shader model 6.6 dynamic resources](https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_DynamicResources.html), and [D3D12 Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator).
+
+### T22 cache identity and material application
+
+The derived-cache key uses `model_core::kDerivedCacheParserIdentity`
+(protocol, glTF importer, material-semantics and vertex-layout versions) rather
+than a caller default; cache schema is 4. The 0.7.0 renderer still applies the
+T21 material path (MR-red AO, no normal-scale/per-slot transform application).
+Applying the v13 authored inputs in the shader is an open T22 follow-up; the
+wire/validator/importer contract above is authoritative.

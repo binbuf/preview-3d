@@ -74,7 +74,7 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 
 ## Phase 7 — Authored inputs and bounded complete loads
 
-- [ ] T22 — Preserve authored material, UV, normal and AO semantics → [../tasks/0.7.0/T22-material-semantics.md](../tasks/0.7.0/T22-material-semantics.md)
+- [~] T22 — Preserve authored material, UV, normal and AO semantics → [../tasks/0.7.0/T22-material-semantics.md](../tasks/0.7.0/T22-material-semantics.md) ⟵ running
 - [ ] T23 — Texture-budget accounting and complete-load readiness → [../tasks/0.7.0/T23-texture-budgets-load-readiness.md](../tasks/0.7.0/T23-texture-budgets-load-readiness.md)
 
 ## Phase 8 — Correct shading and textured lobes

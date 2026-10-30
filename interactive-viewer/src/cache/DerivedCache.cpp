@@ -13,13 +13,18 @@
 namespace {
 
 constexpr uint32_t kCacheEntryMagic = 0x43443350; // "P3DC"
-// v3: protocol v12 grows MaterialPayload from 72 to 140 bytes and adds the PBR
+// v4: protocol v13 grows MaterialPayload to 244 bytes for the authored texture
+// inputs and widens the material dependency array to five image slots. The
+// entry key's parserVersion now carries model_core::kDerivedCacheParserIdentity
+// (protocol + importer + material + vertex-layout versions), so a v3 entry can
+// never match a v4 read even before the schema check.
+// v3: protocol v12 grew MaterialPayload from 72 to 140 bytes and added the PBR
 // lobes. A v2 entry carries the old material record, so it cannot be reused
 // without reinterpreting the payload under new rules.
 // v2: normalized geometry may carry ChunkTopology::LineList (protocol v11) and
 // glTF strip/fan primitives now normalize to different triangle counts. A v1
 // entry cannot be reused without reinterpreting its payload under new rules.
-constexpr uint32_t kCurrentCacheSchemaVersion = 3;
+constexpr uint32_t kCurrentCacheSchemaVersion = 4;
 
 #pragma pack(push, 1)
 struct CacheEntryHeader

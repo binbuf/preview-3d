@@ -737,6 +737,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 if (chunk.descriptor.dependencyIds[1]) material.metallicRoughnessImageChunkId = chunk.descriptor.dependencyIds[1];
                 if (chunk.descriptor.dependencyIds[2]) material.normalImageChunkId = chunk.descriptor.dependencyIds[2];
                 if (chunk.descriptor.dependencyIds[3]) material.emissiveImageChunkId = chunk.descriptor.dependencyIds[3];
+                if (chunk.descriptor.dependencyIds[4]) material.occlusionImageChunkId = chunk.descriptor.dependencyIds[4];
                 result.materials.push_back(std::move(material));
                 break;
             }

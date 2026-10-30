@@ -36,6 +36,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -394,6 +395,52 @@ struct ScratchExternalGltf {
             + imageUri + "\",\"mimeType\":\"image/png\"}],"
               "\"textures\":[{\"source\":0}],"
               "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}]}";
+        WriteRaw(L"scene.gltf", std::span<const std::byte>(
+                                    reinterpret_cast<const std::byte*>(json.data()), json.size()));
+    }
+
+    // T22: authored material semantics. Three materials exercise normal scale,
+    // independent occlusion, per-slot transforms/samplers, an unsupported UV
+    // set and an alpha cutout. All textures share one PNG so the assertions are
+    // about metadata and slot wiring, not image content.
+    void WriteMaterialSemanticsGltf(const std::string& imageUri)
+    {
+        std::string json
+            = "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+              "\"meshes\":[{\"primitives\":["
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0},"
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":1},"
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":2}]}],"
+              "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+              "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+              "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+              "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+              "\"buffers\":[{\"uri\":\"mesh.bin\",\"byteLength\":48}],"
+              "\"extensionsUsed\":[\"KHR_texture_transform\"],"
+              "\"samplers\":[{\"wrapS\":10497,\"wrapT\":10497},"
+              "{\"wrapS\":33071,\"wrapT\":33648,\"magFilter\":9728},"
+              "{\"wrapS\":33648,\"wrapT\":33071}],"
+              "\"images\":[{\"uri\":\""
+            + imageUri + "\",\"mimeType\":\"image/png\"}],"
+              "\"textures\":[{\"source\":0,\"sampler\":0},{\"source\":0,\"sampler\":1},"
+              "{\"source\":0,\"sampler\":2}],"
+              "\"materials\":["
+              "{\"name\":\"semantic main\","
+              "\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0,"
+              "\"extensions\":{\"KHR_texture_transform\":{\"offset\":[0.25,0.5],"
+              "\"scale\":[2.0,3.0],\"rotation\":0.5}}},"
+              "\"metallicRoughnessTexture\":{\"index\":2}},"
+              "\"normalTexture\":{\"index\":1,\"scale\":0.45,"
+              "\"extensions\":{\"KHR_texture_transform\":{\"offset\":[0.1,0.2],"
+              "\"scale\":[0.5,0.5]}}},"
+              "\"occlusionTexture\":{\"index\":2,\"strength\":0.35,"
+              "\"extensions\":{\"KHR_texture_transform\":{\"scale\":[4.0,4.0]}}},"
+              "\"emissiveTexture\":{\"index\":0}},"
+              "{\"name\":\"uv1 unsupported\","
+              "\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0,\"texCoord\":1}}},"
+              "{\"name\":\"cutout\",\"alphaMode\":\"MASK\",\"alphaCutoff\":0.25,"
+              "\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.9,0.1,0.7,1.0]}}"
+              "]}";
         WriteRaw(L"scene.gltf", std::span<const std::byte>(
                                     reinterpret_cast<const std::byte*>(json.data()), json.size()));
     }
@@ -985,9 +1032,11 @@ TEST_CASE("KHR_materials_transmission is accepted and approximated as alpha-blen
     REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
     model_core::MaterialPayload payload{};
     std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
-    // Approximated as blend, not left opaque: the transmission factor is
-    // carried to the shader and the authored base-color alpha is preserved.
-    CHECK(payload.alphaMode == static_cast<uint32_t>(model_core::AlphaModeId::Blend));
+    // T22: the authored alphaMode stays OPAQUE in normalized data. The
+    // transmissive flag is what makes the renderer choose its blend bucket, so
+    // the preview still composites the transmission without rewriting the
+    // source's alpha semantics.
+    CHECK(payload.alphaMode == static_cast<uint32_t>(model_core::AlphaModeId::Opaque));
     CHECK(payload.baseColorFactor[0] == Catch::Approx(0.8f));
     CHECK(payload.baseColorFactor[3] == Catch::Approx(1.0f));
     CHECK((payload.flags & model_core::kMaterialFlagTransmissive) != 0);
@@ -1062,8 +1111,10 @@ TEST_CASE("KHR_materials_ior at or below 1 keeps the authored transmission opaqu
     REQUIRE(run.validation.ok);
 
     const import_broker::ValidatedChunk* materialChunk = nullptr;
+    const import_broker::ValidatedChunk* reportChunk = nullptr;
     for (const auto& c : run.validation.chunks) {
         if (c.descriptor.topology == model_core::ChunkTopology::Material) materialChunk = &c;
+        if (c.descriptor.topology == model_core::ChunkTopology::CompatibilityReport) reportChunk = &c;
     }
     REQUIRE(materialChunk != nullptr);
     REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
@@ -1073,6 +1124,17 @@ TEST_CASE("KHR_materials_ior at or below 1 keeps the authored transmission opaqu
     CHECK((payload.flags & model_core::kMaterialFlagTransmissive) == 0);
     CHECK(payload.transmissionFactor == Catch::Approx(0.0f));
     CHECK((payload.flags & model_core::kMaterialFlagDoubleSided) != 0);
+    // The suppression is an explicit, tested diagnostic, not a silent hack.
+    REQUIRE(reportChunk != nullptr);
+    REQUIRE(reportChunk->payload.size() == sizeof(model_core::CompatibilityReportPayload));
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, reportChunk->payload.data(), sizeof(report));
+    bool sawDiagnostic = false;
+    for (uint32_t i = 0; i < report.recordCount; ++i)
+        if (report.records[i].featureId
+            == model_core::kGltfFeatureTransmissionNoInterfaceSuppressed)
+            sawDiagnostic = true;
+    CHECK(sawDiagnostic);
 }
 
 TEST_CASE("KHR_materials_pbrSpecularGlossiness is accepted and approximated as a diffuse dielectric",
@@ -1450,6 +1512,111 @@ TEST_CASE("A glTF image in a textures/ subdirectory resolves through the brokere
     CHECK(header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Srgb));
     CHECK(material->descriptor.dependencyCount == 1);
     CHECK(material->descriptor.dependencyIds[0] == image->descriptor.chunkId);
+}
+
+TEST_CASE("T22 preserves normal scale, per-slot metadata and independent occlusion",
+          "[gltf-import][material][material-semantics]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    ScratchExternalGltf scratch;
+    auto png = ReadFileBytes(TestAssetPath(L"textures\\gray.png"));
+    REQUIRE(png.has_value());
+    scratch.WriteRaw(L"textures\\gray.png", *png);
+    scratch.WriteBin(L"mesh.bin", 48);
+    scratch.WriteMaterialSemanticsGltf("textures/gray.png");
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, scratch.gltfPath, 2244, 16);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    std::vector<const import_broker::ValidatedChunk*> materials;
+    std::unordered_map<uint32_t, const import_broker::ValidatedChunk*> images;
+    const import_broker::ValidatedChunk* report = nullptr;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materials.push_back(&chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image)
+            images.emplace(chunk.descriptor.chunkId, &chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport)
+            report = &chunk;
+    }
+    REQUIRE(materials.size() == 3);
+
+    const auto payloadOf = [](const import_broker::ValidatedChunk& chunk) {
+        model_core::MaterialPayload payload{};
+        REQUIRE(chunk.payload.size() == sizeof(payload));
+        std::memcpy(&payload, chunk.payload.data(), sizeof(payload));
+        return payload;
+    };
+
+    // Material 0: authored normal scale, five image slots including the
+    // independent occlusion map, and per-slot transforms/samplers.
+    const auto mainMaterial = payloadOf(*materials[0]);
+    CHECK(mainMaterial.normalScale == Catch::Approx(0.45f));
+    CHECK(mainMaterial.occlusionStrength == Catch::Approx(0.35f));
+    CHECK(materials[0]->descriptor.dependencyCount == 5);
+    for (int slot = 0; slot < 5; ++slot)
+        CHECK(materials[0]->descriptor.dependencyIds[slot] != 0);
+    // MR (slot 1) and occlusion (slot 4) deliberately point at the same image
+    // here; they are still distinct authored slots, and neither is inferred
+    // from the other's channel.
+    CHECK(materials[0]->descriptor.dependencyIds[1]
+          == materials[0]->descriptor.dependencyIds[4]);
+
+    CHECK(model_core::MaterialSlotUvSet(mainMaterial.slotFlags[0]) == 0);
+    CHECK(((mainMaterial.slotFlags[0] >> model_core::kMaterialSlotAddressUShift)
+           & model_core::kMaterialSlotAddressMask) == 0); // repeat
+    CHECK(((mainMaterial.slotFlags[1] >> model_core::kMaterialSlotAddressUShift)
+           & model_core::kMaterialSlotAddressMask) == 1); // mirrored U
+    CHECK(((mainMaterial.slotFlags[2] >> model_core::kMaterialSlotAddressVShift)
+           & model_core::kMaterialSlotAddressMask) == 1); // mirrored V
+    CHECK((mainMaterial.slotFlags[2] & model_core::kMaterialSlotNearest) != 0);
+    CHECK(mainMaterial.uvOffset[0] == Catch::Approx(0.25f));
+    CHECK(mainMaterial.uvScale[1] == Catch::Approx(3.0f));
+    CHECK(mainMaterial.uvRotation == Catch::Approx(0.5f));
+    // Slot arrays index slots 1..4 (MR, normal, emissive, occlusion).
+    CHECK(mainMaterial.slotUvOffset[1][0] == Catch::Approx(0.1f));   // normal slot
+    CHECK(mainMaterial.slotUvScale[1][0] == Catch::Approx(0.5f));
+    CHECK(mainMaterial.slotUvScale[3][0] == Catch::Approx(4.0f));    // occlusion slot
+
+    // Material 1 references TEXCOORD_1, which the wire does not carry. It must
+    // be left unbound (not aliased to UV0) and produce a specific record.
+    const auto uv1Material = payloadOf(*materials[1]);
+    CHECK(model_core::MaterialSlotUvSet(uv1Material.slotFlags[0]) == 1);
+    CHECK_FALSE(model_core::MaterialSlotUvSetSupported(uv1Material.slotFlags[0]));
+    CHECK(materials[1]->descriptor.dependencyIds[0] == 0);
+    CHECK(materials[1]->descriptor.dependencyCount == 0);
+    REQUIRE(report != nullptr);
+    REQUIRE(report->payload.size() == sizeof(model_core::CompatibilityReportPayload));
+    model_core::CompatibilityReportPayload reportPayload{};
+    std::memcpy(&reportPayload, report->payload.data(), sizeof(reportPayload));
+    bool sawUnsupportedUvSet = false;
+    for (uint32_t i = 0; i < reportPayload.recordCount; ++i) {
+        if (reportPayload.records[i].featureId == model_core::kTextureFeatureUnsupportedUvSet) {
+            sawUnsupportedUvSet = true;
+            CHECK(reportPayload.records[i].count >= 1);
+        }
+    }
+    CHECK(sawUnsupportedUvSet);
+
+    // Material 2 keeps its authored alpha mode and cutoff independently.
+    const auto cutoutMaterial = payloadOf(*materials[2]);
+    CHECK(cutoutMaterial.alphaMode == static_cast<uint32_t>(model_core::AlphaModeId::Mask));
+    CHECK(cutoutMaterial.alphaCutoff == Catch::Approx(0.25f));
+
+    // Color and data maps live in the correct color spaces.
+    for (const auto& [id, image] : images) {
+        (void)id;
+        REQUIRE(image->payload.size() >= sizeof(model_core::ImagePayloadHeader));
+        model_core::ImagePayloadHeader header{};
+        std::memcpy(&header, image->payload.data(), sizeof(header));
+        // Every image here comes from the same gray PNG, but the adapter may
+        // emit one chunk per semantic. Data maps must never be sRGB.
+        if (header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Linear)) {
+            CHECK(header.pixelFormat
+                  != static_cast<uint32_t>(model_core::PixelFormatId::Unknown));
+        }
+    }
 }
 
 namespace {

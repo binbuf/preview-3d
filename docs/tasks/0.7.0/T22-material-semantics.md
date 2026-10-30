@@ -53,7 +53,57 @@ and cache identities when contracts change. No per-asset-name rendering hacks.
 
 ## Hand-off
 
-Pending. Record implemented behavior, deviations, exact build/verification
-commands and results, image/review manifests, performance evidence and what
-the next task must know. Do not mark this task done with missing visual evidence.
+**Status: partial slice (continue).** Authored-input preservation is landed on
+the wire, in the glTF importer, at the trust boundary and in the derived-cache
+identity. The renderer-side application of normal scale, per-slot transforms
+and independent occlusion was reverted after a reproducible textured-draw hang;
+the current render path is the T21 baseline. T22 is not done.
+
+### Landed
+
+- Wire protocol 13: `MaterialPayload` 244 bytes, `ChunkDescriptor` 176 bytes
+  (eight dependency ids), five material image slots including occlusion.
+- `normalScale`, per-slot UV set/sampler/transform metadata, independent
+  occlusion, preserved authored alphaMode/cutoff, explicit IOR<=1 suppression
+  and degenerate-BLEND recovery records.
+- Updated glTF importer, validator, compatibility IDs/host text, cache schema
+  and parser identity, plus unit/import/hostile/cache regression coverage.
+- Generated `material-semantics` fixture, T22 profile, serial material-semantic
+  lane and review record.
+
+### Deviations / blockers
+
+- GPU shading application of normal scale, per-slot transforms and independent
+  AO is *not* applied; adding the per-material slot CBV/root-signature change
+  hung every textured load. The change was reverted to keep a working tree.
+  Reproduce with `TestResults/render-quality/T22-dev/probe7.txt`; suspects are
+  the per-material CBV lifetime, the sixth SRV table, or the material constant
+  buffer size. This is the remaining blocking work.
+- `material_semantics.py` therefore asserts normalized records and captures
+  channel images; it does not assert normal-scale/AO pixels.
+
+### Commands and results
+
+- Build: `MSBuild Preview3D.slnx /p:Configuration=Debug /p:Platform=x64 /m:1`
+  — success.
+- `x64\Debug\Tests.Unit.exe "[material-lobes],[wire-format]"` — all pass.
+- `x64\Debug\Tests.Unit.exe "[cache]"` — all pass.
+- `x64\Debug\Tests.ImportIsolation.exe "[material-semantics]"` — 73
+  assertions pass.
+- `[shared-section-validator]` (95 assertions) and `[hostile-worker]`
+  (304 assertions) — pass.
+- Full `Tests.ImportIsolation.exe` — 506 passed, 1 skipped, 1 expected
+  alpha-mode assertion updated to the preserved-OPAQUE contract.
+- `python tests/render-quality/verify.py --task T22 --configuration Debug
+  --output TestResults/render-quality/T22 --no-build` — capture lane and
+  serial lanes pass; the material-semantic GPU lane currently exercises
+  records/captures only due to the reverted shader.
+
+### Evidence
+
+- `TestResults/render-quality/T22/report.json`
+- `TestResults/render-quality/T22/diagnostics/material-semantics.json`
+- `TestResults/render-quality/T22/probes/` and `external/` channel images
+- `tests/render-quality/review/T22-review.json`
+- Reusable notes: `docs/0.7.0/progress/T22.md`.
 

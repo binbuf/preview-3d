@@ -349,6 +349,70 @@ TEST_CASE("Protocol v12 Material lobe fields are range-checked at the trust boun
     reject([](MaterialPayload& m) { m.reserved[1] = 1; });
 }
 
+TEST_CASE("T22 texture-slot metadata and normal scale are range-checked at the trust boundary",
+          "[shared-section-validator][texture][material-semantics]")
+{
+    auto accepted = ValidTriple();
+    MaterialPayload p = ValidMaterialPayload();
+    p.normalScale = 0.45f;
+    p.slotFlags[model_core::kMaterialSlotIndexNormal]
+        = model_core::MaterialSlotFlags(0, TextureAddressId::Clamp,
+                                        TextureAddressId::Mirror, true);
+    p.slotUvOffset[1][0] = 0.25f;
+    p.slotUvScale[1][1] = 2.0f;
+    p.slotUvRotation[1] = 0.5f;
+    accepted[1].payload = ToBytes(p);
+    CHECK(import_broker::ValidateAndCopySection(BuildSection(accepted, 1), 1, 8).ok);
+
+    auto reject = [](auto mutate) {
+        auto chunks = ValidTriple();
+        MaterialPayload bad = ValidMaterialPayload();
+        mutate(bad);
+        chunks[1].payload = ToBytes(bad);
+        const auto result = import_broker::ValidateAndCopySection(BuildSection(chunks, 1), 1, 8);
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == ImportErrorCode::MalformedData);
+    };
+    reject([](MaterialPayload& m) { m.normalScale = 17.0f; });
+    reject([](MaterialPayload& m) { m.normalScale = std::numeric_limits<float>::quiet_NaN(); });
+    reject([](MaterialPayload& m) { m.slotFlags[0] = 0x80000000u; });
+    reject([](MaterialPayload& m) {
+        m.slotFlags[0] = model_core::MaterialSlotFlags(16, TextureAddressId::Wrap,
+                                                       TextureAddressId::Wrap, false);
+    });
+    reject([](MaterialPayload& m) { m.slotUvOffset[0][1] = 5000.0f; });
+    reject([](MaterialPayload& m) { m.slotUvScale[2][0] = std::numeric_limits<float>::infinity(); });
+}
+
+TEST_CASE("T22 material accepts an independent occlusion image in slot 4",
+          "[shared-section-validator][texture][material-semantics]")
+{
+    auto chunks = ValidTriple();
+    // Add a second image chunk and point the occlusion slot at it.
+    ChunkSpec occlusionImage = chunks[2];
+    occlusionImage.descriptor.chunkId = 4;
+    occlusionImage.descriptor.dependencyCount = 0;
+    chunks.push_back(occlusionImage);
+    chunks[1].descriptor.dependencyIds[4] = 4;
+    chunks[1].descriptor.dependencyCount = 2;
+    const auto result = import_broker::ValidateAndCopySection(BuildSection(chunks, 1), 1, 8);
+    CHECK(result.ok);
+
+    // Slots beyond the five semantic slots are rejected rather than silently
+    // treated as another image.
+    auto invalid = ValidTriple();
+    ChunkSpec extra = invalid[2];
+    extra.descriptor.chunkId = 4;
+    extra.descriptor.dependencyCount = 0;
+    invalid.push_back(extra);
+    invalid[1].descriptor.dependencyIds[5] = 4;
+    invalid[1].descriptor.dependencyCount = 2;
+    const auto rejected = import_broker::ValidateAndCopySection(
+        BuildSection(invalid, 1), 1, 8);
+    CHECK_FALSE(rejected.ok);
+    CHECK(rejected.errorCode == ImportErrorCode::MalformedData);
+}
+
 TEST_CASE("A Material chunk whose dependency resolves to a non-Image chunk is rejected",
           "[shared-section-validator][texture]")
 {

@@ -13,12 +13,13 @@ Roles, not asset names, drive the capture regions:
 """
 from __future__ import annotations
 
+import base64
 import json
 import math
 from pathlib import Path
 import struct
 
-from common import write_json
+from common import encoded_png, write_json
 from studio import uv_sphere
 
 
@@ -214,7 +215,7 @@ def material_probe(path: Path) -> Path:
          'pbrMetallicRoughness': {'baseColorFactor': [0.7, 0.9, 0.95, 1.0],
                                   'metallicFactor': 0.0, 'roughnessFactor': 0.05}},
         {'name': 'probe masked cutout',
-         'alphaMode': 'MASK', 'alphaCutoff': 0.5,
+         'alphaMode': 'MASK', 'alphaCutoff': 0.2,
          'pbrMetallicRoughness': {'baseColorFactor': [0.9, 0.1, 0.7, 1.0],
                                   'metallicFactor': 0.0, 'roughnessFactor': 0.6}},
     ]
@@ -238,6 +239,148 @@ def material_probe(path: Path) -> Path:
                            'KHR_materials_specular', 'KHR_materials_emissive_strength'],
         'scene': 0, 'scenes': [{'nodes': [0]}], 'nodes': [{'mesh': 0}],
         'meshes': [{'primitives': primitives}], 'materials': materials,
+    }
+    document, binary = finish(document)
+    return _glb(document, binary, path)
+
+
+def _png_data_uri(pixels: bytes, width: int = 4, height: int = 4) -> str:
+    return 'data:image/png;base64,' + base64.b64encode(
+        encoded_png(width, height, pixels)).decode('ascii')
+
+
+def _solid(width, height, rgb):
+    return bytes(rgb) * (width * height)
+
+
+def material_semantics(path: Path) -> Path:
+    """T22 authored-material fixture.
+
+    Ten spheres isolate one authored input each: normal scale 0/0.45/1,
+    MR-red-only versus an independent occlusion binding, an unsupported UV1
+    reference, per-slot transforms/samplers, a masked cutout, and IOR 1 versus
+    1.5 transmission. Every image is embedded as a data URI so the fixture is a
+    single redistributable file.
+    """
+    # Non-flat tangent-space normal map: the R channel varies so normalScale
+    # changes the resulting shading normal (diagnostic channel 3).
+    normal_width = 4
+    normal_pixels = bytearray()
+    for y in range(normal_width):
+        for x in range(normal_width):
+            normal_pixels += bytes((64 + x * 48, 128, 255))
+    normal_uri = _png_data_uri(bytes(normal_pixels))
+
+    color_pixels = bytearray()
+    for y in range(4):
+        for x in range(4):
+            color_pixels += bytes((230, 210, 190) if (x + y) % 2 else (40, 90, 160))
+    color_uri = _png_data_uri(bytes(color_pixels))
+    mr_uri = _png_data_uri(_solid(4, 4, (51, 128, 0)))   # R=0.2 is NOT AO
+    ao_uri = _png_data_uri(_solid(4, 4, (51, 51, 51)))   # independent AO 0.2
+
+    materials = [
+        {'name': 'normal scale 0',
+         'normalTexture': {'index': 2, 'scale': 0.0},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.55, 0.55, 0.55, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.55}},
+        {'name': 'normal scale 045',
+         'normalTexture': {'index': 2, 'scale': 0.45},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.55, 0.55, 0.55, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.55}},
+        {'name': 'normal scale 1',
+         'normalTexture': {'index': 2, 'scale': 1.0},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.55, 0.55, 0.55, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.55}},
+        {'name': 'MR red is not AO',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.6, 0.6, 0.6, 1],
+                                  'metallicFactor': 1.0, 'roughnessFactor': 1.0,
+                                  'metallicRoughnessTexture': {'index': 3}}},
+        {'name': 'independent occlusion',
+         'occlusionTexture': {'index': 4, 'strength': 1.0},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.6, 0.6, 0.6, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.8}},
+        {'name': 'uv1 unsupported',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.8, 0.3, 0.2, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.5,
+                                  'baseColorTexture': {'index': 0, 'texCoord': 1}}},
+        {'name': 'per slot transform',
+         'normalTexture': {'index': 2, 'scale': 1.0, 'extensions': {
+             'KHR_texture_transform': {'offset': [0.25, 0.1], 'scale': [2.0, 2.0],
+                                       'rotation': 0.4}}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.7, 0.7, 0.7, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.5,
+                                  'baseColorTexture': {'index': 0, 'extensions': {
+                                      'KHR_texture_transform': {'offset': [0.5, 0.5],
+                                                                'scale': [3.0, 3.0]}}}}},
+        {'name': 'alpha cutout',
+         'alphaMode': 'MASK', 'alphaCutoff': 0.2,
+         'pbrMetallicRoughness': {'baseColorFactor': [0.9, 0.1, 0.7, 0.35],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.6}},
+        {'name': 'ior 1 transmission suppressed',
+         'extensions': {'KHR_materials_transmission': {'transmissionFactor': 1.0},
+                        'KHR_materials_ior': {'ior': 1.0}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.72, 0.02, 0.02, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.4}},
+        {'name': 'ior 15 transmission',
+         'extensions': {'KHR_materials_transmission': {'transmissionFactor': 0.9},
+                        'KHR_materials_ior': {'ior': 1.5}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.7, 0.9, 0.95, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.05}},
+    ]
+    positions, normals, uvs, indices = uv_sphere(segments=32, rings=20)
+    add_mesh, finish = _mesh_builder()
+    primitives = []
+    locations = [(-4.5, 1.15), (-3.0, 1.15), (-1.5, 1.15), (0.0, 1.15), (1.5, 1.15),
+                 (3.0, 1.15), (4.5, 1.15), (-2.25, -1.15), (0.0, -1.15), (2.25, -1.15)]
+    for index, (x, y) in enumerate(locations):
+        scale = 0.62
+        base = add_mesh(
+            [(px * scale + x, py * scale + y, pz * scale + scale) for px, py, pz in positions],
+            normals, uvs, indices,
+            tangents=[(1.0, 0.0, 0.0, 1.0)] * len(positions),
+            colors=[(1.0, 1.0, 1.0, 1.0)] * len(positions))
+        primitives.append({'attributes': {'POSITION': base, 'NORMAL': base + 1,
+                                         'TEXCOORD_0': base + 2, 'TANGENT': base + 4,
+                                         'COLOR_0': base + 5},
+                           'indices': base + 3, 'material': index})
+    # A separate mirrored sphere exercises the negative-determinant tangent
+    # handedness path without instancing every probe sphere.
+    mirrored_base = add_mesh(
+        [(px * 0.8, py * 0.8, pz * 0.8) for px, py, pz in positions],
+        normals, uvs, indices,
+        tangents=[(1.0, 0.0, 0.0, 1.0)] * len(positions),
+        colors=[(1.0, 1.0, 1.0, 1.0)] * len(positions))
+    mirrored_primitive = {
+        'attributes': {'POSITION': mirrored_base, 'NORMAL': mirrored_base + 1,
+                       'TEXCOORD_0': mirrored_base + 2, 'TANGENT': mirrored_base + 4,
+                       'COLOR_0': mirrored_base + 5},
+        'indices': mirrored_base + 3, 'material': 6}
+    document = {
+        'asset': {'version': '2.0',
+                  'generator': 'preview-3d tests/render-quality/fixtures.py'},
+        'extensionsUsed': ['KHR_texture_transform', 'KHR_materials_transmission',
+                           'KHR_materials_ior'],
+        'samplers': [
+            {'wrapS': 10497, 'wrapT': 10497},
+            {'wrapS': 33071, 'wrapT': 33648, 'magFilter': 9728},
+            {'wrapS': 33648, 'wrapT': 33071},
+        ],
+        'images': [{'uri': color_uri}, {'uri': normal_uri},
+                   {'uri': normal_uri}, {'uri': mr_uri}, {'uri': ao_uri}],
+        'textures': [
+            {'source': 0, 'sampler': 0}, {'source': 1, 'sampler': 1},
+            {'source': 2, 'sampler': 0}, {'source': 3, 'sampler': 0},
+            {'source': 4, 'sampler': 0},
+        ],
+        'scene': 0,
+        'scenes': [{'nodes': [0, 1]}],
+        'nodes': [{'mesh': 0},
+                  {'mesh': 1, 'translation': [0.0, -3.1, 0.0],
+                   'scale': [-1.0, 1.0, 1.0]}],
+        'meshes': [{'primitives': primitives},
+                   {'primitives': [mirrored_primitive]}],
+        'materials': materials,
     }
     document, binary = finish(document)
     return _glb(document, binary, path)
@@ -267,6 +410,7 @@ FIXTURES = {
     'sphere-grid': (sphere_grid, 'sphere-grid.glb'),
     'glass-reference': (glass_reference, 'glass-reference.glb'),
     'material-probe': (material_probe, 'material-probe.glb'),
+    'material-semantics': (material_semantics, 'material-semantics.glb'),
     'stl-box': (stl_box, 'stl-box.stl'),
 }
 
@@ -293,7 +437,40 @@ EXPECTED_MATERIALS = {
          'transmission': 0.9, 'ior': 1.33},
         {'name': 'probe masked cutout', 'baseColor': [0.9, 0.1, 0.7, 1.0],
          'metallic': 0.0, 'roughness': 0.6, 'bucket': 1, 'alphaMode': 1,
-         'alphaCutoff': 0.5},
+         'alphaCutoff': 0.2},
+    ],
+    # T22: authored inputs and the renderer policy each one must produce.
+    'material-semantics': [
+        {'name': 'normal scale 0', 'baseColor': [0.55, 0.55, 0.55, 1.0],
+         'metallic': 0.0, 'roughness': 0.55, 'bucket': 0, 'alphaMode': 0,
+         'normalScale': 0.0, 'occlusionBound': False, 'transmission': 0.0},
+        {'name': 'normal scale 045', 'baseColor': [0.55, 0.55, 0.55, 1.0],
+         'metallic': 0.0, 'roughness': 0.55, 'bucket': 0, 'alphaMode': 0,
+         'normalScale': 0.45, 'occlusionBound': False, 'transmission': 0.0},
+        {'name': 'normal scale 1', 'baseColor': [0.55, 0.55, 0.55, 1.0],
+         'metallic': 0.0, 'roughness': 0.55, 'bucket': 0, 'alphaMode': 0,
+         'normalScale': 1.0, 'occlusionBound': False, 'transmission': 0.0},
+        {'name': 'MR red is not AO', 'baseColor': [0.6, 0.6, 0.6, 1.0],
+         'metallic': 1.0, 'roughness': 1.0, 'bucket': 0, 'alphaMode': 0,
+         'occlusionBound': False, 'occlusionExpectation': 1.0},
+        {'name': 'independent occlusion', 'baseColor': [0.6, 0.6, 0.6, 1.0],
+         'metallic': 0.0, 'roughness': 0.8, 'bucket': 0, 'alphaMode': 0,
+         'occlusionBound': True, 'occlusionExpectation': 0.2},
+        {'name': 'uv1 unsupported', 'baseColor': [0.8, 0.3, 0.2, 1.0],
+         'metallic': 0.0, 'roughness': 0.5, 'bucket': 0, 'alphaMode': 0,
+         'baseColorBound': False},
+        {'name': 'per slot transform', 'baseColor': [0.7, 0.7, 0.7, 1.0],
+         'metallic': 0.0, 'roughness': 0.5, 'bucket': 0, 'alphaMode': 0,
+         'normalScale': 1.0, 'baseColorBound': True},
+        {'name': 'alpha cutout', 'baseColor': [0.9, 0.1, 0.7, 0.35],
+         'metallic': 0.0, 'roughness': 0.6, 'bucket': 1, 'alphaMode': 1,
+         'alphaCutoff': 0.2},
+        {'name': 'ior 1 transmission suppressed', 'baseColor': [0.72, 0.02, 0.02, 1.0],
+         'metallic': 0.0, 'roughness': 0.4, 'bucket': 0, 'alphaMode': 0,
+         'transmission': 0.0, 'ior': 1.0},
+        {'name': 'ior 15 transmission', 'baseColor': [0.7, 0.9, 0.95, 1.0],
+         'metallic': 0.0, 'roughness': 0.05, 'bucket': 3, 'alphaMode': 0,
+         'transmission': 0.9, 'ior': 1.5},
     ],
 }
 
@@ -327,6 +504,7 @@ def generate(output: Path):
                     'glass-reference': ['thin tinted transmission', 'rough transmission',
                                         'clear lens dielectric'],
                     'material-probe': [item['name'] for item in EXPECTED_MATERIALS['material-probe']],
+                    'material-semantics': [item['name'] for item in EXPECTED_MATERIALS['material-semantics']],
                     'stl-box': ['hard-edged STEP/STL-like surface', 'ground contact'],
                 }[name],
             },

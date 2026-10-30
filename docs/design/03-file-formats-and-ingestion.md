@@ -491,3 +491,21 @@ Every adapter requires valid, malformed, truncated, adversarial-count, cancellat
 Every adapter's isolation, not only its parsing correctness, is verified: a synthetic hostile-worker build (deliberately mutating shared-section bytes after the host's first read, replaying stale generations, or lying about a chunk's declared layout ID) proves the copy-then-validate rule in [02-system-architecture.md](./02-system-architecture.md) actually rejects the mutation, rather than only proving that well-formed workers behave. This test exists once per wire-format version, not once per format, since the host's validator is format-agnostic — but it must be in place before any real parser adapter ships behind it, per Gate 2 in [10-delivery-plan.md](./10-delivery-plan.md).
 
 Primary references: [Windows file mapping](https://learn.microsoft.com/windows/win32/memory/file-mapping), [fastgltf](https://github.com/spnda/fastgltf), [Google Draco](https://github.com/google/draco), [KTX-Software](https://github.com/KhronosGroup/KTX-Software), [ufbx](https://github.com/ufbx/ufbx), [lib3mf](https://github.com/3MFConsortium/lib3mf), [TinyUSDZ](https://github.com/lighttransport/tinyusdz), [OpenUSD](https://openusd.org/release/) and [meshoptimizer](https://github.com/zeux/meshoptimizer).
+
+## T22 authored material inputs (protocol v13)
+
+`MaterialPayload` is 244 bytes. It carries `normalScale`, per-texture
+`slotFlags[5]` (authored UV set, U/V address mode, nearest intent),
+`slotUvOffset/Scale/Rotation` for slots 1-4, the independent occlusion slot and
+the existing alpha/transmission/unlit fields. The material chunk's image
+dependency slots are `{baseColor, metallicRoughness, normal, emissive,
+occlusion}`; slots 5-7 stay zero and `ChunkDescriptor` is 176 bytes. The
+metallic-roughness red channel is never treated as authored AO.
+
+Only UV set 0 is carried by the normalized vertex layouts. A slot that
+references another set is left unbound and produces the specific
+`kTextureFeatureUnsupportedUvSet` compatibility record; it is never sampled
+with UV0. IOR<=1 transmission suppression and degenerate-BLEND recovery are
+explicit `CompatibilityRecord` entries (`kGltfFeature...` ids 9 and 10), not
+silent rewrites. The authored `alphaMode` is preserved; the transmissive flag
+selects the blend bucket independently.

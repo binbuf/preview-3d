@@ -79,7 +79,7 @@ std::vector<std::byte> StepMetadataSection(model_core::UpAxisId axis, double met
 
 TEST_CASE("STEP-002 extends protocol-v10 with closed additive identities", "[step-002][protocol]")
 {
-    CHECK(model_core::kCurrentProtocolVersion == 12);
+    CHECK(model_core::kCurrentProtocolVersion == 13);
     CHECK(uint32_t(model_core::SourceFormatId::Step) == 13);
     CHECK(uint32_t(model_core::ControlOpcode::StartStepImportFromFile) == 20);
     CHECK(uint32_t(model_core::ControlOpcode::StepProgress) == 21);

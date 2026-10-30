@@ -159,7 +159,7 @@ struct DetailRequest {
     uint64_t generationId;
     ChunkDescriptor source;
 };
-static_assert(sizeof(DetailRequest) == 168);
+static_assert(sizeof(DetailRequest) == 184);
 
 struct ControlMessageHeader {
     uint32_t opcode;      // ControlOpcode value

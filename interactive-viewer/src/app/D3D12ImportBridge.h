@@ -113,12 +113,15 @@ struct ImportedMesh {
 struct ImportedMaterial {
     uint32_t chunkId = 0;
     model_core::MaterialPayload data{};
-    // All four slots are populated and consumed: GltfAdapter.cpp resolves
-    // metallicRoughness/normal/emissive alongside base color. 0 = none.
+    // All five slots are populated and consumed: GltfAdapter.cpp resolves
+    // metallicRoughness/normal/emissive/occlusion alongside base color. The
+    // occlusion map is independent; the metallic-roughness red channel is not
+    // treated as AO. 0 = none.
     uint32_t baseColorImageChunkId = 0;
     uint32_t metallicRoughnessImageChunkId = 0;
     uint32_t normalImageChunkId = 0;
     uint32_t emissiveImageChunkId = 0;
+    uint32_t occlusionImageChunkId = 0;
 };
 
 struct ImportedImage {

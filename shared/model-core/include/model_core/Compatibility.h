@@ -70,7 +70,19 @@ constexpr uint32_t kGltfFeatureAnisotropy = 5;
 constexpr uint32_t kGltfFeatureVolume = 6;
 constexpr uint32_t kGltfFeatureEmissiveStrength = 7;
 constexpr uint32_t kGltfFeatureDispersion = 8;
+// T22 intentional compatibility conversions. Both are explicit and tested
+// rather than silent: an authoring tool that stamps a physically empty
+// transmission interface or a blend with no alpha source would otherwise make
+// an opaque object disappear or paint over what is behind it.
+constexpr uint32_t kGltfFeatureTransmissionNoInterfaceSuppressed = 9;
+constexpr uint32_t kGltfFeatureDegenerateBlendRecovered = 10;
 constexpr uint32_t kGltfFeatureUnspecifiedExtension = 900;
+
+// Texture feature IDs shared by every importer (4000..4999, append-only).
+// T22: a texture slot that references an authored UV set the normalized
+// vertex layouts do not carry is left unbound with this specific record; it is
+// never silently aliased to UV0.
+constexpr uint32_t kTextureFeatureUnsupportedUvSet = 4000;
 
 // 3MF extension/feature IDs (1000..1999, append-only). A required extension is
 // only terminal when the visible geometry depends on it; unknown required

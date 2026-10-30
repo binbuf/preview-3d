@@ -38,6 +38,7 @@ import corpus
 import diagnostics
 import env
 import fixtures
+import material_semantics
 import selftest
 from viewer import LoadFailed, Viewer, ViewerError, set_dpi_awareness
 
@@ -462,6 +463,19 @@ def main():
             report['failures'].extend(
                 f'diagnostics: {failure}' for failure in diagnostic_report['failures'])
         report['causeReport'] = str(diagnostics.write_cause_report(output, diagnostic_report))
+    if args.task == 'T22' and not args.capture_only:
+        # Serial unit/import/hostile/cache lanes plus the GPU material-semantic
+        # readback and channel-image lane. It is a separate viewer session from
+        # the capture lane so a failed semantic check cannot be hidden by a
+        # successful screenshot.
+        semantic_report = material_semantics.run(
+            ROOT, output, args.configuration)
+        report['materialSemantics'] = semantic_report
+        if semantic_report.get('failures'):
+            report['failures'].extend(
+                f'material-semantics: {failure}'
+                for failure in semantic_report['failures'])
+        report['causeReport'] = semantic_report.get('reportPath')
 
     required_lanes = [name for name, lane in profile['lanes'].items() if lane.get('required')]
     selected_lanes = {}

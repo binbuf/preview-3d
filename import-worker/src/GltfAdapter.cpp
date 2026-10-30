@@ -101,11 +101,12 @@ struct PendingMaterial {
     MaterialPayload data{};
     // Indices into WalkState::pendingImages, fixed slot order per
     // WireFormat.h's documented ChunkDescriptor::dependencyIds contract:
-    // {baseColor, metallicRoughness, normal, emissive}.
+    // {baseColor, metallicRoughness, normal, emissive, occlusion}.
     std::optional<size_t> pendingBaseColorImageIndex;
     std::optional<size_t> pendingMetallicRoughnessImageIndex;
     std::optional<size_t> pendingNormalImageIndex;
     std::optional<size_t> pendingEmissiveImageIndex;
+    std::optional<size_t> pendingOcclusionImageIndex;
 };
 
 // This codebase's ImportErrorCode enum is a deliberately small subset of
@@ -382,6 +383,12 @@ struct WalkState {
     uint64_t totalDecodedImageBytes = 0;
     uint64_t totalDecodedMeshoptBytes = 0;
     uint32_t textureWarningCount = 0;
+    // T22 specific, tested compatibility records. Generic textureWarnings are
+    // still emitted for dropped maps; these counters name the authored
+    // semantics that were deliberately not applied as authored.
+    uint32_t unsupportedUvSetCount = 0;
+    uint32_t transmissionNoInterfaceCount = 0;
+    uint32_t degenerateBlendCount = 0;
     TextureDecodeOptions textureOptions;
     uint32_t maxChunkCount = 0;
     ImportErrorCode error = ImportErrorCode::None;
@@ -1167,9 +1174,81 @@ bool TextureImageHasNoAlpha(const WalkState& state, const fastgltf::TextureInfo&
     }, image.data);
 }
 
+TextureAddressId MapWrap(fastgltf::Wrap wrap)
+{
+    switch (wrap) {
+    case fastgltf::Wrap::ClampToEdge: return TextureAddressId::Clamp;
+    case fastgltf::Wrap::MirroredRepeat: return TextureAddressId::Mirror;
+    case fastgltf::Wrap::Repeat:
+    default: return TextureAddressId::Wrap;
+    }
+}
+
+// T22: maps one glTF TextureInfo's UV set and sampler intent into the bounded
+// per-slot flags. The authored texCoordIndex is preserved even when this build
+// cannot sample it; the caller then leaves the slot unbound instead of aliasing
+// it to UV0 and records a specific compatibility entry.
+uint32_t ResolveSlotFlags(WalkState& state, const fastgltf::TextureInfo& info)
+{
+    TextureAddressId addressU = TextureAddressId::Wrap;
+    TextureAddressId addressV = TextureAddressId::Wrap;
+    bool nearest = false;
+    if (info.textureIndex < state.asset.textures.size()) {
+        const fastgltf::Texture& texture = state.asset.textures[info.textureIndex];
+        if (texture.samplerIndex.has_value()
+            && *texture.samplerIndex < state.asset.samplers.size()) {
+            const fastgltf::Sampler& sampler = state.asset.samplers[*texture.samplerIndex];
+            addressU = MapWrap(sampler.wrapS);
+            addressV = MapWrap(sampler.wrapT);
+            nearest = sampler.magFilter.has_value()
+                && (*sampler.magFilter == fastgltf::Filter::Nearest
+                    || *sampler.magFilter == fastgltf::Filter::NearestMipMapNearest
+                    || *sampler.magFilter == fastgltf::Filter::NearestMipMapLinear);
+        }
+    }
+    const uint32_t uvSet = info.texCoordIndex <= 0xFFFFFFFFull
+        ? static_cast<uint32_t>(info.texCoordIndex) : 0xFFFFFFFFu;
+    if (uvSet > model_core::kMaterialMaxSupportedUvSet)
+        state.unsupportedUvSetCount = (std::min)(64u, state.unsupportedUvSetCount + 1);
+    return model_core::MaterialSlotFlags(uvSet, addressU, addressV, nearest);
+}
+
+// True when the authored UV set can actually be sampled by the normalized
+// vertex layout (the wire carries TEXCOORD_0 only).
+bool SlotUvSetSupported(const fastgltf::TextureInfo& info)
+{
+    return info.texCoordIndex <= model_core::kMaterialMaxSupportedUvSet;
+}
+
+void StoreSlotTransform(MaterialPayload& material, uint32_t slot,
+                        const fastgltf::TextureInfo& info)
+{
+    const fastgltf::TextureTransform* transform = info.transform ? &*info.transform : nullptr;
+    const float offsetU = transform ? float(transform->uvOffset.x()) : 0.0f;
+    const float offsetV = transform ? float(transform->uvOffset.y()) : 0.0f;
+    const float scaleU = transform ? float(transform->uvScale.x()) : 1.0f;
+    const float scaleV = transform ? float(transform->uvScale.y()) : 1.0f;
+    const float rotation = transform ? float(transform->rotation) : 0.0f;
+    if (slot == model_core::kMaterialSlotIndexBaseColor) {
+        // Slot 0 keeps the legacy fields as its single source of truth.
+        material.uvOffset[0] = offsetU;
+        material.uvOffset[1] = offsetV;
+        material.uvScale[0] = scaleU;
+        material.uvScale[1] = scaleV;
+        material.uvRotation = rotation;
+        return;
+    }
+    const uint32_t index = slot - 1;
+    material.slotUvOffset[index][0] = offsetU;
+    material.slotUvOffset[index][1] = offsetV;
+    material.slotUvScale[index][0] = scaleU;
+    material.slotUvScale[index][1] = scaleV;
+    material.slotUvRotation[index] = rotation;
+}
+
 // Resolves (with dedup by glTF material index) the pending-material index
-// for asset.materials[materialIndex]. All four PBR texture slots
-// (baseColor/metallicRoughness/normal/emissive) are inspected, each
+// for asset.materials[materialIndex]. All five PBR texture slots
+// (baseColor/metallicRoughness/normal/emissive/occlusion) are inspected, each
 // resolved through ResolveTextureSlotImage/ResolveImage -- a texture this
 // chunk can't decode/transcode (or that's simply absent) leaves that slot
 // unpopulated, matching the design doc's "missing/unsupported optional
@@ -1210,6 +1289,16 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     pending.data.uvScale[0] = 1.0f;
     pending.data.uvScale[1] = 1.0f;
     pending.data.uvRotation = 0.0f;
+    for (uint32_t slot = 0; slot < model_core::kMaterialTextureSlotCount; ++slot)
+        pending.data.slotFlags[slot] = 0;
+    for (uint32_t slot = 1; slot < model_core::kMaterialTextureSlotCount; ++slot) {
+        pending.data.slotUvOffset[slot - 1][0] = 0.0f;
+        pending.data.slotUvOffset[slot - 1][1] = 0.0f;
+        pending.data.slotUvScale[slot - 1][0] = 1.0f;
+        pending.data.slotUvScale[slot - 1][1] = 1.0f;
+        pending.data.slotUvRotation[slot - 1] = 0.0f;
+    }
+    pending.data.normalScale = 1.0f;
     pending.data.alphaMode = static_cast<uint32_t>(material.alphaMode); // AlphaMode/AlphaModeId share numeric values
     pending.data.alphaCutoff = material.alphaCutoff;
     pending.data.flags = (material.doubleSided ? kMaterialFlagDoubleSided : 0u)
@@ -1261,6 +1350,8 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         pending.data.ior = std::clamp(float(material.ior), 1.0f, 4.0f);
     if (material.occlusionTexture && std::isfinite(material.occlusionTexture->strength))
         pending.data.occlusionStrength = std::clamp(float(material.occlusionTexture->strength), 0.0f, 1.0f);
+    if (material.normalTexture && std::isfinite(material.normalTexture->scale))
+        pending.data.normalScale = std::clamp(float(material.normalTexture->scale), -16.0f, 16.0f);
 
     // KHR_materials_pbrSpecularGlossiness is archived in the Khronos registry
     // but still emitted as a required extension by current exporters (the
@@ -1313,19 +1404,29 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     // case -- which must stay the opaque surface it is rather than becoming a
     // see-through ghost.
     const bool hasOpticalInterface = material.ior > 1.0f + 1.0e-4f;
-    if (material.transmission && material.alphaMode != fastgltf::AlphaMode::Mask
-        && hasOpticalInterface) {
+    if (material.transmission) {
         float transmission = material.transmission->transmissionFactor;
         if (!std::isfinite(transmission)) {
             transmission = 0.0f;
         }
         transmission = std::clamp(transmission, 0.0f, 1.0f);
-        if (transmission > 0.0f) {
+        if (transmission > 0.0f && material.alphaMode == fastgltf::AlphaMode::Mask) {
+            // A MASK material keeps its authored discard test; transmission is
+            // not silently reinterpreted as coverage.
+        } else if (transmission > 0.0f && !hasOpticalInterface) {
+            // Deliberate, diagnosed conversion (not a model/material-name
+            // hack): an IOR of 1 has no optical interface, so the authored
+            // transmission would make an opaque object vanish. Keep the
+            // surface opaque and tell the user exactly why.
+            state.transmissionNoInterfaceCount =
+                (std::min)(64u, state.transmissionNoInterfaceCount + 1);
+        } else if (transmission > 0.0f) {
+            // The authored alphaMode is preserved independently in normalized
+            // data. The renderer derives its blend bucket from the transmissive
+            // flag, so an authored OPAQUE transmission still composites
+            // correctly without rewriting what the source said.
             pending.data.transmissionFactor = transmission;
             pending.data.flags |= kMaterialFlagTransmissive;
-            if (material.alphaMode == fastgltf::AlphaMode::Opaque) {
-                pending.data.alphaMode = static_cast<uint32_t>(AlphaModeId::Blend);
-            }
         }
     }
 
@@ -1345,46 +1446,51 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         pending.data.transmissionFactor = 1.0f;
         pending.data.flags |= kMaterialFlagTransmissive;
         state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
+        state.degenerateBlendCount = (std::min)(64u, state.degenerateBlendCount + 1);
     }
 
-    if (baseColorTexture) {
-        const fastgltf::TextureInfo& textureInfo = *baseColorTexture;
-        if (textureInfo.transform) {
-            pending.data.uvOffset[0] = textureInfo.transform->uvOffset.x();
-            pending.data.uvOffset[1] = textureInfo.transform->uvOffset.y();
-            pending.data.uvScale[0] = textureInfo.transform->uvScale.x();
-            pending.data.uvScale[1] = textureInfo.transform->uvScale.y();
-            pending.data.uvRotation = textureInfo.transform->rotation;
-        }
-        pending.pendingBaseColorImageIndex = ResolveTextureSlotImage(state, &textureInfo, ColorSpaceId::Srgb,TextureSemantic::Color);
-        if (state.error != ImportErrorCode::None) {
-            return std::nullopt;
-        }
-    }
-    if (material.pbrData.metallicRoughnessTexture.has_value()) {
-        pending.pendingMetallicRoughnessImageIndex
-            = ResolveTextureSlotImage(state, &*material.pbrData.metallicRoughnessTexture, ColorSpaceId::Linear,TextureSemantic::Data);
-        if (state.error != ImportErrorCode::None) {
-            return std::nullopt;
-        }
-    }
-    if (material.normalTexture.has_value()) {
-        // NormalTextureInfo derives from TextureInfo -- ResolveTextureSlotImage
-        // only needs the base; its extra .scale field is dropped (no
-        // MaterialPayload field exists for it this chunk, a deliberate
-        // scope call, not an oversight).
-        pending.pendingNormalImageIndex = ResolveTextureSlotImage(state, &*material.normalTexture, ColorSpaceId::Linear,TextureSemantic::Normal);
-        if (state.error != ImportErrorCode::None) {
-            return std::nullopt;
-        }
-    }
-    if (material.emissiveTexture.has_value()) {
-        pending.pendingEmissiveImageIndex
-            = ResolveTextureSlotImage(state, &*material.emissiveTexture, ColorSpaceId::Srgb,TextureSemantic::Emissive);
-        if (state.error != ImportErrorCode::None) {
-            return std::nullopt;
-        }
-    }
+    // Every texture slot carries its own UV set, sampler intent and
+    // KHR_texture_transform. A slot on an unsupported set is left unbound with
+    // a specific compatibility record; it is never sampled against UV0.
+    const auto resolveSlot = [&](const fastgltf::TextureInfo* info, uint32_t slot,
+                                 std::optional<size_t>& pendingImage,
+                                 ColorSpaceId colorSpace, TextureSemantic semantic) -> bool {
+        if (info == nullptr)
+            return true;
+        pending.data.slotFlags[slot] = ResolveSlotFlags(state, *info);
+        StoreSlotTransform(pending.data, slot, *info);
+        if (!SlotUvSetSupported(*info))
+            return true; // left unbound; warning already counted
+        pendingImage = ResolveTextureSlotImage(state, info, colorSpace, semantic);
+        return state.error == ImportErrorCode::None;
+    };
+    if (!resolveSlot(baseColorTexture, model_core::kMaterialSlotIndexBaseColor,
+                     pending.pendingBaseColorImageIndex,
+                     ColorSpaceId::Srgb, TextureSemantic::Color))
+        return std::nullopt;
+    if (!resolveSlot(material.pbrData.metallicRoughnessTexture
+                         ? &*material.pbrData.metallicRoughnessTexture : nullptr,
+                     model_core::kMaterialSlotIndexMetallicRoughness,
+                     pending.pendingMetallicRoughnessImageIndex,
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+    if (!resolveSlot(material.normalTexture ? &*material.normalTexture : nullptr,
+                     model_core::kMaterialSlotIndexNormal,
+                     pending.pendingNormalImageIndex,
+                     ColorSpaceId::Linear, TextureSemantic::Normal))
+        return std::nullopt;
+    if (!resolveSlot(material.emissiveTexture ? &*material.emissiveTexture : nullptr,
+                     model_core::kMaterialSlotIndexEmissive,
+                     pending.pendingEmissiveImageIndex,
+                     ColorSpaceId::Srgb, TextureSemantic::Emissive))
+        return std::nullopt;
+    // Independent occlusion map. glTF AO lives only here; the
+    // metallicRoughness red channel is never reinterpreted as AO.
+    if (!resolveSlot(material.occlusionTexture ? &*material.occlusionTexture : nullptr,
+                     model_core::kMaterialSlotIndexOcclusion,
+                     pending.pendingOcclusionImageIndex,
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
 
     size_t pendingIndex = state.pendingMaterials.size();
     state.pendingMaterials.push_back(std::move(pending));
@@ -2867,6 +2973,25 @@ void BuildGltfCompatibilityReport(const fastgltf::Asset& asset,
     }
 }
 
+// T22: appends the specific material-semantic conversions/limitations that are
+// not glTF extensions. Counts are saturated and the severity is stable so the
+// host can localize a precise message instead of a generic warning.
+void AppendMaterialCompatibilityRecords(const WalkState& state,
+                                        model_core::CompatibilityReportBuilder& compatibility,
+                                        model_core::ImportStatusPayload& status)
+{
+    const auto add = [&](uint32_t featureId, uint32_t count) {
+        if (count == 0)
+            return;
+        status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
+        compatibility.Add(featureId, model_core::CompatibilitySeverity::Degraded, count);
+    };
+    add(model_core::kTextureFeatureUnsupportedUvSet, state.unsupportedUvSetCount);
+    add(model_core::kGltfFeatureTransmissionNoInterfaceSuppressed,
+        state.transmissionNoInterfaceCount);
+    add(model_core::kGltfFeatureDegenerateBlendRecovered, state.degenerateBlendCount);
+}
+
 } // namespace
 
 std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::byte> sourceGlbBytes,
@@ -3332,8 +3457,9 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             d.chunkId = materialBase + uint32_t(emittedMaterials) + 1;
             const std::optional<size_t> images[]{
                 material.pendingBaseColorImageIndex, material.pendingMetallicRoughnessImageIndex,
-                material.pendingNormalImageIndex, material.pendingEmissiveImageIndex};
-            for (unsigned i = 0; i < 4; ++i)
+                material.pendingNormalImageIndex, material.pendingEmissiveImageIndex,
+                material.pendingOcclusionImageIndex};
+            for (unsigned i = 0; i < model_core::kMaterialTextureSlotCount; ++i)
                 if (images[i])
                 {
                     d.dependencyIds[i] = imageBase + uint32_t(*images[i]) + 1;
@@ -3412,6 +3538,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         ImportStatusPayload status{};
         model_core::CompatibilityReportBuilder compatibility;
         BuildGltfCompatibilityReport(asset, requiredExtensionNames, compatibility, status);
+        AppendMaterialCompatibilityRecords(state, compatibility, status);
         if (status.optionalFeatureWarnings)
         {
             ChunkDescriptor d{};
@@ -3561,27 +3688,20 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         plan.descriptor.vertexLayoutId = 0;
         plan.descriptor.lodLevel = 0;
         plan.descriptor.chunkId = materialChunkId(j);
-        // Fixed slot order {baseColor, metallicRoughness, normal, emissive}
-        // per WireFormat.h; sparsely populated is valid (e.g. a normal-map-
-        // only material leaves slots 0/1/3 at their zero-initialized
-        // default) -- SharedSectionValidator checks each slot independently,
-        // not as a contiguous prefix.
+        // Fixed slot order {baseColor, metallicRoughness, normal, emissive,
+        // occlusion} per WireFormat.h; sparsely populated is valid (e.g. a
+        // normal-map-only material leaves the other slots at their
+        // zero-initialized default) -- SharedSectionValidator checks each slot
+        // independently, not as a contiguous prefix.
         plan.descriptor.dependencyCount = 0;
-        if (material.pendingBaseColorImageIndex.has_value()) {
-            plan.descriptor.dependencyIds[0] = imageChunkId(*material.pendingBaseColorImageIndex);
-            ++plan.descriptor.dependencyCount;
-        }
-        if (material.pendingMetallicRoughnessImageIndex.has_value()) {
-            plan.descriptor.dependencyIds[1]
-                = imageChunkId(*material.pendingMetallicRoughnessImageIndex);
-            ++plan.descriptor.dependencyCount;
-        }
-        if (material.pendingNormalImageIndex.has_value()) {
-            plan.descriptor.dependencyIds[2] = imageChunkId(*material.pendingNormalImageIndex);
-            ++plan.descriptor.dependencyCount;
-        }
-        if (material.pendingEmissiveImageIndex.has_value()) {
-            plan.descriptor.dependencyIds[3] = imageChunkId(*material.pendingEmissiveImageIndex);
+        const std::optional<size_t> imageSlots[]{
+            material.pendingBaseColorImageIndex, material.pendingMetallicRoughnessImageIndex,
+            material.pendingNormalImageIndex, material.pendingEmissiveImageIndex,
+            material.pendingOcclusionImageIndex};
+        for (uint32_t slot = 0; slot < model_core::kMaterialTextureSlotCount; ++slot) {
+            if (!imageSlots[slot].has_value())
+                continue;
+            plan.descriptor.dependencyIds[slot] = imageChunkId(*imageSlots[slot]);
             ++plan.descriptor.dependencyCount;
         }
         plan.pieceA = BytesOf(material.data);
@@ -3655,6 +3775,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     model_core::ImportStatusPayload status{};
     model_core::CompatibilityReportBuilder compatibility;
     BuildGltfCompatibilityReport(asset, requiredExtensionNames, compatibility, status);
+    AppendMaterialCompatibilityRecords(state, compatibility, status);
     if (!refinements.empty()) status.flags |= model_core::kStatusRefining;
     if (status.flags || status.optionalFeatureWarnings) {
         if (plans.size()>=maxChunkCount) return ImportErrorCode::ResourceLimit;
