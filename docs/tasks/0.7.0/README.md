@@ -1,9 +1,16 @@
-# 0.7.0 — format breadth and Studio lighting
+# 0.7.0 — format breadth and rendering quality
 
 This is the execution plan derived from [`docs/proposal.md`](../../proposal.md).
 It is deliberately split into small, independently reviewable sessions: a task
 should leave the build and its named verification command green, and its
 hand-off should tell the next task what changed.
+
+The original 20 tasks completed at T19. T20–T35 extend this same set with
+quality work in **Studio, Clay and Directional**. Read the
+[post-qualification investigation and shared acceptance contract](../../0.7.0/RENDER-QUALITY-FOLLOWUP.md)
+for measured observations, source findings, reference versions and the
+implementation order. This update is a plan; the new renderer fixes and
+verification runner have not yet been implemented.
 
 This plan is registered as the `0.7.0` symphony task set; run it without
 disturbing the base/MVP or `security` sets:
@@ -44,6 +51,16 @@ progress notebook and run logs live beside it.
    suite and cache/importer identity. A new public limit needs an ADR.
 5. **Every task updates its hand-off.** Record what landed, deviations,
    commands run and what the next task must know.
+6. **Visual quality requires actual image evidence.** T20–T35 use
+   image-capable review, immutable references, local detail regions and
+   motion checks. Missing baselines and self-created goldens cannot pass.
+   Camera lens appearance is a mandatory nonregression case alongside Car glass.
+7. **Capture only completed loads.** Visible geometry may precede a terminal
+   failure; verify generation, final success/degradation and texture readiness.
+   The observed microscope ResourceLimit is assigned to T23.
+8. **Keep source and binary references distinct.** Local F3D source is 4.0.0;
+   the inspected installed renderer is 3.5.0. Record effective presets, DPI
+   and viewport pixels before comparing. Keep restricted corpus assets local.
 
 ## Phase map
 
@@ -55,6 +72,13 @@ progress notebook and run logs live beside it.
 | 3 — Studio | T12, T13, T14, T15, T16 | Textures, TGA/DDS/HDR/EXR, IBL/tonemap, HDR/exposure/presets, ground shadow/AO |
 | 4 — depth | T17, T18 | Lines/strips/fans, material lobes and transparency |
 | 5 — qualify | T19 | Run the corpus, close docs/SBOM/installer, record evidence |
+| 6 — evidence | T20, T21 | Reproducible comparisons, complete-load capture and diagnostics |
+| 7 — inputs/budgets | T22, T23 | Authored material semantics and bounded, complete textured loads |
+| 8 — shading | T24, T25 | Correct BRDF/IBL/coat layering and lobe textures |
+| 9 — glass | T26, T27 | Bounded OIT, independent coverage and scene-based transmission |
+| 10 — modes | T28, T29, T30 | Calibrate Studio, coherent Clay override and Directional sun |
+| 11 — depth/sampling | T31, T32, T33 | Geometry shadows, SSAO and edge/specular/texture sampling |
+| 12 — qualify again | T34, T35 | Complete cross-format matrix and independent release gate |
 
 T02 and T04 are foundations; do not start dependent tasks until they land. T01
 can run in parallel with T02. T14/T15/T16 touch graphics and can run in parallel
@@ -85,9 +109,37 @@ with the import-side breadth tasks after T02 is stable.
 | [T18](T18-material-lobes-transparency.md) | Material lobes and transparency | T15 | `x64\Release\Tests.Unit.exe "[material-lobes]"` |
 | [T19](T19-qualification-docs.md) | 0.7.0 compatibility qualification and docs | All | `x64\Release\Tests.ImportIsolation.exe "[compat]"` |
 
+### Rendering-quality follow-up tasks
+
+Execute these tasks in order after T19. T20 **creates** the new verification
+runner; every later task implements its profile. The commands below are
+planned interfaces and have not run at planning time. Their profiles must
+include meaningful unit/import checks **and** actual GPU images, failing
+on missing evidence or unimplemented/empty lanes.
+
+| ID | Task | Depends on | Verify |
+| --- | --- | --- | --- |
+| [T20](T20-visual-comparison-harness.md) | Deterministic visual comparison harness and observed baseline | T19 | `python tests/render-quality/verify.py --task T20 --configuration Debug --output TestResults/render-quality/T20` |
+| [T21](T21-render-diagnostics.md) | Material and light-contribution diagnostics | T20 | `python tests/render-quality/verify.py --task T21 --configuration Debug --output TestResults/render-quality/T21` |
+| [T22](T22-material-semantics.md) | Preserve authored material, UV, normal and AO semantics | T20, T21 | `python tests/render-quality/verify.py --task T22 --configuration Debug --output TestResults/render-quality/T22` |
+| [T23](T23-texture-budgets-load-readiness.md) | Texture-budget accounting and complete-load readiness | T20, T21, T22 | `python tests/render-quality/verify.py --task T23 --configuration Debug --output TestResults/render-quality/T23` |
+| [T24](T24-brdf-ibl-layering.md) | Correct BRDF, environment integration and clearcoat layering | T20, T21, T22, T23 | `python tests/render-quality/verify.py --task T24 --configuration Debug --output TestResults/render-quality/T24` |
+| [T25](T25-textured-material-lobes.md) | Texture-driven clearcoat, specular, sheen and transmission inputs | T22, T24 | `python tests/render-quality/verify.py --task T25 --configuration Debug --output TestResults/render-quality/T25` |
+| [T26](T26-layered-transparency.md) | Bounded order-independent transparency | T20, T22, T24, T25 | `python tests/render-quality/verify.py --task T26 --configuration Debug --output TestResults/render-quality/T26` |
+| [T27](T27-scene-transmission.md) | Scene-based transmission and tinted or rough glass | T22, T24, T25, T26 | `python tests/render-quality/verify.py --task T27 --configuration Debug --output TestResults/render-quality/T27` |
+| [T28](T28-studio-lighting-quality.md) | Calibrate Studio environment and first-open presentation | T24, T25, T26, T27 | `python tests/render-quality/verify.py --task T28 --configuration Debug --output TestResults/render-quality/T28` |
+| [T29](T29-clay-lighting-quality.md) | Clay as a coherent opaque geometry-review mode | T22, T24, T26, T28 | `python tests/render-quality/verify.py --task T29 --configuration Debug --output TestResults/render-quality/T29` |
+| [T30](T30-directional-lighting-quality.md) | Directional lighting, reflection and sun consistency | T24, T27, T28, T29 | `python tests/render-quality/verify.py --task T30 --configuration Debug --output TestResults/render-quality/T30` |
+| [T31](T31-geometry-ground-shadows.md) | Geometry-derived ground and contact shadows | T26, T27, T28, T29, T30 | `python tests/render-quality/verify.py --task T31 --configuration Debug --output TestResults/render-quality/T31` |
+| [T32](T32-screen-space-ambient-occlusion.md) | Scale-aware screen-space ambient occlusion | T24, T26, T27, T31 | `python tests/render-quality/verify.py --task T32 --configuration Debug --output TestResults/render-quality/T32` |
+| [T33](T33-antialiasing-texture-filtering.md) | Edge, specular and texture sampling quality | T24, T25, T26, T27, T31, T32 | `python tests/render-quality/verify.py --task T33 --configuration Debug --output TestResults/render-quality/T33` |
+| [T34](T34-full-corpus-render-regressions.md) | Complete corpus, cross-format and hostile-input render qualification | T20–T33 | `python tests/render-quality/verify.py --task T34 --configuration Debug --output TestResults/render-quality/T34` |
+| [T35](T35-render-quality-release-gate.md) | Independent visual release gate and final 0.7.0 evidence | T20–T34 | `python tests/render-quality/verify.py --task T35 --configuration Debug --output TestResults/render-quality/T35` |
+
 ## Status
 
-All 20 tasks are complete in this task set. T19's evidence is recorded in
+The original 20 tasks are complete. The 16 tasks T20–T35 are pending, so the
+extended set is **20/36 complete**. T19's historical evidence is recorded in
 [`docs/0.7.0-QUALIFICATION.md`](../../0.7.0-QUALIFICATION.md); the corpus
 report is `artifacts/compat/Release.json`, and the app-smoke/visual reports are
 under `TestResults/qualification/`.
@@ -96,6 +148,7 @@ under `TestResults/qualification/`.
 | --- | --- | --- |
 | T01–T18 | done | Per-task hand-offs and `docs/0.7.0/progress/` |
 | T19 | done | `[compat]` 312 assertions pass; unit 465/465; import-isolation 506 cases (501 pass, 5 typed skips); visual and app-smoke lanes recorded; installer/SBOM/dependency checks pass |
+| T20–T35 | pending | [Follow-up investigation](../../0.7.0/RENDER-QUALITY-FOLLOWUP.md); per-task implementation and visual evidence still required |
 
 Use the scoped Catch2 filters above during the task. Before declaring the
 series done, run the unfiltered unit and import-isolation suites and record any
@@ -113,6 +166,12 @@ pre-existing failures separately.
   entries and fuzz coverage.
 - Studio has a real environment, neutral tone mapping, exposure, ground contact
   and AO; metals, glass, whites and CAD parts have goldens.
+- Studio, Clay and Directional each pass the completed real-model matrix and
+  image-quality rubric; Car glass improves while Camera lens appearance is
+  preserved. No severe ordering, visibility, normal, exposure or aliasing
+  regression remains hidden by an aggregate image metric.
+- Ordinary verification never accepts its own reference images, never counts
+  missing evidence as success, and rejects late-failed/partial-load captures.
 - `docs/FORMAT-SUPPORT.md`, `README.md`, the installer, the SBOM/license file and
   the design docs agree with the shipped behaviour.
 - No new parser runs in the trusted viewer, and no path/network authority was

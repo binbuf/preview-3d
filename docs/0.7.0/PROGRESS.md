@@ -1,5 +1,10 @@
 # 0.7.0 progress notes
 
+Planning update 2026-10-30: T01–T19 (including T10b) remain completed;
+T20–T35 extend the roadmap with rendering-quality work. See
+[the follow-up investigation](RENDER-QUALITY-FOLLOWUP.md). No implementation
+or completed hand-off is claimed for those new tasks.
+
 Shared notebook for the `0.7.0` task set. Earlier sessions record findings, decisions and
 things later tasks must know here; the harness maintains the "Key facts" digest at the top.
 
