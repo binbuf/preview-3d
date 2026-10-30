@@ -12,7 +12,7 @@
 // and this is never surfaced to the user as an error.
 struct ViewerSettings
 {
-    static constexpr int kCurrentVersion = 5;
+    static constexpr int kCurrentVersion = 6;
     int version = kCurrentVersion;
 
     // Display the model in the orientation its source file authored (true)
@@ -39,6 +39,13 @@ struct ViewerSettings
     // UI language pack code (e.g. "fr", "pt-BR", "zh_Hans"). Empty means
     // "follow the Windows display language".
     std::wstring language;
+
+    // T15 view presentation. Stored as small integers/float so this header
+    // stays independent of the renderer's enums; unknown values fall back to
+    // the defaults on load.
+    int toneMapMode = 0;   // viewer_presentation::ToneMapMode
+    int backgroundMode = 0; // viewer_presentation::BackgroundMode
+    float exposure = 1.0f;
 
     // Future preferences are added here as additional flat fields with their
     // own defaults — see Settings.cpp for why this needs no migration step.

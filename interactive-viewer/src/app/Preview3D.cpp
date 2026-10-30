@@ -222,6 +222,20 @@ struct ViewerApp
     model_core::PresentationProfile activePresentation = model_core::PresentationProfile::Default;
     bool presentationOverridden = false;
     std::wstring presentationSourcePath;
+    // T15 view state. Presets seed these defaults; explicit exposure/background
+    // changes pin their field for the rest of the session so a later preset
+    // application cannot stomp the user's choice.
+    viewer_presentation::PresentationPreset activePreset = viewer_presentation::PresentationPreset::StudioPbr;
+    viewer_presentation::ToneMapMode toneMapMode = viewer_presentation::ToneMapMode::Neutral;
+    viewer_presentation::BackgroundMode backgroundMode = viewer_presentation::BackgroundMode::Dark;
+    float exposure = 1.0f;
+    float studioIntensity = 1.0f;
+    float keyLightScale = 1.0f;
+    float fillLightScale = 1.0f;
+    float rimLightScale = 1.0f;
+    bool exposureOverridden = false;
+    bool backgroundOverridden = false;
+    bool toneMapOverridden = false;
     float directionalLightAngle = 0.875f;
     // Elevation above the horizon in radians; atan(0.55) matches the previous
     // fixed key elevation. The gizmo sun's distance from center encodes it.
@@ -1556,27 +1570,100 @@ bool SetDirectionalLightFromGizmoPoint(ViewerApp& app, POINT point)
     return true;
 }
 
-// Applies the catalog's presentation profile exactly once for a document.
+// Applies a material-aware presentation preset exactly once for a document.
 // Point clouds use the existing round colored splat pipeline (which is unlit),
 // so they keep Studio selected for the toolbar while the grid is suppressed.
 // Studio CAD uses the neutral Clay review material; the PBR profile uses the
 // material-aware Studio shader. This function does not call SetLightingMode,
 // because that would mark the choice as a user override.
-void ApplyPresentationProfile(ViewerApp& app, model_core::PresentationProfile profile)
+void SaveViewerPreferences(const ViewerApp& app);
+
+void ApplyPresentationSettings(ViewerApp& app, model_core::PresentationProfile profile,
+                               viewer_presentation::PresentationPreset preset)
 {
+    const auto settings = viewer_presentation::SettingsForPreset(preset);
     app.activePresentation = profile;
-    switch (profile)
+    app.activePreset = preset;
+    app.studioIntensity = settings.environmentIntensity;
+    app.keyLightScale = settings.keyScale;
+    app.fillLightScale = settings.fillScale;
+    app.rimLightScale = settings.rimScale;
+    if (!app.exposureOverridden) app.exposure = settings.exposure;
+    if (!app.backgroundOverridden) app.backgroundMode = settings.background;
+    if (!app.toneMapOverridden) app.toneMapMode = settings.toneMap;
+    switch (preset)
     {
-    case model_core::PresentationProfile::StudioCad:
+    case viewer_presentation::PresentationPreset::StudioCad:
         app.lightingMode = LightingMode::Clay;
         break;
-    case model_core::PresentationProfile::PointCloud:
-    case model_core::PresentationProfile::StudioPbr:
+    case viewer_presentation::PresentationPreset::PointCloud:
+    case viewer_presentation::PresentationPreset::ScanSculpt:
+    case viewer_presentation::PresentationPreset::Transparent:
+    case viewer_presentation::PresentationPreset::StudioPbr:
     default:
         app.lightingMode = LightingMode::Studio;
         break;
     }
-    app.gridVisible = profile != model_core::PresentationProfile::PointCloud;
+    app.gridVisible = settings.gridVisible;
+}
+
+void ApplyPresentationProfile(ViewerApp& app, model_core::PresentationProfile profile,
+                              const viewer_presentation::MaterialSummary& summary)
+{
+    const auto preset = viewer_presentation::SelectPresentationPreset(summary, profile);
+    ApplyPresentationSettings(app, profile, preset);
+}
+
+void ApplyManualPresentationPreset(ViewerApp& app, viewer_presentation::PresentationPreset preset)
+{
+    app.presentationOverridden = true;
+    // An explicit preset choice is the user's view state: apply its background
+    // and exposure rather than preserving an earlier manual background.
+    app.exposureOverridden = false;
+    app.backgroundOverridden = false;
+    app.toneMapOverridden = false;
+    const auto profile = model_core::FindBySourceFormatId(
+        app.loadedModel ? app.loadedModel->source.format : model_core::SourceFormatId::Unknown);
+    ApplyPresentationSettings(app, profile ? profile->presentation : model_core::PresentationProfile::Default,
+                              preset);
+}
+
+void ShowPresentationHud(ViewerApp& app)
+{
+    app.modeHudText = std::wstring(viewer_presentation::PresetName(app.activePreset)) + L"  \u2022  "
+        + viewer_presentation::BackgroundName(app.backgroundMode) + L"  \u2022  "
+        + viewer_presentation::ToneMapName(app.toneMapMode) + L"  \u2022  exp "
+        + std::to_wstring(app.exposure).substr(0, 4);
+    app.modeHudUntil = NowSeconds() + kHudVisibleSeconds;
+}
+
+void AdjustExposure(ViewerApp& app, float delta)
+{
+    app.exposure = viewer_presentation::ClampExposure(app.exposure + delta);
+    app.exposureOverridden = true;
+    ShowPresentationHud(app);
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void CycleBackground(ViewerApp& app)
+{
+    const int next = (static_cast<int>(app.backgroundMode) + 1) % 4;
+    app.backgroundMode = static_cast<viewer_presentation::BackgroundMode>(next);
+    app.backgroundOverridden = true;
+    ShowPresentationHud(app);
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void CycleToneMap(ViewerApp& app)
+{
+    const int next = (static_cast<int>(app.toneMapMode) + 1) % 4;
+    app.toneMapMode = static_cast<viewer_presentation::ToneMapMode>(next);
+    app.toneMapOverridden = true;
+    ShowPresentationHud(app);
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
 }
 
 void SetLightingMode(ViewerApp& app,LightingMode mode)
@@ -1765,12 +1852,16 @@ void ToggleAxisSnap(ViewerApp& app)
 void SaveViewerPreferences(const ViewerApp& app)
 {
     ViewerSettings settings;
+    settings.version = ViewerSettings::kCurrentVersion;
     settings.showNativeOrientation = app.showNativeOrientation;
     settings.groundAxis = app.groundAxis;
     settings.groundAxisInverted = app.groundAxisInverted;
     settings.hideCursorWhileDragging = app.hideCursorWhileDragging;
     settings.hideModelUntilComplete = app.hideModelUntilComplete;
     settings.language = app.language;
+    settings.toneMapMode = static_cast<int>(app.toneMapMode);
+    settings.backgroundMode = static_cast<int>(app.backgroundMode);
+    settings.exposure = app.exposure;
     SaveSettings(settings);
 }
 
@@ -4011,6 +4102,14 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.isFullscreen = app.isFullscreen;
     overlay.lightingMode=app.lightingMode;
     overlay.presentationProfile=app.activePresentation;
+    overlay.presentationPreset=app.activePreset;
+    overlay.toneMap=app.toneMapMode;
+    overlay.background=app.backgroundMode;
+    overlay.exposure=app.exposure;
+    overlay.studioIntensity=app.studioIntensity;
+    overlay.keyLightScale=app.keyLightScale;
+    overlay.fillLightScale=app.fillLightScale;
+    overlay.rimLightScale=app.rimLightScale;
     overlay.directionalLightAngle=app.directionalLightAngle;
     overlay.directionalLightElevation=app.directionalLightElevation;
     overlay.lightDragging=app.pointerMode==PointerMode::LightDrag;
@@ -4218,7 +4317,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Shipping builds cannot be driven by local WM_APP messages.
         return 0;
 #else
-        if (!app->appSmoke || wParam > 88) return 0;
+        if (!app->appSmoke || wParam > 100) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -4322,6 +4421,57 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 || lParam > static_cast<LPARAM>(LightingMode::Wireframe)) return static_cast<LRESULT>(app->lightingMode);
             SetLightingMode(*app, static_cast<LightingMode>(lParam));
             return static_cast<LRESULT>(app->lightingMode);
+        }
+        // T15 presentation evidence: preset / exposure / background / tone map.
+        if (wParam == 89) return static_cast<LRESULT>(app->activePreset);
+        if (wParam == 90) {
+            if (lParam >= 0 && lParam <= static_cast<LPARAM>(viewer_presentation::PresentationPreset::PointCloud)) {
+                ApplyManualPresentationPreset(*app,
+                    static_cast<viewer_presentation::PresentationPreset>(lParam));
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return static_cast<LRESULT>(app->activePreset);
+        }
+        if (wParam == 91) return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->exposure));
+        if (wParam == 92) {
+            const float value = std::bit_cast<float>(static_cast<uint32_t>(lParam));
+            app->exposure = viewer_presentation::ClampExposure(value);
+            app->exposureOverridden = true;
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->exposure));
+        }
+        if (wParam == 93) return static_cast<LRESULT>(app->backgroundMode);
+        if (wParam == 94) {
+            if (lParam >= 0 && lParam <= static_cast<LPARAM>(viewer_presentation::BackgroundMode::Checkerboard)) {
+                app->backgroundMode = static_cast<viewer_presentation::BackgroundMode>(lParam);
+                app->backgroundOverridden = true;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return static_cast<LRESULT>(app->backgroundMode);
+        }
+        if (wParam == 95) return static_cast<LRESULT>(app->toneMapMode);
+        if (wParam == 96) {
+            if (lParam >= 0 && lParam <= static_cast<LPARAM>(viewer_presentation::ToneMapMode::None)) {
+                app->toneMapMode = static_cast<viewer_presentation::ToneMapMode>(lParam);
+                app->toneMapOverridden = true;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return static_cast<LRESULT>(app->toneMapMode);
+        }
+        if (wParam == 97) return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->studioIntensity));
+        if (wParam == 98) {
+            const float value = std::bit_cast<float>(static_cast<uint32_t>(lParam));
+            if (std::isfinite(value)) app->studioIntensity = std::clamp(value, 0.0f, 4.0f);
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->studioIntensity));
+        }
+        if (wParam == 99) {
+            const auto stats = app->renderThread.Stats();
+            return static_cast<LRESULT>(std::bit_cast<uint64_t>(stats.meanMs));
+        }
+        if (wParam == 100) {
+            const auto stats = app->renderThread.Stats();
+            return static_cast<LRESULT>(std::bit_cast<uint64_t>(stats.p95Ms));
         }
         if (wParam >= 80 && wParam <= 83) {
             if (!app->loadedModel) return 0;
@@ -5553,6 +5703,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (HandleAccessibleKey(*app, wParam)) return 0;
         if (!CanNavigate(*app)) break;
+        if (wParam == VK_OEM_4) { AdjustExposure(*app, -0.1f); return 0; }
+        if (wParam == VK_OEM_6) { AdjustExposure(*app, 0.1f); return 0; }
+        if (wParam == VK_OEM_5) { CycleBackground(*app); return 0; }
+        if (wParam == VK_OEM_3) { CycleToneMap(*app); return 0; }
         if (SetNavigationKey(*app, wParam, true)) return 0;
         if (wParam == VK_OEM_PLUS || wParam == VK_ADD) app->renderThread.LockCamera()->Dolly(1.0f);
         else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) app->renderThread.LockCamera()->Dolly(-1.0f);
@@ -5713,7 +5867,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 {
                     const auto profile = model_core::ResolvePresentationProfile(*descriptor,
                         { uploaded->metadata->pointCount, uploaded->metadata->triangleCount });
-                    ApplyPresentationProfile(*app, profile);
+                    ApplyPresentationProfile(*app, profile,
+                        uploaded->hasMaterialSummary ? uploaded->materialSummary
+                                                     : viewer_presentation::MaterialSummary{});
                 }
             }
         }
@@ -5873,6 +6029,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.groundAxisInverted = settings.groundAxisInverted;
     app.hideCursorWhileDragging = settings.hideCursorWhileDragging;
     app.hideModelUntilComplete = settings.hideModelUntilComplete;
+    app.toneMapMode = static_cast<viewer_presentation::ToneMapMode>(settings.toneMapMode);
+    app.backgroundMode = static_cast<viewer_presentation::BackgroundMode>(settings.backgroundMode);
+    app.exposure = viewer_presentation::ClampExposure(settings.exposure);
     app.renderThread.SetHideModelUntilComplete(app.hideModelUntilComplete);
     bool commandLineInvalid = false;
     bool bypassSingleInstance = false;

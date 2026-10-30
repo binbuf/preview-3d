@@ -7,6 +7,7 @@
 #include "RenderThread.h"
 #include "CompatibilityText.h"
 #include "Localization.h"
+#include "model_core/FormatCatalog.h"
 #include <cstdio>
 
 #include <windows.h>
@@ -810,6 +811,25 @@ void RenderThread::PumpUploads(HWND window)
             initialTerminal_=true;
             completeModelAwaitingPresentGeneration_.store(pub.task.generation, std::memory_order_release);
             stagedMetadata_->importStatus.flags = rejectedDetailCount_.load() ? model_core::kStatusPressure : 0;
+            // T15: bounded material-aware preset summary. Only the same
+            // generation-wide catalog the renderer just uploaded is inspected,
+            // and SummarizeMaterials caps the loop independently of the file.
+            std::vector<model_core::MaterialPayload> materialPayloads;
+            std::vector<uint32_t> baseColorIds;
+            materialPayloads.reserve(std::min<size_t>(materials_.size(), viewer_presentation::kMaterialScanCap));
+            baseColorIds.reserve(materialPayloads.capacity());
+            for (const auto& entry : materials_) {
+                if (materialPayloads.size() >= viewer_presentation::kMaterialScanCap) break;
+                materialPayloads.push_back(entry.second.data);
+                baseColorIds.push_back(entry.second.baseColorImageChunkId);
+            }
+            bool cadFormat = false;
+            if (const auto* descriptor = model_core::FindBySourceFormatId(stagedMetadata_->source.format))
+                cadFormat = descriptor->presentation == model_core::PresentationProfile::StudioCad;
+            message->materialSummary = viewer_presentation::SummarizeMaterials(
+                materialPayloads, stagedMetadata_->pointCount, stagedMetadata_->triangleCount,
+                cadFormat, baseColorIds);
+            message->hasMaterialSummary = true;
             message->metadata = std::make_shared<const ModelData>(*stagedMetadata_);
         }
     } else if (!pub.task.result.ok) {

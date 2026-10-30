@@ -67,6 +67,11 @@ struct RenderUploadResult
     std::wstring errorSummary;
     std::wstring errorDetails;
     std::shared_ptr<const ModelData> metadata;
+    // T15: bounded material/geometry summary for the material-aware preset
+    // decision. Computed on the render thread from the same imported catalog
+    // it uploads, then consumed by the UI thread once per document.
+    viewer_presentation::MaterialSummary materialSummary;
+    bool hasMaterialSummary = false;
 };
 
 struct RenderDisplaySnapshot {

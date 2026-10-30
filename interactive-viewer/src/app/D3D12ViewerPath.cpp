@@ -20,6 +20,10 @@ using Microsoft::WRL::ComPtr;
 namespace {
 constexpr DWORD kIdleWaitTimeoutMs = 5000;
 
+// T15's linear HDR intermediate. Feature-level 11_0 guarantees render-target
+// and shader-resource support for R16G16B16A16_FLOAT.
+constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
 // The catalog preset changes view state only. CAD gets a slightly lighter
 // neutral backdrop so untextured parts read against it; point clouds get a
 // darker backdrop so vertex colors/splats are not washed out. PBR keeps the
@@ -251,6 +255,7 @@ cbuffer FrameConstants : register(b0)
     float4 gWorldFromCamera; // world-from-camera rotation quaternion
     float4 gEnvironment;     // intensity, yaw, exposure, last specular mip
     float4 gSh[9];           // diffuse irradiance/pi, RGB coefficients
+    float4 gPresentation;    // key/fill/rim direct-light multipliers
 };
 Texture2D gBaseColor : register(t0);
 Texture2D gMetallicRoughness : register(t1);
@@ -455,7 +460,7 @@ PixelOutput PSMain(PSInput input)
         // small world-stable ambient so metals still have a reflection.
         float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
         float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
-        color=EvaluateLight(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,3.4f)
+        color=EvaluateLight(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,3.4f*envIntensity*gPresentation.x)
             + base.rgb*(1.0f-metallic)*.08f*diffuseScale*occlusion;
         color+=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*.25f*diffuseScale*occlusion;
         color+=SampleStudioSpecular(worldN,worldView,roughness)*envIntensity*.35f*occlusion;
@@ -464,11 +469,15 @@ PixelOutput PSMain(PSInput input)
         // World-stable Studio IBL: SH9 diffuse irradiance plus the GGX-
         // prefiltered cubemap reflection, with a camera-relative soft key for
         // form. Clay keeps the same environment but suppresses specular.
+        // environmentIntensity scales the direct rig and IBL together, matching
+        // F3D's paired render.light.intensity / IBLIntensity behavior.
         color=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*diffuseScale*occlusion;
         float specularScale=clay?.25f:1.0f;
         color+=SampleStudioSpecular(worldN,worldView,roughness)
             *(transmissive?float3(1.0f,1.0f,1.0f):fresnel)*envIntensity*specularScale*occlusion;
-        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,1.15f);
+        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,1.15f*envIntensity*gPresentation.x);
+        color+=EvaluateLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),base.rgb*diffuseScale,metallic,roughness,.35f*envIntensity*gPresentation.y);
+        color+=EvaluateLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),base.rgb*diffuseScale,metallic,roughness,.22f*envIntensity*gPresentation.z);
         color+=base.rgb*(1.0f-metallic)*.05f*diffuseScale*occlusion;
     }
     if (!clay) {
@@ -478,7 +487,10 @@ PixelOutput PSMain(PSInput input)
     }
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
-    PixelOutput output; output.color = float4(NeutralToneMap(color,gEnvironment.z), base.a); output.pick = input.pickId; return output;
+    // Linear HDR output. T15's resolve pass owns exposure, tone mapping and the
+    // sRGB transfer so transparency, transmission and emission all blend in the
+    // same color space before the display transform.
+    PixelOutput output; output.color = float4(max(color,0.0f), base.a); output.pick = input.pickId; return output;
 }
 )";
 
@@ -553,6 +565,101 @@ struct I{float4 p:SV_POSITION;float4 c:COLOR0;nointerpolation uint id:TEXCOORD7;
 constexpr char kPointPixelShaderSource[] = R"(
 struct I{float4 p:SV_POSITION;float4 c:COLOR0;float2 q:TEXCOORD0;nointerpolation uint id:TEXCOORD7;};struct O{float4 c:SV_TARGET0;uint pick:SV_TARGET1;};
 O PSMain(I i){if(dot(i.q,i.q)>1)discard;O o;o.c=i.c;o.pick=i.id;return o;}
+)";
+
+// T15 full-screen resolve. Reads the linear HDR scene target, composites the
+// background in the same color space, applies exposure and the selected tone
+// curve, then writes sRGB into the UNORM back buffer. The D2D/D3D11On12
+// overlay still runs after this pass.
+constexpr char kResolveVertexShaderSource[] = R"(
+struct ResolveOutput { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
+ResolveOutput VSMain(uint vertexId : SV_VertexID)
+{
+    float2 p = float2((vertexId << 1) & 2, vertexId & 2);
+    ResolveOutput output;
+    output.uv = p;
+    output.position = float4(p * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), 0.0f, 1.0f);
+    return output;
+}
+)";
+
+constexpr char kResolvePixelShaderSource[] = R"(
+cbuffer ResolveConstants : register(b0)
+{
+    float4 gResolve;    // exposure, tone-map mode, background mode, checker size
+    float4 gBackground; // linear background rgb (transparent/checker ignore rgb)
+};
+Texture2D<float4> gSceneColor : register(t0);
+SamplerState gLinearSampler : register(s0);
+
+float3 NeutralToneMap(float3 linearColor,float exposure)
+{
+    float3 color=max(linearColor*exposure,0.0f);
+    const float startCompression=0.8f-0.04f;
+    const float desaturation=0.15f;
+    float minimum=min(color.r,min(color.g,color.b));
+    float offset=minimum<0.08f ? minimum-6.25f*minimum*minimum : 0.04f;
+    color-=offset;
+    float peak=max(color.r,max(color.g,color.b));
+    if (peak>=startCompression) {
+        float d=1.0f-startCompression;
+        float newPeak=1.0f-d*d/(peak+d-startCompression);
+        color*=newPeak/max(peak,1e-6f);
+        float grey=1.0f-1.0f/(desaturation*(peak-newPeak)+1.0f);
+        color=lerp(color,newPeak.xxx,grey);
+    }
+    return saturate(color);
+}
+float3 AcesToneMap(float3 color)
+{
+    const float a=2.51f,b=0.03f,c=2.43f,d=0.59f,e=0.14f;
+    color=max(color,0.0f);
+    return saturate((color*(a*color+b))/(color*(c*color+d)+e));
+}
+float HableCurve(float x)
+{
+    const float A=0.15f,B=0.50f,C=0.10f,D=0.20f,E=0.02f,F=0.30f;
+    return ((x*(A*x+C*B)+D*E)/(x*(A*x+B)+D*F))-E/F;
+}
+float3 FilmicToneMap(float3 color)
+{
+    const float white=11.2f;
+    float3 mapped=float3(HableCurve(max(color.r,0.0f)),HableCurve(max(color.g,0.0f)),HableCurve(max(color.b,0.0f)));
+    return saturate(mapped/HableCurve(white));
+}
+float3 ApplyToneMap(float3 linearColor, float exposure, uint mode)
+{
+    if (mode==1u) return AcesToneMap(linearColor*exposure);
+    if (mode==2u) return FilmicToneMap(linearColor*exposure);
+    if (mode==3u) return saturate(linearColor*exposure);
+    return NeutralToneMap(linearColor,exposure);
+}
+float3 SrgbEncode(float3 color)
+{
+    float3 low=color*12.92f;
+    float3 high=1.055f*pow(max(color,0.0f),1.0f/2.4f)-0.055f;
+    return lerp(high,low,step(color,0.0031308f));
+}
+float4 PSMain(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
+{
+    float4 scene=gSceneColor.Sample(gLinearSampler,uv);
+    uint backgroundMode=(uint)gResolve.z;
+    float3 background=gBackground.rgb;
+    if (backgroundMode==3u) {
+        float2 cell=floor(position.xy/max(4.0f,gResolve.w));
+        float parity=fmod(cell.x+cell.y,2.0f);
+        background=lerp(float3(0.10f,0.10f,0.11f),float3(0.18f,0.18f,0.19f),parity);
+    } else if (backgroundMode==2u) {
+        background=float3(0.0f,0.0f,0.0f);
+    }
+    float alpha=saturate(scene.a);
+    float3 linearColor=scene.rgb+background*(1.0f-alpha);
+    float3 mapped=ApplyToneMap(linearColor,gResolve.x,(uint)gResolve.y);
+    float4 output;
+    output.rgb=SrgbEncode(mapped);
+    output.a=backgroundMode==2u ? alpha : 1.0f;
+    return output;
+}
 )";
 
 bool CompileShader(const char* source, size_t sourceLength, const char* entryPoint, const char* target,
@@ -633,6 +740,11 @@ const char* D3D12ViewerPath::TexturedPixelShaderSource()
     return kTexturedPixelShaderSource;
 }
 
+const char* D3D12ViewerPath::ResolvePixelShaderSource()
+{
+    return kResolvePixelShaderSource;
+}
+
 bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
 {
     auto deviceResult = device.Initialize(deviceOptions);
@@ -677,6 +789,7 @@ bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
     if (!CreateDepthBuffer(swapChainOptions.width, swapChainOptions.height, error)) return false;
     if (!CreatePipeline(error)) return false;
     if (!CreateTexturedPipeline(error)) return false;
+    if (!CreateResolvePipeline(error)) return false;
     if (!CreateFrameConstantBuffer(error)) return false;
     if (!CreateStudioEnvironment(error)) return false;
 
@@ -753,6 +866,70 @@ bool D3D12ViewerPath::CreatePickTarget(UINT width, UINT height, std::wstring& er
     device.Device()->CreateRenderTargetView(pickTarget.Get(), nullptr, pickRtvHeap->GetCPUDescriptorHandleForHeapStart());
     if (!pickReadback) pickReadback = CreateBuffer(device.Device(), 256, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
     if (!pickReadback) { error = L"The selection readback could not be created."; return false; }
+    if (!CreateSceneColorTarget(width, height, error)) return false;
+    return true;
+}
+
+bool D3D12ViewerPath::CreateSceneColorTarget(UINT width, UINT height, std::wstring& error)
+{
+    // The HDR target doubles color memory versus the old RGBA8 back buffer.
+    // Keep the same bounded extent guard as the pick target and fail cleanly;
+    // the caller treats that as a graphics/startup failure, never as a reason
+    // to keep drawing into a stale target.
+    if (width == 0 || height == 0 || uint64_t(width) * height > 16ull * 1024 * 1024) {
+        error = L"The HDR scene target extent is not supported.";
+        return false;
+    }
+
+    sceneColor.Reset();
+    sceneColorRtvHeap.Reset();
+    sceneColorSrvHeap.Reset();
+
+    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
+    rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    rtvHeapDesc.NumDescriptors = 1;
+    D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc{};
+    srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    srvHeapDesc.NumDescriptors = 1;
+    srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    if (FAILED(device.Device()->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&sceneColorRtvHeap)))
+        || FAILED(device.Device()->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&sceneColorSrvHeap)))) {
+        error = L"The HDR scene descriptor heaps could not be created.";
+        return false;
+    }
+
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width;
+    desc.Height = height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = kSceneColorFormat;
+    desc.SampleDesc.Count = 1;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    D3D12_CLEAR_VALUE clear{};
+    clear.Format = kSceneColorFormat;
+    D3D12_HEAP_PROPERTIES properties{};
+    properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    const HRESULT allocationResult = device.Device()->CreateCommittedResource(
+        &properties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET,
+        &clear, IID_PPV_ARGS(&sceneColor));
+    if (FAILED(allocationResult)) {
+        error = L"The HDR scene target could not be created (HRESULT "
+            + std::to_wstring(static_cast<long>(allocationResult)) + L").";
+        return false;
+    }
+    sceneColorAllocationBytes = device.Device()->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+
+    device.Device()->CreateRenderTargetView(sceneColor.Get(), nullptr,
+        sceneColorRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = kSceneColorFormat;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MipLevels = 1;
+    device.Device()->CreateShaderResourceView(sceneColor.Get(), &srv,
+        sceneColorSrvHeap->GetCPUDescriptorHandleForHeapStart());
     return true;
 }
 
@@ -855,7 +1032,7 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     psoDesc.InputLayout = { inputElements, static_cast<UINT>(std::size(inputElements)) };
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 2;
-    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[0] = kSceneColorFormat;
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R32_UINT;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count = 1;
@@ -1079,7 +1256,7 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     psoDesc.InputLayout = { inputElements, static_cast<UINT>(std::size(inputElements)) };
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 2;
-    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[0] = kSceneColorFormat;
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R32_UINT;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count = 1;
@@ -1129,6 +1306,140 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
         error=L"The mirrored blended material pipeline state could not be created.";return false;
     }
     return true;
+}
+
+bool D3D12ViewerPath::CreateResolvePipeline(std::wstring& error)
+{
+    D3D12_DESCRIPTOR_RANGE srvRange{};
+    srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRange.NumDescriptors = 1;
+    srvRange.BaseShaderRegister = 0;
+    srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER params[2]{};
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[0].Constants.ShaderRegister = 0;
+    params[0].Constants.RegisterSpace = 0;
+    params[0].Constants.Num32BitValues = 8;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[1].DescriptorTable.NumDescriptorRanges = 1;
+    params[1].DescriptorTable.pDescriptorRanges = &srvRange;
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderRegister = 0;
+    sampler.RegisterSpace = 0;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootSigDesc{};
+    rootSigDesc.NumParameters = static_cast<UINT>(std::size(params));
+    rootSigDesc.pParameters = params;
+    rootSigDesc.NumStaticSamplers = 1;
+    rootSigDesc.pStaticSamplers = &sampler;
+    rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> signatureBlob;
+    ComPtr<ID3DBlob> signatureErrorBlob;
+    if (FAILED(D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                            &signatureBlob, &signatureErrorBlob))) {
+        error = L"The resolve root signature could not be serialized.";
+        return false;
+    }
+    if (FAILED(device.Device()->CreateRootSignature(0, signatureBlob->GetBufferPointer(),
+                                                      signatureBlob->GetBufferSize(),
+                                                      IID_PPV_ARGS(&resolveRootSignature)))) {
+        error = L"The resolve root signature could not be created.";
+        return false;
+    }
+
+    ComPtr<ID3DBlob> vsBlob;
+    ComPtr<ID3DBlob> psBlob;
+    if (!CompileShader(kResolveVertexShaderSource, sizeof(kResolveVertexShaderSource) - 1,
+                       "VSMain", "vs_5_1", vsBlob, error)
+        || !CompileShader(kResolvePixelShaderSource, sizeof(kResolvePixelShaderSource) - 1,
+                          "PSMain", "ps_5_1", psBlob, error)) {
+        return false;
+    }
+
+    D3D12_BLEND_DESC blend{};
+    blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    D3D12_RASTERIZER_DESC rasterizer{};
+    rasterizer.FillMode = D3D12_FILL_MODE_SOLID;
+    rasterizer.CullMode = D3D12_CULL_MODE_NONE;
+    rasterizer.DepthClipEnable = TRUE;
+    D3D12_DEPTH_STENCIL_DESC depth{};
+    depth.DepthEnable = FALSE;
+    depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    depth.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc{};
+    psoDesc.pRootSignature = resolveRootSignature.Get();
+    psoDesc.VS = { vsBlob->GetBufferPointer(), vsBlob->GetBufferSize() };
+    psoDesc.PS = { psBlob->GetBufferPointer(), psBlob->GetBufferSize() };
+    psoDesc.BlendState = blend;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.RasterizerState = rasterizer;
+    psoDesc.DepthStencilState = depth;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.SampleDesc.Count = 1;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&resolvePipelineState)))) {
+        error = L"The full-screen resolve pipeline state could not be created.";
+        return false;
+    }
+    return true;
+}
+
+void D3D12ViewerPath::ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv,
+                                               const OverlayInfo& info)
+{
+    if (!sceneColor || !sceneColorSrvHeap || !resolveRootSignature || !resolvePipelineState) return;
+
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = sceneColor.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    commandList->ResourceBarrier(1, &barrier);
+
+    const auto background = viewer_presentation::BackgroundLinear(info.background);
+    const float constants[8] = {
+        viewer_presentation::ClampExposure(info.exposure),
+        static_cast<float>(info.toneMap),
+        static_cast<float>(info.background),
+        12.0f,
+        background[0], background[1], background[2], background[3],
+    };
+    commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
+    D3D12_VIEWPORT viewport{ 0.0f, 0.0f, static_cast<float>(swapChain.Width()),
+                             static_cast<float>(swapChain.Height()), 0.0f, 1.0f };
+    D3D12_RECT scissor{ 0, 0, static_cast<LONG>(swapChain.Width()),
+                        static_cast<LONG>(swapChain.Height()) };
+    commandList->RSSetViewports(1, &viewport);
+    commandList->RSSetScissorRects(1, &scissor);
+    ID3D12DescriptorHeap* heaps[] = { sceneColorSrvHeap.Get() };
+    commandList->SetDescriptorHeaps(1, heaps);
+    commandList->SetGraphicsRootSignature(resolveRootSignature.Get());
+    commandList->SetPipelineState(resolvePipelineState.Get());
+    commandList->SetGraphicsRoot32BitConstants(0, 8, constants, 0);
+    commandList->SetGraphicsRootDescriptorTable(1,
+        sceneColorSrvHeap->GetGPUDescriptorHandleForHeapStart());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->IASetVertexBuffers(0, 0, nullptr);
+    commandList->IASetIndexBuffer(nullptr);
+    commandList->DrawInstanced(3, 1, 0, 0);
+
+    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+    commandList->ResourceBarrier(1, &barrier);
 }
 
 bool D3D12ViewerPath::CreateFrameConstantBuffer(std::wstring& error)
@@ -1418,11 +1729,18 @@ void D3D12ViewerPath::RenderClearFrame(const DirectX::XMFLOAT4& orientation, con
     toRenderTarget.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     commandList->ResourceBarrier(1, &toRenderTarget);
 
-    // Gate 1's immediate #1C1C1E is the default; the active catalog preset
-    // may choose the CAD or point-cloud backdrop.
-    float clearColor[4]{};
-    PresentationClearColor(chrome.info.presentationProfile, clearColor);
-    commandList->ClearRenderTargetView(swapChain.BackBufferRtv(index), clearColor, 0, nullptr);
+    // The idle frame still goes through the same HDR resolve so background mode,
+    // exposure and tone map are identical before and after a model loads.
+    if (sceneColor && sceneColorRtvHeap) {
+        const auto background = viewer_presentation::BackgroundLinear(chrome.info.background);
+        commandList->ClearRenderTargetView(
+            sceneColorRtvHeap->GetCPUDescriptorHandleForHeapStart(), background.data(), 0, nullptr);
+        ResolveSceneToBackBuffer(swapChain.BackBufferRtv(index), chrome.info);
+    } else {
+        float clearColor[4]{};
+        PresentationClearColor(chrome.info.presentationProfile, clearColor);
+        commandList->ClearRenderTargetView(swapChain.BackBufferRtv(index), clearColor, 0, nullptr);
+    }
 
     // With an overlay pass following, the back buffer is left in
     // RENDER_TARGET and the bridge's ReleaseWrappedResources moves it to
@@ -1456,12 +1774,13 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     toRenderTarget.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     commandList->ResourceBarrier(1, &toRenderTarget);
 
-    D3D12_CPU_DESCRIPTOR_HANDLE rtv = swapChain.BackBufferRtv(index);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = sceneColorRtvHeap
+        ? sceneColorRtvHeap->GetCPUDescriptorHandleForHeapStart()
+        : swapChain.BackBufferRtv(index);
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
-    float clearColor[4]{};
-    PresentationClearColor(chrome.info.presentationProfile, clearColor);
-    commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+    const auto background = viewer_presentation::BackgroundLinear(chrome.info.background);
+    commandList->ClearRenderTargetView(rtv, background.data(), 0, nullptr);
     commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     const auto pickRtv = pickRtvHeap->GetCPUDescriptorHandleForHeapStart();
     const float pickClear[4]{};
@@ -1505,11 +1824,21 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     // the model's ground-axis transform is already baked into the vertices).
     std::memcpy(frameConstantBufferMapped + frameOffset, &orientation, sizeof(orientation));
     frameOffset += sizeof(orientation);
-    std::memcpy(frameConstantBufferMapped + frameOffset, &environment.parameters,
-                sizeof(environment.parameters));
-    frameOffset += sizeof(environment.parameters);
+    const DirectX::XMFLOAT4 studioParameters(
+        chrome.info.studioIntensity, 0.0f,
+        viewer_presentation::ClampExposure(chrome.info.exposure),
+        static_cast<float>(environment.mipCount > 0 ? environment.mipCount - 1 : 0));
+    std::memcpy(frameConstantBufferMapped + frameOffset, &studioParameters,
+                sizeof(studioParameters));
+    frameOffset += sizeof(studioParameters);
     std::memcpy(frameConstantBufferMapped + frameOffset, environment.sh,
                 sizeof(environment.sh));
+    frameOffset += sizeof(environment.sh);
+    const DirectX::XMFLOAT4 presentationConstants(
+        chrome.info.keyLightScale, chrome.info.fillLightScale,
+        chrome.info.rimLightScale, 0.0f);
+    std::memcpy(frameConstantBufferMapped + frameOffset, &presentationConstants,
+                sizeof(presentationConstants));
     const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
         = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
 
@@ -1746,6 +2075,10 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         std::swap(barrier.Transition.StateBefore,barrier.Transition.StateAfter);
         commandList->ResourceBarrier(1, &barrier);
     }
+
+    // Full-screen resolve: linear HDR -> background composite -> exposure ->
+    // tone map -> sRGB back buffer. The overlay still draws afterwards.
+    ResolveSceneToBackBuffer(swapChain.BackBufferRtv(index), chrome.info);
 
     if (FAILED(commandList->Close())) return;
     ID3D12CommandList* lists[] = { commandList.Get() };
@@ -2498,7 +2831,8 @@ uint64_t D3D12ViewerPath::AccountedAllocationBytes(const ModelResources* extra) 
     };
     for (UINT frame=0; frame<kFrameCount; ++frame) resource(swapChain.BackBuffer(frame));
     resource(depthBuffer.Get()); resource(pickTarget.Get()); resource(pickReadback.Get()); resource(frameConstantBuffer.Get());
-    heap(dsvHeap.Get()); heap(pickRtvHeap.Get());
+    resource(sceneColor.Get(),sceneColorAllocationBytes);
+    heap(dsvHeap.Get()); heap(pickRtvHeap.Get()); heap(sceneColorRtvHeap.Get()); heap(sceneColorSrvHeap.Get());
     modelBytes(model); modelBytes(pendingModel);
     for (const auto& retired:retiredModels) modelBytes(retired.resources);
     if (extra) modelBytes(*extra);

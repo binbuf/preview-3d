@@ -26,6 +26,7 @@
 #include "D3D12SwapChain.h"
 #include "D3D12UploadRing.h"
 #include "FrameStats.h"
+#include "Presentation.h"
 
 #include <DirectXMath.h>
 #include <platform/Generation.h>
@@ -73,6 +74,15 @@ struct D3D12ViewerPath
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
     Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
+    // T15: geometry renders into a linear HDR scene target; a full-screen
+    // resolve pass tone maps and writes sRGB to the swap-chain back buffer.
+    // The pick target remains a separate R32_UINT MRT.
+    Microsoft::WRL::ComPtr<ID3D12Resource> sceneColor;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sceneColorRtvHeap;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sceneColorSrvHeap;
+    uint64_t sceneColorAllocationBytes = 0;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> resolveRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> resolvePipelineState;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> blendPipelineState;
@@ -208,6 +218,9 @@ struct D3D12ViewerPath
     // The exact textured PBR pixel shader text, exposed so the ORM/AO lighting
     // contract can be asserted without a GPU device.
     static const char* TexturedPixelShaderSource();
+    // The full-screen resolve shader text, exposed so the tone-map/background
+    // contract and the FL11_0 compile baseline can be asserted without a GPU.
+    static const char* ResolvePixelShaderSource();
     void EvictFineChunks(std::span<const uint32_t> identities);
     void RetirePreviewChunks(ModelResources& resources);
     uint64_t AccountedAllocationBytes(const ModelResources* extra = nullptr) const;
@@ -360,6 +373,14 @@ private:
     void RetireInFlightUpload();
     bool CreateDepthBuffer(UINT width, UINT height, std::wstring& error);
     bool CreatePickTarget(UINT width, UINT height, std::wstring& error);
+    bool CreateSceneColorTarget(UINT width, UINT height, std::wstring& error);
+    bool CreateResolvePipeline(std::wstring& error);
+    // Transitions the HDR scene target to a shader resource, binds the
+    // full-screen resolve pipeline against `backBufferRtv`, then returns the
+    // target to RENDER_TARGET for the next frame. Leaves the back buffer in
+    // RENDER_TARGET so the D2D/D3D11On12 overlay still draws on top.
+    void ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv,
+                                  const OverlayInfo& info);
     bool CreatePipeline(std::wstring& error);
     bool CreateTexturedPipeline(std::wstring& error);
     bool CreateFrameConstantBuffer(std::wstring& error);

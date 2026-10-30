@@ -299,8 +299,8 @@ void DrawKeyboard(HDC dc, const DialogState& state)
     DrawCallout(dc, state, 359, colors.views, Loc("controls.viewSnap", L"VIEW SNAP").c_str(),
         Loc("controls.viewSnapDetail", L"Num 1 / 3 / 7 · Ctrl reverses\nNum 5 toggles perspective · Num . frames").c_str());
     DrawTextLine(dc, state.smallFont, colors.muted,
-        Loc("controls.gizmoToolbarHint", L"Gizmo: click an axis ball to snap\nToolbar: Ground axis cycles · Snap locks pan").c_str(),
-        ScaledRect(state, 731, 417, 998, 451), DT_LEFT | DT_TOP | DT_WORDBREAK);
+        Loc("controls.gizmoToolbarHint", L"Gizmo: click an axis ball to snap\nToolbar: Ground axis cycles · Snap locks pan\nPresentation: [ / ] exposure · \\ background · ` tone map").c_str(),
+        ScaledRect(state, 731, 405, 998, 455), DT_LEFT | DT_TOP | DT_WORDBREAK);
 }
 
 void DrawMouseCard(HDC dc, const DialogState& state)

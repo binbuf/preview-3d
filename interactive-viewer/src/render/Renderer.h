@@ -6,6 +6,7 @@
 #include "Model.h"
 #include "NavGizmo.h"
 #include "OpenWithIcon.h"
+#include "Presentation.h"
 
 #include <DirectXMath.h>
 #include <windows.h>
@@ -152,6 +153,18 @@ struct OverlayInfo
     // Catalog presentation profile for the current document. Drives only the
     // viewport clear color (a preset never changes source materials).
     model_core::PresentationProfile presentationProfile = model_core::PresentationProfile::Default;
+    // T15: full-screen resolve state. The object shaders write linear HDR and
+    // never apply the display transform; the resolve pass owns exposure,
+    // tone-map selection, background compositing and the sRGB transfer.
+    viewer_presentation::PresentationPreset presentationPreset =
+        viewer_presentation::PresentationPreset::StudioPbr;
+    viewer_presentation::ToneMapMode toneMap = viewer_presentation::ToneMapMode::Neutral;
+    viewer_presentation::BackgroundMode background = viewer_presentation::BackgroundMode::Dark;
+    float exposure = 1.0f;
+    float studioIntensity = 1.0f;
+    float keyLightScale = 1.0f;
+    float fillLightScale = 1.0f;
+    float rimLightScale = 1.0f;
     float directionalLightAngle = 0.0f; // normalized 0..1 horizontal rotation
     float directionalLightElevation = 0.502f; // radians above the horizon, 0..~85deg
     bool lightDragging = false; // LMB held on the gizmo's sun (drag affordance)

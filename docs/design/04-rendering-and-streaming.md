@@ -60,7 +60,12 @@ The MVP uses a forward, rasterized PBR-lite pipeline:
 - bounded point primitives rendered as depth-tested camera-scaled round splats with source color or neutral shading;
 - opaque and masked geometry before sorted transparent draw groups;
 - back-face culling unless a material is double-sided;
-- Khronos PBR Neutral tonemapping with an exposure constant to SDR and sRGB output;
+- a linear `R16G16B16A16_FLOAT` HDR scene target plus the reversed-Z depth
+  buffer and the R32_UINT pick target; object shaders write linear light and
+  never apply a display transform;
+- a full-screen resolve pass that composites the background in linear space,
+  applies exposure, the selected neutral/ACES/Filmic/None tone curve and the
+  sRGB transfer, then writes the UNORM swap-chain back buffer;
 - MSAA disabled by default; temporal effects, ray tracing, mesh shaders, shadows, and post-process antialiasing are outside the MVP.
 
 Materials are flattened into fixed-size GPU records. Feature level 11_0-compatible descriptor tables are used instead of assuming resource binding tier 3 or shader model 6.6 bindless behavior. Missing resources point at permanent neutral descriptors.
@@ -109,15 +114,42 @@ the per-frame constant buffer. Clay reuses the same environment at low
 specular; Directional keeps its hard key and adds only a low-intensity
 world-stable ambient/reflection term.
 
-The object shader applies the Khronos PBR Neutral curve (`startCompression`
-0.76, desaturation 0.15) multiplied by the exposure constant, then the sRGB
-transfer. This replaces the old per-object luminance roll-off: white rolls into
-the display range instead of clipping, and saturated red/blue materials keep
-their hue at normal exposures. Tone mapping remains in the object shader for
-this slice; T15 moves it to the HDR post pass. The CPU reference in
-`StudioEnvironment.cpp` and the HLSL copy are kept in lock-step by the
-`[studio-ibl]` unit tests, including a pixel-shader compile check at the
-feature-level-11_0 baseline.
+The object shader now writes linear HDR radiance into an
+`R16G16B16A16_FLOAT` scene target; it deliberately no longer applies the
+display transform. A full-screen resolve pass reads that target, composites the
+background in the same linear space (dark UI-matched, neutral mid-grey,
+transparent, or a checkerboard), multiplies by exposure, applies the selected
+tone curve and writes sRGB into the swap-chain back buffer. Tone mapping after
+blending is what makes alpha and transmission composite correctly: the old
+per-object curve ran before the blend and could not account for what was
+behind a transparent surface.
+
+The default curve is still Khronos PBR Neutral (`startCompression` 0.76,
+desaturation 0.15); ACES, Filmic and None are selectable, and non-finite scene
+values are contained before the curve. Exposure is a view setting applied
+before the curve. `[` / `]` change it, `\` cycles the background and `` ` ``
+cycles the tone curve; exposure, background and tone-map choice are persisted
+with the other view preferences. Because the background is cleared into the
+same HDR target and tone-mapped with the scene, a dark backdrop never hides a
+dark object's silhouette without the preset's rim/key contribution. Transparent
+and checkerboard modes clear the target alpha to zero and preserve it through
+the resolve, so a shell or screenshot path can use transparency.
+
+Presentation presets are selected from a bounded summary of the imported
+material catalog (base-color texture presence, metallic/roughness range,
+alpha/transmission share, unlit flags, point-only geometry and CAD format).
+Studio PBR, Studio CAD, Scan/Sculpt, Transparent and Point cloud each supply
+environment intensity, direct key/fill/rim multipliers, exposure, background
+and grid/ground defaults. The selection is a pure function in
+[`Presentation.h`](../../interactive-viewer/src/render/Presentation.h); the
+material loop is capped independently of the file. An explicit toolbar/preset
+choice pins the session and wins over later catalog recommendations.
+Environment intensity scales the direct rig and IBL together, matching F3D's
+paired `render.light.intensity` / `IBLIntensity` behavior. The CPU reference in
+`StudioEnvironment.cpp` and `Presentation.cpp` and their HLSL copies are kept
+in lock-step by the `[studio-ibl]`, `[tonemap]` and `[studio-presets]` unit
+tests, including pixel-shader compile checks at the feature-level-11_0
+baseline.
 
 ## Upload ring
 

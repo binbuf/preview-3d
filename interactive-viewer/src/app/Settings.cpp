@@ -5,6 +5,7 @@
 #include <shlobj.h>
 
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <span>
 #include <string>
@@ -124,6 +125,27 @@ ViewerSettings LoadSettings()
         settings.language.assign(code.begin(), code.end());
     }
 
+    const std::string toneMapText = FindJsonValue(content, "toneMapMode");
+    if (!toneMapText.empty())
+    {
+        const int value = std::atoi(toneMapText.c_str());
+        if (value >= 0 && value <= 3) settings.toneMapMode = value;
+    }
+    const std::string backgroundText = FindJsonValue(content, "backgroundMode");
+    if (!backgroundText.empty())
+    {
+        const int value = std::atoi(backgroundText.c_str());
+        if (value >= 0 && value <= 3) settings.backgroundMode = value;
+    }
+    const std::string exposureText = FindJsonValue(content, "exposure");
+    if (!exposureText.empty())
+    {
+        char* end = nullptr;
+        const float value = std::strtof(exposureText.c_str(), &end);
+        if (end && end != exposureText.c_str() && std::isfinite(value))
+            settings.exposure = std::clamp(value, 0.05f, 8.0f);
+    }
+
     return settings;
 }
 
@@ -162,6 +184,9 @@ void SaveSettings(const ViewerSettings& settings)
         ",\n  \"groundAxisInverted\": " + (settings.groundAxisInverted ? "true" : "false") +
         ",\n  \"hideCursorWhileDragging\": " + (settings.hideCursorWhileDragging ? "true" : "false") +
         ",\n  \"hideModelUntilComplete\": " + (settings.hideModelUntilComplete ? "true" : "false") +
+        ",\n  \"toneMapMode\": " + std::to_string(settings.toneMapMode) +
+        ",\n  \"backgroundMode\": " + std::to_string(settings.backgroundMode) +
+        ",\n  \"exposure\": " + std::to_string(settings.exposure) +
         ",\n  \"language\": \"" + escapedLanguage + "\"\n}\n";
 
     std::wstring writeError;

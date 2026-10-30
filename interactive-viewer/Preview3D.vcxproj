@@ -89,6 +89,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="src\ui\NavGizmo.h" />
     <ClInclude Include="src\app\Preview3D.h" />
     <ClInclude Include="src\render\Renderer.h" />
+    <ClInclude Include="src\render\Presentation.h" />
     <ClInclude Include="src\app\Resource.h" />
     <ClInclude Include="src\app\Settings.h" />
     <ClInclude Include="src\app\Localization.h" />
@@ -152,6 +153,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClCompile Include="src\app\Localization.cpp" />
     <ClCompile Include="src\render\Renderer.cpp" />
     <ClCompile Include="src\render\StudioEnvironment.cpp" />
+    <ClCompile Include="src\render\Presentation.cpp" />
     <ClCompile Include="src\platform\ShellIntegration.cpp" />
     <ClCompile Include="src\platform\OpenWithCache.cpp" />
     <ClCompile Include="src\platform\OpenWithNaming.cpp" />
