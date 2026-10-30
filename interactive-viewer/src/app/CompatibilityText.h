@@ -44,6 +44,21 @@ inline std::wstring CompatibilityFeatureText(uint32_t featureId)
     case model_core::kGltfFeatureUnspecifiedExtension:
         return Loc("compat.gltf.unspecifiedExtension",
                    L"An unsupported glTF extension was ignored; the preview may differ from the source.");
+    case model_core::kStepFeatureExternalDocumentUnresolved:
+        return Loc("compat.step.externalDocument",
+                   L"External STEP references were skipped; the main document is shown.");
+    case model_core::kStepFeatureLengthUnitAssumedMillimetre:
+        return Loc("compat.step.unitAssumedMillimetres",
+                   L"The STEP file declares no length unit; millimetres were assumed.");
+    case model_core::kStepFeatureLengthUnitContradictory:
+        return Loc("compat.step.unitContradictory",
+                   L"The STEP file declares conflicting length units; the first unit was used.");
+    case model_core::kStepFeatureBoundedRepair:
+        return Loc("compat.step.repaired",
+                   L"Some STEP geometry needed bounded repair and is shown degraded.");
+    case model_core::kStepFeatureUnmeshedDefinition:
+        return Loc("compat.step.unmeshedDefinition",
+                   L"Some STEP shapes could not be tessellated and were skipped.");
     default:
         return {};
     }

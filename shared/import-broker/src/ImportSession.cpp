@@ -288,6 +288,7 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         // 10303-21 by bytes, never by extension.
         auto request = MakeFileRequest<model_core::ParseStepFileRequest>(
             session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+        request.requestFlags |= model_core::StepImportQualityFlags(session.stepImportQuality);
         return model_core::WriteControlMessage(
             controlInWrite, model_core::ControlOpcode::StartStepImportFromFile,
             &request, sizeof(request));

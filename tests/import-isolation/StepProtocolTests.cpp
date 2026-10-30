@@ -227,7 +227,7 @@ TEST_CASE("STEP-002 Part-21 admission enforces bounded lexical ceilings",
     }
 }
 
-TEST_CASE("STEP-002 Part-21 admission flags external document declarations",
+TEST_CASE("STEP-002 Part-21 admission counts external declarations without vetoing",
           "[step-002][preflight][external]")
 {
     constexpr std::string_view text =
@@ -240,8 +240,18 @@ TEST_CASE("STEP-002 Part-21 admission flags external document declarations",
         "ENDSEC;\n"
         "END-ISO-10303-21;\n";
     const auto result = Preflight(text);
-    CHECK(result.status == step_host::StepPreflightStatus::ExternalDocument);
+    // T07: a declaration is a bounded warning count, not a preflight failure.
+    CHECK(result.status == step_host::StepPreflightStatus::Ok);
     CHECK(result.externalDocuments == 1);
+
+    // A mention inside a string or comment is not an instance name.
+    constexpr std::string_view falsePositive =
+        "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('FILE_POPULATION'),'2;1');\n"
+        "ENDSEC;\nDATA;\n#1=APPLICATION_CONTEXT('DOCUMENT_FILE');\n"
+        "/* FILE_POPULATION(('x'),('y'),($),$) */\nENDSEC;\nEND-ISO-10303-21;\n";
+    const auto quiet = Preflight(falsePositive);
+    CHECK(quiet.status == step_host::StepPreflightStatus::Ok);
+    CHECK(quiet.externalDocuments == 0);
 }
 
 TEST_CASE("STEP-002 validator requires unknown up axis and a positive metre factor",

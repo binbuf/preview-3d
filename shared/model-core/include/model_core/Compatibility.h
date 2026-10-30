@@ -72,6 +72,17 @@ constexpr uint32_t kGltfFeatureEmissiveStrength = 7;
 constexpr uint32_t kGltfFeatureDispersion = 8;
 constexpr uint32_t kGltfFeatureUnspecifiedExtension = 900;
 
+// Named STEP header/unit features (3000..3999). These describe a degraded but
+// usable main document: the file opened, and the named authored information was
+// skipped or assumed. They never make a malformed file acceptable.
+constexpr uint32_t kStepFeatureExternalDocumentUnresolved = 3000;
+constexpr uint32_t kStepFeatureLengthUnitAssumedMillimetre = 3001;
+constexpr uint32_t kStepFeatureLengthUnitContradictory = 3002;
+constexpr uint32_t kStepFeatureBoundedRepair = 3003;
+// A definition that could not be tessellated was skipped (per-definition
+// isolation), so the rest of the assembly still opens.
+constexpr uint32_t kStepFeatureUnmeshedDefinition = 3004;
+
 // Maps a glTF extension name to its stable numeric feature ID. This is a pure
 // lookup; it does not change whether the adapter supports the extension.
 inline uint32_t GltfExtensionFeatureId(std::string_view extension)

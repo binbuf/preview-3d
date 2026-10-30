@@ -86,7 +86,7 @@ The MVP does not include:
 
 - editing, repair, slicing, export/conversion, measurement, annotation, picking, or selection;
 - animation playback, simulation, skeletal posing, morph controls, material variants UI, scene/camera/light selection;
-- CAD kernels or unlisted formats such as IGES, IFC, AMF, DAE, and native Blender files. A bounded static STEP/STP preview subset through the dedicated OCCT host is designed separately and is not a general CAD kernel; it is self-contained only, because external STEP documents are out of scope by recorded product decision (see ADR-017);
+- CAD kernels or unlisted formats such as IGES, IFC, AMF, DAE, and native Blender files. A bounded static STEP/STP preview subset through the dedicated OCCT host is designed separately and is not a general CAD kernel. External STEP document declarations (`FILE_POPULATION`/`DOCUMENT_FILE`) no longer veto an otherwise valid main document: the host never opens the referenced path and reports the unresolved reference as a warning (ADR-0062). Missing or contradictory length units assume/choose a documented factor with a warning, and an opt-in bounded `ShapeFix` pass may repair a definition that fails to tessellate;
 - ray tracing, mesh-shader-only rendering, GPU decompression, DirectStorage, virtual-texture reserved resources, or multi-GPU rendering;
 - perfect/full-resolution simultaneous residency for a scene larger than the safe GPU budget;
 - online/UNC resource resolution, recent-files history, crash upload, automatic update, background daemon, tray icon, or start-at-login;

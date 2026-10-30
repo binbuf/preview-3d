@@ -187,6 +187,10 @@ struct ImportSessionRequest {
     // STEP-005 test-only seam: forces the STEP host's mesher serial so a test
     // can compare parallel and serial normalized output byte-for-byte.
     bool stepForceSerialForTesting = false;
+    // STEP import quality. Balanced keeps the established display deflection;
+    // Draft/Full are opt-in and are part of the STEP cache identity. Only the
+    // dedicated STEP host consumes it.
+    model_core::StepImportQuality stepImportQuality = model_core::StepImportQuality::Balanced;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;
     uint64_t generationId = 0;

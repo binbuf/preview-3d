@@ -85,6 +85,17 @@ struct StepPhaseTimings {
     std::uint64_t totalMilliseconds = 0;
 };
 
+// T07 per-request import policy. It is derived by the host from the closed
+// request-flag quality field and the admission result; the adapter never reads
+// an ambient setting. `unresolvedExternalDocuments` is a count only -- the host
+// still has no path authority and never tries to open one.
+struct StepImportPolicy {
+    StepTessellationQuality quality = StepTessellationQuality::Balanced;
+    StepHealingPolicy healing = kStepHealingPolicy;
+    StepRepairBudget repairBudget{};
+    std::uint32_t unresolvedExternalDocuments = 0;
+};
+
 struct StepXdeResult {
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
     std::uint32_t chunkCount = 0;        // terminal window only
@@ -116,6 +127,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                 std::span<const std::byte> mappedSource = {},
                                 const StepXdeLimits& limits = {},
                                 const StepBatchPublisher& publish = {},
-                                const StepProgressSink& progress = {});
+                                const StepProgressSink& progress = {},
+                                const StepImportPolicy& policy = {});
 
 } // namespace step_host

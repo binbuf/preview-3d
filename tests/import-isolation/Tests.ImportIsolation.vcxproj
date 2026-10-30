@@ -125,6 +125,7 @@
     <ClCompile Include="StepPerformanceTests.cpp" />
     <ClCompile Include="StepInteropTests.cpp" />
     <ClCompile Include="StepQualificationTests.cpp" />
+    <ClCompile Include="StepToleranceTests.cpp" />
     <ClCompile Include="..\..\compatibility-host-step\src\StepPart21Preflight.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\app\D3D12ImportBridge.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\app\Localization.cpp" />

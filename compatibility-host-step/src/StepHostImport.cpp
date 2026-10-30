@@ -17,6 +17,16 @@ double ElapsedMilliseconds(const std::chrono::steady_clock::time_point& start)
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
+StepTessellationQuality MapImportQuality(model_core::StepImportQuality quality)
+{
+    switch (quality) {
+    case model_core::StepImportQuality::Draft: return StepTessellationQuality::Draft;
+    case model_core::StepImportQuality::Full: return StepTessellationQuality::Full;
+    case model_core::StepImportQuality::Balanced: break;
+    }
+    return StepTessellationQuality::Balanced;
+}
+
 } // namespace
 
 model_core::ImportErrorCode MapPreflightStatus(std::uint32_t status)
@@ -56,6 +66,11 @@ StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& reque
         || request.sectionByteCapacity < sizeof(model_core::SectionHeader)
         || section.size() < static_cast<std::size_t>(request.sectionByteCapacity)
         || !request.maxChunkCount) {
+        result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
+        return result;
+    }
+    model_core::StepImportQuality importQuality = model_core::StepImportQuality::Balanced;
+    if (!model_core::StepImportQualityFromFlags(request.requestFlags, importQuality)) {
         result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
         return result;
     }
@@ -118,8 +133,11 @@ StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& reque
         return result;
     }
 
+    StepImportPolicy policy;
+    policy.quality = MapImportQuality(importQuality);
+    policy.unresolvedExternalDocuments = preflight.externalDocuments;
     const StepXdeResult scene = RunStepXdeAdapter(request, section, sourceHandle, cancellationEvent,
-                                                  mappedSource, {}, publish, progress);
+                                                  mappedSource, {}, publish, progress, policy);
     result.errorCode = scene.errorCode;
     result.chunkCount = scene.chunkCount;
     result.batchCount = scene.batchCount;

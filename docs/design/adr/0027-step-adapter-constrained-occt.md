@@ -27,8 +27,14 @@ separate (dynamic) OCCT closure and no other binary links OCCT.
   configuration links the `debug/lib` variants so the CRT/iterator levels match.
 - The adapter reuses the STEP host's product-owned Part-21 admission scanner
   (source-not-state, [ADR-0004](0004-share-source-not-state.md)) **before** any
-  OCCT call, rejects external documents and over-budget input, and feeds OCCT a
-  bounded seekable stream over the T12 `BoundedSource` (never a path).
+  OCCT call and feeds OCCT a bounded seekable stream over the T12
+  `BoundedSource` (never a path). T07 changed the shared scanner so external
+  declarations are counted from Part-21 instance names and are a bounded
+  warning rather than a preflight veto. The **thumbnail provider deliberately
+  keeps its stricter self-contained policy** by setting
+  `maxExternalDocuments = 0`; the import host attempts the main document and
+  reports unresolved externals as a compatibility warning. Neither path opens
+  the referenced file.
 - OCCT opaque calls (read/transfer and meshing/extraction) run under the T16
   exception/structured-exception containment boundary; a contained fault is a
   typed failure, never a fabricated thumbnail.
@@ -47,3 +53,7 @@ separate (dynamic) OCCT closure and no other binary links OCCT.
 - OCCT's `XCAFApp_Application` singleton is created once per process but every
   document is per call and closed on `Reset`; the adapter keeps no lasting
   per-call state.
+- T07's tolerance/quality/repair policy lives in the shared STEP host sources
+  and [ADR-0062](0062-step-tolerance-bounded-repair-and-import-quality.md). The
+  provider still uses its fixed low-detail profile and does not expose
+  Draft/Balanced/Full, so the provider statement above remains intentional.

@@ -15,7 +15,7 @@ For install and build instructions, see the [README](../README.md).
 | PLY | ASCII and binary triangle meshes and point clouds |
 | 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews |
 | Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`; static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
-| STEP | `.step` and `.stp`: self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, and authored length units through a dedicated isolated OCCT host |
+| STEP | `.step` and `.stp`: ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality through a dedicated isolated OCCT host |
 
 `.mtl` is always a sidecar and is never a primary open type. The Open dialog,
 command line, drag/drop, single-instance activation, Retry, and Open With all
@@ -37,7 +37,7 @@ the rest of the session.
 | PLY mesh | unspecified | unspecified | Studio PBR |
 | PLY point-only / 3DGS | unspecified | unspecified | Point cloud (unlit round colored splats, no grid) |
 | STL / 3MF | Z | unspecified (STL) / millimetres (3MF) | Studio CAD |
-| STEP | unspecified (STEP defines no display-up axis) | authored, verified positive metre factor | Studio CAD |
+| STEP | unspecified (STEP defines no display-up axis) | authored, verified positive metre factor; absent units assume millimetres and contradictory units use the first/dominant factor, both warned | Studio CAD |
 
 Notes:
 
@@ -148,9 +148,15 @@ selection are not currently included. USD skeletal bindings are ignored and the
 authored rest pose is previewed statically (matching the baked start pose FBX
 already shows).
 
-The supported STEP/STP subset is bounded and self-contained only: external STEP
-documents are out of scope, and there is no PMI/GD&T, editing, saved views, exact
-measurement, or shape healing.
+The supported STEP/STP subset is bounded. External STEP document declarations
+are unresolved metadata rather than a veto: the isolated host never opens the
+referenced path, keeps the usable main-document geometry, and reports a
+compatibility warning. Missing units assume millimetres and contradictory units
+use the reader's first/dominant factor, both warned. Draft/Balanced/Full import
+quality selects a versioned deflection profile (Balanced is the default), and a
+bounded, deterministic `ShapeFix` repair runs only after a definition fails to
+tessellate. There is no PMI/GD&T, editing, saved views, exact measurement, or
+general-purpose shape healing.
 
 3MF slicer-private multi-plate grouping, printer/process settings, Slice, Secure
 Content, Volumetric, Implicit, toolpath, repair, slicing, and export features are

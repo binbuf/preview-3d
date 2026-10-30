@@ -9,10 +9,22 @@
 
 #include "StepTessellationProfile.h"
 
+#include "model_core/ControlProtocol.h"
+
 #include <cstdint>
 
 namespace step_host {
 
 constexpr std::uint32_t kStepImporterVersion = 1 + kStepTessellationProfileVersion;
+
+// Per-request cache identity. The build identity names the release policy; the
+// quality is folded into the low two bits so Draft/Balanced/Full can never
+// share a derived-cache entry even if a cache key forgets the request flags.
+constexpr std::uint32_t StepImporterCacheIdentity(
+    model_core::StepImportQuality quality) noexcept
+{
+    return (kStepImporterVersion << 2)
+        | static_cast<std::uint32_t>(quality);
+}
 
 } // namespace step_host

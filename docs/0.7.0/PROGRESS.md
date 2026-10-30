@@ -16,6 +16,7 @@ The plan, ground rules and per-task verify commands are in
 - **T04 - Compatibility severity model and report chunk**: Header: `shared/model-core/include/model_core/Compatibility.h`.; `CompatibilitySeverity { Critical=0, Degraded=1, Ignored=2 }`.
 - **T05 - glTF required-extension compatibility**: Policy table: `import-worker/src/GltfAdapter.cpp`, anonymous namespace near; Enabled in the fastgltf mask: Draco, basisu, texture transform, quantization,
 - **T06 — Per-format presentation defaults and orientation**: Catalog profile enum: `shared/model-core/include/model_core/FormatCatalog.h`; Pure selection: `model_core::ResolvePresentationProfile(descriptor,
+- **T07 — STEP tolerance and import quality**: **Profile version is now 6.** `StepTessellationProfile.h`:; **Request quality bits** in `shared/model-core/include/model_core/
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -25,4 +26,5 @@ The plan, ground rules and per-task verify commands are in
 - [T04](progress/T04.md) — Header: `shared/model-core/include/model_core/Compatibility.h`.
 - [T05](progress/T05.md) — Policy table: `import-worker/src/GltfAdapter.cpp`, anonymous namespace near
 - [T06](progress/T06.md) — Catalog profile enum: `shared/model-core/include/model_core/FormatCatalog.h`
+- [T07](progress/T07.md) — **Profile version is now 6.** `StepTessellationProfile.h`:
 <!-- symphony:digest:end -->

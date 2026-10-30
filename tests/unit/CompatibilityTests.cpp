@@ -136,9 +136,14 @@ TEST_CASE("The trusted host owns specific localized text for known feature IDs",
     CHECK_FALSE(clearcoat.empty());
     CHECK(clearcoat.find(L"Clearcoat") != std::wstring::npos);
     CHECK_FALSE(CompatibilityFeatureText(kGltfFeatureUnspecifiedExtension).empty());
+    // STEP header/unit features added by T07 have specific host text.
+    CHECK_FALSE(CompatibilityFeatureText(kStepFeatureExternalDocumentUnresolved).empty());
+    CHECK_FALSE(CompatibilityFeatureText(kStepFeatureLengthUnitAssumedMillimetre).empty());
+    CHECK_FALSE(CompatibilityFeatureText(kStepFeatureLengthUnitContradictory).empty());
+    CHECK_FALSE(CompatibilityFeatureText(kStepFeatureBoundedRepair).empty());
     // An ID this build has no table entry for falls back to the generic host
     // warning rather than inventing text.
-    CHECK(CompatibilityFeatureText(kFeatureIdStepMin).empty());
+    CHECK(CompatibilityFeatureText(kFeatureIdStepMax).empty());
     CHECK(CompatibilitySeverityLabel(static_cast<uint8_t>(CompatibilitySeverity::Degraded))
           == L"degraded");
     CHECK(CompatibilitySeverityLabel(static_cast<uint8_t>(CompatibilitySeverity::Ignored))

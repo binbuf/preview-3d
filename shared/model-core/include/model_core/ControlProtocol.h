@@ -92,7 +92,47 @@ enum : uint32_t {
     // parallel and serial paths emit byte-identical normalized output. Product
     // callers never set it.
     kImportRequestStepForceSerialForTesting = 1u << 8,
+    // STEP import quality, encoded as a closed two-bit field on the STEP request
+    // only (Balanced is both bits clear, preserving every existing caller).
+    // Draft/Full select a coarser/finer versioned tessellation profile; Balanced
+    // is exactly the pre-T07 default. The value is part of the STEP importer and
+    // cache identity, so two qualities never share normalized bytes.
+    kImportRequestStepQualityDraft = 1u << 9,
+    kImportRequestStepQualityFull = 1u << 10,
+    kImportRequestStepQualityMask =
+        kImportRequestStepQualityDraft | kImportRequestStepQualityFull,
 };
+
+// Closed product-level STEP import-quality selection. `Balanced` is the default
+// and maps to the established STEP-004 display deflection.
+enum class StepImportQuality : uint32_t {
+    Draft = 0,
+    Balanced = 1,
+    Full = 2,
+};
+
+// Pure mapping from the STEP request flag bits. Both quality bits set is an
+// invalid protocol value; callers validate it before dispatch and the host
+// rejects it as ImportProtocolViolation.
+inline bool StepImportQualityFromFlags(uint32_t flags, StepImportQuality& quality) noexcept
+{
+    const uint32_t bits = flags & kImportRequestStepQualityMask;
+    if (bits == kImportRequestStepQualityMask) return false;
+    if (bits == kImportRequestStepQualityDraft) quality = StepImportQuality::Draft;
+    else if (bits == kImportRequestStepQualityFull) quality = StepImportQuality::Full;
+    else quality = StepImportQuality::Balanced;
+    return true;
+}
+
+inline uint32_t StepImportQualityFlags(StepImportQuality quality) noexcept
+{
+    switch (quality) {
+    case StepImportQuality::Draft: return kImportRequestStepQualityDraft;
+    case StepImportQuality::Full: return kImportRequestStepQualityFull;
+    case StepImportQuality::Balanced: break;
+    }
+    return 0;
+}
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
 // unbounded allocation or read in ControlChannelIo::ReadControlMessage.
