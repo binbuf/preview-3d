@@ -12,7 +12,7 @@
 // and this is never surfaced to the user as an error.
 struct ViewerSettings
 {
-    static constexpr int kCurrentVersion = 6;
+    static constexpr int kCurrentVersion = 7;
     int version = kCurrentVersion;
 
     // Display the model in the orientation its source file authored (true)
@@ -46,6 +46,12 @@ struct ViewerSettings
     int toneMapMode = 0;   // viewer_presentation::ToneMapMode
     int backgroundMode = 0; // viewer_presentation::BackgroundMode
     float exposure = 1.0f;
+    // T16 contact shadow; presets still choose the per-document default until
+    // the user toggles it (H), which pins and persists this value.
+    bool groundShadowEnabled = true;
+    // True once the user toggled the shadow, so presets must not replace the
+    // saved choice on the next launch/document.
+    bool groundShadowOverridden = false;
 
     // Future preferences are added here as additional flat fields with their
     // own defaults — see Settings.cpp for why this needs no migration step.

@@ -85,6 +85,9 @@ struct PresetSettings
     BackgroundMode background = BackgroundMode::Dark;
     ToneMapMode toneMap = ToneMapMode::Neutral;
     bool gridVisible = true;
+    // T16 ground contact shadow. CAD/PBR/Scan opt in by default; point clouds
+    // and transparent/checkerboard assets do not. The grid is independent.
+    bool shadowEnabled = true;
 };
 
 // Computes the bounded summary. Only the first kMaterialScanCap records are
@@ -111,6 +114,11 @@ PresetSettings ResolvePresetSettings(const MaterialSummary& summary,
                                      model_core::PresentationProfile catalogProfile,
                                      bool manualOverride,
                                      PresentationPreset manualPreset) noexcept;
+
+// T16 toggle/preset arbitration: an explicit user toggle (H / menu) survives a
+// later preset application; otherwise the preset's default wins.
+bool ResolveShadowVisible(bool userOverridden, bool currentVisible,
+                          bool presetDefault) noexcept;
 
 float ClampExposure(float exposure) noexcept;
 

@@ -295,7 +295,7 @@ void DrawKeyboard(HDC dc, const DialogState& state)
     DrawCallout(dc, state, 211, colors.orbit, Loc("controls.orbitPan", L"ORBIT & PAN").c_str(),
         Loc("controls.orbitPanDetail", L"Arrow keys orbit\nShift + arrows pan along the ground").c_str());
     DrawCallout(dc, state, 285, colors.actions, Loc("controls.frameReset", L"FRAME & RESET").c_str(),
-        Loc("controls.frameResetDetail", L"F frames selection · G toggles grid\nR or Home resets the view").c_str());
+        Loc("controls.frameResetDetail", L"F frames selection · G toggles grid  H toggles shadow\nR or Home resets the view").c_str());
     DrawCallout(dc, state, 359, colors.views, Loc("controls.viewSnap", L"VIEW SNAP").c_str(),
         Loc("controls.viewSnapDetail", L"Num 1 / 3 / 7 · Ctrl reverses\nNum 5 toggles perspective · Num . frames").c_str());
     DrawTextLine(dc, state.smallFont, colors.muted,

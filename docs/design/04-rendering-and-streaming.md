@@ -66,7 +66,7 @@ The MVP uses a forward, rasterized PBR-lite pipeline:
 - a full-screen resolve pass that composites the background in linear space,
   applies exposure, the selected neutral/ACES/Filmic/None tone curve and the
   sRGB transfer, then writes the UNORM swap-chain back buffer;
-- MSAA disabled by default; temporal effects, ray tracing, mesh shaders, shadows, and post-process antialiasing are outside the MVP.
+- MSAA disabled by default; temporal effects, ray tracing, mesh shaders, shadow maps and post-process antialiasing are outside the MVP. An analytic soft contact shadow and ORM ambient occlusion are in the MVP (see below).
 
 Materials are flattened into fixed-size GPU records. Feature level 11_0-compatible descriptor tables are used instead of assuming resource binding tier 3 or shader model 6.6 bindless behavior. Missing resources point at permanent neutral descriptors.
 
@@ -139,8 +139,8 @@ Presentation presets are selected from a bounded summary of the imported
 material catalog (base-color texture presence, metallic/roughness range,
 alpha/transmission share, unlit flags, point-only geometry and CAD format).
 Studio PBR, Studio CAD, Scan/Sculpt, Transparent and Point cloud each supply
-environment intensity, direct key/fill/rim multipliers, exposure, background
-and grid/ground defaults. The selection is a pure function in
+environment intensity, direct key/fill/rim multipliers, exposure, background,
+grid and ground-shadow defaults. The selection is a pure function in
 [`Presentation.h`](../../interactive-viewer/src/render/Presentation.h); the
 material loop is capped independently of the file. An explicit toolbar/preset
 choice pins the session and wins over later catalog recommendations.
@@ -150,6 +150,40 @@ paired `render.light.intensity` / `IBLIntensity` behavior. The CPU reference in
 in lock-step by the `[studio-ibl]`, `[tonemap]` and `[studio-presets]` unit
 tests, including pixel-shader compile checks at the feature-level-11_0
 baseline.
+
+## Ground contact shadow and ambient occlusion
+
+Objects sit on a ground layer that is independent of the grid. The chosen MVP
+path is the analytic soft contact footprint from ADR-0072, not a shadow map:
+[`GroundShadow.cpp`](../../interactive-viewer/src/render/GroundShadow.cpp)
+transforms the verified model bounds with the active ground-axis matrix, places
+the plane at `min.z - 0.0015 × radius`, projects the eight bounds corners along
+the stable studio key direction `(0.45, -0.55, 0.70)`, biases that projection
+15 % back toward the base and adds a 0.60 × radius soft rim. `D3D12ViewerPath`
+draws the plane and mask as a generated quad before the grid and the model,
+into the linear HDR target. It writes no depth, so it cannot occlude the model;
+the grid stays a separate lower layer at `min.z - 0.012 × radius`, so the two
+coplanar layers cannot z-fight.
+
+The shadow is one blended quad: there is no extra target, pass or GPU
+allocation. Opacity is 0.78 with 0.50 softness and an opaque core. A grazing
+key elevation is clamped to 0.08 and the footprint to 6 × radius, so a flat or
+very directional light cannot produce an unbounded ellipse. `H`, the More menu
+item and the persisted `groundShadowEnabled` preference toggle the layer. Studio
+CAD/PBR/Scan enable it by default; Transparent and Point cloud disable it. A
+manual toggle is independent of the grid toggle and survives later preset
+applications. SSAO is deliberately deferred to a follow-up: the HDR target does
+not yet expose a depth/normal chain, and the quality option must never gate the
+contact shadow.
+
+The metallic-roughness texture's R channel is ambient occlusion. The shader
+applies the glTF strength formula `saturate(1 + strength × (sample - 1))`, with
+sample = 1 when the map is absent. AO multiplies indirect diffuse, environment
+reflection and ambient terms only; direct `EvaluateLight` key/fill/rim
+specular is never AO-scaled, so metals do not read as dirty. `MaterialPayload`
+does not yet carry `occlusionStrength`, so the shipped value is the default 1.0.
+The transparent/checkerboard backdrop from T15 remains the single background
+implementation; ground shadow defaults off there and for point clouds.
 
 ## Upload ring
 

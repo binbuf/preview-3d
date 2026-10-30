@@ -26,6 +26,7 @@ The plan, ground rules and per-task verify commands are in
 - **T13 — HDR/EXR textures and environment assets**: **HDR decoder (product-owned).** `import-worker/src/RadianceHdrDecode.{h,cpp}`:; **EXR decoder.** `import-worker/src/OpenExrDecode.{h,cpp}` compiles the
 - **T14 — Studio IBL and neutral tone map (first slice)**: **Environment source.** Product-owned procedural studio, no HDRI/user file.; **Bake shape.** Defaults 128 texels/face, 6 specular mips, 48 GGX samples.
 - **T15 — HDR target, exposure, background and presets**: **Pure module.** `interactive-viewer/src/render/Presentation.{h,cpp}` owns the; **HDR target.** `D3D12ViewerPath` creates `R16G16B16A16_FLOAT` `sceneColor`
+- **T16 — Ground contact shadow and ambient occlusion**: **Chosen path: analytic soft contact footprint, no extra pass.** ADR-0072; **Pure math.** `interactive-viewer/src/render/GroundShadow.{h,cpp}` owns
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -45,4 +46,5 @@ The plan, ground rules and per-task verify commands are in
 - [T13](progress/T13.md) — **HDR decoder (product-owned).** `import-worker/src/RadianceHdrDecode.{h,cpp}`:
 - [T14](progress/T14.md) — **Environment source.** Product-owned procedural studio, no HDRI/user file.
 - [T15](progress/T15.md) — **Pure module.** `interactive-viewer/src/render/Presentation.{h,cpp}` owns the
+- [T16](progress/T16.md) — **Chosen path: analytic soft contact footprint, no extra pass.** ADR-0072
 <!-- symphony:digest:end -->

@@ -47,7 +47,7 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [x] T13 — HDR/EXR textures and environment assets → [../tasks/0.7.0/T13-textures-hdr-exr-environment.md](../tasks/0.7.0/T13-textures-hdr-exr-environment.md)
 - [x] T14 — Studio IBL and neutral tone map (first slice) → [../tasks/0.7.0/T14-studio-ibl-neutral-tonemap.md](../tasks/0.7.0/T14-studio-ibl-neutral-tonemap.md)
 - [x] T15 — HDR target, exposure, background and presets → [../tasks/0.7.0/T15-hdr-target-exposure-presets.md](../tasks/0.7.0/T15-hdr-target-exposure-presets.md)
-- [ ] T16 — Ground contact shadow and ambient occlusion → [../tasks/0.7.0/T16-ground-shadow-ao.md](../tasks/0.7.0/T16-ground-shadow-ao.md)
+- [x] T16 — Ground contact shadow and ambient occlusion → [../tasks/0.7.0/T16-ground-shadow-ao.md](../tasks/0.7.0/T16-ground-shadow-ao.md)
 
 ## Phase 4 — Render depth
 
@@ -59,11 +59,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T07:53:28Z · 16/20 done
+**Pipeline status** — updated 2026-10-30T08:24:58Z · 17/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16
 - Blocked: none
 - Failed: none
-- Remaining: T16, T17, T18, T19
-- Last finished: T15 — done · HDR target/resolve, tone-map modes, exposure/background controls, material-aware presets, unit tests and stable screenshot goldens landed; verify filter passes.
+- Remaining: T17, T18, T19
+- Last finished: T16 — done · Analytic ground contact shadow, ORM AO strength formula, preset/toggle persistence, unit tests, screenshot goldens and docs landed; SSAO deferred as follow-up.
 <!-- /symphony:status -->

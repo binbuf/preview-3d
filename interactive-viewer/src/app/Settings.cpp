@@ -137,6 +137,12 @@ ViewerSettings LoadSettings()
         const int value = std::atoi(backgroundText.c_str());
         if (value >= 0 && value <= 3) settings.backgroundMode = value;
     }
+    const std::string shadowText = FindJsonValue(content, "groundShadowEnabled");
+    if (shadowText == "true") settings.groundShadowEnabled = true;
+    else if (shadowText == "false") settings.groundShadowEnabled = false;
+    const std::string shadowOverrideText = FindJsonValue(content, "groundShadowOverridden");
+    if (shadowOverrideText == "true") settings.groundShadowOverridden = true;
+    else if (shadowOverrideText == "false") settings.groundShadowOverridden = false;
     const std::string exposureText = FindJsonValue(content, "exposure");
     if (!exposureText.empty())
     {
@@ -187,6 +193,8 @@ void SaveSettings(const ViewerSettings& settings)
         ",\n  \"toneMapMode\": " + std::to_string(settings.toneMapMode) +
         ",\n  \"backgroundMode\": " + std::to_string(settings.backgroundMode) +
         ",\n  \"exposure\": " + std::to_string(settings.exposure) +
+        ",\n  \"groundShadowEnabled\": " + (settings.groundShadowEnabled ? "true" : "false") +
+        ",\n  \"groundShadowOverridden\": " + (settings.groundShadowOverridden ? "true" : "false") +
         ",\n  \"language\": \"" + escapedLanguage + "\"\n}\n";
 
     std::wstring writeError;

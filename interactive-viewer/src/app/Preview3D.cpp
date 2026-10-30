@@ -359,6 +359,8 @@ struct ViewerApp
     uint64_t smokePickRequests = 0;
     bool meshSelected = false;
     bool gridVisible = true;
+    bool shadowVisible = true;
+    bool shadowOverridden = false;
     bool axisSnapEnabled = false;
     // Display the loaded model in its native/source orientation instead of
     // this app's normalized Z-up correction (Model.h's ModelData::
@@ -1591,6 +1593,8 @@ void ApplyPresentationSettings(ViewerApp& app, model_core::PresentationProfile p
     if (!app.exposureOverridden) app.exposure = settings.exposure;
     if (!app.backgroundOverridden) app.backgroundMode = settings.background;
     if (!app.toneMapOverridden) app.toneMapMode = settings.toneMap;
+    app.shadowVisible = viewer_presentation::ResolveShadowVisible(
+        app.shadowOverridden, app.shadowVisible, settings.shadowEnabled);
     switch (preset)
     {
     case viewer_presentation::PresentationPreset::StudioCad:
@@ -1622,6 +1626,7 @@ void ApplyManualPresentationPreset(ViewerApp& app, viewer_presentation::Presenta
     app.exposureOverridden = false;
     app.backgroundOverridden = false;
     app.toneMapOverridden = false;
+    app.shadowOverridden = false;
     const auto profile = model_core::FindBySourceFormatId(
         app.loadedModel ? app.loadedModel->source.format : model_core::SourceFormatId::Unknown);
     ApplyPresentationSettings(app, profile ? profile->presentation : model_core::PresentationProfile::Default,
@@ -1830,6 +1835,17 @@ void ToggleGrid(ViewerApp& app)
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
+void ToggleShadow(ViewerApp& app)
+{
+    if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_SHADOW)) return;
+    app.shadowVisible = !app.shadowVisible;
+    app.shadowOverridden = true;
+    ShowModeHud(app, app.shadowVisible ? Loc("hud.shadowShown", L"Contact shadow shown")
+                                       : Loc("hud.shadowHidden", L"Contact shadow hidden"));
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
 void ToggleProjection(ViewerApp& app)
 {
     if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_PROJECTION)) return;
@@ -1862,6 +1878,8 @@ void SaveViewerPreferences(const ViewerApp& app)
     settings.toneMapMode = static_cast<int>(app.toneMapMode);
     settings.backgroundMode = static_cast<int>(app.backgroundMode);
     settings.exposure = app.exposure;
+    settings.groundShadowEnabled = app.shadowVisible;
+    settings.groundShadowOverridden = app.shadowOverridden;
     SaveSettings(settings);
 }
 
@@ -2597,6 +2615,9 @@ void ShowMoreMenu(ViewerApp& app)
         AppendMenuW(menu, MF_STRING, ID_VIEW_DIAGNOSTICS, Loc("menu.modelWarnings", L"Model warnings…").c_str());
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
+    AppendMenuW(menu, MF_STRING | (app.shadowVisible ? MF_CHECKED : MF_UNCHECKED),
+        ID_VIEW_SHADOW, Loc("menu.groundShadow", L"Ground contact shadow\tH").c_str());
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, ID_VIEW_CONTROLS, Loc("menu.controls", L"Controls\t?").c_str());
     AppendMenuW(menu, MF_STRING, ID_VIEW_SETTINGS, Loc("menu.settings", L"Settings…").c_str());
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -2874,6 +2895,7 @@ void HandleCommand(ViewerApp& app, int id)
         }
         break;
     case ID_VIEW_GRID: ToggleGrid(app); break;
+    case ID_VIEW_SHADOW: ToggleShadow(app); break;
     case ID_VIEW_GROUND_AXIS: CycleGroundAxis(app); break;
     case ID_VIEW_GROUND_DIRECTION: ToggleGroundDirection(app); break;
     case ID_VIEW_AXIS_SNAP: ToggleAxisSnap(app); break;
@@ -4123,6 +4145,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     }
     overlay.rollGlyphAlpha = app.rollGlyphAlpha;
     overlay.gridVisible = app.gridVisible;
+    overlay.shadowVisible = app.shadowVisible;
     overlay.axisSnapEnabled = app.axisSnapEnabled;
     overlay.groundAxis = app.groundAxis;
     overlay.groundAxisInverted = app.groundAxisInverted;
@@ -4317,7 +4340,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Shipping builds cannot be driven by local WM_APP messages.
         return 0;
 #else
-        if (!app->appSmoke || wParam > 100) return 0;
+        if (!app->appSmoke || wParam > 104) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -4472,6 +4495,22 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (wParam == 100) {
             const auto stats = app->renderThread.Stats();
             return static_cast<LRESULT>(std::bit_cast<uint64_t>(stats.p95Ms));
+        }
+        // T16 ground-shadow evidence: query (101) and set (102) the layer.
+        if (wParam == 101) return static_cast<LRESULT>(app->shadowVisible ? 1 : 0);
+        if (wParam == 102) {
+            app->shadowVisible = lParam != 0;
+            app->shadowOverridden = true;
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(app->shadowVisible ? 1 : 0);
+        }
+        // Grid independence evidence: query (103) and set (104).
+        if (wParam == 103) return static_cast<LRESULT>(app->gridVisible ? 1 : 0);
+        if (wParam == 104) {
+            app->gridVisible = lParam != 0;
+            app->presentationOverridden = true;
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(app->gridVisible ? 1 : 0);
         }
         if (wParam >= 80 && wParam <= 83) {
             if (!app->loadedModel) return 0;
@@ -6032,6 +6071,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.toneMapMode = static_cast<viewer_presentation::ToneMapMode>(settings.toneMapMode);
     app.backgroundMode = static_cast<viewer_presentation::BackgroundMode>(settings.backgroundMode);
     app.exposure = viewer_presentation::ClampExposure(settings.exposure);
+    app.shadowVisible = settings.groundShadowEnabled;
+    app.shadowOverridden = settings.groundShadowOverridden;
     app.renderThread.SetHideModelUntilComplete(app.hideModelUntilComplete);
     bool commandLineInvalid = false;
     bool bypassSingleInstance = false;

@@ -161,8 +161,10 @@
          tone curve, compiled from the shipped viewer source. -->
     <ClCompile Include="..\..\interactive-viewer\src\render\StudioEnvironment.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\render\Presentation.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\render\GroundShadow.cpp" />
     <ClCompile Include="StudioIblTests.cpp" />
     <ClCompile Include="PresentationToneMapTests.cpp" />
+    <ClCompile Include="GroundShadowTests.cpp" />
     <ClCompile Include="CompatibilityTests.cpp" />
     <ClCompile Include="CoarseProxyTests.cpp" />
     <ClCompile Include="GraphicsDeviceTests.cpp" />

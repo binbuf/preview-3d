@@ -1,5 +1,6 @@
 #include "D3D12ViewerPath.h"
 #include "DetailView.h"
+#include "GroundShadow.h"
 #include "StudioEnvironment.h"
 
 #include <d3dcompiler.h>
@@ -378,6 +379,13 @@ float3 SrgbToLinear(float3 color)
     float3 high=pow((color+0.055f)/1.055f,2.4f);
     return lerp(high,low,step(color,0.04045f));
 }
+// glTF occlusion strength: 1 + strength * (sample - 1). MaterialPayload does
+// not carry occlusionStrength yet, so the shipped value is the spec default
+// 1.0; a missing map samples 1.0 and leaves the factor at 1.0.
+float OcclusionFactor(float sample,float strength)
+{
+    return saturate(1.0f+clamp(strength,0.0f,1.0f)*(saturate(sample)-1.0f));
+}
 PixelOutput PSMain(PSInput input)
 {
     if ((input.pickId&0x80000000u)!=0) {
@@ -431,7 +439,7 @@ PixelOutput PSMain(PSInput input)
     float occlusion=1.0f;
     if (!clay && (maps&2) && uvValid) {
         float4 mr=nearest?gMetallicRoughness.Sample(gNearestSampler,sampleUv):gMetallicRoughness.Sample(gLinearSampler,sampleUv);
-        metallic*=mr.b; roughness*=mr.g; occlusion=saturate(mr.r);
+        metallic*=mr.b; roughness*=mr.g; occlusion=OcclusionFactor(mr.r,1.0f);
     }
     roughness=clamp(roughness,.045f,1.0f);
     // KHR_materials_transmission approximation. A transmissive surface has no
@@ -536,6 +544,68 @@ GridOutput PSMain(GridInput input)
 {
     GridOutput output;
     output.color = input.color;
+    output.pick = 0;
+    return output;
+}
+)";
+
+// T16 ground contact shadow. The plane and its analytic soft ellipse are drawn
+// as their own layer: hiding the grid cannot hide the shadow, and hiding the
+// shadow leaves the grid untouched. The vertex shader generates a camera-
+// relative quad from SV_VertexID; the pixel shader mirrors GroundShadow.cpp's
+// ShadowMask so the CPU reference tests and the GPU image cannot drift.
+constexpr char kGroundVertexShaderSource[] = R"(
+cbuffer FrameConstants : register(b0)
+{
+    row_major float4x4 gViewProjection;
+    float4 gEyeSelection;
+    float4 gViewport;
+};
+cbuffer GroundConstants : register(b1)
+{
+    float4 gGround;       // center.xy, plane z, half size
+    float4 gShadow;       // footprint center.xy, radii.xy
+    float4 gShadowParams; // opacity, softness, unused, unused
+    float4 gGroundColor;  // linear rgb, center alpha
+};
+struct GroundOutput { float4 position : SV_POSITION; float3 worldPosition : TEXCOORD0; };
+GroundOutput VSMain(uint vertexId : SV_VertexID)
+{
+    float2 corner = float2(
+        (vertexId == 1 || vertexId == 4 || vertexId == 5) ? 1.0f : -1.0f,
+        (vertexId == 2 || vertexId == 3 || vertexId == 5) ? 1.0f : -1.0f);
+    float3 position = float3(gGround.xy + corner * gGround.w, gGround.z);
+    GroundOutput output;
+    output.position = mul(float4(position, 1.0f), gViewProjection);
+    output.worldPosition = position;
+    return output;
+}
+)";
+
+constexpr char kGroundPixelShaderSource[] = R"(
+cbuffer GroundConstants : register(b1)
+{
+    float4 gGround;
+    float4 gShadow;
+    float4 gShadowParams;
+    float4 gGroundColor;
+};
+struct GroundInput { float4 position : SV_POSITION; float3 worldPosition : TEXCOORD0; };
+struct GroundOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
+GroundOutput PSMain(GroundInput input)
+{
+    float2 p = input.worldPosition.xy;
+    float2 shadowDelta = (p - gShadow.xy) / max(gShadow.zw, float2(1e-6f, 1e-6f));
+    float distanceToShadow = length(shadowDelta);
+    float softness = clamp(gShadowParams.y, 0.001f, 1.0f);
+    float shadow = (1.0f - smoothstep(1.0f - softness, 1.0f, distanceToShadow)) * gShadowParams.x;
+    float2 groundDelta = (p - gGround.xy) / max(gGround.w, 1e-6f);
+    float groundDistance = length(groundDelta);
+    float fade = 1.0f - smoothstep(0.72f, 1.0f, groundDistance);
+    float3 ground = gGroundColor.rgb * (0.88f + 0.12f * (1.0f - saturate(groundDistance)));
+    float3 color = lerp(ground, ground * 0.05f, saturate(shadow));
+    GroundOutput output;
+    output.color = float4(max(color, 0.0f), fade * gGroundColor.a);
     output.pick = 0;
     return output;
 }
@@ -743,6 +813,11 @@ const char* D3D12ViewerPath::TexturedPixelShaderSource()
 const char* D3D12ViewerPath::ResolvePixelShaderSource()
 {
     return kResolvePixelShaderSource;
+}
+
+const char* D3D12ViewerPath::GroundPixelShaderSource()
+{
+    return kGroundPixelShaderSource;
 }
 
 bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
@@ -958,7 +1033,9 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     D3D12_ROOT_PARAMETER params[3] = {rootParam, {}, {}};
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[1].Constants.ShaderRegister = 1; params[1].Constants.Num32BitValues = 33;
-    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    // The ground-shadow pixel shader reads its constants from b1 too; the
+    // compact/render pipelines only read it from the vertex stage.
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     // The compact STEP vertex format still carries an authored material per
     // draw. Keep its color in root constants rather than expanding millions
     // of vertices to the full textured layout.
@@ -1088,6 +1165,34 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     gridBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&gridPsoDesc, IID_PPV_ARGS(&gridPipelineState)))) {
         error = L"The ground-grid pipeline state could not be created.";
+        return false;
+    }
+    ComPtr<ID3DBlob> groundVsBlob;
+    ComPtr<ID3DBlob> groundPsBlob;
+    if (!CompileShader(kGroundVertexShaderSource, sizeof(kGroundVertexShaderSource) - 1,
+                       "VSMain", "vs_5_1", groundVsBlob, error)
+        || !CompileShader(kGroundPixelShaderSource, sizeof(kGroundPixelShaderSource) - 1,
+                          "PSMain", "ps_5_1", groundPsBlob, error)) {
+        return false;
+    }
+    auto groundPsoDesc = psoDesc;
+    groundPsoDesc.VS = { groundVsBlob->GetBufferPointer(), groundVsBlob->GetBufferSize() };
+    groundPsoDesc.PS = { groundPsBlob->GetBufferPointer(), groundPsBlob->GetBufferSize() };
+    groundPsoDesc.InputLayout = {};
+    groundPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    auto& groundBlend = groundPsoDesc.BlendState.RenderTarget[0];
+    groundBlend.BlendEnable = TRUE;
+    groundBlend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    groundBlend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    groundBlend.BlendOp = D3D12_BLEND_OP_ADD;
+    groundBlend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    groundBlend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    groundBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    groundPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    groundPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&groundPsoDesc,
+                                                             IID_PPV_ARGS(&groundPipelineState)))) {
+        error = L"The ground-shadow pipeline state could not be created.";
         return false;
     }
     std::string positionOnlySource(kVertexShaderSource);
@@ -1841,6 +1946,42 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 sizeof(presentationConstants));
     const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
         = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
+
+    if (chrome.info.shadowVisible && haveModelBounds) {
+        DirectX::XMFLOAT4X4 groundTransform{};
+        DirectX::XMStoreFloat4x4(&groundTransform,
+            GroundAxisTransform(chrome.info.groundAxis, sourceUpAxis,
+                chrome.info.showNativeOrientation, chrome.info.groundAxisInverted));
+        viewer_ground_shadow::Bounds sourceBounds;
+        sourceBounds.minimum[0] = modelBoundsMin.x;
+        sourceBounds.minimum[1] = modelBoundsMin.y;
+        sourceBounds.minimum[2] = modelBoundsMin.z;
+        sourceBounds.maximum[0] = modelBoundsMax.x;
+        sourceBounds.maximum[1] = modelBoundsMax.y;
+        sourceBounds.maximum[2] = modelBoundsMax.z;
+        const auto worldBounds = viewer_ground_shadow::TransformBounds(
+            sourceBounds, &groundTransform._11);
+        const auto plane = viewer_ground_shadow::PlaceGroundPlane(worldBounds);
+        const float cameraTargetF[3] = {
+            static_cast<float>(cameraTarget[0]),
+            static_cast<float>(cameraTarget[1]),
+            static_cast<float>(cameraTarget[2]),
+        };
+        const auto footprint = viewer_ground_shadow::ProjectShadow(
+            worldBounds, plane, viewer_ground_shadow::kKeyLightDirection);
+        if (plane.valid && footprint.valid) {
+            const auto constants = viewer_ground_shadow::BuildConstants(
+                plane, footprint, cameraTargetF);
+            commandList->SetGraphicsRootSignature(rootSignature.Get());
+            commandList->SetPipelineState(groundPipelineState.Get());
+            commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
+            commandList->SetGraphicsRoot32BitConstants(1, 16, &constants, 0);
+            commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            commandList->IASetVertexBuffers(0, 0, nullptr);
+            commandList->IASetIndexBuffer(nullptr);
+            commandList->DrawInstanced(6, 1, 0, 0);
+        }
+    }
 
     if (chrome.info.gridVisible && haveModelBounds) {
         DirectX::XMFLOAT3 boundsMin;

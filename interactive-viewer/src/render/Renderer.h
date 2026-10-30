@@ -183,6 +183,8 @@ struct OverlayInfo
     bool wireframeButtonPressed = false;
     bool hasModel = false;
     bool gridVisible = true;
+    // T16: ground contact shadow is its own layer, independent of the grid.
+    bool shadowVisible = true;
     bool axisSnapEnabled = false;
     bool infoPanelVisible = false;
     bool speedFlyoutOpen = false;

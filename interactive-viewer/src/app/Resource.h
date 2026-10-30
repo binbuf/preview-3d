@@ -42,6 +42,7 @@
 #define ID_VIEW_GROUND_AXIS     32793
 #define ID_VIEW_GROUND_DIRECTION 32794
 #define ID_VIEW_OPEN_AS         32795
+#define ID_VIEW_SHADOW          32796
 #ifndef IDC_STATIC
 #define IDC_STATIC				-1
 #endif

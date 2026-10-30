@@ -1,0 +1,140 @@
+{
+  "configuration": "Debug",
+  "screenshots": {
+    "cad-shadow-on.png": [
+      1258,
+      849
+    ],
+    "cad-grid-on.png": [
+      1258,
+      849
+    ],
+    "cad-shadow-off.png": [
+      1258,
+      849
+    ],
+    "cad-grid-off-shadow-on.png": [
+      1258,
+      849
+    ],
+    "sculpt-shadow.png": [
+      1258,
+      849
+    ],
+    "transparent-checker.png": [
+      1258,
+      849
+    ],
+    "point-cloud-no-shadow.png": [
+      1258,
+      849
+    ]
+  },
+  "mae": {
+    "cad-shadow-on.png-vs-cad-grid-on.png": 0.0,
+    "cad-shadow-on.png-vs-cad-shadow-off.png": 0.026860574959150327,
+    "cad-shadow-on.png-vs-cad-grid-off-shadow-on.png": 0.0005722145629084967,
+    "cad-shadow-on.png-vs-sculpt-shadow.png": 0.10611372804330066,
+    "cad-shadow-on.png-vs-transparent-checker.png": 0.08031907424428104,
+    "cad-shadow-on.png-vs-point-cloud-no-shadow.png": 0.08554049223856208,
+    "cad-grid-on.png-vs-cad-shadow-off.png": 0.026860574959150327,
+    "cad-grid-on.png-vs-cad-grid-off-shadow-on.png": 0.0005722145629084967,
+    "cad-grid-on.png-vs-sculpt-shadow.png": 0.10611372804330066,
+    "cad-grid-on.png-vs-transparent-checker.png": 0.08031907424428104,
+    "cad-grid-on.png-vs-point-cloud-no-shadow.png": 0.08554049223856208,
+    "cad-shadow-off.png-vs-cad-grid-off-shadow-on.png": 0.0269949320874183,
+    "cad-shadow-off.png-vs-sculpt-shadow.png": 0.127084290747549,
+    "cad-shadow-off.png-vs-transparent-checker.png": 0.07829063265931373,
+    "cad-shadow-off.png-vs-point-cloud-no-shadow.png": 0.05873863868464053,
+    "cad-grid-off-shadow-on.png-vs-sculpt-shadow.png": 0.10599405126633987,
+    "cad-grid-off-shadow-on.png-vs-transparent-checker.png": 0.08011003880718953,
+    "cad-grid-off-shadow-on.png-vs-point-cloud-no-shadow.png": 0.08509784773284314,
+    "sculpt-shadow.png-vs-transparent-checker.png": 0.09122370302287582,
+    "sculpt-shadow.png-vs-point-cloud-no-shadow.png": 0.1256149790645425,
+    "transparent-checker.png-vs-point-cloud-no-shadow.png": 0.08492168351715686
+  },
+  "ssim": {
+    "cad-shadow-on.png-vs-cad-grid-on.png": 1.0,
+    "cad-shadow-on.png-vs-cad-shadow-off.png": 0.9571494053397019,
+    "cad-shadow-on.png-vs-cad-grid-off-shadow-on.png": 0.9995567545452372,
+    "cad-shadow-on.png-vs-sculpt-shadow.png": 0.3690422700094494,
+    "cad-shadow-on.png-vs-transparent-checker.png": 0.6206683903633827,
+    "cad-shadow-on.png-vs-point-cloud-no-shadow.png": 0.585328361947182,
+    "cad-grid-on.png-vs-cad-shadow-off.png": 0.9571494053397019,
+    "cad-grid-on.png-vs-cad-grid-off-shadow-on.png": 0.9995567545452372,
+    "cad-grid-on.png-vs-sculpt-shadow.png": 0.3690422700094494,
+    "cad-grid-on.png-vs-transparent-checker.png": 0.6206683903633827,
+    "cad-grid-on.png-vs-point-cloud-no-shadow.png": 0.585328361947182,
+    "cad-shadow-off.png-vs-cad-grid-off-shadow-on.png": 0.9566673188538112,
+    "cad-shadow-off.png-vs-sculpt-shadow.png": 0.33076654244224124,
+    "cad-shadow-off.png-vs-transparent-checker.png": 0.608672312670627,
+    "cad-shadow-off.png-vs-point-cloud-no-shadow.png": 0.6031489824114792,
+    "cad-grid-off-shadow-on.png-vs-sculpt-shadow.png": 0.3690183518486206,
+    "cad-grid-off-shadow-on.png-vs-transparent-checker.png": 0.6205048364640172,
+    "cad-grid-off-shadow-on.png-vs-point-cloud-no-shadow.png": 0.5856380026592128,
+    "sculpt-shadow.png-vs-transparent-checker.png": 0.4707468134071835,
+    "sculpt-shadow.png-vs-point-cloud-no-shadow.png": 0.2977515646969224,
+    "transparent-checker.png-vs-point-cloud-no-shadow.png": 0.4804716326891061
+  },
+  "golden": {
+    "cad-shadow-on.png": {
+      "mae": 0.0,
+      "ssim": 1.0
+    },
+    "cad-grid-on.png": {
+      "mae": 0.0,
+      "ssim": 1.0
+    },
+    "cad-shadow-off.png": {
+      "mae": 0.0,
+      "ssim": 1.0
+    },
+    "cad-grid-off-shadow-on.png": {
+      "mae": 0.0,
+      "ssim": 1.0
+    },
+    "sculpt-shadow.png": {
+      "mae": 8.106107026143792e-05,
+      "ssim": 0.9993023213354074
+    },
+    "transparent-checker.png": {
+      "mae": 3.1913807189542485e-05,
+      "ssim": 0.9998509865924529
+    },
+    "point-cloud-no-shadow.png": {
+      "mae": 0.0,
+      "ssim": 1.0
+    }
+  },
+  "states": {
+    "cad": {
+      "shadow": 1,
+      "grid": 1,
+      "background": 0
+    },
+    "sculpt": {
+      "shadow": 1,
+      "grid": 0
+    },
+    "transparent": {
+      "shadow": 0,
+      "background": 3
+    },
+    "point-cloud": {
+      "shadow": 0
+    }
+  },
+  "tolerances": {
+    "mae": 0.06,
+    "ssim": 0.9
+  },
+  "failure": null,
+  "performance": {
+    "mean_frame_ms": 36.93232105263159,
+    "p95_frame_ms": 291.9783,
+    "accounted_gpu_bytes": 36765696,
+    "private_bytes": 636329984,
+    "presented_frames": 210
+  },
+  "diagnostics": ""
+}

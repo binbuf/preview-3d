@@ -139,6 +139,7 @@ PresetSettings SettingsForPreset(PresentationPreset preset) noexcept
         settings.rimScale = 0.90f;
         settings.background = BackgroundMode::Dark;
         settings.gridVisible = true;
+        settings.shadowEnabled = true;
         break;
     case PresentationPreset::ScanSculpt:
         settings.environmentIntensity = 0.85f;
@@ -147,11 +148,13 @@ PresetSettings SettingsForPreset(PresentationPreset preset) noexcept
         settings.rimScale = 0.55f;
         settings.background = BackgroundMode::MidGrey;
         settings.gridVisible = false;
+        settings.shadowEnabled = true;
         break;
     case PresentationPreset::Transparent:
         settings.environmentIntensity = 1.0f;
         settings.background = BackgroundMode::Checkerboard;
         settings.gridVisible = false;
+        settings.shadowEnabled = false;
         break;
     case PresentationPreset::PointCloud:
         settings.environmentIntensity = 0.80f;
@@ -159,11 +162,13 @@ PresetSettings SettingsForPreset(PresentationPreset preset) noexcept
         settings.rimScale = 0.80f;
         settings.background = BackgroundMode::Dark;
         settings.gridVisible = false;
+        settings.shadowEnabled = false;
         break;
     case PresentationPreset::StudioPbr:
     default:
         settings.background = BackgroundMode::Dark;
         settings.gridVisible = true;
+        settings.shadowEnabled = true;
         break;
     }
     return settings;
@@ -178,6 +183,12 @@ PresetSettings ResolvePresetSettings(const MaterialSummary& summary,
         ? manualPreset
         : SelectPresentationPreset(summary, catalogProfile);
     return SettingsForPreset(preset);
+}
+
+bool ResolveShadowVisible(bool userOverridden, bool currentVisible,
+                          bool presetDefault) noexcept
+{
+    return userOverridden ? currentVisible : presetDefault;
 }
 
 float ClampExposure(float exposure) noexcept

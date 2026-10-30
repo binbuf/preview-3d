@@ -87,6 +87,7 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> blendPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gridPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> groundPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> coloredPointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyPipelineState;
@@ -221,6 +222,9 @@ struct D3D12ViewerPath
     // The full-screen resolve shader text, exposed so the tone-map/background
     // contract and the FL11_0 compile baseline can be asserted without a GPU.
     static const char* ResolvePixelShaderSource();
+    // T16 analytic ground contact-shadow pixel shader, exposed for the no-GPU
+    // source-contract test.
+    static const char* GroundPixelShaderSource();
     void EvictFineChunks(std::span<const uint32_t> identities);
     void RetirePreviewChunks(ModelResources& resources);
     uint64_t AccountedAllocationBytes(const ModelResources* extra = nullptr) const;
