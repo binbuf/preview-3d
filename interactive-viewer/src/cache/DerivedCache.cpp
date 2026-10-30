@@ -13,10 +13,13 @@
 namespace {
 
 constexpr uint32_t kCacheEntryMagic = 0x43443350; // "P3DC"
+// v3: protocol v12 grows MaterialPayload from 72 to 140 bytes and adds the PBR
+// lobes. A v2 entry carries the old material record, so it cannot be reused
+// without reinterpreting the payload under new rules.
 // v2: normalized geometry may carry ChunkTopology::LineList (protocol v11) and
 // glTF strip/fan primitives now normalize to different triangle counts. A v1
 // entry cannot be reused without reinterpreting its payload under new rules.
-constexpr uint32_t kCurrentCacheSchemaVersion = 2;
+constexpr uint32_t kCurrentCacheSchemaVersion = 3;
 
 #pragma pack(push, 1)
 struct CacheEntryHeader

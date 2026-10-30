@@ -31,8 +31,10 @@ Ship the analytic soft contact footprint as the MVP shadow:
 - ORM R is ambient occlusion through `OcclusionFactor(sample, strength) =
   saturate(1 + strength * (sample - 1))`. AO scales indirect diffuse,
   environment reflection and ambient terms only; every `EvaluateLight` direct
-  call stays unoccluded. `MaterialPayload` has no `occlusionStrength` field, so
-  the shipped strength is the glTF default 1.0 and a missing map samples 1.0.
+  call stays unoccluded. At T16 `MaterialPayload` had no `occlusionStrength`
+  field, so the shipped strength was the glTF default 1.0 and a missing map
+  sampled 1.0. T18's protocol-v12 record now carries the authored strength
+  (ADR 0074); the formula and unoccluded direct path are unchanged.
 - Presets: Studio CAD/PBR/Scan enable the shadow, Transparent and Point cloud
   disable it. `H` (accelerator, More menu item, and persisted
   `groundShadowEnabled`) toggles it. A manual toggle survives later preset

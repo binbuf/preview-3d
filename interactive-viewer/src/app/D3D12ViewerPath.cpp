@@ -206,7 +206,11 @@ cbuffer MaterialConstants : register(b2)
     float4 gMaterialFactors; // metallic, roughness, alpha cutoff, flags-as-float
     float4 gEmissive;
     float4 gUvTransform; // offset.xy, scale.xy
-    float4 gUvRotationAndMaps; // cos, sin, map mask, unused
+    float4 gUvRotationAndMaps; // cos, sin, map mask, transmission
+    float4 gMaterialLobes0; // emissive strength, clearcoat factor/roughness, occlusion strength
+    float4 gMaterialLobes1; // sheen rgb, sheen roughness
+    float4 gMaterialLobes2; // specular factor, ior, reserved, reserved
+    float4 gMaterialLobes3; // specular color rgb, reserved
 };
 struct VSInput
 {
@@ -273,6 +277,10 @@ cbuffer MaterialConstants : register(b2)
     float4 gEmissiveFactor;
     float4 gUvTransform;
     float4 gUvRotationAndMaps;
+    float4 gMaterialLobes0;
+    float4 gMaterialLobes1;
+    float4 gMaterialLobes2;
+    float4 gMaterialLobes3;
 };
 
 struct PSInput
@@ -300,17 +308,38 @@ float GeometrySchlickGGX(float nv,float roughness)
     float r=roughness+1.0f, k=(r*r)/8.0f;
     return nv/(nv*(1.0f-k)+k);
 }
-float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float roughness,float intensity)
+// IOR-derived dielectric F0. The authored KHR_materials_specular factor/color
+// are folded into the caller's dielectricF0; ior <= 1 has no optical interface.
+float IorToF0(float ior)
+{
+    if (!(ior>1.0f)) return 0.0f;
+    float ratio=(ior-1.0f)/(ior+1.0f);
+    return saturate(ratio*ratio);
+}
+float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float roughness,
+                     float3 f0,float intensity)
 {
     float3 h=normalize(v+l);
     float nl=saturate(dot(n,l)), nv=saturate(dot(n,v));
-    float3 f0=lerp(float3(.04f,.04f,.04f),base,metallic);
     float3 f=f0+(1.0f-f0)*pow(1.0f-saturate(dot(h,v)),5.0f);
     float d=DistributionGGX(n,h,roughness);
     float g=GeometrySchlickGGX(nv,roughness)*GeometrySchlickGGX(nl,roughness);
     float3 specular=d*g*f/max(0.004f,4.0f*nv*nl);
     float3 diffuse=(1.0f-f)*(1.0f-metallic)*base/3.14159265f;
     return (diffuse+specular)*nl*intensity;
+}
+// Clearcoat is a second, dielectric-only GGX lobe over the base. Keeping it
+// separate from EvaluateLight avoids tinting the coat with the base metal and
+// lets the caller scale the base specular by (1 - clearcoatFactor).
+float3 EvaluateClearcoatLight(float3 n,float3 v,float3 l,float roughness,float intensity)
+{
+    float3 h=normalize(v+l);
+    float nl=saturate(dot(n,l)), nv=saturate(dot(n,v));
+    float3 f0=float3(0.04f,0.04f,0.04f);
+    float3 f=f0+(1.0f-f0)*pow(1.0f-saturate(dot(h,v)),5.0f);
+    float d=DistributionGGX(n,h,roughness);
+    float g=GeometrySchlickGGX(nv,roughness)*GeometrySchlickGGX(nl,roughness);
+    return d*g*f/max(0.004f,4.0f*nv*nl)*nl*intensity;
 }
 // The vertex shader still produces camera-space positions/normals (the
 // camera-relative precision policy). The pixel shader rotates those directions
@@ -379,9 +408,9 @@ float3 SrgbToLinear(float3 color)
     float3 high=pow((color+0.055f)/1.055f,2.4f);
     return lerp(high,low,step(color,0.04045f));
 }
-// glTF occlusion strength: 1 + strength * (sample - 1). MaterialPayload does
-// not carry occlusionStrength yet, so the shipped value is the spec default
-// 1.0; a missing map samples 1.0 and leaves the factor at 1.0.
+// glTF occlusion strength: 1 + strength * (sample - 1). The authored
+// occlusionStrength now travels in MaterialPayload.gMaterialLobes0.w; a
+// missing map samples 1.0 and leaves the factor at 1.0.
 float OcclusionFactor(float sample,float strength)
 {
     return saturate(1.0f+clamp(strength,0.0f,1.0f)*(saturate(sample)-1.0f));
@@ -435,13 +464,26 @@ PixelOutput PSMain(PSInput input)
     // ORM convention: the metallic-roughness map's R channel carries ambient
     // occlusion (glTF's metallicRoughnessTexture leaves R unused). AO only
     // scales indirect diffuse/environment light; direct-light specular stays
-    // unoccluded so metals do not read as dirty.
+    // unoccluded so metals do not read as dirty. The authored occlusionStrength
+    // is applied here instead of the former fixed 1.0.
     float occlusion=1.0f;
     if (!clay && (maps&2) && uvValid) {
         float4 mr=nearest?gMetallicRoughness.Sample(gNearestSampler,sampleUv):gMetallicRoughness.Sample(gLinearSampler,sampleUv);
-        metallic*=mr.b; roughness*=mr.g; occlusion=OcclusionFactor(mr.r,1.0f);
+        metallic*=mr.b; roughness*=mr.g; occlusion=OcclusionFactor(mr.r,gMaterialLobes0.w);
     }
     roughness=clamp(roughness,.045f,1.0f);
+    // T18 PBR lobes. Clearcoat is layered as a second dielectric GGX lobe; the
+    // base specular is scaled by (1 - clearcoatFactor) so the two lobes do not
+    // count the same reflected energy twice. Sheen is a grazing-only velvet
+    // term. Clay suppresses both so it stays a geometry-review mode.
+    float clearcoat=clay?0.0f:saturate(gMaterialLobes0.y);
+    float clearcoatRoughness=clamp(gMaterialLobes0.z,.045f,1.0f);
+    float3 sheenColor=clay?float3(0.0f,0.0f,0.0f):saturate(gMaterialLobes1.rgb);
+    float sheenRoughness=clamp(gMaterialLobes1.w,0.0f,1.0f);
+    // KHR_materials_ior/specular: the authored dielectric F0 replaces the old
+    // fixed 0.04. Metallic surfaces keep base color as F0.
+    float iorF0=IorToF0(gMaterialLobes2.y);
+    float3 dielectricF0=saturate(iorF0*gMaterialLobes2.x*gMaterialLobes3.rgb);
     // KHR_materials_transmission approximation. A transmissive surface has no
     // transmitted diffuse; it shows a view-dependent Fresnel reflection over
     // whatever is behind it. The blend alpha carries that reflectance so the
@@ -451,11 +493,12 @@ PixelOutput PSMain(PSInput input)
     float transmission=transmissive?clamp(gUvRotationAndMaps.w,0.0f,1.0f):0.0f;
     float nv=saturate(dot(n,viewDir));
     float diffuseScale=1.0f-transmission;
-    float glassReflectance=lerp(0.04f,1.0f,pow(1.0f-nv,5.0f));
+    float glassF0=dot(dielectricF0,float3(0.3333333f,0.3333333f,0.3333333f));
+    float glassReflectance=lerp(glassF0,1.0f,pow(1.0f-nv,5.0f));
     if (transmissive) base.a=saturate(base.a*diffuseScale+glassReflectance*transmission);
     float3 worldN=RotateWorldFromCamera(n);
     float3 worldView=RotateWorldFromCamera(viewDir);
-    float3 f0=lerp(float3(.04f,.04f,.04f),base.rgb,metallic);
+    float3 f0=lerp(dielectricF0,base.rgb,metallic)*(1.0f-clearcoat);
     float3 fresnel=f0+(1.0f-f0)*pow(1.0f-nv,5.0f);
     float envIntensity=gEnvironment.x;
     float3 color;
@@ -468,7 +511,7 @@ PixelOutput PSMain(PSInput input)
         // small world-stable ambient so metals still have a reflection.
         float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
         float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
-        color=EvaluateLight(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,3.4f*envIntensity*gPresentation.x)
+        color=EvaluateLight(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,f0,3.4f*envIntensity*gPresentation.x)
             + base.rgb*(1.0f-metallic)*.08f*diffuseScale*occlusion;
         color+=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*.25f*diffuseScale*occlusion;
         color+=SampleStudioSpecular(worldN,worldView,roughness)*envIntensity*.35f*occlusion;
@@ -483,13 +526,34 @@ PixelOutput PSMain(PSInput input)
         float specularScale=clay?.25f:1.0f;
         color+=SampleStudioSpecular(worldN,worldView,roughness)
             *(transmissive?float3(1.0f,1.0f,1.0f):fresnel)*envIntensity*specularScale*occlusion;
-        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,1.15f*envIntensity*gPresentation.x);
-        color+=EvaluateLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),base.rgb*diffuseScale,metallic,roughness,.35f*envIntensity*gPresentation.y);
-        color+=EvaluateLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),base.rgb*diffuseScale,metallic,roughness,.22f*envIntensity*gPresentation.z);
+        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,f0,1.15f*envIntensity*gPresentation.x);
+        color+=EvaluateLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),base.rgb*diffuseScale,metallic,roughness,f0,.35f*envIntensity*gPresentation.y);
+        color+=EvaluateLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),base.rgb*diffuseScale,metallic,roughness,f0,.22f*envIntensity*gPresentation.z);
         color+=base.rgb*(1.0f-metallic)*.05f*diffuseScale*occlusion;
     }
+    if (!clay && clearcoat>0.0f) {
+        // Add the coat lobe over the base. The base already lost (1-clearcoat)
+        // of its specular above; the coat's own Fresnel is folded into the
+        // reflected term, so transmitted base light is not double-counted.
+        color+=SampleStudioSpecular(worldN,worldView,clearcoatRoughness)
+            *clearcoat*envIntensity*occlusion;
+        float coatFresnel=0.04f+0.96f*pow(1.0f-nv,5.0f);
+        color+=EvaluateClearcoatLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),clearcoatRoughness,1.15f*envIntensity*gPresentation.x)
+            *clearcoat*coatFresnel;
+        color+=EvaluateClearcoatLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),clearcoatRoughness,.35f*envIntensity*gPresentation.y)
+            *clearcoat*coatFresnel;
+        color+=EvaluateClearcoatLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),clearcoatRoughness,.22f*envIntensity*gPresentation.z)
+            *clearcoat*coatFresnel;
+    }
+    if (!clay && any(sheenColor>0.0f)) {
+        // Soft velvet lobe: only visible at grazing angles, strongest for a
+        // rough weave. It is intentionally additive and low-energy so it
+        // cannot masquerade as the base diffuse.
+        float sheenWeight=pow(1.0f-nv,3.0f)*(0.35f+0.65f*sheenRoughness);
+        color+=sheenColor*sheenWeight*(0.35f+0.65f*envIntensity);
+    }
     if (!clay) {
-        float3 emissive=gEmissiveFactor.rgb;
+        float3 emissive=gEmissiveFactor.rgb*gMaterialLobes0.x;
         if ((maps&8) && uvValid) emissive*=(nearest?gEmissive.Sample(gNearestSampler,sampleUv):gEmissive.Sample(gLinearSampler,sampleUv)).rgb;
         color+=emissive;
     }
@@ -1330,7 +1394,7 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     rootParams[6].Constants.ShaderRegister = 1; rootParams[6].Constants.Num32BitValues = 33;
     rootParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     rootParams[7].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[7].Constants.ShaderRegister=2;rootParams[7].Constants.Num32BitValues=20;
+    rootParams[7].Constants.ShaderRegister=2;rootParams[7].Constants.Num32BitValues=36;
     rootParams[7].ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -2166,7 +2230,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
             }
             commandList->SetGraphicsRoot32BitConstants(6, 33, &drawConstants, 0);
-            float material[20]{};
+            float material[36]{};
             std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
             material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
             material[6]=mesh.material.alphaCutoff;
@@ -2185,7 +2249,25 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
             material[18]=float(mapMask);
             material[19]=mesh.material.transmissionFactor;
-            commandList->SetGraphicsRoot32BitConstants(7,20,material,0);
+            // v12 lobe block: emissive strength, clearcoat, occlusion in the
+            // first float4; sheen rgb/roughness; specular factor/IOR; specular
+            // color. The shader reads the same 36-dword root constant block.
+            material[20]=mesh.material.emissiveStrength;
+            material[21]=mesh.material.clearcoatFactor;
+            material[22]=mesh.material.clearcoatRoughness;
+            material[23]=mesh.material.occlusionStrength;
+            material[24]=mesh.material.sheenColor[0];
+            material[25]=mesh.material.sheenColor[1];
+            material[26]=mesh.material.sheenColor[2];
+            material[27]=mesh.material.sheenRoughness;
+            material[28]=mesh.material.specularFactor;
+            material[29]=mesh.material.ior;
+            material[30]=0.0f;material[31]=0.0f;
+            material[32]=mesh.material.specularColor[0];
+            material[33]=mesh.material.specularColor[1];
+            material[34]=mesh.material.specularColor[2];
+            material[35]=0.0f;
+            commandList->SetGraphicsRoot32BitConstants(7,36,material,0);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
             commandList->SetPipelineState(mesh.lines ? linePipelineState.Get()
@@ -2248,7 +2330,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                     commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
                 }
                 commandList->SetGraphicsRoot32BitConstants(6,33,&drawConstants,0);
-                float material[20]{};
+                float material[36]{};
                 std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
                 material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
                 material[6]=mesh.material.alphaCutoff;
@@ -2265,7 +2347,21 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
                 material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
                 material[18]=float(mapMask);
-                commandList->SetGraphicsRoot32BitConstants(7,20,material,0);
+                material[19]=mesh.material.transmissionFactor;
+                material[20]=mesh.material.emissiveStrength;
+                material[21]=mesh.material.clearcoatFactor;
+                material[22]=mesh.material.clearcoatRoughness;
+                material[23]=mesh.material.occlusionStrength;
+                material[24]=mesh.material.sheenColor[0];
+                material[25]=mesh.material.sheenColor[1];
+                material[26]=mesh.material.sheenColor[2];
+                material[27]=mesh.material.sheenRoughness;
+                material[28]=mesh.material.specularFactor;
+                material[29]=mesh.material.ior;
+                material[32]=mesh.material.specularColor[0];
+                material[33]=mesh.material.specularColor[1];
+                material[34]=mesh.material.specularColor[2];
+                commandList->SetGraphicsRoot32BitConstants(7,36,material,0);
             } else {
                 commandList->SetGraphicsRootSignature(rootSignature.Get());
                 commandList->SetPipelineState(mesh.positionOnly

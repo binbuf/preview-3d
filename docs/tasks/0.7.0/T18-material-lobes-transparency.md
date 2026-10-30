@@ -107,5 +107,50 @@ warning rather than silently disappearing.
 - [ ] Hand-off records the payload layout, mapping table and deferred lobes.
 
 ## Hand-off
-_(filled in by the implementing session: payload layout/version, field mapping,
-shader layering, OIT choice, fixtures/goldens and remaining limitations.)_
+Implemented protocol-v12 material lobes end to end.
+
+- **Payload/version:** `kCurrentProtocolVersion = 12`; `MaterialPayload` grows
+  from 72 to 140 bytes. Layout: base color/metallic/roughness/emissive/UV/alpha/
+  transmission unchanged at offsets 0-68; `emissiveStrength` @72, clearcoat
+  factor/roughness @76/80, `sheenColor[3]` @84, `sheenRoughness` @96,
+  `specularFactor` @100, `specularColor[3]` @104, `ior` @116,
+  `occlusionStrength` @120, `reserved[4]` @124 (must be zero). Defaults preserve
+  pre-v12 appearance. Shared `ValidateMaterialLobeFields` is used by the wire
+  validator and unit tests.
+- **Mapping:** glTF clearcoat/sheen/specular/IOR/emissive-strength/occlusion
+  strength, plus ufbx FBX/OBJ equivalents. T05 now treats clearcoat/sheen/
+  specular/emissive-strength as adapter-supported; iridescence/anisotropy/
+  volume/dispersion/diffuse-transmission remain parse-and-warn with specific
+  Degraded records. Texture-driven lobe maps warn because the fixed record has
+  no extra texture slots.
+- **Shader layering:** 36 material root-constant dwords (20 old + 4 float4
+  lobes). Clearcoat is a second dielectric GGX lobe with base specular scaled by
+  `(1-clearcoatFactor)`; sheen is a grazing-only velvet term; IOR/specular drive
+  dielectric F0; emissive strength applies before the HDR resolve; AO uses the
+  authored strength. Roughness/energy clamps and the double-sided normal flip
+  remain. Clay suppresses lobes.
+- **Transparency/OIT:** T15's linear HDR resolve still composites sorted
+  straight-alpha transparency after opaque, avoiding the dark-halo tone-map
+  ordering. Weighted blended OIT/depth peeling are deferred, so intersecting
+  transparent surfaces remain order-dependent; transmission stays
+  Fresnel-weighted alpha (now using the authored F0).
+- **Fixtures/tests:** new `tests/unit/MaterialLobesTests.cpp` (`[material-lobes]`),
+  `[material]` glTF cases for clearcoat/sheen/specular/emissive strength, new
+  `required-sheen.gltf`, lobe range/reserved validator cases, and a hostile
+  `--catalog-bad-material-lobes` mode. Existing glass/transmission coverage
+  remains in `[gltf-import][material][transmission]`.
+- **Docs:** `docs/design/03-file-formats-and-ingestion.md` (v12 layout and
+  mapping table), `docs/design/04-rendering-and-streaming.md` (layering/
+  transparency), `docs/FORMAT-SUPPORT.md`, `docs/design/interfaces.md`,
+  ADR-0074, and supersession notes in ADR-0068/0072. Derived-cache schema is v3.
+- **Checks:** `Tests.Unit.exe "[material-lobes]"` 6 cases/67 assertions pass;
+  `Tests.ImportIsolation.exe "[material]"` 8 cases/166 assertions pass;
+  `[material-lobes]` import 1/15; `[wire-format]` 8/80; `[gltf-extensions]`
+  8/140; `[chunk-batch]` 21/102; `[hostile-worker]` 15/304; `[compatibility]`
+  11/145. Full `Tests.Unit` is 463/465 with only the two pre-existing stale
+  expectations (`dae`, `model.iges`). `Preview3D` Release builds. Run
+  import-isolation lanes serially; the sandbox is not parallel-process safe.
+- **Deferred:** OIT/depth peeling, material inspection modes, texture-driven
+  lobe maps, thumbnail clearcoat/sheen shading, anisotropy/iridescence/volume/
+  dispersion rendering, and wiring `DerivedCache::parserVersion` from the
+  protocol version (the cache is not currently populated in this tree).

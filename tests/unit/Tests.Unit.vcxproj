@@ -156,6 +156,9 @@
     <ClCompile Include="..\..\shared\parser-core\src\PlyParserCore.cpp" />
     <ClCompile Include="FixtureManifestTests.cpp" />
     <ClCompile Include="WireFormatTests.cpp" />
+    <!-- T18 protocol-v12 material lobes: layout, mapping defaults, F0 and the
+         layered shader source contract. -->
+    <ClCompile Include="MaterialLobesTests.cpp" />
     <ClCompile Include="PresentationTests.cpp" />
     <!-- T14 procedural Studio environment baker, SH irradiance and neutral
          tone curve, compiled from the shipped viewer source. -->

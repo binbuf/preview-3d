@@ -128,6 +128,38 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
     result.emissiveFactor[0] = SafeFloat(emission.x * emissionFactor);
     result.emissiveFactor[1] = SafeFloat(emission.y * emissionFactor);
     result.emissiveFactor[2] = SafeFloat(emission.z * emissionFactor);
+    // T18 PBR lobes: ufbx exposes the same dielectric/coat/sheen concepts as
+    // glTF. Values are optional; absent maps leave the normalized defaults
+    // (no coat/sheen, specular 1, IOR 1.5, emissive strength 1).
+    if (material.pbr.coat_factor.has_value)
+        result.clearcoatFactor = Saturate(material.pbr.coat_factor.value_real);
+    if (material.pbr.coat_roughness.has_value)
+        result.clearcoatRoughness = Saturate(material.pbr.coat_roughness.value_real);
+    const bool hasSheen = material.pbr.sheen_color.has_value
+        || material.pbr.sheen_factor.has_value;
+    if (hasSheen) {
+        const ufbx_vec3 sheen = material.pbr.sheen_color.value_vec3;
+        const double factor = material.pbr.sheen_factor.has_value
+            ? material.pbr.sheen_factor.value_real : 1.0;
+        result.sheenColor[0] = Saturate(sheen.x * factor);
+        result.sheenColor[1] = Saturate(sheen.y * factor);
+        result.sheenColor[2] = Saturate(sheen.z * factor);
+        if (material.pbr.sheen_roughness.has_value)
+            result.sheenRoughness = Saturate(material.pbr.sheen_roughness.value_real);
+    }
+    if (material.pbr.specular_factor.has_value)
+        result.specularFactor = Saturate(material.pbr.specular_factor.value_real);
+    if (material.pbr.specular_color.has_value) {
+        const ufbx_vec3 specular = material.pbr.specular_color.value_vec3;
+        result.specularColor[0] = Saturate(specular.x);
+        result.specularColor[1] = Saturate(specular.y);
+        result.specularColor[2] = Saturate(specular.z);
+    }
+    if (material.pbr.specular_ior.has_value && Finite(material.pbr.specular_ior.value_real))
+        result.ior = std::clamp(float(material.pbr.specular_ior.value_real), 1.0f, 4.0f);
+    if (material.pbr.ambient_occlusion.has_value
+        && Finite(material.pbr.ambient_occlusion.value_real))
+        result.occlusionStrength = Saturate(material.pbr.ambient_occlusion.value_real);
     result.uvScale[0] = result.uvScale[1] = 1.0f;
     result.alphaMode = uint32_t(result.baseColorFactor[3] < 0.999f
         ? AlphaModeId::Blend : AlphaModeId::Opaque);
@@ -161,8 +193,6 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
         if (material.features.unlit.is_explicit && material.features.unlit.enabled)
             result.flags |= kMaterialFlagUnlit;
         if ((material.features.transmission.is_explicit && material.features.transmission.enabled)
-            || (material.features.coat.is_explicit && material.features.coat.enabled)
-            || (material.features.sheen.is_explicit && material.features.sheen.enabled)
             || (material.features.thin_walled.is_explicit && material.features.thin_walled.enabled)
             || (material.features.caustics.is_explicit && material.features.caustics.enabled))
             Warn(optionalWarnings);

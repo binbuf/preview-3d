@@ -612,6 +612,7 @@ TEST_CASE("Terminal catalogs reject unresolved and incorrectly typed forward dep
     SECTION("wrong image") { mode = L"--catalog-wrong-image"; }
     SECTION("missing image") { mode = L"--catalog-missing-image"; }
     SECTION("wrong material") { mode = L"--catalog-wrong-material"; }
+    SECTION("bad material lobe") { mode = L"--catalog-bad-material-lobes"; }
     auto result = import_broker::RunImportSession(MakeBatchRequest(mode, 8));
     REQUIRE_FALSE(result.ok);
     CHECK(result.stage == import_broker::ImportStage::ValidateSection);

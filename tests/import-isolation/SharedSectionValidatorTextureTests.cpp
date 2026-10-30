@@ -314,6 +314,41 @@ TEST_CASE("A Material transmission factor without its flag is rejected",
     CHECK(result.errorCode == ImportErrorCode::MalformedData);
 }
 
+TEST_CASE("Protocol v12 Material lobe fields are range-checked at the trust boundary",
+          "[shared-section-validator][texture][material-lobes]")
+{
+    auto accepted = ValidTriple();
+    MaterialPayload p = ValidMaterialPayload();
+    p.emissiveStrength = 5.0f;
+    p.clearcoatFactor = 1.0f;
+    p.clearcoatRoughness = 0.2f;
+    p.sheenColor[0] = 0.8f;
+    p.sheenRoughness = 0.6f;
+    p.specularFactor = 0.5f;
+    p.specularColor[1] = 0.75f;
+    p.ior = 1.33f;
+    p.occlusionStrength = 0.4f;
+    accepted[1].payload = ToBytes(p);
+    CHECK(import_broker::ValidateAndCopySection(BuildSection(accepted, 1), 1, 8).ok);
+
+    auto reject = [](auto mutate) {
+        auto chunks = ValidTriple();
+        MaterialPayload bad = ValidMaterialPayload();
+        mutate(bad);
+        chunks[1].payload = ToBytes(bad);
+        const auto result = import_broker::ValidateAndCopySection(BuildSection(chunks, 1), 1, 8);
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == ImportErrorCode::MalformedData);
+    };
+    reject([](MaterialPayload& m) { m.clearcoatFactor = 1.5f; });
+    reject([](MaterialPayload& m) { m.sheenRoughness = -0.1f; });
+    reject([](MaterialPayload& m) { m.specularColor[2] = 1.1f; });
+    reject([](MaterialPayload& m) { m.ior = 4.5f; });
+    reject([](MaterialPayload& m) { m.occlusionStrength = 1.5f; });
+    reject([](MaterialPayload& m) { m.emissiveStrength = -1.0f; });
+    reject([](MaterialPayload& m) { m.reserved[1] = 1; });
+}
+
 TEST_CASE("A Material chunk whose dependency resolves to a non-Image chunk is rejected",
           "[shared-section-validator][texture]")
 {

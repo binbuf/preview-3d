@@ -108,7 +108,9 @@ T15 lands the implementation as `thumbnail-provider/CpuRasterizer.cpp` (entry po
 `RenderCpuTileRaster`, declared in `CpuRasterizerImpl.h`; a thin `CpuTileRasterizer` implements the
 frozen interface). `DefaultThumbnailDependencies::Render` calls it, so the T13 pipeline's render
 stage is live once a T21–T34 adapter exists. It clamps `min(cx, 512)`, resolves
-`model_core::MaterialPayload` (base color, alpha mode/cutoff, double-sided/unlit/emissive),
+`model_core::MaterialPayload` (base color, alpha mode/cutoff, double-sided/unlit/emissive
+and the protocol-v12 emissive-strength/lobe records; the rasterizer consumes emissive strength
+and the material table, while clearcoat/sheen shading remains viewer-only),
 charges the raster targets and output against the T06 ledger before allocating, polls the deadline
 every 2048 work units, and is covered by `[provider][rasterizer]` with committed PAM goldens in
 `thumbnail-provider/goldens/` ([ADR-0017](adr/0017-cpu-tile-rasterizer.md)).

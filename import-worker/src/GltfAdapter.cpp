@@ -461,14 +461,18 @@ constexpr GltfExtensionPolicy kGltfExtensionPolicies[] = {
      fastgltf::Extensions::KHR_materials_ior, true},
     {"KHR_materials_pbrSpecularGlossiness", GltfExtensionClass::Visual,
      fastgltf::Extensions::KHR_materials_pbrSpecularGlossiness, true},
-    // Visual material extensions: parsed by fastgltf so the file opens, but the
-    // renderer still shows core PBR, so they get a specific Degraded record.
+    // T18 PBR lobes are normalized into MaterialPayload and approximated by the
+    // Studio shader, so a required use needs no degradation record.
     {"KHR_materials_clearcoat", GltfExtensionClass::Visual,
-     fastgltf::Extensions::KHR_materials_clearcoat, false},
+     fastgltf::Extensions::KHR_materials_clearcoat, true},
     {"KHR_materials_sheen", GltfExtensionClass::Visual,
-     fastgltf::Extensions::KHR_materials_sheen, false},
+     fastgltf::Extensions::KHR_materials_sheen, true},
     {"KHR_materials_specular", GltfExtensionClass::Visual,
-     fastgltf::Extensions::KHR_materials_specular, false},
+     fastgltf::Extensions::KHR_materials_specular, true},
+    {"KHR_materials_emissive_strength", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_emissive_strength, true},
+    // Still parsed but not rendered: parse/ignore with a specific Degraded
+    // record rather than silently replacing the authored lobe.
     {"KHR_materials_iridescence", GltfExtensionClass::Visual,
      fastgltf::Extensions::KHR_materials_iridescence, false},
     {"KHR_materials_anisotropy", GltfExtensionClass::Visual,
@@ -479,8 +483,6 @@ constexpr GltfExtensionPolicy kGltfExtensionPolicies[] = {
      fastgltf::Extensions::KHR_materials_dispersion, false},
     {"KHR_materials_diffuse_transmission", GltfExtensionClass::Visual,
      fastgltf::Extensions::KHR_materials_diffuse_transmission, false},
-    {"KHR_materials_emissive_strength", GltfExtensionClass::Visual,
-     fastgltf::Extensions::KHR_materials_emissive_strength, false},
     // Scene/metadata: ignored for the default static studio view.
     {"KHR_materials_variants", GltfExtensionClass::Scene,
      fastgltf::Extensions::KHR_materials_variants, false},
@@ -1213,6 +1215,52 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     pending.data.flags = (material.doubleSided ? kMaterialFlagDoubleSided : 0u)
         | (material.unlit ? kMaterialFlagUnlit : 0u);
     pending.data.transmissionFactor = 0.0f;
+
+    // Protocol v12 PBR lobes. fastgltf always exposes the scalar defaults, so
+    // a material that does not author an extension keeps the exact pre-v12
+    // appearance: emissive scale 1, no clearcoat/sheen, specular factor 1 and
+    // IOR 1.5 (F0 0.04), occlusion strength 1.
+    if (std::isfinite(material.emissiveStrength))
+        pending.data.emissiveStrength = std::clamp(float(material.emissiveStrength), 0.0f, 1024.0f);
+    if (material.clearcoat) {
+        const float factor = float(material.clearcoat->clearcoatFactor);
+        const float roughness = float(material.clearcoat->clearcoatRoughnessFactor);
+        if (std::isfinite(factor)) pending.data.clearcoatFactor = std::clamp(factor, 0.0f, 1.0f);
+        if (std::isfinite(roughness)) pending.data.clearcoatRoughness = std::clamp(roughness, 0.0f, 1.0f);
+        // Texture-driven clearcoat maps are not representable in the fixed
+        // payload; the scalar factor is the authored base layer. One bounded
+        // texture warning tells the user the map was dropped.
+        if (material.clearcoat->clearcoatTexture.has_value()
+            || material.clearcoat->clearcoatRoughnessTexture.has_value()
+            || material.clearcoat->clearcoatNormalTexture.has_value())
+            state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
+    }
+    if (material.sheen) {
+        const auto& sheen = *material.sheen;
+        for (int channel = 0; channel < 3; ++channel) {
+            const float value = float(sheen.sheenColorFactor[channel]);
+            pending.data.sheenColor[channel] = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
+        }
+        const float roughness = float(sheen.sheenRoughnessFactor);
+        if (std::isfinite(roughness)) pending.data.sheenRoughness = std::clamp(roughness, 0.0f, 1.0f);
+        if (sheen.sheenColorTexture.has_value() || sheen.sheenRoughnessTexture.has_value())
+            state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
+    }
+    if (material.specular) {
+        const float factor = float(material.specular->specularFactor);
+        if (std::isfinite(factor)) pending.data.specularFactor = std::clamp(factor, 0.0f, 1.0f);
+        for (int channel = 0; channel < 3; ++channel) {
+            const float value = float(material.specular->specularColorFactor[channel]);
+            pending.data.specularColor[channel] = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
+        }
+        if (material.specular->specularTexture.has_value()
+            || material.specular->specularColorTexture.has_value())
+            state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
+    }
+    if (std::isfinite(material.ior))
+        pending.data.ior = std::clamp(float(material.ior), 1.0f, 4.0f);
+    if (material.occlusionTexture && std::isfinite(material.occlusionTexture->strength))
+        pending.data.occlusionStrength = std::clamp(float(material.occlusionTexture->strength), 0.0f, 1.0f);
 
     // KHR_materials_pbrSpecularGlossiness is archived in the Khronos registry
     // but still emitted as a required extension by current exporters (the

@@ -619,6 +619,7 @@ int RunCatalogBatches(int mode)
     }
     MaterialPayload mat{}; mat.baseColorFactor[3] = 1; mat.roughnessFactor = 1;
     mat.uvScale[0] = mat.uvScale[1] = 1;
+    if (mode == 4) mat.reserved[0] = 1; // protocol-v12 reserved words must stay zero
     ChunkDescriptor material{}; material.chunkId = 2; material.topology = ChunkTopology::Material;
     material.dependencyIds[2] = 3; material.dependencyCount = 1; // sparse normal slot
     length = write(material, &mat, sizeof(mat));

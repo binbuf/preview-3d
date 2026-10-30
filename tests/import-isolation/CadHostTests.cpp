@@ -178,7 +178,7 @@ std::vector<std::byte> MetadataSection(model_core::SourceFormatId format,
 
 TEST_CASE("T08 CAD protocol additions are closed and append-only", "[cad-iges][protocol]")
 {
-    CHECK(model_core::kCurrentProtocolVersion == 11);
+    CHECK(model_core::kCurrentProtocolVersion == 12);
     CHECK(uint32_t(model_core::SourceFormatId::Iges) == 14);
     CHECK(uint32_t(model_core::SourceFormatId::Brep) == 15);
     CHECK(uint32_t(model_core::ControlOpcode::StartStepImportFromFile) == 20);

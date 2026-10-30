@@ -88,6 +88,7 @@ if (ArgEquals(argv[1], "--compat-dependency")) return hostile_worker::RunCompati
     if (ArgEquals(argv[1], "--catalog-wrong-image")) return hostile_worker::RunCatalogBatches(1);
     if (ArgEquals(argv[1], "--catalog-missing-image")) return hostile_worker::RunCatalogBatches(2);
     if (ArgEquals(argv[1], "--catalog-wrong-material")) return hostile_worker::RunCatalogBatches(3);
+    if (ArgEquals(argv[1], "--catalog-bad-material-lobes")) return hostile_worker::RunCatalogBatches(4);
     if (ArgEquals(argv[1], "--origin-nan")) return hostile_worker::RunMetadataAttack(0);
     if (ArgEquals(argv[1], "--origin-inf")) return hostile_worker::RunMetadataAttack(1);
     if (ArgEquals(argv[1], "--bounds-fabricated")) return hostile_worker::RunMetadataAttack(2);

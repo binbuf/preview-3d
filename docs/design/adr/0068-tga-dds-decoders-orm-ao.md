@@ -31,10 +31,12 @@ already uploads those blocks, so most of the GPU contract exists.
    and all other DXGI formats typed; clamp a mip count the payload cannot back.
 4. Sidecar policy adds `.tga` and `.dds` to the image allowlist for
    glTF/OBJ/FBX/Assimp/USD; no other sidecar category changes.
-5. Keep the 72-byte `MaterialPayload`. The metallic-roughness texture follows
-   the ORM convention: R is AO, G roughness, B metallic. The studio shader
-   multiplies indirect diffuse and environment terms by R; direct-light
-   specular stays unoccluded. No `occlusionStrength` field is added.
+5. Keep the 72-byte `MaterialPayload` at the time of this decision. The
+   metallic-roughness texture follows the ORM convention: R is AO, G roughness,
+   B metallic. The studio shader multiplies indirect diffuse and environment
+   terms by R; direct-light specular stays unoccluded. No `occlusionStrength`
+   field is added here; T18 later supersedes the size clause with the 140-byte
+   protocol-v12 record and an authored occlusion strength (ADR 0074).
 
 ## Consequences
 

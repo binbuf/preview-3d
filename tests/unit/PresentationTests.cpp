@@ -146,7 +146,7 @@ TEST_CASE("Studio PBR uses ORM R as ambient occlusion without darkening direct s
     REQUIRE(source != nullptr);
     const std::string shader(source);
     // ORM convention: R is AO, G roughness, B metallic.
-    CHECK(shader.find("occlusion=OcclusionFactor(mr.r,1.0f)") != std::string::npos);
+    CHECK(shader.find("occlusion=OcclusionFactor(mr.r,gMaterialLobes0.w)") != std::string::npos);
     CHECK(shader.find("metallic*=mr.b") != std::string::npos);
     CHECK(shader.find("roughness*=mr.g") != std::string::npos);
     // Indirect diffuse/environment terms are scaled by AO. T14 replaced the

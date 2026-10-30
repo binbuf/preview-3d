@@ -25,7 +25,7 @@ TEST_CASE("SectionHeader and ChunkDescriptor match the documented fixed-width wi
 {
     REQUIRE(sizeof(model_core::SectionHeader) == 88);
     REQUIRE(sizeof(model_core::ChunkDescriptor) == 160);
-    REQUIRE(model_core::kCurrentProtocolVersion == 11);
+    REQUIRE(model_core::kCurrentProtocolVersion == 12);
     REQUIRE(sizeof(model_core::NodePayload) == 144);
     REQUIRE(sizeof(model_core::MeshInstancePayload) == 80);
 

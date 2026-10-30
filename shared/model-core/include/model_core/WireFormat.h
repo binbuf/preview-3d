@@ -18,10 +18,13 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-// v11 adds ChunkTopology::LineList (append-only: every v10 identity keeps its
-// numeric value). Old consumers reject the version outright rather than
-// misinterpret line indices as triangles.
-constexpr uint32_t kCurrentProtocolVersion = 11;
+// v12 grows MaterialPayload from 72 to 140 bytes for the PBR lobes
+// (emissive strength, clearcoat, sheen, specular/IOR, occlusion strength and
+// reserved future-lobe words). Topology identities remain append-only; an old
+// consumer rejects the version outright rather than misreading a material
+// record. v11 added ChunkTopology::LineList; every v10 identity keeps its
+// numeric value.
+constexpr uint32_t kCurrentProtocolVersion = 12;
 // Product coarse/full delivery has four closed geometry roles. Scan payloads
 // cross the validator, but are never allocated on the GPU or retained by it.
 constexpr uint32_t kFineLod = 0, kCoarseLod = 1, kScanLod = 2, kPreviewLod = 3;

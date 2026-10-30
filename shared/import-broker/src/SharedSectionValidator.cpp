@@ -599,6 +599,8 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             } else if (payload.transmissionFactor != 0.0f) {
                 return Reject(ImportErrorCode::MalformedData, "material transmissionFactor set without its flag");
             }
+            if (const char* lobeError = model_core::ValidateMaterialLobeFields(payload))
+                return Reject(ImportErrorCode::MalformedData, lobeError);
             if (descriptor.dependencyCount > model_core::kMaxDependencyIds) {
                 return Reject(ImportErrorCode::MalformedData, "material dependencyCount exceeds cap");
             }

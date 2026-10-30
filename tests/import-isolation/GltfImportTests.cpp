@@ -1555,20 +1555,21 @@ TEST_CASE("A mesh-bearing doubling DAG fails fast with ResourceLimit instead of 
     CHECK(elapsedMs < 5000);
 }
 
-TEST_CASE("A visual-only glTF extension emits a stable Degraded compatibility record",
+TEST_CASE("An unrendered visual glTF extension emits a stable Degraded compatibility record",
           "[compatibility][gltf-import]")
 {
     sandbox_test_support::SandboxFixture fixture;
-    // KHR_materials_clearcoat is optional/visual-only: the model still loads,
-    // but the preview must say which feature was approximated instead of only
-    // incrementing the legacy count.
+    // KHR_materials_iridescence is optional/visual-only: the model still
+    // loads, but the preview must say which feature was approximated instead
+    // of only incrementing the legacy count. Clearcoat/sheen/specular/emissive
+    // strength are normalized by T18 and no longer warn.
     const char* json =
         "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],"
         "\"nodes\":[{\"mesh\":0}],"
         "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],"
-        "\"extensionsUsed\":[\"KHR_materials_clearcoat\"],"
-        "\"materials\":[{\"name\":\"coated\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.2,0.4,0.6,1.0]},"
-        "\"extensions\":{\"KHR_materials_clearcoat\":{\"clearcoatFactor\":1.0}}}],"
+        "\"extensionsUsed\":[\"KHR_materials_iridescence\"],"
+        "\"materials\":[{\"name\":\"soap\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.2,0.4,0.6,1.0]},"
+        "\"extensions\":{\"KHR_materials_iridescence\":{\"iridescenceFactor\":1.0}}}],"
         "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
         "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
         "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
@@ -1597,7 +1598,7 @@ TEST_CASE("A visual-only glTF extension emits a stable Degraded compatibility re
     model_core::CompatibilityReportPayload report{};
     std::memcpy(&report, reportChunk->payload.data(), sizeof(report));
     REQUIRE(report.recordCount == 1);
-    CHECK(report.records[0].featureId == model_core::kGltfFeatureClearcoat);
+    CHECK(report.records[0].featureId == model_core::kGltfFeatureIridescence);
     CHECK(report.records[0].severity
           == static_cast<uint8_t>(model_core::CompatibilitySeverity::Degraded));
     CHECK(report.records[0].count == 1);
@@ -1643,8 +1644,8 @@ bool ReportHasFeature(const model_core::CompatibilityReportPayload& report, uint
 
 } // namespace
 
-TEST_CASE("A glTF requiring KHR_materials_clearcoat opens with core PBR and a clearcoat warning",
-          "[gltf-extensions]")
+TEST_CASE("KHR_materials_clearcoat opens and normalizes its scalar lobe without a warning",
+          "[gltf-extensions][material]")
 {
     sandbox_test_support::SandboxFixture fixture;
     auto bytes = ReadFileBytes(TestAssetPath(L"required-clearcoat.gltf"));
@@ -1655,25 +1656,63 @@ TEST_CASE("A glTF requiring KHR_materials_clearcoat opens with core PBR and a cl
     REQUIRE(run.validation.ok);
 
     const auto chunks = FindGltfCompatibilityChunks(run.validation);
-    REQUIRE(chunks.status != nullptr);
-    REQUIRE(chunks.report != nullptr);
     REQUIRE(chunks.triangle != nullptr);
     CHECK(chunks.triangle->descriptor.vertexCount == 3);
     CHECK(chunks.triangle->descriptor.indexCount == 3);
     CHECK(chunks.materialCount == 1);
+    // T18 consumes the extension, so it is no longer a degraded optional
+    // feature and no compatibility report (or warning status) is needed.
+    CHECK(chunks.report == nullptr);
 
-    model_core::ImportStatusPayload status{};
-    std::memcpy(&status, chunks.status->payload.data(), sizeof(status));
-    CHECK(status.optionalFeatureWarnings == 1);
-
-    model_core::CompatibilityReportPayload report{};
-    std::memcpy(&report, chunks.report->payload.data(), sizeof(report));
-    CHECK(ReportHasFeature(report, model_core::kGltfFeatureClearcoat,
-                           model_core::CompatibilitySeverity::Degraded));
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materialChunk = &chunk;
+    REQUIRE(materialChunk != nullptr);
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    CHECK(payload.clearcoatFactor == Catch::Approx(1.0f));
+    CHECK(payload.clearcoatRoughness == Catch::Approx(0.1f));
+    CHECK(payload.emissiveStrength == 1.0f);
+    CHECK(payload.ior == Catch::Approx(1.5f));
 }
 
-TEST_CASE("A glTF requiring KHR_materials_specular opens with core PBR and a specular warning",
-          "[gltf-extensions]")
+TEST_CASE("KHR_materials_sheen opens and normalizes the velvet lobe without a warning",
+          "[gltf-extensions][material]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-sheen.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3305, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.materialCount == 1);
+    CHECK(chunks.report == nullptr);
+
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materialChunk = &chunk;
+    REQUIRE(materialChunk != nullptr);
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    CHECK(payload.sheenColor[0] == Catch::Approx(0.85f));
+    CHECK(payload.sheenColor[1] == Catch::Approx(0.35f));
+    CHECK(payload.sheenColor[2] == Catch::Approx(0.25f));
+    CHECK(payload.sheenRoughness == Catch::Approx(0.65f));
+    // A distinct grazing response, not an opaque emissive tint.
+    CHECK(model_core::SheenLobeWeight(payload, 0.1f)
+          > model_core::SheenLobeWeight(payload, 0.9f) * 10.0f);
+}
+
+TEST_CASE("KHR_materials_specular opens and maps factor/color/IOR without a warning",
+          "[gltf-extensions][material]")
 {
     sandbox_test_support::SandboxFixture fixture;
     auto bytes = ReadFileBytes(TestAssetPath(L"required-specular.gltf"));
@@ -1684,19 +1723,31 @@ TEST_CASE("A glTF requiring KHR_materials_specular opens with core PBR and a spe
     REQUIRE(run.validation.ok);
 
     const auto chunks = FindGltfCompatibilityChunks(run.validation);
-    REQUIRE(chunks.report != nullptr);
     REQUIRE(chunks.triangle != nullptr);
     CHECK(chunks.triangle->descriptor.vertexCount == 3);
     CHECK(chunks.materialCount == 1);
+    CHECK(chunks.report == nullptr);
 
-    model_core::CompatibilityReportPayload report{};
-    std::memcpy(&report, chunks.report->payload.data(), sizeof(report));
-    CHECK(ReportHasFeature(report, model_core::kGltfFeatureSpecular,
-                           model_core::CompatibilitySeverity::Degraded));
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materialChunk = &chunk;
+    REQUIRE(materialChunk != nullptr);
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    CHECK(payload.specularFactor == Catch::Approx(0.8f));
+    CHECK(payload.specularColor[0] == Catch::Approx(1.0f));
+    CHECK(payload.specularColor[1] == Catch::Approx(0.9f));
+    CHECK(payload.specularColor[2] == Catch::Approx(0.8f));
+    CHECK(payload.ior == Catch::Approx(1.5f));
+    float f0[3]{};
+    model_core::MaterialDielectricF0(payload, f0);
+    CHECK(f0[0] == Catch::Approx(0.032f).margin(1e-5f));
 }
 
-TEST_CASE("A glTF requiring KHR_materials_emissive_strength opens and reports the strength warning",
-          "[gltf-extensions]")
+TEST_CASE("KHR_materials_emissive_strength opens and maps the multiplier without a warning",
+          "[gltf-extensions][material]")
 {
     sandbox_test_support::SandboxFixture fixture;
     auto bytes = ReadFileBytes(TestAssetPath(L"required-emissive-strength.gltf"));
@@ -1707,17 +1758,23 @@ TEST_CASE("A glTF requiring KHR_materials_emissive_strength opens and reports th
     REQUIRE(run.validation.ok);
 
     const auto chunks = FindGltfCompatibilityChunks(run.validation);
-    REQUIRE(chunks.report != nullptr);
     REQUIRE(chunks.triangle != nullptr);
     CHECK(chunks.triangle->descriptor.vertexCount == 3);
     CHECK(chunks.materialCount == 1);
+    CHECK(chunks.report == nullptr);
 
-    model_core::CompatibilityReportPayload report{};
-    std::memcpy(&report, chunks.report->payload.data(), sizeof(report));
-    // T18 has not landed, so the adapter reports the unapplied multiplier
-    // rather than silently pretending the emissive factor already includes it.
-    CHECK(ReportHasFeature(report, model_core::kGltfFeatureEmissiveStrength,
-                           model_core::CompatibilitySeverity::Degraded));
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materialChunk = &chunk;
+    REQUIRE(materialChunk != nullptr);
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    CHECK(payload.emissiveStrength == Catch::Approx(5.0f));
+    CHECK(payload.emissiveFactor[0] == Catch::Approx(1.0f));
+    CHECK(payload.emissiveFactor[1] == Catch::Approx(0.7f));
+    CHECK(payload.emissiveFactor[2] == Catch::Approx(0.2f));
 }
 
 TEST_CASE("A truly unknown required extension keeps core geometry and reports Degraded",

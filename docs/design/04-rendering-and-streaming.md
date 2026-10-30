@@ -178,12 +178,44 @@ contact shadow.
 
 The metallic-roughness texture's R channel is ambient occlusion. The shader
 applies the glTF strength formula `saturate(1 + strength × (sample - 1))`, with
-sample = 1 when the map is absent. AO multiplies indirect diffuse, environment
-reflection and ambient terms only; direct `EvaluateLight` key/fill/rim
-specular is never AO-scaled, so metals do not read as dirty. `MaterialPayload`
-does not yet carry `occlusionStrength`, so the shipped value is the default 1.0.
+sample = 1 when the map is absent and `strength` from the protocol-v12
+`occlusionStrength` field (default 1). AO multiplies indirect diffuse,
+environment reflection and ambient terms only; direct `EvaluateLight` key/fill/
+rim specular is never AO-scaled, so metals do not read as dirty.
 The transparent/checkerboard backdrop from T15 remains the single background
 implementation; ground shadow defaults off there and for point clouds.
+
+### Material lobes and transparency
+
+The textured pixel shader reads the protocol-v12 lobe block as four additional
+`float4` root constants (`gMaterialLobes0..3`), keeping peak-shader-model 5.1
+and the existing 32-bit-constant path instead of a material buffer rewrite.
+
+- **Specular / IOR.** Dielectric F0 is `((ior-1)/(ior+1))²`, multiplied by the
+  authored `specularFactor` and tinted by `specularColor`; the metallic path
+  still uses base color as F0. The old fixed 0.04 survives only as the default
+  IOR 1.5 result.
+- **Clearcoat.** A second dielectric GGX lobe with its own roughness is added
+  over the base. The base specular layer is multiplied by
+  `(1 - clearcoatFactor)` so the same reflected energy is not counted twice;
+  the coat's Fresnel term is folded into its direct-light contribution.
+- **Sheen.** A grazing-only `pow(1 - N·V, 3)` velvet term, strongest for a
+  rough weave, added at low weight. It never applies to the clay mode.
+- **Emissive.** `emissiveStrength` multiplies emissive radiance before the
+  resolve pass, so an authored 5× sign enters tone mapping as linear HDR
+  rather than clipping at 1.0.
+- **Occlusion strength.** Applied through the same glTF formula above.
+
+Transparency stays on the existing straight-alpha path: opaque draws first,
+alpha-blend draws are stable-sorted back-to-front by view depth, the HDR scene
+target keeps linear color, and T15's resolve composites the background,
+exposure and neutral tone curve afterwards. This ordering avoids the old
+dark-halo failure where tone mapping happened before blending. Weighted blended
+OIT and depth peeling are **deferred**: the sorted path is correct for ordinary
+layered glTF glass, but intersecting transparent surfaces and very dense
+transmission scenes remain order-dependent. The transmission approximation
+remains Fresnel-weighted alpha with suppressed transmitted diffuse; there is
+no refraction pass.
 
 ## Upload ring
 

@@ -113,11 +113,11 @@ Normalized output crosses the process boundary only as chunk descriptors over a 
 
 A new protocol version is a breaking change requiring updated fixtures, fuzz corpora, and an explicit compatibility decision — the host never attempts to interpret a section whose version it does not recognize. This wire format, not the shared-memory mechanism by itself, is what lets the host snapshot rule in [02-system-architecture.md](./02-system-architecture.md) be a cheap, bounded, fully-checkable copy rather than an open-ended deserialization of untrusted structure.
 
-The viewer uses protocol v11: an 88-byte header, 160-byte chunk
+The viewer uses protocol v12: an 88-byte header, 160-byte chunk
 descriptor, 40-byte scan-summary payload, and 168-byte detail request. A scan
 summary retains counts, verified bounds, source provenance, layout and the
 normalized-detail checksum without transferring a second copy of normalized
-geometry. Protocol-v11 section and payload integrity uses XXH64 directly below
+geometry. Protocol-v12 section and payload integrity uses XXH64 directly below
 10 MiB and a split-invariant fixed-256-KiB-leaf XXH64 tree at or above 10 MiB;
 this is an incidental-corruption check, not an authentication boundary. A
 validated deindexed flag lets proxy sampling traverse identity-indexed triangle
@@ -127,10 +127,10 @@ re-decoded exactly. Detail replies must match the original verified scan's
 geometry, provenance, checksum and metadata. They reuse pinned primary and
 approved sidecar handles; new sidecar requests are forbidden during replay.
 Viewer and worker binaries ship from the same build. Compatibility decision:
-reject v10 and every other unknown version; there is no migration or mixed-
+reject v11 and every other unknown version; there is no migration or mixed-
 version fallback. Updated protocol fixtures and hostile-worker cases exercise
-the v11 checksum, LineList, scan-summary, scene-record, flag and
-copy-then-validate paths.
+the v12 material record, v11 checksum, LineList, scan-summary, scene-record,
+flag and copy-then-validate paths.
 
 Protocol v11 is append-only. `ChunkTopology::LineList = 11` keeps every earlier
 numeric identity unchanged, but the version bump is deliberate: a v10 consumer
@@ -148,6 +148,52 @@ divides the index count by two. The renderer draws LineList with a dedicated
 depth-biased, depth-write-disabled line PSO and a stable grey-blue color; line
 geometry participates in bounds, visibility, proxy/LOD, and picking through the
 existing geometry pipeline.
+
+### Protocol v12 material lobes
+
+Protocol v12 grows the fixed `MaterialPayload` from 72 to 140 bytes. This is a
+new record, not a reinterpretation of the old reserved bytes, so the version
+bump is mandatory and every producer/consumer moves together. Layout:
+
+| Offset | Field | Meaning |
+| --- | --- | --- |
+| 0 | `baseColorFactor[4]` | linear RGBA |
+| 16 | `metallicFactor`, `roughnessFactor` | scalars |
+| 24 | `emissiveFactor[3]` | linear RGB before the strength multiplier |
+| 36 | `uvOffset[2]`, `uvScale[2]`, `uvRotation` | base-color transform |
+| 56 | `alphaMode`, `alphaCutoff`, `flags`, `transmissionFactor` | alpha/closed flags plus KHR transmission |
+| 72 | `emissiveStrength` | KHR emissive multiplier, default 1 |
+| 76 | `clearcoatFactor`, `clearcoatRoughness` | scalar clearcoat layer |
+| 84 | `sheenColor[3]`, `sheenRoughness` | velvet lobe |
+| 100 | `specularFactor`, `specularColor[3]` | dielectric F0 scale/tint |
+| 116 | `ior` | KHR IOR, default 1.5; F0 = ((ior-1)/(ior+1))² |
+| 120 | `occlusionStrength` | ORM AO strength, default 1 |
+| 124 | `reserved[4]` | zero in v12; future anisotropy/iridescence/volume/dispersion |
+
+The validator rejects non-finite or out-of-range lobe values, any non-zero
+reserved word, and an unrecognized flag bit. A value-initialized record keeps
+the pre-v12 appearance: emissive scale 1, no clearcoat/sheen, specular factor 1,
+IOR 1.5 (F0 0.04), occlusion strength 1.
+
+Mapping table:
+
+| Authored source | Normalized field | Rendering approximation |
+| --- | --- | --- |
+| `KHR_materials_clearcoat` scalar factor/roughness | `clearcoatFactor`, `clearcoatRoughness` | second dielectric GGX lobe; base specular scaled by (1 - factor) |
+| `KHR_materials_sheen` color/roughness | `sheenColor`, `sheenRoughness` | grazing-only velvet lobe |
+| `KHR_materials_specular` factor/color | `specularFactor`, `specularColor` | scales/tints the IOR-derived dielectric F0 |
+| `KHR_materials_ior` | `ior` | replaces the fixed 0.04 F0; <=1 means no optical interface |
+| `KHR_materials_emissive_strength` | `emissiveStrength` | multiplies emissive radiance before the HDR tone map |
+| glTF `occlusionTexture.strength` | `occlusionStrength` | glTF ORM strength formula |
+| FBX PBR coat/sheen/specular/IOR maps | same fields where ufbx exposes them | same approximations |
+
+Texture-driven lobe maps (clearcoat/sheen/specular textures) are not carried in
+the fixed record; the scalar base lobe is kept and a bounded texture warning is
+emitted. `KHR_materials_iridescence`, `anisotropy`, `volume`,
+`dispersion` and `diffuse_transmission` remain parsed-but-unrendered: a required
+use yields a specific `Degraded` compatibility record rather than silently
+disappearing. Anisotropy/iridescence/volume rendering, refraction and OIT are
+deferred.
 
 Protocol v10 adds three fixed payloads. `NodePayload` is 144 bytes: a stable
 nonzero ID, optional parent ID, closed visibility flags, and a finite
@@ -415,7 +461,7 @@ import-worker translation unit (never the viewer) and needs no new vcpkg port.
 
 It does not enumerate or invoke arbitrary installed WIC codecs. Encoded type is verified from bytes and declared MIME/container metadata rather than extension alone; TGA is selected by the decodable-extension candidate filter because it has no magic, then every header field is validated from bytes. Color textures are sRGB; data/normal textures remain linear. Dimensions, row pitch, mip/array/depth counts, multiplication, total pixels, and compressed input size are checked before decode or direct upload. A texture over the decoded budget, or a TGA beyond the non-scalable source allocation bound, uses the deterministic fallback with one warning.
 
-The metallic-roughness map follows the ORM convention: R is ambient occlusion, G roughness, B metallic. The studio PBR shader samples R as AO and multiplies only indirect diffuse/environment terms; direct-light specular is left unoccluded so metals keep clean highlights. The existing 72-byte material payload is unchanged: it carries no separate occlusion-strength field, so the per-texel R value is applied at full strength and glTF's authored `occlusionStrength` is not represented by the normalized contract.
+The metallic-roughness map follows the ORM convention: R is ambient occlusion, G roughness, B metallic. The studio PBR shader samples R as AO and multiplies only indirect diffuse/environment terms; direct-light specular is left unoccluded so metals keep clean highlights. Protocol v12 carries the authored `occlusionStrength` (default 1) in the 140-byte material payload, so glTF's strength formula is applied without changing formats that do not author it.
 
 Validated DDS/KTX2 mip chains may upload directly when their DXGI formats are supported. Basis payloads transcode to a supported BC7/BC5/BC3/BC1 target selected by semantic and adapter capabilities, with RGBA8 fallback. Existing small mip levels are uploaded first. For ordinary raster images, decoder-native downscaling is requested when trustworthy and CPU mip generation otherwise happens in cancellable tiles. The JPEG native path sizes its copy scratch for the full `uiWidth*uiHeight` extent that `IWICBitmapSourceTransform::CopyPixels` requires, even though `prc` clips each 32-row iteration, so the buffer cannot be overrun by a codec that honors the extent over `cbBufferSize` (ADR-0054). Tangents are generated only for visible geometry whose material actually requires tangent-space normal mapping. A missing, corrupt, or unsupported optional texture uses a deterministic checker/neutral fallback without hiding the mesh.
 
