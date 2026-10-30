@@ -55,6 +55,9 @@ enum class ImportFormat : uint32_t {
     // the generalized CAD opcode/request; the general worker never accepts it.
     Iges,
     Brep,
+    // T09 OCCT-native formats through the same dedicated host.
+    Xbf,
+    Fcstd,
 };
 
 enum class ImportProducer : uint32_t {

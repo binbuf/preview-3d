@@ -29,6 +29,9 @@ enum class CadPreflightStatus : std::uint32_t {
     ReferenceLimit = 7,
     SourceLimit = 8,
     ReadFailure = 9,
+    // T09 OCCT binary XCAF document: the fixed `BINFILE` + format-version
+    // header was absent or not the supported binary document version.
+    NotXbf = 10,
 };
 
 // Documented admission ceilings. They are deliberately independent of the
@@ -120,5 +123,14 @@ CadPreflightResult BrepPreflightBytes(std::span<const std::byte> bytes,
                                       CadPreflightLimits limits = {});
 CadPreflightResult BrepPreflightHandle(HANDLE handle, std::uint64_t size,
                                        CadPreflightLimits limits = {});
+
+// T09 XBF admission. The OCCT binary XCAF document starts with the seven ASCII
+// bytes `BINFILE` followed by the little-endian 64-bit format signature
+// 0x0000000704030201. Only the header and the documented byte cap are checked
+// here; the XCAF read itself still runs under the adapter's own limits.
+CadPreflightResult XbfPreflightBytes(std::span<const std::byte> bytes,
+                                     CadPreflightLimits limits = {});
+CadPreflightResult XbfPreflightHandle(HANDLE handle, std::uint64_t size,
+                                      CadPreflightLimits limits = {});
 
 } // namespace step_host

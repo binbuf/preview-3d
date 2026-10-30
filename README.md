@@ -13,7 +13,7 @@
 
 ## Highlights
 
-- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, STEP/STP, IGES, and BREP** files locally.
+- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, STEP/STP, IGES, BREP, XBF, and FreeCAD** files locally.
 - Navigate with familiar Blender-style orbit, pan, and frame controls, plus Unreal-style right-mouse fly, a navigation gizmo with 90° roll controls, and a keyboard-friendly command set.
 - Inspect models with Studio, Clay, and rotatable Directional lighting, Wireframe mode, an information panel, and point-cloud rendering.
 - Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration.
@@ -35,6 +35,8 @@
 | STEP | `.step` and `.stp`: self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies, instance/shape/face colors, and authored length units |
 | IGES | `.igs` and `.iges`: bounded fixed-column record streams, analytic B-rep geometry, assemblies, and representable colors |
 | BREP | `.brep`: OCCT `CASCADE Topology` shape sets with bounded shape/location admission; no authored units or colors |
+| XBF | `.xbf`: OCCT binary XCAF documents with colors, assembly structure, and placements |
+| FreeCAD Standard | `.fcstd`: the common Part/PartDesign layout with evaluated `*.brp` shapes, colors, visibility, and nested placements |
 
 For the exact supported subset, resource ceilings, and known limitations of each format, see [Format support and limits](docs/FORMAT-SUPPORT.md).
 

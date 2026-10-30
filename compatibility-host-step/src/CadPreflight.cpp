@@ -499,4 +499,88 @@ CadPreflightResult BrepPreflightHandle(HANDLE handle, std::uint64_t size,
     return ScanHandle(handle, size, BrepPreflightScanner(limits));
 }
 
+// --- XBF --------------------------------------------------------------------
+
+namespace {
+
+constexpr char kXbfMagic[] = {'B', 'I', 'N', 'F', 'I', 'L', 'E'};
+constexpr std::size_t kXbfHeaderBytes = 15; // 7-byte magic + 8-byte version
+constexpr std::uint64_t kXbfFormatVersion = 0x0000000704030201ull;
+
+CadPreflightResult InspectXbfHeader(std::span<const std::byte> header,
+                                   std::uint64_t sourceBytes,
+                                   CadPreflightLimits limits)
+{
+    CadPreflightResult result;
+    if (sourceBytes == 0) {
+        result.status = CadPreflightStatus::ReadFailure;
+        return result;
+    }
+    if (sourceBytes > limits.maxBytes || header.size() > limits.maxBytes) {
+        result.status = CadPreflightStatus::SourceLimit;
+        return result;
+    }
+    if (header.size() < kXbfHeaderBytes) {
+        result.status = CadPreflightStatus::NotXbf;
+        return result;
+    }
+    for (std::size_t index = 0; index < sizeof(kXbfMagic); ++index) {
+        if (header[index] != static_cast<std::byte>(kXbfMagic[index])) {
+            result.status = CadPreflightStatus::NotXbf;
+            return result;
+        }
+    }
+    std::uint64_t version = 0;
+    for (std::size_t index = 0; index < 8; ++index) {
+        version |= static_cast<std::uint64_t>(
+                       std::to_integer<std::uint8_t>(header[7 + index]))
+            << (index * 8);
+    }
+    if (version != kXbfFormatVersion) {
+        result.status = CadPreflightStatus::NotXbf;
+        return result;
+    }
+    result.records = 1;
+    result.lexedBytes = sourceBytes;
+    return result;
+}
+
+} // namespace
+
+CadPreflightResult XbfPreflightBytes(std::span<const std::byte> bytes,
+                                     CadPreflightLimits limits)
+{
+    return InspectXbfHeader(bytes.first((std::min)(bytes.size(), kXbfHeaderBytes)),
+                            bytes.size(), limits);
+}
+
+CadPreflightResult XbfPreflightHandle(HANDLE handle, std::uint64_t size,
+                                      CadPreflightLimits limits)
+{
+    if (size == 0) {
+        CadPreflightResult result;
+        result.status = CadPreflightStatus::ReadFailure;
+        return result;
+    }
+    if (size > limits.maxBytes) {
+        CadPreflightResult result;
+        result.status = CadPreflightStatus::SourceLimit;
+        return result;
+    }
+    LARGE_INTEGER beginning{};
+    if (!SetFilePointerEx(handle, beginning, nullptr, FILE_BEGIN)) {
+        CadPreflightResult result;
+        result.status = CadPreflightStatus::ReadFailure;
+        return result;
+    }
+    std::array<std::byte, kXbfHeaderBytes> header{};
+    DWORD read = 0;
+    if (!ReadFile(handle, header.data(), static_cast<DWORD>(header.size()), &read, nullptr)) {
+        CadPreflightResult result;
+        result.status = CadPreflightStatus::ReadFailure;
+        return result;
+    }
+    return InspectXbfHeader(std::span<const std::byte>(header.data(), read), size, limits);
+}
+
 } // namespace step_host

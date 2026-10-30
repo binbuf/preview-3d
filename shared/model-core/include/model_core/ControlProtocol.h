@@ -368,11 +368,15 @@ enum class CadFormat : uint32_t {
     Step = 0,
     Iges = 1,
     Brep = 2,
+    // T09: OCCT binary XCAF document and the FreeCAD Standard ZIP package.
+    Xbf = 3,
+    Fcstd = 4,
 };
 
 constexpr bool IsKnownCadFormat(CadFormat format) noexcept
 {
-    return format == CadFormat::Step || format == CadFormat::Iges || format == CadFormat::Brep;
+    return format == CadFormat::Step || format == CadFormat::Iges || format == CadFormat::Brep
+        || format == CadFormat::Xbf || format == CadFormat::Fcstd;
 }
 
 // Generalized CAD host request. The first seven fields are layout-identical to

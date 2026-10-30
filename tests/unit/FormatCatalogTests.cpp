@@ -237,10 +237,10 @@ TEST_CASE("format catalog extensions are unique and resolve", "[format-catalog]"
         }
     }
 
-    const std::array<std::wstring_view, 16> required{
+    const std::array<std::wstring_view, 18> required{
         L"gltf", L"glb", L"stl", L"ply", L"obj", L"fbx", L"3mf",
         L"usd", L"usda", L"usdc", L"usdz", L"step", L"stp",
-        L"igs", L"iges", L"brep",
+        L"igs", L"iges", L"brep", L"xbf", L"fcstd",
     };
     for (const auto extension : required) {
         INFO("required extension " << Narrow(extension));
@@ -256,7 +256,7 @@ TEST_CASE("format catalog extensions are unique and resolve", "[format-catalog]"
 TEST_CASE("every source format id has a catalog descriptor", "[format-catalog]")
 {
     std::set<uint32_t> seenWireIds;
-    for (uint32_t value = 1; value <= static_cast<uint32_t>(SourceFormatId::Brep); ++value) {
+    for (uint32_t value = 1; value <= static_cast<uint32_t>(SourceFormatId::Fcstd); ++value) {
         const auto wire = static_cast<SourceFormatId>(value);
         INFO("wire id " << value);
         const auto* descriptor = FindBySourceFormatId(wire);
@@ -289,6 +289,34 @@ TEST_CASE("T08 IGES and BREP are catalog-backed CAD host formats", "[format-cata
     CHECK(FindByExtension(L"brep") == brep);
     // The provider's OCCT closure stays STEP-only.
     CHECK(brep->thumbnail == ThumbnailFamily::None);
+}
+
+TEST_CASE("T09 XBF and FCStd are catalog-backed CAD host formats", "[format-catalog][cad]")
+{
+    static_assert(static_cast<uint32_t>(SourceFormatId::Xbf) == 16);
+    static_assert(static_cast<uint32_t>(SourceFormatId::Fcstd) == 17);
+
+    const auto* xbf = FindById(FormatId::Xbf);
+    REQUIRE(xbf != nullptr);
+    CHECK(xbf->importer == ImporterKind::CadHost);
+    CHECK(xbf->wireFormatId == SourceFormatId::Xbf);
+    CHECK(xbf->defaultUpAxis == UpAxisId::Unknown);
+    CHECK(xbf->presentation == PresentationProfile::StudioCad);
+    CHECK(HasCapability(xbf->capabilities, CapabilityFlags::CadHost));
+    CHECK(xbf->thumbnail == ThumbnailFamily::None);
+    CHECK(FindByExtension(L"xbf") == xbf);
+    CHECK(FindByExtension(L".XBF") == xbf);
+
+    const auto* fcstd = FindById(FormatId::Fcstd);
+    REQUIRE(fcstd != nullptr);
+    CHECK(fcstd->importer == ImporterKind::CadHost);
+    CHECK(fcstd->wireFormatId == SourceFormatId::Fcstd);
+    CHECK(fcstd->defaultUpAxis == UpAxisId::Unknown);
+    CHECK(fcstd->presentation == PresentationProfile::StudioCad);
+    CHECK(HasCapability(fcstd->capabilities, CapabilityFlags::Archive));
+    CHECK(fcstd->thumbnail == ThumbnailFamily::None);
+    CHECK(FindByExtension(L"fcstd") == fcstd);
+    CHECK(FindByExtension(L".FCStd") == fcstd);
 }
 
 TEST_CASE("content sniff identifies a GLB renamed to .bin", "[format-catalog]")

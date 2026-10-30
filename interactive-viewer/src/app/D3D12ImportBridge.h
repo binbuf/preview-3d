@@ -45,6 +45,10 @@ enum class SourceFormat {
     // zero-capability AppContainer payload; no OCCT code is linked here.
     Iges,
     Brep,
+    // T09 OCCT-native formats: binary XCAF document and FreeCAD Standard
+    // package, both still handled only by the dedicated CAD host.
+    Xbf,
+    Fcstd,
 };
 
 // nullopt for any extension this slice doesn't recognize. This remains the

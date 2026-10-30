@@ -1,6 +1,7 @@
 #include "StepHostImport.h"
 
 #include "CadPreflight.h"
+#include "FcstdPreflight.h"
 #include "StepPart21Preflight.h"
 #include "StepXdeAdapter.h"
 
@@ -79,6 +80,27 @@ PreflightOutcome RunCadPreflight(model_core::CadFormat format,
             : BrepPreflightHandle(sourceHandle, size);
         outcome.errorCode = MapCadPreflightStatus(static_cast<std::uint32_t>(preflight.status));
         outcome.lexedBytes = preflight.lexedBytes;
+        break;
+    }
+    case model_core::CadFormat::Xbf: {
+        const CadPreflightResult preflight = !mappedSource.empty()
+            ? XbfPreflightBytes(mappedSource)
+            : XbfPreflightHandle(sourceHandle, size);
+        outcome.errorCode = MapCadPreflightStatus(static_cast<std::uint32_t>(preflight.status));
+        outcome.lexedBytes = preflight.lexedBytes;
+        break;
+    }
+    case model_core::CadFormat::Fcstd: {
+        // FCStd cannot be admitted from an unmapped handle: the bounded ZIP
+        // scan and the later entry extraction both need the same private view.
+        // The host always creates it, so an empty mapping is a host fault.
+        if (mappedSource.empty()) {
+            outcome.errorCode = model_core::ImportErrorCode::FileUnavailable;
+            break;
+        }
+        const FcstdPreflightStatus preflight = InspectFcstd(mappedSource);
+        outcome.errorCode = MapFcstdPreflightStatus(static_cast<std::uint32_t>(preflight));
+        outcome.lexedBytes = mappedSource.size();
         break;
     }
     default:
@@ -221,6 +243,7 @@ model_core::ImportErrorCode MapCadPreflightStatus(std::uint32_t status)
         return model_core::ImportErrorCode::None;
     case CadPreflightStatus::NotIges:
     case CadPreflightStatus::NotBrep:
+    case CadPreflightStatus::NotXbf:
     case CadPreflightStatus::MalformedSyntax:
         return model_core::ImportErrorCode::MalformedData;
     case CadPreflightStatus::UnsupportedEncoding:

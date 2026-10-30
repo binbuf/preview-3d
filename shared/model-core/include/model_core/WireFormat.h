@@ -144,6 +144,11 @@ enum class SourceFormatId : uint32_t {
     // authored unit, so zero means unspecified, like STL.
     Iges = 14,
     Brep = 15,
+    // T09 additive OCCT-native identities. XBF is the OCCT binary XCAF
+    // document (colors/assembly preserved); FCStd is the FreeCAD Standard
+    // package, rendered from its evaluated Part shape and millimetre data.
+    Xbf = 16,
+    Fcstd = 17,
 };
 // Preserve the protocol-v10 numeric identities of Unknown/Y/Z. USD is the
 // first supported family that can author X-up, so X is appended rather than

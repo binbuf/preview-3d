@@ -128,6 +128,7 @@
     <ClCompile Include="StepToleranceTests.cpp" />
     <ClCompile Include="CadHostTests.cpp" />
     <ClCompile Include="..\..\compatibility-host-step\src\CadPreflight.cpp" />
+    <ClCompile Include="..\..\compatibility-host-step\src\FcstdPreflight.cpp" />
     <ClCompile Include="..\..\compatibility-host-step\src\StepPart21Preflight.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\app\D3D12ImportBridge.cpp" />
     <ClCompile Include="..\..\interactive-viewer\src\app\Localization.cpp" />

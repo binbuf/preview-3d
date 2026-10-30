@@ -13,6 +13,19 @@ carry the repository's own test-data terms (no separate upstream license).
 | `compound.brep` | A compound of two solids translated 20 mm apart; world-bounds coverage |
 | `truncated.igs` | A real IGES stream cut mid-record (admission must fail typed) |
 | `malformed.brep` | A real `CASCADE Topology` header with a `TShapes 7` table and no records |
+| `assembly.xbf` (T09) | A binary XCAF document with a shared box placed twice, a coloured cylinder, and a millimetre document unit |
+| `truncated.xbf` (T09) | `assembly.xbf` cut after a valid `BINFILE` header; admission passes and the OCCT reader fails typed |
+| `malformed.xbf` (T09) | `assembly.xbf` with an unsupported 64-bit binary-document version; admission rejects it typed |
+| `partdesign.FCStd` (T09) | ZIP package with a PartDesign `Body` under an `App::Part` placement, a green 20%-transparent shape, and a hidden base shape |
+| `external_link.FCStd` (T09) | `partdesign.FCStd` plus an external `App::Link` that must degrade to a warning |
+| `malformed.FCStd` (T09) | Well-formed ZIP with truncated `Document.xml` |
+| `nodocument.FCStd` (T09) | ZIP with a shape payload but no required `Document.xml` |
+| `truncated.FCStd` (T09) | `partdesign.FCStd` cut mid-archive |
+| `zipbomb.FCStd` (T09) | 128 MiB of zeros in one Deflate entry; rejected by the expansion-ratio policy before extraction |
+| `oversized.FCStd` (T09) | Structurally valid directory claiming a 300 MiB expanded entry; rejected from the central directory |
+
+`GenerateFcstdFixtures.py` builds the T09 `.FCStd` packages from the local
+`part.brep`; no third-party FreeCAD document is copied in.
 
 `GenerateCadFixtures.cpp` is a developer tool. It links OCCT readers/writers,
 never product code, and is not part of any solution or shipped target. Driver

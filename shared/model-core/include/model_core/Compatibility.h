@@ -88,6 +88,16 @@ constexpr uint32_t kStepFeatureUnmeshedDefinition = 3004;
 constexpr uint32_t kCadFeatureIgesUnitAssumedMillimetre = 3010;
 constexpr uint32_t kCadFeatureIgesUnitNonMillimetre = 3011;
 constexpr uint32_t kCadFeatureBrepUnitsUnspecified = 3012;
+// T09 OCCT-native formats.
+constexpr uint32_t kCadFeatureXbfUnitAssumedMillimetre = 3013;
+// FreeCAD has no authored unit: the document's Part payload is millimetres by
+// format convention. The warning names the assumption instead of implying it
+// was authored data.
+constexpr uint32_t kCadFeatureFcstdMillimetresAssumed = 3014;
+// A FreeCAD link points at another document/package the host cannot open.
+constexpr uint32_t kCadFeatureFcstdExternalLinkIgnored = 3015;
+// Unsupported FreeCAD objects are skipped without failing the document.
+constexpr uint32_t kCadFeatureFcstdUnsupportedObject = 3016;
 
 // Maps a glTF extension name to its stable numeric feature ID. This is a pure
 // lookup; it does not change whether the adapter supports the extension.

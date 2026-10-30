@@ -18,6 +18,7 @@ The plan, ground rules and per-task verify commands are in
 - **T06 — Per-format presentation defaults and orientation**: Catalog profile enum: `shared/model-core/include/model_core/FormatCatalog.h`; Pure selection: `model_core::ResolvePresentationProfile(descriptor,
 - **T07 — STEP tolerance and import quality**: **Profile version is now 6.** `StepTessellationProfile.h`:; **Request quality bits** in `shared/model-core/include/model_core/
 - **T08 — OCCT host: IGES and BREP**: **Wire identities:** `SourceFormatId::Iges = 14`, `Brep = 15` (appended).; **Host route:** STEP keeps opcode 20 / `ParseStepFileRequest` (48 bytes).
+- **T09 — OCCT host: XBF and FCStd**: **Wire identities:** `SourceFormatId::Xbf = 16`, `Fcstd = 17` (appended).; **Broker:** `ImportFormat::Xbf`/`Fcstd` are CAD-only, producer
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -29,4 +30,5 @@ The plan, ground rules and per-task verify commands are in
 - [T06](progress/T06.md) — Catalog profile enum: `shared/model-core/include/model_core/FormatCatalog.h`
 - [T07](progress/T07.md) — **Profile version is now 6.** `StepTessellationProfile.h`:
 - [T08](progress/T08.md) — **Wire identities:** `SourceFormatId::Iges = 14`, `Brep = 15` (appended).
+- [T09](progress/T09.md) — **Wire identities:** `SourceFormatId::Xbf = 16`, `Fcstd = 17` (appended).
 <!-- symphony:digest:end -->

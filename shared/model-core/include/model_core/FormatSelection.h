@@ -103,6 +103,8 @@ inline const char* ProgIdForFamily(FormatId family) noexcept
     case FormatId::Step: return "Binbuf.Preview3D.STEP.1";
     case FormatId::Iges: return "Binbuf.Preview3D.IGES.1";
     case FormatId::Brep: return "Binbuf.Preview3D.BREP.1";
+    case FormatId::Xbf: return "Binbuf.Preview3D.XBF.1";
+    case FormatId::Fcstd: return "Binbuf.Preview3D.FCStd.1";
     default: return nullptr;
     }
 }

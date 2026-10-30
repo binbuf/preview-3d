@@ -14,6 +14,7 @@
 #include <windows.h>
 
 #pragma warning(push, 0)
+#include <BinXCAFDrivers.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -25,7 +26,9 @@
 #include <Quantity_Color.hxx>
 #include <Quantity_ColorRGBA.hxx>
 #include <TDF_LabelSequence.hxx>
+#include <TDocStd_Application.hxx>
 #include <TDocStd_Document.hxx>
+#include <TCollection_ExtendedString.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS_Compound.hxx>
 #include <XCAFApp_Application.hxx>
@@ -116,6 +119,69 @@ bool WriteAssemblyIges(const std::filesystem::path& path)
     return WriteIges(document, path);
 }
 
+bool WriteAssemblyXbf(const std::filesystem::path& path)
+{
+    const Handle(TDocStd_Application) app = XCAFApp_Application::GetApplication();
+    BinXCAFDrivers::DefineFormat(app);
+    Handle(TDocStd_Document) document;
+    app->NewDocument("BinXCAF", document);
+    const Handle(XCAFDoc_ShapeTool) shapes = XCAFDoc_DocumentTool::ShapeTool(document->Main());
+    const Handle(XCAFDoc_ColorTool) colors = XCAFDoc_DocumentTool::ColorTool(document->Main());
+    XCAFDoc_DocumentTool::SetLengthUnit(document, 0.001);
+
+    const TDF_Label boxLabel = shapes->AddShape(BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape(),
+                                                Standard_False);
+    colors->SetColor(boxLabel, Quantity_Color(0.9, 0.1, 0.1, Quantity_TOC_RGB), XCAFDoc_ColorGen);
+    const TDF_Label cylinderLabel = shapes->AddShape(BRepPrimAPI_MakeCylinder(3.0, 12.0).Shape(),
+                                                     Standard_False);
+    colors->SetColor(cylinderLabel, Quantity_Color(0.1, 0.4, 0.9, Quantity_TOC_RGB),
+                     XCAFDoc_ColorGen);
+
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    const TDF_Label assembly = shapes->AddShape(compound, Standard_True);
+    shapes->AddComponent(assembly, boxLabel, TopLoc_Location(gp_Trsf()));
+    gp_Trsf second;
+    second.SetTranslation(gp_Vec(40.0, 0.0, 0.0));
+    shapes->AddComponent(assembly, boxLabel, TopLoc_Location(second));
+    gp_Trsf third;
+    third.SetTranslation(gp_Vec(5.0, 5.0, 15.0));
+    shapes->AddComponent(assembly, cylinderLabel, TopLoc_Location(third));
+    shapes->UpdateAssemblies();
+
+    const TCollection_ExtendedString wide(path.wstring().c_str());
+    return app->SaveAs(document, wide) == PCDM_SS_OK;
+}
+
+bool WriteTruncatedXbf(const std::filesystem::path& directory)
+{
+    const std::filesystem::path source = directory / "assembly.xbf";
+    std::ifstream input(source, std::ios::binary);
+    if (!input) return false;
+    std::vector<char> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    if (bytes.size() < 64) return false;
+    bytes.resize(bytes.size() / 3);
+    std::ofstream output(directory / "truncated.xbf", std::ios::binary | std::ios::trunc);
+    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    return output.good();
+}
+
+bool WriteMalformedXbf(const std::filesystem::path& directory)
+{
+    const std::filesystem::path source = directory / "assembly.xbf";
+    std::ifstream input(source, std::ios::binary);
+    if (!input) return false;
+    std::vector<char> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    if (bytes.size() < 15) return false;
+    // Keep the ASCII magic, replace the 64-bit format version with an
+    // unsupported value so product-owned admission must reject it.
+    for (std::size_t index = 7; index < 15; ++index) bytes[index] = '\x7f';
+    std::ofstream output(directory / "malformed.xbf", std::ios::binary | std::ios::trunc);
+    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    return output.good();
+}
+
 bool WritePartBrep(const std::filesystem::path& path)
 {
     return BRepTools::Write(PartWithHole(), Narrow(path.wstring()).c_str());
@@ -175,6 +241,7 @@ int wmain(int argc, wchar_t** argv)
     const Case cases[] = {
         {L"part.igs", WritePartIges},
         {L"assembly.igs", WriteAssemblyIges},
+        {L"assembly.xbf", WriteAssemblyXbf},
         {L"part.brep", WritePartBrep},
         {L"compound.brep", WriteCompoundBrep},
     };
@@ -186,7 +253,8 @@ int wmain(int argc, wchar_t** argv)
         }
         std::printf("wrote %ls\n", path.c_str());
     }
-    if (!WriteTruncatedIges(output) || !WriteMalformedBrep(output)) {
+    if (!WriteTruncatedIges(output) || !WriteMalformedBrep(output)
+        || !WriteTruncatedXbf(output) || !WriteMalformedXbf(output)) {
         std::fprintf(stderr, "failed to write negative fixtures\n");
         return 3;
     }

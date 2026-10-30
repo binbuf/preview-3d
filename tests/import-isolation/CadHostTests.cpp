@@ -9,11 +9,14 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "CadPreflight.h"
+#include "FcstdPreflight.h"
 
 #include "import_broker/ImportSession.h"
 #include "import_broker/SharedSectionValidator.h"
 #include "model_core/Checksum.h"
+#include "model_core/Compatibility.h"
 #include "model_core/ControlProtocol.h"
+#include "model_core/FormatSelection.h"
 #include "model_core/ImportError.h"
 #include "model_core/WireFormat.h"
 
@@ -82,6 +85,23 @@ struct SceneCounts {
     double minX = 0.0;
     double maxX = 0.0;
 };
+
+bool HasCompatibilityFeature(const import_broker::ImportSessionResult& result,
+                             std::uint32_t featureId)
+{
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::CompatibilityReport)
+            continue;
+        if (chunk.payload.size() != sizeof(model_core::CompatibilityReportPayload)) continue;
+        model_core::CompatibilityReportPayload payload{};
+        std::memcpy(&payload, chunk.payload.data(), sizeof(payload));
+        for (std::uint32_t index = 0; index < payload.recordCount
+             && index < model_core::kMaxCompatibilityRecords; ++index) {
+            if (payload.records[index].featureId == featureId) return true;
+        }
+    }
+    return false;
+}
 
 SceneCounts Tally(const import_broker::ImportSessionResult& result)
 {
@@ -168,7 +188,7 @@ TEST_CASE("T08 CAD protocol additions are closed and append-only", "[cad-iges][p
     CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Step));
     CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Iges));
     CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Brep));
-    CHECK_FALSE(model_core::IsKnownCadFormat(static_cast<model_core::CadFormat>(3)));
+    CHECK_FALSE(model_core::IsKnownCadFormat(static_cast<model_core::CadFormat>(5)));
 }
 
 TEST_CASE("T08 IGES admission verifies fixed 80-column sections and bounds",
@@ -344,6 +364,206 @@ TEST_CASE("T08 validator enforces IGES/BREP axis and unit rules", "[cad-validato
              std::pair{model_core::UpAxisId::Unknown, 0.001}}) {
         const auto result = import_broker::ValidateAndCopySection(
             MetadataSection(model_core::SourceFormatId::Brep, axis, units), 91, 4);
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    }
+}
+
+TEST_CASE("T09 XBF and FCStd protocol identities are append-only", "[cad-xbf][cad-fcstd][protocol]")
+{
+    CHECK(uint32_t(model_core::SourceFormatId::Xbf) == 16);
+    CHECK(uint32_t(model_core::SourceFormatId::Fcstd) == 17);
+    CHECK(uint32_t(model_core::CadFormat::Xbf) == 3);
+    CHECK(uint32_t(model_core::CadFormat::Fcstd) == 4);
+    CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Xbf));
+    CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Fcstd));
+    CHECK_FALSE(model_core::IsKnownCadFormat(static_cast<model_core::CadFormat>(5)));
+    CHECK(model_core::ProgIdForFamily(model_core::FormatId::Xbf) != nullptr);
+    CHECK(model_core::ProgIdForFamily(model_core::FormatId::Fcstd) != nullptr);
+}
+
+TEST_CASE("T09 XBF BINFILE/version admission and truncation", "[cad-xbf][preflight]")
+{
+    const auto xbf = ReadFixture(L"assembly.xbf");
+    const auto accepted = step_host::XbfPreflightBytes(xbf);
+    INFO("status " << uint32_t(accepted.status));
+    CHECK(accepted.ok());
+    CHECK(accepted.lexedBytes == xbf.size());
+
+    // The header scan is intentionally structural: a file cut after a valid
+    // BINFILE header passes admission and fails later in the OCCT reader.
+    const auto truncated = ReadFixture(L"truncated.xbf");
+    CHECK(step_host::XbfPreflightBytes(truncated).ok());
+
+    const auto malformed = ReadFixture(L"malformed.xbf");
+    CHECK(step_host::XbfPreflightBytes(malformed).status
+          == step_host::CadPreflightStatus::NotXbf);
+
+    std::vector<std::byte> notXbf = xbf;
+    notXbf[0] = std::byte{'X'};
+    CHECK(step_host::XbfPreflightBytes(notXbf).status
+          == step_host::CadPreflightStatus::NotXbf);
+
+    step_host::CadPreflightLimits limits;
+    limits.maxBytes = 64;
+    CHECK(step_host::XbfPreflightBytes(xbf, limits).status
+          == step_host::CadPreflightStatus::SourceLimit);
+}
+
+TEST_CASE("T09 FCStd ZIP preflight limits and required parts", "[cad-fcstd][preflight]")
+{
+    step_host::FcstdPackage package;
+    const auto positive = ReadFixture(L"partdesign.FCStd");
+    CHECK(step_host::InspectFcstd(positive, &package) == step_host::FcstdPreflightStatus::Ok);
+    CHECK_FALSE(package.documentEntry.empty());
+    CHECK(package.hasGuiDocument);
+    CHECK(step_host::FindFcstdEntry(package, "PartShape.brp") != nullptr);
+
+    const auto truncated = ReadFixture(L"truncated.FCStd");
+    CHECK(step_host::InspectFcstd(truncated) == step_host::FcstdPreflightStatus::NotZip);
+
+    const auto zipbomb = ReadFixture(L"zipbomb.FCStd");
+    CHECK(step_host::InspectFcstd(zipbomb) == step_host::FcstdPreflightStatus::ExpansionRatio);
+
+    const auto oversized = ReadFixture(L"oversized.FCStd");
+    CHECK(step_host::InspectFcstd(oversized) == step_host::FcstdPreflightStatus::EntryTooLarge);
+
+    // A package without Document.xml is not an FCStd document.
+    const auto noDocument = ReadFixture(L"nodocument.FCStd");
+    CHECK(step_host::InspectFcstd(noDocument)
+          == step_host::FcstdPreflightStatus::MissingDocument);
+}
+
+TEST_CASE("T09 XBF opens through the isolated CAD host with colors and assembly", "[cad-xbf]")
+{
+    const auto result = import_broker::RunImportSession(
+        Request(import_broker::ImportFormat::Xbf, L"assembly.xbf", 0x9001));
+    INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
+    REQUIRE(result.ok);
+    REQUIRE_FALSE(result.chunks.empty());
+    CHECK(result.producer == import_broker::ImportProducer::StepHost);
+    CHECK(result.chunks.front().scene.format == model_core::SourceFormatId::Xbf);
+    CHECK(result.chunks.front().scene.upAxis == model_core::UpAxisId::Unknown);
+    CHECK(result.chunks.front().scene.metersPerUnit > 0.0);
+
+    const SceneCounts counts = Tally(result);
+    CHECK(counts.geometry >= 1);
+    CHECK(counts.triangles > 0);
+    CHECK(counts.instances >= 2);
+    CHECK(counts.materials >= 2);
+    CHECK(counts.maxX - counts.minX > 30.0);
+}
+
+TEST_CASE("T09 FCStd PartDesign shape, color and nested placement", "[cad-fcstd]")
+{
+    const auto result = import_broker::RunImportSession(
+        Request(import_broker::ImportFormat::Fcstd, L"partdesign.FCStd", 0x9011));
+    INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
+    REQUIRE(result.ok);
+    REQUIRE_FALSE(result.chunks.empty());
+    CHECK(result.producer == import_broker::ImportProducer::StepHost);
+    CHECK(result.chunks.front().scene.format == model_core::SourceFormatId::Fcstd);
+    CHECK(result.chunks.front().scene.upAxis == model_core::UpAxisId::Unknown);
+    CHECK(result.chunks.front().scene.metersPerUnit == 0.001);
+
+    const SceneCounts counts = Tally(result);
+    CHECK(counts.geometry >= 1);
+    CHECK(counts.triangles > 0);
+    CHECK(counts.instances == 1); // HiddenBase is not rendered.
+    CHECK(counts.materials >= 1); // GuiDocument ShapeColor.
+    // Body placement 5 mm inside Assembly placement 10 mm along X.
+    CHECK(counts.minX > 14.9);
+    CHECK(counts.maxX - counts.minX > 29.0);
+    CHECK(HasCompatibilityFeature(result, model_core::kCadFeatureFcstdMillimetresAssumed));
+}
+
+TEST_CASE("T09 FCStd external link degrades without opening another path", "[cad-fcstd]")
+{
+    const auto result = import_broker::RunImportSession(
+        Request(import_broker::ImportFormat::Fcstd, L"external_link.FCStd", 0x9012));
+    INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
+    REQUIRE(result.ok);
+    const SceneCounts counts = Tally(result);
+    CHECK(counts.geometry >= 1);
+    CHECK(HasCompatibilityFeature(result,
+                                  model_core::kCadFeatureFcstdExternalLinkIgnored));
+}
+
+TEST_CASE("T09 malformed XBF/FCStd fail with typed outcomes", "[cad-xbf][cad-fcstd][negative]")
+{
+    SECTION("truncated XBF")
+    {
+        const auto result = import_broker::RunImportSession(
+            Request(import_broker::ImportFormat::Xbf, L"truncated.xbf", 0x9021));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    }
+    SECTION("malformed XBF header")
+    {
+        const auto result = import_broker::RunImportSession(
+            Request(import_broker::ImportFormat::Xbf, L"malformed.xbf", 0x9027));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    }
+    SECTION("truncated FCStd")
+    {
+        const auto result = import_broker::RunImportSession(
+            Request(import_broker::ImportFormat::Fcstd, L"truncated.FCStd", 0x9022));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    }
+    SECTION("malformed Document.xml")
+    {
+        const auto result = import_broker::RunImportSession(
+            Request(import_broker::ImportFormat::Fcstd, L"malformed.FCStd", 0x9023));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    }
+    SECTION("zip-bomb FCStd")
+    {
+        const auto result = import_broker::RunImportSession(
+            Request(import_broker::ImportFormat::Fcstd, L"zipbomb.FCStd", 0x9024));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::StepHostLimit);
+    }
+    SECTION("oversized FCStd")
+    {
+        const auto result = import_broker::RunImportSession(
+            Request(import_broker::ImportFormat::Fcstd, L"oversized.FCStd", 0x9025));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::StepHostLimit);
+    }
+    SECTION("XBF bytes through the FCStd adapter")
+    {
+        const auto result = import_broker::RunImportSession(
+            Request(import_broker::ImportFormat::Fcstd, L"assembly.xbf", 0x9026));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    }
+}
+
+TEST_CASE("T09 XBF/FCStd section metadata rules match T08", "[cad-validator]")
+{
+    CHECK(import_broker::ValidateAndCopySection(
+              MetadataSection(model_core::SourceFormatId::Xbf,
+                              model_core::UpAxisId::Unknown, 0.001), 91, 4).ok);
+    for (const auto [axis, units] : {
+             std::pair{model_core::UpAxisId::Y, 0.001},
+             std::pair{model_core::UpAxisId::Unknown, 0.0}}) {
+        const auto result = import_broker::ValidateAndCopySection(
+            MetadataSection(model_core::SourceFormatId::Xbf, axis, units), 91, 4);
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    }
+
+    CHECK(import_broker::ValidateAndCopySection(
+              MetadataSection(model_core::SourceFormatId::Fcstd,
+                              model_core::UpAxisId::Unknown, 0.001), 91, 4).ok);
+    for (const auto [axis, units] : {
+             std::pair{model_core::UpAxisId::Z, 0.001},
+             std::pair{model_core::UpAxisId::Unknown, 0.0}}) {
+        const auto result = import_broker::ValidateAndCopySection(
+            MetadataSection(model_core::SourceFormatId::Fcstd, axis, units), 91, 4);
         CHECK_FALSE(result.ok);
         CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
     }

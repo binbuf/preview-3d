@@ -57,6 +57,17 @@ constexpr bool SceneUnitsAndUpAxisAllowed(
         // length unit. Zero is the explicit "unspecified" value, never a
         // guessed millimetre scale.
         return upAxis == UpAxisId::Unknown && metersPerUnit == 0.0;
+    case SourceFormatId::Xbf:
+        // Binary XCAF documents carry no universal display-up axis. The XCAF
+        // length unit is reported when present and is always a positive metre
+        // factor; absence is resolved to the documented OCCT millimetre
+        // default with a compatibility warning, never left ambiguous on wire.
+        return upAxis == UpAxisId::Unknown && metersPerUnit > 0.0;
+    case SourceFormatId::Fcstd:
+        // FreeCAD stores evaluated Part geometry in millimetres, so the
+        // adapter reports a positive verified metre factor and no display-up
+        // axis; the ground-axis control chooses the orientation.
+        return upAxis == UpAxisId::Unknown && metersPerUnit > 0.0;
     default:
         return true;
     }

@@ -41,9 +41,10 @@ enum class FormatId : uint32_t {
     // USDZ) is a content decision, so this descriptor has no wire identity of
     // its own until a parser reports one.
     Usd = 14,
-    // Reserved append-only identities for later 0.7.0 breadth tasks (T07-T10).
-    // They intentionally have no descriptor yet; a format is not "supported"
-    // until its adapter, preflight, fixtures and installer entry also land.
+    // Append-only identities for the 0.7.0 breadth tasks. Iges/Brep (T08) and
+    // Xbf/Fcstd (T09) now have descriptors; the remaining values stay reserved
+    // and have no descriptor until their adapter, preflight, fixtures and
+    // installer entry also land.
     Iges = 15,
     Brep = 16,
     Xbf = 17,
@@ -69,7 +70,7 @@ enum class ImporterKind : uint8_t {
     UsdFastPath,          // TinyUSDZ subset in Preview3DImportWorker.exe
     UsdCompatibilityHost, // OpenUSD compatibility host fallback
     StepHost,             // Preview3DStepHost.exe
-    CadHost,              // reserved: OCCT IGES/BREP/XBF/FCStd
+    CadHost,              // OCCT IGES/BREP/XBF/FCStd in Preview3DStepHost.exe
     AssimpCompat,         // reserved: bounded Assimp compatibility adapter
 };
 
@@ -187,6 +188,8 @@ inline constexpr std::wstring_view kThreeMfExtensions[] = { L"3mf" };
 inline constexpr std::wstring_view kStepExtensions[] = { L"step", L"stp" };
 inline constexpr std::wstring_view kIgesExtensions[] = { L"igs", L"iges" };
 inline constexpr std::wstring_view kBrepExtensions[] = { L"brep" };
+inline constexpr std::wstring_view kXbfExtensions[] = { L"xbf" };
+inline constexpr std::wstring_view kFcstdExtensions[] = { L"fcstd" };
 
 inline constexpr MagicSignature kGltfSignatures[] = {
     { MagicKind::GltfJsonAsset, {}, 0 },
@@ -347,6 +350,23 @@ inline constexpr FormatDescriptor kFormats[] = {
       PresentationProfile::StudioCad, ThumbnailFamily::None,
       CapabilityFlags::CadHost | CapabilityFlags::CoarseProxy,
       SourceFormatId::Brep },
+    // T09: both formats run in the same dedicated OCCT host and reuse its
+    // normalized chunk writer. XBF is an extension-selected binary XCAF
+    // document; FCStd is a ZIP package whose Document.xml and shape entries
+    // are bounded before any FreeCAD data is interpreted. No signature is
+    // claimed: the host's format-specific admission is the authority.
+    { FormatId::Xbf, FormatId::Xbf, "xbf", "format.xbf", L"XBF",
+      Extensions(kXbfExtensions), {},
+      ImporterKind::CadHost, 100, UpAxisId::Unknown, UnitPolicy::Unspecified,
+      PresentationProfile::StudioCad, ThumbnailFamily::None,
+      CapabilityFlags::CadHost | CapabilityFlags::CoarseProxy,
+      SourceFormatId::Xbf },
+    { FormatId::Fcstd, FormatId::Fcstd, "fcstd", "format.fcstd", L"FreeCAD",
+      Extensions(kFcstdExtensions), {},
+      ImporterKind::CadHost, 100, UpAxisId::Unknown, UnitPolicy::Millimetres,
+      PresentationProfile::StudioCad, ThumbnailFamily::None,
+      CapabilityFlags::CadHost | CapabilityFlags::Archive | CapabilityFlags::CoarseProxy,
+      SourceFormatId::Fcstd },
 };
 
 constexpr wchar_t FoldExtensionChar(wchar_t value) noexcept

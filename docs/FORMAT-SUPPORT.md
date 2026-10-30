@@ -18,6 +18,8 @@ For install and build instructions, see the [README](../README.md).
 | STEP | `.step` and `.stp`: ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality through a dedicated isolated OCCT host |
 | IGES | `.igs` and `.iges`: bounded fixed-column S/G/D/P/T record streams, analytic B-rep surfaces, assemblies/subfigures where representable, and IGES colors through the same dedicated OCCT host. The optional global unit flag converts to the verified OCCT system millimetre; a missing flag assumes millimetres with a warning |
 | BREP | `.brep`: the OCCT ASCII `CASCADE Topology` shape-set serialization. Topology and geometry only (no authored colors or units); the scene reports `UpAxisId::Unknown` and zero metres-per-unit, and the bounded shape/location table is admitted before `BRepTools::Read` |
+| XBF | `.xbf`: the OCCT binary XCAF document (`BINFILE` + supported format version). Colors, assembly structure and placements are preserved; the XCAF length unit is reported when present (otherwise the documented OCCT millimetre default with a warning), and the scene up axis stays `Unknown` |
+| FreeCAD Standard | `.fcstd`: the common single-part/PartDesign case. A bounded ZIP preflight requires `Document.xml` and at least one evaluated `*.brp` Part shape, rejects encryption/multi-disk/data descriptors/overlapping or over-expanding entries, and parses `Document.xml`/`GuiDocument.xml` with node/depth/size limits. Shape colors, transparency, visibility, local links and nested placements are applied; external links and unsupported FreeCAD features are skipped with warnings |
 
 `.mtl` is always a sidecar and is never a primary open type. The Open dialog,
 command line, drag/drop, single-instance activation, Retry, and Open With all
@@ -42,6 +44,8 @@ the rest of the session.
 | STEP | unspecified (STEP defines no display-up axis) | authored, verified positive metre factor; absent units assume millimetres and contradictory units use the first/dominant factor, both warned | Studio CAD |
 | IGES | unspecified (IGES defines no display-up axis) | verified positive post-transfer metre factor (OCCT system millimetre); an absent global unit flag assumes millimetres and warns | Studio CAD |
 | BREP | unspecified (no display-up axis) | unspecified (`0.0`, no authored unit); never guessed as millimetres | Studio CAD |
+| XBF | unspecified (no display-up axis) | XCAF document length unit converted to a positive metre factor; absent metadata assumes the OCCT millimetre default with a warning | Studio CAD |
+| FCStd | unspecified (no display-up axis) | millimetres (the FreeCAD Part payload convention); reported as `0.001` with a compatibility note | Studio CAD |
 
 Notes:
 
@@ -128,7 +132,7 @@ supported composition are retried atomically in a separately isolated, lazily
 started OpenUSD host. Local relative sublayers, references, payloads, authored
 default variants, and texture dependencies are brokered by the viewer.
 
-STEP/STP, IGES and BREP use the same dedicated zero-capability host
+STEP/STP, IGES, BREP, XBF and FCStd use the same dedicated zero-capability host
 (`Preview3DStepHost.exe`) with a pinned constrained OCCT closure. It receives
 only an inherited read-only handle (never a path), performs product-owned
 Part-21 admission for STEP and format-specific record/shape-set admission for
@@ -149,7 +153,8 @@ AppContainer granted access only to that tree.
 ## Not included
 
 Animation playback, editing, other CAD formats (IFC/JT/Parasolid/DWG/native
-CAD), Explorer thumbnails (including for 3MF, USD, FBX, STEP, IGES, and BREP),
+CAD), Explorer thumbnails (including for 3MF, USD, FBX, STEP, IGES, BREP, XBF,
+and FCStd),
 network assets,
 USD skeletal deformation, MaterialX, procedural schemas, and interactive variant
 selection are not currently included. USD skeletal bindings are ignored and the
@@ -172,7 +177,21 @@ input fails typed before OCCT. Colors follow the IGES color entities that the
 XDE reader can represent; assembly/subfigure structure is preserved where
 present. BREP is admitted only as a `CASCADE Topology` V1-V3 shape set with a
 bounded `TShapes`/`Locations` table; it has no colors and no authored units.
-Both reuse the STEP tessellation profile and per-definition failure isolation.
+All CAD interchange formats reuse the STEP tessellation profile and
+per-definition failure isolation.
+
+XBF is admitted by its fixed `BINFILE` magic and supported binary-document
+version, then opened with OCCT's BinXCAF drivers through the mapped handle; no
+path is opened. FCStd is a ZIP package interpreted without extraction to disk:
+the structure scan rejects encryption, multi-disk archives, streaming data
+descriptors, unsafe/duplicate names, overlapping entries, per-entry sizes over
+256 MiB, aggregate expansion over 512 MiB, and expansions over 200:1 before any
+FreeCAD data is decoded. `Document.xml` is parsed with 8 MiB / 200,000-node /
+64-depth limits and external or absolute shape paths are rejected. Only the
+evaluated Part/PartDesign `*.brp` payload is rendered; sketches, history,
+expressions, assemblies beyond nested placements, FEM/CAM and FreeCAD macros or
+Python are not evaluated. External links and unknown objects are skipped with
+bounded warnings rather than failing the local geometry.
 
 3MF slicer-private multi-plate grouping, printer/process settings, Slice, Secure
 Content, Volumetric, Implicit, toolpath, repair, slicing, and export features are

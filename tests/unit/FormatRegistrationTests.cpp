@@ -137,8 +137,10 @@ TEST_CASE("--format rejects empty, unknown, non-ASCII and unshipped names", "[op
     CHECK(open_options::ParseFormatName(L"iges").valid);
     CHECK(open_options::ParseFormatName(L"IGES").valid);
     CHECK(open_options::ParseFormatName(L"brep").valid);
-    CHECK_FALSE(open_options::ParseFormatName(L"xbf").valid);
-    CHECK_FALSE(open_options::ParseFormatName(L"fcstd").valid);
+    // T09 shipped the OCCT-native XBF/FCStd readers through the same host.
+    CHECK(open_options::ParseFormatName(L"xbf").valid);
+    CHECK(open_options::ParseFormatName(L"fcstd").valid);
+    CHECK_FALSE(open_options::ParseFormatName(L"dae").valid);
 }
 
 TEST_CASE("Open As selection keeps existing suffix behaviour and asks on conflict", "[open-as]")
@@ -179,7 +181,8 @@ TEST_CASE("Catalog extension list and --list-formats text stay catalog-driven", 
     const auto extensions = DirectOpenExtensions();
     for (const wchar_t* expected : { L".glb", L".gltf", L".stl", L".ply", L".obj", L".fbx",
                                      L".3mf", L".usd", L".usda", L".usdc", L".usdz",
-                                     L".step", L".stp", L".igs", L".iges", L".brep" }) {
+                                     L".step", L".stp", L".igs", L".iges", L".brep",
+                                    L".xbf", L".fcstd" }) {
         CHECK(std::find(extensions.begin(), extensions.end(), expected) != extensions.end());
     }
     CHECK(std::find(extensions.begin(), extensions.end(), L".mtl") == extensions.end());

@@ -2292,7 +2292,9 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     const uint64_t hostCommitCap =
         (format == d3d12_import_bridge::SourceFormat::Step
          || format == d3d12_import_bridge::SourceFormat::Iges
-         || format == d3d12_import_bridge::SourceFormat::Brep)
+         || format == d3d12_import_bridge::SourceFormat::Brep
+         || format == d3d12_import_bridge::SourceFormat::Xbf
+         || format == d3d12_import_bridge::SourceFormat::Fcstd)
         ? import_broker::DedicatedHostCommitLimitBytes() : 0;
     auto cpuGuard = app.renderThread.CpuBudgetGuard(hostCommitCap);
     auto* stepPhase = &app.stepProgressPhase;

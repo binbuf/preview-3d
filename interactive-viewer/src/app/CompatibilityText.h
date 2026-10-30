@@ -68,6 +68,18 @@ inline std::wstring CompatibilityFeatureText(uint32_t featureId)
     case model_core::kCadFeatureBrepUnitsUnspecified:
         return Loc("compat.brep.unitsUnspecified",
                    L"BREP files carry no units; the model scale is unspecified.");
+    case model_core::kCadFeatureXbfUnitAssumedMillimetre:
+        return Loc("compat.xbf.unitAssumedMillimetres",
+                   L"The XBF document declares no length unit; millimetres were assumed.");
+    case model_core::kCadFeatureFcstdMillimetresAssumed:
+        return Loc("compat.fcstd.millimetres",
+                   L"FreeCAD stores evaluated Part geometry in millimetres.");
+    case model_core::kCadFeatureFcstdExternalLinkIgnored:
+        return Loc("compat.fcstd.externalLink",
+                   L"FreeCAD links to external documents were skipped; the local shapes are shown.");
+    case model_core::kCadFeatureFcstdUnsupportedObject:
+        return Loc("compat.fcstd.unsupportedObject",
+                   L"Some FreeCAD objects have no supported Part shape and were skipped.");
     default:
         return {};
     }

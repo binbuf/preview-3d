@@ -69,6 +69,8 @@ model_core::FormatId FormatIdForSource(SourceFormat format)
     case SourceFormat::Step: return model_core::FormatId::Step;
     case SourceFormat::Iges: return model_core::FormatId::Iges;
     case SourceFormat::Brep: return model_core::FormatId::Brep;
+    case SourceFormat::Xbf: return model_core::FormatId::Xbf;
+    case SourceFormat::Fcstd: return model_core::FormatId::Fcstd;
     }
     return model_core::FormatId::Unknown;
 }
@@ -94,6 +96,8 @@ std::optional<SourceFormat> SourceFormatForCatalogDescriptor(
     case model_core::FormatId::Step: return SourceFormat::Step;
     case model_core::FormatId::Iges: return SourceFormat::Iges;
     case model_core::FormatId::Brep: return SourceFormat::Brep;
+    case model_core::FormatId::Xbf: return SourceFormat::Xbf;
+    case model_core::FormatId::Fcstd: return SourceFormat::Fcstd;
     default: return std::nullopt;
     }
 }
@@ -338,7 +342,9 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
         return import_broker::ImportFormat::Step;
     case model_core::ImporterKind::CadHost:
         return format == SourceFormat::Iges ? import_broker::ImportFormat::Iges
-                                            : import_broker::ImportFormat::Brep;
+            : format == SourceFormat::Brep ? import_broker::ImportFormat::Brep
+            : format == SourceFormat::Xbf ? import_broker::ImportFormat::Xbf
+                                          : import_broker::ImportFormat::Fcstd;
     case model_core::ImporterKind::GltfWorker:
     default:
         return import_broker::ImportFormat::Gltf;
@@ -567,7 +573,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.additionalSidecarSearchRoots = std::move(additionalSidecarSearchRoots);
     sessionRequest.onSidecarUnavailable = recordMissing;
     const bool cadFormat = format == SourceFormat::Step || format == SourceFormat::Iges
-        || format == SourceFormat::Brep;
+        || format == SourceFormat::Brep || format == SourceFormat::Xbf
+        || format == SourceFormat::Fcstd;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
         && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf
         && format != SourceFormat::Usd && !cadFormat;
@@ -803,11 +810,15 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
                 result.errorDetails = Loc("fb.detail.step.parsing.or.tessellation.exceeded.the.bounde", L"STEP parsing or tessellation exceeded the bounded Tier B scratch budget.");
             }
-        } else if (format == SourceFormat::Iges || format == SourceFormat::Brep) {
+        } else if (format == SourceFormat::Iges || format == SourceFormat::Brep
+                   || format == SourceFormat::Xbf || format == SourceFormat::Fcstd) {
             if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
                 result.errorDetails = Loc("fb.detail.cad.files.are.limited.to.the.bounded.tier.b.prim", L"CAD files are limited to the bounded Tier B primary-source size.");
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
                 result.errorDetails = Loc("fb.detail.cad.parsing.or.tessellation.exceeded.the.bounde", L"CAD parsing or tessellation exceeded the bounded Tier B scratch budget.");
+            } else if (format == SourceFormat::Fcstd
+                       && session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
+                result.errorDetails = Loc("fb.detail.fcstd.only.stored.or.deflate.parts.are.supported", L"FreeCAD packages must use an unencrypted ZIP container with stored or Deflate entries and a Document.xml plus evaluated Part shape.");
             }
         }
         return result;

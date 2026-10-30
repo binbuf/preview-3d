@@ -55,12 +55,13 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\import-worker\src;src;$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows-static-md\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\import-worker\src;src;$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows-static-md\include;$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows-static-md\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>psapi.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows-static-md\debug\lib;$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows-static-md\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>zsd.lib;psapi.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -68,17 +69,20 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\import-worker\src;src;$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows-static-md\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\shared\platform\include;..\shared\model-core\include;..\import-worker\src;src;$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows-static-md\include;$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows-static-md\include\opencascade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>psapi.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(MSBuildThisFileDirectory)vcpkg_installed\x64-windows-static-md\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>zs.lib;psapi.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\CadPreflight.cpp" />
+    <ClCompile Include="src\FcstdPreflight.cpp" />
+    <ClCompile Include="src\FcstdReader.cpp" />
     <ClCompile Include="src\IgesStreamReader.cpp" />
     <ClCompile Include="src\StepHostImport.cpp" />
     <ClCompile Include="src\StepPart21Preflight.cpp" />
@@ -91,6 +95,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\CadPreflight.h" />
+    <ClInclude Include="src\FcstdPreflight.h" />
+    <ClInclude Include="src\FcstdReader.h" />
     <ClInclude Include="src\IgesStreamReader.h" />
     <ClInclude Include="src\StepHostImport.h" />
     <ClInclude Include="src\StepImporterVersion.h" />

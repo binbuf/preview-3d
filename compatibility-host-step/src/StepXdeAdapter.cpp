@@ -17,6 +17,8 @@
 
 #include "StepXdeAdapter.h"
 
+#include "FcstdPreflight.h"
+#include "FcstdReader.h"
 #include "IgesStreamReader.h"
 
 #include "model_core/Checksum.h"
@@ -40,6 +42,7 @@
 #include <StepBasic_ConversionBasedUnitAndLengthUnit.hxx>
 #include <StepBasic_LengthUnit.hxx>
 #include <StepBasic_SiUnitAndLengthUnit.hxx>
+#include <BinXCAFDrivers.hxx>
 #include <BRepLib_ToolTriangulatedShape.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
@@ -61,6 +64,7 @@
 #include <TDF_Label.hxx>
 #include <TDF_LabelSequence.hxx>
 #include <TDF_Tool.hxx>
+#include <TDocStd_Application.hxx>
 #include <TDocStd_Document.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopAbs_Orientation.hxx>
@@ -1500,8 +1504,12 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
     }
 
     Handle(TDocStd_Document) document;
+    // XBF is opened through its own TDocStd_Application with the BinXCAF
+    // drivers registered, so the close path must use that application rather
+    // than the XCAF singleton.
+    Handle(TDocStd_Application) documentApp = XCAFApp_Application::GetApplication();
     auto closeDocument = [&] {
-        if (!document.IsNull()) XCAFApp_Application::GetApplication()->Close(document);
+        if (!document.IsNull()) documentApp->Close(document);
     };
 
     try {
@@ -1705,7 +1713,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                         ++policyWarnings;
                 }
             }
-        } else {
+        } else if (cadFormat == model_core::CadFormat::Brep) {
             // OCCT BREP is a topology/shape-set serialization with no unit and
             // no XDE document. Read it into an ordinary XCAF shape document so
             // the existing planner/emitter contract is reused unchanged.
@@ -1743,11 +1751,97 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                 ++policyWarnings;
             readStatus = IFSelect_RetDone;
             transferred = true;
+        } else if (cadFormat == model_core::CadFormat::Xbf) {
+            // OCCT binary XCAF document. The product-owned admission checked
+            // the BINFILE/version header before this branch; the document is
+            // read through the mapped stream with the BinXCAF drivers, so
+            // colors, assembly structure and placements are preserved.
+            ScopedCoutSilencer silence;
+            Handle(TDocStd_Application) app = new TDocStd_Application();
+            BinXCAFDrivers::DefineFormat(app);
+            Handle(TDocStd_Document) opened;
+            PCDM_ReaderStatus openStatus = PCDM_RS_DriverFailure;
+            try {
+                openStatus = app->Open(stream, opened);
+            } catch (...) {
+                result.errorCode = model_core::ImportErrorCode::MalformedData;
+                closeDocument();
+                return result;
+            }
+            result.timings.readMilliseconds =
+                static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
+            emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
+            if (openStatus != PCDM_RS_OK || opened.IsNull()) {
+                result.errorCode = model_core::ImportErrorCode::MalformedData;
+                closeDocument();
+                return result;
+            }
+            document = opened;
+            documentApp = app;
+            const Handle(XCAFDoc_ShapeTool) shapes =
+                XCAFDoc_DocumentTool::ShapeTool(document->Main());
+            if (shapes.IsNull()) {
+                result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
+                closeDocument();
+                return result;
+            }
+            double reportedMetersPerUnit = 0.0;
+            if (XCAFDoc_DocumentTool::GetLengthUnit(document, reportedMetersPerUnit)
+                && std::isfinite(reportedMetersPerUnit) && reportedMetersPerUnit > 0.0
+                && reportedMetersPerUnit <= 1e12) {
+                metersPerUnit = reportedMetersPerUnit;
+            } else {
+                // XCAF's documented default system unit is the millimetre.
+                metersPerUnit = 0.001;
+                if (compatibility.Add(model_core::kCadFeatureXbfUnitAssumedMillimetre,
+                                      CompatibilitySeverity::Degraded))
+                    ++policyWarnings;
+            }
+            readStatus = IFSelect_RetDone;
+            transferred = true;
+        } else {
+            // FreeCAD Standard: a bounded ZIP/XML read that builds the same
+            // XCAF shape document the planner already understands. Unsupported
+            // FreeCAD objects and external links degrade to warnings; only
+            // malformed packages/XML or an empty visible result fail.
+            ScopedCoutSilencer silence;
+            if (mappedSource.empty()) {
+                result.errorCode = model_core::ImportErrorCode::FileUnavailable;
+                closeDocument();
+                return result;
+            }
+            FcstdPackage package;
+            const FcstdPreflightStatus preflight =
+                InspectFcstd(mappedSource, &package, FcstdLimits{});
+            if (preflight != FcstdPreflightStatus::Ok) {
+                result.errorCode =
+                    MapFcstdPreflightStatus(static_cast<std::uint32_t>(preflight));
+                closeDocument();
+                return result;
+            }
+            result.timings.readMilliseconds =
+                static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
+            emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
+            FcstdReadResult read = BuildFcstdDocument(
+                package, mappedSource, document, FcstdLimits{}, compatibility,
+                [cancellationEvent] { return IsCancelled(cancellationEvent); });
+            policyWarnings += read.warningCount;
+            if (read.errorCode != model_core::ImportErrorCode::None) {
+                result.errorCode = read.errorCode;
+                closeDocument();
+                return result;
+            }
+            // FreeCAD stores the evaluated Part payload in millimetres; the
+            // reader reports that assumption on the compatibility channel.
+            metersPerUnit = 0.001;
+            readStatus = IFSelect_RetDone;
+            transferred = true;
         }
 
         result.timings.transferMilliseconds =
             static_cast<std::uint64_t>(ElapsedMilliseconds(transferStart));
-        if (cadFormat != model_core::CadFormat::Brep)
+        if (cadFormat != model_core::CadFormat::Brep
+            && cadFormat != model_core::CadFormat::Fcstd)
             emitProgress(model_core::kStepPhaseTransfer, 0, 0, 0,
                          result.timings.transferMilliseconds);
         if (readStatus != IFSelect_RetDone || !transferred) {
@@ -1787,7 +1881,9 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         const SourceFormatId sourceFormat = cadFormat == model_core::CadFormat::Iges
             ? SourceFormatId::Iges
             : cadFormat == model_core::CadFormat::Brep ? SourceFormatId::Brep
-                                                       : SourceFormatId::Step;
+            : cadFormat == model_core::CadFormat::Xbf ? SourceFormatId::Xbf
+            : cadFormat == model_core::CadFormat::Fcstd ? SourceFormatId::Fcstd
+                                                        : SourceFormatId::Step;
         SceneEmitter emitter(section, request.generationId, sourceFormat, metersPerUnit,
                              planner.definitionCount(),
                              static_cast<std::uint32_t>(planner.nodes().size()),
