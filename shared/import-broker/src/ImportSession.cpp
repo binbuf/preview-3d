@@ -974,8 +974,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 }
                 batchHasCompatibilityReport=true;
             }
-            if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList
-                || chunk.descriptor.topology == model_core::ChunkTopology::PointList) {
+            if (model_core::IsGeometryTopology(chunk.descriptor.topology)) {
                 const auto& geometry = chunk.descriptor;
                 if (!acceptance.origin) acceptance.origin = std::array<double,3>{geometry.origin[0],geometry.origin[1],geometry.origin[2]};
                 for (unsigned axis = 0; axis < 3; ++axis) {
@@ -1106,8 +1105,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 newTriangles += d.indexCount / 3;
             if (d.topology == model_core::ChunkTopology::PointList)
                 newPoints += d.vertexCount;
-            if (d.topology == model_core::ChunkTopology::TriangleList ||
-                d.topology == model_core::ChunkTopology::PointList)
+            if (model_core::IsGeometryTopology(d.topology))
                 newVertices += d.vertexCount;
         }
         const uint64_t triangleLimit = tierBFormat ? model_core::kTierBTriangleLimit : model_core::kTierATriangleLimit;
@@ -1133,8 +1131,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         for (const auto& chunk : validation.chunks)
         {
             const auto& d = chunk.descriptor;
-            if (d.topology != model_core::ChunkTopology::TriangleList &&
-                d.topology != model_core::ChunkTopology::PointList)
+            if (!model_core::IsGeometryTopology(d.topology))
                 continue;
             if (!d.sourceRangeLength && chunk.scene.format != model_core::SourceFormatId::Unknown)
             {
@@ -1165,7 +1162,9 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierAObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > 300000000 ||
                      d.sourceRangeLength > 300000000 - uint32_t(d.sourceRangeOffset) ||
-                     (d.lodLevel != model_core::kCoarseLod && d.sourceRangeLength != d.indexCount)))
+                     (d.lodLevel != model_core::kCoarseLod &&
+                      d.sourceRangeLength != model_core::GeometrySourceElementCount(
+                          d.topology, d.indexCount, d.vertexCount))))
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
@@ -1179,8 +1178,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
                      d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
-                     d.sourceRangeLength != (d.topology == model_core::ChunkTopology::PointList
-                         ? d.vertexCount : d.indexCount)))
+                     d.sourceRangeLength != model_core::GeometrySourceElementCount(
+                         d.topology, d.indexCount, d.vertexCount)))
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
@@ -1191,7 +1190,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
                      d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
-                     d.sourceRangeLength != d.indexCount))
+                     d.sourceRangeLength != model_core::GeometrySourceElementCount(
+                         d.topology, d.indexCount, d.vertexCount)))
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
@@ -1204,7 +1204,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         bool havePreview=false,haveOtherGeometry=false;
         for (const auto& chunk:validation.chunks) {
             const auto& d=chunk.descriptor;
-            if (d.topology!=model_core::ChunkTopology::TriangleList && d.topology!=model_core::ChunkTopology::PointList) continue;
+            if (!model_core::IsGeometryTopology(d.topology)) continue;
             if (d.lodLevel==model_core::kPreviewLod) havePreview=true; else haveOtherGeometry=true;
         }
         // Provisional preview publications are separate from the validated
@@ -1230,7 +1230,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         }
         for (const auto& chunk:validation.chunks) {
             const auto& d=chunk.descriptor;
-            const bool geometry=d.topology==model_core::ChunkTopology::TriangleList || d.topology==model_core::ChunkTopology::PointList;
+            const bool geometry=model_core::IsGeometryTopology(d.topology);
             if (!coarseProtocol) {
                 if (d.lodLevel>=model_core::kScanLod || d.topology==model_core::ChunkTopology::CoarseComplete) {
                     failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData); return false;
@@ -1244,7 +1244,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 if (d.lodLevel==model_core::kPreviewLod) {
                     if (d.chunkId!=(identity|model_core::kPreviewIdentity) || !acceptance.regions.empty()
                         || acceptance.coarseComplete || d.dependencyCount) return invalid();
-                    acceptance.previewPrimitives+=d.topology==model_core::ChunkTopology::PointList ? d.vertexCount : d.indexCount/3;
+                    acceptance.previewPrimitives+=model_core::GeometryPrimitiveCount(
+                        d.topology,d.indexCount,d.vertexCount);
                     acceptance.previewBytes+=d.byteSize;
                     if (acceptance.previewPrimitives>model_core::kPreviewPrimitiveLimit || acceptance.previewBytes>model_core::kPreviewByteLimit) return invalid();
                 } else if (d.lodLevel==model_core::kScanLod) {
@@ -1263,8 +1264,10 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                         if (d.chunkId!=(identity|model_core::kCoarseIdentity) || region->second.coarse || acceptance.coarseComplete) return invalid();
                         for (unsigned axis=0;axis<3;++axis)
                             if (d.localMin[axis]<scan.localMin[axis] || d.localMax[axis]>scan.localMax[axis]) return invalid();
-                        const uint64_t primitives=d.topology==model_core::ChunkTopology::PointList ? d.vertexCount : d.indexCount/3;
-                        if (!primitives || primitives>(scan.topology==model_core::ChunkTopology::PointList ? scan.vertexCount : scan.indexCount/3)) return invalid();
+                        const uint64_t primitives=model_core::GeometryPrimitiveCount(
+                            d.topology,d.indexCount,d.vertexCount);
+                        if (!primitives || primitives>model_core::GeometryPrimitiveCount(
+                                scan.topology,scan.indexCount,scan.vertexCount)) return invalid();
                         acceptance.coarsePrimitives+=primitives; acceptance.coarseBytes+=d.byteSize;
                         if (acceptance.coarsePrimitives>model_core::kCoarsePrimitiveLimit || acceptance.coarseBytes>model_core::kCoarseReservedBytes) return invalid();
                         region->second.coarse=true; ++acceptance.coarseRegions;
@@ -1631,7 +1634,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::FileChanged);
     bool haveGeometry = false;
     for (const auto& [id, topology] : acceptance.catalog)
-        haveGeometry |= topology == model_core::ChunkTopology::TriangleList || topology == model_core::ChunkTopology::PointList;
+        haveGeometry |= model_core::IsGeometryTopology(topology);
     if (!haveGeometry) return fail(ImportStage::WorkerReportedError, model_core::ImportErrorCode::EmptyGeometry);
     ImportSessionResult result;
     result.ok = true;

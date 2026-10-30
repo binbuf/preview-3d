@@ -703,6 +703,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.coarseComplete = true;
                 break;
             case model_core::ChunkTopology::TriangleList:
+            case model_core::ChunkTopology::LineList:
             case model_core::ChunkTopology::PointList: {
                 ImportedMesh mesh;
                 mesh.geometry = chunk.descriptor;

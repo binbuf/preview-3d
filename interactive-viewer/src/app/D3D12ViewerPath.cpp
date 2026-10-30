@@ -506,6 +506,48 @@ PixelOutput PSMain(PSInput input)
 // buffer or upload. Draw constants carry its camera-relative center, ground
 // height, and span; this preserves the large-coordinate precision policy used
 // by model draws while keeping the grid in the viewer's fixed Z-up world.
+// LineList uses the same bounded vertex payload as meshes but only the
+// position is needed. A dedicated depth-biased PSO keeps authored curves and
+// wireframe-like line geometry visible on coplanar surfaces; the pick target
+// still receives the identity so a line can be selected.
+constexpr char kLineVertexShaderSource[] = R"(
+cbuffer FrameConstants : register(b0)
+{
+    row_major float4x4 gViewProjection;
+    float4 gEyeSelection;
+    float4 gViewport;
+    float4 gLighting;
+};
+cbuffer DrawConstants : register(b1)
+{
+    row_major float4x4 gLocalToCamera;
+    row_major float4x4 gNormalToCamera;
+    uint gPickId;
+};
+struct VSInput { float3 position : POSITION; };
+struct PSInput { float4 position : SV_POSITION; nointerpolation uint pickId : TEXCOORD7; };
+PSInput VSMain(VSInput input)
+{
+    PSInput output;
+    output.position = mul(mul(float4(input.position, 1.0f), gLocalToCamera), gViewProjection);
+    output.pickId = gPickId;
+    return output;
+}
+)";
+
+constexpr char kLinePixelShaderSource[] = R"(
+struct PSInput { float4 position : SV_POSITION; nointerpolation uint pickId : TEXCOORD7; };
+struct PixelOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
+PixelOutput PSMain(PSInput input)
+{
+    PixelOutput output;
+    // Stable cool grey-blue, matching the wireframe overlay family.
+    output.color = float4(0.62f, 0.74f, 0.92f, 1.0f);
+    output.pick = input.pickId;
+    return output;
+}
+)";
+
 constexpr char kGridVertexShaderSource[] = R"(
 cbuffer FrameConstants : register(b0)
 {
@@ -1237,6 +1279,30 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     wirePsoDesc.InputLayout={inputElements,1};
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&wirePsoDesc,IID_PPV_ARGS(&positionOnlyWireframePipelineState)))) {
         error=L"The position-only wireframe overlay pipeline state could not be created.";return false;
+    }
+
+    // T17 line pipeline. Position-only input layout keeps it usable for every
+    // normalized vertex layout (the vertex-buffer stride comes from the VBV).
+    // Negative depth bias plus LESS_EQUAL keeps a line visible where it is
+    // coplanar with the surface it outlines without letting it write depth.
+    ComPtr<ID3DBlob> lineVsBlob, linePsBlob;
+    if (!CompileShader(kLineVertexShaderSource, sizeof(kLineVertexShaderSource)-1,
+                       "VSMain","vs_5_1",lineVsBlob,error)
+        || !CompileShader(kLinePixelShaderSource, sizeof(kLinePixelShaderSource)-1,
+                          "PSMain","ps_5_1",linePsBlob,error)) return false;
+    auto linePsoDesc = psoDesc;
+    linePsoDesc.VS = {lineVsBlob->GetBufferPointer(),lineVsBlob->GetBufferSize()};
+    linePsoDesc.PS = {linePsBlob->GetBufferPointer(),linePsBlob->GetBufferSize()};
+    linePsoDesc.GS = {};
+    linePsoDesc.InputLayout = {inputElements,1};
+    linePsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    linePsoDesc.RasterizerState.DepthBias = -1000;
+    linePsoDesc.RasterizerState.SlopeScaledDepthBias = -1.0f;
+    linePsoDesc.RasterizerState.DepthBiasClamp = -0.01f;
+    linePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    linePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&linePsoDesc,IID_PPV_ARGS(&linePipelineState)))) {
+        error=L"The line pipeline state could not be created.";return false;
     }
 
     return true;
@@ -2067,8 +2133,9 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
             sceneOrigin,cameraTarget,modelTransform);
         drawConstants.pickId=mesh.instanceId ? mesh.instanceId : mesh.chunkId;
-        commandList->IASetPrimitiveTopology(mesh.points ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        if (mesh.completeVertex && !mesh.points && mesh.textureHeap) {
+        commandList->IASetPrimitiveTopology(mesh.points ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST
+            : mesh.lines ? D3D_PRIMITIVE_TOPOLOGY_LINELIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        if (mesh.completeVertex && !mesh.points && !mesh.lines && mesh.textureHeap) {
             ID3D12DescriptorHeap* heaps[] = { mesh.textureHeap.Get() };
             commandList->SetDescriptorHeaps(1, heaps);
             commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
@@ -2121,7 +2188,8 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             commandList->SetGraphicsRoot32BitConstants(7,20,material,0);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
-            commandList->SetPipelineState(mesh.points ? (mesh.completeVertex?coloredPointPipelineState.Get():pointPipelineState.Get())
+            commandList->SetPipelineState(mesh.lines ? linePipelineState.Get()
+                : mesh.points ? (mesh.completeVertex?coloredPointPipelineState.Get():pointPipelineState.Get())
                 : mesh.positionOnly ? positionOnlyPipelineState.Get()
                 : mesh.material.alphaMode == uint32_t(model_core::AlphaModeId::Blend)
                     ? blendPipelineState.Get() : pipelineState.Get());
@@ -2142,6 +2210,20 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         for (GpuMesh* meshPtr:draws) {
             auto& mesh=*meshPtr;
             if (mesh.points) continue;
+            if (mesh.lines) {
+                DrawConstants lineConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
+                    sceneOrigin,cameraTarget,modelTransform);
+                lineConstants.pickId=(mesh.instanceId ? mesh.instanceId : mesh.chunkId)|0x80000000u;
+                commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+                commandList->SetGraphicsRootSignature(rootSignature.Get());
+                commandList->SetPipelineState(linePipelineState.Get());
+                commandList->SetGraphicsRootConstantBufferView(0,constantBufferAddress);
+                commandList->SetGraphicsRoot32BitConstants(1,33,&lineConstants,0);
+                commandList->IASetVertexBuffers(0,1,&mesh.vbv);
+                commandList->IASetIndexBuffer(&mesh.ibv);
+                commandList->DrawIndexedInstanced(mesh.indexCount,1,0,0,0);
+                continue;
+            }
             DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
                 sceneOrigin,cameraTarget,modelTransform);
             drawConstants.pickId=(mesh.instanceId ? mesh.instanceId : mesh.chunkId)|0x80000000u;
@@ -2535,12 +2617,16 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
     for (const auto& mesh : importedMeshes) {
         if (mesh.geometry.lodLevel == model_core::kScanLod) continue;
         const bool points = mesh.topology == model_core::ChunkTopology::PointList;
+        const bool lines = mesh.topology == model_core::ChunkTopology::LineList;
         const bool positionOnly = mesh.vertexLayoutId == model_core::VertexLayoutId::PositionOnly_F32;
         const bool completeVertex=mesh.vertexLayoutId==model_core::VertexLayoutId::PositionNormalUv0TangentColor_F32;
-        if (!points && (mesh.topology != model_core::ChunkTopology::TriangleList
+        if (!points && !lines && (mesh.topology != model_core::ChunkTopology::TriangleList
             || (!positionOnly && !completeVertex && mesh.vertexLayoutId != model_core::VertexLayoutId::PositionNormalUv0_F32))) continue;
         if (points && !positionOnly && !completeVertex) continue;
+        if (lines && !positionOnly && !completeVertex
+            && mesh.vertexLayoutId != model_core::VertexLayoutId::PositionNormalUv0_F32) continue;
         if (mesh.vertexCount == 0 || (!points && mesh.indexCount == 0)) continue;
+        if (lines && (mesh.indexCount & 1u)) { error = L"An imported line list had a partial segment."; RetireStagedResources(std::move(staged)); pendingResourceCount = 0; return false; }
 
         const uint64_t vertexBytes
             = static_cast<uint64_t>(mesh.vertexCount) * model_core::VertexStrideForLayout(mesh.vertexLayoutId);
@@ -2561,7 +2647,7 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         gpuMesh.sourceMeshId = mesh.geometry.meshId;
         gpuMesh.sourceNodeId = mesh.geometry.nodeId;
         gpuMesh.sourceGeometry = mesh.geometry;
-        gpuMesh.points = points; gpuMesh.vertexCount = mesh.vertexCount;
+        gpuMesh.points = points; gpuMesh.lines = lines; gpuMesh.vertexCount = mesh.vertexCount;
         gpuMesh.positionOnly = positionOnly;
         gpuMesh.completeVertex=completeVertex;
         gpuMesh.drawEnabled=(mesh.geometry.geometryFlags&model_core::kGeometryReusableInstanceSource)==0;

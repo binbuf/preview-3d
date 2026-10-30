@@ -271,10 +271,10 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         // 12a. chunkId 0 is the "no dependency" sentinel -- a chunk must not
         // claim it as its own identity.
         const auto& bounded = descriptors[i];
-        if ((bounded.topology == model_core::ChunkTopology::TriangleList ||
-             bounded.topology == model_core::ChunkTopology::PointList) &&
+        if (model_core::IsGeometryTopology(bounded.topology) &&
             (bounded.byteSize > 16ull * 1024 * 1024 || bounded.vertexCount > 1048576 ||
-             (bounded.topology == model_core::ChunkTopology::TriangleList &&
+             ((bounded.topology == model_core::ChunkTopology::TriangleList ||
+               bounded.topology == model_core::ChunkTopology::LineList) &&
               bounded.indexCount > 262144u * 3)))
             return Reject(ImportErrorCode::ResourceLimit, "normalized geometry cluster limit");
         if (descriptors[i].chunkId == 0) {
@@ -343,7 +343,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         }
         if (descriptor.lodLevel > model_core::kPreviewLod)
             return Reject(ImportErrorCode::MalformedData, "unknown geometry role");
-        if (descriptor.topology != ChunkTopology::TriangleList && descriptor.topology != ChunkTopology::PointList) {
+        if (!model_core::IsGeometryTopology(descriptor.topology)) {
             if (descriptor.lodLevel || descriptor.meshId || descriptor.nodeId || descriptor.geometryFlags || descriptor.sourceElementOffset
                 || descriptor.boundsState != model_core::BoundsState::Unknown)
                 return Reject(ImportErrorCode::MalformedData, "non-geometry chunk declares geometry metadata");
@@ -402,8 +402,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             const auto* nodeTopology = resolveTopology(instance.nodeId);
             const auto* materialTopology = instance.materialChunkId
                 ? resolveTopology(instance.materialChunkId) : nullptr;
-            if (!geometryTopology || (*geometryTopology != ChunkTopology::TriangleList
-                                      && *geometryTopology != ChunkTopology::PointList)
+            if (!geometryTopology || !model_core::IsGeometryTopology(*geometryTopology)
                 || !nodeTopology || *nodeTopology != ChunkTopology::Node
                 || (instance.materialChunkId && (!materialTopology || *materialTopology != ChunkTopology::Material)))
                 return Reject(ImportErrorCode::MalformedData, "instance dependency has the wrong topology");
@@ -435,6 +434,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             break;
         }
         case ChunkTopology::TriangleList:
+        case ChunkTopology::LineList:
         case ChunkTopology::PointList: {
             // Unrecognized layout ID is never guessed.
             size_t stride = VertexStrideForLayout(
@@ -452,7 +452,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             }
 
             uint64_t expectedByteSize = 0;
-            if (descriptor.topology == ChunkTopology::TriangleList) {
+            if (descriptor.topology != ChunkTopology::PointList) {
                 auto indexBytes = CheckedMultiply(static_cast<uint64_t>(descriptor.indexCount),
                                                    static_cast<uint64_t>(sizeof(uint32_t)));
                 if (!indexBytes) {
@@ -515,8 +515,13 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                     if (!std::isfinite(value)) return Reject(ImportErrorCode::MalformedData, "non-finite vertex");
                 }
             }
-            if (!scanSummary && descriptor.topology == ChunkTopology::TriangleList) {
-                if (descriptor.indexCount % 3) return Reject(ImportErrorCode::MalformedData, "partial triangle");
+            if (!scanSummary && descriptor.topology != ChunkTopology::PointList) {
+                if (descriptor.topology == ChunkTopology::TriangleList && descriptor.indexCount % 3)
+                    return Reject(ImportErrorCode::MalformedData, "partial triangle");
+                // LineList is an independent segment list: an odd index count
+                // leaves a half segment and is never guessed/truncated.
+                if (descriptor.topology == ChunkTopology::LineList && descriptor.indexCount % 2)
+                    return Reject(ImportErrorCode::MalformedData, "partial line segment");
                 for (uint32_t index = 0; index < descriptor.indexCount; ++index) {
                     uint32_t value;
                     std::memcpy(&value, section.data() + descriptor.normalizedRangeOffset + *vertexBytes
@@ -525,7 +530,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                 }
             }
 
-            // dependencyIds on a TriangleList/PointList chunk predates this
+            // dependencyIds on a TriangleList/LineList/PointList chunk predates this
             // chunk's Material/Image work -- SyntheticSceneGenerator.cpp
             // already uses it for a PointList-depends-on-TriangleList
             // LOD/derivation relationship, unrelated to materials. Only

@@ -26,8 +26,8 @@ struct CoarseSample {
     std::vector<std::byte> vertices;
     std::vector<uint32_t> indices;
     uint64_t Primitives() const {
-        return descriptor.topology == model_core::ChunkTopology::PointList
-            ? descriptor.vertexCount : descriptor.indexCount / 3;
+        return model_core::GeometryPrimitiveCount(descriptor.topology, descriptor.indexCount,
+                                                  descriptor.vertexCount);
     }
 };
 
@@ -39,7 +39,9 @@ inline CoarseSample SampleCoarse(model_core::ChunkDescriptor d, std::span<const 
                                  const std::function<bool()>& cancelled = {}) {
     using namespace model_core;
     const bool points = d.topology == ChunkTopology::PointList;
-    const uint32_t count = points ? d.vertexCount : d.indexCount / 3;
+    const bool lines = d.topology == ChunkTopology::LineList;
+    const unsigned cornersPerPrimitive = points ? 1u : (lines ? 2u : 3u);
+    const uint32_t count = points ? d.vertexCount : (lines ? d.indexCount / 2 : d.indexCount / 3);
     const size_t stride = VertexStrideForLayout(VertexLayoutId(d.vertexLayoutId));
     struct Candidate { uint32_t cell, source; uint64_t key; };
     std::array<Candidate,64> candidates{};
@@ -52,12 +54,14 @@ inline CoarseSample SampleCoarse(model_core::ChunkDescriptor d, std::span<const 
         inverseSpan[axis]=span>0 ? 4.0/span : 0.0;
     }
     auto vertexIndex = [&](uint32_t primitive, unsigned corner) {
-        if (!points && (d.geometryFlags & kGeometryDeindexed)) return primitive*3+corner;
+        if (!points && (d.geometryFlags & kGeometryDeindexed))
+            return primitive*cornersPerPrimitive+corner;
         uint32_t index = primitive;
-        if (!points) std::memcpy(&index, indices.data() + (size_t(primitive)*3+corner)*4, 4);
+        if (!points) std::memcpy(&index, indices.data() +
+            (size_t(primitive)*cornersPerPrimitive+corner)*4, 4);
         return index;
     };
-    const bool parallelDeindexed=!points && (d.geometryFlags&kGeometryDeindexed) && count>=16384;
+    const bool parallelDeindexed=!points && !lines && (d.geometryFlags&kGeometryDeindexed) && count>=16384;
     if (parallelDeindexed) {
         constexpr uint32_t kBlockPrimitives=8192;
         struct LocalCandidates {
@@ -119,7 +123,7 @@ inline CoarseSample SampleCoarse(model_core::ChunkDescriptor d, std::span<const 
         if (primitive%65536==0 && cancelled && cancelled()) return {};
         double center[3]{};
         uint64_t key = 14695981039346656037ull;
-        for (unsigned corner=0; corner<(points ? 1u : 3u); ++corner) {
+        for (unsigned corner=0; corner<cornersPerPrimitive; ++corner) {
             auto vertex = vertices.subspan(size_t(vertexIndex(primitive,corner))*stride,stride);
             float position[3]; std::memcpy(position, vertex.data(), sizeof(position));
             // Representative selection depends on geometry, not on normals,
@@ -130,7 +134,7 @@ inline CoarseSample SampleCoarse(model_core::ChunkDescriptor d, std::span<const 
             key^=uint64_t(bits[0])|(uint64_t(bits[1])<<32); key*=1099511628211ull;
             key^=bits[2]; key*=1099511628211ull;
             for (unsigned axis=0; axis<3; ++axis) {
-                center[axis] += position[axis] / (points ? 1.0 : 3.0);
+                center[axis] += position[axis] / double(cornersPerPrimitive);
                 for (unsigned side=0; side<2; ++side) {
                     const unsigned slot=axis*2+side;
                     if ((!primitive && !corner) || (side ? position[axis]>extremeValues[slot] : position[axis]<extremeValues[slot])) {
@@ -152,9 +156,9 @@ inline CoarseSample SampleCoarse(model_core::ChunkDescriptor d, std::span<const 
     // letting multiple extrema consume the slots needed by other components.
     for (auto source:extrema) {
         double center[3]{};
-        for (unsigned corner=0;corner<(points ? 1u : 3u);++corner) {
+        for (unsigned corner=0;corner<cornersPerPrimitive;++corner) {
             float position[3]; std::memcpy(position,vertices.data()+size_t(vertexIndex(source,corner))*stride,12);
-            for (unsigned axis=0;axis<3;++axis) center[axis]+=position[axis]/(points ? 1.0 : 3.0);
+            for (unsigned axis=0;axis<3;++axis) center[axis]+=position[axis]/double(cornersPerPrimitive);
         }
         uint32_t cell=0;
         for (unsigned axis=0;axis<3;++axis) {
@@ -178,8 +182,8 @@ inline CoarseSample SampleCoarse(model_core::ChunkDescriptor d, std::span<const 
     coarse.lodLevel=kCoarseLod;
     coarse.chunkId=kCoarseIdentity | d.chunkId;
     // Preserve all attributes and winding; deindexing avoids a source-sized remap.
-    sample.vertices.reserve(selected.size()*(points ? 1 : 3)*stride);
-    for (auto source:selected) for (unsigned corner=0; corner<(points ? 1u : 3u); ++corner) {
+    sample.vertices.reserve(selected.size()*cornersPerPrimitive*stride);
+    for (auto source:selected) for (unsigned corner=0; corner<cornersPerPrimitive; ++corner) {
         auto vertex=vertices.subspan(size_t(vertexIndex(source,corner))*stride,stride);
         if (!points) sample.indices.push_back(uint32_t(sample.vertices.size()/stride));
         sample.vertices.insert(sample.vertices.end(),vertex.begin(),vertex.end());

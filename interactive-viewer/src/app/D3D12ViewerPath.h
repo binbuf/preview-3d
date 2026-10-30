@@ -90,6 +90,7 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12PipelineState> groundPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> coloredPointPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> linePipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> wireframePipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyWireframePipelineState;
@@ -159,6 +160,7 @@ struct D3D12ViewerPath
         UINT indexCount = 0;
         UINT vertexCount = 0;
         bool points = false;
+        bool lines = false; // LineList: independent index pairs, drawn with the line PSO
         bool positionOnly = false;
         bool completeVertex = false;
         bool drawEnabled = true;

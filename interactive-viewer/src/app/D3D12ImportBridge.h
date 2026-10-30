@@ -93,9 +93,9 @@ std::wstring ClassificationDiagnostic(const model_core::FormatClassification& cl
 
 // One validated chunk, ready for the upload coordinator. payload is
 // vertex bytes immediately followed by index bytes (index bytes only when
-// topology == TriangleList), matching GltfAdapter.cpp/StlAdapter.cpp/
-// PlyAdapter.cpp's wire packing -- no further chunk-table bookkeeping is
-// needed at this layer.
+// topology == TriangleList or LineList), matching GltfAdapter.cpp/
+// StlAdapter.cpp/PlyAdapter.cpp's wire packing -- no further chunk-table
+// bookkeeping is needed at this layer.
 struct ImportedMesh {
     model_core::ChunkTopology topology = model_core::ChunkTopology::Unknown;
     model_core::VertexLayoutId vertexLayoutId = model_core::VertexLayoutId::Unknown;

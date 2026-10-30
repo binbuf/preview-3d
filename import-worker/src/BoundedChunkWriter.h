@@ -69,7 +69,7 @@ class BoundedChunkWriter
              std::span<const std::byte> b = {})
     {
         using namespace model_core;
-        const bool geometry = descriptor.topology == ChunkTopology::TriangleList || descriptor.topology == ChunkTopology::PointList;
+        const bool geometry = IsGeometryTopology(descriptor.topology);
         std::optional<model_core::ScanSummaryPayload> scanSummary;
         if (sink_ && sink_->ProxyEnabled()) {
             if (sink_->Preview()) {
@@ -81,13 +81,16 @@ class BoundedChunkWriter
             } else if (sink_->Refinement()) {
                 if (!geometry) return true; // immutable dependency catalog was delivered during scan
             } else if (geometry) {
-                const uint64_t count = descriptor.topology == ChunkTopology::PointList ? descriptor.vertexCount : descriptor.indexCount/3;
+                const uint64_t count = GeometryPrimitiveCount(descriptor.topology, descriptor.indexCount, descriptor.vertexCount);
                 validPrimitives_ += count;
                 const uint32_t quota = uint32_t(count < 20 ? (validPrimitives_<20 ? count : 1) :
                     (std::min)(count/20,(std::max)(8ull,count/1024)));
                 // Reserve before sampling; payload + single-cluster candidates are bounded.
                 const uint64_t stride=VertexStrideForLayout(VertexLayoutId(descriptor.vertexLayoutId));
-                const uint64_t reserve = uint64_t(quota) * (descriptor.topology == ChunkTopology::PointList ? stride : 3*stride+12);
+                const uint64_t corners = descriptor.topology == ChunkTopology::PointList ? 1
+                    : descriptor.topology == ChunkTopology::LineList ? 2 : 3;
+                const uint64_t reserve = uint64_t(quota) * (descriptor.topology == ChunkTopology::PointList
+                    ? stride : corners*stride+corners*4);
                 if (reserve > kCoarseReservedBytes - coarseBytes_) return Fail(ImportErrorCode::ResourceLimit);
                 CoarseSample sample;
                 uint64_t fullChecksum=0;

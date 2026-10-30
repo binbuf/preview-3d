@@ -126,6 +126,7 @@
     <ClCompile Include="..\..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\..\shared\platform\src\Sha256.cpp" />
     <ClCompile Include="ImportSessionTests.cpp" />
+    <ClCompile Include="TopologyTests.cpp" />
     <ClCompile Include="RecoveryTests.cpp" />
     <ClCompile Include="StepProtocolTests.cpp" />
     <ClCompile Include="StepHostSpikeTests.cpp" />

@@ -83,6 +83,7 @@ struct PendingChunk {
     std::vector<VertexPositionNormalUv0TangentColorF32> vertices;
     std::vector<uint32_t> indices;
     ChunkDescriptor geometry{};
+    ChunkTopology topology = ChunkTopology::TriangleList;
     std::optional<size_t> pendingMaterialIndex; // index into WalkState::pendingMaterials
 };
 
@@ -1343,6 +1344,243 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     return pendingIndex;
 }
 
+// Appends one fully normalized chunk. The progressive path publishes through
+// the batch sink; the bounded single-section path retains it in state.chunks.
+bool StoreGeometryChunk(WalkState& state, PendingChunk&& chunk)
+{
+    if (state.emit)
+        return state.emit(std::move(chunk));
+    state.chunks.push_back(std::move(chunk));
+    return true;
+}
+
+// T17 bounded converter for the non-triangle-list primitive modes. Strip/fan
+// modes become ordinary indexed triangles here (no wire change); LINES,
+// LINE_STRIP and LINE_LOOP become LineList segment pairs; POINTS becomes the
+// existing PointList. This path is intentionally simple rather than sharing
+// the dense triangle fast path: these primitives are typically small, and a
+// deterministic per-chunk remap keeps the payload bounded.
+bool ConvertNonTrianglePrimitive(WalkState& state, const fastgltf::Primitive& primitive,
+                                 const fastgltf::math::dmat4x4& world,
+                                 const fastgltf::math::fmat3x3& normalMatrix,
+                                 uint32_t meshId, uint32_t nodeId, uint32_t primitiveId)
+{
+    using PrimitiveType = fastgltf::PrimitiveType;
+    const PrimitiveType type = primitive.type;
+    const bool points = type == PrimitiveType::Points;
+    const bool lines = type == PrimitiveType::Lines || type == PrimitiveType::LineStrip
+        || type == PrimitiveType::LineLoop;
+    const bool triangles = type == PrimitiveType::TriangleStrip || type == PrimitiveType::TriangleFan;
+    if (!points && !lines && !triangles)
+        return true; // unknown/unsupported mode remains a non-fatal skip
+
+    auto positionIt = primitive.findAttribute("POSITION");
+    if (positionIt == primitive.attributes.end())
+        return true;
+    const fastgltf::Accessor& positionAccessor = state.asset.accessors[positionIt->accessorIndex];
+    const auto normalIt = primitive.findAttribute("NORMAL");
+    const auto uvIt = primitive.findAttribute("TEXCOORD_0");
+    const auto tangentIt = primitive.findAttribute("TANGENT");
+    const auto colorIt = primitive.findAttribute("COLOR_0");
+    const bool hasNormal = normalIt != primitive.attributes.end();
+    const bool hasUv = uvIt != primitive.attributes.end();
+    const bool hasTangent = tangentIt != primitive.attributes.end();
+    const bool hasColor = colorIt != primitive.attributes.end();
+
+    std::vector<uint32_t> source;
+    source.reserve(primitive.indicesAccessor ? state.asset.accessors[*primitive.indicesAccessor].count
+                                             : positionAccessor.count);
+    if (primitive.indicesAccessor) {
+        const auto& indexAccessor = state.asset.accessors[*primitive.indicesAccessor];
+        SidecarBufferDataAdapter adapter(state);
+        for (size_t i = 0; i < indexAccessor.count; ++i) {
+            const uint32_t value = fastgltf::getAccessorElement<uint32_t>(state.asset, indexAccessor, i, adapter);
+            if (value >= positionAccessor.count) {
+                state.error = ImportErrorCode::MalformedData;
+                return false;
+            }
+            source.push_back(value);
+        }
+    } else {
+        for (uint32_t i = 0; i < positionAccessor.count; ++i) source.push_back(i);
+    }
+
+    std::vector<uint32_t> expanded;
+    ChunkTopology topology = ChunkTopology::TriangleList;
+    if (points) {
+        topology = ChunkTopology::PointList;
+        expanded = source;
+    } else if (triangles) {
+        if (source.size() >= 2) {
+            const bool strip = type == PrimitiveType::TriangleStrip;
+            for (size_t i = 2; i < source.size(); ++i) {
+                uint32_t a, b, c;
+                if (strip) {
+                    if (i % 2 == 0) { a = source[i - 2]; b = source[i - 1]; c = source[i]; }
+                    else { a = source[i - 1]; b = source[i - 2]; c = source[i]; }
+                } else {
+                    a = source[0]; b = source[i - 1]; c = source[i];
+                }
+                // A strip's stitched degenerates carry no area; drop them rather
+                // than smuggling zero-area triangles to the renderer.
+                if (a == b || b == c || a == c) continue;
+                expanded.push_back(a); expanded.push_back(b); expanded.push_back(c);
+            }
+        }
+    } else {
+        topology = ChunkTopology::LineList;
+        if (type == PrimitiveType::Lines) {
+            if (source.size() % 2) { state.error = ImportErrorCode::MalformedData; return false; }
+            expanded = source;
+        } else if (type == PrimitiveType::LineStrip) {
+            for (size_t i = 0; i + 1 < source.size(); ++i) {
+                expanded.push_back(source[i]); expanded.push_back(source[i + 1]);
+            }
+        } else { // LineLoop
+            if (source.size() >= 2) {
+                for (size_t i = 0; i < source.size(); ++i) {
+                    expanded.push_back(source[i]);
+                    expanded.push_back(source[(i + 1) % source.size()]);
+                }
+            }
+        }
+    }
+    if (expanded.empty() && !points) return true;
+    if (expanded.size() > kMaxVertices
+        || expanded.size() > kMaxVertices - state.totalVertices) {
+        state.error = ImportErrorCode::ResourceLimit;
+        return false;
+    }
+
+    const uint64_t perChunkElements = points
+        ? uint64_t(kChunkPoints)
+        : uint64_t(state.chunkTriangles) * 3;
+    const size_t perChunk = size_t(std::max<uint64_t>(1, perChunkElements));
+    // Resolve the material once for the whole primitive.
+    std::optional<size_t> material;
+    if (!state.preview && !state.requested && primitive.materialIndex) {
+        material = ResolveMaterial(state, *primitive.materialIndex);
+        if (state.error != ImportErrorCode::None) return false;
+    }
+
+    const double worldTranslation[3] = { world[3][0], world[3][1], world[3][2] };
+    SidecarBufferDataAdapter adapter(state);
+    size_t emitted = 0;
+    while (emitted < expanded.size()) {
+        size_t count = std::min(perChunk, expanded.size() - emitted);
+        if (topology == ChunkTopology::LineList && (count & 1u)) --count;
+        if (topology == ChunkTopology::TriangleList) count -= count % 3;
+        if (!count) break;
+
+        PendingChunk part;
+        part.topology = topology;
+        part.pendingMaterialIndex = material;
+        part.geometry.meshId = meshId;
+        part.geometry.nodeId = nodeId;
+        part.geometry.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
+        part.geometry.geometryFlags = hasUv ? kGeometryHasUv0 : 0;
+        if (hasColor) part.geometry.geometryFlags |= kGeometryHasColors;
+        if (primitive.findAttribute("TEXCOORD_1") != primitive.attributes.end())
+            part.geometry.geometryFlags |= kGeometryHasUv1;
+        for (unsigned axis = 0; axis < 3; ++axis) part.geometry.origin[axis] = worldTranslation[axis];
+
+        // Separate the first referenced position into the double origin so the
+        // emitted local floats stay small even for a far-from-world-origin node.
+        double localShift[3]{};
+        {
+            const auto& firstAccessor = state.asset.accessors[positionIt->accessorIndex];
+            const auto first = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                state.asset, firstAccessor, expanded[emitted], adapter);
+            const auto worldPoint = world * fastgltf::math::dvec4(first.x(), first.y(), first.z(), 1);
+            for (unsigned axis = 0; axis < 3; ++axis) {
+                const double candidate = worldTranslation[axis] + worldPoint[axis];
+                if (candidate - worldTranslation[axis] == worldPoint[axis]) {
+                    localShift[axis] = worldPoint[axis];
+                    part.geometry.origin[axis] = candidate;
+                }
+            }
+        }
+
+        std::unordered_map<uint32_t, uint32_t> remap;
+        remap.reserve(std::min<size_t>(count, 4096));
+        bool haveBounds = false;
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t sourceIndex = expanded[emitted + i];
+            uint32_t localIndex;
+            if (points) {
+                localIndex = uint32_t(part.vertices.size());
+            } else {
+                auto [it, inserted] = remap.emplace(sourceIndex, uint32_t(part.vertices.size()));
+                localIndex = it->second;
+                if (!inserted) { part.indices.push_back(localIndex); continue; }
+            }
+            const auto position = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                state.asset, positionAccessor, sourceIndex, adapter);
+            const auto worldPosition = world * fastgltf::math::dvec4(
+                position.x(), position.y(), position.z(), 1);
+            VertexPositionNormalUv0TangentColorF32 vertex{};
+            vertex.tx = 1.0f; vertex.tw = 1.0f;
+            vertex.r = vertex.g = vertex.b = vertex.a = 1.0f;
+            float* local = &vertex.px;
+            for (unsigned axis = 0; axis < 3; ++axis) {
+                local[axis] = float(worldPosition[axis] - localShift[axis]);
+                if (!std::isfinite(local[axis])) { state.error = ImportErrorCode::MalformedData; return false; }
+                if (!haveBounds) part.geometry.localMin[axis] = part.geometry.localMax[axis] = local[axis];
+                else {
+                    part.geometry.localMin[axis] = (std::min)(part.geometry.localMin[axis], local[axis]);
+                    part.geometry.localMax[axis] = (std::max)(part.geometry.localMax[axis], local[axis]);
+                }
+            }
+            haveBounds = true;
+            if (hasNormal) {
+                const auto normal = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                    state.asset, state.asset.accessors[normalIt->accessorIndex], sourceIndex, adapter);
+                const auto transformed = fastgltf::math::normalize(normalMatrix * normal);
+                vertex.nx = transformed.x(); vertex.ny = transformed.y(); vertex.nz = transformed.z();
+            } else {
+                vertex.nz = 1.0f;
+            }
+            if (hasUv) {
+                const auto uv = fastgltf::getAccessorElement<fastgltf::math::fvec2>(
+                    state.asset, state.asset.accessors[uvIt->accessorIndex], sourceIndex, adapter);
+                vertex.u = uv.x(); vertex.v = uv.y();
+            }
+            if (hasTangent) {
+                const auto tangent = fastgltf::getAccessorElement<fastgltf::math::fvec4>(
+                    state.asset, state.asset.accessors[tangentIt->accessorIndex], sourceIndex, adapter);
+                const auto transformed = fastgltf::math::normalize(normalMatrix *
+                    fastgltf::math::fvec3(tangent.x(), tangent.y(), tangent.z()));
+                vertex.tx = transformed.x(); vertex.ty = transformed.y(); vertex.tz = transformed.z();
+                vertex.tw = tangent.w();
+            }
+            if (hasColor) {
+                const auto& accessor = state.asset.accessors[colorIt->accessorIndex];
+                if (accessor.type == fastgltf::AccessorType::Vec3) {
+                    const auto color = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                        state.asset, accessor, sourceIndex, adapter);
+                    vertex.r = color.x(); vertex.g = color.y(); vertex.b = color.z();
+                } else {
+                    const auto color = fastgltf::getAccessorElement<fastgltf::math::fvec4>(
+                        state.asset, accessor, sourceIndex, adapter);
+                    vertex.r = color.x(); vertex.g = color.y(); vertex.b = color.z(); vertex.a = color.w();
+                }
+            }
+            part.vertices.push_back(vertex);
+            if (!points) part.indices.push_back(localIndex);
+        }
+        part.geometry.vertexCount = uint32_t(part.vertices.size());
+        part.geometry.indexCount = uint32_t(part.indices.size());
+        part.geometry.boundsState = BoundsState::Verified;
+        part.geometry.sourceRangeOffset = (uint64_t(primitiveId) << 32) | uint32_t(emitted);
+        part.geometry.sourceRangeLength = points ? part.geometry.vertexCount : part.geometry.indexCount;
+        state.totalVertices += part.vertices.size();
+        state.totalIndices += part.indices.size();
+        if (!StoreGeometryChunk(state, std::move(part))) return false;
+        emitted += count;
+    }
+    return true;
+}
+
 bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
                       const fastgltf::math::dmat4x4& world, const fastgltf::math::fmat3x3& normalMatrix,
                       uint32_t meshId, uint32_t nodeId, uint32_t primitiveId)
@@ -1360,8 +1598,16 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             selected |= state.primitiveOccurrences-1 == stratum*state.previewOccurrences/8;
         if (!selected) return true;
     }
-    if (primitive.type != fastgltf::PrimitiveType::Triangles) {
-        return true; // skip, not fatal -- mirrors Model.cpp's leniency for non-triangle primitives
+    const auto primitiveType = primitive.type;
+    const bool supportedMode = primitiveType == fastgltf::PrimitiveType::Triangles
+        || primitiveType == fastgltf::PrimitiveType::TriangleStrip
+        || primitiveType == fastgltf::PrimitiveType::TriangleFan
+        || primitiveType == fastgltf::PrimitiveType::Lines
+        || primitiveType == fastgltf::PrimitiveType::LineStrip
+        || primitiveType == fastgltf::PrimitiveType::LineLoop
+        || primitiveType == fastgltf::PrimitiveType::Points;
+    if (!supportedMode) {
+        return true; // unknown mode remains a non-fatal skip
     }
 
     auto positionIt = primitive.findAttribute("POSITION");
@@ -1408,7 +1654,11 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         state.error = ImportErrorCode::MalformedData;
         return false;
     }
-    if (indexAccessor.count % 3 != 0) {
+    if (primitiveType == fastgltf::PrimitiveType::Triangles && indexAccessor.count % 3 != 0) {
+        state.error = ImportErrorCode::MalformedData;
+        return false;
+    }
+    if (primitiveType == fastgltf::PrimitiveType::Lines && indexAccessor.count % 2 != 0) {
         state.error = ImportErrorCode::MalformedData;
         return false;
     }
@@ -1454,6 +1704,13 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             state.error = ImportErrorCode::MalformedData;
             return false;
         }
+    }
+    // T17: strip/fan/lines/points use the bounded generic converter. They are
+    // validated above exactly like triangles, then normalized without the
+    // triangle fast path's three-corner assumptions.
+    if (primitiveType != fastgltf::PrimitiveType::Triangles) {
+        return ConvertNonTrianglePrimitive(state, primitive, world, normalMatrix,
+                                           meshId, nodeId, primitiveId);
     }
     // fastgltf stores a primitive's material index even when the material array
     // is absent or the index is out of range (a mutated/broken JSON object key
@@ -3047,7 +3304,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             if (!emitDependencies())
                 return false;
             auto d = chunk.geometry;
-            d.topology = ChunkTopology::TriangleList;
+            d.topology = chunk.topology;
             d.chunkId = ++state.emittedGeometry;
             d.vertexCount = uint32_t(chunk.vertices.size());
             d.indexCount = uint32_t(chunk.indices.size());
@@ -3225,7 +3482,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         plan.descriptor = chunk.geometry;
         plan.descriptor.sourceRangeOffset = 0;
         plan.descriptor.sourceRangeLength = 0;
-        plan.descriptor.topology = ChunkTopology::TriangleList;
+        plan.descriptor.topology = chunk.topology;
         plan.descriptor.indexCount = static_cast<uint32_t>(chunk.indices.size());
         plan.descriptor.vertexCount = static_cast<uint32_t>(chunk.vertices.size());
         plan.descriptor.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0TangentColor_F32);

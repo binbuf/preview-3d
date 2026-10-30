@@ -18,7 +18,10 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-constexpr uint32_t kCurrentProtocolVersion = 10;
+// v11 adds ChunkTopology::LineList (append-only: every v10 identity keeps its
+// numeric value). Old consumers reject the version outright rather than
+// misinterpret line indices as triangles.
+constexpr uint32_t kCurrentProtocolVersion = 11;
 // Product coarse/full delivery has four closed geometry roles. Scan payloads
 // cross the validator, but are never allocated on the GPU or retained by it.
 constexpr uint32_t kFineLod = 0, kCoarseLod = 1, kScanLod = 2, kPreviewLod = 3;
@@ -49,7 +52,44 @@ enum class ChunkTopology : uint32_t {
     Node = 8,           // payload is one fixed NodePayload
     MeshInstance = 9,  // payload is one fixed MeshInstancePayload
     CompatibilityReport = 10, // payload is one fixed CompatibilityReportPayload (Compatibility.h)
+    // Non-indexed segment list. The vertex payload precedes the index payload
+    // exactly like TriangleList; indexCount is even and each pair
+    // {indices[2i], indices[2i+1]} is one independent line segment. Line
+    // strips/loops are converted to pairs by the adapter, never carried on the
+    // wire. Points keep using PointList.
+    LineList = 11,
 };
+
+// True for the closed set of chunks that carry renderable geometry and use
+// the shared vertex-layout/index bounds validation path.
+constexpr bool IsGeometryTopology(ChunkTopology topology)
+{
+    return topology == ChunkTopology::TriangleList
+        || topology == ChunkTopology::PointList
+        || topology == ChunkTopology::LineList;
+}
+
+// Number of independent primitives a geometry chunk contributes: triangles,
+// points, or line segments. Used only for progressive proxy accounting.
+constexpr uint64_t GeometryPrimitiveCount(ChunkTopology topology, uint32_t indexCount,
+                                          uint32_t vertexCount)
+{
+    switch (topology) {
+    case ChunkTopology::TriangleList: return indexCount / 3;
+    case ChunkTopology::LineList: return indexCount / 2;
+    case ChunkTopology::PointList: return vertexCount;
+    default: return 0;
+    }
+}
+
+// Source elements replayed by a retained geometry chunk. PointList carries a
+// vertex stream with no indices, so its provenance length is vertexCount; the
+// indexed topologies (triangles and lines) retain one element per index.
+constexpr uint32_t GeometrySourceElementCount(ChunkTopology topology, uint32_t indexCount,
+                                              uint32_t vertexCount)
+{
+    return topology == ChunkTopology::PointList ? vertexCount : indexCount;
+}
 
 #pragma pack(push, 1)
 
