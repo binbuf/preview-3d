@@ -14,6 +14,7 @@ SEED_ASSETS = {
     'camera': 'Camera_01_4k.gltf',
     'microscope': 'vintage_microscope_4k.gltf',
     'stl': 'base.stl',
+    'suit': 'Advanced Crew Escape Suit.glb',
 }
 
 

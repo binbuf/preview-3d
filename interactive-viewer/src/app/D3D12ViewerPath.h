@@ -102,6 +102,28 @@ struct D3D12ViewerPath
     uint32_t lastPickedId = 0;
     bool pickInFlight = false;
     int pickX = -1, pickY = -1;
+
+    // T21 Debug diagnostics. `debugChannel` selects a raw linear inspection
+    // view (0 = normal render); it travels to the shader in gPresentation.w.
+    // The HDR sample copies the requested scene-color region into a readback
+    // resource and averages it on the CPU so tests can assert numeric values
+    // without relying on the display transform.
+    uint32_t debugChannel = 0;
+    struct DebugSample
+    {
+        float rgba[4]{};
+        uint32_t width = 0, height = 0;
+    };
+    Microsoft::WRL::ComPtr<ID3D12Resource> debugReadback;
+    DebugSample debugSample;
+    uint64_t debugSampleFence = 0;
+    int debugSampleState = 0; // 0 idle, 1 pending, 2 ready, 3 failed
+    bool debugSampleArmed = false;
+    bool debugSampleRecorded = false;
+    int debugSampleX0 = 0, debugSampleY0 = 0, debugSampleX1 = 0, debugSampleY1 = 0;
+    static constexpr UINT kDebugSampleMaxExtent = 64;
+    void RequestDebugSample(int x0, int y0, int x1, int y1);
+    int PollDebugSample(DebugSample& out);
     // Complete material variant: base-color, metallic/roughness, normal, and
     // emissive maps plus normalized factors, alpha, unlit, UV transform, and
     // double-sided behavior. Legacy position-only meshes keep using
@@ -170,6 +192,17 @@ struct D3D12ViewerPath
         bool mirrored = false;
         int textureIndex = -1; // base-color index retained for pressure compatibility
         int textureIndices[4]{-1,-1,-1,-1};
+        // T21: validated source identity and color-space of each bound slot.
+        // Zero/first entries mean the slot is unbound and samples the neutral
+        // fallback; the diagnostics report that explicitly.
+        struct TextureInfo
+        {
+            uint32_t chunkId = 0;
+            model_core::PixelFormatId pixelFormat = model_core::PixelFormatId::Unknown;
+            model_core::ColorSpaceId colorSpace = model_core::ColorSpaceId::Linear;
+            bool bound = false;
+        };
+        TextureInfo textureInfo[4]{};
         Microsoft::WRL::ComPtr<ID3D12Resource> neutralResources[4];
         UINT neutralDescriptorBase = 0;
         model_core::MaterialPayload material{};

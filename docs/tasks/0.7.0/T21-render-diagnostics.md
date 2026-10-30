@@ -53,7 +53,52 @@ and cache identities when contracts change. No per-asset-name rendering hacks.
 
 ## Hand-off
 
-Pending. Record implemented behavior, deviations, exact build/verification
-commands and results, image/review manifests, performance evidence and what
-the next task must know. Do not mark this task done with missing visual evidence.
+Implemented:
+
+- Debug inspection channels 0-20 in the textured PBR shader, selected through
+  `gPresentation.w`; raw linear values, display clamp only. UV1 is explicitly
+  unsupported (magenta marker + capability mask bit absent).
+- Numeric HDR readback of a bounded (≤64×64) RGBA16F scene-target region through
+  a READBACK resource and the frame fence; tests assert authored values, not
+  shader tokens.
+- Bounded per-material draw record: primitive/material/node/instance ids,
+  vertex/index counts, validated wire material, bound texture chunk id/format/
+  colour space, map mask, UV transform, and effective bucket/depth-write/cull.
+  Viewer never parses glTF; `tests/render-quality/diagnostics.py` reads source
+  metadata for comparison.
+- T21 profile, `material-probe.glb` six-material fixture, cause report and
+  image review. All fields are inside the existing Debug + `--app-smoke` guard;
+  the wrapper builds Release and asserts every T21 message returns 0.
+- Docs: `tests/render-quality/README.md`, `docs/design/04-rendering-and-streaming.md`,
+  `docs/design/adr/0077-debug-material-light-diagnostics.md`,
+  `docs/0.7.0/progress/T21.md`.
+
+Verification (all run in the foreground on 2026-10-30):
+
+```powershell
+python tests/render-quality/verify.py --task T21 --configuration Debug --output TestResults/render-quality/T21
+# status pass; 10 captures; 83/83 diagnostic checks; Release rejection pass
+python tests/render-quality/verify.py --task T20 --configuration Debug --output TestResults/render-quality/T20-regression
+# status pass; 53 captures; 15/15 regression comparisons
+```
+
+The T21 report is `TestResults/render-quality/T21/report.json`; diagnostic
+numbers are `diagnostics/diagnostics.json`, channel images are
+`diagnostics/channels/`, and the cause-by-region report is `cause-report.md`.
+Review record: `tests/render-quality/review/T21-review.json`.
+
+Observed dominance (local evidence, not proven causes): Car windshield and paint
+are environment-specular dominated (0.698 / 0.188 mean linear), Camera lens and
+body environment-specular (0.081 / 0.023), Suit torso environment-diffuse
+(0.093). T22-T27 should use the isolated channels before changing exposure or
+light intensity.
+
+Deviations: the material probes need TANGENT/COLOR_0 so the importer selects the
+textured shader; without them the compact shader intentionally ignores the
+diagnostic channel. Region rectangles for Camera were tightened to the actual
+lens/body from the captured lens view.
+
+Remaining/blockers: none for T21. Texture-driven lobes (T25), independent AO
+texture (T22), physical transmission/ordering (T26/T27) remain later tasks.
+
 

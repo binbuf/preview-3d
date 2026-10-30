@@ -18,6 +18,10 @@ Make Studio deliver balanced product-quality lighting on first open while preser
 
 ## Scope
 
+- [ ] Preserve T21a's user-requested appearance: Windows Photos-style dark
+  default, persisted Background choice and independent Ground highlight
+  toggle. Studio presets may not replace these preferences or brighten the
+  whole background through model exposure/tone mapping.
 - [ ] Compare the corrected procedural environment with a product-owned, appropriately licensed studio HDR environment/bake. Choose a measured default with broad readable highlights, useful dark reflections and neutral diffuse response; do not assume a larger HDR file is automatically better.
 - [ ] Set an explicit relationship between world-stable IBL and camera-relative fill/key lights. Avoid uncalibrated double illumination; preserve rotation/intensity/exposure semantics and verify white/gray/black patches under the chosen reference white.
 - [ ] Calibrate exposure and highlight rolloff for white plastic/CAD, red paint, black leather/enamel, brass/chrome, emission and glass. Preserve color and texture detail rather than forcing every model to the same brightness.

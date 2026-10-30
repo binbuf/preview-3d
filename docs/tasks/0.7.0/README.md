@@ -5,7 +5,7 @@ It is deliberately split into small, independently reviewable sessions: a task
 should leave the build and its named verification command green, and its
 hand-off should tell the next task what changed.
 
-The original 20 tasks completed at T19. T20–T35 extend this same set with
+The original 20 tasks completed at T19. T20–T35 plus T21a extend this same set with
 quality work in **Studio, Clay and Directional**. Read the
 [post-qualification investigation and shared acceptance contract](../../0.7.0/RENDER-QUALITY-FOLLOWUP.md)
 for measured observations, source findings, reference versions and the
@@ -72,7 +72,7 @@ progress notebook and run logs live beside it.
 | 3 — Studio | T12, T13, T14, T15, T16 | Textures, TGA/DDS/HDR/EXR, IBL/tonemap, HDR/exposure/presets, ground shadow/AO |
 | 4 — depth | T17, T18 | Lines/strips/fans, material lobes and transparency |
 | 5 — qualify | T19 | Run the corpus, close docs/SBOM/installer, record evidence |
-| 6 — evidence | T20, T21 | Reproducible comparisons, complete-load capture and diagnostics |
+| 6 — evidence/appearance | T20, T21, T21a | Reproducible comparisons, diagnostics and user-controlled native backdrop |
 | 7 — inputs/budgets | T22, T23 | Authored material semantics and bounded, complete textured loads |
 | 8 — shading | T24, T25 | Correct BRDF/IBL/coat layering and lobe textures |
 | 9 — glass | T26, T27 | Bounded OIT, independent coverage and scene-based transmission |
@@ -121,6 +121,7 @@ on missing evidence or unimplemented/empty lanes.
 | --- | --- | --- | --- |
 | [T20](T20-visual-comparison-harness.md) | Deterministic visual comparison harness and observed baseline | T19 | `python tests/render-quality/verify.py --task T20 --configuration Debug --output TestResults/render-quality/T20` |
 | [T21](T21-render-diagnostics.md) | Material and light-contribution diagnostics | T20 | `python tests/render-quality/verify.py --task T21 --configuration Debug --output TestResults/render-quality/T21` |
+| [T21a](T21a-native-background-settings.md) | Windows Photos-style background and ground-highlight settings | T20, T21 | `python tests/render-quality/verify.py --task T21a --configuration Debug --output TestResults/render-quality/T21a` |
 | [T22](T22-material-semantics.md) | Preserve authored material, UV, normal and AO semantics | T20, T21 | `python tests/render-quality/verify.py --task T22 --configuration Debug --output TestResults/render-quality/T22` |
 | [T23](T23-texture-budgets-load-readiness.md) | Texture-budget accounting and complete-load readiness | T20, T21, T22 | `python tests/render-quality/verify.py --task T23 --configuration Debug --output TestResults/render-quality/T23` |
 | [T24](T24-brdf-ibl-layering.md) | Correct BRDF, environment integration and clearcoat layering | T20, T21, T22, T23 | `python tests/render-quality/verify.py --task T24 --configuration Debug --output TestResults/render-quality/T24` |
@@ -138,8 +139,9 @@ on missing evidence or unimplemented/empty lanes.
 
 ## Status
 
-The original 20 tasks are complete. The 16 tasks T20–T35 are pending, so the
-extended set is **20/36 complete**. T19's historical evidence is recorded in
+The original 20 tasks are complete. The extended set contains **37 tasks**;
+follow-up execution is in progress. The roadmap's live markers track T20–T35
+and the additional T21a appearance task. T19's historical evidence is recorded in
 [`docs/0.7.0-QUALIFICATION.md`](../../0.7.0-QUALIFICATION.md); the corpus
 report is `artifacts/compat/Release.json`, and the app-smoke/visual reports are
 under `TestResults/qualification/`.
@@ -149,6 +151,7 @@ under `TestResults/qualification/`.
 | T01–T18 | done | Per-task hand-offs and `docs/0.7.0/progress/` |
 | T19 | done | `[compat]` 312 assertions pass; unit 465/465; import-isolation 506 cases (501 pass, 5 typed skips); visual and app-smoke lanes recorded; installer/SBOM/dependency checks pass |
 | T20–T35 | pending | [Follow-up investigation](../../0.7.0/RENDER-QUALITY-FOLLOWUP.md); per-task implementation and visual evidence still required |
+| T21a | pending | User-requested Photos-style default, Background dropdown/custom color and independent Ground highlight toggle |
 
 Use the scoped Catch2 filters above during the task. Before declaring the
 series done, run the unfiltered unit and import-isolation suites and record any

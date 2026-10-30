@@ -14,7 +14,7 @@ Task files live in [`../tasks/0.7.0/`](../tasks/0.7.0/). Read
 [`../tasks/0.7.0/README.md`](../tasks/0.7.0/README.md) first for the ground rules, phase map
 and per-task verify commands. Each task carries its own `verify:` front matter.
 
-T01–T19 (including T10b) completed the original plan. **T20–T35 are pending**
+T01–T19 (including T10b) completed the original plan. **T20–T35 plus T21a are the follow-up work**
 post-qualification work for Studio, Clay and Directional. Read the
 [render-quality findings and shared acceptance contract](RENDER-QUALITY-FOLLOWUP.md)
 before starting T20. These additions preserve the completed tasks and run in
@@ -68,7 +68,9 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 ## Phase 6 — Reproducible visual evidence
 
 - [x] T20 — Deterministic visual comparison harness and observed baseline → [../tasks/0.7.0/T20-visual-comparison-harness.md](../tasks/0.7.0/T20-visual-comparison-harness.md)
-- [ ] T21 — Material and light-contribution diagnostics → [../tasks/0.7.0/T21-render-diagnostics.md](../tasks/0.7.0/T21-render-diagnostics.md)
+- [x] T21 — Material and light-contribution diagnostics → [../tasks/0.7.0/T21-render-diagnostics.md](../tasks/0.7.0/T21-render-diagnostics.md)
+
+- [ ] T21a — Windows Photos-style background and ground-highlight settings → [../tasks/0.7.0/T21a-native-background-settings.md](../tasks/0.7.0/T21a-native-background-settings.md)
 
 ## Phase 7 — Authored inputs and bounded complete loads
 
@@ -103,11 +105,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T35 — Independent visual release gate and final 0.7.0 evidence → [../tasks/0.7.0/T35-render-quality-release-gate.md](../tasks/0.7.0/T35-render-quality-release-gate.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T18:20:38Z · 21/36 done
+**Pipeline status** — updated 2026-10-30T19:21:15Z · 22/36 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21
 - Blocked: none
 - Failed: none
-- Remaining: T21, T22, T23, T24, T25, T26, T27, T28, T29, T30, T31, T32, T33, T34, T35
-- Last finished: T20 — done · T20 harness, Debug capture controls, generated fixtures, corpus inventory, 53 actual captures, F3D references, reviewed observed baselines, accepted generated refs and defect hand-off are landed; the acceptance command passes.
+- Remaining: T22, T23, T24, T25, T26, T27, T28, T29, T30, T31, T32, T33, T34, T35
+- Last finished: T21 — done · T21 diagnostic channels, numeric HDR readback, per-material draw records, probe fixture/profile, Release rejection and cause-by-region evidence all landed and pass the required verification.
 <!-- /symphony:status -->

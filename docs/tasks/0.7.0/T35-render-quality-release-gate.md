@@ -18,6 +18,9 @@ Close the follow-up only when every default mode has demonstrated image quality 
 
 ## Scope
 
+- [ ] Include T21a's appearance gate: Photos-style dark by default, stable
+  chosen background across exposure/mode/preset/model changes, persisted
+  custom color and independent highlight/shadow/grid behavior.
 - [ ] Run the consolidated rendering gate against reviewed references without a baseline-update flag. Include numerical material invariants, local glass/highlight/normal/contact/edge regions, orbit stability and all external-model modes. Prove missing references, unreviewed candidates, blank captures and empty test selections fail.
 - [ ] Perform an image-capable review of actual first-open and controlled before/after/reference images with reviewer/tool identity, asset/view/mode and concrete defect notes. No unresolved high-severity glass/order/visibility/normal/exposure/aliasing defect may remain in any default mode; a text-only summary is not visual acceptance.
 - [ ] Recheck Camera lens quality explicitly while assessing Car windshield, side windows, headlights and paint. Record where we intentionally differ from F3D and why Khronos/authored semantics support it. Do not require pixel equality with an engine/version that ignores an extension.

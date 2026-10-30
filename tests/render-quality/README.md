@@ -1,22 +1,28 @@
 # Render-quality evidence lane
 
-T20 introduced this lane for reproducible GPU evidence. It is separate from the
-per-frame/import tests: it launches the Debug viewer, waits for a complete and
-settled scene, drives the existing `--app-smoke` control surface, captures the
-viewport, and compares only same-camera images.
+T20 introduced this lane for reproducible GPU evidence. T21 extends the same
+lane with material/light diagnostics, raw HDR readback and a per-material draw
+record. It is separate from the per-frame/import tests: it launches the Debug
+viewer, waits for a complete and settled scene, drives the existing
+`--app-smoke` control surface, captures the viewport, and compares only
+same-camera images.
 
-The front-matter command is:
+The front-matter commands are:
 
 ```powershell
 python tests/render-quality/verify.py --task T20 --configuration Debug --output TestResults/render-quality/T20
+python tests/render-quality/verify.py --task T21 --configuration Debug --output TestResults/render-quality/T21
 ```
 
-The wrapper builds `Preview3D` Debug, runs the negative capture-contract
+The T20 wrapper builds `Preview3D` Debug, runs the negative capture-contract
 self-tests, generates fixtures, inventories the external corpus, renders the
 installed F3D reference conditions, captures 53 T20 cases, and compares the
-generated-fixture cases against accepted regression references. It exits nonzero
-on any failure and writes `report.json`, `captures.json`, `build.log` and the
-images under the output directory.
+generated-fixture cases against accepted regression references. T21 instead
+builds Debug **and Release**, captures the material probe plus Car/Camera/Suit,
+runs the diagnostic GPU channel/readback checks in `diagnostics.py`, verifies
+Release rejects the whole test-control surface, and writes `cause-report.md`.
+Both exit nonzero on any failure and write `report.json`, `captures.json`,
+`build.log` and images under the output directory.
 
 ## What a capture must satisfy
 
@@ -54,8 +60,51 @@ The viewer exposes these only with `--app-smoke` in a Debug build
 | 106 | force a render-thread pass and synchronous paint; returns presented-frame count |
 | 107 | capability mask: 1 canonical camera, 2 capture-clean, 4 forced present |
 | 108-123 | effective source-to-viewer transform, row-major float elements |
+| 124 | Debug diagnostic channel (0 normal, 1-20 inspection views); `lParam == -1` reads |
+| 125 | supported diagnostic-channel mask; UV1 (bit 5) is deliberately absent |
+| 126 / 127 | numeric sample rectangle min/max (client pixels, packed 16-bit x/y) |
+| 128 / 129 | request HDR scene-target readback / status (0 none, 1 pending, 2 ready, 3 failed) |
+| 130-133 | sampled mean linear RGBA as float32 bit patterns |
+| 134 / 135 | per-material draw-record count / selected index |
+| 136-194 | selected record: ids, counts, bucket, depth-write, cull, wire material, UV and texture metadata |
+| 195+ | reserved for later diagnostics; Release answers none of these |
 
 Fields 37-39 remain the existing texture smoke values; do not reuse them.
+
+## T21 material and light diagnostics
+
+The textured PBR shader accepts a diagnostic channel in `gPresentation.w`. It
+writes raw linear values; the full-screen resolve is the only clamp. Channels:
+
+| Channel | Value |
+| --- | --- |
+| 1 | base colour (factor × texture × vertex colour) |
+| 2 / 3 | geometric normal / shading normal, encoded `n*0.5+0.5` |
+| 4 | UV0 |
+| 5 | UV1 — **unsupported**, deliberate magenta marker |
+| 6 / 7 / 8 | metallic / roughness / effective AO factor |
+| 9 / 10 | effective coverage alpha / transmission factor |
+| 11 | IOR (r = ior/4) and IOR-derived F0 (g) |
+| 12 / 13 | clearcoat factor / sheen colour × weight |
+| 14-19 | isolated direct diffuse, direct specular, environment diffuse, environment specular (including sheen), coat and emission |
+| 20 | pre-tone-map linear HDR colour |
+
+A 64×64 RGBA16F scene-target region is copied to a readback resource and
+averaged on the CPU. Tests compare the numeric result with source-authored
+values from `fixtures.py`, not with shader-source tokens. `diagnostics.py`
+also reads glTF JSON for external assets only in test tooling; the viewer never
+parses glTF.
+
+The per-material record is a bounded snapshot of the validated wire material
+plus the effective draw state: bucket (opaque/masked/blended/transmissive),
+depth-write, cull mode, source/primitive/material ids, texture slot identity,
+pixel format, colour space and sampler/UV flags. Unbound slots are reported as
+unbound rather than as authored maps.
+
+The T21 profile captures Car window/paint, Camera lens/body, Suit torso and the
+six-material `material-probe` fixture. `diagnostics/diagnostics.json` holds the
+numbers, `diagnostics/channels/` the channel images and `cause-report.md` the
+short dominance report handed to T22-T27.
 
 ## Reference conditions
 
@@ -96,12 +145,13 @@ pixel dimensions are in `report.json.reference`.
 
 ## Generated fixtures and provenance
 
-`fixtures.py` builds three deterministic fixtures from code:
+`fixtures.py` builds four deterministic fixtures from code:
 
 | Fixture | Roles | Rights |
 | --- | --- | --- |
 | `sphere-grid.glb` | white/black/red dielectric, rough/polished metal, transparent dielectric | Generated here; redistributable with the test tree |
 | `glass-reference.glb` | thin tinted transmission, rough transmission, clear lens | Generated here; Khronos-style material roles, no Khronos binary is redistributed |
+| `material-probe.glb` | six constant-material probes: smooth dielectric, rough metal, clearcoat, blend+sheen+emission, transmissive IOR, masked cutout | Generated here; source values repeated in `fixtures.json.expectedMaterials` |
 | `stl-box.stl` | hard-edged CAD-like surface and ground contact | Generated here |
 
 The generated lane runs without `D:/repos/binbuf/preview-3d-test-models`. The

@@ -49,7 +49,7 @@ def _mesh_builder():
                       'target': target})
         return len(views) - 1
 
-    def add_mesh(positions, normals, uvs, indices):
+    def add_mesh(positions, normals, uvs, indices, tangents=None, colors=None):
         pos = add(b''.join(struct.pack('<3f', *p) for p in positions), 34962)
         nrm = add(b''.join(struct.pack('<3f', *n) for n in normals), 34962)
         uv = add(b''.join(struct.pack('<2f', *t) for t in uvs), 34962)
@@ -62,6 +62,14 @@ def _mesh_builder():
             {'bufferView': uv, 'componentType': 5126, 'count': len(uvs), 'type': 'VEC2'},
             {'bufferView': idx, 'componentType': 5125, 'count': len(indices), 'type': 'SCALAR'},
         ])
+        if tangents is not None:
+            tangent = add(b''.join(struct.pack('<4f', *t) for t in tangents), 34962)
+            accessors.append({'bufferView': tangent, 'componentType': 5126,
+                              'count': len(tangents), 'type': 'VEC4'})
+        if colors is not None:
+            color = add(b''.join(struct.pack('<4f', *c) for c in colors), 34962)
+            accessors.append({'bufferView': color, 'componentType': 5126,
+                              'count': len(colors), 'type': 'VEC4'})
         return base
 
     def finish(document):
@@ -167,6 +175,74 @@ def glass_reference(path: Path) -> Path:
     return _glb(document, binary, path)
 
 
+def material_probe(path: Path) -> Path:
+    """T21 material/light probe: five constant-material spheres in a row.
+
+    Every value is authored here and repeated in ``EXPECTED['material-probe']``
+    so the test tooling can compare the source document with the viewer's
+    validated wire values without the viewer ever parsing glTF.
+    """
+    materials = [
+        {'name': 'probe dielectric smooth',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.8, 0.2, 0.1, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.1}},
+        {'name': 'probe metal rough',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.2, 0.7, 0.3, 1.0],
+                                  'metallicFactor': 1.0, 'roughnessFactor': 0.8}},
+        {'name': 'probe clearcoat',
+         'extensions': {'KHR_materials_clearcoat': {
+             'clearcoatFactor': 0.75, 'clearcoatRoughnessFactor': 0.1}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.1, 0.3, 0.9, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.4}},
+        {'name': 'probe blend sheen emission',
+         'alphaMode': 'BLEND',
+         'emissiveFactor': [0.2, 0.1, 0.05],
+         'extensions': {
+             'KHR_materials_emissive_strength': {'emissiveStrength': 2.0},
+             'KHR_materials_sheen': {'sheenColorFactor': [0.4, 0.5, 0.6],
+                                     'sheenRoughnessFactor': 0.5},
+             'KHR_materials_specular': {'specularFactor': 0.8,
+                                        'specularColorFactor': [1.0, 0.9, 0.8]},
+             'KHR_materials_ior': {'ior': 1.7},
+         },
+         'pbrMetallicRoughness': {'baseColorFactor': [0.9, 0.8, 0.2, 0.5],
+                                  'metallicFactor': 0.5, 'roughnessFactor': 0.3}},
+        {'name': 'probe transmissive',
+         'alphaMode': 'BLEND',
+         'extensions': {'KHR_materials_transmission': {'transmissionFactor': 0.9},
+                        'KHR_materials_ior': {'ior': 1.33}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.7, 0.9, 0.95, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.05}},
+        {'name': 'probe masked cutout',
+         'alphaMode': 'MASK', 'alphaCutoff': 0.5,
+         'pbrMetallicRoughness': {'baseColorFactor': [0.9, 0.1, 0.7, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.6}},
+    ]
+    positions, normals, uvs, indices = uv_sphere(segments=32, rings=20)
+    add_mesh, finish = _mesh_builder()
+    primitives = []
+    for index, x in enumerate([-3.0, -1.8, -0.6, 0.6, 1.8, 3.0]):
+        scale = 0.55
+        base = add_mesh([(px * scale + x, py * scale, pz * scale + scale) for px, py, pz in positions],
+                        normals, uvs, indices,
+                        tangents=[(1.0, 0.0, 0.0, 1.0)] * len(positions),
+                        colors=[(1.0, 1.0, 1.0, 1.0)] * len(positions))
+        primitives.append({'attributes': {'POSITION': base, 'NORMAL': base + 1,
+                                         'TEXCOORD_0': base + 2, 'TANGENT': base + 4,
+                                         'COLOR_0': base + 5},
+                           'indices': base + 3, 'material': index})
+    document = {
+        'asset': {'version': '2.0', 'generator': 'preview-3d tests/render-quality/fixtures.py'},
+        'extensionsUsed': ['KHR_materials_transmission', 'KHR_materials_ior',
+                           'KHR_materials_clearcoat', 'KHR_materials_sheen',
+                           'KHR_materials_specular', 'KHR_materials_emissive_strength'],
+        'scene': 0, 'scenes': [{'nodes': [0]}], 'nodes': [{'mesh': 0}],
+        'meshes': [{'primitives': primitives}], 'materials': materials,
+    }
+    document, binary = finish(document)
+    return _glb(document, binary, path)
+
+
 def stl_box(path: Path) -> Path:
     """Binary STL box: hard edges, planar faces and a ground contact face."""
     corners = [
@@ -190,8 +266,46 @@ def stl_box(path: Path) -> Path:
 FIXTURES = {
     'sphere-grid': (sphere_grid, 'sphere-grid.glb'),
     'glass-reference': (glass_reference, 'glass-reference.glb'),
+    'material-probe': (material_probe, 'material-probe.glb'),
     'stl-box': (stl_box, 'stl-box.stl'),
 }
+
+# Source-authoritative material values for the T21 probe. The viewer must report
+# these through its validated wire snapshot; the test tooling reads this table
+# (and, for external assets, the glTF JSON) and never asks the viewer to parse
+# the document.
+EXPECTED_MATERIALS = {
+    'material-probe': [
+        {'name': 'probe dielectric smooth', 'baseColor': [0.8, 0.2, 0.1, 1.0],
+         'metallic': 0.0, 'roughness': 0.1, 'bucket': 0, 'alphaMode': 0},
+        {'name': 'probe metal rough', 'baseColor': [0.2, 0.7, 0.3, 1.0],
+         'metallic': 1.0, 'roughness': 0.8, 'bucket': 0, 'alphaMode': 0},
+        {'name': 'probe clearcoat', 'baseColor': [0.1, 0.3, 0.9, 1.0],
+         'metallic': 0.0, 'roughness': 0.4, 'bucket': 0, 'alphaMode': 0,
+         'clearcoat': 0.75, 'clearcoatRoughness': 0.1},
+        {'name': 'probe blend sheen emission', 'baseColor': [0.9, 0.8, 0.2, 0.5],
+         'metallic': 0.5, 'roughness': 0.3, 'bucket': 2, 'alphaMode': 2,
+         'emissive': [0.2, 0.1, 0.05], 'emissiveStrength': 2.0,
+         'sheen': [0.4, 0.5, 0.6], 'sheenRoughness': 0.5,
+         'specularFactor': 0.8, 'specularColor': [1.0, 0.9, 0.8], 'ior': 1.7},
+        {'name': 'probe transmissive', 'baseColor': [0.7, 0.9, 0.95, 1.0],
+         'metallic': 0.0, 'roughness': 0.05, 'bucket': 3, 'alphaMode': 2,
+         'transmission': 0.9, 'ior': 1.33},
+        {'name': 'probe masked cutout', 'baseColor': [0.9, 0.1, 0.7, 1.0],
+         'metallic': 0.0, 'roughness': 0.6, 'bucket': 1, 'alphaMode': 1,
+         'alphaCutoff': 0.5},
+    ],
+}
+
+
+def _sanitize(value):
+    if isinstance(value, float):
+        return value
+    if isinstance(value, list):
+        return [_sanitize(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitize(item) for key, item in value.items()}
+    return value
 
 
 def generate(output: Path):
@@ -212,9 +326,12 @@ def generate(output: Path):
                                     'rough gold metal', 'polished steel', 'transparent dielectric'],
                     'glass-reference': ['thin tinted transmission', 'rough transmission',
                                         'clear lens dielectric'],
+                    'material-probe': [item['name'] for item in EXPECTED_MATERIALS['material-probe']],
                     'stl-box': ['hard-edged STEP/STL-like surface', 'ground contact'],
                 }[name],
             },
         }
+        if name in EXPECTED_MATERIALS:
+            generated[name]['expectedMaterials'] = _sanitize(EXPECTED_MATERIALS[name])
     write_json(output / 'fixtures.json', {'schema': 1, 'fixtures': generated})
     return generated

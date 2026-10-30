@@ -258,6 +258,99 @@ void RenderThread::RequestPick(int x, int y, uint64_t generation)
     Invalidate();
 }
 
+void RenderThread::RequestDebugSample(int x0, int y0, int x1, int y1)
+{
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        debugSampleRequest_ = DebugSampleRequest{x0,y0,x1,y1};
+    }
+    debugSampleStatus_.store(1, std::memory_order_release);
+    Invalidate();
+}
+
+bool RenderThread::DebugSample(float rgba[4]) const
+{
+    std::lock_guard<std::mutex> lock(debugMutex_);
+    if (debugSampleStatus_.load(std::memory_order_acquire) != 2) return false;
+    std::memcpy(rgba, debugSampleRgba_, sizeof(debugSampleRgba_));
+    return true;
+}
+
+uint32_t RenderThread::DebugMaterialCount() const
+{
+    std::lock_guard<std::mutex> lock(debugMutex_);
+    return static_cast<uint32_t>(debugMaterials_.size());
+}
+
+bool RenderThread::DebugMaterial(uint32_t index, DebugMaterialRecord& out) const
+{
+    std::lock_guard<std::mutex> lock(debugMutex_);
+    if (index >= debugMaterials_.size()) return false;
+    out = debugMaterials_[index];
+    return true;
+}
+
+void RenderThread::RefreshDebugMaterials()
+{
+    std::vector<DebugMaterialRecord> records;
+    records.reserve(path_.model.meshes.size());
+    for (const auto& mesh : path_.model.meshes) {
+        if (!mesh.drawEnabled) continue;
+        DebugMaterialRecord record;
+        record.chunkId = mesh.chunkId;
+        record.materialChunkId = mesh.materialChunkId;
+        record.sourceMeshId = mesh.sourceMeshId;
+        record.sourceNodeId = mesh.sourceNodeId;
+        record.instanceId = mesh.instanceId;
+        record.vertexCount = mesh.vertexCount;
+        record.indexCount = mesh.indexCount;
+        record.alphaMode = mesh.material.alphaMode;
+        record.flags = mesh.material.flags;
+        record.hasMaterial = mesh.hasMaterial;
+        record.points = mesh.points;
+        record.lines = mesh.lines;
+        record.completeVertex = mesh.completeVertex;
+        const bool blended = mesh.material.alphaMode == uint32_t(model_core::AlphaModeId::Blend);
+        const bool masked = mesh.material.alphaMode == uint32_t(model_core::AlphaModeId::Mask);
+        const bool transmissive = (mesh.material.flags & model_core::kMaterialFlagTransmissive) != 0;
+        // The PSO selection in RenderFrame is the authority; mirror it exactly.
+        record.bucket = transmissive ? 3u : blended ? 2u : masked ? 1u : 0u;
+        const bool twoSided = !mesh.hasMaterial
+            || (mesh.material.flags & model_core::kMaterialFlagDoubleSided) != 0;
+        record.cullMode = twoSided ? 0u : 1u;
+        record.depthWrite = !blended;
+        std::memcpy(record.baseColor, mesh.material.baseColorFactor, sizeof(record.baseColor));
+        record.metallic = mesh.material.metallicFactor;
+        record.roughness = mesh.material.roughnessFactor;
+        record.alphaCutoff = mesh.material.alphaCutoff;
+        std::memcpy(record.emissive, mesh.material.emissiveFactor, sizeof(record.emissive));
+        record.emissiveStrength = mesh.material.emissiveStrength;
+        record.clearcoatFactor = mesh.material.clearcoatFactor;
+        record.clearcoatRoughness = mesh.material.clearcoatRoughness;
+        record.occlusionStrength = mesh.material.occlusionStrength;
+        record.sheenRoughness = mesh.material.sheenRoughness;
+        std::memcpy(record.sheen, mesh.material.sheenColor, sizeof(record.sheen));
+        record.specularFactor = mesh.material.specularFactor;
+        record.ior = mesh.material.ior;
+        std::memcpy(record.specularColor, mesh.material.specularColor, sizeof(record.specularColor));
+        record.transmissionFactor = mesh.material.transmissionFactor;
+        std::memcpy(record.uvOffset, mesh.material.uvOffset, sizeof(record.uvOffset));
+        std::memcpy(record.uvScale, mesh.material.uvScale, sizeof(record.uvScale));
+        record.uvRotation = mesh.material.uvRotation;
+        for (int slot = 0; slot < 4; ++slot) {
+            record.textureIndices[slot] = mesh.textureIndices[slot];
+            record.textureBound[slot] = mesh.textureInfo[slot].bound;
+            record.textureChunkIds[slot] = mesh.textureInfo[slot].chunkId;
+            record.textureFormats[slot] = static_cast<uint32_t>(mesh.textureInfo[slot].pixelFormat);
+            record.textureColorSpaces[slot] = static_cast<uint32_t>(mesh.textureInfo[slot].colorSpace);
+            if (mesh.textureInfo[slot].bound) record.mapMask |= 1u << slot;
+        }
+        records.push_back(record);
+    }
+    std::lock_guard<std::mutex> lock(debugMutex_);
+    debugMaterials_ = std::move(records);
+}
+
 void RenderThread::CancelUploads()
 {
     std::lock_guard<std::mutex> lock(uploads_->mutex);
@@ -639,6 +732,28 @@ void RenderThread::ThreadMain(HWND window)
                 }
                 pickRequest_.reset();
             }
+            if (debugSampleRequest_) {
+                path_.RequestDebugSample(debugSampleRequest_->x0, debugSampleRequest_->y0,
+                                         debugSampleRequest_->x1, debugSampleRequest_->y1);
+                debugSampleRequest_.reset();
+                debugSampleStatus_.store(1, std::memory_order_release);
+                invalidated_.store(true);
+            }
+        }
+        {
+            D3D12ViewerPath::DebugSample sample;
+            const int state = path_.PollDebugSample(sample);
+            if (state == 2) {
+                std::lock_guard<std::mutex> lock(debugMutex_);
+                std::memcpy(debugSampleRgba_, sample.rgba, sizeof(debugSampleRgba_));
+                debugSampleStatus_.store(2, std::memory_order_release);
+            } else if (state == 3) {
+                debugSampleStatus_.store(3, std::memory_order_release);
+            } else if (state == 1) {
+                // Keep the loop awake until the copy fence retires; otherwise
+                // it would sleep on the next idle wait with the sample pending.
+                invalidated_.store(true, std::memory_order_release);
+            }
         }
 
         bool cameraMoving = false;
@@ -751,6 +866,8 @@ void RenderThread::DrainCommands()
         texturedChunks_.store(0, std::memory_order_release);
         textureExtent_.store(0);textureCount_.store(0);textureMips_.store(0);
         stagedScene_ = {}; stagedGeneration_ = 0; materials_.clear();
+        { std::lock_guard<std::mutex> lock(debugMutex_); debugMaterials_.clear(); debugSampleRgba_[0]=debugSampleRgba_[1]=debugSampleRgba_[2]=debugSampleRgba_[3]=0.0f; }
+        debugSampleStatus_.store(0, std::memory_order_release);
 
     }
 
@@ -1063,6 +1180,7 @@ void RenderThread::PumpUploads(HWND window)
             displayedChunks_.store(std::count_if(path_.model.meshes.begin(),path_.model.meshes.end(),[](const auto& mesh) { return mesh.drawEnabled; }), std::memory_order_release);
             texturedChunks_.store(std::count_if(path_.model.meshes.begin(), path_.model.meshes.end(),
                 [](const auto& mesh) { return mesh.drawEnabled && mesh.textureIndex >= 0 && mesh.textureHeap; }), std::memory_order_release);
+            RefreshDebugMaterials();
         }
         metadata.stats.drawCallCount = int(displayedChunks_.load());
         if (stagedHaveBounds_ && modelGeneration_ == pub.task.generation) {
@@ -1186,8 +1304,10 @@ void RenderThread::RenderOneFrame()
         displayModel = complete;
     }
     if (displayModel) {
+        path_.debugChannel = debugChannel_.load(std::memory_order_acquire);
         path_.RenderFrame(viewProjection, orientation, *overlay, cameraTarget, eyeSelection);
     } else {
+        path_.debugChannel = debugChannel_.load(std::memory_order_acquire);
         path_.RenderClearFrame(orientation, *overlay);
     }
     if (injectDeviceRemoval_.exchange(false)) path_.lastPresentResult = DXGI_ERROR_DEVICE_REMOVED;

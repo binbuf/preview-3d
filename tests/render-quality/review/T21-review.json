@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "task": "T21",
+  "date": "2026-10-30",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the PNG files listed below",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T21",
+  "imagesInspected": [
+    "TestResults/render-quality/T21/images/generated-material-probe-studio-front.png",
+    "TestResults/render-quality/T21/images/external-car-studio-window.png",
+    "TestResults/render-quality/T21/images/external-camera-studio-lens.png",
+    "TestResults/render-quality/T21/images/external-suit-studio-front.png",
+    "TestResults/render-quality/T21/diagnostics/channels/channel-01-base-color.png",
+    "TestResults/render-quality/T21/diagnostics/channels/channel-05-uv1-unsupported.png",
+    "TestResults/render-quality/T21/diagnostics/channels/channel-06-metallic.png",
+    "TestResults/render-quality/T21/diagnostics/channels/channel-07-roughness.png",
+    "TestResults/render-quality/T21/diagnostics/channels/channel-09-coverage-alpha.png",
+    "TestResults/render-quality/T21/diagnostics/channels/channel-10-transmission.png",
+    "TestResults/render-quality/T21/diagnostics/channels/channel-18-coat.png",
+    "TestResults/render-quality/T21/diagnostics/channels/channel-19-emission.png"
+  ],
+  "observations": [
+    "The six-probe row resolves the authored base colours, metallic 0/1/0.5, roughness 0.1/0.8/0.4/0.3/0.05/0.6, clearcoat 0.75, transmission 0.9, coverage alpha 0.5, IOR/F0 and the masked-cutout bucket in both the channel images and the numeric HDR readback (83/83 checks).",
+    "The UV1 channel is advertised unsupported and renders as the deliberate magenta marker on every probe; no neutral fallback is presented as authored data.",
+    "The emission channel isolates the emissive probe; the coat channel isolates the clearcoat probe; the metallic and roughness channels show only their authored constants, not lighting.",
+    "Car windshield/side-window pixels are dominated by environment specular (0.698 mean linear vs 0.057 environment diffuse), consistent with the recorded bright/speckled glass defect. Paint is also environment-specular dominated (0.188).",
+    "Camera lens and black body are environment-specular dominated at the sampled lens region (0.081) with low direct terms; the lens remains dark with visible reflection depth.",
+    "Suit torso is environment-diffuse dominated (0.093) ahead of direct diffuse (0.075), so changing only the direct key would not isolate its appearance.",
+    "These dominance readings are numeric observations from isolated channels. They do not claim a proven root cause where no isolated A/B comparison was run."
+  ],
+  "defects": [
+    {
+      "id": "car-windshield-speckle",
+      "label": "known-defect",
+      "where": "external-car-studio-window.png; diagnostics regionSurvey car/windshield",
+      "description": "Bright windshield/side glass with dotted white speckles; environment specular dominates. Authored coverage alpha and transmission remain separate in the diagnostic record but are not yet composited as a physical transmission path.",
+      "assignedTo": "T22/T26/T27"
+    },
+    {
+      "id": "car-glass-order-depth",
+      "label": "known-defect",
+      "where": "external-car-studio-window.png",
+      "description": "Roof/window interpenetration still reads as a flat plate without layered glass depth. T21 records the bucket and depth-write state per material; ordering remains T26.",
+      "assignedTo": "T26"
+    },
+    {
+      "id": "camera-lens-dark-reflection",
+      "label": "limitation",
+      "where": "external-camera-studio-lens.png; diagnostics regionSurvey camera/lens",
+      "description": "The lens is dark with a visible environment reflection. T21 does not establish the transmitted scene sampling or tint it should show; that is T26/T27 work.",
+      "assignedTo": "T26/T27"
+    },
+    {
+      "id": "texture-driven-lobes",
+      "label": "known-defect",
+      "where": "diagnostics/diagnostics.json materialRecords",
+      "description": "Only scalar clearcoat/sheen/specular/transmission values reach the wire; texture-driven versions are still warning-only. The unbound slot identities are recorded, not presented as authored maps.",
+      "assignedTo": "T25"
+    },
+    {
+      "id": "ao-orm-red",
+      "label": "known-defect",
+      "where": "diagnostics/diagnostics.json materialRecords mapMask/occlusionStrength",
+      "description": "AO is still read from the metallic-roughness map's red channel when bound; independent occlusion texture identity is T22 work.",
+      "assignedTo": "T22"
+    }
+  ],
+  "positives": [
+    "Debug inspection channels expose raw linear values and the display clamp is the only clamp; numeric HDR readback preserves values above display range.",
+    "Material/texture identity is verified from a source-authored probe fixture, with source metadata parsed only in test tooling.",
+    "Release still rejects every test-control message, including the new T21 fields (all responses 0).",
+    "The per-material record links primitive/material/source ids, validated wire values, bound texture identity/color space/sampler/UV and the effective bucket, depth-write and cull state."
+  ],
+  "acceptance": {
+    "diagnosticChannelsReviewed": true,
+    "numericReadbackVerified": true,
+    "acceptedReferencesPromotedBy": "not applicable for T21 (observed evidence only)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "T21 evidence is observed diagnostics; it does not promote a reference or certify image quality."
+  }
+}

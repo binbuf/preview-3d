@@ -18,6 +18,9 @@ Ground models using their geometry and light direction instead of a broad projec
 
 ## Scope
 
+- [ ] Preserve T21a's independent Ground highlight preference. The chosen
+  background stays fixed; highlight off retains contact shadows, and
+  shadows off does not force the highlight off. Keep grid state separate.
 - [ ] Implement a bounded geometry-derived shadow/contact path, such as a fitted shadow map with stable filtering, integrated into linear HDR. Use verified scene bounds for allocation/frustum setup, not as the shadow silhouette.
 - [ ] Derive Directional shadow direction from the same sun as T30 and a documented Studio/Clay key. Tune contact, penumbra, depth/normal bias and stabilization across tiny/large models and camera movement.
 - [ ] Test holes and disconnected parts: camera strap loop, car tire contacts, open STEP frame, STL cavities, a suspended part and point/line-only content. Preserve empty space instead of painting an ellipse across the entire assembly.

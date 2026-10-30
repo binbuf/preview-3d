@@ -35,6 +35,7 @@ from common import (ROOT, RESULT_SCHEMA, decode_png, encoded_png, send_field,
                     sha256_file, write_json)
 import compare
 import corpus
+import diagnostics
 import env
 import fixtures
 import selftest
@@ -401,6 +402,18 @@ def main():
     if not build_result['pass']:
         report['failures'].append(f'build failed (see {build_result.get("log")})')
 
+    # T21 must prove the inspection surface is absent from a shipping binary.
+    # Build Release explicitly and record the exact command; a missing Release
+    # binary makes the rejection check fail rather than silently pass.
+    if args.task == 'T21' and not args.capture_only:
+        release_build = build('Release', output / 'release-build', enabled=not args.no_build)
+        report['releaseBuild'] = release_build
+        if release_build.get('command'):
+            report['commands'].append(release_build['command'])
+        if not release_build['pass']:
+            report['failures'].append(
+                f'Release build failed (see {release_build.get("log")})')
+
     contract = selftest.run(output / 'contract-selftest')
     report['contractSelfTest'] = contract
     if not contract['pass']:
@@ -441,6 +454,15 @@ def main():
     report['cases'] = cases
     report['captures'] = captures
 
+    if args.task == 'T21' and not args.capture_only:
+        diagnostic_report = diagnostics.run(
+            ROOT, output, ROOT / f'x64/Release/Preview3D.exe')
+        report['diagnostics'] = diagnostic_report
+        if diagnostic_report.get('failures'):
+            report['failures'].extend(
+                f'diagnostics: {failure}' for failure in diagnostic_report['failures'])
+        report['causeReport'] = str(diagnostics.write_cause_report(output, diagnostic_report))
+
     required_lanes = [name for name, lane in profile['lanes'].items() if lane.get('required')]
     selected_lanes = {}
     for case in cases:
@@ -460,6 +482,7 @@ def main():
         report['failures'].append('F3D reference lane failed')
 
     comparisons = []
+    regression_selected = any(case.get('regression') for case in cases)
     if not args.capture_only:
         for case in cases:
             if not case.get('regression'):
@@ -469,7 +492,7 @@ def main():
             if not result['pass']:
                 report['failures'].append(
                     f'regression {case["id"]}: {"; ".join(result["reasons"])}')
-        if not comparisons:
+        if not comparisons and regression_selected:
             report['failures'].append('required regression lane produced no comparisons')
     report['comparisons'] = comparisons
 

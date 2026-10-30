@@ -217,6 +217,32 @@ transmission scenes remain order-dependent. The transmission approximation
 remains Fresnel-weighted alpha with suppressed transmitted diffuse; there is
 no refraction pass.
 
+### Material and light diagnostics
+
+T21 adds a bounded Debug inspection surface to the same textured PBR shader.
+The channel selector travels in the otherwise-unused `gPresentation.w` frame
+constant; channel 0 is the normal product render, 1-20 select raw linear views
+(base colour, geometric/shading normal, UV0, metallic, roughness, effective AO,
+coverage alpha, transmission, IOR/F0, clearcoat, sheen, isolated direct/
+environment diffuse and specular, coat, emission, pre-tone-map HDR). The shader
+writes linear values and the resolve pass remains the only clamp. UV1 is not on
+the wire; channel 5 renders a deliberate magenta marker and the capability mask
+reports the channel unsupported rather than substituting neutral data.
+
+Numeric verification copies a bounded (at most 64x64) RGBA16F region of the HDR
+scene target into a readback resource, waits on the frame fence, and averages it
+on the CPU. This keeps numeric HDR readback independent of the display transform
+and proves the values through actual GPU output.
+
+The same Debug surface exposes a bounded per-material draw record: source
+geometry/material/node/instance ids, vertex/index counts, validated wire values,
+bound texture chunk ids/formats/colour spaces and the effective bucket
+(opaque/masked/blended/transmissive), depth-write and cull state. The viewer
+never parses glTF for this; source metadata is read only by test tooling and
+matched against the viewer's validated snapshot. All fields remain inside the
+existing `PREVIEW3D_ENABLE_TEST_CONTROL` + `--app-smoke` guard, so a shipping
+Release binary answers none of them (verified by T21).
+
 ### Line and point topology
 
 `ChunkTopology::LineList` is an indexed pair list: `indexCount` is even and each

@@ -3,9 +3,24 @@
 Prepared 2026-10-30 after T19. This is an AI-assisted source review and local
 visual investigation, followed by an executable task plan; the proposed fixes
 have **not** been implemented. T01–T19, including T10b, remain completed.
-T20–T35 extend the same task set with a separate rendering acceptance gate.
+T20–T35, plus the later user-requested appearance task T21a, extend the same
+task set with a separate rendering acceptance gate.
 
 ## Recommendation
+
+User appearance requirement (2026-10-30): restore the original Windows
+Photos-style dark background by default. Add a Settings Background dropdown
+with custom color selection and an independent Ground highlight toggle;
+keep a subtle base highlight enabled by default. Both preferences persist
+across models, restarts and lighting/presentation modes, and later quality
+work must preserve them. [T21a](../tasks/0.7.0/T21a-native-background-settings.md)
+runs immediately after the active T21, before further material/lighting work.
+
+The current Dark background is lighter partly because `BackgroundLinear`
+returns #1C1C1E's sRGB codes as linear values and the resolve then tone-maps
+and sRGB-encodes them. Some presets also select MidGrey, and the ground shader
+adds a broad bright plane. T21a fixes the display-color contract and exposes
+the user choices; changing model-light intensity is not the solution.
 
 Fix material interpretation, light transport, transparency and sampling before
 polishing presets. Then qualify **Studio, Clay and Directional individually**

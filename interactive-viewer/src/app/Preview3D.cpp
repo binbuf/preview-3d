@@ -277,6 +277,10 @@ struct ViewerApp
     std::jthread benchmarkSampler;
     bool appSmoke = false; // opt-in, bounded test commands; no normal activation IPC
     bool captureClean = false; // T20: omit viewport overlays from capture evidence
+    // T21 Debug inspection state. UI-thread only; the render thread owns the
+    // channel, readback and material snapshot behind RenderThread methods.
+    int debugMaterialIndex = 0;
+    int debugSampleX0 = 0, debugSampleY0 = 0, debugSampleX1 = 1, debugSampleY1 = 1;
     active_instance::Coordinator activeInstance;
     IAccessible* accessible = nullptr;
     IRawElementProviderSimple* uiaAccessible = nullptr;
@@ -4342,7 +4346,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Shipping builds cannot be driven by local WM_APP messages.
         return 0;
 #else
-        if (!app->appSmoke || wParam > 123) return 0;
+        if (!app->appSmoke || wParam > 200) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -4460,6 +4464,117 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             DirectX::XMStoreFloat4x4(&value, transform);
             const float* elements = &value._11;
             return static_cast<LRESULT>(std::bit_cast<uint32_t>(elements[wParam - 108]));
+        }
+        // T21 Debug material/light diagnostics. All of these live inside the
+        // existing PREVIEW3D_ENABLE_TEST_CONTROL + --app-smoke guard, so a
+        // shipped/Release build still rejects the message without reading any
+        // path or adding a message authority surface.
+        if (wParam == 124) {
+            if (lParam >= 0 && lParam <= 20) app->renderThread.SetDebugChannel(static_cast<uint32_t>(lParam));
+            return static_cast<LRESULT>(app->renderThread.DebugChannel());
+        }
+        if (wParam == 125) {
+            const uint32_t mask = app->renderThread.DebugChannelMask();
+            uint32_t supported = 0;
+            for (uint32_t channel = 0; channel <= 20; ++channel)
+                if ((mask & (1u << channel)) && RenderThread::DebugChannelSupported(channel))
+                    supported |= 1u << channel;
+            return static_cast<LRESULT>(supported);
+        }
+        if (wParam == 126) {
+            app->debugSampleX0 = static_cast<int>(LOWORD(lParam));
+            app->debugSampleY0 = static_cast<int>(HIWORD(lParam));
+            return 1;
+        }
+        if (wParam == 127) {
+            app->debugSampleX1 = static_cast<int>(LOWORD(lParam));
+            app->debugSampleY1 = static_cast<int>(HIWORD(lParam));
+            return 1;
+        }
+        if (wParam == 128) {
+            app->renderThread.RequestDebugSample(app->debugSampleX0, app->debugSampleY0,
+                                                 app->debugSampleX1, app->debugSampleY1);
+            return 1;
+        }
+        if (wParam == 129) return static_cast<LRESULT>(app->renderThread.DebugSampleStatus());
+        if (wParam >= 130 && wParam <= 133) {
+            float rgba[4]{};
+            if (!app->renderThread.DebugSample(rgba)) return 0;
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(rgba[wParam - 130]));
+        }
+        if (wParam == 134) return static_cast<LRESULT>(app->renderThread.DebugMaterialCount());
+        if (wParam == 135) {
+            const uint32_t count = app->renderThread.DebugMaterialCount();
+            if (lParam >= 0 && static_cast<uint32_t>(lParam) < count)
+                app->debugMaterialIndex = static_cast<int>(lParam);
+            return static_cast<LRESULT>(app->debugMaterialIndex);
+        }
+        if (wParam >= 136 && wParam <= 194) {
+            DebugMaterialRecord record;
+            if (!app->renderThread.DebugMaterial(static_cast<uint32_t>(app->debugMaterialIndex), record))
+                return 0;
+            auto f32 = [](float value) { return static_cast<LRESULT>(std::bit_cast<uint32_t>(value)); };
+            switch (wParam) {
+            case 136: return static_cast<LRESULT>(record.chunkId);
+            case 137: return static_cast<LRESULT>(record.materialChunkId);
+            case 138: return static_cast<LRESULT>(record.sourceMeshId);
+            case 139: return static_cast<LRESULT>(record.sourceNodeId);
+            case 140: return static_cast<LRESULT>(record.instanceId);
+            case 141: return static_cast<LRESULT>(record.vertexCount);
+            case 142: return static_cast<LRESULT>(record.indexCount);
+            case 143: return static_cast<LRESULT>(record.bucket);
+            case 144: return record.depthWrite ? 1 : 0;
+            case 145: return static_cast<LRESULT>(record.cullMode);
+            case 146: return record.hasMaterial ? 1 : 0;
+            case 147: return static_cast<LRESULT>(record.alphaMode);
+            case 148: return static_cast<LRESULT>(record.flags);
+            case 149: return f32(record.baseColor[0]);
+            case 150: return f32(record.baseColor[1]);
+            case 151: return f32(record.baseColor[2]);
+            case 152: return f32(record.baseColor[3]);
+            case 153: return f32(record.metallic);
+            case 154: return f32(record.roughness);
+            case 155: return f32(record.alphaCutoff);
+            case 156: return f32(record.emissive[0]);
+            case 157: return f32(record.emissive[1]);
+            case 158: return f32(record.emissive[2]);
+            case 159: return f32(record.emissiveStrength);
+            case 160: return f32(record.clearcoatFactor);
+            case 161: return f32(record.clearcoatRoughness);
+            case 162: return f32(record.occlusionStrength);
+            case 163: return f32(record.sheenRoughness);
+            case 164: return f32(record.sheen[0]);
+            case 165: return f32(record.sheen[1]);
+            case 166: return f32(record.sheen[2]);
+            case 167: return f32(record.specularFactor);
+            case 168: return f32(record.ior);
+            case 169: return f32(record.specularColor[0]);
+            case 170: return f32(record.specularColor[1]);
+            case 171: return f32(record.specularColor[2]);
+            case 172: return f32(record.transmissionFactor);
+            case 173: return f32(record.uvOffset[0]);
+            case 174: return f32(record.uvOffset[1]);
+            case 175: return f32(record.uvScale[0]);
+            case 176: return f32(record.uvScale[1]);
+            case 177: return f32(record.uvRotation);
+            case 178: {
+                uint32_t packed = 0;
+                for (int slot = 0; slot < 4; ++slot)
+                    if (record.textureIndices[slot] >= 0)
+                        packed |= uint32_t(record.textureIndices[slot] & 0xFF) << (slot * 8);
+                return static_cast<LRESULT>(packed);
+            }
+            case 179: case 180: case 181: case 182:
+                return static_cast<LRESULT>(record.textureChunkIds[wParam - 179]);
+            case 183: case 184: case 185: case 186:
+                return static_cast<LRESULT>(record.textureFormats[wParam - 183]);
+            case 187: case 188: case 189: case 190:
+                return static_cast<LRESULT>(record.textureColorSpaces[wParam - 187]);
+            case 191: return static_cast<LRESULT>(record.mapMask);
+            case 192: return record.points ? 1 : 0;
+            case 193: return record.lines ? 1 : 0;
+            case 194: return record.completeVertex ? 1 : 0;
+            }
         }
         if (wParam >= 13 && wParam <= 29) {
             if (!app->loadedModel) return 0;

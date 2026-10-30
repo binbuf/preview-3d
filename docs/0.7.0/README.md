@@ -4,11 +4,13 @@ This is the `0.7.0` task set — the format-breadth and Studio-lighting plan der
 [`../proposal.md`](../proposal.md). It runs alongside the base/MVP and `security` sets without
 touching either.
 
-The original 20 tasks completed at T19. The same set now has **16 pending
-follow-ups, T20–T35**, for measured rendering quality in Studio, Clay and
+The original 20 tasks completed at T19. The same set now has **17 follow-up
+tasks, T20–T35 plus T21a**, for measured rendering quality in Studio, Clay and
 Directional. The [investigation and shared acceptance contract](RENDER-QUALITY-FOLLOWUP.md)
 explain the source findings, local image evidence, priorities and stricter
-visual gate. Running the set continues at T20; no completed task was reset.
+visual gate. T21a restores the Photos-style dark background and adds Settings
+appearance controls. Follow-up execution is in progress; see the roadmap for
+current markers. No completed task was reset.
 
 ```powershell
 ./.symphony/symphony.ps1 doctor --set 0.7.0

@@ -79,6 +79,54 @@ struct RenderDisplaySnapshot {
     std::shared_ptr<const ModelData> metadata;
 };
 
+// T21 per-material draw diagnostic. A bounded copy of the validated wire
+// material plus the effective draw state (bucket, depth-write, cull) as the
+// renderer actually applies it. Source-file metadata stays in the test tooling;
+// this record only reflects values the viewer validated and bound.
+struct DebugMaterialRecord
+{
+    uint32_t chunkId = 0;
+    uint32_t materialChunkId = 0;
+    uint32_t sourceMeshId = 0;
+    uint32_t sourceNodeId = 0;
+    uint32_t instanceId = 0;
+    uint32_t vertexCount = 0;
+    uint32_t indexCount = 0;
+    uint32_t alphaMode = 0;
+    uint32_t flags = 0;
+    uint32_t bucket = 0; // 0 opaque, 1 masked, 2 blended, 3 transmissive
+    uint32_t cullMode = 0; // 0 none, 1 back
+    bool depthWrite = true;
+    bool hasMaterial = false;
+    bool points = false;
+    bool lines = false;
+    bool completeVertex = false;
+    float baseColor[4]{};
+    float metallic = 0.0f;
+    float roughness = 0.0f;
+    float alphaCutoff = 0.0f;
+    float emissive[3]{};
+    float emissiveStrength = 1.0f;
+    float clearcoatFactor = 0.0f;
+    float clearcoatRoughness = 0.0f;
+    float occlusionStrength = 1.0f;
+    float sheenRoughness = 0.0f;
+    float sheen[3]{};
+    float specularFactor = 1.0f;
+    float ior = 1.5f;
+    float specularColor[3]{};
+    float transmissionFactor = 0.0f;
+    float uvOffset[2]{};
+    float uvScale[2]{1.0f, 1.0f};
+    float uvRotation = 0.0f;
+    int textureIndices[4]{-1, -1, -1, -1};
+    uint32_t textureChunkIds[4]{};
+    uint32_t textureFormats[4]{};
+    uint32_t textureColorSpaces[4]{};
+    bool textureBound[4]{};
+    uint32_t mapMask = 0;
+};
+
 // A locked view of the Camera shared between the two threads.
 //
 // The camera cannot simply move to the render thread: the UI thread needs
@@ -313,6 +361,26 @@ public:
     void RequestPick(int x, int y, uint64_t generation);
     void InjectDeviceRemovalForTesting() { injectDeviceRemoval_.store(true); Invalidate(); }
 
+    // --- T21 Debug material/light diagnostics (Debug test control only) ---
+    // Channel 0 is the normal render; 1..20 select the diagnostic views the
+    // textured shader documents. The mask reports unsupported channels.
+    void SetDebugChannel(uint32_t channel) { debugChannel_.store(channel); Invalidate(); }
+    uint32_t DebugChannel() const noexcept { return debugChannel_.load(); }
+    uint32_t DebugChannelMask() const noexcept {
+        return (1u << 21) - 1u; // channels 0..20; unsupported channels are reported per-channel
+    }
+    static bool DebugChannelSupported(uint32_t channel) noexcept {
+        return channel <= 20u && channel != 5u; // UV1 is not on the wire
+    }
+    // Numeric HDR sampling of the scene target. Status: 0 none, 1 pending,
+    // 2 ready, 3 failed (optically) 4 consumed.
+    void RequestDebugSample(int x0, int y0, int x1, int y1);
+    uint32_t DebugSampleStatus() const noexcept { return debugSampleStatus_.load(); }
+    bool DebugSample(float rgba[4]) const;
+    // Bounded per-material draw records, rebuilt when a model is published.
+    uint32_t DebugMaterialCount() const;
+    bool DebugMaterial(uint32_t index, DebugMaterialRecord& out) const;
+
 private:
     void ThreadMain(HWND window);
     bool InitializeOnThread(HWND window, std::wstring& error);
@@ -386,6 +454,9 @@ private:
     struct PickRequest { int x, y; uint64_t generation; };
     std::optional<PickRequest> pickRequest_;
     std::optional<PickRequest> pendingPick_;
+    struct DebugSampleRequest { int x0, y0, x1, y1; };
+    std::optional<DebugSampleRequest> debugSampleRequest_;
+    void RefreshDebugMaterials();
     struct UploadTask {
         d3d12_import_bridge::ImportResult result;
         std::uint64_t generation = 0;
@@ -451,6 +522,11 @@ private:
     bool recoveryAttempted_ = false;
     bool deviceFatal_ = false;
     std::atomic<bool> injectDeviceRemoval_{false};
+    std::atomic<uint32_t> debugChannel_{0};
+    std::atomic<uint32_t> debugSampleStatus_{0};
+    mutable std::mutex debugMutex_;
+    float debugSampleRgba_[4]{};
+    std::vector<DebugMaterialRecord> debugMaterials_;
     std::atomic<bool> recoveryRequested_{false};
     std::atomic<uint64_t> recoveryCount_{0};
     double pauseDetailUntil_=0;

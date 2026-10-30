@@ -5,9 +5,11 @@
 
 #include <d3dcompiler.h>
 #include <windows.h>
+#include <DirectXPackedVector.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <functional>
@@ -362,8 +364,11 @@ float IorToF0(float ior)
     float ratio=(ior-1.0f)/(ior+1.0f);
     return saturate(ratio*ratio);
 }
-float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float roughness,
-                     float3 f0,float intensity)
+// Split form for the T21 diagnostics: outDiffuse/outSpecular carry the two
+// linear contributions and the return value is byte-for-byte the combined
+// expression the default render path used before diagnostics existed.
+float3 EvaluateLightSplit(float3 n,float3 v,float3 l,float3 base,float metallic,float roughness,
+                          float3 f0,float intensity,out float3 outDiffuse,out float3 outSpecular)
 {
     float3 h=normalize(v+l);
     float nl=saturate(dot(n,l)), nv=saturate(dot(n,v));
@@ -372,7 +377,15 @@ float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float
     float g=GeometrySchlickGGX(nv,roughness)*GeometrySchlickGGX(nl,roughness);
     float3 specular=d*g*f/max(0.004f,4.0f*nv*nl);
     float3 diffuse=(1.0f-f)*(1.0f-metallic)*base/3.14159265f;
+    outDiffuse=diffuse*nl*intensity;
+    outSpecular=specular*nl*intensity;
     return (diffuse+specular)*nl*intensity;
+}
+float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float roughness,
+                     float3 f0,float intensity)
+{
+    float3 diffuse,specular;
+    return EvaluateLightSplit(n,v,l,base,metallic,roughness,f0,intensity,diffuse,specular);
 }
 // Clearcoat is a second, dielectric-only GGX lobe over the base. Keeping it
 // separate from EvaluateLight avoids tinting the coat with the base metal and
@@ -547,9 +560,17 @@ PixelOutput PSMain(PSInput input)
     float3 f0=lerp(dielectricF0,base.rgb,metallic)*(1.0f-clearcoat);
     float3 fresnel=f0+(1.0f-f0)*pow(1.0f-nv,5.0f);
     float envIntensity=gEnvironment.x;
+    // T21 diagnostic contributions. Each is accumulated with exactly the same
+    // arithmetic that is added to `color`, so channel 0 and channel 20 stay
+    // identical to the pre-diagnostic result while the split views expose the
+    // individual direct/environment/coat/emission terms.
+    float3 directDiffuse=float3(0,0,0),directSpecular=float3(0,0,0);
+    float3 envDiffuse=float3(0,0,0),envSpecular=float3(0,0,0);
+    float3 coatContribution=float3(0,0,0),emission=float3(0,0,0);
     float3 color;
     if (!clay && (flags&2)) {
         color=base.rgb*diffuseScale;
+        envDiffuse+=color;
     } else if (gLighting.x>1.5f) {
         // A single hard key whose elevation is user-adjustable via the gizmo's
         // sun. Higher elevations read as daylight on upward faces; lower ones
@@ -557,54 +578,109 @@ PixelOutput PSMain(PSInput input)
         // small world-stable ambient so metals still have a reflection.
         float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
         float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
-        color=EvaluateLight(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,f0,3.4f*envIntensity*gPresentation.x)
-            + base.rgb*(1.0f-metallic)*.08f*diffuseScale*occlusion;
-        color+=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*.25f*diffuseScale*occlusion;
-        color+=SampleStudioSpecular(worldN,worldView,roughness)*envIntensity*.35f*occlusion;
-        if (transmissive) color+=SampleStudioSpecular(worldN,worldView,roughness)*occlusion;
+        float3 keyDiffuse,keySpecular;
+        float3 key=EvaluateLightSplit(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,f0,
+                                      3.4f*envIntensity*gPresentation.x,keyDiffuse,keySpecular);
+        directDiffuse+=keyDiffuse;directSpecular+=keySpecular;
+        float3 ambient=base.rgb*(1.0f-metallic)*.08f*diffuseScale*occlusion;
+        color=key+ambient;
+        envDiffuse+=ambient;
+        float3 irradiance=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*.25f*diffuseScale*occlusion;
+        color+=irradiance;envDiffuse+=irradiance;
+        float3 environmentSpecular=SampleStudioSpecular(worldN,worldView,roughness)*envIntensity*.35f*occlusion;
+        color+=environmentSpecular;envSpecular+=environmentSpecular;
+        if (transmissive) {
+            float3 transmittedReflection=SampleStudioSpecular(worldN,worldView,roughness)*occlusion;
+            color+=transmittedReflection;envSpecular+=transmittedReflection;
+        }
     } else {
         // World-stable Studio IBL: SH9 diffuse irradiance plus the GGX-
         // prefiltered cubemap reflection, with a camera-relative soft key for
         // form. Clay keeps the same environment but suppresses specular.
         // environmentIntensity scales the direct rig and IBL together, matching
         // F3D's paired render.light.intensity / IBLIntensity behavior.
-        color=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*diffuseScale*occlusion;
+        float3 irradiance=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*diffuseScale*occlusion;
+        color=irradiance;envDiffuse+=irradiance;
         float specularScale=clay?.25f:1.0f;
-        color+=SampleStudioSpecular(worldN,worldView,roughness)
+        float3 environmentSpecular=SampleStudioSpecular(worldN,worldView,roughness)
             *(transmissive?float3(1.0f,1.0f,1.0f):fresnel)*envIntensity*specularScale*occlusion;
-        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,f0,1.15f*envIntensity*gPresentation.x);
-        color+=EvaluateLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),base.rgb*diffuseScale,metallic,roughness,f0,.35f*envIntensity*gPresentation.y);
-        color+=EvaluateLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),base.rgb*diffuseScale,metallic,roughness,f0,.22f*envIntensity*gPresentation.z);
-        color+=base.rgb*(1.0f-metallic)*.05f*diffuseScale*occlusion;
+        color+=environmentSpecular;envSpecular+=environmentSpecular;
+        float3 directDiffuse0,directSpecular0,directDiffuse1,directSpecular1,directDiffuse2,directSpecular2;
+        float3 key=EvaluateLightSplit(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,f0,1.15f*envIntensity*gPresentation.x,directDiffuse0,directSpecular0);
+        float3 fill=EvaluateLightSplit(n,viewDir,normalize(float3(-.70f,.25f,.38f)),base.rgb*diffuseScale,metallic,roughness,f0,.35f*envIntensity*gPresentation.y,directDiffuse1,directSpecular1);
+        float3 rim=EvaluateLightSplit(n,viewDir,normalize(float3(.18f,.76f,.28f)),base.rgb*diffuseScale,metallic,roughness,f0,.22f*envIntensity*gPresentation.z,directDiffuse2,directSpecular2);
+        color+=key;
+        color+=fill;
+        color+=rim;
+        directDiffuse+=directDiffuse0+directDiffuse1+directDiffuse2;
+        directSpecular+=directSpecular0+directSpecular1+directSpecular2;
+        float3 ambient=base.rgb*(1.0f-metallic)*.05f*diffuseScale*occlusion;
+        color+=ambient;envDiffuse+=ambient;
     }
     if (!clay && clearcoat>0.0f) {
         // Add the coat lobe over the base. The base already lost (1-clearcoat)
         // of its specular above; the coat's own Fresnel is folded into the
         // reflected term, so transmitted base light is not double-counted.
-        color+=SampleStudioSpecular(worldN,worldView,clearcoatRoughness)
+        float3 coatEnvironment=SampleStudioSpecular(worldN,worldView,clearcoatRoughness)
             *clearcoat*envIntensity*occlusion;
+        color+=coatEnvironment;coatContribution+=coatEnvironment;
         float coatFresnel=0.04f+0.96f*pow(1.0f-nv,5.0f);
-        color+=EvaluateClearcoatLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),clearcoatRoughness,1.15f*envIntensity*gPresentation.x)
+        float3 coatKey=EvaluateClearcoatLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),clearcoatRoughness,1.15f*envIntensity*gPresentation.x)
             *clearcoat*coatFresnel;
-        color+=EvaluateClearcoatLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),clearcoatRoughness,.35f*envIntensity*gPresentation.y)
+        float3 coatFill=EvaluateClearcoatLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),clearcoatRoughness,.35f*envIntensity*gPresentation.y)
             *clearcoat*coatFresnel;
-        color+=EvaluateClearcoatLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),clearcoatRoughness,.22f*envIntensity*gPresentation.z)
+        float3 coatRim=EvaluateClearcoatLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),clearcoatRoughness,.22f*envIntensity*gPresentation.z)
             *clearcoat*coatFresnel;
+        color+=coatKey;color+=coatFill;color+=coatRim;
+        coatContribution+=coatKey+coatFill+coatRim;
     }
+    float sheenWeight=0.0f;
     if (!clay && any(sheenColor>0.0f)) {
         // Soft velvet lobe: only visible at grazing angles, strongest for a
         // rough weave. It is intentionally additive and low-energy so it
         // cannot masquerade as the base diffuse.
-        float sheenWeight=pow(1.0f-nv,3.0f)*(0.35f+0.65f*sheenRoughness);
-        color+=sheenColor*sheenWeight*(0.35f+0.65f*envIntensity);
+        sheenWeight=pow(1.0f-nv,3.0f)*(0.35f+0.65f*sheenRoughness);
+        float3 sheen=sheenColor*sheenWeight*(0.35f+0.65f*envIntensity);
+        color+=sheen;envSpecular+=sheen;
     }
     if (!clay) {
         float3 emissive=gEmissiveFactor.rgb*gEmissiveFactor.a;
         if ((maps&8) && uvValid) emissive*=(nearest?gEmissive.Sample(gNearestSampler,sampleUv):gEmissive.Sample(gLinearSampler,sampleUv)).rgb;
-        color+=emissive;
+        color+=emissive;emission+=emissive;
     }
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
+    // T21 Debug inspection channels travel in gPresentation.w. They are raw
+    // linear values; the display resolve performs the only clamp. Unsupported
+    // channels return a deliberate magenta marker rather than a neutral value.
+    uint debugChannel=(uint)gPresentation.w;
+    if (debugChannel!=0u) {
+        float3 dbg;
+        const float3 unsupported=float3(1.0f,0.0f,1.0f);
+        if (debugChannel==1u) dbg=base.rgb;
+        else if (debugChannel==2u) dbg=normalize(input.normal)*0.5f+0.5f;
+        else if (debugChannel==3u) dbg=n*0.5f+0.5f;
+        else if (debugChannel==4u) dbg=float3(input.uv,0.0f);
+        else if (debugChannel==5u) dbg=unsupported; // UV1 is not on the wire
+        else if (debugChannel==6u) dbg=metallic.xxx;
+        else if (debugChannel==7u) dbg=roughness.xxx;
+        else if (debugChannel==8u) dbg=occlusion.xxx;
+        else if (debugChannel==9u) dbg=base.a.xxx;
+        else if (debugChannel==10u) dbg=transmission.xxx;
+        else if (debugChannel==11u) dbg=float3(gMaterialLobes2.x*0.25f,iorF0,0.0f);
+        else if (debugChannel==12u) dbg=clearcoat.xxx;
+        else if (debugChannel==13u) dbg=sheenColor*sheenWeight;
+        else if (debugChannel==14u) dbg=directDiffuse;
+        else if (debugChannel==15u) dbg=directSpecular;
+        else if (debugChannel==16u) dbg=envDiffuse;
+        else if (debugChannel==17u) dbg=envSpecular;
+        else if (debugChannel==18u) dbg=coatContribution;
+        else if (debugChannel==19u) dbg=emission;
+        else if (debugChannel==20u) dbg=color;
+        else dbg=float3(0.0f,1.0f,1.0f);
+        PixelOutput debugOutput; debugOutput.color=float4(max(dbg,0.0f),1.0f);
+        debugOutput.pick=input.pickId; return debugOutput;
+    }
     // Linear HDR output. T15's resolve pass owns exposure, tone mapping and the
     // sRGB transfer so transparency, transmission and emission all blend in the
     // same color space before the display transform.
@@ -1093,6 +1169,13 @@ bool D3D12ViewerPath::CreatePickTarget(UINT width, UINT height, std::wstring& er
     device.Device()->CreateRenderTargetView(pickTarget.Get(), nullptr, pickRtvHeap->GetCPUDescriptorHandleForHeapStart());
     if (!pickReadback) pickReadback = CreateBuffer(device.Device(), 256, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
     if (!pickReadback) { error = L"The selection readback could not be created."; return false; }
+    // T21: one bounded 64x64 RGBA16F sample slot. 64 texels * 8 bytes = 512,
+    // already a 256-byte multiple, so every row obeys D3D12's placed-footprint
+    // pitch requirement.
+    if (!debugReadback) debugReadback = CreateBuffer(device.Device(),
+        uint64_t(kDebugSampleMaxExtent) * kDebugSampleMaxExtent * 8,
+        D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+    if (!debugReadback) { error = L"The diagnostic readback could not be created."; return false; }
     if (!CreateSceneColorTarget(width, height, error)) return false;
     return true;
 }
@@ -1171,6 +1254,57 @@ bool D3D12ViewerPath::PollPick(bool& hit)
         D3D12_RANGE written{0,0}; pickReadback->Unmap(0, &written);
     }
     pickInFlight = false; return true;
+}
+
+void D3D12ViewerPath::RequestDebugSample(int x0, int y0, int x1, int y1)
+{
+    const int width = static_cast<int>(swapChain.Width());
+    const int height = static_cast<int>(swapChain.Height());
+    x0 = std::clamp(x0, 0, std::max(0, width - 1));
+    y0 = std::clamp(y0, 0, std::max(0, height - 1));
+    x1 = std::clamp(x1, x0 + 1, std::min(width, x0 + static_cast<int>(kDebugSampleMaxExtent)));
+    y1 = std::clamp(y1, y0 + 1, std::min(height, y0 + static_cast<int>(kDebugSampleMaxExtent)));
+    debugSampleX0 = x0; debugSampleY0 = y0; debugSampleX1 = x1; debugSampleY1 = y1;
+    debugSampleState = 1;
+    debugSampleArmed = true;
+    debugSampleRecorded = false;
+    debugSampleFence = 0;
+}
+
+int D3D12ViewerPath::PollDebugSample(DebugSample& out)
+{
+    if (debugSampleState == 1 && debugSampleRecorded
+        && debugSampleFence != 0 && directQueue.CompletedValue() >= debugSampleFence) {
+        const UINT sampleWidth = static_cast<UINT>(debugSampleX1 - debugSampleX0);
+        const UINT sampleHeight = static_cast<UINT>(debugSampleY1 - debugSampleY0);
+        const UINT rowPitch = static_cast<UINT>(kDebugSampleMaxExtent) * 8;
+        D3D12_RANGE range{0, rowPitch * sampleHeight}; void* bytes = nullptr;
+        if (SUCCEEDED(debugReadback->Map(0, &range, &bytes))) {
+            double sums[4]{};
+            const auto* pixels = static_cast<const uint16_t*>(bytes);
+            const UINT step = std::max<UINT>(1, std::max(sampleWidth, sampleHeight) / 17);
+            UINT count = 0;
+            for (UINT y = 0; y < sampleHeight; y += step) {
+                for (UINT x = 0; x < sampleWidth; x += step) {
+                    const uint16_t* texel = pixels + size_t(y) * (rowPitch / 2) + size_t(x) * 4;
+                    for (int channel = 0; channel < 4; ++channel)
+                        sums[channel] += DirectX::PackedVector::XMConvertHalfToFloat(texel[channel]);
+                    ++count;
+                }
+            }
+            D3D12_RANGE written{0,0}; debugReadback->Unmap(0, &written);
+            if (count) {
+                for (int channel = 0; channel < 4; ++channel)
+                    out.rgba[channel] = static_cast<float>(sums[channel] / count);
+                out.width = sampleWidth; out.height = sampleHeight;
+                debugSample = out;
+                debugSampleState = 2;
+            } else debugSampleState = 3;
+        } else debugSampleState = 3;
+        debugSampleRecorded = false;
+    }
+    out = debugSample;
+    return debugSampleState;
 }
 
 bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
@@ -2117,7 +2251,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     frameOffset += sizeof(environment.sh);
     const DirectX::XMFLOAT4 presentationConstants(
         chrome.info.keyLightScale, chrome.info.fillLightScale,
-        chrome.info.rimLightScale, 0.0f);
+        chrome.info.rimLightScale, static_cast<float>(debugChannel));
     std::memcpy(frameConstantBufferMapped + frameOffset, &presentationConstants,
                 sizeof(presentationConstants));
     const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
@@ -2421,6 +2555,29 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         }
     }
 
+    // T21 numeric diagnostic readback. The HDR scene target is still a render
+    // target here; copy the bounded sample region before the resolve applies
+    // exposure/tone mapping. An unarmed request is a no-op.
+    if (debugSampleArmed) {
+        debugSampleArmed = false;
+        const UINT sampleWidth = static_cast<UINT>(debugSampleX1 - debugSampleX0);
+        const UINT sampleHeight = static_cast<UINT>(debugSampleY1 - debugSampleY0);
+        D3D12_TEXTURE_COPY_LOCATION source{};
+        source.pResource = sceneColor.Get();
+        source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        source.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION destination{};
+        destination.pResource = debugReadback.Get();
+        destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        destination.PlacedFootprint.Footprint = {
+            kSceneColorFormat, sampleWidth, sampleHeight, 1,
+            static_cast<UINT>(kDebugSampleMaxExtent) * 8};
+        const D3D12_BOX box{static_cast<UINT>(debugSampleX0), static_cast<UINT>(debugSampleY0), 0,
+                            static_cast<UINT>(debugSampleX1), static_cast<UINT>(debugSampleY1), 1};
+        commandList->CopyTextureRegion(&destination, 0, 0, 0, &source, &box);
+        debugSampleRecorded = true;
+        debugSampleFence = UINT64_MAX; // resolved to the slot fence after EndFrame
+    }
     const bool picking = !pickInFlight && pickX >= 0 && pickY >= 0
         && UINT(pickX) < swapChain.Width() && UINT(pickY) < swapChain.Height();
     if (picking) {
@@ -2451,7 +2608,9 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
 
     DrawChrome(index, orientation, chrome);
     EndFrame(index);
-    if (picking) { pickFence = frames[index].fenceValue; pickInFlight = true; pickX = pickY = -1; }
+    if (debugSampleRecorded && debugSampleFence == UINT64_MAX) {
+        debugSampleFence = frames[index].fenceValue;
+    }    if (picking) { pickFence = frames[index].fenceValue; pickInFlight = true; pickX = pickY = -1; }
 }
 
 bool D3D12ViewerPath::CreateAndQueueBuffer(const void* data, uint64_t sizeBytes, uint32_t clusterId,
@@ -2841,6 +3000,20 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
                 draw.textureIndices[1]=findImageIndex(material->metallicRoughnessImageChunkId);
                 draw.textureIndices[2]=findImageIndex(material->normalImageChunkId);
                 draw.textureIndices[3]=findImageIndex(material->emissiveImageChunkId);
+                const uint32_t imageIds[4] = {material->baseColorImageChunkId,
+                    material->metallicRoughnessImageChunkId, material->normalImageChunkId,
+                    material->emissiveImageChunkId};
+                for (UINT slot=0; slot<4; ++slot) {
+                    const int index=draw.textureIndices[slot];
+                    GpuMesh::TextureInfo info{};
+                    info.chunkId=imageIds[slot];
+                    info.bound=index>=0;
+                    if (info.bound && index<static_cast<int>(importedImages.size())) {
+                        info.pixelFormat=importedImages[index].pixelFormat;
+                        info.colorSpace=importedImages[index].colorSpace;
+                    }
+                    draw.textureInfo[slot]=info;
+                }
                 draw.material=material->data;draw.hasMaterial=true;
             } else {
                 // Match the viewer's established untextured solid color. Pure
