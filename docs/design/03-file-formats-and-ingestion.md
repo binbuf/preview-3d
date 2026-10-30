@@ -40,9 +40,17 @@ containers, a bounded End-Of-Central-Directory plus central-directory window
 (1 MiB and at most 8,192 entries) to produce a candidate; it never decompresses
 an archive and never parses model structure. The worker/host still performs the
 real parse with the same containment, budgets and typed errors. A malformed
-container therefore fails in the parser exactly as it did before, and an
-extension/content disagreement is recorded as a mismatch for the Open As flow
-(T03) rather than silently changing the open path.
+container therefore fails in the parser exactly as it did before. Extension and
+content are combined by `model_core::DecideOpenFormat`: a known suffix keeps the
+existing extension-only open path; content-only evidence or a cross-family
+disagreement never opens silently but raises the failure card's **Open As**
+choice with both candidates listed. `--format <stable-name>` and Open As force a
+catalog importer (still fully validated by the worker/host), while
+`--skip-content-check` selects by suffix only. `--list-formats` prints one
+`stable-name<TAB>extensions<TAB>display-name` line per directly registered
+catalog entry. The same catalog feeds the open-dialog filter, single-instance
+acceptance, Shell Open With discovery and the NSIS install/uninstall
+registration checked by `[format-installer]` ([ADR-0058](./adr/0058-catalog-driven-open-as-and-installer-drift.md)).
 
 All primary inputs are local, regular, non-empty files. The loader rejects:
 

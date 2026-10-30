@@ -12,9 +12,11 @@ The plan, ground rules and per-task verify commands are in
 
 - **T01 — Compatibility corpus and baseline scoreboard**: Manifest: `tests/compat/manifest.json` (schema 1). Entry `path` is relative; Harness: `tests/import-isolation/CompatCorpusTests.cpp`, tag `[compat]`.
 - **T02 — Format catalog and content-aware router**: Catalog: `shared/model-core/include/model_core/FormatCatalog.h` (header-only; Reserved append-only `FormatId`s with **no descriptor yet**: `Iges=15`,
+- **T03 — Catalog-driven registration, filters and Open As**: Core policy: `shared/model-core/include/model_core/FormatSelection.h`.; CLI helpers: `interactive-viewer/src/app/OpenOptions.h`.
 
 ## Task notes (maintained by symphony — do not edit)
 
 - [T01](progress/T01.md) — Manifest: `tests/compat/manifest.json` (schema 1). Entry `path` is relative
 - [T02](progress/T02.md) — Catalog: `shared/model-core/include/model_core/FormatCatalog.h` (header-only
+- [T03](progress/T03.md) — Core policy: `shared/model-core/include/model_core/FormatSelection.h`.
 <!-- symphony:digest:end -->

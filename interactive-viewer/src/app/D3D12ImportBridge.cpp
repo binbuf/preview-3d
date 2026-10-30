@@ -70,7 +70,7 @@ model_core::FormatId FormatIdForSource(SourceFormat format)
     return model_core::FormatId::Unknown;
 }
 
-std::optional<SourceFormat> SourceFormatForDescriptor(
+std::optional<SourceFormat> SourceFormatForCatalogDescriptor(
     const model_core::FormatDescriptor* descriptor)
 {
     if (!descriptor) return std::nullopt;
@@ -469,7 +469,7 @@ std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
     // `.step`/`.stp` select the dedicated STEP host, but the extension alone
     // never bypasses STEP-002 admission: StepPart21Preflight verifies the
     // ISO 10303-21 byte envelope on the inherited handle before OCCT runs.
-    return SourceFormatForDescriptor(model_core::FindByExtension(ExtensionOf(path)));
+    return SourceFormatForCatalogDescriptor(model_core::FindByExtension(ExtensionOf(path)));
 }
 
 model_core::FormatId ClassifyByContent(const std::wstring& path)
@@ -477,15 +477,28 @@ model_core::FormatId ClassifyByContent(const std::wstring& path)
     return model_core::SniffFile(path).format;
 }
 
-model_core::FormatClassification ClassifyForOpen(const std::wstring& path)
+model_core::FormatClassification ClassifyForOpen(const std::wstring& path, bool skipContentCheck)
 {
-    return model_core::ClassifyFormat(ExtensionOf(path), model_core::SniffFile(path));
+    const auto extension = ExtensionOf(path);
+    if (skipContentCheck) {
+        // --skip-content-check trusts the suffix only. The worker/host still
+        // performs full admission; this merely leaves the content candidate
+        // unknown so a deliberate wrong-suffix choice is not second-guessed.
+        return model_core::ClassifyFormat(extension, model_core::SniffResult{});
+    }
+    return model_core::ClassifyFormat(extension, model_core::SniffFile(path));
+}
+
+std::optional<SourceFormat> SourceFormatForFormatDescriptor(
+    const model_core::FormatDescriptor* descriptor)
+{
+    return SourceFormatForCatalogDescriptor(descriptor);
 }
 
 std::optional<SourceFormat> ExtensionSourceFormat(
     const model_core::FormatClassification& classification)
 {
-    return SourceFormatForDescriptor(classification.extension);
+    return SourceFormatForCatalogDescriptor(classification.extension);
 }
 
 std::wstring ClassificationDiagnostic(const model_core::FormatClassification& classification)

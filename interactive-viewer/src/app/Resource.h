@@ -41,6 +41,7 @@
 #define ID_VIEW_SETTINGS        32792
 #define ID_VIEW_GROUND_AXIS     32793
 #define ID_VIEW_GROUND_DIRECTION 32794
+#define ID_VIEW_OPEN_AS         32795
 #ifndef IDC_STATIC
 #define IDC_STATIC				-1
 #endif
@@ -51,7 +52,7 @@
 
 #define _APS_NO_MFC					130
 #define _APS_NEXT_RESOURCE_VALUE	129
-#define _APS_NEXT_COMMAND_VALUE		32795
+#define _APS_NEXT_COMMAND_VALUE		32796
 #define _APS_NEXT_CONTROL_VALUE		1000
 #define _APS_NEXT_SYMED_VALUE		110
 #endif

@@ -201,6 +201,7 @@
          shipped shared sources so the table and probe are tested directly. -->
     <ClCompile Include="..\..\shared\model-core\src\FormatSniffer.cpp" />
     <ClCompile Include="FormatCatalogTests.cpp" />
+    <ClCompile Include="FormatRegistrationTests.cpp" />
     <!-- SPIKE-8a (T02) prototype CPU rasterizer + deterministic fixtures. -->
     <ClCompile Include="..\..\thumbnail-spike\rasterizer\ThumbnailRasterizer.cpp" />
     <ClCompile Include="..\..\thumbnail-spike\rasterizer\SceneFixtures.cpp" />

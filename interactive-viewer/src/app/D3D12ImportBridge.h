@@ -12,6 +12,7 @@
 // the renderer-facing structs below.
 //
 #include "model_core/FormatCatalog.h"
+#include "model_core/FormatSelection.h"
 #include "model_core/FormatSniffer.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
@@ -51,9 +52,17 @@ model_core::FormatId ClassifyByContent(const std::wstring& path);
 
 // Combined extension/content candidate with the reason. The selected format
 // prefers a strong content signature; a cross-family disagreement is recorded
-// as Mismatch for T03 to resolve. This function never changes the open path's
-// existing extension-only decision.
-model_core::FormatClassification ClassifyForOpen(const std::wstring& path);
+// as Mismatch for DecideOpenFormat/the Open As prompt to resolve.
+// `skipContentCheck` trusts the suffix only (still no parse, still validated by
+// the worker); it never bypasses the worker's own admission.
+model_core::FormatClassification ClassifyForOpen(const std::wstring& path,
+    bool skipContentCheck = false);
+
+// Maps any catalog descriptor with a shipped importer to the bridge's
+// SourceFormat. Used by --format and Open As, which force an importer but still
+// go through the normal worker/host validation.
+std::optional<SourceFormat> SourceFormatForFormatDescriptor(
+    const model_core::FormatDescriptor* descriptor);
 
 // The legacy open-path decision carried by a classification's extension
 // candidate. Keeps callers from re-reading the file just to recover it.

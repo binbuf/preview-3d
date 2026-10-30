@@ -1,5 +1,7 @@
 #include "ActiveInstance.h"
 
+#include "model_core/FormatSelection.h"
+
 #include <bcrypt.h>
 #include <sddl.h>
 #include <shellapi.h>
@@ -11,6 +13,8 @@
 #include <cwctype>
 #include <memory>
 #include <sstream>
+
+#include "model_core/FormatCatalog.h"
 
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -318,12 +322,8 @@ bool IsSupportedExtension(const std::wstring& path)
 {
     const auto dot = path.find_last_of(L'.');
     if (dot == std::wstring::npos) return false;
-    std::wstring extension = path.substr(dot);
-    std::transform(extension.begin(), extension.end(), extension.begin(), std::towlower);
-    return extension == L".glb" || extension == L".gltf" || extension == L".stl" ||
-        extension == L".ply" || extension == L".obj" || extension == L".fbx" ||
-        extension == L".3mf" || extension == L".usd" || extension == L".usda" || extension == L".usdc" ||
-        extension == L".usdz" || extension == L".step" || extension == L".stp";
+    std::wstring extension = path.substr(dot + 1);
+    return model_core::IsImportableFormat(model_core::FindByExtension(extension));
 }
 
 bool WaitOverlapped(HANDLE object, OVERLAPPED& operation, HANDLE stopEvent, DWORD timeout, DWORD& transferred,

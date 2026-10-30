@@ -87,6 +87,13 @@ Direct-open extensions:
 
 .mtl is deliberately absent. It is resolved only as an OBJ sidecar and is neither an Open With target nor a thumbnail handler.
 
+The list is generated from `model_core::FormatCatalog`; the viewer's open
+dialog, single-instance acceptance, Shell Open With discovery and NSIS
+install/uninstall entries all consume the same catalog. `Preview3D.exe
+--list-formats` prints `stable-name<TAB>extensions<TAB>display-name` for the
+same set, and the `[format-installer]` unit test fails if `Preview3D.nsi` and the
+catalog disagree in either direction ([ADR-0058](adr/0058-catalog-driven-open-as-installer-drift.md)).
+
 The application registers capabilities and ProgIDs but never writes the user's selected default value for an extension. Windows Default Apps/user choice remains authoritative.
 
 ## Application ProgIDs

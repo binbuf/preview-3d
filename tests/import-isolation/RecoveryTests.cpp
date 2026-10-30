@@ -125,6 +125,27 @@ TEST_CASE("A GLB renamed .bin classifies by content but the open gate stays exte
         != std::wstring::npos);
 }
 
+TEST_CASE("A forced format opens a renamed GLB and a wrong forced format fails typed",
+    "[recovery][open-as]") {
+    std::ifstream input(Triangle(), std::ios::binary);
+    REQUIRE(input.is_open());
+    const std::string bytes((std::istreambuf_iterator<char>(input)),
+        std::istreambuf_iterator<char>());
+    REQUIRE_FALSE(bytes.empty());
+    ScratchSource source(bytes, L".bin");
+
+    auto result = d3d12_import_bridge::RunImport(
+        d3d12_import_bridge::SourceFormat::Glb, source.path.wstring(), 900);
+    CAPTURE(result.errorStage, result.errorCode, result.errorSummary);
+    REQUIRE(result.ok);
+    CHECK_FALSE(result.meshes.empty());
+
+    auto wrong = d3d12_import_bridge::RunImport(
+        d3d12_import_bridge::SourceFormat::Step, source.path.wstring(), 901);
+    CHECK_FALSE(wrong.ok);
+    CHECK(wrong.errorCode != model_core::ImportErrorCode::None);
+}
+
 TEST_CASE("Shipping viewer bridge opens fast and compatibility USD stages", "[recovery][usd-008]") {
     const std::filesystem::path fixtures(PREVIEW3D_USD_FIXTURES_DIR);
     uint64_t generation = 800;

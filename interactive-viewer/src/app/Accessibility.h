@@ -82,6 +82,8 @@ enum class Control
     // Appended after OpenWithMoreApps so earlier numeric runtime IDs stay
     // stable. Visible only while a newer release is known.
     UpdateAvailable,
+    // Appended after UpdateAvailable so earlier numeric runtime IDs stay stable.
+    ErrorOpenAs,
     Count,
 };
 

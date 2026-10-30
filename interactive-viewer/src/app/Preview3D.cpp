@@ -13,6 +13,7 @@
 #include "Renderer.h"
 #include "NavGizmo.h"
 #include "OpenWithPopup.h"
+#include "OpenOptions.h"
 #include "Settings.h"
 #include "ShellIntegration.h"
 #include "SafeFileOps.h"
@@ -164,6 +165,7 @@ struct ViewerApp
     HWND window = nullptr;
     HWND retryButton = nullptr;
     HWND openAnotherButton = nullptr;
+    HWND openAsButton = nullptr;
     HWND copyButton = nullptr;
     HWND tooltip = nullptr;
     // Owns the text buffers referenced by the tooltip control for its lifetime
@@ -302,6 +304,13 @@ struct ViewerApp
     POINT touchCenter{};
     double touchSpan = 0.0;
     std::wstring initialPath;
+    // --format / Open As: a catalog descriptor that replaces extension/content
+    // candidate selection. Null means normal classification.
+    const model_core::FormatDescriptor* forcedFormat = nullptr;
+    bool skipContentCheck = false;
+    // Path-free "opened as X; detected Y" text kept across the import so the
+    // success warning and diagnostics can report the user override.
+    std::wstring openFormatNotice;
     std::wstring currentPath;
     std::wstring failedPath;
     std::wstring filename;
@@ -1838,8 +1847,10 @@ void UpdateButtonAvailability(ViewerApp& app)
 {
     SetControlVisible(app.retryButton, app.state == ViewerState::Failed);
     SetControlVisible(app.openAnotherButton, app.state == ViewerState::Failed);
+    SetControlVisible(app.openAsButton, app.state == ViewerState::Failed);
     SetControlVisible(app.copyButton, app.state == ViewerState::Failed);
     EnableWindow(app.retryButton, app.failedPath.empty() ? FALSE : TRUE);
+    EnableWindow(app.openAsButton, app.failedPath.empty() ? FALSE : TRUE);
 }
 
 void LayoutControls(ViewerApp& app)
@@ -1852,11 +1863,13 @@ void LayoutControls(ViewerApp& app)
     const int actionGap = Scale(app, 8);
     const int retryWidth = Scale(app, 78);
     const int anotherWidth = Scale(app, 112);
+    const int openAsWidth = Scale(app, 96);
     const int copyWidth = Scale(app, 104);
     int actionX = card.left + Scale(app, 28);
     const int actionY = card.bottom - Scale(app, 52);
     MoveWindow(app.retryButton, actionX, actionY, retryWidth, actionHeight, TRUE); actionX += retryWidth + actionGap;
     MoveWindow(app.openAnotherButton, actionX, actionY, anotherWidth, actionHeight, TRUE); actionX += anotherWidth + actionGap;
+    MoveWindow(app.openAsButton, actionX, actionY, openAsWidth, actionHeight, TRUE); actionX += openAsWidth + actionGap;
     MoveWindow(app.copyButton, actionX, actionY, copyWidth, actionHeight, TRUE);
 
 }
@@ -1944,7 +1957,7 @@ void RecreateButtonFont(ViewerApp& app)
     if (app.buttonFont) DeleteObject(app.buttonFont);
     app.buttonFont = CreateFontW(-Scale(app, 12), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI Variable Text");
-    for (HWND button : { app.retryButton, app.openAnotherButton, app.copyButton })
+    for (HWND button : { app.retryButton, app.openAnotherButton, app.openAsButton, app.copyButton })
     {
         if (button) SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(app.buttonFont), TRUE);
     }
@@ -1991,8 +2004,9 @@ void CreateControls(ViewerApp& app)
     // error-state action buttons remain real HWND controls.
     app.retryButton = CreateButton(app, ID_VIEW_RETRY, Loc("action.retry", L"Retry").c_str());
     app.openAnotherButton = CreateButton(app, ID_VIEW_OPEN_ANOTHER, Loc("action.openAnother", L"Open another").c_str());
+    app.openAsButton = CreateButton(app, ID_VIEW_OPEN_AS, Loc("action.openAs", L"Open as\u2026").c_str());
     app.copyButton = CreateButton(app, ID_VIEW_COPY_DETAILS, Loc("action.copyDetails", L"Copy details").c_str());
-    for (HWND button : { app.retryButton, app.openAnotherButton, app.copyButton })
+    for (HWND button : { app.retryButton, app.openAnotherButton, app.openAsButton, app.copyButton })
         SetWindowSubclass(button, ErrorButtonAccessibilitySubclass, 1, 0);
     app.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, app.window, nullptr, app.instance, nullptr);
@@ -2000,6 +2014,7 @@ void CreateControls(ViewerApp& app)
     SendMessageW(app.tooltip, TTM_SETMAXTIPWIDTH, 0, Scale(app, 360));
     AddTooltip(app, app.retryButton, Loc("action.retryTip", L"Try opening this file again"));
     AddTooltip(app, app.openAnotherButton, Loc("action.openAnotherTip", L"Choose a different supported 3D model"));
+    AddTooltip(app, app.openAsButton, Loc("action.openAsTip", L"Open this file with a chosen 3D format"));
     AddTooltip(app, app.copyButton, Loc("action.copyDetailsTip", L"Copy technical error details without the file path"));
     RecreateButtonFont(app);
     UpdateButtonAvailability(app);
@@ -2013,6 +2028,10 @@ void SyncDisplayedModel(ViewerApp& app)
         app.loadedModel = displayed->metadata;
         app.currentPath = displayed->path;
         app.warning = displayed->metadata->warning;
+        if (!app.openFormatNotice.empty()) {
+            if (!app.warning.empty()) app.warning += L"\n";
+            app.warning += app.openFormatNotice;
+        }
         if (displayed->metadata->source.format == model_core::SourceFormatId::Step
             && displayed->metadata->importStatus.optionalFeatureWarnings)
             app.warning = Loc("warning.stepSurfaces", L"Some STEP surfaces or assembly items could not be displayed.");
@@ -2031,6 +2050,10 @@ void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring&
     app.state = ViewerState::Failed;
     app.errorSummary = summary;
     app.errorDetails = details;
+    if (!app.openFormatNotice.empty()) {
+        if (!app.errorDetails.empty()) app.errorDetails += L"\r\n\r\n";
+        app.errorDetails += app.openFormatNotice;
+    }
     app.failedPath = failedPath;
     app.diagnosticPath = failedPath;
     app.errorCode = code;
@@ -2066,11 +2089,14 @@ void CancelOpen(ViewerApp& app)
     viewer_accessibility::Announce(app.window, app.uiaAccessible, AccessibilityStatus(app));
 }
 
-void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> assetSearchRoots = {})
+void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> assetSearchRoots = {},
+    const model_core::FormatDescriptor* forcedFormat = nullptr)
 {
     if (path.empty()) return;
     CloseOpenWithPopup(app);
     app.assetSearchRoots = assetSearchRoots;
+    app.forcedFormat = forcedFormat;
+    app.openFormatNotice.clear();
     ++app.generation;
     if (app.cancellation)
     {
@@ -2091,25 +2117,97 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
             path, model_core::ImportErrorCode::UnsafeReference);
         return;
     }
-    // One bounded probe supplies both the extension decision and diagnostics.
-    // T03 will use the selected content candidate to offer Open As; for now the
-    // legacy extension-only gate below still decides whether to open.
-    const auto classification = d3d12_import_bridge::ClassifyForOpen(path);
+    // One bounded probe supplies the extension candidate, the content
+    // candidate and diagnostics. --skip-content-check deliberately treats the
+    // suffix as the only candidate. A forced format (--format / Open As)
+    // replaces candidate selection but is still validated by the worker/host.
+    const auto classification = d3d12_import_bridge::ClassifyForOpen(
+        path, app.skipContentCheck && !forcedFormat);
     if (classification.reason == model_core::ClassificationReason::Mismatch
         || classification.reason == model_core::ClassificationReason::Content)
     {
         const auto diagnostic = d3d12_import_bridge::ClassificationDiagnostic(classification);
         OutputDebugStringW((L"Preview3D " + diagnostic + L"\n").c_str());
     }
-    const auto d3d12Format = d3d12_import_bridge::ExtensionSourceFormat(classification);
+
+    const model_core::FormatDescriptor* chosen = forcedFormat;
+    if (!chosen)
+    {
+        const auto decision = model_core::DecideOpenFormat(classification);
+        if (decision.action == model_core::OpenFormatAction::AskUser)
+        {
+            // Never silently pick one side of a weak/missing-suffix match. The
+            // failure card offers Open As with both candidates listed.
+            const auto detected = decision.format && decision.format->displayName
+                ? Loc(decision.format->displayNameKey, decision.format->displayName)
+                : Loc("format.unknown", L"Unknown");
+            app.openFormatNotice = LocFormat("info.detectedAs",
+                L"Detected {0}.", { detected });
+            app.filename = FileNameFromPath(path);
+            UpdateTitle(app);
+            if (decision.reason == model_core::ClassificationReason::Mismatch) {
+                const auto suffix = decision.extensionCandidate && decision.extensionCandidate->displayName
+                    ? Loc(decision.extensionCandidate->displayNameKey, decision.extensionCandidate->displayName)
+                    : Loc("format.unknown", L"Unknown");
+                SetFailure(app,
+                    Loc("failure.openAs.summary", L"The file suffix does not match its content."),
+                    LocFormat("failure.openAs.details",
+                        L"Detected {0}, but the suffix selects {1}. Choose Open As to pick the importer.",
+                        { detected, suffix }),
+                    path, model_core::ImportErrorCode::UnsupportedFormat);
+            } else {
+                SetFailure(app,
+                    Loc("failure.openAs.noSuffixSummary", L"This file needs an explicit format."),
+                    LocFormat("failure.openAs.noSuffixDetails",
+                        L"Detected {0}, but the suffix is missing or unknown. Choose Open As to open it with the {0} importer.",
+                        { detected }),
+                    path, model_core::ImportErrorCode::UnsupportedFormat);
+            }
+            return;
+        }
+        chosen = decision.format;
+    }
+
+    const auto d3d12Format = d3d12_import_bridge::SourceFormatForFormatDescriptor(chosen);
     if (!d3d12Format)
     {
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
-        SetFailure(app, Loc("failure.unsupported.summary", L"This model format is not supported."),
-            Loc("failure.unsupported.details", L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, .usdz, .step, or .stp file. Other model formats are deferred."),
-            path, model_core::ImportErrorCode::UnsupportedFormat);
+        if (chosen) {
+            // A forced catalog entry whose importer is not shipped in this
+            // release (reserved identity) is a typed failure, not a crash.
+            app.openFormatNotice = LocFormat("info.openedAsUnavailable",
+                L"The {0} importer is not available in this build.",
+                { Loc(chosen->displayNameKey, chosen->displayName) });
+            SetFailure(app,
+                Loc("failure.formatUnavailable.summary", L"This format is not supported by this build."),
+                Loc("failure.formatUnavailable.details",
+                    L"Choose a supported format in Open As or update Preview 3D."),
+                path, model_core::ImportErrorCode::UnsupportedFormat);
+        } else {
+            SetFailure(app, Loc("failure.unsupported.summary", L"This model format is not supported."),
+                Loc("failure.unsupported.details", L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, .usdz, .step, or .stp file. Other model formats are deferred."),
+                path, model_core::ImportErrorCode::UnsupportedFormat);
+        }
         return;
+    }
+
+    if (forcedFormat)
+    {
+        const auto opened = Loc(forcedFormat->displayNameKey, forcedFormat->displayName);
+        app.openFormatNotice = LocFormat("info.openedAs", L"Opened as {0}.", { opened });
+        if (classification.content && classification.content->family != forcedFormat->family)
+        {
+            const auto detected = Loc(classification.content->displayNameKey,
+                classification.content->displayName);
+            app.openFormatNotice += L" " + LocFormat("info.detectedAs",
+                L"Detected {0}.", { detected });
+        }
+        app.forcedFormat = forcedFormat;
+    }
+    else
+    {
+        app.forcedFormat = nullptr;
     }
 
     const auto alive = app.alive;
@@ -2216,6 +2314,53 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     });
 }
 
+// Failure/open-flow Open As: show the detected/suffix candidates first, then
+// every importable catalog format. Stable names are ASCII and kept in the
+// menu label so power users can map the choice to --format.
+void ShowOpenAsMenu(ViewerApp& app)
+{
+    if (app.failedPath.empty()) return;
+    const auto classification = d3d12_import_bridge::ClassifyForOpen(
+        app.failedPath, app.skipContentCheck && !app.forcedFormat);
+    std::vector<const model_core::FormatDescriptor*> choices;
+    auto addChoice = [&](const model_core::FormatDescriptor* descriptor) {
+        if (!model_core::IsImportableFormat(descriptor)) return;
+        for (const auto* existing : choices) if (existing == descriptor) return;
+        choices.push_back(descriptor);
+    };
+    // Detected content and the suffix candidate are offered first; a
+    // disagreement therefore exposes both sides rather than silently picking.
+    if (classification.selected) addChoice(classification.selected);
+    if (classification.extension && classification.extension != classification.selected)
+        addChoice(classification.extension);
+    const std::size_t preferred = choices.size();
+    for (const auto* descriptor : open_options::OpenAsFormats()) addChoice(descriptor);
+    if (choices.empty()) return;
+
+    HMENU menu = CreatePopupMenu();
+    constexpr UINT kOpenAsMenuBase = 60000;
+    for (std::size_t index = 0; index < choices.size(); ++index) {
+        if (index == preferred && preferred > 0) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        const auto* descriptor = choices[index];
+        std::wstring label = Loc(descriptor->displayNameKey, descriptor->displayName);
+        label += L"  (";
+        label += std::wstring(descriptor->stableName.begin(), descriptor->stableName.end());
+        label += L")";
+        AppendMenuW(menu, MF_STRING, kOpenAsMenuBase + static_cast<UINT>(index), label.c_str());
+    }
+    RECT button = app.chrome.Button(Chrome::Part::Overflow).rect;
+    POINT anchor{ button.right, button.bottom };
+    ClientToScreen(app.window, &anchor);
+    const int selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+        anchor.x, anchor.y, 0, app.window, nullptr);
+    DestroyMenu(menu);
+    if (selected >= static_cast<int>(kOpenAsMenuBase)
+        && selected < static_cast<int>(kOpenAsMenuBase + choices.size())) {
+        const auto* forced = choices[static_cast<std::size_t>(selected - kOpenAsMenuBase)];
+        BeginOpen(app, app.failedPath, app.assetSearchRoots, forced);
+    }
+}
+
 void OpenDialog(ViewerApp& app)
 {
     if (app.appSmoke && !app.smokePickerPath.empty()) {
@@ -2229,33 +2374,46 @@ void OpenDialog(ViewerApp& app)
         Loc("failure.openDialogUnavailable.details", L"Windows could not create the system file picker."));
         return;
     }
-    // Filter labels are localized; the extension patterns are not. The label
-    // strings must outlive SetFileTypes, so they live in these arrays.
-    const std::wstring filterNames[] = {
-        Loc("open.filter.all", L"Supported 3D models"),
-        Loc("open.filter.gltf", L"glTF models (*.glb; *.gltf)"),
-        Loc("open.filter.stl", L"STL (*.stl)"),
-        Loc("open.filter.ply", L"PLY meshes and points (*.ply)"),
-        Loc("open.filter.obj", L"Wavefront OBJ with MTL (*.obj)"),
-        Loc("open.filter.fbx", L"Autodesk FBX (*.fbx)"),
-        Loc("open.filter.3mf", L"3D Manufacturing Format (*.3mf)"),
-        Loc("open.filter.usd", L"Universal Scene Description (*.usd; *.usda; *.usdc; *.usdz)"),
-        Loc("open.filter.step", L"STEP CAD models (*.step; *.stp)"),
-        Loc("open.filter.allFiles", L"All files (*.*)"),
+    // Filter labels are localized; the extension patterns are not. Both are
+    // generated from the format catalog so a new format cannot be added to the
+    // open dialog by hand. The vectors outlive SetFileTypes.
+    std::wstring allPattern;
+    std::vector<std::wstring> filterNames;
+    std::vector<std::wstring> filterPatterns;
+    auto appendPattern = [](std::wstring& pattern, const std::wstring& extension) {
+        if (!pattern.empty()) pattern += L';';
+        pattern += L"*." + extension;
     };
-    const wchar_t* const filterPatterns[] = {
-        L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx;*.3mf;*.usd;*.usda;*.usdc;*.usdz;*.step;*.stp",
-        L"*.glb;*.gltf", L"*.stl", L"*.ply", L"*.obj", L"*.fbx", L"*.3mf",
-        L"*.usd;*.usda;*.usdc;*.usdz", L"*.step;*.stp", L"*.*",
-    };
-    static_assert(ARRAYSIZE(filterNames) == ARRAYSIZE(filterPatterns), "filter arrays must match");
-    COMDLG_FILTERSPEC filters[ARRAYSIZE(filterNames)];
-    for (std::size_t index = 0; index < ARRAYSIZE(filterNames); ++index)
+    std::vector<model_core::FormatId> families;
+    for (const auto& descriptor : model_core::Formats()) {
+        if (!model_core::ProgIdForFormat(descriptor) || descriptor.extensions.empty()) continue;
+        for (const auto extension : descriptor.extensions)
+            appendPattern(allPattern, std::wstring(extension));
+        bool knownFamily = false;
+        for (const auto family : families) if (family == descriptor.family) { knownFamily = true; break; }
+        if (knownFamily) continue;
+        families.push_back(descriptor.family);
+        std::wstring pattern;
+        for (const auto& candidate : model_core::Formats()) {
+            if (candidate.family != descriptor.family) continue;
+            for (const auto extension : candidate.extensions)
+                appendPattern(pattern, std::wstring(extension));
+        }
+        const std::wstring display = Loc(descriptor.displayNameKey, descriptor.displayName);
+        filterNames.push_back(LocFormat("open.filter.format", L"{0} (*{1})", { display, pattern }));
+        filterPatterns.push_back(pattern);
+    }
+    filterNames.insert(filterNames.begin(), Loc("open.filter.all", L"Supported 3D models"));
+    filterPatterns.insert(filterPatterns.begin(), allPattern);
+    filterNames.push_back(Loc("open.filter.allFiles", L"All files (*.*)"));
+    filterPatterns.push_back(L"*.*");
+    std::vector<COMDLG_FILTERSPEC> filters(filterNames.size());
+    for (std::size_t index = 0; index < filterNames.size(); ++index)
     {
         filters[index].pszName = filterNames[index].c_str();
-        filters[index].pszSpec = filterPatterns[index];
+        filters[index].pszSpec = filterPatterns[index].c_str();
     }
-    dialog->SetFileTypes(ARRAYSIZE(filters), filters);
+    dialog->SetFileTypes(static_cast<UINT>(filters.size()), filters.data());
     dialog->SetDefaultExtension(L"glb");
     dialog->SetOptions(FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
     const HRESULT shown = dialog->Show(app.window);
@@ -2407,7 +2565,7 @@ void DrawOwnerButton(ViewerApp& app, const DRAWITEMSTRUCT& item)
     if (disabled) { fill = RGB(44, 44, 46); border = RGB(51, 51, 53); foreground = RGB(112, 112, 117); }
 
     const bool errorAction = item.CtlID == ID_VIEW_RETRY || item.CtlID == ID_VIEW_OPEN_ANOTHER ||
-        item.CtlID == ID_VIEW_COPY_DETAILS;
+        item.CtlID == ID_VIEW_OPEN_AS || item.CtlID == ID_VIEW_COPY_DETAILS;
     HBRUSH surfaceBrush = CreateSolidBrush(errorAction ? RGB(36, 36, 38) : RGB(44, 44, 46));
     FillRect(item.hDC, &bounds, surfaceBrush);
     DeleteObject(surfaceBrush);
@@ -2573,6 +2731,7 @@ void HandleCommand(ViewerApp& app, int id)
     {
     case ID_VIEW_OPEN:
     case ID_VIEW_OPEN_ANOTHER: OpenDialog(app); break;
+    case ID_VIEW_OPEN_AS: ShowOpenAsMenu(app); break;
     case ID_VIEW_FIT: FrameSelectedOrAll(app); break;
     case ID_VIEW_RESET:
         if (app.renderThread.HasModel())
@@ -2595,7 +2754,7 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_TOP: SnapViewCommand(app, ViewDir::Top); break;
     case ID_VIEW_PROJECTION: ToggleProjection(app); break;
     case ID_VIEW_MENU: ShowMoreMenu(app); break;
-    case ID_VIEW_RETRY: if (!app.failedPath.empty()) BeginOpen(app, app.failedPath); break;
+    case ID_VIEW_RETRY: if (!app.failedPath.empty()) BeginOpen(app, app.failedPath, app.assetSearchRoots, app.forcedFormat); break;
     case ID_VIEW_COPY_DETAILS: CopyErrorDetails(app); break;
     case ID_VIEW_CANCEL: CancelOpen(app); break;
     case ID_VIEW_CONTROLS: ShowControlsDialog(app.window); break;
@@ -3311,9 +3470,14 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.role = ROLE_SYSTEM_PUSHBUTTON;
         break;
     case Control::ErrorRetry: case Control::ErrorOpenAnother: case Control::ErrorCopyDetails:
+    case Control::ErrorOpenAs:
     {
-        HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton:app.copyButton;
-        info.name=control==Control::ErrorRetry?Loc("action.retry", L"Retry"):control==Control::ErrorOpenAnother?Loc("action.openAnother", L"Open another"):Loc("action.copyDetails", L"Copy details");
+        HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton
+            :control==Control::ErrorOpenAs?app.openAsButton:app.copyButton;
+        info.name=control==Control::ErrorRetry?Loc("action.retry", L"Retry")
+            :control==Control::ErrorOpenAnother?Loc("action.openAnother", L"Open another")
+            :control==Control::ErrorOpenAs?Loc("action.openAs", L"Open as\u2026")
+            :Loc("action.copyDetails", L"Copy details");
         RECT screen{};GetWindowRect(button,&screen);POINT corners[2]={{screen.left,screen.top},{screen.right,screen.bottom}};
         MapWindowPoints(nullptr,app.window,corners,2);info.rect={corners[0].x,corners[0].y,corners[1].x,corners[1].y};
         info.visible=app.state==ViewerState::Failed;info.enabled=IsWindowEnabled(button)!=FALSE;info.focused=GetFocus()==button;
@@ -3348,6 +3512,7 @@ void FocusAccessible(ViewerApp& app, viewer_accessibility::Control control)
     }
     if (control==viewer_accessibility::Control::ErrorRetry) SetFocus(app.retryButton);
     else if (control==viewer_accessibility::Control::ErrorOpenAnother) SetFocus(app.openAnotherButton);
+    else if (control==viewer_accessibility::Control::ErrorOpenAs) SetFocus(app.openAsButton);
     else if (control==viewer_accessibility::Control::ErrorCopyDetails) SetFocus(app.copyButton);
     InvalidateRect(app.window, nullptr, FALSE);
 }
@@ -3432,6 +3597,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::GizmoRollClockwise: TurnViewCommand(app,ViewTurn::RollClockwise); break;
     case Control::ErrorRetry: HandleCommand(app,ID_VIEW_RETRY); break;
     case Control::ErrorOpenAnother: HandleCommand(app,ID_VIEW_OPEN_ANOTHER); break;
+    case Control::ErrorOpenAs: HandleCommand(app,ID_VIEW_OPEN_AS); break;
     case Control::ErrorCopyDetails: HandleCommand(app,ID_VIEW_COPY_DETAILS); break;
     default: break;
     }
@@ -4220,7 +4386,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         std::wstring activationError;
         if (!app->activeInstance.StartListener(window, kActivationMessage, activationError))
             SetFailure(*app, Loc("failure.activationUnavailable.summary", L"Single-instance activation is unavailable."), activationError);
-        if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath);
+        if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath, {}, app->forcedFormat);
         return 0;
     }
     // --- Custom title bar: removes the native caption (WM_NCCALCSIZE) while
@@ -4373,7 +4539,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         break;
     }
     case WM_COMMAND:
-        if (LOWORD(wParam) == ID_VIEW_OPEN_INITIAL) BeginOpen(*app, app->initialPath);
+        if (LOWORD(wParam) == ID_VIEW_OPEN_INITIAL) BeginOpen(*app, app->initialPath, {}, app->forcedFormat);
         else HandleCommand(*app, LOWORD(wParam));
         return 0;
     case WM_DRAWITEM:
@@ -5477,6 +5643,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (!app->loadedModel || app->loadedModel->source.generationId != uploaded->generation) app->meshSelected = false;
             app->loadedModel = uploaded->metadata;
             app->warning=uploaded->metadata->warning;
+            if (!app->openFormatNotice.empty()) {
+                if (!app->warning.empty()) app->warning += L"\n";
+                app->warning += app->openFormatNotice;
+            }
             app->missingAssets=uploaded->metadata->missingAssets;
         }
         app->currentPath = uploaded->path;
@@ -5639,6 +5809,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     bool commandLineInvalid = false;
     bool bypassSingleInstance = false;
     bool activationSmoke = false;
+    bool listFormats = false;
     int argumentCount = 0;
     PWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
     if (arguments)
@@ -5654,6 +5825,21 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             }
             else if (_wcsicmp(arguments[i], L"--new-instance") == 0) bypassSingleInstance = true;
             else if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
+            else if (_wcsicmp(arguments[i], L"--skip-content-check") == 0) app.skipContentCheck = true;
+            else if (_wcsicmp(arguments[i], L"--list-formats") == 0) listFormats = true;
+            else if (_wcsicmp(arguments[i], L"--format") == 0) {
+                if (++i >= argumentCount) commandLineInvalid = true;
+                else {
+                    const auto option = open_options::ParseFormatName(arguments[i]);
+                    if (!option.valid) commandLineInvalid = true;
+                    else app.forcedFormat = option.descriptor;
+                }
+            }
+            else if (_wcsnicmp(arguments[i], L"--format=", 9) == 0) {
+                const auto option = open_options::ParseFormatName(arguments[i] + 9);
+                if (!option.valid) commandLineInvalid = true;
+                else app.forcedFormat = option.descriptor;
+            }
             // The external test-control surface (--app-smoke plus the WM_APP+104
             // and WM_COPYDATA message handlers) is compiled only into Debug
             // developer/test builds. In a Release (shipping) binary these flags
@@ -5744,6 +5930,37 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             else commandLineInvalid = true;
         }
         LocalFree(arguments);
+    }
+
+    if (listFormats)
+    {
+        // Stable machine-readable listing: one
+        // stable-name<TAB>extensions<TAB>display-name line per catalog format.
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
+        const std::wstring text = open_options::BuildFormatListText(
+            [](const model_core::FormatDescriptor& descriptor) {
+                return Loc(descriptor.displayNameKey, descriptor.displayName);
+            });
+        const int required = WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
+            static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+        std::string utf8(required > 0 ? static_cast<std::size_t>(required) : 0, '\0');
+        if (required > 0) {
+            WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+                utf8.data(), required, nullptr, nullptr);
+        }
+        HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+        bool closeOutput = false;
+        if (!output || output == INVALID_HANDLE_VALUE || GetFileType(output) == FILE_TYPE_UNKNOWN) {
+            output = CreateFileW(L"CONOUT$", GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+            closeOutput = true;
+        }
+        DWORD written = 0;
+        if (output && output != INVALID_HANDLE_VALUE && !utf8.empty())
+            WriteFile(output, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+        if (closeOutput && output && output != INVALID_HANDLE_VALUE) CloseHandle(output);
+        if (gBackgroundBrush) DeleteObject(gBackgroundBrush);
+        return 0;
     }
 
     if (!app.initialPath.empty())
