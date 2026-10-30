@@ -16,6 +16,8 @@
 #include <fstream>
 #include "SceneSnapshot.h"
 #include "SyntheticStreamingSource.h"
+#include <DirectXMath.h>
+#include <cmath>
 
 #include <model_core/VertexLayouts.h>
 #include <platform/Generation.h>
@@ -903,6 +905,43 @@ TEST_CASE("One uploaded geometry allocation backs many stable hierarchical insta
         CHECK(draw.instanceId==1000+i);CHECK(draw.instanceTransform[12]>=1.0e12);}
     CHECK(uploader.pendingModel.meshes.back().mirrored);
     uploader.WaitForIdle();
+}
+
+TEST_CASE("Normal matrix inverts nonuniform and mirrored instances", "[graphics][material-semantics]")
+{
+    DirectX::XMFLOAT4X4 identityAxis;
+    DirectX::XMStoreFloat4x4(&identityAxis,DirectX::XMMatrixIdentity());
+    const double origin[3]={0,0,0}, scene[3]={0,0,0}, camera[3]={0,0,0};
+    const auto transformNormal=[&](const CameraRelativeInstanceTransform& relative,
+                                   DirectX::XMFLOAT3 normal) {
+        // The shader forms n' from dot(n, normalToCameraRowN).
+        const auto& m=relative.normalToCamera;
+        DirectX::XMFLOAT3 result(
+            normal.x*m._11+normal.y*m._21+normal.z*m._31,
+            normal.x*m._12+normal.y*m._22+normal.z*m._32,
+            normal.x*m._13+normal.y*m._23+normal.z*m._33);
+        const float length=std::sqrt(result.x*result.x+result.y*result.y+result.z*result.z);
+        return DirectX::XMFLOAT3(result.x/length,result.y/length,result.z/length);
+    };
+
+    // Nonuniform scale 2 / 1 / 0.5: a 45-degree normal gains a 1:2:4 slope.
+    const double nonuniform[16]={2,0,0,0, 0,1,0,0, 0,0,0.5,0, 0,0,0,1};
+    const auto scaled=BuildCameraRelativeInstanceTransform(nonuniform,origin,scene,camera,identityAxis);
+    const auto normal=transformNormal(scaled,{1,1,1});
+    const float expectedLength=std::sqrt(0.25f+1.0f+4.0f);
+    CHECK(std::fabs(normal.x-0.5f/expectedLength)<1e-5f);
+    CHECK(std::fabs(normal.y-1.0f/expectedLength)<1e-5f);
+    CHECK(std::fabs(normal.z-2.0f/expectedLength)<1e-5f);
+
+    // Mirrored X: the inverse-transpose keeps the reflection, the tangent
+    // handedness sign (determinant) flips, and the projected winding reverses.
+    const double mirrored[16]={-1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    const auto flipped=BuildCameraRelativeInstanceTransform(mirrored,origin,scene,camera,identityAxis);
+    const auto mirroredNormal=transformNormal(flipped,{1,1,0});
+    CHECK(std::fabs(mirroredNormal.x+0.70710677f)<1e-5f);
+    CHECK(std::fabs(mirroredNormal.y-0.70710677f)<1e-5f);
+    const auto matrix=DirectX::XMLoadFloat4x4(&flipped.localToCamera);
+    CHECK(DirectX::XMVectorGetX(DirectX::XMMatrixDeterminant(matrix))<0.0f);
 }
 
 TEST_CASE("PNG JPEG and Basis decode-to-product-upload pixels match frozen goldens at every mip", "[graphics][texture-upload]")

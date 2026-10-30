@@ -1,6 +1,6 @@
 # ADR-0078 — Authored material texture semantics are normalized, not inferred
 
-- Status: Accepted for the wire/import contract; renderer application pending
+- Status: Accepted
 - Date: 2026-10-30
 - Task: T22
 
@@ -35,11 +35,24 @@ ior=1 on every material) exercise these paths.
 6. Derived-cache keys use the actual parser/protocol/material/vertex identity
    (`kDerivedCacheParserIdentity`); cache schema is 4.
 
+7. The renderer consumes every v13 field: normal scale multiplies the sampled
+   tangent-space XY, each slot applies its own UV set/transform/sampler, and AO
+   is sampled only from the occlusion slot. Double-sided back faces reverse the
+   geometric normal before the TBN is formed; a mirrored instance flips tangent
+   handedness by its determinant sign; a zero tangent falls back to
+   screen-space derivatives. The binding mechanism (per-material `b2` CBV,
+   one region per swap-chain frame) is ADR-0080.
+
 ## Consequences
 
 - Every producer/consumer and the hostile-section validator move together with
   protocol 13. Older entries cannot be reused.
 - Adding a new material slot or transform layout is a wire change.
-- The renderer must eventually consume the v13 fields; until it does, the
-  normalized data is ahead of the image. That gap is recorded as a T22
-  follow-up and must not be papered over with MR-red AO.
+- The renderer now depends on the v13 record; a producer that leaves a slot
+  flag zero inherits the material-wide address/nearest fallback.
+- Only UV set 0 exists on the wire. Supporting UV1 requires a vertex-layout and
+  wire change, not a shader-side alias.
+- Evidence is the generated `material-semantics` fixture, its numeric Debug
+  readback (normal-scale ordering, independent AO 0.2 versus MR-red 1.0,
+  UV1-unbound, MASK alpha, IOR=1 suppression) and the Car/Camera/Suit/
+  microscope captures.

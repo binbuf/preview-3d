@@ -139,16 +139,19 @@ TEST_CASE("Info panel reports the active preset and source orientation",
     CHECK(sections.back().rows[0].value == L"Studio CAD");
 }
 
-TEST_CASE("Studio PBR uses ORM R as ambient occlusion without darkening direct specular",
+TEST_CASE("Studio PBR samples the independent occlusion map without darkening direct specular",
           "[texture-ao]")
 {
     const char* source = D3D12ViewerPath::TexturedPixelShaderSource();
     REQUIRE(source != nullptr);
     const std::string shader(source);
-    // ORM convention: R is AO, G roughness, B metallic.
-    CHECK(shader.find("occlusion=OcclusionFactor(mr.r,gMaterialLobes0.z)") != std::string::npos);
+    // The metallic-roughness map is G roughness/B metallic only; T22's AO comes
+    // from the authored occlusion slot, never from MR red.
+    CHECK(shader.find("occlusion=OcclusionFactor(SampleSlot(gOcclusion,aoUv).r,gMaterialLobes0.z)")
+          != std::string::npos);
     CHECK(shader.find("metallic*=mr.b") != std::string::npos);
     CHECK(shader.find("roughness*=mr.g") != std::string::npos);
+    CHECK(shader.find("Texture2D gOcclusion : register(t5)") != std::string::npos);
     // Indirect diffuse/environment terms are scaled by AO. T14 replaced the
     // analytic view-space gradient with the world-stable SH/cubemap IBL.
     CHECK(shader.find("EvaluateStudioIrradiance(worldN)*envIntensity*diffuseScale*occlusion")

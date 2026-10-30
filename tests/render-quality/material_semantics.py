@@ -1,10 +1,12 @@
 """T22 authored material/UV/normal/AO verification.
 
 Runs the material-semantic unit/import/hostile/cache lanes serially, then drives
-the Debug viewer's validated wire records and raw linear inspection channels on
-the generated ``material-semantics`` fixture. It also records Car, Camera,
-microscope and Suit observations and compares them with the T21 baseline where
-one is present locally.
+the Debug viewer's validated wire records, raw linear inspection channels and
+per-probe numeric readback on the generated ``material-semantics`` fixture. It
+also records Car, Camera, microscope and Suit observations and compares them
+with the T21 baseline where one is present locally. The generated fixture has
+ten authored probes plus separate mirrored-tangent and double-sided back-face
+probes.
 
 The viewer is never asked to parse glTF: the expected values come from
 ``fixtures.EXPECTED_MATERIALS`` and the viewer reports only its validated wire
@@ -18,9 +20,10 @@ import time
 from pathlib import Path
 
 from common import RESULT_SCHEMA, encoded_png, sha256_file, write_json
-from diagnostics import (CHANNELS, CONTRIBUTION_CHANNELS, _f32, _save_channel_images,
-                         _u32, material_records, region_sample, sample_region,
-                         set_channel, channel_supported)
+from diagnostics import (CHANNELS, CONTRIBUTION_CHANNELS, _display_rgb, _f32,
+                         _save_channel_images, _u32, material_records,
+                         region_sample, sample_region, set_channel,
+                         channel_supported)
 from fixtures import EXPECTED_MATERIALS
 from viewer import Viewer
 
@@ -136,50 +139,117 @@ def _check_material_records(records, expected_materials):
             checks.append({'name': f"{expected['name']} baseColor[{component}]",
                            'pass': abs(value - channel) <= 1e-3,
                            'actual': value, 'expected': channel, 'tolerance': 1e-3})
-        for field in ('occlusionStrength', 'transmissionFactor', 'ior', 'alphaCutoff'):
+        for field in ('occlusionStrength', 'transmissionFactor', 'ior', 'alphaCutoff',
+                      'normalScale'):
             if field not in expected:
                 continue
             check(field, expected[field])
+        if 'occlusionBound' in expected:
+            bound = bool(record.get('occlusionBound'))
+            checks.append({
+                'name': f"{expected['name']} occlusion bound",
+                'pass': bound == bool(expected['occlusionBound']),
+                'actual': bound, 'expected': bool(expected['occlusionBound'])})
         if 'baseColorBound' in expected:
             bound = bool(record.get('mapMask', 0) & 1)
             checks.append({
                 'name': f"{expected['name']} baseColor bound",
                 'pass': bound == bool(expected['baseColorBound']),
                 'actual': bound, 'expected': bool(expected['baseColorBound'])})
+        if 'baseUv' in expected:
+            for field, expected_value in (('uvOffset', expected['baseUv']['offset']),
+                                          ('uvScale', expected['baseUv']['scale'])):
+                actual = record.get(field)
+                good = actual is not None and max(
+                    abs(a - b) for a, b in zip(actual, expected_value)) <= 1e-3
+                checks.append({'name': f"{expected['name']} {field}", 'pass': good,
+                               'actual': actual, 'expected': expected_value})
+            check('uvRotation', expected['baseUv']['rotation'])
+        for slot, spec in (expected.get('slotUv') or {}).items():
+            index = slot - 1
+            for field, values in (('slotUvOffset', spec['offset']),
+                                  ('slotUvScale', spec['scale'])):
+                actual = (record.get(field) or [[0.0, 0.0]] * 4)[index]
+                good = actual is not None and max(
+                    abs(a - b) for a, b in zip(actual, values)) <= 1e-3
+                checks.append({'name': f"{expected['name']} {field}[{slot}]",
+                               'pass': good, 'actual': actual, 'expected': values})
+            actual = (record.get('slotUvRotation') or [0.0] * 4)[index]
+            checks.append({'name': f"{expected['name']} slotUvRotation[{slot}]",
+                           'pass': abs(actual - spec['rotation']) <= 1e-3,
+                           'actual': actual, 'expected': spec['rotation']})
+        for slot, spec in (expected.get('slotSampler') or {}).items():
+            uv_set, address_u, address_v, nearest = _slot_fields(
+                (record.get('slotFlags') or [0] * 5)[slot])
+            good = (uv_set == 0 and address_u == spec['addressU']
+                    and address_v == spec['addressV'] and nearest == spec['nearest'])
+            checks.append({'name': f"{expected['name']} slot sampler[{slot}]",
+                           'pass': good,
+                           'actual': {'uvSet': uv_set, 'addressU': address_u,
+                                      'addressV': address_v, 'nearest': nearest},
+                           'expected': spec})
     return checks, matched
 
 
-def _centroid_for_base(frame, base_color, rect):
-    """Approximate sphere screen position from the base-colour channel image."""
-    from diagnostics import _display_rgb
-    target = _display_rgb(base_color[:3])
-    width, height = frame['width'], frame['height']
-    rgb = frame['rgb']
-    best, best_distance, total = None, 1e9, 0
-    for y in range(0, height, 2):
-        for x in range(0, width, 2):
-            i = (y * width + x) * 3
-            distance = sum((rgb[i + c] - target[c]) ** 2 for c in range(3))
-            if distance < best_distance:
-                best_distance, best = distance, (x, y)
-    return best
+def _slot_fields(flags):
+    return (int(flags & 0xFF), (int(flags) >> 8) & 3, (int(flags) >> 10) & 3,
+            bool(int(flags) & (1 << 12)))
+
+
+PROBE_CHANNELS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20]
+
+
+def _locate_probes(frame, expected_materials):
+    """Centroid per probe, classified against every expected display colour.
+
+    Each material contributes one or more expected colours (a textured probe
+    shows its two texel colours), and a pixel is assigned to the nearest target
+    across all groups. That keeps the normal-scale probes, which differ by only
+    a few hundredths of a base-colour component, apart.
+    """
+    targets, owners = [], []
+    for index, material in enumerate(expected_materials):
+        colors = material.get('locatorColors') or [material['baseColor'][:3]]
+        for color in colors:
+            targets.append(_display_rgb(color))
+            owners.append(index)
+    sums = [[0, 0, 0] for _ in expected_materials]
+    width, height, rgb = frame['width'], frame['height'], frame['rgb']
+    for y in range(height):
+        row = y * width
+        for x in range(width):
+            i = (row + x) * 3
+            pixel = (rgb[i], rgb[i + 1], rgb[i + 2])
+            best, best_distance = -1, 1e9
+            for index, target in enumerate(targets):
+                distance = ((pixel[0] - target[0]) ** 2 + (pixel[1] - target[1]) ** 2
+                            + (pixel[2] - target[2]) ** 2)
+                if distance < best_distance:
+                    best, best_distance = index, distance
+            if best < 0 or best_distance > 45 * 45:
+                continue
+            group = owners[best]
+            sums[group][0] += x
+            sums[group][1] += y
+            sums[group][2] += 1
+    return [(sx // count, sy // count) if count >= 100 else None
+            for sx, sy, count in sums]
 
 
 def _probe_channels(viewer, records, expected_materials, output: Path):
-    """Sample the isolated channels at each probe sphere and save images."""
-    images = _save_channel_images(viewer, output / 'probes',
-                                  [1, 3, 4, 5, 6, 7, 8, 9, 10, 20])
+    """Locate every probe sphere from the base-colour channel, then read values.
+
+    The fixture assigns each probe a distinct base color so the locator cannot
+    confuse two spheres that share a material key, and ``_centroids`` classifies
+    every pixel against all expected display colours at once.
+    """
+    images = _save_channel_images(viewer, output / 'probes', PROBE_CHANNELS)
     set_channel(viewer.hwnd, 1)
     frame = viewer.wait_stable()
     rect = frame['rect']
+    centroids = _locate_probes(frame, expected_materials)
     samples = []
-    used = set()
-    for expected in expected_materials:
-        record = _match_expected(expected, records, used)
-        if record is None:
-            samples.append({'material': expected['name'], 'error': 'record not found'})
-            continue
-        centroid = _centroid_for_base(frame, expected['baseColor'], rect)
+    for expected, centroid in zip(expected_materials, centroids):
         entry = {'material': expected['name'], 'centroid': centroid, 'channels': {}}
         if centroid is None:
             entry['error'] = 'probe not visible'
@@ -187,12 +257,16 @@ def _probe_channels(viewer, records, expected_materials, output: Path):
             continue
         x = rect['left'] + centroid[0]
         y = rect['top'] + centroid[1]
-        for channel in [1, 3, 4, 5, 6, 7, 8, 9, 10, 20]:
+        for channel in PROBE_CHANNELS:
             set_channel(viewer.hwnd, channel)
             entry['channels'][channel] = sample_region(
                 viewer.hwnd, x - 4, y - 4, x + 4, y + 4).get('rgba')
         samples.append(entry)
     return samples, images
+
+
+def _distance(left, right):
+    return max(abs(a - b) for a, b in zip(left[:3], right[:3]))
 
 
 def _check_gpu(samples, expected_materials):
@@ -203,20 +277,101 @@ def _check_gpu(samples, expected_materials):
         entry = by_name.get(name, {})
         return (entry.get('channels') or {}).get(channel)
 
-    # The shading-normal and AO channel images are recorded as evidence, but
-    # this slice applies those semantics in the validated wire record and the
-    # GPU shading application lands with the renderer-side follow-up. Do not
-    # assert pixel values the current shader does not yet produce.
+    def check(name, passed, actual, expected, tolerance=None):
+        checks.append({'name': name, 'pass': bool(passed), 'actual': actual,
+                       'expected': expected, 'tolerance': tolerance})
+
+    # --- normal texture scale -------------------------------------------------
+    deviations = {}
+    for name in ('normal scale 0', 'normal scale 045', 'normal scale 1'):
+        geometric = channel(name, 2)
+        shading = channel(name, 3)
+        if not geometric or not shading:
+            check(f'{name} normal channels present', False, shading, 'shading normal')
+            continue
+        deviations[name] = _distance(geometric, shading)
+    if 'normal scale 0' in deviations:
+        check('normal scale 0 does not perturb the shading normal',
+              deviations['normal scale 0'] <= 0.02, deviations['normal scale 0'], 0.0, 0.02)
+    if 'normal scale 045' in deviations and 'normal scale 0' in deviations:
+        check('normal scale 0.45 perturbs the shading normal',
+              deviations['normal scale 045'] > deviations['normal scale 0'] + 0.005,
+              deviations['normal scale 045'], '>0.005')
+    if 'normal scale 1' in deviations and 'normal scale 045' in deviations:
+        check('normal scale 1 perturbs more than 0.45',
+              deviations['normal scale 1'] > deviations['normal scale 045'],
+              deviations['normal scale 1'], f">{deviations['normal scale 045']:.4f}")
+
+    # --- independent occlusion ---------------------------------------------
+    mr_ao = (channel('MR red is not AO', 8) or [None])[0]
+    authored_ao = (channel('independent occlusion', 8) or [None])[0]
+    if mr_ao is not None:
+        check('MR red is not used as AO', abs(mr_ao - 1.0) <= 0.02, mr_ao, 1.0, 0.02)
+    if authored_ao is not None:
+        check('independent occlusion samples the authored 0.2',
+              abs(authored_ao - 0.2) <= 0.02, authored_ao, 0.2, 0.02)
+
+    # --- UV1 is unbound, not aliased to UV0 --------------------------------
     uv1 = channel('uv1 unsupported', 1)
     if uv1:
-        # The base-color texture is not bound, so the authored factor is shown
-        # rather than a UV0-sampled texture.
-        checks.append({'name': 'uv1 slot not aliased', 'pass': True,
-                       'actual': uv1[:3], 'expected': 'authored factor'})
+        expected = [0.8, 0.3, 0.2]
+        check('uv1 slot is left unbound rather than aliased to UV0',
+              _distance(uv1, expected) <= 0.02, uv1[:3], expected, 0.02)
 
-    # Alpha/transmission channel values are recorded as evidence; the import
-    # lane is the authority for their normalized values (region sampling on a
-    # dense sphere grid is too coarse for a numeric assertion here).
+    # --- per-slot transform actually changes the base-colour sample --------
+    transformed = channel('per slot transform', 1)
+    if transformed:
+        check('per-slot base-colour transform replaces the flat factor',
+              _distance(transformed, [0.7, 0.7, 0.7]) > 0.02,
+              transformed[:3], 'texture sample')
+
+    # --- alpha coverage and transmission ----------------------------------
+    cutout_alpha = (channel('alpha cutout', 9) or [None])[0]
+    if cutout_alpha is not None:
+        check('MASK coverage keeps the authored 0.35 alpha above the 0.2 cutoff',
+              abs(cutout_alpha - 0.35) <= 0.02, cutout_alpha, 0.35, 0.02)
+    suppressed = (channel('ior 1 transmission suppressed', 10) or [None])[0]
+    if suppressed is not None:
+        check('IOR=1 transmission is suppressed rather than forced to a glass lobe',
+              suppressed <= 0.01, suppressed, 0.0, 0.01)
+    transmitted = (channel('ior 15 transmission', 10) or [None])[0]
+    if transmitted is not None:
+        check('IOR=1.5 transmission keeps the authored 0.9 factor',
+              abs(transmitted - 0.9) <= 0.02, transmitted, 0.9, 0.02)
+
+    # --- metal/rough split from the MR map --------------------------------
+    mr_metal = (channel('MR red is not AO', 6) or [None])[0]
+    mr_rough = (channel('MR red is not AO', 7) or [None])[0]
+    if mr_metal is not None:
+        check('MR blue still drives metallic', abs(mr_metal - 1.0) <= 0.02, mr_metal, 1.0, 0.02)
+    if mr_rough is not None:
+        check('MR green still drives roughness', abs(mr_rough - 128 / 255) <= 0.02,
+              mr_rough, 128 / 255, 0.02)
+
+    # --- mirrored instance tangent handedness -----------------------------
+    mirrored = channel('mirrored tangent handedness', 3)
+    mirrored_geo = channel('mirrored tangent handedness', 2)
+    if mirrored and mirrored_geo:
+        deviation = _distance(mirrored_geo, mirrored)
+        check('mirrored instance keeps a valid perturbed tangent basis',
+              deviation > 0.01, deviation, '>0.01')
+
+    # --- double-sided back face reverses the geometric normal -------------
+    for expected in expected_materials:
+        if not expected.get('backFace'):
+            continue
+        geometric = channel(expected['name'], 2)
+        shading = channel(expected['name'], 3)
+        if not geometric or not shading:
+            continue
+        # Channel encoding is n*0.5+0.5, so reversing n maps each component v
+        # to 1-v. Normal scale is 0 on this probe, so shading equals the
+        # reversed geometric normal exactly.
+        reversed_normal = [1.0 - value for value in geometric[:3]]
+        check('double-sided back face reverses the geometric normal before the TBN',
+              _distance(shading, reversed_normal) <= 0.02,
+              shading[:3], reversed_normal, 0.02)
+
     return checks
 
 
@@ -334,14 +489,20 @@ def write_report(output: Path, report):
         '',
         '## Interpretation',
         '',
-        '- MR red is no longer read as AO. The MR probe reports occlusion 1.0; the',
-        '  independent occlusion probe reports the authored 0.2.',
-        '- Normal scale travels in the validated material record and changes the',
-        '  isolated shading-normal channel.',
+        '- MR red is no longer read as AO. The MR probe reads occlusion 1.0 while',
+        '  the independent occlusion probe reads the authored 0.2.',
+        '- Normal scale changes the isolated shading-normal channel in authored',
+        '  order (0 -> 0.45 -> 1.0); scale 0 leaves the geometric normal intact.',
+        '- Per-slot transforms and samplers are applied independently, the base',
+        '  color sample changes under its authored transform and the normal map',
+        '  keeps its own transform and sampler.',
         '- UV1 references are left unbound with a specific compatibility record;',
         '  they are not sampled with UV0 coordinates.',
-        '- Authored alphaMode/cutoff are preserved. The IOR=1 testimonial case',
-        '  keeps its explicit suppression record; IOR=1.5 transmission is carried.',
+        '- Authored alphaMode/cutoff are preserved: the MASK probe keeps 0.35',
+        '  coverage above its 0.2 cutoff. The IOR=1 testimonial case keeps its',
+        '  explicit suppression (transmission 0.0); IOR=1.5 carries 0.9.',
+        '- A mirrored instance keeps a valid perturbed tangent basis; the',
+        '  double-sided front-face path is exercised by the shader contract lane.',
         '- Camera glass is a reviewed nonregression case: the lens keeps its dark',
         '  reflection/depth rather than becoming a flat pale disk. Car glass',
         '  ordering remains T26/T27 work.',

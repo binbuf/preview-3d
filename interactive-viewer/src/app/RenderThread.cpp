@@ -337,7 +337,16 @@ void RenderThread::RefreshDebugMaterials()
         std::memcpy(record.uvOffset, mesh.material.uvOffset, sizeof(record.uvOffset));
         std::memcpy(record.uvScale, mesh.material.uvScale, sizeof(record.uvScale));
         record.uvRotation = mesh.material.uvRotation;
-        for (int slot = 0; slot < 4; ++slot) {
+        record.normalScale = mesh.material.normalScale;
+        for (int slot = 0; slot < 5; ++slot) {
+            record.slotFlags[slot] = mesh.material.slotFlags[slot];
+            if (slot > 0) {
+                record.slotUvOffset[slot - 1][0] = mesh.material.slotUvOffset[slot - 1][0];
+                record.slotUvOffset[slot - 1][1] = mesh.material.slotUvOffset[slot - 1][1];
+                record.slotUvScale[slot - 1][0] = mesh.material.slotUvScale[slot - 1][0];
+                record.slotUvScale[slot - 1][1] = mesh.material.slotUvScale[slot - 1][1];
+                record.slotUvRotation[slot - 1] = mesh.material.slotUvRotation[slot - 1];
+            }
             record.textureIndices[slot] = mesh.textureIndices[slot];
             record.textureBound[slot] = mesh.textureInfo[slot].bound;
             record.textureChunkIds[slot] = mesh.textureInfo[slot].chunkId;
@@ -962,23 +971,28 @@ void RenderThread::PumpUploads(HWND window)
             path_.model.neutralTextures=std::move(pub.resources.neutralTextures);
         std::wstring descriptorError;
         const bool descriptorsReady=path_.RebuildMaterialDescriptors(path_.model,descriptorError);
+        bool materialBuffersReady=descriptorsReady;
         D3D12ViewerPath::UpdateCoarseVisibility(path_.model);
         for (auto& mesh:path_.model.meshes) {
             const auto mat=materials_.find(mesh.materialChunkId);
             if (mat==materials_.end()) continue;
             mesh.material=mat->second.data;mesh.hasMaterial=true;
-            const uint32_t ids[4]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
-                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId};
-            for (UINT slot=0;slot<4;++slot) for (const auto& texture:path_.model.textures) if (texture.chunkId==ids[slot]) {
+            if (!path_.EnsureMaterialConstants(mesh,descriptorError)) materialBuffersReady=false;
+            const uint32_t ids[5]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
+                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId,
+                                  mat->second.occlusionImageChunkId};
+            for (UINT slot=0;slot<5;++slot) for (const auto& texture:path_.model.textures) if (texture.chunkId==ids[slot]) {
                 mesh.textureIndices[slot]=int(texture.srvHeapIndex);
+                mesh.textureInfo[slot].chunkId=texture.chunkId;
+                mesh.textureInfo[slot].bound=true;
                 if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
                 break;
             }
         }
         UpdateResidencySmoke();
         stagedMetadata_->stats.drawCallCount=int(displayedChunks_.load());
-        message->ok=descriptorsReady; message->terminal=true;
-        if (!descriptorsReady) {
+        message->ok=materialBuffersReady; message->terminal=true;
+        if (!materialBuffersReady) {
             message->errorCode=model_core::ImportErrorCode::UploadFailure;
             message->errorDetails=descriptorError;
         }
@@ -1093,7 +1107,17 @@ void RenderThread::PumpUploads(HWND window)
             std::memcpy(draw.instanceTransform,instance.worldTransform,sizeof(draw.instanceTransform));
             std::memcpy(draw.instanceBoundsMin,instance.data.worldMin,sizeof(draw.instanceBoundsMin));
             std::memcpy(draw.instanceBoundsMax,instance.data.worldMax,sizeof(draw.instanceBoundsMax));
-            draw.mirrored=instance.mirrored;destination.meshes.push_back(std::move(draw));
+            draw.mirrored=instance.mirrored;
+            // The clone shares the source geometry's buffer, which may be
+            // tagged for another material or handedness. Give it its own
+            // before publication.
+            std::wstring materialError;
+            if (!path_.EnsureMaterialConstants(draw,materialError)) {
+                stagedFailed_=true;
+                message->errorCode=model_core::ImportErrorCode::UploadFailure;
+                message->errorDetails=materialError;
+            }
+            destination.meshes.push_back(std::move(draw));
         }
         if (destination.neutralTextures.empty())
             destination.neutralTextures=std::move(pub.resources.neutralTextures);
@@ -1138,22 +1162,27 @@ void RenderThread::PumpUploads(HWND window)
             const auto desc=texture.resource->GetDesc();extent=std::max(extent,desc.Width);mips=std::max(mips,uint64_t(desc.MipLevels));
         }
         textureExtent_.store(extent);textureCount_.store(destination.textures.size());textureMips_.store(mips);
+        bool materialBuffersReady=descriptorsReady;
         for (auto& mesh : destination.meshes) {
             auto mat = materials_.find(mesh.materialChunkId);
             if (mat == materials_.end()) continue; // Neutral, immutable until a dependency arrives.
             mesh.material=mat->second.data;mesh.hasMaterial=true;
-            const uint32_t ids[4]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
-                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId};
-            for (UINT slot=0;slot<4;++slot) for (const auto& texture:destination.textures) {
+            if (!path_.EnsureMaterialConstants(mesh,descriptorError)) materialBuffersReady=false;
+            const uint32_t ids[5]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
+                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId,
+                                  mat->second.occlusionImageChunkId};
+            for (UINT slot=0;slot<5;++slot) for (const auto& texture:destination.textures) {
                 if (texture.chunkId!=ids[slot]) continue;
                 mesh.textureIndices[slot]=static_cast<int>(texture.srvHeapIndex);
+                mesh.textureInfo[slot].chunkId=texture.chunkId;
+                mesh.textureInfo[slot].bound=true;
                 if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
                 break;
             }
         }
         const bool hasVisibleDraw = std::any_of(destination.meshes.begin(), destination.meshes.end(),
             [](const auto& draw) { return draw.drawEnabled; });
-        if (descriptorsReady && stagedHaveBounds_ && hasVisibleDraw
+        if (materialBuffersReady && stagedHaveBounds_ && hasVisibleDraw
             && (!stagedProxyMode_ || stagedProxyComplete_ || !path_.hasModel)) {
             if (modelGeneration_ != pub.task.generation) {
                 uint64_t fence = 0;
@@ -1205,7 +1234,12 @@ void RenderThread::PumpUploads(HWND window)
             }
         }
         message->metadata = std::make_shared<const ModelData>(metadata);
-        message->ok = descriptorsReady;
+        message->ok = materialBuffersReady;
+        if (!materialBuffersReady) {
+            stagedFailed_=true;
+            message->errorCode=model_core::ImportErrorCode::UploadFailure;
+            message->errorDetails=descriptorError;
+        }
         if (modelGeneration_ != pub.task.generation) return;
     }
     // Align cancel/recovery UI with the representation already accepted by the

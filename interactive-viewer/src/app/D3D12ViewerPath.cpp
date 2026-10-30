@@ -71,11 +71,133 @@ DrawConstants BuildDrawConstants(const double instance[16], const double origin[
     return result;
 }
 
+// T22 per-material CBV. The layout matches the HLSL MaterialConstants cbuffer
+// byte for byte; it must stay float4-aligned because HLSL packs cbuffers that
+// way. The per-slot packed word is addressU | addressV<<2 | nearest<<4 |
+// uvSet<<5, with bit 9 marking an authored uv set this build cannot sample.
+struct MaterialConstantData
+{
+    float baseColorFactor[4]{};
+    float materialFactors[4]{};
+    float emissiveFactor[4]{};
+    float uvLegacy[4]{};
+    float uvLegacy2[4]{};
+    float lobes0[4]{};
+    float lobes1[4]{};
+    float lobes2[4]{};
+    float extras[4]{};
+    float slotUv[model_core::kMaterialTextureSlotCount][4]{};
+    float slotParams[model_core::kMaterialTextureSlotCount][4]{};
+};
+static_assert(sizeof(MaterialConstantData) <= D3D12ViewerPath::kMaterialConstantStride,
+              "material constant data exceeds its CBV stride");
+
+constexpr uint32_t kRenderSlotFlagUnsupportedUvSet = 1u << 9;
+
+uint32_t RenderMaterialFlags(const model_core::MaterialPayload& material, bool twoSided) noexcept
+{
+    return (twoSided ? 1u : 0u)
+        | ((material.flags & model_core::kMaterialFlagUnlit) ? 2u : 0u)
+        | (material.alphaMode == uint32_t(model_core::AlphaModeId::Mask) ? 4u : 0u)
+        | ((material.flags & model_core::kMaterialFlagFlipV) ? 8u : 0u)
+        | ((material.flags & model_core::kMaterialSamplerFlags) << 1)
+        | ((material.flags & model_core::kMaterialFlagTextureLayer) ? 512u : 0u)
+        | ((material.flags & model_core::kMaterialFlagTextureMix) ? 1024u : 0u)
+        | ((material.flags & model_core::kMaterialFlagVertexSrgb) ? 2048u : 0u)
+        | ((material.flags & model_core::kMaterialFlagTransmissive) ? 4096u : 0u);
+}
+
+uint32_t RenderSlotPacked(const model_core::MaterialPayload& material, uint32_t slot) noexcept
+{
+    uint32_t addressU = 0, addressV = 0, uvSet = 0;
+    bool nearest = false;
+    const uint32_t slotFlags = material.slotFlags[slot];
+    if (slotFlags == 0 && (material.flags & model_core::kMaterialSamplerFlags) != 0) {
+        // Producers predating per-slot metadata keep their material-wide
+        // addressing/nearest intent rather than silently becoming wrap/linear.
+        addressU = (material.flags >> model_core::kMaterialAddressUShift)
+            & model_core::kMaterialAddressMask;
+        addressV = (material.flags >> model_core::kMaterialAddressVShift)
+            & model_core::kMaterialAddressMask;
+        nearest = (material.flags & model_core::kMaterialFlagNearest) != 0;
+    } else {
+        addressU = (slotFlags >> model_core::kMaterialSlotAddressUShift)
+            & model_core::kMaterialSlotAddressMask;
+        addressV = (slotFlags >> model_core::kMaterialSlotAddressVShift)
+            & model_core::kMaterialSlotAddressMask;
+        nearest = (slotFlags & model_core::kMaterialSlotNearest) != 0;
+        uvSet = model_core::MaterialSlotUvSet(slotFlags);
+    }
+    uint32_t packed = addressU | (addressV << 2) | (nearest ? 16u : 0u)
+        | ((std::min)(uvSet, 15u) << 5);
+    if (uvSet > model_core::kMaterialMaxSupportedUvSet) packed |= kRenderSlotFlagUnsupportedUvSet;
+    return packed;
+}
+
+void FillMaterialConstantData(const model_core::MaterialPayload& material, uint32_t mapMask,
+                              bool twoSided, bool mirrored, MaterialConstantData& data) noexcept
+{
+    std::memcpy(data.baseColorFactor, material.baseColorFactor, sizeof(data.baseColorFactor));
+    data.materialFactors[0] = material.metallicFactor;
+    data.materialFactors[1] = material.roughnessFactor;
+    data.materialFactors[2] = material.alphaCutoff;
+    data.materialFactors[3] = float(RenderMaterialFlags(material, twoSided));
+    data.emissiveFactor[0] = material.emissiveFactor[0];
+    data.emissiveFactor[1] = material.emissiveFactor[1];
+    data.emissiveFactor[2] = material.emissiveFactor[2];
+    data.emissiveFactor[3] = material.emissiveStrength;
+    data.uvLegacy[0] = material.uvOffset[0];
+    data.uvLegacy[1] = material.uvOffset[1];
+    data.uvLegacy[2] = material.uvScale[0];
+    data.uvLegacy[3] = material.uvScale[1];
+    data.uvLegacy2[0] = std::cos(material.uvRotation);
+    data.uvLegacy2[1] = std::sin(material.uvRotation);
+    data.uvLegacy2[2] = float(mapMask);
+    data.uvLegacy2[3] = material.transmissionFactor;
+    data.lobes0[0] = material.clearcoatFactor;
+    data.lobes0[1] = material.clearcoatRoughness;
+    data.lobes0[2] = material.occlusionStrength;
+    data.lobes0[3] = material.sheenRoughness;
+    data.lobes1[0] = material.sheenColor[0];
+    data.lobes1[1] = material.sheenColor[1];
+    data.lobes1[2] = material.sheenColor[2];
+    data.lobes1[3] = material.specularFactor;
+    data.lobes2[0] = material.ior;
+    data.lobes2[1] = material.specularColor[0];
+    data.lobes2[2] = material.specularColor[1];
+    data.lobes2[3] = material.specularColor[2];
+    data.extras[0] = material.normalScale;
+    data.extras[1] = mirrored ? -1.0f : 1.0f;
+    for (uint32_t slot = 0; slot < model_core::kMaterialTextureSlotCount; ++slot) {
+        float offsetU = 0.0f, offsetV = 0.0f, scaleU = 1.0f, scaleV = 1.0f, rotation = 0.0f;
+        if (slot == model_core::kMaterialSlotIndexBaseColor) {
+            offsetU = material.uvOffset[0]; offsetV = material.uvOffset[1];
+            scaleU = material.uvScale[0]; scaleV = material.uvScale[1];
+            rotation = material.uvRotation;
+        } else {
+            offsetU = material.slotUvOffset[slot - 1][0];
+            offsetV = material.slotUvOffset[slot - 1][1];
+            scaleU = material.slotUvScale[slot - 1][0];
+            scaleV = material.slotUvScale[slot - 1][1];
+            rotation = material.slotUvRotation[slot - 1];
+        }
+        data.slotUv[slot][0] = offsetU;
+        data.slotUv[slot][1] = offsetV;
+        data.slotUv[slot][2] = scaleU;
+        data.slotUv[slot][3] = scaleV;
+        data.slotParams[slot][0] = std::cos(rotation);
+        data.slotParams[slot][1] = std::sin(rotation);
+        data.slotParams[slot][2] = float(RenderSlotPacked(material, slot));
+        data.slotParams[slot][3] = 0.0f;
+    }
+}
+
 // D3D12 root constants are limited to 64 DWORDs per root signature. The
 // textured signature uploads a transposed 3x4 local transform (12 DWORDs) and
 // a 3x3 normal matrix (12 DWORDs, three padded rows) instead of two 4x4
-// matrices, plus the pick id: 12 + 12 + 1 = 25 DWORDs for b1 and 32 for b2
-// leaves room for the b0 CBV (2) and five descriptor tables (5) = 64 exactly.
+// matrices, plus the pick id: 12 + 12 + 1 = 25 DWORDs for b1. T22 moved the
+// 32-DWORD material block into a b2 CBV (2 DWORDs) so six single-descriptor
+// SRV tables, the b0 frame CBV and b2 fit: 2 + 6 + 25 + 2 = 35 DWORDs.
 struct TexturedDrawConstants {
     float localToCamera[12]{};
     float normalToCamera[12]{};
@@ -242,17 +364,6 @@ cbuffer DrawConstants : register(b1)
     float4 gNormalToCamera2;
     uint gPickId;
 };
-cbuffer MaterialConstants : register(b2)
-{
-    float4 gBaseColorFactor;
-    float4 gMaterialFactors; // metallic, roughness, alpha cutoff, flags-as-float
-    float4 gEmissive; // rgb; .a carries emissive strength
-    float4 gUvTransform; // offset.xy, scale.xy
-    float4 gUvRotationAndMaps; // cos, sin, map mask, transmission
-    float4 gMaterialLobes0; // clearcoat factor/roughness, occlusion strength, sheen roughness
-    float4 gMaterialLobes1; // sheen rgb, specular factor
-    float4 gMaterialLobes2; // IOR, specular color rgb
-};
 struct VSInput
 {
     float3 position : POSITION;
@@ -286,10 +397,10 @@ PSInput VSMain(VSInput input)
     output.normal = float3(dot(input.normal, gNormalToCamera0.xyz),
                            dot(input.normal, gNormalToCamera1.xyz),
                            dot(input.normal, gNormalToCamera2.xyz));
-    float2 scaled=input.uv*gUvTransform.zw;
-    output.uv=float2(scaled.x*gUvRotationAndMaps.x-scaled.y*gUvRotationAndMaps.y,
-                     scaled.x*gUvRotationAndMaps.y+scaled.y*gUvRotationAndMaps.x)+gUvTransform.xy;
-    if (((uint)gMaterialFactors.w&8u)!=0) output.uv.y=1.0f-output.uv.y;
+    // T22: the raw authored TEXCOORD set travels to the pixel shader. Each
+    // texture slot applies its own authored transform and sampler, so a single
+    // vertex-stage uv transform cannot represent the material any more.
+    output.uv=input.uv;
     output.tangent=float4(normalize(float3(dot(input.tangent.xyz,gNormalToCamera0.xyz),
                                           dot(input.tangent.xyz,gNormalToCamera1.xyz),
                                           dot(input.tangent.xyz,gNormalToCamera2.xyz))),input.tangent.w);
@@ -316,19 +427,27 @@ Texture2D gMetallicRoughness : register(t1);
 Texture2D gNormal : register(t2);
 Texture2D gEmissive : register(t3);
 TextureCube gStudioEnvironment : register(t4);
+// T22: glTF occlusionTexture is an independent binding. The metallic-roughness
+// red channel stays unused per ORM; it is never aliased to AO.
+Texture2D gOcclusion : register(t5);
 SamplerState gLinearSampler : register(s0);
 SamplerState gNearestSampler : register(s1);
 SamplerState gEnvironmentSampler : register(s2);
+// The per-material record is a CBV now, not root constants, so the extra
+// per-slot transforms fit inside D3D12's 64-DWORD root-signature budget.
 cbuffer MaterialConstants : register(b2)
 {
     float4 gBaseColorFactor;
-    float4 gMaterialFactors;
-    float4 gEmissiveFactor; // rgb; .a carries emissive strength
-    float4 gUvTransform;
-    float4 gUvRotationAndMaps;
-    float4 gMaterialLobes0;
-    float4 gMaterialLobes1;
-    float4 gMaterialLobes2;
+    float4 gMaterialFactors;        // metallic, roughness, alpha cutoff, flags-as-float
+    float4 gEmissiveFactor;         // rgb; .a carries emissive strength
+    float4 gUvLegacy;               // base-color offset.xy, scale.xy
+    float4 gUvLegacy2;              // cos, sin, map mask, transmission
+    float4 gMaterialLobes0;         // clearcoat factor/roughness, occlusion strength, sheen roughness
+    float4 gMaterialLobes1;         // sheen rgb, specular factor
+    float4 gMaterialLobes2;         // IOR, specular color rgb
+    float4 gMaterialExtras;         // normal scale, mirrored sign, reserved
+    float4 gSlotUv[5];              // per-slot offset.xy, scale.xy
+    float4 gSlotParams[5];          // per-slot cos, sin, packed sampler/uv-set
 };
 
 struct PSInput
@@ -340,7 +459,58 @@ struct PSInput
     float4 tangent : TANGENT;
     float4 color : COLOR0;
     nointerpolation uint pickId : TEXCOORD7;
+    bool frontFace : SV_IsFrontFace;
 };
+
+struct SlotUv
+{
+    float2 uv;
+    bool valid;
+    bool nearest;
+};
+
+// Applies one slot's authored KHR_texture_transform and address mode. The
+// packed word carries addressU | addressV<<2 | nearest<<4 | uvSet<<5 with bit
+// 9 set when the authored UV set cannot be sampled by this layout. An
+// unsupported set is never aliased to UV0: the slot is reported invalid and
+// the caller skips it.
+SlotUv ResolveSlotUv(uint slot, float2 raw)
+{
+    const float4 xform=gSlotUv[slot];
+    const float4 params=gSlotParams[slot];
+    const uint packed=(uint)params.z;
+    const uint addressU=packed&3u;
+    const uint addressV=(packed>>2)&3u;
+    const uint uvSet=(packed>>5)&0xFu;
+    SlotUv result;
+    result.nearest=(packed&16u)!=0;
+    float2 scaled=raw*xform.zw;
+    float2 uv=float2(scaled.x*params.x-scaled.y*params.y,
+                     scaled.x*params.y+scaled.y*params.x)+xform.xy;
+    if (((uint)gMaterialFactors.w&8u)!=0) uv.y=1.0f-uv.y;
+    result.uv=uv;
+    const bool supported=((packed&512u)==0u)&&uvSet==0u;
+    const bool uInside=(addressU!=3u)||(uv.x>=0.0f&&uv.x<=1.0f);
+    const bool vInside=(addressV!=3u)||(uv.y>=0.0f&&uv.y<=1.0f);
+    result.valid=supported&&uInside&&vInside;
+    result.uv.x=addressU==0u?frac(uv.x):addressU==1u?1.0f-abs(frac(uv.x*.5f)*2.0f-1.0f):saturate(uv.x);
+    result.uv.y=addressV==0u?frac(uv.y):addressV==1u?1.0f-abs(frac(uv.y*.5f)*2.0f-1.0f):saturate(uv.y);
+    return result;
+}
+float4 SampleSlot(Texture2D tex,SlotUv uv)
+{
+    return uv.nearest?tex.Sample(gNearestSampler,uv.uv):tex.Sample(gLinearSampler,uv.uv);
+}
+float2 TransformSlotUvUnwrapped(uint slot,float2 raw)
+{
+    const float4 xform=gSlotUv[slot];
+    const float4 params=gSlotParams[slot];
+    float2 scaled=raw*xform.zw;
+    float2 uv=float2(scaled.x*params.x-scaled.y*params.y,
+                     scaled.x*params.y+scaled.y*params.x)+xform.xy;
+    if (((uint)gMaterialFactors.w&8u)!=0) uv.y=1.0f-uv.y;
+    return uv;
+}
 
 struct PixelOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
 
@@ -480,55 +650,85 @@ PixelOutput PSMain(PSInput input)
         PixelOutput wire;wire.color=float4(.72f,.76f,.82f,1);wire.pick=input.pickId&0x7fffffffu;return wire;
     }
     uint flags=(uint)gMaterialFactors.w;
-    uint maps=(uint)gUvRotationAndMaps.z;
-    uint addressU=(flags>>4)&3u, addressV=(flags>>6)&3u;
-    bool uvValid=(addressU!=3u || (input.uv.x>=0.0f && input.uv.x<=1.0f))
-        && (addressV!=3u || (input.uv.y>=0.0f && input.uv.y<=1.0f));
-    float2 sampleUv=input.uv;
-    sampleUv.x=addressU==0u?frac(sampleUv.x):addressU==1u?1.0f-abs(frac(sampleUv.x*.5f)*2.0f-1.0f):saturate(sampleUv.x);
-    sampleUv.y=addressV==0u?frac(sampleUv.y):addressV==1u?1.0f-abs(frac(sampleUv.y*.5f)*2.0f-1.0f):saturate(sampleUv.y);
-    bool nearest=(flags&256u)!=0;
+    uint maps=(uint)gUvLegacy2.z;
     bool textureLayer=(flags&512u)!=0;
     bool textureMix=(flags&1024u)!=0;
     bool clay=gLighting.x>0.5f && gLighting.x<1.5f;
     bool transmissive=!clay && (flags&4096u)!=0;
+    bool doubleSided=(flags&1u)!=0;
+    // Every map slot resolves its own uv set, transform, address mode and
+    // sampler. Slots 0..4 mirror the material chunk's image dependency order.
+    SlotUv baseUv=ResolveSlotUv(0,input.uv);
     float4 vertexColor=input.color;
     if ((flags&2048u)!=0) vertexColor.rgb=SrgbToLinear(vertexColor.rgb);
     float4 base=clay ? float4(.58f,.58f,.58f,1.0f) : gBaseColorFactor*vertexColor;
-    if (!clay && (maps&1)) {
-        float4 tex=nearest?gBaseColor.Sample(gNearestSampler,sampleUv):gBaseColor.Sample(gLinearSampler,sampleUv);
+    if (!clay && (maps&1) && baseUv.valid) {
+        float4 tex=SampleSlot(gBaseColor,baseUv);
         if (!textureLayer) tex.a=1.0f;
-        else if (!uvValid) tex.a=0.0f;
         if (textureMix) {
             base.rgb=tex.rgb*tex.a+base.rgb*(1.0f-tex.a);
             base.a=tex.a+base.a*(1.0f-tex.a);
         } else base*=tex;
+    } else if (!clay && (maps&1) && textureLayer) {
+        // An authored address mode of None outside [0,1] means the layer
+        // contributes no coverage; it must not fall back to UV0 sampling.
+        base.a=0.0f;
     }
     if ((flags&4)!=0 && base.a<gMaterialFactors.z) discard;
     float3 n=normalize(input.normal);
+    // glTF double-sided back faces: reverse the geometric normal before the
+    // tangent basis is formed. Flipping the perturbed normal toward the eye
+    // instead would invert the normal map's slope on back faces.
+    if (doubleSided && !input.frontFace) n=-n;
     if (!clay && (maps&4)) {
-        float3 t=normalize(input.tangent.xyz);
-        float3 b=normalize(cross(n,t))*input.tangent.w;
-        float3 sampled=(nearest?gNormal.Sample(gNearestSampler,sampleUv):gNormal.Sample(gLinearSampler,sampleUv)).xyz*2-1;
-        n=normalize(sampled.x*t+sampled.y*b+sampled.z*n);
+        SlotUv normalUv=ResolveSlotUv(2,input.uv);
+        if (normalUv.valid) {
+            float3 t=input.tangent.xyz;
+            float tangentLength=dot(t,t);
+            if (tangentLength<1e-10f) {
+                // PositionNormalUv0 layouts carry no tangent; recover one from
+                // the screen-space derivatives of the (transformed) normal-map
+                // uv so the map still perturbs in the right frame.
+                float2 uv=TransformSlotUvUnwrapped(2,input.uv);
+                float3 dpdx=ddx(input.worldPosition),dpdy=ddy(input.worldPosition);
+                float2 duvdx=ddx(uv),duvdy=ddy(uv);
+                float det=duvdx.x*duvdy.y-duvdx.y*duvdy.x;
+                if (abs(det)>1e-8f) {
+                    t=(dpdx*duvdy.y-dpdy*duvdx.y)/det;
+                } else {
+                    t=cross(n,float3(0.0f,0.0f,1.0f));
+                    if (dot(t,t)<1e-8f) t=cross(n,float3(0.0f,1.0f,0.0f));
+                }
+            }
+            t=normalize(t);
+            // A mirrored instance reverses tangent handedness; multiply by the
+            // instance determinant sign so the reconstructed bitangent matches
+            // the transformed authored basis.
+            float tangentSign=input.tangent.w*gMaterialExtras.y;
+            float3 b=normalize(cross(n,t))*tangentSign;
+            float3 sampled=SampleSlot(gNormal,normalUv).xyz*2-1;
+            // normalTexture.scale multiplies the tangent-space XY only.
+            sampled.xy*=gMaterialExtras.x;
+            n=normalize(sampled.x*t+sampled.y*b+sampled.z*n);
+        }
     }
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
-    // Double-sided materials can show their back faces. The authored normal
-    // then points away from the eye (a surface authored "inside out" lights as
-    // if it were in shadow), so light the side actually being viewed by
-    // flipping the shading normal toward the camera. This matches glTF's
-    // requirement to reverse the normal on back-facing double-sided triangles.
-    if ((flags&1u)!=0 && dot(n,viewDir)<0.0f) n=-n;
     float metallic=clay?0.0f:gMaterialFactors.x, roughness=clay?.82f:gMaterialFactors.y;
-    // ORM convention: the metallic-roughness map's R channel carries ambient
-    // occlusion (glTF's metallicRoughnessTexture leaves R unused). AO only
-    // scales indirect diffuse/environment light; direct-light specular stays
-    // unoccluded so metals do not read as dirty. The authored occlusionStrength
-    // is applied here instead of the former fixed 1.0.
+    // ORM convention leaves the metallic-roughness red channel unused. AO is
+    // sampled only from the independent occlusion slot and scaled by the
+    // authored occlusionStrength; it darkens indirect diffuse/environment
+    // light only, so direct-light specular stays unoccluded.
     float occlusion=1.0f;
-    if (!clay && (maps&2) && uvValid) {
-        float4 mr=nearest?gMetallicRoughness.Sample(gNearestSampler,sampleUv):gMetallicRoughness.Sample(gLinearSampler,sampleUv);
-        metallic*=mr.b; roughness*=mr.g; occlusion=OcclusionFactor(mr.r,gMaterialLobes0.z);
+    if (!clay && (maps&2)) {
+        SlotUv mrUv=ResolveSlotUv(1,input.uv);
+        if (mrUv.valid) {
+            float4 mr=SampleSlot(gMetallicRoughness,mrUv);
+            metallic*=mr.b; roughness*=mr.g;
+        }
+    }
+    if (!clay && (maps&16)) {
+        SlotUv aoUv=ResolveSlotUv(4,input.uv);
+        if (aoUv.valid) occlusion=OcclusionFactor(SampleSlot(gOcclusion,aoUv).r,gMaterialLobes0.z);
     }
     roughness=clamp(roughness,.045f,1.0f);
     // T18 PBR lobes. Clearcoat is layered as a second dielectric GGX lobe; the
@@ -549,7 +749,7 @@ PixelOutput PSMain(PSInput input)
     // straight-alpha blend composites reflection over background correctly,
     // and the environment reflection is added unfresneled because alpha
     // already supplies the reflectance factor.
-    float transmission=transmissive?clamp(gUvRotationAndMaps.w,0.0f,1.0f):0.0f;
+    float transmission=transmissive?clamp(gUvLegacy2.w,0.0f,1.0f):0.0f;
     float nv=saturate(dot(n,viewDir));
     float diffuseScale=1.0f-transmission;
     float glassF0=dot(dielectricF0,float3(0.3333333f,0.3333333f,0.3333333f));
@@ -645,7 +845,10 @@ PixelOutput PSMain(PSInput input)
     }
     if (!clay) {
         float3 emissive=gEmissiveFactor.rgb*gEmissiveFactor.a;
-        if ((maps&8) && uvValid) emissive*=(nearest?gEmissive.Sample(gNearestSampler,sampleUv):gEmissive.Sample(gLinearSampler,sampleUv)).rgb;
+        if (maps&8) {
+            SlotUv emissiveUv=ResolveSlotUv(3,input.uv);
+            if (emissiveUv.valid) emissive*=SampleSlot(gEmissive,emissiveUv).rgb;
+        }
         color+=emissive;emission+=emissive;
     }
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
@@ -660,7 +863,7 @@ PixelOutput PSMain(PSInput input)
         if (debugChannel==1u) dbg=base.rgb;
         else if (debugChannel==2u) dbg=normalize(input.normal)*0.5f+0.5f;
         else if (debugChannel==3u) dbg=n*0.5f+0.5f;
-        else if (debugChannel==4u) dbg=float3(input.uv,0.0f);
+        else if (debugChannel==4u) dbg=float3(TransformSlotUvUnwrapped(0,input.uv),0.0f);
         else if (debugChannel==5u) dbg=unsupported; // UV1 is not on the wire
         else if (debugChannel==6u) dbg=metallic.xxx;
         else if (debugChannel==7u) dbg=roughness.xxx;
@@ -1058,6 +1261,11 @@ ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, uint64_t sizeBytes, D3
 const char* D3D12ViewerPath::TexturedPixelShaderSource()
 {
     return kTexturedPixelShaderSource;
+}
+
+const char* D3D12ViewerPath::TexturedVertexShaderSource()
+{
+    return kTexturedVertexShaderSource;
 }
 
 const char* D3D12ViewerPath::ResolvePixelShaderSource()
@@ -1622,14 +1830,19 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
 
 bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
 {
-    D3D12_ROOT_PARAMETER rootParams[8]{};
+    // T22 root layout. Six SRV tables (baseColor, MR, normal, emissive, the
+    // studio cubemap and the independent occlusion map) plus the 25-DWORD b1
+    // draw block (25) and two CBVs (b0 frame, b2 material) total 35 DWORDs,
+    // well inside D3D12's 64-DWORD limit. Moving the material record from root
+    // constants to a CBV is what made room for the per-slot transforms.
+    D3D12_ROOT_PARAMETER rootParams[9]{};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    D3D12_DESCRIPTOR_RANGE srvRanges[5]{};
-    for (UINT i=0;i<5;++i) {
+    D3D12_DESCRIPTOR_RANGE srvRanges[6]{};
+    for (UINT i=0;i<6;++i) {
         srvRanges[i].RangeType=D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         srvRanges[i].NumDescriptors=1;srvRanges[i].BaseShaderRegister=i;
         srvRanges[i].OffsetInDescriptorsFromTableStart=D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -1638,12 +1851,13 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
         rootParams[1+i].DescriptorTable.pDescriptorRanges=&srvRanges[i];
         rootParams[1+i].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
     }
-    rootParams[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[6].Constants.ShaderRegister = 1; rootParams[6].Constants.Num32BitValues = 25;
-    rootParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-    rootParams[7].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[7].Constants.ShaderRegister=2;rootParams[7].Constants.Num32BitValues=32;
-    rootParams[7].ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[7].Constants.ShaderRegister = 1; rootParams[7].Constants.Num32BitValues = 25;
+    rootParams[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootParams[8].ParameterType=D3D12_ROOT_PARAMETER_TYPE_CBV;
+    rootParams[8].Descriptor.ShaderRegister=2;
+    rootParams[8].Descriptor.RegisterSpace=0;
+    rootParams[8].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -2509,44 +2723,27 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
                 commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
             }
+            // T22 independent occlusion map: its own descriptor table at t5,
+            // mapped to root parameter 6 so parameter 5 can stay the Studio
+            // environment cubemap.
+            {
+                D3D12_GPU_DESCRIPTOR_HANDLE handle=mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+                const int selected=mesh.textureIndices[4]>=0 ? mesh.textureIndices[4]
+                    : int(mesh.neutralDescriptorBase+4);
+                if (mesh.textureIndices[4]>=0) mapMask|=1u<<4;
+                handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
+                commandList->SetGraphicsRootDescriptorTable(6,handle);
+            }
             const auto texturedDraw = BuildTexturedDrawConstants(drawConstants);
-            commandList->SetGraphicsRoot32BitConstants(6, 25, &texturedDraw, 0);
-            float material[32]{};
-            std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
-            material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
-            material[6]=mesh.material.alphaCutoff;
-            material[7]=float((twoSided?1u:0u)
-                | ((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
-                | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u)
-                | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u)
-                | ((mesh.material.flags&model_core::kMaterialSamplerFlags)<<1)
-                | ((mesh.material.flags&model_core::kMaterialFlagTextureLayer)?512u:0u)
-                | ((mesh.material.flags&model_core::kMaterialFlagTextureMix)?1024u:0u)
-                | ((mesh.material.flags&model_core::kMaterialFlagVertexSrgb)?2048u:0u)
-                | ((mesh.material.flags&model_core::kMaterialFlagTransmissive)?4096u:0u));
-            std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
-            material[11]=mesh.material.emissiveStrength;
-            material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
-            material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
-            material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
-            material[18]=float(mapMask);
-            material[19]=mesh.material.transmissionFactor;
-            // v12 lobe block packed into three float4 plus the emissive-strength
-            // slot in gEmissive.a, so the textured root signature stays inside
-            // D3D12's 64-DWORD root-constant limit.
-            material[20]=mesh.material.clearcoatFactor;
-            material[21]=mesh.material.clearcoatRoughness;
-            material[22]=mesh.material.occlusionStrength;
-            material[23]=mesh.material.sheenRoughness;
-            material[24]=mesh.material.sheenColor[0];
-            material[25]=mesh.material.sheenColor[1];
-            material[26]=mesh.material.sheenColor[2];
-            material[27]=mesh.material.specularFactor;
-            material[28]=mesh.material.ior;
-            material[29]=mesh.material.specularColor[0];
-            material[30]=mesh.material.specularColor[1];
-            material[31]=mesh.material.specularColor[2];
-            commandList->SetGraphicsRoot32BitConstants(7,32,material,0);
+            commandList->SetGraphicsRoot32BitConstants(7, 25, &texturedDraw, 0);
+            MaterialConstantData material{};
+            FillMaterialConstantData(mesh.material,mapMask,twoSided,mesh.mirrored,material);
+            if (mesh.materialConstants.mapped && mesh.materialConstants.resource) {
+                const UINT64 materialOffset=UINT64(index)*kMaterialConstantStride;
+                std::memcpy(mesh.materialConstants.mapped+materialOffset,&material,sizeof(material));
+                commandList->SetGraphicsRootConstantBufferView(8,
+                    mesh.materialConstants.resource->GetGPUVirtualAddress()+materialOffset);
+            }
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
             commandList->SetPipelineState(mesh.lines ? linePipelineState.Get()
@@ -2608,40 +2805,25 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                     handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
                     commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
                 }
+                {
+                    D3D12_GPU_DESCRIPTOR_HANDLE handle=mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+                    const int selected=mesh.textureIndices[4]>=0 ? mesh.textureIndices[4]
+                        : int(mesh.neutralDescriptorBase+4);
+                    if (mesh.textureIndices[4]>=0) mapMask|=1u<<4;
+                    handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
+                    commandList->SetGraphicsRootDescriptorTable(6,handle);
+                }
                 const auto texturedDraw = BuildTexturedDrawConstants(drawConstants);
-                commandList->SetGraphicsRoot32BitConstants(6,25,&texturedDraw,0);
-                float material[32]{};
-                std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
-                material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
-                material[6]=mesh.material.alphaCutoff;
-                material[7]=float(((mesh.material.flags&model_core::kMaterialFlagDoubleSided)?1u:0u)
-                    | ((mesh.material.flags&model_core::kMaterialFlagUnlit)?2u:0u)
-                    | (mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Mask)?4u:0u)
-                    | ((mesh.material.flags&model_core::kMaterialFlagFlipV)?8u:0u)
-                    | ((mesh.material.flags&model_core::kMaterialSamplerFlags)<<1)
-                    | ((mesh.material.flags&model_core::kMaterialFlagTextureLayer)?512u:0u)
-                    | ((mesh.material.flags&model_core::kMaterialFlagTextureMix)?1024u:0u)
-                    | ((mesh.material.flags&model_core::kMaterialFlagVertexSrgb)?2048u:0u));
-                std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
-                material[11]=mesh.material.emissiveStrength;
-                material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
-                material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
-                material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
-                material[18]=float(mapMask);
-                material[19]=mesh.material.transmissionFactor;
-                material[20]=mesh.material.clearcoatFactor;
-                material[21]=mesh.material.clearcoatRoughness;
-                material[22]=mesh.material.occlusionStrength;
-                material[23]=mesh.material.sheenRoughness;
-                material[24]=mesh.material.sheenColor[0];
-                material[25]=mesh.material.sheenColor[1];
-                material[26]=mesh.material.sheenColor[2];
-                material[27]=mesh.material.specularFactor;
-                material[28]=mesh.material.ior;
-                material[29]=mesh.material.specularColor[0];
-                material[30]=mesh.material.specularColor[1];
-                material[31]=mesh.material.specularColor[2];
-                commandList->SetGraphicsRoot32BitConstants(7,32,material,0);
+                commandList->SetGraphicsRoot32BitConstants(7,25,&texturedDraw,0);
+                const bool twoSided=(mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
+                MaterialConstantData material{};
+                FillMaterialConstantData(mesh.material,mapMask,twoSided,mesh.mirrored,material);
+                if (mesh.materialConstants.mapped && mesh.materialConstants.resource) {
+                    const UINT64 materialOffset=UINT64(index)*kMaterialConstantStride;
+                    std::memcpy(mesh.materialConstants.mapped+materialOffset,&material,sizeof(material));
+                    commandList->SetGraphicsRootConstantBufferView(8,
+                        mesh.materialConstants.resource->GetGPUVirtualAddress()+materialOffset);
+                }
             } else {
                 commandList->SetGraphicsRootSignature(rootSignature.Get());
                 commandList->SetPipelineState(mesh.positionOnly
@@ -2844,6 +3026,37 @@ bool D3D12ViewerPath::CreateAndQueueTexture(const d3d12_import_bridge::ImportedI
     return true;
 }
 
+bool D3D12ViewerPath::EnsureMaterialConstants(GpuMesh& mesh, std::wstring& error)
+{
+    if (mesh.materialConstants.resource && mesh.materialConstants.mapped
+        && mesh.materialConstants.materialChunkId == mesh.materialChunkId
+        && mesh.materialConstants.mirrored == mesh.mirrored)
+        return true;
+    GpuMesh::MaterialConstantBuffer constants;
+    HRESULT allocationResult = S_OK;
+    const uint64_t bytes = uint64_t(kMaterialConstantStride) * kFrameCount;
+    constants.resource = CreateBuffer(device.Device(), bytes, D3D12_HEAP_TYPE_UPLOAD,
+                                      D3D12_RESOURCE_STATE_GENERIC_READ, &allocationResult);
+    if (!constants.resource) {
+        if (allocationResult == E_OUTOFMEMORY) uploadErrorCode = model_core::ImportErrorCode::OutOfMemory;
+        error = L"A material constant buffer could not be created.";
+        return false;
+    }
+    D3D12_RANGE noRead{0, 0};
+    void* mapped = nullptr;
+    if (FAILED(constants.resource->Map(0, &noRead, &mapped)) || !mapped) {
+        error = L"A material constant buffer could not be mapped.";
+        return false;
+    }
+    constants.mapped = static_cast<std::byte*>(mapped);
+    constants.materialChunkId = mesh.materialChunkId;
+    constants.mirrored = mesh.mirrored;
+    const auto desc = constants.resource->GetDesc();
+    constants.allocationBytes = device.Device()->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+    mesh.materialConstants = constants;
+    return true;
+}
+
 bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
                                          const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
                                          const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
@@ -2876,8 +3089,10 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
     // can be written straight to its slot.
     if (!importedImages.empty() || needsNeutralTextures) {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        // Five neutral slots: baseColor (white), MR (white), normal (flat),
+        // emissive (black) and the T22 independent occlusion slot (white).
         const UINT materialDescriptors = static_cast<UINT>(
-            importedImages.size() + (needsNeutralTextures ? 4 : 0));
+            importedImages.size() + (needsNeutralTextures ? 5 : 0));
         staged.environmentDescriptorIndex = materialDescriptors;
         heapDesc.NumDescriptors = materialDescriptors + 1; // + Studio cubemap
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -2913,8 +3128,8 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
             staged.textures[i].allocationBytes = device.Device()->GetResourceAllocationInfo(0,1,&textureDesc).SizeInBytes;
             ++pendingResourceCount;
         }
-        const uint8_t fallbackPixels[4][4]={{255,255,255,255},{255,255,255,255},{128,128,255,255},{0,0,0,255}};
-        staged.neutralTextures.resize(needsNeutralTextures?4:0);
+        const uint8_t fallbackPixels[5][4]={{255,255,255,255},{255,255,255,255},{128,128,255,255},{0,0,0,255},{255,255,255,255}};
+        staged.neutralTextures.resize(needsNeutralTextures?5:0);
         for (size_t i=0;i<staged.neutralTextures.size();++i) {
             d3d12_import_bridge::ImportedImage fallback;
             fallback.pixelFormat=model_core::PixelFormatId::RGBA8_UNORM;
@@ -2948,6 +3163,46 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
             if (m.chunkId == chunkId) return &m;
         }
         return nullptr;
+    };
+    // T22 material cbuffers. One CPU-writable region per material chunk (and a
+    // shared default for meshes without one), each with kFrameCount slots so a
+    // per-frame write never races a frame still sampling the previous copy.
+    constexpr uint32_t kDefaultMaterialBufferKey = 0xFFFFFFFFu;
+    std::unordered_map<uint64_t, GpuMesh::MaterialConstantBuffer> materialConstantBuffers;
+    bool materialBufferFailed = false;
+    const auto materialConstantsFor = [&](uint32_t materialChunkId, bool mirrored) {
+        // The mirrored sign is the only per-draw value that reaches the
+        // material cbuffer, so two instances of one material can share it only
+        // when they agree on handedness.
+        const uint64_t key = (uint64_t(materialChunkId ? materialChunkId : kDefaultMaterialBufferKey) << 1)
+            | (mirrored ? 1u : 0u);
+        if (const auto found = materialConstantBuffers.find(key); found != materialConstantBuffers.end())
+            return found->second;
+        GpuMesh::MaterialConstantBuffer constants;
+        HRESULT allocationResult = S_OK;
+        const uint64_t bytes = uint64_t(kMaterialConstantStride) * kFrameCount;
+        constants.resource = CreateBuffer(device.Device(), bytes, D3D12_HEAP_TYPE_UPLOAD,
+                                          D3D12_RESOURCE_STATE_GENERIC_READ, &allocationResult);
+        if (!constants.resource) {
+            if (allocationResult == E_OUTOFMEMORY) uploadErrorCode = model_core::ImportErrorCode::OutOfMemory;
+            error = L"A material constant buffer could not be created.";
+            materialBufferFailed = true;
+            return constants;
+        }
+        D3D12_RANGE noRead{0, 0};
+        void* mapped = nullptr;
+        if (FAILED(constants.resource->Map(0, &noRead, &mapped)) || !mapped) {
+            error = L"A material constant buffer could not be mapped.";
+            materialBufferFailed = true;
+            return constants;
+        }
+        constants.mapped = static_cast<std::byte*>(mapped);
+        constants.materialChunkId = materialChunkId;
+        constants.mirrored = mirrored;
+        const auto desc = constants.resource->GetDesc();
+        constants.allocationBytes = device.Device()->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+        materialConstantBuffers.emplace(key, constants);
+        return constants;
     };
     struct ResolvedNode { double world[16]{}; bool visible = false; bool resolving = false; };
     std::unordered_map<uint32_t, const model_core::NodePayload*> sourceNodes;
@@ -3100,10 +3355,11 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
                 draw.textureIndices[1]=findImageIndex(material->metallicRoughnessImageChunkId);
                 draw.textureIndices[2]=findImageIndex(material->normalImageChunkId);
                 draw.textureIndices[3]=findImageIndex(material->emissiveImageChunkId);
-                const uint32_t imageIds[4] = {material->baseColorImageChunkId,
+                draw.textureIndices[4]=findImageIndex(material->occlusionImageChunkId);
+                const uint32_t imageIds[5] = {material->baseColorImageChunkId,
                     material->metallicRoughnessImageChunkId, material->normalImageChunkId,
-                    material->emissiveImageChunkId};
-                for (UINT slot=0; slot<4; ++slot) {
+                    material->emissiveImageChunkId, material->occlusionImageChunkId};
+                for (UINT slot=0; slot<5; ++slot) {
                     const int index=draw.textureIndices[slot];
                     GpuMesh::TextureInfo info{};
                     info.chunkId=imageIds[slot];
@@ -3126,6 +3382,7 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
                 draw.material.baseColorFactor[3]=1.0f;
                 draw.material.roughnessFactor=1.0f;
             }
+            draw.materialConstants=materialConstantsFor(materialId,draw.mirrored);
         };
         const auto occurrences = instancesByGeometry.find(mesh.chunkId);
         if (occurrences == instancesByGeometry.end()) {
@@ -3155,6 +3412,12 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         }
     }
 
+    if (materialBufferFailed) {
+        RetireStagedResources(std::move(staged));
+        pendingResourceCount = 0;
+        return false;
+    }
+
     for (const auto& [geometryId, occurrences] : instancesByGeometry) {
         if (std::none_of(importedMeshes.begin(), importedMeshes.end(),
                          [&](const auto& mesh) { return mesh.chunkId == geometryId; })) {
@@ -3178,14 +3441,14 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
         return mesh.completeVertex && !mesh.points;
     });
     if (!needsMaterialHeap) return true;
-    if (resources.neutralTextures.size()<4) {
+    if (resources.neutralTextures.size()<5) {
         error=L"The material fallback catalog is incomplete.";
         return false;
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    // + 4 neutral material slots, + 1 global Studio cubemap.
-    heapDesc.NumDescriptors=static_cast<UINT>(resources.textures.size()+4+1);
+    // + 5 neutral material slots, + 1 global Studio cubemap.
+    heapDesc.NumDescriptors=static_cast<UINT>(resources.textures.size()+5+1);
     heapDesc.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> rebuilt;
@@ -3207,8 +3470,8 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
     };
     for (UINT i=0;i<resources.textures.size();++i) writeSrv(resources.textures[i].resource.Get(),i);
     const UINT neutralBase=static_cast<UINT>(resources.textures.size());
-    for (UINT i=0;i<4;++i) writeSrv(resources.neutralTextures[i].resource.Get(),neutralBase+i);
-    const UINT environmentIndex=neutralBase+4;
+    for (UINT i=0;i<5;++i) writeSrv(resources.neutralTextures[i].resource.Get(),neutralBase+i);
+    const UINT environmentIndex=neutralBase+5;
     WriteEnvironmentSrv(*rebuilt.Get(),environmentIndex,descriptorSize);
 
     ModelResources displaced;
@@ -3230,7 +3493,7 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
         resources.textures[i].descriptorSize=descriptorSize;
         resources.textures[i].srvHeapIndex=i;
     }
-    for (UINT i=0;i<4;++i) {
+    for (UINT i=0;i<5;++i) {
         resources.neutralTextures[i].heap=rebuilt;
         resources.neutralTextures[i].descriptorSize=descriptorSize;
         resources.neutralTextures[i].srvHeapIndex=neutralBase+i;
@@ -3239,7 +3502,7 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
         mesh.textureHeap=rebuilt;
         mesh.textureDescriptorSize=descriptorSize;
         mesh.neutralDescriptorBase=neutralBase;
-        for (UINT i=0;i<4;++i) mesh.neutralResources[i]=resources.neutralTextures[i].resource;
+        for (UINT i=0;i<5;++i) mesh.neutralResources[i]=resources.neutralTextures[i].resource;
     }
     if (!displaced.retainedDescriptorHeaps.empty()) {
         uint64_t fence=0;for (const auto& frame:frames) fence=std::max(fence,frame.fenceValue);
@@ -3439,11 +3702,24 @@ uint64_t D3D12ViewerPath::EstimateUploadBytes(ID3D12Device* device,
         neutral.Width=1;neutral.Height=1;neutral.DepthOrArraySize=1;neutral.MipLevels=1;neutral.SampleDesc.Count=1;
         neutral.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
         const uint64_t allocation=device->GetResourceAllocationInfo(0,1,&neutral).SizeInBytes;
-        if (allocation==UINT64_MAX || allocation>(UINT64_MAX-bytes)/4) return UINT64_MAX;
-        bytes+=allocation*4;
+        if (allocation==UINT64_MAX || allocation>(UINT64_MAX-bytes)/5) return UINT64_MAX;
+        bytes+=allocation*5;
     }
     if (!images.empty() || needsNeutral)
-        bytes+=align(uint64_t(images.size()+(needsNeutral?4:0))*device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
+        bytes+=align(uint64_t(images.size()+(needsNeutral?5:0))*device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
+    // T22 per-material constant buffers (one 256-byte-aligned region per frame
+    // per draw, and instance expansion can only increase the count).
+    if (needsNeutral) {
+        uint64_t draws=0;
+        for (const auto& mesh:meshes) {
+            if (mesh.geometry.lodLevel==model_core::kScanLod) continue;
+            ++draws;
+        }
+        const uint64_t materialBytes=draws*uint64_t(D3D12ViewerPath::kMaterialConstantStride)
+            *D3D12ViewerPath::kFrameCount;
+        if (materialBytes>UINT64_MAX-bytes) return UINT64_MAX;
+        bytes+=align(materialBytes);
+    }
     return bytes;
 }
 
@@ -3465,6 +3741,7 @@ uint64_t D3D12ViewerPath::AccountedAllocationBytes(const ModelResources* extra) 
         for (const auto& mesh:resources.meshes) {
             resource(mesh.vertexBuffer.Get(),mesh.vertexAllocationBytes); resource(mesh.indexBuffer.Get(),mesh.indexAllocationBytes); heap(mesh.textureHeap.Get());
             for (const auto& neutral:mesh.neutralResources) resource(neutral.Get());
+            resource(mesh.materialConstants.resource.Get(),mesh.materialConstants.allocationBytes);
         }
         for (const auto* textures:{&resources.textures,&resources.neutralTextures,&resources.fallbackTextures})
             for (const auto& texture:*textures) { resource(texture.resource.Get(),texture.allocationBytes); heap(texture.heap.Get()); }

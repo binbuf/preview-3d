@@ -129,11 +129,26 @@ def material_records(hwnd):
             'depthWrite': bool(_u32(hwnd, 144)), 'cullMode': _u32(hwnd, 145),
             'hasMaterial': bool(_u32(hwnd, 146)), 'alphaMode': _u32(hwnd, 147),
             'flags': _u32(hwnd, 148),
-            'textureIndices': _u32(hwnd, 178),
-            'textureChunkIds': [_u32(hwnd, 179 + slot) for slot in range(4)],
-            'textureFormats': [_u32(hwnd, 183 + slot) for slot in range(4)],
-            'textureColorSpaces': [_u32(hwnd, 187 + slot) for slot in range(4)],
+            'normalScale': _f32(hwnd, 201),
+            'slotFlags': [_u32(hwnd, 202 + slot) for slot in range(5)],
+            'slotUvOffset': [[_f32(hwnd, 207 + slot), _f32(hwnd, 211 + slot)]
+                             for slot in range(4)],
+            'slotUvScale': [[_f32(hwnd, 215 + slot), _f32(hwnd, 219 + slot)]
+                            for slot in range(4)],
+            'slotUvRotation': [_f32(hwnd, 223 + slot) for slot in range(4)],
+            # Field 178 packs slots 0..3 into one word; slot 4 has its own
+            # field because the published diagnostics contract is append-only.
+            'textureIndicesPacked': _u32(hwnd, 178),
+            'textureIndices': [(_u32(hwnd, 178) >> (slot * 8)) & 0xFF for slot in range(4)]
+                              + [_u32(hwnd, 227)],
+            'textureChunkIds': [_u32(hwnd, 179 + slot) for slot in range(4)]
+                               + [_u32(hwnd, 228)],
+            'textureFormats': [_u32(hwnd, 183 + slot) for slot in range(4)]
+                              + [_u32(hwnd, 229)],
+            'textureColorSpaces': [_u32(hwnd, 187 + slot) for slot in range(4)]
+                                  + [_u32(hwnd, 230)],
             'mapMask': _u32(hwnd, 191),
+            'occlusionBound': bool(_u32(hwnd, 191) & (1 << 4)),
             'points': bool(_u32(hwnd, 192)), 'lines': bool(_u32(hwnd, 193)),
             'completeVertex': bool(_u32(hwnd, 194)),
         }

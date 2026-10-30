@@ -30,7 +30,7 @@ session override; reloads and refinements do not re-apply the preset.
 
 | Input | Parser | MVP content | Deliberate limits | Performance tier |
 | --- | --- | --- | --- | --- |
-| .glb, .gltf | fastgltf + Draco + KTX/Basis | glTF 2.0 scenes, nodes, triangle meshes, PBR metallic/roughness and unlit materials, vertex colors, PNG/JPEG/WebP/KTX2 textures, `KHR_texture_transform`, `KHR_mesh_quantization`, `KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `EXT_texture_webp`, `KHR_materials_transmission` (approximated as Fresnel-weighted alpha-blended glass; no refraction pass), `KHR_materials_pbrSpecularGlossiness` (archived; approximated as diffuse base color with metallic 0 and roughness `1 - glossiness`; the specular-glossiness texture has no matching slot) | No animation playback, skins, morph targets, lights, cameras, or advanced material lobes. External URIs must resolve to approved local files contained within the primary file's directory tree (its own directory or a subdirectory). A single oversized compressed primitive/view may fail its decode-working-set limit. | A for ordinary/meshopt data; compressed primitives are bounded decode units |
+| .glb, .gltf | fastgltf + Draco + KTX/Basis | glTF 2.0 scenes, nodes, triangle meshes, PBR metallic/roughness and unlit materials, vertex colors, PNG/JPEG/WebP/KTX2 textures, `KHR_texture_transform`, `KHR_mesh_quantization`, `KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `EXT_texture_webp`, `KHR_materials_transmission` (approximated as Fresnel-weighted alpha-blended glass; no refraction pass), `KHR_materials_pbrSpecularGlossiness` (archived; approximated as diffuse base color with metallic 0 and roughness `1 - glossiness`; the specular-glossiness texture has no matching slot), `normalTexture.scale`, per-texture `texCoord`/sampler/`KHR_texture_transform` and an independent `occlusionTexture` | No animation playback, skins, morph targets, lights, cameras, or advanced material lobes. Only TEXCOORD_0 is rendered; a texture whose `texCoord` is above 0 stays unbound with an explicit unsupported-UV-set record rather than sampling UV0. External URIs must resolve to approved local files contained within the primary file's directory tree (its own directory or a subdirectory). A single oversized compressed primitive/view may fail its decode-working-set limit. | A for ordinary/meshopt data; compressed primitives are bounded decode units |
 | .stl | Product code | Binary and ASCII triangles; supplied normals or generated flat normals | No color/material dialect guarantee | A for binary; B for ASCII |
 | .ply | Product code | ASCII and binary little/big-endian PLY mesh or point cloud; positions, normals, common UV/color properties, polygon faces triangulated on import | Unknown elements/properties are skipped within bounds; no volumetric, range-grid, material, or arbitrary custom-property visualization | A for supported binary layouts; B for ASCII |
 | .obj with optional .mtl | ufbx OBJ loader | Faces, smoothing, normals, UVs, vertex colors where available, MTL colors and approved local texture maps | Triangulated on import; .mtl is never opened as a primary document | B |
@@ -194,6 +194,39 @@ emitted. `KHR_materials_iridescence`, `anisotropy`, `volume`,
 use yields a specific `Degraded` compatibility record rather than silently
 disappearing. Anisotropy/iridescence/volume rendering, refraction and OIT are
 deferred.
+
+### Protocol v13 authored texture inputs
+
+Protocol v13 grows `MaterialPayload` from 140 to 244 bytes and widens the
+material chunk's dependency array to eight ids (`{baseColor,
+metallicRoughness, normal, emissive, occlusion}` in slots 0-4; slots 5-7 must be
+zero). The record is replaced, not reinterpreted in place, so every producer,
+consumer, validator and cache identity moves with the protocol number.
+
+| Offset | Field | Meaning |
+| --- | --- | --- |
+| 124 | `normalScale` | glTF `normalTexture.scale`; multiplies tangent-space XY only |
+| 128 | `slotFlags[5]` | per-slot authored UV set (0-15), U/V address mode, nearest filter |
+| 148 | `slotUvOffset[4][2]` | offset for slots 1-4 (slot 0 keeps `uvOffset`) |
+| 180 | `slotUvScale[4][2]` | scale for slots 1-4 (slot 0 keeps `uvScale`) |
+| 212 | `slotUvRotation[4]` | radians for slots 1-4 (slot 0 keeps `uvRotation`) |
+| 228 | `reserved[4]` | must be zero |
+
+Only UV set 0 is addressable because the normalized vertex layouts carry one
+TEXCOORD set. A texture that references a higher set is left unbound rather
+than aliased to UV0 and emits
+`kTextureFeatureUnsupportedUvSet` (feature id 4000). The supported set count is
+bounded by `kMaterialMaxSupportedUvSet`; adding a second TEXCOORD set is a
+vertex-layout and wire change. The validator bounds the uv-set number (0-15),
+address modes, normal scale magnitude, and every transform component, and
+rejects unknown slot-flag bits and non-zero reserved words.
+
+Color textures stay in their authored color space (`ColorSpaceId` is per image)
+and data maps stay linear; an image shared by color and data semantics is
+decoded into distinct chunks. Authored `alphaMode`/`cutoff` are preserved
+verbatim. `KHR_materials_transmission` with IOR <= 1 is suppressed with
+compatibility record 9; a BLEND material with no alpha source is recovered with
+record 10. Both are visible, tested conversions, never name-based exceptions.
 
 Protocol v10 adds three fixed payloads. `NodePayload` is 144 bytes: a stable
 nonzero ID, optional parent ID, closed visibility flags, and a finite

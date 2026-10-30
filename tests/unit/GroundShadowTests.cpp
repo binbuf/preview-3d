@@ -183,7 +183,7 @@ TEST_CASE("Ground highlight and contact shadow are independent constants",
     CHECK(noShadow.parameters[0] == on.parameters[0]);
 }
 
-TEST_CASE("ORM ambient occlusion honours strength and leaves direct specular clean",
+TEST_CASE("Authored ambient occlusion honours strength and leaves direct specular clean",
           "[ground-shadow]")
 {
     CHECK(OcclusionFactor(1.0f, 1.0f) == Approx(1.0f));
@@ -196,7 +196,10 @@ TEST_CASE("ORM ambient occlusion honours strength and leaves direct specular cle
     const char* objectSource = D3D12ViewerPath::TexturedPixelShaderSource();
     REQUIRE(objectSource != nullptr);
     const std::string shader(objectSource);
-    CHECK(shader.find("occlusion=OcclusionFactor(mr.r,gMaterialLobes0.z)") != std::string::npos);
+    // T22: MR red is not AO. Only the independent occlusion slot contributes.
+    CHECK(shader.find("occlusion=OcclusionFactor(SampleSlot(gOcclusion,aoUv).r,gMaterialLobes0.z)")
+          != std::string::npos);
+    CHECK(shader.find("OcclusionFactor(mr.r") == std::string::npos);
     CHECK(shader.find("float OcclusionFactor(float sample,float strength)") != std::string::npos);
     // Direct key/fill/rim calls must not receive an AO factor; only indirect
     // diffuse and environment reflection are scaled.

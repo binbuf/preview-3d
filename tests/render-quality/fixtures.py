@@ -259,8 +259,9 @@ def material_semantics(path: Path) -> Path:
     Ten spheres isolate one authored input each: normal scale 0/0.45/1,
     MR-red-only versus an independent occlusion binding, an unsupported UV1
     reference, per-slot transforms/samplers, a masked cutout, and IOR 1 versus
-    1.5 transmission. Every image is embedded as a data URI so the fixture is a
-    single redistributable file.
+    1.5 transmission. A separate mirrored sphere and a double-sided back-facing
+    quad exercise tangent handedness and front-face orientation. Every image is
+    embedded as a data URI so the fixture is a single redistributable file.
     """
     # Non-flat tangent-space normal map: the R channel varies so normalScale
     # changes the resulting shading normal (diagnostic channel 3).
@@ -276,7 +277,9 @@ def material_semantics(path: Path) -> Path:
         for x in range(4):
             color_pixels += bytes((230, 210, 190) if (x + y) % 2 else (40, 90, 160))
     color_uri = _png_data_uri(bytes(color_pixels))
-    mr_uri = _png_data_uri(_solid(4, 4, (51, 128, 0)))   # R=0.2 is NOT AO
+    # R=0.2 is deliberately not AO; G=0.502 roughness and B=1 metallic keep the
+    # metal/rough channels independently observable.
+    mr_uri = _png_data_uri(_solid(4, 4, (51, 128, 255)))
     ao_uri = _png_data_uri(_solid(4, 4, (51, 51, 51)))   # independent AO 0.2
 
     materials = [
@@ -286,11 +289,11 @@ def material_semantics(path: Path) -> Path:
                                   'metallicFactor': 0.0, 'roughnessFactor': 0.55}},
         {'name': 'normal scale 045',
          'normalTexture': {'index': 2, 'scale': 0.45},
-         'pbrMetallicRoughness': {'baseColorFactor': [0.55, 0.55, 0.55, 1],
+         'pbrMetallicRoughness': {'baseColorFactor': [0.55, 0.52, 0.58, 1],
                                   'metallicFactor': 0.0, 'roughnessFactor': 0.55}},
         {'name': 'normal scale 1',
          'normalTexture': {'index': 2, 'scale': 1.0},
-         'pbrMetallicRoughness': {'baseColorFactor': [0.55, 0.55, 0.55, 1],
+         'pbrMetallicRoughness': {'baseColorFactor': [0.58, 0.55, 0.52, 1],
                                   'metallicFactor': 0.0, 'roughnessFactor': 0.55}},
         {'name': 'MR red is not AO',
          'pbrMetallicRoughness': {'baseColorFactor': [0.6, 0.6, 0.6, 1],
@@ -298,7 +301,7 @@ def material_semantics(path: Path) -> Path:
                                   'metallicRoughnessTexture': {'index': 3}}},
         {'name': 'independent occlusion',
          'occlusionTexture': {'index': 4, 'strength': 1.0},
-         'pbrMetallicRoughness': {'baseColorFactor': [0.6, 0.6, 0.6, 1],
+         'pbrMetallicRoughness': {'baseColorFactor': [0.62, 0.56, 0.52, 1],
                                   'metallicFactor': 0.0, 'roughnessFactor': 0.8}},
         {'name': 'uv1 unsupported',
          'pbrMetallicRoughness': {'baseColorFactor': [0.8, 0.3, 0.2, 1],
@@ -327,10 +330,21 @@ def material_semantics(path: Path) -> Path:
                         'KHR_materials_ior': {'ior': 1.5}},
          'pbrMetallicRoughness': {'baseColorFactor': [0.7, 0.9, 0.95, 1.0],
                                   'metallicFactor': 0.0, 'roughnessFactor': 0.05}},
+        {'name': 'mirrored tangent handedness',
+         'normalTexture': {'index': 2, 'scale': 1.0},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.35, 0.75, 0.45, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.5}},
+        {'name': 'double sided backface', 'doubleSided': True,
+         'normalTexture': {'index': 2, 'scale': 0.0},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.45, 0.65, 0.85, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.6}},
     ]
     positions, normals, uvs, indices = uv_sphere(segments=32, rings=20)
     add_mesh, finish = _mesh_builder()
     primitives = []
+    # Each probe gets a distinct base color (the three normal-scale probes differ
+    # only by a few hundredths) so the diagnostic locator can identify every
+    # sphere from the isolated base-color channel rather than by draw order.
     locations = [(-4.5, 1.15), (-3.0, 1.15), (-1.5, 1.15), (0.0, 1.15), (1.5, 1.15),
                  (3.0, 1.15), (4.5, 1.15), (-2.25, -1.15), (0.0, -1.15), (2.25, -1.15)]
     for index, (x, y) in enumerate(locations):
@@ -355,7 +369,24 @@ def material_semantics(path: Path) -> Path:
         'attributes': {'POSITION': mirrored_base, 'NORMAL': mirrored_base + 1,
                        'TEXCOORD_0': mirrored_base + 2, 'TANGENT': mirrored_base + 4,
                        'COLOR_0': mirrored_base + 5},
-        'indices': mirrored_base + 3, 'material': 6}
+        'indices': mirrored_base + 3, 'material': 10}
+    # A double-sided quad whose authoring normal points away from the camera
+    # (back face visible). Normal scale 0 isolates the geometric-normal flip
+    # from any tangent-space perturbation.
+    quad = [(-0.45, -0.45, 0.0), (0.45, -0.45, 0.0), (-0.45, 0.45, 0.0), (0.45, 0.45, 0.0)]
+    quad_positions = [(4.2 + x, -1.15 + y, 1.0 + z) for x, y, z in quad]
+    quad_base = add_mesh(
+        quad_positions,
+        [(0.0, 0.0, -1.0)] * 4,
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)],
+        [0, 2, 1, 1, 2, 3],
+        tangents=[(1.0, 0.0, 0.0, 1.0)] * 4,
+        colors=[(1.0, 1.0, 1.0, 1.0)] * 4)
+    backface_primitive = {
+        'attributes': {'POSITION': quad_base, 'NORMAL': quad_base + 1,
+                       'TEXCOORD_0': quad_base + 2, 'TANGENT': quad_base + 4,
+                       'COLOR_0': quad_base + 5},
+        'indices': quad_base + 3, 'material': 11}
     document = {
         'asset': {'version': '2.0',
                   'generator': 'preview-3d tests/render-quality/fixtures.py'},
@@ -364,22 +395,27 @@ def material_semantics(path: Path) -> Path:
         'samplers': [
             {'wrapS': 10497, 'wrapT': 10497},
             {'wrapS': 33071, 'wrapT': 33648, 'magFilter': 9728},
-            {'wrapS': 33648, 'wrapT': 33071},
+            {'wrapS': 33648, 'wrapT': 33071, 'magFilter': 9728},
         ],
         'images': [{'uri': color_uri}, {'uri': normal_uri},
                    {'uri': normal_uri}, {'uri': mr_uri}, {'uri': ao_uri}],
+        # Distinct samplers per slot: base color wraps, the normal map mirrors U
+        # and clamps V with nearest filtering, and the occlusion map clamps U
+        # and mirrors V with nearest filtering.
         'textures': [
             {'source': 0, 'sampler': 0}, {'source': 1, 'sampler': 1},
-            {'source': 2, 'sampler': 0}, {'source': 3, 'sampler': 0},
-            {'source': 4, 'sampler': 0},
+            {'source': 2, 'sampler': 2}, {'source': 3, 'sampler': 0},
+            {'source': 4, 'sampler': 1},
         ],
         'scene': 0,
-        'scenes': [{'nodes': [0, 1]}],
+        'scenes': [{'nodes': [0, 1, 2]}],
         'nodes': [{'mesh': 0},
                   {'mesh': 1, 'translation': [0.0, -3.1, 0.0],
-                   'scale': [-1.0, 1.0, 1.0]}],
+                   'scale': [-1.0, 1.0, 1.0]},
+                  {'mesh': 2}],
         'meshes': [{'primitives': primitives},
-                   {'primitives': [mirrored_primitive]}],
+                   {'primitives': [mirrored_primitive]},
+                   {'primitives': [backface_primitive]}],
         'materials': materials,
     }
     document, binary = finish(document)
@@ -444,24 +480,33 @@ EXPECTED_MATERIALS = {
         {'name': 'normal scale 0', 'baseColor': [0.55, 0.55, 0.55, 1.0],
          'metallic': 0.0, 'roughness': 0.55, 'bucket': 0, 'alphaMode': 0,
          'normalScale': 0.0, 'occlusionBound': False, 'transmission': 0.0},
-        {'name': 'normal scale 045', 'baseColor': [0.55, 0.55, 0.55, 1.0],
+        {'name': 'normal scale 045', 'baseColor': [0.55, 0.52, 0.58, 1.0],
          'metallic': 0.0, 'roughness': 0.55, 'bucket': 0, 'alphaMode': 0,
          'normalScale': 0.45, 'occlusionBound': False, 'transmission': 0.0},
-        {'name': 'normal scale 1', 'baseColor': [0.55, 0.55, 0.55, 1.0],
+        {'name': 'normal scale 1', 'baseColor': [0.58, 0.55, 0.52, 1.0],
          'metallic': 0.0, 'roughness': 0.55, 'bucket': 0, 'alphaMode': 0,
          'normalScale': 1.0, 'occlusionBound': False, 'transmission': 0.0},
         {'name': 'MR red is not AO', 'baseColor': [0.6, 0.6, 0.6, 1.0],
          'metallic': 1.0, 'roughness': 1.0, 'bucket': 0, 'alphaMode': 0,
          'occlusionBound': False, 'occlusionExpectation': 1.0},
-        {'name': 'independent occlusion', 'baseColor': [0.6, 0.6, 0.6, 1.0],
+        {'name': 'independent occlusion', 'baseColor': [0.62, 0.56, 0.52, 1.0],
          'metallic': 0.0, 'roughness': 0.8, 'bucket': 0, 'alphaMode': 0,
-         'occlusionBound': True, 'occlusionExpectation': 0.2},
+         'occlusionBound': True, 'occlusionExpectation': 0.2,
+         'slotSampler': {4: {'addressU': 2, 'addressV': 1, 'nearest': True}}},
         {'name': 'uv1 unsupported', 'baseColor': [0.8, 0.3, 0.2, 1.0],
          'metallic': 0.0, 'roughness': 0.5, 'bucket': 0, 'alphaMode': 0,
          'baseColorBound': False},
         {'name': 'per slot transform', 'baseColor': [0.7, 0.7, 0.7, 1.0],
          'metallic': 0.0, 'roughness': 0.5, 'bucket': 0, 'alphaMode': 0,
-         'normalScale': 1.0, 'baseColorBound': True},
+         'normalScale': 1.0, 'baseColorBound': True,
+         'baseUv': {'offset': [0.5, 0.5], 'scale': [3.0, 3.0], 'rotation': 0.0},
+         'slotUv': {2: {'offset': [0.25, 0.1], 'scale': [2.0, 2.0],
+                        'rotation': 0.4}},
+         'slotSampler': {2: {'addressU': 1, 'addressV': 2, 'nearest': True}},
+         # The textured probe cannot be located by its flat factor; this is
+         # factor * linear(base-color texel) for the fixture's two colors.
+         'locatorColors': [[0.55391, 0.45114, 0.36044],
+                           [0.01485, 0.07157, 0.24607]]},
         {'name': 'alpha cutout', 'baseColor': [0.9, 0.1, 0.7, 0.35],
          'metallic': 0.0, 'roughness': 0.6, 'bucket': 1, 'alphaMode': 1,
          'alphaCutoff': 0.2},
@@ -471,6 +516,13 @@ EXPECTED_MATERIALS = {
         {'name': 'ior 15 transmission', 'baseColor': [0.7, 0.9, 0.95, 1.0],
          'metallic': 0.0, 'roughness': 0.05, 'bucket': 3, 'alphaMode': 0,
          'transmission': 0.9, 'ior': 1.5},
+        {'name': 'mirrored tangent handedness', 'baseColor': [0.35, 0.75, 0.45, 1.0],
+         'metallic': 0.0, 'roughness': 0.5, 'bucket': 0, 'alphaMode': 0,
+         'normalScale': 1.0, 'occlusionBound': False, 'transmission': 0.0},
+        {'name': 'double sided backface', 'baseColor': [0.45, 0.65, 0.85, 1.0],
+         'metallic': 0.0, 'roughness': 0.6, 'bucket': 0, 'alphaMode': 0,
+         'normalScale': 0.0, 'occlusionBound': False, 'transmission': 0.0,
+         'backFace': True},
     ],
 }
 

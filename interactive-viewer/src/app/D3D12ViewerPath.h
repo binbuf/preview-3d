@@ -154,6 +154,10 @@ struct D3D12ViewerPath
     static constexpr UINT kConstantBufferSlotBytes = 512;
     Microsoft::WRL::ComPtr<ID3D12Resource> frameConstantBuffer;
     std::byte* frameConstantBufferMapped = nullptr;
+    // T22: per-material cbuffer stride. The record is 304 bytes today but the
+    // binding address must be 256-byte aligned, so each draw/frame region is
+    // 512 bytes.
+    static constexpr UINT kMaterialConstantStride = 512;
 
     // T14: the product-owned procedural studio environment, baked once at
     // initialization into an RGB float cubemap with a GGX-prefiltered mip
@@ -198,10 +202,11 @@ struct D3D12ViewerPath
         double instanceBoundsMin[3]{}, instanceBoundsMax[3]{};
         bool mirrored = false;
         int textureIndex = -1; // base-color index retained for pressure compatibility
-        int textureIndices[4]{-1,-1,-1,-1};
+        int textureIndices[5]{-1,-1,-1,-1,-1};
         // T21: validated source identity and color-space of each bound slot.
         // Zero/first entries mean the slot is unbound and samples the neutral
-        // fallback; the diagnostics report that explicitly.
+        // fallback; the diagnostics report that explicitly. T22 adds the
+        // independent occlusion slot 4.
         struct TextureInfo
         {
             uint32_t chunkId = 0;
@@ -209,9 +214,26 @@ struct D3D12ViewerPath
             model_core::ColorSpaceId colorSpace = model_core::ColorSpaceId::Linear;
             bool bound = false;
         };
-        TextureInfo textureInfo[4]{};
-        Microsoft::WRL::ComPtr<ID3D12Resource> neutralResources[4];
+        TextureInfo textureInfo[5]{};
+        Microsoft::WRL::ComPtr<ID3D12Resource> neutralResources[5];
         UINT neutralDescriptorBase = 0;
+        // T22 per-material constant buffer. It is a CPU-writable UPLOAD-heap
+        // resource with one kMaterialConstantStride region per swap-chain
+        // frame, so a material update can never race a frame still reading the
+        // previous copy. A distinct buffer is shared by every draw that uses
+        // the same material chunk.
+        struct MaterialConstantBuffer
+        {
+            Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+            std::byte* mapped = nullptr;
+            uint64_t allocationBytes = 0;
+            // Ownership tag. A buffer may be shared only by draws with the same
+            // material chunk and mirrored sign, because those are the only
+            // per-draw values in the record.
+            uint32_t materialChunkId = 0;
+            bool mirrored = false;
+        };
+        MaterialConstantBuffer materialConstants;
         model_core::MaterialPayload material{};
         bool hasMaterial = false;
     };
@@ -258,9 +280,10 @@ struct D3D12ViewerPath
     // against.
     ModelResources model;
     static void UpdateCoarseVisibility(ModelResources& resources);
-    // The exact textured PBR pixel shader text, exposed so the ORM/AO lighting
-    // contract can be asserted without a GPU device.
+    // The exact textured PBR shader text, exposed so the material/UV/normal/AO
+    // contract can be asserted and compiled without a GPU device.
     static const char* TexturedPixelShaderSource();
+    static const char* TexturedVertexShaderSource();
     // The full-screen resolve shader text, exposed so the tone-map/background
     // contract and the FL11_0 compile baseline can be asserted without a GPU.
     static const char* ResolvePixelShaderSource();
@@ -365,6 +388,12 @@ struct D3D12ViewerPath
     // observes the whole batch retire. Supersedes any upload already in
     // flight by advancing uploadGeneration, which makes the abandoned one's
     // publications stale rather than merely unwanted.
+    // Ensures `mesh` owns a material cbuffer tagged for its current material
+    // chunk and mirrored sign. Instances copied from a shared geometry must
+    // call this when their effective material differs from the source draw;
+    // otherwise two draws would overwrite one buffer's per-frame region.
+    bool EnsureMaterialConstants(GpuMesh& mesh, std::wstring& error);
+
     bool BeginUploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
                            const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
                            const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,

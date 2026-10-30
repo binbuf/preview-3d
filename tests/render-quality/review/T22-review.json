@@ -16,45 +16,56 @@
     "TestResults/render-quality/T22/images/external-camera-studio-lens.png",
     "TestResults/render-quality/T22/images/external-suit-studio-front.png",
     "TestResults/render-quality/T22/images/external-microscope-studio-front.png",
-    "TestResults/render-quality/T22/diagnostics/channels/channel-01-base-color.png",
-    "TestResults/render-quality/T22/diagnostics/channels/channel-08-occlusion.png",
-    "TestResults/render-quality/T22/diagnostics/channels/channel-09-coverage-alpha.png",
-    "TestResults/render-quality/T22/diagnostics/channels/channel-10-transmission.png"
+    "TestResults/render-quality/T22/probes/channels/channel-01-base-color.png",
+    "TestResults/render-quality/T22/probes/channels/channel-02-geometric-normal.png",
+    "TestResults/render-quality/T22/probes/channels/channel-03-shading-normal.png",
+    "TestResults/render-quality/T22/probes/channels/channel-08-occlusion.png",
+    "TestResults/render-quality/T22/probes/channels/channel-09-coverage-alpha.png",
+    "TestResults/render-quality/T22/probes/channels/channel-10-transmission.png"
   ],
   "observations": [
-    "The generated material-semantics fixture loads and renders all ten probe spheres plus the mirrored sphere; the Debug material records match the authored base colour, metallic, roughness, alpha mode, transmission and IOR values.",
+    "The generated material-semantics fixture renders ten authored probes plus the separate mirrored-tangent and double-sided back-face probes. The Debug material records match the authored base color, metallic, roughness, normal scale, per-slot sampler/transform metadata, alpha mode, transmission and IOR values.",
+    "Numeric GPU readback proves the authored inputs reach the shader: shading-normal deviation from the geometric normal is 0.0 at normal scale 0, 0.0174 at 0.45 and 0.0494 at 1.0; the independent occlusion probe reads 0.19995 while the MR-red-only probe reads 1.0; the UV1 probe shows its authored factor (0.8/0.3/0.2) because the slot is unbound; the MASK probe keeps 0.35 coverage; IOR=1 reads transmission 0.0 and IOR=1.5 reads 0.9; the mirrored probe's perturbed normal differs from its geometric normal by 0.058; and the double-sided back-face probe's shading normal is exactly the reversed authored geometric normal (normal scale 0), proving front-face orientation rather than an eye-facing flip.",
     "The import-isolation lane proves normalTexture.scale 0/0.45/1, independent occlusion in dependency slot 4, per-slot UV set/sampler/transform, the UV1 unsupported record, MASK cutoff and IOR=1 suppression without any GPU dependence.",
-    "The IOR=1 crew-suit pattern now emits the explicit suppression compatibility record instead of silently dropping transmission; the OPAQUE alpha mode is preserved rather than rewritten to BLEND.",
-    "The GPU shading application of normalTexture.scale, per-slot texture transforms and the independent occlusion map is NOT applied by this slice: the renderer-side CBV/root-signature change was reverted after it produced a reproducible textured-draw hang on this workstation. The wire, validator, importer, compatibility and cache work is landed and tested.",
-    "Car, Camera, Suit and microscope captures were re-run with the T21-equivalent render path; Camera glass remains a reviewed nonregression case (dark lens with reflection depth). Car glass ordering and microscope ResourceLimit remain T26/T27 and T23."
+    "The IOR=1 crew-suit pattern emits the explicit suppression compatibility record instead of silently dropping transmission; the authored OPAQUE alpha mode is preserved rather than rewritten to BLEND.",
+    "Car, Camera, Suit and microscope captures were re-run with the T22 material path. Car reports 139 materials with normal scales 0.3703/0.4495/1.0, 10 occlusion-bound materials and 23 transmissive draws; Camera keeps 1 transmissive material and its dark lens with reflection depth (reviewed nonregression); Suit keeps 14 materials with transmission suppressed at IOR=1; microscope remains visible with its known T23 ResourceLimit.",
+    "Car glass ordering/speckle and microscope complete-load readiness remain out of scope (T26/T27 and T23 respectively)."
   ],
   "defects": [
-    {
-      "id": "gpu-material-semantics-deferred",
-      "label": "limitation",
-      "where": "interactive-viewer/src/app/D3D12ViewerPath.cpp (reverted)",
-      "description": "Normal scale, per-slot transforms and the independent occlusion texture are carried and validated on the wire but the GPU shader still uses the T21 material path (MR red as AO). The attempted b3 CBV/root-signature integration hung every textured load and was reverted to keep the tree working.",
-      "assignedTo": "T22 follow-up / T25"
-    },
     {
       "id": "camera-glass-nonregression",
       "label": "reviewed-nonregression",
       "where": "external-camera-studio-lens.png",
-      "description": "Camera lens remains dark with visible reflection depth; no regression from the material-record changes.",
+      "description": "Camera lens remains dark with visible reflection depth; no regression from the T22 material changes.",
       "assignedTo": "T26/T27"
+    },
+    {
+      "id": "car-windshield-ordering",
+      "label": "known-defect",
+      "where": "external-car-studio-window.png",
+      "description": "Car windshield/side-glass ordering and speckle remain owned by T26/T27; T22 preserves the authored alpha/transmission inputs independently.",
+      "assignedTo": "T26/T27"
+    },
+    {
+      "id": "microscope-resource-limit",
+      "label": "known-defect",
+      "where": "external-microscope-studio-front.png",
+      "description": "The microscope can become visible before a terminal ResourceLimit; complete-load readiness is T23.",
+      "assignedTo": "T23"
     }
   ],
   "positives": [
     "Wire protocol v13, MaterialPayload 244 bytes, five material image slots and eight dependency slots are validated at the trust boundary.",
     "The glTF importer preserves authored normal scale, per-texture UV set/sampler/transform metadata, independent occlusion, alpha mode/cutoff, transmission and unlit semantics.",
-    "Derived-cache keys now default to the real protocol/importer/material/vertex-layout identity.",
-    "UV1 references are left unbound with a specific compatibility record; MR red is no longer treated as authored AO in the normalized data."
+    "The textured shader applies normal scale, per-slot transforms/samplers, independent occlusion, mirrored tangent handedness and front-face-aware TBN; the material record is now a per-material CBV (ADR-0080).",
+    "Derived-cache keys default to the real protocol/importer/material/vertex-layout identity.",
+    "UV1 references are left unbound with a specific compatibility record; MR red is never treated as AO."
   ],
   "acceptance": {
     "diagnosticChannelsReviewed": true,
     "numericReadbackVerified": true,
     "acceptedReferencesPromotedBy": "not applicable for T22 (observed evidence only)",
     "acceptedReferencesAreQualityTargets": false,
-    "note": "T22 is a partial slice: authored-input preservation is landed and tested; the GPU shading application remains open."
+    "note": "T22 imports and GPU diagnostics pass. Image review used numeric Debug readback plus captured PNGs; an image-capable reviewer should still confirm the artistic before/after framing before any reference promotion."
   }
 }

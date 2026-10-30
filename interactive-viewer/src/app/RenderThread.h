@@ -119,11 +119,19 @@ struct DebugMaterialRecord
     float uvOffset[2]{};
     float uvScale[2]{1.0f, 1.0f};
     float uvRotation = 0.0f;
-    int textureIndices[4]{-1, -1, -1, -1};
-    uint32_t textureChunkIds[4]{};
-    uint32_t textureFormats[4]{};
-    uint32_t textureColorSpaces[4]{};
-    bool textureBound[4]{};
+    // T22 authored normal-map scale and the per-slot sampler/UV metadata the
+    // renderer actually applies. slotUv* arrays carry slots 1..4; slot 0 is the
+    // legacy uvOffset/uvScale/uvRotation block above.
+    float normalScale = 1.0f;
+    uint32_t slotFlags[5]{};
+    float slotUvOffset[4][2]{};
+    float slotUvScale[4][2]{{1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}};
+    float slotUvRotation[4]{};
+    int textureIndices[5]{-1, -1, -1, -1, -1};
+    uint32_t textureChunkIds[5]{};
+    uint32_t textureFormats[5]{};
+    uint32_t textureColorSpaces[5]{};
+    bool textureBound[5]{};
     uint32_t mapMask = 0;
 };
 

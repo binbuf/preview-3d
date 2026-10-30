@@ -4491,7 +4491,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Shipping builds cannot be driven by local WM_APP messages.
         return 0;
 #else
-        if (!app->appSmoke || wParam > 200) return 0;
+        if (!app->appSmoke || wParam > 240) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -4654,7 +4654,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 app->debugMaterialIndex = static_cast<int>(lParam);
             return static_cast<LRESULT>(app->debugMaterialIndex);
         }
-        if (wParam >= 136 && wParam <= 194) {
+        if (wParam >= 136 && wParam <= 230) {
             DebugMaterialRecord record;
             if (!app->renderThread.DebugMaterial(static_cast<uint32_t>(app->debugMaterialIndex), record))
                 return 0;
@@ -4719,6 +4719,26 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             case 192: return record.points ? 1 : 0;
             case 193: return record.lines ? 1 : 0;
             case 194: return record.completeVertex ? 1 : 0;
+            // T22 authored-input diagnostics. Slot 0 keeps the legacy uv fields
+            // above; these add normal scale, per-slot metadata and slot 4.
+            case 201: return f32(record.normalScale);
+            case 202: case 203: case 204: case 205: case 206:
+                return static_cast<LRESULT>(record.slotFlags[wParam - 202]);
+            case 207: case 208: case 209: case 210:
+                return f32(record.slotUvOffset[wParam - 207][0]);
+            case 211: case 212: case 213: case 214:
+                return f32(record.slotUvOffset[wParam - 211][1]);
+            case 215: case 216: case 217: case 218:
+                return f32(record.slotUvScale[wParam - 215][0]);
+            case 219: case 220: case 221: case 222:
+                return f32(record.slotUvScale[wParam - 219][1]);
+            case 223: case 224: case 225: case 226:
+                return f32(record.slotUvRotation[wParam - 223]);
+            case 227: return static_cast<LRESULT>(record.textureIndices[4] >= 0
+                ? uint32_t(record.textureIndices[4]) : 0u);
+            case 228: return static_cast<LRESULT>(record.textureChunkIds[4]);
+            case 229: return static_cast<LRESULT>(record.textureFormats[4]);
+            case 230: return static_cast<LRESULT>(record.textureColorSpaces[4]);
             }
         }
         if (wParam >= 13 && wParam <= 29) {

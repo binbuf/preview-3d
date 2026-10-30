@@ -232,3 +232,42 @@ TEST_CASE("Textured shader applies the layered lobes before the HDR resolve",
     CHECK(SUCCEEDED(hr));
     CHECK(compiled != nullptr);
 }
+
+TEST_CASE("Textured shaders preserve authored normal scale, per-slot UVs and front-face basis",
+          "[material-semantics][material-lobes-shader]")
+{
+    const char* pixelSource = D3D12ViewerPath::TexturedPixelShaderSource();
+    const char* vertexSource = D3D12ViewerPath::TexturedVertexShaderSource();
+    REQUIRE(pixelSource != nullptr);
+    REQUIRE(vertexSource != nullptr);
+    const std::string shader(pixelSource);
+    const std::string vertex(vertexSource);
+    // normalTexture.scale multiplies the sampled tangent-space XY only.
+    CHECK(shader.find("sampled.xy*=gMaterialExtras.x") != std::string::npos);
+    // Per-slot transforms and samplers travel separately.
+    CHECK(shader.find("gSlotUv[") != std::string::npos);
+    CHECK(shader.find("ResolveSlotUv(2,input.uv)") != std::string::npos);
+    CHECK(shader.find("ResolveSlotUv(4,input.uv)") != std::string::npos);
+    // Back faces reverse the geometric normal before the tangent basis, rather
+    // than flipping the perturbed normal toward the eye afterwards.
+    CHECK(shader.find("if (doubleSided && !input.frontFace) n=-n;") != std::string::npos);
+    CHECK(shader.find("dot(n,viewDir)<0.0f") == std::string::npos);
+    // Missing/zero tangents fall back to screen-space derivatives.
+    CHECK(shader.find("tangentLength<1e-10f") != std::string::npos);
+    CHECK(shader.find("ddx(input.worldPosition)") != std::string::npos);
+    // The vertex stage now carries the raw authored UV set.
+    CHECK(vertex.find("output.uv=input.uv") != std::string::npos);
+
+    Microsoft::WRL::ComPtr<ID3DBlob> compiledPs, compiledVs, errors;
+    const HRESULT ps = D3DCompile(pixelSource, std::strlen(pixelSource), nullptr, nullptr,
+                                  nullptr, "PSMain", "ps_5_1",
+                                  D3DCOMPILE_ENABLE_STRICTNESS, 0, &compiledPs, &errors);
+    if (FAILED(ps) && errors) INFO(static_cast<const char*>(errors->GetBufferPointer()));
+    CHECK(SUCCEEDED(ps));
+    errors.Reset();
+    const HRESULT vs = D3DCompile(vertexSource, std::strlen(vertexSource), nullptr, nullptr,
+                                  nullptr, "VSMain", "vs_5_1",
+                                  D3DCOMPILE_ENABLE_STRICTNESS, 0, &compiledVs, &errors);
+    if (FAILED(vs) && errors) INFO(static_cast<const char*>(errors->GetBufferPointer()));
+    CHECK(SUCCEEDED(vs));
+}

@@ -184,18 +184,27 @@ treatment. SSAO is deliberately deferred to a follow-up: the HDR target does
 not yet expose a depth/normal chain, and the quality option must never gate the
 contact shadow.
 
-The metallic-roughness texture's R channel is ambient occlusion. The shader
-applies the glTF strength formula `saturate(1 + strength × (sample - 1))`, with
-sample = 1 when the map is absent and `strength` from the protocol-v12
-`occlusionStrength` field (default 1). AO multiplies indirect diffuse,
-environment reflection and ambient terms only; direct `EvaluateLightSplit`
-key/fill/rim specular is never AO-scaled, so metals do not read as dirty.
+Ambient occlusion is sampled only from an authored `occlusionTexture` (protocol
+v13 dependency slot 4); the metallic-roughness red channel is unused by the ORM
+convention and is never treated as AO. The shader applies the glTF strength
+formula `saturate(1 + strength × (sample - 1))`, with sample = 1 when the map is
+absent and `strength` from the `occlusionStrength` field (default 1). The
+occlusion slot has its own UV set, transform and sampler and is bound to `t5`.
+AO multiplies indirect diffuse, environment reflection and ambient terms only;
+direct `EvaluateLightSplit` key/fill/rim specular is never AO-scaled, so metals
+do not read as dirty.
 
 ### Material lobes and transparency
 
-The textured pixel shader reads the protocol-v12 lobe block as four additional
-`float4` root constants (`gMaterialLobes0..3`), keeping peak-shader-model 5.1
-and the existing 32-bit-constant path instead of a material buffer rewrite.
+The textured pixel shader reads its complete material record from a per-material
+`b2` constant buffer (`MaterialConstants`): base color, the protocol-v12 lobe
+block, normal scale, the map mask and per-slot UV/sampler metadata. Moving the
+material block out of root constants is what keeps the root signature inside
+D3D12's 64-DWORD budget once the sixth SRV table (independent occlusion) and the
+per-slot transforms exist; the layout and lifetime rule are recorded in
+ADR-0080. Each material owns a CPU-writable UPLOAD buffer with one region per
+swap-chain frame, so a progressive material/texture update never races a frame
+that is still sampling the previous copy. Peak shader model remains 5.1.
 
 - **Specular / IOR.** Dielectric F0 is `((ior-1)/(ior+1))²`, multiplied by the
   authored `specularFactor` and tinted by `specularColor`; the metallic path
@@ -211,6 +220,20 @@ and the existing 32-bit-constant path instead of a material buffer rewrite.
   resolve pass, so an authored 5× sign enters tone mapping as linear HDR
   rather than clipping at 1.0.
 - **Occlusion strength.** Applied through the same glTF formula above.
+
+Authored texture metadata is applied per slot, not per material: slot 0 keeps
+the legacy UV transform fields and slots 1-4 (metallic/roughness, normal,
+emissive, occlusion) carry their own offset/scale/rotation plus the packed UV
+set, U/V address mode and nearest-filter intent. A slot whose UV set is not 0 is
+reported invalid and skipped; it is never sampled with UV0 coordinates. The
+normal map's tangent-space XY is multiplied by `normalScale` before
+renormalization. The TBN basis is formed in camera space from the transformed
+normal and tangent; a zero-length tangent falls back to screen-space
+derivatives of the transformed normal-map UV. A mirrored (negative-determinant)
+instance multiplies the tangent handedness by the instance sign. For a
+double-sided material the geometric normal is reversed on a back-facing
+fragment *before* the TBN is formed (glTF/Khronos reference behavior), so the
+normal map keeps its authored slope rather than being flipped toward the eye.
 
 Transparency stays on the existing straight-alpha path: opaque draws first,
 alpha-blend draws are stable-sorted back-to-front by view depth, the HDR scene
@@ -241,9 +264,12 @@ on the CPU. This keeps numeric HDR readback independent of the display transform
 and proves the values through actual GPU output.
 
 The same Debug surface exposes a bounded per-material draw record: source
-geometry/material/node/instance ids, vertex/index counts, validated wire values,
-bound texture chunk ids/formats/colour spaces and the effective bucket
-(opaque/masked/blended/transmissive), depth-write and cull state. The viewer
+geometry/material/node/instance ids, vertex/index counts, validated wire values
+(including `normalScale`, the five per-slot sampler/UV-set flags and the
+per-slot transforms), bound texture chunk ids/formats/colour spaces for all five
+material slots and the effective bucket (opaque/masked/blended/transmissive),
+depth-write and cull state. Fields 201-230 extend the T21 record; the earlier
+fields keep their meaning and ordering. The viewer
 never parses glTF for this; source metadata is read only by test tooling and
 matched against the viewer's validated snapshot. All fields remain inside the
 existing `PREVIEW3D_ENABLE_TEST_CONTROL` + `--app-smoke` guard, so a shipping
@@ -412,7 +438,8 @@ Primary references: [D3D12 fence-based resource management](https://learn.micros
 
 The derived-cache key uses `model_core::kDerivedCacheParserIdentity`
 (protocol, glTF importer, material-semantics and vertex-layout versions) rather
-than a caller default; cache schema is 4. The 0.7.0 renderer still applies the
-T21 material path (MR-red AO, no normal-scale/per-slot transform application).
-Applying the v13 authored inputs in the shader is an open T22 follow-up; the
-wire/validator/importer contract above is authoritative.
+than a caller default; cache schema is 4. A different parser identity misses
+even for the same source file identity. The v13 authored inputs are applied by
+the shader: normal scale, per-slot UV/sampler/transform metadata, the
+independent occlusion slot and the front-face/mirrored TBN rules described
+above. MR red is not read as AO anywhere.
