@@ -310,6 +310,12 @@ struct StagePolicy {
     uint32_t primCount = 0;
     uint32_t optionalWarnings = 0;
     bool hasComposition = false;
+    // Valid features the TinyUSDZ render-scene converter cannot represent but
+    // the OpenUSD compatibility host can (procedural Gprims, Points and
+    // creased/subdivided meshes). This is a retryable classification, not a
+    // terminal unsupported-required failure, and the broker only accepts it
+    // before any fast-path batch has been published.
+    bool needsCompatibilityHost = false;
     bool unsupportedRequired = false;
     bool omittedPurpose = false;
 };
@@ -368,9 +374,18 @@ void ClassifyPrim(const Prim& prim, double time, bool parentVisible,
         const bool hasCreases = mesh->cornerIndices.authored() || mesh->cornerSharpnesses.authored()
             || mesh->creaseIndices.authored() || mesh->creaseLengths.authored()
             || mesh->creaseSharpnesses.authored();
-        if (hasCreases) policy.unsupportedRequired = true;
-        if (mesh->subdivisionScheme.get_value() != GeomMesh::SubdivisionScheme::SubdivisionSchemeNone)
-            SaturatingWarn(policy); // bounded control-cage approximation
+        // Creases and subdivision are valid content. The host renders the
+        // authored control cage with a Degraded warning instead of failing, so
+        // hand these meshes to OpenUSD rather than treating them as terminal.
+        if (hasCreases)
+            policy.needsCompatibilityHost = true;
+        // An unauthored scheme keeps the historical fast-path treatment
+        // (plain triangle cage without a subdivision warning); only an
+        // explicit non-none scheme needs the host's control-cage path.
+        if (mesh->subdivisionScheme.authored()
+            && mesh->subdivisionScheme.get_value()
+                != GeomMesh::SubdivisionScheme::SubdivisionSchemeNone)
+            policy.needsCompatibilityHost = true;
     } else if (const auto* instancer = AsExact<PointInstancer>(prim)) {
         if (visible && includedPurpose) {
             if (instancer->velocities.authored() || instancer->accelerations.authored()
@@ -391,11 +406,16 @@ void ClassifyPrim(const Prim& prim, double time, bool parentVisible,
                 }
             }
         }
-    } else if ((AsExact<tinyusdz::GeomBasisCurves>(prim) || AsExact<tinyusdz::GeomNurbsCurves>(prim)
-                || AsExact<tinyusdz::GeomSphere>(prim) || AsExact<tinyusdz::GeomCube>(prim)
+    } else if ((AsExact<tinyusdz::GeomSphere>(prim) || AsExact<tinyusdz::GeomCube>(prim)
                 || AsExact<tinyusdz::GeomCone>(prim) || AsExact<tinyusdz::GeomCylinder>(prim)
                 || AsExact<tinyusdz::GeomCapsule>(prim) || AsExact<tinyusdz::GeomPoints>(prim))
                && visible && includedPurpose) {
+        // The OpenUSD host owns procedural tessellation and PointList output.
+        policy.needsCompatibilityHost = true;
+    } else if ((AsExact<tinyusdz::GeomBasisCurves>(prim)
+                || AsExact<tinyusdz::GeomNurbsCurves>(prim))
+               && visible && includedPurpose) {
+        // Curves/NURBS stay terminal until line topology lands (T17).
         policy.unsupportedRequired = true;
     } else if (AsExact<tinyusdz::GeomCamera>(prim)) {
         SaturatingWarn(policy);
@@ -1461,6 +1481,10 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
                                            ImportFailurePhase::Geometry);
     if (policy.unsupportedRequired)
         return Fail(ImportErrorCode::UnsupportedRequiredFeature);
+    // Host-supported primitives/points/creases are valid content: signal a
+    // pre-publication retry using the existing closed fallback classification.
+    if (policy.needsCompatibilityHost)
+        return Fail(ImportErrorCode::UnsupportedComposition, ImportFailurePhase::Geometry);
     if (options.Cancelled()) return Fail(ImportErrorCode::Cancelled);
 
     tinyusdz::tydra::RenderSceneConverterEnv environment(stage);

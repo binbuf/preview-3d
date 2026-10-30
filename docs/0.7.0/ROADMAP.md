@@ -39,7 +39,7 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [x] T09 — OCCT host: XBF and FCStd → [../tasks/0.7.0/T09-cad-host-xbf-fcstd.md](../tasks/0.7.0/T09-cad-host-xbf-fcstd.md)
 - [x] T10 — Bounded Assimp compatibility adapter → [../tasks/0.7.0/T10-assimp-compatibility-adapter.md](../tasks/0.7.0/T10-assimp-compatibility-adapter.md)
 - [x] T10b — 3MF best-effort compatibility → [../tasks/0.7.0/T10b-three-mf-compatibility.md](../tasks/0.7.0/T10b-three-mf-compatibility.md)
-- [ ] T11 — USD primitives, points and crease tolerance → [../tasks/0.7.0/T11-usd-primitives-points-creases.md](../tasks/0.7.0/T11-usd-primitives-points-creases.md)
+- [~] T11 — USD primitives, points and crease tolerance → [../tasks/0.7.0/T11-usd-primitives-points-creases.md](../tasks/0.7.0/T11-usd-primitives-points-creases.md) ⟵ running
 
 ## Phase 3 — Studio lighting and presentation
 

@@ -38,13 +38,19 @@
 #include "pxr/usd/usd/primRange.h"
 #include "pxr/usd/usd/primFlags.h"
 #include "pxr/usd/usd/stage.h"
+#include "pxr/usd/usdGeom/capsule.h"
+#include "pxr/usd/usdGeom/cone.h"
+#include "pxr/usd/usdGeom/cube.h"
+#include "pxr/usd/usdGeom/cylinder.h"
 #include "pxr/usd/usdGeom/gprim.h"
 #include "pxr/usd/usdGeom/imageable.h"
 #include "pxr/usd/usdGeom/mesh.h"
 #include "pxr/usd/usdGeom/metrics.h"
 #include "pxr/usd/usdGeom/pointInstancer.h"
+#include "pxr/usd/usdGeom/points.h"
 #include "pxr/usd/usdGeom/primvar.h"
 #include "pxr/usd/usdGeom/primvarsAPI.h"
+#include "pxr/usd/usdGeom/sphere.h"
 #include "pxr/usd/usdGeom/subset.h"
 #include "pxr/usd/usdGeom/tokens.h"
 #include "pxr/usd/usdGeom/xformable.h"
@@ -1162,19 +1168,14 @@ std::optional<MeshGeometry> EmitMeshGeometry(import_worker::BoundedChunkWriter& 
     mesh.GetHoleIndicesAttr().Get(&holes, time);
     std::unordered_set<int> holeSet(holes.begin(), holes.end());
     TfToken subdivision;
-    mesh.GetSubdivisionSchemeAttr().Get(&subdivision, time);
-    if (subdivision != UsdGeomTokens->none) {
-        VtIntArray creaseIndices, creaseLengths, cornerIndices;
-        VtFloatArray creaseSharpnesses, cornerSharpnesses;
-        mesh.GetCreaseIndicesAttr().Get(&creaseIndices, time);
-        mesh.GetCreaseLengthsAttr().Get(&creaseLengths, time);
-        mesh.GetCreaseSharpnessesAttr().Get(&creaseSharpnesses, time);
-        mesh.GetCornerIndicesAttr().Get(&cornerIndices, time);
-        mesh.GetCornerSharpnessesAttr().Get(&cornerSharpnesses, time);
-        if (!holes.empty() || !creaseIndices.empty() || !creaseLengths.empty()
-            || !creaseSharpnesses.empty() || !cornerIndices.empty() || !cornerSharpnesses.empty()) {
-            state.Fail(ImportErrorCode::UnsupportedRequiredFeature); return std::nullopt;
-        }
+    const UsdAttribute subdivisionAttr = mesh.GetSubdivisionSchemeAttr();
+    subdivisionAttr.Get(&subdivision, time);
+    if (subdivisionAttr.HasAuthoredValue() && subdivision != UsdGeomTokens->none) {
+        // Creases and subdivision are rendered as the authored control cage.
+        // This is a deterministic, bounded approximation: no OpenSubdiv link
+        // and no smoothing; the existing optional-warning count marks the
+        // result Degraded for the compatibility report. Holes (if authored)
+        // are already skipped by the control-cage triangulation below.
         if (subdivision != UsdGeomTokens->catmullClark && subdivision != UsdGeomTokens->loop
             && subdivision != UsdGeomTokens->bilinear) {
             state.Fail(ImportErrorCode::UnsupportedRequiredFeature); return std::nullopt;
@@ -1374,13 +1375,574 @@ UsdShadeMaterial BoundMaterial(const UsdPrim& prim)
     return UsdShadeMaterialBindingAPI(prim).ComputeBoundMaterial();
 }
 
-UsdShadeMaterial GroupMaterial(const UsdGeomMesh& mesh, int group)
+bool IsHostGeometryPrim(const UsdPrim& prim)
 {
-    if (group < 0) return BoundMaterial(mesh.GetPrim());
+    return prim.IsA<UsdGeomMesh>() || prim.IsA<UsdGeomSphere>()
+        || prim.IsA<UsdGeomCube>() || prim.IsA<UsdGeomCylinder>()
+        || prim.IsA<UsdGeomCone>() || prim.IsA<UsdGeomCapsule>()
+        || prim.IsA<UsdGeomPoints>();
+}
+
+UsdShadeMaterial GroupMaterial(const UsdPrim& prim, int group)
+{
+    const UsdGeomMesh mesh(prim);
+    if (!mesh || group < 0) return BoundMaterial(prim);
     const auto subsets = UsdGeomSubset::GetGeomSubsets(mesh, UsdGeomTokens->face,
                                                        UsdShadeTokens->materialBind);
     return static_cast<std::size_t>(group) < subsets.size()
         ? BoundMaterial(subsets[static_cast<std::size_t>(group)].GetPrim()) : UsdShadeMaterial();
+}
+
+// ---------------------------------------------------------------------------
+// Bounded procedural Gprim tessellation (Product-owned, deterministic).
+// Segment counts are fixed so repeated opens produce byte-identical geometry:
+//   sphere   24 longitude x 16 latitude bands
+//   capsule  24 longitude x 8 latitude bands per hemisphere
+//   cylinder 24 radial segments, capped
+//   cone     24 radial segments, capped base
+//   cube     12 triangles
+// The local transform comes from the prim's Xformable node; extent is only a
+// hint, so actual bounds are computed from the generated vertices.
+// ---------------------------------------------------------------------------
+
+constexpr int kGprimRadialSegments = 24;
+constexpr int kSphereLatitudeSegments = 16;
+constexpr int kCapsuleLatitudeSegments = 8;
+
+struct SurfaceVertex { GfVec3f position; GfVec3f normal; };
+
+GfVec3f NormalizedOr(const GfVec3f& value, const GfVec3f& fallback)
+{
+    const float length = value.GetLength();
+    return length > 1e-20f && std::isfinite(length) ? value / length : fallback;
+}
+
+GfVec3f AxisMapped(const GfVec3f& value, const TfToken& axis, bool& valid)
+{
+    valid = true;
+    if (axis == UsdGeomTokens->z || axis.IsEmpty()) return value;
+    // Proper rotations keep the authored right-handed winding.
+    if (axis == UsdGeomTokens->y) return GfVec3f(value[0], value[2], -value[1]);
+    if (axis == UsdGeomTokens->x) return GfVec3f(value[2], value[1], -value[0]);
+    valid = false;
+    return value;
+}
+
+void AddTriangle(std::vector<SurfaceVertex>& out, const SurfaceVertex& a,
+                 const SurfaceVertex& b, const SurfaceVertex& c)
+{
+    out.push_back(a); out.push_back(b); out.push_back(c);
+}
+
+std::vector<SurfaceVertex> LatitudeRing(int segments, double latitude, double radius,
+                                        double centerZ, double direction)
+{
+    std::vector<SurfaceVertex> ring(static_cast<std::size_t>(segments));
+    const double sinLatitude = std::sin(latitude);
+    const double cosLatitude = std::cos(latitude);
+    for (int index = 0; index < segments; ++index) {
+        const double angle = 2.0 * std::numbers::pi_v<double>
+            * static_cast<double>(index) / static_cast<double>(segments);
+        const GfVec3f normal(static_cast<float>(sinLatitude * std::cos(angle)),
+            static_cast<float>(sinLatitude * std::sin(angle)),
+            static_cast<float>(direction * cosLatitude));
+        ring[static_cast<std::size_t>(index)] = SurfaceVertex{
+            normal * static_cast<float>(radius) + GfVec3f(0, 0, static_cast<float>(centerZ)),
+            normal};
+    }
+    return ring;
+}
+
+void AppendSphere(std::vector<SurfaceVertex>& out, double radius)
+{
+    std::vector<std::vector<SurfaceVertex>> rings;
+    for (int latitude = 0; latitude <= kSphereLatitudeSegments; ++latitude) {
+        const double phi = std::numbers::pi_v<double> * static_cast<double>(latitude)
+            / static_cast<double>(kSphereLatitudeSegments);
+        rings.push_back(LatitudeRing(kGprimRadialSegments, phi, radius, 0.0, 1.0));
+    }
+    const auto& north = rings[0][0];
+    const auto& south = rings[static_cast<std::size_t>(kSphereLatitudeSegments)][0];
+    for (int index = 0; index < kGprimRadialSegments; ++index) {
+        const int next = (index + 1) % kGprimRadialSegments;
+        AddTriangle(out, north, rings[1][static_cast<std::size_t>(index)],
+                    rings[1][static_cast<std::size_t>(next)]);
+        AddTriangle(out, rings[static_cast<std::size_t>(kSphereLatitudeSegments - 1)]
+                             [static_cast<std::size_t>(index)],
+                    south, rings[static_cast<std::size_t>(kSphereLatitudeSegments - 1)]
+                               [static_cast<std::size_t>(next)]);
+    }
+    for (int latitude = 1; latitude + 1 < kSphereLatitudeSegments; ++latitude) {
+        const auto& upper = rings[static_cast<std::size_t>(latitude)];
+        const auto& lower = rings[static_cast<std::size_t>(latitude + 1)];
+        for (int index = 0; index < kGprimRadialSegments; ++index) {
+            const int next = (index + 1) % kGprimRadialSegments;
+            AddTriangle(out, upper[static_cast<std::size_t>(index)],
+                        lower[static_cast<std::size_t>(index)],
+                        upper[static_cast<std::size_t>(next)]);
+            AddTriangle(out, upper[static_cast<std::size_t>(next)],
+                        lower[static_cast<std::size_t>(index)],
+                        lower[static_cast<std::size_t>(next)]);
+        }
+    }
+}
+
+void AppendCube(std::vector<SurfaceVertex>& out, double size)
+{
+    const float half = static_cast<float>(size * 0.5);
+    struct Face { GfVec3f corners[4]; GfVec3f normal; };
+    const GfVec3f p[8] = {
+        {-half, -half, -half}, {half, -half, -half}, {half, half, -half}, {-half, half, -half},
+        {-half, -half, half}, {half, -half, half}, {half, half, half}, {-half, half, half}};
+    const Face faces[] = {
+        {{p[4], p[5], p[6], p[7]}, GfVec3f(0, 0, 1)},
+        {{p[1], p[0], p[3], p[2]}, GfVec3f(0, 0, -1)},
+        {{p[5], p[1], p[2], p[6]}, GfVec3f(1, 0, 0)},
+        {{p[0], p[4], p[7], p[3]}, GfVec3f(-1, 0, 0)},
+        {{p[7], p[6], p[2], p[3]}, GfVec3f(0, 1, 0)},
+        {{p[0], p[1], p[5], p[4]}, GfVec3f(0, -1, 0)}};
+    for (const Face& face : faces) {
+        const SurfaceVertex a{face.corners[0], face.normal};
+        const SurfaceVertex b{face.corners[1], face.normal};
+        const SurfaceVertex c{face.corners[2], face.normal};
+        const SurfaceVertex d{face.corners[3], face.normal};
+        AddTriangle(out, a, b, c);
+        AddTriangle(out, a, c, d);
+    }
+}
+
+void AppendCylinder(std::vector<SurfaceVertex>& out, double radius, double height)
+{
+    const float half = static_cast<float>(height * 0.5);
+    std::vector<SurfaceVertex> bottom, top;
+    for (int index = 0; index < kGprimRadialSegments; ++index) {
+        const double angle = 2.0 * std::numbers::pi_v<double>
+            * static_cast<double>(index) / static_cast<double>(kGprimRadialSegments);
+        const float x = static_cast<float>(radius * std::cos(angle));
+        const float y = static_cast<float>(radius * std::sin(angle));
+        const GfVec3f normal = NormalizedOr(GfVec3f(x, y, 0), GfVec3f(1, 0, 0));
+        bottom.push_back({GfVec3f(x, y, -half), normal});
+        top.push_back({GfVec3f(x, y, half), normal});
+    }
+    const SurfaceVertex bottomCenter{GfVec3f(0, 0, -half), GfVec3f(0, 0, -1)};
+    const SurfaceVertex topCenter{GfVec3f(0, 0, half), GfVec3f(0, 0, 1)};
+    for (int index = 0; index < kGprimRadialSegments; ++index) {
+        const int next = (index + 1) % kGprimRadialSegments;
+        AddTriangle(out, bottom[static_cast<std::size_t>(index)],
+                    bottom[static_cast<std::size_t>(next)],
+                    top[static_cast<std::size_t>(index)]);
+        AddTriangle(out, bottom[static_cast<std::size_t>(next)],
+                    top[static_cast<std::size_t>(next)],
+                    top[static_cast<std::size_t>(index)]);
+        SurfaceVertex topCurrent = top[static_cast<std::size_t>(index)];
+        topCurrent.normal = GfVec3f(0, 0, 1);
+        SurfaceVertex topNext = top[static_cast<std::size_t>(next)];
+        topNext.normal = GfVec3f(0, 0, 1);
+        AddTriangle(out, topCenter, topCurrent, topNext);
+        SurfaceVertex bottomCurrent = bottom[static_cast<std::size_t>(index)];
+        bottomCurrent.normal = GfVec3f(0, 0, -1);
+        SurfaceVertex bottomNext = bottom[static_cast<std::size_t>(next)];
+        bottomNext.normal = GfVec3f(0, 0, -1);
+        AddTriangle(out, bottomCenter, bottomNext, bottomCurrent);
+    }
+}
+
+void AppendCone(std::vector<SurfaceVertex>& out, double radius, double height)
+{
+    const float half = static_cast<float>(height * 0.5);
+    const SurfaceVertex apex{GfVec3f(0, 0, half), GfVec3f(0, 0, 1)};
+    std::vector<SurfaceVertex> base;
+    for (int index = 0; index < kGprimRadialSegments; ++index) {
+        const double angle = 2.0 * std::numbers::pi_v<double>
+            * static_cast<double>(index) / static_cast<double>(kGprimRadialSegments);
+        base.push_back({GfVec3f(static_cast<float>(radius * std::cos(angle)),
+                               static_cast<float>(radius * std::sin(angle)), -half),
+                        GfVec3f(0, 0, 1)});
+    }
+    const SurfaceVertex baseCenter{GfVec3f(0, 0, -half), GfVec3f(0, 0, -1)};
+    for (int index = 0; index < kGprimRadialSegments; ++index) {
+        const int next = (index + 1) % kGprimRadialSegments;
+        const double middle = 2.0 * std::numbers::pi_v<double>
+            * (static_cast<double>(index) + 0.5) / static_cast<double>(kGprimRadialSegments);
+        const GfVec3f sideNormal = NormalizedOr(
+            GfVec3f(static_cast<float>(height * std::cos(middle)),
+                    static_cast<float>(height * std::sin(middle)), static_cast<float>(radius)),
+            GfVec3f(0, 0, 1));
+        SurfaceVertex side = base[static_cast<std::size_t>(index)];
+        side.normal = sideNormal;
+        SurfaceVertex nextSide = base[static_cast<std::size_t>(next)];
+        nextSide.normal = sideNormal;
+        SurfaceVertex apexSide = apex; apexSide.normal = sideNormal;
+        AddTriangle(out, side, nextSide, apexSide);
+        SurfaceVertex capNext = base[static_cast<std::size_t>(next)];
+        capNext.normal = GfVec3f(0, 0, -1);
+        SurfaceVertex capCurrent = base[static_cast<std::size_t>(index)];
+        capCurrent.normal = GfVec3f(0, 0, -1);
+        AddTriangle(out, baseCenter, capNext, capCurrent);
+    }
+}
+
+void AppendCapsule(std::vector<SurfaceVertex>& out, double radius, double height)
+{
+    const float spineHalf = static_cast<float>(height * 0.5);
+    std::vector<SurfaceVertex> topRings[kCapsuleLatitudeSegments + 1];
+    for (int latitude = 0; latitude <= kCapsuleLatitudeSegments; ++latitude) {
+        const double phi = std::numbers::pi_v<double> * 0.5
+            * static_cast<double>(latitude) / static_cast<double>(kCapsuleLatitudeSegments);
+        topRings[latitude] = LatitudeRing(kGprimRadialSegments, phi, radius, spineHalf, 1.0);
+    }
+    const auto& north = topRings[0][0];
+    for (int index = 0; index < kGprimRadialSegments; ++index) {
+        const int next = (index + 1) % kGprimRadialSegments;
+        AddTriangle(out, north, topRings[1][static_cast<std::size_t>(index)],
+                    topRings[1][static_cast<std::size_t>(next)]);
+    }
+    for (int latitude = 1; latitude + 1 <= kCapsuleLatitudeSegments; ++latitude) {
+        const auto& upper = topRings[latitude];
+        const auto& lower = topRings[latitude + 1];
+        for (int index = 0; index < kGprimRadialSegments; ++index) {
+            const int next = (index + 1) % kGprimRadialSegments;
+            AddTriangle(out, upper[static_cast<std::size_t>(index)],
+                        lower[static_cast<std::size_t>(index)],
+                        upper[static_cast<std::size_t>(next)]);
+            AddTriangle(out, upper[static_cast<std::size_t>(next)],
+                        lower[static_cast<std::size_t>(index)],
+                        lower[static_cast<std::size_t>(next)]);
+        }
+    }
+    // Cylinder spine.
+    const auto& equatorTop = topRings[kCapsuleLatitudeSegments];
+    std::vector<SurfaceVertex> equatorBottom = equatorTop;
+    for (auto& vertex : equatorBottom) vertex.position[2] = -spineHalf;
+    for (int index = 0; index < kGprimRadialSegments; ++index) {
+        const int next = (index + 1) % kGprimRadialSegments;
+        AddTriangle(out, equatorBottom[static_cast<std::size_t>(index)],
+                    equatorBottom[static_cast<std::size_t>(next)],
+                    equatorTop[static_cast<std::size_t>(index)]);
+        AddTriangle(out, equatorBottom[static_cast<std::size_t>(next)],
+                    equatorTop[static_cast<std::size_t>(next)],
+                    equatorTop[static_cast<std::size_t>(index)]);
+    }
+    // South hemisphere, generated from the equator down to the pole. Ring 0
+    // sits on the equator (z == -spineHalf), unlike the top rings which start
+    // at the pole.
+    std::vector<std::vector<SurfaceVertex>> bottomRings;
+    for (int latitude = 0; latitude <= kCapsuleLatitudeSegments; ++latitude) {
+        const double phi = std::numbers::pi_v<double> * 0.5
+            * static_cast<double>(latitude) / static_cast<double>(kCapsuleLatitudeSegments);
+        const double radial = radius * std::cos(phi);
+        const double z = -static_cast<double>(spineHalf) - radius * std::sin(phi);
+        std::vector<SurfaceVertex> ring(static_cast<std::size_t>(kGprimRadialSegments));
+        for (int index = 0; index < kGprimRadialSegments; ++index) {
+            const double angle = 2.0 * std::numbers::pi_v<double>
+                * static_cast<double>(index) / static_cast<double>(kGprimRadialSegments);
+            const GfVec3f normal(static_cast<float>(std::cos(phi) * std::cos(angle)),
+                static_cast<float>(std::cos(phi) * std::sin(angle)),
+                static_cast<float>(-std::sin(phi)));
+            ring[static_cast<std::size_t>(index)] = SurfaceVertex{
+                GfVec3f(static_cast<float>(radial * std::cos(angle)),
+                        static_cast<float>(radial * std::sin(angle)),
+                        static_cast<float>(z)),
+                normal};
+        }
+        bottomRings.push_back(std::move(ring));
+    }
+    const auto& south = bottomRings[static_cast<std::size_t>(kCapsuleLatitudeSegments)][0];
+    for (int latitude = 0; latitude + 1 < kCapsuleLatitudeSegments; ++latitude) {
+        const auto& upper = bottomRings[static_cast<std::size_t>(latitude)];
+        const auto& lower = bottomRings[static_cast<std::size_t>(latitude + 1)];
+        for (int index = 0; index < kGprimRadialSegments; ++index) {
+            const int next = (index + 1) % kGprimRadialSegments;
+            AddTriangle(out, upper[static_cast<std::size_t>(index)],
+                        lower[static_cast<std::size_t>(index)],
+                        upper[static_cast<std::size_t>(next)]);
+            AddTriangle(out, upper[static_cast<std::size_t>(next)],
+                        lower[static_cast<std::size_t>(index)],
+                        lower[static_cast<std::size_t>(next)]);
+        }
+    }
+    const auto& lower = bottomRings[static_cast<std::size_t>(kCapsuleLatitudeSegments - 1)];
+    for (int index = 0; index < kGprimRadialSegments; ++index) {
+        const int next = (index + 1) % kGprimRadialSegments;
+        AddTriangle(out, lower[static_cast<std::size_t>(index)], south,
+                    lower[static_cast<std::size_t>(next)]);
+    }
+}
+
+void ColorSample(const UsdGeomPrimvar& primvar, const VtVec3fArray& colors,
+                 const VtFloatArray& opacities, std::size_t index, GfVec3f& color, float& opacity);
+
+std::optional<MeshGeometry> EmitSurfaceGeometry(import_worker::BoundedChunkWriter& writer,
+                         const UsdPrim& prim, const std::vector<SurfaceVertex>& surface,
+                         std::uint32_t meshId, const UsdTimeCode time, ProductionState& state,
+                         std::uint64_t& triangleTotal, std::uint64_t& vertexTotal);
+
+std::optional<MeshGeometry> EmitGprimGeometry(import_worker::BoundedChunkWriter& writer,
+                         const UsdPrim& prim, std::uint32_t meshId, const UsdTimeCode time,
+                         ProductionState& state, std::uint64_t& triangleTotal,
+                         std::uint64_t& vertexTotal)
+{
+    std::vector<SurfaceVertex> surface;
+    bool mapsAxis = false;
+    TfToken axis = UsdGeomTokens->z;
+    const auto readDouble = [&](const UsdAttribute& attribute, double fallback, double& value) {
+        if (!attribute || !attribute.Get(&value, time)) value = fallback;
+        return std::isfinite(value) && value > 0.0;
+    };
+    if (const UsdGeomSphere sphere{prim}) {
+        double radius = 1.0;
+        if (!readDouble(sphere.GetRadiusAttr(), 1.0, radius)) {
+            state.Fail(ImportErrorCode::MalformedData); return std::nullopt;
+        }
+        if (Animated(sphere.GetRadiusAttr())) state.Warn();
+        surface.reserve(static_cast<std::size_t>(kGprimRadialSegments)
+            * kSphereLatitudeSegments * 6);
+        AppendSphere(surface, radius);
+    } else if (const UsdGeomCube cube{prim}) {
+        double size = 2.0;
+        if (!readDouble(cube.GetSizeAttr(), 2.0, size)) {
+            state.Fail(ImportErrorCode::MalformedData); return std::nullopt;
+        }
+        if (Animated(cube.GetSizeAttr())) state.Warn();
+        AppendCube(surface, size);
+    } else if (const UsdGeomCylinder cylinder{prim}) {
+        double radius = 1.0, height = 2.0;
+        if (!readDouble(cylinder.GetRadiusAttr(), 1.0, radius)
+            || !readDouble(cylinder.GetHeightAttr(), 2.0, height)) {
+            state.Fail(ImportErrorCode::MalformedData); return std::nullopt;
+        }
+        cylinder.GetAxisAttr().Get(&axis, time);
+        mapsAxis = true;
+        if (Animated(cylinder.GetRadiusAttr()) || Animated(cylinder.GetHeightAttr())) state.Warn();
+        AppendCylinder(surface, radius, height);
+    } else if (const UsdGeomCone cone{prim}) {
+        double radius = 1.0, height = 2.0;
+        if (!readDouble(cone.GetRadiusAttr(), 1.0, radius)
+            || !readDouble(cone.GetHeightAttr(), 2.0, height)) {
+            state.Fail(ImportErrorCode::MalformedData); return std::nullopt;
+        }
+        cone.GetAxisAttr().Get(&axis, time);
+        mapsAxis = true;
+        if (Animated(cone.GetRadiusAttr()) || Animated(cone.GetHeightAttr())) state.Warn();
+        AppendCone(surface, radius, height);
+    } else if (const UsdGeomCapsule capsule{prim}) {
+        double radius = 0.5, height = 1.0;
+        if (!readDouble(capsule.GetRadiusAttr(), 0.5, radius)
+            || !readDouble(capsule.GetHeightAttr(), 1.0, height)) {
+            state.Fail(ImportErrorCode::MalformedData); return std::nullopt;
+        }
+        capsule.GetAxisAttr().Get(&axis, time);
+        mapsAxis = true;
+        if (Animated(capsule.GetRadiusAttr()) || Animated(capsule.GetHeightAttr())) state.Warn();
+        AppendCapsule(surface, radius, height);
+    } else {
+        state.Fail(ImportErrorCode::UnsupportedRequiredFeature); return std::nullopt;
+    }
+    if (mapsAxis) {
+        bool valid = true;
+        for (auto& vertex : surface) {
+            vertex.position = AxisMapped(vertex.position, axis, valid);
+            if (!valid) { state.Fail(ImportErrorCode::MalformedData); return std::nullopt; }
+            vertex.normal = AxisMapped(vertex.normal, axis, valid);
+            if (!valid) { state.Fail(ImportErrorCode::MalformedData); return std::nullopt; }
+        }
+    }
+    // `extent` is a hint; actual bounds come from the generated vertices and
+    // are checked again by the shared-section validator.
+    return EmitSurfaceGeometry(writer, prim, surface, meshId, time, state,
+                               triangleTotal, vertexTotal);
+}
+
+std::optional<MeshGeometry> EmitPointsGeometry(import_worker::BoundedChunkWriter& writer,
+                         const UsdPrim& prim, std::uint32_t meshId, const UsdTimeCode time,
+                         ProductionState& state, std::uint64_t& vertexTotal)
+{
+    const UsdGeomPoints points{prim};
+    VtVec3fArray positions;
+    if (!points.GetPointsAttr().Get(&positions, time) || positions.empty()) {
+        state.Fail(ImportErrorCode::MalformedData); return std::nullopt;
+    }
+    if (positions.size() > model_core::kTierBVertexLimit - vertexTotal) {
+        state.Fail(ImportErrorCode::ResourceLimit); return std::nullopt;
+    }
+    if (Animated(points.GetPointsAttr()) || Animated(points.GetWidthsAttr())) state.Warn();
+    VtVec3fArray colors;
+    VtFloatArray opacities;
+    const auto displayColor = points.GetDisplayColorPrimvar();
+    if (displayColor) displayColor.ComputeFlattened(&colors, time);
+    const auto displayOpacity = points.GetDisplayOpacityPrimvar();
+    if (displayOpacity) displayOpacity.ComputeFlattened(&opacities, time);
+    const bool hasColor = !colors.empty() || !opacities.empty();
+    if (Animated(displayColor.GetAttr()) || Animated(displayOpacity.GetAttr())) state.Warn();
+    // Widths are ignored: the viewer's existing point-splat policy owns the
+    // bounded screen-space size. An authored widths value is a Degraded hint.
+    if (points.GetWidthsAttr().HasAuthoredValue()) state.Warn();
+
+    if (writer.Length() + model_core::kChunkDescriptorSize >= state.request.sectionByteCapacity) {
+        state.Fail(ImportErrorCode::ResourceLimit); return std::nullopt;
+    }
+    const std::uint64_t room = state.request.sectionByteCapacity - model_core::kSectionHeaderSize
+        - model_core::kChunkDescriptorSize;
+    const std::uint32_t sectionLimit = static_cast<std::uint32_t>((std::min<std::uint64_t>)(
+        import_worker::kChunkPoints, room / sizeof(VertexPositionNormalUv0TangentColorF32)));
+    if (!sectionLimit) { state.Fail(ImportErrorCode::ResourceLimit); return std::nullopt; }
+
+    MeshGeometry geometry;
+    for (std::size_t first = 0; first < positions.size();) {
+        if (state.Cancelled()) { state.Fail(ImportErrorCode::Cancelled); return std::nullopt; }
+        if (state.Expired()) { state.Fail(ImportErrorCode::CompatibilityHostLimit); return std::nullopt; }
+        const std::size_t count = (std::min<std::size_t>(
+            static_cast<std::size_t>(sectionLimit), positions.size() - first));
+        const GfVec3f originPoint = positions[first];
+        const double origin[3]{originPoint[0], originPoint[1], originPoint[2]};
+        std::vector<VertexPositionNormalUv0TangentColorF32> vertices(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            const GfVec3f& point = positions[first + index];
+            auto& vertex = vertices[index];
+            vertex.px = static_cast<float>(double(point[0]) - origin[0]);
+            vertex.py = static_cast<float>(double(point[1]) - origin[1]);
+            vertex.pz = static_cast<float>(double(point[2]) - origin[2]);
+            vertex.nx = 0; vertex.ny = 0; vertex.nz = 1;
+            GfVec3f color(1, 1, 1); float opacity = 1.0f;
+            ColorSample(displayColor ? displayColor : UsdGeomPrimvar(),
+                        colors, opacities, first + index, color, opacity);
+            vertex.r = color[0]; vertex.g = color[1]; vertex.b = color[2]; vertex.a = opacity;
+            vertex.u = vertex.v = 0;
+            vertex.tx = vertex.ty = vertex.tz = 0; vertex.tw = 1.0f;
+            const float values[]{vertex.px,vertex.py,vertex.pz,vertex.nx,vertex.ny,vertex.nz,
+                vertex.u,vertex.v,vertex.r,vertex.g,vertex.b,vertex.a};
+            if (std::ranges::any_of(values, [](float v) { return !std::isfinite(v); })) {
+                state.Fail(ImportErrorCode::MalformedData); return std::nullopt;
+            }
+        }
+        ChunkDescriptor descriptor{};
+        descriptor.topology = ChunkTopology::PointList;
+        descriptor.vertexCount = static_cast<std::uint32_t>(count);
+        descriptor.indexCount = 0;
+        descriptor.vertexLayoutId = static_cast<std::uint32_t>(
+            VertexLayoutId::PositionNormalUv0TangentColor_F32);
+        descriptor.chunkId = writer.NextId(); descriptor.meshId = meshId;
+        descriptor.geometryFlags = hasColor ? model_core::kGeometryHasColors : 0;
+        descriptor.sourceRangeOffset = (std::uint64_t(meshId - 1) << 32)
+            | static_cast<std::uint32_t>(first);
+        descriptor.sourceRangeLength = count;
+        std::copy(std::begin(origin), std::end(origin), descriptor.origin);
+        if (!model_core::SetLocalBounds(descriptor, import_worker::ChunkBytes(vertices))
+            || !writer.Add(descriptor, import_worker::ChunkBytes(vertices))) {
+            state.Fail(writer.Error() == ImportErrorCode::None ? ImportErrorCode::MalformedData
+                                                              : writer.Error());
+            return std::nullopt;
+        }
+        geometry.records.push_back(GeometryRecord{descriptor.chunkId, descriptor, -1});
+        first += count;
+    }
+    vertexTotal += positions.size();
+    return geometry;
+}
+
+void ColorSample(const UsdGeomPrimvar& primvar, const VtVec3fArray& colors,
+                 const VtFloatArray& opacities, std::size_t index, GfVec3f& color, float& opacity)
+{
+    const TfToken interpolation = primvar ? primvar.GetInterpolation() : TfToken();
+    const std::size_t colorIndex = interpolation == UsdGeomTokens->constant || colors.empty()
+        ? 0 : (std::min)(index, colors.size() - 1);
+    if (!colors.empty()) color = colors[colorIndex];
+    const std::size_t opacityIndex = interpolation == UsdGeomTokens->constant || opacities.empty()
+        ? 0 : (std::min)(index, opacities.size() - 1);
+    if (!opacities.empty()) opacity = opacities[opacityIndex];
+}
+
+std::optional<MeshGeometry> EmitSurfaceGeometry(import_worker::BoundedChunkWriter& writer,
+                         const UsdPrim& prim, const std::vector<SurfaceVertex>& surface,
+                         std::uint32_t meshId, const UsdTimeCode time, ProductionState& state,
+                         std::uint64_t& triangleTotal, std::uint64_t& vertexTotal)
+{
+    if (surface.empty() || surface.size() % 3) {
+        state.Fail(ImportErrorCode::MalformedData); return std::nullopt;
+    }
+    const std::uint64_t triangles = surface.size() / 3;
+    if (triangles > model_core::kTierBTriangleLimit - triangleTotal
+        || surface.size() > model_core::kTierBVertexLimit - vertexTotal) {
+        state.Fail(ImportErrorCode::ResourceLimit); return std::nullopt;
+    }
+    const UsdGeomGprim gprim(prim);
+    VtVec3fArray colors;
+    VtFloatArray opacities;
+    const auto displayColor = gprim.GetDisplayColorPrimvar();
+    if (displayColor) displayColor.ComputeFlattened(&colors, time);
+    const auto displayOpacity = gprim.GetDisplayOpacityPrimvar();
+    if (displayOpacity) displayOpacity.ComputeFlattened(&opacities, time);
+    const bool hasColor = !colors.empty() || !opacities.empty();
+    if (Animated(gprim.GetVisibilityAttr()) || Animated(displayColor.GetAttr())
+        || Animated(displayOpacity.GetAttr())) state.Warn();
+
+    if (writer.Length() + model_core::kChunkDescriptorSize >= state.request.sectionByteCapacity) {
+        state.Fail(ImportErrorCode::ResourceLimit); return std::nullopt;
+    }
+    constexpr std::uint64_t perTriangle = 3 * sizeof(VertexPositionNormalUv0TangentColorF32)
+        + 3 * sizeof(std::uint32_t);
+    const std::uint32_t sectionLimit = static_cast<std::uint32_t>((std::min<std::uint64_t>)(
+        model_core::kTierAClusterTriangles,
+        (state.request.sectionByteCapacity - model_core::kSectionHeaderSize
+            - model_core::kChunkDescriptorSize) / perTriangle));
+    if (!sectionLimit) { state.Fail(ImportErrorCode::ResourceLimit); return std::nullopt; }
+
+    MeshGeometry geometry;
+    for (std::size_t first = 0; first < surface.size();) {
+        if (state.Cancelled()) { state.Fail(ImportErrorCode::Cancelled); return std::nullopt; }
+        if (state.Expired()) { state.Fail(ImportErrorCode::CompatibilityHostLimit); return std::nullopt; }
+        const std::size_t count = (std::min<std::size_t>(
+            static_cast<std::size_t>(sectionLimit) * 3, surface.size() - first));
+        const GfVec3f originPoint = surface[first].position;
+        const double origin[3]{originPoint[0], originPoint[1], originPoint[2]};
+        std::vector<VertexPositionNormalUv0TangentColorF32> vertices(count);
+        std::vector<std::uint32_t> normalized(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto& source = surface[first + index];
+            auto& vertex = vertices[index];
+            vertex.px = static_cast<float>(double(source.position[0]) - origin[0]);
+            vertex.py = static_cast<float>(double(source.position[1]) - origin[1]);
+            vertex.pz = static_cast<float>(double(source.position[2]) - origin[2]);
+            const GfVec3f normal = NormalizedOr(source.normal, GfVec3f(0, 0, 1));
+            vertex.nx = normal[0]; vertex.ny = normal[1]; vertex.nz = normal[2];
+            GfVec3f color(1, 1, 1); float opacity = 1.0f;
+            ColorSample(displayColor ? displayColor : UsdGeomPrimvar(),
+                        colors, opacities, first + index, color, opacity);
+            vertex.r = color[0]; vertex.g = color[1]; vertex.b = color[2]; vertex.a = opacity;
+            vertex.u = vertex.v = 0;
+            vertex.tx = vertex.ty = vertex.tz = 0; vertex.tw = 1.0f;
+            const float values[]{vertex.px,vertex.py,vertex.pz,vertex.nx,vertex.ny,vertex.nz,
+                vertex.u,vertex.v,vertex.r,vertex.g,vertex.b,vertex.a};
+            if (std::ranges::any_of(values, [](float v) { return !std::isfinite(v); })) {
+                state.Fail(ImportErrorCode::MalformedData); return std::nullopt;
+            }
+            normalized[index] = static_cast<std::uint32_t>(index);
+        }
+        ChunkDescriptor descriptor{};
+        descriptor.topology = ChunkTopology::TriangleList;
+        descriptor.vertexCount = descriptor.indexCount = static_cast<std::uint32_t>(count);
+        descriptor.vertexLayoutId = static_cast<std::uint32_t>(
+            VertexLayoutId::PositionNormalUv0TangentColor_F32);
+        descriptor.chunkId = writer.NextId(); descriptor.meshId = meshId;
+        descriptor.geometryFlags = model_core::kGeometryDeindexed
+            | model_core::kGeometryReusableInstanceSource
+            | (hasColor ? model_core::kGeometryHasColors : 0);
+        descriptor.sourceRangeOffset = (std::uint64_t(meshId - 1) << 32)
+            | static_cast<std::uint32_t>(first);
+        descriptor.sourceRangeLength = count;
+        std::copy(std::begin(origin), std::end(origin), descriptor.origin);
+        if (!model_core::SetLocalBounds(descriptor, import_worker::ChunkBytes(vertices))
+            || !writer.Add(descriptor, import_worker::ChunkBytes(vertices),
+                           import_worker::ChunkBytes(normalized))) {
+            state.Fail(writer.Error() == ImportErrorCode::None ? ImportErrorCode::MalformedData
+                                                              : writer.Error());
+            return std::nullopt;
+        }
+        geometry.records.push_back(GeometryRecord{descriptor.chunkId, descriptor, -1});
+        first += count;
+    }
+    triangleTotal += triangles; vertexTotal += surface.size();
+    return geometry;
 }
 
 struct PointExpansionInfo {
@@ -1435,7 +1997,7 @@ bool ExpandPointInstancers(std::vector<NodeRecord>& nodes, const UsdTimeCode tim
                 return state.Fail(ImportErrorCode::UnsupportedRequiredFeature);
             const GfMatrix4d inverseRoot = root->world.GetInverse();
             for (std::size_t prototypeNode = 0; prototypeNode < info.originalNodeCount; ++prototypeNode) {
-                if (!nodes[prototypeNode].prim.IsA<UsdGeomMesh>()
+                if (!IsHostGeometryPrim(nodes[prototypeNode].prim)
                     || !nodes[prototypeNode].prim.GetPath().HasPrefix(rootPath)) continue;
                 NodeRecord expanded = nodes[prototypeNode];
                 const GfMatrix4d relative = nodes[prototypeNode].world * inverseRoot;
@@ -1478,7 +2040,7 @@ bool NormalizeProduction(const UsdStageRefPtr& stage, SourceFormatId format,
     if (!ExpandPointInstancers(nodes, time, state, pointExpansions)) return false;
 
     std::set<std::string> geometryKeys;
-    for (const auto& node : nodes) if (node.prim.IsA<UsdGeomMesh>()) {
+    for (const auto& node : nodes) if (IsHostGeometryPrim(node.prim)) {
         const UsdPrim source = node.prim.IsInstanceProxy() ? node.prim.GetPrimInPrototype() : node.prim;
         geometryKeys.insert(source.GetPath().GetString());
     }
@@ -1496,14 +2058,24 @@ bool NormalizeProduction(const UsdStageRefPtr& stage, SourceFormatId format,
     std::unordered_map<std::string, MeshGeometry> geometry;
     std::uint64_t triangles = 0, vertices = 0;
     std::uint32_t meshId = 0;
+    std::uint64_t geometryRecords = 0;
     for (const std::string& key : geometryKeys) {
         const UsdPrim prim = stage->GetPrimAtPath(SdfPath(key));
-        auto emitted = EmitMeshGeometry(writer, UsdGeomMesh(prim), ++meshId, time,
-                                        state, triangles, vertices);
+        std::optional<MeshGeometry> emitted;
+        if (prim.IsA<UsdGeomMesh>()) {
+            emitted = EmitMeshGeometry(writer, UsdGeomMesh(prim), ++meshId, time,
+                                       state, triangles, vertices);
+        } else if (prim.IsA<UsdGeomPoints>()) {
+            emitted = EmitPointsGeometry(writer, prim, ++meshId, time, state, vertices);
+        } else {
+            emitted = EmitGprimGeometry(writer, prim, ++meshId, time, state,
+                                        triangles, vertices);
+        }
         if (!emitted) return false;
+        geometryRecords += emitted->records.size();
         geometry.emplace(key, std::move(*emitted));
     }
-    if (!triangles) return state.Fail(ImportErrorCode::EmptyGeometry);
+    if (!geometryRecords) return state.Fail(ImportErrorCode::EmptyGeometry);
 
     const std::uint32_t firstNodeId = writer.NextId();
     if (std::uint64_t(firstNodeId) + nodes.size() > UINT32_MAX)
@@ -1524,19 +2096,19 @@ bool NormalizeProduction(const UsdStageRefPtr& stage, SourceFormatId format,
     std::uint64_t instanceCount = 0;
     for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
         const auto& node = nodes[nodeIndex];
-        const UsdGeomMesh occurrence(node.prim);
-        if (!occurrence || !node.visible || !node.acceptedPurpose) continue;
+        if (!IsHostGeometryPrim(node.prim) || !node.visible || !node.acceptedPurpose) continue;
         if (nodeIndex < pointExpansions.originalNodeCount
             && UnderPrototype(node.prim.GetPath(), pointExpansions.prototypeRoots)) continue;
         const UsdPrim sourcePrim = node.prim.IsInstanceProxy() ? node.prim.GetPrimInPrototype() : node.prim;
         const auto found = geometry.find(sourcePrim.GetPath().GetString());
         if (found == geometry.end()) return state.Fail(ImportErrorCode::MalformedData);
-        bool doubleSided = false; occurrence.GetDoubleSidedAttr().Get(&doubleSided, time);
+        bool doubleSided = false;
+        UsdGeomGprim(node.prim).GetDoubleSidedAttr().Get(&doubleSided, time);
         for (const auto& record : found->second.records) {
             if (++instanceCount > model_core::kTierBObjectLimit)
                 return state.Fail(ImportErrorCode::ResourceLimit);
             const std::uint32_t materialId = materialEmitter.Emit(
-                GroupMaterial(occurrence, record.materialGroup), doubleSided);
+                GroupMaterial(node.prim, record.materialGroup), doubleSided);
             if (state.error != ImportErrorCode::None) return false;
             MeshInstancePayload payload{}; payload.instanceId = writer.NextId();
             payload.nodeId = node.id; payload.geometryChunkId = record.id;

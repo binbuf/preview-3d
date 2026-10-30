@@ -14,7 +14,7 @@ For install and build instructions, see the [README](../README.md).
 | STL | ASCII and binary |
 | PLY | ASCII and binary triangle meshes and point clouds |
 | 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews. Slicer-private required namespaces that do not describe the mesh are ignored with a compatibility record; a required Slice/Volumetric/Implicit/Secure Content extension still fails typed because the visible geometry depends on it |
-| Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`; static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
+| Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`; static meshes, procedural `Sphere`/`Cube`/`Cylinder`/`Cone`/`Capsule`, `Points` as colored point splats, hierarchy/instances, common primvars, display color/opacity, creased or subdivided meshes as a control cage with a compatibility warning, bounded USD Preview Surface materials/textures, and bounded local composition |
 | STEP | `.step` and `.stp`: ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality through a dedicated isolated OCCT host |
 | IGES | `.igs` and `.iges`: bounded fixed-column S/G/D/P/T record streams, analytic B-rep surfaces, assemblies/subfigures where representable, and IGES colors through the same dedicated OCCT host. The optional global unit flag converts to the verified OCCT system millimetre; a missing flag assumes millimetres with a warning |
 | BREP | `.brep`: the OCCT ASCII `CASCADE Topology` shape-set serialization. Topology and geometry only (no authored colors or units); the scene reports `UpAxisId::Unknown` and zero metres-per-unit, and the bounded shape/location table is admitted before `BRepTools::Read` |
@@ -143,9 +143,26 @@ wire-format chunks. Local relative sidecars are brokered by the viewer; remote
 assets and arbitrary resolvers/plugins are never allowed.
 
 USD files first use TinyUSDZ in the general isolated importer. Stages requiring
-supported composition are retried atomically in a separately isolated, lazily
-started OpenUSD host. Local relative sublayers, references, payloads, authored
-default variants, and texture dependencies are brokered by the viewer.
+supported composition, procedural Gprims (`Sphere`, `Cube`, `Cylinder`, `Cone`,
+`Capsule`), `Points`, or authored creases/subdivision are retried atomically in
+a separately isolated, lazily started OpenUSD host. The retry classification
+(`UnsupportedComposition`) is only accepted before any fast-path batch has been
+published, so the two producers never mix. Local relative sublayers, references,
+payloads, authored default variants, and texture dependencies are brokered by
+the viewer.
+
+The OpenUSD host tessellates procedural primitives deterministically: 24x16
+longitude/latitude for spheres, 24 radial segments with caps for
+cylinders/cones, 24x8 per hemisphere plus the spine for capsules, and the
+authored 12-triangle cube. Cylinder/cone/capsule honor the authored `axis`
+(default Z) and X/Y/Z are all supported; `radius`, `height`, and `size` are
+honored, while `extent` is treated only as a hint because bounds are computed
+from the generated vertices. Creases and non-`none` subdivision schemes render
+the authored control cage with a `Degraded` warning (no OpenSubdiv, no smoothing
+level option). `Points` become a `PointList` chunk carrying display color,
+display opacity, transforms and bounds; authored `widths` are ignored in favor
+of the viewer's existing bounded point-splat size policy. Curves/NURBS remain
+unsupported until line topology work.
 
 STEP/STP, IGES, BREP, XBF and FCStd use the same dedicated zero-capability host
 (`Preview3DStepHost.exe`) with a pinned constrained OCCT closure. It receives
@@ -171,10 +188,11 @@ Animation playback, editing, other CAD formats (IFC/JT/Parasolid/DWG/native
 CAD), Explorer thumbnails (including for 3MF, USD, FBX, STEP, IGES, BREP, XBF,
 and FCStd),
 network assets,
-USD skeletal deformation, MaterialX, procedural schemas, and interactive variant
-selection are not currently included. USD skeletal bindings are ignored and the
-authored rest pose is previewed statically (matching the baked start pose FBX
-already shows).
+USD skeletal deformation, MaterialX, procedural schemas beyond the five
+supported Gprims plus `Points`, curves/NURBS, and interactive variant selection
+are not currently included. USD skeletal bindings are ignored and the authored
+rest pose is previewed statically (matching the baked start pose FBX already
+shows).
 
 The supported STEP/STP subset is bounded. External STEP document declarations
 are unresolved metadata rather than a veto: the isolated host never opens the

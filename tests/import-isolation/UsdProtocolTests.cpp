@@ -16,6 +16,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <chrono>
@@ -25,6 +26,7 @@
 #include <future>
 #include <iterator>
 #include <limits>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -1348,6 +1350,243 @@ TEST_CASE("USD-007 preserves common fast-path geometry semantics and Preview Sur
         if (chunk.descriptor.topology != model_core::ChunkTopology::ImportStatus) return false;
         return Payload<model_core::ImportStatusPayload>(chunk).textureWarnings > 0;
     }));
+}
+
+TEST_CASE("USD-T11 procedural Gprims tessellate through the compatibility host",
+          "[usd-primitives][openusd][gprim][tessellation]")
+{
+    struct Expected {
+        const char* fixture;
+        double minimum[3];
+        double maximum[3];
+    };
+    const Expected cases[] = {
+        // primitives.usda authors Cylinder axis Y, Cone axis X and Capsule axis
+        // Z; primitivesZ.usda leaves all three at the default Z axis.
+        {"primitives.usda", {-4.5, -1.0, -0.75}, {4.25, 1.0, 0.75}},
+        {"primitivesZ.usda", {-4.5, -0.5, -1.0}, {4.25, 0.5, 1.0}},
+    };
+    uint64_t generation = 800;
+    for (const auto& expected : cases) {
+        DYNAMIC_SECTION(expected.fixture) {
+            ScratchUsd scratch(L"usda");
+            scratch.Write(ReadFixture(expected.fixture));
+            auto request = Request(scratch.path, ++generation);
+            request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+            request.sectionByteCapacity = import_broker::kImportSectionBytes;
+            request.maxChunkCount = 1024;
+            request.maxChunkBatchesPerGeneration = 64;
+            const auto result = import_broker::RunImportSession(request);
+            CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.batchCount);
+            REQUIRE(result.ok);
+            CHECK(result.producer == import_broker::ImportProducer::CompatibilityHost);
+            REQUIRE_FALSE(result.chunks.empty());
+            CHECK(result.chunks.front().scene.upAxis == model_core::UpAxisId::Z);
+            CHECK(result.chunks.front().scene.metersPerUnit == 1.0);
+            CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 5);
+            CHECK(Count(result, model_core::ChunkTopology::MeshInstance) == 5);
+            CHECK(Count(result, model_core::ChunkTopology::Node) >= 6);
+            CHECK(Count(result, model_core::ChunkTopology::PointList) == 0);
+
+            uint64_t triangles = 0;
+            std::array<double, 3> minimum{ INFINITY, INFINITY, INFINITY };
+            std::array<double, 3> maximum{ -INFINITY, -INFINITY, -INFINITY };
+            std::set<uint32_t> geometryIds;
+            for (const auto& chunk : result.chunks) {
+                if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList) {
+                    CHECK(chunk.descriptor.indexCount % 3 == 0);
+                    triangles += chunk.descriptor.indexCount / 3;
+                    geometryIds.insert(chunk.descriptor.chunkId);
+                } else if (chunk.descriptor.topology == model_core::ChunkTopology::MeshInstance) {
+                    const auto instance = Payload<model_core::MeshInstancePayload>(chunk);
+                    for (size_t axis = 0; axis < 3; ++axis) {
+                        minimum[axis] = (std::min)(minimum[axis], instance.worldMin[axis]);
+                        maximum[axis] = (std::max)(maximum[axis], instance.worldMax[axis]);
+                    }
+                }
+            }
+            // sphere 720, cube 12, cylinder 96, cone 48, capsule 768.
+            CHECK(triangles == 1644);
+            CHECK(geometryIds.size() == 5);
+            for (size_t axis = 0; axis < 3; ++axis) {
+                CHECK(minimum[axis] == expected.minimum[axis]);
+                CHECK(maximum[axis] == expected.maximum[axis]);
+            }
+        }
+    }
+}
+
+TEST_CASE("USD-T11 UsdGeomPoints becomes a colored PointList chunk",
+          "[usd-primitives][openusd][points]")
+{
+    ScratchUsd scratch(L"usda");
+    scratch.Write(ReadFixture("usd_points_rgb.usda"));
+    auto request = Request(scratch.path, 820);
+    request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.batchCount);
+    REQUIRE(result.ok);
+    CHECK(result.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(Count(result, model_core::ChunkTopology::PointList) == 1);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 0);
+    CHECK(Count(result, model_core::ChunkTopology::MeshInstance) == 1);
+
+    const auto point = std::find_if(result.chunks.begin(), result.chunks.end(), [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::PointList;
+    });
+    REQUIRE(point != result.chunks.end());
+    CHECK(point->descriptor.vertexCount == 4);
+    CHECK(point->descriptor.indexCount == 0);
+    CHECK((point->descriptor.geometryFlags & model_core::kGeometryHasColors) != 0);
+    const auto stride = model_core::VertexStrideForLayout(
+        static_cast<model_core::VertexLayoutId>(point->descriptor.vertexLayoutId));
+    REQUIRE(stride >= sizeof(model_core::VertexPositionNormalUv0TangentColorF32));
+    REQUIRE(point->payload.size() >= uint64_t(point->descriptor.vertexCount) * stride);
+    const std::array<std::array<float, 4>, 4> expectedColors{{
+        {1.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 1.0f, 0.0f, 0.5f},
+        {0.0f, 0.0f, 1.0f, 0.25f},
+        {1.0f, 1.0f, 0.0f, 1.0f},
+    }};
+    for (uint32_t index = 0; index < point->descriptor.vertexCount; ++index) {
+        model_core::VertexPositionNormalUv0TangentColorF32 vertex{};
+        std::memcpy(&vertex, point->payload.data() + uint64_t(index) * stride, sizeof(vertex));
+        CHECK(vertex.nz == 1.0f);
+        CHECK(vertex.r == expectedColors[index][0]);
+        CHECK(vertex.g == expectedColors[index][1]);
+        CHECK(vertex.b == expectedColors[index][2]);
+        CHECK(vertex.a == expectedColors[index][3]);
+    }
+
+    const auto instance = std::find_if(result.chunks.begin(), result.chunks.end(), [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::MeshInstance;
+    });
+    REQUIRE(instance != result.chunks.end());
+    const auto payload = Payload<model_core::MeshInstancePayload>(*instance);
+    CHECK(payload.worldMin[0] == 1.0);
+    CHECK(payload.worldMin[1] == 2.0);
+    CHECK(payload.worldMin[2] == 3.0);
+    CHECK(payload.worldMax[0] == 2.0);
+    CHECK(payload.worldMax[1] == 3.0);
+    CHECK(payload.worldMax[2] == 4.0);
+    // The authored widths are ignored by the viewer's bounded point-splat
+    // policy but surface as one optional warning.
+    CHECK(std::ranges::any_of(result.chunks, [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus
+            && Payload<model_core::ImportStatusPayload>(chunk).optionalFeatureWarnings > 0;
+    }));
+}
+
+TEST_CASE("USD-T11 subdivision and creases render the control cage with a warning",
+          "[usd-primitives][openusd][subdivision][creases]")
+{
+    ScratchUsd scratch(L"usda");
+    scratch.Write(ReadFixture("subdiv_cube_cc.usda"));
+    auto request = Request(scratch.path, 830);
+    request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.batchCount);
+    REQUIRE(result.ok);
+    CHECK(result.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 1);
+    uint64_t triangles = 0;
+    for (const auto& chunk : result.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            triangles += chunk.descriptor.indexCount / 3;
+    CHECK(triangles == 12); // the authored cage, not a Catmull-Clark limit surface
+    CHECK(std::ranges::any_of(result.chunks, [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus
+            && Payload<model_core::ImportStatusPayload>(chunk).optionalFeatureWarnings > 0;
+    }));
+}
+
+TEST_CASE("USD-T11 mixed mesh and primitive scenes keep both producers' geometry",
+          "[usd-primitives][openusd][mixed]")
+{
+    ScratchUsd scratch(L"usda");
+    scratch.Write(ReadFixture("mixed_mesh_primitives.usda"));
+    auto request = Request(scratch.path, 840);
+    request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    request.sectionByteCapacity = import_broker::kImportSectionBytes;
+    request.maxChunkCount = 1024;
+    request.maxChunkBatchesPerGeneration = 64;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode));
+    REQUIRE(result.ok);
+    CHECK(result.producer == import_broker::ImportProducer::CompatibilityHost);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 2);
+    CHECK(Count(result, model_core::ChunkTopology::MeshInstance) == 2);
+    uint64_t triangles = 0;
+    for (const auto& chunk : result.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            triangles += chunk.descriptor.indexCount / 3;
+    CHECK(triangles == 721); // one authored triangle + one 720-triangle sphere
+}
+
+TEST_CASE("USD-T11 mesh-only USD still takes the fast path",
+          "[usd-primitives][fast-path][equivalence]")
+{
+    ScratchUsd scratch(L"usda");
+    scratch.Write(ReadFixture("mesh.usda"));
+    const auto result = import_broker::RunImportSession(Request(scratch.path, 850));
+    REQUIRE(result.ok);
+    CHECK(result.producer == import_broker::ImportProducer::FastWorker);
+    CHECK(Count(result, model_core::ChunkTopology::TriangleList) == 1);
+    CHECK(Count(result, model_core::ChunkTopology::PointList) == 0);
+}
+
+TEST_CASE("USD-T11 malformed primitive stages stay terminal and are not retried",
+          "[usd-primitives][negative][fallback]")
+{
+    ScratchUsd malformed(L"usda");
+    const std::string source = "#usda 1.0\ndef Sphere \"Broken\" { double radius = \n";
+    malformed.Write(std::as_bytes(std::span(source)));
+    auto request = Request(malformed.path, 860);
+    request.compatibilityHostExePath = PREVIEW3D_IMPORT_HOST_EXE;
+    const auto result = import_broker::RunImportSession(request);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode), result.batchCount);
+    CHECK_FALSE(result.ok);
+    CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    CHECK_FALSE(result.compatibilityFallbackRequired);
+    CHECK(result.producer == import_broker::ImportProducer::FastWorker);
+    CHECK(result.batchCount == 0);
+    CHECK(result.chunks.empty());
+}
+
+TEST_CASE("USD-T11 a host-supported retry needs no accepted fast batch and cannot follow one",
+          "[usd-primitives][protocol][fallback]")
+{
+    ScratchUsd scratch(L"usda");
+    scratch.Write(ReadFixture("primitivesZ.usda"));
+
+    auto beforeBatch = Request(scratch.path, 870);
+    beforeBatch.workerExePath = sandbox_test_support::HostileWorkerExePath();
+    beforeBatch.workerArgumentsOverride = L"--error-unsupported-composition";
+    auto beforeResult = import_broker::RunImportSession(beforeBatch);
+    CHECK_FALSE(beforeResult.ok);
+    CHECK(beforeResult.errorCode == model_core::ImportErrorCode::UnsupportedComposition);
+    CHECK(beforeResult.compatibilityFallbackRequired);
+    CHECK(beforeResult.batchCount == 0);
+    CHECK(beforeResult.chunks.empty());
+
+    uint32_t published = 0;
+    auto afterBatch = Request(scratch.path, 871);
+    afterBatch.workerExePath = sandbox_test_support::HostileWorkerExePath();
+    afterBatch.workerArgumentsOverride = L"--usd-fallback-after-batch";
+    afterBatch.onBatch = [&](auto) { ++published; };
+    auto afterResult = import_broker::RunImportSession(afterBatch);
+    CAPTURE(uint32_t(afterResult.stage), uint32_t(afterResult.errorCode));
+    CHECK_FALSE(afterResult.ok);
+    CHECK(afterResult.errorCode == model_core::ImportErrorCode::ImportProtocolViolation);
+    CHECK_FALSE(afterResult.compatibilityFallbackRequired);
+    CHECK(afterResult.batchCount == 1);
+    CHECK(published == 1);
 }
 
 TEST_CASE("USD-007 composition denial and dependency pressure recover on the next stage",
