@@ -206,7 +206,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         return Reject(ImportErrorCode::ImportProtocolViolation, "header changed during copy");
     if (header.reserved || header.scene.reserved || header.scene.generationId != expectedGenerationId)
         return Reject(ImportErrorCode::ImportProtocolViolation, "stale or malformed scene metadata");
-    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Step))
+    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Brep))
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
     const bool usdFormat = header.scene.format == model_core::SourceFormatId::Usda
         || header.scene.format == model_core::SourceFormatId::Usdc
@@ -217,6 +217,8 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         || header.scene.format == model_core::SourceFormatId::Obj
         || header.scene.format == model_core::SourceFormatId::Fbx
         || header.scene.format == model_core::SourceFormatId::Step
+        || header.scene.format == model_core::SourceFormatId::Iges
+        || header.scene.format == model_core::SourceFormatId::Brep
         || usdFormat;
     const uint32_t objectLimit = tierBFormat ? model_core::kTierBObjectLimit
                                              : model_core::kTierAObjectLimit;

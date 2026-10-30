@@ -67,6 +67,8 @@ model_core::FormatId FormatIdForSource(SourceFormat format)
     case SourceFormat::ThreeMf: return model_core::FormatId::ThreeMf;
     case SourceFormat::Usd: return model_core::FormatId::Usd;
     case SourceFormat::Step: return model_core::FormatId::Step;
+    case SourceFormat::Iges: return model_core::FormatId::Iges;
+    case SourceFormat::Brep: return model_core::FormatId::Brep;
     }
     return model_core::FormatId::Unknown;
 }
@@ -90,6 +92,8 @@ std::optional<SourceFormat> SourceFormatForCatalogDescriptor(
     case model_core::FormatId::Usdc:
     case model_core::FormatId::Usdz: return SourceFormat::Usd;
     case model_core::FormatId::Step: return SourceFormat::Step;
+    case model_core::FormatId::Iges: return SourceFormat::Iges;
+    case model_core::FormatId::Brep: return SourceFormat::Brep;
     default: return std::nullopt;
     }
 }
@@ -332,6 +336,9 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
         return import_broker::ImportFormat::Usd;
     case model_core::ImporterKind::StepHost:
         return import_broker::ImportFormat::Step;
+    case model_core::ImporterKind::CadHost:
+        return format == SourceFormat::Iges ? import_broker::ImportFormat::Iges
+                                            : import_broker::ImportFormat::Brep;
     case model_core::ImporterKind::GltfWorker:
     default:
         return import_broker::ImportFormat::Gltf;
@@ -559,13 +566,15 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     import_broker::ImportSessionRequest sessionRequest;
     sessionRequest.additionalSidecarSearchRoots = std::move(additionalSidecarSearchRoots);
     sessionRequest.onSidecarUnavailable = recordMissing;
+    const bool cadFormat = format == SourceFormat::Step || format == SourceFormat::Iges
+        || format == SourceFormat::Brep;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
         && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd && format != SourceFormat::Step;
+        && format != SourceFormat::Usd && !cadFormat;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
     if (!delayBatchesForTesting && !faultForTesting && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd && format != SourceFormat::Step) {
+        && format != SourceFormat::Usd && !cadFormat) {
         sessionRequest.nextDetail = std::move(nextDetail);
         sessionRequest.onInitialComplete = std::move(onInitialComplete);
     }
@@ -573,7 +582,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.workerExePath = ResolveWorkerExePath();
     if (format == SourceFormat::Usd)
         sessionRequest.compatibilityHostExePath = ResolveCompatibilityHostExePath();
-    if (format == SourceFormat::Step) {
+    if (cadFormat) {
         sessionRequest.stepHostExePath = ResolveStepHostExePath();
         sessionRequest.onStepProgress = std::move(onStepProgress);
     }
@@ -599,9 +608,9 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         sessionRequest.commitLimitBytes = 1ull * 1024 * 1024;
         sessionRequest.replyTimeoutMs = 500;
     }
-    // The dedicated STEP host owns its own attack-mode flags; the general
+    // The dedicated CAD host owns its own attack-mode flags; the general
     // worker override above never reaches it.
-    if (format == SourceFormat::Step) {
+    if (cadFormat) {
         if (faultForTesting == 1) sessionRequest.stepHostArgumentsOverride = L"--pool-crash";
         if (faultForTesting == 2) {
             sessionRequest.stepHostArgumentsOverride = L"--pool-hang";
@@ -793,6 +802,12 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.errorDetails = Loc("fb.detail.step.files.are.limited.to.the.bounded.tier.b.pri", L"STEP files are limited to the bounded Tier B primary-source size.");
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
                 result.errorDetails = Loc("fb.detail.step.parsing.or.tessellation.exceeded.the.bounde", L"STEP parsing or tessellation exceeded the bounded Tier B scratch budget.");
+            }
+        } else if (format == SourceFormat::Iges || format == SourceFormat::Brep) {
+            if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
+                result.errorDetails = Loc("fb.detail.cad.files.are.limited.to.the.bounded.tier.b.prim", L"CAD files are limited to the bounded Tier B primary-source size.");
+            } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
+                result.errorDetails = Loc("fb.detail.cad.parsing.or.tessellation.exceeded.the.bounde", L"CAD parsing or tessellation exceeded the bounded Tier B scratch budget.");
             }
         }
         return result;

@@ -58,7 +58,7 @@ Release payload:
 - Preview3D.exe;
 - Preview3DImportWorker.exe plus fastgltf, the product STL/PLY parsers, ufbx, lib3mf, TinyUSDZ, the pinned Draco decoder, KTX/Basis transcoder, libwebp, WIC, and meshoptimizer — every general-format parser/decoder the product ships, none of which is present in Preview3D.exe's own binary;
 - Preview3DImportHost.exe plus the exact signed app-local OpenUSD libraries and release-manifest-hashed resources required by its minimal host build;
-- Preview3DStepHost.exe plus the exact signed app-local constrained OCCT closure (modeling, data-exchange, and foundation toolkits only) required by its minimal STEP host build;
+- Preview3DStepHost.exe plus the exact signed app-local constrained OCCT closure (modeling, data-exchange including TKDEIGES, and foundation toolkits only) required by its minimal STEP/IGES/BREP host build;
 - Preview3DThumbnailProvider.dll;
 - license/third-party notices;
 - optional local documentation and uninstaller metadata.
@@ -73,7 +73,7 @@ Three distinct AppContainer profiles exist, one per import executable, so a poli
 
 - `Binbuf.Preview3D.ImportWorker` for `Preview3DImportWorker.exe`, created at or before the first Open in a session;
 - `Binbuf.Preview3D.ImportHost` for `Preview3DImportHost.exe`, created only on first USD fallback for a user;
-- `Binbuf.Preview3D.StepHost` for `Preview3DStepHost.exe`, created only on first STEP/STP open for a user.
+- `Binbuf.Preview3D.StepHost` for `Preview3DStepHost.exe`, created only on first STEP/IGES/BREP open for a user.
 
 Each profile's deterministic package SID is part of the installer manifest. The installer grants each SID read/execute access only to its own private payload — the worker's general-format parser/decoder binaries, the host's OpenUSD libraries, or the STEP host's OCCT closure — never to another's payload, and never to model or cache directories. Profile creation for any identity is not on ordinary startup beyond what that process's first use requires, and grants no model, cache, registry, device, or network access by itself.
 
@@ -83,7 +83,7 @@ The broker's per-generation control pipes, cancellation event, and shared sectio
 
 Direct-open extensions:
 
-    .glb .gltf .stl .ply .obj .fbx .3mf .usd .usda .usdc .usdz .step .stp
+    .glb .gltf .stl .ply .obj .fbx .3mf .usd .usda .usdc .usdz .step .stp .igs .iges .brep
 
 .mtl is deliberately absent. It is resolved only as an OBJ sidecar and is neither an Open With target nor a thumbnail handler.
 
@@ -110,6 +110,8 @@ Stable versioned ProgIDs:
 | 3MF | Binbuf.Preview3D.ThreeMF.1 | .3mf |
 | USD | Binbuf.Preview3D.USD.1 | .usd, .usda, .usdc, .usdz |
 | STEP | Binbuf.Preview3D.STEP.1 | .step, .stp |
+| IGES | Binbuf.Preview3D.IGES.1 | .igs, .iges |
+| BREP | Binbuf.Preview3D.BREP.1 | .brep |
 
 Each ProgID declares:
 

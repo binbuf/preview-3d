@@ -145,12 +145,32 @@ int RunProductionPool(PoolMode mode)
         const auto opcode = static_cast<model_core::ControlOpcode>(received->header.opcode);
         if (opcode == model_core::ControlOpcode::Shutdown && received->payload.empty())
             return 0;
-        if (opcode != model_core::ControlOpcode::StartStepImportFromFile
-            || received->payload.size() != sizeof(model_core::ParseStepFileRequest))
-            return 74;
 
+        // STEP keeps its original opcode and request; T08's generalized CAD
+        // route carries the same seven fields plus the closed CadFormat. No
+        // other host or worker accepts either opcode.
         model_core::ParseStepFileRequest request{};
-        std::memcpy(&request, received->payload.data(), sizeof(request));
+        model_core::ParseCadFileRequest cadRequest{};
+        model_core::CadFormat cadFormat = model_core::CadFormat::Step;
+        bool generalCad = false;
+        if (opcode == model_core::ControlOpcode::StartStepImportFromFile) {
+            if (received->payload.size() != sizeof(model_core::ParseStepFileRequest)) return 74;
+            std::memcpy(&request, received->payload.data(), sizeof(request));
+        } else if (opcode == model_core::ControlOpcode::StartCadImportFromFile) {
+            if (received->payload.size() != sizeof(model_core::ParseCadFileRequest)) return 74;
+            std::memcpy(&cadRequest, received->payload.data(), sizeof(cadRequest));
+            cadFormat = static_cast<model_core::CadFormat>(cadRequest.cadFormat);
+            generalCad = true;
+            request.generationId = cadRequest.generationId;
+            request.sourceFileHandleValue = cadRequest.sourceFileHandleValue;
+            request.sectionHandleValue = cadRequest.sectionHandleValue;
+            request.sectionByteCapacity = cadRequest.sectionByteCapacity;
+            request.maxChunkCount = cadRequest.maxChunkCount;
+            request.requestFlags = cadRequest.requestFlags;
+            request.cancellationEventHandleValue = cadRequest.cancellationEventHandleValue;
+        } else {
+            return 74;
+        }
 
         if (mode == PoolMode::Crash) { RaiseFailFastException(nullptr, nullptr, 0); return 79; }
         if (mode == PoolMode::Hang) { Sleep(INFINITE); return 80; }
@@ -181,7 +201,9 @@ int RunProductionPool(PoolMode mode)
                 | model_core::kImportRequestStepForceSerialForTesting
                 | model_core::kImportRequestStepQualityMask))
             || (request.requestFlags & model_core::kImportRequestStepQualityMask)
-                == model_core::kImportRequestStepQualityMask;
+                == model_core::kImportRequestStepQualityMask
+            || (generalCad && (!model_core::IsKnownCadFormat(cadFormat)
+                               || cadRequest.reserved0 != 0));
         if (malformedRequest) {
             if (!SendError(request.generationId, model_core::ImportErrorCode::ImportProtocolViolation))
                 return 75;
@@ -206,14 +228,18 @@ int RunProductionPool(PoolMode mode)
         import_worker::ChunkBatchSink batchSink(
             GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE),
             request.generationId, request.requestFlags, cancellation.get());
-        const auto result = step_host::RunStepHostImport(
-            request, outputView.bytes(), source.get(), cancellation.get(),
-            [&batchSink](std::uint32_t chunkCount, std::uint64_t sectionBytesWritten) {
-                return batchSink.PublishBatch(chunkCount, sectionBytesWritten);
-            },
-            [&request](const step_host::StepProgressEvent& event) {
-                SendStepProgress(request.generationId, event);
-            });
+        const auto publish = [&batchSink](std::uint32_t chunkCount,
+                                          std::uint64_t sectionBytesWritten) {
+            return batchSink.PublishBatch(chunkCount, sectionBytesWritten);
+        };
+        const auto progress = [&request](const step_host::StepProgressEvent& event) {
+            SendStepProgress(request.generationId, event);
+        };
+        const auto result = generalCad
+            ? step_host::RunCadHostImport(cadRequest, outputView.bytes(), source.get(),
+                                          cancellation.get(), publish, progress)
+            : step_host::RunStepHostImport(request, outputView.bytes(), source.get(),
+                                           cancellation.get(), publish, progress);
         if (result.errorCode != model_core::ImportErrorCode::None) {
             if (!SendError(request.generationId, result.errorCode)) return 78;
             continue;

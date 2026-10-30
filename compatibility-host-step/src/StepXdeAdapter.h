@@ -121,6 +121,10 @@ struct StepXdeResult {
 // (single read for preflight plus transfer); otherwise it falls back to the
 // proven `HandleStreamBuf` over `sourceHandle`. `progress` receives bounded
 // phase events; it is optional.
+// T08: `cadFormat` selects the reader. Step keeps the existing STEPCAF path;
+// Iges uses IGESCAFControl_Reader into the same XCAF document; Brep reads the
+// OCCT shape set and adds it to an XCAF document. Planning, tessellation,
+// transforms, bounds and emission are identical for all three.
 StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                 std::span<std::byte> section, HANDLE sourceHandle,
                                 HANDLE cancellationEvent,
@@ -128,6 +132,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                 const StepXdeLimits& limits = {},
                                 const StepBatchPublisher& publish = {},
                                 const StepProgressSink& progress = {},
-                                const StepImportPolicy& policy = {});
+                                const StepImportPolicy& policy = {},
+                                model_core::CadFormat cadFormat = model_core::CadFormat::Step);
 
 } // namespace step_host

@@ -1,5 +1,6 @@
 #include "StepHostImport.h"
 
+#include "CadPreflight.h"
 #include "StepPart21Preflight.h"
 #include "StepXdeAdapter.h"
 
@@ -27,38 +28,73 @@ StepTessellationQuality MapImportQuality(model_core::StepImportQuality quality)
     return StepTessellationQuality::Balanced;
 }
 
-} // namespace
-
-model_core::ImportErrorCode MapPreflightStatus(std::uint32_t status)
+model_core::ParseStepFileRequest NarrowStepRequest(
+    const model_core::ParseCadFileRequest& request)
 {
-    switch (static_cast<StepPreflightStatus>(status)) {
-    case StepPreflightStatus::Ok:
-        return model_core::ImportErrorCode::None;
-    case StepPreflightStatus::NotPart21:
-    case StepPreflightStatus::MalformedSyntax:
-    case StepPreflightStatus::DuplicateEntity:
-        return model_core::ImportErrorCode::MalformedData;
-    case StepPreflightStatus::UnsupportedEncoding:
-        return model_core::ImportErrorCode::UnsupportedEncoding;
-    case StepPreflightStatus::EntityLimit:
-    case StepPreflightStatus::ReferenceLimit:
-    case StepPreflightStatus::DepthLimit:
-    case StepPreflightStatus::RecordLengthLimit:
-    case StepPreflightStatus::StringLengthLimit:
-    case StepPreflightStatus::SourceLimit:
-        return model_core::ImportErrorCode::ResourceLimit;
-    case StepPreflightStatus::ExternalDocument:
-        return model_core::ImportErrorCode::UnsupportedRequiredFeature;
-    case StepPreflightStatus::ReadFailure:
-        return model_core::ImportErrorCode::FileUnavailable;
-    }
-    return model_core::ImportErrorCode::InternalImporterFailure;
+    model_core::ParseStepFileRequest narrow{};
+    narrow.generationId = request.generationId;
+    narrow.sourceFileHandleValue = request.sourceFileHandleValue;
+    narrow.sectionHandleValue = request.sectionHandleValue;
+    narrow.sectionByteCapacity = request.sectionByteCapacity;
+    narrow.maxChunkCount = request.maxChunkCount;
+    narrow.requestFlags = request.requestFlags;
+    narrow.cancellationEventHandleValue = request.cancellationEventHandleValue;
+    return narrow;
 }
 
-StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& request,
-                                   std::span<std::byte> section, HANDLE sourceHandle,
-                                   HANDLE cancellationEvent, const StepBatchPublisher& publish,
-                                   const StepProgressSink& progress)
+struct PreflightOutcome {
+    model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
+    std::uint32_t unresolvedExternalDocuments = 0;
+    std::uint64_t lexedBytes = 0;
+    std::uint64_t milliseconds = 0;
+};
+
+PreflightOutcome RunCadPreflight(model_core::CadFormat format,
+                                 std::span<const std::byte> mappedSource,
+                                 HANDLE sourceHandle, std::uint64_t size)
+{
+    PreflightOutcome outcome;
+    const auto start = std::chrono::steady_clock::now();
+    switch (format) {
+    case model_core::CadFormat::Step: {
+        const StepPreflightResult preflight = !mappedSource.empty()
+            ? StepPreflightBytes(mappedSource)
+            : StepPreflightHandle(sourceHandle, size);
+        outcome.errorCode = MapPreflightStatus(static_cast<std::uint32_t>(preflight.status));
+        outcome.unresolvedExternalDocuments = preflight.externalDocuments;
+        outcome.lexedBytes = preflight.lexedBytes;
+        break;
+    }
+    case model_core::CadFormat::Iges: {
+        const CadPreflightResult preflight = !mappedSource.empty()
+            ? IgesPreflightBytes(mappedSource)
+            : IgesPreflightHandle(sourceHandle, size);
+        outcome.errorCode = MapCadPreflightStatus(static_cast<std::uint32_t>(preflight.status));
+        outcome.lexedBytes = preflight.lexedBytes;
+        break;
+    }
+    case model_core::CadFormat::Brep: {
+        const CadPreflightResult preflight = !mappedSource.empty()
+            ? BrepPreflightBytes(mappedSource)
+            : BrepPreflightHandle(sourceHandle, size);
+        outcome.errorCode = MapCadPreflightStatus(static_cast<std::uint32_t>(preflight.status));
+        outcome.lexedBytes = preflight.lexedBytes;
+        break;
+    }
+    default:
+        outcome.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
+        break;
+    }
+    outcome.milliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(start));
+    return outcome;
+}
+
+StepImportResult RunCadHostImportImpl(const model_core::ParseStepFileRequest& request,
+                                      model_core::CadFormat cadFormat,
+                                      std::span<std::byte> section, HANDLE sourceHandle,
+                                      HANDLE cancellationEvent,
+                                      const StepBatchPublisher& publish,
+                                      const StepProgressSink& progress)
 {
     StepImportResult result;
     const auto totalStart = std::chrono::steady_clock::now();
@@ -66,6 +102,10 @@ StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& reque
         || request.sectionByteCapacity < sizeof(model_core::SectionHeader)
         || section.size() < static_cast<std::size_t>(request.sectionByteCapacity)
         || !request.maxChunkCount) {
+        result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
+        return result;
+    }
+    if (!model_core::IsKnownCadFormat(cadFormat)) {
         result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
         return result;
     }
@@ -99,8 +139,7 @@ StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& reque
             mapping.reset(rawMapping);
             // Map exactly the file size: mapping to end-of-file would expose
             // the zero-filled tail of the final allocation granule to the
-            // lexical scanner, which correctly rejects NUL as a non-Part-21
-            // control byte.
+            // lexical scanner, which correctly rejects NUL as a control byte.
             mappedView = platform::MappedView::Map(
                 mapping.get(), FILE_MAP_READ, static_cast<SIZE_T>(size.QuadPart));
         }
@@ -109,14 +148,12 @@ StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& reque
         mappedView ? mappedView.bytes() : std::span<const std::byte>{};
 
     // Product-owned lexical admission always runs before the OCCT semantic
-    // transfer; the production XDE reader cannot be reached until it passes.
-    const auto preflightStart = std::chrono::steady_clock::now();
-    const StepPreflightResult preflight = mappedView
-        ? StepPreflightBytes(mappedSource)
-        : StepPreflightHandle(sourceHandle, static_cast<std::uint64_t>(size.QuadPart));
-    result.timings.preflightMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(preflightStart));
-    if (!preflight.ok()) {
-        result.errorCode = MapPreflightStatus(static_cast<std::uint32_t>(preflight.status));
+    // transfer; the production reader cannot be reached until it passes.
+    const PreflightOutcome preflight = RunCadPreflight(
+        cadFormat, mappedSource, sourceHandle, static_cast<std::uint64_t>(size.QuadPart));
+    result.timings.preflightMilliseconds = preflight.milliseconds;
+    if (preflight.errorCode != model_core::ImportErrorCode::None) {
+        result.errorCode = preflight.errorCode;
         return result;
     }
     if (progress) {
@@ -135,17 +172,93 @@ StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& reque
 
     StepImportPolicy policy;
     policy.quality = MapImportQuality(importQuality);
-    policy.unresolvedExternalDocuments = preflight.externalDocuments;
+    policy.unresolvedExternalDocuments = preflight.unresolvedExternalDocuments;
     const StepXdeResult scene = RunStepXdeAdapter(request, section, sourceHandle, cancellationEvent,
-                                                  mappedSource, {}, publish, progress, policy);
+                                                  mappedSource, {}, publish, progress, policy,
+                                                  cadFormat);
     result.errorCode = scene.errorCode;
     result.chunkCount = scene.chunkCount;
     result.batchCount = scene.batchCount;
     result.sectionBytesWritten = scene.sectionBytesWritten;
     result.timings = scene.timings;
-    result.timings.preflightMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(preflightStart));
+    result.timings.preflightMilliseconds = preflight.milliseconds;
     result.timings.totalMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(totalStart));
     return result;
+}
+
+} // namespace
+
+model_core::ImportErrorCode MapPreflightStatus(std::uint32_t status)
+{
+    switch (static_cast<StepPreflightStatus>(status)) {
+    case StepPreflightStatus::Ok:
+        return model_core::ImportErrorCode::None;
+    case StepPreflightStatus::NotPart21:
+    case StepPreflightStatus::MalformedSyntax:
+    case StepPreflightStatus::DuplicateEntity:
+        return model_core::ImportErrorCode::MalformedData;
+    case StepPreflightStatus::UnsupportedEncoding:
+        return model_core::ImportErrorCode::UnsupportedEncoding;
+    case StepPreflightStatus::EntityLimit:
+    case StepPreflightStatus::ReferenceLimit:
+    case StepPreflightStatus::DepthLimit:
+    case StepPreflightStatus::RecordLengthLimit:
+    case StepPreflightStatus::StringLengthLimit:
+    case StepPreflightStatus::SourceLimit:
+        return model_core::ImportErrorCode::ResourceLimit;
+    case StepPreflightStatus::ExternalDocument:
+        return model_core::ImportErrorCode::UnsupportedRequiredFeature;
+    case StepPreflightStatus::ReadFailure:
+        return model_core::ImportErrorCode::FileUnavailable;
+    }
+    return model_core::ImportErrorCode::InternalImporterFailure;
+}
+
+model_core::ImportErrorCode MapCadPreflightStatus(std::uint32_t status)
+{
+    switch (static_cast<CadPreflightStatus>(status)) {
+    case CadPreflightStatus::Ok:
+        return model_core::ImportErrorCode::None;
+    case CadPreflightStatus::NotIges:
+    case CadPreflightStatus::NotBrep:
+    case CadPreflightStatus::MalformedSyntax:
+        return model_core::ImportErrorCode::MalformedData;
+    case CadPreflightStatus::UnsupportedEncoding:
+        return model_core::ImportErrorCode::UnsupportedEncoding;
+    case CadPreflightStatus::RecordLimit:
+    case CadPreflightStatus::EntityLimit:
+    case CadPreflightStatus::ReferenceLimit:
+    case CadPreflightStatus::SourceLimit:
+        return model_core::ImportErrorCode::ResourceLimit;
+    case CadPreflightStatus::ReadFailure:
+        return model_core::ImportErrorCode::FileUnavailable;
+    }
+    return model_core::ImportErrorCode::InternalImporterFailure;
+}
+
+StepImportResult RunStepHostImport(const model_core::ParseStepFileRequest& request,
+                                   std::span<std::byte> section, HANDLE sourceHandle,
+                                   HANDLE cancellationEvent, const StepBatchPublisher& publish,
+                                   const StepProgressSink& progress)
+{
+    return RunCadHostImportImpl(request, model_core::CadFormat::Step, section, sourceHandle,
+                                cancellationEvent, publish, progress);
+}
+
+StepImportResult RunCadHostImport(const model_core::ParseCadFileRequest& request,
+                                  std::span<std::byte> section, HANDLE sourceHandle,
+                                  HANDLE cancellationEvent,
+                                  const StepBatchPublisher& publish,
+                                  const StepProgressSink& progress)
+{
+    const model_core::CadFormat cadFormat = static_cast<model_core::CadFormat>(request.cadFormat);
+    if (!model_core::IsKnownCadFormat(cadFormat)) {
+        StepImportResult result;
+        result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
+        return result;
+    }
+    return RunCadHostImportImpl(NarrowStepRequest(request), cadFormat, section, sourceHandle,
+                                cancellationEvent, publish, progress);
 }
 
 } // namespace step_host

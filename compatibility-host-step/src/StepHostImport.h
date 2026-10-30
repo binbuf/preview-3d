@@ -31,6 +31,18 @@ struct StepImportResult {
 // Maps a preflight outcome into the closed product error taxonomy. Exposed so
 // the mapping is unit-testable without launching the host.
 model_core::ImportErrorCode MapPreflightStatus(std::uint32_t status);
+model_core::ImportErrorCode MapCadPreflightStatus(std::uint32_t status);
+
+// T08 generalized CAD entry. It performs the format-specific bounded
+// preflight (Part-21 for Step, section-letter records for Iges, CASCADE
+// Topology shape-set admission for Brep) and then runs the shared XDE/scene
+// adapter. The executable keeps its STEP name/path; only the request shape is
+// generalized.
+StepImportResult RunCadHostImport(const model_core::ParseCadFileRequest& request,
+                                  std::span<std::byte> section, HANDLE sourceHandle,
+                                  HANDLE cancellationEvent,
+                                  const StepBatchPublisher& publish = {},
+                                  const StepProgressSink& progress = {});
 
 // Runs admission then the bounded XDE scene adapter. `section` is the mapped
 // output section and must be exactly `request.sectionByteCapacity` bytes. When

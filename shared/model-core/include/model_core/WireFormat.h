@@ -138,6 +138,12 @@ enum class SourceFormatId : uint32_t {
     // UpAxisId stays Unknown: ISO 10303-21 defines no universal display-up
     // axis, so the existing ground-axis control remains a viewer choice.
     Step = 13,
+    // T08 additive CAD interchange identities. Both are emitted only by the
+    // dedicated CAD host. IGES carries a verified positive post-transfer metre
+    // factor (the reader normalizes to OCCT's system millimetre); BREP has no
+    // authored unit, so zero means unspecified, like STL.
+    Iges = 14,
+    Brep = 15,
 };
 // Preserve the protocol-v10 numeric identities of Unknown/Y/Z. USD is the
 // first supported family that can author X-up, so X is appended rather than

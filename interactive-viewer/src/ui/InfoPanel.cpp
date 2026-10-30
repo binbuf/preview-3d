@@ -150,7 +150,10 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
                 : format == model_core::SourceFormatId::Usdc ? Loc("infopanel.usd.crate", L"USD (crate)")
                 : format == model_core::SourceFormatId::Usdz ? Loc("infopanel.usdz", L"USDZ")
                 : format == model_core::SourceFormatId::ThreeMf ? Loc("infopanel.3mf", L"3MF")
-                : format == model_core::SourceFormatId::Step ? Loc("infopanel.step", L"STEP") : Loc("infopanel.unknown", L"Unknown") },
+                : format == model_core::SourceFormatId::Step ? Loc("infopanel.step", L"STEP")
+                : format == model_core::SourceFormatId::Iges ? Loc("infopanel.iges", L"IGES")
+                : format == model_core::SourceFormatId::Brep ? Loc("infopanel.brep", L"BREP")
+                : Loc("infopanel.unknown", L"Unknown") },
             { Loc("infopanel.units", L"Units"), metersPerUnit > 0 ? Loc("infopanel.metres", L"Metres") : Loc("infopanel.unspecified", L"Unspecified") },
         } });
 

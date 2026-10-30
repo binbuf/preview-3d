@@ -101,6 +101,8 @@ inline const char* ProgIdForFamily(FormatId family) noexcept
     case FormatId::ThreeMf: return "Binbuf.Preview3D.ThreeMF.1";
     case FormatId::Usd: return "Binbuf.Preview3D.USD.1";
     case FormatId::Step: return "Binbuf.Preview3D.STEP.1";
+    case FormatId::Iges: return "Binbuf.Preview3D.IGES.1";
+    case FormatId::Brep: return "Binbuf.Preview3D.BREP.1";
     default: return nullptr;
     }
 }
@@ -126,6 +128,7 @@ inline bool IsImportableFormat(const FormatDescriptor* descriptor) noexcept
     case ImporterKind::UsdFastPath:
     case ImporterKind::UsdCompatibilityHost:
     case ImporterKind::StepHost:
+    case ImporterKind::CadHost:
         return true;
     default:
         return false;

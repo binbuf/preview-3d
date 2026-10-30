@@ -2,7 +2,7 @@
 
 **A fast, secure, and native 3D object viewer for Windows**
 
-[![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install) [![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP-6e7681?style=flat-square)](#supported-formats)
+[![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install) [![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP%20%C2%B7%20IGES%20%C2%B7%20BREP-6e7681?style=flat-square)](#supported-formats)
 
 [Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Contributing](CONTRIBUTING.md) · [Windows security help](docs/WINDOWS-SECURITY.md)
 
@@ -13,7 +13,7 @@
 
 ## Highlights
 
-- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, and STEP/STP** files locally.
+- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, STEP/STP, IGES, and BREP** files locally.
 - Navigate with familiar Blender-style orbit, pan, and frame controls, plus Unreal-style right-mouse fly, a navigation gizmo with 90° roll controls, and a keyboard-friendly command set.
 - Inspect models with Studio, Clay, and rotatable Directional lighting, Wireframe mode, an information panel, and point-cloud rendering.
 - Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration.
@@ -33,6 +33,8 @@
 | 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews |
 | Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`: static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
 | STEP | `.step` and `.stp`: self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies, instance/shape/face colors, and authored length units |
+| IGES | `.igs` and `.iges`: bounded fixed-column record streams, analytic B-rep geometry, assemblies, and representable colors |
+| BREP | `.brep`: OCCT `CASCADE Topology` shape sets with bounded shape/location admission; no authored units or colors |
 
 For the exact supported subset, resource ceilings, and known limitations of each format, see [Format support and limits](docs/FORMAT-SUPPORT.md).
 

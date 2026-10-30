@@ -82,6 +82,12 @@ constexpr uint32_t kStepFeatureBoundedRepair = 3003;
 // A definition that could not be tessellated was skipped (per-definition
 // isolation), so the rest of the assembly still opens.
 constexpr uint32_t kStepFeatureUnmeshedDefinition = 3004;
+// T08 CAD interchange features (same 3000-range, append-only). IGES has an
+// optional global unit flag; absence is a documented millimetre assumption.
+// BREP carries no authored unit at all, so its scale is explicitly unknown.
+constexpr uint32_t kCadFeatureIgesUnitAssumedMillimetre = 3010;
+constexpr uint32_t kCadFeatureIgesUnitNonMillimetre = 3011;
+constexpr uint32_t kCadFeatureBrepUnitsUnspecified = 3012;
 
 // Maps a glTF extension name to its stable numeric feature ID. This is a pure
 // lookup; it does not change whether the adapter supports the extension.

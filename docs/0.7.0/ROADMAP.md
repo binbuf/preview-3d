@@ -35,7 +35,7 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [x] T05 — glTF required-extension compatibility → [../tasks/0.7.0/T05-gltf-extension-compatibility.md](../tasks/0.7.0/T05-gltf-extension-compatibility.md)
 - [x] T06 — Per-format presentation defaults and orientation → [../tasks/0.7.0/T06-presentation-defaults-orientation.md](../tasks/0.7.0/T06-presentation-defaults-orientation.md)
 - [x] T07 — STEP tolerance and import quality → [../tasks/0.7.0/T07-step-tolerance-import-quality.md](../tasks/0.7.0/T07-step-tolerance-import-quality.md)
-- [ ] T08 — OCCT host: IGES and BREP → [../tasks/0.7.0/T08-cad-host-iges-brep.md](../tasks/0.7.0/T08-cad-host-iges-brep.md)
+- [x] T08 — OCCT host: IGES and BREP → [../tasks/0.7.0/T08-cad-host-iges-brep.md](../tasks/0.7.0/T08-cad-host-iges-brep.md)
 - [ ] T09 — OCCT host: XBF and FCStd → [../tasks/0.7.0/T09-cad-host-xbf-fcstd.md](../tasks/0.7.0/T09-cad-host-xbf-fcstd.md)
 - [ ] T10 — Bounded Assimp compatibility adapter → [../tasks/0.7.0/T10-assimp-compatibility-adapter.md](../tasks/0.7.0/T10-assimp-compatibility-adapter.md)
 - [ ] T10b — 3MF best-effort compatibility → [../tasks/0.7.0/T10b-three-mf-compatibility.md](../tasks/0.7.0/T10b-three-mf-compatibility.md)
@@ -59,11 +59,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T04:02:14Z · 7/20 done
+**Pipeline status** — updated 2026-10-30T04:44:17Z · 8/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08
 - Blocked: none
 - Failed: none
-- Remaining: T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T07 — done · STEP external/unit tolerance, bounded repair policy, Draft/Balanced/Full quality, fixtures, tests, and docs landed; all step-tolerance and related STEP/unit/provider checks pass.
+- Remaining: T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T08 — done · IGES/BREP open through the isolated CAD host with bounded preflights, normalized scene metadata, colors/transforms, fixtures, tests, installer/catalog/docs updates; the clean-clone OCCT restore path and an inch-IGES fixture remain recorded follow-ups.
 <!-- /symphony:status -->

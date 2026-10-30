@@ -41,6 +41,10 @@ enum class SourceFormat {
     // `.step`/`.stp`; the STEP host's Part-21 admission still verifies the
     // ISO 10303-21 byte envelope before any OCCT work.
     Step,
+    // T08: IGES and OCCT BREP share the dedicated STEP host process and its
+    // zero-capability AppContainer payload; no OCCT code is linked here.
+    Iges,
+    Brep,
 };
 
 // nullopt for any extension this slice doesn't recognize. This remains the

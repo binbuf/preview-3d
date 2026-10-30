@@ -20,7 +20,7 @@ struct FormatOption {
 };
 
 // A stable name is ASCII and case-insensitive. Only formats with a shipped
-// importer are accepted so `--format iges` fails typed until T08 lands.
+// importer are accepted, so reserved catalog identities stay unclaimable.
 inline FormatOption ParseFormatName(std::wstring_view value)
 {
     FormatOption result;

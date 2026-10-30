@@ -132,9 +132,13 @@ TEST_CASE("--format rejects empty, unknown, non-ASCII and unshipped names", "[op
     CHECK_FALSE(open_options::ParseFormatName(L"nope").valid);
     CHECK_FALSE(open_options::ParseFormatName(L"gltf2").valid);
     CHECK_FALSE(open_options::ParseFormatName(L"gl\u00e4tf").valid);
-    // Reserved catalog identities without a shipped importer must not be
-    // claimable until their adapter task lands.
-    CHECK_FALSE(open_options::ParseFormatName(L"iges").valid);
+    // T08 shipped the OCCT CAD host readers, so IGES/BREP stable names are now
+    // claimable; still-reserved identities stay rejected.
+    CHECK(open_options::ParseFormatName(L"iges").valid);
+    CHECK(open_options::ParseFormatName(L"IGES").valid);
+    CHECK(open_options::ParseFormatName(L"brep").valid);
+    CHECK_FALSE(open_options::ParseFormatName(L"xbf").valid);
+    CHECK_FALSE(open_options::ParseFormatName(L"fcstd").valid);
 }
 
 TEST_CASE("Open As selection keeps existing suffix behaviour and asks on conflict", "[open-as]")
@@ -175,7 +179,7 @@ TEST_CASE("Catalog extension list and --list-formats text stay catalog-driven", 
     const auto extensions = DirectOpenExtensions();
     for (const wchar_t* expected : { L".glb", L".gltf", L".stl", L".ply", L".obj", L".fbx",
                                      L".3mf", L".usd", L".usda", L".usdc", L".usdz",
-                                     L".step", L".stp" }) {
+                                     L".step", L".stp", L".igs", L".iges", L".brep" }) {
         CHECK(std::find(extensions.begin(), extensions.end(), expected) != extensions.end());
     }
     CHECK(std::find(extensions.begin(), extensions.end(), L".mtl") == extensions.end());

@@ -46,6 +46,17 @@ constexpr bool SceneUnitsAndUpAxisAllowed(
         // STEP does not define a universal display-up axis, but the authored
         // length unit must convert to a verified positive metre factor.
         return upAxis == UpAxisId::Unknown && metersPerUnit > 0.0;
+    case SourceFormatId::Iges:
+        // IGES has no universal display-up axis. OCCT normalizes the
+        // transferred geometry to its system millimetre, so the verified
+        // post-transfer metre factor must be positive. A missing global unit
+        // flag is a documented millimetre assumption with a warning.
+        return upAxis == UpAxisId::Unknown && metersPerUnit > 0.0;
+    case SourceFormatId::Brep:
+        // OCCT BREP carries topology only: no display-up axis and no authored
+        // length unit. Zero is the explicit "unspecified" value, never a
+        // guessed millimetre scale.
+        return upAxis == UpAxisId::Unknown && metersPerUnit == 0.0;
     default:
         return true;
     }

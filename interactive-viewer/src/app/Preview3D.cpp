@@ -2289,7 +2289,10 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     // min(4 GiB, 35% of RAM); the general Tier-B scratch cap would reject a
     // legitimate large transfer as a resource limit. The host Job remains the
     // hard bound.
-    const uint64_t hostCommitCap = format == d3d12_import_bridge::SourceFormat::Step
+    const uint64_t hostCommitCap =
+        (format == d3d12_import_bridge::SourceFormat::Step
+         || format == d3d12_import_bridge::SourceFormat::Iges
+         || format == d3d12_import_bridge::SourceFormat::Brep)
         ? import_broker::DedicatedHostCommitLimitBytes() : 0;
     auto cpuGuard = app.renderThread.CpuBudgetGuard(hostCommitCap);
     auto* stepPhase = &app.stepProgressPhase;

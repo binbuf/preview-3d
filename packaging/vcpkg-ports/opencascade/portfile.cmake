@@ -3,11 +3,13 @@
 #
 #   1. no OpenGL dependency and no default features (freetype/fontconfig), so
 #      the closure is the STEP/XDE/B-rep/meshing modules only; and
-#   2. the DataExchange toolkit list is reduced to the STEP/XDE set, dropping
-#      IGES, STL, OBJ, PLY, glTF, VRML, Cascade, and RWMesh. The XCAF
-#      persistence toolkits are retained because STEPCAFControl_Provider.cxx
-#      includes BinXCAFDrivers.hxx. OCCT's own dependency resolution re-adds
-#      any toolkit a retained toolkit genuinely needs.
+#   2. the DataExchange toolkit list is reduced to the STEP/IGES/XDE set,
+#      dropping STL, OBJ, PLY, glTF, VRML, Cascade, and RWMesh. T08 adds
+#      TKDEIGES (and its BRepToIGES/IGES* closure) so the same dedicated host
+#      can read IGES without adding a second CAD runtime. The XCAF persistence
+#      toolkits are retained because STEPCAFControl_Provider.cxx includes
+#      BinXCAFDrivers.hxx. OCCT's own dependency resolution re-adds any toolkit
+#      a retained toolkit genuinely needs.
 #
 # Writers, samples, tests, Draw, DETools, and visualization are off. Resource
 # files (STEP unit lexicons) are compiled in, so the host reads no external
@@ -32,7 +34,7 @@ vcpkg_from_github(
 file(READ "${SOURCE_PATH}/adm/MODULES" OCCT_MODULES_CONTENT)
 string(REPLACE
     "DataExchange TKDE TKXSBase TKDESTEP TKDEIGES TKDESTL TKDEVRML TKDECascade TKDEOBJ TKDEGLTF TKDEPLY TKXCAF TKXmlXCAF TKBinXCAF TKRWMesh"
-    "DataExchange TKDE TKXSBase TKDESTEP TKXCAF TKXmlXCAF TKBinXCAF"
+    "DataExchange TKDE TKXSBase TKDESTEP TKDEIGES TKXCAF TKXmlXCAF TKBinXCAF"
     OCCT_MODULES_CONTENT "${OCCT_MODULES_CONTENT}")
 file(WRITE "${SOURCE_PATH}/adm/MODULES" "${OCCT_MODULES_CONTENT}")
 

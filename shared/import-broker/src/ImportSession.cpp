@@ -118,9 +118,11 @@ const wchar_t* ParseFlagFor(ImportFormat format)
     case ImportFormat::ThreeMf:
         return L"--parse-3mf";
     case ImportFormat::Step:
-        // Unreachable: STEP always runs in the pooled dedicated host, never
-        // the one-shot fast-worker path. Kept explicit so the closed format
-        // set is auditable next to its opcode/request mapping.
+    case ImportFormat::Iges:
+    case ImportFormat::Brep:
+        // Unreachable: CAD always runs in the pooled dedicated host, never the
+        // one-shot fast-worker path. Kept explicit so the closed format set is
+        // auditable next to its opcode/request mapping.
         return L"--parse-step";
     case ImportFormat::Gltf:
     default:
@@ -291,6 +293,20 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         request.requestFlags |= model_core::StepImportQualityFlags(session.stepImportQuality);
         return model_core::WriteControlMessage(
             controlInWrite, model_core::ControlOpcode::StartStepImportFromFile,
+            &request, sizeof(request));
+    }
+    case ImportFormat::Iges:
+    case ImportFormat::Brep: {
+        // Generalized CAD route: the closed cadFormat field is validated by
+        // the host before preflight, so an Iges request can never be read by
+        // the BREP adapter (or vice versa) through a stale field.
+        auto request = MakeFileRequest<model_core::ParseCadFileRequest>(
+            session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+        request.requestFlags |= model_core::StepImportQualityFlags(session.stepImportQuality);
+        request.cadFormat = static_cast<uint32_t>(session.format == ImportFormat::Iges
+            ? model_core::CadFormat::Iges : model_core::CadFormat::Brep);
+        return model_core::WriteControlMessage(
+            controlInWrite, model_core::ControlOpcode::StartCadImportFromFile,
             &request, sizeof(request));
     }
     }
@@ -631,9 +647,12 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     // the general worker.
     if (producer == ImportProducer::CompatibilityHost && request.format != ImportFormat::Usd)
         return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
-    if (producer == ImportProducer::StepHost && request.format != ImportFormat::Step)
+    if (producer == ImportProducer::StepHost && request.format != ImportFormat::Step
+        && request.format != ImportFormat::Iges && request.format != ImportFormat::Brep)
         return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
-    if (producer == ImportProducer::FastWorker && request.format == ImportFormat::Step)
+    if (producer == ImportProducer::FastWorker
+        && (request.format == ImportFormat::Step || request.format == ImportFormat::Iges
+            || request.format == ImportFormat::Brep))
         return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
     // Cheapest possible cancellation: a generation already superseded before
     // it started launches no worker and touches no file at all.
@@ -947,6 +966,10 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                     ? chunk.scene.format == model_core::SourceFormatId::ThreeMf
                                 : request.format == ImportFormat::Step
                                     ? chunk.scene.format == model_core::SourceFormatId::Step
+                                : request.format == ImportFormat::Iges
+                                    ? chunk.scene.format == model_core::SourceFormatId::Iges
+                                : request.format == ImportFormat::Brep
+                                    ? chunk.scene.format == model_core::SourceFormatId::Brep
                                 : (chunk.scene.format == model_core::SourceFormatId::Usda
                                    || chunk.scene.format == model_core::SourceFormatId::Usdc
                                    || chunk.scene.format == model_core::SourceFormatId::Usdz);
@@ -969,7 +992,9 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 || acceptance.scene->format == model_core::SourceFormatId::Usdc
                 || acceptance.scene->format == model_core::SourceFormatId::Usdz
                 || acceptance.scene->format == model_core::SourceFormatId::ThreeMf
-                || acceptance.scene->format == model_core::SourceFormatId::Step);
+                || acceptance.scene->format == model_core::SourceFormatId::Step
+                || acceptance.scene->format == model_core::SourceFormatId::Iges
+                || acceptance.scene->format == model_core::SourceFormatId::Brep);
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -1528,7 +1553,9 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             || acceptance.scene->format == model_core::SourceFormatId::Usdc
             || acceptance.scene->format == model_core::SourceFormatId::Usdz
             || acceptance.scene->format == model_core::SourceFormatId::ThreeMf
-            || acceptance.scene->format == model_core::SourceFormatId::Step);
+            || acceptance.scene->format == model_core::SourceFormatId::Step
+            || acceptance.scene->format == model_core::SourceFormatId::Iges
+            || acceptance.scene->format == model_core::SourceFormatId::Brep);
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)
@@ -1736,9 +1763,10 @@ ImportSessionResult MapStepFailure(ImportSessionResult result)
 
 ImportSessionResult RunImportSession(const ImportSessionRequest& request)
 {
-    // STEP has no fast-worker candidate and no fallback: the dedicated host is
-    // the only producer allowed to emit SourceFormatId::Step.
-    if (request.format == ImportFormat::Step) {
+    // CAD formats have no fast-worker candidate and no fallback: the dedicated
+    // host is the only producer allowed to emit their SourceFormatId.
+    if (request.format == ImportFormat::Step || request.format == ImportFormat::Iges
+        || request.format == ImportFormat::Brep) {
         if (request.stepHostExePath.empty())
             return Fail(ImportStage::LaunchWorker, model_core::ImportErrorCode::StepHostFailure);
         return MapStepFailure(RunImportSessionForProducer(request, ImportProducer::StepHost));

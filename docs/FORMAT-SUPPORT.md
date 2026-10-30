@@ -16,6 +16,8 @@ For install and build instructions, see the [README](../README.md).
 | 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews |
 | Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`; static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
 | STEP | `.step` and `.stp`: ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality through a dedicated isolated OCCT host |
+| IGES | `.igs` and `.iges`: bounded fixed-column S/G/D/P/T record streams, analytic B-rep surfaces, assemblies/subfigures where representable, and IGES colors through the same dedicated OCCT host. The optional global unit flag converts to the verified OCCT system millimetre; a missing flag assumes millimetres with a warning |
+| BREP | `.brep`: the OCCT ASCII `CASCADE Topology` shape-set serialization. Topology and geometry only (no authored colors or units); the scene reports `UpAxisId::Unknown` and zero metres-per-unit, and the bounded shape/location table is admitted before `BRepTools::Read` |
 
 `.mtl` is always a sidecar and is never a primary open type. The Open dialog,
 command line, drag/drop, single-instance activation, Retry, and Open With all
@@ -38,6 +40,8 @@ the rest of the session.
 | PLY point-only / 3DGS | unspecified | unspecified | Point cloud (unlit round colored splats, no grid) |
 | STL / 3MF | Z | unspecified (STL) / millimetres (3MF) | Studio CAD |
 | STEP | unspecified (STEP defines no display-up axis) | authored, verified positive metre factor; absent units assume millimetres and contradictory units use the first/dominant factor, both warned | Studio CAD |
+| IGES | unspecified (IGES defines no display-up axis) | verified positive post-transfer metre factor (OCCT system millimetre); an absent global unit flag assumes millimetres and warns | Studio CAD |
+| BREP | unspecified (no display-up axis) | unspecified (`0.0`, no authored unit); never guessed as millimetres | Studio CAD |
 
 Notes:
 
@@ -124,10 +128,13 @@ supported composition are retried atomically in a separately isolated, lazily
 started OpenUSD host. Local relative sublayers, references, payloads, authored
 default variants, and texture dependencies are brokered by the viewer.
 
-STEP/STP uses a third, dedicated zero-capability host with a pinned constrained
-OCCT closure. It receives only an inherited read-only handle (never a path),
-performs product-owned Part-21 admission before the CAD kernel runs, and emits
-only normalized wire records.
+STEP/STP, IGES and BREP use the same dedicated zero-capability host
+(`Preview3DStepHost.exe`) with a pinned constrained OCCT closure. It receives
+only an inherited read-only handle (never a path), performs product-owned
+Part-21 admission for STEP and format-specific record/shape-set admission for
+IGES/BREP before the CAD kernel runs, and emits only normalized wire records.
+IGES is read by feeding the admitted fixed-column records to OCCT's pinned
+record parser in memory; no temporary file or path is created.
 
 Portable packaging keeps `Preview3D.exe` at the package root and the sandbox
 executable plus its private DLL closure under `worker\`. The viewer prefers that
@@ -141,8 +148,9 @@ AppContainer granted access only to that tree.
 
 ## Not included
 
-Animation playback, editing, other CAD formats (IGES/IFC/JT/native CAD),
-Explorer thumbnails (including for 3MF, USD, FBX, and STEP), network assets,
+Animation playback, editing, other CAD formats (IFC/JT/Parasolid/DWG/native
+CAD), Explorer thumbnails (including for 3MF, USD, FBX, STEP, IGES, and BREP),
+network assets,
 USD skeletal deformation, MaterialX, procedural schemas, and interactive variant
 selection are not currently included. USD skeletal bindings are ignored and the
 authored rest pose is previewed statically (matching the baked start pose FBX
@@ -157,6 +165,14 @@ quality selects a versioned deflection profile (Balanced is the default), and a
 bounded, deterministic `ShapeFix` repair runs only after a definition fails to
 tessellate. There is no PMI/GD&T, editing, saved views, exact measurement, or
 general-purpose shape healing.
+
+IGES is admitted only as a complete fixed 80-column S/G/D/P/T record stream with
+bounded record/entity/reference counts; truncated, control-byte, or out-of-order
+input fails typed before OCCT. Colors follow the IGES color entities that the
+XDE reader can represent; assembly/subfigure structure is preserved where
+present. BREP is admitted only as a `CASCADE Topology` V1-V3 shape set with a
+bounded `TShapes`/`Locations` table; it has no colors and no authored units.
+Both reuse the STEP tessellation profile and per-definition failure isolation.
 
 3MF slicer-private multi-plate grouping, printer/process settings, Slice, Secure
 Content, Volumetric, Implicit, toolpath, repair, slicing, and export features are

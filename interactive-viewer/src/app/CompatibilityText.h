@@ -59,6 +59,15 @@ inline std::wstring CompatibilityFeatureText(uint32_t featureId)
     case model_core::kStepFeatureUnmeshedDefinition:
         return Loc("compat.step.unmeshedDefinition",
                    L"Some STEP shapes could not be tessellated and were skipped.");
+    case model_core::kCadFeatureIgesUnitAssumedMillimetre:
+        return Loc("compat.iges.unitAssumedMillimetres",
+                   L"The IGES file declares no units; millimetres were assumed.");
+    case model_core::kCadFeatureIgesUnitNonMillimetre:
+        return Loc("compat.iges.unitConverted",
+                   L"The IGES file was authored in non-millimetre units and converted for display.");
+    case model_core::kCadFeatureBrepUnitsUnspecified:
+        return Loc("compat.brep.unitsUnspecified",
+                   L"BREP files carry no units; the model scale is unspecified.");
     default:
         return {};
     }

@@ -51,6 +51,10 @@ enum class ImportFormat : uint32_t {
     // zero-capability Preview3DStepHost.exe; the general worker never accepts
     // this format. Product extension discovery stays disabled until STEP-006.
     Step,
+    // T08 CAD interchange through the same dedicated OCCT host. IGES/BREP use
+    // the generalized CAD opcode/request; the general worker never accepts it.
+    Iges,
+    Brep,
 };
 
 enum class ImportProducer : uint32_t {

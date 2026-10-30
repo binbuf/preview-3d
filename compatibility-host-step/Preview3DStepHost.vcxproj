@@ -78,6 +78,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\CadPreflight.cpp" />
+    <ClCompile Include="src\IgesStreamReader.cpp" />
     <ClCompile Include="src\StepHostImport.cpp" />
     <ClCompile Include="src\StepPart21Preflight.cpp" />
     <ClCompile Include="src\StepXdeAdapter.cpp" />
@@ -88,6 +90,8 @@
     <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\CadPreflight.h" />
+    <ClInclude Include="src\IgesStreamReader.h" />
     <ClInclude Include="src\StepHostImport.h" />
     <ClInclude Include="src\StepImporterVersion.h" />
     <ClInclude Include="src\StepPart21Preflight.h" />

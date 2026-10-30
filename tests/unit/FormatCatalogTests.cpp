@@ -237,9 +237,10 @@ TEST_CASE("format catalog extensions are unique and resolve", "[format-catalog]"
         }
     }
 
-    const std::array<std::wstring_view, 13> required{
+    const std::array<std::wstring_view, 16> required{
         L"gltf", L"glb", L"stl", L"ply", L"obj", L"fbx", L"3mf",
         L"usd", L"usda", L"usdc", L"usdz", L"step", L"stp",
+        L"igs", L"iges", L"brep",
     };
     for (const auto extension : required) {
         INFO("required extension " << Narrow(extension));
@@ -255,7 +256,7 @@ TEST_CASE("format catalog extensions are unique and resolve", "[format-catalog]"
 TEST_CASE("every source format id has a catalog descriptor", "[format-catalog]")
 {
     std::set<uint32_t> seenWireIds;
-    for (uint32_t value = 1; value <= static_cast<uint32_t>(SourceFormatId::Step); ++value) {
+    for (uint32_t value = 1; value <= static_cast<uint32_t>(SourceFormatId::Brep); ++value) {
         const auto wire = static_cast<SourceFormatId>(value);
         INFO("wire id " << value);
         const auto* descriptor = FindBySourceFormatId(wire);
@@ -263,6 +264,31 @@ TEST_CASE("every source format id has a catalog descriptor", "[format-catalog]")
         CHECK(seenWireIds.insert(value).second);
     }
     CHECK(FindBySourceFormatId(SourceFormatId::Unknown) == nullptr);
+}
+
+TEST_CASE("T08 IGES and BREP are catalog-backed CAD host formats", "[format-catalog][cad]")
+{
+    static_assert(static_cast<uint32_t>(SourceFormatId::Iges) == 14);
+    static_assert(static_cast<uint32_t>(SourceFormatId::Brep) == 15);
+
+    const auto* iges = FindById(FormatId::Iges);
+    REQUIRE(iges != nullptr);
+    CHECK(iges->importer == ImporterKind::CadHost);
+    CHECK(iges->wireFormatId == SourceFormatId::Iges);
+    CHECK(iges->defaultUpAxis == UpAxisId::Unknown);
+    CHECK(iges->presentation == PresentationProfile::StudioCad);
+    CHECK(HasCapability(iges->capabilities, CapabilityFlags::CadHost));
+    CHECK(FindByExtension(L"igs") == iges);
+    CHECK(FindByExtension(L".IGES") == iges);
+
+    const auto* brep = FindById(FormatId::Brep);
+    REQUIRE(brep != nullptr);
+    CHECK(brep->importer == ImporterKind::CadHost);
+    CHECK(brep->wireFormatId == SourceFormatId::Brep);
+    CHECK(brep->defaultUpAxis == UpAxisId::Unknown);
+    CHECK(FindByExtension(L"brep") == brep);
+    // The provider's OCCT closure stays STEP-only.
+    CHECK(brep->thumbnail == ThumbnailFamily::None);
 }
 
 TEST_CASE("content sniff identifies a GLB renamed to .bin", "[format-catalog]")

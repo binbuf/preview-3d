@@ -70,6 +70,12 @@ enum class ControlOpcode : uint32_t {
     // broker records the last event and enforces a per-generation cap so a
     // hostile host cannot flood the control channel.
     StepProgress = 21, // STEP host -> broker, non-terminal
+    // T08 generalized CAD route. It carries the same bounded request plus a
+    // closed CadFormat discriminator, and is accepted only by the dedicated
+    // Preview3DStepHost.exe. STEP keeps its existing opcode/request unchanged;
+    // IGES and BREP use this opcode so a worker or other host can never accept
+    // a CAD request by reusing a general-import opcode.
+    StartCadImportFromFile = 22, // broker -> CAD host
 };
 
 enum : uint32_t {
@@ -353,6 +359,38 @@ struct ParseStepFileRequest {
 };
 static_assert(sizeof(ParseStepFileRequest) == 48,
               "ParseStepFileRequest layout changed");
+
+// T08 closed CAD discriminator. Step keeps the existing dedicated STEP opcode;
+// the generalized StartCadImportFromFile route carries Iges/Brep (and may carry
+// Step for a future merged caller). The value is validated by the host before
+// any preflight or OCCT call.
+enum class CadFormat : uint32_t {
+    Step = 0,
+    Iges = 1,
+    Brep = 2,
+};
+
+constexpr bool IsKnownCadFormat(CadFormat format) noexcept
+{
+    return format == CadFormat::Step || format == CadFormat::Iges || format == CadFormat::Brep;
+}
+
+// Generalized CAD host request. The first seven fields are layout-identical to
+// ParseStepFileRequest so existing handle transfer/framing rules stay common;
+// cadFormat selects the product-owned admission scanner and OCCT adapter.
+struct ParseCadFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue;
+    uint64_t sectionHandleValue;
+    uint64_t sectionByteCapacity;
+    uint32_t maxChunkCount;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
+    uint32_t cadFormat; // closed CadFormat value
+    uint32_t reserved0; // zero
+};
+static_assert(sizeof(ParseCadFileRequest) == 56,
+              "ParseCadFileRequest layout changed");
 
 // Closed STEP phase identities for StepProgressNotice::phase. They name the
 // product's own pipeline stages, not OCCT internals, so the viewer can render

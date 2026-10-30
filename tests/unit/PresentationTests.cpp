@@ -85,6 +85,16 @@ TEST_CASE("OBJ accepts the Y-up default while keeping units unspecified",
     CHECK(SceneUnitsAndUpAxisAllowed(SourceFormatId::Step, UpAxisId::Unknown, 0.001));
     CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Step, UpAxisId::Y, 0.001));
     CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Step, UpAxisId::Unknown, 0.0));
+
+    // T08: IGES normalizes geometry to the OCCT system millimetre, so its
+    // post-transfer factor must be positive; BREP carries no unit at all and
+    // must report the explicit zero rather than a guessed scale.
+    CHECK(SceneUnitsAndUpAxisAllowed(SourceFormatId::Iges, UpAxisId::Unknown, 0.001));
+    CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Iges, UpAxisId::Y, 0.001));
+    CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Iges, UpAxisId::Unknown, 0.0));
+    CHECK(SceneUnitsAndUpAxisAllowed(SourceFormatId::Brep, UpAxisId::Unknown, 0.0));
+    CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Brep, UpAxisId::Z, 0.0));
+    CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Brep, UpAxisId::Unknown, 0.001));
 }
 
 TEST_CASE("Info panel reports the active preset and source orientation",

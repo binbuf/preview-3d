@@ -185,6 +185,8 @@ inline constexpr std::wstring_view kUsdcExtensions[] = { L"usdc" };
 inline constexpr std::wstring_view kUsdzExtensions[] = { L"usdz" };
 inline constexpr std::wstring_view kThreeMfExtensions[] = { L"3mf" };
 inline constexpr std::wstring_view kStepExtensions[] = { L"step", L"stp" };
+inline constexpr std::wstring_view kIgesExtensions[] = { L"igs", L"iges" };
+inline constexpr std::wstring_view kBrepExtensions[] = { L"brep" };
 
 inline constexpr MagicSignature kGltfSignatures[] = {
     { MagicKind::GltfJsonAsset, {}, 0 },
@@ -328,6 +330,23 @@ inline constexpr FormatDescriptor kFormats[] = {
       PresentationProfile::StudioPbr, ThumbnailFamily::Usd,
       CapabilityFlags::Sidecars | CapabilityFlags::CoarseProxy,
       SourceFormatId::Unknown },
+    // T08: both formats run in the existing dedicated OCCT host. Extension is
+    // the catalog identity; the host still validates the bytes with the
+    // format-specific bounded preflight before any reader is reached. No
+    // thumbnail family is claimed because the provider's OCCT closure is
+    // deliberately STEP-only.
+    { FormatId::Iges, FormatId::Iges, "iges", "format.iges", L"IGES",
+      Extensions(kIgesExtensions), {},
+      ImporterKind::CadHost, 100, UpAxisId::Unknown, UnitPolicy::Unspecified,
+      PresentationProfile::StudioCad, ThumbnailFamily::None,
+      CapabilityFlags::CadHost | CapabilityFlags::CoarseProxy,
+      SourceFormatId::Iges },
+    { FormatId::Brep, FormatId::Brep, "brep", "format.brep", L"BREP",
+      Extensions(kBrepExtensions), {},
+      ImporterKind::CadHost, 100, UpAxisId::Unknown, UnitPolicy::Unspecified,
+      PresentationProfile::StudioCad, ThumbnailFamily::None,
+      CapabilityFlags::CadHost | CapabilityFlags::CoarseProxy,
+      SourceFormatId::Brep },
 };
 
 constexpr wchar_t FoldExtensionChar(wchar_t value) noexcept
