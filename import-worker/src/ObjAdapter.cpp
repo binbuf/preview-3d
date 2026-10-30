@@ -389,7 +389,11 @@ bool ParseObjScalar(const char*& cursor, const char* end, double& value)
     return true;
 }
 
-bool ParseObjVertexIndex(const char*& cursor, const char* end, size_t vertexCount, uint32_t& index)
+// Returns true when a token was consumed. `malformed` distinguishes a real
+// syntax/range fault from the normal end-of-line case, so a `p`/`l` element
+// can fail typed rather than silently collapsing to EmptyGeometry.
+bool ParseObjVertexIndex(const char*& cursor, const char* end, size_t vertexCount,
+                         uint32_t& index, bool& malformed)
 {
     while (cursor < end && (*cursor == ' ' || *cursor == '\t')) ++cursor;
     if (cursor >= end) return false;
@@ -401,18 +405,18 @@ bool ParseObjVertexIndex(const char*& cursor, const char* end, size_t vertexCoun
     while (cursor < end && *cursor >= '0' && *cursor <= '9') {
         digits = true;
         value = value * 10 + uint64_t(*cursor - '0');
-        if (value > uint64_t(kTierBIndexLimit)) return false;
+        if (value > uint64_t(kTierBIndexLimit)) { malformed = true; return false; }
         ++cursor;
     }
-    if (!digits || !value) return false;
+    if (!digits || !value) { malformed = true; return false; }
     // Anything after the vertex token (a /vt /vn suffix) belongs to the same
     // element; the wire carries positions only.
     while (cursor < end && *cursor != ' ' && *cursor != '\t') ++cursor;
     if (negative) {
-        if (uint64_t(value) > vertexCount) return false;
+        if (uint64_t(value) > vertexCount) { malformed = true; return false; }
         index = uint32_t(vertexCount - uint64_t(value));
     } else {
-        if (value > vertexCount) return false;
+        if (value > vertexCount) { malformed = true; return false; }
         index = uint32_t(value - 1);
     }
     return true;
@@ -451,9 +455,19 @@ bool EmitObjLinePointGeometry(std::span<const std::byte> sourceBytes, BoundedChu
                 const char* token = p + 1;
                 std::vector<uint32_t> indices;
                 uint32_t index = 0;
-                while (ParseObjVertexIndex(token, lineEnd, vertexCount, index)) indices.push_back(index);
+                bool malformed = false;
+                while (ParseObjVertexIndex(token, lineEnd, vertexCount, index, malformed))
+                    indices.push_back(index);
                 while (token < lineEnd && (*token == ' ' || *token == '\t')) ++token;
-                if (token < lineEnd) { context.error = ImportErrorCode::MalformedData; return false; }
+                if (malformed || token < lineEnd) {
+                    context.error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+                // `l` needs at least one segment; `p` needs at least one point.
+                if (indices.size() < (isLine ? 2u : 1u)) {
+                    context.error = ImportErrorCode::MalformedData;
+                    return false;
+                }
                 if (isLine) {
                     for (size_t i = 0; i + 1 < indices.size(); ++i) {
                         segments.push_back(indices[i]); segments.push_back(indices[i + 1]);

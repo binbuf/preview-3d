@@ -1447,7 +1447,9 @@ bool ConvertNonTrianglePrimitive(WalkState& state, const fastgltf::Primitive& pr
     }
     if (expanded.empty() && !points) return true;
     if (expanded.size() > kMaxVertices
-        || expanded.size() > kMaxVertices - state.totalVertices) {
+        || expanded.size() > kMaxVertices - state.totalVertices
+        || expanded.size() > kMaxIndices
+        || expanded.size() > kMaxIndices - state.totalIndices) {
         state.error = ImportErrorCode::ResourceLimit;
         return false;
     }

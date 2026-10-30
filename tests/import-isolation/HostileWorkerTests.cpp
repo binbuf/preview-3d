@@ -223,6 +223,44 @@ TEST_CASE("Hostile worker claiming an unrecognized vertex layout ID is rejected 
     WaitForSingleObject(launch->proc.process.get(), 5000);
 }
 
+TEST_CASE("Hostile worker publishing an odd-count LineList is rejected as MalformedData",
+          "[hostile-worker][topology]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+
+    auto section = import_broker::CreateSharedSection(import_broker::kSyntheticSectionBytes);
+    REQUIRE(section);
+
+    auto launch = LaunchHostileWorker(fixture.sid, L"--lie-line-topology", section.get());
+    REQUIRE(launch.has_value());
+    REQUIRE(import_broker::ResumeSandboxProcess(launch->proc));
+
+    constexpr uint64_t kGenerationId = 750;
+    model_core::StartGenerationRequest request{};
+    request.generationId = kGenerationId;
+    request.sceneVariant = model_core::kSceneVariant_CubeAndPointCluster;
+    request.sectionHandleValue = reinterpret_cast<uint64_t>(section.get());
+    request.sectionByteCapacity = import_broker::kSyntheticSectionBytes;
+    request.maxChunkCount = 8;
+    REQUIRE(model_core::WriteControlMessage(launch->controlInWrite.get(),
+                                             model_core::ControlOpcode::StartGeneration, &request,
+                                             sizeof(request)));
+
+    auto received = model_core::ReadControlMessage(launch->controlOutRead.get());
+    REQUIRE(received.has_value());
+    REQUIRE(received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::ChunksReady));
+
+    auto view = platform::MappedView::Map(section.get(), FILE_MAP_READ,
+                                           import_broker::kSyntheticSectionBytes);
+    REQUIRE(view);
+    auto result = import_broker::ValidateAndCopySection(view.bytes(), kGenerationId, 8);
+    CHECK_FALSE(result.ok);
+    CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    CHECK(result.chunks.empty());
+
+    WaitForSingleObject(launch->proc.process.get(), 5000);
+}
+
 TEST_CASE("Hostile scene-instance graph attacks are rejected before any record is published",
           "[hostile-worker][fbx-002]")
 {

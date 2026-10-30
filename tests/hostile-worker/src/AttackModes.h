@@ -46,6 +46,11 @@ int RunLieOffset();
 // guessing a stride.
 int RunLieLayout();
 
+// T17: a structurally honest LineList chunk with an odd index count. Proves
+// the validator rejects a half segment instead of truncating or reinterpreting
+// it as triangles/points.
+int RunLieLineTopology();
+
 // ---------------------------------------------------------------------------
 // Progressive delivery (ChunkBatchReady/ChunkBatchConsumed).
 //

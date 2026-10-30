@@ -13,7 +13,10 @@
 namespace {
 
 constexpr uint32_t kCacheEntryMagic = 0x43443350; // "P3DC"
-constexpr uint32_t kCurrentCacheSchemaVersion = 1;
+// v2: normalized geometry may carry ChunkTopology::LineList (protocol v11) and
+// glTF strip/fan primitives now normalize to different triangle counts. A v1
+// entry cannot be reused without reinterpreting its payload under new rules.
+constexpr uint32_t kCurrentCacheSchemaVersion = 2;
 
 #pragma pack(push, 1)
 struct CacheEntryHeader

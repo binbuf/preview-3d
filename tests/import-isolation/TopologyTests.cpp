@@ -4,6 +4,7 @@
 
 #include "SandboxTestSupport.h"
 #include "import_broker/ImportSession.h"
+#include "import_broker/SharedSection.h"
 #include "import_broker/SharedSectionValidator.h"
 #include "model_core/Checksum.h"
 #include "model_core/GeometryBounds.h"
@@ -125,6 +126,12 @@ std::string GltfJson(const MeshData& mesh, uint32_t mode)
     return json;
 }
 
+std::filesystem::path FixturePath(const char* name)
+{
+    return std::filesystem::path(__FILE__).parent_path().parent_path()
+        / "fixtures" / "topology" / name;
+}
+
 import_broker::ImportSessionRequest Request(const std::filesystem::path& path,
                                             import_broker::ImportFormat format)
 {
@@ -218,14 +225,10 @@ TEST_CASE("glTF triangle strips and fans normalize to complete indexed triangles
           "[topology][gltf]")
 {
     // Strip: 0 1 2 3 -> (0,1,2),(2,1,3)
-    const MeshData strip = Mesh({0,0,0, 1,0,0, 0,1,0, 1,1,0}, {0,1,2,3});
-    const MeshData fan = Mesh({0,0,0, 1,0,0, 1,1,0, 0,1,0}, {0,1,2,3});
-    for (const auto& [mesh, mode] : {std::pair{strip, 5u}, std::pair{fan, 6u}}) {
-        ScratchFile source(L".gltf");
-        source.Write(GltfJson(mesh, mode));
+    for (const char* name : {"triangle_strip.gltf", "triangle_fan.gltf"}) {
         const auto result = import_broker::RunImportSession(
-            Request(source.path, import_broker::ImportFormat::Gltf));
-        CAPTURE(result.stage, result.errorCode, result.chunks.size());
+            Request(FixturePath(name), import_broker::ImportFormat::Gltf));
+        CAPTURE(name, result.stage, result.errorCode, result.chunks.size());
         REQUIRE(result.ok);
         const auto* geometry = FirstGeometry(result);
         REQUIRE(geometry);
@@ -248,14 +251,12 @@ TEST_CASE("glTF triangle strips and fans normalize to complete indexed triangles
 TEST_CASE("glTF line strip and loop produce LineList instead of EmptyGeometry",
           "[topology][gltf]")
 {
-    const MeshData line = Mesh({0,0,0, 1,0,0, 1,1,0, 0,1,0}, {0,1,2,3});
-    const std::array<std::pair<uint32_t, uint32_t>, 2> modes{{{3, 3}, {2, 4}}}; // strip, loop
-    for (const auto& [mode, expectedSegments] : modes) {
-        ScratchFile source(L".gltf");
-        source.Write(GltfJson(line, mode));
+    const std::array<std::pair<const char*, uint32_t>, 2> modes{{
+        {"line_strip.gltf", 3}, {"line_loop.gltf", 4}}}; // strip, loop
+    for (const auto& [name, expectedSegments] : modes) {
         const auto result = import_broker::RunImportSession(
-            Request(source.path, import_broker::ImportFormat::Gltf));
-        CAPTURE(mode, result.stage, result.errorCode);
+            Request(FixturePath(name), import_broker::ImportFormat::Gltf));
+        CAPTURE(name, result.stage, result.errorCode);
         REQUIRE(result.ok);
         const auto* geometry = FirstGeometry(result);
         REQUIRE(geometry);
@@ -270,10 +271,8 @@ TEST_CASE("glTF LINES and POINTS preserve their topology", "[topology][gltf]")
 {
     const MeshData data = Mesh({0,0,0, 1,0,0, 0,1,0, 1,1,0}, {0,1,2,3});
     {
-        ScratchFile source(L".gltf");
-        source.Write(GltfJson(data, 1)); // LINES
         const auto result = import_broker::RunImportSession(
-            Request(source.path, import_broker::ImportFormat::Gltf));
+            Request(FixturePath("lines.gltf"), import_broker::ImportFormat::Gltf));
         REQUIRE(result.ok);
         const auto* geometry = FirstGeometry(result);
         REQUIRE(geometry);
@@ -298,28 +297,25 @@ TEST_CASE("OBJ line-only and point-only documents open with the right topology",
           "[topology][obj]")
 {
     {
-        ScratchFile source(L".obj");
-        source.Write("v 0 0 0\nv 1 0 0\nv 1 1 0\nl 1 2 3\n");
         const auto result = import_broker::RunImportSession(
-            Request(source.path, import_broker::ImportFormat::Obj));
+            Request(FixturePath("line_only.obj"), import_broker::ImportFormat::Obj));
         CAPTURE(result.stage, result.errorCode);
         REQUIRE(result.ok);
         const auto* geometry = FirstGeometry(result);
         REQUIRE(geometry);
         CHECK(geometry->descriptor.topology == model_core::ChunkTopology::LineList);
-        CHECK(geometry->descriptor.indexCount == 4);
+        // `l 1 2 3 4` is an open polyline: three independent segments.
+        CHECK(geometry->descriptor.indexCount == 6);
     }
     {
-        ScratchFile source(L".obj");
-        source.Write("v 0 0 0\nv 1 0 0\np 1 2\n");
         const auto result = import_broker::RunImportSession(
-            Request(source.path, import_broker::ImportFormat::Obj));
+            Request(FixturePath("point_only.obj"), import_broker::ImportFormat::Obj));
         CAPTURE(result.stage, result.errorCode);
         REQUIRE(result.ok);
         const auto* geometry = FirstGeometry(result);
         REQUIRE(geometry);
         CHECK(geometry->descriptor.topology == model_core::ChunkTopology::PointList);
-        CHECK(geometry->descriptor.vertexCount == 2);
+        CHECK(geometry->descriptor.vertexCount == 3);
         CHECK(geometry->descriptor.indexCount == 0);
     }
 }

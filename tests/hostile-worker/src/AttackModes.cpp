@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -127,7 +128,7 @@ uint64_t BuildLyingSingleChunkSection(std::span<std::byte> destination, uint64_t
     // checksum below is computed over whatever ends up actually written.
     corrupt(descriptor, sectionLength);
 
-    if (descriptor.topology == ChunkTopology::TriangleList || descriptor.topology == ChunkTopology::PointList)
+    if (IsGeometryTopology(descriptor.topology))
         SetLocalBounds(descriptor, destination.subspan(size_t(payloadOffset), size_t(descriptor.byteSize)));
     std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
 
@@ -257,6 +258,67 @@ int RunLieLayout()
     return 0;
 }
 
+// T17: a structurally honest LineList chunk whose index count is odd. The
+// validator must reject the half segment rather than truncating it or
+// interpreting the payload as triangles/points.
+int RunLieLineTopology()
+{
+    using namespace model_core;
+    auto requestAndSection = ReadRequestAndMapSection();
+    if (!requestAndSection) {
+        return 1;
+    }
+    auto& [request, view] = *requestAndSection;
+
+    const std::array<VertexPositionOnlyF32, 3> vertices{{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}};
+    const std::array<uint32_t, 3> indices{{0, 1, 2}};
+    const uint64_t payloadOffset = kSectionHeaderSize + kChunkDescriptorSize;
+    const uint64_t vertexBytes = vertices.size() * sizeof(VertexPositionOnlyF32);
+    const uint64_t indexBytes = indices.size() * sizeof(uint32_t);
+    const uint64_t sectionLength = payloadOffset + vertexBytes + indexBytes;
+    if (sectionLength > view.bytes().size()) {
+        return 1;
+    }
+
+    std::memcpy(view.bytes().data() + payloadOffset, vertices.data(), vertexBytes);
+    std::memcpy(view.bytes().data() + payloadOffset + vertexBytes, indices.data(), indexBytes);
+
+    ChunkDescriptor descriptor{};
+    descriptor.normalizedRangeOffset = payloadOffset;
+    descriptor.normalizedRangeLength = vertexBytes + indexBytes;
+    descriptor.topology = ChunkTopology::LineList;
+    descriptor.indexCount = 3; // odd -- one complete segment plus a half
+    descriptor.vertexCount = uint32_t(vertices.size());
+    descriptor.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionOnly_F32);
+    descriptor.lodLevel = 0;
+    descriptor.chunkId = 1;
+    descriptor.byteSize = vertexBytes + indexBytes;
+    descriptor.boundsState = BoundsState::Verified;
+    descriptor.chunkChecksum = WireChecksum64(
+        view.bytes().subspan(payloadOffset, size_t(vertexBytes + indexBytes)));
+    SetLocalBounds(descriptor, view.bytes().subspan(payloadOffset, size_t(vertexBytes)));
+    std::memcpy(view.bytes().data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
+
+    SectionHeader header{};
+    header.magic = kSectionMagic;
+    header.protocolVersion = kCurrentProtocolVersion;
+    header.generationId = request.generationId;
+    header.scene.generationId = request.generationId;
+    header.scene.format = SourceFormatId::Gltf;
+    header.scene.upAxis = UpAxisId::Y;
+    header.scene.metersPerUnit = 1.0;
+    header.sectionLength = sectionLength;
+    header.chunkCount = 1;
+    header.sectionChecksum = WireChecksum64(
+        view.bytes().subspan(kSectionHeaderSize, size_t(sectionLength - kSectionHeaderSize)));
+    std::memcpy(view.bytes().data(), &header, sizeof(header));
+
+    if (!SendChunksReady(request.generationId, 1, sectionLength)) {
+        return 1;
+    }
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Progressive-delivery attacks. See AttackModes.h for what each one proves.
 // ---------------------------------------------------------------------------
@@ -350,7 +412,7 @@ uint64_t BuildOneChunkSection(std::span<std::byte> destination, uint64_t generat
     descriptor.dependencyCount = 0;
     descriptor.chunkChecksum = WireChecksum64(destination.subspan(payloadOffset, sizeof(vertex)));
 
-    if (descriptor.topology == ChunkTopology::TriangleList || descriptor.topology == ChunkTopology::PointList)
+    if (IsGeometryTopology(descriptor.topology))
         SetLocalBounds(descriptor, destination.subspan(size_t(payloadOffset), size_t(descriptor.byteSize)));
     std::memcpy(destination.data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
 
@@ -529,7 +591,7 @@ int RunCatalogBatches(int mode)
     auto write = [&](ChunkDescriptor desc, const void* payload, size_t bytes) {
         desc.byteSize = desc.normalizedRangeLength = bytes;
         desc.normalizedRangeOffset = kSectionHeaderSize + kChunkDescriptorSize;
-        if (desc.topology == ChunkTopology::TriangleList || desc.topology == ChunkTopology::PointList)
+        if (IsGeometryTopology(desc.topology))
             SetLocalBounds(desc, std::span(static_cast<const std::byte*>(payload), bytes));
         desc.chunkChecksum = WireChecksum64(std::span(static_cast<const std::byte*>(payload), bytes));
         std::memcpy(view.bytes().data() + desc.normalizedRangeOffset, payload, bytes);

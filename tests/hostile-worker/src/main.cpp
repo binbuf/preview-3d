@@ -64,6 +64,10 @@ int main(int argc, char* argv[])
         return hostile_worker::RunLieLayout();
     }
 
+    if (ArgEquals(argv[1], "--lie-line-topology")) {
+        return hostile_worker::RunLieLineTopology();
+    }
+
     if (ArgEquals(argv[1], "--texture-missing-root")) return hostile_worker::RunTextureAttack(0);
     if (ArgEquals(argv[1], "--texture-semantic-change")) return hostile_worker::RunTextureAttack(1);
     if (ArgEquals(argv[1], "--texture-repeat-refinement")) return hostile_worker::RunTextureAttack(2);

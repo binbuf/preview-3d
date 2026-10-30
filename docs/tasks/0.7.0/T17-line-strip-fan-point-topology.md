@@ -95,6 +95,75 @@ the renderer has a depth-biased line pipeline.
 - [ ] Hand-off lists the exact topology/layout semantics and format coverage.
 
 ## Hand-off
-_(filled in by the implementing session: topology enum/version, layout,
-strip/fan conversion, line pipeline, format coverage, and deferred USD/STEP
-curve work.)_
+
+### Topology and wire version
+
+- `ChunkTopology::LineList = 11`, `kCurrentProtocolVersion = 11` (append-only:
+  all v10 numeric identities unchanged; v10 consumers reject v11 instead of
+  misreading line indices).
+- `LineList` payload is `[vertex bytes][uint32 indices]` like `TriangleList`.
+  `indexCount` is even; pair `{indices[2i], indices[2i+1]}` is one independent
+  segment. Strips/loops are converted by the adapter, never carried on the
+  wire. Points keep the existing no-index `PointList`.
+- `WireFormat.h` gained `IsGeometryTopology`, `GeometryPrimitiveCount` and
+  `GeometrySourceElementCount`; `BoundedChunkWriter`, `CoarseSampler`,
+  `ImportSession` and `SharedSectionValidator` use them. The validator rejects
+  odd counts, out-of-range indices, wrong byte size and non-finite data.
+- `DerivedCache` schema version is now 2 (protocol/topology identity change).
+
+### Strip/fan and line emission
+
+- glTF triangle strips/fans become indexed `TriangleList` (stitch degenerates
+  dropped); `LINES` becomes `LineList`, `LINE_STRIP`/`LINE_LOOP` become pair
+  lists, `POINTS` stays `PointList`.
+- OBJ `l`/`p`: ufbx does not expose these elements, so when no triangle geometry
+  exists the adapter scans the bounded OBJ text directly. `l` is an open
+  polyline pair list, `p` is `PointList`; invalid/out-of-range/too-short
+  elements are `MalformedData`.
+- FBX `ufbx_line_curve` elements emit transformed `LineList` pairs.
+
+### Rendering
+
+- New position-only line PSO in `D3D12ViewerPath`: `LINE` topology, negative
+  depth bias/clamp, depth writes disabled, `LESS_EQUAL`, stable grey-blue color.
+  Lines still write the pick target and flow through existing bounds, proxy/LOD,
+  visibility and instance handling.
+- `GpuMesh::lines` selects `D3D_PRIMITIVE_TOPOLOGY_LINELIST` and rejects a
+  partial segment at upload time.
+
+### Coverage
+
+- Fixtures owned by the repo: `tests/fixtures/topology/` (glTF strip/fan/line
+  strip/line loop/LINES plus OBJ line-only and point-only), opened through the
+  real sandboxed import session by `[topology]`.
+- `[topology]` also covers validator acceptance/rejection and
+  `--lie-line-topology` hostile-worker odd-count rejection.
+- USD curves/NURBS and STEP wires remain deferred (USD still
+  `UnsupportedRequiredFeature`; STEP still emits tessellated triangles). The
+  wire topology is ready for a follow-up. Line material/color and line-width
+  policy are also deferred.
+
+### Checks (Release x64)
+
+```powershell
+& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' Preview3D.slnx /t:Tests_ImportIsolation /p:Configuration=Release /p:Platform=x64
+& '...\MSBuild.exe' Preview3D.slnx /t:Tests_Unit /p:Configuration=Release /p:Platform=x64
+& '...\MSBuild.exe' Preview3D.slnx /t:Preview3DHostileWorker /p:Configuration=Release /p:Platform=x64
+& '...\MSBuild.exe' Preview3D.slnx /t:Preview3D /p:Configuration=Release /p:Platform=x64
+
+x64\Release\Tests.ImportIsolation.exe "[topology]"       # 7 cases / 92 assertions, pass
+x64\Release\Tests.Unit.exe "[wire-format]"               # 7 / 66, pass
+x64\Release\Tests.Unit.exe "[cache]"                     # 8 / 71, pass
+x64\Release\Tests.ImportIsolation.exe "[gltf-import]"    # 31 / 655, pass
+x64\Release\Tests.ImportIsolation.exe "[obj]"            # 10 / 110, pass
+x64\Release\Tests.ImportIsolation.exe "[fbx]"            # 31 / 48044, pass, 1 external skip
+x64\Release\Tests.ImportIsolation.exe "[hostile-worker]" # 15 / 304, pass
+```
+
+### Docs changed
+
+- `docs/design/03-file-formats-and-ingestion.md` (protocol v11, LineList rules,
+  dependency table).
+- `docs/design/adr/0073-line-topology-and-strip-fan-normalization.md`.
+- `docs/FORMAT-SUPPORT.md` (glTF/OBJ/FBX line and strip/fan support).
+- `docs/0.7.0/progress/T17.md`.
