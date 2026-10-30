@@ -28,6 +28,7 @@ The plan, ground rules and per-task verify commands are in
 - **T15 — HDR target, exposure, background and presets**: **Pure module.** `interactive-viewer/src/render/Presentation.{h,cpp}` owns the; **HDR target.** `D3D12ViewerPath` creates `R16G16B16A16_FLOAT` `sceneColor`
 - **T16 — Ground contact shadow and ambient occlusion**: **Chosen path: analytic soft contact footprint, no extra pass.** ADR-0072; **Pure math.** `interactive-viewer/src/render/GroundShadow.{h,cpp}` owns
 - **T17 - Line/strip/fan/point topology**: **Wire version is 11** (`model_core::kCurrentProtocolVersion == 11`).; **LineList contract.** Payload is `[vertex bytes][uint32 indices]`, exactly
+- **T18 - Material lobes and transparency**: **Wire version is 12** (`model_core::kCurrentProtocolVersion == 12`). v11 and; Value-initialized `MaterialPayload{}` now supplies the pre-v12 defaults
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -49,4 +50,5 @@ The plan, ground rules and per-task verify commands are in
 - [T15](progress/T15.md) — **Pure module.** `interactive-viewer/src/render/Presentation.{h,cpp}` owns the
 - [T16](progress/T16.md) — **Chosen path: analytic soft contact footprint, no extra pass.** ADR-0072
 - [T17](progress/T17.md) — **Wire version is 11** (`model_core::kCurrentProtocolVersion == 11`).
+- [T18](progress/T18.md) — **Wire version is 12** (`model_core::kCurrentProtocolVersion == 12`). v11 and
 <!-- symphony:digest:end -->

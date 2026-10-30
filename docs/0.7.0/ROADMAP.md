@@ -52,18 +52,18 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 ## Phase 4 — Render depth
 
 - [x] T17 — Line/strip/fan/point topology → [../tasks/0.7.0/T17-line-strip-fan-point-topology.md](../tasks/0.7.0/T17-line-strip-fan-point-topology.md)
-- [ ] T18 — Material lobes and transparency → [../tasks/0.7.0/T18-material-lobes-transparency.md](../tasks/0.7.0/T18-material-lobes-transparency.md)
+- [x] T18 — Material lobes and transparency → [../tasks/0.7.0/T18-material-lobes-transparency.md](../tasks/0.7.0/T18-material-lobes-transparency.md)
 
 ## Phase 5 — Qualify
 
 - [ ] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T14:09:16Z · 18/20 done
+**Pipeline status** — updated 2026-10-30T14:35:45Z · 19/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18
 - Blocked: none
 - Failed: none
-- Remaining: T18, T19
-- Last finished: T17 — done · LineList wire topology v11, strip/fan/line/point normalization, validator and hostile coverage, depth-biased line pipeline, fixtures, docs and cache identity all landed and passing.
+- Remaining: T19
+- Last finished: T18 — done · Protocol-v12 material lobes, layered shader, sorted HDR transparency, validator/hostile/cache coverage, fixtures, tests, docs and ADR-0074 are committed; OIT and inspection modes remain documented deferrals.
 <!-- /symphony:status -->
