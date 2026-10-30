@@ -21,6 +21,7 @@ The plan, ground rules and per-task verify commands are in
 - **T09 — OCCT host: XBF and FCStd**: **Wire identities:** `SourceFormatId::Xbf = 16`, `Fcstd = 17` (appended).; **Broker:** `ImportFormat::Xbf`/`Fcstd` are CAD-only, producer
 - **T10 — Bounded Assimp compatibility adapter**: **Dependency:** `assimp` 6.0.4#3 from the pinned vcpkg baseline, plus its; **Overlay port:** `packaging/vcpkg-ports/assimp/` copies the baseline port and
 - **T10b - 3MF best-effort compatibility**: Required-extension policy lives in; Supported: Core, Materials, Production, Beam, Ball.
+- **T11 — USD primitives, points and crease tolerance**: **Fast-path classification.** `import-worker/src/UsdAdapter.cpp` adds; **Preserve fast path.** TinyUSDZ reports an unauthored `subdivisionScheme` as
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -35,4 +36,5 @@ The plan, ground rules and per-task verify commands are in
 - [T09](progress/T09.md) — **Wire identities:** `SourceFormatId::Xbf = 16`, `Fcstd = 17` (appended).
 - [T10](progress/T10.md) — **Dependency:** `assimp` 6.0.4#3 from the pinned vcpkg baseline, plus its
 - [T10b](progress/T10b.md) — Required-extension policy lives in
+- [T11](progress/T11.md) — **Fast-path classification.** `import-worker/src/UsdAdapter.cpp` adds
 <!-- symphony:digest:end -->
