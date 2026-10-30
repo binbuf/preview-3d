@@ -10,5 +10,5 @@ The plan, ground rules and per-task verify commands are in
 <!-- symphony:digest:start -->
 ## Key facts (maintained by symphony — do not edit)
 
-_No tasks have run yet._
+_(no progress recorded yet)_
 <!-- symphony:digest:end -->
