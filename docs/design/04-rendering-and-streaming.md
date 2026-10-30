@@ -217,6 +217,25 @@ transmission scenes remain order-dependent. The transmission approximation
 remains Fresnel-weighted alpha with suppressed transmitted diffuse; there is
 no refraction pass.
 
+### Line and point topology
+
+`ChunkTopology::LineList` is an indexed pair list: `indexCount` is even and each
+`{indices[2i], indices[2i+1]}` pair is one independent segment. There are no
+strips or loops on the wire. glTF `LINES` maps directly; `LINE_STRIP` and
+`LINE_LOOP` normalize to pairs; triangle strips/fans become indexed
+`TriangleList` with degenerate stitches dropped. OBJ `l`/`p` and FBX
+`line_curves` use the same pair contract. The validator rejects an odd index
+count or an out-of-range index as `MalformedData`, and line payloads use the
+triangle vertex/byte caps.
+
+The viewer draws lines with a position-only vertex/pixel shader, a dedicated
+`D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE` pipeline, negative depth bias and
+`LESS_EQUAL` with depth writes off, so authored curves stay visible over
+coplanar surfaces without occluding them. Lines participate in bounds,
+visibility, LOD and the pick target. `PointList` remains unindexed and renders
+as bounded round/colored point splats; the point pipeline keeps its own pick
+identity so a point cloud can be selected even though it has no triangles.
+
 ## Upload ring
 
 The upload lane owns a persistently mapped ID3D12Resource in an UPLOAD heap. Its initial size is 256 MiB, allowed to grow in 64 MiB increments up to the lesser of 512 MiB and its CPU/GPU memory budget. It is a logical ring of allocations aligned to D3D12 placement and copy requirements.

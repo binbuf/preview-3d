@@ -158,14 +158,17 @@ TEST_CASE("Textured shader applies the layered lobes before the HDR resolve",
     CHECK(shader.find("gMaterialLobes0") != std::string::npos);
     CHECK(shader.find("IorToF0") != std::string::npos);
     CHECK(shader.find("EvaluateClearcoatLight") != std::string::npos);
-    CHECK(shader.find("gMaterialLobes0.y") != std::string::npos); // clearcoat
-    CHECK(shader.find("gMaterialLobes0.x") != std::string::npos); // emissive strength
-    CHECK(shader.find("gMaterialLobes0.w") != std::string::npos); // occlusion strength
-    CHECK(shader.find("gMaterialLobes1") != std::string::npos);   // sheen
-    CHECK(shader.find("gMaterialLobes2.x") != std::string::npos); // specular factor
-    CHECK(shader.find("gMaterialLobes2.y") != std::string::npos); // IOR
-    CHECK(shader.find("gMaterialLobes3") != std::string::npos);   // specular color
-    CHECK(shader.find("(1.0f-clearcoat)") != std::string::npos);  // energy layering
+    CHECK(shader.find("gMaterialLobes0.x") != std::string::npos); // clearcoat factor
+    CHECK(shader.find("gMaterialLobes0.y") != std::string::npos); // clearcoat roughness
+    CHECK(shader.find("gMaterialLobes0.z") != std::string::npos); // occlusion strength
+    CHECK(shader.find("gMaterialLobes0.w") != std::string::npos); // sheen roughness
+    CHECK(shader.find("gMaterialLobes1.rgb") != std::string::npos); // sheen
+    CHECK(shader.find("gMaterialLobes1.w") != std::string::npos);   // specular factor
+    CHECK(shader.find("gMaterialLobes2.x") != std::string::npos);   // IOR
+    CHECK(shader.find("gMaterialLobes2.yzw") != std::string::npos); // specular color
+    CHECK(shader.find("gEmissiveFactor.a") != std::string::npos);   // emissive strength
+    CHECK(shader.find("gMaterialLobes3") == std::string::npos);     // root-constant budget
+    CHECK(shader.find("(1.0f-clearcoat)") != std::string::npos);    // energy layering
     // The old fixed 0.04 dielectric F0 must not remain in EvaluateLight.
     CHECK(shader.find("float3 f0=lerp(float3(.04f,.04f,.04f),base,metallic)") == std::string::npos);
 

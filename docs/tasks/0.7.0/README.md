@@ -85,6 +85,18 @@ with the import-side breadth tasks after T02 is stable.
 | [T18](T18-material-lobes-transparency.md) | Material lobes and transparency | T15 | `x64\Release\Tests.Unit.exe "[material-lobes]"` |
 | [T19](T19-qualification-docs.md) | 0.7.0 compatibility qualification and docs | All | `x64\Release\Tests.ImportIsolation.exe "[compat]"` |
 
+## Status
+
+All 20 tasks are complete in this task set. T19's evidence is recorded in
+[`docs/0.7.0-QUALIFICATION.md`](../../0.7.0-QUALIFICATION.md); the corpus
+report is `artifacts/compat/Release.json`, and the app-smoke/visual reports are
+under `TestResults/qualification/`.
+
+| Task | Status | Evidence |
+| --- | --- | --- |
+| T01–T18 | done | Per-task hand-offs and `docs/0.7.0/progress/` |
+| T19 | done | `[compat]` 312 assertions pass; unit 465/465; import-isolation 506 cases (501 pass, 5 typed skips); visual and app-smoke lanes recorded; installer/SBOM/dependency checks pass |
+
 Use the scoped Catch2 filters above during the task. Before declaring the
 series done, run the unfiltered unit and import-isolation suites and record any
 pre-existing failures separately.

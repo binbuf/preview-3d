@@ -30,7 +30,7 @@ Windows 10, ARM64/x86, Store/MSIX packaging, server/headless sessions, and UNC/d
 
 | ID | Requirement |
 | --- | --- |
-| FR-01 | The product MUST recognize `.glb`, `.gltf`, `.stl`, `.ply`, `.obj`, `.fbx`, `.3mf`, `.usd`, `.usda`, `.usdc`, `.usdz`, `.step`, `.stp`, `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd`, `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, and `.x3d` case-insensitively (twenty-five direct extensions across eighteen families). `.mtl` is an OBJ sidecar, not a directly opened type. |
+| FR-01 | The product MUST recognize `.glb`, `.gltf`, `.stl`, `.ply`, `.obj`, `.fbx`, `.3mf`, `.usd`, `.usda`, `.usdc`, `.usdz`, `.step`, `.stp`, `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd`, `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, and `.x3d` case-insensitively (twenty-five direct extensions across nineteen families). `.mtl` is an OBJ sidecar, not a directly opened type. |
 | FR-02 | Explorer MUST receive a model-derived thumbnail for valid files within the provider's stream-contained feature and resource limits. Corrupt, unsupported, sidecar-dependent, or over-budget input MUST fail safely so Explorer can use its normal icon. |
 | FR-03 | The viewer MUST open a supported path supplied by command line/file association, Open With, an open dialog, or one-file drag-and-drop. |
 | FR-04 | The native window and first background frame MUST appear before model parsing or GPU upload. Input, resize, and painting MUST remain responsive throughout loading. |
@@ -84,9 +84,9 @@ Tier A is GLB, glTF with binary sidecars, binary STL, and supported binary PLY l
 
 The MVP does not include:
 
-- editing, repair, slicing, export/conversion, measurement, annotation, picking, or selection;
+- editing, repair, slicing, export/conversion, measurement, or annotation;
 - animation playback, simulation, skeletal posing, morph controls, material variants UI, scene/camera/light selection;
-- CAD kernels or unlisted formats such as IFC, JT, Parasolid, DWG, and native Blender files. Bounded static STEP/STP, IGES, and OCCT BREP preview subsets through the dedicated OCCT host are designed separately and are not a general CAD kernel (ADR-0063). Assimp provides compatibility-only static geometry for DAE/3DS/DXF/X/OFF/AMF/X3D and is never a universal fallback (ADR-0065). External STEP document declarations (`FILE_POPULATION`/`DOCUMENT_FILE`) no longer veto an otherwise valid main document: the host never opens the referenced path and reports the unresolved reference as a warning (ADR-0062). Missing or contradictory length units assume/choose a documented factor with a warning, and an opt-in bounded `ShapeFix` pass may repair a definition that fails to tessellate. IGES records and OCCT BREP shape sets each pass their own bounded preflight before the kernel; BREP carries no authored unit;
+- CAD kernels or unlisted formats such as IFC, JT, Parasolid, DWG, and native Blender files. Bounded static STEP/STP, IGES, OCCT BREP, XBF and FCStd preview subsets through the dedicated OCCT host are designed separately and are not a general CAD kernel (ADR-0063, ADR-0064). Assimp provides compatibility-only static geometry for DAE/3DS/DXF/X/OFF/AMF/X3D and is never a universal fallback (ADR-0065). External STEP document declarations (`FILE_POPULATION`/`DOCUMENT_FILE`) no longer veto an otherwise valid main document: the host never opens the referenced path and reports the unresolved reference as a warning (ADR-0062). Missing or contradictory length units assume/choose a documented factor with a warning, and an opt-in bounded `ShapeFix` pass may repair a definition that fails to tessellate. IGES records and OCCT BREP shape sets each pass their own bounded preflight before the kernel; BREP carries no authored unit;
 - ray tracing, mesh-shader-only rendering, GPU decompression, DirectStorage, virtual-texture reserved resources, or multi-GPU rendering;
 - perfect/full-resolution simultaneous residency for a scene larger than the safe GPU budget;
 - online/UNC resource resolution, recent-files history, crash upload, automatic update, background daemon, tray icon, or start-at-login;

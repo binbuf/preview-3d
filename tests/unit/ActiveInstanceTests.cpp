@@ -108,7 +108,15 @@ TEST_CASE("Forward paths are absolute local supported-model paths", "[activation
         REQUIRE(NormalizeForwardPath(step,path,error));
         CHECK(std::filesystem::path(path).is_absolute());
     }
-    CHECK_FALSE(NormalizeForwardPath(L"model.iges",path,error));
+    // 0.7.0 shipped IGES/BREP/XBF/FCStd and the Assimp compatibility family,
+    // so every catalog direct extension is now forwardable.
+    for (const auto* cad : {L"model.iges", L"model.IGS", L"model.brep", L"model.xbf",
+                            L"model.fcstd", L"model.dae", L"model.3ds", L"model.dxf",
+                            L"model.x", L"model.off", L"model.amf", L"model.x3d"}) {
+        REQUIRE(NormalizeForwardPath(cad,path,error));
+        CHECK(std::filesystem::path(path).is_absolute());
+    }
+    CHECK_FALSE(NormalizeForwardPath(L"model.ifc",path,error));
 }
 
 TEST_CASE("Session coordinator forwards and survives a close relaunch race", "[activation]")

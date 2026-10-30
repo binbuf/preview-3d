@@ -166,7 +166,7 @@ TEST_CASE("ORM ambient occlusion honours strength and leaves direct specular cle
     const char* objectSource = D3D12ViewerPath::TexturedPixelShaderSource();
     REQUIRE(objectSource != nullptr);
     const std::string shader(objectSource);
-    CHECK(shader.find("occlusion=OcclusionFactor(mr.r,gMaterialLobes0.w)") != std::string::npos);
+    CHECK(shader.find("occlusion=OcclusionFactor(mr.r,gMaterialLobes0.z)") != std::string::npos);
     CHECK(shader.find("float OcclusionFactor(float sample,float strength)") != std::string::npos);
     // Direct key/fill/rim calls must not receive an AO factor; only indirect
     // diffuse and environment reflection are scaled.

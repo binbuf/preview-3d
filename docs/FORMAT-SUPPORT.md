@@ -245,11 +245,42 @@ AppContainer is granted access only to that tree. The constrained OCCT closure
 and `Preview3DStepHost.exe` live only under `StepHost\`, with a third distinct
 AppContainer granted access only to that tree.
 
+## Studio rendering and presentation
+
+Studio is a product-owned procedural environment: three softboxes, an overhead
+strip and a neutral floor/ceiling gradient, baked once into a 128-texel
+RGBA32F cubemap with a GGX-prefiltered specular chain and SH9 irradiance. No
+HDRI file is read for the default view. Lighting, environment intensity, yaw,
+exposure and the tone curve are view state; the default tone curve is Khronos
+PBR Neutral, with ACES, Filmic and None selectable. The scene renders into an
+`R16G16B16A16_FLOAT` target and a full-screen resolve composites the background,
+applies exposure and tone mapping, then writes sRGB. This is what lets sorted
+transparent and transmission surfaces composite correctly.
+
+Five presentation presets (Studio PBR, Studio CAD, Scan/Sculpt, Transparent,
+Point cloud) select environment intensity, direct key/fill/rim multipliers,
+exposure, background, grid and ground-shadow defaults from a bounded material
+summary. A toolbar/preset choice pins the session. The ground layer uses an
+analytic soft contact footprint (no shadow map), with opacity 0.78 and a
+0.60-radius soft rim; it is a separate blended quad and cannot occlude the
+model. ORM ambient occlusion multiplies indirect diffuse/environment only;
+direct-light specular is unoccluded.
+
+Protocol-v12 materials carry emissive strength, clearcoat factor/roughness,
+sheen color/roughness, specular factor/color, IOR and occlusion strength. The
+Studio shader draws clearcoat as a second dielectric GGX lobe (base specular
+scaled by `1 - clearcoat`), sheen as a grazing velvet term, and emissive
+strength before tone mapping. Weighted blended OIT, depth peeling and SSAO are
+deferred: intersecting transparent surfaces remain order-dependent, and the
+contact shadow does not depend on a depth/normal chain.
+
 ## Not included
 
 Animation playback, editing, other CAD formats (IFC/JT/Parasolid/DWG/native
-CAD), Explorer thumbnails (including for 3MF, USD, FBX, STEP, IGES, BREP, XBF,
-and FCStd),
+CAD), Explorer thumbnails for IGES, BREP, XBF, FCStd, DAE, 3DS, DXF, X, OFF,
+AMF and X3D (the installed thumbnail provider covers glTF/GLB, OBJ, FBX, STL,
+PLY, 3MF, USD/USDZ and STEP/STP only; those eight are the provider program's
+complete scope),
 network assets,
 USD skeletal deformation, MaterialX, procedural schemas beyond the five
 supported Gprims plus `Points`, curves/NURBS, and interactive variant selection
@@ -336,4 +367,6 @@ The implemented USD viewer path has an immutable corpus and a standalone
 sanitizer fuzz-smoke lane. Final release qualification still requires the
 recorded clean-machine, repeated performance/heartbeat, soak, and signed-build
 gates; see [USD-009 verification](legacy/USD-009-VERIFICATION.md). Explorer USD
-thumbnails are a separate follow-up and are not installed.
+thumbnails are part of the installed provider's eight-family scope
+(`thumbnail-provider/FamilyRouting.h`); the provider's own dirty-corpus and
+installed-surrogate gates remain a separate qualification.

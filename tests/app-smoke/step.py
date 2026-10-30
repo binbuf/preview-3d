@@ -16,6 +16,7 @@ ULONG_PTR = ctypes.c_size_t
 STEP_FORMAT = 13
 MALFORMED_DATA = 1
 UNSUPPORTED_REQUIRED_FEATURE = 10
+EMPTY_GEOMETRY = 11
 STEP_PHASE_EMIT = 6
 
 
@@ -96,6 +97,8 @@ def prepare_fixtures():
     shutil.copyfile(source / 'assembly_ap214.stp', target / 'assembly-ap214.stp')
     shutil.copyfile(source / 'tessellated_ap242.stp', target / 'tessellated-ap242.stp')
     shutil.copyfile(source / 'external_document_ap214.stp', target / 'external-document.stp')
+    shutil.copyfile(source / 'external_document_self_contained_ap214.stp',
+                    target / 'external-self-contained.stp')
     (target / 'malformed.stp').write_bytes(b'not an ISO 10303-21 file')
     return target
 
@@ -147,11 +150,28 @@ def run(configuration, exe_override=None):
         forward(exe, paths['part-uppercase.STEP'])
         wait_for(lambda: ready(hwnd, paths['part-uppercase.STEP']))
 
+        # T07/ADR-0062: an external STEP document declaration is unresolved
+        # metadata, not a veto. This fixture has no local shape entities, so the
+        # main document still fails typed with EmptyGeometry rather than the old
+        # UnsupportedRequiredFeature; the prior model must survive.
+        presented_before_external = query(hwnd, 4)
         forward(exe, paths['external-document.stp'])
         wait_for(lambda: query(hwnd, 0) == 4 and query(hwnd, 45) and query(hwnd, 17) == STEP_FORMAT)
-        if query(hwnd, 41) != UNSUPPORTED_REQUIRED_FEATURE:
+        if query(hwnd, 41) != EMPTY_GEOMETRY:
             raise RuntimeError(f'external STEP reported code {query(hwnd, 41)}')
-        checks.append('required external STEP document fails typed without bypass')
+        if query(hwnd, 4) != presented_before_external:
+            raise RuntimeError('geometry-free external STEP did not retain the prior model')
+        checks.append('geometry-free external STEP fails typed EmptyGeometry without bypass')
+        forward(exe, paths['part-uppercase.STEP'])
+        wait_for(lambda: ready(hwnd, paths['part-uppercase.STEP']))
+
+        # A self-contained document that also declares an external document now
+        # opens: the declaration is a Degraded warning, not a rejection.
+        forward(exe, paths['external-self-contained.stp'])
+        wait_for(lambda: ready(hwnd, paths['external-self-contained.stp']))
+        if not 0 < query(hwnd, 40) <= 256:
+            raise RuntimeError('self-contained external STEP published no compatibility warning')
+        checks.append('self-contained external STEP opens with a compatibility warning')
         forward(exe, paths['part-uppercase.STEP'])
         wait_for(lambda: ready(hwnd, paths['part-uppercase.STEP']))
 

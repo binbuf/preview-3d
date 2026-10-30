@@ -12,11 +12,11 @@ The extension column below is an index for readers, not the authority. The
 compile-time catalog at `shared/model-core/include/model_core/FormatCatalog.h`
 is the single authority for which extensions a format owns, its stable
 `FormatId`, importer kind, default up axis/unit policy, presentation profile,
-thumbnail family and capabilities. UI filters, broker registration and the
-installer will be generated from that table (T03); until then this document and
-the catalog must agree, and the catalog wins when they do not. The catalog is
-data plus pure lookups: it never parses a file, includes no third-party parser,
-and carries no path or network authority.
+thumbnail family and capabilities. UI filters, broker registration, Open As
+names and the installer registration lists are generated from that table. This
+document and the catalog must agree, and the catalog wins when they do not. The
+catalog is data plus pure lookups: it never parses a file, includes no
+third-party parser, and carries no path or network authority.
 
 `PresentationProfile` is declared per family in the same table. The viewer maps
 it once at document open to its own view state: `StudioPbr` selects the
@@ -35,7 +35,7 @@ session override; reloads and refinements do not re-apply the preset.
 | .ply | Product code | ASCII and binary little/big-endian PLY mesh or point cloud; positions, normals, common UV/color properties, polygon faces triangulated on import | Unknown elements/properties are skipped within bounds; no volumetric, range-grid, material, or arbitrary custom-property visualization | A for supported binary layouts; B for ASCII |
 | .obj with optional .mtl | ufbx OBJ loader | Faces, smoothing, normals, UVs, vertex colors where available, MTL colors and approved local texture maps | Triangulated on import; .mtl is never opened as a primary document | B |
 | .fbx | ufbx | Binary/ASCII FBX, static hierarchy, instancing, polygon geometry, unified PBR materials, and a deterministic evaluated start pose including supported skin and blend deformers | No animation playback, geometry caches, dynamic constraints, NURBS/subdivision tessellation, cameras, or lights | B |
-| .3mf | lib3mf | Core, Materials, Production, and bounded Beam Lattice preview subsets; components, build items, transforms, colors/materials, textures | Slice, Secure Content, Volumetric, and Implicit extensions are not supported; any unsupported required extension fails | B |
+| .3mf | lib3mf | Core, Materials, Production, and bounded Beam Lattice preview subsets; components, build items, transforms, colors/materials, textures | Slice, Secure Content, Volumetric, and Implicit extensions are terminal (`UnsupportedRequiredFeature`). Any other required namespace that only annotates the package is ignored with an `Ignored` compatibility record, per ADR-0066. | B |
 | .usd, .usda, .usdc, .usdz | TinyUSDZ fast path; OpenUSD compatibility host | Static meshes, procedural `Sphere`/`Cube`/`Cylinder`/`Cone`/`Capsule`, `Points` as point splats, creased/subdivided meshes as a control cage, transforms, instances/point instances, display color/opacity, bounded Preview Surface materials, packaged textures, and bounded local composition including sublayers, references, inherits/specializes, authored variant selections, and payloads; skeletal bindings are ignored and the authored rest pose is previewed statically | No animation playback, skeletal deformation, curves/NURBS, variants UI, MaterialX, remote assets, other procedural schemas, or arbitrary renderer plug-ins | B |
 | .igs, .iges | OCCT IGES in the dedicated CAD host | Fixed 80-column S/G/D/P/T record streams, analytic B-rep geometry, subfigure/assembly structure, and representable colors | Bounded record/entity/reference preflight before OCCT; no temporary file or path (the admitted records are fed to the pinned in-memory parser). Missing global unit flag assumes millimetres and warns; authored units convert to the verified OCCT system millimetre. No PMI/GD&T or exact-kernel operations; `UpAxisId::Unknown` | B |
 | .brep | OCCT `BRepTools` in the dedicated CAD host | `CASCADE Topology` V1-V3 shape sets: topology and geometry, including compounds | Bounded `TShapes`/`Locations` shape-set preflight before `BRepTools::Read`; no authored colors or units (zero metres-per-unit). No PMI/GD&T; `UpAxisId::Unknown` | B |
@@ -467,16 +467,20 @@ Validated DDS/KTX2 mip chains may upload directly when their DXGI formats are su
 
 ## Error taxonomy
 
-Adapters return typed errors, not localized strings:
+Adapters return the closed `model_core::ImportErrorCode` set, not localized
+strings:
 
-- FileUnavailable, FileChanged, UnsafeReference;
-- UnsupportedVersion, UnsupportedRequiredFeature, UnsupportedEncoding;
-- MalformedData, IntegerOverflow, ArchiveLimit;
-- ResourceLimit, OutOfMemory, Cancelled;
-- NoSupportedGeometry, TextureDecodeFailed;
-- UnsupportedComposition, CompatibilityHostFailure, CompatibilityHostLimit;
-- ImportWorkerFailure, ImportWorkerLimit, ImportProtocolViolation;
-- InternalImporterFailure.
+- source identity/containment: `FileUnavailable`, `FileChanged`,
+  `UnsafeReference`, `UnsupportedFormat`;
+- parser outcome: `MalformedData`, `UnsupportedEncoding`,
+  `UnsupportedRequiredFeature`, `EmptyGeometry`, `UnsupportedComposition`;
+- budgets: `ResourceLimit`, `PrimarySourceLimit`, `AggregateSourceLimit`,
+  `ScratchLimit`, `ChunkCatalogLimit`, `DracoPrimitiveLimit`, `ArchiveLimit`,
+  `CompatibilityHostLimit`, `StepHostLimit`, `OutOfMemory`;
+- process/transport: `WorkerCrashed`, `WorkerTimedOut`, `UploadFailure`,
+  `ImportProtocolViolation`, `CompatibilityHostFailure`, `StepHostFailure`,
+  `TessellationFailed`, `InternalImporterFailure`;
+- cancellation: `Cancelled`.
 
 The application maps these to user text and preserves format, byte offset/object path where safe, and a correlation ID in diagnostic logs. Third-party exceptions never cross a module boundary.
 

@@ -69,6 +69,39 @@ DrawConstants BuildDrawConstants(const double instance[16], const double origin[
     return result;
 }
 
+// D3D12 root constants are limited to 64 DWORDs per root signature. The
+// textured signature uploads a transposed 3x4 local transform (12 DWORDs) and
+// a 3x3 normal matrix (12 DWORDs, three padded rows) instead of two 4x4
+// matrices, plus the pick id: 12 + 12 + 1 = 25 DWORDs for b1 and 32 for b2
+// leaves room for the b0 CBV (2) and five descriptor tables (5) = 64 exactly.
+struct TexturedDrawConstants {
+    float localToCamera[12]{};
+    float normalToCamera[12]{};
+    uint32_t pickId = 0;
+};
+static_assert(sizeof(TexturedDrawConstants) == 25 * sizeof(uint32_t));
+
+TexturedDrawConstants BuildTexturedDrawConstants(const DrawConstants& source)
+{
+    TexturedDrawConstants result{};
+    // HLSL reads a row_major float3x4 as mul(matrix, position), i.e. the
+    // transpose of the 4x4 row-vector transform, truncated to three rows.
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 4; ++column) {
+            result.localToCamera[row * 4 + column] = source.localToCamera.m[column][row];
+        }
+    }
+    // The shader dots the authored normal with three stored columns, so keep
+    // the transpose of the normal matrix's upper-left 3x3.
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 3; ++row) {
+            result.normalToCamera[column * 4 + row] = source.normalToCamera.m[row][column];
+        }
+    }
+    result.pickId = source.pickId;
+    return result;
+}
+
 void TransformGridBounds(const DirectX::XMFLOAT3& minimum, const DirectX::XMFLOAT3& maximum,
                          DirectX::FXMMATRIX transform, DirectX::XMFLOAT3& outMinimum,
                          DirectX::XMFLOAT3& outMaximum)
@@ -196,21 +229,27 @@ cbuffer FrameConstants : register(b0)
 
 cbuffer DrawConstants : register(b1)
 {
-    row_major float4x4 gLocalToCamera;
-    row_major float4x4 gNormalToCamera;
+    // Explicit float4 rows keep the cbuffer layout unambiguous: three rows of
+    // the transposed 3x4 local transform, three columns of the normal matrix,
+    // then the pick id (25 DWORDs total).
+    float4 gLocalToCamera0;
+    float4 gLocalToCamera1;
+    float4 gLocalToCamera2;
+    float4 gNormalToCamera0;
+    float4 gNormalToCamera1;
+    float4 gNormalToCamera2;
     uint gPickId;
 };
 cbuffer MaterialConstants : register(b2)
 {
     float4 gBaseColorFactor;
     float4 gMaterialFactors; // metallic, roughness, alpha cutoff, flags-as-float
-    float4 gEmissive;
+    float4 gEmissive; // rgb; .a carries emissive strength
     float4 gUvTransform; // offset.xy, scale.xy
     float4 gUvRotationAndMaps; // cos, sin, map mask, transmission
-    float4 gMaterialLobes0; // emissive strength, clearcoat factor/roughness, occlusion strength
-    float4 gMaterialLobes1; // sheen rgb, sheen roughness
-    float4 gMaterialLobes2; // specular factor, ior, reserved, reserved
-    float4 gMaterialLobes3; // specular color rgb, reserved
+    float4 gMaterialLobes0; // clearcoat factor/roughness, occlusion strength, sheen roughness
+    float4 gMaterialLobes1; // sheen rgb, specular factor
+    float4 gMaterialLobes2; // IOR, specular color rgb
 };
 struct VSInput
 {
@@ -235,15 +274,23 @@ struct PSInput
 PSInput VSMain(VSInput input)
 {
     PSInput output;
-    float4 relativePosition = mul(float4(input.position, 1.0f), gLocalToCamera);
+    const float4 position = float4(input.position, 1.0f);
+    float4 relativePosition = float4(
+        dot(gLocalToCamera0, position),
+        dot(gLocalToCamera1, position),
+        dot(gLocalToCamera2, position), 1.0f);
     output.position = mul(relativePosition, gViewProjection);
     output.worldPosition = relativePosition.xyz;
-    output.normal = mul(float4(input.normal, 0.0f), gNormalToCamera).xyz;
+    output.normal = float3(dot(input.normal, gNormalToCamera0.xyz),
+                           dot(input.normal, gNormalToCamera1.xyz),
+                           dot(input.normal, gNormalToCamera2.xyz));
     float2 scaled=input.uv*gUvTransform.zw;
     output.uv=float2(scaled.x*gUvRotationAndMaps.x-scaled.y*gUvRotationAndMaps.y,
                      scaled.x*gUvRotationAndMaps.y+scaled.y*gUvRotationAndMaps.x)+gUvTransform.xy;
     if (((uint)gMaterialFactors.w&8u)!=0) output.uv.y=1.0f-output.uv.y;
-    output.tangent=float4(normalize(mul(float4(input.tangent.xyz,0.0f),gNormalToCamera).xyz),input.tangent.w);
+    output.tangent=float4(normalize(float3(dot(input.tangent.xyz,gNormalToCamera0.xyz),
+                                          dot(input.tangent.xyz,gNormalToCamera1.xyz),
+                                          dot(input.tangent.xyz,gNormalToCamera2.xyz))),input.tangent.w);
     output.color=input.color;
     output.pickId=gPickId;
     return output;
@@ -274,13 +321,12 @@ cbuffer MaterialConstants : register(b2)
 {
     float4 gBaseColorFactor;
     float4 gMaterialFactors;
-    float4 gEmissiveFactor;
+    float4 gEmissiveFactor; // rgb; .a carries emissive strength
     float4 gUvTransform;
     float4 gUvRotationAndMaps;
     float4 gMaterialLobes0;
     float4 gMaterialLobes1;
     float4 gMaterialLobes2;
-    float4 gMaterialLobes3;
 };
 
 struct PSInput
@@ -409,7 +455,7 @@ float3 SrgbToLinear(float3 color)
     return lerp(high,low,step(color,0.04045f));
 }
 // glTF occlusion strength: 1 + strength * (sample - 1). The authored
-// occlusionStrength now travels in MaterialPayload.gMaterialLobes0.w; a
+// occlusionStrength now travels in MaterialPayload.gMaterialLobes0.z; a
 // missing map samples 1.0 and leaves the factor at 1.0.
 float OcclusionFactor(float sample,float strength)
 {
@@ -469,21 +515,21 @@ PixelOutput PSMain(PSInput input)
     float occlusion=1.0f;
     if (!clay && (maps&2) && uvValid) {
         float4 mr=nearest?gMetallicRoughness.Sample(gNearestSampler,sampleUv):gMetallicRoughness.Sample(gLinearSampler,sampleUv);
-        metallic*=mr.b; roughness*=mr.g; occlusion=OcclusionFactor(mr.r,gMaterialLobes0.w);
+        metallic*=mr.b; roughness*=mr.g; occlusion=OcclusionFactor(mr.r,gMaterialLobes0.z);
     }
     roughness=clamp(roughness,.045f,1.0f);
     // T18 PBR lobes. Clearcoat is layered as a second dielectric GGX lobe; the
     // base specular is scaled by (1 - clearcoatFactor) so the two lobes do not
     // count the same reflected energy twice. Sheen is a grazing-only velvet
     // term. Clay suppresses both so it stays a geometry-review mode.
-    float clearcoat=clay?0.0f:saturate(gMaterialLobes0.y);
-    float clearcoatRoughness=clamp(gMaterialLobes0.z,.045f,1.0f);
+    float clearcoat=clay?0.0f:saturate(gMaterialLobes0.x);
+    float clearcoatRoughness=clamp(gMaterialLobes0.y,.045f,1.0f);
     float3 sheenColor=clay?float3(0.0f,0.0f,0.0f):saturate(gMaterialLobes1.rgb);
-    float sheenRoughness=clamp(gMaterialLobes1.w,0.0f,1.0f);
+    float sheenRoughness=clamp(gMaterialLobes0.w,0.0f,1.0f);
     // KHR_materials_ior/specular: the authored dielectric F0 replaces the old
     // fixed 0.04. Metallic surfaces keep base color as F0.
-    float iorF0=IorToF0(gMaterialLobes2.y);
-    float3 dielectricF0=saturate(iorF0*gMaterialLobes2.x*gMaterialLobes3.rgb);
+    float iorF0=IorToF0(gMaterialLobes2.x);
+    float3 dielectricF0=saturate(iorF0*gMaterialLobes1.w*gMaterialLobes2.yzw);
     // KHR_materials_transmission approximation. A transmissive surface has no
     // transmitted diffuse; it shows a view-dependent Fresnel reflection over
     // whatever is behind it. The blend alpha carries that reflectance so the
@@ -553,7 +599,7 @@ PixelOutput PSMain(PSInput input)
         color+=sheenColor*sheenWeight*(0.35f+0.65f*envIntensity);
     }
     if (!clay) {
-        float3 emissive=gEmissiveFactor.rgb*gMaterialLobes0.x;
+        float3 emissive=gEmissiveFactor.rgb*gEmissiveFactor.a;
         if ((maps&8) && uvValid) emissive*=(nearest?gEmissive.Sample(gNearestSampler,sampleUv):gEmissive.Sample(gLinearSampler,sampleUv)).rgb;
         color+=emissive;
     }
@@ -1391,10 +1437,10 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
         rootParams[1+i].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
     }
     rootParams[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[6].Constants.ShaderRegister = 1; rootParams[6].Constants.Num32BitValues = 33;
+    rootParams[6].Constants.ShaderRegister = 1; rootParams[6].Constants.Num32BitValues = 25;
     rootParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     rootParams[7].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[7].Constants.ShaderRegister=2;rootParams[7].Constants.Num32BitValues=36;
+    rootParams[7].Constants.ShaderRegister=2;rootParams[7].Constants.Num32BitValues=32;
     rootParams[7].ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -2229,8 +2275,9 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
                 commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
             }
-            commandList->SetGraphicsRoot32BitConstants(6, 33, &drawConstants, 0);
-            float material[36]{};
+            const auto texturedDraw = BuildTexturedDrawConstants(drawConstants);
+            commandList->SetGraphicsRoot32BitConstants(6, 25, &texturedDraw, 0);
+            float material[32]{};
             std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
             material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
             material[6]=mesh.material.alphaCutoff;
@@ -2244,30 +2291,28 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 | ((mesh.material.flags&model_core::kMaterialFlagVertexSrgb)?2048u:0u)
                 | ((mesh.material.flags&model_core::kMaterialFlagTransmissive)?4096u:0u));
             std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
+            material[11]=mesh.material.emissiveStrength;
             material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
             material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
             material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
             material[18]=float(mapMask);
             material[19]=mesh.material.transmissionFactor;
-            // v12 lobe block: emissive strength, clearcoat, occlusion in the
-            // first float4; sheen rgb/roughness; specular factor/IOR; specular
-            // color. The shader reads the same 36-dword root constant block.
-            material[20]=mesh.material.emissiveStrength;
-            material[21]=mesh.material.clearcoatFactor;
-            material[22]=mesh.material.clearcoatRoughness;
-            material[23]=mesh.material.occlusionStrength;
+            // v12 lobe block packed into three float4 plus the emissive-strength
+            // slot in gEmissive.a, so the textured root signature stays inside
+            // D3D12's 64-DWORD root-constant limit.
+            material[20]=mesh.material.clearcoatFactor;
+            material[21]=mesh.material.clearcoatRoughness;
+            material[22]=mesh.material.occlusionStrength;
+            material[23]=mesh.material.sheenRoughness;
             material[24]=mesh.material.sheenColor[0];
             material[25]=mesh.material.sheenColor[1];
             material[26]=mesh.material.sheenColor[2];
-            material[27]=mesh.material.sheenRoughness;
-            material[28]=mesh.material.specularFactor;
-            material[29]=mesh.material.ior;
-            material[30]=0.0f;material[31]=0.0f;
-            material[32]=mesh.material.specularColor[0];
-            material[33]=mesh.material.specularColor[1];
-            material[34]=mesh.material.specularColor[2];
-            material[35]=0.0f;
-            commandList->SetGraphicsRoot32BitConstants(7,36,material,0);
+            material[27]=mesh.material.specularFactor;
+            material[28]=mesh.material.ior;
+            material[29]=mesh.material.specularColor[0];
+            material[30]=mesh.material.specularColor[1];
+            material[31]=mesh.material.specularColor[2];
+            commandList->SetGraphicsRoot32BitConstants(7,32,material,0);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
             commandList->SetPipelineState(mesh.lines ? linePipelineState.Get()
@@ -2329,8 +2374,9 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                     handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
                     commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
                 }
-                commandList->SetGraphicsRoot32BitConstants(6,33,&drawConstants,0);
-                float material[36]{};
+                const auto texturedDraw = BuildTexturedDrawConstants(drawConstants);
+                commandList->SetGraphicsRoot32BitConstants(6,25,&texturedDraw,0);
+                float material[32]{};
                 std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
                 material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
                 material[6]=mesh.material.alphaCutoff;
@@ -2343,25 +2389,25 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                     | ((mesh.material.flags&model_core::kMaterialFlagTextureMix)?1024u:0u)
                     | ((mesh.material.flags&model_core::kMaterialFlagVertexSrgb)?2048u:0u));
                 std::memcpy(material+8,mesh.material.emissiveFactor,3*sizeof(float));
+                material[11]=mesh.material.emissiveStrength;
                 material[12]=mesh.material.uvOffset[0];material[13]=mesh.material.uvOffset[1];
                 material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
                 material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
                 material[18]=float(mapMask);
                 material[19]=mesh.material.transmissionFactor;
-                material[20]=mesh.material.emissiveStrength;
-                material[21]=mesh.material.clearcoatFactor;
-                material[22]=mesh.material.clearcoatRoughness;
-                material[23]=mesh.material.occlusionStrength;
+                material[20]=mesh.material.clearcoatFactor;
+                material[21]=mesh.material.clearcoatRoughness;
+                material[22]=mesh.material.occlusionStrength;
+                material[23]=mesh.material.sheenRoughness;
                 material[24]=mesh.material.sheenColor[0];
                 material[25]=mesh.material.sheenColor[1];
                 material[26]=mesh.material.sheenColor[2];
-                material[27]=mesh.material.sheenRoughness;
-                material[28]=mesh.material.specularFactor;
-                material[29]=mesh.material.ior;
-                material[32]=mesh.material.specularColor[0];
-                material[33]=mesh.material.specularColor[1];
-                material[34]=mesh.material.specularColor[2];
-                commandList->SetGraphicsRoot32BitConstants(7,36,material,0);
+                material[27]=mesh.material.specularFactor;
+                material[28]=mesh.material.ior;
+                material[29]=mesh.material.specularColor[0];
+                material[30]=mesh.material.specularColor[1];
+                material[31]=mesh.material.specularColor[2];
+                commandList->SetGraphicsRoot32BitConstants(7,32,material,0);
             } else {
                 commandList->SetGraphicsRootSignature(rootSignature.Get());
                 commandList->SetPipelineState(mesh.positionOnly

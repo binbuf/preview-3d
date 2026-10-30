@@ -140,7 +140,11 @@ TEST_CASE("--format rejects empty, unknown, non-ASCII and unshipped names", "[op
     // T09 shipped the OCCT-native XBF/FCStd readers through the same host.
     CHECK(open_options::ParseFormatName(L"xbf").valid);
     CHECK(open_options::ParseFormatName(L"fcstd").valid);
-    CHECK_FALSE(open_options::ParseFormatName(L"dae").valid);
+    // T10 shipped the bounded Assimp compatibility family, so these stable
+    // names are claimable; VRML remains a reserved identity with no descriptor.
+    for (const wchar_t* name : { L"dae", L"3ds", L"dxf", L"directx", L"off", L"amf", L"x3d" })
+        CHECK(open_options::ParseFormatName(name).valid);
+    CHECK_FALSE(open_options::ParseFormatName(L"vrml").valid);
 }
 
 TEST_CASE("Open As selection keeps existing suffix behaviour and asks on conflict", "[open-as]")
