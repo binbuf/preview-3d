@@ -32,7 +32,7 @@ breadth tasks once T02 is stable.
 
 T06 depends only on T02 and is sequenced at the start of this phase so task ids stay ascending.
 
-- [ ] T05 — glTF required-extension compatibility → [../tasks/0.7.0/T05-gltf-extension-compatibility.md](../tasks/0.7.0/T05-gltf-extension-compatibility.md)
+- [x] T05 — glTF required-extension compatibility → [../tasks/0.7.0/T05-gltf-extension-compatibility.md](../tasks/0.7.0/T05-gltf-extension-compatibility.md)
 - [ ] T06 — Per-format presentation defaults and orientation → [../tasks/0.7.0/T06-presentation-defaults-orientation.md](../tasks/0.7.0/T06-presentation-defaults-orientation.md)
 - [ ] T07 — STEP tolerance and import quality → [../tasks/0.7.0/T07-step-tolerance-import-quality.md](../tasks/0.7.0/T07-step-tolerance-import-quality.md)
 - [ ] T08 — OCCT host: IGES and BREP → [../tasks/0.7.0/T08-cad-host-iges-brep.md](../tasks/0.7.0/T08-cad-host-iges-brep.md)
@@ -59,11 +59,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T03:17:27Z · 4/20 done
+**Pipeline status** — updated 2026-10-30T03:25:46Z · 5/20 done
 
-- Completed: T01, T02, T03, T04
+- Completed: T01, T02, T03, T04, T05
 - Blocked: none
 - Failed: none
-- Remaining: T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T04 — done · Compatibility report chunk, feature-ID ranges, glTF records, host localization/warning/diagnostics, validator and hostile-worker coverage all landed; all acceptance checks pass.
+- Remaining: T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T05 — done · glTF required-extension compatibility landed: visual/scene extensions parse with specific warnings, unknown required names degrade to core geometry, geometry-critical failures stay typed, docs/ADR updated, and all `[gltf-extensions]` plus adjacent suites pass.
 <!-- /symphony:status -->

@@ -105,10 +105,11 @@ struct PendingMaterial {
 
 // This codebase's ImportErrorCode enum is a deliberately small subset of
 // the full taxonomy in .docs/design/03-file-formats-and-ingestion.md --
-// every fastgltf-reported failure (bad JSON, missing/unrecognized
-// extension, bad GLB container, etc.) maps to MalformedData until that enum
-// is expanded with finer-grained codes, a known simplification for this
-// slice.
+// every fastgltf-reported failure (bad JSON, bad GLB container, etc.) maps to
+// MalformedData until that enum is expanded with finer-grained codes.
+// Missing/unknown required extensions reach this mapping only after the
+// compatibility retry has failed: geometry-critical names are never filtered,
+// so this remains the typed failure for a model whose usable geometry is lost.
 ImportErrorCode MapFastgltfError(fastgltf::Error error)
 {
     if (error == fastgltf::Error::MissingExtensions || error == fastgltf::Error::UnknownRequiredExtension)
@@ -398,17 +399,130 @@ bool RequiresExtension(const WalkState& state, std::string_view name)
         != state.asset.extensionsRequired.end();
 }
 
+// Required-extension policy. The class decides what may be filtered from
+// extensionsRequired before fastgltf parses the file; adapterSupported decides
+// whether the host needs a compatibility warning. Geometry-critical names are
+// never filtered -- if their parser support is disabled the import fails typed
+// instead of silently dropping geometry.
+enum class GltfExtensionClass {
+    Core,
+    GeometryCritical,
+    TextureCritical,
+    Visual,
+    Scene,
+    Instance,
+    Unknown,
+};
+
+struct GltfExtensionPolicy {
+    std::string_view name;
+    GltfExtensionClass extensionClass;
+    fastgltf::Extensions parserMask; // None means fastgltf must not parse it
+    bool adapterSupported;           // no compatibility warning is needed
+};
+
+constexpr GltfExtensionPolicy kGltfExtensionPolicies[] = {
+    // Geometry/decoder-critical: decode or fail typed.
+    {"KHR_draco_mesh_compression", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::KHR_draco_mesh_compression, true},
+    {"EXT_meshopt_compression", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::EXT_meshopt_compression, true},
+    {"KHR_mesh_quantization", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::KHR_mesh_quantization, true},
+    // Compiled out of the pinned fastgltf build, or whose geometry path this
+    // adapter cannot read. A required use is a typed failure, never a filter.
+    {"KHR_implicit_shapes", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::None, false},
+    {"KHR_accessor_float64", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::None, false},
+    // Texture-critical: use the documented fallback instead of failing
+    // otherwise-usable geometry.
+    {"KHR_texture_basisu", GltfExtensionClass::TextureCritical,
+     fastgltf::Extensions::KHR_texture_basisu, true},
+    {"EXT_texture_webp", GltfExtensionClass::TextureCritical,
+     fastgltf::Extensions::EXT_texture_webp, true},
+    // No DDS decoder yet (T12): a required DDS texture is filtered and reported,
+    // never allowed to fail core geometry.
+    {"MSFT_texture_dds", GltfExtensionClass::TextureCritical,
+     fastgltf::Extensions::None, false},
+    // Core/extensions the adapter already consumes completely.
+    {"KHR_texture_transform", GltfExtensionClass::Core,
+     fastgltf::Extensions::KHR_texture_transform, true},
+    {"KHR_materials_unlit", GltfExtensionClass::Core,
+     fastgltf::Extensions::KHR_materials_unlit, true},
+    {"KHR_materials_transmission", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_transmission, true},
+    {"KHR_materials_ior", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_ior, true},
+    {"KHR_materials_pbrSpecularGlossiness", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_pbrSpecularGlossiness, true},
+    // Visual material extensions: parsed by fastgltf so the file opens, but the
+    // renderer still shows core PBR, so they get a specific Degraded record.
+    {"KHR_materials_clearcoat", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_clearcoat, false},
+    {"KHR_materials_sheen", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_sheen, false},
+    {"KHR_materials_specular", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_specular, false},
+    {"KHR_materials_iridescence", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_iridescence, false},
+    {"KHR_materials_anisotropy", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_anisotropy, false},
+    {"KHR_materials_volume", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_volume, false},
+    {"KHR_materials_dispersion", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_dispersion, false},
+    {"KHR_materials_diffuse_transmission", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_diffuse_transmission, false},
+    {"KHR_materials_emissive_strength", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_emissive_strength, false},
+    // Scene/metadata: ignored for the default static studio view.
+    {"KHR_materials_variants", GltfExtensionClass::Scene,
+     fastgltf::Extensions::KHR_materials_variants, false},
+    {"KHR_lights_punctual", GltfExtensionClass::Scene,
+     fastgltf::Extensions::KHR_lights_punctual, false},
+    // Instance-critical: out of scope for expansion; show one instance.
+    {"EXT_mesh_gpu_instancing", GltfExtensionClass::Instance,
+     fastgltf::Extensions::None, false},
+};
+
+const GltfExtensionPolicy* FindGltfExtensionPolicy(std::string_view name)
+{
+    for (const auto& policy : kGltfExtensionPolicies)
+        if (policy.name == name)
+            return &policy;
+    return nullptr;
+}
+
 bool IsSupportedExtension(std::string_view extension)
 {
-    return extension == "KHR_draco_mesh_compression"
-        || extension == "KHR_texture_basisu"
-        || extension == "KHR_texture_transform"
-        || extension == "KHR_mesh_quantization"
-        || extension == "EXT_meshopt_compression"
-        || extension == "EXT_texture_webp"
-        || extension == "KHR_materials_unlit"
-        || extension == "KHR_materials_transmission"
-        || extension == "KHR_materials_pbrSpecularGlossiness";
+    const auto* policy = FindGltfExtensionPolicy(extension);
+    return policy != nullptr && policy->adapterSupported;
+}
+
+bool IsGltfExtensionFilterable(std::string_view name)
+{
+    const auto* policy = FindGltfExtensionPolicy(name);
+    if (policy == nullptr)
+        return true; // truly unknown required extension: keep core geometry
+    return policy->parserMask == fastgltf::Extensions::None
+        && policy->extensionClass != GltfExtensionClass::GeometryCritical;
+}
+
+fastgltf::Extensions GltfParserExtensionMask()
+{
+    fastgltf::Extensions mask = fastgltf::Extensions::None;
+    for (const auto& policy : kGltfExtensionPolicies)
+        if (policy.parserMask != fastgltf::Extensions::None)
+            mask = mask | policy.parserMask;
+    return mask;
+}
+
+model_core::CompatibilitySeverity GltfExtensionSeverity(GltfExtensionClass extensionClass)
+{
+    return extensionClass == GltfExtensionClass::Scene || extensionClass == GltfExtensionClass::Core
+        ? model_core::CompatibilitySeverity::Ignored
+        : model_core::CompatibilitySeverity::Degraded;
 }
 
 std::optional<std::span<const std::byte>> ResolveBufferBytes(WalkState& state, size_t bufferIndex)
@@ -2193,6 +2307,221 @@ size_t CountChunksThatFit(std::span<const PlannedChunk> remaining, uint64_t wind
     return taken;
 }
 
+// ---------------------------------------------------------------------------
+// Bounded JSON text helpers for the required-extension compatibility retry.
+// They operate only on the already bounded metadata region.
+// ---------------------------------------------------------------------------
+
+bool SkipJsonWhitespace(std::span<const char> text, size_t& offset)
+{
+    while (offset < text.size()) {
+        const char c = text[offset];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') ++offset;
+        else break;
+    }
+    return offset < text.size();
+}
+
+bool SkipJsonString(std::span<const char> text, size_t& offset)
+{
+    if (offset >= text.size() || text[offset] != '"') return false;
+    ++offset;
+    while (offset < text.size()) {
+        const char c = text[offset++];
+        if (c == '\\') {
+            if (offset >= text.size()) return false;
+            ++offset;
+        } else if (c == '"') {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SkipJsonValue(std::span<const char> text, size_t& offset, unsigned depth)
+{
+    if (depth > 256 || !SkipJsonWhitespace(text, offset)) return false;
+    const char first = text[offset];
+    if (first == '"') return SkipJsonString(text, offset);
+    if (first != '{' && first != '[') {
+        const size_t start = offset;
+        while (offset < text.size() && text[offset] != ',' && text[offset] != '}'
+               && text[offset] != ']' && text[offset] != ' ' && text[offset] != '\t'
+               && text[offset] != '\r' && text[offset] != '\n')
+            ++offset;
+        return offset > start;
+    }
+    const char close = first == '{' ? '}' : ']';
+    ++offset;
+    if (!SkipJsonWhitespace(text, offset)) return false;
+    if (text[offset] == close) {
+        ++offset;
+        return true;
+    }
+    while (offset < text.size()) {
+        if (first == '{') {
+            if (!SkipJsonString(text, offset) || !SkipJsonWhitespace(text, offset)
+                || text[offset] != ':')
+                return false;
+            ++offset;
+        }
+        if (!SkipJsonValue(text, offset, depth + 1) || !SkipJsonWhitespace(text, offset))
+            return false;
+        if (text[offset] == ',') {
+            ++offset;
+            if (!SkipJsonWhitespace(text, offset)) return false;
+            continue;
+        }
+        if (text[offset] == close) {
+            ++offset;
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+struct JsonArrayBounds {
+    size_t begin; // index of '['
+    size_t end;   // index of the matching ']'
+};
+
+std::optional<JsonArrayBounds> FindRootJsonArray(std::span<const char> text, std::string_view key)
+{
+    size_t offset = 0;
+    if (!SkipJsonWhitespace(text, offset) || text[offset] != '{') return std::nullopt;
+    ++offset;
+    while (true) {
+        if (!SkipJsonWhitespace(text, offset)) return std::nullopt;
+        if (text[offset] == '}') return std::nullopt;
+        const size_t keyStart = offset;
+        if (!SkipJsonString(text, offset)) return std::nullopt;
+        const std::string_view rawKey(text.data() + keyStart + 1, offset - keyStart - 2);
+        if (!SkipJsonWhitespace(text, offset) || text[offset] != ':') return std::nullopt;
+        ++offset;
+        if (!SkipJsonWhitespace(text, offset)) return std::nullopt;
+        if (rawKey == key) {
+            if (text[offset] != '[') return std::nullopt;
+            const size_t begin = offset;
+            unsigned depth = 0;
+            ++offset;
+            while (offset < text.size()) {
+                const char c = text[offset];
+                if (c == '"') {
+                    if (!SkipJsonString(text, offset)) return std::nullopt;
+                    continue;
+                }
+                if (c == '[') {
+                    ++depth;
+                } else if (c == ']') {
+                    if (depth == 0) return JsonArrayBounds{begin, offset};
+                    --depth;
+                }
+                ++offset;
+            }
+            return std::nullopt;
+        }
+        if (!SkipJsonValue(text, offset, 0) || !SkipJsonWhitespace(text, offset))
+            return std::nullopt;
+        if (text[offset] == ',') {
+            ++offset;
+            continue;
+        }
+        return std::nullopt;
+    }
+}
+
+// Rewrites only the contents of the root `extensionsRequired` array, removing
+// names that may be degraded, and pads the replacement with spaces so the JSON
+// text keeps its exact length. For a GLB that preserves the header and every
+// following byte offset, so the already-mapped BIN chunk is not re-packed.
+std::optional<std::vector<std::byte>> BuildFilteredRequiredExtensions(
+    std::span<const std::byte> jsonBytes)
+{
+    const auto text = std::span(reinterpret_cast<const char*>(jsonBytes.data()), jsonBytes.size());
+    const auto array = FindRootJsonArray(text, "extensionsRequired");
+    if (!array) return std::nullopt;
+    const size_t contentBegin = array->begin + 1;
+    const size_t contentEnd = array->end;
+
+    std::vector<std::pair<size_t, size_t>> kept;
+    size_t offset = contentBegin;
+    while (offset < contentEnd) {
+        if (!SkipJsonWhitespace(text, offset) || offset >= contentEnd) break;
+        const size_t tokenStart = offset;
+        if (!SkipJsonString(text, offset) || offset > contentEnd) return std::nullopt;
+        const std::string_view name(text.data() + tokenStart + 1, offset - tokenStart - 2);
+        if (!IsGltfExtensionFilterable(name))
+            kept.emplace_back(tokenStart, offset);
+        if (!SkipJsonWhitespace(text, offset) || offset >= contentEnd) break;
+        if (text[offset] == ',') {
+            ++offset;
+            continue;
+        }
+        if (text[offset] == ']') break;
+        return std::nullopt;
+    }
+
+    std::string replacement;
+    for (size_t i = 0; i < kept.size(); ++i) {
+        if (i) replacement.push_back(',');
+        replacement.append(text.data() + kept[i].first, kept[i].second - kept[i].first);
+    }
+    const size_t capacity = contentEnd - contentBegin;
+    if (replacement.size() > capacity) return std::nullopt;
+
+    std::vector<std::byte> filtered(jsonBytes.begin(), jsonBytes.end());
+    auto* destination = reinterpret_cast<char*>(filtered.data());
+    std::fill(destination + contentBegin, destination + contentEnd, ' ');
+    std::memcpy(destination + contentBegin, replacement.data(), replacement.size());
+    return filtered;
+}
+
+// Builds the source passed to fastgltf after one failed parse. Only the JSON
+// text changes; a GLB keeps its original byte layout. Bounded by the source
+// size, which the caller has already capped.
+std::optional<std::vector<std::byte>> BuildFilteredGltfSource(
+    std::span<const std::byte> source, std::span<const std::byte> jsonBytes)
+{
+    auto filteredJson = BuildFilteredRequiredExtensions(jsonBytes);
+    if (!filteredJson) return std::nullopt;
+    const bool isGlb = source.size() >= 4 && std::memcmp(source.data(), "glTF", 4) == 0;
+    if (!isGlb) return filteredJson;
+    std::vector<std::byte> filtered(source.begin(), source.end());
+    if (static_cast<size_t>(20) + filteredJson->size() > filtered.size()) return std::nullopt;
+    std::memcpy(filtered.data() + 20, filteredJson->data(), filteredJson->size());
+    return filtered;
+}
+
+void BuildGltfCompatibilityReport(const fastgltf::Asset& asset,
+                                  std::span<const std::string> requiredExtensions,
+                                  model_core::CompatibilityReportBuilder& compatibility,
+                                  model_core::ImportStatusPayload& status)
+{
+    auto add = [&](std::string_view name) {
+        const auto* policy = FindGltfExtensionPolicy(name);
+        if (policy != nullptr && policy->adapterSupported)
+            return;
+        status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
+        // Older hosts still read the saturated count; the report adds the
+        // stable identity behind each warning.
+        compatibility.Add(model_core::GltfExtensionFeatureId(name),
+                          GltfExtensionSeverity(policy != nullptr ? policy->extensionClass
+                                                                  : GltfExtensionClass::Unknown));
+    };
+    for (const auto& extension : asset.extensionsUsed)
+        add(std::string_view(extension));
+    // extensionsRequired is a subset of extensionsUsed in a valid file, but a
+    // hostile file can omit the used entry. Still report the decision.
+    for (const auto& extension : requiredExtensions) {
+        const bool alreadyUsed = std::any_of(
+            asset.extensionsUsed.begin(), asset.extensionsUsed.end(),
+            [&](const auto& used) { return std::string_view(used) == extension; });
+        if (!alreadyUsed)
+            add(extension);
+    }
+}
+
 } // namespace
 
 std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::byte> sourceGlbBytes,
@@ -2247,9 +2576,10 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     // Preflight only the bounded JSON DOM, then release it before constructing
     // that asset. Include conservative storage for every nested array entry.
     uint64_t parserReserve = 160ull * 1024 * 1024 + metadataBytes * 8ull;
+    const bool isGlb = !bin.empty() || std::memcmp(sourceGlbBytes.data(), "glTF", 4) == 0;
+    const auto json = sourceGlbBytes.subspan(isGlb ? 20 : 0, metadataBytes);
+    std::vector<std::string> requiredExtensionNames;
     {
-        const auto json = sourceGlbBytes.subspan(
-            bin.empty() && std::memcmp(sourceGlbBytes.data(), "glTF", 4) != 0 ? 0 : 20, metadataBytes);
         simdjson::dom::parser preflight;
         simdjson::dom::element root;
         if (preflight.parse(reinterpret_cast<const char*>(json.data()), json.size()).get(root))
@@ -2257,6 +2587,21 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         simdjson::dom::object object;
         if (root.get_object().get(object))
             return ImportErrorCode::MalformedData;
+        // Pre-scan the required list before fastgltf sees it. A visual or truly
+        // unknown required name must not turn an otherwise usable file into an
+        // "unsupported feature" failure.
+        simdjson::dom::array required;
+        if (!object["extensionsRequired"].get_array().get(required)) {
+            if (required.size() > kTierAObjectLimit)
+                return ImportErrorCode::ResourceLimit;
+            requiredExtensionNames.reserve(required.size());
+            for (auto value : required) {
+                std::string_view name;
+                if (value.get_string().get(name))
+                    return ImportErrorCode::MalformedData;
+                requiredExtensionNames.emplace_back(name);
+            }
+        }
         for (const auto& field : object)
         {
             simdjson::dom::array array;
@@ -2347,6 +2692,25 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             }
         }
     }
+    // Classify required names before fastgltf runs. Geometry-critical names are
+    // never filtered; everything else (visual, scene, texture fallback, truly
+    // unknown, instancing) may be dropped from the required list once, so the
+    // core scene still opens. A required geometry extension this build cannot
+    // decode stays a typed failure.
+    bool requiredGeometryCriticalUnsupported = false;
+    bool hasFilterableRequiredExtensions = false;
+    for (const auto& name : requiredExtensionNames) {
+        const auto* policy = FindGltfExtensionPolicy(name);
+        if (policy != nullptr && policy->extensionClass == GltfExtensionClass::GeometryCritical
+            && policy->parserMask == fastgltf::Extensions::None) {
+            requiredGeometryCriticalUnsupported = true;
+        } else if (IsGltfExtensionFilterable(name)) {
+            hasFilterableRequiredExtensions = true;
+        }
+    }
+    if (requiredGeometryCriticalUnsupported)
+        return ImportErrorCode::UnsupportedRequiredFeature;
+
     // fastgltf receives bounded padded JSON and aliases the already mapped BIN.
     // Its buffer allocation callback returns the BIN address; read(void*) detects
     // that exact alias and performs no write to the read-only file mapping.
@@ -2354,6 +2718,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     {
       public:
         std::span<const std::byte> source, bin;
+        size_t binOffset = 0; // BIN payload offset within the original source
         size_t offset = 0;
         std::vector<std::byte> metadata;
         std::vector<std::vector<std::byte>> decoded;
@@ -2388,49 +2753,90 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     } getter;
     getter.source = sourceGlbBytes;
     getter.bin = bin;
-    // Only the documented static-scene extensions are enabled -- a file requiring any other
-    // one still fails cleanly with MissingExtensions/UnknownRequiredExtension
-    // rather than being parsed. KHR_texture_transform is enabled read-only,
-    // purely so MaterialPayload's uvOffset/uvScale/uvRotation fields can be
-    // populated when present; if that ever proves troublesome it can be
-    // dropped independently of Draco/basisu support (uv transform would
-    // just stay at identity). Never LoadExternalBuffers/LoadExternalImages:
-    // the worker has no path authority. LoadGLBBuffers is deprecated in
-    // 0.9.0 (now default behaviour) and deliberately not passed.
+    if (!bin.empty())
+        getter.binOffset = static_cast<size_t>(bin.data() - sourceGlbBytes.data());
+    // The parser mask enables every extension whose data path this adapter can
+    // consume. Visual/scene extensions are parsed so a file that requires them
+    // opens with core PBR; the adapter reports the unrendered lobe instead.
+    // MSFT_texture_dds stays disabled until T12 lands a DDS decoder. Never
+    // LoadExternalBuffers/LoadExternalImages: the worker has no path authority.
+    // KHR_texture_transform is read-only for uvOffset/uvScale/uvRotation.
     // KHR_materials_ior is enabled only so the transmission guard can read the
-    // authored index of refraction; fastgltf otherwise leaves material.ior at
-    // its 1.5 default and an authored ior=1 would be misread as an optical
-    // interface, turning the whole model into see-through glass.
-    fastgltf::Parser parser(fastgltf::Extensions::KHR_draco_mesh_compression
-                             | fastgltf::Extensions::KHR_texture_basisu
-                             | fastgltf::Extensions::KHR_texture_transform
-                             | fastgltf::Extensions::KHR_mesh_quantization
-                             | fastgltf::Extensions::EXT_meshopt_compression
-                             | fastgltf::Extensions::EXT_texture_webp
-                             | fastgltf::Extensions::KHR_materials_unlit
-                             | fastgltf::Extensions::KHR_materials_transmission
-                             | fastgltf::Extensions::KHR_materials_ior
-                             | fastgltf::Extensions::KHR_materials_pbrSpecularGlossiness);
-    // loadGltf (rather than loadGltfBinary) auto-detects GLB vs. plain-JSON
-    // .gltf via fastgltf::determineGltfFileType internally -- needed so a
-    // real multi-file .gltf (this chunk's whole point) parses at all; a
-    // self-contained .glb continues to work identically either way.
+    // authored index of refraction.
+    // One Parser lives for the whole function: fastgltf may allocate asset
+    // storage from its internal pool, so the parser must outlive the asset.
+    fastgltf::Parser parser(GltfParserExtensionMask());
     parser.setUserPointer(&getter);
     parser.setBufferAllocationCallback(+[](uint64_t bytes, void* user) -> fastgltf::BufferInfo {
         auto& data = *static_cast<MappedGetter*>(user);
-        if (!data.bin.empty() && data.source.data() + data.offset == data.bin.data() &&
-            bytes <= data.bin.size())
+        if (!data.bin.empty() && data.offset == data.binOffset && bytes <= data.bin.size())
             return {const_cast<std::byte*>(data.bin.data()), 0};
         if (bytes > kMaxDataUriDecodedBytes)
             throw std::out_of_range("data URI limit");
         data.decoded.emplace_back(size_t(bytes));
         return {data.decoded.back().data(), uint32_t(data.decoded.size())};
     });
-    auto assetResult = parser.loadGltf(getter, std::filesystem::path{}, fastgltf::Options::None);
-    if (!assetResult) {
-        return MapFastgltfError(assetResult.error());
+    auto parseSource = [&](std::span<const std::byte> source) {
+        getter.source = source;
+        // A filtered GLB retry is a same-layout copy. Point the BIN alias into
+        // that copy so read() sees the exact alias and never writes the mapped
+        // BIN bytes back through the read-only source view.
+        if (!bin.empty())
+            getter.bin = source.data() == sourceGlbBytes.data()
+                ? bin
+                : std::span<const std::byte>(source.data() + getter.binOffset, bin.size());
+        getter.offset = 0;
+        getter.metadata.clear();
+        getter.decoded.clear();
+        // loadGltf (rather than loadGltfBinary) auto-detects GLB vs. plain-JSON
+        // .gltf. The BIN alias is tracked by offset so a filtered JSON retry
+        // (which keeps the exact GLB byte layout) still points at the original
+        // read-only BIN mapping.
+        return parser.loadGltf(getter, std::filesystem::path{}, fastgltf::Options::None);
+    };
+
+    // Retry exactly once with non-critical required names filtered out. The
+    // filtered copy must outlive the parsed asset because it is the getter's
+    // source for the successful attempt.
+    std::vector<std::byte> filteredSource;
+    std::optional<fastgltf::Asset> parsedAsset;
+    {
+        // The pre-scan already found at least one non-critical required name;
+        // build the bounded filtered JSON now rather than forcing fastgltf to
+        // reject the file first. Geometry-critical names were never removed.
+        if (hasFilterableRequiredExtensions) {
+            auto filtered = BuildFilteredGltfSource(sourceGlbBytes, json);
+            if (!filtered)
+                return ImportErrorCode::MalformedData;
+            filteredSource = std::move(*filtered);
+            auto result = parseSource(filteredSource);
+            if (!result)
+                return MapFastgltfError(result.error());
+            parsedAsset = std::move(result.get());
+        } else {
+            auto first = parseSource(sourceGlbBytes);
+            if (!first) {
+                const auto error = first.error();
+                // A filterable name the pre-scan missed (for example a policy
+                // table gap) still gets exactly one filtered retry.
+                const bool extensionError = error == fastgltf::Error::MissingExtensions
+                    || error == fastgltf::Error::UnknownRequiredExtension;
+                if (!extensionError)
+                    return MapFastgltfError(error);
+                auto filtered = BuildFilteredGltfSource(sourceGlbBytes, json);
+                if (!filtered)
+                    return MapFastgltfError(error);
+                filteredSource = std::move(*filtered);
+                auto second = parseSource(filteredSource);
+                if (!second)
+                    return MapFastgltfError(second.error());
+                parsedAsset = std::move(second.get());
+            } else {
+                parsedAsset = std::move(first.get());
+            }
+        }
     }
-    auto& asset = assetResult.get();
+    fastgltf::Asset& asset = *parsedAsset;
     if (!bin.empty())
     {
         if (asset.buffers.empty() || asset.buffers[0].byteLength > bin.size())
@@ -2660,15 +3066,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             }
         ImportStatusPayload status{};
         model_core::CompatibilityReportBuilder compatibility;
-        for (const auto& extension : asset.extensionsUsed) {
-            if (!IsSupportedExtension(extension)) {
-                status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
-                // Saturated count kept for older hosts; the report adds the
-                // stable identity behind each warning.
-                compatibility.Add(model_core::GltfExtensionFeatureId(extension),
-                                  model_core::CompatibilitySeverity::Degraded);
-            }
-        }
+        BuildGltfCompatibilityReport(asset, requiredExtensionNames, compatibility, status);
         if (status.optionalFeatureWarnings)
         {
             ChunkDescriptor d{};
@@ -2911,13 +3309,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     plans.insert(plans.end(),refinements.begin(),refinements.end());
     model_core::ImportStatusPayload status{};
     model_core::CompatibilityReportBuilder compatibility;
-    for (const auto& extension : asset.extensionsUsed) {
-        if (!IsSupportedExtension(extension)) {
-            status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
-            compatibility.Add(model_core::GltfExtensionFeatureId(extension),
-                              model_core::CompatibilitySeverity::Degraded);
-        }
-    }
+    BuildGltfCompatibilityReport(asset, requiredExtensionNames, compatibility, status);
     if (!refinements.empty()) status.flags |= model_core::kStatusRefining;
     if (status.flags || status.optionalFeatureWarnings) {
         if (plans.size()>=maxChunkCount) return ImportErrorCode::ResourceLimit;

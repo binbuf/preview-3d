@@ -36,7 +36,12 @@ TEST_CASE("Empty malformed and unsupported-feature failures remain typed and rec
         {std::string(84,'\0'),L".stl",import_broker::ImportFormat::Stl,model_core::ImportErrorCode::EmptyGeometry},
         {"ply\nformat binary_little_endian 1.0\nelement vertex 0\nproperty float x\nproperty float y\nproperty float z\nend_header\n",L".ply",import_broker::ImportFormat::Ply,model_core::ImportErrorCode::EmptyGeometry},
         {R"({"asset":{"version":"2.0"},"scenes":[{"nodes":[]}]})",L".gltf",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::EmptyGeometry},
-        {R"({"asset":{"version":"2.0"},"extensionsRequired":["UNSUPPORTED_private"]})",L".gltf",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::UnsupportedRequiredFeature},
+        // Geometry-critical required extensions are never filtered; with no
+        // usable core geometry the import stays a typed failure.
+        {R"({"asset":{"version":"2.0"},"extensionsRequired":["KHR_implicit_shapes"]})",L".gltf",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::UnsupportedRequiredFeature},
+        // A truly unknown required name is filtered, but this file has no
+        // scene at all, so the normal empty-geometry outcome still applies.
+        {R"({"asset":{"version":"2.0"},"extensionsRequired":["UNSUPPORTED_private"]})",L".gltf",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::EmptyGeometry},
         {"not a glTF",L".glb",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::MalformedData}
     };
     for (const auto& fixture : fixtures) {

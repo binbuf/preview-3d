@@ -700,8 +700,8 @@ TEST_CASE("a malformed base64 data URI buffer is rejected before fastgltf (SEC-1
     CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
 }
 
-TEST_CASE("A file requiring an unrecognized extension is rejected as a clean GenerationError",
-          "[gltf-import]")
+TEST_CASE("A file requiring an unrecognized extension keeps its core geometry and reports Degraded",
+          "[gltf-import][gltf-extensions]")
 {
     sandbox_test_support::SandboxFixture fixture;
 
@@ -710,7 +710,9 @@ TEST_CASE("A file requiring an unrecognized extension is rejected as a clean Gen
     // The historical fixture names KHR_materials_unlit, which became part of
     // the documented static-material subset in TSK-208. Keep exercising a
     // genuinely unknown required extension with an equal-length mutation so
-    // the frozen GLB container lengths remain valid.
+    // the frozen GLB container lengths remain valid. With the T05 policy the
+    // core triangle still opens; only the unknown name is filtered from
+    // extensionsRequired for the retry.
     constexpr std::string_view oldName = "KHR_materials_unlit";
     constexpr std::string_view newName = "UNSUPPORTED_private";
     auto chars = std::span(reinterpret_cast<char*>(bytes->data()), bytes->size());
@@ -719,8 +721,26 @@ TEST_CASE("A file requiring an unrecognized extension is rejected as a clean Gen
             std::memcpy(chars.data() + offset, newName.data(), newName.size());
 
     auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/14, /*maxChunkCount=*/8);
-    CHECK_FALSE(run.ready);
-    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::UnsupportedRequiredFeature));
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const import_broker::ValidatedChunk* reportChunk = nullptr;
+    const import_broker::ValidatedChunk* triangleChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport)
+            reportChunk = &chunk;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            triangleChunk = &chunk;
+    }
+    REQUIRE(reportChunk != nullptr);
+    REQUIRE(triangleChunk != nullptr);
+    CHECK(triangleChunk->descriptor.vertexCount == 3);
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, reportChunk->payload.data(), sizeof(report));
+    REQUIRE(report.recordCount == 1);
+    CHECK(report.records[0].featureId == model_core::kGltfFeatureUnspecifiedExtension);
+    CHECK(report.records[0].severity
+          == static_cast<uint8_t>(model_core::CompatibilitySeverity::Degraded));
 }
 
 TEST_CASE("maxChunkCount of 0 against a 1-primitive fixture is rejected as ResourceLimit",
@@ -1584,4 +1604,169 @@ TEST_CASE("A visual-only glTF extension emits a stable Degraded compatibility re
     CHECK(report.records[0].reserved[0] == 0);
     CHECK(report.records[0].reserved[1] == 0);
     CHECK(report.records[0].reserved[2] == 0);
+}
+
+namespace {
+
+struct GltfCompatibilityChunks {
+    const import_broker::ValidatedChunk* status = nullptr;
+    const import_broker::ValidatedChunk* report = nullptr;
+    const import_broker::ValidatedChunk* triangle = nullptr;
+    uint32_t materialCount = 0;
+};
+
+GltfCompatibilityChunks FindGltfCompatibilityChunks(const import_broker::ValidationResult& validation)
+{
+    GltfCompatibilityChunks found;
+    for (const auto& chunk : validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus)
+            found.status = &chunk;
+        else if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport)
+            found.report = &chunk;
+        else if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            found.triangle = &chunk;
+        else if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            ++found.materialCount;
+    }
+    return found;
+}
+
+bool ReportHasFeature(const model_core::CompatibilityReportPayload& report, uint32_t featureId,
+                      model_core::CompatibilitySeverity severity)
+{
+    for (uint32_t i = 0; i < report.recordCount; ++i)
+        if (report.records[i].featureId == featureId
+            && report.records[i].severity == static_cast<uint8_t>(severity))
+            return true;
+    return false;
+}
+
+} // namespace
+
+TEST_CASE("A glTF requiring KHR_materials_clearcoat opens with core PBR and a clearcoat warning",
+          "[gltf-extensions]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-clearcoat.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3301, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.status != nullptr);
+    REQUIRE(chunks.report != nullptr);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.triangle->descriptor.vertexCount == 3);
+    CHECK(chunks.triangle->descriptor.indexCount == 3);
+    CHECK(chunks.materialCount == 1);
+
+    model_core::ImportStatusPayload status{};
+    std::memcpy(&status, chunks.status->payload.data(), sizeof(status));
+    CHECK(status.optionalFeatureWarnings == 1);
+
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, chunks.report->payload.data(), sizeof(report));
+    CHECK(ReportHasFeature(report, model_core::kGltfFeatureClearcoat,
+                           model_core::CompatibilitySeverity::Degraded));
+}
+
+TEST_CASE("A glTF requiring KHR_materials_specular opens with core PBR and a specular warning",
+          "[gltf-extensions]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-specular.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3302, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.report != nullptr);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.triangle->descriptor.vertexCount == 3);
+    CHECK(chunks.materialCount == 1);
+
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, chunks.report->payload.data(), sizeof(report));
+    CHECK(ReportHasFeature(report, model_core::kGltfFeatureSpecular,
+                           model_core::CompatibilitySeverity::Degraded));
+}
+
+TEST_CASE("A glTF requiring KHR_materials_emissive_strength opens and reports the strength warning",
+          "[gltf-extensions]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-emissive-strength.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3303, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.report != nullptr);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.triangle->descriptor.vertexCount == 3);
+    CHECK(chunks.materialCount == 1);
+
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, chunks.report->payload.data(), sizeof(report));
+    // T18 has not landed, so the adapter reports the unapplied multiplier
+    // rather than silently pretending the emissive factor already includes it.
+    CHECK(ReportHasFeature(report, model_core::kGltfFeatureEmissiveStrength,
+                           model_core::CompatibilitySeverity::Degraded));
+}
+
+TEST_CASE("A truly unknown required extension keeps core geometry and reports Degraded",
+          "[gltf-extensions]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"unknown-required.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3304, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.report != nullptr);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.triangle->descriptor.vertexCount == 3);
+    CHECK(chunks.materialCount == 1);
+
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, chunks.report->payload.data(), sizeof(report));
+    CHECK(ReportHasFeature(report, model_core::kGltfFeatureUnspecifiedExtension,
+                           model_core::CompatibilitySeverity::Degraded));
+}
+
+TEST_CASE("A required geometry-replacing extension that cannot be decoded fails typed",
+          "[gltf-extensions]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-geometry-unknown.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3305, /*maxChunkCount=*/8);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::UnsupportedRequiredFeature));
+}
+
+TEST_CASE("A required Draco primitive with corrupt compressed bytes fails typed",
+          "[gltf-extensions]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-draco-bad.glb"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3306, /*maxChunkCount=*/8);
+    CHECK_FALSE(run.ready);
+    // The zeroed payload loses the DRACO magic, so the bounded decoder layer
+    // rejects it as malformed instead of degrading the model.
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
 }

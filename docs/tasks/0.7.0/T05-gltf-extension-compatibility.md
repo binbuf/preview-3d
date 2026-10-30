@@ -85,6 +85,75 @@ geometry/decoding extensions still fail when they cannot be decoded.
 - [ ] Hand-off records the extension table and any fastgltf limitations.
 
 ## Hand-off
-_(filled in by the implementing session: enabled extension list, classification
-table, fixture names, and the exact fallback behavior for unknown required
-extensions.)_
+
+**Status: done.**
+
+### Enabled fastgltf extension list
+`KHR_draco_mesh_compression`, `KHR_texture_basisu`, `KHR_texture_transform`,
+`KHR_mesh_quantization`, `EXT_meshopt_compression`, `EXT_texture_webp`,
+`KHR_materials_unlit`, `transmission`, `ior`, `pbrSpecularGlossiness`,
+`clearcoat`, `sheen`, `specular`, `iridescence`, `anisotropy`, `volume`,
+`dispersion`, `diffuse_transmission`, `emissive_strength`,
+`KHR_materials_variants`, `KHR_lights_punctual`. `MSFT_texture_dds` is still
+disabled pending T12. The mask is generated from the policy table in
+`GltfAdapter.cpp` (`GltfParserExtensionMask`).
+
+### Classification table
+| Class | Names | Behavior |
+| --- | --- | --- |
+| Geometry-critical | Draco, meshopt, quantization | Decode; undecodable data fails typed |
+| Geometry-critical, no parser support | `KHR_implicit_shapes`, `KHR_accessor_float64` | Never filtered; required use returns `UnsupportedRequiredFeature` |
+| Texture-critical | basisu, WebP | Decode/fallback; no core-geometry failure |
+| Texture-critical, no decoder | `MSFT_texture_dds` | Filtered from required, reported, core geometry survives |
+| Visual | clearcoat, sheen, specular, iridescence, anisotropy, volume, dispersion, diffuse transmission, emissive strength | Parsed by fastgltf; core PBR shown; `Degraded` record with the T04 feature ID |
+| Scene | variants, lights punctual | Parsed/ignored; `Ignored` record |
+| Instance | `EXT_mesh_gpu_instancing` | Filtered/one-instance fallback; `Degraded` |
+| Truly unknown | any other required name | Filtered once; core scene opens and reports `Degraded` (ID 900); fails only if no usable geometry remains |
+
+### Fallback behavior for unknown required extensions
+The JSON preflight pre-scans the root `extensionsRequired`. If any non-critical
+required name is present, the adapter builds a bounded copy that rewrites only
+that array (spaces pad the replacement so GLB byte offsets and the mapped BIN are
+unchanged) and parses it once. If the pre-scan misses a filterable name and
+fastgltf returns `MissingExtensions`/`UnknownRequiredExtension`, the adapter
+performs exactly one filtered retry. Geometry-critical names are never removed,
+so those still fail `UnsupportedRequiredFeature`. `extensionsUsed` is never
+edited; unsupported used names (and required names missing from used) produce
+`CompatibilityReport` records.
+
+### Fixtures and tests
+Added `interactive-viewer/test-assets/required-clearcoat.gltf`,
+`required-specular.gltf`, `required-emissive-strength.gltf`,
+`unknown-required.gltf`, `required-geometry-unknown.gltf`, and
+`required-draco-bad.glb`. Added seven `[gltf-extensions]` cases in
+`tests/import-isolation/GltfImportTests.cpp`; updated the previous
+unknown-required rejection case and the `[recovery]` typed-error fixture.
+
+### Checks
+- `MSBuild Preview3D.slnx /t:Tests_ImportIsolation /p:Configuration=Release /p:Platform=x64 /v:q` — pass.
+- `x64\Release\Tests.ImportIsolation.exe "[gltf-extensions]"` — 104 assertions, 7 cases, pass.
+  `required-draco-bad.glb` fails with the typed `MalformedData` code from the
+  bounded Draco decoder.
+- `[gltf-import]` — 655 assertions, 31 cases, pass.
+- `[compatibility]` — 93 assertions, 10 cases, pass.
+- `[recovery]` — 2327 assertions, 38 cases (35 pass, 3 fault-harness skips), pass.
+
+### Docs
+Updated `docs/FORMAT-SUPPORT.md` and
+`docs/design/03-file-formats-and-ingestion.md`; added ADR
+`docs/design/adr/0060-gltf-required-extension-compatibility.md`; wrote reusable
+facts and follow-ups to `docs/0.7.0/progress/T05.md`.
+
+### Deviations / limitations
+- Emissive strength is parsed but not applied; T18 owns baking it into the
+  emissive factor, so the fixture reports the warning as allowed by the task.
+- No new numeric limit was added: required-name count reuses
+  `kTierAObjectLimit`, and the filtered copy stays inside the existing metadata
+  and Tier A source ceilings.
+- `KHR_implicit_shapes` stands in for an unknown geometry-replacing extension in
+  the typed-failure fixture; it is a real Khronos name compiled out of the pinned
+  fastgltf build.
+
+### Remaining work
+None for T05. Follow-ups are recorded in `docs/0.7.0/progress/T05.md` (T18 lobes,
+T12 DDS, optional named scene IDs).
