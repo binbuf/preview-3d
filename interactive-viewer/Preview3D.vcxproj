@@ -81,6 +81,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="src\app\framework.h" />
     <ClInclude Include="src\app\ActiveInstance.h" />
     <ClInclude Include="src\app\Accessibility.h" />
+    <ClInclude Include="src\ui\AboutDialog.h" />
     <ClInclude Include="src\ui\Chrome.h" />
     <ClInclude Include="src\ui\ControlsDialog.h" />
     <ClInclude Include="src\ui\InfoPanel.h" />
@@ -136,6 +137,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="..\shared\model-core\include\model_core\ControlChannelIo.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\ui\AboutDialog.cpp" />
     <ClCompile Include="src\ui\Chrome.cpp" />
     <ClCompile Include="src\ui\ControlsDialog.cpp" />
     <ClCompile Include="src\app\ActiveInstance.cpp" />

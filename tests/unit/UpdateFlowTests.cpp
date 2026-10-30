@@ -11,6 +11,7 @@
 
 #include <string>
 
+using preview3d_update::DownloadText;
 using preview3d_update::InstallerAssetName;
 using preview3d_update::ParseSha256Sidecar;
 using preview3d_update::QuoteWindowsCommandLineArgument;
@@ -82,6 +83,18 @@ TEST_CASE("download verification hashes the file on disk", "[update]")
 
     DeleteFileW(empty.c_str());
     DeleteFileW(abc.c_str());
+}
+
+TEST_CASE("update URLs are cracked before the scheme is rejected", "[update]")
+{
+    // Regression: WinHttpCrackUrl leaves every component pointer null when the
+    // URL_COMPONENTS length members are zero, so a perfectly valid URL was
+    // reported as "invalid URL" and the update check silently never ran. A
+    // non-HTTP scheme exercises URL parsing without touching the network.
+    std::wstring text;
+    std::wstring error;
+    REQUIRE_FALSE(DownloadText(L"ftp://example.com/version.txt", text, error, 4096));
+    REQUIRE(error == L"unsupported URL scheme");
 }
 
 TEST_CASE("updater command line quoting follows Windows rules", "[update]")

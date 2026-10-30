@@ -1,5 +1,6 @@
 #include "framework.h"
 #include "Preview3D.h"
+#include "AboutDialog.h"
 #include "Accessibility.h"
 #include "ActiveInstance.h"
 #include "Chrome.h"
@@ -2592,11 +2593,7 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_DIAGNOSTICS:
         ShowModelWarnings(app);
         break;
-    case IDM_ABOUT:
-        MessageBoxW(app.window,
-            Loc("about.body", L"A native static viewer for glTF, OBJ, FBX, STL, PLY, the supported static 3MF preview subset, and USD-family models. 3MF includes Core, Materials, Production, and bounded Beam Lattice content. USD uses a fast isolated importer with a separate isolated OpenUSD compatibility host for bounded local composition.\n\nImports are bounded and local-only. No cloud, animation playback, editing, file modification, slicer-private multi-plate grouping, Explorer thumbnails, or persistent model cache.").c_str(),
-            Loc("about.title", L"About Preview 3D").c_str(), MB_OK | MB_ICONINFORMATION);
-        break;
+    case IDM_ABOUT: ShowAboutDialog(app.window); break;
     case IDM_EXIT: DestroyWindow(app.window); break;
     }
 }

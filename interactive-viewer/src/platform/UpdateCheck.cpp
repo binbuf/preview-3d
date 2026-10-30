@@ -68,8 +68,16 @@ bool HttpGet(const std::wstring& url, std::size_t maximumBytes,
         return false;
     }
 
+    // WinHttpCrackUrl only fills a component's pointer when its length member
+    // is non-zero; with a zeroed URL_COMPONENTS it succeeds but leaves every
+    // pointer null. Set the lengths we consume to "unknown" (-1) so the
+    // function points them into `url`.
     URL_COMPONENTS components{};
     components.dwStructSize = sizeof(components);
+    components.dwSchemeLength = static_cast<DWORD>(-1);
+    components.dwHostNameLength = static_cast<DWORD>(-1);
+    components.dwUrlPathLength = static_cast<DWORD>(-1);
+    components.dwExtraInfoLength = static_cast<DWORD>(-1);
     if (!WinHttpCrackUrl(url.c_str(), static_cast<DWORD>(url.size()), 0, &components) ||
         components.lpszHostName == nullptr)
     {
