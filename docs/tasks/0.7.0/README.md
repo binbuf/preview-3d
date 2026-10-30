@@ -5,6 +5,18 @@ It is deliberately split into small, independently reviewable sessions: a task
 should leave the build and its named verification command green, and its
 hand-off should tell the next task what changed.
 
+This plan is registered as the `0.7.0` symphony task set; run it without
+disturbing the base/MVP or `security` sets:
+
+```powershell
+./.symphony/symphony.ps1 doctor --set 0.7.0
+./.symphony/symphony.ps1 run    --set 0.7.0
+./.symphony/symphony.ps1 status --set 0.7.0
+```
+
+The harness roadmap is [`docs/0.7.0/ROADMAP.md`](../../0.7.0/ROADMAP.md); the
+progress notebook and run logs live beside it.
+
 ## Read first
 
 - [`docs/proposal.md`](../../proposal.md) — the study and ranked rationale.
