@@ -26,8 +26,10 @@
     "TestResults/render-quality/T20/images/external-stl-studio-oblique.png",
     "TestResults/render-quality/T20/images/generated-sphere-grid-studio-front.png",
     "TestResults/render-quality/T20/images/generated-sphere-grid-studio-oblique.png",
+    "TestResults/render-quality/T20/images/generated-sphere-grid-clay-oblique.png",
     "TestResults/render-quality/T20/images/generated-glass-reference-studio-front.png",
-    "TestResults/render-quality/T20/images/generated-stl-box-studio-oblique.png"
+    "TestResults/render-quality/T20/images/generated-stl-box-studio-oblique.png",
+    "TestResults/render-quality/T20/images/generated-stl-box-directional-front.png"
   ],
   "referenceImagesInspected": [
     "TestResults/render-quality/T20/reference/f3d-car-shipped-preset.png",
@@ -90,12 +92,14 @@
     "Preview3D Camera lens remains dark with visible reflection and depth in Studio; it is not the gray F3D appearance.",
     "Clay renders Car and Camera form without material distraction; Directional adds a visible raking light.",
     "All 53 T20 captures passed the settled/complete/non-blank contract after the wait-for-visible fix.",
+    "T21a restored the display-space #1C1C1E backdrop; regenerated generated-fixture references show the intended darker backdrop without a change to model lighting, glass roles or the grid.",
     "F3D installed 3.5.0 rendered Car and Camera with both the shipped preset and recorded controlled settings."
   ],
   "acceptance": {
     "observedBaselinesReviewed": true,
     "acceptedReferencesPromotedBy": "promote.py (explicit, after this review)",
     "acceptedReferencesAreQualityTargets": false,
+    "t21aBackdropRepromotion": "The 15 generated-fixture accepted references were re-promoted after the display-space backdrop change. The promoted images were inspected; the only intended delta is the darker #1C1C1E backdrop.",
     "note": "Accepted references defend the reviewed current behavior against regressions. They do not certify Studio/Clay/Directional quality; the defect list above remains open."
   }
 }

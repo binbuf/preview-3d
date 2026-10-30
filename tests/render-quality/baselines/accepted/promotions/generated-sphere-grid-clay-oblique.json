@@ -12,7 +12,7 @@
   },
   "candidate": "TestResults\\render-quality\\T20\\images\\generated-sphere-grid-clay-oblique.png",
   "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-clay-oblique-candidate.png",
-  "candidateSha256": "9145655e155abef4a2ca8961a3d3fcfdffa1640c28b0c011b56841290c96e1a8",
+  "candidateSha256": "821356611382701e75b24985c6737a081a3c4a2ed3d7441f7e2dbee78016153e",
   "case": "generated-sphere-grid-clay-oblique",
   "crops": {
     "centre-metal": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-clay-oblique-crop-centre-metal.png",
@@ -21,7 +21,7 @@
   },
   "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-clay-oblique-diff.png",
   "image": "generated-sphere-grid-clay-oblique.png",
-  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "reason": "T21a restored the display-space #1C1C1E backdrop; reviewed intentional darkening only.",
   "regions": {
     "centre-metal": [
       0.35,
@@ -45,10 +45,10 @@
   "review": "tests/render-quality/review/T20-review.json",
   "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
   "stats": {
-    "lumaStdDev": 33.027,
-    "meanLuma": 92.925,
+    "lumaStdDev": 43.379,
+    "meanLuma": 45.53,
     "pixels": 886890,
-    "uniqueSampleColours": 1666
+    "uniqueSampleColours": 1484
   },
   "viewport": [
     1258,

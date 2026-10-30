@@ -163,7 +163,11 @@ struct OverlayInfo
         viewer_presentation::PresentationPreset::StudioPbr;
     viewer_presentation::ToneMapMode toneMap = viewer_presentation::ToneMapMode::Neutral;
     viewer_presentation::BackgroundMode background = viewer_presentation::BackgroundMode::Dark;
+    uint32_t backgroundColor = 0x001C1C1Eu;
     float exposure = 1.0f;
+    // T21a: independent illuminated ground area; the contact shadow keeps its
+    // own flag and neither implies the other.
+    bool groundHighlightVisible = true;
     float studioIntensity = 1.0f;
     float keyLightScale = 1.0f;
     float fillLightScale = 1.0f;
@@ -226,10 +230,16 @@ struct OverlayInfo
     RECT hideCursorSwitchRect{};
     RECT hideUntilCompleteRowRect{};
     RECT hideUntilCompleteSwitchRect{};
+    RECT backgroundRowRect{};
+    RECT groundHighlightRowRect{};
+    RECT groundHighlightSwitchRect{};
     RECT languageRowRect{};
     bool showNativeOrientation = false;   // current value, for drawing the switch's on/off state
     bool hideCursorWhileDragging = true;
     bool hideModelUntilComplete = true;
+    std::wstring backgroundLabel;
+    std::wstring backgroundValue;
+    std::wstring groundHighlightLabel;
     // Localized strings for the D2D-drawn chrome. The render thread must never
     // call Loc() itself, so the UI thread resolves these when it builds the
     // OverlayInfo snapshot each frame. See Localization.h.

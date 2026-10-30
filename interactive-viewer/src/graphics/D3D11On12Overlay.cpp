@@ -1379,6 +1379,18 @@ void D3D11On12Overlay::DrawSettingsPanel(const OverlayInfo& overlay, float scale
     DrawToggleRow(ToRectF(overlay.hideUntilCompleteRowRect), ToRectF(overlay.hideUntilCompleteSwitchRect),
         overlay.hideUntilCompleteLabel, overlay.hideModelUntilComplete, scale);
 
+    // Background row: label + current value, whole row opens a native popup.
+    const D2D1_RECT_F backgroundRow = ToRectF(overlay.backgroundRowRect);
+    DrawText(overlay.backgroundLabel, smallFormat.Get(),
+        D2D1::RectF(backgroundRow.left, backgroundRow.top, backgroundRow.right, backgroundRow.bottom),
+        D2D1::ColorF(0xF5F5F7));
+    DrawText(overlay.backgroundValue, smallFormat.Get(),
+        D2D1::RectF(backgroundRow.left, backgroundRow.top, backgroundRow.right, backgroundRow.bottom),
+        D2D1::ColorF(0x0A84FF), DWRITE_TEXT_ALIGNMENT_TRAILING);
+
+    DrawToggleRow(ToRectF(overlay.groundHighlightRowRect), ToRectF(overlay.groundHighlightSwitchRect),
+        overlay.groundHighlightLabel, overlay.groundHighlightVisible, scale);
+
     // Language row: label on the left, current pack endonym trailing on the
     // right (the whole row is the click target — see ShowLanguageMenu).
     const D2D1_RECT_F languageRow = ToRectF(overlay.languageRowRect);

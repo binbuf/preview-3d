@@ -169,8 +169,18 @@ float OcclusionFactor(float sampledOcclusion, float strength) noexcept
     return std::clamp(1.0f + amount * (sample - 1.0f), 0.0f, 1.0f);
 }
 
+void HighlightColor(const float backdropDisplay[3], float out[3]) noexcept
+{
+    constexpr float lift = 0.055f;
+    for (int i = 0; i < 3; ++i) {
+        const float base = backdropDisplay ? backdropDisplay[i] : 0.0f;
+        out[i] = std::clamp((Finite(base) ? base : 0.0f) + lift, 0.0f, 1.0f);
+    }
+}
+
 Constants BuildConstants(const GroundPlane& plane, const ShadowFootprint& footprint,
-                         const float cameraTarget[3]) noexcept
+                         const float cameraTarget[3], bool highlightEnabled,
+                         const float highlightColor[3], bool shadowEnabled) noexcept
 {
     const float targetX = cameraTarget ? cameraTarget[0] : 0.0f;
     const float targetY = cameraTarget ? cameraTarget[1] : 0.0f;
@@ -190,10 +200,20 @@ Constants BuildConstants(const GroundPlane& plane, const ShadowFootprint& footpr
     constants.shadow[3] = footprint.radius[1];
     constants.parameters[0] = footprint.opacity;
     constants.parameters[1] = footprint.softness;
-    constants.color[0] = 0.160f;
-    constants.color[1] = 0.170f;
-    constants.color[2] = 0.190f;
-    constants.color[3] = 0.90f;
+    // T21a: independent highlight strength. The contact shadow keeps using
+    // parameters[0]/[1] even when the highlight is off.
+    constants.parameters[2] = highlightEnabled ? 1.0f : 0.0f;
+    // T21a: the shadow toggle is independent of the highlight. parameters[3]
+    // is 0 when the user turned shadows off, even if the ground quad is still
+    // drawn for the highlight.
+    constants.parameters[3] = shadowEnabled ? 1.0f : 0.0f;
+    float tint[3] = { 0.235f, 0.240f, 0.270f };
+    if (highlightColor) { tint[0] = highlightColor[0]; tint[1] = highlightColor[1]; tint[2] = highlightColor[2]; }
+    constants.color[0] = std::clamp(Finite(tint[0]) ? tint[0] : 0.0f, 0.0f, 1.0f);
+    constants.color[1] = std::clamp(Finite(tint[1]) ? tint[1] : 0.0f, 0.0f, 1.0f);
+    constants.color[2] = std::clamp(Finite(tint[2]) ? tint[2] : 0.0f, 0.0f, 1.0f);
+    // Peak coverage of the local highlight. The shader applies the radial fade.
+    constants.color[3] = 0.55f;
     return constants;
 }
 

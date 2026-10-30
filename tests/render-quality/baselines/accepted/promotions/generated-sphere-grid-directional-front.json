@@ -12,7 +12,7 @@
   },
   "candidate": "TestResults\\render-quality\\T20\\images\\generated-sphere-grid-directional-front.png",
   "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-directional-front-candidate.png",
-  "candidateSha256": "4c68b709bc7431961bd556dcd0f57dca207652995e9e246205a99ccc79439b31",
+  "candidateSha256": "fa4870b93df9cec5a7f2abaaa951a1d972e65dffb5ad3adc4c21a2c14bac1d18",
   "case": "generated-sphere-grid-directional-front",
   "crops": {
     "centre-metal": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-directional-front-crop-centre-metal.png",
@@ -21,7 +21,7 @@
   },
   "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-sphere-grid-directional-front-diff.png",
   "image": "generated-sphere-grid-directional-front.png",
-  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "reason": "T21a restored the display-space #1C1C1E backdrop; reviewed intentional darkening only.",
   "regions": {
     "centre-metal": [
       0.35,
@@ -45,10 +45,10 @@
   "review": "tests/render-quality/review/T20-review.json",
   "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
   "stats": {
-    "lumaStdDev": 29.593,
-    "meanLuma": 85.724,
+    "lumaStdDev": 34.622,
+    "meanLuma": 39.698,
     "pixels": 886890,
-    "uniqueSampleColours": 1697
+    "uniqueSampleColours": 1489
   },
   "viewport": [
     1258,

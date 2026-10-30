@@ -135,8 +135,19 @@ ViewerSettings LoadSettings()
     if (!backgroundText.empty())
     {
         const int value = std::atoi(backgroundText.c_str());
-        if (value >= 0 && value <= 3) settings.backgroundMode = value;
+        if (value >= 0 && value <= 4) settings.backgroundMode = value;
     }
+    const std::string backgroundColorText = FindJsonValue(content, "backgroundColor");
+    if (!backgroundColorText.empty())
+    {
+        char* end = nullptr;
+        const unsigned long value = std::strtoul(backgroundColorText.c_str(), &end, 0);
+        if (end && end != backgroundColorText.c_str() && value <= 0x00FFFFFFul)
+            settings.backgroundColor = static_cast<unsigned int>(value);
+    }
+    const std::string highlightText = FindJsonValue(content, "groundHighlightEnabled");
+    if (highlightText == "true") settings.groundHighlightEnabled = true;
+    else if (highlightText == "false") settings.groundHighlightEnabled = false;
     const std::string shadowText = FindJsonValue(content, "groundShadowEnabled");
     if (shadowText == "true") settings.groundShadowEnabled = true;
     else if (shadowText == "false") settings.groundShadowEnabled = false;
@@ -192,6 +203,8 @@ void SaveSettings(const ViewerSettings& settings)
         ",\n  \"hideModelUntilComplete\": " + (settings.hideModelUntilComplete ? "true" : "false") +
         ",\n  \"toneMapMode\": " + std::to_string(settings.toneMapMode) +
         ",\n  \"backgroundMode\": " + std::to_string(settings.backgroundMode) +
+        ",\n  \"backgroundColor\": " + std::to_string(settings.backgroundColor & 0x00FFFFFFu) +
+        ",\n  \"groundHighlightEnabled\": " + (settings.groundHighlightEnabled ? "true" : "false") +
         ",\n  \"exposure\": " + std::to_string(settings.exposure) +
         ",\n  \"groundShadowEnabled\": " + (settings.groundShadowEnabled ? "true" : "false") +
         ",\n  \"groundShadowOverridden\": " + (settings.groundShadowOverridden ? "true" : "false") +

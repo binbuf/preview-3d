@@ -35,11 +35,22 @@ enum class ToneMapMode : uint8_t {
 };
 
 enum class BackgroundMode : uint8_t {
-    Dark = 0,         // UI-matched #1C1C1E (current default)
-    MidGrey = 1,      // neutral studio sweep
+    Dark = 0,         // Windows Photos dark #1C1C1E (default)
+    MidGrey = 1,      // studio gray #808080
     Transparent = 2,  // alpha is preserved for capture/shell use
     Checkerboard = 3, // visible transparency checker behind the asset
+    // Appended so the four saved values above keep their original meaning.
+    Custom = 4,       // user-selected display color (see customColor)
 };
+
+// Default custom background display color, packed 0xRRGGBB. The value is only
+// used while BackgroundMode::Custom is selected; it is persisted independently
+// so switching modes never loses the user's choice.
+inline constexpr uint32_t kDefaultCustomBackground = 0x336699u;
+
+// Packed 0xRRGGBB helpers. Validation clamps each channel to 0..255.
+uint32_t NormalizeBackgroundColor(uint32_t packed) noexcept;
+uint32_t PackBackgroundColor(float red, float green, float blue) noexcept;
 
 enum class PresentationPreset : uint8_t {
     StudioPbr = 0,
@@ -82,12 +93,17 @@ struct PresetSettings
     float fillScale = 1.0f;
     float rimScale = 1.0f;
     float exposure = 1.0f;
+    // Presets keep their historical appearance default for callers that still
+    // consume a complete preset record, but the shipping viewer never applies
+    // this field: background selection is a global user preference (T21a).
     BackgroundMode background = BackgroundMode::Dark;
     ToneMapMode toneMap = ToneMapMode::Neutral;
     bool gridVisible = true;
     // T16 ground contact shadow. CAD/PBR/Scan opt in by default; point clouds
     // and transparent/checkerboard assets do not. The grid is independent.
     bool shadowEnabled = true;
+    // T21a illuminated ground area. Presets never override the user preference.
+    bool groundHighlightEnabled = true;
 };
 
 // Computes the bounded summary. Only the first kMaterialScanCap records are
@@ -133,16 +149,25 @@ std::array<float, 3> ToneMapLinear(const std::array<float, 3>& linear, float exp
 std::array<float, 3> ToneMapToSrgb(const std::array<float, 3>& linear, float exposure,
                                    ToneMapMode mode) noexcept;
 
-// Linear background radiance cleared into the HDR target. Transparent and
-// checkerboard modes clear to zero and are composited in the resolve pass.
-std::array<float, 4> BackgroundLinear(BackgroundMode mode) noexcept;
+// Display-encoded (sRGB) backdrop color. This is written directly to the
+// display-space backdrop target, so it is independent of exposure and the
+// selected tone curve. #1C1C1E therefore reaches the screen as #1C1C1E.
+std::array<float, 3> BackgroundDisplayColor(BackgroundMode mode, uint32_t customColor) noexcept;
 
-// Approximate display color for the no-model clear path. Checkerboard uses the
-// mean of its two shades.
-std::array<float, 3> BackgroundDisplay(BackgroundMode mode, float exposure,
-                                       ToneMapMode toneMap) noexcept;
+// The display-space illuminated ground tint for a backdrop. It is a subtle
+// local lift: the backdrop plus a small fixed increment, never a bright sweep.
+std::array<float, 3> GroundHighlightColor(const std::array<float, 3>& backdropDisplay) noexcept;
 
-// Checkerboard shades in linear light (resolve pass and tests share them).
+// Display-space compositing reference used by the resolve pass and tests.
+// `scene` is the straight-alpha HDR scene color; the CPU mirrors
+// tone-map-then-composite-over-display-backdrop. For coverage 0 the backdrop is
+// returned unchanged, and for coverage 1 only the tone-mapped model remains.
+std::array<float, 3> CompositeOverBackground(const std::array<float, 3>& sceneLinear,
+                                             float coverage, float exposure,
+                                             ToneMapMode mode,
+                                             const std::array<float, 3>& backdropDisplay) noexcept;
+
+// Checkerboard shades in display space (resolve pass and tests share them).
 constexpr float kCheckerDark = 0.10f;
 constexpr float kCheckerLight = 0.18f;
 

@@ -153,6 +153,36 @@ TEST_CASE("Analytic shadow projection follows the key light and stays bounded",
     CHECK(constants.parameters[1] == Approx(angled.softness));
 }
 
+TEST_CASE("Ground highlight and contact shadow are independent constants",
+          "[ground-shadow][appearance]")
+{
+    const Bounds bounds = Box(-1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 2.0f);
+    const GroundPlane plane = PlaceGroundPlane(bounds);
+    REQUIRE(plane.valid);
+    const ShadowFootprint footprint = ProjectShadow(bounds, plane, kKeyLightDirection);
+    REQUIRE(footprint.valid);
+    const float target[3] = { 0.0f, 0.0f, 0.0f };
+    const float backdrop[3] = { 0x1C / 255.0f, 0x1C / 255.0f, 0x1E / 255.0f };
+    float tint[3]{};
+    HighlightColor(backdrop, tint);
+    CHECK(tint[0] > backdrop[0]);
+    CHECK(tint[2] > backdrop[2]);
+
+    const Constants on = BuildConstants(plane, footprint, target, true, tint);
+    const Constants off = BuildConstants(plane, footprint, target, false, tint);
+    const Constants noShadow = BuildConstants(plane, footprint, target, true, tint, false);
+    // The highlight flag changes only the highlight channel, never the shadow.
+    CHECK(on.parameters[2] == 1.0f);
+    CHECK(off.parameters[2] == 0.0f);
+    CHECK(on.parameters[0] == off.parameters[0]);
+    CHECK(on.color[0] == Approx(tint[0]));
+    // The shadow flag is independent too: highlight on, shadow off.
+    CHECK(on.parameters[3] == 1.0f);
+    CHECK(noShadow.parameters[3] == 0.0f);
+    CHECK(noShadow.parameters[2] == 1.0f);
+    CHECK(noShadow.parameters[0] == on.parameters[0]);
+}
+
 TEST_CASE("ORM ambient occlusion honours strength and leaves direct specular clean",
           "[ground-shadow]")
 {
@@ -171,9 +201,9 @@ TEST_CASE("ORM ambient occlusion honours strength and leaves direct specular cle
     // Direct key/fill/rim calls must not receive an AO factor; only indirect
     // diffuse and environment reflection are scaled.
     for (const char* direct : {
-            "EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f))",
-            "EvaluateLight(n,viewDir,normalize(float3(-.70f,.25f,.38f))",
-            "EvaluateLight(n,viewDir,normalize(float3(.18f,.76f,.28f))" }) {
+            "EvaluateLightSplit(n,viewDir,normalize(float3(.45f,-.55f,.70f))",
+            "EvaluateLightSplit(n,viewDir,normalize(float3(-.70f,.25f,.38f))",
+            "EvaluateLightSplit(n,viewDir,normalize(float3(.18f,.76f,.28f))" }) {
         const auto start = shader.find(direct);
         REQUIRE(start != std::string::npos);
         const auto end = shader.find(';', start);
@@ -227,6 +257,9 @@ TEST_CASE("Ground-shadow shader is an independent compilable layer", "[ground-sh
     CHECK(shader.find("Grid") == std::string::npos);
     CHECK(shader.find("gShadow") != std::string::npos);
     CHECK(shader.find("smoothstep") != std::string::npos);
+    // T21a: the highlight flag and the shadow flag are separate channels.
+    CHECK(shader.find("gShadowParams.z") != std::string::npos);
+    CHECK(shader.find("gShadowParams.w") != std::string::npos);
 
     Microsoft::WRL::ComPtr<ID3DBlob> compiled;
     Microsoft::WRL::ComPtr<ID3DBlob> errors;

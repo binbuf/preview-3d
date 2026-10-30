@@ -242,6 +242,7 @@ class Viewer:
         send(self.hwnd, 0x8000 + 104, 101, 1)     # ground shadow query (no set)
         send(self.hwnd, 0x8000 + 104, 102, 1)     # ground shadow on
         send(self.hwnd, 0x8000 + 104, 104, 1)     # grid on
+        send(self.hwnd, 0x8000 + 104, 196, 1)     # ground highlight on
         time.sleep(0.35)
 
     def presentation_state(self):
@@ -255,6 +256,8 @@ class Viewer:
             'preset': query(self.hwnd, 89),
             'exposure': round(f32(91), 4),
             'background': query(self.hwnd, 93),
+            'backgroundColor': query(self.hwnd, 197),
+            'groundHighlight': bool(query(self.hwnd, 195)),
             'toneMap': query(self.hwnd, 95),
             'studioIntensity': round(f32(97), 4),
             'shadow': bool(query(self.hwnd, 101)),

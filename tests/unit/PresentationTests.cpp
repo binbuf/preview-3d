@@ -157,7 +157,7 @@ TEST_CASE("Studio PBR uses ORM R as ambient occlusion without darkening direct s
     CHECK(shader.find("*envIntensity*specularScale*occlusion") != std::string::npos);
     // The direct key light is not AO-scaled: its call has no `*occlusion`
     // argument, so metals keep clean direct specular.
-    const auto direct = shader.find("EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f))");
+    const auto direct = shader.find("EvaluateLightSplit(n,viewDir,normalize(float3(.45f,-.55f,.70f))");
     REQUIRE(direct != std::string::npos);
     const auto lineEnd = shader.find(';', direct);
     REQUIRE(lineEnd != std::string::npos);

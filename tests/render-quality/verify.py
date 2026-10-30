@@ -40,6 +40,7 @@ import env
 import fixtures
 import material_semantics
 import selftest
+import appearance
 from viewer import LoadFailed, Viewer, ViewerError, set_dpi_awareness
 
 PROFILE_DIR = Path(__file__).resolve().parent / 'profiles'
@@ -463,6 +464,15 @@ def main():
             report['failures'].extend(
                 f'diagnostics: {failure}' for failure in diagnostic_report['failures'])
         report['causeReport'] = str(diagnostics.write_cause_report(output, diagnostic_report))
+    if args.task == 'T21a' and not args.capture_only:
+        fixture_id = profile['lanes']['generated']['fixtures'][0]['id']
+        fixture_path = Path(generated_files[fixture_id]['path'])
+        appearance_report = appearance.run(args.configuration, output, fixture_path,
+                                           inventory_record)
+        report['appearance'] = appearance_report
+        if appearance_report.get('failures'):
+            report['failures'].extend(
+                f'appearance: {failure}' for failure in appearance_report['failures'])
     if args.task == 'T22' and not args.capture_only:
         # Serial unit/import/hostile/cache lanes plus the GPU material-semantic
         # readback and channel-image lane. It is a separate viewer session from

@@ -12,7 +12,7 @@
 // and this is never surfaced to the user as an error.
 struct ViewerSettings
 {
-    static constexpr int kCurrentVersion = 7;
+    static constexpr int kCurrentVersion = 8;
     int version = kCurrentVersion;
 
     // Display the model in the orientation its source file authored (true)
@@ -46,6 +46,12 @@ struct ViewerSettings
     int toneMapMode = 0;   // viewer_presentation::ToneMapMode
     int backgroundMode = 0; // viewer_presentation::BackgroundMode
     float exposure = 1.0f;
+    // T21a appearance preferences. They are global user choices: opening a
+    // different model or applying a presentation preset never rewrites them.
+    // `backgroundColor` is packed 0xRRGGBB and persists even while another
+    // background mode is selected.
+    unsigned int backgroundColor = 0x001C1C1Eu;
+    bool groundHighlightEnabled = true;
     // T16 contact shadow; presets still choose the per-document default until
     // the user toggles it (H), which pins and persists this value.
     bool groundShadowEnabled = true;

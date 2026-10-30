@@ -114,33 +114,37 @@ the per-frame constant buffer. Clay reuses the same environment at low
 specular; Directional keeps its hard key and adds only a low-intensity
 world-stable ambient/reflection term.
 
-The object shader now writes linear HDR radiance into an
-`R16G16B16A16_FLOAT` scene target; it deliberately no longer applies the
-display transform. A full-screen resolve pass reads that target, composites the
-background in the same linear space (dark UI-matched, neutral mid-grey,
-transparent, or a checkerboard), multiplies by exposure, applies the selected
-tone curve and writes sRGB into the swap-chain back buffer. Tone mapping after
-blending is what makes alpha and transmission composite correctly: the old
-per-object curve ran before the blend and could not account for what was
-behind a transparent surface.
+The object shader writes linear HDR radiance into an
+`R16G16B16A16_FLOAT` scene target; it deliberately does not apply the display
+transform. A separate display-space `R8G8B8A8_UNORM` backdrop target carries
+the selected backdrop and the local ground treatment. A full-screen resolve
+pass reads both targets, recovers straight-alpha scene color, multiplies by
+exposure, applies the selected tone curve, then composites the tone-mapped
+model over the display-space backdrop before writing sRGB to the swap-chain
+back buffer. Tone mapping the model before compositing keeps alpha and
+transmission correct; keeping the backdrop outside the curve is what makes
+`#1C1C1E` reach the screen as `#1C1C1E` (ADR-0079).
 
 The default curve is still Khronos PBR Neutral (`startCompression` 0.76,
 desaturation 0.15); ACES, Filmic and None are selectable, and non-finite scene
 values are contained before the curve. Exposure is a view setting applied
 before the curve. `[` / `]` change it, `\` cycles the background and `` ` ``
 cycles the tone curve; exposure, background and tone-map choice are persisted
-with the other view preferences. Because the background is cleared into the
-same HDR target and tone-mapped with the scene, a dark backdrop never hides a
-dark object's silhouette without the preset's rim/key contribution. Transparent
-and checkerboard modes clear the target alpha to zero and preserve it through
-the resolve, so a shell or screenshot path can use transparency.
+with the other view preferences. Background choices are "Windows Photos dark"
+(`#1C1C1E`, the default), "Studio gray" (`#808080`), "Custom color…"
+(native color picker, packed `0xRRGGBB`), Transparent and Checkerboard.
+Transparent mode preserves coverage alpha and premultiplies the display color;
+Checkerboard is drawn in display space and is an explicit transparency-review
+choice. Neither preset selection nor model counts rewrite the global background
+or ground-highlight preference.
 
 Presentation presets are selected from a bounded summary of the imported
 material catalog (base-color texture presence, metallic/roughness range,
 alpha/transmission share, unlit flags, point-only geometry and CAD format).
 Studio PBR, Studio CAD, Scan/Sculpt, Transparent and Point cloud each supply
-environment intensity, direct key/fill/rim multipliers, exposure, background,
-grid and ground-shadow defaults. The selection is a pure function in
+environment intensity, direct key/fill/rim multipliers, exposure, grid and
+ground-shadow defaults. Background and ground-highlight are deliberately not
+preset-controlled. The selection is a pure function in
 [`Presentation.h`](../../interactive-viewer/src/render/Presentation.h); the
 material loop is capped independently of the file. An explicit toolbar/preset
 choice pins the session and wins over later catalog recommendations.
@@ -151,7 +155,7 @@ in lock-step by the `[studio-ibl]`, `[tonemap]` and `[studio-presets]` unit
 tests, including pixel-shader compile checks at the feature-level-11_0
 baseline.
 
-## Ground contact shadow and ambient occlusion
+## Ground contact shadow, highlight and ambient occlusion
 
 Objects sit on a ground layer that is independent of the grid. The chosen MVP
 path is the analytic soft contact footprint from ADR-0072, not a shadow map:
@@ -160,19 +164,23 @@ transforms the verified model bounds with the active ground-axis matrix, places
 the plane at `min.z - 0.0015 × radius`, projects the eight bounds corners along
 the stable studio key direction `(0.45, -0.55, 0.70)`, biases that projection
 15 % back toward the base and adds a 0.60 × radius soft rim. `D3D12ViewerPath`
-draws the plane and mask as a generated quad before the grid and the model,
-into the linear HDR target. It writes no depth, so it cannot occlude the model;
-the grid stays a separate lower layer at `min.z - 0.012 × radius`, so the two
-coplanar layers cannot z-fight.
+draws the plane as a generated quad before the grid and the model, into the
+display-space backdrop (ADR-0079). It writes no depth, so it cannot occlude the
+model; the grid stays a separate lower layer at `min.z - 0.012 × radius`, so the
+two coplanar layers cannot z-fight.
 
-The shadow is one blended quad: there is no extra target, pass or GPU
-allocation. Opacity is 0.78 with 0.50 softness and an opaque core. A grazing
-key elevation is clamped to 0.08 and the footprint to 6 × radius, so a flat or
-very directional light cannot produce an unbounded ellipse. `H`, the More menu
-item and the persisted `groundShadowEnabled` preference toggle the layer. Studio
-CAD/PBR/Scan enable it by default; Transparent and Point cloud disable it. A
-manual toggle is independent of the grid toggle and survives later preset
-applications. SSAO is deliberately deferred to a follow-up: the HDR target does
+The ground draw combines two independent flags. The contact shadow is a soft
+ellipse with opacity 0.78 and softness 0.50; the illuminated highlight is a
+subtle, local additive tint around the base (backdrop + 0.055 with a radial
+fade), enabled by default. Turning the highlight off leaves the selected flat
+backdrop while the contact shadow still darkens it; turning the shadow off
+leaves the highlight intact. `H`, the More menu item and the persisted
+`groundShadowEnabled` preference toggle the shadow. The Settings "Ground
+highlight" switch toggles `groundHighlightEnabled` independently. Studio
+CAD/PBR/Scan enable the shadow by default; Transparent and Point cloud disable
+it. A manual toggle is independent of the grid toggle and survives later preset
+applications. Checkerboard and transparent modes omit the local ground
+treatment. SSAO is deliberately deferred to a follow-up: the HDR target does
 not yet expose a depth/normal chain, and the quality option must never gate the
 contact shadow.
 
@@ -180,10 +188,8 @@ The metallic-roughness texture's R channel is ambient occlusion. The shader
 applies the glTF strength formula `saturate(1 + strength × (sample - 1))`, with
 sample = 1 when the map is absent and `strength` from the protocol-v12
 `occlusionStrength` field (default 1). AO multiplies indirect diffuse,
-environment reflection and ambient terms only; direct `EvaluateLight` key/fill/
-rim specular is never AO-scaled, so metals do not read as dirty.
-The transparent/checkerboard backdrop from T15 remains the single background
-implementation; ground shadow defaults off there and for point clouds.
+environment reflection and ambient terms only; direct `EvaluateLightSplit`
+key/fill/rim specular is never AO-scaled, so metals do not read as dirty.
 
 ### Material lobes and transparency
 

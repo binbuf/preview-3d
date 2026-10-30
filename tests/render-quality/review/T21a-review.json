@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "task": "T21a",
+  "date": "2026-10-30",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the PNG files listed below",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T21a/appearance",
+  "imagesInspected": [
+    "TestResults/render-quality/T21a/appearance/images/no-model-dark.png",
+    "TestResults/render-quality/T21a/appearance/images/empty-windows-photos-dark-exp1.0-tm0.png",
+    "TestResults/render-quality/T21a/appearance/images/empty-studio-gray-exp2.5-tm2.png",
+    "TestResults/render-quality/T21a/appearance/images/empty-custom-exp0.3-tm0.png",
+    "TestResults/render-quality/T21a/appearance/images/model-windows-photos-dark.png",
+    "TestResults/render-quality/T21a/appearance/images/model-studio-gray.png",
+    "TestResults/render-quality/T21a/appearance/images/model-custom.png",
+    "TestResults/render-quality/T21a/appearance/images/combo-h1-s1-g1.png",
+    "TestResults/render-quality/T21a/appearance/images/combo-h1-s0-g0.png",
+    "TestResults/render-quality/T21a/appearance/images/combo-h0-s1-g0.png",
+    "TestResults/render-quality/T21a/appearance/images/combo-h0-s0-g0.png",
+    "TestResults/render-quality/T21a/appearance/images/decoupling-highlight-on.png",
+    "TestResults/render-quality/T21a/appearance/images/decoupling-highlight-off.png",
+    "TestResults/render-quality/T21a/appearance/images/settings-dpi-100.png",
+    "TestResults/render-quality/T21a/appearance/images/settings-dpi-150.png",
+    "TestResults/render-quality/T21a/appearance/images/settings-dpi-200.png",
+    "TestResults/render-quality/T21a/appearance/images/settings-high-contrast.png",
+    "TestResults/render-quality/T21a/appearance/images/settings-narrow-window.png",
+    "TestResults/render-quality/T21a/appearance/images/external-car-window-dark.png",
+    "TestResults/render-quality/T21a/appearance/images/external-car-window-gray.png",
+    "TestResults/render-quality/T21a/appearance/images/external-car-window-custom.png",
+    "TestResults/render-quality/T21a/appearance/images/external-camera-lens-dark.png",
+    "TestResults/render-quality/T21a/appearance/images/external-camera-lens-gray.png",
+    "TestResults/render-quality/T21a/appearance/images/external-camera-lens-custom.png",
+    "TestResults/render-quality/T21a/appearance/images/restart-custom-highlight-off.png"
+  ],
+  "observations": [
+    "The empty and model-surrounding backdrop is #1C1C1E on screen; it does not lighten with exposure or change with Neutral/ACES/Filmic.",
+    "Studio gray is neutral and custom #336699 keeps its hue behind the model and through glass transmission.",
+    "Ground highlight on shows a subtle local lift around the model base; off leaves the flat selected backdrop. The contact shadow remains visible with the highlight off, and turning shadows off while the highlight is on removes only the contact shadow.",
+    "The Settings panel shows Background and Ground highlight rows at 100%, 150% and 200% simulated DPI, in a narrow window, and under high contrast; labels and switches remain inside the panel.",
+    "Car windows retain their existing speckle/order defects on all three backdrops; no new halo surrounds the glass or body.",
+    "Camera lens remains dark with visible reflection/depth on dark and custom backdrops; its material appearance does not change with the backdrop."
+  ],
+  "defects": [
+    {
+      "id": "car-windshield-speckle",
+      "label": "known-defect",
+      "where": "external-car-window-dark.png; external-car-window-gray.png",
+      "description": "Existing bright dotted windshield/side-glass speckles remain. T21a changes only the backdrop and ground treatment; coverage/transmission separation is still T22/T26/T27 work.",
+      "assignedTo": "T22/T26/T27"
+    },
+    {
+      "id": "car-glass-order-depth",
+      "label": "known-defect",
+      "where": "external-car-window-dark.png; external-car-window-gray.png",
+      "description": "Roof/window interpenetration still reads as a single bright plate. Unchanged by T21a.",
+      "assignedTo": "T26"
+    },
+    {
+      "id": "khronos-glass-roles-collapse",
+      "label": "known-defect",
+      "where": "generated sphere-grid glass roles",
+      "description": "Tinted, rough and clear transmission still read similarly; T21a does not alter material shading.",
+      "assignedTo": "T22/T25/T26/T27"
+    },
+    {
+      "id": "dpi-evidence-is-simulated-layout",
+      "label": "limitation",
+      "where": "settings-dpi-150.png; settings-dpi-200.png",
+      "description": "The 150%/200% images use the Debug DPI test control (field 67) to relayout chrome in a 1280x860 physical client; they prove layout/reflow, not per-monitor rasterization on physical 150%/200% displays.",
+      "assignedTo": "T34/T35"
+    }
+  ],
+  "acceptance": {
+    "backdropPixelsMatchSelectedDisplayColor": true,
+    "exposureToneMapStabilityReviewed": true,
+    "highlightShadowGridIndependenceReviewed": true,
+    "persistenceAndPresetPrecedenceReviewed": true,
+    "settingsUiReviewed": true,
+    "externalGlassRegressionReviewed": true,
+    "note": "Numeric checks are in appearance/appearance.json; this record covers the actual images read by the image-capable reviewer."
+  }
+}

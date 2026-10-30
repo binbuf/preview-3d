@@ -25,6 +25,7 @@
 #include "platform/SourcePathPolicy.h"
 
 #include <commctrl.h>
+#include <commdlg.h>
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <shobjidl.h>
@@ -228,13 +229,14 @@ struct ViewerApp
     viewer_presentation::PresentationPreset activePreset = viewer_presentation::PresentationPreset::StudioPbr;
     viewer_presentation::ToneMapMode toneMapMode = viewer_presentation::ToneMapMode::Neutral;
     viewer_presentation::BackgroundMode backgroundMode = viewer_presentation::BackgroundMode::Dark;
+    uint32_t backgroundColor = 0x001C1C1Eu;
+    bool groundHighlightVisible = true;
     float exposure = 1.0f;
     float studioIntensity = 1.0f;
     float keyLightScale = 1.0f;
     float fillLightScale = 1.0f;
     float rimLightScale = 1.0f;
     bool exposureOverridden = false;
-    bool backgroundOverridden = false;
     bool toneMapOverridden = false;
     float directionalLightAngle = 0.875f;
     // Elevation above the horizon in radians; atan(0.55) matches the previous
@@ -1102,15 +1104,20 @@ void SetOrbitSpeedFromFlyoutX(ViewerApp& app, int clientX)
 RECT SettingsPanelRect(const ViewerApp& app)
 {
     const RECT overflowButton = app.chrome.Button(Chrome::Part::Overflow).rect;
-    const int width = Scale(app, 280);
-    const int height = Scale(app, 200);
+    const int width = Scale(app, 300);
+    const int height = Scale(app, 292);
     const int gap = Scale(app, 6);
     RECT client{};
     GetClientRect(app.window, &client);
     int left = std::min(overflowButton.left, client.right - Scale(app, 8) - width);
     left = std::max(left, Scale(app, 8));
     const int top = app.toolbarHeight + gap;
-    return RECT{ left, top, left + width, top + height };
+    // Keep the panel inside a short/narrow client instead of letting the
+    // language row fall off the bottom. Rows themselves stay scale-relative.
+    const int available = client.bottom - top - Scale(app, 8);
+    const int panelHeight = std::max(Scale(app, 252),
+        std::min(height, available > 0 ? available : Scale(app, 252)));
+    return RECT{ left, top, left + width, top + panelHeight };
 }
 
 RECT SettingsToggleRowRect(const ViewerApp& app)
@@ -1164,15 +1171,41 @@ RECT SettingsHideUntilCompleteSwitchRect(const ViewerApp& app)
     return RECT{ row.right - switchWidth, centerY - switchHeight / 2, row.right, centerY + switchHeight / 2 };
 }
 
-// Fourth row: a language selector. Unlike the three on/off switches above it,
-// the whole row is a button that opens a native popup menu of installed packs
-// (TrackPopupMenu scales to dozens of entries far better than a custom-drawn
-// dropdown would).
-RECT SettingsLanguageRowRect(const ViewerApp& app)
+// Background and ground-highlight rows sit between the existing switches and
+// the language selector. The panel grows accordingly; all rects still use the
+// same Scale()/clamp helper as the rest of the chrome, so DPI and narrow
+// windows keep the same relative layout.
+RECT SettingsBackgroundRowRect(const ViewerApp& app)
 {
     const RECT panel = SettingsPanelRect(app);
     const int marginX = Scale(app, 16);
     return RECT{ panel.left + marginX, panel.top + Scale(app, 152),
+        panel.right - marginX, panel.top + Scale(app, 196) };
+}
+
+RECT SettingsGroundHighlightRowRect(const ViewerApp& app)
+{
+    const RECT panel = SettingsPanelRect(app);
+    const int marginX = Scale(app, 16);
+    return RECT{ panel.left + marginX, panel.top + Scale(app, 200),
+        panel.right - marginX, panel.top + Scale(app, 244) };
+}
+
+RECT SettingsGroundHighlightSwitchRect(const ViewerApp& app)
+{
+    const RECT row = SettingsGroundHighlightRowRect(app);
+    const int switchWidth = Scale(app, 36);
+    const int switchHeight = Scale(app, 20);
+    const int centerY = (row.top + row.bottom) / 2;
+    return RECT{ row.right - switchWidth, centerY - switchHeight / 2, row.right, centerY + switchHeight / 2 };
+}
+
+// Language row: a native popup menu button.
+RECT SettingsLanguageRowRect(const ViewerApp& app)
+{
+    const RECT panel = SettingsPanelRect(app);
+    const int marginX = Scale(app, 16);
+    return RECT{ panel.left + marginX, panel.top + Scale(app, 248),
         panel.right - marginX, panel.bottom - Scale(app, 8) };
 }
 
@@ -1596,8 +1629,9 @@ void ApplyPresentationSettings(ViewerApp& app, model_core::PresentationProfile p
     app.fillLightScale = settings.fillScale;
     app.rimLightScale = settings.rimScale;
     if (!app.exposureOverridden) app.exposure = settings.exposure;
-    if (!app.backgroundOverridden) app.backgroundMode = settings.background;
     if (!app.toneMapOverridden) app.toneMapMode = settings.toneMap;
+    // T21a: background and ground highlight are global user preferences. A
+    // preset (including Scan/Transparent) never rewrites them.
     app.shadowVisible = viewer_presentation::ResolveShadowVisible(
         app.shadowOverridden, app.shadowVisible, settings.shadowEnabled);
     switch (preset)
@@ -1626,10 +1660,10 @@ void ApplyPresentationProfile(ViewerApp& app, model_core::PresentationProfile pr
 void ApplyManualPresentationPreset(ViewerApp& app, viewer_presentation::PresentationPreset preset)
 {
     app.presentationOverridden = true;
-    // An explicit preset choice is the user's view state: apply its background
-    // and exposure rather than preserving an earlier manual background.
+    // An explicit preset choice is the user's view state: apply its exposure
+    // rather than preserving an earlier manual exposure. Background and ground
+    // highlight remain global appearance preferences.
     app.exposureOverridden = false;
-    app.backgroundOverridden = false;
     app.toneMapOverridden = false;
     app.shadowOverridden = false;
     const auto profile = model_core::FindBySourceFormatId(
@@ -1647,6 +1681,28 @@ void ShowPresentationHud(ViewerApp& app)
     app.modeHudUntil = NowSeconds() + kHudVisibleSeconds;
 }
 
+std::wstring BackgroundDisplayLabel(const ViewerApp& app)
+{
+    switch (app.backgroundMode)
+    {
+    case viewer_presentation::BackgroundMode::MidGrey:
+        return Loc("settings.background.gray", L"Studio gray");
+    case viewer_presentation::BackgroundMode::Custom:
+    {
+        wchar_t text[16]{};
+        swprintf_s(text, L"#%06X", app.backgroundColor & 0x00FFFFFFu);
+        return text;
+    }
+    case viewer_presentation::BackgroundMode::Transparent:
+        return Loc("settings.background.transparent", L"Transparent (capture alpha)");
+    case viewer_presentation::BackgroundMode::Checkerboard:
+        return Loc("settings.background.checker", L"Checkerboard (transparency review)");
+    case viewer_presentation::BackgroundMode::Dark:
+    default:
+        return Loc("settings.background.dark", L"Windows Photos dark");
+    }
+}
+
 void AdjustExposure(ViewerApp& app, float delta)
 {
     app.exposure = viewer_presentation::ClampExposure(app.exposure + delta);
@@ -1656,14 +1712,79 @@ void AdjustExposure(ViewerApp& app, float delta)
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
-void CycleBackground(ViewerApp& app)
+void SetBackgroundMode(ViewerApp& app, viewer_presentation::BackgroundMode mode)
 {
-    const int next = (static_cast<int>(app.backgroundMode) + 1) % 4;
-    app.backgroundMode = static_cast<viewer_presentation::BackgroundMode>(next);
-    app.backgroundOverridden = true;
+    app.backgroundMode = mode;
     ShowPresentationHud(app);
     SaveViewerPreferences(app);
     InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void CycleBackground(ViewerApp& app)
+{
+    const int next = (static_cast<int>(app.backgroundMode) + 1) % 5;
+    SetBackgroundMode(app, static_cast<viewer_presentation::BackgroundMode>(next));
+}
+
+void ToggleGroundHighlight(ViewerApp& app)
+{
+    app.groundHighlightVisible = !app.groundHighlightVisible;
+    ShowModeHud(app, app.groundHighlightVisible
+        ? Loc("hud.groundHighlightShown", L"Ground highlight shown")
+        : Loc("hud.groundHighlightHidden", L"Ground highlight hidden"));
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+// Background dropdown: a native popup menu, matching the language selector's
+// established convention. Custom color opens the standard color dialog.
+void ShowBackgroundMenu(ViewerApp& app)
+{
+    HMENU menu = CreatePopupMenu();
+    const std::wstring labels[] = {
+        Loc("settings.background.dark", L"Windows Photos dark"),
+        Loc("settings.background.gray", L"Studio gray"),
+        Loc("settings.background.custom", L"Custom color\u2026"),
+        Loc("settings.background.transparent", L"Transparent (capture alpha)"),
+        Loc("settings.background.checker", L"Checkerboard (transparency review)"),
+    };
+    // Menu order follows the enum only for the three opaque choices; the two
+    // transparency modes are listed last with accurate labels.
+    static constexpr int order[] = { 0, 1, 4, 2, 3 };
+    static constexpr UINT kBackgroundMenuBase = 51000;
+    for (int index = 0; index < 5; ++index) {
+        const UINT flags = MF_STRING | (static_cast<int>(app.backgroundMode) == order[index]
+            ? MF_CHECKED : 0u);
+        AppendMenuW(menu, flags, kBackgroundMenuBase + order[index], labels[index].c_str());
+    }
+    const RECT row = SettingsBackgroundRowRect(app);
+    POINT anchor{ row.left, row.bottom };
+    ClientToScreen(app.window, &anchor);
+    const int selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+        anchor.x, anchor.y, 0, app.window, nullptr);
+    DestroyMenu(menu);
+    if (selected < static_cast<int>(kBackgroundMenuBase)
+        || selected >= static_cast<int>(kBackgroundMenuBase) + 5) return;
+    const int mode = selected - static_cast<int>(kBackgroundMenuBase);
+    if (mode != static_cast<int>(viewer_presentation::BackgroundMode::Custom)) {
+        SetBackgroundMode(app, static_cast<viewer_presentation::BackgroundMode>(mode));
+        return;
+    }
+    // Native custom color picker. Cancel leaves the saved color untouched.
+    static COLORREF customColors[16]{};
+    CHOOSECOLORW choose{};
+    choose.lStructSize = sizeof(choose);
+    choose.hwndOwner = app.window;
+    choose.rgbResult = RGB((app.backgroundColor >> 16) & 0xFFu,
+                           (app.backgroundColor >> 8) & 0xFFu,
+                           app.backgroundColor & 0xFFu);
+    choose.lpCustColors = customColors;
+    choose.Flags = CC_FULLOPEN | CC_RGBINIT;
+    if (!ChooseColorW(&choose)) return;
+    app.backgroundColor = (static_cast<uint32_t>(GetRValue(choose.rgbResult)) << 16)
+        | (static_cast<uint32_t>(GetGValue(choose.rgbResult)) << 8)
+        | static_cast<uint32_t>(GetBValue(choose.rgbResult));
+    SetBackgroundMode(app, viewer_presentation::BackgroundMode::Custom);
 }
 
 void CycleToneMap(ViewerApp& app)
@@ -1882,6 +2003,8 @@ void SaveViewerPreferences(const ViewerApp& app)
     settings.language = app.language;
     settings.toneMapMode = static_cast<int>(app.toneMapMode);
     settings.backgroundMode = static_cast<int>(app.backgroundMode);
+    settings.backgroundColor = app.backgroundColor & 0x00FFFFFFu;
+    settings.groundHighlightEnabled = app.groundHighlightVisible;
     settings.exposure = app.exposure;
     settings.groundShadowEnabled = app.shadowVisible;
     settings.groundShadowOverridden = app.shadowOverridden;
@@ -3553,6 +3676,17 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.description=Loc("a11y.hideUntilCompleteDesc", L"Keep the model hidden until loading and refinement complete");
         info.rect=SettingsHideUntilCompleteRowRect(app); info.visible=app.settingsPanelOpen;
         info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.hideModelUntilComplete; break;
+    case Control::BackgroundMode:
+        info.name=Loc("settings.background", L"Background");
+        info.description=Loc("a11y.backgroundDesc", L"Choose the viewport backdrop; it does not change model lighting");
+        info.value=BackgroundDisplayLabel(app);
+        info.rect=SettingsBackgroundRowRect(app); info.visible=app.settingsPanelOpen;
+        info.role=ROLE_SYSTEM_PUSHBUTTON; break;
+    case Control::GroundHighlight:
+        info.name=Loc("settings.groundHighlight", L"Ground highlight");
+        info.description=Loc("a11y.groundHighlightDesc", L"Show a subtle illuminated area at the model base; contact shadows stay independent");
+        info.rect=SettingsGroundHighlightRowRect(app); info.visible=app.settingsPanelOpen;
+        info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.groundHighlightVisible; break;
     case Control::GizmoPositiveX: case Control::GizmoNegativeX: case Control::GizmoPositiveY:
     case Control::GizmoNegativeY: case Control::GizmoPositiveZ: case Control::GizmoNegativeZ:
     {
@@ -3744,6 +3878,8 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::NativeOrientation: ToggleShowNativeOrientation(app); break;
     case Control::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
     case Control::HideModelUntilComplete: ToggleHideModelUntilComplete(app); break;
+    case Control::BackgroundMode: ShowBackgroundMenu(app); break;
+    case Control::GroundHighlight: ToggleGroundHighlight(app); break;
     case Control::GizmoPositiveX: SnapViewCommand(app,ViewDir::Right); break;
     case Control::GizmoNegativeX: SnapViewCommand(app,ViewDir::Left); break;
     case Control::GizmoPositiveY: SnapViewCommand(app,ViewDir::Back); break;
@@ -4132,6 +4268,8 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.presentationPreset=app.activePreset;
     overlay.toneMap=app.toneMapMode;
     overlay.background=app.backgroundMode;
+    overlay.backgroundColor=app.backgroundColor;
+    overlay.groundHighlightVisible=app.groundHighlightVisible;
     overlay.exposure=app.exposure;
     overlay.studioIntensity=app.studioIntensity;
     overlay.keyLightScale=app.keyLightScale;
@@ -4180,12 +4318,16 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.showNativeOrientation = app.showNativeOrientation;
     overlay.hideCursorWhileDragging = app.hideCursorWhileDragging;
     overlay.hideModelUntilComplete = app.hideModelUntilComplete;
+    overlay.groundHighlightVisible = app.groundHighlightVisible;
     overlay.statsPanelTitle = Loc("info.statsShading", L"Stats & Shading");
     overlay.speedFlyoutTitle = Loc("chrome.travelSpeed", L"Travel speed");
     overlay.orbitFlyoutTitle = Loc("chrome.orbitSpeed", L"Orbit speed");
     overlay.nativeOrientationLabel = Loc("settings.nativeOrientation", L"Show model in its original orientation");
     overlay.hideCursorLabel = Loc("settings.hideCursor", L"Hide cursor while dragging");
     overlay.hideUntilCompleteLabel = Loc("settings.hideUntilComplete", L"Show model only when fully loaded");
+    overlay.backgroundLabel = Loc("settings.background", L"Background");
+    overlay.backgroundValue = BackgroundDisplayLabel(app);
+    overlay.groundHighlightLabel = Loc("settings.groundHighlight", L"Ground highlight");
     overlay.languageLabel = Loc("settings.language", L"Language");
     overlay.languageValue = LocalizationDisplayName(LocalizationLanguage());
     overlay.emptyDropTitle = Loc("empty.dropTitle", L"Drop a 3D model here");
@@ -4199,6 +4341,9 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.hideCursorSwitchRect = SettingsCursorSwitchRect(app);
         overlay.hideUntilCompleteRowRect = SettingsHideUntilCompleteRowRect(app);
         overlay.hideUntilCompleteSwitchRect = SettingsHideUntilCompleteSwitchRect(app);
+        overlay.backgroundRowRect = SettingsBackgroundRowRect(app);
+        overlay.groundHighlightRowRect = SettingsGroundHighlightRowRect(app);
+        overlay.groundHighlightSwitchRect = SettingsGroundHighlightSwitchRect(app);
         overlay.languageRowRect = SettingsLanguageRowRect(app);
     }
 
@@ -4651,9 +4796,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (wParam == 93) return static_cast<LRESULT>(app->backgroundMode);
         if (wParam == 94) {
-            if (lParam >= 0 && lParam <= static_cast<LPARAM>(viewer_presentation::BackgroundMode::Checkerboard)) {
+            if (lParam >= 0 && lParam <= static_cast<LPARAM>(viewer_presentation::BackgroundMode::Custom)) {
                 app->backgroundMode = static_cast<viewer_presentation::BackgroundMode>(lParam);
-                app->backgroundOverridden = true;
+                SaveViewerPreferences(*app);
                 InvalidateRect(window, nullptr, FALSE);
             }
             return static_cast<LRESULT>(app->backgroundMode);
@@ -4697,6 +4842,29 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             app->presentationOverridden = true;
             InvalidateRect(window, nullptr, FALSE);
             return static_cast<LRESULT>(app->gridVisible ? 1 : 0);
+        }
+        // T21a appearance evidence: ground highlight query/set (195/196) and
+        // custom background color query/set (197/198). 199 flushes the same
+        // persisted state the Settings UI and the background shortcut write.
+        if (wParam == 195) return static_cast<LRESULT>(app->groundHighlightVisible ? 1 : 0);
+        if (wParam == 196) {
+            app->groundHighlightVisible = lParam != 0;
+            SaveViewerPreferences(*app);
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(app->groundHighlightVisible ? 1 : 0);
+        }
+        if (wParam == 197) return static_cast<LRESULT>(app->backgroundColor & 0x00FFFFFFu);
+        if (wParam == 198) {
+            if (lParam >= 0 && lParam <= 0x00FFFFFF) {
+                app->backgroundColor = static_cast<uint32_t>(lParam) & 0x00FFFFFFu;
+                SaveViewerPreferences(*app);
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return static_cast<LRESULT>(app->backgroundColor & 0x00FFFFFFu);
+        }
+        if (wParam == 199) {
+            SaveViewerPreferences(*app);
+            return 1;
         }
         if (wParam >= 80 && wParam <= 83) {
             if (!app->loadedModel) return 0;
@@ -5243,6 +5411,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             const RECT switchRect = SettingsSwitchRect(*app);
             const RECT cursorSwitchRect = SettingsCursorSwitchRect(*app);
             const RECT hideUntilCompleteSwitchRect = SettingsHideUntilCompleteSwitchRect(*app);
+            const RECT backgroundRowRect = SettingsBackgroundRowRect(*app);
+            const RECT highlightSwitchRect = SettingsGroundHighlightSwitchRect(*app);
             const RECT languageRowRect = SettingsLanguageRowRect(*app);
             const RECT panel = SettingsPanelRect(*app);
             if (PtInRect(&switchRect, downPoint))
@@ -5258,6 +5428,16 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (PtInRect(&hideUntilCompleteSwitchRect, downPoint))
             {
                 ToggleHideModelUntilComplete(*app);
+                return 0;
+            }
+            if (PtInRect(&backgroundRowRect, downPoint))
+            {
+                ShowBackgroundMenu(*app);
+                return 0;
+            }
+            if (PtInRect(&highlightSwitchRect, downPoint))
+            {
+                ToggleGroundHighlight(*app);
                 return 0;
             }
             if (PtInRect(&languageRowRect, downPoint))
@@ -6256,6 +6436,8 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.hideModelUntilComplete = settings.hideModelUntilComplete;
     app.toneMapMode = static_cast<viewer_presentation::ToneMapMode>(settings.toneMapMode);
     app.backgroundMode = static_cast<viewer_presentation::BackgroundMode>(settings.backgroundMode);
+    app.backgroundColor = settings.backgroundColor & 0x00FFFFFFu;
+    app.groundHighlightVisible = settings.groundHighlightEnabled;
     app.exposure = viewer_presentation::ClampExposure(settings.exposure);
     app.shadowVisible = settings.groundShadowEnabled;
     app.shadowOverridden = settings.groundShadowOverridden;

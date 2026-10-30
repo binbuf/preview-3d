@@ -84,6 +84,9 @@ enum class Control
     UpdateAvailable,
     // Appended after UpdateAvailable so earlier numeric runtime IDs stay stable.
     ErrorOpenAs,
+    // T21a appearance controls, appended to keep all earlier runtime IDs.
+    BackgroundMode,
+    GroundHighlight,
     Count,
 };
 

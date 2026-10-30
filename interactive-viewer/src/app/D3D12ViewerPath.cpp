@@ -793,7 +793,7 @@ cbuffer GroundConstants : register(b1)
 {
     float4 gGround;       // center.xy, plane z, half size
     float4 gShadow;       // footprint center.xy, radii.xy
-    float4 gShadowParams; // opacity, softness, unused, unused
+    float4 gShadowParams; // opacity, softness, highlight strength, shadow enabled
     float4 gGroundColor;  // linear rgb, center alpha
 };
 struct GroundOutput { float4 position : SV_POSITION; float3 worldPosition : TEXCOORD0; };
@@ -827,13 +827,23 @@ GroundOutput PSMain(GroundInput input)
     float distanceToShadow = length(shadowDelta);
     float softness = clamp(gShadowParams.y, 0.001f, 1.0f);
     float shadow = (1.0f - smoothstep(1.0f - softness, 1.0f, distanceToShadow)) * gShadowParams.x;
+    // T21a: gShadowParams.w gates the contact shadow independently of the
+    // illuminated area, so turning shadows off does not remove the highlight.
+    shadow *= saturate(gShadowParams.w);
+    // The illuminated area is a separate presentation layer. gShadowParams.z
+    // is 0 when the user turned the highlight off; the shadow still applies.
+    float highlight = saturate(gShadowParams.z);
     float2 groundDelta = (p - gGround.xy) / max(gGround.w, 1e-6f);
     float groundDistance = length(groundDelta);
     float fade = 1.0f - smoothstep(0.72f, 1.0f, groundDistance);
     float3 ground = gGroundColor.rgb * (0.88f + 0.12f * (1.0f - saturate(groundDistance)));
-    float3 color = lerp(ground, ground * 0.05f, saturate(shadow));
+    // Highlight off leaves only the contact shadow (black over the backdrop).
+    float3 color = ground * highlight;
+    color *= (1.0f - 0.95f * saturate(shadow));
+    float alpha = saturate(max(shadow, highlight * fade * gGroundColor.a));
     GroundOutput output;
-    output.color = float4(max(color, 0.0f), fade * gGroundColor.a);
+    // Premultiplied over the display-space backdrop target.
+    output.color = float4(max(color * alpha, 0.0f), alpha);
     output.pick = 0;
     return output;
 }
@@ -888,6 +898,7 @@ cbuffer ResolveConstants : register(b0)
     float4 gBackground; // linear background rgb (transparent/checker ignore rgb)
 };
 Texture2D<float4> gSceneColor : register(t0);
+Texture2D<float4> gBackdrop : register(t1);
 SamplerState gLinearSampler : register(s0);
 
 float3 NeutralToneMap(float3 linearColor,float exposure)
@@ -942,20 +953,31 @@ float4 PSMain(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 {
     float4 scene=gSceneColor.Sample(gLinearSampler,uv);
     uint backgroundMode=(uint)gResolve.z;
-    float3 background=gBackground.rgb;
+    // The HDR target stores straight-alpha scene color premultiplied over a
+    // black clear. Recover the straight color before the display transform so
+    // glass does not get darker just because its coverage is low.
+    float alpha=saturate(scene.a);
+    float3 sceneStraight=alpha>1e-5f ? scene.rgb/alpha : float3(0.0f,0.0f,0.0f);
+    float3 mapped=SrgbEncode(ApplyToneMap(sceneStraight,gResolve.x,(uint)gResolve.y));
+    float3 backdrop=gBackdrop.Sample(gLinearSampler,uv).rgb;
     if (backgroundMode==3u) {
+        // Explicit checkerboard choice, in display space so it is stable.
         float2 cell=floor(position.xy/max(4.0f,gResolve.w));
         float parity=fmod(cell.x+cell.y,2.0f);
-        background=lerp(float3(0.10f,0.10f,0.11f),float3(0.18f,0.18f,0.19f),parity);
+        backdrop=lerp(float3(0.10f,0.10f,0.11f),float3(0.18f,0.18f,0.19f),parity);
     } else if (backgroundMode==2u) {
-        background=float3(0.0f,0.0f,0.0f);
+        backdrop=float3(0.0f,0.0f,0.0f);
     }
-    float alpha=saturate(scene.a);
-    float3 linearColor=scene.rgb+background*(1.0f-alpha);
-    float3 mapped=ApplyToneMap(linearColor,gResolve.x,(uint)gResolve.y);
     float4 output;
-    output.rgb=SrgbEncode(mapped);
-    output.a=backgroundMode==2u ? alpha : 1.0f;
+    if (backgroundMode==2u) {
+        // Transparent capture: premultiplied display color and preserved
+        // coverage alpha. The backdrop/ground contributes no alpha.
+        output.rgb=mapped*alpha;
+        output.a=alpha;
+    } else {
+        output.rgb=lerp(backdrop,mapped,alpha);
+        output.a=1.0f;
+    }
     return output;
 }
 )";
@@ -1194,16 +1216,20 @@ bool D3D12ViewerPath::CreateSceneColorTarget(UINT width, UINT height, std::wstri
     sceneColor.Reset();
     sceneColorRtvHeap.Reset();
     sceneColorSrvHeap.Reset();
+    backdropColor.Reset();
+    backdropRtvHeap.Reset();
 
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.NumDescriptors = 1;
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc{};
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    srvHeapDesc.NumDescriptors = 1;
+    // t0 = HDR scene, t1 = display-space backdrop.
+    srvHeapDesc.NumDescriptors = 2;
     srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     if (FAILED(device.Device()->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&sceneColorRtvHeap)))
-        || FAILED(device.Device()->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&sceneColorSrvHeap)))) {
+        || FAILED(device.Device()->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&sceneColorSrvHeap)))
+        || FAILED(device.Device()->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&backdropRtvHeap)))) {
         error = L"The HDR scene descriptor heaps could not be created.";
         return false;
     }
@@ -1240,6 +1266,41 @@ bool D3D12ViewerPath::CreateSceneColorTarget(UINT width, UINT height, std::wstri
     srv.Texture2D.MipLevels = 1;
     device.Device()->CreateShaderResourceView(sceneColor.Get(), &srv,
         sceneColorSrvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    // T21a display-space backdrop target. RGBA8 is enough: it stores the
+    // already-sRGB-encoded display color and the local ground treatment.
+    D3D12_RESOURCE_DESC backdropDesc{};
+    backdropDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    backdropDesc.Width = width;
+    backdropDesc.Height = height;
+    backdropDesc.DepthOrArraySize = 1;
+    backdropDesc.MipLevels = 1;
+    backdropDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    backdropDesc.SampleDesc.Count = 1;
+    backdropDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    D3D12_CLEAR_VALUE backdropClear{};
+    backdropClear.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    if (FAILED(device.Device()->CreateCommittedResource(
+            &properties, D3D12_HEAP_FLAG_NONE, &backdropDesc,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &backdropClear, IID_PPV_ARGS(&backdropColor)))) {
+        error = L"The display-space backdrop target could not be created.";
+        return false;
+    }
+    backdropAllocationBytes =
+        device.Device()->GetResourceAllocationInfo(0, 1, &backdropDesc).SizeInBytes;
+    device.Device()->CreateRenderTargetView(backdropColor.Get(), nullptr,
+        backdropRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    const UINT srvDescriptorSize =
+        device.Device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CPU_DESCRIPTOR_HANDLE backdropSrv =
+        sceneColorSrvHeap->GetCPUDescriptorHandleForHeapStart();
+    backdropSrv.ptr += srvDescriptorSize;
+    D3D12_SHADER_RESOURCE_VIEW_DESC backdropSrvDesc{};
+    backdropSrvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    backdropSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    backdropSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    backdropSrvDesc.Texture2D.MipLevels = 1;
+    device.Device()->CreateShaderResourceView(backdropColor.Get(), &backdropSrvDesc, backdropSrv);
     return true;
 }
 
@@ -1466,16 +1527,23 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     groundPsoDesc.PS = { groundPsBlob->GetBufferPointer(), groundPsBlob->GetBufferSize() };
     groundPsoDesc.InputLayout = {};
     groundPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    // T21a: the highlight/shadow layer renders into the display-space backdrop,
+    // not the linear HDR scene. Premultiplied source-over is exact there.
+    groundPsoDesc.NumRenderTargets = 1;
+    groundPsoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    groundPsoDesc.RTVFormats[1] = DXGI_FORMAT_UNKNOWN;
+    groundPsoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
     auto& groundBlend = groundPsoDesc.BlendState.RenderTarget[0];
     groundBlend.BlendEnable = TRUE;
-    groundBlend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    groundBlend.SrcBlend = D3D12_BLEND_ONE;
     groundBlend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
     groundBlend.BlendOp = D3D12_BLEND_OP_ADD;
     groundBlend.SrcBlendAlpha = D3D12_BLEND_ONE;
     groundBlend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
     groundBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    groundPsoDesc.DepthStencilState.DepthEnable = FALSE;
     groundPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-    groundPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    groundPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&groundPsoDesc,
                                                              IID_PPV_ARGS(&groundPipelineState)))) {
         error = L"The ground-shadow pipeline state could not be created.";
@@ -1727,7 +1795,7 @@ bool D3D12ViewerPath::CreateResolvePipeline(std::wstring& error)
 {
     D3D12_DESCRIPTOR_RANGE srvRange{};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 1;
+    srvRange.NumDescriptors = 2;
     srvRange.BaseShaderRegister = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -1816,23 +1884,27 @@ bool D3D12ViewerPath::CreateResolvePipeline(std::wstring& error)
 void D3D12ViewerPath::ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv,
                                                const OverlayInfo& info)
 {
-    if (!sceneColor || !sceneColorSrvHeap || !resolveRootSignature || !resolvePipelineState) return;
+    if (!sceneColor || !backdropColor || !sceneColorSrvHeap || !resolveRootSignature || !resolvePipelineState) return;
 
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = sceneColor.Get();
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    commandList->ResourceBarrier(1, &barrier);
+    D3D12_RESOURCE_BARRIER barriers[2]{};
+    barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[0].Transition.pResource = sceneColor.Get();
+    barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[1].Transition.pResource = backdropColor.Get();
+    barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    commandList->ResourceBarrier(2, barriers);
 
-    const auto background = viewer_presentation::BackgroundLinear(info.background);
     const float constants[8] = {
         viewer_presentation::ClampExposure(info.exposure),
         static_cast<float>(info.toneMap),
         static_cast<float>(info.background),
         12.0f,
-        background[0], background[1], background[2], background[3],
+        0.0f, 0.0f, 0.0f, 0.0f,
     };
     commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
     D3D12_VIEWPORT viewport{ 0.0f, 0.0f, static_cast<float>(swapChain.Width()),
@@ -1853,8 +1925,9 @@ void D3D12ViewerPath::ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backB
     commandList->IASetIndexBuffer(nullptr);
     commandList->DrawInstanced(3, 1, 0, 0);
 
-    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-    commandList->ResourceBarrier(1, &barrier);
+    std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
+    std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
+    commandList->ResourceBarrier(2, barriers);
 }
 
 bool D3D12ViewerPath::CreateFrameConstantBuffer(std::wstring& error)
@@ -2144,12 +2217,17 @@ void D3D12ViewerPath::RenderClearFrame(const DirectX::XMFLOAT4& orientation, con
     toRenderTarget.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     commandList->ResourceBarrier(1, &toRenderTarget);
 
-    // The idle frame still goes through the same HDR resolve so background mode,
-    // exposure and tone map are identical before and after a model loads.
-    if (sceneColor && sceneColorRtvHeap) {
-        const auto background = viewer_presentation::BackgroundLinear(chrome.info.background);
+    // The idle frame still goes through the same resolve so background mode,
+    // exposure and tone map behave identically before and after a model loads.
+    if (sceneColor && sceneColorRtvHeap && backdropColor && backdropRtvHeap) {
+        const float sceneClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
         commandList->ClearRenderTargetView(
-            sceneColorRtvHeap->GetCPUDescriptorHandleForHeapStart(), background.data(), 0, nullptr);
+            sceneColorRtvHeap->GetCPUDescriptorHandleForHeapStart(), sceneClear, 0, nullptr);
+        const auto display = viewer_presentation::BackgroundDisplayColor(
+            chrome.info.background, chrome.info.backgroundColor);
+        const float backdropClear[4] = { display[0], display[1], display[2], 1.0f };
+        commandList->ClearRenderTargetView(
+            backdropRtvHeap->GetCPUDescriptorHandleForHeapStart(), backdropClear, 0, nullptr);
         ResolveSceneToBackBuffer(swapChain.BackBufferRtv(index), chrome.info);
     } else {
         float clearColor[4]{};
@@ -2194,8 +2272,16 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         : swapChain.BackBufferRtv(index);
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
-    const auto background = viewer_presentation::BackgroundLinear(chrome.info.background);
-    commandList->ClearRenderTargetView(rtv, background.data(), 0, nullptr);
+    const auto backgroundDisplay = viewer_presentation::BackgroundDisplayColor(
+        chrome.info.background, chrome.info.backgroundColor);
+    const float sceneClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    commandList->ClearRenderTargetView(rtv, sceneClear, 0, nullptr);
+    if (backdropRtvHeap && backdropColor) {
+        const float backdropClear[4] = {
+            backgroundDisplay[0], backgroundDisplay[1], backgroundDisplay[2], 1.0f };
+        commandList->ClearRenderTargetView(
+            backdropRtvHeap->GetCPUDescriptorHandleForHeapStart(), backdropClear, 0, nullptr);
+    }
     commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     const auto pickRtv = pickRtvHeap->GetCPUDescriptorHandleForHeapStart();
     const float pickClear[4]{};
@@ -2257,7 +2343,10 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
         = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
 
-    if (chrome.info.shadowVisible && haveModelBounds) {
+    const bool opaqueBackdrop = chrome.info.background != viewer_presentation::BackgroundMode::Transparent
+        && chrome.info.background != viewer_presentation::BackgroundMode::Checkerboard;
+    if (opaqueBackdrop && (chrome.info.shadowVisible || chrome.info.groundHighlightVisible)
+        && haveModelBounds && backdropRtvHeap && backdropColor) {
         DirectX::XMFLOAT4X4 groundTransform{};
         DirectX::XMStoreFloat4x4(&groundTransform,
             GroundAxisTransform(chrome.info.groundAxis, sourceUpAxis,
@@ -2280,8 +2369,18 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         const auto footprint = viewer_ground_shadow::ProjectShadow(
             worldBounds, plane, viewer_ground_shadow::kKeyLightDirection);
         if (plane.valid && footprint.valid) {
+            float highlightTint[3]{};
+            viewer_ground_shadow::HighlightColor(backgroundDisplay.data(), highlightTint);
             const auto constants = viewer_ground_shadow::BuildConstants(
-                plane, footprint, cameraTargetF);
+                plane, footprint, cameraTargetF,
+                chrome.info.groundHighlightVisible, highlightTint,
+                chrome.info.shadowVisible);
+            // Draw the local highlight/contact shadow into the display-space
+            // backdrop (not the HDR scene), so exposure and tone mapping cannot
+            // alter it. The layer's two flags are independent.
+            D3D12_CPU_DESCRIPTOR_HANDLE backdropTarget =
+                backdropRtvHeap->GetCPUDescriptorHandleForHeapStart();
+            commandList->OMSetRenderTargets(1, &backdropTarget, FALSE, nullptr);
             commandList->SetGraphicsRootSignature(rootSignature.Get());
             commandList->SetPipelineState(groundPipelineState.Get());
             commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
@@ -2290,6 +2389,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             commandList->IASetVertexBuffers(0, 0, nullptr);
             commandList->IASetIndexBuffer(nullptr);
             commandList->DrawInstanced(6, 1, 0, 0);
+            commandList->OMSetRenderTargets(2, targets, FALSE, &dsv);
         }
     }
 
@@ -3374,7 +3474,9 @@ uint64_t D3D12ViewerPath::AccountedAllocationBytes(const ModelResources* extra) 
     for (UINT frame=0; frame<kFrameCount; ++frame) resource(swapChain.BackBuffer(frame));
     resource(depthBuffer.Get()); resource(pickTarget.Get()); resource(pickReadback.Get()); resource(frameConstantBuffer.Get());
     resource(sceneColor.Get(),sceneColorAllocationBytes);
+    resource(backdropColor.Get(),backdropAllocationBytes);
     heap(dsvHeap.Get()); heap(pickRtvHeap.Get()); heap(sceneColorRtvHeap.Get()); heap(sceneColorSrvHeap.Get());
+    heap(backdropRtvHeap.Get());
     modelBytes(model); modelBytes(pendingModel);
     for (const auto& retired:retiredModels) modelBytes(retired.resources);
     if (extra) modelBytes(*extra);

@@ -122,28 +122,53 @@ TEST_CASE("Exposure is a linear pre-scale and 1.0 is the identity", "[tonemap]")
     CHECK(ClampExposure(std::numeric_limits<float>::quiet_NaN()) == 1.0f);
 }
 
-TEST_CASE("Background modes clear and composite in linear space", "[tonemap][studio-presets]")
+TEST_CASE("Background display colors are exact and exposure/tone-map independent", "[tonemap][studio-presets]")
 {
-    const auto dark = BackgroundLinear(BackgroundMode::Dark);
-    CHECK(dark[3] == 1.0f);
-    CHECK(dark[0] > 0.0f);
-    CHECK(dark[0] < 0.2f);
+    // T21a: the backdrop is display-encoded, not linear HDR. The restored
+    // Windows Photos dark must be exactly #1C1C1E.
+    const auto dark = BackgroundDisplayColor(BackgroundMode::Dark, 0x001C1C1Eu);
+    CHECK(std::fabs(dark[0] - 0x1C / 255.0f) < 1e-6f);
+    CHECK(std::fabs(dark[1] - 0x1C / 255.0f) < 1e-6f);
+    CHECK(std::fabs(dark[2] - 0x1E / 255.0f) < 1e-6f);
 
-    const auto grey = BackgroundLinear(BackgroundMode::MidGrey);
-    CHECK(grey[3] == 1.0f);
-    CHECK(grey[0] > dark[0]);
+    const auto grey = BackgroundDisplayColor(BackgroundMode::MidGrey, 0);
+    CHECK(std::fabs(grey[0] - 0.5f) < 1e-6f);
 
-    const auto transparent = BackgroundLinear(BackgroundMode::Transparent);
-    CHECK(transparent[3] == 0.0f);
-    const auto checker = BackgroundLinear(BackgroundMode::Checkerboard);
-    CHECK(checker[3] == 0.0f);
+    const auto custom = BackgroundDisplayColor(BackgroundMode::Custom, 0x00336699u);
+    CHECK(std::fabs(custom[0] - 0x33 / 255.0f) < 1e-6f);
+    CHECK(std::fabs(custom[1] - 0x66 / 255.0f) < 1e-6f);
+    CHECK(std::fabs(custom[2] - 0x99 / 255.0f) < 1e-6f);
+
+    const auto transparent = BackgroundDisplayColor(BackgroundMode::Transparent, 0);
+    CHECK(transparent[0] == 0.0f);
+    const auto checker = BackgroundDisplayColor(BackgroundMode::Checkerboard, 0);
+    CHECK(checker[0] == 0.0f);
     CHECK(kCheckerLight > kCheckerDark);
 
-    // The no-model clear path uses the same tone curve as the resolve pass.
-    const auto display = BackgroundDisplay(BackgroundMode::Dark, 1.0f, ToneMapMode::Neutral);
-    CHECK(display[0] > 0.0f);
-    CHECK(display[0] < 0.5f);
-    CHECK(std::isfinite(display[0]));
+    // The function has no exposure or tone-map parameter by construction, so
+    // untouched pixels cannot drift with either control.
+    CHECK(NormalizeBackgroundColor(0xFF336699u) == 0x00336699u);
+    CHECK(PackBackgroundColor(0x33 / 255.0f, 0x66 / 255.0f, 0x99 / 255.0f) == 0x00336699u);
+}
+
+TEST_CASE("Display compositing keeps the backdrop exact behind transparent coverage", "[tonemap]")
+{
+    const auto backdrop = BackgroundDisplayColor(BackgroundMode::Dark, 0);
+    const auto empty = CompositeOverBackground({ 0.0f, 0.0f, 0.0f }, 0.0f, 8.0f,
+                                                ToneMapMode::Aces, backdrop);
+    CHECK(empty == backdrop);
+    // Full coverage ignores the backdrop entirely.
+    const std::array<float, 3> scene{ 0.2f, 0.3f, 0.4f };
+    const auto full = CompositeOverBackground(scene, 1.0f, 1.0f, ToneMapMode::Neutral, backdrop);
+    const auto expected = ToneMapToSrgb(scene, 1.0f, ToneMapMode::Neutral);
+    CHECK(std::fabs(full[0] - expected[0]) < 1e-6f);
+    CHECK(std::fabs(full[2] - expected[2]) < 1e-6f);
+    // Half coverage lies between the two, with the backdrop still exact in the
+    // uncovered half.
+    const auto half = CompositeOverBackground({ scene[0] * 0.5f, scene[1] * 0.5f, scene[2] * 0.5f },
+                                               0.5f, 1.0f, ToneMapMode::Neutral, backdrop);
+    CHECK(half[0] > backdrop[0]);
+    CHECK(half[0] < expected[0] + 1e-5f);
 }
 
 TEST_CASE("Material summary is bounded and reports ranges", "[studio-presets]")
@@ -288,6 +313,8 @@ TEST_CASE("Object shader writes linear HDR and the resolve shader owns the displ
     CHECK(resolveShader.find("SrgbEncode") != std::string::npos);
     CHECK(resolveShader.find("backgroundMode==3u") != std::string::npos);
     CHECK(resolveShader.find("backgroundMode==2u") != std::string::npos);
+    CHECK(resolveShader.find("gBackdrop") != std::string::npos);
+    CHECK(resolveShader.find("scene.rgb/alpha") != std::string::npos);
 }
 
 TEST_CASE("Resolve pixel shader compiles for the feature-level-11_0 baseline", "[tonemap]")

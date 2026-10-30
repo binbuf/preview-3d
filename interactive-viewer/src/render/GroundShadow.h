@@ -68,9 +68,20 @@ struct Constants
 {
     float ground[4]{};      // center.xy, plane z, half size (camera relative)
     float shadow[4]{};      // center.xy, radii.xy (camera relative)
-    float parameters[4]{};  // opacity, softness, 0, 0
-    float color[4]{};       // linear ground rgb, center alpha
+    float parameters[4]{};  // opacity, softness, highlight strength, unused
+    float color[4]{};       // display-space highlight rgb, center alpha
 };
+
+// T21a: the illuminated ground treatment is independent of the contact shadow.
+// `highlightStrength` of 0 disables it while leaving the shadow untouched.
+Constants BuildConstants(const GroundPlane& plane, const ShadowFootprint& footprint,
+                         const float cameraTarget[3],
+                         bool highlightEnabled = true,
+                         const float highlightColor[3] = nullptr,
+                         bool shadowEnabled = true) noexcept;
+
+// Display-space highlight tint for a backdrop (subtle additive lift).
+void HighlightColor(const float backdropDisplay[3], float out[3]) noexcept;
 
 // Row-major world-from-model matrix applied to the eight bounds corners.
 Bounds TransformBounds(const Bounds& bounds, const float worldFromModel[16]) noexcept;
@@ -92,9 +103,5 @@ float ShadowMask(float x, float y, const ShadowFootprint& footprint) noexcept;
 // glTF occlusion strength: 1 + strength * (sample - 1). A missing map uses
 // sample = 1, and an absent strength uses 1.0.
 float OcclusionFactor(float sampledOcclusion, float strength) noexcept;
-
-// Builds camera-relative root constants. `cameraTarget` may be null.
-Constants BuildConstants(const GroundPlane& plane, const ShadowFootprint& footprint,
-                         const float cameraTarget[3]) noexcept;
 
 } // namespace viewer_ground_shadow

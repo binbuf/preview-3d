@@ -12,14 +12,14 @@
   },
   "candidate": "TestResults\\render-quality\\T20\\images\\generated-stl-box-clay-front.png",
   "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-clay-front-candidate.png",
-  "candidateSha256": "b0792dd71ac2cd721d7302ad4882709caf73f8c2b748b361ae12f2e09a608e8e",
+  "candidateSha256": "73d1d7a32cc18d03e85f75c0313c3fed337c7d730fcf4b0f483e68fe38fd23f3",
   "case": "generated-stl-box-clay-front",
   "crops": {
     "hard-edge": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-clay-front-crop-hard-edge.png"
   },
   "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-clay-front-diff.png",
   "image": "generated-stl-box-clay-front.png",
-  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "reason": "T21a restored the display-space #1C1C1E backdrop; reviewed intentional darkening only.",
   "regions": {
     "hard-edge": [
       0.28,
@@ -31,10 +31,10 @@
   "review": "tests/render-quality/review/T20-review.json",
   "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
   "stats": {
-    "lumaStdDev": 27.594,
-    "meanLuma": 94.899,
+    "lumaStdDev": 45.791,
+    "meanLuma": 55.287,
     "pixels": 886890,
-    "uniqueSampleColours": 251
+    "uniqueSampleColours": 85
   },
   "viewport": [
     1258,

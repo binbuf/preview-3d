@@ -229,32 +229,67 @@ std::array<float, 3> ToneMapToSrgb(const std::array<float, 3>& linear, float exp
     return { SrgbEncode(mapped[0]), SrgbEncode(mapped[1]), SrgbEncode(mapped[2]) };
 }
 
-std::array<float, 4> BackgroundLinear(BackgroundMode mode) noexcept
+std::array<float, 3> BackgroundDisplayColor(BackgroundMode mode, uint32_t customColor) noexcept
 {
     switch (mode) {
     case BackgroundMode::MidGrey:
-        return { 0.21f, 0.21f, 0.22f, 1.0f };
+        return { 0.5f, 0.5f, 0.5f };
+    case BackgroundMode::Custom: {
+        const uint32_t packed = NormalizeBackgroundColor(customColor);
+        return { ((packed >> 16) & 0xFFu) / 255.0f,
+                 ((packed >> 8) & 0xFFu) / 255.0f,
+                 (packed & 0xFFu) / 255.0f };
+    }
     case BackgroundMode::Transparent:
     case BackgroundMode::Checkerboard:
-        return { 0.0f, 0.0f, 0.0f, 0.0f };
+        return { 0.0f, 0.0f, 0.0f };
     case BackgroundMode::Dark:
     default:
-        return { 0x1C / 255.0f, 0x1C / 255.0f, 0x1E / 255.0f, 1.0f };
+        // Windows Photos' dark chrome. These are display (sRGB) codes, not
+        // linear radiance: the backdrop bypasses exposure and tone mapping.
+        return { 0x1C / 255.0f, 0x1C / 255.0f, 0x1E / 255.0f };
     }
 }
 
-std::array<float, 3> BackgroundDisplay(BackgroundMode mode, float exposure,
-                                       ToneMapMode toneMap) noexcept
+std::array<float, 3> GroundHighlightColor(const std::array<float, 3>& backdropDisplay) noexcept
 {
-    std::array<float, 3> color{};
-    if (mode == BackgroundMode::Checkerboard) {
-        const float mean = (kCheckerDark + kCheckerLight) * 0.5f;
-        color = { mean, mean, mean };
-    } else {
-        const auto linear = BackgroundLinear(mode);
-        color = { linear[0], linear[1], linear[2] };
-    }
-    return ToneMapToSrgb(color, exposure, toneMap);
+    // A bounded additive lift keeps the treatment local and subtle on both the
+    // dark and studio-gray backdrops.
+    constexpr float lift = 0.055f;
+    return { std::clamp(backdropDisplay[0] + lift, 0.0f, 1.0f),
+             std::clamp(backdropDisplay[1] + lift, 0.0f, 1.0f),
+             std::clamp(backdropDisplay[2] + lift, 0.0f, 1.0f) };
+}
+
+std::array<float, 3> CompositeOverBackground(const std::array<float, 3>& sceneLinear,
+                                             float coverage, float exposure,
+                                             ToneMapMode mode,
+                                             const std::array<float, 3>& backdropDisplay) noexcept
+{
+    const float alpha = std::isfinite(coverage) ? std::clamp(coverage, 0.0f, 1.0f) : 0.0f;
+    if (alpha <= 0.0f) return backdropDisplay;
+    const std::array<float, 3> straight = {
+        sceneLinear[0] / alpha, sceneLinear[1] / alpha, sceneLinear[2] / alpha };
+    const auto mapped = ToneMapToSrgb(straight, exposure, mode);
+    return { std::clamp(backdropDisplay[0] * (1.0f - alpha) + mapped[0] * alpha, 0.0f, 1.0f),
+             std::clamp(backdropDisplay[1] * (1.0f - alpha) + mapped[1] * alpha, 0.0f, 1.0f),
+             std::clamp(backdropDisplay[2] * (1.0f - alpha) + mapped[2] * alpha, 0.0f, 1.0f) };
+}
+
+uint32_t NormalizeBackgroundColor(uint32_t packed) noexcept
+{
+    // Mask first: only the low 24 bits are a color, so out-of-range saved
+    // values cannot inject alpha or sign bits into the display path.
+    return packed & 0x00FFFFFFu;
+}
+
+uint32_t PackBackgroundColor(float red, float green, float blue) noexcept
+{
+    const auto channel = [](float value) {
+        if (!std::isfinite(value)) return 0u;
+        return static_cast<uint32_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+    };
+    return (channel(red) << 16) | (channel(green) << 8) | channel(blue);
 }
 
 const wchar_t* PresetName(PresentationPreset preset) noexcept
@@ -283,11 +318,12 @@ const wchar_t* ToneMapName(ToneMapMode mode) noexcept
 const wchar_t* BackgroundName(BackgroundMode mode) noexcept
 {
     switch (mode) {
-    case BackgroundMode::MidGrey: return L"Mid grey";
+    case BackgroundMode::MidGrey: return L"Studio gray";
+    case BackgroundMode::Custom: return L"Custom color";
     case BackgroundMode::Transparent: return L"Transparent";
     case BackgroundMode::Checkerboard: return L"Checkerboard";
     case BackgroundMode::Dark:
-    default: return L"Dark";
+    default: return L"Windows Photos dark";
     }
 }
 

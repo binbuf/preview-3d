@@ -81,6 +81,13 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sceneColorRtvHeap;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sceneColorSrvHeap;
     uint64_t sceneColorAllocationBytes = 0;
+    // T21a display-space backdrop. It is cleared to the selected display color
+    // and receives the local ground highlight/contact shadow; the resolve pass
+    // composites the tone-mapped scene over it. This is what keeps #1C1C1E
+    // independent of exposure and tone mapping.
+    Microsoft::WRL::ComPtr<ID3D12Resource> backdropColor;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> backdropRtvHeap;
+    uint64_t backdropAllocationBytes = 0;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> resolveRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> resolvePipelineState;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;

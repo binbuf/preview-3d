@@ -37,6 +37,7 @@ The plan, ground rules and per-task verify commands are in
 - **T19 - 0.7.0 compatibility qualification and docs**: **Evidence file:** `docs/0.7.0-QUALIFICATION.md`. Raw reports live in; **Corpus gate:** `x64\Release\Tests.ImportIsolation.exe "[compat]"` — 312
 - **T20 - deterministic visual comparison harness and observed baseline**: **Wrapper:** `python tests/render-quality/verify.py --task T20 --configuration Debug --output TestResults/render-quality/T20`.; **Bootstrap/research:** `--capture-only` collects candidates and skips
 - **T21 - material and light-contribution diagnostics**: **Wrapper:** `python tests/render-quality/verify.py --task T21 --configuration Debug --output TestResults/render-quality/T21`.; **New profile:** `tests/render-quality/profiles/T21.json`. Generated fixture
+- **T21a - Windows Photos-style background and ground highlight**: **Gate:** `python tests/render-quality/verify.py --task T21a --configuration Debug --output TestResults/render-quality/T21a`.; **Profile:** `tests/render-quality/profiles/T21a.json`. Unknown/empty profiles
 - **T22 — authored material, UV, normal and AO semantics**: The wire/import/validation/compatibility/cache half of T22 is implemented and; **Wire version is 13** (`model_core::kCurrentProtocolVersion == 13`).
 
 ## Task notes (maintained by symphony — do not edit)
@@ -63,5 +64,6 @@ The plan, ground rules and per-task verify commands are in
 - [T19](progress/T19.md) — **Evidence file:** `docs/0.7.0-QUALIFICATION.md`. Raw reports live in
 - [T20](progress/T20.md) — **Wrapper:** `python tests/render-quality/verify.py --task T20 --configuration Debug --output TestResults/render-quality/T20`.
 - [T21](progress/T21.md) — **Wrapper:** `python tests/render-quality/verify.py --task T21 --configuration Debug --output TestResults/render-quality/T21`.
+- [T21a](progress/T21a.md) — **Gate:** `python tests/render-quality/verify.py --task T21a --configuration Debug --output TestResults/render-quality/T21a`.
 - [T22](progress/T22.md) — The wire/import/validation/compatibility/cache half of T22 is implemented and
 <!-- symphony:digest:end -->

@@ -12,14 +12,14 @@
   },
   "candidate": "TestResults\\render-quality\\T20\\images\\generated-stl-box-studio-oblique.png",
   "candidateCopy": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-oblique-candidate.png",
-  "candidateSha256": "2715e123e2b990d18c0c55f7118ba78b2cc8220f78d4d2294e9a6bad2ae48a55",
+  "candidateSha256": "af73fa050fcd2d502a099a20d8ca98a078ccf5f49a94cbd132d5406911f0716d",
   "case": "generated-stl-box-studio-oblique",
   "crops": {
     "hard-edge": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-oblique-crop-hard-edge.png"
   },
   "diff": "tests\\render-quality\\baselines\\accepted\\promotions\\generated-stl-box-studio-oblique-diff.png",
   "image": "generated-stl-box-studio-oblique.png",
-  "reason": "T20 reviewed observed baseline; regression reference for the current generated-fixture rendering, not a quality target.",
+  "reason": "T21a restored the display-space #1C1C1E backdrop; reviewed intentional darkening only.",
   "regions": {
     "hard-edge": [
       0.28,
@@ -31,10 +31,10 @@
   "review": "tests/render-quality/review/T20-review.json",
   "reviewer": "DeepSeek V4.1 Flash coding agent (image-capable)",
   "stats": {
-    "lumaStdDev": 40.253,
-    "meanLuma": 105.614,
+    "lumaStdDev": 60.135,
+    "meanLuma": 64.921,
     "pixels": 886890,
-    "uniqueSampleColours": 256
+    "uniqueSampleColours": 79
   },
   "viewport": [
     1258,

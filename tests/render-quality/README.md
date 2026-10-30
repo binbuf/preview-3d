@@ -12,6 +12,7 @@ The front-matter commands are:
 ```powershell
 python tests/render-quality/verify.py --task T20 --configuration Debug --output TestResults/render-quality/T20
 python tests/render-quality/verify.py --task T21 --configuration Debug --output TestResults/render-quality/T21
+python tests/render-quality/verify.py --task T21a --configuration Debug --output TestResults/render-quality/T21a
 ```
 
 The T20 wrapper builds `Preview3D` Debug, runs the negative capture-contract
@@ -23,6 +24,19 @@ runs the diagnostic GPU channel/readback checks in `diagnostics.py`, verifies
 Release rejects the whole test-control surface, and writes `cause-report.md`.
 Both exit nonzero on any failure and write `report.json`, `captures.json`,
 `build.log` and images under the output directory.
+
+T21a adds `appearance.py`. It drives the Debug test-control fields, opens the
+generated sphere-grid fixture and samples real GPU pixels: the untouched corner
+must equal `#1C1C1E`, `#808080` or the selected custom color within three 8-bit
+channel units, across exposure and tone-map changes, before and after a model
+loads. It also exercises all eight highlight/shadow/grid combinations, checks
+that the highlight never changes model pixels, verifies shadow visibility with
+the highlight off, walks all three lighting modes and a manual Transparent
+preset, and relaunches the viewer to prove background/custom-color/highlight
+persistence. Malformed saved values must fall back to dark/highlight-on and
+must not disturb unrelated settings. Evidence is in
+`appearance/appearance.json` and `appearance/images/`; the review record is
+`tests/render-quality/review/T21a-review.json`.
 
 ## What a capture must satisfy
 
@@ -67,7 +81,10 @@ The viewer exposes these only with `--app-smoke` in a Debug build
 | 130-133 | sampled mean linear RGBA as float32 bit patterns |
 | 134 / 135 | per-material draw-record count / selected index |
 | 136-194 | selected record: ids, counts, bucket, depth-write, cull, wire material, UV and texture metadata |
-| 195+ | reserved for later diagnostics; Release answers none of these |
+| 195 / 196 | query / set the independent ground-highlight switch |
+| 197 / 198 | query / set the packed custom background color (`0xRRGGBB`) |
+| 199 | flush the same persisted appearance state the Settings UI writes |
+| 200+ | reserved for later diagnostics; Release answers none of these |
 
 Fields 37-39 remain the existing texture smoke values; do not reuse them.
 
