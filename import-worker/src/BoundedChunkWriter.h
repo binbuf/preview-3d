@@ -2,6 +2,7 @@
 #include "ChunkBatchSink.h"
 #include "CoarseSampler.h"
 #include "model_core/Checksum.h"
+#include "model_core/Compatibility.h"
 #include "model_core/ImportError.h"
 #include "model_core/MappedFile.h"
 #include "model_core/TierALimits.h"
@@ -143,6 +144,19 @@ class BoundedChunkWriter
         descriptor.dependencyIds[2] = instance.nodeId;
         descriptor.dependencyCount = instance.materialChunkId ? 3u : 2u;
         return AddRaw(descriptor, std::as_bytes(std::span(&instance, 1)));
+    }
+    // Emits the already-deduplicated/saturated report, or nothing when the
+    // adapter observed no optional-feature degradation. A report is a
+    // generation-scoped fact with a fixed identity, so it is emitted at most
+    // once and never carries dependencies.
+    bool AddCompatibilityReport(const model_core::CompatibilityReportBuilder& report)
+    {
+        if (report.Empty())
+            return true;
+        model_core::ChunkDescriptor descriptor{};
+        descriptor.topology = model_core::ChunkTopology::CompatibilityReport;
+        descriptor.chunkId = model_core::kCompatibilityReportChunkId;
+        return Add(descriptor, std::as_bytes(std::span(&report.Payload(), 1)));
     }
     bool Complete() {
         using namespace model_core;

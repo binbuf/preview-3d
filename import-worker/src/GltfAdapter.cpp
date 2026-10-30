@@ -12,6 +12,7 @@
 #include "WicImageDecodeAdapter.h"
 
 #include "model_core/Checksum.h"
+#include "model_core/Compatibility.h"
 #include "model_core/GltfDataUriPreflight.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
@@ -2658,9 +2659,16 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                     return state.error;
             }
         ImportStatusPayload status{};
-        for (const auto& extension : asset.extensionsUsed)
-            if (!IsSupportedExtension(extension))
+        model_core::CompatibilityReportBuilder compatibility;
+        for (const auto& extension : asset.extensionsUsed) {
+            if (!IsSupportedExtension(extension)) {
                 status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
+                // Saturated count kept for older hosts; the report adds the
+                // stable identity behind each warning.
+                compatibility.Add(model_core::GltfExtensionFeatureId(extension),
+                                  model_core::CompatibilitySeverity::Degraded);
+            }
+        }
         if (status.optionalFeatureWarnings)
         {
             ChunkDescriptor d{};
@@ -2669,6 +2677,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             if (!streamingWriter.Add(d, ChunkBytes(status)))
                 return streamingWriter.Error();
         }
+        if (!streamingWriter.AddCompatibilityReport(compatibility))
+            return streamingWriter.Error();
         if (state.textureWarningCount)
         {
             ChunkDescriptor d{};
@@ -2900,9 +2910,13 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     size_t initialPlanCount=plans.size();
     plans.insert(plans.end(),refinements.begin(),refinements.end());
     model_core::ImportStatusPayload status{};
+    model_core::CompatibilityReportBuilder compatibility;
     for (const auto& extension : asset.extensionsUsed) {
-        if (!IsSupportedExtension(extension))
+        if (!IsSupportedExtension(extension)) {
             status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
+            compatibility.Add(model_core::GltfExtensionFeatureId(extension),
+                              model_core::CompatibilitySeverity::Degraded);
+        }
     }
     if (!refinements.empty()) status.flags |= model_core::kStatusRefining;
     if (status.flags || status.optionalFeatureWarnings) {
@@ -2912,6 +2926,16 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         statusChunk.descriptor.chunkId=static_cast<uint32_t>(meshChunkCount+materialChunkCount+imageChunkCount+2);
         statusChunk.pieceA=BytesOf(status); statusChunk.payloadBytes=sizeof(status);
         plans.insert(plans.begin(),statusChunk);
+        ++initialPlanCount;
+    }
+    if (!compatibility.Empty()) {
+        if (plans.size()>=maxChunkCount) return ImportErrorCode::ResourceLimit;
+        PlannedChunk reportChunk;
+        reportChunk.descriptor.topology=ChunkTopology::CompatibilityReport;
+        reportChunk.descriptor.chunkId=model_core::kCompatibilityReportChunkId;
+        reportChunk.pieceA=BytesOf(compatibility.Payload());
+        reportChunk.payloadBytes=sizeof(compatibility.Payload());
+        plans.insert(plans.begin(),reportChunk);
         ++initialPlanCount;
     }
     uint32_t warningCount=state.textureWarningCount;

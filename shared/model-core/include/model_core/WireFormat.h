@@ -48,6 +48,7 @@ enum class ChunkTopology : uint32_t {
     CoarseComplete = 7, // only after every validated scan region has a usable sample
     Node = 8,           // payload is one fixed NodePayload
     MeshInstance = 9,  // payload is one fixed MeshInstancePayload
+    CompatibilityReport = 10, // payload is one fixed CompatibilityReportPayload (Compatibility.h)
 };
 
 #pragma pack(push, 1)

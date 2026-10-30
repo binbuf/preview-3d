@@ -3,6 +3,7 @@
 #include "SyntheticSceneGenerator.h"
 
 #include "model_core/Checksum.h"
+#include "model_core/Compatibility.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/ControlChannelIo.h"
@@ -623,6 +624,60 @@ int RunTextureAttack(int mode)
     if (mode==1) {image.colorSpace=uint32_t(ColorSpaceId::Srgb);return SendChunksReady(request.generationId,1,write(2,image)) ? 0 : 1;}
     if (!SendBatchReady(request.generationId,1,1,write(2,image)) || !AwaitBatchConsumed())return 1;
     return SendChunksReady(request.generationId,1,write(3,image)) ? 0 : 1;
+}
+
+int RunCompatibilityAttack(int mode)
+{
+    using namespace model_core;
+    auto session = ReadFileImportRequestAndMapSection();
+    if (!session)
+        return 1;
+    auto& [request, view] = *session;
+
+    CompatibilityReportPayload report{};
+    report.recordCount = 1;
+    report.records[0].featureId = kGltfFeatureClearcoat;
+    report.records[0].severity = uint8_t(CompatibilitySeverity::Degraded);
+    report.records[0].count = 1;
+    uint64_t byteSize = sizeof(report);
+    if (mode == 0) report.recordCount = kMaxCompatibilityRecords + 1;
+    if (mode == 1) byteSize = sizeof(report) - 4;       // truncated descriptor size
+    if (mode == 2) report.records[0].severity = 3;       // severity out of range
+    if (mode == 3) report.records[0].reserved[0] = 1;    // reserved byte
+    if (mode == 4) report.records[0].featureId = 0;      // unknown feature ID
+    if (mode == 5) report.records[1].count = 1;          // nonzero padding
+    if (mode == 6) {                                     // dependency
+        report.recordCount = 1;
+    }
+
+    const uint64_t offset = kSectionHeaderSize + kChunkDescriptorSize;
+    if (offset + sizeof(report) > view.bytes().size())
+        return 1;
+    ChunkDescriptor descriptor{};
+    descriptor.topology = ChunkTopology::CompatibilityReport;
+    descriptor.chunkId = kCompatibilityReportChunkId;
+    descriptor.normalizedRangeOffset = offset;
+    descriptor.byteSize = descriptor.normalizedRangeLength = byteSize;
+    if (mode == 6) {
+        descriptor.dependencyIds[0] = 1;
+        descriptor.dependencyCount = 1;
+    }
+    std::memcpy(view.bytes().data() + offset, &report, sizeof(report));
+    descriptor.chunkChecksum
+        = WireChecksum64(view.bytes().subspan(offset, size_t(byteSize)));
+    std::memcpy(view.bytes().data() + kSectionHeaderSize, &descriptor, sizeof(descriptor));
+
+    SectionHeader header{};
+    header.magic = kSectionMagic;
+    header.protocolVersion = kCurrentProtocolVersion;
+    header.generationId = request.generationId;
+    header.scene.generationId = request.generationId;
+    header.chunkCount = 1;
+    header.sectionLength = offset + sizeof(report);
+    header.sectionChecksum = WireChecksum64(
+        view.bytes().subspan(kSectionHeaderSize, size_t(header.sectionLength - kSectionHeaderSize)));
+    std::memcpy(view.bytes().data(), &header, sizeof(header));
+    return SendChunksReady(request.generationId, 1, header.sectionLength) ? 0 : 1;
 }
 
 int RunReplayBatchIndex()

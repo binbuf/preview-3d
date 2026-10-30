@@ -87,6 +87,7 @@
     <ClCompile Include="SourceFileAccessTests.cpp" />
     <ClCompile Include="WorkerPoolTests.cpp" />
     <ClCompile Include="SharedSectionValidatorTextureTests.cpp" />
+    <ClCompile Include="CompatibilityReportValidatorTests.cpp" />
     <ClCompile Include="SidecarPathResolverTests.cpp" />
     <ClCompile Include="SidecarProtocolTests.cpp" />
     <ClCompile Include="ChunkBatchTests.cpp" />

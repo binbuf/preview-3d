@@ -5,6 +5,7 @@
 #define NOMINMAX
 
 #include "RenderThread.h"
+#include "CompatibilityText.h"
 #include "Localization.h"
 #include <cstdio>
 
@@ -55,14 +56,40 @@ void MergeMissingAssets(ModelData& metadata, const std::vector<std::wstring>& as
     }
 }
 
+// Merge one batch's compatibility records into the generation's accumulating
+// list, deduplicating by (featureId, severity) and saturating counts. The
+// worker cannot grow this list beyond the wire cap, and the host re-caps it.
+void MergeCompatibility(ModelData& metadata,
+                        const std::vector<model_core::CompatibilityRecord>& records)
+{
+    for (const auto& record : records) {
+        auto existing = std::find_if(metadata.compatibility.begin(), metadata.compatibility.end(),
+            [&](const model_core::CompatibilityRecord& candidate) {
+                return candidate.featureId == record.featureId
+                    && candidate.severity == record.severity;
+            });
+        if (existing != metadata.compatibility.end()) {
+            const uint64_t total = uint64_t(existing->count) + record.count;
+            existing->count = total > model_core::kCompatibilityCountCap
+                ? model_core::kCompatibilityCountCap : static_cast<uint32_t>(total);
+            continue;
+        }
+        if (metadata.compatibility.size() < model_core::kMaxCompatibilityRecords)
+            metadata.compatibility.push_back(record);
+    }
+}
+
 // The single place the user-visible warning banner text is composed, so the
 // existing feature/texture warnings and the missing-asset warning can never
 // drift apart across the terminal/detail/per-batch metadata snapshots.
 void RebuildModelWarning(ModelData& metadata)
 {
     metadata.warning.clear();
-    if (metadata.importStatus.optionalFeatureWarnings)
-        metadata.warning = Loc("warning.optionalFeatures", L"Some optional glTF features are not supported. Their fallback representation is shown.");
+    // Prefer specific, host-localized messages for known IDs. Older adapters
+    // still send only a count, so CompatibilityWarningText keeps the generic
+    // fallback when no record maps to host text.
+    metadata.warning = CompatibilityWarningText(metadata.compatibility,
+                                                metadata.importStatus.optionalFeatureWarnings);
     if (metadata.importStatus.textureWarnings) {
         metadata.warning += (metadata.warning.empty() ? L"" : L"\n");
         metadata.warning += Loc("warning.textures", L"Some textures could not be loaded. Fallback textures are shown.");
@@ -771,6 +798,7 @@ void RenderThread::PumpUploads(HWND window)
     message->refinement=pub.task.result.detail;
     if (pub.task.terminal) {
         if (stagedMetadata_) {
+            MergeCompatibility(*stagedMetadata_, pub.task.result.compatibility);
             MergeMissingAssets(*stagedMetadata_, pub.task.result.missingAssets);
             RebuildModelWarning(*stagedMetadata_);
         }
@@ -817,6 +845,7 @@ void RenderThread::PumpUploads(HWND window)
             message->errorCode=model_core::ImportErrorCode::UploadFailure;
             message->errorDetails=descriptorError;
         }
+        MergeCompatibility(*stagedMetadata_, pub.task.result.compatibility);
         MergeMissingAssets(*stagedMetadata_, pub.task.result.missingAssets);
         RebuildModelWarning(*stagedMetadata_);
         message->metadata=std::make_shared<const ModelData>(*stagedMetadata_);

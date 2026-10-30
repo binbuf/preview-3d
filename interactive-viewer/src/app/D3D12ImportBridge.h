@@ -11,6 +11,7 @@
 // session failure to user-facing text, and unpacking validated chunks into
 // the renderer-facing structs below.
 //
+#include "model_core/Compatibility.h"
 #include "model_core/FormatCatalog.h"
 #include "model_core/FormatSelection.h"
 #include "model_core/FormatSniffer.h"
@@ -133,6 +134,9 @@ struct ImportResult {
     model_core::FileIdentity sourceIdentity{};
     uint32_t textureWarningCount = 0;
     model_core::ImportStatusPayload status{};
+    // Stable numeric optional-feature records from a CompatibilityReport
+    // chunk. Never worker-authored text.
+    std::vector<model_core::CompatibilityRecord> compatibility;
     // Authored relative references whose sidecar assets could not be found,
     // deduplicated, in request order. Non-empty only when the model loaded but
     // some referenced asset is missing; the viewer offers a folder picker to

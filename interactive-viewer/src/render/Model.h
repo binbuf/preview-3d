@@ -3,6 +3,7 @@
 #include "model_core/FileIdentity.h"
 
 #include <DirectXMath.h>
+#include <model_core/Compatibility.h>
 #include <model_core/WireFormat.h>
 
 #include <atomic>
@@ -97,6 +98,9 @@ struct ModelData
     // folder picker so the user can point at where the assets live.
     std::vector<std::wstring> missingAssets;
     model_core::ImportStatusPayload importStatus{};
+    // Deduplicated, host-capped optional-feature records for this generation.
+    // Used only to compose specific localized warnings and diagnostics.
+    std::vector<model_core::CompatibilityRecord> compatibility;
     ModelStats stats;
 
     // Root transform mapping this model's native/source axes into the app's

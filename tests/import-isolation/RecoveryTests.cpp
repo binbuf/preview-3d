@@ -70,6 +70,23 @@ TEST_CASE("Status facts reject unknown flags excessive counts reserved values an
     }
 }
 
+TEST_CASE("Malformed compatibility reports are rejected by the hostile-worker path",
+          "[compatibility][hostile-worker]")
+{
+    for (auto mode : {L"--compat-count", L"--compat-size", L"--compat-severity",
+                      L"--compat-reserved", L"--compat-feature", L"--compat-padding",
+                      L"--compat-dependency"}) {
+        CAPTURE(mode);
+        auto request = Request(Triangle());
+        request.workerExePath = sandbox_test_support::HostileWorkerExePath();
+        request.workerArgumentsOverride = mode;
+        auto result = import_broker::RunImportSession(request);
+        CHECK_FALSE(result.ok);
+        CHECK(result.stage == import_broker::ImportStage::ValidateSection);
+        CHECK(result.chunks.empty());
+    }
+}
+
 TEST_CASE("Worker hang and crash return typed failures and permit a valid reopen", "[recovery]") {
     if (!sandbox_test_support::FaultHarnessEnabled()) SKIP("fault harness compiled out of Release");
     auto request=Request(Triangle()); request.workerArgumentsOverride=L"--test-hang-import"; request.replyTimeoutMs=200;

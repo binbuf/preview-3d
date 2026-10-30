@@ -160,6 +160,7 @@
     <ClInclude Include="..\shared\platform\include\platform\Win32Handle.h" />
     <ClInclude Include="..\shared\platform\include\platform\CheckedMath.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\Compatibility.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\PixelFormats.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\MaterialPayload.h" />

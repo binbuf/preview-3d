@@ -156,6 +156,7 @@
     <ClCompile Include="..\..\shared\parser-core\src\PlyParserCore.cpp" />
     <ClCompile Include="FixtureManifestTests.cpp" />
     <ClCompile Include="WireFormatTests.cpp" />
+    <ClCompile Include="CompatibilityTests.cpp" />
     <ClCompile Include="CoarseProxyTests.cpp" />
     <ClCompile Include="GraphicsDeviceTests.cpp" />
     <ClCompile Include="CommandQueueTests.cpp" />
@@ -214,6 +215,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\model-core\include\model_core\WireFormat.h" />
+    <ClInclude Include="..\..\shared\model-core\include\model_core\Compatibility.h" />
+    <ClInclude Include="..\..\interactive-viewer\src\app\CompatibilityText.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\UsdFallbackState.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\Checksum.h" />

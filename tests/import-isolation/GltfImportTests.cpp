@@ -13,6 +13,7 @@
 #include "import_broker/SharedSectionValidator.h"
 #include "import_broker/SidecarRequestServicer.h"
 #include "import_broker/SourceFileAccess.h"
+#include "model_core/Compatibility.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
 #include "model_core/MaterialPayload.h"
@@ -1532,4 +1533,55 @@ TEST_CASE("A mesh-bearing doubling DAG fails fast with ResourceLimit instead of 
           == static_cast<uint32_t>(model_core::ImportErrorCode::ResourceLimit));
     std::cout << "SEC-01 mesh-bearing doubling-DAG elapsed-ms=" << elapsedMs << '\n';
     CHECK(elapsedMs < 5000);
+}
+
+TEST_CASE("A visual-only glTF extension emits a stable Degraded compatibility record",
+          "[compatibility][gltf-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    // KHR_materials_clearcoat is optional/visual-only: the model still loads,
+    // but the preview must say which feature was approximated instead of only
+    // incrementing the legacy count.
+    const char* json =
+        "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],"
+        "\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],"
+        "\"extensionsUsed\":[\"KHR_materials_clearcoat\"],"
+        "\"materials\":[{\"name\":\"coated\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.2,0.4,0.6,1.0]},"
+        "\"extensions\":{\"KHR_materials_clearcoat\":{\"clearcoatFactor\":1.0}}}],"
+        "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+        "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],\"buffers\":[{\"byteLength\":48}]}";
+    const auto glb = BuildGlb(json, TriangleBin());
+    auto run = RunGltfImport(fixture.sid, glb, /*generationId=*/3201, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const import_broker::ValidatedChunk* statusChunk = nullptr;
+    const import_broker::ValidatedChunk* reportChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus)
+            statusChunk = &chunk;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport)
+            reportChunk = &chunk;
+    }
+    REQUIRE(statusChunk != nullptr);
+    REQUIRE(reportChunk != nullptr);
+    REQUIRE(reportChunk->payload.size() == sizeof(model_core::CompatibilityReportPayload));
+
+    model_core::ImportStatusPayload status{};
+    std::memcpy(&status, statusChunk->payload.data(), sizeof(status));
+    CHECK(status.optionalFeatureWarnings == 1); // legacy count retained
+
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, reportChunk->payload.data(), sizeof(report));
+    REQUIRE(report.recordCount == 1);
+    CHECK(report.records[0].featureId == model_core::kGltfFeatureClearcoat);
+    CHECK(report.records[0].severity
+          == static_cast<uint8_t>(model_core::CompatibilitySeverity::Degraded));
+    CHECK(report.records[0].count == 1);
+    CHECK(report.records[0].reserved[0] == 0);
+    CHECK(report.records[0].reserved[1] == 0);
+    CHECK(report.records[0].reserved[2] == 0);
 }

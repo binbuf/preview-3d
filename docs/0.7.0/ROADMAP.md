@@ -26,7 +26,7 @@ breadth tasks once T02 is stable.
 
 - [x] T02 — Format catalog and content-aware router → [../tasks/0.7.0/T02-format-catalog-router.md](../tasks/0.7.0/T02-format-catalog-router.md)
 - [x] T03 — Catalog-driven registration, filters and Open As → [../tasks/0.7.0/T03-registration-filters-open-as.md](../tasks/0.7.0/T03-registration-filters-open-as.md)
-- [ ] T04 — Compatibility severity model and report chunk → [../tasks/0.7.0/T04-compatibility-report.md](../tasks/0.7.0/T04-compatibility-report.md)
+- [x] T04 — Compatibility severity model and report chunk → [../tasks/0.7.0/T04-compatibility-report.md](../tasks/0.7.0/T04-compatibility-report.md)
 
 ## Phase 2 — Import breadth and presentation
 
@@ -59,11 +59,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T03:03:27Z · 3/20 done
+**Pipeline status** — updated 2026-10-30T03:17:27Z · 4/20 done
 
-- Completed: T01, T02, T03
+- Completed: T01, T02, T03, T04
 - Blocked: none
 - Failed: none
-- Remaining: T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T03 — done · Catalog-driven Open As/--format/--list-formats, filters, ActiveInstance/Shell registration and installer drift test landed; all T03 checks pass.
+- Remaining: T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T04 — done · Compatibility report chunk, feature-ID ranges, glTF records, host localization/warning/diagnostics, validator and hostile-worker coverage all landed; all acceptance checks pass.
 <!-- /symphony:status -->

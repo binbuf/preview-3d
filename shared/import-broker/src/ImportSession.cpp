@@ -348,7 +348,7 @@ struct BatchAcceptance {
     KnownImageCatalog images;
     KnownSceneCatalog sceneCatalog;
     uint64_t textureBytes=0,texturePixels=0;
-    bool haveTextureWarning=false, haveStatus=false;
+    bool haveTextureWarning=false, haveStatus=false, haveCompatibilityReport=false;
     std::optional<model_core::SceneMetadata> scene;
     std::optional<std::array<double, 3>> origin;
     struct Region { model_core::ChunkDescriptor scan; bool coarse=false, fine=false; };
@@ -392,6 +392,7 @@ struct BatchAcceptance {
             }
             if (chunk.descriptor.topology==model_core::ChunkTopology::TextureWarning) haveTextureWarning=true;
             if (chunk.descriptor.topology==model_core::ChunkTopology::ImportStatus) haveStatus=true;
+            if (chunk.descriptor.topology==model_core::ChunkTopology::CompatibilityReport) haveCompatibilityReport=true;
         }
         totalChunks += static_cast<uint32_t>(chunks.size());
         ++nextBatchIndex;
@@ -887,7 +888,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             failure = Fail(ImportStage::ValidateSection, validation.errorCode);
             return false;
         }
-        bool batchHasWarning=false, batchHasStatus=false;
+        bool batchHasWarning=false, batchHasStatus=false, batchHasCompatibilityReport=false;
         for (const auto& chunk : validation.chunks) {
             if (chunk.descriptor.topology==model_core::ChunkTopology::ImportStatus) {
                 if (acceptance.haveStatus || batchHasStatus) {
@@ -900,6 +901,12 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                     failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);return false;
                 }
                 batchHasWarning=true;
+            }
+            if (chunk.descriptor.topology==model_core::ChunkTopology::CompatibilityReport) {
+                if (acceptance.haveCompatibilityReport || batchHasCompatibilityReport) {
+                    failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ImportProtocolViolation);return false;
+                }
+                batchHasCompatibilityReport=true;
             }
             if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList
                 || chunk.descriptor.topology == model_core::ChunkTopology::PointList) {

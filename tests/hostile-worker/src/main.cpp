@@ -73,6 +73,13 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--status-count")) return hostile_worker::RunTextureAttack(6);
     if (ArgEquals(argv[1], "--status-reserved")) return hostile_worker::RunTextureAttack(7);
     if (ArgEquals(argv[1], "--status-duplicate")) return hostile_worker::RunTextureAttack(8);
+if (ArgEquals(argv[1], "--compat-count")) return hostile_worker::RunCompatibilityAttack(0);
+if (ArgEquals(argv[1], "--compat-size")) return hostile_worker::RunCompatibilityAttack(1);
+if (ArgEquals(argv[1], "--compat-severity")) return hostile_worker::RunCompatibilityAttack(2);
+if (ArgEquals(argv[1], "--compat-reserved")) return hostile_worker::RunCompatibilityAttack(3);
+if (ArgEquals(argv[1], "--compat-feature")) return hostile_worker::RunCompatibilityAttack(4);
+if (ArgEquals(argv[1], "--compat-padding")) return hostile_worker::RunCompatibilityAttack(5);
+if (ArgEquals(argv[1], "--compat-dependency")) return hostile_worker::RunCompatibilityAttack(6);
     if (ArgEquals(argv[1], "--catalog-forward")) return hostile_worker::RunCatalogBatches(0);
     if (ArgEquals(argv[1], "--catalog-wrong-image")) return hostile_worker::RunCatalogBatches(1);
     if (ArgEquals(argv[1], "--catalog-missing-image")) return hostile_worker::RunCatalogBatches(2);

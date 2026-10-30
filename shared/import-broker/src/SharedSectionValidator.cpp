@@ -2,6 +2,7 @@
 #include "import_broker/SharedSectionValidator.h"
 
 #include "model_core/Checksum.h"
+#include "model_core/Compatibility.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
@@ -329,6 +330,10 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
     KnownSceneCatalog scenes = sceneCatalog ? *sceneCatalog : KnownSceneCatalog{};
     std::unordered_map<uint32_t, model_core::NodePayload> pendingNodes;
     std::unordered_map<uint32_t, model_core::MeshInstancePayload> pendingInstances;
+    // A compatibility report is generation-scoped state, not a per-batch
+    // stream. The fixed chunk id already makes a later batch collide with the
+    // generation catalog; this catches a second report in the same section.
+    bool compatibilityReportSeen = false;
 
     for (uint32_t i = 0; i < header.chunkCount; ++i) {
         const ChunkDescriptor& descriptor = descriptors[i];
@@ -639,6 +644,45 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             if ((status.flags & ~model_core::kStatusKnownMask) || status.optionalFeatureWarnings > 64
                 || status.textureWarnings > 64 || status.reserved)
                 return Reject(ImportErrorCode::ImportProtocolViolation,"unknown or over-limit import status");
+            break;
+        }
+        case ChunkTopology::CompatibilityReport: {
+            if (compatibilityReportSeen)
+                return Reject(ImportErrorCode::ImportProtocolViolation,
+                              "duplicate compatibility report");
+            compatibilityReportSeen = true;
+            if (descriptor.chunkId != model_core::kCompatibilityReportChunkId
+                || descriptor.vertexCount || descriptor.indexCount || descriptor.vertexLayoutId
+                || descriptor.dependencyCount
+                || descriptor.byteSize != sizeof(model_core::CompatibilityReportPayload))
+                return Reject(ImportErrorCode::MalformedData, "malformed compatibility report");
+            for (auto id : descriptor.dependencyIds)
+                if (id)
+                    return Reject(ImportErrorCode::MalformedData,
+                                  "compatibility report dependency");
+            model_core::CompatibilityReportPayload report{};
+            std::memcpy(&report, section.data() + descriptor.normalizedRangeOffset, sizeof(report));
+            if (report.reserved
+                || report.recordCount > model_core::kMaxCompatibilityRecords)
+                return Reject(ImportErrorCode::MalformedData,
+                              "compatibility report count out of range");
+            for (uint32_t record = 0; record < model_core::kMaxCompatibilityRecords; ++record) {
+                const auto& entry = report.records[record];
+                if (record >= report.recordCount) {
+                    // Unused slots are padding, not worker-controlled space.
+                    if (entry.featureId || entry.severity || entry.reserved[0] || entry.reserved[1]
+                        || entry.reserved[2] || entry.count)
+                        return Reject(ImportErrorCode::MalformedData,
+                                      "compatibility report has nonzero padding");
+                    continue;
+                }
+                if (!model_core::IsKnownFeatureId(entry.featureId)
+                    || entry.severity > model_core::kCompatibilitySeverityLast
+                    || entry.reserved[0] || entry.reserved[1] || entry.reserved[2]
+                    || entry.count == 0 || entry.count > model_core::kCompatibilityCountCap)
+                    return Reject(ImportErrorCode::MalformedData,
+                                  "invalid compatibility record");
+            }
             break;
         }
         case ChunkTopology::TextureWarning: {

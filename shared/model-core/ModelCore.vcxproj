@@ -57,6 +57,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="include\ModelCore.h" />
+    <ClInclude Include="include\model_core\Compatibility.h" />
     <ClInclude Include="include\model_core\FormatCatalog.h" />
     <ClInclude Include="include\model_core\FormatSniffer.h" />
     <ClInclude Include="include\model_core\OpenUsdIdentifier.h" />

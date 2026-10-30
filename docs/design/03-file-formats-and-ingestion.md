@@ -118,7 +118,7 @@ reject v9 and every other unknown version; there is no migration or mixed-
 version fallback. Updated protocol fixtures and hostile-worker cases exercise
 the v10 checksum, scan-summary, scene-record, flag and copy-then-validate paths.
 
-Protocol v10 adds two fixed payloads. `NodePayload` is 144 bytes: a stable
+Protocol v10 adds three fixed payloads. `NodePayload` is 144 bytes: a stable
 nonzero ID, optional parent ID, closed visibility flags, and a finite
 double-precision row-vector affine 4x4 local transform. `MeshInstancePayload`
 is 80 bytes: a stable nonzero ID, node/geometry/material IDs, closed visibility
@@ -144,6 +144,39 @@ generation catalog. Scene references do not reach outside that catalog, and
 the terminal generation check requires the accepted Node catalog to match the
 declared node count. This makes cross-window edges strictly backward, so a
 worker cannot hide a cycle or an unbounded late dependency graph.
+
+### Compatibility report chunk
+
+Optional-feature degradation is no longer only a count. A generation may carry
+at most one `CompatibilityReport` chunk (topology 10, fixed chunk ID
+`0xf0000003`) whose payload is a 776-byte `CompatibilityReportPayload`:
+`recordCount` (0–64), a zero `reserved` word, and 64 packed 12-byte
+`CompatibilityRecord` entries. Each entry is `featureId` (uint32), a closed
+`severity` byte (`Critical=0`, `Degraded=1`, `Ignored=2`), three zero reserved
+bytes, and a `count` in `[1, 1,000,000]`. Unused record slots must be all zero.
+A report chunk declares no dependencies, no geometry fields, and must use its
+fixed chunk ID, so the generation-wide chunk-ID uniqueness rule also makes it
+appear once per generation. The section and chunk checksums cover the report
+like any other payload; there is no side channel.
+
+The worker never sends feature names or text. `FeatureId` ranges are
+append-only and reserved per producer family:
+
+| Range | Owner |
+| --- | --- |
+| 1–999 | glTF extensions and glTF-level features |
+| 1000–1999 | 3MF extensions/features |
+| 2000–2999 | USD schemas/primitives |
+| 3000–3999 | STEP header/unit features |
+| 4000–4999 | texture features (any format) |
+| 5000–5999 | container/archive features (any format) |
+
+The trusted host owns a `FeatureId -> localized text` table
+(`interactive-viewer/src/app/CompatibilityText.h`) and composes the warning
+banner from it; unknown IDs keep the legacy generic text. `Critical` remains
+diagnostic only: it never replaces the typed error code. The existing
+`ImportStatusPayload::optionalFeatureWarnings` count is retained while
+adapters migrate, so older producers keep their generic warning.
 
 ## Import generations
 

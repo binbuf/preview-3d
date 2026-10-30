@@ -92,6 +92,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="src\app\Resource.h" />
     <ClInclude Include="src\app\Settings.h" />
     <ClInclude Include="src\app\Localization.h" />
+    <ClInclude Include="src\app\CompatibilityText.h" />
     <ClInclude Include="src\app\Version.h" />
     <ClInclude Include="src\app\GroundAxis.h" />
     <ClInclude Include="src\platform\ShellIntegration.h" />
@@ -130,6 +131,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="..\shared\import-broker\include\import_broker\SidecarPathResolver.h" />
     <ClInclude Include="..\shared\import-broker\include\import_broker\SidecarRequestServicer.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\Compatibility.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ImportError.h" />

@@ -1,5 +1,6 @@
 #include "model_core/TierALimits.h"
 #include "D3D12ImportBridge.h"
+#include "CompatibilityText.h"
 #include "Localization.h"
 #include <cstdio>
 
@@ -448,6 +449,14 @@ std::wstring DiagnosticDetails(const std::wstring& path, const ImportResult& res
     text += LocalizedJoin(Loc("diagnostics.format", L"Format:"), SourceFormatLabel(path));
     text += L"\r\n" + LocalizedJoin(Loc("diagnostics.phase", L"Phase:"), FailurePhaseLabel(result));
     text += L"\r\n" + LocalizedJoin(Loc("diagnostics.code", L"Code:"), std::to_wstring(uint32_t(result.errorCode)));
+    // Stable numeric compatibility facts only: feature ID, closed severity,
+    // saturated count. No source path and no worker-authored text.
+    for (const auto& record : result.compatibility) {
+        text += L"\r\n" + LocFormat("diagnostics.compatibility",
+            L"Compatibility: feature {0} ({1}) x{2}",
+            { std::to_wstring(record.featureId), CompatibilitySeverityLabel(record.severity),
+              std::to_wstring(record.count) });
+    }
     return text;
 }
 
@@ -701,6 +710,14 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 break;
             case model_core::ChunkTopology::TextureWarning:
                 std::memcpy(&result.textureWarningCount,chunk.payload.data(),sizeof(uint32_t));
+                break;
+            case model_core::ChunkTopology::CompatibilityReport:
+                if (chunk.payload.size() == sizeof(model_core::CompatibilityReportPayload)) {
+                    model_core::CompatibilityReportPayload report{};
+                    std::memcpy(&report, chunk.payload.data(), sizeof(report));
+                    result.compatibility.assign(report.records,
+                                                report.records + report.recordCount);
+                }
                 break;
             default:
                 break; // unrecognized topology already rejected by the validator; never reached
