@@ -185,6 +185,9 @@ struct D3D12ViewerPath
     // against.
     ModelResources model;
     static void UpdateCoarseVisibility(ModelResources& resources);
+    // The exact textured PBR pixel shader text, exposed so the ORM/AO lighting
+    // contract can be asserted without a GPU device.
+    static const char* TexturedPixelShaderSource();
     void EvictFineChunks(std::span<const uint32_t> identities);
     void RetirePreviewChunks(ModelResources& resources);
     uint64_t AccountedAllocationBytes(const ModelResources* extra = nullptr) const;

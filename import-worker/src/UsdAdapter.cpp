@@ -9,6 +9,8 @@
 
 #include "BoundedChunkWriter.h"
 #include "ImageFormatSniff.h"
+#include "DdsImageDecode.h"
+#include "TgaImageDecode.h"
 #include "SidecarFileClient.h"
 #include "TextureDecodePolicy.h"
 #include "TextureTranscodeAdapter.h"
@@ -846,6 +848,8 @@ bool ImageExtensionMatches(std::string_view path, SniffedImageFormat format)
     case SniffedImageFormat::Tiff: return extension == ".tif" || extension == ".tiff";
     case SniffedImageFormat::WebP: return extension == ".webp";
     case SniffedImageFormat::Ktx2: return extension == ".ktx2";
+    case SniffedImageFormat::Dds: return extension == ".dds";
+    case SniffedImageFormat::Tga: return extension == ".tga";
     // An unrecognized/corrupt payload is an optional-texture decode failure.
     // Only a positively identified format that disagrees with the authored
     // extension is a terminal type-mismatch classification.
@@ -892,6 +896,16 @@ std::optional<DecodedUsdImage> DecodeImage(MaterialContext& context, int64_t ima
     case SniffedImageFormat::Ktx2:
         if (auto decoded = TranscodeKtx2BasisImage(encoded, options)) {
             image.format = decoded->pixelFormat;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Tga:
+    case SniffedImageFormat::Dds:
+        if (auto decoded = sniffed == SniffedImageFormat::Tga
+                ? DecodeTgaImage(encoded, space, options)
+                : DecodeDdsImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = space;
             image.width = decoded->width; image.height = decoded->height;
             image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
         }

@@ -6,6 +6,8 @@
 #include "BoundedChunkWriter.h"
 #include "ChunkBatchSink.h"
 #include "ImageFormatSniff.h"
+#include "DdsImageDecode.h"
+#include "TgaImageDecode.h"
 #include "SidecarFileClient.h"
 #include "TextureDecodePolicy.h"
 #include "TextureTranscodeAdapter.h"
@@ -807,6 +809,8 @@ bool ImageExtensionMatches(std::string_view asset, import_worker::SniffedImageFo
     case F::Tiff: return extension == ".tif" || extension == ".tiff";
     case F::WebP: return extension == ".webp";
     case F::Ktx2: return extension == ".ktx2";
+    case F::Dds: return extension == ".dds";
+    case F::Tga: return extension == ".tga";
     case F::Unknown: return true;
     }
     return false;
@@ -951,6 +955,16 @@ struct MaterialEmitter {
         case import_worker::SniffedImageFormat::WebP:
             if (auto decoded = import_worker::DecodeWebpImage(encoded, colorSpace, options)) {
                 pixelFormat = decoded->pixelFormat; decodedColorSpace = decoded->colorSpace;
+                width = decoded->width; height = decoded->height;
+                mipLevels = decoded->mipLevels; pixelBytes = std::move(decoded->pixelBytes);
+            }
+            break;
+        case import_worker::SniffedImageFormat::Tga:
+        case import_worker::SniffedImageFormat::Dds:
+            if (auto decoded = imageFormat == import_worker::SniffedImageFormat::Tga
+                    ? import_worker::DecodeTgaImage(encoded, colorSpace, options)
+                    : import_worker::DecodeDdsImage(encoded, colorSpace, options)) {
+                pixelFormat = decoded->pixelFormat; decodedColorSpace = colorSpace;
                 width = decoded->width; height = decoded->height;
                 mipLevels = decoded->mipLevels; pixelBytes = std::move(decoded->pixelBytes);
             }

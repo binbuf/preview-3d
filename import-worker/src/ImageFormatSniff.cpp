@@ -1,5 +1,7 @@
 #include "ImageFormatSniff.h"
 
+#include "model_core/PixelFormats.h"
+
 #include <array>
 #include <cctype>
 #include <cstring>
@@ -19,6 +21,45 @@ bool StartsWith(std::span<const std::byte> bytes, std::initializer_list<uint8_t>
             return false;
         }
         ++i;
+    }
+    return true;
+}
+
+uint16_t Le16(std::span<const std::byte> bytes, size_t offset) noexcept
+{
+    return uint16_t(static_cast<uint8_t>(bytes[offset]))
+        | uint16_t(uint16_t(static_cast<uint8_t>(bytes[offset + 1])) << 8);
+}
+
+// TGA has no printable magic. This is a candidate check on the fixed header,
+// not a promise of decodability: the decoder revalidates every field and the
+// payload. It exists so a TGA-named file with invalid header bytes is never
+// treated as a valid texture.
+bool LooksLikeTga(std::span<const std::byte> bytes) noexcept
+{
+    if (bytes.size() < 18) return false;
+    const uint8_t idLength = static_cast<uint8_t>(bytes[0]);
+    const uint8_t colorMapType = static_cast<uint8_t>(bytes[1]);
+    const uint8_t imageType = static_cast<uint8_t>(bytes[2]);
+    if (colorMapType != 0 || (imageType != 2 && imageType != 10)) return false;
+    for (size_t i = 3; i < 8; ++i) {
+        if (static_cast<uint8_t>(bytes[i]) != 0) return false;
+    }
+    if (Le16(bytes, 8) != 0 || Le16(bytes, 10) != 0) return false;
+    const uint32_t width = Le16(bytes, 12);
+    const uint32_t height = Le16(bytes, 14);
+    const uint8_t depth = static_cast<uint8_t>(bytes[16]);
+    const uint8_t descriptor = static_cast<uint8_t>(bytes[17]);
+    if (width == 0 || height == 0 || width > model_core::kMaxTextureDimension
+        || height > model_core::kMaxTextureDimension) return false;
+    if (depth != 24 && depth != 32) return false;
+    if ((descriptor & 0xC0u) != 0) return false;
+    if ((descriptor & 0x0Fu) > (depth == 32 ? 8u : 0u)) return false;
+    const uint64_t headerAndId = 18ull + idLength;
+    if (headerAndId > bytes.size()) return false;
+    if (imageType == 2) {
+        const uint64_t needed = headerAndId + uint64_t(width) * height * (depth / 8);
+        if (needed > bytes.size()) return false;
     }
     return true;
 }
@@ -57,6 +98,16 @@ SniffedImageFormat SniffImageFormat(std::span<const std::byte> bytes) noexcept
     if (StartsWith(bytes, { 0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A })) {
         return SniffedImageFormat::Ktx2;
     }
+    // DDS: fixed "DDS " magic followed by the 124-byte header. The decoder
+    // proves the rest of the container before any block is copied.
+    if (StartsWith(bytes, { 0x44, 0x44, 0x53, 0x20 })) {
+        return SniffedImageFormat::Dds;
+    }
+    // TGA: no magic; a strict fixed-header candidate check. Callers still use
+    // the extension allowlist to decide whether TGA is worth attempting.
+    if (LooksLikeTga(bytes)) {
+        return SniffedImageFormat::Tga;
+    }
     return SniffedImageFormat::Unknown;
 }
 
@@ -89,7 +140,8 @@ bool HasDecodableImageExtension(std::string_view path) noexcept
     }
     const std::string_view lower(folded, extension.size());
     return lower == "png" || lower == "jpg" || lower == "jpeg" || lower == "bmp"
-        || lower == "tif" || lower == "tiff" || lower == "webp" || lower == "ktx2";
+        || lower == "tif" || lower == "tiff" || lower == "webp" || lower == "ktx2"
+        || lower == "tga" || lower == "dds";
 }
 
 } // namespace import_worker

@@ -42,6 +42,8 @@
 #include "TextureTranscodeAdapter.h"
 #include "WebpDecodeAdapter.h"
 #include "WicImageDecodeAdapter.h"
+#include "DdsImageDecode.h"
+#include "TgaImageDecode.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -77,7 +79,9 @@ enum class Domain : uint8_t {
     WebP = 4,
     WicRaster = 5,
     Sniff = 6,
-    Count = 7,
+    Tga = 7,
+    Dds = 8,
+    Count = 9,
 };
 
 enum : uint8_t {
@@ -217,6 +221,26 @@ void RunWicRaster(const Input& input)
         MakeTextureOptions(input, SemanticFor(static_cast<uint8_t>(input.flags >> 2))));
 }
 
+// Product-owned TGA/DDS decoders: headers, palette/RLE/block bounds, and the
+// shared decoded-texture budget all run under ASan here.
+void RunTga(const Input& input)
+{
+    const auto colorSpace = (input.flags & kSrgb) ? model_core::ColorSpaceId::Srgb
+                                                  : model_core::ColorSpaceId::Linear;
+    (void)import_worker::DecodeTgaImage(
+        input.payload, colorSpace,
+        MakeTextureOptions(input, SemanticFor(static_cast<uint8_t>(input.flags >> 2))));
+}
+
+void RunDds(const Input& input)
+{
+    const auto colorSpace = (input.flags & kSrgb) ? model_core::ColorSpaceId::Srgb
+                                                  : model_core::ColorSpaceId::Linear;
+    (void)import_worker::DecodeDdsImage(
+        input.payload, colorSpace,
+        MakeTextureOptions(input, SemanticFor(static_cast<uint8_t>(input.flags >> 2))));
+}
+
 void RunSniff(const Input& input)
 {
     (void)import_worker::SniffImageFormat(input.payload);
@@ -252,6 +276,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
         case Domain::WebP: RunWebp(input); break;
         case Domain::WicRaster: RunWicRaster(input); break;
         case Domain::Sniff: RunSniff(input); break;
+        case Domain::Tga: RunTga(input); break;
+        case Domain::Dds: RunDds(input); break;
         }
     } catch (...) {
         // Product code must not throw past its boundaries; a throw here is a

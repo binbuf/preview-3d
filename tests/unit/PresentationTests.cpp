@@ -6,8 +6,12 @@
 #include "model_core/FormatCatalog.h"
 #include "model_core/SceneMetadataRules.h"
 #include "InfoPanel.h"
+#include "D3D12ViewerPath.h"
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <cstring>
+#include <string>
 
 using namespace model_core;
 
@@ -133,4 +137,27 @@ TEST_CASE("Info panel reports the active preset and source orientation",
     sections = BuildInfoPanelSections(metadata, false, GroundAxis::Automatic,
         model_core::PresentationProfile::StudioCad);
     CHECK(sections.back().rows[0].value == L"Studio CAD");
+}
+
+TEST_CASE("Studio PBR uses ORM R as ambient occlusion without darkening direct specular",
+          "[texture-ao]")
+{
+    const char* source = D3D12ViewerPath::TexturedPixelShaderSource();
+    REQUIRE(source != nullptr);
+    const std::string shader(source);
+    // ORM convention: R is AO, G roughness, B metallic.
+    CHECK(shader.find("occlusion=saturate(mr.r)") != std::string::npos);
+    CHECK(shader.find("metallic*=mr.b") != std::string::npos);
+    CHECK(shader.find("roughness*=mr.g") != std::string::npos);
+    // Indirect diffuse/environment terms are scaled by AO.
+    CHECK(shader.find("EnvironmentIrradiance(n)*.85f*diffuseScale*occlusion") != std::string::npos);
+    CHECK(shader.find("StudioEnvironment(refl,roughness)*(transmissive?float3(1.0f,1.0f,1.0f):fresnel)*occlusion")
+          != std::string::npos);
+    // The direct key light is not AO-scaled: its call has no `*occlusion`
+    // argument, so metals keep clean direct specular.
+    const auto direct = shader.find("EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f))");
+    REQUIRE(direct != std::string::npos);
+    const auto lineEnd = shader.find(';', direct);
+    REQUIRE(lineEnd != std::string::npos);
+    CHECK(shader.substr(direct, lineEnd - direct).find("occlusion") == std::string::npos);
 }

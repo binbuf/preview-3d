@@ -2,7 +2,7 @@
 
 // Constrained sidecar-file resolution, per .docs/design/03-file-formats-and-
 // ingestion.md's "Input boundary": a .gltf's referenced .bin/.png/.jpg/
-// .jpeg/.webp/.ktx2 sidecar must resolve to a file that (a) is a relative,
+// .jpeg/.webp/.ktx2/.tga/.dds sidecar must resolve to a file that (a) is a relative,
 // local reference -- never absolute, UNC, a device path, or any URI scheme
 // -- and (b) canonicalizes (after opening, the same trusted technique
 // SourceFileAccess.cpp already uses for the primary file) to a path inside

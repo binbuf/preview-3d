@@ -29,6 +29,8 @@ KTX2 = 3
 WEBP = 4
 WIC_RASTER = 5
 SNIFF = 6
+TGA = 7
+DDS = 8
 
 # Adapter / texture-domain flags (domain-specific below the shared bits).
 SMALL_DIMENSION = 1 << 1
@@ -44,6 +46,14 @@ CORPUS = (Path(__file__).resolve().parents[2]
 # Minimized findings promoted into the smoke corpus now that their class is
 # mitigated (SEC-16b). These are immutable reproducers, read byte-for-byte.
 FINDINGS = Path(__file__).resolve().parent / 'corpus' / 'gltf'
+TEXTURES = Path(__file__).resolve().parent.parent / 'fixtures' / 'textures'
+
+
+def read_texture(name: str) -> bytes:
+    path = TEXTURES / name
+    if not path.is_file():
+        raise SystemExit(f'missing committed texture fixture: {path}')
+    return path.read_bytes()
 
 
 def envelope(domain: int, payload: bytes, flags: int = 0) -> bytes:
@@ -302,6 +312,14 @@ def main() -> None:
                                 0xBB, 0x0D, 0x0A, 0x1A, 0x0A)))),
         ('sniff-extensions.seed',
          envelope(SNIFF, b'../../escape.png\0.jpg') + b' http://x/y.ktx2?q=1'),
+        # --- TGA/DDS domains: header, RLE packet and block bounds ---
+        ('tga-uncompressed.seed', envelope(TGA, read_texture('tga24_uncompressed.tga'))),
+        ('tga-rle.seed', envelope(TGA, read_texture('tga32_rle.tga'))),
+        ('tga-truncated.seed', envelope(TGA, read_texture('tga24_rle.tga')[:-1])),
+        ('dds-bc1.seed', envelope(DDS, read_texture('dds_bc1.dds'))),
+        ('dds-bc7.seed', envelope(DDS, read_texture('dds_bc7.dds'))),
+        ('dds-truncated.seed', envelope(DDS, read_texture('dds_truncated.dds'))),
+        ('dds-rgba8.seed', envelope(DDS, read_texture('dds_rgba8.dds'))),
     ]
     for name, blob in seeds:
         (args.output / name).write_bytes(blob)

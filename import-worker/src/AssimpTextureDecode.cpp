@@ -1,6 +1,8 @@
 #include "AssimpTextureDecode.h"
 
 #include "ImageFormatSniff.h"
+#include "DdsImageDecode.h"
+#include "TgaImageDecode.h"
 #include "TextureTranscodeAdapter.h"
 #include "WebpDecodeAdapter.h"
 #include "WicImageDecodeAdapter.h"
@@ -21,6 +23,19 @@ std::optional<AssimpDecodedImage> DecodeAssimpTexture(
     case SniffedImageFormat::Ktx2:
         if (auto decoded = TranscodeKtx2BasisImage(encoded, local)) {
             image.format = decoded->pixelFormat;
+            image.width = decoded->width;
+            image.height = decoded->height;
+            image.levels = decoded->mipLevels;
+            image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Tga:
+    case SniffedImageFormat::Dds:
+        if (auto decoded = SniffImageFormat(encoded) == SniffedImageFormat::Tga
+                ? DecodeTgaImage(encoded, space, local)
+                : DecodeDdsImage(encoded, space, local)) {
+            image.format = decoded->pixelFormat;
+            image.space = space;
             image.width = decoded->width;
             image.height = decoded->height;
             image.levels = decoded->mipLevels;

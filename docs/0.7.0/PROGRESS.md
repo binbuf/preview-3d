@@ -22,6 +22,7 @@ The plan, ground rules and per-task verify commands are in
 - **T10 — Bounded Assimp compatibility adapter**: **Dependency:** `assimp` 6.0.4#3 from the pinned vcpkg baseline, plus its; **Overlay port:** `packaging/vcpkg-ports/assimp/` copies the baseline port and
 - **T10b - 3MF best-effort compatibility**: Required-extension policy lives in; Supported: Core, Materials, Production, Beam, Ball.
 - **T11 — USD primitives, points and crease tolerance**: **Fast-path classification.** `import-worker/src/UsdAdapter.cpp` adds; **Preserve fast path.** TinyUSDZ reports an unauthored `subdivisionScheme` as
+- **T12 — TGA/DDS textures and ORM ambient occlusion**: **Decoders (product-owned, no new third-party code).**; `import-worker/src/TgaImageDecode.{h,cpp}` — type 2/10 true-color,
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -37,4 +38,5 @@ The plan, ground rules and per-task verify commands are in
 - [T10](progress/T10.md) — **Dependency:** `assimp` 6.0.4#3 from the pinned vcpkg baseline, plus its
 - [T10b](progress/T10b.md) — Required-extension policy lives in
 - [T11](progress/T11.md) — **Fast-path classification.** `import-worker/src/UsdAdapter.cpp` adds
+- [T12](progress/T12.md) — **Decoders (product-owned, no new third-party code).**
 <!-- symphony:digest:end -->

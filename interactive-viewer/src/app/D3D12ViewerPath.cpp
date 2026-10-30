@@ -377,7 +377,15 @@ PixelOutput PSMain(PSInput input)
     // requirement to reverse the normal on back-facing double-sided triangles.
     if ((flags&1u)!=0 && dot(n,viewDir)<0.0f) n=-n;
     float metallic=clay?0.0f:gMaterialFactors.x, roughness=clay?.82f:gMaterialFactors.y;
-    if (!clay && (maps&2) && uvValid) { float4 mr=nearest?gMetallicRoughness.Sample(gNearestSampler,sampleUv):gMetallicRoughness.Sample(gLinearSampler,sampleUv); metallic*=mr.b; roughness*=mr.g; }
+    // ORM convention: the metallic-roughness map's R channel carries ambient
+    // occlusion (glTF's metallicRoughnessTexture leaves R unused). AO only
+    // scales indirect diffuse/environment light; direct-light specular stays
+    // unoccluded so metals do not read as dirty.
+    float occlusion=1.0f;
+    if (!clay && (maps&2) && uvValid) {
+        float4 mr=nearest?gMetallicRoughness.Sample(gNearestSampler,sampleUv):gMetallicRoughness.Sample(gLinearSampler,sampleUv);
+        metallic*=mr.b; roughness*=mr.g; occlusion=saturate(mr.r);
+    }
     roughness=clamp(roughness,.045f,1.0f);
     // KHR_materials_transmission approximation. A transmissive surface has no
     // transmitted diffuse; it shows a view-dependent Fresnel reflection over
@@ -400,19 +408,19 @@ PixelOutput PSMain(PSInput input)
         float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
         float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
         color=EvaluateLight(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,3.4f)
-            + base.rgb*(1.0f-metallic)*.08f*diffuseScale;
-        if (transmissive) color+=StudioEnvironment(reflect(-viewDir,n),roughness);
+            + base.rgb*(1.0f-metallic)*.08f*diffuseScale*occlusion;
+        if (transmissive) color+=StudioEnvironment(reflect(-viewDir,n),roughness)*occlusion;
     } else {
         // Neutral studio environment. Analytic diffuse irradiance plus a
         // roughness-blurred reflection keep authored base color and make
         // metallic and roughness meaningful; a single soft key adds form.
         float3 f0=lerp(float3(.04f,.04f,.04f),base.rgb,metallic);
         float3 fresnel=f0+(1.0f-f0)*pow(1.0f-nv,5.0f);
-        color=base.rgb*(1.0f-metallic)*EnvironmentIrradiance(n)*.85f*diffuseScale;
+        color=base.rgb*(1.0f-metallic)*EnvironmentIrradiance(n)*.85f*diffuseScale*occlusion;
         float3 refl=reflect(-viewDir,n);
-        color+=StudioEnvironment(refl,roughness)*(transmissive?float3(1.0f,1.0f,1.0f):fresnel);
+        color+=StudioEnvironment(refl,roughness)*(transmissive?float3(1.0f,1.0f,1.0f):fresnel)*occlusion;
         color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,1.9f);
-        color+=base.rgb*(1.0f-metallic)*.05f*diffuseScale;
+        color+=base.rgb*(1.0f-metallic)*.05f*diffuseScale*occlusion;
     }
     if (!clay) {
         float3 emissive=gEmissiveFactor.rgb;
@@ -570,6 +578,11 @@ ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, uint64_t sizeBytes, D3
 }
 
 } // namespace
+
+const char* D3D12ViewerPath::TexturedPixelShaderSource()
+{
+    return kTexturedPixelShaderSource;
+}
 
 bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
 {

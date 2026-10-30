@@ -8,8 +8,8 @@ For install and build instructions, see the [README](../README.md).
 
 | Format | Support |
 | --- | --- |
-| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, bounded Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP textures, material texture slots, texture transforms, `KHR_materials_pbrSpecularGlossiness` approximated as diffuse albedo plus a dielectric response, and `KHR_materials_transmission`/`KHR_materials_ior` approximated as Fresnel-weighted glass (an authored index of refraction at or below 1 keeps the surface opaque, since there is no optical interface). Visual/scene extensions that are parsed but not rendered (`KHR_materials_clearcoat`, `sheen`, `specular`, `iridescence`, `anisotropy`, `volume`, `dispersion`, `diffuse_transmission`, `emissive_strength`, `KHR_materials_variants`, `KHR_lights_punctual`) open with core PBR and a specific compatibility warning. A truly unknown required extension keeps the core scene and is reported as degraded. Core geometry wins: only a required geometry/decoding extension that cannot be decoded (`KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `KHR_mesh_quantization`, `KHR_implicit_shapes`, `KHR_accessor_float64`) fails the import, and a missing optional/required texture never removes usable geometry. `MSFT_texture_dds` is not decoded yet. |
-| Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars; ufbx polygon triangulation, smoothing/generated normals, UVs, vertex colors, object/group meshes, MTL material factors, and broker-approved base-color, normal/bump, and emissive maps |
+| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, bounded Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP/TGA/DDS textures, material texture slots, texture transforms, `KHR_materials_pbrSpecularGlossiness` approximated as diffuse albedo plus a dielectric response, and `KHR_materials_transmission`/`KHR_materials_ior` approximated as Fresnel-weighted glass (an authored index of refraction at or below 1 keeps the surface opaque, since there is no optical interface). Visual/scene extensions that are parsed but not rendered (`KHR_materials_clearcoat`, `sheen`, `specular`, `iridescence`, `anisotropy`, `volume`, `dispersion`, `diffuse_transmission`, `emissive_strength`, `KHR_materials_variants`, `KHR_lights_punctual`) open with core PBR and a specific compatibility warning. A truly unknown required extension keeps the core scene and is reported as degraded. Core geometry wins: only a required geometry/decoding extension that cannot be decoded (`KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `KHR_mesh_quantization`, `KHR_implicit_shapes`, `KHR_accessor_float64`) fails the import, and a missing optional/required texture never removes usable geometry. `MSFT_texture_dds` alternate image indexing is not enabled; DDS files are decoded as direct image sidecars. |
+| Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars; ufbx polygon triangulation, smoothing/generated normals, UVs, vertex colors, object/group meshes, MTL material factors, and broker-approved base-color, normal/bump, and emissive maps (PNG/JPEG/BMP/TIFF/WebP/KTX2/TGA/DDS) |
 | FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose; supported skin and blend deformation is baked. Image references that carry the authoring machine's absolute path are reduced to their file name and resolve through the package lookup below |
 | STL | ASCII and binary |
 | PLY | ASCII and binary triangle meshes and point clouds |
@@ -107,7 +107,7 @@ directly is looked up, in this exact order:
 The first directory with a matching image wins, so the closest copy is
 preferred and two model packages in the same parent cannot collide. The search
 is **image-only** (`.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff`, `.webp`,
-`.ktx2`); a missing `.bin` buffer, `.mtl`, or USD layer is never resolved this
+`.ktx2`, `.tga`, `.dds`); a missing `.bin` buffer, `.mtl`, or USD layer is never resolved this
 way. Names are matched exactly first, then with case, space/underscore, and
 `jpg`/`jpeg`/`tif`/`tiff` spelling normalized, plus material-role
 abbreviations (`_BaseColor`/`_B`, `_Normal`/`_N`, `_Roughness`/`_R`,
@@ -134,6 +134,34 @@ worker and the broker independently. A glTF image URI that contains `..` (what
 exporters write for a model inside `source/`) is reduced to its file name
 before the request, so the authored traversal is never followed; required
 buffers and USD layers keep the strict rejection.
+
+## TGA and DDS texture subsets
+
+TGA and DDS are decoded by product-owned, bounded decoders in the import
+worker; no DirectXTex or new third-party codec is linked.
+
+- **TGA**: true-color image types 2 (uncompressed) and 10 (RLE), 24- or 32-bit,
+  no color map, no interleaving, zero origin. Both left/right and top/bottom
+  origin bits are honored. Rejected typed: paletted/indexed images, 15/16-bit
+  or grayscale/color-mapped types, nonzero canvas origin, invalid alpha-bit
+  descriptors, truncated/RLE-overrunning payloads, and dimensions or decoded
+  bytes over budget. The extension is only a candidate filter; a `.tga` name
+  with invalid header bytes falls back with a warning.
+- **DDS**: legacy `DXT1` (BC1), `DXT5` (BC3), `ATI2`/`BC5U` (BC5), and DX10
+  `BC1_UNORM`/`BC3_UNORM`/`BC5_UNORM`/`BC7_UNORM` including their `_SRGB`
+  variants, all mapped to the existing closed `PixelFormatId` block set. Valid
+  authored mip chains are preserved and can upload directly. Uncompressed
+  24/32-bit RGB(A) legacy DDS and DXGI `R8G8B8A8_UNORM(_SRGB)` /
+  `B8G8R8A8_UNORM(_SRGB)` decode to RGBA8 and regenerate mips. Rejected typed:
+  cubemaps, texture arrays, volumes/3D, every other DXGI format, invalid header
+  or pixel-format sizes, and payloads shorter than the declared block/level
+  extent. A header that claims more mips than the bytes contain is clamped to
+  the levels actually present.
+- **ORM / ambient occlusion**: the metallic-roughness map's R channel is AO
+  (common ORM packing), G is roughness, B is metallic. AO multiplies indirect
+  diffuse and environment lighting only; direct-light specular is unchanged.
+  The material wire record stays at 72 bytes, so no authored
+  `occlusionStrength` is carried and R is applied at full strength.
 
 ## Isolation model
 

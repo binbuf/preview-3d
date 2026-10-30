@@ -80,7 +80,8 @@ std::wstring LowerCopy(std::wstring s)
 bool IsImageExtension(const std::wstring& lowerExtension)
 {
     static const std::wstring kImage[] = { L".png", L".jpg", L".jpeg", L".bmp",
-                                           L".tif", L".tiff", L".webp", L".ktx2" };
+                                           L".tif", L".tiff", L".webp", L".ktx2",
+                                           L".tga", L".dds" };
     for (const auto& allowed : kImage) {
         if (lowerExtension == allowed) {
             return true;

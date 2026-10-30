@@ -57,3 +57,7 @@ family. It is checked against the mapping (and the pinned baseline) by
 This table is a navigation aid, not a replacement for the complete license
 texts. Before redistributing a modified build, regenerate the release package
 from the pinned manifest and preserve its notices and license files.
+
+The TGA and DDS decoding paths added in T12 are product-owned code (see
+ADR-0068) and link no new third-party decoder, so they add no SBOM component or
+license row. The SBOM still derives solely from the installed vcpkg closure.

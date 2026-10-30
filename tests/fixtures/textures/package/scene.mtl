@@ -1,0 +1,5 @@
+# Repository-owned fixture: TGA base colour and DDS BC5 normal map.
+newmtl Material
+Kd 1 1 1
+map_Kd albedo.tga
+norm normal.dds

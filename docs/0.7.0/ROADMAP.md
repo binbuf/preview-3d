@@ -43,7 +43,7 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 
 ## Phase 3 — Studio lighting and presentation
 
-- [ ] T12 — TGA/DDS textures and ORM ambient occlusion → [../tasks/0.7.0/T12-textures-tga-dds-ao.md](../tasks/0.7.0/T12-textures-tga-dds-ao.md)
+- [x] T12 — TGA/DDS textures and ORM ambient occlusion → [../tasks/0.7.0/T12-textures-tga-dds-ao.md](../tasks/0.7.0/T12-textures-tga-dds-ao.md)
 - [ ] T13 — HDR/EXR textures and environment assets → [../tasks/0.7.0/T13-textures-hdr-exr-environment.md](../tasks/0.7.0/T13-textures-hdr-exr-environment.md)
 - [ ] T14 — Studio IBL and neutral tone map (first slice) → [../tasks/0.7.0/T14-studio-ibl-neutral-tonemap.md](../tasks/0.7.0/T14-studio-ibl-neutral-tonemap.md)
 - [ ] T15 — HDR target, exposure, background and presets → [../tasks/0.7.0/T15-hdr-target-exposure-presets.md](../tasks/0.7.0/T15-hdr-target-exposure-presets.md)
@@ -59,11 +59,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T06:38:43Z · 12/20 done
+**Pipeline status** — updated 2026-10-30T06:52:16Z · 13/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12
 - Blocked: none
 - Failed: none
-- Remaining: T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T11 — done · USD Gprim/points/crease support landed with control-cage fallback, fixtures, protocol tests, docs and ADR-0067; all targeted checks pass.
+- Remaining: T13, T14, T15, T16, T17, T18, T19
+- Last finished: T12 — done · TGA/DDS decoders, sidecar/sniff integration, ORM AO shader path, fixtures, fuzz coverage, tests, and docs are landed; the objective verify target passes.
 <!-- /symphony:status -->

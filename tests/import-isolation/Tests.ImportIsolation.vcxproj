@@ -107,11 +107,14 @@
     <ClCompile Include="DracoDecodeAdapterTests.cpp" />
     <ClCompile Include="TextureTranscodeAdapterTests.cpp" />
     <ClCompile Include="TexturePathTests.cpp" />
+    <ClCompile Include="TextureTgaDdsTests.cpp" />
     <ClCompile Include="..\..\import-worker\src\WicImageDecodeAdapter.cpp" />
     <ClCompile Include="..\..\import-worker\src\ImageFormatSniff.cpp" />
     <ClCompile Include="..\..\import-worker\src\DracoDecodeAdapter.cpp" />
     <ClCompile Include="..\..\import-worker\src\MeshoptDecodeAdapter.cpp" />
     <ClCompile Include="..\..\import-worker\src\TextureTranscodeAdapter.cpp" />
+    <ClCompile Include="..\..\import-worker\src\DdsImageDecode.cpp" />
+    <ClCompile Include="..\..\import-worker\src\TgaImageDecode.cpp" />
     <ClCompile Include="..\..\import-worker\src\WebpDecodeAdapter.cpp" />
     <ClCompile Include="..\..\shared\platform\src\AppContainerSid.cpp" />
     <ClCompile Include="..\..\shared\platform\src\ProcThreadAttributeList.cpp" />
@@ -177,6 +180,9 @@
     <ClInclude Include="..\..\import-worker\src\DracoDecodeAdapter.h" />
     <ClInclude Include="..\..\import-worker\src\MeshoptDecodeAdapter.h" />
     <ClInclude Include="..\..\import-worker\src\TextureTranscodeAdapter.h" />
+    <ClInclude Include="..\..\import-worker\src\DdsImageDecode.h" />
+    <ClInclude Include="..\..\import-worker\src\TgaImageDecode.h" />
+    <ClInclude Include="..\..\import-worker\src\RasterRgbaSupport.h" />
     <ClInclude Include="..\..\import-worker\src\WebpDecodeAdapter.h" />
   </ItemGroup>
   <ItemGroup>

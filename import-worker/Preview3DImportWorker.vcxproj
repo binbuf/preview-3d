@@ -97,6 +97,8 @@
     <ClCompile Include="src\DracoDecodeAdapter.cpp" />
     <ClCompile Include="src\MeshoptDecodeAdapter.cpp" />
     <ClCompile Include="src\TextureTranscodeAdapter.cpp" />
+    <ClCompile Include="src\DdsImageDecode.cpp" />
+    <ClCompile Include="src\TgaImageDecode.cpp" />
     <ClCompile Include="src\ImageFormatSniff.cpp" />
     <ClCompile Include="src\WebpDecodeAdapter.cpp" />
     <ClCompile Include="src\WicImageDecodeAdapter.cpp" />
@@ -143,6 +145,9 @@
     <ClInclude Include="src\DracoDecodeAdapter.h" />
     <ClInclude Include="src\MeshoptDecodeAdapter.h" />
     <ClInclude Include="src\TextureTranscodeAdapter.h" />
+    <ClInclude Include="src\DdsImageDecode.h" />
+    <ClInclude Include="src\TgaImageDecode.h" />
+    <ClInclude Include="src\RasterRgbaSupport.h" />
     <ClInclude Include="src\ImageFormatSniff.h" />
     <ClInclude Include="src\WebpDecodeAdapter.h" />
     <ClInclude Include="src\WicImageDecodeAdapter.h" />

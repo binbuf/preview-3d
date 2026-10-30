@@ -211,7 +211,7 @@ Opening another file requests stop on the prior generation and immediately makes
 
 fastgltf validates glTF 2.0 structure while the adapter owns URI resolution and data access. GLB headers, JSON/BIN ranges, buffer views, accessors, strides, sparse accessors, and component conversions are checked before use. `KHR_mesh_quantization`, `EXT_meshopt_compression`, `KHR_draco_mesh_compression`, `KHR_texture_basisu`, `EXT_texture_webp`, `KHR_texture_transform`, `KHR_materials_unlit`, `KHR_materials_transmission`, and the archived `KHR_materials_pbrSpecularGlossiness` are accepted when their required data passes validation. Transmission is approximated: with no refraction pass, the transmitted fraction is carried to the shader as a material flag plus factor, which suppresses transmitted diffuse and adds a view-dependent Fresnel term to the blend alpha (preserving the authored base-color alpha), and a per-texel `transmissionTexture` is not applied. Specular/glossiness is approximated as diffuse albedo (factor and texture) with metallic 0 and roughness `1 - glossiness`; the combined specular-glossiness texture is dropped with a bounded warning because the normalized material has no matching slot. meshoptimizer, the pinned Draco decoder, KTX/Basis transcoder, and libwebp handle their corresponding payloads behind the same budgets.
 
-Required-extension policy is table-driven (ADR-0060). The parser mask enables every extension whose data path the adapter can consume, including the visual/scene extensions `KHR_materials_clearcoat`, `sheen`, `specular`, `iridescence`, `anisotropy`, `volume`, `dispersion`, `diffuse_transmission`, `emissive_strength`, `KHR_materials_variants`, and `KHR_lights_punctual`; parsing them lets the core PBR material open even before the renderer draws those lobes, and each unrendered feature produces a specific `CompatibilityReport` record. `MSFT_texture_dds` stays disabled until a DDS decoder exists. Before fastgltf runs, the adapter pre-scans `extensionsRequired` with simdjson and classifies each name:
+Required-extension policy is table-driven (ADR-0060). The parser mask enables every extension whose data path the adapter can consume, including the visual/scene extensions `KHR_materials_clearcoat`, `sheen`, `specular`, `iridescence`, `anisotropy`, `volume`, `dispersion`, `diffuse_transmission`, `emissive_strength`, `KHR_materials_variants`, and `KHR_lights_punctual`; parsing them lets the core PBR material open even before the renderer draws those lobes, and each unrendered feature produces a specific `CompatibilityReport` record. `MSFT_texture_dds` stays disabled: DDS is decoded as a direct sidecar/image container, and the glTF extension's alternate image indexing is not implemented. Before fastgltf runs, the adapter pre-scans `extensionsRequired` with simdjson and classifies each name:
 
 | Class | Examples | Action |
 | --- | --- | --- |
@@ -226,7 +226,8 @@ Draco decode is scheduled per primitive inside the import worker and publishes n
 
 Accessor min/max values may produce provisional scene bounds quickly, but they are not trusted as verified bounds. A bounded position scan verifies them while geometry is normalized. If verified bounds materially differ and the user has not moved the camera, the app eases to the corrected frame. If the user has interacted, camera target and scale are corrected without overriding their orientation.
 
-A .gltf may reference approved local `.bin`, `.png`, `.jpg/.jpeg`, `.webp`, and `.ktx2` files contained within the primary file's directory tree, including subdirectories such as `textures/`. Data URIs have encoded- and decoded-byte caps. Unsupported image MIME types use the material fallback only when the image is not required to recover valid geometry.
+A .gltf may reference approved local `.bin`, `.png`, `.jpg/.jpeg`, `.webp`,
+`.ktx2`, `.tga`, and `.dds` files contained within the primary file's directory tree, including subdirectories such as `textures/`. Data URIs have encoded- and decoded-byte caps. Unsupported image MIME types use the material fallback only when the image is not required to recover valid geometry.
 
 ### STL
 
@@ -368,10 +369,21 @@ The texture layer accepts format/container combinations explicitly enabled by th
 
 - inbox WIC paths for PNG, JPEG, BMP, TIFF, and GIF;
 - pinned libwebp for WebP;
-- TGA, HDR, and DDS are *not* decoded: the planned DirectXTex path was dropped (ADR-0048), so those containers remain unsupported as listed in [FORMAT-SUPPORT.md](../FORMAT-SUPPORT.md);
+- product-owned bounded TGA and DDS decoders (ADR-0068). TGA accepts only
+  true-color type 2/10, 24/32-bit, non-paletted, non-interleaved images with a
+  zero origin; RLE packets, dimensions, and payload extent are checked before
+  allocation. DDS accepts legacy DXT1/DXT5/ATI2 (BC1/BC3/BC5) and DX10
+  BC1/BC3/BC5/BC7 UNORM or SRGB blocks plus uncompressed 24/32-bit RGB(A);
+  cubemaps, arrays, volumes, 3D textures, and every other DXGI format are
+  rejected typed. Valid block mip chains are preserved and may upload directly;
+  uncompressed DDS level 0 is converted to RGBA8 and mip-generated. Declared
+  sizes are never trusted: block/level byte counts are cross-checked against the
+  actual payload;
 - KTX-Software/Basis transcoding for KTX2 and `KHR_texture_basisu`.
 
-It does not enumerate or invoke arbitrary installed WIC codecs. Encoded type is verified from bytes and declared MIME/container metadata rather than extension alone. Color textures are sRGB; data/normal textures remain linear. Dimensions, row pitch, mip/array/depth counts, multiplication, total pixels, and compressed input size are checked before decode or direct upload.
+It does not enumerate or invoke arbitrary installed WIC codecs. Encoded type is verified from bytes and declared MIME/container metadata rather than extension alone; TGA is selected by the decodable-extension candidate filter because it has no magic, then every header field is validated from bytes. Color textures are sRGB; data/normal textures remain linear. Dimensions, row pitch, mip/array/depth counts, multiplication, total pixels, and compressed input size are checked before decode or direct upload. A texture over the decoded budget, or a TGA beyond the non-scalable source allocation bound, uses the deterministic fallback with one warning.
+
+The metallic-roughness map follows the ORM convention: R is ambient occlusion, G roughness, B metallic. The studio PBR shader samples R as AO and multiplies only indirect diffuse/environment terms; direct-light specular is left unoccluded so metals keep clean highlights. The existing 72-byte material payload is unchanged: it carries no separate occlusion-strength field, so the per-texel R value is applied at full strength and glTF's authored `occlusionStrength` is not represented by the normalized contract.
 
 Validated DDS/KTX2 mip chains may upload directly when their DXGI formats are supported. Basis payloads transcode to a supported BC7/BC5/BC3/BC1 target selected by semantic and adapter capabilities, with RGBA8 fallback. Existing small mip levels are uploaded first. For ordinary raster images, decoder-native downscaling is requested when trustworthy and CPU mip generation otherwise happens in cancellable tiles. The JPEG native path sizes its copy scratch for the full `uiWidth*uiHeight` extent that `IWICBitmapSourceTransform::CopyPixels` requires, even though `prc` clips each 32-row iteration, so the buffer cannot be overrun by a codec that honors the extent over `cbBufferSize` (ADR-0054). Tangents are generated only for visible geometry whose material actually requires tangent-space normal mapping. A missing, corrupt, or unsupported optional texture uses a deterministic checker/neutral fallback without hiding the mesh.
 
