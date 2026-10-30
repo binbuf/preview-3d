@@ -77,5 +77,89 @@ open-rate scoreboard instead of anecdotal "it opens now" claims.
 - [ ] No product code outside the test harness changed.
 
 ## Hand-off
-_(filled in by the implementing session: manifest path, baseline counts, known
-skips, and the exact fixture slots reserved for T05/T07/T08/T09/T10/T11/T12/T13.)_
+
+### Landed
+
+- `tests/compat/manifest.json` — schema 1, seeded with 36 entries from the
+  existing Preview3D corpus (26 glTF, 3 STL, 6 PLY, 1 STEP). Entry `path` is
+  repository-root relative because fixtures span `interactive-viewer/test-assets/`
+  and `tests/fixtures/`.
+- `tests/compat/README.md` — outcome schema, warning ids, fixture/license
+  policy, reporting rules and reserved breadth-task slots.
+- `tests/import-isolation/CompatCorpusTests.cpp` — `[compat]` corpus runner plus
+  hidden `[write-compat-report]`; minimal in-test JSON reader, typed
+  `opened`/`degraded`/`failed`, host-missing skip, path-free report at
+  `artifacts/compat/<Configuration>.json`.
+- `Tests.ImportIsolation.vcxproj` — new source file and
+  `PREVIEW3D_COMPAT_MANIFEST`, `PREVIEW3D_REPO_ROOT`,
+  `PREVIEW3D_BUILD_CONFIGURATION` defines.
+- `docs/design/testing-strategy.md` — compatibility corpus section.
+- `docs/design/adr/0056-compatibility-corpus-scoreboard.md` — outcome and
+  ownership decision for later tasks.
+- No product code outside the test harness changed.
+
+### Baseline (Release, current tree)
+
+| Format | Opened | Degraded | Failed |
+| --- | ---: | ---: | ---: |
+| glTF | 13 | 1 | 12 |
+| STL | 1 | 0 | 2 |
+| PLY | 4 | 0 | 2 |
+| STEP | 1 | 0 | 0 |
+| **Total** | **19** | **1** | **16** |
+
+15 of the 16 failures are intentional negative fixtures:
+`sidecar-missing` = `FileUnavailable`; the eight traversal/absolute/network/UNC/
+ADS/NUL sidecar fixtures = `UnsafeReference`; `sparse-invalid`,
+`truncated-glb`, `truncated-stl` = `MalformedData`; `over-limit-stl`,
+`over-limit-ply` = `ResourceLimit`; `empty-ply` = `EmptyGeometry`.
+`basisu_corrupt_ktx2` is the one `degraded` row (`texture-fallback`).
+
+The one unintended baseline failure is **`Draw-heavy`**:
+`ResourceLimit` at `WorkerReportedError`, zero chunks. It is recorded as
+`expected: failed` with tag `known-failure`; this task measures only, so the
+owning instancing/catalog work (T02/T17) must classify or fix it.
+
+### Known skips
+
+No skips on this machine: both `Preview3DImportHost.exe` and
+`Preview3DStepHost.exe` exist in `x64\Debug` and `x64\Release`. On a worker-only
+build, entries with `requiresHost`/`requiresStepHost` report `skipped` in the
+JSON report and emit a Catch2 `WARN`; the checked assertion does not fail.
+
+### Commands and results
+
+- `msbuild Preview3D.slnx /t:Tests_ImportIsolation /p:Configuration=Debug /p:Platform=x64`
+  — success.
+- `msbuild Preview3D.slnx /t:Tests_ImportIsolation /p:Configuration=Release /p:Platform=x64`
+  — success.
+- `x64\Debug\Tests.ImportIsolation.exe "[compat]"` — **All tests passed
+  (312 assertions in 2 test cases)**.
+- `x64\Release\Tests.ImportIsolation.exe "[compat]"` — **All tests passed
+  (312 assertions in 2 test cases)**.
+- `x64\Release\Tests.ImportIsolation.exe "[write-compat-report]"` — passed,
+  wrote `artifacts/compat/Release.json` (36 entries).
+- Deliberately broken entry: temporarily changed `truncated-glb`'s
+  `expectedError` from `MalformedData` to `ResourceLimit`; `[compat]` failed
+  with `id=truncated-glb outcome=failed error=MalformedData
+  stage=WorkerReportedError`, the observed typed error and the fixture id.
+  Manifest restored and re-run green.
+
+### Reserved fixture slots
+
+T05 glTF required/optional extensions; T07 STEP tolerance/quality; T08
+IGES/BREP (`requiresStepHost`); T09 XBF/FCStd (`requiresStepHost`); T10 Assimp
+long tail; T10b 3MF best effort; T11 USD primitives/points/creases
+(`requiresHost`); T12 TGA/DDS/ORM; T13 HDR/EXR. Details are in
+`tests/compat/README.md`.
+
+### Deviations
+
+Entry paths are repository-root relative rather than test-asset relative, so
+the same manifest can name both `interactive-viewer/test-assets/` and
+`tests/fixtures/`; the manifest itself is located by a compiled macro.
+
+### Remaining work
+
+`Draw-heavy`'s pre-existing `ResourceLimit` is intentionally left for the
+owning breadth task; all other checks are green.

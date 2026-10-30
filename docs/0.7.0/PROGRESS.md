@@ -10,5 +10,9 @@ The plan, ground rules and per-task verify commands are in
 <!-- symphony:digest:start -->
 ## Key facts (maintained by symphony — do not edit)
 
-_(no progress recorded yet)_
+- **T01 — Compatibility corpus and baseline scoreboard**: Manifest: `tests/compat/manifest.json` (schema 1). Entry `path` is relative; Harness: `tests/import-isolation/CompatCorpusTests.cpp`, tag `[compat]`.
+
+## Task notes (maintained by symphony — do not edit)
+
+- [T01](progress/T01.md) — Manifest: `tests/compat/manifest.json` (schema 1). Entry `path` is relative
 <!-- symphony:digest:end -->

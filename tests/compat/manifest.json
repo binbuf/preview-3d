@@ -1,0 +1,295 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "id": "tri_tight-glb",
+      "path": "interactive-viewer/test-assets/tri_tight.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "geometry"]
+    },
+    {
+      "id": "tri_interleaved-glb",
+      "path": "interactive-viewer/test-assets/tri_interleaved.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "geometry"]
+    },
+    {
+      "id": "tri_transformed_node-glb",
+      "path": "interactive-viewer/test-assets/tri_transformed_node.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "hierarchy"]
+    },
+    {
+      "id": "unsupported_extension-glb",
+      "path": "interactive-viewer/test-assets/unsupported_extension.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "extension"]
+    },
+    {
+      "id": "tri_external-gltf",
+      "path": "interactive-viewer/test-assets/tri_external.gltf",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "sidecar"]
+    },
+    {
+      "id": "A-small-glb",
+      "path": "interactive-viewer/test-assets/corpus/A-small-glb.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "geometry"]
+    },
+    {
+      "id": "A-small-stl",
+      "path": "interactive-viewer/test-assets/corpus/A-small-stl.stl",
+      "format": "stl",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["stl", "corpus", "geometry"]
+    },
+    {
+      "id": "A-small-ply-mesh-le",
+      "path": "interactive-viewer/test-assets/corpus/A-small-ply-mesh-le.ply",
+      "format": "ply",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["ply", "corpus", "geometry"]
+    },
+    {
+      "id": "A-small-ply-mesh-be",
+      "path": "interactive-viewer/test-assets/corpus/A-small-ply-mesh-be.ply",
+      "format": "ply",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["ply", "corpus", "geometry"]
+    },
+    {
+      "id": "A-small-ply-points-le",
+      "path": "interactive-viewer/test-assets/corpus/A-small-ply-points-le.ply",
+      "format": "ply",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["ply", "corpus", "points"]
+    },
+    {
+      "id": "A-small-ply-points-be",
+      "path": "interactive-viewer/test-assets/corpus/A-small-ply-points-be.ply",
+      "format": "ply",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["ply", "corpus", "points"]
+    },
+    {
+      "id": "Draw-heavy",
+      "path": "interactive-viewer/test-assets/corpus/Draw-heavy.glb",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "ResourceLimit",
+      "tags": ["gltf", "corpus", "instancing", "known-failure"]
+    },
+    {
+      "id": "draco_triangle",
+      "path": "interactive-viewer/test-assets/corpus/draco_triangle.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "compressed"]
+    },
+    {
+      "id": "draco_position_only",
+      "path": "interactive-viewer/test-assets/corpus/draco_position_only.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "compressed"]
+    },
+    {
+      "id": "basisu_textured_triangle",
+      "path": "interactive-viewer/test-assets/corpus/basisu_textured_triangle.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "texture"]
+    },
+    {
+      "id": "basisu_corrupt_ktx2",
+      "path": "interactive-viewer/test-assets/corpus/basisu_corrupt_ktx2.glb",
+      "format": "gltf",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["texture-fallback"],
+      "tags": ["gltf", "corpus", "texture", "degraded"]
+    },
+    {
+      "id": "meshopt",
+      "path": "interactive-viewer/test-assets/corpus/meshopt.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "compressed"]
+    },
+    {
+      "id": "webp-gltf",
+      "path": "interactive-viewer/test-assets/corpus/webp.gltf",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "texture"]
+    },
+    {
+      "id": "sparse-valid",
+      "path": "interactive-viewer/test-assets/corpus/sparse-valid.gltf",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "sparse"]
+    },
+    {
+      "id": "sidecar-approved",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-approved.gltf",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "sidecar"]
+    },
+    {
+      "id": "sidecar-missing",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-missing.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "FileUnavailable",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-traversal",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-traversal.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-encoded-traversal",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-encoded-traversal.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-absolute",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-absolute.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-network",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-network.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-unc",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-unc.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-ads",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-ads.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-nul-extension",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-nul-extension.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-nul-trailing",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-nul-trailing.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sparse-invalid",
+      "path": "interactive-viewer/test-assets/corpus/sparse-invalid.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["gltf", "corpus", "sparse", "negative"]
+    },
+    {
+      "id": "truncated-glb",
+      "path": "interactive-viewer/test-assets/corpus/truncated.glb",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["gltf", "corpus", "malformed", "negative"]
+    },
+    {
+      "id": "over-limit-stl",
+      "path": "interactive-viewer/test-assets/corpus/over-limit.stl",
+      "format": "stl",
+      "expected": "failed",
+      "expectedError": "ResourceLimit",
+      "tags": ["stl", "corpus", "limit", "negative"]
+    },
+    {
+      "id": "truncated-stl",
+      "path": "interactive-viewer/test-assets/corpus/truncated.stl",
+      "format": "stl",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["stl", "corpus", "malformed", "negative"]
+    },
+    {
+      "id": "over-limit-ply",
+      "path": "interactive-viewer/test-assets/corpus/over-limit.ply",
+      "format": "ply",
+      "expected": "failed",
+      "expectedError": "ResourceLimit",
+      "tags": ["ply", "corpus", "limit", "negative"]
+    },
+    {
+      "id": "empty-ply",
+      "path": "interactive-viewer/test-assets/corpus/empty.ply",
+      "format": "ply",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "tags": ["ply", "corpus", "empty", "negative"]
+    },
+    {
+      "id": "step-part-ap214",
+      "path": "tests/fixtures/stp-spike/part_ap214.stp",
+      "format": "step",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["step", "cad", "baseline"],
+      "requiresStepHost": true
+    }
+  ]
+}

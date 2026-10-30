@@ -20,7 +20,7 @@ breadth tasks once T02 is stable.
 
 ## Phase 0 — Baseline
 
-- [~] T01 — Compatibility corpus and baseline scoreboard → [../tasks/0.7.0/T01-compatibility-corpus.md](../tasks/0.7.0/T01-compatibility-corpus.md) ⟵ failed
+- [x] T01 — Compatibility corpus and baseline scoreboard → [../tasks/0.7.0/T01-compatibility-corpus.md](../tasks/0.7.0/T01-compatibility-corpus.md)
 
 ## Phase 1 — Foundation
 
@@ -59,11 +59,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T01:57:11Z · 0/20 done
+**Pipeline status** — updated 2026-10-30T02:13:03Z · 1/20 done
 
-- Completed: none
+- Completed: T01
 - Blocked: none
-- Failed: T01
+- Failed: none
 - Remaining: T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T01 — failed · interrupted during retry backoff
+- Last finished: T01 — done · Compatibility corpus, baseline scoreboard, report case, typed host skips, docs, and hand-off all landed; Debug and Release [compat] pass with the Draw-heavy baseline failure recorded for later tasks.
 <!-- /symphony:status -->

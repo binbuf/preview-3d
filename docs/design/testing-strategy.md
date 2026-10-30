@@ -36,6 +36,19 @@ push to `main`, and `Release` gates packaging on that workflow. Routine provider
 `Tests.Unit.exe` and scoped `Tests.ImportIsolation.exe` filters locally in Debug and Release. See
 [adr/0042-ci-test-gate.md](adr/0042-ci-test-gate.md).
 
+## Compatibility corpus
+
+`tests/compat/manifest.json` (schema 1) is the 0.7.0 open-rate scoreboard. The
+`[compat]` case in `tests/import-isolation/CompatCorpusTests.cpp` runs every
+entry through `import_broker::RunImportSession` and records `opened`,
+`degraded` (geometry plus at least one compatibility warning) or `failed` with
+the exact `model_core::ImportErrorCode`. Entries needing an absent compatibility
+or STEP host report a typed skip so a worker-only developer build still runs.
+The hidden `[write-compat-report]` case writes path-free observations to
+`artifacts/compat/<Configuration>.json`; that report is evidence, while the
+`[compat]` assertion is the gate. Breadth tasks append their own fixtures and
+update an expectation only when they own the importer change (ADR-0056).
+
 ## Golden-image policy
 
 - Render at fixed isometric framing with a fixed seed; compare with a tolerant perceptual metric
