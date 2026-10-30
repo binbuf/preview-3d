@@ -9,7 +9,9 @@
 #include "ImageFormatSniff.h"
 #include "TextureDecodePolicy.h"
 #include "ThreeMfDisplayProperties.h"
+#include "ThreeMfMaterialPlan.h"
 #include "WicImageDecodeAdapter.h"
+#include "model_core/Compatibility.h"
 #include "model_core/GeometryBounds.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
@@ -246,6 +248,20 @@ struct MaterialKeyHash {
     }
 };
 
+ThreeMfCornerGrouping GroupingOf(const PropertySample& sample)
+{
+    return {sample.textureId, sample.samplerFlags, sample.textureLayer,
+            sample.textureMix};
+}
+
+void ApplyGrouping(PropertySample& sample, const ThreeMfCornerGrouping& grouping)
+{
+    sample.textureId = grouping.textureId;
+    sample.samplerFlags = grouping.samplerFlags;
+    sample.textureLayer = grouping.textureLayer;
+    sample.textureMix = grouping.textureMix;
+}
+
 struct DecodedTexture {
     PixelFormatId format = PixelFormatId::Unknown;
     uint32_t width = 0, height = 0, levels = 0;
@@ -274,6 +290,26 @@ public:
     ImportErrorCode Error() const { return error_; }
     void SetError(ImportErrorCode error) { if (error_ == ImportErrorCode::None) error_ = error; }
     uint32_t WarningCount() const { return warnings_; }
+    const model_core::CompatibilityReportBuilder& Compatibility() const { return compatibility_; }
+
+    void RecordFeature(uint32_t featureId, model_core::CompatibilitySeverity severity,
+                       uint32_t count = 1)
+    {
+        compatibility_.Add(featureId, severity, count);
+    }
+
+    // Fold the required-extension records gathered by the XML pre-scan into
+    // this generation's report. Records are numeric and deduplicated by ID.
+    void MergeCompatibility(const model_core::CompatibilityReportBuilder& other)
+    {
+        const auto& payload = other.Payload();
+        for (uint32_t index = 0; index < payload.recordCount; ++index) {
+            const auto& record = payload.records[index];
+            compatibility_.Add(record.featureId,
+                               model_core::CompatibilitySeverity(record.severity),
+                               record.count);
+        }
+    }
 
     bool ValidateDisplayProperties()
     {
@@ -359,9 +395,22 @@ public:
         return Resolve(uniqueResource, ids[propertyIndex], sample);
     }
 
-    uint32_t MaterialFor(PropertySample samples[3])
+    uint32_t MaterialFor(PropertySample samples[3], bool allowCapFailure = false)
     {
         if (error_ != ImportErrorCode::None) return 0;
+        ThreeMfCornerGrouping groupings[3]{GroupingOf(samples[0]), GroupingOf(samples[1]),
+                                           GroupingOf(samples[2])};
+        const auto plan = PlanThreeMfTriangleMaterials(groupings, true);
+        if (plan.distinctGroupings > 1) {
+            // Callers that can split a triangle do so before reaching here.
+            // Everything else (beam/lattice fans, clipping output) degrades to
+            // the dominant corner instead of failing the whole model.
+            const ThreeMfCornerGrouping dominant = groupings[plan.dominantCorner];
+            for (auto& sample : std::span<PropertySample, 3>(samples, 3))
+                ApplyGrouping(sample, dominant);
+            RecordFeature(model_core::kThreeMfFeaturePerCornerDominant,
+                          model_core::CompatibilitySeverity::Degraded);
+        }
         const uint32_t texture = samples[0].textureId;
         float metallic = 0.0f, roughness = 0.0f;
         for (unsigned corner = 0; corner < 3; ++corner) {
@@ -379,27 +428,27 @@ public:
                 break;
             }
         bool blend = false;
-        for (unsigned corner = 0; corner < 3; ++corner) {
+        for (unsigned corner = 0; corner < 3; ++corner)
             blend |= samples[corner].color[3] < 0.99999f || samples[corner].textureLayer;
-            if (samples[corner].textureId != texture
-                || samples[corner].samplerFlags != sampler
-                || samples[corner].textureLayer != textureLayer
-                || samples[corner].textureMix != textureMix) {
-                error_ = ImportErrorCode::UnsupportedRequiredFeature;
-                return 0;
-            }
-        }
         MaterialKey key{texture, std::bit_cast<uint32_t>(metallic),
                         std::bit_cast<uint32_t>(roughness), sampler, blend,
                         textureLayer, textureMix, vertexSrgb};
         if (const auto found = materials_.find(key); found != materials_.end()) return found->second;
         if (materials_.size() >= kTierBMaterialLimit) {
+            if (allowCapFailure) return 0;
             error_ = ImportErrorCode::ResourceLimit; return 0;
         }
         uint32_t imageId = 0;
         if (texture) {
+            const ImportErrorCode previous = error_;
             imageId = ResolveImage(texture);
-            if (!imageId) return 0;
+            if (!imageId) {
+                if (allowCapFailure && previous == ImportErrorCode::None) {
+                    error_ = ImportErrorCode::None;
+                    return 0;
+                }
+                return 0;
+            }
         }
         MaterialPayload payload{};
         payload.baseColorFactor[0] = payload.baseColorFactor[1]
@@ -517,7 +566,12 @@ private:
             error_ = ImportErrorCode::MalformedData; return false;
         }
         if (group->second.kind == ThreeMfDisplayKind::Unsupported) {
-            if (warnedDisplayGroups_.insert(association->second).second) Warn(warnings_);
+            if (warnedDisplayGroups_.insert(association->second).second) {
+                Warn(warnings_);
+                if (group->second.ignoredFeatureId)
+                    RecordFeature(group->second.ignoredFeatureId,
+                                  model_core::CompatibilitySeverity::Ignored);
+            }
             return true;
         }
         uint32_t propertyIndex = 0;
@@ -656,6 +710,8 @@ private:
                 }
                 if (current.textureId) {
                     if (accumulated.textureId) {
+                        RecordFeature(model_core::kThreeMfFeatureMultipleTextureLayers,
+                                      model_core::CompatibilitySeverity::Ignored);
                         error_ = ImportErrorCode::UnsupportedRequiredFeature;
                         return finish(false);
                     }
@@ -668,6 +724,8 @@ private:
                     continue;
                 }
                 if (accumulated.textureId) {
+                    RecordFeature(model_core::kThreeMfFeatureMultipleTextureLayers,
+                                  model_core::CompatibilitySeverity::Ignored);
                     error_ = ImportErrorCode::UnsupportedRequiredFeature;
                     return finish(false);
                 }
@@ -685,7 +743,11 @@ private:
                     accumulated.metallic = current.metallic;
                     accumulated.roughness = current.roughness;
                     accumulated.hasPbr = true;
-                } else if (current.hasPbr) Warn(warnings_);
+                } else if (current.hasPbr) {
+                    Warn(warnings_);
+                    RecordFeature(model_core::kThreeMfFeatureMultiplePbrLayers,
+                                  model_core::CompatibilitySeverity::Ignored);
+                }
             }
             sample = accumulated;
             return finish(initialized && ApplyDisplay(group, propertyId, sample));
@@ -742,6 +804,8 @@ private:
                 error_ = ImportErrorCode::ResourceLimit; return 0;
             }
             Warn(warnings_);
+            RecordFeature(model_core::kThreeMfFeatureTextureDecodeFallback,
+                          model_core::CompatibilitySeverity::Degraded);
             image.format = PixelFormatId::RGBA8_UNORM; image.width = image.height = 2;
             image.levels = 1; image.pixels.resize(16, std::byte{255});
             for (unsigned pixel = 0; pixel < 4; ++pixel)
@@ -776,6 +840,7 @@ private:
     std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> propertyIndices_;
     std::unordered_map<std::string, Lib3MF::PResource> resourcesByKey_;
     std::unordered_set<std::string> warnedDisplayGroups_;
+    model_core::CompatibilityReportBuilder compatibility_;
     ImportErrorCode error_ = ImportErrorCode::None;
     uint32_t warnings_ = 0;
     uint64_t decodedBytes_ = 0, decodedPixels_ = 0;
@@ -1307,6 +1372,84 @@ bool EmitMesh(BoundedChunkWriter& writer, PropertyCatalog& catalog,
         for (uint32_t index : triangle.m_Indices)
             if (index >= positions.size()) return false;
 
+    // A per-corner fan triples the triangle count; only split this mesh when
+    // the whole generation stays inside the bounded triangle ceiling.
+    const bool splitWithinBudget = uint64_t(triangleCount) * 3
+        <= uint64_t(kTierBTriangleLimit) - totalTriangles;
+
+    const auto planFor = [&](const TriangleAppearance& appearance) {
+        ThreeMfCornerGrouping groupings[3]{
+            GroupingOf(appearance.corners[0]), GroupingOf(appearance.corners[1]),
+            GroupingOf(appearance.corners[2])};
+        return PlanThreeMfTriangleMaterials(groupings, splitWithinBudget);
+    };
+    const auto dominantSamples = [](const TriangleAppearance& appearance,
+                                    uint32_t corner, PropertySample samples[3]) {
+        const ThreeMfCornerGrouping dominant = GroupingOf(appearance.corners[corner]);
+        for (uint32_t index = 0; index < 3; ++index) {
+            samples[index] = appearance.corners[index];
+            ApplyGrouping(samples[index], dominant);
+        }
+    };
+    const auto splitSamples = [](const TriangleAppearance& appearance,
+                                 uint32_t corner, PropertySample samples[3]) {
+        PropertySample centre = appearance.corners[0];
+        for (uint32_t channel = 0; channel < 4; ++channel)
+            centre.color[channel] = (appearance.corners[0].color[channel]
+                + appearance.corners[1].color[channel]
+                + appearance.corners[2].color[channel]) / 3.0f;
+        for (uint32_t axis = 0; axis < 2; ++axis)
+            centre.uv[axis] = (appearance.corners[0].uv[axis]
+                + appearance.corners[1].uv[axis]
+                + appearance.corners[2].uv[axis]) / 3.0f;
+        centre.metallic = (appearance.corners[0].metallic + appearance.corners[1].metallic
+            + appearance.corners[2].metallic) / 3.0f;
+        centre.roughness = (appearance.corners[0].roughness + appearance.corners[1].roughness
+            + appearance.corners[2].roughness) / 3.0f;
+        centre.hasUv = appearance.corners[0].hasUv || appearance.corners[1].hasUv
+            || appearance.corners[2].hasUv;
+        centre.hasPbr = appearance.corners[0].hasPbr || appearance.corners[1].hasPbr
+            || appearance.corners[2].hasPbr;
+        centre.colorSrgb = appearance.corners[0].colorSrgb
+            && appearance.corners[1].colorSrgb && appearance.corners[2].colorSrgb;
+        const ThreeMfCornerGrouping grouping = GroupingOf(appearance.corners[corner]);
+        samples[0] = centre;
+        samples[1] = appearance.corners[corner];
+        samples[2] = appearance.corners[(corner + 1) % 3];
+        for (uint32_t index = 0; index < 3; ++index)
+            ApplyGrouping(samples[index], grouping);
+    };
+    const auto materialFor = [&](const TriangleAppearance& appearance) -> uint32_t {
+        const auto plan = planFor(appearance);
+        if (plan.choice == ThreeMfTriangleMaterialChoice::Uniform) {
+            PropertySample samples[3]{appearance.corners[0], appearance.corners[1],
+                                      appearance.corners[2]};
+            return catalog.MaterialFor(samples);
+        }
+        if (plan.choice == ThreeMfTriangleMaterialChoice::Split) {
+            for (uint32_t corner = 0; corner < 3; ++corner) {
+                PropertySample samples[3];
+                splitSamples(appearance, corner, samples);
+                if (!catalog.MaterialFor(samples, true)) {
+                    // Material cap or an image only this corner needed: degrade
+                    // the whole triangle to the dominant corner instead of
+                    // failing when a usable preview still exists.
+                    PropertySample degraded[3];
+                    dominantSamples(appearance, plan.dominantCorner, degraded);
+                    return catalog.MaterialFor(degraded);
+                }
+            }
+            // Re-run one group so the caller receives a stable material for
+            // the fan (the first corner is always present).
+            PropertySample samples[3];
+            splitSamples(appearance, 0, samples);
+            return catalog.MaterialFor(samples);
+        }
+        PropertySample samples[3];
+        dominantSamples(appearance, plan.dominantCorner, samples);
+        return catalog.MaterialFor(samples);
+    };
+
     // Resolve once without emitting geometry so every dependency precedes the
     // first chunk that can reference it. The second pass re-resolves bounded
     // values instead of retaining source-proportional appearance state.
@@ -1314,71 +1457,151 @@ bool EmitMesh(BoundedChunkWriter& writer, PropertyCatalog& catalog,
         if (options.Cancelled()) return false;
         TriangleAppearance appearance;
         if (!ResolveTriangleAppearance(mesh, triangleIndex, catalog, appearance)) return false;
+        if (!materialFor(appearance)) return false;
     }
 
-    uint32_t start = 0;
-    while (start < triangleCount) {
-        if (options.Cancelled()) return false;
-        TriangleAppearance firstAppearance;
-        if (!ResolveTriangleAppearance(mesh, start, catalog, firstAppearance)) return false;
-        uint32_t count = 1;
-        while (count < kChunkTriangles && start + count < triangleCount) {
-            TriangleAppearance next;
-            if (!ResolveTriangleAppearance(mesh, start + count, catalog, next)) return false;
-            if (next.materialId != firstAppearance.materialId) break;
-            ++count;
-        }
-        if (totalTriangles > kTierBTriangleLimit - count || totalVertices > kTierBVertexLimit - uint64_t(count) * 3)
-            return false;
-        std::vector<VertexPositionNormalUv0TangentColorF32> vertices(size_t(count) * 3);
-        std::vector<uint32_t> indices(size_t(count) * 3);
-        for (uint32_t triangleIndex = 0; triangleIndex < count; ++triangleIndex) {
-            const auto& triangle = triangles[start + triangleIndex];
-            TriangleAppearance appearance;
-            if (!ResolveTriangleAppearance(mesh, start + triangleIndex, catalog, appearance)
-                || appearance.materialId != firstAppearance.materialId) return false;
-            float point[3][3]{};
+    std::vector<GeneratedTriangle> pending;
+    pending.reserve(kChunkTriangles);
+    uint32_t pendingMaterial = 0;
+    uint64_t emittedTriangles = 0;
+    const auto flush = [&]() -> bool {
+        if (pending.empty()) return true;
+        const size_t count = pending.size();
+        if (totalTriangles > kTierBTriangleLimit - count
+            || totalVertices > kTierBVertexLimit - uint64_t(count) * 3) return false;
+        std::vector<VertexPositionNormalUv0TangentColorF32> vertices(count * 3);
+        std::vector<uint32_t> indices(count * 3);
+        bool hasUv = false;
+        for (size_t triangleIndex = 0; triangleIndex < count; ++triangleIndex)
             for (uint32_t corner = 0; corner < 3; ++corner) {
-                const auto& source = positions[triangle.m_Indices[corner]];
-                std::copy(std::begin(source.m_Coordinates), std::end(source.m_Coordinates), point[corner]);
+                const auto& source = pending[triangleIndex].vertex[corner];
+                auto& target = vertices[triangleIndex * 3 + corner];
+                target.px = float(source.position.x); target.py = float(source.position.y);
+                target.pz = float(source.position.z); target.nx = float(source.normal.x);
+                target.ny = float(source.normal.y); target.nz = float(source.normal.z);
+                target.u = source.property.uv[0]; target.v = source.property.uv[1];
+                target.tx = 1.0f; target.tw = 1.0f;
+                target.r = source.property.color[0]; target.g = source.property.color[1];
+                target.b = source.property.color[2]; target.a = source.property.color[3];
+                indices[triangleIndex * 3 + corner] = uint32_t(triangleIndex * 3 + corner);
+                hasUv |= source.property.textureId != 0;
             }
-            const float ax = point[1][0] - point[0][0], ay = point[1][1] - point[0][1], az = point[1][2] - point[0][2];
-            const float bx = point[2][0] - point[0][0], by = point[2][1] - point[0][1], bz = point[2][2] - point[0][2];
-            float nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
-            const double length = std::sqrt(double(nx) * nx + double(ny) * ny + double(nz) * nz);
-            if (Finite(length) && length > 1.0e-20) { nx = float(nx / length); ny = float(ny / length); nz = float(nz / length); }
-            else { nx = 0.0f; ny = 0.0f; nz = 1.0f; }
-            for (uint32_t corner = 0; corner < 3; ++corner) {
-                auto& vertex = vertices[size_t(triangleIndex) * 3 + corner];
-                vertex.px = point[corner][0]; vertex.py = point[corner][1]; vertex.pz = point[corner][2];
-                vertex.nx = nx; vertex.ny = ny; vertex.nz = nz;
-                vertex.u = appearance.corners[corner].uv[0];
-                vertex.v = appearance.corners[corner].uv[1];
-                vertex.tx = 1.0f; vertex.tw = 1.0f;
-                vertex.r = appearance.corners[corner].color[0];
-                vertex.g = appearance.corners[corner].color[1];
-                vertex.b = appearance.corners[corner].color[2];
-                vertex.a = appearance.corners[corner].color[3];
-                indices[size_t(triangleIndex) * 3 + corner] = triangleIndex * 3 + corner;
-            }
-        }
         ChunkDescriptor descriptor{};
         descriptor.topology = ChunkTopology::TriangleList;
         descriptor.chunkId = writer.NextId();
-        descriptor.vertexCount = count * 3; descriptor.indexCount = count * 3;
+        descriptor.vertexCount = uint32_t(count * 3);
+        descriptor.indexCount = uint32_t(count * 3);
         descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
         descriptor.meshId = meshOrdinal;
-        descriptor.sourceRangeOffset = (uint64_t(meshKey) << 32) | (uint64_t(start) * 3);
+        descriptor.sourceRangeOffset = (uint64_t(meshKey) << 32)
+            | ((emittedTriangles - count) * 3);
         descriptor.sourceRangeLength = uint64_t(count) * 3;
         descriptor.geometryFlags = kGeometryDeindexed | kGeometryReusableInstanceSource
-            | kGeometryHasColors;
-        if (firstAppearance.corners[0].textureId) descriptor.geometryFlags |= kGeometryHasUv0;
-        if (!SetLocalBounds(descriptor, ChunkBytes(vertices)) || !writer.Add(descriptor, ChunkBytes(vertices), ChunkBytes(indices))) return false;
-        output.push_back({descriptor.chunkId, descriptor, firstAppearance.materialId});
+            | kGeometryHasColors | (hasUv ? kGeometryHasUv0 : 0);
+        if (!SetLocalBounds(descriptor, ChunkBytes(vertices))
+            || !writer.Add(descriptor, ChunkBytes(vertices), ChunkBytes(indices))) return false;
+        output.push_back({descriptor.chunkId, descriptor, pendingMaterial});
         totalTriangles += count; totalVertices += uint64_t(count) * 3;
-        start += count;
+        pending.clear();
+        return true;
+    };
+    const auto append = [&](const GeneratedTriangle& triangle, uint32_t material) -> bool {
+        if (!pending.empty() && material != pendingMaterial && !flush()) return false;
+        if (pending.size() >= kChunkTriangles && !flush()) return false;
+        if (pending.empty()) pendingMaterial = material;
+        pending.push_back(triangle);
+        ++emittedTriangles;
+        return true;
+    };
+
+    for (uint32_t triangleIndex = 0; triangleIndex < triangleCount; ++triangleIndex) {
+        if (options.Cancelled()) return false;
+        TriangleAppearance appearance;
+        if (!ResolveTriangleAppearance(mesh, triangleIndex, catalog, appearance)) return false;
+        const auto& triangle = triangles[triangleIndex];
+        float point[3][3]{};
+        for (uint32_t corner = 0; corner < 3; ++corner) {
+            const auto& source = positions[triangle.m_Indices[corner]];
+            std::copy(std::begin(source.m_Coordinates), std::end(source.m_Coordinates), point[corner]);
+        }
+        const float ax = point[1][0] - point[0][0], ay = point[1][1] - point[0][1], az = point[1][2] - point[0][2];
+        const float bx = point[2][0] - point[0][0], by = point[2][1] - point[0][1], bz = point[2][2] - point[0][2];
+        float nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+        const double length = std::sqrt(double(nx) * nx + double(ny) * ny + double(nz) * nz);
+        if (Finite(length) && length > 1.0e-20) { nx = float(nx / length); ny = float(ny / length); nz = float(nz / length); }
+        else { nx = 0.0f; ny = 0.0f; nz = 1.0f; }
+        const auto plan = planFor(appearance);
+        if (plan.choice == ThreeMfTriangleMaterialChoice::Split) {
+            Vec3d centre{};
+            for (uint32_t corner = 0; corner < 3; ++corner)
+                centre = centre + Vec3d{point[corner][0], point[corner][1], point[corner][2]};
+            centre = centre * (1.0 / 3.0);
+            PropertySample pieces[3][3]{};
+            uint32_t pieceMaterials[3]{};
+            bool usable = true;
+            for (uint32_t corner = 0; corner < 3 && usable; ++corner) {
+                splitSamples(appearance, corner, pieces[corner]);
+                pieceMaterials[corner] = catalog.MaterialFor(pieces[corner], true);
+                usable = pieceMaterials[corner] != 0;
+            }
+            if (!usable) {
+                // The material/image ceiling only affects this corner's
+                // grouping: keep a usable preview with the dominant corner.
+                PropertySample degraded[3];
+                dominantSamples(appearance, plan.dominantCorner, degraded);
+                const uint32_t material = catalog.MaterialFor(degraded);
+                if (!material) return false;
+                GeneratedTriangle generated;
+                for (uint32_t corner = 0; corner < 3; ++corner) {
+                    generated.vertex[corner].position =
+                        Vec3d{point[corner][0], point[corner][1], point[corner][2]};
+                    generated.vertex[corner].normal = Vec3d{nx, ny, nz};
+                    generated.vertex[corner].property = degraded[corner];
+                }
+                if (!append(generated, material)) return false;
+                catalog.RecordFeature(model_core::kThreeMfFeaturePerCornerDominant,
+                                      model_core::CompatibilitySeverity::Degraded);
+                continue;
+            }
+            for (uint32_t corner = 0; corner < 3; ++corner) {
+                GeneratedTriangle generated;
+                const Vec3d position[3]{centre,
+                    Vec3d{point[corner][0], point[corner][1], point[corner][2]},
+                    Vec3d{point[(corner + 1) % 3][0], point[(corner + 1) % 3][1],
+                          point[(corner + 1) % 3][2]}};
+                for (uint32_t vertex = 0; vertex < 3; ++vertex) {
+                    generated.vertex[vertex].position = position[vertex];
+                    generated.vertex[vertex].normal = Vec3d{nx, ny, nz};
+                    generated.vertex[vertex].property = pieces[corner][vertex];
+                }
+                if (!append(generated, pieceMaterials[corner])) return false;
+            }
+            catalog.RecordFeature(model_core::kThreeMfFeaturePerCornerSplit,
+                                  model_core::CompatibilitySeverity::Degraded);
+            continue;
+        }
+        PropertySample samples[3];
+        if (plan.choice == ThreeMfTriangleMaterialChoice::Dominant) {
+            dominantSamples(appearance, plan.dominantCorner, samples);
+            catalog.RecordFeature(model_core::kThreeMfFeaturePerCornerDominant,
+                                  model_core::CompatibilitySeverity::Degraded);
+        } else {
+            samples[0] = appearance.corners[0];
+            samples[1] = appearance.corners[1];
+            samples[2] = appearance.corners[2];
+        }
+        const uint32_t material = catalog.MaterialFor(samples);
+        if (!material) return false;
+        GeneratedTriangle generated;
+        for (uint32_t corner = 0; corner < 3; ++corner) {
+            generated.vertex[corner].position =
+                Vec3d{point[corner][0], point[corner][1], point[corner][2]};
+            generated.vertex[corner].normal = Vec3d{nx, ny, nz};
+            generated.vertex[corner].property = samples[corner];
+        }
+        if (!append(generated, material)) return false;
     }
-    return true;
+    return flush();
 }
 
 bool SameDisplayProperty(const PropertySample& a, const PropertySample& b)
@@ -1658,6 +1881,8 @@ ThreeMfImportOutcome ImportThreeMf(const Lib3MF::PModel& model, std::span<std::b
     metadata.nodeCount = uint32_t(traversal.occurrences.size());
     BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
     PropertyCatalog properties(model, writer, options);
+    if (options.displayCatalog)
+        properties.MergeCompatibility(options.displayCatalog->compatibility);
     if (!properties.ValidateDisplayProperties()) return Fail(properties.Error());
     std::unordered_map<std::string, Lib3MF::PMeshObject> sourceMeshes;
     auto resources = model->GetResources();
@@ -1733,6 +1958,8 @@ ThreeMfImportOutcome ImportThreeMf(const Lib3MF::PModel& model, std::span<std::b
                 || !writer.AddInstance(instance)) return Fail(options.Cancelled() ? ImportErrorCode::Cancelled : writer.Error());
         }
     }
+    if (!writer.AddCompatibilityReport(properties.Compatibility()))
+        return Fail(writer.Error());
     if (properties.WarningCount()) {
         ChunkDescriptor warning{};
         warning.topology = ChunkTopology::TextureWarning;

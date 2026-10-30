@@ -22,11 +22,19 @@ subset already promised by the design:
 
 It does **not** mean every 3MF extension. Slice, Secure Content, Volumetric,
 Implicit, toolpath interpretation, printer/process settings, repair, slicing,
-editing, or export remain outside the original MVP contract. A required
-unsupported extension fails with `UnsupportedRequiredFeature`; optional data
-may be ignored only when the standard build still has a coherent preview, and
-then produces a bounded warning. Product and release documentation must call
-this the "supported static 3MF preview subset," not unqualified "full 3MF."
+editing, or export remain outside the original MVP contract. Required extensions
+are classified rather than rejected wholesale (T10b):
+
+| Required namespace | Behavior |
+| --- | --- |
+| Core, Materials, Production, Beam, Ball | Understood; no record |
+| Slice, Volumetric, Implicit, Secure Content | Terminal `UnsupportedRequiredFeature` because the visible geometry depends on data this adapter does not consume; the numeric feature ID is retained (`1001`..`1004`) |
+| Anything else (including slicer-private metadata namespaces) | Ignored with an `Ignored` compatibility record (`1000`); Core mesh/build data stays authoritative |
+
+Optional data may be ignored only when the standard build still has a coherent
+preview, and then produces a bounded warning. Product and release documentation
+must call this the "supported static 3MF preview subset," not unqualified "full
+3MF."
 
 ## Build items are not slicer plates
 
@@ -394,6 +402,14 @@ the design permits them.
 5. Apply object defaults and triangle `pid`/`p1`/`p2`/`p3` overrides exactly,
    including mixed property indices and per-corner interpolation. Invalid
    references/counts fail rather than selecting material zero.
+   T10b adds a bounded per-corner rule: when resolved corners disagree about
+   texture/sampler/texture-layer/mix, fan the triangle from its centroid into
+   one sub-triangle per corner (same positions, winding and bounds) so each piece
+   keeps a single material grouping. If the fan would exceed the generation's
+   triangle or material ceilings, or a corner-only image cannot be decoded, use
+   the first most-frequent corner for the whole triangle. Report `1010`
+   (split) or `1011` (dominant) as `Degraded`; never convert this into
+   `ResourceLimit` while a usable preview remains.
 6. Emit material/image dependencies before geometry that references them and
    preserve progressive batch/catalog ordering. Missing or corrupt optional
    texture data uses the existing neutral/checker fallback and bounded warning;

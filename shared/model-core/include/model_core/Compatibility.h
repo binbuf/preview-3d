@@ -72,6 +72,35 @@ constexpr uint32_t kGltfFeatureEmissiveStrength = 7;
 constexpr uint32_t kGltfFeatureDispersion = 8;
 constexpr uint32_t kGltfFeatureUnspecifiedExtension = 900;
 
+// 3MF extension/feature IDs (1000..1999, append-only). A required extension is
+// only terminal when the visible geometry depends on it; unknown required
+// namespaces are ignored with a record because the Core mesh/build data stays
+// authoritative.
+constexpr uint32_t kThreeMfFeatureUnknownRequiredExtension = 1000;
+// These extensions replace or define the visible geometry with data this
+// adapter does not consume: slice stacks, volumetric/implicit geometry and
+// encrypted Secure Content packages. A required use stays terminal.
+constexpr uint32_t kThreeMfFeatureSliceExtension = 1001;
+constexpr uint32_t kThreeMfFeatureVolumetricExtension = 1002;
+constexpr uint32_t kThreeMfFeatureImplicitExtension = 1003;
+constexpr uint32_t kThreeMfFeatureSecureContentExtension = 1004;
+// A triangle whose corners disagree about texture/sampler/layer/mix is split
+// into per-material triangles when the budget allows (Degraded), otherwise the
+// dominant corner is chosen (Degraded).
+constexpr uint32_t kThreeMfFeaturePerCornerSplit = 1010;
+constexpr uint32_t kThreeMfFeaturePerCornerDominant = 1011;
+// Slicer-private object types (notably "other" referenced by the build) and
+// an unsupported object type that was skipped without losing core geometry.
+constexpr uint32_t kThreeMfFeatureSlicerPrivateObjectType = 1012;
+constexpr uint32_t kThreeMfFeatureUnsupportedObjectType = 1013;
+// Optional display/material surfaces this adapter cannot render but whose
+// absence does not change the mesh.
+constexpr uint32_t kThreeMfFeatureTranslucentDisplayProperty = 1014;
+constexpr uint32_t kThreeMfFeatureUnsupportedDisplayProperty = 1015;
+constexpr uint32_t kThreeMfFeatureMultipleTextureLayers = 1016;
+constexpr uint32_t kThreeMfFeatureTextureDecodeFallback = 1017;
+constexpr uint32_t kThreeMfFeatureMultiplePbrLayers = 1018;
+
 // Named STEP header/unit features (3000..3999). These describe a degraded but
 // usable main document: the file opened, and the named authored information was
 // skipped or assumed. They never make a malformed file acceptable.

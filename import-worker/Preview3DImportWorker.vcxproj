@@ -134,6 +134,7 @@
     <ClInclude Include="src\ThreeMfOpcPreflight.h" />
     <ClInclude Include="src\ThreeMfDisplayProperties.h" />
     <ClInclude Include="src\ThreeMfAdapter.h" />
+    <ClInclude Include="src\ThreeMfMaterialPlan.h" />
     <ClInclude Include="src\ThreeMfImportWorker.h" />
     <ClInclude Include="src\ThreeMfImporterVersion.h" />
     <ClInclude Include="src\SyntheticSceneGenerator.h" />

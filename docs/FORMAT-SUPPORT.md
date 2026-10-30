@@ -13,7 +13,7 @@ For install and build instructions, see the [README](../README.md).
 | FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose; supported skin and blend deformation is baked. Image references that carry the authoring machine's absolute path are reduced to their file name and resolve through the package lookup below |
 | STL | ASCII and binary |
 | PLY | ASCII and binary triangle meshes and point clouds |
-| 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews |
+| 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews. Slicer-private required namespaces that do not describe the mesh are ignored with a compatibility record; a required Slice/Volumetric/Implicit/Secure Content extension still fails typed because the visible geometry depends on it |
 | Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`; static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
 | STEP | `.step` and `.stp`: ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality through a dedicated isolated OCCT host |
 | IGES | `.igs` and `.iges`: bounded fixed-column S/G/D/P/T record streams, analytic B-rep surfaces, assemblies/subfigures where representable, and IGES colors through the same dedicated OCCT host. The optional global unit flag converts to the verified OCCT system millimetre; a missing flag assumes millimetres with a warning |
@@ -210,7 +210,13 @@ bounded warnings rather than failing the local geometry.
 
 3MF slicer-private multi-plate grouping, printer/process settings, Slice, Secure
 Content, Volumetric, Implicit, toolpath, repair, slicing, and export features are
-not supported.
+not rendered. A required extension that merely annotates the package is ignored
+with an `Ignored` compatibility record; a required Slice, Volumetric, Implicit
+or Secure Content namespace is terminal (`UnsupportedRequiredFeature`) because
+the Core mesh/build data is not authoritative for the visible geometry. Missing
+or malformed optional metadata namespaces, including PrusaSlicer/Bambu
+Studio/OrcaSlicer/Cura private namespaces, never fail an otherwise valid Core
+model.
 
 FBX geometry caches, dynamic constraints, NURBS/subdivision tessellation,
 cameras, and lights are outside the supported static subset. TGA/DDS/HDR,
@@ -233,6 +239,15 @@ affect the preview; a multi-plate project may show all root-build objects
 together. The 3MF build placement is preserved, including models positioned
 head-down for printing. To view one upright on the grid, select ground axis Z
 and use the ground direction button to make negative Z point up.
+
+Per-corner material variation is bounded: when a triangle's corners disagree
+about texture/sampler/texture-layer/mix, the adapter fans it from its centroid
+into one sub-triangle per corner so each piece keeps one material, provided the
+whole generation stays within the triangle and material ceilings. If a split
+would exceed those ceilings, or a corner-only texture cannot be decoded, the
+dominant corner is used for the whole triangle. Both choices are `Degraded`
+compatibility records (`1010` split, `1011` dominant), never
+`ResourceLimit`, and positions, bounds and corner UVs stay unchanged.
 
 ## Release qualification
 

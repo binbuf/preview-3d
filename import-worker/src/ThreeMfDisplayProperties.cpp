@@ -67,7 +67,8 @@ bool AttributeNamespace(IXmlReader* reader, const wchar_t* name, const wchar_t* 
     return ok;
 }
 
-model_core::ImportErrorCode CheckRequiredExtensions(IXmlReader* reader)
+model_core::ImportErrorCode CheckRequiredExtensions(IXmlReader* reader,
+                                                    ThreeMfDisplayCatalog& catalog)
 {
     std::wstring required;
     if (!Attribute(reader, L"requiredextensions", required))
@@ -88,11 +89,36 @@ model_core::ImportErrorCode CheckRequiredExtensions(IXmlReader* reader)
             return model_core::ImportErrorCode::ResourceLimit;
         const std::wstring prefix = required.substr(start, offset - start);
         std::wstring uri;
-        if (!AttributeNamespace(reader, prefix.c_str(), kXmlnsNamespace, uri)
-            || !(uri == kCoreNamespace || uri == kMaterialNamespace
-                 || uri == kProductionNamespace || uri == kBeamNamespace
-                 || uri == kBallNamespace))
+        // A required prefix with no namespace declaration is malformed XML
+        // usage; keep the historical typed rejection rather than guessing.
+        if (!AttributeNamespace(reader, prefix.c_str(), kXmlnsNamespace, uri))
             return model_core::ImportErrorCode::UnsupportedRequiredFeature;
+        if (uri == kCoreNamespace || uri == kMaterialNamespace
+            || uri == kProductionNamespace || uri == kBeamNamespace
+            || uri == kBallNamespace)
+            continue;
+        // Extensions that replace or define the visible geometry have no
+        // fallback here: the Core mesh/build data is not authoritative.
+        if (uri == L"http://schemas.microsoft.com/3dmanufacturing/slice/2015/07") {
+            catalog.requiredExtensionFailureId = model_core::kThreeMfFeatureSliceExtension;
+            return model_core::ImportErrorCode::UnsupportedRequiredFeature;
+        }
+        if (uri == L"http://schemas.microsoft.com/3dmanufacturing/volumetric/2018/02") {
+            catalog.requiredExtensionFailureId = model_core::kThreeMfFeatureVolumetricExtension;
+            return model_core::ImportErrorCode::UnsupportedRequiredFeature;
+        }
+        if (uri == L"http://schemas.microsoft.com/3dmanufacturing/implicit/2023/01") {
+            catalog.requiredExtensionFailureId = model_core::kThreeMfFeatureImplicitExtension;
+            return model_core::ImportErrorCode::UnsupportedRequiredFeature;
+        }
+        if (uri == L"http://schemas.microsoft.com/3dmanufacturing/securecontent/2019/04") {
+            catalog.requiredExtensionFailureId = model_core::kThreeMfFeatureSecureContentExtension;
+            return model_core::ImportErrorCode::UnsupportedRequiredFeature;
+        }
+        // Any other required namespace is treated as an optional annotation:
+        // ignore it, keep the Core mesh/build data, and report the decision.
+        catalog.compatibility.Add(model_core::kThreeMfFeatureUnknownRequiredExtension,
+                                  model_core::CompatibilitySeverity::Ignored);
     }
     return model_core::ImportErrorCode::None;
 }
@@ -264,7 +290,7 @@ model_core::ImportErrorCode ParseModelPart(std::span<const std::byte> bytes,
             return model_core::ImportErrorCode::MalformedData;
 
         if (depth == 0 && Equals(uri, kCoreNamespace) && Equals(local, L"model")) {
-            const auto required = CheckRequiredExtensions(reader.Get());
+            const auto required = CheckRequiredExtensions(reader.Get(), catalog);
             if (required != model_core::ImportErrorCode::None) return required;
             continue;
         }
@@ -488,6 +514,13 @@ model_core::ImportErrorCode ParseModelPart(std::span<const std::byte> bytes,
             activeDepth = depth;
             ThreeMfDisplayPropertySet set;
             set.kind = kind;
+            if (Equals(local, L"translucentdisplayproperties"))
+                set.ignoredFeatureId = model_core::kThreeMfFeatureTranslucentDisplayProperty;
+            else if (Equals(local, L"pbmetallictexturedisplayproperties")
+                     || Equals(local, L"pbspeculartexturedisplayproperties"))
+                set.ignoredFeatureId = model_core::kThreeMfFeatureUnsupportedDisplayProperty;
+            else
+                set.ignoredFeatureId = model_core::kThreeMfFeatureUnsupportedDisplayProperty;
             if (!catalog.groups.emplace(activeKey, std::move(set)).second)
                 return model_core::ImportErrorCode::MalformedData;
             if (catalog.groups.size() > model_core::kTierBMaterialLimit)
