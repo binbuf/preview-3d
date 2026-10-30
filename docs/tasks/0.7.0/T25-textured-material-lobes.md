@@ -33,6 +33,25 @@ binaries first. Keep import-worker suites serial. Image review and explicit
 reference promotion are separate from ordinary verification; source-string
 checks and self-created goldens do not prove rendering quality.
 
+### Verification economy
+
+The front-matter gate launches a real GPU viewer and takes minutes. Spend runs
+deliberately:
+
+- Run it in the foreground with an explicit long timeout (900000 ms or more).
+  Do not background it and poll with short `Start-Sleep` loops; if the tool
+  moves it to the background, wait once for completion instead of polling.
+- Iterate with `--fast` (add `--no-build` once the binary is current). `--fast`
+  keeps the build, generated fixtures and this task's focused lane, and skips
+  the contract self-tests, external corpus, F3D references and review gate. It
+  is iteration evidence, not acceptance evidence.
+- Keep agent-run full gates to at most two: one early proof of the lane and
+  one final after the last edit. The harness repeats the front-matter command
+  once after you finish. Corpus or baseline re-promotion is one run, not a
+  per-fix loop.
+- Use focused unit/import filters between runs. Do not re-run a passing gate to
+  "confirm" it, and do not repeat a failing configuration without a change.
+
 ## Done when
 
 - [ ] T25 verification combines texture/lobe import, wire/hostile-section checks and actual GPU map-variation images.

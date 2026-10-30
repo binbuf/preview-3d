@@ -136,6 +136,27 @@ actual GPU image lane, propagate failures, reject empty test selections and
 missing artifacts, and write machine-readable results. A future task/profile
 that is unimplemented must fail, not silently pass. Keep worker suites serial.
 
+### Verification economy
+
+The GPU gate is the expensive part of every task; T21a spent roughly half its
+session waiting on repeated full gates. Spend runs deliberately:
+
+- Run the front-matter command in the foreground with an explicit long timeout
+  (900000 ms or more). Do not background it and poll with short `Start-Sleep`
+  loops; if the tool moves it to the background, wait once for completion.
+- Iterate with `--fast` (add `--no-build` once the binary is current). `--fast`
+  keeps the build, generated fixtures and the task's focused lane, and skips
+  the contract self-tests, external corpus, F3D references and review gate. It
+  is iteration evidence, not acceptance evidence. Task-specific lanes must
+  honor the same switch (a `fast` argument or `RENDER_QUALITY_FAST=1`) so they
+  can skip slow external sampling too.
+- Keep agent-run full gates to at most two: one early proof of the lane and
+  one final after the last edit. The harness repeats the front-matter command
+  once after you finish. Corpus or baseline re-promotion is one run, not a
+  per-fix loop.
+- Use focused unit/import filters between runs. Do not re-run a passing gate to
+  "confirm" it, and do not repeat a failing configuration without a change.
+
 Compare two distinct things:
 
 1. **First-open product quality:** default framing, ground, background and

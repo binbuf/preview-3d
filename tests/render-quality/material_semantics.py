@@ -358,10 +358,10 @@ def write_report(output: Path, report):
     return path
 
 
-def run(workspace: Path, output: Path, configuration: str):
+def run(workspace: Path, output: Path, configuration: str, fast: bool = False):
     output = Path(output)
     report = {'schema': RESULT_SCHEMA, 'task': 'T22', 'checks': [], 'failures': [],
-              'status': 'running'}
+              'status': 'running', 'fast': fast}
     report['serialLanes'] = _run_serial(configuration, output)
     for lane in report['serialLanes']:
         if not lane.get('pass'):
@@ -391,7 +391,9 @@ def run(workspace: Path, output: Path, configuration: str):
             report['probeSamples'] = samples
             report['probeImages'] = images
             report['checks'].extend(_check_gpu(samples, expected))
-            report['externalSurvey'] = _external_survey(viewer, output)
+            # The external survey is the slow part of the lane and is not
+            # acceptance evidence on its own; the fast iteration lane skips it.
+            report['externalSurvey'] = {} if fast else _external_survey(viewer, output)
     except Exception as error:
         report['failures'].append(f'GPU diagnostic lane failed: {error}')
 

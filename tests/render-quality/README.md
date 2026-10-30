@@ -38,6 +38,16 @@ must not disturb unrelated settings. Evidence is in
 `appearance/appearance.json` and `appearance/images/`; the review record is
 `tests/render-quality/review/T21a-review.json`.
 
+For iteration, add `--fast` (and `--no-build` once the binary is current). It
+still builds, generates fixtures, captures their views and runs the task's
+focused lane, but skips the contract self-tests, external corpus, F3D references
+and review gate. Task-specific lanes must honor the same switch (a `fast`
+argument or `RENDER_QUALITY_FAST=1`) and skip their slow external sampling.
+`--fast` is iteration evidence, not acceptance evidence: run
+the front-matter command once when the implementation is complete, and again
+only if the last edit changed pixels or build inputs. Do not background the
+gate and poll it with short sleeps; use one long foreground timeout.
+
 ## What a capture must satisfy
 
 A capture is not evidence until all of these hold:

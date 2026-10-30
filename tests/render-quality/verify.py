@@ -16,6 +16,12 @@ Bootstrap:
 ``--capture-only`` is an explicit evidence-collection mode, not a passing
 verification lane: it skips regression comparison and exits nonzero on capture
 failure. Promotion is a separate command (compare.py).
+
+``--fast`` is an iteration lane: it skips the negative contract self-tests, the
+external corpus, F3D references and the review-record gate, and treats lanes as
+optional. It still builds, generates fixtures, captures their views and runs the
+task's focused lane, so use it between edits and run the full command once for
+acceptance evidence.
 """
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ import ctypes as C
 from ctypes import wintypes as W
 import json
 import math
+import os
 from pathlib import Path
 import platform
 import struct
@@ -382,7 +389,14 @@ def main():
     parser.add_argument('--no-build', action='store_true')
     parser.add_argument('--capture-only', action='store_true',
                         help='Collect candidate images for review/promotion; not a passing lane')
+    parser.add_argument('--fast', action='store_true',
+                        help='Iteration subset: skip contract self-tests, external corpus and '
+                             'F3D references. Not acceptance evidence')
     args = parser.parse_args()
+    if args.fast:
+        # Focused lanes added by later tasks can skip their slow external
+        # sampling without changing their signatures.
+        os.environ['RENDER_QUALITY_FAST'] = '1'
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     set_dpi_awareness()
@@ -391,11 +405,23 @@ def main():
         'schema': RESULT_SCHEMA, 'task': args.task, 'configuration': args.configuration,
         'generatedAt': time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime()),
         'commands': [], 'failures': [], 'status': 'running',
-        'captureOnly': args.capture_only,
+        'captureOnly': args.capture_only, 'fast': args.fast,
     }
+    if args.fast:
+        report['note'] = ('Fast iteration lane: contract self-tests, external corpus, '
+                          'F3D references and review gating are skipped. It is not '
+                          'acceptance evidence; run the full command before finishing.')
     report['commands'].append(' '.join(sys.argv))
 
     profile = profile_for(args.task)
+    if args.fast:
+        # Keep the generated/fixture lane and the task's focused lane; drop the
+        # expensive external/reference work and relax required-lane accounting.
+        for lane in profile.get('lanes', {}).values():
+            lane['required'] = False
+        profile.setdefault('lanes', {}).setdefault('external', {})['assets'] = []
+        profile['lanes'].setdefault('reference', {}).setdefault(
+            'f3d', {}).update({'assets': [], 'configurations': []})
     report['profile'] = str(PROFILE_DIR / f'{args.task}.json')
     build_result = build(args.configuration, output, enabled=not args.no_build)
     report['build'] = build_result
@@ -416,16 +442,26 @@ def main():
             report['failures'].append(
                 f'Release build failed (see {release_build.get("log")})')
 
-    contract = selftest.run(output / 'contract-selftest')
+    if args.fast:
+        contract = {'pass': True, 'skipped': True, 'reason': 'fast iteration lane'}
+    else:
+        contract = selftest.run(output / 'contract-selftest')
     report['contractSelfTest'] = contract
     if not contract['pass']:
         report['failures'].append('capture-contract negative self-tests did not all fail as expected')
 
-    inventory_record = corpus.inventory(Path(profile['lanes']['external']['root']))
-    write_json(output / 'corpus-inventory.json', inventory_record)
-    report['corpus'] = inventory_record
-    report['externalQualification'] = corpus.external_lane_status(inventory_record)
-    if report['externalQualification']['status'] != 'available':
+    if args.fast:
+        inventory_record = {'available': False, 'assets': [],
+                            'note': 'external corpus skipped by the fast iteration lane'}
+        report['corpus'] = inventory_record
+        report['externalQualification'] = {
+            'status': 'skipped', 'reason': 'fast iteration lane'}
+    else:
+        inventory_record = corpus.inventory(Path(profile['lanes']['external']['root']))
+        write_json(output / 'corpus-inventory.json', inventory_record)
+        report['corpus'] = inventory_record
+        report['externalQualification'] = corpus.external_lane_status(inventory_record)
+    if report['externalQualification']['status'] != 'available' and not args.fast:
         report['externalQualification']['note'] = (
             'External qualification is incomplete; generated fixtures still run and are '
             'the only portable passing lane.')
@@ -479,7 +515,7 @@ def main():
         # the capture lane so a failed semantic check cannot be hidden by a
         # successful screenshot.
         semantic_report = material_semantics.run(
-            ROOT, output, args.configuration)
+            ROOT, output, args.configuration, fast=args.fast)
         report['materialSemantics'] = semantic_report
         if semantic_report.get('failures'):
             report['failures'].extend(
@@ -499,7 +535,8 @@ def main():
         report['failures'].extend(lane_result['failures'])
 
     report['reference'] = {
-        'f3d': render_f3d(profile, inventory_record, output),
+        'f3d': ({'status': 'skipped', 'reason': 'fast iteration lane'}
+                if args.fast else render_f3d(profile, inventory_record, output)),
         'khronos': khronos_route(),
     }
     if report['reference']['f3d'].get('status') == 'fail':
@@ -544,7 +581,7 @@ def main():
                     'through the agent image tool)',
         'providerSettingsChanged': False,
     }
-    if not args.capture_only and not review_ok:
+    if not args.capture_only and not args.fast and not review_ok:
         report['failures'].append('image review record missing or empty')
     if args.capture_only:
         report['status'] = 'capture-only'
