@@ -55,6 +55,10 @@ enum class FormatId : uint32_t {
     Amf = 22,
     Vrml = 23,
     X3d = 24,
+    // T10 compatibility formats that were not reserved by T02. Appended so
+    // every previously published identity is untouched.
+    Dxf = 25,
+    DirectX = 26,
 };
 
 // Which product adapter owns the family. The catalog records identity only;
@@ -190,6 +194,13 @@ inline constexpr std::wstring_view kIgesExtensions[] = { L"igs", L"iges" };
 inline constexpr std::wstring_view kBrepExtensions[] = { L"brep" };
 inline constexpr std::wstring_view kXbfExtensions[] = { L"xbf" };
 inline constexpr std::wstring_view kFcstdExtensions[] = { L"fcstd" };
+inline constexpr std::wstring_view kDaeExtensions[] = { L"dae" };
+inline constexpr std::wstring_view kThreeDsExtensions[] = { L"3ds" };
+inline constexpr std::wstring_view kDxfExtensions[] = { L"dxf" };
+inline constexpr std::wstring_view kDirectXExtensions[] = { L"x" };
+inline constexpr std::wstring_view kOffExtensions[] = { L"off" };
+inline constexpr std::wstring_view kAmfExtensions[] = { L"amf" };
+inline constexpr std::wstring_view kX3dExtensions[] = { L"x3d" };
 
 inline constexpr MagicSignature kGltfSignatures[] = {
     { MagicKind::GltfJsonAsset, {}, 0 },
@@ -235,6 +246,25 @@ inline constexpr MagicSignature kThreeMfSignatures[] = {
 };
 inline constexpr MagicSignature kStepSignatures[] = {
     { MagicKind::HeadPrefix, "ISO-10303-21", 0 },
+};
+// T10 compatibility signatures are dispatch hints only. The Assimp adapter's
+// own admission and the closed request discriminator remain authoritative.
+inline constexpr MagicSignature kDaeSignatures[] = {
+    { MagicKind::HeadPrefixCaseInsensitive, "<COLLADA", 0 },
+};
+inline constexpr MagicSignature kDxfSignatures[] = {
+    { MagicKind::HeadPrefix, "0\nSECTION", 0 },
+    { MagicKind::HeadPrefix, "0\r\nSECTION", 0 },
+};
+inline constexpr MagicSignature kDirectXSignatures[] = {
+    { MagicKind::HeadPrefix, "xof 0303", 0 },
+    { MagicKind::HeadPrefix, "xof 0302", 0 },
+};
+inline constexpr MagicSignature kOffSignatures[] = {
+    { MagicKind::HeadPrefix, "OFF", 0 },
+};
+inline constexpr MagicSignature kX3dSignatures[] = {
+    { MagicKind::HeadPrefixCaseInsensitive, "<X3D", 0 },
 };
 
 inline constexpr std::span<const std::wstring_view> Extensions(std::span<const std::wstring_view> value) noexcept
@@ -367,6 +397,46 @@ inline constexpr FormatDescriptor kFormats[] = {
       PresentationProfile::StudioCad, ThumbnailFamily::None,
       CapabilityFlags::CadHost | CapabilityFlags::Archive | CapabilityFlags::CoarseProxy,
       SourceFormatId::Fcstd },
+    // T10: bounded Assimp compatibility importer. These are formats with no
+    // native adapter; the existing glTF/OBJ/FBX/STL/PLY/USD/STEP paths are
+    // never routed here. Up axes are the exporters' de-facto conventions and
+    // are presentation metadata only. No thumbnail family is claimed because
+    // the provider does not link Assimp.
+    { FormatId::Dae, FormatId::Dae, "dae", "format.dae", L"COLLADA",
+      Extensions(kDaeExtensions), Signatures(kDaeSignatures),
+      ImporterKind::AssimpCompat, 70, UpAxisId::Y, UnitPolicy::Unspecified,
+      PresentationProfile::StudioPbr, ThumbnailFamily::None,
+      CapabilityFlags::Sidecars, SourceFormatId::Dae },
+    { FormatId::ThreeDs, FormatId::ThreeDs, "3ds", "format.3ds", L"3DS",
+      Extensions(kThreeDsExtensions), {},
+      ImporterKind::AssimpCompat, 60, UpAxisId::Z, UnitPolicy::Unspecified,
+      PresentationProfile::StudioCad, ThumbnailFamily::None,
+      CapabilityFlags::Sidecars, SourceFormatId::ThreeDs },
+    { FormatId::Dxf, FormatId::Dxf, "dxf", "format.dxf", L"DXF",
+      Extensions(kDxfExtensions), Signatures(kDxfSignatures),
+      ImporterKind::AssimpCompat, 60, UpAxisId::Z, UnitPolicy::Unspecified,
+      PresentationProfile::StudioCad, ThumbnailFamily::None,
+      CapabilityFlags::None, SourceFormatId::Dxf },
+    { FormatId::DirectX, FormatId::DirectX, "directx", "format.directx", L"DirectX",
+      Extensions(kDirectXExtensions), Signatures(kDirectXSignatures),
+      ImporterKind::AssimpCompat, 60, UpAxisId::Y, UnitPolicy::Unspecified,
+      PresentationProfile::StudioPbr, ThumbnailFamily::None,
+      CapabilityFlags::Sidecars, SourceFormatId::DirectX },
+    { FormatId::Off, FormatId::Off, "off", "format.off", L"OFF",
+      Extensions(kOffExtensions), Signatures(kOffSignatures),
+      ImporterKind::AssimpCompat, 50, UpAxisId::Y, UnitPolicy::Unspecified,
+      PresentationProfile::StudioCad, ThumbnailFamily::None,
+      CapabilityFlags::None, SourceFormatId::Off },
+    { FormatId::Amf, FormatId::Amf, "amf", "format.amf", L"AMF",
+      Extensions(kAmfExtensions), {},
+      ImporterKind::AssimpCompat, 50, UpAxisId::Z, UnitPolicy::Unspecified,
+      PresentationProfile::StudioCad, ThumbnailFamily::None,
+      CapabilityFlags::None, SourceFormatId::Amf },
+    { FormatId::X3d, FormatId::X3d, "x3d", "format.x3d", L"X3D",
+      Extensions(kX3dExtensions), Signatures(kX3dSignatures),
+      ImporterKind::AssimpCompat, 60, UpAxisId::Y, UnitPolicy::Unspecified,
+      PresentationProfile::StudioPbr, ThumbnailFamily::None,
+      CapabilityFlags::Sidecars, SourceFormatId::X3d },
 };
 
 constexpr wchar_t FoldExtensionChar(wchar_t value) noexcept

@@ -2,7 +2,7 @@
 
 **A fast, secure, and native 3D object viewer for Windows**
 
-[![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install) [![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP%20%C2%B7%20IGES%20%C2%B7%20BREP-6e7681?style=flat-square)](#supported-formats)
+[![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install) [![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP%20%C2%B7%20IGES%20%C2%B7%20BREP%20%C2%B7%20DAE%20%C2%B7%203DS%20%C2%B7%20OFF%20%C2%B7%20AMF%20%C2%B7%20X3D-6e7681?style=flat-square)](#supported-formats)
 
 [Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Contributing](CONTRIBUTING.md) · [Windows security help](docs/WINDOWS-SECURITY.md)
 
@@ -13,7 +13,7 @@
 
 ## Highlights
 
-- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, STEP/STP, IGES, BREP, XBF, and FreeCAD** files locally.
+- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, STEP/STP, IGES, BREP, XBF, FreeCAD, COLLADA, 3DS, DXF, DirectX, OFF, AMF, and X3D** files locally.
 - Navigate with familiar Blender-style orbit, pan, and frame controls, plus Unreal-style right-mouse fly, a navigation gizmo with 90° roll controls, and a keyboard-friendly command set.
 - Inspect models with Studio, Clay, and rotatable Directional lighting, Wireframe mode, an information panel, and point-cloud rendering.
 - Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration.
@@ -37,6 +37,7 @@
 | BREP | `.brep`: OCCT `CASCADE Topology` shape sets with bounded shape/location admission; no authored units or colors |
 | XBF | `.xbf`: OCCT binary XCAF documents with colors, assembly structure, and placements |
 | FreeCAD Standard | `.fcstd`: the common Part/PartDesign layout with evaluated `*.brp` shapes, colors, visibility, and nested placements |
+| Compatibility formats | `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, and `.x3d` through a bounded Assimp adapter: static triangles, transforms, material factors, and approved local/embedded textures. DXF is limited to Assimp's 3DFACE/polyline subset; no animation, cameras, lights, plug-ins, or file writes |
 
 For the exact supported subset, resource ceilings, and known limitations of each format, see [Format support and limits](docs/FORMAT-SUPPORT.md).
 
@@ -70,7 +71,7 @@ vcpkg integrate install
 
 Then open `Preview3D.slnx`, pick **Release | x64** (or **Debug | x64**), and build. With integration installed, the first build restores every manifest the solution needs, with no manual `vcpkg install` required:
 
-- the repository root manifest into `vcpkg_installed\x64-windows-static-md` (fastgltf, draco, lib3mf, TinyUSDZ, OpenUSD, and the rest);
+- the repository root manifest into `vcpkg_installed\x64-windows-static-md` (fastgltf, draco, lib3mf, TinyUSDZ, OpenUSD, Assimp, and the rest);
 - the STEP host's isolated OCCT manifest into `compatibility-host-step\vcpkg_installed`;
 - the thumbnail provider's isolated OCCT manifest into `thumbnail-provider\step-occt\vcpkg_installed`.
 

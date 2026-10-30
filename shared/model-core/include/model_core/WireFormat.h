@@ -149,6 +149,16 @@ enum class SourceFormatId : uint32_t {
     // package, rendered from its evaluated Part shape and millimetre data.
     Xbf = 16,
     Fcstd = 17,
+    // T10 additive Assimp compatibility identities. These are emitted only by
+    // the general import worker's bounded Assimp adapter; the native formats
+    // above never route through it.
+    Dae = 18,
+    ThreeDs = 19,
+    Dxf = 20,
+    DirectX = 21,
+    Off = 22,
+    Amf = 23,
+    X3d = 24,
 };
 // Preserve the protocol-v10 numeric identities of Unknown/Y/Z. USD is the
 // first supported family that can author X-up, so X is appended rather than

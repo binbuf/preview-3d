@@ -6,6 +6,7 @@
 // parser: the sniffer is a candidate selector, never a validation claim.
 
 #include "model_core/FormatCatalog.h"
+#include "model_core/FormatSelection.h"
 #include "model_core/FormatSniffer.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -21,6 +22,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 using namespace model_core;
@@ -256,7 +258,7 @@ TEST_CASE("format catalog extensions are unique and resolve", "[format-catalog]"
 TEST_CASE("every source format id has a catalog descriptor", "[format-catalog]")
 {
     std::set<uint32_t> seenWireIds;
-    for (uint32_t value = 1; value <= static_cast<uint32_t>(SourceFormatId::Fcstd); ++value) {
+    for (uint32_t value = 1; value <= static_cast<uint32_t>(SourceFormatId::X3d); ++value) {
         const auto wire = static_cast<SourceFormatId>(value);
         INFO("wire id " << value);
         const auto* descriptor = FindBySourceFormatId(wire);
@@ -317,6 +319,35 @@ TEST_CASE("T09 XBF and FCStd are catalog-backed CAD host formats", "[format-cata
     CHECK(fcstd->thumbnail == ThumbnailFamily::None);
     CHECK(FindByExtension(L"fcstd") == fcstd);
     CHECK(FindByExtension(L".FCStd") == fcstd);
+}
+
+TEST_CASE("T10 Assimp compatibility formats are catalog-backed worker importers",
+          "[format-catalog][assimp]")
+{
+    static_assert(static_cast<uint32_t>(SourceFormatId::Dae) == 18);
+    static_assert(static_cast<uint32_t>(SourceFormatId::X3d) == 24);
+
+    for (const auto& [id, extension, wire, up] : {
+             std::tuple{FormatId::Dae, L"dae", SourceFormatId::Dae, UpAxisId::Y},
+             std::tuple{FormatId::ThreeDs, L"3ds", SourceFormatId::ThreeDs, UpAxisId::Z},
+             std::tuple{FormatId::Dxf, L"dxf", SourceFormatId::Dxf, UpAxisId::Z},
+             std::tuple{FormatId::DirectX, L"x", SourceFormatId::DirectX, UpAxisId::Y},
+             std::tuple{FormatId::Off, L"off", SourceFormatId::Off, UpAxisId::Y},
+             std::tuple{FormatId::Amf, L"amf", SourceFormatId::Amf, UpAxisId::Z},
+             std::tuple{FormatId::X3d, L"x3d", SourceFormatId::X3d, UpAxisId::Y},
+         }) {
+        INFO("Assimp format " << static_cast<uint32_t>(id));
+        const auto* descriptor = FindById(id);
+        REQUIRE(descriptor != nullptr);
+        CHECK(descriptor->importer == ImporterKind::AssimpCompat);
+        CHECK(descriptor->wireFormatId == wire);
+        CHECK(descriptor->defaultUpAxis == up);
+        CHECK(descriptor->unitPolicy == UnitPolicy::Unspecified);
+        CHECK(FindByExtension(extension) == descriptor);
+        CHECK(IsImportableFormat(descriptor));
+        CHECK(FindBySourceFormatId(wire) == descriptor);
+        CHECK(ProgIdForFormat(*descriptor) != nullptr);
+    }
 }
 
 TEST_CASE("content sniff identifies a GLB renamed to .bin", "[format-catalog]")

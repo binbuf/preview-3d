@@ -111,6 +111,11 @@ bool IsAllowedSidecarExtension(ImportFormat format, const std::filesystem::path&
         // FBX geometry caches are never evaluated (FBX-005), but the unified
         // PBR material path brokers approved local textures.
         return IsImageExtension(extension);
+    case ImportFormat::Assimp:
+        // T10 compatibility formats reference textures only. The adapter's
+        // IOSystem still enforces relative/local/extension rules before asking
+        // the broker, so both layers must agree on the image allowlist.
+        return IsImageExtension(extension);
     case ImportFormat::Usd:
         // The fast path brokers contained image assets; the compatibility host
         // additionally brokers local layer dependencies for composition arcs.

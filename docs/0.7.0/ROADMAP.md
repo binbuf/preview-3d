@@ -37,7 +37,7 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [x] T07 — STEP tolerance and import quality → [../tasks/0.7.0/T07-step-tolerance-import-quality.md](../tasks/0.7.0/T07-step-tolerance-import-quality.md)
 - [x] T08 — OCCT host: IGES and BREP → [../tasks/0.7.0/T08-cad-host-iges-brep.md](../tasks/0.7.0/T08-cad-host-iges-brep.md)
 - [x] T09 — OCCT host: XBF and FCStd → [../tasks/0.7.0/T09-cad-host-xbf-fcstd.md](../tasks/0.7.0/T09-cad-host-xbf-fcstd.md)
-- [ ] T10 — Bounded Assimp compatibility adapter → [../tasks/0.7.0/T10-assimp-compatibility-adapter.md](../tasks/0.7.0/T10-assimp-compatibility-adapter.md)
+- [x] T10 — Bounded Assimp compatibility adapter → [../tasks/0.7.0/T10-assimp-compatibility-adapter.md](../tasks/0.7.0/T10-assimp-compatibility-adapter.md)
 - [ ] T10b — 3MF best-effort compatibility → [../tasks/0.7.0/T10b-three-mf-compatibility.md](../tasks/0.7.0/T10b-three-mf-compatibility.md)
 - [ ] T11 — USD primitives, points and crease tolerance → [../tasks/0.7.0/T11-usd-primitives-points-creases.md](../tasks/0.7.0/T11-usd-primitives-points-creases.md)
 
@@ -59,11 +59,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T19 — 0.7.0 compatibility qualification and docs → [../tasks/0.7.0/T19-qualification-docs.md](../tasks/0.7.0/T19-qualification-docs.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-30T05:09:42Z · 9/20 done
+**Pipeline status** — updated 2026-10-30T06:12:00Z · 10/20 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10
 - Blocked: none
 - Failed: none
-- Remaining: T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
-- Last finished: T09 — done · XBF and FCStd open through the isolated OCCT host with bounded admission/readers, colors/transforms/visibility, catalog+installer routing, fixtures, tests, docs and ADR; acceptance passes, with only clean-restore zlib validation and a real FreeCAD-authored fixture recorded as follow-ups.
+- Remaining: T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19
+- Last finished: T10 — done · Bounded Assimp compatibility adapter landed for DAE/3DS/DXF/X/OFF/AMF/X3D with broker IOSystem, caps, fixtures, tests, fuzz lane, catalog/installer/docs, overlay X3D fix, ADR-0065, and passing acceptance checks.
 <!-- /symphony:status -->

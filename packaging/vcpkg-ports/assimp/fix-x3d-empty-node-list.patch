@@ -1,0 +1,20 @@
+diff --git a/code/AssetLib/X3D/X3DImporter.cpp b/code/AssetLib/X3D/X3DImporter.cpp
+--- a/code/AssetLib/X3D/X3DImporter.cpp
++++ b/code/AssetLib/X3D/X3DImporter.cpp
+@@ -293,10 +293,14 @@ void X3DImporter::InternReadFile(const std::string &pFile, aiScene *pScene, IOSys
+ 
+     //search for root node element
+ 
+-    mNodeElementCur = NodeElement_List.front();
+-    if (mNodeElementCur == nullptr) {
++    // Product finding (T10): an XML document that pugixml accepts but the
++    // X3D importer's own tokenizer rejects leaves NodeElement_List empty.
++    // Calling front() on an empty std::list is undefined behaviour and was
++    // reachable from a single mutated X3D fixture.
++    if (NodeElement_List.empty() || NodeElement_List.front() == nullptr) {
+         return;
+     }
++    mNodeElementCur = NodeElement_List.front();
+     while (mNodeElementCur->Parent != nullptr) {
+         mNodeElementCur = mNodeElementCur->Parent;
+     }

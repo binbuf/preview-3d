@@ -68,6 +68,21 @@ constexpr bool SceneUnitsAndUpAxisAllowed(
         // adapter reports a positive verified metre factor and no display-up
         // axis; the ground-axis control chooses the orientation.
         return upAxis == UpAxisId::Unknown && metersPerUnit > 0.0;
+    case SourceFormatId::Dae:
+    case SourceFormatId::DirectX:
+    case SourceFormatId::Off:
+    case SourceFormatId::X3d:
+        // Assimp compatibility formats carry no authored length unit on the
+        // wire. The declared up axis is the exporter family convention and is
+        // presentation metadata only; Unknown remains accepted for an older
+        // worker, but a different authored axis is a protocol violation.
+        return metersPerUnit == 0.0
+            && (upAxis == UpAxisId::Y || upAxis == UpAxisId::Unknown);
+    case SourceFormatId::ThreeDs:
+    case SourceFormatId::Dxf:
+    case SourceFormatId::Amf:
+        return metersPerUnit == 0.0
+            && (upAxis == UpAxisId::Z || upAxis == UpAxisId::Unknown);
     default:
         return true;
     }

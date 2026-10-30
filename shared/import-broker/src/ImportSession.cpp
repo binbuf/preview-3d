@@ -117,6 +117,8 @@ const wchar_t* ParseFlagFor(ImportFormat format)
         return L"--parse-usd";
     case ImportFormat::ThreeMf:
         return L"--parse-3mf";
+    case ImportFormat::Assimp:
+        return L"--parse-assimp";
     case ImportFormat::Step:
     case ImportFormat::Iges:
     case ImportFormat::Brep:
@@ -220,9 +222,35 @@ Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFile
         | (session.fbxTinyTextureLimitForTesting
             ? model_core::kImportRequestFbxTinyTextureLimitForTesting : 0)
         | (session.stepForceSerialForTesting
-            ? model_core::kImportRequestStepForceSerialForTesting : 0);
+            ? model_core::kImportRequestStepForceSerialForTesting : 0)
+        | (session.assimpTinyLimitsForTesting
+            ? model_core::kImportRequestAssimpTinyLimitsForTesting : 0);
     request.cancellationEventHandleValue = cancellationEventHandle;
     return request;
+}
+
+model_core::SourceFormatId AssimpSourceFormat(model_core::AssimpFormat format)
+{
+    using A = model_core::AssimpFormat;
+    using S = model_core::SourceFormatId;
+    switch (format) {
+    case A::Dae: return S::Dae;
+    case A::ThreeDs: return S::ThreeDs;
+    case A::Dxf: return S::Dxf;
+    case A::DirectX: return S::DirectX;
+    case A::Off: return S::Off;
+    case A::Amf: return S::Amf;
+    case A::X3d: return S::X3d;
+    }
+    return S::Unknown;
+}
+
+bool IsAssimpSourceFormat(model_core::SourceFormatId format)
+{
+    using S = model_core::SourceFormatId;
+    return format == S::Dae || format == S::ThreeDs || format == S::Dxf
+        || format == S::DirectX || format == S::Off || format == S::Amf
+        || format == S::X3d;
 }
 
 bool SendStartRequest(const ImportSessionRequest& session, ImportProducer producer,
@@ -283,6 +311,15 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
             session, sourceFileHandle, sectionHandle, cancellationEventHandle);
         return model_core::WriteControlMessage(
             controlInWrite, model_core::ControlOpcode::StartThreeMfImportFromFile,
+            &request, sizeof(request));
+    }
+    case ImportFormat::Assimp: {
+        if (!model_core::IsKnownAssimpFormat(session.assimpFormat)) return false;
+        auto request = MakeFileRequest<model_core::ParseAssimpFileRequest>(
+            session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+        request.assimpFormat = static_cast<uint32_t>(session.assimpFormat);
+        return model_core::WriteControlMessage(
+            controlInWrite, model_core::ControlOpcode::StartAssimpImportFromFile,
             &request, sizeof(request));
     }
     case ImportFormat::Step: {
@@ -983,6 +1020,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                     ? chunk.scene.format == model_core::SourceFormatId::Xbf
                                 : request.format == ImportFormat::Fcstd
                                     ? chunk.scene.format == model_core::SourceFormatId::Fcstd
+                                : request.format == ImportFormat::Assimp
+                                    ? chunk.scene.format == AssimpSourceFormat(request.assimpFormat)
                                 : (chunk.scene.format == model_core::SourceFormatId::Usda
                                    || chunk.scene.format == model_core::SourceFormatId::Usdc
                                    || chunk.scene.format == model_core::SourceFormatId::Usdz);
@@ -1009,7 +1048,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 || acceptance.scene->format == model_core::SourceFormatId::Iges
                 || acceptance.scene->format == model_core::SourceFormatId::Brep
                 || acceptance.scene->format == model_core::SourceFormatId::Xbf
-                || acceptance.scene->format == model_core::SourceFormatId::Fcstd);
+                || acceptance.scene->format == model_core::SourceFormatId::Fcstd
+                || IsAssimpSourceFormat(acceptance.scene->format));
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -1146,7 +1186,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                     return false;
                 }
                 if ((chunk.scene.format == model_core::SourceFormatId::Obj
-                     || chunk.scene.format == model_core::SourceFormatId::Fbx) &&
+                     || chunk.scene.format == model_core::SourceFormatId::Fbx
+                     || IsAssimpSourceFormat(chunk.scene.format)) &&
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
                      d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
@@ -1572,7 +1613,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             || acceptance.scene->format == model_core::SourceFormatId::Iges
             || acceptance.scene->format == model_core::SourceFormatId::Brep
             || acceptance.scene->format == model_core::SourceFormatId::Xbf
-            || acceptance.scene->format == model_core::SourceFormatId::Fcstd);
+            || acceptance.scene->format == model_core::SourceFormatId::Fcstd
+            || IsAssimpSourceFormat(acceptance.scene->format));
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)

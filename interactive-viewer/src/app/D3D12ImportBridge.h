@@ -49,6 +49,15 @@ enum class SourceFormat {
     // package, both still handled only by the dedicated CAD host.
     Xbf,
     Fcstd,
+    // T10 bounded Assimp compatibility formats. They use the general worker,
+    // never a native adapter or the CAD host.
+    Dae,
+    ThreeDs,
+    Dxf,
+    DirectX,
+    Off,
+    Amf,
+    X3d,
 };
 
 // nullopt for any extension this slice doesn't recognize. This remains the

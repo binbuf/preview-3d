@@ -76,6 +76,11 @@ enum class ControlOpcode : uint32_t {
     // IGES and BREP use this opcode so a worker or other host can never accept
     // a CAD request by reusing a general-import opcode.
     StartCadImportFromFile = 22, // broker -> CAD host
+    // T10 bounded Assimp compatibility route. The request carries a closed
+    // AssimpFormat discriminator and is accepted only by the general import
+    // worker's pool. Assimp never replaces a native adapter; this opcode is
+    // the only route into the compatibility importer.
+    StartAssimpImportFromFile = 23, // host -> worker
 };
 
 enum : uint32_t {
@@ -107,6 +112,10 @@ enum : uint32_t {
     kImportRequestStepQualityFull = 1u << 10,
     kImportRequestStepQualityMask =
         kImportRequestStepQualityDraft | kImportRequestStepQualityFull,
+    // T10 test-only seam: constrains the Assimp adapter's object, material,
+    // triangle and vertex caps so a small fixture can prove typed ResourceLimit
+    // rejection. Product callers never set it.
+    kImportRequestAssimpTinyLimitsForTesting = 1u << 11,
 };
 
 // Closed product-level STEP import-quality selection. `Balanced` is the default
@@ -395,6 +404,43 @@ struct ParseCadFileRequest {
 };
 static_assert(sizeof(ParseCadFileRequest) == 56,
               "ParseCadFileRequest layout changed");
+
+// T10 closed compatibility-format discriminator. The worker validates this
+// against the request before selecting an Assimp importer hint; it is never a
+// free-form extension.
+enum class AssimpFormat : uint32_t {
+    Dae = 0,
+    ThreeDs = 1,
+    Dxf = 2,
+    DirectX = 3,
+    Off = 4,
+    Amf = 5,
+    X3d = 6,
+};
+
+constexpr bool IsKnownAssimpFormat(AssimpFormat format) noexcept
+{
+    return format == AssimpFormat::Dae || format == AssimpFormat::ThreeDs
+        || format == AssimpFormat::Dxf || format == AssimpFormat::DirectX
+        || format == AssimpFormat::Off || format == AssimpFormat::Amf
+        || format == AssimpFormat::X3d;
+}
+
+// The first seven fields are layout-identical to every other real-file
+// request; assimpFormat selects the product-owned compatibility importer.
+struct ParseAssimpFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue;
+    uint64_t sectionHandleValue;
+    uint64_t sectionByteCapacity;
+    uint32_t maxChunkCount;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
+    uint32_t assimpFormat; // closed AssimpFormat value
+    uint32_t reserved0;    // zero
+};
+static_assert(sizeof(ParseAssimpFileRequest) == 56,
+              "ParseAssimpFileRequest layout changed");
 
 // Closed STEP phase identities for StepProgressNotice::phase. They name the
 // product's own pipeline stages, not OCCT internals, so the viewer can render

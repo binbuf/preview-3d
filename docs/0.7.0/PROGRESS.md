@@ -19,6 +19,7 @@ The plan, ground rules and per-task verify commands are in
 - **T07 — STEP tolerance and import quality**: **Profile version is now 6.** `StepTessellationProfile.h`:; **Request quality bits** in `shared/model-core/include/model_core/
 - **T08 — OCCT host: IGES and BREP**: **Wire identities:** `SourceFormatId::Iges = 14`, `Brep = 15` (appended).; **Host route:** STEP keeps opcode 20 / `ParseStepFileRequest` (48 bytes).
 - **T09 — OCCT host: XBF and FCStd**: **Wire identities:** `SourceFormatId::Xbf = 16`, `Fcstd = 17` (appended).; **Broker:** `ImportFormat::Xbf`/`Fcstd` are CAD-only, producer
+- **T10 — Bounded Assimp compatibility adapter**: **Dependency:** `assimp` 6.0.4#3 from the pinned vcpkg baseline, plus its; **Overlay port:** `packaging/vcpkg-ports/assimp/` copies the baseline port and
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -31,4 +32,5 @@ The plan, ground rules and per-task verify commands are in
 - [T07](progress/T07.md) — **Profile version is now 6.** `StepTessellationProfile.h`:
 - [T08](progress/T08.md) — **Wire identities:** `SourceFormatId::Iges = 14`, `Brep = 15` (appended).
 - [T09](progress/T09.md) — **Wire identities:** `SourceFormatId::Xbf = 16`, `Fcstd = 17` (appended).
+- [T10](progress/T10.md) — **Dependency:** `assimp` 6.0.4#3 from the pinned vcpkg baseline, plus its
 <!-- symphony:digest:end -->

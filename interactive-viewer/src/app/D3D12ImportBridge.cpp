@@ -71,6 +71,13 @@ model_core::FormatId FormatIdForSource(SourceFormat format)
     case SourceFormat::Brep: return model_core::FormatId::Brep;
     case SourceFormat::Xbf: return model_core::FormatId::Xbf;
     case SourceFormat::Fcstd: return model_core::FormatId::Fcstd;
+    case SourceFormat::Dae: return model_core::FormatId::Dae;
+    case SourceFormat::ThreeDs: return model_core::FormatId::ThreeDs;
+    case SourceFormat::Dxf: return model_core::FormatId::Dxf;
+    case SourceFormat::DirectX: return model_core::FormatId::DirectX;
+    case SourceFormat::Off: return model_core::FormatId::Off;
+    case SourceFormat::Amf: return model_core::FormatId::Amf;
+    case SourceFormat::X3d: return model_core::FormatId::X3d;
     }
     return model_core::FormatId::Unknown;
 }
@@ -98,6 +105,13 @@ std::optional<SourceFormat> SourceFormatForCatalogDescriptor(
     case model_core::FormatId::Brep: return SourceFormat::Brep;
     case model_core::FormatId::Xbf: return SourceFormat::Xbf;
     case model_core::FormatId::Fcstd: return SourceFormat::Fcstd;
+    case model_core::FormatId::Dae: return SourceFormat::Dae;
+    case model_core::FormatId::ThreeDs: return SourceFormat::ThreeDs;
+    case model_core::FormatId::Dxf: return SourceFormat::Dxf;
+    case model_core::FormatId::DirectX: return SourceFormat::DirectX;
+    case model_core::FormatId::Off: return SourceFormat::Off;
+    case model_core::FormatId::Amf: return SourceFormat::Amf;
+    case model_core::FormatId::X3d: return SourceFormat::X3d;
     default: return std::nullopt;
     }
 }
@@ -318,6 +332,20 @@ void DescribeSessionFailureInternal(const import_broker::ImportSessionResult& se
     }
 }
 
+model_core::AssimpFormat AssimpFormatForSource(SourceFormat format)
+{
+    switch (format) {
+    case SourceFormat::ThreeDs: return model_core::AssimpFormat::ThreeDs;
+    case SourceFormat::Dxf: return model_core::AssimpFormat::Dxf;
+    case SourceFormat::DirectX: return model_core::AssimpFormat::DirectX;
+    case SourceFormat::Off: return model_core::AssimpFormat::Off;
+    case SourceFormat::Amf: return model_core::AssimpFormat::Amf;
+    case SourceFormat::X3d: return model_core::AssimpFormat::X3d;
+    case SourceFormat::Dae:
+    default: return model_core::AssimpFormat::Dae;
+    }
+}
+
 import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
 {
     const auto* descriptor = model_core::FindById(FormatIdForSource(format));
@@ -345,6 +373,8 @@ import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
             : format == SourceFormat::Brep ? import_broker::ImportFormat::Brep
             : format == SourceFormat::Xbf ? import_broker::ImportFormat::Xbf
                                           : import_broker::ImportFormat::Fcstd;
+    case model_core::ImporterKind::AssimpCompat:
+        return import_broker::ImportFormat::Assimp;
     case model_core::ImporterKind::GltfWorker:
     default:
         return import_broker::ImportFormat::Gltf;
@@ -575,13 +605,17 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     const bool cadFormat = format == SourceFormat::Step || format == SourceFormat::Iges
         || format == SourceFormat::Brep || format == SourceFormat::Xbf
         || format == SourceFormat::Fcstd;
+    const bool assimpFormat = format == SourceFormat::Dae || format == SourceFormat::ThreeDs
+        || format == SourceFormat::Dxf || format == SourceFormat::DirectX
+        || format == SourceFormat::Off || format == SourceFormat::Amf
+        || format == SourceFormat::X3d;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
         && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd && !cadFormat;
+        && format != SourceFormat::Usd && !cadFormat && !assimpFormat;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
     if (!delayBatchesForTesting && !faultForTesting && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd && !cadFormat) {
+        && format != SourceFormat::Usd && !cadFormat && !assimpFormat) {
         sessionRequest.nextDetail = std::move(nextDetail);
         sessionRequest.onInitialComplete = std::move(onInitialComplete);
     }
@@ -595,6 +629,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     }
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
+    if (assimpFormat) sessionRequest.assimpFormat = AssimpFormatForSource(format);
     sessionRequest.generationId = generationId;
     sessionRequest.sectionByteCapacity = sectionBytes;
     if (delayBatchesForTesting && format == SourceFormat::Glb)

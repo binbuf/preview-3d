@@ -22,6 +22,7 @@ family. It is checked against the mapping (and the pinned baseline) by
 
 | Package | Version | License family |
 | --- | --- | --- |
+| assimp | 6.0.4#3 | BSD-3-Clause |
 | basisu | 2.50 | Apache-2.0 |
 | bzip2 | 1.0.8#6 | bzip2-1.0.6 |
 | catch2 | 3.16.0 | Boost Software License 1.0 (BSL-1.0) |
@@ -30,18 +31,26 @@ family. It is checked against the mapping (and the pinned baseline) by
 | egl-registry | 2025-05-27 | Apache-2.0 and MIT |
 | fast-float | 8.2.10#1 | MIT or Apache-2.0 |
 | fastgltf | 0.9.0 | MIT |
+| jhasse-poly2tri | 2023-12-27#2 | BSD-3-Clause |
 | ktx | 4.4.2 | Apache-2.0, with enabled third-party notices as applicable |
+| kubazip | 0.3.15 | MIT |
 | lib3mf | 2.5.0#1 | BSD-2-Clause, with bundled dependency notices as applicable |
 | libwebp | 1.6.0#3 | BSD-3-Clause |
 | libzip | 1.11.4 | BSD-3-Clause |
 | meshoptimizer | 1.2 | MIT |
+| minizip | 1.3.2 | Zlib |
 | opencascade | 7.8.1#1 | LGPL-2.1; see the release package's `licenses/opencascade.txt` |
 | opengl-registry | 2026-08-03 | Apache-2.0 and MIT |
 | openusd | 26.8.0 | Apache-2.0 |
+| polyclipping | 6.4.2#13 | BSL-1.0 |
+| pugixml | 1.16 | MIT |
+| rapidjson | 2025-02-26 | MIT |
 | simdjson | 4.6.8 | Apache-2.0 |
+| stb | 2024-07-29#1 | MIT or Unlicense |
 | tbb | 2023.1.0 | Apache-2.0 |
 | tinyusdz | 0.9.1#3 | Apache-2.0, with enabled vendored-code notices |
 | ufbx | 0.23.0 | MIT (the project also offers Unlicense) |
+| utfcpp | 4.1.1 | BSL-1.0 |
 | zlib | 1.3.2#2 | Zlib |
 | zstd | 1.5.7 | BSD-3-Clause |
 

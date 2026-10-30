@@ -109,6 +109,9 @@
     <ClCompile Include="src\ObjImportWorker.cpp" />
     <ClCompile Include="src\ObjAdapter.cpp" />
     <ClCompile Include="src\UfbxMaterialConversion.cpp" />
+    <ClCompile Include="src\AssimpImportWorker.cpp" />
+    <ClCompile Include="src\AssimpAdapter.cpp" />
+    <ClCompile Include="src\AssimpTextureDecode.cpp" />
     <ClCompile Include="src\FbxImportWorker.cpp" />
     <ClCompile Include="src\FbxAdapter.cpp" />
     <ClCompile Include="..\shared\parser-core\src\AsciiTokenizer.cpp" />

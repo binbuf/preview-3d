@@ -1,6 +1,7 @@
 #include "WorkerRequestDispatch.h"
 
 #include "GenerationWorker.h"
+#include "AssimpImportWorker.h"
 #include "FbxImportWorker.h"
 #include "GltfImportWorker.h"
 #include "PlyImportWorker.h"
@@ -94,6 +95,14 @@ DispatchOutcome DispatchOneRequest(HANDLE stdIn, HANDLE stdOut)
         model_core::ParseThreeMfFileRequest request{};
         std::memcpy(&request, received->payload.data(), sizeof(request));
         HandleThreeMfImportFileRequest(stdIn, stdOut, request);
+        return DispatchOutcome::Continue;
+    }
+
+    if (received->header.opcode == static_cast<uint32_t>(model_core::ControlOpcode::StartAssimpImportFromFile)
+        && received->payload.size() == sizeof(model_core::ParseAssimpFileRequest)) {
+        model_core::ParseAssimpFileRequest request{};
+        std::memcpy(&request, received->payload.data(), sizeof(request));
+        HandleAssimpImportFileRequest(stdIn, stdOut, request);
         return DispatchOutcome::Continue;
     }
 

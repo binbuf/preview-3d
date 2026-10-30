@@ -58,6 +58,10 @@ enum class ImportFormat : uint32_t {
     // T09 OCCT-native formats through the same dedicated host.
     Xbf,
     Fcstd,
+    // T10 bounded Assimp compatibility route in the general worker. The
+    // concrete compatibility format travels separately in
+    // ImportSessionRequest::assimpFormat.
+    Assimp,
 };
 
 enum class ImportProducer : uint32_t {
@@ -200,6 +204,9 @@ struct ImportSessionRequest {
     model_core::StepImportQuality stepImportQuality = model_core::StepImportQuality::Balanced;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;
+    // Meaningful only when format == ImportFormat::Assimp. The closed value
+    // selects the compatibility importer hint and the expected wire identity.
+    model_core::AssimpFormat assimpFormat = model_core::AssimpFormat::Dae;
     uint64_t generationId = 0;
     uint64_t sectionByteCapacity = 0;
     uint32_t maxChunkCount = 0;
@@ -311,6 +318,9 @@ struct ImportSessionRequest {
     // FBX qualification seam: constrains the aggregate decoded texture budget
     // so pressure and same-worker recovery are practical to exercise.
     bool fbxTinyTextureLimitForTesting = false;
+    // T10 qualification seam: constrains every Assimp adapter cap so a small
+    // fixture proves typed ResourceLimit rejection.
+    bool assimpTinyLimitsForTesting = false;
 };
 
 struct SourceChunkRange

@@ -20,6 +20,13 @@ For install and build instructions, see the [README](../README.md).
 | BREP | `.brep`: the OCCT ASCII `CASCADE Topology` shape-set serialization. Topology and geometry only (no authored colors or units); the scene reports `UpAxisId::Unknown` and zero metres-per-unit, and the bounded shape/location table is admitted before `BRepTools::Read` |
 | XBF | `.xbf`: the OCCT binary XCAF document (`BINFILE` + supported format version). Colors, assembly structure and placements are preserved; the XCAF length unit is reported when present (otherwise the documented OCCT millimetre default with a warning), and the scene up axis stays `Unknown` |
 | FreeCAD Standard | `.fcstd`: the common single-part/PartDesign case. A bounded ZIP preflight requires `Document.xml` and at least one evaluated `*.brp` Part shape, rejects encryption/multi-disk/data descriptors/overlapping or over-expanding entries, and parses `Document.xml`/`GuiDocument.xml` with node/depth/size limits. Shape colors, transparency, visibility, local links and nested placements are applied; external links and unsupported FreeCAD features are skipped with warnings |
+| COLLADA | `.dae`: static scene meshes, node transforms, normals/UVs/colors, diffuse/metallic/roughness/emissive factors, and embedded or approved local textures. No animation, cameras or lights |
+| 3DS | `.3ds`: static triangle meshes, transforms, material groups/colors, and approved local textures. No animation, cameras or lights |
+| DXF | `.dxf`: Assimp's limited 3DFACE and polyline subset only, not full DXF entities/blocks |
+| DirectX | `.x`: static text/binary mesh geometry and materials where Assimp supports them; no animation or DirectX effect state |
+| OFF | `.off`: static ASCII triangle/polygon meshes, triangulated on import |
+| AMF | `.amf`: static mesh volumes and materials; no slicing or AMF production/print semantics |
+| X3D | `.x3d`: static IndexedFaceSet geometry, materials/colors and approved local textures; no scripting, sensors or animation |
 
 `.mtl` is always a sidecar and is never a primary open type. The Open dialog,
 command line, drag/drop, single-instance activation, Retry, and Open With all
@@ -46,6 +53,8 @@ the rest of the session.
 | BREP | unspecified (no display-up axis) | unspecified (`0.0`, no authored unit); never guessed as millimetres | Studio CAD |
 | XBF | unspecified (no display-up axis) | XCAF document length unit converted to a positive metre factor; absent metadata assumes the OCCT millimetre default with a warning | Studio CAD |
 | FCStd | unspecified (no display-up axis) | millimetres (the FreeCAD Part payload convention); reported as `0.001` with a compatibility note | Studio CAD |
+| DAE / X3D / DirectX / OFF | Y | unspecified (`0.0`); the exporter family authors no verifiable unit | Studio PBR for DAE/X3D/DirectX; Studio CAD for OFF |
+| 3DS / DXF / AMF | Z | unspecified (`0.0`); the exporter family authors no verifiable unit | Studio CAD |
 
 Notes:
 
@@ -56,6 +65,12 @@ Notes:
   delivers normalized Y-up/metres geometry, so the info panel reports Y and
   metres. An authored unit is never guessed or treated as metres; the
   ground-axis control is the user override for orientation.
+- Assimp-backed formats (DAE, 3DS, DXF, X, OFF, AMF, X3D) are compatibility
+  importers, not native paths: static triangles/materials only, no animation,
+  cameras, lights, plug-ins, file writes or external path access. DXF support is
+  limited to Assimp's 3DFACE/polyline entities and is not a full DXF importer.
+  Line/point-only content is skipped with a warning; a file with no triangles
+  fails typed.
 - PLY point detection is content-based: a file that emits points and no
   triangles selects the point preset; a PLY with any triangle mesh keeps the
   PBR review preset.

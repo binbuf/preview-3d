@@ -40,6 +40,7 @@ session override; reloads and refinements do not re-apply the preset.
 | .igs, .iges | OCCT IGES in the dedicated CAD host | Fixed 80-column S/G/D/P/T record streams, analytic B-rep geometry, subfigure/assembly structure, and representable colors | Bounded record/entity/reference preflight before OCCT; no temporary file or path (the admitted records are fed to the pinned in-memory parser). Missing global unit flag assumes millimetres and warns; authored units convert to the verified OCCT system millimetre. No PMI/GD&T or exact-kernel operations; `UpAxisId::Unknown` | B |
 | .brep | OCCT `BRepTools` in the dedicated CAD host | `CASCADE Topology` V1-V3 shape sets: topology and geometry, including compounds | Bounded `TShapes`/`Locations` shape-set preflight before `BRepTools::Read`; no authored colors or units (zero metres-per-unit). No PMI/GD&T; `UpAxisId::Unknown` | B |
 | .step, .stp | OCCT in the dedicated STEP host | ISO 10303-21 clear-text AP203/AP214/AP242 product/assembly structure, B-rep and faceted geometry including supported AP242 tessellated representations, occurrence transforms, authored length units with tolerant assumptions, representable colors/transparency, and Draft/Balanced/Full import quality | External STEP document declarations (`FILE_POPULATION`/`DOCUMENT_FILE`) are counted from Part-21 instance names outside comments/strings and never opened; an unresolved declaration is a warning and the main document still opens. A missing length unit assumes millimetres (0.001 m per unit) and contradictory units use the reader's first/dominant factor, both with warnings; a positive factor above the validated bound still fails typed. An opt-in bounded `ShapeFix` pass runs only after a definition transfers but cannot tessellate. No PMI/GD&T, editing, exact-kernel operations, or measurement; `UpAxisId::Unknown` by design | B |
+| .dae, .3ds, .dxf, .x, .off, .amf, .x3d | Assimp in the general worker (compatibility adapter) | Static triangle meshes, node transforms, vertex normals/UVs/colors, diffuse/metallic/roughness/emissive material factors, and approved local or embedded textures. DAE keeps its scene hierarchy; 3DS/DXF/X/OFF/AMF/X3D expose their supported static mesh subsets. | No animation, cameras/lights, plug-ins, file writes or default IOSystem. Assimp never serves a native format. DXF is limited to Assimp's 3DFACE/polyline entities (not full DXF). Line/point-only content is skipped with a warning; a scene with no triangles fails typed. Tier-B object/material/triangle/vertex caps and scratch/texture/sidecar budgets apply. `UpAxisId` is the exporter-family convention and units are unspecified (`0.0`) | B |
 
 Tier A is the release-gated out-of-core path for the multi-gigabyte workload in [01-product-scope.md](./01-product-scope.md). Tier B formats are still MVP features, but their parser libraries may materialize more intermediate state and therefore have lower enforced limits. Draco primitives are independently bounded because their decoded topology cannot be demand-paged from the compressed bitstream. A format badge is shown when a file uses an ignored or approximated optional feature; unsupported required geometry/composition fails instead of silently presenting an apparently faithful model.
 
@@ -78,7 +79,7 @@ All primary inputs are local, regular, non-empty files. The loader rejects:
 - files that change identity or size after opening;
 - integer overflow, overlapping ranges where prohibited by the format, invalid UTF encoding, non-finite geometry, and counts that exceed the applicable budget.
 
-The sidecar extension set is per requesting format. A `.gltf`/`.glb` may request a `.bin` buffer or an approved image; an OBJ a `.mtl` or an image; FBX an image (geometry caches are never evaluated); USD a `.usd`/`.usda`/`.usdc` layer or an image (direct image assets are dependencies, not layer composition). STL, PLY, STEP, and the in-archive 3MF/USDZ package entries resolve no sidecar at all, so a request from those formats fails closed. STEP external-document declarations are counted only as unresolved metadata: the host has no path authority and never brokers or opens the referenced file. The requesting format is the trusted host's own `ImportSessionRequest::format`, never text from the worker.
+The sidecar extension set is per requesting format. A `.gltf`/`.glb` may request a `.bin` buffer or an approved image; an OBJ a `.mtl` or an image; FBX an image (geometry caches are never evaluated); USD a `.usd`/`.usda`/`.usdc` layer or an image (direct image assets are dependencies, not layer composition); the Assimp compatibility formats request images only. STL, PLY, STEP, and the in-archive 3MF/USDZ package entries resolve no sidecar at all, so a request from those formats fails closed. STEP external-document declarations are counted only as unresolved metadata: the host has no path authority and never brokers or opens the referenced file. The requesting format is the trusted host's own `ImportSessionRequest::format`, never text from the worker.
 
 One deliberate package convenience: for a local file import, an image reference that does not resolve directly is looked up by file name in exactly these directories, closest first -- beside the model, `<model dir>/texture`, `<model dir>/textures`, then the same under the parent package root. The first directory with a match wins, so sibling model packages cannot collide, and the fallback is image-only: required buffers, MTL files, and USD layers must stay where the document references them. Names match exactly first, then with case, space/underscore, and `jpg`/`jpeg`/`tif`/`tiff` spelling normalized, so files renamed by a download site still match. Traversal, UNC/device, ADS, and URL text never reach the lookup and keep failing closed; a name containing wildcards is never used as a pattern, and the matched file still passes the ordinary canonical containment and size checks. A glTF *image* URI that contains `..` (what exporters write for a model inside `source/`) is reduced to its file name before the request for the same reason -- the authored traversal is still never followed, and required buffers and USD layers keep the strict rejection.
 
@@ -256,6 +257,36 @@ ufbx's unified PBR material mapping feeds the normalized base-color/metallic/rou
 ### 3MF
 
 Before lib3mf reads the bounded OPC stream, product code preflights local and central ZIP records, OPC part/relationship names, archive entry paths, per-entry sizes, aggregate expansion, compression ratio, and the required-extension allowlist. The preflight rejects encrypted, multi-disk, and general-purpose-bit-3 (streaming data-descriptor) entries, requires each entry's local CRC, compressed/uncompressed sizes and name bytes to equal the central directory, and bounds the attacker-controlled ZIP64 locator offset with checked addition before use while accepting the spec-correct single-disk locator total of 1. The adapter then validates object/component recursion and build-item counts before allocating normalized resources. Components and all occurrences reachable from the root build use reusable geometry instances where possible; child-model build sections are not interpreted as additional plates. The allowlist covers Core, Materials and Properties, Production, and a bounded Beam Lattice preview subset. A lattice prefers its validated authored representation mesh; otherwise deterministic product tessellation emits the complete beam/ball set under a 262,144-triangle per-lattice ceiling. Parametric clipping is limited to `inside` clipping against a closed, axis-aligned box with uniform appearance; other clipping requires a valid authored representation mesh. Nonrepresentable optional display/translucent features preserve the supported base appearance with a bounded warning, while unsupported required extensions fail.
+
+### Assimp compatibility formats (DAE, 3DS, DXF, X, OFF, AMF, X3D)
+
+A single worker adapter runs Assimp for the seven formats with no native
+adapter (ADR-0065). The closed request discriminator selects the importer hint;
+the extension is never used as a trusted path or free-form argument. Assimp is
+configured with `Triangulate`, `JoinIdenticalVertices`, `GenNormals` (only
+missing normals are generated), `ValidateDataStructure` and `SortByPType`; it
+does not evaluate animation, geometry caches, plug-ins, cameras, lights or
+file writes. The custom `IOSystem` answers every external reference through the
+broker: absolute/rooted, UNC/device, ADS, URL, drive-relative, `..` and
+non-image references are rejected before a request, and the broker applies the
+same image allowlist, canonical containment and size caps as OBJ/FBX.
+Embedded textures are read from Assimp's scene memory under the existing encoded
+and decoded texture budgets.
+
+The adapter validates object/material/triangle/vertex counts before emission,
+skips line/point primitives with a bounded compatibility warning, fails typed
+when no triangles remain, and normalizes world-space triangles, material
+factors and texture images into the same chunk contract as the native adapters.
+Before Assimp runs, product admission checks control bytes and a well-formed XML
+DOM (pugixml) for DAE/AMF/X3D, DAE numeric count/offset/stride attributes and
+token lists, the full ASCII OFF header/vertex/face/token graph, and the 3DS
+main-chunk magic/length. This crash boundary is deliberately separate from
+Assimp's own sniffers. DXF coverage is deliberately limited to the
+3DFACE/polyline entities Assimp supports; it is not a full DXF importer.
+Assimp's source objects never leave the adapter, and the `AssimpFuzz`
+dispatcher target covers all seven container hints. The pinned overlay port
+carries one product finding fix: Assimp 6.0.4's X3D importer called `front()`
+on an empty node list for an XML document its own tokenizer rejected.
 
 ### USD and USDZ
 

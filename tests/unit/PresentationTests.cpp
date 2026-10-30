@@ -95,6 +95,14 @@ TEST_CASE("OBJ accepts the Y-up default while keeping units unspecified",
     CHECK(SceneUnitsAndUpAxisAllowed(SourceFormatId::Brep, UpAxisId::Unknown, 0.0));
     CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Brep, UpAxisId::Z, 0.0));
     CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Brep, UpAxisId::Unknown, 0.001));
+
+    // T10 compatibility formats report the exporter-family up axis and never
+    // invent a length unit.
+    CHECK(SceneUnitsAndUpAxisAllowed(SourceFormatId::Dae, UpAxisId::Y, 0.0));
+    CHECK(SceneUnitsAndUpAxisAllowed(SourceFormatId::ThreeDs, UpAxisId::Z, 0.0));
+    CHECK(SceneUnitsAndUpAxisAllowed(SourceFormatId::Off, UpAxisId::Unknown, 0.0));
+    CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Dae, UpAxisId::Y, 1.0));
+    CHECK_FALSE(SceneUnitsAndUpAxisAllowed(SourceFormatId::Amf, UpAxisId::Y, 0.0));
 }
 
 TEST_CASE("Info panel reports the active preset and source orientation",

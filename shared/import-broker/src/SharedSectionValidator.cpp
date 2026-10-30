@@ -206,7 +206,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         return Reject(ImportErrorCode::ImportProtocolViolation, "header changed during copy");
     if (header.reserved || header.scene.reserved || header.scene.generationId != expectedGenerationId)
         return Reject(ImportErrorCode::ImportProtocolViolation, "stale or malformed scene metadata");
-    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Fcstd))
+    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::X3d))
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
     const bool usdFormat = header.scene.format == model_core::SourceFormatId::Usda
         || header.scene.format == model_core::SourceFormatId::Usdc
@@ -221,6 +221,13 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         || header.scene.format == model_core::SourceFormatId::Brep
         || header.scene.format == model_core::SourceFormatId::Xbf
         || header.scene.format == model_core::SourceFormatId::Fcstd
+        || header.scene.format == model_core::SourceFormatId::Dae
+        || header.scene.format == model_core::SourceFormatId::ThreeDs
+        || header.scene.format == model_core::SourceFormatId::Dxf
+        || header.scene.format == model_core::SourceFormatId::DirectX
+        || header.scene.format == model_core::SourceFormatId::Off
+        || header.scene.format == model_core::SourceFormatId::Amf
+        || header.scene.format == model_core::SourceFormatId::X3d
         || usdFormat;
     const uint32_t objectLimit = tierBFormat ? model_core::kTierBObjectLimit
                                              : model_core::kTierAObjectLimit;
