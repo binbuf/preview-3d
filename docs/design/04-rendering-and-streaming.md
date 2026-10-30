@@ -55,12 +55,12 @@ The MVP uses a forward, rasterized PBR-lite pipeline:
 
 - right-handed internal coordinates and camera-relative float matrices;
 - reversed-Z depth with a floating-point depth buffer;
-- one analytic studio environment (diffuse irradiance plus a roughness-blurred reflection) with a camera-relative key/fill light;
+- one product-owned procedural studio environment baked once into a world-stable cubemap (SH9 diffuse irradiance plus a GGX-prefiltered specular mip chain) with a camera-relative key/fill light;
 - base color, metallic, roughness, emissive, normal map and UV transform when present, vertex color, unlit mode, alpha mask, double-sided state;
 - bounded point primitives rendered as depth-tested camera-scaled round splats with source color or neutral shading;
 - opaque and masked geometry before sorted transparent draw groups;
 - back-face culling unless a material is double-sided;
-- ACES-like tonemapping to SDR and sRGB output;
+- Khronos PBR Neutral tonemapping with an exposure constant to SDR and sRGB output;
 - MSAA disabled by default; temporal effects, ray tracing, mesh shaders, shadows, and post-process antialiasing are outside the MVP.
 
 Materials are flattened into fixed-size GPU records. Feature level 11_0-compatible descriptor tables are used instead of assuming resource binding tier 3 or shader model 6.6 bindless behavior. Missing resources point at permanent neutral descriptors.
@@ -72,6 +72,52 @@ Per-frame camera/pass data (view-projection, camera-relative origin, lighting) i
 The normalized-chunk vertex layout is a small, closed, product-enumerated set of explicit layouts (at minimum: a position-only layout for point clouds, a position+normal+UV layout for untextured/simple meshes, and a full PBR layout with tangents/vertex color for textured meshes), each with a stable numeric layout ID carried on the chunk descriptor. It is not one universal fixed-size vertex record that every format's normalizer is forced into: a struct sized to fit worst-case data (as in the advisor's illustrative 32-byte sample, whose declared members total 28 bytes and only reach 32 through tail padding, and whose UV field is full float2 rather than half-precision) wastes bandwidth on the common case and still cannot represent every source faithfully. Adding a layout to the enumeration is a normal chunk-schema change reviewed like any other in [03-file-formats-and-ingestion.md](./03-file-formats-and-ingestion.md); it is not a reason to add a second universal struct.
 
 CPU frustum culling operates on cluster bounds. Draws are grouped by pipeline/material and compatible instances are batched. When measured visible draw count or CPU submission time crosses the Gate-3 threshold, a feature-level-11-compatible `ExecuteIndirect` path consumes product-generated commands after CPU cluster culling; the ordinary direct-draw path remains the correctness fallback. GPU occlusion culling and mesh shaders remain deferred. The normalized cluster size bounds CPU work in either path.
+
+## Studio environment and color pipeline
+
+The default Studio view does not read a user file or a shipped HDRI. A
+product-owned procedural environment is generated at startup
+([`StudioEnvironment.h`](../../interactive-viewer/src/render/StudioEnvironment.h)):
+three rectangular softboxes, a soft overhead strip and a neutral floor/ceiling
+gradient, evaluated analytically in direction space. The default bake is 128
+texels per cube face, six mips, with a fixed GGX importance sequence; total
+GPU storage is well under 4 MiB. `BakeOptions` clamps the face size to 4–256 and
+the mip count to the full chain, so the startup cost is bounded and the output
+is bit-identical across runs.
+
+The bake produces three derived views of the same radiance:
+
+- the base RGBA32F cubemap (Direct3D face order +X, -X, +Y, -Y, +Z, -Z);
+- a GGX-prefiltered specular mip chain, where roughness 0 selects mip 0 and
+  roughness 1 selects the last mip (`roughness * (mipCount - 1)`);
+- SH9 coefficients of irradiance/π for diffuse lighting.
+
+The environment is uploaded once on the direct queue during initialization and
+never re-baked for a camera move or a frame. Its SRV occupies one slot appended
+to each model's material descriptor heap: D3D12 permits only one shader-visible
+CBV/SRV/UAV heap at a time, so a separate environment heap cannot be bound
+alongside the material heap. The same heap slot is re-written when progressive
+material descriptors are rebuilt.
+
+The vertex shader keeps the camera-relative position/normal precision policy.
+Before sampling the environment the pixel shader rotates the camera-space
+normal and view direction back into the model/world frame using the
+world-from-camera quaternion; the cubemap therefore stays attached to the model
+while the camera orbits. The key/fill analytic rig remains camera-relative for
+predictable object readability. Studio exposes intensity, yaw and exposure in
+the per-frame constant buffer. Clay reuses the same environment at low
+specular; Directional keeps its hard key and adds only a low-intensity
+world-stable ambient/reflection term.
+
+The object shader applies the Khronos PBR Neutral curve (`startCompression`
+0.76, desaturation 0.15) multiplied by the exposure constant, then the sRGB
+transfer. This replaces the old per-object luminance roll-off: white rolls into
+the display range instead of clipping, and saturated red/blue materials keep
+their hue at normal exposures. Tone mapping remains in the object shader for
+this slice; T15 moves it to the HDR post pass. The CPU reference in
+`StudioEnvironment.cpp` and the HLSL copy are kept in lock-step by the
+`[studio-ibl]` unit tests, including a pixel-shader compile check at the
+feature-level-11_0 baseline.
 
 ## Upload ring
 

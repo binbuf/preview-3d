@@ -1,0 +1,30 @@
+{
+  "configuration": "Debug",
+  "fixture": "D:\\repos\\binbuf\\preview-3d\\TestResults\\studio-ibl\\studio-spheres.glb",
+  "screenshots": {
+    "studio.png": [
+      1258,
+      849
+    ],
+    "directional.png": [
+      1258,
+      849
+    ],
+    "clay.png": [
+      1258,
+      849
+    ],
+    "studio-orbited.png": [
+      1258,
+      849
+    ]
+  },
+  "mae": {
+    "studio-vs-directional": 0.014262918709150328,
+    "studio-vs-clay": 0.023662173202614382,
+    "studio-vs-orbited": 0.03651482077205882
+  },
+  "failure": null,
+  "goldenWritten": true,
+  "diagnostics": ""
+}

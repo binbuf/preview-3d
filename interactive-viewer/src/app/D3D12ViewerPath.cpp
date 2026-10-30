@@ -1,5 +1,6 @@
 #include "D3D12ViewerPath.h"
 #include "DetailView.h"
+#include "StudioEnvironment.h"
 
 #include <d3dcompiler.h>
 #include <windows.h>
@@ -241,13 +242,24 @@ PSInput VSMain(VSInput input)
 )";
 
 constexpr char kTexturedPixelShaderSource[] = R"(
-cbuffer FrameConstants : register(b0) { row_major float4x4 gViewProjection; float4 gEyeSelection; float4 gViewport; float4 gLighting; };
+cbuffer FrameConstants : register(b0)
+{
+    row_major float4x4 gViewProjection;
+    float4 gEyeSelection;
+    float4 gViewport;
+    float4 gLighting;
+    float4 gWorldFromCamera; // world-from-camera rotation quaternion
+    float4 gEnvironment;     // intensity, yaw, exposure, last specular mip
+    float4 gSh[9];           // diffuse irradiance/pi, RGB coefficients
+};
 Texture2D gBaseColor : register(t0);
 Texture2D gMetallicRoughness : register(t1);
 Texture2D gNormal : register(t2);
 Texture2D gEmissive : register(t3);
+TextureCube gStudioEnvironment : register(t4);
 SamplerState gLinearSampler : register(s0);
 SamplerState gNearestSampler : register(s1);
+SamplerState gEnvironmentSampler : register(s2);
 cbuffer MaterialConstants : register(b2)
 {
     float4 gBaseColorFactor;
@@ -294,36 +306,66 @@ float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float
     float3 diffuse=(1.0f-f)*(1.0f-metallic)*base/3.14159265f;
     return (diffuse+specular)*nl*intensity;
 }
-// Analytic studio environment. There is no HDRI asset, but a smooth
-// sky/wall/floor gradient plus a broad virtual softbox gives diffuse
-// irradiance and a roughness-blurred reflection, so metals and rough
-// dielectrics read correctly instead of going flat grey.
-float3 StudioEnvironment(float3 dir, float roughness)
+// The vertex shader still produces camera-space positions/normals (the
+// camera-relative precision policy). The pixel shader rotates those directions
+// back into the model/world frame before touching the environment, which keeps
+// reflections attached to the model while the camera orbits. The camera-
+// relative key/fill rig deliberately stays in camera space.
+float3 RotateWorldFromCamera(float3 v)
 {
-    float up=saturate(dir.z*0.5f+0.5f);
-    float3 env=lerp(float3(.16f,.15f,.14f),float3(.40f,.41f,.43f),smoothstep(0.0f,0.5f,up));
-    env=lerp(env,float3(.92f,.93f,.95f),smoothstep(0.5f,1.0f,up));
-    float3 key=normalize(float3(.45f,-.55f,.70f));
-    float tight=lerp(0.90f,0.30f,roughness);
-    float glow=saturate((dot(normalize(dir),key)-tight)/max(1e-3f,1.0f-tight));
-    env+=float3(1.0f,.99f,.97f)*glow*glow*(1.0f-roughness)*1.6f;
-    return env;
+    float3 q=gWorldFromCamera.xyz;
+    return v+2.0f*cross(q,cross(q,v)+gWorldFromCamera.w*v);
 }
-float3 EnvironmentIrradiance(float3 n)
+float3 EnvironmentDirection(float3 worldDir)
 {
-    float up=saturate(n.z*0.5f+0.5f);
-    return lerp(float3(.14f,.13f,.12f),float3(.78f,.80f,.84f),smoothstep(0.0f,1.0f,up));
+    // Studio yaw is a view preference, not part of the baked cubemap.
+    float c=cos(gEnvironment.y), s=sin(gEnvironment.y);
+    return float3(c*worldDir.x+s*worldDir.y,-s*worldDir.x+c*worldDir.y,worldDir.z);
 }
-float3 DisplayMap(float3 color)
+// SH9 diffuse irradiance (already divided by pi on the CPU).
+float3 EvaluateStudioIrradiance(float3 n)
 {
-    // Compress only luminance and scale the chroma with it. A per-channel
-    // roll-off lifts dark channels faster than bright ones, which washes
-    // saturated base color toward grey; a luminance roll-off keeps hue and
-    // saturation while still taming specular highlights.
+    float3 result=gSh[0].rgb*0.282095f;
+    result+=gSh[1].rgb*(0.488603f*n.y);
+    result+=gSh[2].rgb*(0.488603f*n.z);
+    result+=gSh[3].rgb*(0.488603f*n.x);
+    result+=gSh[4].rgb*(1.092548f*n.x*n.y);
+    result+=gSh[5].rgb*(1.092548f*n.y*n.z);
+    result+=gSh[6].rgb*(0.315392f*(3.0f*n.z*n.z-1.0f));
+    result+=gSh[7].rgb*(1.092548f*n.x*n.z);
+    result+=gSh[8].rgb*(0.546274f*(n.x*n.x-n.y*n.y));
+    return max(result,0.0f);
+}
+// GGX-prefiltered specular cubemap. Roughness 1 selects the coarsest mip.
+float3 SampleStudioSpecular(float3 worldNormal,float3 worldView,float roughness)
+{
+    float3 refl=reflect(-worldView,worldNormal);
+    return gStudioEnvironment.SampleLevel(gEnvironmentSampler,
+        EnvironmentDirection(refl),roughness*gEnvironment.w).rgb;
+}
+// Khronos PBR Neutral tone curve, followed by the sRGB transfer. Unlike the
+// old per-lightness roll-off this preserves hue at moderate exposures while
+// rolling white into the display range instead of clipping it.
+float3 NeutralToneMap(float3 linearColor,float exposure)
+{
+    float3 color=max(linearColor*exposure,0.0f);
+    const float startCompression=0.8f-0.04f;
+    const float desaturation=0.15f;
+    float minimum=min(color.r,min(color.g,color.b));
+    float offset=minimum<0.08f ? minimum-6.25f*minimum*minimum : 0.04f;
+    color-=offset;
     float peak=max(color.r,max(color.g,color.b));
-    float mapped=peak/(peak+0.82f);
-    color=peak>1e-5f ? color*(mapped/peak) : color;
-    return pow(saturate(color),1.0f/2.2f);
+    if (peak>=startCompression) {
+        float d=1.0f-startCompression;
+        float newPeak=1.0f-d*d/(peak+d-startCompression);
+        color*=newPeak/max(peak,1e-6f);
+        float grey=1.0f-1.0f/(desaturation*(peak-newPeak)+1.0f);
+        color=lerp(color,newPeak.xxx,grey);
+    }
+    color=saturate(color);
+    float3 low=color*12.92f;
+    float3 high=1.055f*pow(max(color,0.0f),1.0f/2.4f)-0.055f;
+    return lerp(high,low,step(color,0.0031308f));
 }
 float3 SrgbToLinear(float3 color)
 {
@@ -398,28 +440,35 @@ PixelOutput PSMain(PSInput input)
     float diffuseScale=1.0f-transmission;
     float glassReflectance=lerp(0.04f,1.0f,pow(1.0f-nv,5.0f));
     if (transmissive) base.a=saturate(base.a*diffuseScale+glassReflectance*transmission);
+    float3 worldN=RotateWorldFromCamera(n);
+    float3 worldView=RotateWorldFromCamera(viewDir);
+    float3 f0=lerp(float3(.04f,.04f,.04f),base.rgb,metallic);
+    float3 fresnel=f0+(1.0f-f0)*pow(1.0f-nv,5.0f);
+    float envIntensity=gEnvironment.x;
     float3 color;
     if (!clay && (flags&2)) {
         color=base.rgb*diffuseScale;
     } else if (gLighting.x>1.5f) {
         // A single hard key whose elevation is user-adjustable via the gizmo's
         // sun. Higher elevations read as daylight on upward faces; lower ones
-        // rake across slopes to expose relief.
+        // rake across slopes to expose relief. The environment contributes a
+        // small world-stable ambient so metals still have a reflection.
         float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
         float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
         color=EvaluateLight(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,3.4f)
             + base.rgb*(1.0f-metallic)*.08f*diffuseScale*occlusion;
-        if (transmissive) color+=StudioEnvironment(reflect(-viewDir,n),roughness)*occlusion;
+        color+=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*.25f*diffuseScale*occlusion;
+        color+=SampleStudioSpecular(worldN,worldView,roughness)*envIntensity*.35f*occlusion;
+        if (transmissive) color+=SampleStudioSpecular(worldN,worldView,roughness)*occlusion;
     } else {
-        // Neutral studio environment. Analytic diffuse irradiance plus a
-        // roughness-blurred reflection keep authored base color and make
-        // metallic and roughness meaningful; a single soft key adds form.
-        float3 f0=lerp(float3(.04f,.04f,.04f),base.rgb,metallic);
-        float3 fresnel=f0+(1.0f-f0)*pow(1.0f-nv,5.0f);
-        color=base.rgb*(1.0f-metallic)*EnvironmentIrradiance(n)*.85f*diffuseScale*occlusion;
-        float3 refl=reflect(-viewDir,n);
-        color+=StudioEnvironment(refl,roughness)*(transmissive?float3(1.0f,1.0f,1.0f):fresnel)*occlusion;
-        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,1.9f);
+        // World-stable Studio IBL: SH9 diffuse irradiance plus the GGX-
+        // prefiltered cubemap reflection, with a camera-relative soft key for
+        // form. Clay keeps the same environment but suppresses specular.
+        color=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*diffuseScale*occlusion;
+        float specularScale=clay?.25f:1.0f;
+        color+=SampleStudioSpecular(worldN,worldView,roughness)
+            *(transmissive?float3(1.0f,1.0f,1.0f):fresnel)*envIntensity*specularScale*occlusion;
+        color+=EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,1.15f);
         color+=base.rgb*(1.0f-metallic)*.05f*diffuseScale*occlusion;
     }
     if (!clay) {
@@ -429,7 +478,7 @@ PixelOutput PSMain(PSInput input)
     }
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
-    PixelOutput output; output.color = float4(DisplayMap(color), base.a); output.pick = input.pickId; return output;
+    PixelOutput output; output.color = float4(NeutralToneMap(color,gEnvironment.z), base.a); output.pick = input.pickId; return output;
 }
 )";
 
@@ -629,6 +678,7 @@ bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
     if (!CreatePipeline(error)) return false;
     if (!CreateTexturedPipeline(error)) return false;
     if (!CreateFrameConstantBuffer(error)) return false;
+    if (!CreateStudioEnvironment(error)) return false;
 
     if (!overlay.Initialize(device, directQueue, swapChain, error)) {
         return false;
@@ -912,14 +962,14 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
 
 bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
 {
-    D3D12_ROOT_PARAMETER rootParams[7]{};
+    D3D12_ROOT_PARAMETER rootParams[8]{};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    D3D12_DESCRIPTOR_RANGE srvRanges[4]{};
-    for (UINT i=0;i<4;++i) {
+    D3D12_DESCRIPTOR_RANGE srvRanges[5]{};
+    for (UINT i=0;i<5;++i) {
         srvRanges[i].RangeType=D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         srvRanges[i].NumDescriptors=1;srvRanges[i].BaseShaderRegister=i;
         srvRanges[i].OffsetInDescriptorsFromTableStart=D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -928,12 +978,12 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
         rootParams[1+i].DescriptorTable.pDescriptorRanges=&srvRanges[i];
         rootParams[1+i].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
     }
-    rootParams[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[5].Constants.ShaderRegister = 1; rootParams[5].Constants.Num32BitValues = 33;
-    rootParams[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-    rootParams[6].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParams[6].Constants.ShaderRegister=2;rootParams[6].Constants.Num32BitValues=20;
-    rootParams[6].ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
+    rootParams[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[6].Constants.ShaderRegister = 1; rootParams[6].Constants.Num32BitValues = 33;
+    rootParams[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+    rootParams[7].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParams[7].Constants.ShaderRegister=2;rootParams[7].Constants.Num32BitValues=20;
+    rootParams[7].ShaderVisibility=D3D12_SHADER_VISIBILITY_ALL;
     D3D12_STATIC_SAMPLER_DESC sampler{};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -948,11 +998,17 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     D3D12_ROOT_SIGNATURE_DESC rootSigDesc{};
     rootSigDesc.NumParameters = static_cast<UINT>(std::size(rootParams));
     rootSigDesc.pParameters = rootParams;
-    D3D12_STATIC_SAMPLER_DESC samplers[2]{sampler, sampler};
+    D3D12_STATIC_SAMPLER_DESC samplers[3]{sampler, sampler, sampler};
     samplers[0].ShaderRegister=0;
     samplers[1].ShaderRegister=1;
     samplers[1].Filter=D3D12_FILTER_MIN_MAG_MIP_POINT;
-    rootSigDesc.NumStaticSamplers = 2;
+    // Cube faces meet at wrap seams; sampling the prefiltered mip chain with
+    // wrap on all three axes avoids a visible seam line.
+    samplers[2].ShaderRegister=2;
+    samplers[2].AddressU=D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[2].AddressV=D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[2].AddressW=D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    rootSigDesc.NumStaticSamplers = 3;
     rootSigDesc.pStaticSamplers = samplers;
     rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
@@ -1093,6 +1149,168 @@ bool D3D12ViewerPath::CreateFrameConstantBuffer(std::wstring& error)
     }
     frameConstantBufferMapped = static_cast<std::byte*>(mapped);
     return true;
+}
+
+bool D3D12ViewerPath::CreateStudioEnvironment(std::wstring& error)
+{
+    const studio_ibl::EnvironmentBake bake = studio_ibl::BakeStudioEnvironment();
+    const UINT faceSize = bake.base.size;
+    const UINT mipCount = bake.MipCount();
+    if (faceSize == 0 || mipCount == 0) {
+        error = L"The Studio environment bake produced no cubemap.";
+        return false;
+    }
+
+    // RGBA32F is a feature-level-11_0 format; the environment is small
+    // (128^2 x 6 plus mips, well under 4 MiB), so no format fallback is
+    // needed. If a future device cannot sample it, T15 owns the fallback.
+    constexpr DXGI_FORMAT kCubeFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    constexpr UINT kBytesPerTexel = 16;
+
+    D3D12_RESOURCE_DESC textureDesc{};
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Width = faceSize;
+    textureDesc.Height = faceSize;
+    textureDesc.DepthOrArraySize = static_cast<UINT16>(6);
+    textureDesc.MipLevels = static_cast<UINT16>(mipCount);
+    textureDesc.Format = kCubeFormat;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    D3D12_HEAP_PROPERTIES defaultHeap{};
+    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    environment.cube.Reset();
+    if (FAILED(device.Device()->CreateCommittedResource(
+            &defaultHeap, D3D12_HEAP_FLAG_NONE, &textureDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&environment.cube)))) {
+        error = L"The Studio environment cubemap could not be created.";
+        return false;
+    }
+
+    struct SubresourceCopy
+    {
+        UINT mip = 0;
+        UINT face = 0;
+        UINT width = 0;
+        UINT height = 0;
+        UINT rowPitch = 0;
+        UINT64 offset = 0;
+    };
+    std::vector<SubresourceCopy> copies;
+    copies.reserve(static_cast<size_t>(mipCount) * 6);
+    uint64_t uploadBytes = 0;
+    for (UINT face = 0; face < 6; ++face) {
+        for (UINT mip = 0; mip < mipCount; ++mip) {
+            SubresourceCopy copy;
+            copy.mip = mip;
+            copy.face = face;
+            copy.width = (std::max)(1u, faceSize >> mip);
+            copy.height = copy.width;
+            copy.rowPitch = (copy.width * kBytesPerTexel + 255u) & ~255u;
+            uploadBytes = (uploadBytes + 511ull) & ~511ull;
+            copy.offset = uploadBytes;
+            uploadBytes += static_cast<uint64_t>(copy.rowPitch) * copy.height;
+            copies.push_back(copy);
+        }
+    }
+    uploadBytes = (uploadBytes + 511ull) & ~511ull;
+
+    auto uploadBuffer = CreateBuffer(device.Device(), uploadBytes, D3D12_HEAP_TYPE_UPLOAD,
+                                     D3D12_RESOURCE_STATE_GENERIC_READ);
+    if (!uploadBuffer) {
+        error = L"The Studio environment upload buffer could not be created.";
+        return false;
+    }
+    D3D12_RANGE noRead{0, 0};
+    void* mapped = nullptr;
+    if (FAILED(uploadBuffer->Map(0, &noRead, &mapped))) {
+        error = L"The Studio environment upload buffer could not be mapped.";
+        return false;
+    }
+    for (const auto& copy : copies) {
+        const auto& source = bake.specularMips[copy.mip].faces[copy.face];
+        auto* destination = reinterpret_cast<std::byte*>(mapped) + copy.offset;
+        for (UINT y = 0; y < copy.height; ++y) {
+            float* row = reinterpret_cast<float*>(destination + static_cast<size_t>(y) * copy.rowPitch);
+            for (UINT x = 0; x < copy.width; ++x) {
+                const studio_ibl::Rgb& texel = source[static_cast<size_t>(y) * copy.width + x];
+                row[x * 4 + 0] = texel.r;
+                row[x * 4 + 1] = texel.g;
+                row[x * 4 + 2] = texel.b;
+                row[x * 4 + 3] = 1.0f;
+            }
+        }
+    }
+    uploadBuffer->Unmap(0, nullptr);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> list;
+    if (FAILED(device.Device()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                       IID_PPV_ARGS(&allocator)))
+        || FAILED(device.Device()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+                                                     allocator.Get(), nullptr, IID_PPV_ARGS(&list)))) {
+        error = L"The Studio environment upload command list could not be created.";
+        return false;
+    }
+    for (const auto& copy : copies) {
+        D3D12_TEXTURE_COPY_LOCATION source{};
+        source.pResource = uploadBuffer.Get();
+        source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        source.PlacedFootprint.Offset = copy.offset;
+        source.PlacedFootprint.Footprint.Format = kCubeFormat;
+        source.PlacedFootprint.Footprint.Width = copy.width;
+        source.PlacedFootprint.Footprint.Height = copy.height;
+        source.PlacedFootprint.Footprint.Depth = 1;
+        source.PlacedFootprint.Footprint.RowPitch = copy.rowPitch;
+
+        D3D12_TEXTURE_COPY_LOCATION destination{};
+        destination.pResource = environment.cube.Get();
+        destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        destination.SubresourceIndex = copy.mip + copy.face * mipCount;
+        list->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+    }
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = environment.cube.Get();
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    list->ResourceBarrier(1, &barrier);
+    if (FAILED(list->Close())) {
+        error = L"The Studio environment upload command list could not be closed.";
+        return false;
+    }
+    ID3D12CommandList* lists[] = {list.Get()};
+    directQueue.Queue()->ExecuteCommandLists(1, lists);
+    const uint64_t fence = directQueue.SignalNext();
+    if (fence == 0 || directQueue.WaitForValue(fence, kIdleWaitTimeoutMs)
+            != D3D12CommandQueue::WaitResult::Signaled) {
+        error = L"The Studio environment upload did not complete.";
+        return false;
+    }
+
+    for (size_t i = 0; i < 9; ++i) {
+        const auto& coefficient = bake.irradiance.values[i];
+        environment.sh[i] = DirectX::XMFLOAT4(coefficient.r, coefficient.g, coefficient.b, 0.0f);
+    }
+    environment.mipCount = mipCount;
+    environment.parameters = DirectX::XMFLOAT4(
+        1.0f, 0.0f, 1.0f, static_cast<float>(mipCount - 1));
+    return true;
+}
+
+void D3D12ViewerPath::WriteEnvironmentSrv(ID3D12DescriptorHeap& heap, UINT index,
+                                          UINT descriptorSize)
+{
+    if (!environment.cube) return;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.TextureCube.MostDetailedMip = 0;
+    srv.TextureCube.MipLevels = environment.mipCount;
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu = heap.GetCPUDescriptorHandleForHeapStart();
+    cpu.ptr += static_cast<SIZE_T>(index) * descriptorSize;
+    device.Device()->CreateShaderResourceView(environment.cube.Get(), &srv, cpu);
 }
 
 void D3D12ViewerPath::WaitForIdle()
@@ -1279,9 +1497,19 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         static_cast<float>(chrome.info.lightingMode),
         chrome.info.directionalLightAngle * DirectX::XM_2PI,
         chrome.info.directionalLightElevation, 0.0f);
-    std::memcpy(frameConstantBufferMapped + constantBufferOffset + sizeof(viewProjection)
-                    + sizeof(eyeSelection) + sizeof(viewportConstants),
-                &lightingConstants, sizeof(lightingConstants));
+    size_t frameOffset = constantBufferOffset + sizeof(viewProjection) + sizeof(eyeSelection)
+        + sizeof(viewportConstants);
+    std::memcpy(frameConstantBufferMapped + frameOffset, &lightingConstants, sizeof(lightingConstants));
+    frameOffset += sizeof(lightingConstants);
+    // World-from-camera quaternion (the camera is the only view rotation;
+    // the model's ground-axis transform is already baked into the vertices).
+    std::memcpy(frameConstantBufferMapped + frameOffset, &orientation, sizeof(orientation));
+    frameOffset += sizeof(orientation);
+    std::memcpy(frameConstantBufferMapped + frameOffset, &environment.parameters,
+                sizeof(environment.parameters));
+    frameOffset += sizeof(environment.parameters);
+    std::memcpy(frameConstantBufferMapped + frameOffset, environment.sh,
+                sizeof(environment.sh));
     const D3D12_GPU_VIRTUAL_ADDRESS constantBufferAddress
         = frameConstantBuffer->GetGPUVirtualAddress() + constantBufferOffset;
 
@@ -1374,6 +1602,11 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             ID3D12DescriptorHeap* heaps[] = { mesh.textureHeap.Get() };
             commandList->SetDescriptorHeaps(1, heaps);
             commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
+            D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle =
+                mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+            environmentHandle.ptr += uint64_t(model.environmentDescriptorIndex)
+                * mesh.textureDescriptorSize;
+            commandList->SetGraphicsRootDescriptorTable(5, environmentHandle);
             const bool blend=mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
             // A mesh with no authored material has no culling policy either.
             // Treat it as double-sided: CAD/Rhino OBJ exports commonly contain
@@ -1395,7 +1628,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
                 commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
             }
-            commandList->SetGraphicsRoot32BitConstants(5, 33, &drawConstants, 0);
+            commandList->SetGraphicsRoot32BitConstants(6, 33, &drawConstants, 0);
             float material[20]{};
             std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
             material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
@@ -1415,7 +1648,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
             material[18]=float(mapMask);
             material[19]=mesh.material.transmissionFactor;
-            commandList->SetGraphicsRoot32BitConstants(6,20,material,0);
+            commandList->SetGraphicsRoot32BitConstants(7,20,material,0);
         } else {
             commandList->SetGraphicsRootSignature(rootSignature.Get());
             commandList->SetPipelineState(mesh.points ? (mesh.completeVertex?coloredPointPipelineState.Get():pointPipelineState.Get())
@@ -1448,6 +1681,11 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 commandList->SetDescriptorHeaps(1, heaps);
                 commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
                 commandList->SetPipelineState(texturedWireframePipelineState.Get());
+                D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle =
+                    mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+                environmentHandle.ptr += uint64_t(model.environmentDescriptorIndex)
+                    * mesh.textureDescriptorSize;
+                commandList->SetGraphicsRootDescriptorTable(5, environmentHandle);
                 commandList->SetGraphicsRootConstantBufferView(0,constantBufferAddress);
                 uint32_t mapMask=0;
                 for (UINT slot=0;slot<4;++slot) {
@@ -1457,7 +1695,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                     handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
                     commandList->SetGraphicsRootDescriptorTable(1+slot,handle);
                 }
-                commandList->SetGraphicsRoot32BitConstants(5,33,&drawConstants,0);
+                commandList->SetGraphicsRoot32BitConstants(6,33,&drawConstants,0);
                 float material[20]{};
                 std::memcpy(material,mesh.material.baseColorFactor,4*sizeof(float));
                 material[4]=mesh.material.metallicFactor;material[5]=mesh.material.roughnessFactor;
@@ -1475,7 +1713,7 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 material[14]=mesh.material.uvScale[0];material[15]=mesh.material.uvScale[1];
                 material[16]=std::cos(mesh.material.uvRotation);material[17]=std::sin(mesh.material.uvRotation);
                 material[18]=float(mapMask);
-                commandList->SetGraphicsRoot32BitConstants(6,20,material,0);
+                commandList->SetGraphicsRoot32BitConstants(7,20,material,0);
             } else {
                 commandList->SetGraphicsRootSignature(rootSignature.Get());
                 commandList->SetPipelineState(mesh.positionOnly
@@ -1681,7 +1919,10 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
     // can be written straight to its slot.
     if (!importedImages.empty() || needsNeutralTextures) {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-        heapDesc.NumDescriptors = static_cast<UINT>(importedImages.size()+(needsNeutralTextures?4:0));
+        const UINT materialDescriptors = static_cast<UINT>(
+            importedImages.size() + (needsNeutralTextures ? 4 : 0));
+        staged.environmentDescriptorIndex = materialDescriptors;
+        heapDesc.NumDescriptors = materialDescriptors + 1; // + Studio cubemap
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         const HRESULT heapResult = device.Device()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&staged.srvHeap));
@@ -1692,6 +1933,8 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         }
         staged.srvDescriptorSize
             = device.Device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        WriteEnvironmentSrv(*staged.srvHeap.Get(), staged.environmentDescriptorIndex,
+                            staged.srvDescriptorSize);
 
         staged.textures.resize(importedImages.size());
         for (size_t i = 0; i < importedImages.size(); ++i) {
@@ -1966,7 +2209,8 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors=static_cast<UINT>(resources.textures.size()+4);
+    // + 4 neutral material slots, + 1 global Studio cubemap.
+    heapDesc.NumDescriptors=static_cast<UINT>(resources.textures.size()+4+1);
     heapDesc.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> rebuilt;
@@ -1989,6 +2233,8 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
     for (UINT i=0;i<resources.textures.size();++i) writeSrv(resources.textures[i].resource.Get(),i);
     const UINT neutralBase=static_cast<UINT>(resources.textures.size());
     for (UINT i=0;i<4;++i) writeSrv(resources.neutralTextures[i].resource.Get(),neutralBase+i);
+    const UINT environmentIndex=neutralBase+4;
+    WriteEnvironmentSrv(*rebuilt.Get(),environmentIndex,descriptorSize);
 
     ModelResources displaced;
     std::unordered_set<ID3D12DescriptorHeap*> oldHeaps;
@@ -2003,6 +2249,7 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
 
     resources.srvHeap=rebuilt;
     resources.srvDescriptorSize=descriptorSize;
+    resources.environmentDescriptorIndex=environmentIndex;
     for (UINT i=0;i<resources.textures.size();++i) {
         resources.textures[i].heap=rebuilt;
         resources.textures[i].descriptorSize=descriptorSize;

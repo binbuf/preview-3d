@@ -102,15 +102,30 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendMirroredPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendDoubleSidedPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedWireframePipelineState;
-    // kFrameCount slots of 256 bytes (D3D12's CBV alignment), bound at
-    // GetGPUVirtualAddress() + frameIndex * kConstantBufferSlotBytes. One
+    // kFrameCount slots of 512 bytes (D3D12's CBV alignment, sized to hold the
+    // view-projection, eye/viewport/lighting vectors, the world-from-camera
+    // quaternion, the environment constants and the 9 SH coefficients), bound
+    // at GetGPUVirtualAddress() + frameIndex * kConstantBufferSlotBytes. One
     // shared slot was correct only while every frame stalled to idle first;
     // without that stall it is a CPU/GPU race -- the CPU would overwrite
     // frame N-1's matrix while the GPU was still reading it, which shows up
     // as an intermittently wrong camera rather than as a crash.
-    static constexpr UINT kConstantBufferSlotBytes = 256;
+    static constexpr UINT kConstantBufferSlotBytes = 512;
     Microsoft::WRL::ComPtr<ID3D12Resource> frameConstantBuffer;
     std::byte* frameConstantBufferMapped = nullptr;
+
+    // T14: the product-owned procedural studio environment, baked once at
+    // initialization into an RGB float cubemap with a GGX-prefiltered mip
+    // chain. sh[] holds the SH9 diffuse irradiance/pi used by the shader;
+    // parameters is (intensity, yaw, exposure, last specular mip).
+    struct StudioEnvironmentResources
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> cube;
+        UINT mipCount = 0;
+        DirectX::XMFLOAT4 sh[9]{};
+        DirectX::XMFLOAT4 parameters{ 1.0f, 0.0f, 1.0f, 0.0f };
+    };
+    StudioEnvironmentResources environment;
 
     struct GpuMesh
     {
@@ -175,6 +190,11 @@ struct D3D12ViewerPath
         // neutral slots. Progressive publications rebuild it atomically.
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
         UINT srvDescriptorSize = 0;
+        // One extra slot beyond the material maps owns the global Studio
+        // cubemap SRV. D3D12 allows only one shader-visible CBV/SRV/UAV heap
+        // at a time, so the environment cannot live in its own heap while a
+        // model's material heap is bound.
+        UINT environmentDescriptorIndex = 0;
     };
 
     // What RenderFrame draws. Deliberately untouched while a new model is
@@ -343,6 +363,11 @@ private:
     bool CreatePipeline(std::wstring& error);
     bool CreateTexturedPipeline(std::wstring& error);
     bool CreateFrameConstantBuffer(std::wstring& error);
+    // Bakes the procedural Studio environment and uploads its base cubemap and
+    // prefilters once. One bounded startup copy, never per frame or per camera
+    // move; the direct queue is idle here (before the first frame).
+    bool CreateStudioEnvironment(std::wstring& error);
+    void WriteEnvironmentSrv(ID3D12DescriptorHeap& heap, UINT index, UINT descriptorSize);
     // Creates a DEFAULT-heap buffer in COMMON and queues its copy onto the
     // upload ring. No explicit barrier to VERTEX_AND_CONSTANT_BUFFER /
     // INDEX_BUFFER: a copy queue cannot record one, and none is needed --

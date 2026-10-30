@@ -4218,7 +4218,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Shipping builds cannot be driven by local WM_APP messages.
         return 0;
 #else
-        if (!app->appSmoke || wParam > 86) return 0;
+        if (!app->appSmoke || wParam > 88) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -4314,6 +4314,15 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (wParam == 84) return static_cast<LRESULT>(app->stepProgressPhase.load(std::memory_order_relaxed));
         if (wParam == 85) return static_cast<LRESULT>(app->stepProgressDone.load(std::memory_order_relaxed));
         if (wParam == 86) return static_cast<LRESULT>(app->stepProgressTotal.load(std::memory_order_relaxed));
+        // T14 studio evidence: query (87) and select (88) the lighting mode
+        // through the same SetLightingMode path the toolbar uses.
+        if (wParam == 87) return static_cast<LRESULT>(app->lightingMode);
+        if (wParam == 88) {
+            if (lParam < static_cast<LPARAM>(LightingMode::Studio)
+                || lParam > static_cast<LPARAM>(LightingMode::Wireframe)) return static_cast<LRESULT>(app->lightingMode);
+            SetLightingMode(*app, static_cast<LightingMode>(lParam));
+            return static_cast<LRESULT>(app->lightingMode);
+        }
         if (wParam >= 80 && wParam <= 83) {
             if (!app->loadedModel) return 0;
             const auto& stats = app->loadedModel->stats;

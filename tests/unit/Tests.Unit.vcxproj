@@ -157,6 +157,10 @@
     <ClCompile Include="FixtureManifestTests.cpp" />
     <ClCompile Include="WireFormatTests.cpp" />
     <ClCompile Include="PresentationTests.cpp" />
+    <!-- T14 procedural Studio environment baker, SH irradiance and neutral
+         tone curve, compiled from the shipped viewer source. -->
+    <ClCompile Include="..\..\interactive-viewer\src\render\StudioEnvironment.cpp" />
+    <ClCompile Include="StudioIblTests.cpp" />
     <ClCompile Include="CompatibilityTests.cpp" />
     <ClCompile Include="CoarseProxyTests.cpp" />
     <ClCompile Include="GraphicsDeviceTests.cpp" />

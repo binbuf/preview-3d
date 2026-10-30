@@ -27,22 +27,22 @@ camera orbits.
 - T13 — environment asset hook if an embedded HDRI is chosen.
 
 ## Scope
-- [ ] Choose and document the environment source:
+- [x] Choose and document the environment source:
       - **preferred:** a product-owned procedural studio (a few rectangular
         softboxes, gradient floor/ceiling) baked at startup into a cubemap;
       - **alternative:** a small embedded HDRI decoded through T13.
       Do not depend on a user file for the default Studio.
-- [ ] Add a small environment baker:
+- [x] Add a small environment baker:
       - equirect/cubemap resolution (e.g. 128–256 per face), bounded memory;
       - diffuse irradiance via SH9 or a low-res cosine convolution;
       - GGX-prefiltered specular mip chain with a roughness-to-mip mapping;
       - deterministic output and a unit-testable CPU reference.
-- [ ] Add the D3D12 resources/descriptors:
+- [x] Add the D3D12 resources/descriptors:
       - a texture cube (or equirect 2D with mips) uploaded once;
       - SRV/sampler in a frame-level descriptor table (do not force a bindless
         rewrite; the feature-level 11_0 descriptor-table path is the baseline);
       - frame constants for environment intensity/rotation and exposure.
-- [ ] Shader:
+- [x] Shader:
       - evaluate normals/view in a **world/yaw-stable** frame, not camera space,
         or transform the environment direction by the inverse view rotation;
       - replace `StudioEnvironment`/`EnvironmentIrradiance` with cubemap
@@ -51,20 +51,20 @@ camera orbits.
       - replace `DisplayMap` with a Khronos PBR Neutral (or equivalent) curve
         and an exposure multiplier. Tone mapping may remain in the object
         shader for this slice; T15 moves it to an HDR post pass.
-- [ ] Preserve Clay (neutral grey, low specular) and Directional behavior; the
+- [x] Preserve Clay (neutral grey, low specular) and Directional behavior; the
       environment can be lower intensity for Directional.
-- [ ] Add unit tests `[studio-ibl]`:
+- [x] Add unit tests `[studio-ibl]`:
       - environment baker dimensions/energy sanity;
       - SH9/irradiance monotonicity or reference values;
       - roughness-to-mip mapping;
       - neutral tonemap monotonicity and white-point behavior;
       - deterministic bake across runs.
-- [ ] Add screenshot evidence: a material-sphere grid (white/black/red
+- [x] Add screenshot evidence: a material-sphere grid (white/black/red
       dielectric, rough/polished metal, glass) under Studio and Directional.
       Use the existing app-smoke/screenshot mechanism; if none exists for
       screenshots, add a small `tests/app-smoke/studio.py` that captures the
       window and records a tolerant MAE/SSIM golden.
-- [ ] Update `docs/design/04-rendering-and-streaming.md` with the environment
+- [x] Update `docs/design/04-rendering-and-streaming.md` with the environment
       source, prefilter policy and color pipeline.
 
 ## Out of scope
@@ -90,16 +90,56 @@ camera orbits.
   back to RGBA8 cubemap/mips, not to the old view-space gradient.
 
 ## Done when
-- [ ] `x64\Release\Tests.Unit.exe "[studio-ibl]"` passes.
-- [ ] Metals show distinct softbox highlights and the highlight moves when the
+- [x] `x64\Release\Tests.Unit.exe "[studio-ibl]"` passes.
+- [x] Metals show distinct softbox highlights and the highlight moves when the
       camera orbits; glass/white/black spheres read correctly.
-- [ ] Studio/Clay/Directional still switch correctly; no shader compile errors.
-- [ ] The environment bake is deterministic and bounded; frame time remains
+- [x] Studio/Clay/Directional still switch correctly; no shader compile errors.
+- [x] The environment bake is deterministic and bounded; frame time remains
       within the existing budget.
-- [ ] Screenshot evidence is recorded and the rendering design doc is updated.
-- [ ] No parser or import path was touched.
+- [x] Screenshot evidence is recorded and the rendering design doc is updated.
+- [x] No parser or import path was touched.
 
 ## Hand-off
-_(filled in by the implementing session: environment source/resolution, SH/mip
-policy, descriptor/constant-buffer changes, tone curve, goldens and any
-remaining view-space assumptions.)_
+
+**Environment source/resolution.** Product-owned procedural studio (three
+rectangular softboxes, overhead strip, floor/ceiling gradient) in
+`interactive-viewer/src/render/StudioEnvironment.{h,cpp}`; no HDRI/user file.
+Default bake 128 texels/face, 6 GGX-prefiltered mips, 48 samples, deterministic
+fixed Hammersley sequence. `BakeOptions` clamps to 4..256 and the full mip chain.
+Uploaded once as an `R32G32B32A32_FLOAT` cube (~2 MiB) during `Initialize`.
+
+**SH/mip policy.** SH9 stores irradiance/pi directly (band weights applied), so
+the shader is a plain basis sum. Roughness maps linearly to the specular mip
+(`roughness * (mipCount - 1)`), mip 0 = base radiance, last mip = roughness 1.
+Cube face order is Direct3D +X/-X/+Y/-Y/+Z/-Z; `CubemapDirection` is shared by
+bake and tests.
+
+**Descriptor/constant-buffer changes.** Textured root signature gained SRV `t4`
+(TextureCube) and static sampler `s2`; root constants moved to params 6/7. The
+cube SRV is appended to each model material heap at
+`ModelResources::environmentDescriptorIndex` (D3D12 permits one shader-visible
+CBV/SRV/UAV heap at a time) and is rewritten by `RebuildMaterialDescriptors`.
+Frame constant slots grew from 256 to 512 bytes and now carry the
+world-from-camera quaternion, environment (intensity, yaw, exposure, last mip)
+and `gSh[9]`. The vertex shader still produces camera-space positions/normals;
+the pixel shader rotates normal/view back to world before cubemap sampling, so
+reflections stay model-fixed. The key/fill rig remains camera-relative.
+
+**Tone curve.** Khronos PBR Neutral (`startCompression` 0.76, desaturation
+0.15) × exposure, then sRGB. `DisplayMap`, `StudioEnvironment` and
+`EnvironmentIrradiance` are removed from the textured path. Clay keeps grey/low
+specular; Directional keeps its hard key with a 0.25x IBL ambient. The compact
+position-only/point shaders retain the old analytic fallback for this slice.
+
+**Goldens/evidence.** `[studio-ibl]` covers bake dimensions/energy, SH vs
+numeric convolution, roughness→mip, neutral-curve monotonicity/hue/white point,
+determinism, shader source assertions and a `ps_5_1` compile. Evidence and the
+tolerant MAE/SSIM lane live in `tests/app-smoke/studio.py`; captures are under
+`docs/0.7.0/progress/T14-evidence/`. Re-run command and results are recorded in
+`docs/0.7.0/progress/T14.md`.
+
+**Remaining view-space assumptions.** Only the legacy compact/position-only and
+point shaders; they are the temporary developer fallback, not the material
+path. Float-cube fallback to RGBA8 is deferred (FL11_0 guarantees float today).
+Full `Tests.Unit.exe` still has two unrelated stale expectations (`dae`,
+`model.iges`) from T08/T10; the T14 verify filter passes.

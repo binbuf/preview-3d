@@ -149,10 +149,12 @@ TEST_CASE("Studio PBR uses ORM R as ambient occlusion without darkening direct s
     CHECK(shader.find("occlusion=saturate(mr.r)") != std::string::npos);
     CHECK(shader.find("metallic*=mr.b") != std::string::npos);
     CHECK(shader.find("roughness*=mr.g") != std::string::npos);
-    // Indirect diffuse/environment terms are scaled by AO.
-    CHECK(shader.find("EnvironmentIrradiance(n)*.85f*diffuseScale*occlusion") != std::string::npos);
-    CHECK(shader.find("StudioEnvironment(refl,roughness)*(transmissive?float3(1.0f,1.0f,1.0f):fresnel)*occlusion")
+    // Indirect diffuse/environment terms are scaled by AO. T14 replaced the
+    // analytic view-space gradient with the world-stable SH/cubemap IBL.
+    CHECK(shader.find("EvaluateStudioIrradiance(worldN)*envIntensity*diffuseScale*occlusion")
           != std::string::npos);
+    CHECK(shader.find("SampleStudioSpecular(worldN,worldView,roughness)") != std::string::npos);
+    CHECK(shader.find("*envIntensity*specularScale*occlusion") != std::string::npos);
     // The direct key light is not AO-scaled: its call has no `*occlusion`
     // argument, so metals keep clean direct specular.
     const auto direct = shader.find("EvaluateLight(n,viewDir,normalize(float3(.45f,-.55f,.70f))");
