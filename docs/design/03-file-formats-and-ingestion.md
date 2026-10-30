@@ -8,6 +8,16 @@ This document defines what “supports a format” means, how untrusted files en
 
 ## Support matrix
 
+The extension column below is an index for readers, not the authority. The
+compile-time catalog at `shared/model-core/include/model_core/FormatCatalog.h`
+is the single authority for which extensions a format owns, its stable
+`FormatId`, importer kind, default up axis/unit policy, presentation profile,
+thumbnail family and capabilities. UI filters, broker registration and the
+installer will be generated from that table (T03); until then this document and
+the catalog must agree, and the catalog wins when they do not. The catalog is
+data plus pure lookups: it never parses a file, includes no third-party parser,
+and carries no path or network authority.
+
 | Input | Parser | MVP content | Deliberate limits | Performance tier |
 | --- | --- | --- | --- | --- |
 | .glb, .gltf | fastgltf + Draco + KTX/Basis | glTF 2.0 scenes, nodes, triangle meshes, PBR metallic/roughness and unlit materials, vertex colors, PNG/JPEG/WebP/KTX2 textures, `KHR_texture_transform`, `KHR_mesh_quantization`, `KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `EXT_texture_webp`, `KHR_materials_transmission` (approximated as Fresnel-weighted alpha-blended glass; no refraction pass), `KHR_materials_pbrSpecularGlossiness` (archived; approximated as diffuse base color with metallic 0 and roughness `1 - glossiness`; the specular-glossiness texture has no matching slot) | No animation playback, skins, morph targets, lights, cameras, or advanced material lobes. External URIs must resolve to approved local files contained within the primary file's directory tree (its own directory or a subdirectory). A single oversized compressed primitive/view may fail its decode-working-set limit. | A for ordinary/meshopt data; compressed primitives are bounded decode units |
@@ -22,6 +32,17 @@ This document defines what “supports a format” means, how untrusted files en
 Tier A is the release-gated out-of-core path for the multi-gigabyte workload in [01-product-scope.md](./01-product-scope.md). Tier B formats are still MVP features, but their parser libraries may materialize more intermediate state and therefore have lower enforced limits. Draco primitives are independently bounded because their decoded topology cannot be demand-paged from the compressed bitstream. A format badge is shown when a file uses an ignored or approximated optional feature; unsupported required geometry/composition fails instead of silently presenting an apparently faithful model.
 
 ## Input boundary
+
+Extension classification and content sniffing are **dispatch hints**, never a
+trust decision. `FormatCatalog` decides which extension names a format owns.
+`FormatSniffer` reads at most a bounded head window (64 KiB) and, for ZIP
+containers, a bounded End-Of-Central-Directory plus central-directory window
+(1 MiB and at most 8,192 entries) to produce a candidate; it never decompresses
+an archive and never parses model structure. The worker/host still performs the
+real parse with the same containment, budgets and typed errors. A malformed
+container therefore fails in the parser exactly as it did before, and an
+extension/content disagreement is recorded as a mismatch for the Open As flow
+(T03) rather than silently changing the open path.
 
 All primary inputs are local, regular, non-empty files. The loader rejects:
 

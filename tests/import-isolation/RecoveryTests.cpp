@@ -104,6 +104,27 @@ TEST_CASE("Copied diagnostics name source format and phase without source paths"
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.bad\npath")==L"Unknown");
 }
 
+TEST_CASE("A GLB renamed .bin classifies by content but the open gate stays extension-only",
+    "[recovery][format-catalog]") {
+    // 12-byte GLB header: magic, version 2, declared length == file length.
+    std::string glb("glTF", 4);
+    glb.append("\x02\x00\x00\x00", 4);
+    glb.append("\x0c\x00\x00\x00", 4);
+    ScratchSource source(glb, L".bin");
+
+    CHECK_FALSE(d3d12_import_bridge::ClassifyByExtension(source.path.wstring()));
+    CHECK(d3d12_import_bridge::ClassifyByContent(source.path.wstring())
+        == model_core::FormatId::Glb);
+
+    const auto classification = d3d12_import_bridge::ClassifyForOpen(source.path.wstring());
+    CHECK(classification.reason == model_core::ClassificationReason::Content);
+    REQUIRE(classification.selected != nullptr);
+    CHECK(classification.selected->id == model_core::FormatId::Glb);
+    CHECK_FALSE(d3d12_import_bridge::ExtensionSourceFormat(classification));
+    CHECK(d3d12_import_bridge::ClassificationDiagnostic(classification).find(L"content=glb")
+        != std::wstring::npos);
+}
+
 TEST_CASE("Shipping viewer bridge opens fast and compatibility USD stages", "[recovery][usd-008]") {
     const std::filesystem::path fixtures(PREVIEW3D_USD_FIXTURES_DIR);
     uint64_t generation = 800;

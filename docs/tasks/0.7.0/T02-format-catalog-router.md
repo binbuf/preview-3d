@@ -88,6 +88,87 @@ move to the table; no new parser is added in this task.
 - [ ] Hand-off records the descriptor names reserved for later formats.
 
 ## Hand-off
-_(filled in by the implementing session: catalog path, reserved FormatIds,
-sniffer signature list, any extension/content disagreements found, and the
-Open As hooks T03 should use.)_
+
+### Landed
+
+- `shared/model-core/include/model_core/FormatCatalog.h` is the compile-time
+  authority: `FormatId`, `FormatDescriptor` (stable name, display key/name,
+  extensions, magic signatures, importer, priority, default up axis/unit
+  policy, presentation profile, thumbnail family, capabilities, wire id), a
+  `Formats()` table, and `FindByExtension` / `FindByStableName` / `FindById` /
+  `FindBySourceFormatId`.
+- `FormatId` 1..13 mirror the existing `SourceFormatId` 1..13. Reserved
+  append-only ids with no descriptor yet: `Iges=15`, `Brep=16`, `Xbf=17`,
+  `Fcstd=18`, `Dae=19`, `ThreeDs=20`, `Off=21`, `Amf=22`, `Vrml=23`,
+  `X3d=24`. `Usd=14` is the generic `.usd` extension identity.
+- ASCII STL/PLY are wire-only descriptors (no extension), so every extension
+  has exactly one owner while every wire id still has a descriptor.
+- `shared/model-core/include/model_core/FormatSniffer.h` and
+  `src/FormatSniffer.cpp` implement `SniffHead` and `SniffFile` with a 64 KiB
+  head bound, a 1 MiB / 8,192-entry central-directory bound, and no
+  decompression. Signatures: GLB header (v2, declared length bound), glTF JSON
+  asset/version, PLY header, binary/ASCII STL, OBJ statements, FBX binary and
+  ASCII, USDA, USDC, STEP, 3MF content-types entry, USDZ USD-layer entry.
+- `D3D12ImportBridge` now exposes `ClassifyByContent`, `ClassifyForOpen`,
+  `ExtensionSourceFormat` and `ClassificationDiagnostic`.
+  `ClassifyByExtension`, `SourceFormatLabel` and `ToBrokerFormat` read the
+  catalog; `SourceFormatId` wire values are unchanged.
+- The open path still admits files by extension only (so a GLB renamed `.bin`
+  is still rejected), but it runs the bounded probe once and logs a path-free
+  content/mismatch diagnostic so T03 can act on it.
+- Docs: `docs/design/03-file-formats-and-ingestion.md` names the catalog as the
+  extension authority; ADR `0057-format-catalog-and-bounded-sniff-routing.md`
+  records the identity/dispatch boundary.
+
+### Decisions / deviations
+
+- T03 owns the Open As UI/CLI, `--list-formats`, installer registration and
+  replacing the remaining duplicate lists in `ShellIntegration.cpp`,
+  `ActiveInstance.cpp` and the open-dialog filters. T02 deliberately did not
+  touch them.
+- `Tests.Unit` Release opts out of whole-program optimization. MSVC 14.51's c2
+  ICEs (C1001 in `GltfDataUriPreflightTests.cpp`) during LTCG for this test-only
+  link; the same failure reproduces with all T02 sources removed, so it is
+  pre-existing and unrelated. Shipped projects keep LTCG.
+- The catalog's display key/name are `const char*`/`const wchar_t*` literals:
+  `Loc()` caches fallbacks by pointer, so a temporary key would alias.
+
+### Checks
+
+- `msbuild Preview3D.slnx /t:Tests_Unit /p:Configuration=Release /p:Platform=x64`
+  — pass.
+- `x64\Release\Tests.Unit.exe "[format-catalog]"` — 350 assertions, 8 cases,
+  all pass.
+- `x64\Debug\Tests.Unit.exe "[format-catalog]"` — 350 assertions, 8 cases, all
+  pass.
+- `msbuild Preview3D.slnx /t:Tests_ImportIsolation /p:Configuration=Release /p:Platform=x64`
+  then `x64\Release\Tests.ImportIsolation.exe "[recovery]"` — 2312 assertions,
+  37 cases (34 pass, 3 fault-harness skips).
+- `x64\Release\Tests.ImportIsolation.exe "[format-catalog]"` — 8 assertions;
+  the bridge-level case proves a GLB renamed `.bin` has a content candidate but
+  the extension-only gate still rejects it.
+- `x64\Release\Tests.ImportIsolation.exe "[compat]"` — 312 assertions, all
+  pass; existing fixtures still open through the unchanged open path.
+- `msbuild Preview3D.slnx /t:Preview3D /p:Configuration=Release /p:Platform=x64`
+  — pass.
+
+### Extension/content disagreements observed
+
+- A `.gltf` extension over GLB content is the same family, so it classifies as
+  `both` with the GLB candidate selected.
+- `.usd` is intentionally a generic extension descriptor; `#usda` or
+  `PXR-USDC` content selects the concrete USDA/USDC descriptor as `both`.
+- A GLB renamed `.bin`, or any supported content under an unrelated extension,
+  is `content`/`mismatch` and is still rejected by the open path until T03.
+
+### Open As hooks for T03
+
+- Use `d3d12_import_bridge::ClassifyForOpen(path)`; it returns `extension`,
+  `content`, `selected`, `reason` (`Extension`/`Content`/`Both`/`Mismatch`) and
+  the content confidence/detail.
+- `ClassificationDiagnostic` produces a path-free string for the info panel or
+  logs; `ExtensionSourceFormat` recovers the legacy gate without re-reading.
+- Catalog iteration (`Formats()`, `FindByStableName`) is the source for
+  `--format <stableName>`, `--list-formats`, filters, registration and the
+  Open As list. `--skip-content-check` should keep using the extension
+  candidate.

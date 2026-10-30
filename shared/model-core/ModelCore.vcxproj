@@ -57,9 +57,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="include\ModelCore.h" />
+    <ClInclude Include="include\model_core\FormatCatalog.h" />
+    <ClInclude Include="include\model_core\FormatSniffer.h" />
     <ClInclude Include="include\model_core\OpenUsdIdentifier.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\FormatSniffer.cpp" />
     <ClCompile Include="src\ModelCore.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

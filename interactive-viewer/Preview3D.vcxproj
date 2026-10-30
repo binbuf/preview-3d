@@ -182,6 +182,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClCompile Include="..\shared\import-broker\src\SidecarPathResolver.cpp" />
     <ClCompile Include="..\shared\import-broker\src\SidecarRequestServicer.cpp" />
     <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
+    <ClCompile Include="..\shared\model-core\src\FormatSniffer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources\Preview3D.rc" />

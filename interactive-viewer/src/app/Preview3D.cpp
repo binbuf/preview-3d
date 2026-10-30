@@ -2091,7 +2091,17 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
             path, model_core::ImportErrorCode::UnsafeReference);
         return;
     }
-    const auto d3d12Format = d3d12_import_bridge::ClassifyByExtension(path);
+    // One bounded probe supplies both the extension decision and diagnostics.
+    // T03 will use the selected content candidate to offer Open As; for now the
+    // legacy extension-only gate below still decides whether to open.
+    const auto classification = d3d12_import_bridge::ClassifyForOpen(path);
+    if (classification.reason == model_core::ClassificationReason::Mismatch
+        || classification.reason == model_core::ClassificationReason::Content)
+    {
+        const auto diagnostic = d3d12_import_bridge::ClassificationDiagnostic(classification);
+        OutputDebugStringW((L"Preview3D " + diagnostic + L"\n").c_str());
+    }
+    const auto d3d12Format = d3d12_import_bridge::ExtensionSourceFormat(classification);
     if (!d3d12Format)
     {
         app.filename = FileNameFromPath(path);

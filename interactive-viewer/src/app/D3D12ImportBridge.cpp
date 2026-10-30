@@ -55,6 +55,50 @@ std::wstring ExtensionOf(const std::wstring& path)
     return ToLower(path.substr(dot + 1));
 }
 
+model_core::FormatId FormatIdForSource(SourceFormat format)
+{
+    switch (format) {
+    case SourceFormat::Glb: return model_core::FormatId::Glb;
+    case SourceFormat::Stl: return model_core::FormatId::Stl;
+    case SourceFormat::Ply: return model_core::FormatId::Ply;
+    case SourceFormat::Obj: return model_core::FormatId::Obj;
+    case SourceFormat::Fbx: return model_core::FormatId::Fbx;
+    case SourceFormat::ThreeMf: return model_core::FormatId::ThreeMf;
+    case SourceFormat::Usd: return model_core::FormatId::Usd;
+    case SourceFormat::Step: return model_core::FormatId::Step;
+    }
+    return model_core::FormatId::Unknown;
+}
+
+std::optional<SourceFormat> SourceFormatForDescriptor(
+    const model_core::FormatDescriptor* descriptor)
+{
+    if (!descriptor) return std::nullopt;
+    switch (descriptor->id) {
+    case model_core::FormatId::Gltf:
+    case model_core::FormatId::Glb: return SourceFormat::Glb;
+    case model_core::FormatId::Stl:
+    case model_core::FormatId::AsciiStl: return SourceFormat::Stl;
+    case model_core::FormatId::Ply:
+    case model_core::FormatId::AsciiPly: return SourceFormat::Ply;
+    case model_core::FormatId::Obj: return SourceFormat::Obj;
+    case model_core::FormatId::Fbx: return SourceFormat::Fbx;
+    case model_core::FormatId::ThreeMf: return SourceFormat::ThreeMf;
+    case model_core::FormatId::Usd:
+    case model_core::FormatId::Usda:
+    case model_core::FormatId::Usdc:
+    case model_core::FormatId::Usdz: return SourceFormat::Usd;
+    case model_core::FormatId::Step: return SourceFormat::Step;
+    default: return std::nullopt;
+    }
+}
+
+std::wstring StableNameOf(const model_core::FormatDescriptor* descriptor)
+{
+    if (!descriptor) return L"unknown";
+    return std::wstring(descriptor->stableName.begin(), descriptor->stableName.end());
+}
+
 std::wstring ResolveWorkerExePath()
 {
     wchar_t modulePath[MAX_PATH]{};
@@ -267,22 +311,27 @@ void DescribeSessionFailureInternal(const import_broker::ImportSessionResult& se
 
 import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
 {
-    switch (format) {
-    case SourceFormat::Stl:
+    const auto* descriptor = model_core::FindById(FormatIdForSource(format));
+    if (!descriptor) return import_broker::ImportFormat::Gltf;
+    // The catalog names the owning importer; this switch only translates that
+    // closed identity to the broker's existing protocol route.
+    switch (descriptor->importer) {
+    case model_core::ImporterKind::StlWorker:
         return import_broker::ImportFormat::Stl;
-    case SourceFormat::Ply:
+    case model_core::ImporterKind::PlyWorker:
         return import_broker::ImportFormat::Ply;
-    case SourceFormat::Obj:
+    case model_core::ImporterKind::ObjWorker:
         return import_broker::ImportFormat::Obj;
-    case SourceFormat::Fbx:
+    case model_core::ImporterKind::FbxWorker:
         return import_broker::ImportFormat::Fbx;
-    case SourceFormat::ThreeMf:
+    case model_core::ImporterKind::ThreeMfWorker:
         return import_broker::ImportFormat::ThreeMf;
-    case SourceFormat::Usd:
+    case model_core::ImporterKind::UsdFastPath:
+    case model_core::ImporterKind::UsdCompatibilityHost:
         return import_broker::ImportFormat::Usd;
-    case SourceFormat::Step:
+    case model_core::ImporterKind::StepHost:
         return import_broker::ImportFormat::Step;
-    case SourceFormat::Glb:
+    case model_core::ImporterKind::GltfWorker:
     default:
         return import_broker::ImportFormat::Gltf;
     }
@@ -361,16 +410,9 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
 std::wstring SourceFormatLabel(const std::wstring& path)
 {
     const auto ext = ExtensionOf(path);
-    if (ext == L"gltf") return L"glTF";
-    if (ext == L"glb") return L"GLB";
-    if (ext == L"stl") return L"STL";
-    if (ext == L"ply") return L"PLY";
-    if (ext == L"obj") return L"OBJ";
-    if (ext == L"fbx") return L"FBX";
-    if (ext == L"3mf") return L"3MF";
-    if (ext == L"step" || ext == L"stp") return L"STEP";
-    if (ext == L"usd" || ext == L"usda" || ext == L"usdc") return L"USD";
-    if (ext == L"usdz") return L"USDZ";
+    if (const auto* descriptor = model_core::FindByExtension(ext)) {
+        return Loc(descriptor->displayNameKey, descriptor->displayName);
+    }
     // Extension only, capped and restricted to printable alphanumerics.
     if (ext.empty() || ext.size() > 16) return Loc("format.unknown", L"Unknown");
     std::wstring label;
@@ -424,20 +466,44 @@ std::wstring FailurePhaseLabel(const ImportResult& result)
 
 std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
 {
-    std::wstring ext = ExtensionOf(path);
-    if (ext == L"glb" || ext == L"gltf") return SourceFormat::Glb;
-    if (ext == L"stl") return SourceFormat::Stl;
-    if (ext == L"ply") return SourceFormat::Ply;
-    if (ext == L"obj") return SourceFormat::Obj;
-    if (ext == L"fbx") return SourceFormat::Fbx;
-    if (ext == L"3mf") return SourceFormat::ThreeMf;
     // `.step`/`.stp` select the dedicated STEP host, but the extension alone
     // never bypasses STEP-002 admission: StepPart21Preflight verifies the
     // ISO 10303-21 byte envelope on the inherited handle before OCCT runs.
-    if (ext == L"step" || ext == L"stp") return SourceFormat::Step;
-    if (ext == L"usd" || ext == L"usda" || ext == L"usdc" || ext == L"usdz")
-        return SourceFormat::Usd;
-    return std::nullopt;
+    return SourceFormatForDescriptor(model_core::FindByExtension(ExtensionOf(path)));
+}
+
+model_core::FormatId ClassifyByContent(const std::wstring& path)
+{
+    return model_core::SniffFile(path).format;
+}
+
+model_core::FormatClassification ClassifyForOpen(const std::wstring& path)
+{
+    return model_core::ClassifyFormat(ExtensionOf(path), model_core::SniffFile(path));
+}
+
+std::optional<SourceFormat> ExtensionSourceFormat(
+    const model_core::FormatClassification& classification)
+{
+    return SourceFormatForDescriptor(classification.extension);
+}
+
+std::wstring ClassificationDiagnostic(const model_core::FormatClassification& classification)
+{
+    const wchar_t* reason = L"none";
+    switch (classification.reason) {
+    case model_core::ClassificationReason::Extension: reason = L"extension"; break;
+    case model_core::ClassificationReason::Content: reason = L"content"; break;
+    case model_core::ClassificationReason::Both: reason = L"both"; break;
+    case model_core::ClassificationReason::Mismatch: reason = L"mismatch"; break;
+    case model_core::ClassificationReason::None: break;
+    }
+    // Path-free: only stable catalog names and the closed reason, so the text
+    // is safe for the redacted diagnostics stream.
+    return L"classification extension=" + StableNameOf(classification.extension)
+        + L" content=" + StableNameOf(classification.content)
+        + L" selected=" + StableNameOf(classification.selected)
+        + L" reason=" + reason;
 }
 
 void EnsureImportSandboxPrepared()

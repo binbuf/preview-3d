@@ -137,6 +137,7 @@
     <ClCompile Include="..\..\shared\import-broker\src\SidecarRequestServicer.cpp" />
     <ClCompile Include="..\..\shared\import-broker\src\WorkerPool.cpp" />
     <ClCompile Include="..\..\shared\model-core\src\ControlChannelIo.cpp" />
+    <ClCompile Include="..\..\shared\model-core\src\FormatSniffer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SandboxTestSupport.h" />

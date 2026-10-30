@@ -11,6 +11,8 @@
 // session failure to user-facing text, and unpacking validated chunks into
 // the renderer-facing structs below.
 //
+#include "model_core/FormatCatalog.h"
+#include "model_core/FormatSniffer.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
@@ -39,8 +41,28 @@ enum class SourceFormat {
     Step,
 };
 
-// nullopt for any extension this slice doesn't recognize.
+// nullopt for any extension this slice doesn't recognize. This remains the
+// open-path decision until T03 adds the override/Open As surface.
 std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path);
+
+// Bounded, trusted-process content probe. Returns model_core::FormatId::Unknown
+// when the bytes do not match a catalog signature (including malformed GLB).
+model_core::FormatId ClassifyByContent(const std::wstring& path);
+
+// Combined extension/content candidate with the reason. The selected format
+// prefers a strong content signature; a cross-family disagreement is recorded
+// as Mismatch for T03 to resolve. This function never changes the open path's
+// existing extension-only decision.
+model_core::FormatClassification ClassifyForOpen(const std::wstring& path);
+
+// The legacy open-path decision carried by a classification's extension
+// candidate. Keeps callers from re-reading the file just to recover it.
+std::optional<SourceFormat> ExtensionSourceFormat(
+    const model_core::FormatClassification& classification);
+
+// Bounded, path-free diagnostic text for debug logging ("extension=...,
+// content=..., reason=..."). Safe to call from the trusted process only.
+std::wstring ClassificationDiagnostic(const model_core::FormatClassification& classification);
 
 // One validated chunk, ready for the upload coordinator. payload is
 // vertex bytes immediately followed by index bytes (index bytes only when
