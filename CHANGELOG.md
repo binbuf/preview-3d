@@ -8,6 +8,25 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.6.7] - 2026-10-29
+
+### Added
+
+- **About window.** **Help > About** now opens a custom-drawn dialog with the
+  app icon, compiled-in version, a short product summary, the Apache-2.0
+  license link, copyright, and links to the GitHub repository. It follows DPI
+  and high-contrast settings and supports Esc/Enter like the controls window.
+
+### Fixed
+
+- **The newer-release badge could never appear.** The update check passed a
+  zero-initialized `URL_COMPONENTS` to `WinHttpCrackUrl`, which succeeds but
+  leaves the host pointer null, so every release lookup was rejected as an
+  invalid URL and failed silently. The component lengths are now initialized,
+  restoring the title-bar update badge on installed copies. Builds 0.6.4
+  through 0.6.6 contain the faulty check, so 0.6.7 must be installed manually
+  once before future badges work.
+
 ## [0.6.6] - 2026-10-29
 
 ### Added
