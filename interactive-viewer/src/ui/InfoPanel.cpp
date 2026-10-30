@@ -36,6 +36,38 @@ std::wstring TextureSlotValue(int textureCount, bool hasConstantFactor)
     return Loc("infopanel.no", L"No");
 }
 
+std::wstring PresentationProfileLabel(model_core::PresentationProfile profile)
+{
+    switch (profile)
+    {
+    case model_core::PresentationProfile::StudioPbr:
+        return Loc("presentation.profile.studioPbr", L"Studio PBR");
+    case model_core::PresentationProfile::StudioCad:
+        return Loc("presentation.profile.studioCad", L"Studio CAD");
+    case model_core::PresentationProfile::PointCloud:
+        return Loc("presentation.profile.pointCloud", L"Point cloud");
+    default:
+        return Loc("presentation.profile.default", L"Default");
+    }
+}
+
+std::wstring UpAxisLabel(model_core::UpAxisId axis)
+{
+    switch (axis)
+    {
+    case model_core::UpAxisId::X: return L"X";
+    case model_core::UpAxisId::Y: return L"Y";
+    case model_core::UpAxisId::Z: return L"Z";
+    default: return Loc("presentation.upAxis.unknown", L"Unknown");
+    }
+}
+
+std::wstring SourceUnitsLabel(double metersPerUnit)
+{
+    if (metersPerUnit <= 0) return Loc("infopanel.unspecified", L"Unspecified");
+    return Loc("infopanel.metres", L"Metres");
+}
+
 std::wstring FormatDimension(double value, double metersPerUnit)
 {
     std::wostringstream text;
@@ -126,15 +158,33 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
 }
 
 std::vector<InfoPanelSection> BuildInfoPanelSections(
-    const ModelData& metadata, bool showNativeOrientation, GroundAxis groundAxis)
+    const ModelData& metadata, bool showNativeOrientation, GroundAxis groundAxis,
+    model_core::PresentationProfile preset)
 {
     double dimensions[3] = {metadata.relativeMax[0]-metadata.relativeMin[0],
         metadata.relativeMax[1]-metadata.relativeMin[1], metadata.relativeMax[2]-metadata.relativeMin[2]};
     // Exact axis permutations avoid float residue on planar/tiny models.
     PermuteGroundedDimensions(dimensions, groundAxis, metadata.source.upAxis, showNativeOrientation);
-    return BuildInfoPanelSections(metadata.stats,metadata.triangleCount,metadata.vertexCount,
-        metadata.boundsMin,metadata.boundsMax,metadata.source.metersPerUnit,metadata.pointCount,
-        metadata.boundsVerified,metadata.source.format,dimensions);
+    std::vector<InfoPanelSection> sections = BuildInfoPanelSections(metadata.stats,
+        metadata.triangleCount,metadata.vertexCount, metadata.boundsMin,metadata.boundsMax,
+        metadata.source.metersPerUnit,metadata.pointCount, metadata.boundsVerified,
+        metadata.source.format,dimensions);
+    // The preset the viewer actually applied (or, before the first upload has
+    // been applied, the catalog's recommendation). Keep this section last so
+    // existing section indices stay stable.
+    model_core::PresentationProfile resolved = preset;
+    if (resolved == model_core::PresentationProfile::Default) {
+        if (const auto* descriptor = model_core::FindBySourceFormatId(metadata.source.format))
+            resolved = model_core::ResolvePresentationProfile(*descriptor,
+                { metadata.pointCount, metadata.triangleCount });
+    }
+    sections.push_back({ Loc("presentation.title", L"Presentation"),
+        {
+            { Loc("presentation.preset", L"Preset"), PresentationProfileLabel(resolved) },
+            { Loc("presentation.sourceUpAxis", L"Source up axis"), UpAxisLabel(metadata.source.upAxis) },
+            { Loc("presentation.sourceUnits", L"Source units"), SourceUnitsLabel(metadata.source.metersPerUnit) },
+        } });
+    return sections;
 }
 
 InfoPanelLayout ComputeInfoPanelLayout(int viewportWidth, int viewportHeight,

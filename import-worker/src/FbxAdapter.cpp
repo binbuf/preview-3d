@@ -1081,6 +1081,18 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
     if (importOptions.Cancelled()) return Fail(ImportErrorCode::Cancelled);
     const ufbx_scene* scene = evaluatedScene.get();
 
+    // ufbx exposes the authored axes/unit scale even after the load options
+    // above normalized geometry to the product's Y-up/metres convention.
+    // Reading them here documents that the values exist; they are deliberately
+    // not put on the wire because SceneMetadata.upAxis/metersPerUnit describe
+    // the geometry that was actually delivered. A future wire revision can
+    // carry the authored pair separately. We never guess a unit: the toolbar
+    // ground axis is the user override, and an absent authored unit stays
+    // normalized rather than being treated as metres by assumption.
+    const ufbx_coordinate_axis authoredUpAxis = loadedScene->settings.axes.up;
+    const double authoredUnitMeters = loadedScene->settings.original_unit_meters;
+    (void)authoredUpAxis;
+    (void)authoredUnitMeters;
     SceneMetadata metadata{};
     metadata.generationId = generationId;
     metadata.format = SourceFormatId::Fbx;

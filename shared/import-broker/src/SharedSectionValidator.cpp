@@ -5,6 +5,7 @@
 #include "model_core/Compatibility.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
+#include "model_core/SceneMetadataRules.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/GeometryBounds.h"
 #include "platform/CheckedMath.h"
@@ -225,31 +226,12 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         header.scene.nodeCount > objectLimit || header.scene.skinCount > 1'000'000 ||
         header.scene.animationCount > 1'000'000 || header.scene.boneCount > 1'000'000)
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
-    if ((header.scene.format == model_core::SourceFormatId::Gltf || header.scene.format == model_core::SourceFormatId::Glb)
-        && (header.scene.upAxis != model_core::UpAxisId::Y || header.scene.metersPerUnit != 1.0))
-        return Reject(ImportErrorCode::MalformedData, "invalid glTF units/up axis");
-    if ((header.scene.format == model_core::SourceFormatId::Stl
-         || header.scene.format == model_core::SourceFormatId::Ply
-         || header.scene.format == model_core::SourceFormatId::AsciiStl
-         || header.scene.format == model_core::SourceFormatId::AsciiPly
-         || header.scene.format == model_core::SourceFormatId::Obj)
-        && (header.scene.upAxis != model_core::UpAxisId::Unknown || header.scene.metersPerUnit != 0))
-        return Reject(ImportErrorCode::MalformedData, "unspecified source units/up axis must stay unknown");
-    if (header.scene.format == model_core::SourceFormatId::Fbx
-        && (header.scene.upAxis != model_core::UpAxisId::Y || header.scene.metersPerUnit != 1.0))
-        return Reject(ImportErrorCode::MalformedData, "invalid normalized FBX units/up axis");
-    if (usdFormat
-        && (header.scene.upAxis == model_core::UpAxisId::Unknown
-            || header.scene.metersPerUnit <= 0.0))
-        return Reject(ImportErrorCode::MalformedData, "USD units/up axis must be specified");
-    // STEP declares no universal display-up axis, so Unknown is required, but
-    // the authored length unit must convert to a verified positive metre
-    // factor -- an absent/zero unit is a typed failure, never an assumed
-    // millimetre.
-    if (header.scene.format == model_core::SourceFormatId::Step
-        && (header.scene.upAxis != model_core::UpAxisId::Unknown
-            || header.scene.metersPerUnit <= 0.0))
-        return Reject(ImportErrorCode::MalformedData, "STEP requires unknown up axis and a positive metre factor");
+    // Per-format up-axis/unit policy is a pure function shared with the unit
+    // tests (model_core/SceneMetadataRules.h), so the OBJ Y-up default and the
+    // untouched glTF/FBX/USD/STEP rules cannot drift between broker and tests.
+    if (!model_core::SceneUnitsAndUpAxisAllowed(
+            header.scene.format, header.scene.upAxis, header.scene.metersPerUnit))
+        return Reject(ImportErrorCode::MalformedData, "invalid units/up axis for source format");
 
     // 10. Recompute the section checksum over [header, sectionLength).
     auto payloadRegion

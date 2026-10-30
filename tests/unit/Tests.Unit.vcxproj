@@ -156,6 +156,7 @@
     <ClCompile Include="..\..\shared\parser-core\src\PlyParserCore.cpp" />
     <ClCompile Include="FixtureManifestTests.cpp" />
     <ClCompile Include="WireFormatTests.cpp" />
+    <ClCompile Include="PresentationTests.cpp" />
     <ClCompile Include="CompatibilityTests.cpp" />
     <ClCompile Include="CoarseProxyTests.cpp" />
     <ClCompile Include="GraphicsDeviceTests.cpp" />

@@ -18,6 +18,16 @@ the catalog must agree, and the catalog wins when they do not. The catalog is
 data plus pure lookups: it never parses a file, includes no third-party parser,
 and carries no path or network authority.
 
+`PresentationProfile` is declared per family in the same table. The viewer maps
+it once at document open to its own view state: `StudioPbr` selects the
+material-aware Studio shader, `StudioCad` selects the neutral Clay review
+material with the ground grid, and `PointCloud` keeps the unlit round splat
+pipeline and hides the grid. `ResolvePresentationProfile` is a pure function of
+the descriptor plus the validated point/triangle totals, so a PLY point cloud
+selects the point preset while a PLY mesh keeps Studio PBR. The preset never
+rewrites source materials. An explicit toolbar lighting or grid choice pins the
+session override; reloads and refinements do not re-apply the preset.
+
 | Input | Parser | MVP content | Deliberate limits | Performance tier |
 | --- | --- | --- | --- | --- |
 | .glb, .gltf | fastgltf + Draco + KTX/Basis | glTF 2.0 scenes, nodes, triangle meshes, PBR metallic/roughness and unlit materials, vertex colors, PNG/JPEG/WebP/KTX2 textures, `KHR_texture_transform`, `KHR_mesh_quantization`, `KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `EXT_texture_webp`, `KHR_materials_transmission` (approximated as Fresnel-weighted alpha-blended glass; no refraction pass), `KHR_materials_pbrSpecularGlossiness` (archived; approximated as diffuse base color with metallic 0 and roughness `1 - glossiness`; the specular-glossiness texture has no matching slot) | No animation playback, skins, morph targets, lights, cameras, or advanced material lobes. External URIs must resolve to approved local files contained within the primary file's directory tree (its own directory or a subdirectory). A single oversized compressed primitive/view may fail its decode-working-set limit. | A for ordinary/meshopt data; compressed primitives are bounded decode units |

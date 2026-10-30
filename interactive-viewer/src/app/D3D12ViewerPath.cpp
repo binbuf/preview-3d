@@ -19,6 +19,29 @@ using Microsoft::WRL::ComPtr;
 namespace {
 constexpr DWORD kIdleWaitTimeoutMs = 5000;
 
+// The catalog preset changes view state only. CAD gets a slightly lighter
+// neutral backdrop so untextured parts read against it; point clouds get a
+// darker backdrop so vertex colors/splats are not washed out. PBR keeps the
+// historical Gate 1 #1C1C1E clear.
+inline void PresentationClearColor(model_core::PresentationProfile profile, float color[4])
+{
+    switch (profile)
+    {
+    case model_core::PresentationProfile::StudioCad:
+        color[0] = 0x23 / 255.0f; color[1] = 0x23 / 255.0f;
+        color[2] = 0x26 / 255.0f; color[3] = 1.0f;
+        break;
+    case model_core::PresentationProfile::PointCloud:
+        color[0] = 0x11 / 255.0f; color[1] = 0x11 / 255.0f;
+        color[2] = 0x13 / 255.0f; color[3] = 1.0f;
+        break;
+    default:
+        color[0] = 0x1C / 255.0f; color[1] = 0x1C / 255.0f;
+        color[2] = 0x1E / 255.0f; color[3] = 1.0f;
+        break;
+    }
+}
+
 // SceneSnapshotPublisher keys a published resource by (clusterId, lodLevel)
 // and replaces an entry that repeats the pair, so mesh buffers and textures
 // must not share an id space. Meshes count up from 0; textures start here.
@@ -1164,8 +1187,10 @@ void D3D12ViewerPath::RenderClearFrame(const DirectX::XMFLOAT4& orientation, con
     toRenderTarget.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     commandList->ResourceBarrier(1, &toRenderTarget);
 
-    // .docs/design/10-delivery-plan.md's Gate 1 "immediate #1C1C1E background".
-    const float clearColor[4] = { 0x1C / 255.0f, 0x1C / 255.0f, 0x1E / 255.0f, 1.0f };
+    // Gate 1's immediate #1C1C1E is the default; the active catalog preset
+    // may choose the CAD or point-cloud backdrop.
+    float clearColor[4]{};
+    PresentationClearColor(chrome.info.presentationProfile, clearColor);
     commandList->ClearRenderTargetView(swapChain.BackBufferRtv(index), clearColor, 0, nullptr);
 
     // With an overlay pass following, the back buffer is left in
@@ -1203,7 +1228,8 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = swapChain.BackBufferRtv(index);
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
-    const float clearColor[4] = { 0x1C / 255.0f, 0x1C / 255.0f, 0x1E / 255.0f, 1.0f };
+    float clearColor[4]{};
+    PresentationClearColor(chrome.info.presentationProfile, clearColor);
     commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
     commandList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     const auto pickRtv = pickRtvHeap->GetCPUDescriptorHandleForHeapStart();

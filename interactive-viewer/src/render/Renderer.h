@@ -149,6 +149,9 @@ struct OverlayInfo
     bool fullscreenButtonPressed = false;
     bool isFullscreen = false;
     LightingMode lightingMode = LightingMode::Studio;
+    // Catalog presentation profile for the current document. Drives only the
+    // viewport clear color (a preset never changes source materials).
+    model_core::PresentationProfile presentationProfile = model_core::PresentationProfile::Default;
     float directionalLightAngle = 0.0f; // normalized 0..1 horizontal rotation
     float directionalLightElevation = 0.502f; // radians above the horizon, 0..~85deg
     bool lightDragging = false; // LMB held on the gizmo's sun (drag affordance)

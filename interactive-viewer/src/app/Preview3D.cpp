@@ -215,6 +215,13 @@ struct ViewerApp
     float rollGlyphFadeTarget = 0.0f;
     double lastRollGlyphFadeSeconds = 0.0;
     LightingMode lightingMode = LightingMode::Studio;
+    // Catalog-driven view state applied once when a document first opens.
+    // `activePresentation` is what the info panel reports; an explicit user
+    // action (lighting button or grid toggle) pins the session so a reload or
+    // refinement cannot stomp the override.
+    model_core::PresentationProfile activePresentation = model_core::PresentationProfile::Default;
+    bool presentationOverridden = false;
+    std::wstring presentationSourcePath;
     float directionalLightAngle = 0.875f;
     // Elevation above the horizon in radians; atan(0.55) matches the previous
     // fixed key elevation. The gizmo sun's distance from center encodes it.
@@ -746,7 +753,7 @@ float InfoPanelMaxScroll(const ViewerApp& app)
     const float panelHeight = static_cast<float>(panel.bottom - panel.top);
     if (panelHeight <= 0.0f) return 0.0f;
     const std::vector<InfoPanelSection> sections = BuildInfoPanelSections(
-        *app.loadedModel, app.showNativeOrientation, app.groundAxis);
+        *app.loadedModel, app.showNativeOrientation, app.groundAxis, app.activePresentation);
     const InfoPanelScrollMetrics metrics = ComputeInfoPanelScrollMetrics(sections, app.dpiScale);
     const float visibleHeight = std::max(0.0f, panelHeight - metrics.headerHeight);
     return std::max(0.0f, metrics.contentHeight - visibleHeight);
@@ -1549,8 +1556,34 @@ bool SetDirectionalLightFromGizmoPoint(ViewerApp& app, POINT point)
     return true;
 }
 
+// Applies the catalog's presentation profile exactly once for a document.
+// Point clouds use the existing round colored splat pipeline (which is unlit),
+// so they keep Studio selected for the toolbar while the grid is suppressed.
+// Studio CAD uses the neutral Clay review material; the PBR profile uses the
+// material-aware Studio shader. This function does not call SetLightingMode,
+// because that would mark the choice as a user override.
+void ApplyPresentationProfile(ViewerApp& app, model_core::PresentationProfile profile)
+{
+    app.activePresentation = profile;
+    switch (profile)
+    {
+    case model_core::PresentationProfile::StudioCad:
+        app.lightingMode = LightingMode::Clay;
+        break;
+    case model_core::PresentationProfile::PointCloud:
+    case model_core::PresentationProfile::StudioPbr:
+    default:
+        app.lightingMode = LightingMode::Studio;
+        break;
+    }
+    app.gridVisible = profile != model_core::PresentationProfile::PointCloud;
+}
+
 void SetLightingMode(ViewerApp& app,LightingMode mode)
 {
+    // An explicit toolbar choice wins for the rest of the session; opening or
+    // reloading a document must not silently replace it.
+    app.presentationOverridden = true;
     app.lightingMode=mode;
     app.modeHudText=mode==LightingMode::Studio ? Loc("hud.studioLighting", L"Studio lighting")
         : mode==LightingMode::Clay ? Loc("hud.claySolid", L"Clay / Solid")
@@ -1703,6 +1736,7 @@ bool ConsumeToggleCommand(ViewerApp& app, int id)
 void ToggleGrid(ViewerApp& app)
 {
     if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_GRID)) return;
+    app.presentationOverridden = true;
     app.gridVisible = !app.gridVisible;
     ShowModeHud(app, app.gridVisible ? Loc("hud.gridShown", L"Ground grid shown")
                                      : Loc("hud.gridHidden", L"Ground grid hidden"));
@@ -3937,7 +3971,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     if (overlay.infoPanelWidth > 0 && app.loadedModel)
     {
         overlay.infoPanelSections = BuildInfoPanelSections(
-            *app.loadedModel, app.showNativeOrientation, app.groundAxis);
+            *app.loadedModel, app.showNativeOrientation, app.groundAxis, app.activePresentation);
         overlay.infoPanelScrollOffset = app.infoPanelScrollOffset;
         overlay.infoPanelCloseButtonRect = InfoPanelCloseButtonRect(app);
         overlay.infoPanelCloseButtonHover = app.infoPanelCloseButtonHover;
@@ -3971,6 +4005,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     }
     overlay.isFullscreen = app.isFullscreen;
     overlay.lightingMode=app.lightingMode;
+    overlay.presentationProfile=app.activePresentation;
     overlay.directionalLightAngle=app.directionalLightAngle;
     overlay.directionalLightElevation=app.directionalLightElevation;
     overlay.lightDragging=app.pointerMode==PointerMode::LightDrag;
@@ -5648,6 +5683,25 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 app->warning += app->openFormatNotice;
             }
             app->missingAssets=uploaded->metadata->missingAssets;
+        }
+        // Apply the format catalog's presentation profile once, at the first
+        // completed upload for a new document. Refinements, per-frame work and
+        // reloads of the same path must not re-apply it; an explicit lighting
+        // or grid change pins the session override.
+        if (uploaded->metadata && uploaded->terminal && !uploaded->refinement
+            && app->presentationSourcePath != uploaded->path)
+        {
+            app->presentationSourcePath = uploaded->path;
+            if (!app->presentationOverridden)
+            {
+                if (const auto* descriptor =
+                        model_core::FindBySourceFormatId(uploaded->metadata->source.format))
+                {
+                    const auto profile = model_core::ResolvePresentationProfile(*descriptor,
+                        { uploaded->metadata->pointCount, uploaded->metadata->triangleCount });
+                    ApplyPresentationProfile(*app, profile);
+                }
+            }
         }
         app->currentPath = uploaded->path;
         app->filename = FileNameFromPath(uploaded->path);

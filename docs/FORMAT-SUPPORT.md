@@ -21,6 +21,39 @@ For install and build instructions, see the [README](../README.md).
 command line, drag/drop, single-instance activation, Retry, and Open With all
 accept the same direct formats, case-insensitively.
 
+## Orientation, units, and presentation defaults
+
+The format catalog declares each family's source up axis, unit policy and
+presentation profile; opening a file applies that profile once to view state
+(lighting, ground grid, backdrop). A toolbar lighting or grid change wins for
+the rest of the session.
+
+| Family | Source up axis | Units | Opening preset |
+| --- | --- | --- | --- |
+| glTF / GLB | Y (mandated) | metres (mandated) | Studio PBR |
+| FBX | Y after adapter normalization | 1.0 after adapter normalization | Studio PBR |
+| USD / USDA / USDC / USDZ | authored (Y/Z/X) | authored metres-per-unit | Studio PBR |
+| OBJ | Y (ecosystem default; override in the toolbar) | unspecified | Studio PBR |
+| PLY mesh | unspecified | unspecified | Studio PBR |
+| PLY point-only / 3DGS | unspecified | unspecified | Point cloud (unlit round colored splats, no grid) |
+| STL / 3MF | Z | unspecified (STL) / millimetres (3MF) | Studio CAD |
+| STEP | unspecified (STEP defines no display-up axis) | authored, verified positive metre factor | Studio CAD |
+
+Notes:
+
+- OBJ has no standard up axis. Preview 3D reports Y-up so ordinary exports
+  appear upright; the ground-axis toolbar control still cycles X/Y/Z and the
+  "show original orientation" setting bypasses the correction.
+- FBX reads the authored axes/unit scale exposed by ufbx, but the wire contract
+  delivers normalized Y-up/metres geometry, so the info panel reports Y and
+  metres. An authored unit is never guessed or treated as metres; the
+  ground-axis control is the user override for orientation.
+- PLY point detection is content-based: a file that emits points and no
+  triangles selects the point preset; a PLY with any triangle mesh keeps the
+  PBR review preset.
+- A CAD/point preset changes view state only. It never rewrites source
+  materials and never overwrites a persisted user setting.
+
 ## Downloaded-package texture layout
 
 Many downloaded models use a package layout rather than keeping every file

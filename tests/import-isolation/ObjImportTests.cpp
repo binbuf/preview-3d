@@ -255,3 +255,35 @@ TEST_CASE("Malformed and empty OBJ files fail without poisoning the next import"
     result = import_broker::RunImportSession(Request(good.obj));
     REQUIRE(result.ok);
 }
+
+TEST_CASE("A known Y-up OBJ reports Y-up metadata and keeps its native bounds",
+          "[obj][orientation]")
+{
+    ScratchObj source;
+    source.Write(source.obj,
+        "o y_up_triangle\n"
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 0 2 0\n"
+        "f 1 2 3\n");
+
+    const auto result = import_broker::RunImportSession(Request(source.obj));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase, result.chunks.size());
+    REQUIRE(result.ok);
+    REQUIRE_FALSE(result.chunks.empty());
+
+    const import_broker::ValidatedChunk* mesh = nullptr;
+    for (const auto& chunk : result.chunks)
+    {
+        CHECK(chunk.scene.format == model_core::SourceFormatId::Obj);
+        CHECK(chunk.scene.upAxis == model_core::UpAxisId::Y);
+        CHECK(chunk.scene.metersPerUnit == 0.0);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList) mesh = &chunk;
+    }
+    REQUIRE(mesh);
+    // The file is Y-tall (height 2) and Z-flat: nothing rotated or scaled it
+    // in the adapter. The viewer's ground-axis transform turns Y into up.
+    CHECK(mesh->descriptor.localMax[0] >= 0.99f);
+    CHECK(mesh->descriptor.localMax[1] >= 1.99f);
+    CHECK(mesh->descriptor.localMax[2] <= 0.01f);
+}

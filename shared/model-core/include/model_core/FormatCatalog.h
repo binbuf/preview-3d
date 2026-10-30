@@ -82,13 +82,18 @@ enum class UnitPolicy : uint8_t {
     Feet,
 };
 
+// The view-state default declared by the catalog for a format family. It is
+// deliberately expressed in product terms, not in viewer enum values: the
+// trusted viewer maps it to its own lighting/grid/background state, and the
+// thumbnail provider may map it differently. PointCloud is the one profile
+// that cannot be declared by format alone (a PLY may be a mesh or a point
+// cloud), so ResolvePresentationProfile() below picks it from the imported
+// summary instead of from a second switch.
 enum class PresentationProfile : uint8_t {
     Default = 0,
-    GltfPbr,
-    Mesh,
-    Print,
-    UsdStage,
-    Cad,
+    StudioPbr,   // textured/neutral PBR review (glTF, FBX, USD, OBJ, PLY mesh)
+    StudioCad,   // neutral material + ground grid (STL, 3MF, STEP)
+    PointCloud,  // unlit colored round splats, no ground grid (PLY point-only)
 };
 
 enum class ThumbnailFamily : uint8_t {
@@ -244,81 +249,83 @@ inline constexpr FormatDescriptor kFormats[] = {
     { FormatId::Gltf, FormatId::Gltf, "gltf", "format.gltf", L"glTF",
       Extensions(kGltfExtensions), Signatures(kGltfSignatures),
       ImporterKind::GltfWorker, 80, UpAxisId::Y, UnitPolicy::Metres,
-      PresentationProfile::GltfPbr, ThumbnailFamily::Gltf,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Gltf,
       CapabilityFlags::Sidecars | CapabilityFlags::CoarseProxy,
       SourceFormatId::Gltf },
     { FormatId::Stl, FormatId::Stl, "stl", "format.stl", L"STL",
       Extensions(kStlExtensions), Signatures(kStlSignatures),
       ImporterKind::StlWorker, 60, UpAxisId::Z, UnitPolicy::Unspecified,
-      PresentationProfile::Mesh, ThumbnailFamily::Stl,
+      PresentationProfile::StudioCad, ThumbnailFamily::Stl,
       CapabilityFlags::CoarseProxy, SourceFormatId::Stl },
     { FormatId::Ply, FormatId::Ply, "ply", "format.ply", L"PLY",
       Extensions(kPlyExtensions), Signatures(kPlySignatures),
       ImporterKind::PlyWorker, 70, UpAxisId::Unknown, UnitPolicy::Unspecified,
-      PresentationProfile::Mesh, ThumbnailFamily::Ply,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Ply,
       CapabilityFlags::CoarseProxy, SourceFormatId::Ply },
     { FormatId::Glb, FormatId::Gltf, "glb", "format.glb", L"GLB",
       Extensions(kGlbExtensions), Signatures(kGlbSignatures),
       ImporterKind::GltfWorker, 100, UpAxisId::Y, UnitPolicy::Metres,
-      PresentationProfile::GltfPbr, ThumbnailFamily::Gltf,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Gltf,
       CapabilityFlags::CoarseProxy, SourceFormatId::Glb },
     { FormatId::AsciiStl, FormatId::Stl, "stl-ascii", "format.stl.ascii", L"STL (ASCII)",
       {}, Signatures(kStlSignatures),
       ImporterKind::StlWorker, 0, UpAxisId::Z, UnitPolicy::Unspecified,
-      PresentationProfile::Mesh, ThumbnailFamily::Stl,
+      PresentationProfile::StudioCad, ThumbnailFamily::Stl,
       CapabilityFlags::CoarseProxy, SourceFormatId::AsciiStl },
     { FormatId::AsciiPly, FormatId::Ply, "ply-ascii", "format.ply.ascii", L"PLY (ASCII)",
       {}, Signatures(kPlySignatures),
       ImporterKind::PlyWorker, 0, UpAxisId::Unknown, UnitPolicy::Unspecified,
-      PresentationProfile::Mesh, ThumbnailFamily::Ply,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Ply,
       CapabilityFlags::CoarseProxy, SourceFormatId::AsciiPly },
     { FormatId::Obj, FormatId::Obj, "obj", "format.obj", L"OBJ",
       Extensions(kObjExtensions), Signatures(kObjSignatures),
-      ImporterKind::ObjWorker, 50, UpAxisId::Unknown, UnitPolicy::Unspecified,
-      PresentationProfile::Mesh, ThumbnailFamily::Obj,
+      // OBJ has no standard up axis. Y-up is the ecosystem default (and the
+      // F3D convention); the toolbar ground-axis override still wins.
+      ImporterKind::ObjWorker, 50, UpAxisId::Y, UnitPolicy::Unspecified,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Obj,
       CapabilityFlags::Sidecars | CapabilityFlags::CoarseProxy,
       SourceFormatId::Obj },
     { FormatId::Fbx, FormatId::Fbx, "fbx", "format.fbx", L"FBX",
       Extensions(kFbxExtensions), Signatures(kFbxSignatures),
       ImporterKind::FbxWorker, 90, UpAxisId::Y, UnitPolicy::Unspecified,
-      PresentationProfile::Mesh, ThumbnailFamily::Fbx,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Fbx,
       CapabilityFlags::Sidecars | CapabilityFlags::Skeletal | CapabilityFlags::CoarseProxy,
       SourceFormatId::Fbx },
     { FormatId::Usda, FormatId::Usd, "usda", "format.usda", L"USD",
       Extensions(kUsdaExtensions), Signatures(kUsdaSignatures),
       ImporterKind::UsdFastPath, 75, UpAxisId::Y, UnitPolicy::Centimetres,
-      PresentationProfile::UsdStage, ThumbnailFamily::Usd,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Usd,
       CapabilityFlags::Sidecars | CapabilityFlags::CoarseProxy,
       SourceFormatId::Usda },
     { FormatId::Usdc, FormatId::Usd, "usdc", "format.usdc", L"USD",
       Extensions(kUsdcExtensions), Signatures(kUsdcSignatures),
       ImporterKind::UsdFastPath, 95, UpAxisId::Y, UnitPolicy::Centimetres,
-      PresentationProfile::UsdStage, ThumbnailFamily::Usd,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Usd,
       CapabilityFlags::Sidecars | CapabilityFlags::CoarseProxy,
       SourceFormatId::Usdc },
     { FormatId::Usdz, FormatId::Usd, "usdz", "format.usdz", L"USDZ",
       Extensions(kUsdzExtensions), Signatures(kUsdzSignatures),
       ImporterKind::UsdFastPath, 85, UpAxisId::Y, UnitPolicy::Centimetres,
-      PresentationProfile::UsdStage, ThumbnailFamily::Usd,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Usd,
       CapabilityFlags::Sidecars | CapabilityFlags::Archive | CapabilityFlags::Instancing
           | CapabilityFlags::CoarseProxy,
       SourceFormatId::Usdz },
     { FormatId::ThreeMf, FormatId::ThreeMf, "3mf", "format.3mf", L"3MF",
       Extensions(kThreeMfExtensions), Signatures(kThreeMfSignatures),
       ImporterKind::ThreeMfWorker, 90, UpAxisId::Z, UnitPolicy::Millimetres,
-      PresentationProfile::Print, ThumbnailFamily::ThreeMf,
+      PresentationProfile::StudioCad, ThumbnailFamily::ThreeMf,
       CapabilityFlags::Archive | CapabilityFlags::Instancing | CapabilityFlags::CoarseProxy,
       SourceFormatId::ThreeMf },
     { FormatId::Step, FormatId::Step, "step", "format.step", L"STEP",
       Extensions(kStepExtensions), Signatures(kStepSignatures),
       ImporterKind::StepHost, 100, UpAxisId::Unknown, UnitPolicy::Unspecified,
-      PresentationProfile::Cad, ThumbnailFamily::Step,
+      PresentationProfile::StudioCad, ThumbnailFamily::Step,
       CapabilityFlags::CadHost | CapabilityFlags::CoarseProxy,
       SourceFormatId::Step },
     { FormatId::Usd, FormatId::Usd, "usd", "format.usd", L"USD",
       Extensions(kUsdExtensions), Signatures(kUsdSignatures),
       ImporterKind::UsdFastPath, 70, UpAxisId::Y, UnitPolicy::Centimetres,
-      PresentationProfile::UsdStage, ThumbnailFamily::Usd,
+      PresentationProfile::StudioPbr, ThumbnailFamily::Usd,
       CapabilityFlags::Sidecars | CapabilityFlags::CoarseProxy,
       SourceFormatId::Unknown },
 };
@@ -356,6 +363,27 @@ constexpr std::span<const FormatDescriptor> Formats() noexcept
 {
     return catalog_detail::kFormats;
 }
+
+// Imported facts the profile decision is allowed to see. Counts are the
+// validated scene totals, never a worker's unchecked claim.
+struct PresentationSummary {
+    uint64_t pointCount = 0;
+    uint64_t triangleCount = 0;
+};
+
+// Pure, deterministic catalog -> preset mapping. A PLY is the only current
+// family whose profile depends on content: a point-only/3DGS file selects the
+// point preset, while a triangle mesh keeps the declared Studio PBR default.
+// Calling this twice with the same inputs always returns the same profile.
+constexpr PresentationProfile ResolvePresentationProfile(
+    const FormatDescriptor& descriptor, PresentationSummary summary) noexcept
+{
+    if (descriptor.family == FormatId::Ply && summary.pointCount > 0
+        && summary.triangleCount == 0)
+        return PresentationProfile::PointCloud;
+    return descriptor.presentation;
+}
+
 
 inline const FormatDescriptor* FindById(FormatId id) noexcept
 {

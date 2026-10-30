@@ -558,7 +558,12 @@ std::variant<ObjImportResult, ImportErrorCode> ImportObj(
     metadata.format = SourceFormatId::Obj;
     metadata.meshCount = uint32_t(scene->meshes.count);
     metadata.nodeCount = uint32_t(scene->nodes.count);
-    metadata.upAxis = UpAxisId::Unknown;
+    // OBJ has no standard up axis. Y-up is the ecosystem default (matching
+    // F3D) and keeps common exports upright without a manual ground-axis
+    // change. The viewer still applies its existing ground-axis transform and
+    // the toolbar override remains authoritative. OBJ never authors a length
+    // unit, so metersPerUnit stays zero ("unspecified").
+    metadata.upAxis = UpAxisId::Y;
     BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
     constexpr uint64_t kNormalizedTriangleBytes =
         3 * sizeof(VertexPositionNormalUv0TangentColorF32) + 3 * sizeof(uint32_t);

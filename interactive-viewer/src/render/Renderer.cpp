@@ -1104,7 +1104,15 @@ void Renderer::Render(const Camera& camera, const OverlayInfo& overlay, const Na
     if (!impl_->context || !impl_->renderTarget || impl_->width <= 0 || impl_->height <= 0) return;
     ID3D11RenderTargetView* renderTarget = impl_->renderTarget.Get();
     impl_->context->OMSetRenderTargets(1, &renderTarget, impl_->depthView.Get());
-    const float background[] = { 28.0f / 255.0f, 28.0f / 255.0f, 30.0f / 255.0f, 1.0f };
+    float background[] = { 28.0f / 255.0f, 28.0f / 255.0f, 30.0f / 255.0f, 1.0f };
+    if (overlay.presentationProfile == model_core::PresentationProfile::StudioCad)
+    {
+        background[0] = 0x23 / 255.0f; background[1] = 0x23 / 255.0f; background[2] = 0x26 / 255.0f;
+    }
+    else if (overlay.presentationProfile == model_core::PresentationProfile::PointCloud)
+    {
+        background[0] = 0x11 / 255.0f; background[1] = 0x11 / 255.0f; background[2] = 0x13 / 255.0f;
+    }
     impl_->context->ClearRenderTargetView(impl_->renderTarget.Get(), background);
     impl_->context->ClearDepthStencilView(impl_->depthView.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
 
