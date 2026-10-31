@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
@@ -110,7 +111,11 @@ uint32_t RenderMaterialFlags(const model_core::MaterialPayload& material, bool t
         | ((material.flags & model_core::kMaterialFlagTextureLayer) ? 512u : 0u)
         | ((material.flags & model_core::kMaterialFlagTextureMix) ? 1024u : 0u)
         | ((material.flags & model_core::kMaterialFlagVertexSrgb) ? 2048u : 0u)
-        | ((material.flags & model_core::kMaterialFlagTransmissive) ? 4096u : 0u);
+        | ((material.flags & model_core::kMaterialFlagTransmissive) ? 4096u : 0u)
+        // T26: only BLEND draws carry coverage alpha. OPAQUE and MASK writes
+        // are opaque after the authored cutout, so the resolve must not leak
+        // the background through a low alpha texel in an opaque material.
+        | (material.alphaMode == uint32_t(model_core::AlphaModeId::Blend) ? 8192u : 0u);
 }
 
 uint32_t RenderSlotPacked(const model_core::MaterialPayload& material, uint32_t slot) noexcept
@@ -317,10 +322,24 @@ struct PSInput
 };
 
 struct PixelOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
+struct OitOutput { float4 accum : SV_TARGET0; float4 reveal : SV_TARGET1; };
+float OitWeight(float viewDepth)
+{
+    float z=max(viewDepth,1e-3f)/max(gViewport.z,1e-3f);
+    return clamp(0.03f/(1e-5f+pow(z,4.0f)),1e-2f,300.0f);
+}
+#ifdef OIT_PASS
+OitOutput PSMain(PSInput input)
+#else
 PixelOutput PSMain(PSInput input)
+#endif
 {
     if ((input.pickId&0x80000000u)!=0) {
+#ifdef OIT_PASS
+        OitOutput wire;wire.accum=float4(.72f,.76f,.82f,1);wire.reveal=float4(0.0f,0.0f,0.0f,0.0f);return wire;
+#else
         PixelOutput wire;wire.color=float4(.72f,.76f,.82f,1);wire.pick=input.pickId&0x7fffffffu;return wire;
+#endif
     }
     float3 n = normalize(input.normal);
     float3 albedo = gLighting.x>0.5f && gLighting.x<1.5f
@@ -340,9 +359,18 @@ PixelOutput PSMain(PSInput input)
     float3 viewDir = normalize(gEyeSelection.xyz - input.worldPosition);
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
+#ifdef OIT_PASS
+    float coverage=saturate(gBaseColorFactor.a);
+    float weight=OitWeight(length(input.worldPosition));
+    OitOutput output;
+    output.accum=float4(max(color,0.0f)*coverage*weight,coverage*weight);
+    output.reveal=float4(coverage,0.0f,0.0f,coverage);
+    return output;
+#else
     PixelOutput output; output.color = float4(saturate(color),
         gLighting.x>0.5f && gLighting.x<1.5f ? 1.0f : gBaseColorFactor.a);
     output.pick = input.pickId; return output;
+#endif
 }
 )";
 
@@ -533,6 +561,16 @@ float2 TransformSlotUvUnwrapped(uint slot,float2 raw)
 }
 
 struct PixelOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
+struct OitOutput { float4 accum : SV_TARGET0; float4 reveal : SV_TARGET1; };
+// Weighted blended OIT weight (McGuire-Bavoil family). gViewport.z carries the
+// camera distance so the curve is scene-relative rather than a fixed unit
+// assumption. Nearer fragments dominate; the clamps keep every fragment
+// finite and the accumulation commutative.
+float OitWeight(float viewDepth)
+{
+    float z=max(viewDepth,1e-3f)/max(gViewport.z,1e-3f);
+    return clamp(0.03f/(1e-5f+pow(z,4.0f)),1e-2f,300.0f);
+}
 
 // Trowbridge-Reitz GGX for the squared perceptual roughness, matching the CPU
 // StudioEnvironment bake and the Khronos reference renderer.
@@ -672,10 +710,18 @@ float OcclusionFactor(float sample,float strength)
 {
     return saturate(1.0f+clamp(strength,0.0f,1.0f)*(saturate(sample)-1.0f));
 }
+#ifdef OIT_PASS
+OitOutput PSMain(PSInput input)
+#else
 PixelOutput PSMain(PSInput input)
+#endif
 {
     if ((input.pickId&0x80000000u)!=0) {
+#ifdef OIT_PASS
+        OitOutput wire;wire.accum=float4(.72f,.76f,.82f,1);wire.reveal=float4(0.0f,0.0f,0.0f,0.0f);return wire;
+#else
         PixelOutput wire;wire.color=float4(.72f,.76f,.82f,1);wire.pick=input.pickId&0x7fffffffu;return wire;
+#endif
     }
     uint flags=(uint)gMaterialFactors.w;
     uint maps=(uint)gUvLegacy2.z;
@@ -692,7 +738,10 @@ PixelOutput PSMain(PSInput input)
     float4 base=clay ? float4(.58f,.58f,.58f,1.0f) : gBaseColorFactor*vertexColor;
     if (!clay && (maps&1) && baseUv.valid) {
         float4 tex=SampleSlot(gBaseColor,baseUv);
-        if (!textureLayer) tex.a=1.0f;
+        // Authored base-color alpha is significant for MASK cutouts and BLEND
+        // coverage. OPAQUE/MASK writes force display alpha to 1 after the
+        // cutoff, so keeping the sampled alpha here cannot leak background
+        // through an opaque material; it is what makes a textured cutout work.
         if (textureMix) {
             base.rgb=tex.rgb*tex.a+base.rgb*(1.0f-tex.a);
             base.a=tex.a+base.a*(1.0f-tex.a);
@@ -990,13 +1039,34 @@ PixelOutput PSMain(PSInput input)
         else if (debugChannel==29u) dbg=coatN*0.5f+0.5f;
         else if (debugChannel==30u) dbg=sheenRoughness.xxx;
         else dbg=float3(0.0f,1.0f,1.0f);
+#ifdef OIT_PASS
+        OitOutput debugOutput; debugOutput.accum=float4(max(dbg,0.0f),1.0f);
+        debugOutput.reveal=float4(0.0f,0.0f,0.0f,0.0f); return debugOutput;
+#else
         PixelOutput debugOutput; debugOutput.color=float4(max(dbg,0.0f),1.0f);
         debugOutput.pick=input.pickId; return debugOutput;
+#endif
     }
     // Linear HDR output. T15's resolve pass owns exposure, tone mapping and the
     // sRGB transfer so transparency, transmission and emission all blend in the
     // same color space before the display transform.
-    PixelOutput output; output.color = float4(max(color,0.0f), base.a); output.pick = input.pickId; return output;
+#ifdef OIT_PASS
+    // One order-independent accumulation record per transparent fragment.
+    // Coverage (base.a) is kept separate from the lit colour: the revealage
+    // product is the coverage input, while reflection and transmission remain
+    // distinct material terms inside `color` for T27's transmitted-scene pass.
+    float coverage=saturate(base.a);
+    float weight=OitWeight(length(input.worldPosition));
+    OitOutput output;
+    output.accum=float4(max(color,0.0f)*coverage*weight,coverage*weight);
+    output.reveal=float4(coverage,0.0f,0.0f,coverage);
+    return output;
+#else
+    // Only BLEND materials carry coverage here; OPAQUE/MASK writes opaque
+    // alpha after the authored cutout so the resolve cannot leak background.
+    float opacity=((flags&8192u)!=0u)?saturate(base.a):1.0f;
+    PixelOutput output; output.color = float4(max(color,0.0f), opacity); output.pick = input.pickId; return output;
+#endif
 }
 )";
 
@@ -1211,6 +1281,11 @@ cbuffer ResolveConstants : register(b0)
 };
 Texture2D<float4> gSceneColor : register(t0);
 Texture2D<float4> gBackdrop : register(t1);
+// T26 bounded weighted blended OIT: premultiplied weighted colour and the
+// revealage product. gBackground.w is 1 when this frame used OIT and 0 when it
+// used the recorded sorted fallback.
+Texture2D<float4> gOitAccum : register(t2);
+Texture2D<float4> gOitReveal : register(t3);
 SamplerState gLinearSampler : register(s0);
 
 float3 NeutralToneMap(float3 linearColor,float exposure)
@@ -1270,7 +1345,27 @@ float4 PSMain(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
     // glass does not get darker just because its coverage is low.
     float alpha=saturate(scene.a);
     float3 sceneStraight=alpha>1e-5f ? scene.rgb/alpha : float3(0.0f,0.0f,0.0f);
-    float3 mapped=SrgbEncode(ApplyToneMap(sceneStraight,gResolve.x,(uint)gResolve.y));
+    float3 combined=sceneStraight*alpha;
+    float coverage=alpha;
+    if (gBackground.w>0.5f) {
+        // Weighted blended OIT resolve in linear HDR, before tone mapping.
+        // `accum.a` is the sum of coverage*weight; the average transparent
+        // colour is accum.rgb/accum.a and revealage is the product of
+        // (1-coverage). The opaque scene is the background this layer covers.
+        float4 accum=gOitAccum.Sample(gLinearSampler,uv);
+        float reveal=saturate(gOitReveal.Sample(gLinearSampler,uv).r);
+        // Debug-only inspection of the bounded OIT targets.
+        uint oitDiag=(uint)gResolve.w;
+        if (oitDiag==1u) return float4(accum.rgb,1.0f);
+        if (oitDiag==2u) return float4(reveal.xxx,1.0f);
+        if (oitDiag==3u) return float4(scene.rgb,1.0f);
+        if (oitDiag==4u) return float4(accum.a.xxx,1.0f);
+        float transparentCoverage=1.0f-reveal;
+        float3 transparentColor=accum.a>1e-5f ? accum.rgb/accum.a : float3(0.0f,0.0f,0.0f);
+        combined=sceneStraight*alpha*reveal+transparentColor*transparentCoverage;
+        coverage=saturate(alpha+(1.0f-alpha)*transparentCoverage);
+    }
+    float3 mapped=SrgbEncode(ApplyToneMap(combined,gResolve.x,(uint)gResolve.y));
     float3 backdrop=gBackdrop.Sample(gLinearSampler,uv).rgb;
     if (backgroundMode==3u) {
         // Explicit checkerboard choice, in display space so it is stable.
@@ -1284,10 +1379,10 @@ float4 PSMain(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
     if (backgroundMode==2u) {
         // Transparent capture: premultiplied display color and preserved
         // coverage alpha. The backdrop/ground contributes no alpha.
-        output.rgb=mapped*alpha;
-        output.a=alpha;
+        output.rgb=mapped*coverage;
+        output.a=coverage;
     } else {
-        output.rgb=lerp(backdrop,mapped,alpha);
+        output.rgb=lerp(backdrop,mapped,coverage);
         output.a=1.0f;
     }
     return output;
@@ -1295,14 +1390,15 @@ float4 PSMain(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
 )";
 
 bool CompileShader(const char* source, size_t sourceLength, const char* entryPoint, const char* target,
-                    ComPtr<ID3DBlob>& outBlob, std::wstring& error)
+                    ComPtr<ID3DBlob>& outBlob, std::wstring& error,
+                    const D3D_SHADER_MACRO* defines = nullptr)
 {
     UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
 #ifdef _DEBUG
     flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #endif
     ComPtr<ID3DBlob> errorBlob;
-    HRESULT hr = D3DCompile(source, sourceLength, nullptr, nullptr, nullptr, entryPoint, target, flags, 0,
+    HRESULT hr = D3DCompile(source, sourceLength, nullptr, defines, nullptr, entryPoint, target, flags, 0,
                              &outBlob, &errorBlob);
     if (FAILED(hr)) {
         error = L"A D3D12 shader failed to compile.";
@@ -1387,8 +1483,46 @@ const char* D3D12ViewerPath::GroundPixelShaderSource()
     return kGroundPixelShaderSource;
 }
 
+float D3D12ViewerPath::OitWeightForDepth(float viewDepth, float sceneScale) noexcept
+{
+    const float z = (std::max)(viewDepth, 1e-3f) / (std::max)(sceneScale, 1e-3f);
+    const float weight = 0.03f / (1e-5f + std::pow(z, 4.0f));
+    return std::clamp(weight, 1e-2f, 300.0f);
+}
+
+float D3D12ViewerPath::OitResolveCoverage(float revealage) noexcept
+{
+    return std::clamp(1.0f - revealage, 0.0f, 1.0f);
+}
+
+float D3D12ViewerPath::OitResolveAlpha(float accumulatedAlpha) noexcept
+{
+    return accumulatedAlpha > 1e-5f ? accumulatedAlpha : 0.0f;
+}
+
+uint64_t D3D12ViewerPath::OitTargetBytesForExtent(uint32_t width, uint32_t height) noexcept
+{
+    // Two RGBA16F targets, with a conservative 64 KiB per-target allocation
+    // granularity so the public estimate never under-reports what the driver
+    // may commit.
+    const uint64_t pixels = uint64_t(width) * uint64_t(height);
+    const uint64_t accum = ((pixels * 8ull) + 65535ull) / 65536ull * 65536ull;
+    const uint64_t reveal = ((pixels * 8ull) + 65535ull) / 65536ull * 65536ull;
+    return accum + reveal;
+}
+
 bool D3D12ViewerPath::Initialize(HWND window, std::wstring& error)
 {
+#if defined(PREVIEW3D_ENABLE_TEST_CONTROL)
+    // T26 low-memory fallback evidence. A Debug test-control launch can force
+    // the OIT target allocation to fail so the recorded sorted fallback is
+    // exercised without exhausting the real device.
+    wchar_t oitFailure[2]{};
+    if (GetEnvironmentVariableW(L"PREVIEW3D_TEST_OIT_ALLOCATION_FAILURE", oitFailure, 2) == 1
+        && oitFailure[0] == L'1') {
+        oitAllocationForcedFailure = true;
+    }
+#endif
     auto deviceResult = device.Initialize(deviceOptions);
     if (!deviceResult.success) {
         error = L"The D3D12 device could not be created (HRESULT " + std::to_wstring(deviceResult.hr) + L").";
@@ -1541,8 +1675,11 @@ bool D3D12ViewerPath::CreateSceneColorTarget(UINT width, UINT height, std::wstri
     rtvHeapDesc.NumDescriptors = 1;
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc{};
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    // t0 = HDR scene, t1 = display-space backdrop.
-    srvHeapDesc.NumDescriptors = 2;
+    // t0 = HDR scene, t1 = display-space backdrop, t2/t3 = OIT accumulation
+    // and revealage. The two OIT slots always receive a valid descriptor (a
+    // duplicate of the scene/backdrop in fallback mode) so the resolve table is
+    // never partially uninitialized.
+    srvHeapDesc.NumDescriptors = 4;
     srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     if (FAILED(device.Device()->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&sceneColorRtvHeap)))
         || FAILED(device.Device()->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&sceneColorSrvHeap)))
@@ -1618,6 +1755,111 @@ bool D3D12ViewerPath::CreateSceneColorTarget(UINT width, UINT height, std::wstri
     backdropSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     backdropSrvDesc.Texture2D.MipLevels = 1;
     device.Device()->CreateShaderResourceView(backdropColor.Get(), &backdropSrvDesc, backdropSrv);
+
+    // T26 OIT targets. Failure is a recorded fallback, never a startup failure.
+    CreateOitTargets(width, height);
+    D3D12_CPU_DESCRIPTOR_HANDLE oitAccumSrv = sceneColorSrvHeap->GetCPUDescriptorHandleForHeapStart();
+    oitAccumSrv.ptr += srvDescriptorSize * 2;
+    D3D12_CPU_DESCRIPTOR_HANDLE oitRevealSrv = sceneColorSrvHeap->GetCPUDescriptorHandleForHeapStart();
+    oitRevealSrv.ptr += srvDescriptorSize * 3;
+    if (oit.available) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC accumSrvDesc{};
+        accumSrvDesc.Format = kSceneColorFormat;
+        accumSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        accumSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        accumSrvDesc.Texture2D.MipLevels = 1;
+        device.Device()->CreateShaderResourceView(oit.accumulation.Get(), &accumSrvDesc, oitAccumSrv);
+        D3D12_SHADER_RESOURCE_VIEW_DESC revealSrvDesc{};
+        revealSrvDesc.Format = kSceneColorFormat;
+        revealSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        revealSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        revealSrvDesc.Texture2D.MipLevels = 1;
+        device.Device()->CreateShaderResourceView(oit.revealage.Get(), &revealSrvDesc, oitRevealSrv);
+    } else {
+        // Fallback: point the unused table entries at already-valid resources.
+        // The resolve shader branches on the OIT flag and never samples them.
+        device.Device()->CreateShaderResourceView(sceneColor.Get(), &srv, oitAccumSrv);
+        device.Device()->CreateShaderResourceView(backdropColor.Get(), &backdropSrvDesc, oitRevealSrv);
+    }
+    oitTargetBytes = oit.accumulationAllocationBytes + oit.revealageAllocationBytes;
+    return true;
+}
+
+bool D3D12ViewerPath::CreateOitTargets(UINT width, UINT height)
+{
+    oit.accumulation.Reset();
+    oit.revealage.Reset();
+    oit.rtvHeap.Reset();
+    oit.accumulationAllocationBytes = 0;
+    oit.revealageAllocationBytes = 0;
+    oit.available = false;
+    oit.fallbackReason = OitFallbackUnsupportedExtent;
+    if (width == 0 || height == 0 || uint64_t(width) * height > 16ull * 1024 * 1024) {
+        return false;
+    }
+    if (oitAllocationForcedFailure) {
+        oit.fallbackReason = OitFallbackAllocationFailed;
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    heapDesc.NumDescriptors = 2;
+    if (FAILED(device.Device()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&oit.rtvHeap)))) {
+        oit.fallbackReason = OitFallbackAllocationFailed;
+        return false;
+    }
+
+    D3D12_HEAP_PROPERTIES properties{};
+    properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC accumDesc{};
+    accumDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    accumDesc.Width = width;
+    accumDesc.Height = height;
+    accumDesc.DepthOrArraySize = 1;
+    accumDesc.MipLevels = 1;
+    accumDesc.Format = kSceneColorFormat;
+    accumDesc.SampleDesc.Count = 1;
+    accumDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    D3D12_CLEAR_VALUE accumClear{};
+    accumClear.Format = kSceneColorFormat;
+    const HRESULT accumResult = device.Device()->CreateCommittedResource(
+        &properties, D3D12_HEAP_FLAG_NONE, &accumDesc, D3D12_RESOURCE_STATE_RENDER_TARGET,
+        &accumClear, IID_PPV_ARGS(&oit.accumulation));
+    if (FAILED(accumResult)) {
+        oit.fallbackReason = OitFallbackAllocationFailed;
+        oit.accumulation.Reset();
+        oit.rtvHeap.Reset();
+        return false;
+    }
+    oit.accumulationAllocationBytes =
+        device.Device()->GetResourceAllocationInfo(0, 1, &accumDesc).SizeInBytes;
+
+    D3D12_RESOURCE_DESC revealDesc = accumDesc;
+    revealDesc.Format = kSceneColorFormat;
+    D3D12_CLEAR_VALUE revealClear{};
+    revealClear.Format = kSceneColorFormat;
+    revealClear.Color[0] = 1.0f;
+    const HRESULT revealResult = device.Device()->CreateCommittedResource(
+        &properties, D3D12_HEAP_FLAG_NONE, &revealDesc, D3D12_RESOURCE_STATE_RENDER_TARGET,
+        &revealClear, IID_PPV_ARGS(&oit.revealage));
+    if (FAILED(revealResult)) {
+        oit.fallbackReason = OitFallbackAllocationFailed;
+        oit.accumulation.Reset();
+        oit.revealage.Reset();
+        oit.rtvHeap.Reset();
+        oit.accumulationAllocationBytes = 0;
+        return false;
+    }
+    oit.revealageAllocationBytes =
+        device.Device()->GetResourceAllocationInfo(0, 1, &revealDesc).SizeInBytes;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = oit.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    device.Device()->CreateRenderTargetView(oit.accumulation.Get(), nullptr, rtv);
+    rtv.ptr += device.Device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    device.Device()->CreateRenderTargetView(oit.revealage.Get(), nullptr, rtv);
+    oit.available = true;
+    oit.fallbackReason = OitFallbackNone;
     return true;
 }
 
@@ -1794,6 +2036,43 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
     blendPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&blendPsoDesc, IID_PPV_ARGS(&blendPipelineState)))) {
         error = L"The compact-material blend pipeline state could not be created.";
+        return false;
+    }
+    // T26 compact-material OIT and nearest-visible pick variants.
+    D3D_SHADER_MACRO oitDefines[] = { {"OIT_PASS", "1"}, {nullptr, nullptr} };
+    ComPtr<ID3DBlob> oitPsBlob;
+    if (!CompileShader(kPixelShaderSource, sizeof(kPixelShaderSource) - 1, "PSMain", "ps_5_1",
+                       oitPsBlob, error, oitDefines))
+        return false;
+    auto oitPsoDesc = psoDesc;
+    oitPsoDesc.PS = { oitPsBlob->GetBufferPointer(), oitPsBlob->GetBufferSize() };
+    oitPsoDesc.RTVFormats[0] = kSceneColorFormat;
+    oitPsoDesc.RTVFormats[1] = kSceneColorFormat;
+    oitPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    oitPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    auto& oitAccum = oitPsoDesc.BlendState.RenderTarget[0];
+    oitAccum.BlendEnable = TRUE;
+    oitAccum.SrcBlend = D3D12_BLEND_ONE; oitAccum.DestBlend = D3D12_BLEND_ONE;
+    oitAccum.BlendOp = D3D12_BLEND_OP_ADD;
+    oitAccum.SrcBlendAlpha = D3D12_BLEND_ONE; oitAccum.DestBlendAlpha = D3D12_BLEND_ONE;
+    oitAccum.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    auto& oitReveal = oitPsoDesc.BlendState.RenderTarget[1];
+    oitReveal.BlendEnable = TRUE;
+    oitReveal.SrcBlend = D3D12_BLEND_ZERO; oitReveal.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    oitReveal.BlendOp = D3D12_BLEND_OP_ADD;
+    oitReveal.SrcBlendAlpha = D3D12_BLEND_ZERO; oitReveal.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    oitReveal.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&oitPsoDesc, IID_PPV_ARGS(&oitPipelineState)))) {
+        error = L"The compact-material OIT pipeline state could not be created.";
+        return false;
+    }
+    auto pickPsoDesc = psoDesc;
+    pickPsoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
+    pickPsoDesc.BlendState.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pickPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    pickPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&pickPsoDesc, IID_PPV_ARGS(&pickPipelineState)))) {
+        error = L"The compact-material nearest-visible pick pipeline state could not be created.";
         return false;
     }
     auto wirePsoDesc = psoDesc;
@@ -2087,6 +2366,7 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R32_UINT;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
     psoDesc.SampleDesc.Count = 1;
+    psoDesc.BlendState.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&texturedPipelineState)))) {
         error = L"The textured D3D12 pipeline state could not be created.";
@@ -2105,11 +2385,13 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
             +std::to_wstring(static_cast<long>(wireResult))+L").";return false;
     }
     psoDesc.RasterizerState.FrontCounterClockwise=FALSE;
+    psoDesc.BlendState.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedMirroredPipelineState)))) {
         error=L"The mirrored material pipeline state could not be created.";return false;
     }
     psoDesc.RasterizerState.FrontCounterClockwise=TRUE;
     psoDesc.RasterizerState.CullMode=D3D12_CULL_MODE_NONE;
+    psoDesc.BlendState.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedDoubleSidedPipelineState)))) {
         error=L"The double-sided material pipeline state could not be created.";return false;
     }
@@ -2132,6 +2414,69 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
     if (FAILED(device.Device()->CreateGraphicsPipelineState(&psoDesc,IID_PPV_ARGS(&texturedBlendMirroredPipelineState)))) {
         error=L"The mirrored blended material pipeline state could not be created.";return false;
     }
+
+    // T26 weighted blended OIT pipeline. It writes two float targets and never
+    // the integer pick target; a separate nearest-visible pick pass owns
+    // selection. Depth tests against the opaque prepass remain on so hidden
+    // geometry cannot contribute to the transparent accumulation.
+    D3D_SHADER_MACRO oitDefines[] = { {"OIT_PASS", "1"}, {nullptr, nullptr} };
+    ComPtr<ID3DBlob> oitPsBlob;
+    if (!CompileShader(kTexturedPixelShaderSource, sizeof(kTexturedPixelShaderSource) - 1,
+                       "PSMain", "ps_5_1", oitPsBlob, error, oitDefines)) return false;
+    auto oitPsoDesc = psoDesc;
+    oitPsoDesc.PS = { oitPsBlob->GetBufferPointer(), oitPsBlob->GetBufferSize() };
+    oitPsoDesc.RTVFormats[0] = kSceneColorFormat;
+    oitPsoDesc.RTVFormats[1] = kSceneColorFormat;
+    oitPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    oitPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    auto& oitAccum = oitPsoDesc.BlendState.RenderTarget[0];
+    oitAccum.BlendEnable = TRUE;
+    oitAccum.SrcBlend = D3D12_BLEND_ONE; oitAccum.DestBlend = D3D12_BLEND_ONE;
+    oitAccum.BlendOp = D3D12_BLEND_OP_ADD;
+    oitAccum.SrcBlendAlpha = D3D12_BLEND_ONE; oitAccum.DestBlendAlpha = D3D12_BLEND_ONE;
+    oitAccum.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    auto& oitReveal = oitPsoDesc.BlendState.RenderTarget[1];
+    oitReveal.BlendEnable = TRUE;
+    oitReveal.SrcBlend = D3D12_BLEND_ZERO; oitReveal.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    oitReveal.BlendOp = D3D12_BLEND_OP_ADD;
+    oitReveal.SrcBlendAlpha = D3D12_BLEND_ZERO; oitReveal.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    oitReveal.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    oitPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    oitPsoDesc.RasterizerState.FrontCounterClockwise = TRUE;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&oitPsoDesc,IID_PPV_ARGS(&texturedOitDoubleSidedPipelineState)))) {
+        error=L"The double-sided OIT pipeline state could not be created.";return false;
+    }
+    oitPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&oitPsoDesc,IID_PPV_ARGS(&texturedOitPipelineState)))) {
+        error=L"The OIT pipeline state could not be created.";return false;
+    }
+    oitPsoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&oitPsoDesc,IID_PPV_ARGS(&texturedOitMirroredPipelineState)))) {
+        error=L"The mirrored OIT pipeline state could not be created.";return false;
+    }
+
+    // Nearest-visible transparent selection. Colour writes are masked off and
+    // only the integer pick target is written; depth writes are enabled so the
+    // surviving id is the nearest visible fragment, never an averaged id.
+    auto pickPsoDesc = psoDesc;
+    pickPsoDesc.BlendState.RenderTarget[0].BlendEnable = FALSE;
+    pickPsoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;
+    pickPsoDesc.BlendState.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pickPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    pickPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    pickPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    pickPsoDesc.RasterizerState.FrontCounterClockwise = TRUE;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&pickPsoDesc,IID_PPV_ARGS(&texturedPickDoubleSidedPipelineState)))) {
+        error=L"The double-sided transparent pick pipeline state could not be created.";return false;
+    }
+    pickPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&pickPsoDesc,IID_PPV_ARGS(&texturedPickPipelineState)))) {
+        error=L"The transparent pick pipeline state could not be created.";return false;
+    }
+    pickPsoDesc.RasterizerState.FrontCounterClockwise = FALSE;
+    if (FAILED(device.Device()->CreateGraphicsPipelineState(&pickPsoDesc,IID_PPV_ARGS(&texturedPickMirroredPipelineState)))) {
+        error=L"The mirrored transparent pick pipeline state could not be created.";return false;
+    }
     return true;
 }
 
@@ -2139,7 +2484,7 @@ bool D3D12ViewerPath::CreateResolvePipeline(std::wstring& error)
 {
     D3D12_DESCRIPTOR_RANGE srvRange{};
     srvRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors = 2;
+    srvRange.NumDescriptors = 4;
     srvRange.BaseShaderRegister = 0;
     srvRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
@@ -2230,7 +2575,10 @@ void D3D12ViewerPath::ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backB
 {
     if (!sceneColor || !backdropColor || !sceneColorSrvHeap || !resolveRootSignature || !resolvePipelineState) return;
 
-    D3D12_RESOURCE_BARRIER barriers[2]{};
+    const bool useOit = OitUsable();
+    lastResolveUsedOit = useOit;
+    D3D12_RESOURCE_BARRIER barriers[4]{};
+    UINT barrierCount = 2;
     barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barriers[0].Transition.pResource = sceneColor.Get();
     barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
@@ -2241,7 +2589,20 @@ void D3D12ViewerPath::ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backB
     barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    commandList->ResourceBarrier(2, barriers);
+    if (useOit) {
+        barriers[2].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[2].Transition.pResource = oit.accumulation.Get();
+        barriers[2].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barriers[2].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barriers[2].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barriers[3].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[3].Transition.pResource = oit.revealage.Get();
+        barriers[3].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barriers[3].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        barriers[3].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barrierCount = 4;
+    }
+    commandList->ResourceBarrier(barrierCount, barriers);
 
     lastResolveExposure = viewer_presentation::ClampExposure(info.exposure);
     lastResolveToneMap = static_cast<uint32_t>(info.toneMap);
@@ -2249,8 +2610,8 @@ void D3D12ViewerPath::ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backB
         lastResolveExposure,
         static_cast<float>(info.toneMap),
         static_cast<float>(info.background),
-        12.0f,
-        0.0f, 0.0f, 0.0f, 0.0f,
+        oitResolveDiagnostic != 0 ? static_cast<float>(oitResolveDiagnostic) : 12.0f,
+        0.0f, 0.0f, 0.0f, useOit ? 1.0f : 0.0f,
     };
     commandList->OMSetRenderTargets(1, &backBufferRtv, FALSE, nullptr);
     D3D12_VIEWPORT viewport{ 0.0f, 0.0f, static_cast<float>(swapChain.Width()),
@@ -2271,9 +2632,9 @@ void D3D12ViewerPath::ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backB
     commandList->IASetIndexBuffer(nullptr);
     commandList->DrawInstanced(3, 1, 0, 0);
 
-    std::swap(barriers[0].Transition.StateBefore, barriers[0].Transition.StateAfter);
-    std::swap(barriers[1].Transition.StateBefore, barriers[1].Transition.StateAfter);
-    commandList->ResourceBarrier(2, barriers);
+    for (UINT index = 0; index < barrierCount; ++index)
+        std::swap(barriers[index].Transition.StateBefore, barriers[index].Transition.StateAfter);
+    commandList->ResourceBarrier(barrierCount, barriers);
 }
 
 bool D3D12ViewerPath::CreateFrameConstantBuffer(std::wstring& error)
@@ -2712,6 +3073,24 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     D3D12_CPU_DESCRIPTOR_HANDLE targets[2] = {rtv, pickRtv};
     commandList->OMSetRenderTargets(2, targets, FALSE, &dsv);
 
+    const bool useOit = OitUsable();
+    lastTransparencyAlgorithm = useOit ? 1u : 0u;
+    lastTransparencyFallbackReason = useOit ? OitFallbackNone
+        : (debugChannel != 0 ? OitFallbackDiagnostic
+            : (oitForceFallback ? OitFallbackForced : oit.fallbackReason));
+    lastTransparentDrawCount = 0;
+    D3D12_CPU_DESCRIPTOR_HANDLE oitTargets[2]{};
+    if (useOit && oit.rtvHeap) {
+        oitTargets[0] = oit.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        oitTargets[1] = oitTargets[0];
+        oitTargets[1].ptr += device.Device()->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        const float accumClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        const float revealClear[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
+        commandList->ClearRenderTargetView(oitTargets[0], accumClear, 0, nullptr);
+        commandList->ClearRenderTargetView(oitTargets[1], revealClear, 0, nullptr);
+    }
+
     const bool loading = chrome.info.state == ViewerState::Loading;
     const LONG top = loading ? 0 : chrome.info.toolbarHeight;
     const LONG right = std::max(1L, static_cast<LONG>(swapChain.Width()) - (loading ? 0 : chrome.info.infoPanelWidth));
@@ -2733,7 +3112,12 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     const UINT64 constantBufferOffset = static_cast<UINT64>(index) * kConstantBufferSlotBytes;
     std::memcpy(frameConstantBufferMapped + constantBufferOffset, &viewProjection, sizeof(viewProjection));
     std::memcpy(frameConstantBufferMapped + constantBufferOffset + sizeof(viewProjection), &eyeSelection, sizeof(eyeSelection));
-    const DirectX::XMFLOAT4 viewportConstants(float(right),float(bottom-top),0,0);
+    // gViewport.z is the OIT depth reference. Using the eye distance keeps the
+    // weight curve scene-relative instead of assuming a fixed world unit.
+    const float oitDepthScale = (std::max)(1e-3f, std::sqrt(
+        eyeSelection.x * eyeSelection.x + eyeSelection.y * eyeSelection.y
+        + eyeSelection.z * eyeSelection.z));
+    const DirectX::XMFLOAT4 viewportConstants(float(right),float(bottom-top),oitDepthScale,0);
     std::memcpy(frameConstantBufferMapped + constantBufferOffset + sizeof(viewProjection)+sizeof(eyeSelection),
                 &viewportConstants,sizeof(viewportConstants));
     const DirectX::XMFLOAT4 lightingConstants(
@@ -2885,84 +3269,174 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         mesh.lastVisibleFrame = uint32_t(frameStats.PresentedFrames());
         draws.push_back(&mesh);
     }
-    std::stable_sort(draws.begin(),draws.end(),[](const GpuMesh* a,const GpuMesh* b) {
-        const bool ablend=a->material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
-        const bool bblend=b->material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
+    const auto isTransparentTriangle=[](const GpuMesh* mesh) {
+        return !mesh->points && !mesh->lines
+            && mesh->material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
+    };
+    // OIT deliberately stops using mesh-centre depth as the transparent draw
+    // authority. Transparent draws get a stable material/chunk order so any
+    // permutation is reproducible; the accumulation itself is commutative.
+    // The sorted fallback keeps the historical view-depth order.
+    std::stable_sort(draws.begin(),draws.end(),[&](const GpuMesh* a,const GpuMesh* b) {
+        const bool ablend=isTransparentTriangle(a);
+        const bool bblend=isTransparentTriangle(b);
         if (ablend!=bblend) return !ablend;
-        if (ablend && a->viewDepth!=b->viewDepth) return a->viewDepth>b->viewDepth;
+        if (ablend && !useOit && a->viewDepth!=b->viewDepth) return a->viewDepth>b->viewDepth;
         if (a->hasMaterial!=b->hasMaterial) return a->hasMaterial>b->hasMaterial;
         if (a->materialChunkId!=b->materialChunkId) return a->materialChunkId<b->materialChunkId;
         return a->chunkId<b->chunkId;
     });
-    if (chrome.info.lightingMode!=LightingMode::Wireframe) {
-      for (GpuMesh* meshPtr:draws) {
-        auto& mesh=*meshPtr;
-        DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
-            sceneOrigin,cameraTarget,modelTransform);
-        drawConstants.pickId=mesh.instanceId ? mesh.instanceId : mesh.chunkId;
+    const auto firstTransparent=std::find_if(draws.begin(),draws.end(),
+        [&](const GpuMesh* mesh) { return isTransparentTriangle(mesh); });
+    if (reverseTransparentDrawOrderForTesting)
+        std::reverse(firstTransparent,draws.end());
+    lastTransparentDrawCount=static_cast<uint32_t>(std::distance(firstTransparent,draws.end()));
+
+    auto bindTextured=[&](GpuMesh& mesh,const DrawConstants& drawConstants,
+                          ID3D12PipelineState* pso) {
+        ID3D12DescriptorHeap* heaps[] = { mesh.textureHeap.Get() };
+        commandList->SetDescriptorHeaps(1, heaps);
+        commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
+        commandList->SetPipelineState(pso);
+        D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle =
+            mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+        environmentHandle.ptr += uint64_t(model.environmentDescriptorIndex)
+            * mesh.textureDescriptorSize;
+        commandList->SetGraphicsRootDescriptorTable(5, environmentHandle);
+        D3D12_GPU_DESCRIPTOR_HANDLE brdfHandle =
+            mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+        brdfHandle.ptr += uint64_t(model.brdfLutDescriptorIndex)
+            * mesh.textureDescriptorSize;
+        commandList->SetGraphicsRootDescriptorTable(9, brdfHandle);
+        commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
+        uint32_t mapMask=0;
+        for (UINT slot=0;slot<model_core::kMaterialTextureSlotCount;++slot) {
+            D3D12_GPU_DESCRIPTOR_HANDLE handle=mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+            const int selected=mesh.textureIndices[slot]>=0 ? mesh.textureIndices[slot]
+                : int(mesh.neutralDescriptorBase+slot);
+            if (mesh.textureIndices[slot]>=0) mapMask|=1u<<slot;
+            handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
+            commandList->SetGraphicsRootDescriptorTable(kMaterialSlotRootParameter[slot],handle);
+        }
+        const auto texturedDraw = BuildTexturedDrawConstants(drawConstants);
+        commandList->SetGraphicsRoot32BitConstants(7, 25, &texturedDraw, 0);
+        MaterialConstantData material{};
+        const bool twoSided=!mesh.hasMaterial
+            || (mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
+        FillMaterialConstantData(mesh.material,mapMask,twoSided,mesh.mirrored,material);
+        if (mesh.materialConstants.mapped && mesh.materialConstants.resource) {
+            const UINT64 materialOffset=UINT64(index)*kMaterialConstantStride;
+            std::memcpy(mesh.materialConstants.mapped+materialOffset,&material,sizeof(material));
+            commandList->SetGraphicsRootConstantBufferView(8,
+                mesh.materialConstants.resource->GetGPUVirtualAddress()+materialOffset);
+        }
+    };
+    auto bindCompact=[&](GpuMesh& mesh,const DrawConstants& drawConstants,
+                         ID3D12PipelineState* pso,bool blend) {
+        commandList->SetGraphicsRootSignature(rootSignature.Get());
+        commandList->SetPipelineState(pso);
+        commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
+        commandList->SetGraphicsRoot32BitConstants(1, 33, &drawConstants, 0);
+        float color[4];
+        std::memcpy(color,mesh.material.baseColorFactor,sizeof(color));
+        if (!blend) color[3]=1.0f;
+        commandList->SetGraphicsRoot32BitConstants(2, 4, color, 0);
+    };
+    auto drawMesh=[&](GpuMesh& mesh) {
         commandList->IASetPrimitiveTopology(mesh.points ? D3D_PRIMITIVE_TOPOLOGY_POINTLIST
             : mesh.lines ? D3D_PRIMITIVE_TOPOLOGY_LINELIST : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        if (mesh.completeVertex && !mesh.points && !mesh.lines && mesh.textureHeap) {
-            ID3D12DescriptorHeap* heaps[] = { mesh.textureHeap.Get() };
-            commandList->SetDescriptorHeaps(1, heaps);
-            commandList->SetGraphicsRootSignature(texturedRootSignature.Get());
-            D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle =
-                mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
-            environmentHandle.ptr += uint64_t(model.environmentDescriptorIndex)
-                * mesh.textureDescriptorSize;
-            commandList->SetGraphicsRootDescriptorTable(5, environmentHandle);
-            D3D12_GPU_DESCRIPTOR_HANDLE brdfHandle =
-                mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
-            brdfHandle.ptr += uint64_t(model.brdfLutDescriptorIndex)
-                * mesh.textureDescriptorSize;
-            commandList->SetGraphicsRootDescriptorTable(9, brdfHandle);
-            const bool blend=mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
-            // A mesh with no authored material has no culling policy either.
-            // Treat it as double-sided: CAD/Rhino OBJ exports commonly contain
-            // independently oriented surface patches, and back-face culling
-            // otherwise punches apparent holes through details such as faces.
-            const bool twoSided=!mesh.hasMaterial
-                || (mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
-            commandList->SetPipelineState(blend
-                ? (twoSided?texturedBlendDoubleSidedPipelineState.Get()
-                    :(mesh.mirrored?texturedBlendMirroredPipelineState.Get():texturedBlendPipelineState.Get()))
-                : (twoSided?texturedDoubleSidedPipelineState.Get()
-                    :(mesh.mirrored?texturedMirroredPipelineState.Get():texturedPipelineState.Get())));
-            commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
-            uint32_t mapMask=0;
-            for (UINT slot=0;slot<model_core::kMaterialTextureSlotCount;++slot) {
-                D3D12_GPU_DESCRIPTOR_HANDLE handle=mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
-                const int selected=mesh.textureIndices[slot]>=0 ? mesh.textureIndices[slot]
-                    : int(mesh.neutralDescriptorBase+slot);
-                if (mesh.textureIndices[slot]>=0) mapMask|=1u<<slot;
-                handle.ptr+=uint64_t(selected)*mesh.textureDescriptorSize;
-                commandList->SetGraphicsRootDescriptorTable(kMaterialSlotRootParameter[slot],handle);
-            }
-            const auto texturedDraw = BuildTexturedDrawConstants(drawConstants);
-            commandList->SetGraphicsRoot32BitConstants(7, 25, &texturedDraw, 0);
-            MaterialConstantData material{};
-            FillMaterialConstantData(mesh.material,mapMask,twoSided,mesh.mirrored,material);
-            if (mesh.materialConstants.mapped && mesh.materialConstants.resource) {
-                const UINT64 materialOffset=UINT64(index)*kMaterialConstantStride;
-                std::memcpy(mesh.materialConstants.mapped+materialOffset,&material,sizeof(material));
-                commandList->SetGraphicsRootConstantBufferView(8,
-                    mesh.materialConstants.resource->GetGPUVirtualAddress()+materialOffset);
-            }
-        } else {
-            commandList->SetGraphicsRootSignature(rootSignature.Get());
-            commandList->SetPipelineState(mesh.lines ? linePipelineState.Get()
-                : mesh.points ? (mesh.completeVertex?coloredPointPipelineState.Get():pointPipelineState.Get())
-                : mesh.positionOnly ? positionOnlyPipelineState.Get()
-                : mesh.material.alphaMode == uint32_t(model_core::AlphaModeId::Blend)
-                    ? blendPipelineState.Get() : pipelineState.Get());
-            commandList->SetGraphicsRootConstantBufferView(0, constantBufferAddress);
-            commandList->SetGraphicsRoot32BitConstants(1, 33, &drawConstants, 0);
-            commandList->SetGraphicsRoot32BitConstants(2, 4, mesh.material.baseColorFactor, 0);
-        }
         commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         commandList->IASetIndexBuffer(mesh.points ? nullptr : &mesh.ibv);
         if (mesh.points) commandList->DrawInstanced(mesh.vertexCount, 1, 0, 0);
         else commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
+    };
+
+    if (chrome.info.lightingMode!=LightingMode::Wireframe) {
+      // Opaque and masked geometry first, with depth writes, into scene+pick.
+      for (auto it=draws.begin();it!=firstTransparent;++it) {
+        auto& mesh=**it;
+        DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
+            sceneOrigin,cameraTarget,modelTransform);
+        drawConstants.pickId=mesh.instanceId ? mesh.instanceId : mesh.chunkId;
+        if (mesh.completeVertex && !mesh.points && !mesh.lines && mesh.textureHeap) {
+            const bool twoSided=!mesh.hasMaterial
+                || (mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
+            bindTextured(mesh,drawConstants,
+                twoSided?texturedDoubleSidedPipelineState.Get()
+                :(mesh.mirrored?texturedMirroredPipelineState.Get():texturedPipelineState.Get()));
+        } else {
+            bindCompact(mesh,drawConstants,
+                mesh.lines ? linePipelineState.Get()
+                : mesh.points ? (mesh.completeVertex?coloredPointPipelineState.Get():pointPipelineState.Get())
+                : mesh.positionOnly ? positionOnlyPipelineState.Get() : pipelineState.Get(),
+                false);
+        }
+        drawMesh(mesh);
+      }
+
+      if (useOit) {
+        // One bounded transparent pass into the two OIT targets. Depth tests
+        // against the opaque prepass reject hidden geometry; no depth writes
+        // and no per-pixel list, so memory/work do not grow with layer count.
+        commandList->OMSetRenderTargets(2, oitTargets, FALSE, &dsv);
+        for (auto it=firstTransparent;it!=draws.end();++it) {
+            auto& mesh=**it;
+            DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
+                sceneOrigin,cameraTarget,modelTransform);
+            drawConstants.pickId=mesh.instanceId ? mesh.instanceId : mesh.chunkId;
+            if (mesh.completeVertex && mesh.textureHeap) {
+                const bool twoSided=!mesh.hasMaterial
+                    || (mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
+                bindTextured(mesh,drawConstants,
+                    twoSided?texturedOitDoubleSidedPipelineState.Get()
+                    :(mesh.mirrored?texturedOitMirroredPipelineState.Get():texturedOitPipelineState.Get()));
+            } else {
+                bindCompact(mesh,drawConstants,oitPipelineState.Get(),true);
+            }
+            drawMesh(mesh);
+        }
+      } else {
+        // Recorded fallback: the historical stable-sorted straight-alpha path.
+        for (auto it=firstTransparent;it!=draws.end();++it) {
+            auto& mesh=**it;
+            DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
+                sceneOrigin,cameraTarget,modelTransform);
+            drawConstants.pickId=mesh.instanceId ? mesh.instanceId : mesh.chunkId;
+            if (mesh.completeVertex && mesh.textureHeap) {
+                const bool twoSided=!mesh.hasMaterial
+                    || (mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
+                bindTextured(mesh,drawConstants,
+                    twoSided?texturedBlendDoubleSidedPipelineState.Get()
+                    :(mesh.mirrored?texturedBlendMirroredPipelineState.Get():texturedBlendPipelineState.Get()));
+            } else {
+                bindCompact(mesh,drawConstants,blendPipelineState.Get(),true);
+            }
+            drawMesh(mesh);
+        }
+      }
+
+      if (firstTransparent!=draws.end()) {
+        // Deterministic nearest-visible transparent selection. This pass runs
+        // for both OIT and the fallback, writes only the integer pick target,
+        // and writes depth so neither draw order nor an averaged id decides the
+        // answer. Opaque ids already in the target stay for hidden geometry.
+        commandList->OMSetRenderTargets(2, targets, FALSE, &dsv);
+        for (auto it=firstTransparent;it!=draws.end();++it) {
+            auto& mesh=**it;
+            DrawConstants drawConstants=BuildDrawConstants(mesh.instanceTransform,mesh.origin,
+                sceneOrigin,cameraTarget,modelTransform);
+            drawConstants.pickId=mesh.instanceId ? mesh.instanceId : mesh.chunkId;
+            if (mesh.completeVertex && mesh.textureHeap) {
+                const bool twoSided=!mesh.hasMaterial
+                    || (mesh.material.flags&model_core::kMaterialFlagDoubleSided)!=0;
+                bindTextured(mesh,drawConstants,
+                    twoSided?texturedPickDoubleSidedPipelineState.Get()
+                    :(mesh.mirrored?texturedPickMirroredPipelineState.Get():texturedPickPipelineState.Get()));
+            } else {
+                bindCompact(mesh,drawConstants,pickPipelineState.Get(),true);
+            }
+            drawMesh(mesh);
+        }
       }
     }
 
@@ -3967,8 +4441,10 @@ uint64_t D3D12ViewerPath::AccountedAllocationBytes(const ModelResources* extra) 
     resource(depthBuffer.Get()); resource(pickTarget.Get()); resource(pickReadback.Get()); resource(frameConstantBuffer.Get());
     resource(sceneColor.Get(),sceneColorAllocationBytes);
     resource(backdropColor.Get(),backdropAllocationBytes);
+    resource(oit.accumulation.Get(),oit.accumulationAllocationBytes);
+    resource(oit.revealage.Get(),oit.revealageAllocationBytes);
     heap(dsvHeap.Get()); heap(pickRtvHeap.Get()); heap(sceneColorRtvHeap.Get()); heap(sceneColorSrvHeap.Get());
-    heap(backdropRtvHeap.Get());
+    heap(backdropRtvHeap.Get()); heap(oit.rtvHeap.Get());
     modelBytes(model); modelBytes(pendingModel);
     for (const auto& retired:retiredModels) modelBytes(retired.resources);
     if (extra) modelBytes(*extra);

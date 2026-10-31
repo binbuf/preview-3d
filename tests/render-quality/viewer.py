@@ -67,7 +67,8 @@ def set_dpi_awareness():
 
 class Viewer:
     def __init__(self, configuration='Debug', output: Path | None = None,
-                 width=1280, height=860, settle_timeout=120.0):
+                 width=1280, height=860, settle_timeout=120.0, environment=None):
+        self.environment = environment
         self.exe = ROOT / f'x64/{configuration}/Preview3D.exe'
         if not self.exe.exists():
             raise ViewerError(f'built viewer not found: {self.exe}')
@@ -80,7 +81,8 @@ class Viewer:
 
     def __enter__(self):
         self.process = subprocess.Popen([str(self.exe), '--app-smoke'],
-                                        stderr=subprocess.PIPE)
+                                        stderr=subprocess.PIPE,
+                                        env=self.environment)
         self.hwnd = wait_for_window(self.process)
         # Keep the evidence window above the developer console while capturing;
         # an occluded flip-model swap chain can otherwise return a stale or
@@ -335,6 +337,79 @@ class Viewer:
         time.sleep(0.25)
         return self.wait_stable()
 
+    def request_open(self, path: Path):
+        """Send an open without waiting; returns the viewer generation."""
+        text = C.create_unicode_buffer(str(Path(path).resolve()))
+        data = CopyData(104, C.sizeof(text), C.cast(text, C.c_void_p))
+        generation = send(self.hwnd, 0x4A, 0, C.addressof(data))
+        if not generation:
+            raise LoadFailed('viewer rejected the input path', None, None, None)
+        return generation
+
+    def wait_open(self, generation: int, timeout: float | None = None):
+        """Wait for a generation requested with request_open()."""
+        timeout = self.settle_timeout if timeout is None else timeout
+        started = time.monotonic()
+        deadline = started + timeout
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                raise ViewerError(f'viewer exited with {self.process.returncode}')
+            state = query(self.hwnd, 0) - 1
+            loaded_generation = send(self.hwnd, 0x8000 + 104, 47, 0)
+            if state == 3:
+                raise LoadFailed('terminal load failure (state Failed)', state,
+                                 query(self.hwnd, 41), query(self.hwnd, 42))
+            if state == 2 and loaded_generation == generation and query(self.hwnd, 45):
+                stable = self.wait_textures_settled()
+                return generation, time.monotonic() - started, stable
+            time.sleep(0.05)
+        raise LoadFailed(f'load did not settle within {timeout:.0f}s',
+                         query(self.hwnd, 0) - 1, query(self.hwnd, 41),
+                         query(self.hwnd, 42))
+
+    def pick_at(self, x: int, y: int, timeout: float = 5.0):
+        """Click a client pixel and wait for the deterministic picked identity."""
+        before = query(self.hwnd, 254)
+        point = W.POINT(int(x), int(y))
+        user.ClientToScreen.argtypes = [W.HWND, C.POINTER(W.POINT)]
+        user.ClientToScreen(self.hwnd, C.byref(point))
+        user.SetCursorPos(point.x, point.y)
+        time.sleep(0.03)
+        packed = (int(x) & 0xFFFF) | ((int(y) & 0xFFFF) << 16)
+        send(self.hwnd, 0x201, 1, packed)
+        send(self.hwnd, 0x202, 0, packed)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and query(self.hwnd, 254) <= before:
+            time.sleep(0.02)
+        return {
+            'hit': bool(query(self.hwnd, 22)),
+            'id': query(self.hwnd, 251),
+            'requests': query(self.hwnd, 34),
+            'completions': query(self.hwnd, 254),
+        }
+
+    def pick_image(self, frame, x: float, y: float, timeout: float = 5.0):
+        """Pick from viewport-crop image coordinates in physical client pixels."""
+        before = query(self.hwnd, 254)
+        scale = float(frame.get('dpiScale') or 1.0)
+        px = max(0, min(65535, int(round(x * scale))))
+        py = max(0, min(65535, int(round((frame['rect']['top'] + y) * scale))))
+        send(self.hwnd, 0x8000 + 104, 258, px | (py << 16))
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and query(self.hwnd, 254) <= before:
+            time.sleep(0.02)
+        return {
+            'hit': bool(query(self.hwnd, 22)),
+            'id': query(self.hwnd, 251),
+            'completions': query(self.hwnd, 254),
+        }
+
+    def resize(self, width: int, height: int, settle: float = 1.5):
+        """Resize the evidence window and let the render target rebuild."""
+        user.SetWindowPos(self.hwnd, C.c_void_p(-1), 30, 30, int(width), int(height), 0x14)
+        time.sleep(settle)
+        return self.wait_stable()
+
     def apply_controlled_presentation(self):
         """One recorded neutral condition for every controlled comparison."""
         import struct
@@ -342,6 +417,9 @@ class Viewer:
         def f32(value):
             return struct.unpack('<I', struct.pack('<f', float(value)))[0]
 
+        send(self.hwnd, 0x8000 + 104, 70, 0)      # Automatic ground axis
+        if query(self.hwnd, 21):
+            send(self.hwnd, 0x8000 + 104, 30, 0)  # native orientation off
         send(self.hwnd, 0x8000 + 104, 90, 0)      # Studio PBR preset
         send(self.hwnd, 0x8000 + 104, 92, f32(1.0))  # exposure
         send(self.hwnd, 0x8000 + 104, 94, 0)      # dark background

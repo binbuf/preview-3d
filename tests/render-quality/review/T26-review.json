@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "task": "T26",
+  "date": "2026-10-30",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug HDR/channel readback and pick-target census",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T26",
+  "imagesInspected": [
+    "TestResults/render-quality/T26/images/layered-oit.png",
+    "TestResults/render-quality/T26/images/layered-oit-permuted.png",
+    "TestResults/render-quality/T26/images/layered-sorted-fallback.png",
+    "TestResults/render-quality/T26/images/layered-sorted-fallback-permuted.png",
+    "TestResults/render-quality/T26/images/layered-content-oit.png",
+    "TestResults/render-quality/T26/images/layered-content-oit-permuted.png",
+    "TestResults/render-quality/T26/images/layered-content-fallback.png",
+    "TestResults/render-quality/T26/images/layered-content-fallback-permuted.png",
+    "TestResults/render-quality/T26/images/layered-orbit--8-oit.png",
+    "TestResults/render-quality/T26/images/layered-orbit-0-oit.png",
+    "TestResults/render-quality/T26/images/layered-orbit-8-oit.png",
+    "TestResults/render-quality/T26/images/layered-low-memory-fallback.png",
+    "TestResults/render-quality/T26/images/layered-after-resize.png",
+    "TestResults/render-quality/T26/images/layered-after-device-reset.png",
+    "TestResults/render-quality/T26/images/car-front-content-oit.png",
+    "TestResults/render-quality/T26/images/car-front-content-fallback.png",
+    "TestResults/render-quality/T26/images/car-front-windshield-oit.png",
+    "TestResults/render-quality/T26/images/car-front-windshield-fallback.png",
+    "TestResults/render-quality/T26/images/car-oblique-content-oit.png",
+    "TestResults/render-quality/T26/images/car-oblique-content-fallback.png",
+    "TestResults/render-quality/T26/images/camera-content-oit.png",
+    "TestResults/render-quality/T26/images/camera-content-fallback.png",
+    "TestResults/render-quality/T26/images/camera-lens-crop-oit.png",
+    "TestResults/render-quality/T26/images/camera-lens-crop-fallback.png"
+  ],
+  "observations": [
+    "The layered-glass content crop isolates four rows/roles: the shared-material primitive-order regression, nested front/back glass, crossing triangles in one primitive, the low-coverage decal over paint, the alpha cutout over paint with a visible hole, and emissive blended geometry over paint.",
+    "OIT and the deliberately permuted fixture are pixel-identical within floating-point noise (MAE ~6e-6 layering, 0.0 on Car/Camera); the same permutation changes the recorded sorted fallback (MAE ~1.1e-3), and the top-left regression square visibly swaps colour between the fallback crops.",
+    "The small orbit sequence (-8°, 0°, +8°) keeps every layer attached to its authored ring/tint; no window or decal popping is visible between the OIT normal and permuted frames.",
+    "The cutout panel shows a clear hole revealing the paint behind it. The regression test exposed and fixed a real defect: the shader forced base-color texture alpha to 1 for non-layer materials, so textured MASK cutouts could never discard. The fix preserves sampled alpha for MASK/BLEND while OPAQUE/MASK display alpha remains 1 after the cutoff.",
+    "The Camera lens keeps the same dark reflection/depth as the sorted path (lens crop luma identical); the Car windshield keeps its exposure and no longer changes with transparent draw order.",
+    "After resize, the low-memory forced-fallback launch and one injected device removal, the viewer still presents non-blank transparency (fallback in the low-memory case) and rebuilds the bounded OIT targets.",
+    "Pick-target census: the nearest-visible decal, cutout, emissive and front nested-glass ids are present; the hidden glass id and the three back nested-glass ids are absent. The same census is stable under permutation and on the sorted fallback."
+  ],
+  "defects": [
+    {
+      "id": "weighted-oit-is-approximate",
+      "label": "limitation",
+      "where": "layered-glass, Car and Camera content crops",
+      "description": "Weighted blended OIT resolves a weighted colour average plus a coverage product. It is stable and order-independent but not an exact front-to-back stack; the validated overlap range is eight layers. Beyond that the image remains stable but is not claimed exact.",
+      "assignedTo": "T26"
+    },
+    {
+      "id": "transmission-still-interim",
+      "label": "limitation",
+      "where": "layered-glass nested glass and Car/Camera captures",
+      "description": "OIT preserves coverage, reflection and transmission as separate material inputs and does not add refraction. T27 owns the transmitted-scene sample, tint and rough refraction.",
+      "assignedTo": "T27"
+    },
+    {
+      "id": "capture-dpi-crop",
+      "label": "harness limitation",
+      "where": "TestResults/render-quality/T26/images/*content*",
+      "description": "The evidence window is 150% DPI; PrintWindow returns a logical-size crop while the swap chain and pick target are physical. T26 content crops use the right/bottom model region and the pick census uses the physical viewport rect, so the visual conclusion is unaffected. The generic capture helper still needs a DPI-consistent viewport crop.",
+      "assignedTo": "T20/T33"
+    }
+  ],
+  "positives": [
+    "The algorithm is weighted blended OIT in linear HDR before tone mapping, with two fixed RGBA16F targets and one transparent geometry pass. No per-pixel linked list or peel-count allocation.",
+    "Diagnostics fields 243-258 remain inside the existing Debug --app-smoke / PREVIEW3D_ENABLE_TEST_CONTROL guard; a shipping build still rejects the message before reading any state.",
+    "The OIT pass uses the opaque prepass depth for hidden-geometry rejection and does not write depth; the nearest-visible pick pass writes only the integer pick target and depth.",
+    "The sorted fallback is selected only on OIT target allocation failure, an explicit Debug force, or a diagnostic channel, and its reason is recorded rather than silently replacing the high-quality path.",
+    "Car and Camera are paired: the Camera lens remains the same dark reflection/depth, while the Car windshield/window no longer changes with transparent draw order."
+  ],
+  "acceptance": {
+    "orderPermutationVerified": true,
+    "imageReviewPerformed": true,
+    "motionSequenceReviewed": true,
+    "pickingDeterminismVerified": true,
+    "depthAndHiddenGeometryVerified": true,
+    "resourceLifecycleVerified": true,
+    "acceptedReferencesPromotedBy": "not applicable for T26 (observed evidence only)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "Reviewed the T26-lane run generated by the same profile/binary; the final T26 run writes the same names under TestResults/render-quality/T26. No baseline or reference was promoted."
+  }
+}

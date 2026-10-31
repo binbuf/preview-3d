@@ -727,6 +727,7 @@ void RenderThread::ThreadMain(HWND window)
         bool picked = false;
         if (pendingPick_ && path_.PollPick(picked)) {
             ++pickCompletions_; pickHits_.store(picked);
+            lastPickedId_.store(path_.LastPickedId());
             auto reply = std::make_unique<RenderPickResult>(RenderPickResult{pendingPick_->generation,picked});
             if (pendingPick_->generation == modelGeneration_
                 && PostMessageW(window,kRenderPickCompleteMessage,0,reinterpret_cast<LPARAM>(reply.get()))) (void)reply.release();
@@ -1339,10 +1340,24 @@ void RenderThread::RenderOneFrame()
     }
     if (displayModel) {
         path_.debugChannel = debugChannel_.load(std::memory_order_acquire);
+        path_.oitForceFallback = oitForceFallback_.load(std::memory_order_acquire);
+        path_.oitResolveDiagnostic = oitResolveDiagnostic_.load(std::memory_order_acquire);
+        path_.reverseTransparentDrawOrderForTesting =
+            transparentOrderPermutation_.load(std::memory_order_acquire);
         path_.RenderFrame(viewProjection, orientation, *overlay, cameraTarget, eyeSelection);
+        transparencyAlgorithm_.store(path_.lastTransparencyAlgorithm, std::memory_order_release);
+        transparencyFallbackReason_.store(path_.lastTransparencyFallbackReason,
+                                          std::memory_order_release);
+        transparentDrawCount_.store(path_.lastTransparentDrawCount, std::memory_order_release);
+        oitTargetBytes_.store(path_.oitTargetBytes, std::memory_order_release);
+        lastResolveUsedOit_.store(path_.lastResolveUsedOit, std::memory_order_release);
     } else {
         path_.debugChannel = debugChannel_.load(std::memory_order_acquire);
         path_.RenderClearFrame(orientation, *overlay);
+        transparencyAlgorithm_.store(0, std::memory_order_release);
+        transparencyFallbackReason_.store(path_.oit.fallbackReason, std::memory_order_release);
+        transparentDrawCount_.store(0, std::memory_order_release);
+        oitTargetBytes_.store(path_.oitTargetBytes, std::memory_order_release);
     }
     resolveExposure_.store(path_.lastResolveExposure, std::memory_order_release);
     resolveToneMap_.store(path_.lastResolveToneMap, std::memory_order_release);

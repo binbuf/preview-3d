@@ -113,7 +113,7 @@ def sphere_grid(path: Path) -> Path:
             [(px * scale + x, py * scale + y, pz * scale + z) for px, py, pz in positions],
             normals, uvs, indices)
         primitives.append({'attributes': {'POSITION': base, 'NORMAL': base + 1,
-                                         'TEXCOORD_0': base + 2},
+                                          'TEXCOORD_0': base + 2},
                            'indices': base + 3, 'material': index})
     document = {
         'asset': {'version': '2.0', 'generator': 'preview-3d tests/render-quality/fixtures.py'},
@@ -164,7 +164,7 @@ def glass_reference(path: Path) -> Path:
         base = add_mesh([(px * scale + x, py * scale, pz * scale) for px, py, pz in positions],
                         normals, uvs, indices)
         primitives.append({'attributes': {'POSITION': base, 'NORMAL': base + 1,
-                                         'TEXCOORD_0': base + 2},
+                                          'TEXCOORD_0': base + 2},
                            'indices': base + 3, 'material': index})
     document = {
         'asset': {'version': '2.0', 'generator': 'preview-3d tests/render-quality/fixtures.py'},
@@ -790,6 +790,201 @@ def textured_lobes(path: Path) -> Path:
     return _glb(document, binary, path)
 
 
+def _quad_at(x, y, z, width=1.2, height=1.2, color=None):
+    left, right = x - width * 0.5, x + width * 0.5
+    bottom, top = y - height * 0.5, y + height * 0.5
+    positions = [(left, bottom, z), (right, bottom, z), (left, top, z), (right, top, z)]
+    normals = [(0.0, 0.0, -1.0)] * 4
+    uvs = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+    indices = [0, 2, 1, 1, 2, 3]
+    # T26 needs the complete-vertex textured pipeline (OIT, alpha cutout,
+    # emissive and diagnostic channels), not the compact legacy shader.
+    tangents = [(1.0, 0.0, 0.0, 1.0)] * 4
+    colors = [color if color is not None else (1.0, 1.0, 1.0, 1.0)] * 4
+    return positions, normals, uvs, indices, tangents, colors
+
+
+def layered_glass(path: Path, permuted: bool = False) -> Path:
+    """T26 layered transparency fixture.
+
+    Six isolated roles inside one scene: one primitive with two crossing
+    triangles whose index order is the regression control, a two-primitive
+    shared-material overlap, four nested front/back glass sheets, an alpha decal
+    over opaque paint, an alpha-cutout panel over paint, and emissive blended
+    geometry. The permuted twin keeps every world position identical and only
+    changes primitive/index/node order, so an order-independent path must render
+    the same image while a sorted path changes.
+    """
+    cutout_uri = _rgba_png_data_uri(16, 16, lambda x, y: (
+        40, 220, 235, 0 if 4 <= x <= 11 and 4 <= y <= 11 else 255))
+    materials = [
+        {'name': 'regression shared', 'alphaMode': 'BLEND', 'doubleSided': True,
+         'pbrMetallicRoughness': {'baseColorFactor': [1.0, 1.0, 1.0, 0.55],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.35}},
+        {'name': 'intersection shared', 'alphaMode': 'BLEND', 'doubleSided': True,
+         'pbrMetallicRoughness': {'baseColorFactor': [1.0, 1.0, 1.0, 0.5],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.3}},
+        {'name': 'nested amber', 'alphaMode': 'BLEND', 'doubleSided': True,
+         'pbrMetallicRoughness': {'baseColorFactor': [0.9, 0.25, 0.12, 0.4],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.08}},
+        {'name': 'nested green', 'alphaMode': 'BLEND', 'doubleSided': True,
+         'pbrMetallicRoughness': {'baseColorFactor': [0.12, 0.72, 0.25, 0.4],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.08}},
+        {'name': 'nested blue', 'alphaMode': 'BLEND', 'doubleSided': True,
+         'pbrMetallicRoughness': {'baseColorFactor': [0.12, 0.3, 0.92, 0.4],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.08}},
+        {'name': 'nested yellow', 'alphaMode': 'BLEND', 'doubleSided': True,
+         'pbrMetallicRoughness': {'baseColorFactor': [0.92, 0.8, 0.12, 0.4],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.08}},
+        {'name': 'paint opaque', 'doubleSided': True,
+         'pbrMetallicRoughness': {'baseColorFactor': [0.22, 0.23, 0.25, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.55}},
+        {'name': 'alpha decal', 'alphaMode': 'BLEND', 'doubleSided': True,
+         'pbrMetallicRoughness': {'baseColorFactor': [0.85, 0.1, 0.6, 0.3],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.7}},
+        {'name': 'alpha cutout', 'alphaMode': 'MASK', 'alphaCutoff': 0.5,
+         'doubleSided': True,
+         'pbrMetallicRoughness': {
+             'baseColorFactor': [1.0, 1.0, 1.0, 1.0],
+             'baseColorTexture': {'index': 0},
+             'metallicFactor': 0.0, 'roughnessFactor': 0.6}},
+        {'name': 'emissive blend', 'alphaMode': 'BLEND', 'doubleSided': True,
+         'emissiveFactor': [0.9, 0.18, 0.05],
+         'extensions': {'KHR_materials_emissive_strength': {'emissiveStrength': 4.5}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.12, 0.1, 0.08, 0.35],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.8}},
+        {'name': 'hidden glass', 'alphaMode': 'BLEND', 'doubleSided': True,
+         'pbrMetallicRoughness': {'baseColorFactor': [0.2, 0.4, 0.95, 0.5],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.1}},
+    ]
+    add_mesh, finish = _mesh_builder()
+    meshes = []
+    nodes = []
+
+    def add_quad(x, y, z, width, height, color=None):
+        positions, normals, uvs, indices, tangents, colors = _quad_at(
+            x, y, z, width=width, height=height, color=color)
+        return add_mesh(positions, normals, uvs, indices,
+                        tangents=tangents, colors=colors)
+
+    def attributes(base):
+        return {'POSITION': base, 'NORMAL': base + 1, 'TEXCOORD_0': base + 2,
+                'TANGENT': base + 4, 'COLOR_0': base + 5}
+
+    # 1. Shared-material regression: the same world quad twice with different
+    # vertex colours. Only primitive order changes in the permuted twin.
+    regression = []
+    for color in ((0.9, 0.1, 0.1, 1.0), (0.1, 0.9, 0.1, 1.0)):
+        base = add_quad(-2.0, 1.15, 0.0, width=1.5, height=1.4, color=color)
+        regression.append({'attributes': attributes(base),
+                           'indices': base + 3, 'material': 0})
+    if permuted:
+        regression.reverse()
+    meshes.append({'name': 'regression overlap', 'primitives': regression})
+    regression_mesh = len(meshes) - 1
+
+    # 2. Two crossing triangles in one primitive. The permuted twin reverses
+    # the triangle order inside the same draw.
+    left, right = 1.0, 3.0
+    bottom, top = 0.55, 1.75
+    positions = [
+        (left, bottom, 0.0), (right, bottom, 0.0), ((left + right) * 0.5, top, 0.0),
+        (left, top, 0.02), (right, top, 0.02), ((left + right) * 0.5, bottom, 0.02),
+    ]
+    normals = [(0.0, 0.0, -1.0)] * 6
+    uvs = [(0.0, 0.0), (1.0, 0.0), (0.5, 1.0)] * 2
+    colors = [(0.95, 0.5, 0.1, 1.0)] * 3 + [(0.1, 0.4, 0.95, 1.0)] * 3
+    tangents = [(1.0, 0.0, 0.0, 1.0)] * 6
+    indices = [0, 1, 2, 3, 4, 5]
+    if permuted:
+        indices = [3, 4, 5, 0, 1, 2]
+    base = add_mesh(positions, normals, uvs, indices, tangents=tangents, colors=colors)
+    meshes.append({'name': 'crossing triangles', 'primitives': [
+        {'attributes': attributes(base),
+         'indices': base + 3, 'material': 1}]})
+    crossing_mesh = len(meshes) - 1
+
+    # 3. Four nested front/back glass sheets, each its own mesh/node.
+    nested_layers = [(0.2, 2), (0.35, 3), (0.5, 4), (0.65, 5)]
+    nested_meshes = []
+    for z, material in nested_layers:
+        base = add_quad(0.0, 1.15, z, width=1.25, height=1.25)
+        meshes.append({'name': f'nested glass {z}', 'primitives': [
+            {'attributes': attributes(base),
+             'indices': base + 3, 'material': material}]})
+        nested_meshes.append(len(meshes) - 1)
+
+    # 4. Alpha decal over opaque paint, with hidden glass behind the paint.
+    paint_base = add_quad(-2.0, -1.15, 0.0, width=1.55, height=1.45)
+    meshes.append({'name': 'decal paint', 'primitives': [
+        {'attributes': attributes(paint_base),
+         'indices': paint_base + 3, 'material': 6}]})
+    paint_mesh = len(meshes) - 1
+    decal_base = add_quad(-2.0, -1.15, 0.12, width=0.95, height=0.9)
+    meshes.append({'name': 'alpha decal', 'primitives': [
+        {'attributes': attributes(decal_base),
+         'indices': decal_base + 3, 'material': 7}]})
+    decal_mesh = len(meshes) - 1
+    hidden_base = add_quad(-2.0, -1.15, -0.12, width=1.35, height=1.25)
+    meshes.append({'name': 'hidden glass behind paint', 'primitives': [
+        {'attributes': attributes(hidden_base),
+         'indices': hidden_base + 3, 'material': 10}]})
+    hidden_mesh = len(meshes) - 1
+
+    # 5. Alpha cutout over opaque paint.
+    cut_paint = add_quad(0.0, -1.15, 0.0, width=1.55, height=1.45)
+    meshes.append({'name': 'cutout paint', 'primitives': [
+        {'attributes': attributes(cut_paint),
+         'indices': cut_paint + 3, 'material': 6}]})
+    cut_paint_mesh = len(meshes) - 1
+    cut_base = add_quad(0.0, -1.15, 0.12, width=1.2, height=1.15)
+    meshes.append({'name': 'alpha cutout', 'primitives': [
+        {'attributes': attributes(cut_base),
+         'indices': cut_base + 3, 'material': 8}]})
+    cut_mesh = len(meshes) - 1
+
+    # 6. Emissive blended geometry over paint.
+    emit_paint = add_quad(2.0, -1.15, 0.0, width=1.55, height=1.45)
+    meshes.append({'name': 'emissive paint', 'primitives': [
+        {'attributes': attributes(emit_paint),
+         'indices': emit_paint + 3, 'material': 6}]})
+    emit_paint_mesh = len(meshes) - 1
+    emit_base = add_quad(2.0, -1.15, 0.12, width=1.1, height=1.0)
+    meshes.append({'name': 'emissive blend', 'primitives': [
+        {'attributes': attributes(emit_base),
+         'indices': emit_base + 3, 'material': 9}]})
+    emit_mesh = len(meshes) - 1
+
+    nodes.extend([
+        {'mesh': regression_mesh, 'name': 'regression overlap'},
+        {'mesh': crossing_mesh, 'name': 'crossing triangles'},
+        {'mesh': paint_mesh, 'name': 'decal paint'},
+        {'mesh': decal_mesh, 'name': 'alpha decal'},
+        {'mesh': hidden_mesh, 'name': 'hidden glass'},
+        {'mesh': cut_paint_mesh, 'name': 'cutout paint'},
+        {'mesh': cut_mesh, 'name': 'alpha cutout'},
+        {'mesh': emit_paint_mesh, 'name': 'emissive paint'},
+        {'mesh': emit_mesh, 'name': 'emissive blend'},
+    ])
+    for index in nested_meshes:
+        nodes.append({'mesh': index, 'name': f'nested glass {index}'})
+    if permuted:
+        nodes.reverse()
+
+    document = {
+        'asset': {'version': '2.0',
+                  'generator': 'preview-3d tests/render-quality/fixtures.py'},
+        'scene': 0, 'scenes': [{'nodes': list(range(len(nodes)))}],
+        'nodes': nodes, 'meshes': meshes, 'materials': materials,
+        'extensionsUsed': ['KHR_materials_emissive_strength'],
+        'samplers': [{'wrapS': 10497, 'wrapT': 10497}],
+        'images': [{'uri': cutout_uri}],
+        'textures': [{'source': 0, 'sampler': 0}],
+    }
+    document, binary = finish(document)
+    return _glb(document, binary, path)
+
+
 FIXTURES = {
     'sphere-grid': (sphere_grid, 'sphere-grid.glb'),
     'glass-reference': (glass_reference, 'glass-reference.glb'),
@@ -799,6 +994,9 @@ FIXTURES = {
     'textured-lobes': (textured_lobes, 'textured-lobes.glb'),
     'texture-reuse': (texture_reuse, 'texture-reuse.glb'),
     'stl-box': (stl_box, 'stl-box.stl'),
+    'layered-glass': (layered_glass, 'layered-glass.glb'),
+    'layered-glass-permuted': (
+        lambda path: layered_glass(path, permuted=True), 'layered-glass-permuted.glb'),
 }
 
 # T23: unique decoded textures the viewer must report for a generated fixture.
@@ -932,6 +1130,33 @@ EXPECTED_MATERIALS = {
 # diagnostic channels that must vary across the quad's U axis; `constant`
 # records the values a factor-only or unsupported-slot probe must keep. Slot
 # numbers are the fixed material slots from MaterialPayload.h.
+# T26 layered transparency roles. `baseColor` is the authored factor used by
+# the material-record locator; `alphaMode` is 0 OPAQUE, 1 MASK, 2 BLEND.
+EXPECTED_LAYERED_GLASS = [
+    {'name': 'regression shared', 'baseColor': [1.0, 1.0, 1.0, 0.55],
+     'alphaMode': 2, 'role': 'primitive-order regression'},
+    {'name': 'intersection shared', 'baseColor': [1.0, 1.0, 1.0, 0.5],
+     'alphaMode': 2, 'role': 'intersecting triangles in one primitive'},
+    {'name': 'nested amber', 'baseColor': [0.9, 0.25, 0.12, 0.4],
+     'alphaMode': 2, 'role': 'nested front/back glass'},
+    {'name': 'nested green', 'baseColor': [0.12, 0.72, 0.25, 0.4],
+     'alphaMode': 2, 'role': 'nested front/back glass'},
+    {'name': 'nested blue', 'baseColor': [0.12, 0.3, 0.92, 0.4],
+     'alphaMode': 2, 'role': 'nested front/back glass'},
+    {'name': 'nested yellow', 'baseColor': [0.92, 0.8, 0.12, 0.4],
+     'alphaMode': 2, 'role': 'nested front/back glass'},
+    {'name': 'paint opaque', 'baseColor': [0.22, 0.23, 0.25, 1.0],
+     'alphaMode': 0, 'role': 'opaque paint'},
+    {'name': 'alpha decal', 'baseColor': [0.85, 0.1, 0.6, 0.3],
+     'alphaMode': 2, 'role': 'low-coverage decal over paint'},
+    {'name': 'alpha cutout', 'baseColor': [1.0, 1.0, 1.0, 1.0],
+     'alphaMode': 1, 'role': 'alpha cutout over paint'},
+    {'name': 'emissive blend', 'baseColor': [0.12, 0.1, 0.08, 0.35],
+     'alphaMode': 2, 'role': 'emissive blended geometry'},
+    {'name': 'hidden glass', 'baseColor': [0.2, 0.4, 0.95, 0.5],
+     'alphaMode': 2, 'role': 'transparent behind opaque'},
+]
+
 EXPECTED_TEXTURED_LOBES = [
     {'name': 'no extension baseline', 'baseColor': [0.72, 0.72, 0.72, 1.0],
      'bucket': 0, 'alphaMode': 0, 'extensionSlots': [],
@@ -1023,6 +1248,8 @@ def generate(output: Path):
                     'textured-lobes': [item['name'] for item in EXPECTED_TEXTURED_LOBES],
                     'texture-reuse': ['one reused sRGB color map', 'one linear data map'],
                     'stl-box': ['hard-edged STEP/STL-like surface', 'ground contact'],
+                    'layered-glass': [item['name'] for item in EXPECTED_LAYERED_GLASS],
+                    'layered-glass-permuted': [item['name'] for item in EXPECTED_LAYERED_GLASS],
                 }[name],
             },
         }
@@ -1030,5 +1257,7 @@ def generate(output: Path):
             generated[name]['expectedMaterials'] = _sanitize(EXPECTED_MATERIALS[name])
         if name == 'textured-lobes':
             generated[name]['expectedLobes'] = _sanitize(EXPECTED_TEXTURED_LOBES)
+        if name in ('layered-glass', 'layered-glass-permuted'):
+            generated[name]['expectedLayeredGlass'] = _sanitize(EXPECTED_LAYERED_GLASS)
     write_json(output / 'fixtures.json', {'schema': 1, 'fixtures': generated})
     return generated

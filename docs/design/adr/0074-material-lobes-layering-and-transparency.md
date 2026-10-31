@@ -42,3 +42,6 @@ to composite after opaque geometry but before the HDR tone map.
 - A future anisotropy/iridescence/volume task can use the reserved words only
   through another version bump, preserving the "zero means not authored"
   contract.
+- T26 supersedes the OIT deferral: the product path is now bounded weighted
+  blended OIT with a recorded sorted fallback (ADR-0084). The sorted path is no
+  longer described as correct for intersecting transparent surfaces.

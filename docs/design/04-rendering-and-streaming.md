@@ -58,7 +58,8 @@ The MVP uses a forward, rasterized PBR-lite pipeline:
 - one product-owned procedural studio environment baked once into a world-stable cubemap (solid-angle SH9 diffuse irradiance, a GGX-prefiltered specular mip chain and a split-sum DFG LUT) with a camera-relative key/fill light;
 - base color, metallic, roughness, emissive, normal map and UV transform when present, vertex color, unlit mode, alpha mask, double-sided state;
 - bounded point primitives rendered as depth-tested camera-scaled round splats with source color or neutral shading;
-- opaque and masked geometry before sorted transparent draw groups;
+- opaque and masked geometry before one bounded weighted-blended-OIT
+  transparent pass (sorted straight alpha only as a recorded fallback);
 - back-face culling unless a material is double-sided;
 - a linear `R16G16B16A16_FLOAT` HDR scene target plus the reversed-Z depth
   buffer and the R32_UINT pick target; object shaders write linear light and
@@ -263,20 +264,43 @@ channels 24-30 expose the post-map effective inputs (`clearcoat/roughness`,
 `coatNormal`, `sheenRoughness`) so the T25 lane can verify variation across each
 probe without inferring it from lighting.
 
-Transparency stays on the existing straight-alpha path: opaque draws first,
-alpha-blend draws are stable-sorted back-to-front by view depth, the HDR scene
-target keeps linear color, and T15's resolve composites the background,
-exposure and neutral tone curve afterwards. This ordering avoids the old
-dark-halo failure where tone mapping happened before blending. Weighted blended
-OIT and depth peeling are **deferred**: the sorted path is correct for ordinary
-layered glTF glass, but intersecting transparent surfaces and very dense
-transmission scenes remain order-dependent. The transmission approximation
-remains Fresnel-weighted alpha with suppressed transmitted diffuse; there is
-no refraction pass. T24 keeps the interim convention that the blend alpha
-carries the interface Fresnel and the transmissive environment reflection is
-not Fresnel-weighted a second time. Diagnostic channel 22 exposes
+Transparency uses **bounded weighted blended OIT** (ADR-0084). Opaque and
+masked geometry render first with depth writes and the integer pick target.
+Transparent triangles then render in one pass into two fixed `RGBA16F` targets:
+premultiplied weighted colour and a revealage product. The pass tests against
+the opaque depth and never writes depth, so hidden geometry cannot contribute;
+intersecting triangles inside one primitive, nested front/back glass, decals
+and shuffled draw/primitive order all accumulate commutatively. The full-screen
+resolve samples both targets and composites the transparent average and
+coverage in **linear HDR before exposure and tone mapping**, then applies the
+display-space background. Mesh-centre depth is no longer the transparency
+authority (transparent draws use a stable material/chunk order; the sorted path
+is retained only as a recorded fallback).
+
+Resource work is bounded by the viewport, not by a peel count: two targets, one
+extra geometry pass, no per-pixel linked list and no per-layer allocation. The
+validated stable overlap range is eight layers; beyond it the result is still
+order-independent but is a weighted average, not an exact front-to-back stack.
+The two targets are accounted in the existing GPU budget and participate in
+resize, cancellation, device-loss recovery and a low-memory fallback. If the
+targets cannot be allocated the sorted straight-alpha path is used and
+diagnostics fields 243/244 report the fallback; it never silently replaces the
+high-quality path. Depth peeling is not used.
+
+Coverage, interface reflection and transmission remain separate material
+inputs. The blend alpha still carries coverage (and the interim reflection term
+for transmissive materials), while transmission stays its own factor/map; there
+is still no refraction pass. Diagnostic channel 22 exposes
 `(alpha, glassReflectance, transmission)` so this is visible; the physical
-transmitted-scene path is T27.
+transmitted-scene path is T27. OIT makes the composite stable, not physically
+refractive.
+
+Selection is a separate nearest-visible pass after the colour passes. It writes
+only the `R32_UINT` pick target and depth, reuses the material shader's alpha
+cutout discard, and never averages ids. A low-coverage decal or cutout is
+selectable; geometry behind an opaque surface and back nested glass sheets are
+not. Base-colour texture alpha is preserved for MASK/BLEND materials so
+textured cutouts discard correctly.
 
 ### Material and light diagnostics
 

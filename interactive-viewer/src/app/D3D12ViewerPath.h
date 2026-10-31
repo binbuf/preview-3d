@@ -45,6 +45,10 @@ struct D3D12ViewerPath
     // than assuming the UI state reached the GPU.
     float lastResolveExposure = 1.0f;
     uint32_t lastResolveToneMap = 0;
+    bool lastResolveUsedOit = false;
+    // Debug-only OIT resolve inspection: 0 product resolve, 1 accumulation,
+    // 2 revealage, 3 opaque scene. It never changes the material pass.
+    uint32_t oitResolveDiagnostic = 0;
     D3D12Device device;
     D3D12Device::CreateOptions deviceOptions;
     D3D12CommandQueue directQueue;
@@ -86,6 +90,50 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sceneColorRtvHeap;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sceneColorSrvHeap;
     uint64_t sceneColorAllocationBytes = 0;
+
+    // T26 bounded order-independent transparency. Weighted blended OIT needs
+    // exactly two full-screen targets: premultiplied weighted colour plus a
+    // revealage product. There is no per-pixel linked list and no peel-count
+    // allocation, so memory is fixed by the viewport and work is one extra
+    // transparent geometry pass. The sorted path is retained only as a
+    // recorded fallback when these targets cannot be allocated.
+    struct OitResources
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> accumulation;
+        Microsoft::WRL::ComPtr<ID3D12Resource> revealage;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;
+        uint64_t accumulationAllocationBytes = 0;
+        uint64_t revealageAllocationBytes = 0;
+        bool available = false;
+        uint32_t fallbackReason = 0; // OitFallback* below
+    };
+    OitResources oit;
+    // The validated supported overlap range. Weighted OIT remains stable past
+    // it but resolves to a weighted average rather than an exact front-to-back
+    // composite; see docs/design/04-rendering-and-streaming.md.
+    static constexpr uint32_t kOitSupportedLayerLimit = 8;
+    enum OitFallbackReason : uint32_t
+    {
+        OitFallbackNone = 0,
+        OitFallbackAllocationFailed = 1,
+        OitFallbackForced = 2,
+        OitFallbackUnsupportedExtent = 3,
+        OitFallbackDeviceLoss = 4,
+        OitFallbackDiagnostic = 5,
+    };
+    // Actual algorithm used by the last submitted frame: 0 sorted, 1 WBOIT.
+    uint32_t lastTransparencyAlgorithm = 0;
+    uint32_t lastTransparencyFallbackReason = OitFallbackAllocationFailed;
+    uint32_t lastTransparentDrawCount = 0;
+    uint64_t oitTargetBytes = 0;
+    bool oitForceFallback = false;                 // Debug explicit fallback
+    bool oitAllocationForcedFailure = false;       // Debug low-memory simulation
+    bool reverseTransparentDrawOrderForTesting = false;
+    bool OitUsable() const noexcept { return oit.available && !oitForceFallback && debugChannel == 0; }
+    static float OitWeightForDepth(float viewDepth, float sceneScale) noexcept;
+    static float OitResolveCoverage(float revealage) noexcept;
+    static float OitResolveAlpha(float accumulatedAlpha) noexcept;
+    static uint64_t OitTargetBytesForExtent(uint32_t width, uint32_t height) noexcept;
     // T21a display-space backdrop. It is cleared to the selected display color
     // and receives the local ground highlight/contact shadow; the resolve pass
     // composites the tone-mapped scene over it. This is what keeps #1C1C1E
@@ -148,6 +196,15 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendMirroredPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendDoubleSidedPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedWireframePipelineState;
+    // T26 weighted blended OIT and nearest-visible transparent pick variants.
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedOitPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedOitMirroredPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedOitDoubleSidedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPickPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPickMirroredPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPickDoubleSidedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> oitPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> pickPipelineState;
     // kFrameCount slots of 512 bytes (D3D12's CBV alignment, sized to hold the
     // view-projection, eye/viewport/lighting vectors, the world-from-camera
     // quaternion, the environment constants and the 9 SH coefficients), bound
@@ -461,6 +518,9 @@ private:
     bool CreateDepthBuffer(UINT width, UINT height, std::wstring& error);
     bool CreatePickTarget(UINT width, UINT height, std::wstring& error);
     bool CreateSceneColorTarget(UINT width, UINT height, std::wstring& error);
+    // Creates the two bounded OIT targets. A failure is a recorded sorted
+    // fallback, not a startup failure: the viewport must still draw.
+    bool CreateOitTargets(UINT width, UINT height);
     bool CreateResolvePipeline(std::wstring& error);
     // Transitions the HDR scene target to a shader resource, binds the
     // full-screen resolve pipeline against `backBufferRtv`, then returns the

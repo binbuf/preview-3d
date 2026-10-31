@@ -397,6 +397,27 @@ public:
     uint32_t DebugMaterialCount() const;
     bool DebugMaterial(uint32_t index, DebugMaterialRecord& out) const;
 
+    // --- T26 transparency diagnostics (Debug test control only) ---
+    // Effective algorithm: 0 sorted fallback, 1 bounded weighted blended OIT.
+    uint32_t TransparencyAlgorithm() const noexcept { return transparencyAlgorithm_.load(); }
+    uint32_t TransparencyFallbackReason() const noexcept { return transparencyFallbackReason_.load(); }
+    uint32_t TransparencyLayerLimit() const noexcept {
+        return D3D12ViewerPath::kOitSupportedLayerLimit;
+    }
+    uint32_t TransparentDrawCount() const noexcept { return transparentDrawCount_.load(); }
+    uint64_t OitTargetBytes() const noexcept { return oitTargetBytes_.load(); }
+    bool OitForcedFallback() const noexcept { return oitForceFallback_.load(); }
+    void SetOitForcedFallback(bool enabled) { oitForceFallback_.store(enabled); Invalidate(); }
+    bool TransparentOrderPermutation() const noexcept { return transparentOrderPermutation_.load(); }
+    void SetTransparentOrderPermutation(bool enabled) {
+        transparentOrderPermutation_.store(enabled); Invalidate();
+    }
+    uint32_t LastPickedId() const noexcept { return lastPickedId_.load(); }
+    uint64_t PickCompletions() const noexcept { return pickCompletions_.load(); }
+    bool LastResolveUsedOit() const noexcept { return lastResolveUsedOit_.load(); }
+    void SetOitResolveDiagnostic(uint32_t mode) { oitResolveDiagnostic_.store(mode); Invalidate(); }
+    uint32_t OitResolveDiagnostic() const noexcept { return oitResolveDiagnostic_.load(); }
+
 private:
     void ThreadMain(HWND window);
     bool InitializeOnThread(HWND window, std::wstring& error);
@@ -452,6 +473,13 @@ private:
     std::atomic<uint64_t> debugErrors_{0}, debugAvailable_{0};
     std::atomic<uint64_t> textureExtent_{0},textureCount_{0},textureMips_{0};
     std::atomic<uint64_t> pickCompletions_{0}, pickHits_{0};
+    std::atomic<uint32_t> lastPickedId_{0};
+    std::atomic<uint32_t> transparencyAlgorithm_{0}, transparencyFallbackReason_{0};
+    std::atomic<uint32_t> transparentDrawCount_{0};
+    std::atomic<uint64_t> oitTargetBytes_{0};
+    std::atomic<bool> oitForceFallback_{false}, transparentOrderPermutation_{false};
+    std::atomic<bool> lastResolveUsedOit_{false};
+    std::atomic<uint32_t> oitResolveDiagnostic_{0};
     std::uint64_t modelGeneration_ = 0; // render-thread-owned
 
     // Guards `camera_`, `flightInput_`, `viewportAspect_` and `frameOverlay_`, all

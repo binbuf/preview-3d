@@ -159,6 +159,9 @@
     <!-- T18 protocol-v12 material lobes: layout, mapping defaults, F0 and the
          layered shader source contract. -->
     <ClCompile Include="MaterialLobesTests.cpp" />
+    <!-- T26 bounded weighted blended OIT: order invariance, coverage math,
+         target budgeting and the shader-source/compile contract. -->
+    <ClCompile Include="LayeredTransparencyTests.cpp" />
     <ClCompile Include="PresentationTests.cpp" />
     <!-- T14 procedural Studio environment baker, SH irradiance and neutral
          tone curve, compiled from the shipped viewer source. -->

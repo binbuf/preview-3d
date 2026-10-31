@@ -46,6 +46,7 @@ import corpus
 import diagnostics
 import env
 import fixtures
+import layered_transparency
 import material_semantics
 import selftest
 import texture_budget
@@ -593,7 +594,7 @@ def main():
                 f'material-semantics: {failure}'
                 for failure in semantic_report['failures'])
         report['causeReport'] = semantic_report.get('reportPath')
-    if args.task in ('T24', 'T25') and not args.capture_only:
+    if args.task in ('T24', 'T25', 'T26') and not args.capture_only:
         unit_build = build_unit_tests(args.configuration, output, enabled=not args.no_build)
         report['unitTestBuild'] = unit_build
         if unit_build.get('command'):
@@ -603,7 +604,7 @@ def main():
                 f'unit test build failed (see {unit_build.get("log")})')
         # The shared MaterialDielectricF0/F90 helper and the T25 lobe-map import
         # contract are exercised by the importer suite, so build it for the
-        # full lane.
+        # full lane. T26 also runs the shared validator/hostile import lanes.
         if not args.fast:
             import_build = build_import_tests(args.configuration, output,
                                               enabled=not args.no_build)
@@ -644,6 +645,17 @@ def main():
             report['failures'].extend(
                 f'textured-lobes: {failure}' for failure in lobe_report['failures'])
         report['causeReport'] = lobe_report.get('reportPath')
+    if args.task == 'T26' and not args.capture_only:
+        # Serial unit/import/wire/hostile checks plus the generated
+        # layered-glass order-permutation, depth/picking and lifecycle lane.
+        transparency_report = layered_transparency.run(
+            ROOT, output, args.configuration, fast=args.fast)
+        report['layeredTransparency'] = transparency_report
+        if transparency_report.get('failures'):
+            report['failures'].extend(
+                f'layered-transparency: {failure}'
+                for failure in transparency_report['failures'])
+        report['causeReport'] = transparency_report.get('reportPath')
 
     required_lanes = [name for name, lane in profile['lanes'].items() if lane.get('required')]
     selected_lanes = {}

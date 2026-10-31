@@ -84,7 +84,7 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 
 ## Phase 9 — Layered glass and transmission
 
-- [ ] T26 — Bounded order-independent transparency → [../tasks/0.7.0/T26-layered-transparency.md](../tasks/0.7.0/T26-layered-transparency.md)
+- [x] T26 — Bounded order-independent transparency → [../tasks/0.7.0/T26-layered-transparency.md](../tasks/0.7.0/T26-layered-transparency.md)
 - [ ] T27 — Scene-based transmission and tinted or rough glass → [../tasks/0.7.0/T27-scene-transmission.md](../tasks/0.7.0/T27-scene-transmission.md)
 
 ## Phase 10 — Studio, Clay and Directional quality
@@ -105,11 +105,11 @@ T06 depends only on T02 and is sequenced at the start of this phase so task ids 
 - [ ] T35 — Independent visual release gate and final 0.7.0 evidence → [../tasks/0.7.0/T35-render-quality-release-gate.md](../tasks/0.7.0/T35-render-quality-release-gate.md)
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-10-31T02:18:18Z · 27/37 done
+**Pipeline status** — updated 2026-10-31T05:01:17Z · 28/37 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T21a, T22, T23, T24, T25
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08, T09, T10, T10b, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T21a, T22, T23, T24, T25, T26
 - Blocked: none
 - Failed: none
-- Remaining: T26, T27, T28, T29, T30, T31, T32, T33, T34, T35
-- Last finished: T25 — done · Texture-driven clearcoat/specular/sheen/transmission maps landed on wire v14 with bounded GPU layout, import/validator coverage, real GPU map-variation evidence and device-reset rebind; full T25 gate passes 140/140.
+- Remaining: T27, T28, T29, T30, T31, T32, T33, T34, T35
+- Last finished: T26 — done · Bounded weighted blended OIT, nearest-visible transparent picking, cutout alpha fix, Car/Camera checks, permutation regression evidence and full T26 gate all landed and pass.
 <!-- /symphony:status -->

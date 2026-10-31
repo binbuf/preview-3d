@@ -191,8 +191,9 @@ Protocol v14 (below) adds texture-driven clearcoat/sheen/specular/transmission
 maps to the fixed record. `KHR_materials_iridescence`, `anisotropy`, `volume`,
 `dispersion` and `diffuse_transmission` remain parsed-but-unrendered: a required
 use yields a specific `Degraded` compatibility record rather than silently
-disappearing. Anisotropy/iridescence/volume rendering, refraction and OIT are
-deferred.
+disappearing. Anisotropy/iridescence/volume rendering and refraction remain
+deferred; transparent composition uses bounded weighted blended OIT with a
+recorded sorted fallback (ADR-0084), not mesh-centre sorting.
 
 ### Protocol v13 authored texture inputs
 

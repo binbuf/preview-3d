@@ -4497,7 +4497,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Shipping builds cannot be driven by local WM_APP messages.
         return 0;
 #else
-        if (!app->appSmoke || wParam > 242) return 0;
+        if (!app->appSmoke || wParam > 258) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -4782,6 +4782,70 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 return 0;
             }
             }
+        }
+        // T26 transparency evidence. 243/244 name the algorithm and fallback
+        // actually used by the last submitted frame; 245 is the validated
+        // supported layer range; 246/247 are the transparent draw count and
+        // the bounded OIT target bytes; 248/249 force the fallback and reverse
+        // the transparent draw order for the permuted-order regression; 250 is
+        // the high half of the target byte count; 251 is the deterministic
+        // nearest-visible pick id (never an averaged value).
+        if (wParam == 243) return static_cast<LRESULT>(app->renderThread.TransparencyAlgorithm());
+        if (wParam == 244) return static_cast<LRESULT>(app->renderThread.TransparencyFallbackReason());
+        if (wParam == 245) return static_cast<LRESULT>(app->renderThread.TransparencyLayerLimit());
+        if (wParam == 246) return static_cast<LRESULT>(app->renderThread.TransparentDrawCount());
+        if (wParam == 247) return static_cast<LRESULT>(app->renderThread.OitTargetBytes() & 0xFFFFFFFFu);
+        if (wParam == 248) {
+            if (lParam != -1) app->renderThread.SetOitForcedFallback(lParam != 0);
+            InvalidateRect(window, nullptr, FALSE);
+            return app->renderThread.OitForcedFallback() ? 1 : 0;
+        }
+        if (wParam == 249) {
+            if (lParam != -1) app->renderThread.SetTransparentOrderPermutation(lParam != 0);
+            InvalidateRect(window, nullptr, FALSE);
+            return app->renderThread.TransparentOrderPermutation() ? 1 : 0;
+        }
+        if (wParam == 250) return static_cast<LRESULT>(app->renderThread.OitTargetBytes() >> 32);
+        if (wParam == 251) return static_cast<LRESULT>(app->renderThread.LastPickedId());
+        if (wParam == 252) return app->renderThread.LastResolveUsedOit() ? 1 : 0;
+        if (wParam == 253) {
+            if (lParam >= 0 && lParam <= 4) app->renderThread.SetOitResolveDiagnostic(
+                static_cast<uint32_t>(lParam));
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(app->renderThread.OitResolveDiagnostic());
+        }
+        if (wParam == 254) return static_cast<LRESULT>(app->renderThread.PickCompletions());
+        if (wParam == 256) {
+            const RECT viewport = ViewportRect(*app);
+            return MAKELPARAM(viewport.left, viewport.top);
+        }
+        if (wParam == 257) {
+            const RECT viewport = ViewportRect(*app);
+            return MAKELPARAM(viewport.right, viewport.bottom);
+        }
+        if (wParam == 258) {
+            // T26: absolute physical client pick, used when the capture image
+            // is a DPI-downscaled viewport crop.
+            if (!app->loadedModel) return 0;
+            const int px = int(LOWORD(lParam));
+            const int py = int(HIWORD(lParam));
+            app->renderThread.RequestPick(px, py, app->loadedModel->source.generationId);
+            return 1;
+        }
+        if (wParam == 255) {
+            // T26: request a pick from viewport-normalized coordinates. The
+            // caller's image crop is the 3D viewport, so this avoids any
+            // window/DPI client-coordinate ambiguity in the evidence lane.
+            if (!app->loadedModel) return 0;
+            const RECT viewport = ViewportRect(*app);
+            const int nx = int(LOWORD(lParam));
+            const int ny = int(HIWORD(lParam));
+            const int width = std::max(1, int(viewport.right - viewport.left));
+            const int height = std::max(1, int(viewport.bottom - viewport.top));
+            const int px = viewport.left + (nx * (width - 1)) / 65535;
+            const int py = viewport.top + (ny * (height - 1)) / 65535;
+            app->renderThread.RequestPick(px, py, app->loadedModel->source.generationId);
+            return 1;
         }
         // T24: the exposure and tone-map mode the last resolve pass actually
         // used. This proves the CPU tone-map reference is compared with the
