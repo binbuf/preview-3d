@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "task": "T25",
+  "date": "2026-10-30",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug HDR readback",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T25",
+  "imagesInspected": [
+    "TestResults/render-quality/T25/images/generated-textured-lobes-default.png",
+    "TestResults/render-quality/T25/images/generated-textured-lobes-studio-front.png",
+    "TestResults/render-quality/T25/textured-lobes-studio.png",
+    "TestResults/render-quality/T25/textured-lobes-after-device-reset.png",
+    "TestResults/render-quality/T25/channels/channel-12-clearcoat.png",
+    "TestResults/render-quality/T25/channels/channel-24-lobe-clearcoat.png",
+    "TestResults/render-quality/T25/channels/channel-25-lobe-specular-factor.png",
+    "TestResults/render-quality/T25/channels/channel-26-lobe-specular-color.png",
+    "TestResults/render-quality/T25/channels/channel-27-lobe-sheen-color.png",
+    "TestResults/render-quality/T25/channels/channel-28-lobe-transmission.png",
+    "TestResults/render-quality/T25/channels/channel-29-coat-normal.png",
+    "TestResults/render-quality/T25/channels/channel-30-lobe-sheen-roughness.png"
+  ],
+  "observations": [
+    "Nine camera-facing quads isolate the authored inputs: a plain baseline, clearcoat factor/roughness/normal maps, specular factor+color maps, sheen color+roughness maps, a transmission map, a UV1 clearcoat map and a KHR_texture_transform clearcoat map.",
+    "Every mapped probe changes its effective-lobe diagnostic value between the left and right sample of the same quad: clearcoat R gradient, clearcoat roughness G gradient, coat-normal perturbation, specular A gradient, specular-color RGB gradient, sheen color RGB gradient, sheen roughness A gradient and transmission R gradient.",
+    "The plain quad keeps clearcoat 0, sheen 0, transmission 0 and specular F90 1 at both samples; the UV1 clearcoat quad stays at its 0.6 factor because the unsupported set is unbound rather than aliased to UV0.",
+    "The specular factor and specular color maps share one authored PNG but report distinct image chunk ids with linear and sRGB color spaces; the left/right specular F0 and F90 values follow the authored gradients.",
+    "The transformed clearcoat quad reports offset [0.5,0] and scale [2,1] and its channel-12 gradient is reversed by the transform.",
+    "The channel images show the expected separation: clearcoat channels light only the coated probes, the specular-color channel lights only the specular probe, sheen/transmission/coat-normal channels stay on their own probes, and the baseline stays black.",
+    "After one injected device removal the viewer rebuilds the device from the retained source and all nine draw records return with the authored extension maps bound; the post-reset capture is not fallback grey.",
+    "The generated fixture opens with the expected first-open framing in Studio; no new clipping or washout is visible."
+  ],
+  "defects": [
+    {
+      "id": "transmission-interim-alpha",
+      "label": "limitation",
+      "where": "channels/channel-28-lobe-transmission.png; transmission-map probe",
+      "description": "Transmission still uses the alpha-carried interface Fresnel and no transmitted-scene sampling. Channel 28 verifies the per-texel transmission factor itself; T26/T27 own the physical path.",
+      "assignedTo": "T26/T27"
+    },
+    {
+      "id": "volume-anisotropy-iridescence-dispersion",
+      "label": "limitation",
+      "where": "textured-lobes fixture",
+      "description": "KHR_materials_volume, anisotropy, iridescence and dispersion remain parsed-but-unrendered with specific compatibility records. T25 claims only clearcoat/specular/sheen/transmission map paths.",
+      "assignedTo": "T25"
+    },
+    {
+      "id": "uv1-maps-unbound",
+      "label": "limitation",
+      "where": "channels/channel-12-clearcoat.png uv1 probe",
+      "description": "The normalized vertex layouts still carry only TEXCOORD_0, so an authored UV1 map stays unbound with kTextureFeatureUnsupportedUvSet. It is not sampled against UV0.",
+      "assignedTo": "future vertex-layout work"
+    }
+  ],
+  "positives": [
+    "Wire v14 remains a fixed closed record: thirteen material slots, sixteen dependency ids, no variable-length per-material binding list.",
+    "The textured root signature is 44 of 64 DWORDs; the per-material CBV stays a bounded 1024-byte stride and no per-slot data became root constants.",
+    "Unbound slots bind neutral descriptors and the map mask skips them; an authored map is never reported as resident when only a fallback is bound.",
+    "Import, wire-validator, hostile-worker, texture-budget, coarse/detail, texture-decode and cache lanes all pass in the T25 serial set.",
+    "Release still rejects every test-control message; the new fields/channels remain inside the Debug --app-smoke guard."
+  ],
+  "acceptance": {
+    "diagnosticChannelsReviewed": true,
+    "numericReadbackVerified": true,
+    "gpuMapVariationVerified": true,
+    "wireAndHostileSectionsVerified": true,
+    "deviceResetRebindVerified": true,
+    "acceptedReferencesPromotedBy": "not applicable for T25 (observed evidence only)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "Reviewed the T25-dev run generated by the same profile/binary; the final T25 run writes the identical paths listed above. No baseline or reference was promoted."
+  }
+}

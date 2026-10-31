@@ -402,14 +402,14 @@ TEST_CASE("T22 material accepts an independent occlusion image in slot 4",
     const auto result = import_broker::ValidateAndCopySection(BuildSection(chunks, 1), 1, 8);
     CHECK(result.ok);
 
-    // Slots beyond the five semantic slots are rejected rather than silently
-    // treated as another image.
+    // Slots beyond the thirteen semantic slots are rejected rather than
+    // silently treated as another image.
     auto invalid = ValidTriple();
     ChunkSpec extra = invalid[2];
     extra.descriptor.chunkId = 4;
     extra.descriptor.dependencyCount = 0;
     invalid.push_back(extra);
-    invalid[1].descriptor.dependencyIds[5] = 4;
+    invalid[1].descriptor.dependencyIds[13] = 4;
     invalid[1].descriptor.dependencyCount = 2;
     const auto rejected = import_broker::ValidateAndCopySection(
         BuildSection(invalid, 1), 1, 8);

@@ -5,15 +5,18 @@
 // .docs/design/03-file-formats-and-ingestion.md (base color, metallic,
 // roughness, emissive, uv transform, alpha, double-sided/unlit) plus the
 // protocol-v12 PBR lobes (emissive strength, clearcoat, sheen, specular/IOR and
-// occlusion strength) and the protocol-v13 authored texture inputs
+// occlusion strength), the protocol-v13 authored texture inputs
 // (normalTexture.scale, per-texture sampler/UV-set/transform and an independent
-// occlusion slot). The carrying ChunkDescriptor's first five dependency slots
-// identify the base-color, metallic/roughness, normal, emissive and independent
-// occlusion images respectively.
+// occlusion slot) and the protocol-v14 extension-lobe maps (clearcoat factor/
+// roughness/normal, specular factor/color, sheen color/roughness and
+// transmission factor). The carrying ChunkDescriptor's dependency slots follow
+// kMaterialSlotIndex* order: base-color, metallic/roughness, normal, emissive,
+// occlusion, then the eight extension maps.
 //
-// Protocol v13 note: this record grew from 140 to 244 bytes. It is a wire
-// change, not an in-place reinterpretation of the former reserved words, so
-// every producer/consumer and cache identity moves together with
+// Protocol v13 note: this record grew from 140 to 244 bytes. Protocol v14 grows
+// it again to 440 bytes for the eight extension map slots. Both are wire
+// changes, not in-place reinterpretations of former reserved words, so every
+// producer/consumer and cache identity moves together with
 // kCurrentProtocolVersion.
 
 #include <algorithm>
@@ -70,19 +73,31 @@ constexpr uint32_t kMaterialReservedWordCount = 4;
 inline constexpr float kDefaultMaterialIor = 1.5f;
 inline constexpr float kDefaultDielectricF0 = 0.04f;
 
-// T22 per-texture addressing/UV-set metadata. The five slots are in the same
-// fixed order as the material chunk's image dependency slots: baseColor,
-// metallicRoughness, normal, emissive and occlusion. Only the normalized
-// vertex layouts that carry a single authored TEXCOORD set are supported, so an
-// authored set above kMaterialMaxSupportedUvSet is preserved in the payload but
-// the renderer must not sample it against UV0.
-constexpr uint32_t kMaterialTextureSlotCount = 5;
+// T22/T25 per-texture addressing/UV-set metadata. The thirteen slots are in the
+// same fixed order as the material chunk's image dependency slots: baseColor,
+// metallicRoughness, normal, emissive, occlusion, clearcoat factor, clearcoat
+// roughness, clearcoat normal, specular factor, specular color, sheen color,
+// sheen roughness and transmission factor. Only the normalized vertex layouts
+// that carry a single authored TEXCOORD set are supported, so an authored set
+// above kMaterialMaxSupportedUvSet is preserved in the payload but the renderer
+// must not sample it against UV0.
+constexpr uint32_t kMaterialTextureSlotCount = 13;
 constexpr uint32_t kMaterialMaxSupportedUvSet = 0;
 constexpr uint32_t kMaterialSlotIndexBaseColor = 0;
 constexpr uint32_t kMaterialSlotIndexMetallicRoughness = 1;
 constexpr uint32_t kMaterialSlotIndexNormal = 2;
 constexpr uint32_t kMaterialSlotIndexEmissive = 3;
 constexpr uint32_t kMaterialSlotIndexOcclusion = 4;
+constexpr uint32_t kMaterialSlotIndexClearcoat = 5;
+constexpr uint32_t kMaterialSlotIndexClearcoatRoughness = 6;
+constexpr uint32_t kMaterialSlotIndexClearcoatNormal = 7;
+constexpr uint32_t kMaterialSlotIndexSpecular = 8;
+constexpr uint32_t kMaterialSlotIndexSpecularColor = 9;
+constexpr uint32_t kMaterialSlotIndexSheenColor = 10;
+constexpr uint32_t kMaterialSlotIndexSheenRoughness = 11;
+constexpr uint32_t kMaterialSlotIndexTransmission = 12;
+constexpr uint32_t kMaterialExtensionTextureSlotCount =
+    kMaterialTextureSlotCount - 5;
 constexpr uint32_t kMaterialSlotUvSetMask = 0xFFu;
 constexpr uint32_t kMaterialSlotAddressUShift = 8;
 constexpr uint32_t kMaterialSlotAddressVShift = 10;
@@ -150,22 +165,30 @@ struct MaterialPayload {
     // normal's XY before renormalization. Default 1 keeps every pre-v13
     // material's appearance.
     float normalScale = 1.0f;
-    // T22 per-slot sampler/UV-set metadata. slotFlags[i] packs the authored UV
-    // set in bits 0-7 plus the U/V address mode and nearest-filter intent; see
-    // MaterialSlotFlags. Slot 0 (base color) keeps uvOffset/uvScale/uvRotation
-    // above as its transform so existing producers need no second source of
-    // truth. Slots 1..4 carry their own transform arrays.
-    uint32_t slotFlags[kMaterialTextureSlotCount] = {0, 0, 0, 0, 0};
+    // T25 KHR_materials_clearcoat clearcoatNormalTexture.scale. Like
+    // normalScale it multiplies the sampled tangent-space XY before
+    // renormalization, but only for the coat lobe. Default 1 keeps every
+    // pre-v14 material's coat normal behavior.
+    float clearcoatNormalScale = 1.0f;
+    // T22/T25 per-slot sampler/UV-set metadata. slotFlags[i] packs the authored
+    // UV set in bits 0-7 plus the U/V address mode and nearest-filter intent;
+    // see MaterialSlotFlags. Slot 0 (base color) keeps
+    // uvOffset/uvScale/uvRotation above as its transform so existing producers
+    // need no second source of truth. Slots 1..12 carry their own transform
+    // arrays.
+    uint32_t slotFlags[kMaterialTextureSlotCount] = {};
     float slotUvOffset[kMaterialTextureSlotCount - 1][2] = {};
     float slotUvScale[kMaterialTextureSlotCount - 1][2] = {
+        {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f},
+        {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f},
         {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}};
-    float slotUvRotation[kMaterialTextureSlotCount - 1] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float slotUvRotation[kMaterialTextureSlotCount - 1] = {};
     // Reserved for future anisotropy/iridescence/volume/dispersion lobes.
-    // Must be exactly zero in protocol v13; the validator rejects any other
+    // Must be exactly zero in protocol v14; the validator rejects any other
     // value so a later additive meaning cannot be smuggled through.
     uint32_t reserved[kMaterialReservedWordCount] = {0, 0, 0, 0};
 };
-static_assert(sizeof(MaterialPayload) == 244, "MaterialPayload wire layout changed");
+static_assert(sizeof(MaterialPayload) == 440, "MaterialPayload wire layout changed");
 
 #pragma pack(pop)
 
@@ -249,6 +272,9 @@ inline const char* ValidateMaterialLobeFields(const MaterialPayload& material) n
     if (!finite(material.normalScale) || material.normalScale < -16.0f
         || material.normalScale > 16.0f)
         return "material normalScale out of range";
+    if (!finite(material.clearcoatNormalScale) || material.clearcoatNormalScale < -16.0f
+        || material.clearcoatNormalScale > 16.0f)
+        return "material clearcoatNormalScale out of range";
     for (uint32_t slot = 0; slot < kMaterialTextureSlotCount; ++slot) {
         const uint32_t flags = material.slotFlags[slot];
         if ((flags & ~kMaterialSlotFlagsKnownMask) != 0)

@@ -18,15 +18,16 @@
 namespace model_core {
 
 constexpr uint32_t kSectionMagic = 0x50334457; // "P3DW"
-// v13 grows MaterialPayload from 140 to 244 bytes for the authored texture
-// inputs (normal scale, per-texture sampler/UV-set/transform and the
-// independent occlusion slot) and widens ChunkDescriptor's dependency array
-// from 4 to 8 slots so occlusion stops sharing the metallic-roughness red
-// channel. v12 grew it from 72 to 140 for the PBR lobes; v11 added
-// ChunkTopology::LineList. Topology identities remain append-only; an old
-// consumer rejects the version outright rather than misreading a material
-// record.
-constexpr uint32_t kCurrentProtocolVersion = 13;
+// v14 grows MaterialPayload from 244 to 440 bytes for the eight extension-lobe
+// maps (clearcoat factor/roughness/normal, specular factor/color, sheen
+// color/roughness and transmission factor) and widens ChunkDescriptor's
+// dependency array from 8 to 16 slots so all thirteen material texture slots
+// have a fixed position. v13 grew the payload for the authored texture inputs
+// and added the independent occlusion slot; v12 grew it from 72 to 140 for the
+// PBR lobes; v11 added ChunkTopology::LineList. Topology identities remain
+// append-only; an old consumer rejects the version outright rather than
+// misreading a material record.
+constexpr uint32_t kCurrentProtocolVersion = 14;
 // Product coarse/full delivery has four closed geometry roles. Scan payloads
 // cross the validator, but are never allocated on the GPU or retained by it.
 constexpr uint32_t kFineLod = 0, kCoarseLod = 1, kScanLod = 2, kPreviewLod = 3;
@@ -40,10 +41,11 @@ inline uint64_t CoarsePrimitiveCap(uint64_t valid, uint64_t nonemptyRegions = 1)
     const uint64_t density=valid < 20 ? valid : (valid/20 > nonemptyRegions ? valid/20 : nonemptyRegions);
     return density < kCoarsePrimitiveLimit ? density : kCoarsePrimitiveLimit;
 }
-// v13: five material image slots need baseColor/metallicRoughness/normal/
-// emissive/occlusion. The array is widened once (4 -> 8) rather than adding a
-// second descriptor shape; slots beyond the semantic set must stay zero.
-constexpr uint32_t kMaxDependencyIds = 8;
+// v14: thirteen material image slots need baseColor/metallicRoughness/normal/
+// emissive/occlusion plus the eight extension-lobe maps. The array is widened
+// once (8 -> 16) rather than adding a second descriptor shape; slots beyond the
+// fixed material semantic set must stay zero for every other topology.
+constexpr uint32_t kMaxDependencyIds = 16;
 constexpr uint32_t kMaxSceneHierarchyDepth = 256;
 constexpr uint32_t kSceneRecordVisible = 1u << 0;
 constexpr uint32_t kSceneRecordFlagsKnownMask = kSceneRecordVisible;
@@ -282,11 +284,13 @@ struct ChunkDescriptor {
     // resolves to an existing chunk, not one fixed target topology -- a
     // consumer determines a given slot's meaning by inspecting the target
     // chunk's own topology.
-    // Material -- dependencyIds[0..4] are up to 5 Image chunk ids in fixed
-    // slot order {baseColor, metallicRoughness, normal, emissive, occlusion};
-    // each must resolve to a chunk with Image topology specifically. Slots
-    // 5..7 stay zero. Occlusion is independent: the metallicRoughness red
-    // channel is never treated as authored AO.
+    // Material -- dependencyIds[0..12] are up to 13 Image chunk ids in fixed
+    // slot order {baseColor, metallicRoughness, normal, emissive, occlusion,
+    // clearcoat, clearcoatRoughness, clearcoatNormal, specular,
+    // specularColor, sheenColor, sheenRoughness, transmission}; each must
+    // resolve to a chunk with Image topology specifically. Slots 13..15 stay
+    // zero. Occlusion is independent: the metallicRoughness red channel is
+    // never treated as authored AO.
     // Node -- slot 0 is its optional parent Node chunk. All other slots are
     // zero and dependencyCount is 0 or 1.
     // MeshInstance -- slots are {geometry, optional material, node, zero};
@@ -306,7 +310,7 @@ struct ChunkDescriptor {
     BoundsState boundsState;         // geometry must be Verified; other topologies Unknown
     uint32_t sourceElementOffset;    // PLY triangle fan offset in first source face, otherwise zero
 };
-static_assert(sizeof(ChunkDescriptor) == 176, "ChunkDescriptor wire layout changed");
+static_assert(sizeof(ChunkDescriptor) == 208, "ChunkDescriptor wire layout changed");
 
 #pragma pack(pop)
 

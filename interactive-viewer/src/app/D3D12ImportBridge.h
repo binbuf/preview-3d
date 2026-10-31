@@ -113,15 +113,33 @@ struct ImportedMesh {
 struct ImportedMaterial {
     uint32_t chunkId = 0;
     model_core::MaterialPayload data{};
-    // All five slots are populated and consumed: GltfAdapter.cpp resolves
-    // metallicRoughness/normal/emissive/occlusion alongside base color. The
-    // occlusion map is independent; the metallic-roughness red channel is not
-    // treated as AO. 0 = none.
+    // All thirteen v14 slots are populated and consumed: GltfAdapter.cpp
+    // resolves metallicRoughness/normal/emissive/occlusion alongside base color,
+    // plus the eight extension-lobe maps. The occlusion map is independent; the
+    // metallic-roughness red channel is not treated as AO. 0 = none.
     uint32_t baseColorImageChunkId = 0;
     uint32_t metallicRoughnessImageChunkId = 0;
     uint32_t normalImageChunkId = 0;
     uint32_t emissiveImageChunkId = 0;
     uint32_t occlusionImageChunkId = 0;
+    uint32_t clearcoatImageChunkId = 0;
+    uint32_t clearcoatRoughnessImageChunkId = 0;
+    uint32_t clearcoatNormalImageChunkId = 0;
+    uint32_t specularImageChunkId = 0;
+    uint32_t specularColorImageChunkId = 0;
+    uint32_t sheenColorImageChunkId = 0;
+    uint32_t sheenRoughnessImageChunkId = 0;
+    uint32_t transmissionImageChunkId = 0;
+    // Fixed slot order accessor used by the renderer, diagnostics and tests.
+    uint32_t ImageChunkId(uint32_t slot) const noexcept {
+        const uint32_t ids[model_core::kMaterialTextureSlotCount] = {
+            baseColorImageChunkId, metallicRoughnessImageChunkId, normalImageChunkId,
+            emissiveImageChunkId, occlusionImageChunkId, clearcoatImageChunkId,
+            clearcoatRoughnessImageChunkId, clearcoatNormalImageChunkId,
+            specularImageChunkId, specularColorImageChunkId, sheenColorImageChunkId,
+            sheenRoughnessImageChunkId, transmissionImageChunkId};
+        return slot < model_core::kMaterialTextureSlotCount ? ids[slot] : 0u;
+    }
 };
 
 struct ImportedImage {

@@ -102,12 +102,10 @@ struct PendingMaterial {
     MaterialPayload data{};
     // Indices into WalkState::pendingImages, fixed slot order per
     // WireFormat.h's documented ChunkDescriptor::dependencyIds contract:
-    // {baseColor, metallicRoughness, normal, emissive, occlusion}.
-    std::optional<size_t> pendingBaseColorImageIndex;
-    std::optional<size_t> pendingMetallicRoughnessImageIndex;
-    std::optional<size_t> pendingNormalImageIndex;
-    std::optional<size_t> pendingEmissiveImageIndex;
-    std::optional<size_t> pendingOcclusionImageIndex;
+    // {baseColor, metallicRoughness, normal, emissive, occlusion,
+    //  clearcoat, clearcoatRoughness, clearcoatNormal, specular,
+    //  specularColor, sheenColor, sheenRoughness, transmission}.
+    std::optional<size_t> pendingImageIndex[model_core::kMaterialTextureSlotCount];
 };
 
 // This codebase's ImportErrorCode enum is a deliberately small subset of
@@ -1466,6 +1464,7 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         pending.data.slotUvRotation[slot - 1] = 0.0f;
     }
     pending.data.normalScale = 1.0f;
+    pending.data.clearcoatNormalScale = 1.0f;
     pending.data.alphaMode = static_cast<uint32_t>(material.alphaMode); // AlphaMode/AlphaModeId share numeric values
     pending.data.alphaCutoff = material.alphaCutoff;
     pending.data.flags = (material.doubleSided ? kMaterialFlagDoubleSided : 0u)
@@ -1478,18 +1477,19 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     // IOR 1.5 (F0 0.04), occlusion strength 1.
     if (std::isfinite(material.emissiveStrength))
         pending.data.emissiveStrength = std::clamp(float(material.emissiveStrength), 0.0f, 1024.0f);
+    // T25: the extension maps are fixed slots in the v14 material record, so a
+    // supported map keeps its authored per-texel variation instead of being
+    // dropped to its scalar factor. Each texture still follows the extension's
+    // own channel and color space; see the resolveSlot calls below.
     if (material.clearcoat) {
         const float factor = float(material.clearcoat->clearcoatFactor);
         const float roughness = float(material.clearcoat->clearcoatRoughnessFactor);
         if (std::isfinite(factor)) pending.data.clearcoatFactor = std::clamp(factor, 0.0f, 1.0f);
         if (std::isfinite(roughness)) pending.data.clearcoatRoughness = std::clamp(roughness, 0.0f, 1.0f);
-        // Texture-driven clearcoat maps are not representable in the fixed
-        // payload; the scalar factor is the authored base layer. One bounded
-        // texture warning tells the user the map was dropped.
-        if (material.clearcoat->clearcoatTexture.has_value()
-            || material.clearcoat->clearcoatRoughnessTexture.has_value()
-            || material.clearcoat->clearcoatNormalTexture.has_value())
-            state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
+        if (material.clearcoat->clearcoatNormalTexture
+            && std::isfinite(material.clearcoat->clearcoatNormalTexture->scale))
+            pending.data.clearcoatNormalScale = std::clamp(
+                float(material.clearcoat->clearcoatNormalTexture->scale), -16.0f, 16.0f);
     }
     if (material.sheen) {
         const auto& sheen = *material.sheen;
@@ -1499,8 +1499,6 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         }
         const float roughness = float(sheen.sheenRoughnessFactor);
         if (std::isfinite(roughness)) pending.data.sheenRoughness = std::clamp(roughness, 0.0f, 1.0f);
-        if (sheen.sheenColorTexture.has_value() || sheen.sheenRoughnessTexture.has_value())
-            state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
     }
     if (material.specular) {
         const float factor = float(material.specular->specularFactor);
@@ -1509,9 +1507,6 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
             const float value = float(material.specular->specularColorFactor[channel]);
             pending.data.specularColor[channel] = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
         }
-        if (material.specular->specularTexture.has_value()
-            || material.specular->specularColorTexture.has_value())
-            state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
     }
     if (std::isfinite(material.ior))
         pending.data.ior = std::clamp(float(material.ior), 1.0f, 4.0f);
@@ -1557,11 +1552,11 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
 
     // KHR_materials_transmission: there is no refraction/transmission pass, so
     // the transmitted fraction is carried to the shader, which approximates it
-    // with a Fresnel-driven blend alpha plus suppressed transmitted diffuse. A
-    // per-texel transmissionTexture is not representable in MaterialPayload (it
-    // has no slot for one), so the scalar factor -- what the common "glass"
-    // export carries -- is what is applied. A Mask material keeps its authored
-    // discard test untouched rather than silently reinterpreting it.
+    // with a Fresnel-driven blend alpha plus suppressed transmitted diffuse.
+    // The per-texel transmissionTexture multiplies the scalar factor in the
+    // same fixed slot model as the other extension maps (protocol v14). A Mask
+    // material keeps its authored discard test untouched rather than silently
+    // reinterpreting it.
     //
     // A dielectric whose index of refraction is at or below 1 has no optical
     // interface: it neither bends nor reflects light, so an authored
@@ -1632,30 +1627,87 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         return state.error == ImportErrorCode::None;
     };
     if (!resolveSlot(baseColorTexture, model_core::kMaterialSlotIndexBaseColor,
-                     pending.pendingBaseColorImageIndex,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexBaseColor],
                      ColorSpaceId::Srgb, TextureSemantic::Color))
         return std::nullopt;
     if (!resolveSlot(material.pbrData.metallicRoughnessTexture
                          ? &*material.pbrData.metallicRoughnessTexture : nullptr,
                      model_core::kMaterialSlotIndexMetallicRoughness,
-                     pending.pendingMetallicRoughnessImageIndex,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexMetallicRoughness],
                      ColorSpaceId::Linear, TextureSemantic::Data))
         return std::nullopt;
     if (!resolveSlot(material.normalTexture ? &*material.normalTexture : nullptr,
                      model_core::kMaterialSlotIndexNormal,
-                     pending.pendingNormalImageIndex,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexNormal],
                      ColorSpaceId::Linear, TextureSemantic::Normal))
         return std::nullopt;
     if (!resolveSlot(material.emissiveTexture ? &*material.emissiveTexture : nullptr,
                      model_core::kMaterialSlotIndexEmissive,
-                     pending.pendingEmissiveImageIndex,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexEmissive],
                      ColorSpaceId::Srgb, TextureSemantic::Emissive))
         return std::nullopt;
     // Independent occlusion map. glTF AO lives only here; the
     // metallicRoughness red channel is never reinterpreted as AO.
     if (!resolveSlot(material.occlusionTexture ? &*material.occlusionTexture : nullptr,
                      model_core::kMaterialSlotIndexOcclusion,
-                     pending.pendingOcclusionImageIndex,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexOcclusion],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+
+    // T25 Khronos extension maps. Channels are fixed by each extension and
+    // selected in the shader by slot index:
+    //   clearcoat (R factor), clearcoatRoughness (G), clearcoatNormal (RGB),
+    //   specular (A factor), specularColor (RGB), sheenColor (RGB),
+    //   sheenRoughness (A), transmission (R).
+    // Every one keeps its own sampler/UV set/transform through resolveSlot.
+    const auto* clearcoat = material.clearcoat ? &*material.clearcoat : nullptr;
+    if (!resolveSlot(clearcoat && clearcoat->clearcoatTexture
+                         ? &*clearcoat->clearcoatTexture : nullptr,
+                     model_core::kMaterialSlotIndexClearcoat,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexClearcoat],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+    if (!resolveSlot(clearcoat && clearcoat->clearcoatRoughnessTexture
+                         ? &*clearcoat->clearcoatRoughnessTexture : nullptr,
+                     model_core::kMaterialSlotIndexClearcoatRoughness,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexClearcoatRoughness],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+    if (!resolveSlot(clearcoat && clearcoat->clearcoatNormalTexture
+                         ? &*clearcoat->clearcoatNormalTexture : nullptr,
+                     model_core::kMaterialSlotIndexClearcoatNormal,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexClearcoatNormal],
+                     ColorSpaceId::Linear, TextureSemantic::Normal))
+        return std::nullopt;
+    const auto* sheen = material.sheen ? &*material.sheen : nullptr;
+    if (!resolveSlot(sheen && sheen->sheenColorTexture ? &*sheen->sheenColorTexture : nullptr,
+                     model_core::kMaterialSlotIndexSheenColor,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexSheenColor],
+                     ColorSpaceId::Srgb, TextureSemantic::Color))
+        return std::nullopt;
+    if (!resolveSlot(sheen && sheen->sheenRoughnessTexture
+                         ? &*sheen->sheenRoughnessTexture : nullptr,
+                     model_core::kMaterialSlotIndexSheenRoughness,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexSheenRoughness],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+    const auto* specular = material.specular ? &*material.specular : nullptr;
+    if (!resolveSlot(specular && specular->specularTexture
+                         ? &*specular->specularTexture : nullptr,
+                     model_core::kMaterialSlotIndexSpecular,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexSpecular],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+    if (!resolveSlot(specular && specular->specularColorTexture
+                         ? &*specular->specularColorTexture : nullptr,
+                     model_core::kMaterialSlotIndexSpecularColor,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexSpecularColor],
+                     ColorSpaceId::Srgb, TextureSemantic::Color))
+        return std::nullopt;
+    if (!resolveSlot(material.transmission && material.transmission->transmissionTexture
+                         ? &*material.transmission->transmissionTexture : nullptr,
+                     model_core::kMaterialSlotIndexTransmission,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexTransmission],
                      ColorSpaceId::Linear, TextureSemantic::Data))
         return std::nullopt;
 
@@ -3622,14 +3674,10 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             ChunkDescriptor d{};
             d.topology = ChunkTopology::Material;
             d.chunkId = materialBase + uint32_t(emittedMaterials) + 1;
-            const std::optional<size_t> images[]{
-                material.pendingBaseColorImageIndex, material.pendingMetallicRoughnessImageIndex,
-                material.pendingNormalImageIndex, material.pendingEmissiveImageIndex,
-                material.pendingOcclusionImageIndex};
             for (unsigned i = 0; i < model_core::kMaterialTextureSlotCount; ++i)
-                if (images[i])
+                if (material.pendingImageIndex[i])
                 {
-                    d.dependencyIds[i] = imageBase + uint32_t(*images[i]) + 1;
+                    d.dependencyIds[i] = imageBase + uint32_t(*material.pendingImageIndex[i]) + 1;
                     ++d.dependencyCount;
                 }
             if (!streamingWriter.Add(d, ChunkBytes(material.data)))
@@ -3857,19 +3905,17 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         plan.descriptor.lodLevel = 0;
         plan.descriptor.chunkId = materialChunkId(j);
         // Fixed slot order {baseColor, metallicRoughness, normal, emissive,
-        // occlusion} per WireFormat.h; sparsely populated is valid (e.g. a
-        // normal-map-only material leaves the other slots at their
-        // zero-initialized default) -- SharedSectionValidator checks each slot
-        // independently, not as a contiguous prefix.
+        // occlusion, clearcoat, clearcoatRoughness, clearcoatNormal, specular,
+        // specularColor, sheenColor, sheenRoughness, transmission} per
+        // WireFormat.h; sparsely populated is valid (e.g. a normal-map-only
+        // material leaves the other slots at their zero-initialized default) --
+        // SharedSectionValidator checks each slot independently, not as a
+        // contiguous prefix.
         plan.descriptor.dependencyCount = 0;
-        const std::optional<size_t> imageSlots[]{
-            material.pendingBaseColorImageIndex, material.pendingMetallicRoughnessImageIndex,
-            material.pendingNormalImageIndex, material.pendingEmissiveImageIndex,
-            material.pendingOcclusionImageIndex};
         for (uint32_t slot = 0; slot < model_core::kMaterialTextureSlotCount; ++slot) {
-            if (!imageSlots[slot].has_value())
+            if (!material.pendingImageIndex[slot].has_value())
                 continue;
-            plan.descriptor.dependencyIds[slot] = imageChunkId(*imageSlots[slot]);
+            plan.descriptor.dependencyIds[slot] = imageChunkId(*material.pendingImageIndex[slot]);
             ++plan.descriptor.dependencyCount;
         }
         plan.pieceA = BytesOf(material.data);

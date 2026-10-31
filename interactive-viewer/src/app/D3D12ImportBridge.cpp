@@ -738,6 +738,14 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 if (chunk.descriptor.dependencyIds[2]) material.normalImageChunkId = chunk.descriptor.dependencyIds[2];
                 if (chunk.descriptor.dependencyIds[3]) material.emissiveImageChunkId = chunk.descriptor.dependencyIds[3];
                 if (chunk.descriptor.dependencyIds[4]) material.occlusionImageChunkId = chunk.descriptor.dependencyIds[4];
+                if (chunk.descriptor.dependencyIds[5]) material.clearcoatImageChunkId = chunk.descriptor.dependencyIds[5];
+                if (chunk.descriptor.dependencyIds[6]) material.clearcoatRoughnessImageChunkId = chunk.descriptor.dependencyIds[6];
+                if (chunk.descriptor.dependencyIds[7]) material.clearcoatNormalImageChunkId = chunk.descriptor.dependencyIds[7];
+                if (chunk.descriptor.dependencyIds[8]) material.specularImageChunkId = chunk.descriptor.dependencyIds[8];
+                if (chunk.descriptor.dependencyIds[9]) material.specularColorImageChunkId = chunk.descriptor.dependencyIds[9];
+                if (chunk.descriptor.dependencyIds[10]) material.sheenColorImageChunkId = chunk.descriptor.dependencyIds[10];
+                if (chunk.descriptor.dependencyIds[11]) material.sheenRoughnessImageChunkId = chunk.descriptor.dependencyIds[11];
+                if (chunk.descriptor.dependencyIds[12]) material.transmissionImageChunkId = chunk.descriptor.dependencyIds[12];
                 result.materials.push_back(std::move(material));
                 break;
             }

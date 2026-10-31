@@ -282,6 +282,7 @@ struct ViewerApp
     // T21 Debug inspection state. UI-thread only; the render thread owns the
     // channel, readback and material snapshot behind RenderThread methods.
     int debugMaterialIndex = 0;
+    int debugMaterialExtensionSlot = 0;
     int debugSampleX0 = 0, debugSampleY0 = 0, debugSampleX1 = 1, debugSampleY1 = 1;
     active_instance::Coordinator activeInstance;
     IAccessible* accessible = nullptr;
@@ -4496,7 +4497,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Shipping builds cannot be driven by local WM_APP messages.
         return 0;
 #else
-        if (!app->appSmoke || wParam > 240) return 0;
+        if (!app->appSmoke || wParam > 242) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -4620,13 +4621,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // shipped/Release build still rejects the message without reading any
         // path or adding a message authority surface.
         if (wParam == 124) {
-            if (lParam >= 0 && lParam <= 23) app->renderThread.SetDebugChannel(static_cast<uint32_t>(lParam));
+            if (lParam >= 0 && lParam <= 30) app->renderThread.SetDebugChannel(static_cast<uint32_t>(lParam));
             return static_cast<LRESULT>(app->renderThread.DebugChannel());
         }
         if (wParam == 125) {
             const uint32_t mask = app->renderThread.DebugChannelMask();
             uint32_t supported = 0;
-            for (uint32_t channel = 0; channel <= 23; ++channel)
+            for (uint32_t channel = 0; channel <= 30; ++channel)
                 if ((mask & (1u << channel)) && RenderThread::DebugChannelSupported(channel))
                     supported |= 1u << channel;
             return static_cast<LRESULT>(supported);
@@ -4659,7 +4660,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 app->debugMaterialIndex = static_cast<int>(lParam);
             return static_cast<LRESULT>(app->debugMaterialIndex);
         }
-        if (wParam >= 136 && wParam <= 230) {
+        if ((wParam >= 136 && wParam <= 230)
+            || (wParam >= 233 && wParam <= 242)) {
             DebugMaterialRecord record;
             if (!app->renderThread.DebugMaterial(static_cast<uint32_t>(app->debugMaterialIndex), record))
                 return 0;
@@ -4744,6 +4746,41 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             case 228: return static_cast<LRESULT>(record.textureChunkIds[4]);
             case 229: return static_cast<LRESULT>(record.textureFormats[4]);
             case 230: return static_cast<LRESULT>(record.textureColorSpaces[4]);
+            // T25 extension-lobe slot diagnostics. Field 233 selects one of
+            // the eight extension slots (material slots 5..12); 234..240 then
+            // expose its validated metadata through a bounded window instead of
+            // widening every per-slot field range.
+            case 233: {
+                const int selected = static_cast<int>(lParam);
+                if (selected >= 0 && selected < 8)
+                    app->debugMaterialExtensionSlot = selected;
+                return static_cast<LRESULT>(app->debugMaterialExtensionSlot);
+            }
+            case 234: case 235: case 236: case 237: case 238: case 239:
+            case 240: case 241: case 242: {
+                const int slot = 5 + app->debugMaterialExtensionSlot;
+                if (slot < 0 || slot >= int(model_core::kMaterialTextureSlotCount))
+                    return 0;
+                switch (wParam) {
+                case 234: return static_cast<LRESULT>(record.slotFlags[slot]);
+                case 235: return f32(record.slotUvOffset[slot - 1][0]);
+                case 236: return f32(record.slotUvOffset[slot - 1][1]);
+                case 237: return f32(record.slotUvScale[slot - 1][0]);
+                case 238: return f32(record.slotUvScale[slot - 1][1]);
+                case 239: return f32(record.slotUvRotation[slot - 1]);
+                case 240: {
+                    const uint32_t index = record.textureIndices[slot] >= 0
+                        ? uint32_t(record.textureIndices[slot]) & 0xFFu : 0u;
+                    const uint32_t format = uint32_t(record.textureFormats[slot]) & 0xFFu;
+                    const uint32_t colorSpace = uint32_t(record.textureColorSpaces[slot]) & 0xFFu;
+                    const uint32_t bound = record.textureBound[slot] ? 1u << 24 : 0u;
+                    return static_cast<LRESULT>(index | (format << 8) | (colorSpace << 16) | bound);
+                }
+                case 241: return static_cast<LRESULT>(record.textureChunkIds[slot]);
+                case 242: return f32(record.clearcoatNormalScale);
+                }
+                return 0;
+            }
             }
         }
         // T24: the exposure and tone-map mode the last resolve pass actually

@@ -104,10 +104,11 @@ The bake produces four derived views of the same radiance:
 
 The environment and LUT are uploaded once on the direct queue during
 initialization and never re-baked for a camera move or a frame. Their SRVs
-occupy two slots appended to each model's material descriptor heap: D3D12
-permits only one shader-visible CBV/SRV/UAV heap at a time, so a separate
-environment heap cannot be bound alongside the material heap. The same slots
-are re-written when progressive material descriptors are rebuilt.
+occupy two slots appended to each model's material descriptor heap, after the
+thirteen neutral per-slot fallbacks: D3D12 permits only one shader-visible
+CBV/SRV/UAV heap at a time, so a separate environment heap cannot be bound
+alongside the material heap. The same slots are re-written when progressive
+material descriptors are rebuilt.
 
 The vertex shader keeps the camera-relative position/normal precision policy.
 Before sampling the environment the pixel shader rotates the camera-space
@@ -204,13 +205,17 @@ do not read as dirty.
 
 The textured pixel shader reads its complete material record from a per-material
 `b2` constant buffer (`MaterialConstants`): base color, the protocol-v12 lobe
-block, normal scale, the map mask and per-slot UV/sampler metadata. Moving the
-material block out of root constants is what keeps the root signature inside
-D3D12's 64-DWORD budget once the sixth SRV table (independent occlusion) and the
-per-slot transforms exist; the layout and lifetime rule are recorded in
-ADR-0080. Each material owns a CPU-writable UPLOAD buffer with one region per
-swap-chain frame, so a progressive material/texture update never races a frame
-that is still sampling the previous copy. Peak shader model remains 5.1.
+block, both normal scales, the map mask and thirteen per-slot UV/sampler pairs.
+Moving the material block out of root constants is what keeps the root signature
+inside D3D12's 64-DWORD budget; v14's fifteen single-descriptor SRV tables,
+the 25-DWORD draw block and the two CBVs total 44 of 64 DWORDs. Per-slot data
+never becomes root constants. The fixed 1024-byte per-frame material stride and
+lifetime rule are recorded in ADR-0080 and ADR-0083. Each material owns a
+CPU-writable UPLOAD buffer with one region per swap-chain frame, so a progressive
+material/texture update never races a frame that is still sampling the previous
+copy. Peak shader model remains 5.1. Unbound slots point at one of thirteen
+neutral descriptors; the shader's map mask skips them, so a fallback descriptor
+is never reported as an authored resident map.
 
 - **Specular / IOR.** Dielectric F0 is `((ior-1)/(ior+1))²` tinted by the
   authored `specularColor`; `specularFactor` is the F90 grazing reflectance
@@ -234,18 +239,29 @@ that is still sampling the previous copy. Peak shader model remains 5.1.
 - **Occlusion strength.** Applied through the same glTF formula above.
 
 Authored texture metadata is applied per slot, not per material: slot 0 keeps
-the legacy UV transform fields and slots 1-4 (metallic/roughness, normal,
-emissive, occlusion) carry their own offset/scale/rotation plus the packed UV
-set, U/V address mode and nearest-filter intent. A slot whose UV set is not 0 is
-reported invalid and skipped; it is never sampled with UV0 coordinates. The
-normal map's tangent-space XY is multiplied by `normalScale` before
-renormalization. The TBN basis is formed in camera space from the transformed
-normal and tangent; a zero-length tangent falls back to screen-space
-derivatives of the transformed normal-map UV. A mirrored (negative-determinant)
-instance multiplies the tangent handedness by the instance sign. For a
-double-sided material the geometric normal is reversed on a back-facing
-fragment *before* the TBN is formed (glTF/Khronos reference behavior), so the
-normal map keeps its authored slope rather than being flipped toward the eye.
+the legacy UV transform fields and slots 1-12 carry their own
+offset/scale/rotation plus the packed UV set, U/V address mode and
+nearest-filter intent. A slot whose UV set is not 0 is reported invalid and
+skipped; it is never sampled with UV0 coordinates. The base normal map's
+tangent-space XY is multiplied by `normalScale`; the coat normal uses its own
+`clearcoatNormalScale` and perturbs only the coat lobe. Both share one TBN basis
+formed in camera space from the transformed normal and tangent; a zero-length
+tangent falls back to screen-space derivatives of the active normal-map UV. A
+mirrored (negative-determinant) instance multiplies the tangent handedness by
+the instance sign. For a double-sided material the geometric normal is reversed
+on a back-facing fragment *before* the TBN is formed (glTF/Khronos reference
+behavior), so the normal map keeps its authored slope rather than being flipped
+toward the eye.
+
+T25's extension maps multiply their scalar factors per the Khronos channel
+definitions: clearcoat R, clearcoat roughness G, specular factor A, specular
+color RGB, sheen color RGB, sheen roughness A and transmission R. Each keeps
+its own sampler/UV metadata and color space; a color map and a data map that
+share one authored image decode into distinct sRGB/linear chunks. Diagnostic
+channels 24-30 expose the post-map effective inputs (`clearcoat/roughness`,
+`specularFactor`, `specularColor*F0`, `sheenColor`, `transmission`,
+`coatNormal`, `sheenRoughness`) so the T25 lane can verify variation across each
+probe without inferring it from lighting.
 
 Transparency stays on the existing straight-alpha path: opaque draws first,
 alpha-blend draws are stable-sorted back-to-front by view depth, the HDR scene
@@ -273,7 +289,10 @@ environment diffuse and specular, coat, emission, pre-tone-map HDR). T24 adds
 21 (the effective environment BRDF scale `F0*A+B` with multiple scattering),
 22 (`alpha, glassReflectance, transmission`, documenting the interim
 transmission composite) and 23 (a flat 0.3 linear display-calibration patch).
-The shader writes linear values and the resolve pass remains the only clamp.
+T25 adds 24-30 for the effective clearcoat/roughness, specular factor,
+IOR-tinted specular F0, sheen color, transmission, coat normal and sheen
+roughness after map × factor. The shader writes linear values and the resolve
+pass remains the only clamp.
 UV1 is not on the wire; channel 5 renders a deliberate magenta marker and the
 capability mask reports the channel unsupported rather than substituting
 neutral data.
@@ -290,11 +309,14 @@ and proves the values through actual GPU output.
 
 The same Debug surface exposes a bounded per-material draw record: source
 geometry/material/node/instance ids, vertex/index counts, validated wire values
-(including `normalScale`, the five per-slot sampler/UV-set flags and the
-per-slot transforms), bound texture chunk ids/formats/colour spaces for all five
-material slots and the effective bucket (opaque/masked/blended/transmissive),
-depth-write and cull state. Fields 201-230 extend the T21 record; the earlier
-fields keep their meaning and ordering. The viewer
+(including both normal scales, the thirteen per-slot sampler/UV-set flags and
+the per-slot transforms), bound texture chunk ids/formats/colour spaces for all
+thirteen material slots and the effective bucket
+(opaque/masked/blended/transmissive), depth-write and cull state. Fields
+201-230 extend the T21 record. T25 selects one of the eight extension slots with
+field 233 and reads its flags/transform/binding through the bounded 234-242
+window, so the published field range does not grow per slot. The earlier fields
+keep their meaning and ordering. The viewer
 never parses glTF for this; source metadata is read only by test tooling and
 matched against the viewer's validated snapshot. All fields remain inside the
 existing `PREVIEW3D_ENABLE_TEST_CONTROL` + `--app-smoke` guard, so a shipping

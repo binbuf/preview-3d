@@ -24,8 +24,8 @@ TEST_CASE("SectionHeader and ChunkDescriptor match the documented fixed-width wi
           "[wire-format]")
 {
     REQUIRE(sizeof(model_core::SectionHeader) == 88);
-    REQUIRE(sizeof(model_core::ChunkDescriptor) == 176);
-    REQUIRE(model_core::kCurrentProtocolVersion == 13);
+    REQUIRE(sizeof(model_core::ChunkDescriptor) == 208);
+    REQUIRE(model_core::kCurrentProtocolVersion == 14);
     REQUIRE(sizeof(model_core::NodePayload) == 144);
     REQUIRE(sizeof(model_core::MeshInstancePayload) == 80);
 
@@ -36,11 +36,11 @@ TEST_CASE("SectionHeader and ChunkDescriptor match the documented fixed-width wi
 
     CHECK(offsetof(model_core::ChunkDescriptor, topology) == 32);
     CHECK(offsetof(model_core::ChunkDescriptor, byteSize) == 56);
-    CHECK(offsetof(model_core::ChunkDescriptor, chunkChecksum) == 100);
-    CHECK(offsetof(model_core::ChunkDescriptor, origin) == 108);
-    CHECK(offsetof(model_core::ChunkDescriptor, localMin) == 132);
-    CHECK(offsetof(model_core::ChunkDescriptor, boundsState) == 168);
-    CHECK(offsetof(model_core::ChunkDescriptor, sourceElementOffset) == 172);
+    CHECK(offsetof(model_core::ChunkDescriptor, chunkChecksum) == 132);
+    CHECK(offsetof(model_core::ChunkDescriptor, origin) == 140);
+    CHECK(offsetof(model_core::ChunkDescriptor, localMin) == 164);
+    CHECK(offsetof(model_core::ChunkDescriptor, boundsState) == 200);
+    CHECK(offsetof(model_core::ChunkDescriptor, sourceElementOffset) == 204);
     CHECK(sizeof(model_core::SceneMetadata) == 48);
     CHECK(sizeof(double) == 8);
     CHECK(std::numeric_limits<double>::is_iec559);

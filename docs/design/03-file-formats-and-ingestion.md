@@ -30,7 +30,7 @@ session override; reloads and refinements do not re-apply the preset.
 
 | Input | Parser | MVP content | Deliberate limits | Performance tier |
 | --- | --- | --- | --- | --- |
-| .glb, .gltf | fastgltf + Draco + KTX/Basis | glTF 2.0 scenes, nodes, triangle meshes, PBR metallic/roughness and unlit materials, vertex colors, PNG/JPEG/WebP/KTX2 textures, `KHR_texture_transform`, `KHR_mesh_quantization`, `KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `EXT_texture_webp`, `KHR_materials_transmission` (approximated as Fresnel-weighted alpha-blended glass; no refraction pass), `KHR_materials_pbrSpecularGlossiness` (archived; approximated as diffuse base color with metallic 0 and roughness `1 - glossiness`; the specular-glossiness texture has no matching slot), `normalTexture.scale`, per-texture `texCoord`/sampler/`KHR_texture_transform` and an independent `occlusionTexture` | No animation playback, skins, morph targets, lights, cameras, or advanced material lobes. Only TEXCOORD_0 is rendered; a texture whose `texCoord` is above 0 stays unbound with an explicit unsupported-UV-set record rather than sampling UV0. External URIs must resolve to approved local files contained within the primary file's directory tree (its own directory or a subdirectory). A single oversized compressed primitive/view may fail its decode-working-set limit. | A for ordinary/meshopt data; compressed primitives are bounded decode units |
+| .glb, .gltf | fastgltf + Draco + KTX/Basis | glTF 2.0 scenes, nodes, triangle meshes, PBR metallic/roughness and unlit materials, vertex colors, PNG/JPEG/WebP/KTX2 textures, `KHR_texture_transform`, `KHR_mesh_quantization`, `KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `EXT_texture_webp`, `KHR_materials_transmission` (approximated as Fresnel-weighted alpha-blended glass; no refraction pass), `KHR_materials_pbrSpecularGlossiness` (archived; approximated as diffuse base color with metallic 0 and roughness `1 - glossiness`; the specular-glossiness texture has no matching slot), `normalTexture.scale`, per-texture `texCoord`/sampler/`KHR_texture_transform`, an independent `occlusionTexture`, and the `KHR_materials_clearcoat`/`sheen`/`specular`/`transmission` texture maps (fixed v14 slots, including clearcoat normal/roughness) | No animation playback, skins, morph targets, lights, cameras, or advanced material lobes (anisotropy, iridescence, volume, dispersion, diffuse transmission). Only TEXCOORD_0 is rendered; a texture whose `texCoord` is above 0 stays unbound with an explicit unsupported-UV-set record rather than sampling UV0. External URIs must resolve to approved local files contained within the primary file's directory tree (its own directory or a subdirectory). A single oversized compressed primitive/view may fail its decode-working-set limit. | A for ordinary/meshopt data; compressed primitives are bounded decode units |
 | .stl | Product code | Binary and ASCII triangles; supplied normals or generated flat normals | No color/material dialect guarantee | A for binary; B for ASCII |
 | .ply | Product code | ASCII and binary little/big-endian PLY mesh or point cloud; positions, normals, common UV/color properties, polygon faces triangulated on import | Unknown elements/properties are skipped within bounds; no volumetric, range-grid, material, or arbitrary custom-property visualization | A for supported binary layouts; B for ASCII |
 | .obj with optional .mtl | ufbx OBJ loader | Faces, smoothing, normals, UVs, vertex colors where available, MTL colors and approved local texture maps | Triangulated on import; .mtl is never opened as a primary document | B |
@@ -187,9 +187,8 @@ Mapping table:
 | glTF `occlusionTexture.strength` | `occlusionStrength` | glTF ORM strength formula |
 | FBX PBR coat/sheen/specular/IOR maps | same fields where ufbx exposes them | same approximations |
 
-Texture-driven lobe maps (clearcoat/sheen/specular textures) are not carried in
-the fixed record; the scalar base lobe is kept and a bounded texture warning is
-emitted. `KHR_materials_iridescence`, `anisotropy`, `volume`,
+Protocol v14 (below) adds texture-driven clearcoat/sheen/specular/transmission
+maps to the fixed record. `KHR_materials_iridescence`, `anisotropy`, `volume`,
 `dispersion` and `diffuse_transmission` remain parsed-but-unrendered: a required
 use yields a specific `Degraded` compatibility record rather than silently
 disappearing. Anisotropy/iridescence/volume rendering, refraction and OIT are
@@ -227,6 +226,49 @@ decoded into distinct chunks. Authored `alphaMode`/`cutoff` are preserved
 verbatim. `KHR_materials_transmission` with IOR <= 1 is suppressed with
 compatibility record 9; a BLEND material with no alpha source is recovered with
 record 10. Both are visible, tested conversions, never name-based exceptions.
+
+### Protocol v14 extension-lobe maps
+
+Protocol v14 grows `MaterialPayload` from 244 to 440 bytes and widens the
+material chunk's dependency array from 8 to 16 ids. Thirteen slots are now
+semantic, in this fixed order:
+
+| Slot | Semantic | Channel / color space |
+| --- | --- | --- |
+| 0 | baseColor | RGB(A) sRGB |
+| 1 | metallicRoughness | B/G linear data |
+| 2 | normal | RGB linear normal |
+| 3 | emissive | RGB sRGB |
+| 4 | occlusion | R linear data |
+| 5 | clearcoat factor | R linear data |
+| 6 | clearcoat roughness | G linear data |
+| 7 | clearcoat normal | RGB linear normal |
+| 8 | specular factor | A linear data |
+| 9 | specular color | RGB sRGB |
+| 10 | sheen color | RGB sRGB |
+| 11 | sheen roughness | A linear data |
+| 12 | transmission factor | R linear data |
+
+Slots 13-15 must stay zero. Each extension map multiplies its own scalar
+factor (glTF semantics) and keeps its own sampler, UV set and
+`KHR_texture_transform` through `slotFlags`/`slotUv*`; a slot above UV0 stays
+unbound with `kTextureFeatureUnsupportedUvSet` rather than aliasing UV0. The
+record layout after `normalScale` is:
+
+| Offset | Field | Meaning |
+| --- | --- | --- |
+| 128 | `clearcoatNormalScale` | `clearcoatNormalTexture.scale`, tangent-space XY |
+| 132 | `slotFlags[13]` | per-slot UV set, U/V address mode, nearest filter |
+| 184 | `slotUvOffset[12][2]` | offsets for slots 1-12 (slot 0 keeps `uvOffset`) |
+| 280 | `slotUvScale[12][2]` | scales for slots 1-12 |
+| 376 | `slotUvRotation[12]` | radians for slots 1-12 |
+| 424 | `reserved[4]` | must be zero |
+
+The validator applies the same finite/range checks to every slot and rejects
+unknown slot-flag bits, non-finite transforms and non-zero reserved words. An
+image shared between a color map (for example `specularColorTexture`) and a data
+map (for example `specularTexture`) is still decoded into distinct sRGB/linear
+chunks; the two slots reference different image chunk ids.
 
 Protocol v10 adds three fixed payloads. `NodePayload` is 144 bytes: a stable
 nonzero ID, optional parent ID, closed visibility flags, and a finite
@@ -306,7 +348,7 @@ Opening another file requests stop on the prior generation and immediately makes
 
 ### glTF and GLB
 
-fastgltf validates glTF 2.0 structure while the adapter owns URI resolution and data access. GLB headers, JSON/BIN ranges, buffer views, accessors, strides, sparse accessors, and component conversions are checked before use. `KHR_mesh_quantization`, `EXT_meshopt_compression`, `KHR_draco_mesh_compression`, `KHR_texture_basisu`, `EXT_texture_webp`, `KHR_texture_transform`, `KHR_materials_unlit`, `KHR_materials_transmission`, and the archived `KHR_materials_pbrSpecularGlossiness` are accepted when their required data passes validation. Transmission is approximated: with no refraction pass, the transmitted fraction is carried to the shader as a material flag plus factor, which suppresses transmitted diffuse and adds a view-dependent Fresnel term to the blend alpha (preserving the authored base-color alpha), and a per-texel `transmissionTexture` is not applied. Specular/glossiness is approximated as diffuse albedo (factor and texture) with metallic 0 and roughness `1 - glossiness`; the combined specular-glossiness texture is dropped with a bounded warning because the normalized material has no matching slot. meshoptimizer, the pinned Draco decoder, KTX/Basis transcoder, and libwebp handle their corresponding payloads behind the same budgets.
+fastgltf validates glTF 2.0 structure while the adapter owns URI resolution and data access. GLB headers, JSON/BIN ranges, buffer views, accessors, strides, sparse accessors, and component conversions are checked before use. `KHR_mesh_quantization`, `EXT_meshopt_compression`, `KHR_draco_mesh_compression`, `KHR_texture_basisu`, `EXT_texture_webp`, `KHR_texture_transform`, `KHR_materials_unlit`, `KHR_materials_transmission`, and the archived `KHR_materials_pbrSpecularGlossiness` are accepted when their required data passes validation. Transmission is approximated: with no refraction pass, the transmitted fraction is carried to the shader as a material flag plus factor, which suppresses transmitted diffuse and adds a view-dependent Fresnel term to the blend alpha (preserving the authored base-color alpha); a per-texel `transmissionTexture` multiplies that factor through the v14 slot model. Specular/glossiness is approximated as diffuse albedo (factor and texture) with metallic 0 and roughness `1 - glossiness`; the combined specular-glossiness texture is dropped with a bounded warning because the normalized material has no matching slot. meshoptimizer, the pinned Draco decoder, KTX/Basis transcoder, and libwebp handle their corresponding payloads behind the same budgets.
 
 Required-extension policy is table-driven (ADR-0060). The parser mask enables every extension whose data path the adapter can consume, including the visual/scene extensions `KHR_materials_clearcoat`, `sheen`, `specular`, `iridescence`, `anisotropy`, `volume`, `dispersion`, `diffuse_transmission`, `emissive_strength`, `KHR_materials_variants`, and `KHR_lights_punctual`; parsing them lets the core PBR material open even before the renderer draws those lobes, and each unrendered feature produces a specific `CompatibilityReport` record. `MSFT_texture_dds` stays disabled: DDS is decoded as a direct sidecar/image container, and the glTF extension's alternate image indexing is not implemented. Before fastgltf runs, the adapter pre-scans `extensionsRequired` with simdjson and classifies each name:
 
@@ -403,7 +445,7 @@ Importer-specific objects never cross into Streaming or Graphics. Model Core pro
 | SceneMetadata | generation, source format, source units/up axis, node/material/triangle counts, warnings, provisional/verified bounds |
 | Node | stable ID, parent, double-precision local transform, visibility |
 | MeshInstance | stable ID, node, reusable geometry, per-instance material, verified world bounds, visibility |
-| Material | base color factor/texture, metallic, roughness, emissive, normal texture, UV transform, unlit, alpha mode/cutoff, double-sided flag, transmission factor/flag |
+| Material | base color factor/texture, metallic, roughness, emissive, normal/occlusion maps, UV transform, unlit, alpha mode/cutoff, double-sided flag, PBR lobes and the clearcoat/specular/sheen/transmission maps, transmission factor/flag |
 | TextureSource | bounded encoded bytes or validated mapping range, MIME/container, mip metadata, color space, sampler |
 | MeshCluster | mesh/node IDs, triangle-or-point topology, double-precision origin, local AABB/sphere, material, LOD descriptors |
 | ChunkDescriptor | source/normalized range, topology, index/vertex counts, vertex layout, LOD, byte size, dependencies |
@@ -537,14 +579,12 @@ Every adapter's isolation, not only its parsing correctness, is verified: a synt
 
 Primary references: [Windows file mapping](https://learn.microsoft.com/windows/win32/memory/file-mapping), [fastgltf](https://github.com/spnda/fastgltf), [Google Draco](https://github.com/google/draco), [KTX-Software](https://github.com/KhronosGroup/KTX-Software), [ufbx](https://github.com/ufbx/ufbx), [lib3mf](https://github.com/3MFConsortium/lib3mf), [TinyUSDZ](https://github.com/lighttransport/tinyusdz), [OpenUSD](https://openusd.org/release/) and [meshoptimizer](https://github.com/zeux/meshoptimizer).
 
-## T22 authored material inputs (protocol v13)
+## T22 authored material inputs (protocol v13; extended by v14)
 
-`MaterialPayload` is 244 bytes. It carries `normalScale`, per-texture
-`slotFlags[5]` (authored UV set, U/V address mode, nearest intent),
-`slotUvOffset/Scale/Rotation` for slots 1-4, the independent occlusion slot and
-the existing alpha/transmission/unlit fields. The material chunk's image
-dependency slots are `{baseColor, metallicRoughness, normal, emissive,
-occlusion}`; slots 5-7 stay zero and `ChunkDescriptor` is 176 bytes. The
+The v13 slice introduced `normalScale`, per-texture `slotFlags` (authored UV
+set, U/V address mode, nearest intent), per-slot UV transforms and the
+independent occlusion slot. Protocol v14 (above) extends the same model to
+thirteen slots and 440 bytes; `ChunkDescriptor` is now 208 bytes. The
 metallic-roughness red channel is never treated as authored AO.
 
 Only UV set 0 is carried by the normalized vertex layouts. A slot that

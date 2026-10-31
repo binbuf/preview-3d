@@ -119,19 +119,24 @@ struct DebugMaterialRecord
     float uvOffset[2]{};
     float uvScale[2]{1.0f, 1.0f};
     float uvRotation = 0.0f;
-    // T22 authored normal-map scale and the per-slot sampler/UV metadata the
-    // renderer actually applies. slotUv* arrays carry slots 1..4; slot 0 is the
-    // legacy uvOffset/uvScale/uvRotation block above.
+    // T22/T25 authored normal-map scales and the per-slot sampler/UV metadata
+    // the renderer actually applies. slotUv* arrays carry slots 1..12; slot 0
+    // is the legacy uvOffset/uvScale/uvRotation block above.
     float normalScale = 1.0f;
-    uint32_t slotFlags[5]{};
-    float slotUvOffset[4][2]{};
-    float slotUvScale[4][2]{{1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}};
-    float slotUvRotation[4]{};
-    int textureIndices[5]{-1, -1, -1, -1, -1};
-    uint32_t textureChunkIds[5]{};
-    uint32_t textureFormats[5]{};
-    uint32_t textureColorSpaces[5]{};
-    bool textureBound[5]{};
+    float clearcoatNormalScale = 1.0f;
+    uint32_t slotFlags[model_core::kMaterialTextureSlotCount]{};
+    float slotUvOffset[model_core::kMaterialTextureSlotCount - 1][2]{};
+    float slotUvScale[model_core::kMaterialTextureSlotCount - 1][2]{
+        {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f},
+        {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f},
+        {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}};
+    float slotUvRotation[model_core::kMaterialTextureSlotCount - 1]{};
+    int textureIndices[model_core::kMaterialTextureSlotCount]{
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+    uint32_t textureChunkIds[model_core::kMaterialTextureSlotCount]{};
+    uint32_t textureFormats[model_core::kMaterialTextureSlotCount]{};
+    uint32_t textureColorSpaces[model_core::kMaterialTextureSlotCount]{};
+    bool textureBound[model_core::kMaterialTextureSlotCount]{};
     uint32_t mapMask = 0;
 };
 
@@ -378,10 +383,10 @@ public:
     float DebugResolveExposure() const noexcept { return resolveExposure_.load(); }
     uint32_t DebugResolveToneMap() const noexcept { return resolveToneMap_.load(); }
     uint32_t DebugChannelMask() const noexcept {
-        return (1u << 24) - 1u; // channels 0..23; unsupported channels are reported per-channel
+        return (1u << 31) - 1u; // channels 0..30; unsupported channels are reported per-channel
     }
     static bool DebugChannelSupported(uint32_t channel) noexcept {
-        return channel <= 23u && channel != 5u; // UV1 is not on the wire
+        return channel <= 30u && channel != 5u; // UV1 is not on the wire
     }
     // Numeric HDR sampling of the scene target. Status: 0 none, 1 pending,
     // 2 ready, 3 failed (optically) 4 consumed.

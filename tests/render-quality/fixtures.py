@@ -18,6 +18,7 @@ import json
 import math
 from pathlib import Path
 import struct
+import zlib
 
 from common import encoded_png, write_json
 from studio import uv_sphere
@@ -605,12 +606,197 @@ def stl_box(path: Path) -> Path:
     return path
 
 
+def _camera_facing_quad(x: float, y: float, width: float = 1.35,
+                        height: float = 1.0):
+    """A glTF front-facing (-Z normal) quad with UV0 left-to-right.
+
+    glTF is Y-up; the viewer's front view looks along the model Z axis, so a
+    constant-Z XY quad faces the camera. Winding is chosen for a -Z front face.
+    """
+    left, right = x - width * 0.5, x + width * 0.5
+    bottom, top = y - height * 0.5, y + height * 0.5
+    positions = [(left, bottom, 0.0), (right, bottom, 0.0),
+                 (left, top, 0.0), (right, top, 0.0)]
+    normals = [(0.0, 0.0, -1.0)] * 4
+    uvs = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+    indices = [0, 2, 1, 1, 2, 3]
+    tangents = [(1.0, 0.0, 0.0, 1.0)] * 4
+    return positions, normals, uvs, indices, tangents
+
+
+def _gradient_png(width, height, channel_values):
+    """RGB PNG; channel_values returns (r, g, b)."""
+    pixels = bytearray()
+    for y in range(height):
+        for x in range(width):
+            pixels += bytes(channel_values(x, y))
+    return _png_data_uri(bytes(pixels), width, height)
+
+
+def _rgba_png_data_uri(width, height, channel_values):
+    """RGBA PNG for maps whose authored channel is alpha (specular/sheen)."""
+    def chunk(kind, data):
+        return (struct.pack('>I', len(data)) + kind + data
+                + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff))
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)
+        for x in range(width):
+            rows += bytes(channel_values(x, y))
+    data = (b'\x89PNG\r\n\x1a\n'
+            + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(bytes(rows), 6))
+            + chunk(b'IEND', b''))
+    return 'data:image/png;base64,' + base64.b64encode(data).decode('ascii')
+
+
+def textured_lobes(path: Path) -> Path:
+    """T25 textured extension-lobe fixture.
+
+    Nine camera-facing quads isolate one authored map each: clearcoat factor,
+    clearcoat roughness, clearcoat normal, specular factor/color (one shared
+    image decoded into an sRGB color chunk and a linear data chunk), sheen
+    color/roughness, transmission factor, an unsupported UV1 clearcoat map and
+    a KHR_texture_transform clearcoat map. One plain quad is the no-extension
+    baseline. The maps have deliberately mismatched dimensions and every
+    channel varies left-to-right so a single probe can prove per-texel support.
+    """
+    coat_uri = _gradient_png(64, 64, lambda x, y: (30 + x * 225 // 63, 0, 0))
+    rough_uri = _gradient_png(32, 16, lambda x, y: (0, 20 + x * 235 // 31, 0))
+    normal_uri = _gradient_png(16, 8, lambda x, y: (
+        96 + x * 96 // 15, 128, 255))
+    # The shared image carries an RGB color gradient and an independent alpha
+    # factor gradient: the same source is decoded once as sRGB color and once
+    # as a linear data texture.
+    shared_uri = _rgba_png_data_uri(32, 32, lambda x, y: (
+        40 + x * 180 // 31, 70 + y * 150 // 31, 210,
+        30 + x * 220 // 31))
+    sheen_uri = _gradient_png(8, 8, lambda x, y: (20 + x * 200 // 7, 120, 60))
+    # RGBA alpha carries the gradient; _gradient_png appends alpha=255, so build
+    # the transmission map explicitly.
+    transmission_pixels = bytearray()
+    for y in range(16):
+        for x in range(16):
+            transmission_pixels += bytes((x * 255 // 15, 0, 0, 255))
+    transmission_uri = _png_data_uri(bytes(transmission_pixels), 16, 16)
+    # Sheen roughness uses the alpha channel of a 64x8 map.
+    sheen_rough_uri = _rgba_png_data_uri(
+        64, 8, lambda x, y: (0, 0, 0, 10 + x * 230 // 63))
+
+    materials = [
+        {'name': 'no extension baseline',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.72, 0.72, 0.72, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.7}},
+        {'name': 'clearcoat factor map',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.85, 0.25, 0.25, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.6},
+         'extensions': {'KHR_materials_clearcoat': {
+             'clearcoatFactor': 0.9, 'clearcoatTexture': {'index': 0}}}},
+        {'name': 'clearcoat roughness map',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.25, 0.85, 0.25, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.6},
+         'extensions': {'KHR_materials_clearcoat': {
+             'clearcoatFactor': 0.5, 'clearcoatRoughnessFactor': 0.8,
+             'clearcoatRoughnessTexture': {'index': 1}}}},
+        {'name': 'clearcoat normal map',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.25, 0.35, 0.9, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.5},
+         'extensions': {'KHR_materials_clearcoat': {
+             'clearcoatFactor': 1.0,
+             'clearcoatNormalTexture': {'index': 2, 'scale': 1.0}}}},
+        {'name': 'specular maps',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.9, 0.8, 0.2, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.4},
+         'extensions': {'KHR_materials_specular': {
+             'specularFactor': 0.9, 'specularColorFactor': [0.9, 0.8, 0.7],
+             'specularTexture': {'index': 3},
+             'specularColorTexture': {'index': 4}}}},
+        {'name': 'sheen maps',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.8, 0.3, 0.85, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.5},
+         'extensions': {'KHR_materials_sheen': {
+             'sheenColorFactor': [0.7, 0.6, 0.5], 'sheenRoughnessFactor': 0.7,
+             'sheenColorTexture': {'index': 5},
+             'sheenRoughnessTexture': {'index': 6}}}},
+        {'name': 'transmission map',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.2, 0.75, 0.85, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.2},
+         'extensions': {
+             'KHR_materials_transmission': {
+                 'transmissionFactor': 0.8, 'transmissionTexture': {'index': 7}},
+             'KHR_materials_ior': {'ior': 1.5}}},
+        {'name': 'uv1 clearcoat map',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.95, 0.55, 0.3, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.6},
+         'extensions': {'KHR_materials_clearcoat': {
+             'clearcoatFactor': 0.6,
+             'clearcoatTexture': {'index': 0, 'texCoord': 1}}}},
+        {'name': 'transformed clearcoat map',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.55, 0.95, 0.45, 1],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.6},
+         'extensions': {'KHR_materials_clearcoat': {
+             'clearcoatFactor': 0.8, 'clearcoatTexture': {'index': 0,
+                 'extensions': {'KHR_texture_transform': {
+                     'offset': [0.5, 0.0], 'scale': [2.0, 1.0],
+                     'rotation': 0.0}}}}}},
+    ]
+    # The probes are reviewed from either side of the flat plate; double-sided
+    # rendering keeps the authored normal map orientation deterministic under
+    # the viewer's orbit conventions.
+    for material in materials:
+        material['doubleSided'] = True
+    add_mesh, finish = _mesh_builder()
+    locations = [(-3.2, 3.9), (0.0, 3.9), (3.2, 3.9),
+                 (-3.2, 2.6), (0.0, 2.6), (3.2, 2.6),
+                 (-3.2, 1.3), (0.0, 1.3), (3.2, 1.3)]
+    primitives = []
+    for material_index, (x, y) in enumerate(locations):
+        positions, normals, uvs, indices, tangents = _camera_facing_quad(x, y)
+        base = add_mesh(positions, normals, uvs, indices, tangents=tangents,
+                        colors=[(1.0, 1.0, 1.0, 1.0)] * 4)
+        primitives.append({
+            'attributes': {'POSITION': base, 'NORMAL': base + 1,
+                           'TEXCOORD_0': base + 2, 'TANGENT': base + 4,
+                           'COLOR_0': base + 5},
+            'indices': base + 3, 'material': material_index})
+    document = {
+        'asset': {'version': '2.0',
+                  'generator': 'preview-3d tests/render-quality/fixtures.py'},
+        'extensionsUsed': ['KHR_texture_transform', 'KHR_materials_clearcoat',
+                           'KHR_materials_sheen', 'KHR_materials_specular',
+                           'KHR_materials_transmission', 'KHR_materials_ior'],
+        'samplers': [
+            {'wrapS': 10497, 'wrapT': 10497},
+            # Nearest/clamped sampler proves the per-slot sampler metadata is
+            # carried independently of the shared linear default.
+            {'wrapS': 33071, 'wrapT': 33648, 'magFilter': 9728},
+        ],
+        'images': [{'uri': coat_uri}, {'uri': rough_uri}, {'uri': normal_uri},
+                   {'uri': shared_uri}, {'uri': sheen_uri},
+                   {'uri': sheen_rough_uri}, {'uri': transmission_uri}],
+        # Texture 3 and 4 share image 3 but are used as linear (A) and sRGB
+        # (RGB) semantics respectively.
+        'textures': [
+            {'source': 0, 'sampler': 0}, {'source': 1, 'sampler': 1},
+            {'source': 2, 'sampler': 0}, {'source': 3, 'sampler': 0},
+            {'source': 3, 'sampler': 1}, {'source': 4, 'sampler': 0},
+            {'source': 5, 'sampler': 1}, {'source': 6, 'sampler': 0},
+        ],
+        'scene': 0, 'scenes': [{'nodes': [0]}], 'nodes': [{'mesh': 0}],
+        'materials': materials,
+        'meshes': [{'primitives': primitives}],
+    }
+    document, binary = finish(document)
+    return _glb(document, binary, path)
+
+
 FIXTURES = {
     'sphere-grid': (sphere_grid, 'sphere-grid.glb'),
     'glass-reference': (glass_reference, 'glass-reference.glb'),
     'material-probe': (material_probe, 'material-probe.glb'),
     'brdf-probe': (brdf_probe, 'brdf-probe.glb'),
     'material-semantics': (material_semantics, 'material-semantics.glb'),
+    'textured-lobes': (textured_lobes, 'textured-lobes.glb'),
     'texture-reuse': (texture_reuse, 'texture-reuse.glb'),
     'stl-box': (stl_box, 'stl-box.stl'),
 }
@@ -742,6 +928,66 @@ EXPECTED_MATERIALS = {
     ],
 }
 
+# T25 textured extension-lobe probes. `channels` lists the effective-input
+# diagnostic channels that must vary across the quad's U axis; `constant`
+# records the values a factor-only or unsupported-slot probe must keep. Slot
+# numbers are the fixed material slots from MaterialPayload.h.
+EXPECTED_TEXTURED_LOBES = [
+    {'name': 'no extension baseline', 'baseColor': [0.72, 0.72, 0.72, 1.0],
+     'bucket': 0, 'alphaMode': 0, 'extensionSlots': [],
+     'constant': {12: [0.0, 0.0, 0.0], 24: [0.0, 0.045, 0.0],
+                  25: [1.0, 1.0, 1.0], 26: [0.04, 0.04, 0.04],
+                  27: [0.0, 0.0, 0.0], 28: [0.0, 0.0, 0.0],
+                  30: [0.0, 0.0, 0.0]}},
+    {'name': 'clearcoat factor map', 'baseColor': [0.85, 0.25, 0.25, 1.0],
+     'bucket': 0, 'alphaMode': 0,
+     'extensionSlots': [{'slot': 5, 'bound': True, 'uvSet': 0,
+                         'colorSpace': 0}],
+     'channels': [12], 'ranges': {12: [0.1, 0.91]}},
+    {'name': 'clearcoat roughness map', 'baseColor': [0.25, 0.85, 0.25, 1.0],
+     'bucket': 0, 'alphaMode': 0,
+     'extensionSlots': [{'slot': 6, 'bound': True, 'uvSet': 0,
+                         'colorSpace': 0}],
+     'channels': [24], 'ranges': {24: [0.06, 0.81]}},
+    {'name': 'clearcoat normal map', 'baseColor': [0.25, 0.35, 0.9, 1.0],
+     'bucket': 0, 'alphaMode': 0,
+     'extensionSlots': [{'slot': 7, 'bound': True, 'uvSet': 0,
+                         'colorSpace': 0}],
+     'channels': [29], 'ranges': {29: [0.3, 1.0]},
+     'clearcoatNormalScale': 1.0},
+    {'name': 'specular maps', 'baseColor': [0.9, 0.8, 0.2, 1.0],
+     'bucket': 0, 'alphaMode': 0,
+     'extensionSlots': [{'slot': 8, 'bound': True, 'uvSet': 0,
+                         'colorSpace': 0},
+                        {'slot': 9, 'bound': True, 'uvSet': 0,
+                         'colorSpace': 1}],
+     'sharedImageSlots': [8, 9],
+     'channels': [25, 26], 'ranges': {25: [0.09, 0.91], 26: [0.002, 0.02]},
+     'deltas': {26: 0.004}},
+    {'name': 'sheen maps', 'baseColor': [0.8, 0.3, 0.85, 1.0],
+     'bucket': 0, 'alphaMode': 0,
+     'extensionSlots': [{'slot': 10, 'bound': True, 'uvSet': 0,
+                         'colorSpace': 1},
+                        {'slot': 11, 'bound': True, 'uvSet': 0,
+                         'colorSpace': 0}],
+     'channels': [27, 30], 'ranges': {27: [0.01, 0.71], 30: [0.01, 0.71]}},
+    {'name': 'transmission map', 'baseColor': [0.2, 0.75, 0.85, 1.0],
+     'bucket': 3, 'alphaMode': 0,
+     'extensionSlots': [{'slot': 12, 'bound': True, 'uvSet': 0,
+                         'colorSpace': 0}],
+     'channels': [28], 'ranges': {28: [0.0, 0.81]}},
+    {'name': 'uv1 clearcoat map', 'baseColor': [0.95, 0.55, 0.3, 1.0],
+     'bucket': 0, 'alphaMode': 0,
+     'extensionSlots': [{'slot': 5, 'bound': False, 'uvSet': 1,
+                         'colorSpace': 0}],
+     'constant': {12: [0.6, 0.6, 0.6]}},
+    {'name': 'transformed clearcoat map', 'baseColor': [0.55, 0.95, 0.45, 1.0],
+     'bucket': 0, 'alphaMode': 0,
+     'extensionSlots': [{'slot': 5, 'bound': True, 'uvSet': 0,
+                         'colorSpace': 0, 'uvOffset': [0.5, 0.0],
+                         'uvScale': [2.0, 1.0]}],
+     'channels': [12], 'ranges': {12: [0.05, 0.81]}},
+]
 
 def _sanitize(value):
     if isinstance(value, float):
@@ -774,6 +1020,7 @@ def generate(output: Path):
                     'material-probe': [item['name'] for item in EXPECTED_MATERIALS['material-probe']],
                     'brdf-probe': [item['name'] for item in EXPECTED_MATERIALS['brdf-probe']],
                     'material-semantics': [item['name'] for item in EXPECTED_MATERIALS['material-semantics']],
+                    'textured-lobes': [item['name'] for item in EXPECTED_TEXTURED_LOBES],
                     'texture-reuse': ['one reused sRGB color map', 'one linear data map'],
                     'stl-box': ['hard-edged STEP/STL-like surface', 'ground contact'],
                 }[name],
@@ -781,5 +1028,7 @@ def generate(output: Path):
         }
         if name in EXPECTED_MATERIALS:
             generated[name]['expectedMaterials'] = _sanitize(EXPECTED_MATERIALS[name])
+        if name == 'textured-lobes':
+            generated[name]['expectedLobes'] = _sanitize(EXPECTED_TEXTURED_LOBES)
     write_json(output / 'fixtures.json', {'schema': 1, 'fixtures': generated})
     return generated

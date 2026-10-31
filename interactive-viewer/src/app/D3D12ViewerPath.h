@@ -159,10 +159,12 @@ struct D3D12ViewerPath
     static constexpr UINT kConstantBufferSlotBytes = 512;
     Microsoft::WRL::ComPtr<ID3D12Resource> frameConstantBuffer;
     std::byte* frameConstantBufferMapped = nullptr;
-    // T22: per-material cbuffer stride. The record is 304 bytes today but the
+    // T22/T25: per-material cbuffer stride. The v14 record is 560 bytes
+    // (thirteen per-slot UV/param float4 pairs plus the lobe scalars) but the
     // binding address must be 256-byte aligned, so each draw/frame region is
-    // 512 bytes.
-    static constexpr UINT kMaterialConstantStride = 512;
+    // 1024 bytes. The record stays a fixed-size bounded layout: root constants
+    // are never extended with per-slot data.
+    static constexpr UINT kMaterialConstantStride = 1024;
 
     // T14: the product-owned procedural studio environment, baked once at
     // initialization into an RGB float cubemap with a GGX-prefiltered mip
@@ -210,11 +212,12 @@ struct D3D12ViewerPath
         double instanceBoundsMin[3]{}, instanceBoundsMax[3]{};
         bool mirrored = false;
         int textureIndex = -1; // base-color index retained for pressure compatibility
-        int textureIndices[5]{-1,-1,-1,-1,-1};
+        int textureIndices[model_core::kMaterialTextureSlotCount]{
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
         // T21: validated source identity and color-space of each bound slot.
         // Zero/first entries mean the slot is unbound and samples the neutral
         // fallback; the diagnostics report that explicitly. T22 adds the
-        // independent occlusion slot 4.
+        // independent occlusion slot 4 and T25 the eight extension-lobe slots.
         struct TextureInfo
         {
             uint32_t chunkId = 0;
@@ -222,8 +225,8 @@ struct D3D12ViewerPath
             model_core::ColorSpaceId colorSpace = model_core::ColorSpaceId::Linear;
             bool bound = false;
         };
-        TextureInfo textureInfo[5]{};
-        Microsoft::WRL::ComPtr<ID3D12Resource> neutralResources[5];
+        TextureInfo textureInfo[model_core::kMaterialTextureSlotCount]{};
+        Microsoft::WRL::ComPtr<ID3D12Resource> neutralResources[model_core::kMaterialTextureSlotCount];
         UINT neutralDescriptorBase = 0;
         // T22 per-material constant buffer. It is a CPU-writable UPLOAD-heap
         // resource with one kMaterialConstantStride region per swap-chain

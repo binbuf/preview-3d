@@ -323,7 +323,7 @@ std::vector<std::byte> MetadataSection(model_core::UpAxisId axis, double metersP
 
 TEST_CASE("USD-003 extends protocol-v10 with closed additive identities", "[usd-003][protocol]")
 {
-    CHECK(model_core::kCurrentProtocolVersion == 13);
+    CHECK(model_core::kCurrentProtocolVersion == 14);
     CHECK(uint32_t(model_core::SourceFormatId::Usda) == 9);
     CHECK(uint32_t(model_core::SourceFormatId::Usdc) == 10);
     CHECK(uint32_t(model_core::SourceFormatId::Usdz) == 11);

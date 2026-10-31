@@ -27,6 +27,9 @@ CHANNELS = {
     16: 'environment-diffuse', 17: 'environment-specular', 18: 'coat',
     19: 'emission', 20: 'pre-tone-map-hdr', 21: 'environment-brdf-scale',
     22: 'transmission-composite', 23: 'display-calibration',
+    24: 'lobe-clearcoat', 25: 'lobe-specular-factor', 26: 'lobe-specular-color',
+    27: 'lobe-sheen-color', 28: 'lobe-transmission', 29: 'coat-normal',
+    30: 'lobe-sheen-roughness',
 }
 CONTRIBUTION_CHANNELS = [14, 15, 16, 17, 18, 19, 20]
 
@@ -131,6 +134,7 @@ def material_records(hwnd):
             'hasMaterial': bool(_u32(hwnd, 146)), 'alphaMode': _u32(hwnd, 147),
             'flags': _u32(hwnd, 148),
             'normalScale': _f32(hwnd, 201),
+            'clearcoatNormalScale': _f32(hwnd, 242),
             'slotFlags': [_u32(hwnd, 202 + slot) for slot in range(5)],
             'slotUvOffset': [[_f32(hwnd, 207 + slot), _f32(hwnd, 211 + slot)]
                              for slot in range(4)],
@@ -153,6 +157,23 @@ def material_records(hwnd):
             'points': bool(_u32(hwnd, 192)), 'lines': bool(_u32(hwnd, 193)),
             'completeVertex': bool(_u32(hwnd, 194)),
         }
+        extension_slots = []
+        for extension in range(8):
+            _send(hwnd, 233, extension)
+            packed = _u32(hwnd, 240)
+            extension_slots.append({
+                'slot': 5 + extension,
+                'slotFlags': _u32(hwnd, 234),
+                'uvOffset': [_f32(hwnd, 235), _f32(hwnd, 236)],
+                'uvScale': [_f32(hwnd, 237), _f32(hwnd, 238)],
+                'uvRotation': _f32(hwnd, 239),
+                'textureIndex': packed & 0xFF,
+                'pixelFormat': (packed >> 8) & 0xFF,
+                'colorSpace': (packed >> 16) & 0xFF,
+                'bound': bool(packed & (1 << 24)),
+                'chunkId': _u32(hwnd, 241),
+            })
+        record['extensionSlots'] = extension_slots
         for field, (name, component) in FLOAT_FIELDS.items():
             value = _f32(hwnd, field)
             if component is None:

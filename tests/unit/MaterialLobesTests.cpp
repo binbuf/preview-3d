@@ -19,11 +19,11 @@
 
 using namespace model_core;
 
-TEST_CASE("Protocol v13 MaterialPayload is a fixed 244-byte lobe and texture record",
+TEST_CASE("Protocol v14 MaterialPayload is a fixed 440-byte lobe and texture record",
           "[material-lobes][wire-format]")
 {
-    REQUIRE(kCurrentProtocolVersion == 13);
-    REQUIRE(sizeof(MaterialPayload) == 244);
+    REQUIRE(kCurrentProtocolVersion == 14);
+    REQUIRE(sizeof(MaterialPayload) == 440);
     CHECK(offsetof(MaterialPayload, transmissionFactor) == 68);
     CHECK(offsetof(MaterialPayload, emissiveStrength) == 72);
     CHECK(offsetof(MaterialPayload, clearcoatFactor) == 76);
@@ -34,7 +34,7 @@ TEST_CASE("Protocol v13 MaterialPayload is a fixed 244-byte lobe and texture rec
     CHECK(offsetof(MaterialPayload, specularColor) == 104);
     CHECK(offsetof(MaterialPayload, ior) == 116);
     CHECK(offsetof(MaterialPayload, occlusionStrength) == 120);
-    CHECK(offsetof(MaterialPayload, reserved) == 228);
+    CHECK(offsetof(MaterialPayload, reserved) == 424);
     CHECK(kMaterialReservedWordCount == 4);
 }
 
@@ -151,13 +151,18 @@ TEST_CASE("T22 authored texture fields default to identity and validate their bo
           "[material-lobes][material-semantics]")
 {
     MaterialPayload material{};
-    CHECK(sizeof(MaterialPayload) == 244);
+    CHECK(sizeof(MaterialPayload) == 440);
     CHECK(offsetof(MaterialPayload, normalScale) == 124);
-    CHECK(offsetof(MaterialPayload, slotFlags) == 128);
-    CHECK(offsetof(MaterialPayload, slotUvOffset) == 148);
-    CHECK(offsetof(MaterialPayload, slotUvScale) == 180);
-    CHECK(offsetof(MaterialPayload, slotUvRotation) == 212);
+    CHECK(offsetof(MaterialPayload, clearcoatNormalScale) == 128);
+    CHECK(offsetof(MaterialPayload, slotFlags) == 132);
+    CHECK(offsetof(MaterialPayload, slotUvOffset) == 184);
+    CHECK(offsetof(MaterialPayload, slotUvScale) == 280);
+    CHECK(offsetof(MaterialPayload, slotUvRotation) == 376);
+    CHECK(kMaterialTextureSlotCount == 13);
+    CHECK(kMaterialSlotIndexClearcoat == 5);
+    CHECK(kMaterialSlotIndexTransmission == 12);
     CHECK(material.normalScale == 1.0f);
+    CHECK(material.clearcoatNormalScale == 1.0f);
     for (uint32_t slot = 0; slot < kMaterialTextureSlotCount; ++slot) {
         CHECK(material.slotFlags[slot] == 0);
     }
@@ -179,6 +184,11 @@ TEST_CASE("T22 authored texture fields default to identity and validate their bo
     material = MaterialPayload{};
     material.normalScale = 17.0f;
     CHECK(std::strcmp(ValidateMaterialLobeFields(material), "material normalScale out of range") == 0);
+
+    material = MaterialPayload{};
+    material.clearcoatNormalScale = -17.0f;
+    CHECK(std::strcmp(ValidateMaterialLobeFields(material),
+                      "material clearcoatNormalScale out of range") == 0);
 
     material = MaterialPayload{};
     material.slotFlags[1] = 0x80000000u;

@@ -49,6 +49,7 @@ import fixtures
 import material_semantics
 import selftest
 import texture_budget
+import textured_lobes
 import appearance
 from viewer import LoadFailed, Viewer, ViewerError, set_dpi_awareness
 
@@ -592,7 +593,7 @@ def main():
                 f'material-semantics: {failure}'
                 for failure in semantic_report['failures'])
         report['causeReport'] = semantic_report.get('reportPath')
-    if args.task == 'T24' and not args.capture_only:
+    if args.task in ('T24', 'T25') and not args.capture_only:
         unit_build = build_unit_tests(args.configuration, output, enabled=not args.no_build)
         report['unitTestBuild'] = unit_build
         if unit_build.get('command'):
@@ -600,8 +601,9 @@ def main():
         if not unit_build['pass']:
             report['failures'].append(
                 f'unit test build failed (see {unit_build.get("log")})')
-        # The shared MaterialDielectricF0/F90 helper is also exercised by the
-        # importer contract, so build the import suite for the full lane.
+        # The shared MaterialDielectricF0/F90 helper and the T25 lobe-map import
+        # contract are exercised by the importer suite, so build it for the
+        # full lane.
         if not args.fast:
             import_build = build_import_tests(args.configuration, output,
                                               enabled=not args.no_build)
@@ -632,6 +634,16 @@ def main():
             report['failures'].extend(
                 f'brdf: {failure}' for failure in brdf_report['failures'])
         report['causeReport'] = brdf_report.get('reportPath')
+    if args.task == 'T25' and not args.capture_only:
+        # Textured coat/specular/sheen/transmission lanes: serial
+        # unit/import/wire/hostile checks plus the GPU left/right map-variation
+        # session on the generated camera-facing probe fixture.
+        lobe_report = textured_lobes.run(ROOT, output, args.configuration, fast=args.fast)
+        report['texturedLobes'] = lobe_report
+        if lobe_report.get('failures'):
+            report['failures'].extend(
+                f'textured-lobes: {failure}' for failure in lobe_report['failures'])
+        report['causeReport'] = lobe_report.get('reportPath')
 
     required_lanes = [name for name, lane in profile['lanes'].items() if lane.get('required')]
     selected_lanes = {}

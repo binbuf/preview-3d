@@ -338,7 +338,8 @@ void RenderThread::RefreshDebugMaterials()
         std::memcpy(record.uvScale, mesh.material.uvScale, sizeof(record.uvScale));
         record.uvRotation = mesh.material.uvRotation;
         record.normalScale = mesh.material.normalScale;
-        for (int slot = 0; slot < 5; ++slot) {
+        record.clearcoatNormalScale = mesh.material.clearcoatNormalScale;
+        for (int slot = 0; slot < int(model_core::kMaterialTextureSlotCount); ++slot) {
             record.slotFlags[slot] = mesh.material.slotFlags[slot];
             if (slot > 0) {
                 record.slotUvOffset[slot - 1][0] = mesh.material.slotUvOffset[slot - 1][0];
@@ -978,15 +979,15 @@ void RenderThread::PumpUploads(HWND window)
             if (mat==materials_.end()) continue;
             mesh.material=mat->second.data;mesh.hasMaterial=true;
             if (!path_.EnsureMaterialConstants(mesh,descriptorError)) materialBuffersReady=false;
-            const uint32_t ids[5]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
-                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId,
-                                  mat->second.occlusionImageChunkId};
-            for (UINT slot=0;slot<5;++slot) for (const auto& texture:path_.model.textures) if (texture.chunkId==ids[slot]) {
-                mesh.textureIndices[slot]=int(texture.srvHeapIndex);
-                mesh.textureInfo[slot].chunkId=texture.chunkId;
-                mesh.textureInfo[slot].bound=true;
-                if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
-                break;
+            for (UINT slot=0;slot<model_core::kMaterialTextureSlotCount;++slot) {
+                for (const auto& texture:path_.model.textures) {
+                    if (texture.chunkId!=mat->second.ImageChunkId(slot)) continue;
+                    mesh.textureIndices[slot]=int(texture.srvHeapIndex);
+                    mesh.textureInfo[slot].chunkId=texture.chunkId;
+                    mesh.textureInfo[slot].bound=true;
+                    if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
+                    break;
+                }
             }
         }
         UpdateResidencySmoke();
@@ -1168,16 +1169,15 @@ void RenderThread::PumpUploads(HWND window)
             if (mat == materials_.end()) continue; // Neutral, immutable until a dependency arrives.
             mesh.material=mat->second.data;mesh.hasMaterial=true;
             if (!path_.EnsureMaterialConstants(mesh,descriptorError)) materialBuffersReady=false;
-            const uint32_t ids[5]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
-                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId,
-                                  mat->second.occlusionImageChunkId};
-            for (UINT slot=0;slot<5;++slot) for (const auto& texture:destination.textures) {
-                if (texture.chunkId!=ids[slot]) continue;
-                mesh.textureIndices[slot]=static_cast<int>(texture.srvHeapIndex);
-                mesh.textureInfo[slot].chunkId=texture.chunkId;
-                mesh.textureInfo[slot].bound=true;
-                if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
-                break;
+            for (UINT slot=0;slot<model_core::kMaterialTextureSlotCount;++slot) {
+                for (const auto& texture:destination.textures) {
+                    if (texture.chunkId!=mat->second.ImageChunkId(slot)) continue;
+                    mesh.textureIndices[slot]=static_cast<int>(texture.srvHeapIndex);
+                    mesh.textureInfo[slot].chunkId=texture.chunkId;
+                    mesh.textureInfo[slot].bound=true;
+                    if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
+                    break;
+                }
             }
         }
         const bool hasVisibleDraw = std::any_of(destination.meshes.begin(), destination.meshes.end(),

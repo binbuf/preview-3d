@@ -1583,6 +1583,8 @@ TEST_CASE("T22 preserves normal scale, per-slot metadata and independent occlusi
     CHECK(materials[0]->descriptor.dependencyCount == 5);
     for (int slot = 0; slot < 5; ++slot)
         CHECK(materials[0]->descriptor.dependencyIds[slot] != 0);
+    for (uint32_t slot = 5; slot < model_core::kMaterialTextureSlotCount; ++slot)
+        CHECK(materials[0]->descriptor.dependencyIds[slot] == 0);
     // MR (slot 1) and occlusion (slot 4) deliberately point at the same image
     // here; they are still distinct authored slots, and neither is inferred
     // from the other's channel.
@@ -2068,4 +2070,92 @@ TEST_CASE("A required Draco primitive with corrupt compressed bytes fails typed"
     // rejects it as malformed instead of degrading the model.
     CHECK(run.errorNotice.errorCode
           == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+TEST_CASE("T25 extension-lobe maps keep their fixed slot semantics and color spaces",
+          "[gltf-import][material][textured-lobes]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"textured-lobe-maps.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3401,
+                             /*maxChunkCount=*/16);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    std::vector<const import_broker::ValidatedChunk*> materials;
+    std::unordered_map<uint32_t, model_core::ColorSpaceId> imageColorSpaces;
+    bool sawUnsupportedUvSet = false;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materials.push_back(&chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport) {
+            model_core::CompatibilityReportPayload report{};
+            REQUIRE(chunk.payload.size() >= sizeof(report));
+            std::memcpy(&report, chunk.payload.data(), sizeof(report));
+            for (uint32_t i = 0; i < report.recordCount; ++i)
+                if (report.records[i].featureId == model_core::kTextureFeatureUnsupportedUvSet)
+                    sawUnsupportedUvSet = true;
+        }
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image) {
+            REQUIRE(chunk.payload.size() >= sizeof(model_core::ImagePayloadHeader));
+            model_core::ImagePayloadHeader header{};
+            std::memcpy(&header, chunk.payload.data(), sizeof(header));
+            imageColorSpaces[chunk.descriptor.chunkId] = static_cast<model_core::ColorSpaceId>(header.colorSpace);
+        }
+    }
+    REQUIRE(materials.size() == 3);
+    const auto payloadOf = [](const import_broker::ValidatedChunk& chunk) {
+        model_core::MaterialPayload payload{};
+        REQUIRE(chunk.payload.size() == sizeof(payload));
+        std::memcpy(&payload, chunk.payload.data(), sizeof(payload));
+        return payload;
+    };
+
+    // Material 0 authors all eight extension maps.
+    const auto allMaps = payloadOf(*materials[0]);
+    CHECK(allMaps.clearcoatFactor == Catch::Approx(0.8f));
+    CHECK(allMaps.clearcoatRoughness == Catch::Approx(0.6f));
+    CHECK(allMaps.clearcoatNormalScale == Catch::Approx(0.5f));
+    CHECK(allMaps.specularFactor == Catch::Approx(0.7f));
+    CHECK(allMaps.specularColor[1] == Catch::Approx(0.8f));
+    CHECK(allMaps.sheenColor[2] == Catch::Approx(0.7f));
+    CHECK(allMaps.sheenRoughness == Catch::Approx(0.4f));
+    CHECK(allMaps.transmissionFactor == Catch::Approx(0.6f));
+    CHECK(materials[0]->descriptor.dependencyCount == 8);
+    for (uint32_t slot = model_core::kMaterialSlotIndexClearcoat;
+         slot < model_core::kMaterialTextureSlotCount; ++slot)
+        CHECK(materials[0]->descriptor.dependencyIds[slot] != 0);
+
+    // The same authored image is used as a linear specular-factor map (A) and
+    // an sRGB specular-color map (RGB): two decoded chunks, two color spaces.
+    const uint32_t specularId = materials[0]->descriptor.dependencyIds[
+        model_core::kMaterialSlotIndexSpecular];
+    const uint32_t specularColorId = materials[0]->descriptor.dependencyIds[
+        model_core::kMaterialSlotIndexSpecularColor];
+    CHECK(specularId != specularColorId);
+    REQUIRE(imageColorSpaces.contains(specularId));
+    REQUIRE(imageColorSpaces.contains(specularColorId));
+    CHECK(imageColorSpaces[specularId] == model_core::ColorSpaceId::Linear);
+    CHECK(imageColorSpaces[specularColorId] == model_core::ColorSpaceId::Srgb);
+
+    // Material 1 authors a UV1 clearcoat map. The slot keeps its authored set
+    // but stays unbound rather than being aliased to UV0.
+    const auto uv1Map = payloadOf(*materials[1]);
+    CHECK(model_core::MaterialSlotUvSet(
+        uv1Map.slotFlags[model_core::kMaterialSlotIndexClearcoat]) == 1);
+    CHECK(materials[1]->descriptor.dependencyIds[
+        model_core::kMaterialSlotIndexClearcoat] == 0);
+    CHECK(sawUnsupportedUvSet);
+
+    // Material 2 carries its own per-slot UV transform on slot 5.
+    const auto transformed = payloadOf(*materials[2]);
+    const uint32_t slotIndex = model_core::kMaterialSlotIndexClearcoat - 1;
+    CHECK(transformed.slotUvOffset[slotIndex][0] == Catch::Approx(0.25f));
+    CHECK(transformed.slotUvOffset[slotIndex][1] == Catch::Approx(0.1f));
+    CHECK(transformed.slotUvScale[slotIndex][0] == Catch::Approx(2.0f));
+    CHECK(transformed.slotUvScale[slotIndex][1] == Catch::Approx(3.0f));
+    CHECK(transformed.slotUvRotation[slotIndex] == Catch::Approx(0.35f));
+    CHECK(materials[2]->descriptor.dependencyIds[
+        model_core::kMaterialSlotIndexClearcoat] != 0);
 }
