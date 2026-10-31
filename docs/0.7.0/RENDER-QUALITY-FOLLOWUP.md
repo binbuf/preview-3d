@@ -115,6 +115,19 @@ sources (the diffuse map drops from four resident textures to three), and makes
 capture readiness require terminal complete/resident state. See
 [ADR-0081](../design/adr/0081-texture-budget-accounting-and-complete-load-readiness.md).
 
+**T24 disposition (measured).** The split-sum DFG LUT, exact cubemap
+solid-angle SH projection and Khronos clearcoat layering replace the
+Fresnel-only environment response and the flat `(1 − clearcoatFactor)` base
+specular removal. A white metal reads the white-furnace identity (0.99992), the
+flat 0.3 linear patch displays exactly the CPU NeutralToneMap result
+(`[139,139,139]`), Studio and Directional environment channels match with zero
+delta across all sixteen probes, and environment intensity zero removes every
+environment/coat channel. Car paint keeps 0.97× the T21 environment-specular
+baseline; the Camera lens keeps a dark reflection/depth at 0.58×. Transmission
+remains the documented alpha-carried interim composite (channel 22) until
+T26/T27. See
+[ADR-0082](../design/adr/0082-split-sum-brdf-and-clearcoat-layering.md).
+
 ### Why Camera and Car differ
 
 Camera has four materials; its glass uses transmission 1, base RGB about 0.8,

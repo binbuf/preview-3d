@@ -1980,7 +1980,12 @@ TEST_CASE("KHR_materials_specular opens and maps factor/color/IOR without a warn
     CHECK(payload.ior == Catch::Approx(1.5f));
     float f0[3]{};
     model_core::MaterialDielectricF0(payload, f0);
-    CHECK(f0[0] == Catch::Approx(0.032f).margin(1e-5f));
+    // KHR_materials_specular: specularColor tints the IOR F0 at normal
+    // incidence; specularFactor is F90 and does not scale F0.
+    CHECK(f0[0] == Catch::Approx(0.04f).margin(1e-5f));
+    CHECK(f0[1] == Catch::Approx(0.036f).margin(1e-5f));
+    CHECK(f0[2] == Catch::Approx(0.032f).margin(1e-5f));
+    CHECK(model_core::MaterialSpecularF90(payload) == Catch::Approx(0.8f));
 }
 
 TEST_CASE("KHR_materials_emissive_strength opens and maps the multiplier without a warning",

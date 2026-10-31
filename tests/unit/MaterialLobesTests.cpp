@@ -80,22 +80,20 @@ TEST_CASE("IOR and specular fields produce the documented dielectric F0",
     material.specularColor[1] = 0.5f;
     material.specularColor[2] = 0.25f;
     MaterialDielectricF0(material, f0);
-    CHECK(f0[0] == Catch::Approx(0.010025f).margin(1e-4f));
-    CHECK(f0[1] == Catch::Approx(0.0050125f).margin(1e-4f));
-    CHECK(f0[2] == Catch::Approx(0.002506f).margin(1e-4f));
+    // KHR_materials_specular: specularColor tints F0; specularFactor is F90
+    // and must not reduce the normal-incidence reflectance.
+    CHECK(f0[0] == Catch::Approx(0.02005f).margin(1e-4f));
+    CHECK(f0[1] == Catch::Approx(0.010025f).margin(1e-4f));
+    CHECK(f0[2] == Catch::Approx(0.0050125f).margin(1e-4f));
+    CHECK(MaterialSpecularF90(material) == Catch::Approx(0.5f));
 }
 
 TEST_CASE("Clearcoat and sheen lobes are distinct and do not double-count base energy",
           "[material-lobes]")
 {
     MaterialPayload plain{};
-    CHECK(ClearcoatBaseSpecularScale(plain) == 1.0f);
+    CHECK(plain.clearcoatFactor == 0.0f);
     CHECK(SheenLobeWeight(plain, 0.5f) == 0.0f);
-
-    MaterialPayload paint{};
-    paint.clearcoatFactor = 1.0f;
-    paint.clearcoatRoughness = 0.1f;
-    CHECK(ClearcoatBaseSpecularScale(paint) == 0.0f); // coat owns the whole specular layer
 
     MaterialPayload cloth{};
     cloth.sheenColor[0] = cloth.sheenColor[1] = cloth.sheenColor[2] = 0.8f;
@@ -218,7 +216,15 @@ TEST_CASE("Textured shader applies the layered lobes before the HDR resolve",
     CHECK(shader.find("gMaterialLobes2.yzw") != std::string::npos); // specular color
     CHECK(shader.find("gEmissiveFactor.a") != std::string::npos);   // emissive strength
     CHECK(shader.find("gMaterialLobes3") == std::string::npos);     // root-constant budget
-    CHECK(shader.find("(1.0f-clearcoat)") != std::string::npos);    // energy layering
+    // T24 energy-consistent layering: the base is mixed toward the coat by
+    // clearcoatFactor * Fresnel, never by a flat (1 - clearcoatFactor).
+    CHECK(shader.find("(1.0f-clearcoat)") == std::string::npos);
+    CHECK(shader.find("coatWeight=clearcoat*coatFresnel") != std::string::npos);
+    CHECK(shader.find("attenuation=1.0f-coatWeight") != std::string::npos);
+    // Split-sum environment BRDF and independent F0/F90 semantics.
+    CHECK(shader.find("EnvironmentBrdfFresnel") != std::string::npos);
+    CHECK(shader.find("gBrdfLut") != std::string::npos);
+    CHECK(shader.find("MaterialDielectricF0") == std::string::npos); // shader has its own
     // The old fixed 0.04 dielectric F0 must not remain in EvaluateLight.
     CHECK(shader.find("float3 f0=lerp(float3(.04f,.04f,.04f),base,metallic)") == std::string::npos);
 

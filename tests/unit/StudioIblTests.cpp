@@ -5,6 +5,7 @@
 #include "StudioEnvironment.h"
 #include "D3D12ViewerPath.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <d3dcompiler.h>
@@ -12,6 +13,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <string>
 
 using namespace studio_ibl;
@@ -193,6 +195,205 @@ TEST_CASE("Studio environment bake is deterministic across runs",
     CHECK(smaller.MipCount() == 3);
 }
 
+namespace {
+
+float DotProduct(const Vec3& a, const Vec3& b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+CubeImage BuildCube(uint32_t size, const std::function<Rgb(const Vec3&)>& radiance)
+{
+    CubeImage image;
+    image.size = size;
+    for (uint32_t face = 0; face < 6; ++face) {
+        image.faces[face].resize(static_cast<size_t>(size) * size);
+        for (uint32_t y = 0; y < size; ++y)
+            for (uint32_t x = 0; x < size; ++x)
+                image.faces[face][static_cast<size_t>(y) * size + x] =
+                    radiance(CubemapDirection(face, x, y, size));
+    }
+    return image;
+}
+
+std::function<Rgb(const Vec3&)> LobeAround(const Vec3& axis)
+{
+    return [axis](const Vec3& direction) {
+        const float x = std::max(0.0f, DotProduct(direction, axis));
+        const float square = x * x;
+        return Rgb{0.10f + 1.10f * square, 0.08f + 0.70f * square,
+                   0.06f + 0.45f * square};
+    };
+}
+
+Vec3 Rotated(const Vec3& axis, float radians)
+{
+    const float c = std::cos(radians), s = std::sin(radians);
+    return {c * axis.x - s * axis.y, s * axis.x + c * axis.y, axis.z};
+}
+
+} // namespace
+
+TEST_CASE("Cubemap texels carry exact solid angles that sum to 4pi",
+          "[studio-ibl][brdf][ibl-solid-angle]")
+{
+    for (uint32_t size : {4u, 8u, 32u}) {
+        double total = 0.0;
+        float smallest = 1e9f, largest = 0.0f;
+        for (uint32_t face = 0; face < 6; ++face) {
+            for (uint32_t y = 0; y < size; ++y) {
+                for (uint32_t x = 0; x < size; ++x) {
+                    const float omega = CubemapTexelSolidAngle(face, x, y, size);
+                    CHECK(omega > 0.0f);
+                    total += omega;
+                    smallest = std::min(smallest, omega);
+                    largest = std::max(largest, omega);
+                }
+            }
+        }
+        CHECK(total == Catch::Approx(4.0 * 3.14159265358979323846).epsilon(1e-5));
+        // Corners see a much smaller solid angle than face centres; an equal
+        // 4*pi/(6*size*size) weight would hide exactly this difference.
+        CHECK(largest > smallest * 1.4f);
+    }
+    CHECK(CubemapTexelSolidAngle(6, 0, 0, 8) == 0.0f);
+    CHECK(CubemapTexelSolidAngle(0, 8, 0, 8) == 0.0f);
+}
+
+TEST_CASE("Solid-angle SH projection reproduces a constant environment exactly",
+          "[studio-ibl][brdf][ibl-irradiance]")
+{
+    const Rgb constant{0.70f, 0.50f, 0.30f};
+    const auto cube = BuildCube(32, [constant](const Vec3&) { return constant; });
+    const auto coefficients = ProjectCubeIrradiance(cube);
+    for (const Vec3& normal : {Vec3{0, 0, 1}, Vec3{1, 0, 0}, Vec3{0, -1, 0},
+                               Vec3{0.577f, 0.577f, 0.577f}}) {
+        const Rgb value = EvaluateIrradiance(coefficients, normal);
+        CHECK(value.r == Catch::Approx(constant.r).margin(2e-4f));
+        CHECK(value.g == Catch::Approx(constant.g).margin(2e-4f));
+        CHECK(value.b == Catch::Approx(constant.b).margin(2e-4f));
+    }
+}
+
+TEST_CASE("Directional irradiance matches an independent sphere reference and rotates",
+          "[studio-ibl][brdf][ibl-irradiance]")
+{
+    const Vec3 axis{0.35f, -0.42f, 0.84f};
+    const auto radiance = LobeAround(axis);
+    const auto cube = BuildCube(48, radiance);
+    const auto coefficients = ProjectCubeIrradiance(cube);
+    auto close = [](float actual, float reference) {
+        return std::fabs(actual - reference) <= 0.12f * std::max(0.05f, reference)
+            + 0.008f;
+    };
+    for (const Vec3& normal : {axis, Vec3{0, 0, 1}, Vec3{1, 0, 0},
+                               Vec3{-axis.x, -axis.y, -axis.z}}) {
+        const Rgb reference = ReferenceIrradianceDivPi(radiance, normal, 20000);
+        const Rgb value = EvaluateIrradiance(coefficients, normal);
+        CHECK(close(value.r, reference.r));
+        CHECK(close(value.g, reference.g));
+        CHECK(close(value.b, reference.b));
+    }
+
+    // Rotating the environment must rotate the response with it: the response
+    // along the rotated axis in the rotated environment equals the original
+    // response along the original axis (up to SH9 truncation).
+    const Vec3 rotatedAxis = Rotated(axis, 1.2f);
+    const auto rotatedCube = BuildCube(48, LobeAround(rotatedAxis));
+    const auto rotatedCoefficients = ProjectCubeIrradiance(rotatedCube);
+    const Rgb alongRotated = EvaluateIrradiance(rotatedCoefficients, rotatedAxis);
+    const Rgb alongOriginal = EvaluateIrradiance(coefficients, axis);
+    CHECK(Luminance(alongRotated) == Catch::Approx(Luminance(alongOriginal)).epsilon(0.08));
+    const Rgb awayFromRotated = EvaluateIrradiance(rotatedCoefficients, axis);
+    CHECK(Luminance(alongRotated) > Luminance(awayFromRotated) * 1.15f);
+}
+
+TEST_CASE("GGX prefilter preserves constant energy and matches an independent integral",
+          "[studio-ibl][brdf][ibl-prefilter]")
+{
+    const Rgb constant{0.40f, 0.55f, 0.25f};
+    auto constantRadiance = [constant](const Vec3&) { return constant; };
+    for (float roughness : {0.0f, 0.35f, 0.7f, 1.0f}) {
+        for (const Vec3& normal : {Vec3{0, 0, 1}, Vec3{0.6f, 0.0f, 0.8f},
+                                   Vec3{0.0f, -0.8f, 0.6f}}) {
+            const Rgb value = PrefilterSpecular(constantRadiance, normal, roughness, 256);
+            CHECK(value.r == Catch::Approx(constant.r).margin(3e-3f));
+            CHECK(value.g == Catch::Approx(constant.g).margin(3e-3f));
+            CHECK(value.b == Catch::Approx(constant.b).margin(3e-3f));
+        }
+    }
+
+    const Vec3 axis{0.2f, 0.5f, 0.84f};
+    const auto radiance = LobeAround(axis);
+    for (float roughness : {0.3f, 0.55f, 0.9f}) {
+        const Vec3 normal = axis;
+        const Rgb production = PrefilterSpecular(radiance, normal, roughness, 8192);
+        const Rgb reference = ReferencePrefilteredRadiance(radiance, normal, roughness, 65536);
+        auto close = [](float actual, float expected) {
+            return std::fabs(actual - expected) <= 0.06f * std::max(0.05f, expected) + 0.004f;
+        };
+        INFO("roughness " << roughness);
+        CHECK(close(production.r, reference.r));
+        CHECK(close(production.g, reference.g));
+        CHECK(close(production.b, reference.b));
+    }
+
+    // Rotating the environment rotates the prefiltered reflection.
+    const Vec3 rotatedAxis = Rotated(axis, 0.9f);
+    const Rgb rotated = PrefilterSpecular(LobeAround(rotatedAxis), rotatedAxis, 0.5f, 4096);
+    const Rgb original = PrefilterSpecular(LobeAround(axis), rotatedAxis, 0.5f, 4096);
+    CHECK(Luminance(rotated) > Luminance(original) * 1.15f);
+}
+
+TEST_CASE("Split-sum BRDF LUT matches an independent integration and conserves white energy",
+          "[studio-ibl][brdf][ibl-lut]")
+{
+    const BrdfLut lut = BakeBrdfLut(64, 256);
+    REQUIRE(!lut.Empty());
+    CHECK(lut.size == 64);
+
+    // The independent reference uses a uniform half-vector quadrature, which
+    // resolves the lobe at mid/high roughness. Below ~0.4 the GGX peak is much
+    // narrower than one quadrature cell; the production importance sampler is
+    // the appropriate estimator there, and its white-furnace/monotonic checks
+    // below cover it.
+    for (float nv : {0.12f, 0.45f, 0.85f}) {
+        for (float roughness : {0.45f, 0.75f, 0.98f}) {
+            const auto actual = SampleBrdfLut(lut, nv, roughness);
+            const auto reference = ReferenceBrdfIntegration(nv, roughness, 65536);
+            INFO("NoV " << nv << " roughness " << roughness);
+            CHECK(actual[0] >= 0.0f);
+            CHECK(actual[1] >= 0.0f);
+            CHECK(actual[0] <= 1.05f);
+            CHECK(actual[1] <= 1.05f);
+            CHECK(actual[0] == Catch::Approx(reference[0]).margin(0.03f));
+            CHECK(actual[1] == Catch::Approx(reference[1]).margin(0.03f));
+        }
+    }
+
+    // A white metal (F0 = 1) must reflect exactly the environment energy after
+    // the multiple-scattering compensation, at every roughness.
+    for (float nv : {0.05f, 0.4f, 0.9f}) {
+        for (float roughness : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}) {
+            const auto white = EnvironmentBrdfFresnel(lut, nv, roughness, {1, 1, 1}, 1.0f);
+            INFO("NoV " << nv << " roughness " << roughness);
+            CHECK(white[0] == Catch::Approx(1.0f).margin(2e-3f));
+            CHECK(white[1] == Catch::Approx(1.0f).margin(2e-3f));
+            CHECK(white[2] == Catch::Approx(1.0f).margin(2e-3f));
+        }
+    }
+
+    // A black dielectric still gains its IOR Fresnel reflection at grazing.
+    const auto blackFacing = EnvironmentBrdfFresnel(lut, 0.9f, 0.4f, {0.04f, 0.04f, 0.04f}, 1.0f);
+    const auto blackGrazing = EnvironmentBrdfFresnel(lut, 0.05f, 0.4f, {0.04f, 0.04f, 0.04f}, 1.0f);
+    CHECK(blackFacing[0] > 0.02f);
+    CHECK(blackFacing[0] < 0.10f);
+    CHECK(blackGrazing[0] > blackFacing[0] * 3.0f);
+    // KHR_materials_specular factor 0 removes the dielectric reflection.
+    const auto noSpecular = EnvironmentBrdfFresnel(lut, 0.9f, 0.4f, {0.04f, 0.04f, 0.04f}, 0.0f);
+    CHECK(noSpecular[0] == Catch::Approx(0.0f).margin(1e-4f));
+}
+
 TEST_CASE("Studio shader samples a world-stable cubemap and neutral tone curve",
           "[studio-ibl][studio-ibl-shader]")
 {
@@ -205,13 +406,25 @@ TEST_CASE("Studio shader samples a world-stable cubemap and neutral tone curve",
     CHECK(shader.find("TextureCube gStudioEnvironment") != std::string::npos);
     CHECK(shader.find("SampleLevel(gEnvironmentSampler") != std::string::npos);
     CHECK(shader.find("EvaluateStudioIrradiance") != std::string::npos);
-    // The tone curve is the neutral PBR curve, not the old luminance roll-off.
-    CHECK(shader.find("NeutralToneMap") != std::string::npos);
-    CHECK(shader.find("startCompression") != std::string::npos);
+    // Exactly one display encoding: the material shader writes linear HDR and
+    // must not contain the tone curve or the sRGB transfer. The resolve pass
+    // is the only place that maps to the display.
+    CHECK(shader.find("NeutralToneMap") == std::string::npos);
+    CHECK(shader.find("startCompression") == std::string::npos);
     CHECK(shader.find("DisplayMap") == std::string::npos);
+    const char* resolveSource = D3D12ViewerPath::ResolvePixelShaderSource();
+    REQUIRE(resolveSource != nullptr);
+    const std::string resolve(resolveSource);
+    CHECK(resolve.find("NeutralToneMap") != std::string::npos);
+    CHECK(resolve.find("startCompression") != std::string::npos);
+    CHECK(resolve.find("SrgbEncode") != std::string::npos);
     // Both direct key and IBL remain visible to material review.
-    CHECK(shader.find("EvaluateLight") != std::string::npos);
+    CHECK(shader.find("EvaluateLightSplit") != std::string::npos);
     CHECK(shader.find("gEnvironment.x") != std::string::npos);
+    // T24 split-sum environment BRDF and Fresnel-weighted IBL.
+    CHECK(shader.find("EnvironmentBrdfFresnel") != std::string::npos);
+    CHECK(shader.find("gBrdfLut") != std::string::npos);
+    CHECK(shader.find("SampleBrdfLut") != std::string::npos);
 }
 
 TEST_CASE("Studio pixel shader compiles for the feature-level-11_0 baseline",

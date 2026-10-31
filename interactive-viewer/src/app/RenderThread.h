@@ -374,11 +374,14 @@ public:
     // textured shader documents. The mask reports unsupported channels.
     void SetDebugChannel(uint32_t channel) { debugChannel_.store(channel); Invalidate(); }
     uint32_t DebugChannel() const noexcept { return debugChannel_.load(); }
+    // T24: the exposure/tone-map pair the last resolve actually used.
+    float DebugResolveExposure() const noexcept { return resolveExposure_.load(); }
+    uint32_t DebugResolveToneMap() const noexcept { return resolveToneMap_.load(); }
     uint32_t DebugChannelMask() const noexcept {
-        return (1u << 21) - 1u; // channels 0..20; unsupported channels are reported per-channel
+        return (1u << 24) - 1u; // channels 0..23; unsupported channels are reported per-channel
     }
     static bool DebugChannelSupported(uint32_t channel) noexcept {
-        return channel <= 20u && channel != 5u; // UV1 is not on the wire
+        return channel <= 23u && channel != 5u; // UV1 is not on the wire
     }
     // Numeric HDR sampling of the scene target. Status: 0 none, 1 pending,
     // 2 ready, 3 failed (optically) 4 consumed.
@@ -531,6 +534,8 @@ private:
     bool deviceFatal_ = false;
     std::atomic<bool> injectDeviceRemoval_{false};
     std::atomic<uint32_t> debugChannel_{0};
+    std::atomic<float> resolveExposure_{1.0f};
+    std::atomic<uint32_t> resolveToneMap_{0};
     std::atomic<uint32_t> debugSampleStatus_{0};
     mutable std::mutex debugMutex_;
     float debugSampleRgba_[4]{};

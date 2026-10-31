@@ -40,6 +40,7 @@ import time
 
 from common import (ROOT, RESULT_SCHEMA, decode_png, encoded_png, send_field,
                     sha256_file, write_json)
+import brdf
 import compare
 import corpus
 import diagnostics
@@ -106,6 +107,34 @@ def build_import_tests(configuration, output: Path, enabled=True):
                '/p:Platform=x64', f'/p:SolutionDir={ROOT}\\', '/m', '/v:minimal']
     output.mkdir(parents=True, exist_ok=True)
     log_path = output / 'import-tests-build.log'
+    started = time.monotonic()
+    with log_path.open('w', encoding='utf-8') as log:
+        completed = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+    return {
+        'command': ' '.join(command), 'exitCode': completed.returncode,
+        'seconds': round(time.monotonic() - started, 2), 'log': str(log_path),
+        'pass': completed.returncode == 0, 'skipped': False,
+    }
+
+
+def build_unit_tests(configuration, output: Path, enabled=True):
+    """Build the CPU reference/contract suite the task's lane runs.
+
+    T24's acceptance includes independent numeric BRDF/environment references
+    in Tests.Unit, so a stale test binary is not evidence. The project derives
+    include paths from the repository root, so build it through the solution's
+    directory layout.
+    """
+    if not enabled:
+        return {'command': None, 'skipped': True, 'pass': True}
+    project = ROOT / 'tests' / 'unit' / 'Tests.Unit.vcxproj'
+    if not MSBUILD.exists():
+        return {'command': str(MSBUILD), 'skipped': False, 'pass': False,
+                'reason': 'MSBuild not found'}
+    command = [str(MSBUILD), str(project), f'/p:Configuration={configuration}',
+               '/p:Platform=x64', f'/p:SolutionDir={ROOT}\\', '/m', '/v:minimal']
+    output.mkdir(parents=True, exist_ok=True)
+    log_path = output / 'unit-tests-build.log'
     started = time.monotonic()
     with log_path.open('w', encoding='utf-8') as log:
         completed = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
@@ -563,6 +592,26 @@ def main():
                 f'material-semantics: {failure}'
                 for failure in semantic_report['failures'])
         report['causeReport'] = semantic_report.get('reportPath')
+    if args.task == 'T24' and not args.capture_only:
+        unit_build = build_unit_tests(args.configuration, output, enabled=not args.no_build)
+        report['unitTestBuild'] = unit_build
+        if unit_build.get('command'):
+            report['commands'].append(unit_build['command'])
+        if not unit_build['pass']:
+            report['failures'].append(
+                f'unit test build failed (see {unit_build.get("log")})')
+        # The shared MaterialDielectricF0/F90 helper is also exercised by the
+        # importer contract, so build the import suite for the full lane.
+        if not args.fast:
+            import_build = build_import_tests(args.configuration, output,
+                                              enabled=not args.no_build)
+            report['importTestBuild'] = import_build
+            if import_build.get('command'):
+                report['commands'].append(import_build['command'])
+            if not import_build['pass']:
+                report['failures'].append(
+                    f'import test build failed (see {import_build.get("log")})')
+
     if args.task == 'T23' and not args.capture_only:
         # Serial accounting/import lanes plus a Debug viewer readiness session:
         # reused-image count, the microscope hold past its former late-limit
@@ -574,6 +623,15 @@ def main():
             report['failures'].extend(
                 f'texture-budget: {failure}' for failure in budget_report['failures'])
         report['causeReport'] = budget_report.get('reportPath')
+    if args.task == 'T24' and not args.capture_only:
+        # CPU reference lanes plus a Debug GPU numeric/readback session and
+        # Car/Camera nonregression captures in all three modes.
+        brdf_report = brdf.run(ROOT, output, args.configuration, fast=args.fast)
+        report['brdf'] = brdf_report
+        if brdf_report.get('failures'):
+            report['failures'].extend(
+                f'brdf: {failure}' for failure in brdf_report['failures'])
+        report['causeReport'] = brdf_report.get('reportPath')
 
     required_lanes = [name for name, lane in profile['lanes'].items() if lane.get('required')]
     selected_lanes = {}

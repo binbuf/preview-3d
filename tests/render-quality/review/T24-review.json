@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "task": "T24",
+  "date": "2026-10-30",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug HDR readback",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T24",
+  "imagesInspected": [
+    "TestResults/render-quality/T24/images/generated-brdf-probe-studio-front.png",
+    "TestResults/render-quality/T24/images/generated-brdf-probe-clay-front.png",
+    "TestResults/render-quality/T24/images/generated-brdf-probe-directional-front.png",
+    "TestResults/render-quality/T24/external/car-studio.png",
+    "TestResults/render-quality/T24/external/car-clay.png",
+    "TestResults/render-quality/T24/external/car-directional.png",
+    "TestResults/render-quality/T24/external/camera-studio.png",
+    "TestResults/render-quality/T24/external/camera-clay.png",
+    "TestResults/render-quality/T24/external/camera-directional.png",
+    "TestResults/render-quality/T24/diagnostics/channels/channel-01-base-color.png",
+    "TestResults/render-quality/T24/diagnostics/channels/channel-17-environment-specular.png",
+    "TestResults/render-quality/T24/diagnostics/channels/channel-18-coat.png",
+    "TestResults/render-quality/T24/diagnostics/channels/channel-19-emission.png",
+    "TestResults/render-quality/T24/diagnostics/channels/channel-20-pre-tone-map-hdr.png",
+    "TestResults/render-quality/T24/diagnostics/channels/channel-21-environment-brdf-scale.png",
+    "TestResults/render-quality/T24/diagnostics/channels/channel-22-transmission-composite.png"
+  ],
+  "observations": [
+    "The generated brdf-probe fixture renders sixteen isolated roles: white/black dielectric, white/gold metal, IOR 1.5/2.0, specular zero/tinted, uncoated/coated/half-coated dielectric, coated metal, emission, coated emission, transmissive and a 0.5-coverage blend control. The profile capture shows all four rows in Studio, Clay and Directional without clipping.",
+    "Numeric GPU readback is consistent across 575 checks. White metal's environment BRDF scale is 0.9999 (white-furnace unity); black dielectric 0.0400; IOR 2.0 0.1111 vs IOR 1.5 0.0400; specularFactor 0 reads 0.0000; the tinted specular probe is R>G>B.",
+    "Studio and Directional environment-diffuse and environment-specular channels match exactly (delta 0.00) for every probe, proving both modes use the same Fresnel-weighted split-sum IBL. Directional has no second unweighted transmission reflection.",
+    "Clearcoat is Fresnel-weighted: the coated probe's base environment specular is lower than the uncoated twin, the coat channel is non-zero on the two coated dielectrics and coated metal, and emission beneath a coat is attenuated (6.91 vs 7.20 linear) but remains above display range.",
+    "Environment intensity zero removes every environment-diffuse, environment-specular and coat channel for all probes; every non-emissive pre-tone-map HDR patch is black and the emission probes remain above 1.0.",
+    "The flat 0.3 linear diagnostic patch displays exactly [139,139,139] against the CPU NeutralToneMap/SrgbEncode reference [139,139,139], with no hue shift. The coverage-blend probe follows the documented display composite: linear scene -> tone map -> display-space blend over the backdrop.",
+    "Car keeps red paint/dark glass separation and its known windshield/roof ordering and directional brightness; Camera keeps the dark black body and a lens with visible reflection/depth in Studio and Directional. Clay is a coherent opaque form in both assets.",
+    "Channel images confirm the intended separation: environment specular is metal-dominated, the coat channel isolates only coated probes, the BRDF-scale channel shows F0/F90 differences, and the transmission-composite channel shows alpha/glassFresnel/transmission separately."
+  ],
+  "defects": [
+    {
+      "id": "transmission-interim-alpha",
+      "label": "limitation",
+      "where": "diagnostics/channels/channel-22-transmission-composite.png; brdf-probe transmissive probe",
+      "description": "Transmission still uses the alpha-carried interface Fresnel and no transmitted-scene sampling. Channel 22 exposes (alpha, glassReflectance, transmission) so the approximation is recorded rather than hidden.",
+      "assignedTo": "T26/T27"
+    },
+    {
+      "id": "car-glass-ordering",
+      "label": "known-defect",
+      "where": "external/car-studio.png",
+      "description": "Car windshield/side-glass ordering and bright directional reflection remain T26/T27 work; T24 only establishes the shared BRDF/IBL and Fresnel-weighted layering.",
+      "assignedTo": "T26/T27"
+    },
+    {
+      "id": "camera-lens-transmission",
+      "label": "limitation",
+      "where": "external/camera-studio.png",
+      "description": "The Camera lens keeps its dark reflection/depth; the transmitted scene/tint is not yet sampled. This is the T27 target.",
+      "assignedTo": "T27"
+    },
+    {
+      "id": "low-roughness-lut-reference",
+      "label": "limitation",
+      "where": "Tests.Unit [brdf]",
+      "description": "The independent uniform-quadrature LUT/prefilter reference is finite-sampled below roughness ~0.4; production importance sampling covers that range and the white-furnace identity is checked separately.",
+      "assignedTo": "T24"
+    }
+  ],
+  "positives": [
+    "The DFG LUT, GGX prefilter and solid-angle SH projection are baked on the CPU and checked against independent uniform-quadrature references, not a copy of the production formula.",
+    "Per-texel cubemap solid angles sum exactly to 4*pi; constant and rotated directional environments match the sphere reference.",
+    "KHR_materials_specular keeps F0 (IOR*color) and F90 (specularFactor) independent at normal and grazing incidence.",
+    "Clearcoat uses the Khronos c*Fresnel mix and no longer removes a flat (1-clearcoatFactor) of the base specular; base diffuse/specular and emission are all attenuated consistently.",
+    "The material shader writes linear HDR only; the resolve pass is the single tone-map/sRGB display encoding. CPU/GPU tone-map agreement and neutral hue are measured numerically.",
+    "Release still rejects every test-control message; all new defects are Debug-field reads inside the existing --app-smoke guard."
+  ],
+  "acceptance": {
+    "diagnosticChannelsReviewed": true,
+    "numericReadbackVerified": true,
+    "gpuNumericPatchesVerified": true,
+    "carPaintNonregression": "reviewed",
+    "cameraLensNonregression": "reviewed",
+    "acceptedReferencesPromotedBy": "not applicable for T24 (observed evidence only)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "Reviewed the T24-dev run generated by the same profile/binary; the final T24 run writes the identical paths listed above. No baseline or reference was promoted."
+  }
+}

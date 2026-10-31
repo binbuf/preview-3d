@@ -244,6 +244,120 @@ def material_probe(path: Path) -> Path:
     return _glb(document, binary, path)
 
 
+def brdf_probe(path: Path) -> Path:
+    """T24 material-BRDF fixture: isolated lobes and layering invariants.
+
+    Two rows of seven opaque/transmissive probes sweep metallic, roughness,
+    IOR, specular factor/color, clearcoat (with an uncoated twin), coated
+    metal, emission and a thin transmissive surface. Every probe carries
+    TANGENT and COLOR_0 so the Debug diagnostic channels and numeric HDR
+    readback are available. Each base color is distinct enough for the
+    locator to identify the sphere from the base-color channel alone.
+    """
+    materials = [
+        {'name': 'brdf white dielectric',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.95, 0.95, 0.95, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.5}},
+        {'name': 'brdf black dielectric',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.08, 0.05, 0.18, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.3}},
+        {'name': 'brdf white metal',
+         'pbrMetallicRoughness': {'baseColorFactor': [1.0, 1.0, 1.0, 1.0],
+                                  'metallicFactor': 1.0, 'roughnessFactor': 0.2}},
+        {'name': 'brdf rough metal',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.85, 0.65, 0.25, 1.0],
+                                  'metallicFactor': 1.0, 'roughnessFactor': 0.9}},
+        {'name': 'brdf ior 15',
+         'extensions': {'KHR_materials_ior': {'ior': 1.5}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.7, 0.2, 0.2, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.1}},
+        {'name': 'brdf ior 20',
+         'extensions': {'KHR_materials_ior': {'ior': 2.0}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.2, 0.7, 0.2, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.1}},
+        {'name': 'brdf specular zero',
+         'extensions': {'KHR_materials_specular': {'specularFactor': 0.0}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.2, 0.3, 0.8, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.2}},
+        {'name': 'brdf specular tinted',
+         'extensions': {'KHR_materials_specular': {
+             'specularFactor': 1.0, 'specularColorFactor': [1.0, 0.5, 0.25]}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.8, 0.3, 0.2, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.2}},
+        {'name': 'brdf coat zero',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.10, 0.30, 0.90, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.4}},
+        {'name': 'brdf coat one',
+         'extensions': {'KHR_materials_clearcoat': {
+             'clearcoatFactor': 1.0, 'clearcoatRoughnessFactor': 0.05}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.12, 0.32, 0.92, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.4}},
+        {'name': 'brdf coat half',
+         'extensions': {'KHR_materials_clearcoat': {
+             'clearcoatFactor': 0.5, 'clearcoatRoughnessFactor': 0.2}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.10, 0.50, 0.90, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.4}},
+        {'name': 'brdf coated metal',
+         'extensions': {'KHR_materials_clearcoat': {
+             'clearcoatFactor': 1.0, 'clearcoatRoughnessFactor': 0.1}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.9, 0.75, 0.3, 1.0],
+                                  'metallicFactor': 1.0, 'roughnessFactor': 0.3}},
+        {'name': 'brdf emission',
+         'emissiveFactor': [0.9, 0.6, 0.2],
+         'extensions': {'KHR_materials_emissive_strength': {'emissiveStrength': 8.0}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.6, 0.1, 0.6, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.6}},
+        {'name': 'brdf coat emission',
+         'emissiveFactor': [0.9, 0.6, 0.2],
+         'extensions': {
+             'KHR_materials_emissive_strength': {'emissiveStrength': 8.0},
+             'KHR_materials_clearcoat': {
+                 'clearcoatFactor': 1.0, 'clearcoatRoughnessFactor': 0.1}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.6, 0.2, 0.6, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.6}},
+        {'name': 'brdf transmissive',
+         'extensions': {'KHR_materials_transmission': {'transmissionFactor': 1.0},
+                        'KHR_materials_ior': {'ior': 1.5}},
+         'pbrMetallicRoughness': {'baseColorFactor': [0.6, 0.8, 0.9, 1.0],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.05}},
+        {'name': 'brdf coverage blend', 'alphaMode': 'BLEND',
+         'pbrMetallicRoughness': {'baseColorFactor': [0.55, 0.55, 0.55, 0.5],
+                                  'metallicFactor': 0.0, 'roughnessFactor': 0.5}},
+    ]
+    positions, normals, uvs, indices = uv_sphere(segments=32, rings=20)
+    add_mesh, finish = _mesh_builder()
+    primitives = []
+    # 4 x 4 grid: 16 probes, spaced so the framed camera sees every sphere
+    # away from the ground highlight (which the numeric lane disables).
+    locations = []
+    for row, y in enumerate([2.4, 0.8, -0.8, -2.4]):
+        for column in range(4):
+            locations.append((-3.0 + column * 2.0, y))
+    for index, (x, y) in enumerate(locations):
+        scale = 0.55
+        base = add_mesh(
+            [(px * scale + x, py * scale + y, pz * scale + scale)
+             for px, py, pz in positions],
+            normals, uvs, indices,
+            tangents=[(1.0, 0.0, 0.0, 1.0)] * len(positions),
+            colors=[(1.0, 1.0, 1.0, 1.0)] * len(positions))
+        primitives.append({'attributes': {'POSITION': base, 'NORMAL': base + 1,
+                                         'TEXCOORD_0': base + 2, 'TANGENT': base + 4,
+                                         'COLOR_0': base + 5},
+                           'indices': base + 3, 'material': index})
+    document = {
+        'asset': {'version': '2.0',
+                  'generator': 'preview-3d tests/render-quality/fixtures.py'},
+        'extensionsUsed': ['KHR_materials_transmission', 'KHR_materials_ior',
+                           'KHR_materials_clearcoat', 'KHR_materials_specular',
+                           'KHR_materials_emissive_strength'],
+        'scene': 0, 'scenes': [{'nodes': [0]}], 'nodes': [{'mesh': 0}],
+        'meshes': [{'primitives': primitives}], 'materials': materials,
+    }
+    document, binary = finish(document)
+    return _glb(document, binary, path)
+
+
 def _png_data_uri(pixels: bytes, width: int = 4, height: int = 4) -> str:
     return 'data:image/png;base64,' + base64.b64encode(
         encoded_png(width, height, pixels)).decode('ascii')
@@ -495,6 +609,7 @@ FIXTURES = {
     'sphere-grid': (sphere_grid, 'sphere-grid.glb'),
     'glass-reference': (glass_reference, 'glass-reference.glb'),
     'material-probe': (material_probe, 'material-probe.glb'),
+    'brdf-probe': (brdf_probe, 'brdf-probe.glb'),
     'material-semantics': (material_semantics, 'material-semantics.glb'),
     'texture-reuse': (texture_reuse, 'texture-reuse.glb'),
     'stl-box': (stl_box, 'stl-box.stl'),
@@ -528,6 +643,53 @@ EXPECTED_MATERIALS = {
         {'name': 'probe masked cutout', 'baseColor': [0.9, 0.1, 0.7, 1.0],
          'metallic': 0.0, 'roughness': 0.6, 'bucket': 1, 'alphaMode': 1,
          'alphaCutoff': 0.2},
+    ],
+    # T24: isolated BRDF/environment/layering roles. `bucket`/`alphaMode` come
+    # from the normalized material contract; the numeric lane additionally
+    # reads the GPU diagnostic channels for each role.
+    'brdf-probe': [
+        {'name': 'brdf white dielectric', 'baseColor': [0.95, 0.95, 0.95, 1.0],
+         'metallic': 0.0, 'roughness': 0.5, 'bucket': 0, 'alphaMode': 0},
+        {'name': 'brdf black dielectric', 'baseColor': [0.08, 0.05, 0.18, 1.0],
+         'metallic': 0.0, 'roughness': 0.3, 'bucket': 0, 'alphaMode': 0},
+        {'name': 'brdf white metal', 'baseColor': [1.0, 1.0, 1.0, 1.0],
+         'metallic': 1.0, 'roughness': 0.2, 'bucket': 0, 'alphaMode': 0},
+        {'name': 'brdf rough metal', 'baseColor': [0.85, 0.65, 0.25, 1.0],
+         'metallic': 1.0, 'roughness': 0.9, 'bucket': 0, 'alphaMode': 0},
+        {'name': 'brdf ior 15', 'baseColor': [0.7, 0.2, 0.2, 1.0],
+         'metallic': 0.0, 'roughness': 0.1, 'bucket': 0, 'alphaMode': 0, 'ior': 1.5},
+        {'name': 'brdf ior 20', 'baseColor': [0.2, 0.7, 0.2, 1.0],
+         'metallic': 0.0, 'roughness': 0.1, 'bucket': 0, 'alphaMode': 0, 'ior': 2.0},
+        {'name': 'brdf specular zero', 'baseColor': [0.2, 0.3, 0.8, 1.0],
+         'metallic': 0.0, 'roughness': 0.2, 'bucket': 0, 'alphaMode': 0,
+         'specularFactor': 0.0},
+        {'name': 'brdf specular tinted', 'baseColor': [0.8, 0.3, 0.2, 1.0],
+         'metallic': 0.0, 'roughness': 0.2, 'bucket': 0, 'alphaMode': 0,
+         'specularFactor': 1.0, 'specularColor': [1.0, 0.5, 0.25]},
+        {'name': 'brdf coat zero', 'baseColor': [0.10, 0.30, 0.90, 1.0],
+         'metallic': 0.0, 'roughness': 0.4, 'bucket': 0, 'alphaMode': 0,
+         'clearcoat': 0.0},
+        {'name': 'brdf coat one', 'baseColor': [0.12, 0.32, 0.92, 1.0],
+         'metallic': 0.0, 'roughness': 0.4, 'bucket': 0, 'alphaMode': 0,
+         'clearcoat': 1.0, 'clearcoatRoughness': 0.05},
+        {'name': 'brdf coat half', 'baseColor': [0.10, 0.50, 0.90, 1.0],
+         'metallic': 0.0, 'roughness': 0.4, 'bucket': 0, 'alphaMode': 0,
+         'clearcoat': 0.5, 'clearcoatRoughness': 0.2},
+        {'name': 'brdf coated metal', 'baseColor': [0.9, 0.75, 0.3, 1.0],
+         'metallic': 1.0, 'roughness': 0.3, 'bucket': 0, 'alphaMode': 0,
+         'clearcoat': 1.0, 'clearcoatRoughness': 0.1},
+        {'name': 'brdf emission', 'baseColor': [0.6, 0.1, 0.6, 1.0],
+         'metallic': 0.0, 'roughness': 0.6, 'bucket': 0, 'alphaMode': 0,
+         'emissive': [0.9, 0.6, 0.2], 'emissiveStrength': 8.0},
+        {'name': 'brdf coat emission', 'baseColor': [0.6, 0.2, 0.6, 1.0],
+         'metallic': 0.0, 'roughness': 0.6, 'bucket': 0, 'alphaMode': 0,
+         'emissive': [0.9, 0.6, 0.2], 'emissiveStrength': 8.0,
+         'clearcoat': 1.0, 'clearcoatRoughness': 0.1},
+        {'name': 'brdf transmissive', 'baseColor': [0.6, 0.8, 0.9, 1.0],
+         'metallic': 0.0, 'roughness': 0.05, 'bucket': 3, 'alphaMode': 0,
+         'transmission': 1.0, 'ior': 1.5},
+        {'name': 'brdf coverage blend', 'baseColor': [0.55, 0.55, 0.55, 0.5],
+         'metallic': 0.0, 'roughness': 0.5, 'bucket': 2, 'alphaMode': 2},
     ],
     # T22: authored inputs and the renderer policy each one must produce.
     'material-semantics': [
@@ -610,6 +772,7 @@ def generate(output: Path):
                     'glass-reference': ['thin tinted transmission', 'rough transmission',
                                         'clear lens dielectric'],
                     'material-probe': [item['name'] for item in EXPECTED_MATERIALS['material-probe']],
+                    'brdf-probe': [item['name'] for item in EXPECTED_MATERIALS['brdf-probe']],
                     'material-semantics': [item['name'] for item in EXPECTED_MATERIALS['material-semantics']],
                     'texture-reuse': ['one reused sRGB color map', 'one linear data map'],
                     'stl-box': ['hard-edged STEP/STL-like surface', 'ground contact'],

@@ -40,6 +40,7 @@ The plan, ground rules and per-task verify commands are in
 - **T21a - Windows Photos-style background and ground highlight**: **Gate:** `python tests/render-quality/verify.py --task T21a --configuration Debug --output TestResults/render-quality/T21a`.; **Profile:** `tests/render-quality/profiles/T21a.json`. Unknown/empty profiles
 - **T22 — authored material, UV, normal and AO semantics**: The wire/import/validation/cache contract and the renderer-side shader; **Wire version is 13** (`model_core::kCurrentProtocolVersion == 13`).
 - **T23 — texture-budget accounting and complete-load readiness**: The microscope's late failure is reproduced and measured, the false terminal; `state = Failed`, `ImportErrorCode::ResourceLimit` (2),
+- **T24 - correct BRDF, environment integration and clearcoat layering**: Split-sum environment BRDF, exact cubemap solid-angle irradiance, Khronos; **Gate:** `python tests/render-quality/verify.py --task T24 --configuration Debug --output TestResults/render-quality/T24`.
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -68,4 +69,5 @@ The plan, ground rules and per-task verify commands are in
 - [T21a](progress/T21a.md) — **Gate:** `python tests/render-quality/verify.py --task T21a --configuration Debug --output TestResults/render-quality/T21a`.
 - [T22](progress/T22.md) — The wire/import/validation/cache contract and the renderer-side shader
 - [T23](progress/T23.md) — The microscope's late failure is reproduced and measured, the false terminal
+- [T24](progress/T24.md) — Split-sum environment BRDF, exact cubemap solid-angle irradiance, Khronos
 <!-- symphony:digest:end -->

@@ -25,7 +25,8 @@ CHANNELS = {
     9: 'coverage-alpha', 10: 'transmission', 11: 'ior-f0', 12: 'clearcoat',
     13: 'sheen', 14: 'direct-diffuse', 15: 'direct-specular',
     16: 'environment-diffuse', 17: 'environment-specular', 18: 'coat',
-    19: 'emission', 20: 'pre-tone-map-hdr',
+    19: 'emission', 20: 'pre-tone-map-hdr', 21: 'environment-brdf-scale',
+    22: 'transmission-composite', 23: 'display-calibration',
 }
 CONTRIBUTION_CHANNELS = [14, 15, 16, 17, 18, 19, 20]
 

@@ -4620,13 +4620,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // shipped/Release build still rejects the message without reading any
         // path or adding a message authority surface.
         if (wParam == 124) {
-            if (lParam >= 0 && lParam <= 20) app->renderThread.SetDebugChannel(static_cast<uint32_t>(lParam));
+            if (lParam >= 0 && lParam <= 23) app->renderThread.SetDebugChannel(static_cast<uint32_t>(lParam));
             return static_cast<LRESULT>(app->renderThread.DebugChannel());
         }
         if (wParam == 125) {
             const uint32_t mask = app->renderThread.DebugChannelMask();
             uint32_t supported = 0;
-            for (uint32_t channel = 0; channel <= 20; ++channel)
+            for (uint32_t channel = 0; channel <= 23; ++channel)
                 if ((mask & (1u << channel)) && RenderThread::DebugChannelSupported(channel))
                     supported |= 1u << channel;
             return static_cast<LRESULT>(supported);
@@ -4746,6 +4746,14 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             case 230: return static_cast<LRESULT>(record.textureColorSpaces[4]);
             }
         }
+        // T24: the exposure and tone-map mode the last resolve pass actually
+        // used. This proves the CPU tone-map reference is compared with the
+        // GPU's effective values, not with a stale UI snapshot.
+        if (wParam == 231) {
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(
+                app->renderThread.DebugResolveExposure()));
+        }
+        if (wParam == 232) return static_cast<LRESULT>(app->renderThread.DebugResolveToneMap());
         if (wParam >= 13 && wParam <= 29) {
             if (!app->loadedModel) return 0;
             const auto& metadata = *app->loadedModel;

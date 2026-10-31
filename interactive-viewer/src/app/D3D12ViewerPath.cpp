@@ -430,6 +430,8 @@ TextureCube gStudioEnvironment : register(t4);
 // T22: glTF occlusionTexture is an independent binding. The metallic-roughness
 // red channel stays unused per ORM; it is never aliased to AO.
 Texture2D gOcclusion : register(t5);
+// T24 split-sum environment BRDF integration LUT: x = NoV, y = roughness.
+Texture2D<float2> gBrdfLut : register(t6);
 SamplerState gLinearSampler : register(s0);
 SamplerState gNearestSampler : register(s1);
 SamplerState gEnvironmentSampler : register(s2);
@@ -514,61 +516,90 @@ float2 TransformSlotUvUnwrapped(uint slot,float2 raw)
 
 struct PixelOutput { float4 color : SV_TARGET0; uint pick : SV_TARGET1; };
 
-float DistributionGGX(float3 n,float3 h,float roughness)
+// Trowbridge-Reitz GGX for the squared perceptual roughness, matching the CPU
+// StudioEnvironment bake and the Khronos reference renderer.
+float DistributionGGX(float noH,float roughness)
 {
     float a=roughness*roughness, a2=a*a;
-    float nh=saturate(dot(n,h));
-    float d=nh*nh*(a2-1.0f)+1.0f;
-    return a2/max(0.001f,3.14159265f*d*d);
+    float f=noH*noH*(a2-1.0f)+1.0f;
+    return a2/max(0.0001f,3.14159265f*f*f);
 }
-float GeometrySchlickGGX(float nv,float roughness)
+// Height-correlated Smith GGX visibility V = G / (4 NoL NoV).
+float GeometryVisibilityGGX(float noL,float noV,float roughness)
 {
-    float r=roughness+1.0f, k=(r*r)/8.0f;
-    return nv/(nv*(1.0f-k)+k);
+    float a=roughness*roughness, a2=a*a;
+    float gv=noL*sqrt(noV*noV*(1.0f-a2)+a2);
+    float gl=noV*sqrt(noL*noL*(1.0f-a2)+a2);
+    float g=gv+gl;
+    return g>0.0f?0.5f/g:0.0f;
 }
-// IOR-derived dielectric F0. The authored KHR_materials_specular factor/color
-// are folded into the caller's dielectricF0; ior <= 1 has no optical interface.
+// IOR-derived dielectric F0. ior <= 1 has no optical interface.
 float IorToF0(float ior)
 {
     if (!(ior>1.0f)) return 0.0f;
     float ratio=(ior-1.0f)/(ior+1.0f);
     return saturate(ratio*ratio);
 }
-// Split form for the T21 diagnostics: outDiffuse/outSpecular carry the two
-// linear contributions and the return value is byte-for-byte the combined
-// expression the default render path used before diagnostics existed.
+float3 FresnelSchlick(float3 f0,float3 f90,float cosTheta)
+{
+    return f0+(f90-f0)*pow(saturate(1.0f-cosTheta),5.0f);
+}
+float FresnelSchlick(float f0,float f90,float cosTheta)
+{
+    return f0+(f90-f0)*pow(saturate(1.0f-cosTheta),5.0f);
+}
+// T24 split-sum DFG LUT (x = NoV, y = perceptual roughness). The CPU bake in
+// StudioEnvironment.cpp is the reference implementation.
+float2 SampleBrdfLut(float nv,float roughness)
+{
+    return gBrdfLut.SampleLevel(gLinearSampler,float2(saturate(nv),saturate(roughness)),0).rg;
+}
+// Khronos environment Fresnel: F0*A + B plus the Fdez-Aguera multiple-
+// scattering compensation. F0 = 1, weight = 1 is the white-furnace identity.
+float3 EnvironmentBrdfFresnel(float3 f0,float nv,float roughness,float specularWeight)
+{
+    float2 ab=SampleBrdfLut(nv,roughness);
+    float3 fr=max((1.0f-roughness).xxx,f0)-f0;
+    float3 kS=f0+fr*pow(saturate(1.0f-nv),5.0f);
+    float3 fssEss=specularWeight*(kS*ab.x+ab.y);
+    float ems=1.0f-(ab.x+ab.y);
+    float3 fAvg=specularWeight*(f0+(1.0f-f0)/21.0f);
+    float3 fmsEms=ems*fssEss*fAvg/max(1e-4f,1.0f-fAvg*ems);
+    return max(fssEss+fmsEms,0.0f);
+}
+// Khronos glTF punctual BRDF. f0/f90 carry KHR_materials_ior/specular: the
+// IOR/specularColor set normal-incidence F0 while specularFactor sets F90, so
+// normal and grazing response stay independent. outDiffuse/outSpecular split
+// the same combined expression for the T21/T24 diagnostics.
 float3 EvaluateLightSplit(float3 n,float3 v,float3 l,float3 base,float metallic,float roughness,
-                          float3 f0,float intensity,out float3 outDiffuse,out float3 outSpecular)
+                          float3 f0,float3 f90,float intensity,
+                          out float3 outDiffuse,out float3 outSpecular)
 {
     float3 h=normalize(v+l);
     float nl=saturate(dot(n,l)), nv=saturate(dot(n,v));
-    float3 f=f0+(1.0f-f0)*pow(1.0f-saturate(dot(h,v)),5.0f);
-    float d=DistributionGGX(n,h,roughness);
-    float g=GeometrySchlickGGX(nv,roughness)*GeometrySchlickGGX(nl,roughness);
-    float3 specular=d*g*f/max(0.004f,4.0f*nv*nl);
-    float3 diffuse=(1.0f-f)*(1.0f-metallic)*base/3.14159265f;
-    outDiffuse=diffuse*nl*intensity;
-    outSpecular=specular*nl*intensity;
-    return (diffuse+specular)*nl*intensity;
+    float nh=saturate(dot(n,h)), vh=saturate(dot(v,h));
+    float specNl=intensity*nl*GeometryVisibilityGGX(nl,nv,roughness)*DistributionGGX(nh,roughness);
+    float3 fd=FresnelSchlick(f0,f90,vh);
+    float3 fm=FresnelSchlick(base,float3(1,1,1),vh);
+    float3 lDiffuse=intensity*nl*base/3.14159265f;
+    float3 dielectric=lerp(lDiffuse,specNl.xxx,fd);
+    float3 metal=fm*specNl;
+    float3 combined=lerp(dielectric,metal,metallic);
+    outDiffuse=(1.0f-metallic)*lDiffuse*(1.0f-fd);
+    outSpecular=max(combined-outDiffuse,0.0f);
+    return combined;
 }
-float3 EvaluateLight(float3 n,float3 v,float3 l,float3 base,float metallic,float roughness,
-                     float3 f0,float intensity)
-{
-    float3 diffuse,specular;
-    return EvaluateLightSplit(n,v,l,base,metallic,roughness,f0,intensity,diffuse,specular);
-}
-// Clearcoat is a second, dielectric-only GGX lobe over the base. Keeping it
-// separate from EvaluateLight avoids tinting the coat with the base metal and
-// lets the caller scale the base specular by (1 - clearcoatFactor).
+// Clearcoat is a second dielectric GGX lobe. Like the Khronos reference it
+// does NOT carry its own Fresnel here: the caller mixes the base toward this
+// lobe by clearcoatFactor * F_schlick(coatF0, 1, NoV), which is what makes the
+// attenuation energy-consistent.
 float3 EvaluateClearcoatLight(float3 n,float3 v,float3 l,float roughness,float intensity)
 {
     float3 h=normalize(v+l);
     float nl=saturate(dot(n,l)), nv=saturate(dot(n,v));
-    float3 f0=float3(0.04f,0.04f,0.04f);
-    float3 f=f0+(1.0f-f0)*pow(1.0f-saturate(dot(h,v)),5.0f);
-    float d=DistributionGGX(n,h,roughness);
-    float g=GeometrySchlickGGX(nv,roughness)*GeometrySchlickGGX(nl,roughness);
-    return d*g*f/max(0.004f,4.0f*nv*nl)*nl*intensity;
+    float nh=saturate(dot(n,h));
+    float s=intensity*nl*GeometryVisibilityGGX(nl,nv,roughness)*DistributionGGX(nh,roughness);
+    return s.xxx;
 }
 // The vertex shader still produces camera-space positions/normals (the
 // camera-relative precision policy). The pixel shader rotates those directions
@@ -607,30 +638,9 @@ float3 SampleStudioSpecular(float3 worldNormal,float3 worldView,float roughness)
     return gStudioEnvironment.SampleLevel(gEnvironmentSampler,
         EnvironmentDirection(refl),roughness*gEnvironment.w).rgb;
 }
-// Khronos PBR Neutral tone curve, followed by the sRGB transfer. Unlike the
-// old per-lightness roll-off this preserves hue at moderate exposures while
-// rolling white into the display range instead of clipping it.
-float3 NeutralToneMap(float3 linearColor,float exposure)
-{
-    float3 color=max(linearColor*exposure,0.0f);
-    const float startCompression=0.8f-0.04f;
-    const float desaturation=0.15f;
-    float minimum=min(color.r,min(color.g,color.b));
-    float offset=minimum<0.08f ? minimum-6.25f*minimum*minimum : 0.04f;
-    color-=offset;
-    float peak=max(color.r,max(color.g,color.b));
-    if (peak>=startCompression) {
-        float d=1.0f-startCompression;
-        float newPeak=1.0f-d*d/(peak+d-startCompression);
-        color*=newPeak/max(peak,1e-6f);
-        float grey=1.0f-1.0f/(desaturation*(peak-newPeak)+1.0f);
-        color=lerp(color,newPeak.xxx,grey);
-    }
-    color=saturate(color);
-    float3 low=color*12.92f;
-    float3 high=1.055f*pow(max(color,0.0f),1.0f/2.4f)-0.055f;
-    return lerp(high,low,step(color,0.0031308f));
-}
+// Material writes raw linear HDR only. The full-screen resolve owns exposure,
+// the tone curve and the single sRGB display encoding; duplicating any of them
+// here would encode twice.
 float3 SrgbToLinear(float3 color)
 {
     float3 low=color/12.92f;
@@ -731,24 +741,30 @@ PixelOutput PSMain(PSInput input)
         if (aoUv.valid) occlusion=OcclusionFactor(SampleSlot(gOcclusion,aoUv).r,gMaterialLobes0.z);
     }
     roughness=clamp(roughness,.045f,1.0f);
-    // T18 PBR lobes. Clearcoat is layered as a second dielectric GGX lobe; the
-    // base specular is scaled by (1 - clearcoatFactor) so the two lobes do not
-    // count the same reflected energy twice. Sheen is a grazing-only velvet
-    // term. Clay suppresses both so it stays a geometry-review mode.
+    // T18/T24 PBR lobes. Clearcoat is a second dielectric GGX layer. The base
+    // is mixed toward it by clearcoatFactor * F_schlick(coatF0, 1, NoV), which
+    // is the Khronos energy-consistent layering: no implicit (1-clearcoat)
+    // removal of the base F0. Sheen is a grazing-only velvet term. Clay
+    // suppresses both so it stays a geometry-review mode.
     float clearcoat=clay?0.0f:saturate(gMaterialLobes0.x);
     float clearcoatRoughness=clamp(gMaterialLobes0.y,.045f,1.0f);
     float3 sheenColor=clay?float3(0.0f,0.0f,0.0f):saturate(gMaterialLobes1.rgb);
     float sheenRoughness=clamp(gMaterialLobes0.w,0.0f,1.0f);
-    // KHR_materials_ior/specular: the authored dielectric F0 replaces the old
-    // fixed 0.04. Metallic surfaces keep base color as F0.
+    // KHR_materials_ior/specular. specularColor (with IOR) sets F0 at normal
+    // incidence; specularFactor sets F90 at grazing. They stay independent at
+    // normal and grazing angles, as the extension defines. Metals keep base
+    // color as F0 and F90 = 1.
     float iorF0=IorToF0(gMaterialLobes2.x);
-    float3 dielectricF0=saturate(iorF0*gMaterialLobes1.w*gMaterialLobes2.yzw);
-    // KHR_materials_transmission approximation. A transmissive surface has no
-    // transmitted diffuse; it shows a view-dependent Fresnel reflection over
-    // whatever is behind it. The blend alpha carries that reflectance so the
-    // straight-alpha blend composites reflection over background correctly,
-    // and the environment reflection is added unfresneled because alpha
-    // already supplies the reflectance factor.
+    float specularWeight=saturate(gMaterialLobes1.w);
+    float3 dielectricF0=saturate(iorF0*gMaterialLobes2.yzw);
+    float3 f0=lerp(dielectricF0,base.rgb,metallic);
+    float3 f90=lerp(specularWeight.xxx,float3(1.0f,1.0f,1.0f),metallic);
+    // KHR_materials_transmission interim compositing. The blend alpha carries
+    // the view-dependent interface reflectance, so the environment reflection
+    // is kept un-Fresneled for transmissive materials to avoid counting
+    // Fresnel twice. T27 owns the real transmitted-scene path; diagnostic
+    // channel 22 exposes (alpha, glassReflectance, transmission) so the
+    // approximation is visible rather than silent.
     float transmission=transmissive?clamp(gUvLegacy2.w,0.0f,1.0f):0.0f;
     float nv=saturate(dot(n,viewDir));
     float diffuseScale=1.0f-transmission;
@@ -757,100 +773,101 @@ PixelOutput PSMain(PSInput input)
     if (transmissive) base.a=saturate(base.a*diffuseScale+glassReflectance*transmission);
     float3 worldN=RotateWorldFromCamera(n);
     float3 worldView=RotateWorldFromCamera(viewDir);
-    float3 f0=lerp(dielectricF0,base.rgb,metallic)*(1.0f-clearcoat);
-    float3 fresnel=f0+(1.0f-f0)*pow(1.0f-nv,5.0f);
     float envIntensity=gEnvironment.x;
-    // T21 diagnostic contributions. Each is accumulated with exactly the same
-    // arithmetic that is added to `color`, so channel 0 and channel 20 stay
-    // identical to the pre-diagnostic result while the split views expose the
-    // individual direct/environment/coat/emission terms.
+    // One Fresnel-weighted IBL path shared by Studio, Clay and Directional.
+    // Split-sum DFG weight, then the Khronos dielectric/metal mix. Occlusion
+    // darkens the environment response only; direct light stays unoccluded.
+    float specularEnvironmentScale=clay?.25f:1.0f;
+    float3 diffuseEnvironment=base.rgb*EvaluateStudioIrradiance(worldN)*envIntensity*diffuseScale*occlusion;
+    float3 specularEnvironment=SampleStudioSpecular(worldN,worldView,roughness)
+        *envIntensity*specularEnvironmentScale;
+    float3 dielectricIblFresnel=EnvironmentBrdfFresnel(dielectricF0,nv,roughness,specularWeight);
+    float3 metalIblFresnel=EnvironmentBrdfFresnel(base.rgb,nv,roughness,1.0f);
+    float3 envBrdfScale=lerp(dielectricIblFresnel,metalIblFresnel,metallic);
+    float3 dielectricDiffuse=diffuseEnvironment*(1.0f-dielectricIblFresnel);
+    float3 dielectricSpecular=specularEnvironment*dielectricIblFresnel;
+    float3 metalSpecular=specularEnvironment*metalIblFresnel;
+    float3 iblDiffuse=lerp(dielectricDiffuse,float3(0,0,0),metallic);
+    float3 iblSpecular=lerp(dielectricSpecular,metalSpecular,metallic);
+    if (transmissive) { iblDiffuse=diffuseEnvironment; iblSpecular=specularEnvironment; }
+    // Coat IBL is the same prefiltered environment at the coat roughness. It
+    // is weighted once by the layer mix below; it must not carry a second
+    // Fresnel factor.
+    float coatFresnel=FresnelSchlick(clamp(iorF0,0.0f,1.0f),1.0f,nv);
+    float coatWeight=clearcoat*coatFresnel;
+    float3 coatEnvironment=SampleStudioSpecular(worldN,worldView,clearcoatRoughness)
+        *envIntensity*occlusion;
+    // T21/T24 diagnostic contributions. Every split term is accumulated with
+    // exactly the arithmetic that reaches `color`, so channel 20 remains the
+    // sum of channels 14..19 while exposing the individual lobes.
     float3 directDiffuse=float3(0,0,0),directSpecular=float3(0,0,0);
     float3 envDiffuse=float3(0,0,0),envSpecular=float3(0,0,0);
     float3 coatContribution=float3(0,0,0),emission=float3(0,0,0);
-    float3 color;
-    if (!clay && (flags&2)) {
-        color=base.rgb*diffuseScale;
-        envDiffuse+=color;
-    } else if (gLighting.x>1.5f) {
-        // A single hard key whose elevation is user-adjustable via the gizmo's
-        // sun. Higher elevations read as daylight on upward faces; lower ones
-        // rake across slopes to expose relief. The environment contributes a
-        // small world-stable ambient so metals still have a reflection.
-        float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
-        float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
-        float3 keyDiffuse,keySpecular;
-        float3 key=EvaluateLightSplit(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,roughness,f0,
-                                      3.4f*envIntensity*gPresentation.x,keyDiffuse,keySpecular);
-        directDiffuse+=keyDiffuse;directSpecular+=keySpecular;
-        float3 ambient=base.rgb*(1.0f-metallic)*.08f*diffuseScale*occlusion;
-        color=key+ambient;
-        envDiffuse+=ambient;
-        float3 irradiance=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*.25f*diffuseScale*occlusion;
-        color+=irradiance;envDiffuse+=irradiance;
-        float3 environmentSpecular=SampleStudioSpecular(worldN,worldView,roughness)*envIntensity*.35f*occlusion;
-        color+=environmentSpecular;envSpecular+=environmentSpecular;
-        if (transmissive) {
-            float3 transmittedReflection=SampleStudioSpecular(worldN,worldView,roughness)*occlusion;
-            color+=transmittedReflection;envSpecular+=transmittedReflection;
-        }
-    } else {
-        // World-stable Studio IBL: SH9 diffuse irradiance plus the GGX-
-        // prefiltered cubemap reflection, with a camera-relative soft key for
-        // form. Clay keeps the same environment but suppresses specular.
-        // environmentIntensity scales the direct rig and IBL together, matching
-        // F3D's paired render.light.intensity / IBLIntensity behavior.
-        float3 irradiance=base.rgb*(1.0f-metallic)*EvaluateStudioIrradiance(worldN)*envIntensity*diffuseScale*occlusion;
-        color=irradiance;envDiffuse+=irradiance;
-        float specularScale=clay?.25f:1.0f;
-        float3 environmentSpecular=SampleStudioSpecular(worldN,worldView,roughness)
-            *(transmissive?float3(1.0f,1.0f,1.0f):fresnel)*envIntensity*specularScale*occlusion;
-        color+=environmentSpecular;envSpecular+=environmentSpecular;
-        float3 directDiffuse0,directSpecular0,directDiffuse1,directSpecular1,directDiffuse2,directSpecular2;
-        float3 key=EvaluateLightSplit(n,viewDir,normalize(float3(.45f,-.55f,.70f)),base.rgb*diffuseScale,metallic,roughness,f0,1.15f*envIntensity*gPresentation.x,directDiffuse0,directSpecular0);
-        float3 fill=EvaluateLightSplit(n,viewDir,normalize(float3(-.70f,.25f,.38f)),base.rgb*diffuseScale,metallic,roughness,f0,.35f*envIntensity*gPresentation.y,directDiffuse1,directSpecular1);
-        float3 rim=EvaluateLightSplit(n,viewDir,normalize(float3(.18f,.76f,.28f)),base.rgb*diffuseScale,metallic,roughness,f0,.22f*envIntensity*gPresentation.z,directDiffuse2,directSpecular2);
-        color+=key;
-        color+=fill;
-        color+=rim;
-        directDiffuse+=directDiffuse0+directDiffuse1+directDiffuse2;
-        directSpecular+=directSpecular0+directSpecular1+directSpecular2;
-        float3 ambient=base.rgb*(1.0f-metallic)*.05f*diffuseScale*occlusion;
-        color+=ambient;envDiffuse+=ambient;
-    }
-    if (!clay && clearcoat>0.0f) {
-        // Add the coat lobe over the base. The base already lost (1-clearcoat)
-        // of its specular above; the coat's own Fresnel is folded into the
-        // reflected term, so transmitted base light is not double-counted.
-        float3 coatEnvironment=SampleStudioSpecular(worldN,worldView,clearcoatRoughness)
-            *clearcoat*envIntensity*occlusion;
-        color+=coatEnvironment;coatContribution+=coatEnvironment;
-        float coatFresnel=0.04f+0.96f*pow(1.0f-nv,5.0f);
-        float3 coatKey=EvaluateClearcoatLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),clearcoatRoughness,1.15f*envIntensity*gPresentation.x)
-            *clearcoat*coatFresnel;
-        float3 coatFill=EvaluateClearcoatLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),clearcoatRoughness,.35f*envIntensity*gPresentation.y)
-            *clearcoat*coatFresnel;
-        float3 coatRim=EvaluateClearcoatLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),clearcoatRoughness,.22f*envIntensity*gPresentation.z)
-            *clearcoat*coatFresnel;
-        color+=coatKey;color+=coatFill;color+=coatRim;
-        coatContribution+=coatKey+coatFill+coatRim;
-    }
+    float3 baseDirect=float3(0,0,0),coatDirect=float3(0,0,0);
+    float3 dd=float3(0,0,0),ds=float3(0,0,0);
+    float3 sheen=float3(0,0,0);
     float sheenWeight=0.0f;
     if (!clay && any(sheenColor>0.0f)) {
-        // Soft velvet lobe: only visible at grazing angles, strongest for a
-        // rough weave. It is intentionally additive and low-energy so it
-        // cannot masquerade as the base diffuse.
         sheenWeight=pow(1.0f-nv,3.0f)*(0.35f+0.65f*sheenRoughness);
-        float3 sheen=sheenColor*sheenWeight*(0.35f+0.65f*envIntensity);
-        color+=sheen;envSpecular+=sheen;
+        sheen=sheenColor*sheenWeight*(0.35f+0.65f*envIntensity);
     }
+    if (!clay && (flags&2)) {
+        // glTF unlit: authored base color only, no environment or coat.
+        iblDiffuse=base.rgb*diffuseScale;
+        iblSpecular=float3(0,0,0);
+        sheen=float3(0,0,0);
+        coatEnvironment=float3(0,0,0);
+        coatWeight=0.0f;
+    } else if (gLighting.x>1.5f) {
+        // Directional: one coherent sun for base and coat. The IBL above is
+        // identical to Studio, so both modes share one material BRDF.
+        float az=gLighting.y, el=clamp(gLighting.z,0.0f,1.4835f);
+        float3 lightDir=normalize(float3(cos(az)*cos(el),sin(az)*cos(el),sin(el)));
+        float3 d,s;
+        baseDirect=EvaluateLightSplit(n,viewDir,lightDir,base.rgb*diffuseScale,metallic,
+            roughness,f0,f90,3.4f*envIntensity*gPresentation.x,d,s);
+        dd+=d;ds+=s;
+        coatDirect=EvaluateClearcoatLight(n,viewDir,lightDir,clearcoatRoughness,
+            3.4f*envIntensity*gPresentation.x);
+    } else {
+        // World-stable Studio IBL plus the camera-relative key/fill/rim rig.
+        float3 d0,s0,d1,s1,d2,s2;
+        float3 key=EvaluateLightSplit(n,viewDir,normalize(float3(.45f,-.55f,.70f)),
+            base.rgb*diffuseScale,metallic,roughness,f0,f90,1.15f*envIntensity*gPresentation.x,d0,s0);
+        float3 fill=EvaluateLightSplit(n,viewDir,normalize(float3(-.70f,.25f,.38f)),
+            base.rgb*diffuseScale,metallic,roughness,f0,f90,.35f*envIntensity*gPresentation.y,d1,s1);
+        float3 rim=EvaluateLightSplit(n,viewDir,normalize(float3(.18f,.76f,.28f)),
+            base.rgb*diffuseScale,metallic,roughness,f0,f90,.22f*envIntensity*gPresentation.z,d2,s2);
+        baseDirect=key+fill+rim;
+        dd=d0+d1+d2;ds=s0+s1+s2;
+        // Coat direct lights use the same Studio directions as the base rig.
+        coatDirect=EvaluateClearcoatLight(n,viewDir,normalize(float3(.45f,-.55f,.70f)),
+                clearcoatRoughness,1.15f*envIntensity*gPresentation.x)
+            +EvaluateClearcoatLight(n,viewDir,normalize(float3(-.70f,.25f,.38f)),
+                clearcoatRoughness,.35f*envIntensity*gPresentation.y)
+            +EvaluateClearcoatLight(n,viewDir,normalize(float3(.18f,.76f,.28f)),
+                clearcoatRoughness,.22f*envIntensity*gPresentation.z);
+    }
+    // Clearcoat layering: base (diffuse+specular+sheen) is attenuated by
+    // (1 - coatWeight) and the coat lobe fills that energy. Emission beneath
+    // the coat is attenuated the same way.
+    float attenuation=1.0f-coatWeight;
+    float3 coatTotal=coatEnvironment+coatDirect;
+    directDiffuse=dd*attenuation;
+    directSpecular=ds*attenuation;
+    envDiffuse=iblDiffuse*attenuation;
+    envSpecular=(iblSpecular+sheen)*attenuation;
+    coatContribution=coatTotal*coatWeight;
+    float3 emissive=float3(0,0,0);
     if (!clay) {
-        float3 emissive=gEmissiveFactor.rgb*gEmissiveFactor.a;
+        emissive=gEmissiveFactor.rgb*gEmissiveFactor.a;
         if (maps&8) {
             SlotUv emissiveUv=ResolveSlotUv(3,input.uv);
             if (emissiveUv.valid) emissive*=SampleSlot(gEmissive,emissiveUv).rgb;
         }
-        color+=emissive;emission+=emissive;
     }
+    emission=emissive*attenuation;
+    float3 color=directDiffuse+directSpecular+envDiffuse+envSpecular+coatContribution+emission;
     float outline = pow(1.0f - saturate(dot(n,viewDir)), 2.0f);
     color += gEyeSelection.w * (outline * 0.45f * float3(0.36f,0.62f,1.0f) + 0.03f);
     // T21 Debug inspection channels travel in gPresentation.w. They are raw
@@ -880,6 +897,11 @@ PixelOutput PSMain(PSInput input)
         else if (debugChannel==18u) dbg=coatContribution;
         else if (debugChannel==19u) dbg=emission;
         else if (debugChannel==20u) dbg=color;
+        else if (debugChannel==21u) dbg=envBrdfScale;
+        else if (debugChannel==22u) dbg=float3(base.a,glassReflectance,transmission);
+        // Fixed linear patch used to check the resolve's tone-map/display
+        // contract without depending on scene lighting or sampling.
+        else if (debugChannel==23u) dbg=float3(0.3f,0.3f,0.3f);
         else dbg=float3(0.0f,1.0f,1.0f);
         PixelOutput debugOutput; debugOutput.color=float4(max(dbg,0.0f),1.0f);
         debugOutput.pick=input.pickId; return debugOutput;
@@ -1830,18 +1852,17 @@ bool D3D12ViewerPath::CreatePipeline(std::wstring& error)
 
 bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
 {
-    // T22 root layout. Six SRV tables (baseColor, MR, normal, emissive, the
-    // studio cubemap and the independent occlusion map) plus the 25-DWORD b1
-    // draw block (25) and two CBVs (b0 frame, b2 material) total 35 DWORDs,
-    // well inside D3D12's 64-DWORD limit. Moving the material record from root
-    // constants to a CBV is what made room for the per-slot transforms.
-    D3D12_ROOT_PARAMETER rootParams[9]{};
+    // T22/T24 root layout. Seven SRV tables (baseColor, MR, normal, emissive,
+    // the studio cubemap, the independent occlusion map and the split-sum
+    // BRDF LUT) plus the 25-DWORD b1 draw block and two CBVs (b0 frame, b2
+    // material) total 36 DWORDs, well inside D3D12's 64-DWORD limit.
+    D3D12_ROOT_PARAMETER rootParams[10]{};
     rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0;
     rootParams[0].Descriptor.RegisterSpace = 0;
     rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    D3D12_DESCRIPTOR_RANGE srvRanges[6]{};
+    D3D12_DESCRIPTOR_RANGE srvRanges[7]{};
     for (UINT i=0;i<6;++i) {
         srvRanges[i].RangeType=D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         srvRanges[i].NumDescriptors=1;srvRanges[i].BaseShaderRegister=i;
@@ -1851,6 +1872,13 @@ bool D3D12ViewerPath::CreateTexturedPipeline(std::wstring& error)
         rootParams[1+i].DescriptorTable.pDescriptorRanges=&srvRanges[i];
         rootParams[1+i].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
     }
+    srvRanges[6].RangeType=D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    srvRanges[6].NumDescriptors=1;srvRanges[6].BaseShaderRegister=6;
+    srvRanges[6].OffsetInDescriptorsFromTableStart=D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    rootParams[9].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[9].DescriptorTable.NumDescriptorRanges=1;
+    rootParams[9].DescriptorTable.pDescriptorRanges=&srvRanges[6];
+    rootParams[9].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
     rootParams[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParams[7].Constants.ShaderRegister = 1; rootParams[7].Constants.Num32BitValues = 25;
     rootParams[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
@@ -2113,8 +2141,10 @@ void D3D12ViewerPath::ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backB
     barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     commandList->ResourceBarrier(2, barriers);
 
+    lastResolveExposure = viewer_presentation::ClampExposure(info.exposure);
+    lastResolveToneMap = static_cast<uint32_t>(info.toneMap);
     const float constants[8] = {
-        viewer_presentation::ClampExposure(info.exposure),
+        lastResolveExposure,
         static_cast<float>(info.toneMap),
         static_cast<float>(info.background),
         12.0f,
@@ -2227,6 +2257,36 @@ bool D3D12ViewerPath::CreateStudioEnvironment(std::wstring& error)
     }
     uploadBytes = (uploadBytes + 511ull) & ~511ull;
 
+    // T24 split-sum DFG LUT. One tiny R32G32_FLOAT texture alongside the cube;
+    // the same bounded startup upload carries both.
+    const UINT brdfLutSize = bake.brdfLut.Empty() ? 0u : bake.brdfLut.size;
+    UINT brdfLutRowPitch = 0;
+    UINT64 brdfLutOffset = 0;
+    if (brdfLutSize != 0) {
+        D3D12_RESOURCE_DESC lutDesc{};
+        lutDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        lutDesc.Width = brdfLutSize;
+        lutDesc.Height = brdfLutSize;
+        lutDesc.DepthOrArraySize = 1;
+        lutDesc.MipLevels = 1;
+        lutDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+        lutDesc.SampleDesc.Count = 1;
+        lutDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        environment.brdfLut.Reset();
+        if (FAILED(device.Device()->CreateCommittedResource(
+                &defaultHeap, D3D12_HEAP_FLAG_NONE, &lutDesc,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&environment.brdfLut)))) {
+            error = L"The Studio environment BRDF LUT could not be created.";
+            return false;
+        }
+        brdfLutRowPitch = (brdfLutSize * 8u + 255u) & ~255u;
+        uploadBytes = (uploadBytes + 511ull) & ~511ull;
+        brdfLutOffset = uploadBytes;
+        uploadBytes += static_cast<uint64_t>(brdfLutRowPitch) * brdfLutSize;
+        uploadBytes = (uploadBytes + 511ull) & ~511ull;
+        environment.brdfLutSize = brdfLutSize;
+    }
+
     auto uploadBuffer = CreateBuffer(device.Device(), uploadBytes, D3D12_HEAP_TYPE_UPLOAD,
                                      D3D12_RESOURCE_STATE_GENERIC_READ);
     if (!uploadBuffer) {
@@ -2251,6 +2311,14 @@ bool D3D12ViewerPath::CreateStudioEnvironment(std::wstring& error)
                 row[x * 4 + 2] = texel.b;
                 row[x * 4 + 3] = 1.0f;
             }
+        }
+    }
+    if (brdfLutSize != 0) {
+        auto* destination = reinterpret_cast<std::byte*>(mapped) + brdfLutOffset;
+        for (UINT y = 0; y < brdfLutSize; ++y) {
+            float* row = reinterpret_cast<float*>(destination + static_cast<size_t>(y) * brdfLutRowPitch);
+            const float* source = &bake.brdfLut.rg[static_cast<size_t>(y) * brdfLutSize * 2];
+            std::memcpy(row, source, static_cast<size_t>(brdfLutSize) * 2 * sizeof(float));
         }
     }
     uploadBuffer->Unmap(0, nullptr);
@@ -2281,13 +2349,38 @@ bool D3D12ViewerPath::CreateStudioEnvironment(std::wstring& error)
         destination.SubresourceIndex = copy.mip + copy.face * mipCount;
         list->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
     }
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = environment.cube.Get();
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    list->ResourceBarrier(1, &barrier);
+    if (environment.brdfLut) {
+        D3D12_TEXTURE_COPY_LOCATION source{};
+        source.pResource = uploadBuffer.Get();
+        source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        source.PlacedFootprint.Offset = brdfLutOffset;
+        source.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R32G32_FLOAT;
+        source.PlacedFootprint.Footprint.Width = brdfLutSize;
+        source.PlacedFootprint.Footprint.Height = brdfLutSize;
+        source.PlacedFootprint.Footprint.Depth = 1;
+        source.PlacedFootprint.Footprint.RowPitch = brdfLutRowPitch;
+        D3D12_TEXTURE_COPY_LOCATION destination{};
+        destination.pResource = environment.brdfLut.Get();
+        destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        destination.SubresourceIndex = 0;
+        list->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+    }
+    D3D12_RESOURCE_BARRIER barriers[2]{};
+    barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[0].Transition.pResource = environment.cube.Get();
+    barriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    UINT barrierCount = 1;
+    if (environment.brdfLut) {
+        barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barriers[1].Transition.pResource = environment.brdfLut.Get();
+        barriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        barrierCount = 2;
+    }
+    list->ResourceBarrier(barrierCount, barriers);
     if (FAILED(list->Close())) {
         error = L"The Studio environment upload command list could not be closed.";
         return false;
@@ -2324,6 +2417,20 @@ void D3D12ViewerPath::WriteEnvironmentSrv(ID3D12DescriptorHeap& heap, UINT index
     D3D12_CPU_DESCRIPTOR_HANDLE cpu = heap.GetCPUDescriptorHandleForHeapStart();
     cpu.ptr += static_cast<SIZE_T>(index) * descriptorSize;
     device.Device()->CreateShaderResourceView(environment.cube.Get(), &srv, cpu);
+}
+
+void D3D12ViewerPath::WriteBrdfLutSrv(ID3D12DescriptorHeap& heap, UINT index,
+                                      UINT descriptorSize)
+{
+    if (!environment.brdfLut) return;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R32G32_FLOAT;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MipLevels = 1;
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu = heap.GetCPUDescriptorHandleForHeapStart();
+    cpu.ptr += static_cast<SIZE_T>(index) * descriptorSize;
+    device.Device()->CreateShaderResourceView(environment.brdfLut.Get(), &srv, cpu);
 }
 
 void D3D12ViewerPath::WaitForIdle()
@@ -2702,6 +2809,11 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
             environmentHandle.ptr += uint64_t(model.environmentDescriptorIndex)
                 * mesh.textureDescriptorSize;
             commandList->SetGraphicsRootDescriptorTable(5, environmentHandle);
+            D3D12_GPU_DESCRIPTOR_HANDLE brdfHandle =
+                mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+            brdfHandle.ptr += uint64_t(model.brdfLutDescriptorIndex)
+                * mesh.textureDescriptorSize;
+            commandList->SetGraphicsRootDescriptorTable(9, brdfHandle);
             const bool blend=mesh.material.alphaMode==uint32_t(model_core::AlphaModeId::Blend);
             // A mesh with no authored material has no culling policy either.
             // Treat it as double-sided: CAD/Rhino OBJ exports commonly contain
@@ -2796,6 +2908,11 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                 environmentHandle.ptr += uint64_t(model.environmentDescriptorIndex)
                     * mesh.textureDescriptorSize;
                 commandList->SetGraphicsRootDescriptorTable(5, environmentHandle);
+                D3D12_GPU_DESCRIPTOR_HANDLE brdfHandle =
+                    mesh.textureHeap->GetGPUDescriptorHandleForHeapStart();
+                brdfHandle.ptr += uint64_t(model.brdfLutDescriptorIndex)
+                    * mesh.textureDescriptorSize;
+                commandList->SetGraphicsRootDescriptorTable(9, brdfHandle);
                 commandList->SetGraphicsRootConstantBufferView(0,constantBufferAddress);
                 uint32_t mapMask=0;
                 for (UINT slot=0;slot<4;++slot) {
@@ -3094,7 +3211,8 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
         const UINT materialDescriptors = static_cast<UINT>(
             importedImages.size() + (needsNeutralTextures ? 5 : 0));
         staged.environmentDescriptorIndex = materialDescriptors;
-        heapDesc.NumDescriptors = materialDescriptors + 1; // + Studio cubemap
+        staged.brdfLutDescriptorIndex = materialDescriptors + 1;
+        heapDesc.NumDescriptors = materialDescriptors + 2; // + cubemap + BRDF LUT
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         const HRESULT heapResult = device.Device()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&staged.srvHeap));
@@ -3107,6 +3225,8 @@ bool D3D12ViewerPath::BeginUploadModel(const std::vector<d3d12_import_bridge::Im
             = device.Device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         WriteEnvironmentSrv(*staged.srvHeap.Get(), staged.environmentDescriptorIndex,
                             staged.srvDescriptorSize);
+        WriteBrdfLutSrv(*staged.srvHeap.Get(), staged.brdfLutDescriptorIndex,
+                        staged.srvDescriptorSize);
 
         staged.textures.resize(importedImages.size());
         for (size_t i = 0; i < importedImages.size(); ++i) {
@@ -3447,8 +3567,8 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    // + 5 neutral material slots, + 1 global Studio cubemap.
-    heapDesc.NumDescriptors=static_cast<UINT>(resources.textures.size()+5+1);
+    // + 5 neutral material slots, + 1 global Studio cubemap + 1 BRDF LUT.
+    heapDesc.NumDescriptors=static_cast<UINT>(resources.textures.size()+5+2);
     heapDesc.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ComPtr<ID3D12DescriptorHeap> rebuilt;
@@ -3473,6 +3593,8 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
     for (UINT i=0;i<5;++i) writeSrv(resources.neutralTextures[i].resource.Get(),neutralBase+i);
     const UINT environmentIndex=neutralBase+5;
     WriteEnvironmentSrv(*rebuilt.Get(),environmentIndex,descriptorSize);
+    const UINT brdfLutIndex=environmentIndex+1;
+    WriteBrdfLutSrv(*rebuilt.Get(),brdfLutIndex,descriptorSize);
 
     ModelResources displaced;
     std::unordered_set<ID3D12DescriptorHeap*> oldHeaps;
@@ -3488,6 +3610,7 @@ bool D3D12ViewerPath::RebuildMaterialDescriptors(ModelResources& resources, std:
     resources.srvHeap=rebuilt;
     resources.srvDescriptorSize=descriptorSize;
     resources.environmentDescriptorIndex=environmentIndex;
+    resources.brdfLutDescriptorIndex=brdfLutIndex;
     for (UINT i=0;i<resources.textures.size();++i) {
         resources.textures[i].heap=rebuilt;
         resources.textures[i].descriptorSize=descriptorSize;

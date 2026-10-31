@@ -72,19 +72,50 @@ float RadicalInverse(uint32_t bits)
     return static_cast<float>(bits) * 2.3283064365386963e-10f;
 }
 
-Vec3 ImportanceSampleGgx(float xi1, float xi2, const Vec3& normal, float roughness)
+// Samples a GGX half vector in tangent space (z is the surface normal).
+Vec3 ImportanceSampleGgxHalf(float xi1, float xi2, float roughness)
 {
     const float a = roughness * roughness;
     const float a2 = a * a;
     const float phi = 2.0f * kPi * xi1;
     const float cosTheta = std::sqrt(std::max(0.0f, (1.0f - xi2) / (1.0f + (a2 - 1.0f) * xi2)));
     const float sinTheta = std::sqrt(std::max(0.0f, 1.0f - cosTheta * cosTheta));
-    const Vec3 h{std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta};
+    return {std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta};
+}
+
+void TangentBasis(const Vec3& normal, Vec3& tangent, Vec3& bitangent)
+{
     const Vec3 reference = std::fabs(normal.z) < 0.999f ? Vec3{0.0f, 0.0f, 1.0f}
                                                         : Vec3{1.0f, 0.0f, 0.0f};
-    const Vec3 tangent = Normalize(Cross(reference, normal));
-    const Vec3 bitangent = Cross(normal, tangent);
-    return Normalize(Add(Add(Mul(tangent, h.x), Mul(bitangent, h.y)), Mul(normal, h.z)));
+    tangent = Normalize(Cross(reference, normal));
+    bitangent = Cross(normal, tangent);
+}
+
+// Trowbridge-Reitz GGX distribution for the squared perceptual roughness.
+float DistributionGgx(float noH, float roughness)
+{
+    const float alpha = roughness * roughness;
+    const float a2 = alpha * alpha;
+    const float f = noH * noH * (a2 - 1.0f) + 1.0f;
+    return a2 / std::max(1e-4f, kPi * f * f);
+}
+
+// Height-correlated Smith GGX visibility V = G / (4 NoL NoV).
+float VisibilityGgx(float noL, float noV, float roughness)
+{
+    const float alpha = roughness * roughness;
+    const float a2 = alpha * alpha;
+    const float gv = noL * std::sqrt(noV * noV * (1.0f - a2) + a2);
+    const float gl = noV * std::sqrt(noL * noL * (1.0f - a2) + a2);
+    const float g = gv + gl;
+    return g > 0.0f ? 0.5f / g : 0.0f;
+}
+
+float CubemapAreaTerm(float u, float v)
+{
+    // Antiderivative of 1/(1 + u^2 + v^2)^(3/2); the mixed difference over a
+    // texel is that texel's exact solid angle.
+    return std::atan2(u * v, std::sqrt(1.0f + u * u + v * v));
 }
 
 void ShBasis(const Vec3& n, float basis[9])
@@ -123,7 +154,6 @@ void BuildCube(CubeImage& image, uint32_t size,
 ShCoefficients ProjectIrradiance(const CubeImage& base)
 {
     ShCoefficients result;
-    const float deltaOmega = 4.0f * kPi / (6.0f * static_cast<float>(base.size) * base.size);
     for (uint32_t face = 0; face < 6; ++face) {
         const auto& texels = base.faces[face];
         for (uint32_t y = 0; y < base.size; ++y) {
@@ -132,6 +162,10 @@ ShCoefficients ProjectIrradiance(const CubeImage& base)
                 float basis[9];
                 ShBasis(dir, basis);
                 const Rgb radiance = texels[static_cast<size_t>(y) * base.size + x];
+                // Cubemap texels do not subtend equal solid angles. Using the
+                // exact per-texel weight removes the corner bias an equal
+                // 4*pi/(6*size^2) weight leaves in the SH projection.
+                const float deltaOmega = CubemapTexelSolidAngle(face, x, y, base.size);
                 for (uint32_t i = 0; i < 9; ++i) {
                     // Band weights: L0 keeps pi/pi, L1 2pi/3 / pi, L2 pi/4 / pi.
                     const float band = i == 0 ? 1.0f : (i < 4 ? 2.0f / 3.0f : 0.25f);
@@ -159,6 +193,196 @@ Vec3 CubemapDirection(uint32_t face, uint32_t x, uint32_t y, uint32_t size)
     case 4: return Normalize({u, -v, 1.0f});    // +Z
     default: return Normalize({-u, -v, -1.0f}); // -Z
     }
+}
+
+ShCoefficients ProjectCubeIrradiance(const CubeImage& base)
+{
+    return ProjectIrradiance(base);
+}
+
+float CubemapTexelSolidAngle(uint32_t face, uint32_t x, uint32_t y, uint32_t size)
+{
+    if (face >= 6 || size == 0 || x >= size || y >= size) return 0.0f;
+    const float step = 2.0f / static_cast<float>(size);
+    const float u0 = static_cast<float>(x) * step - 1.0f;
+    const float v0 = static_cast<float>(y) * step - 1.0f;
+    const float u1 = u0 + step;
+    const float v1 = v0 + step;
+    return CubemapAreaTerm(u1, v1) - CubemapAreaTerm(u1, v0)
+        - CubemapAreaTerm(u0, v1) + CubemapAreaTerm(u0, v0);
+}
+
+Rgb PrefilterSpecular(const std::function<Rgb(const Vec3&)>& radiance, const Vec3& normal,
+                      float roughness, uint32_t sampleCount)
+{
+    const Vec3 n = Normalize(normal);
+    const uint32_t samples = std::max(1u, sampleCount);
+    Vec3 tangent, bitangent;
+    TangentBasis(n, tangent, bitangent);
+    Rgb sum;
+    float weight = 0.0f;
+    for (uint32_t sample = 0; sample < samples; ++sample)
+    {
+        const float xi1 = (static_cast<float>(sample) + 0.5f) / static_cast<float>(samples);
+        const float xi2 = RadicalInverse(sample);
+        const Vec3 h = ImportanceSampleGgxHalf(xi1, xi2, roughness);
+        const Vec3 halfVector = Normalize(
+            Add(Add(Mul(tangent, h.x), Mul(bitangent, h.y)), Mul(n, h.z)));
+        const float nDotH = std::max(0.0f, Dot(n, halfVector));
+        const Vec3 light = Normalize(Sub(Mul(halfVector, 2.0f * nDotH), n));
+        const float nDotL = std::max(0.0f, Dot(n, light));
+        if (nDotL <= 0.0f) continue;
+        sum = Add(sum, Mul(radiance(light), nDotL));
+        weight += nDotL;
+    }
+    return weight > 1e-6f ? Mul(sum, 1.0f / weight) : radiance(n);
+}
+
+Rgb ReferencePrefilteredRadiance(const std::function<Rgb(const Vec3&)>& radiance,
+                                 const Vec3& normal, float roughness, uint32_t sampleCount)
+{
+    const Vec3 n = Normalize(normal);
+    const uint32_t samples = std::max(1u, sampleCount);
+    Vec3 tangent, bitangent;
+    TangentBasis(n, tangent, bitangent);
+    // Uniform quadrature over the hemisphere in cos(theta): each sample owns
+    // dOmega = 2*pi/N. This is deliberately not the production GGX sampler.
+    const float deltaOmega = 2.0f * kPi / static_cast<float>(samples);
+    Rgb numerator;
+    float denominator = 0.0f;
+    for (uint32_t sample = 0; sample < samples; ++sample)
+    {
+        const float cosTheta = (static_cast<float>(sample) + 0.5f) / static_cast<float>(samples);
+        const float sinTheta = std::sqrt(std::max(0.0f, 1.0f - cosTheta * cosTheta));
+        const float phi = static_cast<float>(sample) * 2.39996322972865332f;
+        const Vec3 h{std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta};
+        const Vec3 halfVector = Normalize(
+            Add(Add(Mul(tangent, h.x), Mul(bitangent, h.y)), Mul(n, h.z)));
+        const float nDotH = cosTheta;
+        const Vec3 light = Normalize(Sub(Mul(halfVector, 2.0f * nDotH), n));
+        const float nDotL = std::max(0.0f, Dot(n, light));
+        if (nDotL <= 0.0f) continue;
+        const float weight = DistributionGgx(nDotH, roughness) * nDotH * nDotL * deltaOmega;
+        numerator = Add(numerator, Mul(radiance(light), weight));
+        denominator += weight;
+    }
+    return denominator > 1e-12f ? Mul(numerator, 1.0f / denominator) : radiance(n);
+}
+
+BrdfLut BakeBrdfLut(uint32_t size, uint32_t sampleCount)
+{
+    BrdfLut lut;
+    lut.size = std::clamp(size, 8u, 256u);
+    const uint32_t samples = std::clamp(sampleCount, 16u, 4096u);
+    lut.rg.assign(static_cast<size_t>(lut.size) * lut.size * 2, 0.0f);
+    for (uint32_t y = 0; y < lut.size; ++y)
+    {
+        const float roughness = (static_cast<float>(y) + 0.5f) / static_cast<float>(lut.size);
+        for (uint32_t x = 0; x < lut.size; ++x)
+        {
+            const float nv = (static_cast<float>(x) + 0.5f) / static_cast<float>(lut.size);
+            const Vec3 v{std::sqrt(std::max(0.0f, 1.0f - nv * nv)), 0.0f, nv};
+            float a = 0.0f, b = 0.0f;
+            for (uint32_t sample = 0; sample < samples; ++sample)
+            {
+                const float xi1 = (static_cast<float>(sample) + 0.5f) / static_cast<float>(samples);
+                const float xi2 = RadicalInverse(sample);
+                const Vec3 h = ImportanceSampleGgxHalf(xi1, xi2, roughness);
+                const float voH = std::max(0.0f, Dot(v, h));
+                const Vec3 light = Sub(Mul(h, 2.0f * voH), v);
+                const float nol = std::max(0.0f, light.z);
+                const float noh = std::max(h.z, 1e-4f);
+                if (nol <= 0.0f) continue;
+                const float gVis = 4.0f * nol * VisibilityGgx(nol, nv, roughness) * voH / noh;
+                const float fc = std::pow(1.0f - voH, 5.0f);
+                a += (1.0f - fc) * gVis;
+                b += fc * gVis;
+            }
+            const size_t index = (static_cast<size_t>(y) * lut.size + x) * 2;
+            lut.rg[index + 0] = a / static_cast<float>(samples);
+            lut.rg[index + 1] = b / static_cast<float>(samples);
+        }
+    }
+    return lut;
+}
+
+std::array<float, 2> SampleBrdfLut(const BrdfLut& lut, float nv, float roughness)
+{
+    if (lut.Empty()) return {0.0f, 0.0f};
+    const float sx = std::clamp(nv, 0.0f, 1.0f) * static_cast<float>(lut.size) - 0.5f;
+    const float sy = std::clamp(roughness, 0.0f, 1.0f) * static_cast<float>(lut.size) - 0.5f;
+    const int x0 = std::clamp(static_cast<int>(std::floor(sx)), 0, static_cast<int>(lut.size) - 1);
+    const int y0 = std::clamp(static_cast<int>(std::floor(sy)), 0, static_cast<int>(lut.size) - 1);
+    const int x1 = std::min(x0 + 1, static_cast<int>(lut.size) - 1);
+    const int y1 = std::min(y0 + 1, static_cast<int>(lut.size) - 1);
+    const float fx = std::clamp(sx - static_cast<float>(x0), 0.0f, 1.0f);
+    const float fy = std::clamp(sy - static_cast<float>(y0), 0.0f, 1.0f);
+    auto texel = [&](int x, int y, int component) {
+        return lut.rg[(static_cast<size_t>(y) * lut.size + x) * 2 + component];
+    };
+    std::array<float, 2> result{};
+    for (int component = 0; component < 2; ++component)
+    {
+        const float top = texel(x0, y0, component)
+            + (texel(x1, y0, component) - texel(x0, y0, component)) * fx;
+        const float bottom = texel(x0, y1, component)
+            + (texel(x1, y1, component) - texel(x0, y1, component)) * fx;
+        result[component] = top + (bottom - top) * fy;
+    }
+    return result;
+}
+
+std::array<float, 2> ReferenceBrdfIntegration(float nv, float roughness, uint32_t sampleCount)
+{
+    const uint32_t samples = std::max(1u, sampleCount);
+    const float noV = std::clamp(nv, 1e-3f, 1.0f);
+    const Vec3 v{std::sqrt(std::max(0.0f, 1.0f - noV * noV)), 0.0f, noV};
+    const float deltaOmega = 2.0f * kPi / static_cast<float>(samples);
+    float a = 0.0f, b = 0.0f;
+    for (uint32_t sample = 0; sample < samples; ++sample)
+    {
+        const float cosTheta = (static_cast<float>(sample) + 0.5f) / static_cast<float>(samples);
+        const float sinTheta = std::sqrt(std::max(0.0f, 1.0f - cosTheta * cosTheta));
+        const float phi = static_cast<float>(sample) * 2.39996322972865332f;
+        const Vec3 h{std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta};
+        const float voH = std::max(0.0f, Dot(v, h));
+        const Vec3 light = Sub(Mul(h, 2.0f * voH), v);
+        const float nol = std::max(0.0f, light.z);
+        const float noh = std::max(cosTheta, 1e-4f);
+        if (nol <= 0.0f) continue;
+        const float gVis = 4.0f * nol * VisibilityGgx(nol, noV, roughness) * voH / noh;
+        // The production LUT estimator samples H proportional to D(n.h)(n.h),
+        // so the reference integrates the same weighted integrand explicitly.
+        const float weight = DistributionGgx(noh, roughness) * cosTheta * deltaOmega;
+        const float fc = std::pow(1.0f - voH, 5.0f);
+        a += (1.0f - fc) * gVis * weight;
+        b += fc * gVis * weight;
+    }
+    return {a, b};
+}
+
+std::array<float, 3> EnvironmentBrdfFresnel(const BrdfLut& lut, float nv, float roughness,
+                                            const std::array<float, 3>& f0,
+                                            float specularWeight)
+{
+    const auto ab = SampleBrdfLut(lut, nv, roughness);
+    const float weight = std::clamp(specularWeight, 0.0f, 1.0f);
+    const float oneMinusNv = std::clamp(1.0f - nv, 0.0f, 1.0f);
+    const float grazing = std::pow(oneMinusNv, 5.0f);
+    const float ems = 1.0f - (ab[0] + ab[1]);
+    std::array<float, 3> result{};
+    for (int channel = 0; channel < 3; ++channel)
+    {
+        const float base = std::clamp(f0[channel], 0.0f, 1.0f);
+        const float fr = std::max(1.0f - roughness, base) - base;
+        const float kS = base + fr * grazing;
+        const float fssEss = weight * (kS * ab[0] + ab[1]);
+        const float fAvg = weight * (base + (1.0f - base) / 21.0f);
+        const float denominator = std::max(1e-6f, 1.0f - fAvg * ems);
+        const float fmsEms = ems * fssEss * fAvg / denominator;
+        result[channel] = std::max(0.0f, fssEss + fmsEms);
+    }
+    return result;
 }
 
 Rgb ProceduralStudioRadiance(const Vec3& direction)
@@ -219,23 +443,8 @@ EnvironmentBake BakeStudioEnvironment(const BakeOptions& options)
                 for (uint32_t x = 0; x < size; ++x)
                 {
                     const Vec3 normal = CubemapDirection(face, x, y, size);
-                    Rgb sum;
-                    float weight = 0.0f;
-                    for (uint32_t sample = 0; sample < samples; ++sample)
-                    {
-                        const float xi1 = (static_cast<float>(sample) + 0.5f) /
-                                          static_cast<float>(samples);
-                        const float xi2 = RadicalInverse(sample);
-                        const Vec3 halfVector = ImportanceSampleGgx(xi1, xi2, normal, roughness);
-                        const float nDotH = std::max(0.0f, Dot(normal, halfVector));
-                        const Vec3 light = Normalize(Sub(Mul(halfVector, 2.0f * nDotH), normal));
-                        const float nDotL = std::max(0.0f, Dot(normal, light));
-                        if (nDotL <= 0.0f) continue;
-                        sum = Add(sum, Mul(ProceduralStudioRadiance(light), nDotL));
-                        weight += nDotL;
-                    }
                     mip.faces[face][static_cast<size_t>(y) * size + x] =
-                        weight > 1e-6f ? Mul(sum, 1.0f / weight) : ProceduralStudioRadiance(normal);
+                        PrefilterSpecular(ProceduralStudioRadiance, normal, roughness, samples);
                 }
             }
         }
@@ -243,6 +452,7 @@ EnvironmentBake BakeStudioEnvironment(const BakeOptions& options)
     }
 
     bake.irradiance = ProjectIrradiance(bake.base);
+    bake.brdfLut = BakeBrdfLut(settings.brdfLutSize, settings.brdfLutSampleCount);
     return bake;
 }
 
@@ -262,7 +472,8 @@ Rgb EvaluateIrradiance(const ShCoefficients& coefficients, const Vec3& normal)
     return {std::max(0.0f, result.r), std::max(0.0f, result.g), std::max(0.0f, result.b)};
 }
 
-Rgb ReferenceIrradianceDivPi(const Vec3& normal, uint32_t sampleCount)
+Rgb ReferenceIrradianceDivPi(const std::function<Rgb(const Vec3&)>& radiance,
+                             const Vec3& normal, uint32_t sampleCount)
 {
     const Vec3 n = Normalize(normal);
     const uint32_t count = std::max(1u, sampleCount);
@@ -277,9 +488,14 @@ Rgb ReferenceIrradianceDivPi(const Vec3& normal, uint32_t sampleCount)
         const float nDotL = std::max(0.0f, Dot(n, direction));
         if (nDotL <= 0.0f) continue;
         // ∫ L cosθ dω / π over the sphere with uniform samples of measure 4π.
-        sum = Add(sum, Mul(ProceduralStudioRadiance(direction), nDotL * 4.0f / count));
+        sum = Add(sum, Mul(radiance(direction), nDotL * 4.0f / count));
     }
     return sum;
+}
+
+Rgb ReferenceIrradianceDivPi(const Vec3& normal, uint32_t sampleCount)
+{
+    return ReferenceIrradianceDivPi(ProceduralStudioRadiance, normal, sampleCount);
 }
 
 float Luminance(const Rgb& color)

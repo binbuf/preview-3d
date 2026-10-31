@@ -55,7 +55,7 @@ The MVP uses a forward, rasterized PBR-lite pipeline:
 
 - right-handed internal coordinates and camera-relative float matrices;
 - reversed-Z depth with a floating-point depth buffer;
-- one product-owned procedural studio environment baked once into a world-stable cubemap (SH9 diffuse irradiance plus a GGX-prefiltered specular mip chain) with a camera-relative key/fill light;
+- one product-owned procedural studio environment baked once into a world-stable cubemap (solid-angle SH9 diffuse irradiance, a GGX-prefiltered specular mip chain and a split-sum DFG LUT) with a camera-relative key/fill light;
 - base color, metallic, roughness, emissive, normal map and UV transform when present, vertex color, unlit mode, alpha mask, double-sided state;
 - bounded point primitives rendered as depth-tested camera-scaled round splats with source color or neutral shading;
 - opaque and masked geometry before sorted transparent draw groups;
@@ -90,19 +90,24 @@ GPU storage is well under 4 MiB. `BakeOptions` clamps the face size to 4–256 a
 the mip count to the full chain, so the startup cost is bounded and the output
 is bit-identical across runs.
 
-The bake produces three derived views of the same radiance:
+The bake produces four derived views of the same radiance:
 
 - the base RGBA32F cubemap (Direct3D face order +X, -X, +Y, -Y, +Z, -Z);
 - a GGX-prefiltered specular mip chain, where roughness 0 selects mip 0 and
   roughness 1 selects the last mip (`roughness * (mipCount - 1)`);
-- SH9 coefficients of irradiance/π for diffuse lighting.
+- SH9 coefficients of irradiance/π for diffuse lighting, projected with the
+  **exact per-texel cubemap solid angle** (`6 × size²` texels sum to `4π`), not
+  an equal `4π/(6 × size²)` weight;
+- a split-sum DFG integration LUT (64² R32G32_FLOAT, x = NoV, y = perceptual
+  roughness) for `F0 * A + B`, including the Fdez-Aguera multiple-scattering
+  compensation (ADR-0082).
 
-The environment is uploaded once on the direct queue during initialization and
-never re-baked for a camera move or a frame. Its SRV occupies one slot appended
-to each model's material descriptor heap: D3D12 permits only one shader-visible
-CBV/SRV/UAV heap at a time, so a separate environment heap cannot be bound
-alongside the material heap. The same heap slot is re-written when progressive
-material descriptors are rebuilt.
+The environment and LUT are uploaded once on the direct queue during
+initialization and never re-baked for a camera move or a frame. Their SRVs
+occupy two slots appended to each model's material descriptor heap: D3D12
+permits only one shader-visible CBV/SRV/UAV heap at a time, so a separate
+environment heap cannot be bound alongside the material heap. The same slots
+are re-written when progressive material descriptors are rebuilt.
 
 The vertex shader keeps the camera-relative position/normal precision policy.
 Before sampling the environment the pixel shader rotates the camera-space
@@ -111,8 +116,9 @@ world-from-camera quaternion; the cubemap therefore stays attached to the model
 while the camera orbits. The key/fill analytic rig remains camera-relative for
 predictable object readability. Studio exposes intensity, yaw and exposure in
 the per-frame constant buffer. Clay reuses the same environment at low
-specular; Directional keeps its hard key and adds only a low-intensity
-world-stable ambient/reflection term.
+specular. Studio, Clay and Directional share one Fresnel-weighted split-sum
+IBL path; Directional adds its sun and no second unweighted transmission
+reflection (ADR-0082).
 
 The object shader writes linear HDR radiance into an
 `R16G16B16A16_FLOAT` scene target; it deliberately does not apply the display
@@ -151,9 +157,9 @@ choice pins the session and wins over later catalog recommendations.
 Environment intensity scales the direct rig and IBL together, matching F3D's
 paired `render.light.intensity` / `IBLIntensity` behavior. The CPU reference in
 `StudioEnvironment.cpp` and `Presentation.cpp` and their HLSL copies are kept
-in lock-step by the `[studio-ibl]`, `[tonemap]` and `[studio-presets]` unit
-tests, including pixel-shader compile checks at the feature-level-11_0
-baseline.
+in lock-step by the `[studio-ibl]`, `[brdf]`, `[tonemap]` and
+`[studio-presets]` unit tests, including pixel-shader compile checks at the
+feature-level-11_0 baseline.
 
 ## Ground contact shadow, highlight and ambient occlusion
 
@@ -206,14 +212,20 @@ ADR-0080. Each material owns a CPU-writable UPLOAD buffer with one region per
 swap-chain frame, so a progressive material/texture update never races a frame
 that is still sampling the previous copy. Peak shader model remains 5.1.
 
-- **Specular / IOR.** Dielectric F0 is `((ior-1)/(ior+1))²`, multiplied by the
-  authored `specularFactor` and tinted by `specularColor`; the metallic path
-  still uses base color as F0. The old fixed 0.04 survives only as the default
-  IOR 1.5 result.
-- **Clearcoat.** A second dielectric GGX lobe with its own roughness is added
-  over the base. The base specular layer is multiplied by
-  `(1 - clearcoatFactor)` so the same reflected energy is not counted twice;
-  the coat's Fresnel term is folded into its direct-light contribution.
+- **Specular / IOR.** Dielectric F0 is `((ior-1)/(ior+1))²` tinted by the
+  authored `specularColor`; `specularFactor` is the F90 grazing reflectance
+  (KHR_materials_specular), so normal and grazing incidence stay independent.
+  The metallic path uses base color as F0 and 1 as F90. The old fixed 0.04
+  survives only as the default IOR 1.5 result.
+- **Environment BRDF.** `F0 * A + B` from the split-sum LUT, with the
+  Fdez-Aguera multiple-scattering term. A white metal (`F0 = 1`) is the
+  white-furnace identity (scale 1.0) at every roughness. Direct light uses the
+  height-correlated Smith GGX visibility and the same F0/F90 Fresnel.
+- **Clearcoat.** A second dielectric GGX layer. The base (diffuse, specular and
+  sheen) is mixed toward the coat by `clearcoatFactor × F_schlick(coatF0, 1,
+  NoV)`; emission beneath the coat is attenuated by the same `(1 - cF)`.
+  There is no flat `(1 - clearcoatFactor)` removal of base F0, and the coat
+  lobe does not carry a second Fresnel factor.
 - **Sheen.** A grazing-only `pow(1 - N·V, 3)` velvet term, strongest for a
   rough weave, added at low weight. It never applies to the clay mode.
 - **Emissive.** `emissiveStrength` multiplies emissive radiance before the
@@ -244,7 +256,11 @@ OIT and depth peeling are **deferred**: the sorted path is correct for ordinary
 layered glTF glass, but intersecting transparent surfaces and very dense
 transmission scenes remain order-dependent. The transmission approximation
 remains Fresnel-weighted alpha with suppressed transmitted diffuse; there is
-no refraction pass.
+no refraction pass. T24 keeps the interim convention that the blend alpha
+carries the interface Fresnel and the transmissive environment reflection is
+not Fresnel-weighted a second time. Diagnostic channel 22 exposes
+`(alpha, glassReflectance, transmission)` so this is visible; the physical
+transmitted-scene path is T27.
 
 ### Material and light diagnostics
 
@@ -253,10 +269,19 @@ The channel selector travels in the otherwise-unused `gPresentation.w` frame
 constant; channel 0 is the normal product render, 1-20 select raw linear views
 (base colour, geometric/shading normal, UV0, metallic, roughness, effective AO,
 coverage alpha, transmission, IOR/F0, clearcoat, sheen, isolated direct/
-environment diffuse and specular, coat, emission, pre-tone-map HDR). The shader
-writes linear values and the resolve pass remains the only clamp. UV1 is not on
-the wire; channel 5 renders a deliberate magenta marker and the capability mask
-reports the channel unsupported rather than substituting neutral data.
+environment diffuse and specular, coat, emission, pre-tone-map HDR). T24 adds
+21 (the effective environment BRDF scale `F0*A+B` with multiple scattering),
+22 (`alpha, glassReflectance, transmission`, documenting the interim
+transmission composite) and 23 (a flat 0.3 linear display-calibration patch).
+The shader writes linear values and the resolve pass remains the only clamp.
+UV1 is not on the wire; channel 5 renders a deliberate magenta marker and the
+capability mask reports the channel unsupported rather than substituting
+neutral data.
+
+T24 also records the exposure/tone-map pair the last resolve actually used
+(Debug fields 231/232) so the CPU tone-map reference is compared with the GPU's
+effective values. The material shader contains no tone curve or sRGB transfer;
+the tone-mapped/flat-patch comparison proves exactly one display encoding.
 
 Numeric verification copies a bounded (at most 64x64) RGBA16F region of the HDR
 scene target into a readback resource, waits on the frame fence, and averages it

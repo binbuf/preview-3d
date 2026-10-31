@@ -40,6 +40,11 @@
 struct D3D12ViewerPath
 {
     HRESULT lastPresentResult = E_PENDING;
+    // Debug-only evidence: the exact exposure/tone-map pair the last resolve
+    // pass used. T24 compares the CPU reference against the same values rather
+    // than assuming the UI state reached the GPU.
+    float lastResolveExposure = 1.0f;
+    uint32_t lastResolveToneMap = 0;
     D3D12Device device;
     D3D12Device::CreateOptions deviceOptions;
     D3D12CommandQueue directQueue;
@@ -166,7 +171,10 @@ struct D3D12ViewerPath
     struct StudioEnvironmentResources
     {
         Microsoft::WRL::ComPtr<ID3D12Resource> cube;
+        // T24 split-sum DFG integration LUT (R32G32_FLOAT, x=NoV, y=roughness).
+        Microsoft::WRL::ComPtr<ID3D12Resource> brdfLut;
         UINT mipCount = 0;
+        UINT brdfLutSize = 0;
         DirectX::XMFLOAT4 sh[9]{};
         DirectX::XMFLOAT4 parameters{ 1.0f, 0.0f, 1.0f, 0.0f };
     };
@@ -265,11 +273,12 @@ struct D3D12ViewerPath
         // neutral slots. Progressive publications rebuild it atomically.
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
         UINT srvDescriptorSize = 0;
-        // One extra slot beyond the material maps owns the global Studio
-        // cubemap SRV. D3D12 allows only one shader-visible CBV/SRV/UAV heap
-        // at a time, so the environment cannot live in its own heap while a
-        // model's material heap is bound.
+        // Two extra slots beyond the material maps own the global Studio
+        // cubemap and the T24 split-sum BRDF LUT. D3D12 allows only one
+        // shader-visible CBV/SRV/UAV heap at a time, so the environment cannot
+        // live in its own heap while a model's material heap is bound.
         UINT environmentDescriptorIndex = 0;
+        UINT brdfLutDescriptorIndex = 0;
     };
 
     // What RenderFrame draws. Deliberately untouched while a new model is
@@ -464,6 +473,7 @@ private:
     // move; the direct queue is idle here (before the first frame).
     bool CreateStudioEnvironment(std::wstring& error);
     void WriteEnvironmentSrv(ID3D12DescriptorHeap& heap, UINT index, UINT descriptorSize);
+    void WriteBrdfLutSrv(ID3D12DescriptorHeap& heap, UINT index, UINT descriptorSize);
     // Creates a DEFAULT-heap buffer in COMMON and queues its copy onto the
     // upload ring. No explicit barrier to VERTEX_AND_CONSTANT_BUFFER /
     // INDEX_BUFFER: a copy queue cannot record one, and none is needed --

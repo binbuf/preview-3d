@@ -1344,6 +1344,8 @@ void RenderThread::RenderOneFrame()
         path_.debugChannel = debugChannel_.load(std::memory_order_acquire);
         path_.RenderClearFrame(orientation, *overlay);
     }
+    resolveExposure_.store(path_.lastResolveExposure, std::memory_order_release);
+    resolveToneMap_.store(path_.lastResolveToneMap, std::memory_order_release);
     if (injectDeviceRemoval_.exchange(false)) path_.lastPresentResult = DXGI_ERROR_DEVICE_REMOVED;
     if (IsDeviceLoss(path_.lastPresentResult)) {
         deviceFatal_ = !RecoverDevice();

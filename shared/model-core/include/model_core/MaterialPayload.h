@@ -178,12 +178,18 @@ inline float IorToF0(float ior) noexcept
     return std::clamp(ratio * ratio, 0.0f, 1.0f);
 }
 
-// The normalized dielectric specular color used by both the CPU reference and
-// the shader. KHR_materials_specular multiplies the IOR/0.04 base F0 by the
-// scalar factor and the authored color.
+// The normalized dielectric F0 used by both the CPU reference and the shader.
+// KHR_materials_specular keeps normal and grazing incidence independent:
+// specularColor tints the IOR/0.04 F0 at normal incidence, while
+// specularFactor is the F90 grazing reflectance. It does not scale F0.
+inline float MaterialSpecularF90(const MaterialPayload& material) noexcept
+{
+    return std::clamp(material.specularFactor, 0.0f, 1.0f);
+}
+
 inline void MaterialDielectricF0(const MaterialPayload& material, float out[3]) noexcept
 {
-    const float base = std::clamp(IorToF0(material.ior) * material.specularFactor, 0.0f, 1.0f);
+    const float base = std::clamp(IorToF0(material.ior), 0.0f, 1.0f);
     for (int channel = 0; channel < 3; ++channel)
         out[channel] = std::clamp(base * std::clamp(material.specularColor[channel], 0.0f, 1.0f),
                                   0.0f, 1.0f);
@@ -201,13 +207,9 @@ inline float SheenLobeWeight(const MaterialPayload& material, float nv) noexcept
     return grazing * tightness;
 }
 
-// Clearcoat and sheen are layered over the base rather than added on top of an
-// unchanged base specular response. Base specular is scaled by
-// (1 - clearcoatFactor) so the coat does not double-count the same energy.
-inline float ClearcoatBaseSpecularScale(const MaterialPayload& material) noexcept
-{
-    return 1.0f - std::clamp(material.clearcoatFactor, 0.0f, 1.0f);
-}
+// Clearcoat layering is Fresnel-weighted, not a flat (1 - clearcoatFactor)
+// removal: the shader mixes the base toward the coat lobe by
+// clearcoatFactor * F_schlick(coatF0, 1, NoV). See T24 and ADR-0082.
 
 // Single validation entry point shared by the hostile/worker wire validator and
 // the [material-lobes] unit tests. Returns nullptr when every v12 lobe field is
