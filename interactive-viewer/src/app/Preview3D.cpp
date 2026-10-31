@@ -2584,6 +2584,11 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
             result.errorDetails = Loc("failure.generic.details", L"The importer stopped unexpectedly while reading the model.");
         }
         if (!alive->load(std::memory_order_relaxed) || (initialComplete && cancellation->load())) return;
+        // The coarse-proxy handoff already posted the successful completion.
+        // A later success from the background detail replay is a no-op; a
+        // later failure is still posted below so a terminal error after the
+        // first visible geometry is never silently treated as success.
+        if (initialComplete && result.ok) return;
         auto* message = new (std::nothrow) D3D12CompleteMessage{ generation, path, std::move(result) };
         if (message && !PostMessageW(window, kD3D12ImportCompleteMessage, 0, reinterpret_cast<LPARAM>(message)))
             delete message;

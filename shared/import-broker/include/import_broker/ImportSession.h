@@ -273,6 +273,27 @@ struct ImportSessionRequest {
     // which is the loosest value that constrains nothing a caller did not
     // already allow.
     uint32_t maxChunksPerGeneration = 0;
+    // T23: the detail-service replay (nextDetail/onInitialComplete) is a
+    // background refinement session, not part of the forward load. It must
+    // end cleanly when the viewer stops asking for visible regions; otherwise
+    // a fully loaded model would sit in the replay until the absolute
+    // generation wall-clock deadline and then be reported as a late
+    // ResourceLimit. After this many consecutive milliseconds of nextDetail()
+    // returning 0, the broker sends EndDetail and completes the generation.
+    // Injectable so a test can prove the end-to-end path quickly.
+    uint32_t detailIdleGraceMs = 1500;
+    // The first visible-detail request can only arrive after the render thread
+    // has uploaded and framed the coarse proxy, which may be slower than the
+    // short post-request grace. Keep the replay available for this generous
+    // bounded window before the first request; once refinement has started,
+    // detailIdleGraceMs applies between requests.
+    uint32_t initialDetailGraceMs = 60000;
+    // Hard upper bound on serviced detail requests for one generation. The
+    // viewer asks for each visible region at most once while it stays
+    // resident, but a hostile/buggy caller returning ids forever must not
+    // churn a pooled worker indefinitely. Exceeding it ends the replay the
+    // same way an idle grace does (successful/degraded completion).
+    uint32_t maxDetailRequestsPerGeneration = 4096;
     // Called once per validated batch, in delivery order, before the import
     // completes. Chunks passed here are already copied into host-owned
     // memory, so the callee may keep them.
@@ -365,6 +386,13 @@ struct ImportSessionResult {
     // the last one received. Zero/empty for every non-STEP producer.
     uint32_t stepProgressCount = 0;
     model_core::StepProgressNotice lastStepProgress{};
+    // T23 detail replay evidence. Count is meaningful for a coarse-proxy
+    // generation with a detail callback; zero otherwise. EndedByIdle records
+    // that the replay was closed by the bounded idle grace/cap rather than by
+    // cancellation, so the caller can describe the surviving representation
+    // truthfully without inventing a failure.
+    uint32_t detailRequestCount = 0;
+    bool detailEndedByIdle = false;
     // True only for an exact, first-result UnsupportedComposition from the
     // USD fast worker. USD-006 consumes this without reinterpreting generic
     // parser/resource failures as permission to launch OpenUSD.

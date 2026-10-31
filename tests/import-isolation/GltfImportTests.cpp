@@ -399,6 +399,32 @@ struct ScratchExternalGltf {
                                     reinterpret_cast<const std::byte*>(json.data()), json.size()));
     }
 
+    // T23: the same encoded image named by two distinct glTF image entries
+    // (the microscope's duplicate diffuse map) must decode and upload once
+    // when both use the same color space and semantic.
+    void WriteReusedImageGltf(const std::string& imageUri)
+    {
+        std::string json
+            = "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+              "\"meshes\":[{\"primitives\":["
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0},"
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":1}]}],"
+              "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+              "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+              "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+              "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+              "\"buffers\":[{\"uri\":\"mesh.bin\",\"byteLength\":48}],"
+              "\"images\":[{\"uri\":\""
+            + imageUri + "\",\"mimeType\":\"image/png\"},{\"uri\":\"" + imageUri
+            + "\",\"mimeType\":\"image/png\"}],"
+              "\"textures\":[{\"source\":0},{\"source\":1}],"
+              "\"materials\":["
+              "{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}},"
+              "{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":1}}}]}";
+        WriteRaw(L"scene.gltf", std::span<const std::byte>(
+                                    reinterpret_cast<const std::byte*>(json.data()), json.size()));
+    }
+
     // T22: authored material semantics. Three materials exercise normal scale,
     // independent occlusion, per-slot transforms/samplers, an unsupported UV
     // set and an alpha cutout. All textures share one PNG so the assertions are
@@ -1617,6 +1643,50 @@ TEST_CASE("T22 preserves normal scale, per-slot metadata and independent occlusi
                   != static_cast<uint32_t>(model_core::PixelFormatId::Unknown));
         }
     }
+}
+
+// T23: two glTF image entries naming the same immutable sidecar under the same
+// semantic/color space are one decoded image, not two independently charged
+// ones. This is the microscope's duplicate diffuse-map pattern.
+TEST_CASE("T23 decodes one identical image source once across distinct image entries",
+          "[gltf-import][texture][texture-budget]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    ScratchExternalGltf scratch;
+    auto png = ReadFileBytes(TestAssetPath(L"textures\\gray.png"));
+    REQUIRE(png.has_value());
+    scratch.WriteRaw(L"textures\\gray.png", *png);
+    scratch.WriteBin(L"mesh.bin", 48);
+    scratch.WriteReusedImageGltf("textures/gray.png");
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, scratch.gltfPath, 2301, 16);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    std::vector<const import_broker::ValidatedChunk*> materials;
+    std::unordered_map<uint32_t, const import_broker::ValidatedChunk*> images;
+    bool textureWarning = false;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materials.push_back(&chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image)
+            images.emplace(chunk.descriptor.chunkId, &chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TextureWarning)
+            textureWarning = true;
+    }
+    REQUIRE(images.size() == 1);
+    REQUIRE(materials.size() == 2);
+    CHECK(materials[0]->descriptor.dependencyCount == 1);
+    CHECK(materials[1]->descriptor.dependencyCount == 1);
+    CHECK(materials[0]->descriptor.dependencyIds[0]
+          == materials[1]->descriptor.dependencyIds[0]);
+    CHECK(images.contains(materials[0]->descriptor.dependencyIds[0]));
+    CHECK_FALSE(textureWarning);
+
+    model_core::ImagePayloadHeader header{};
+    REQUIRE(images.begin()->second->payload.size() >= sizeof(header));
+    std::memcpy(&header, images.begin()->second->payload.data(), sizeof(header));
+    CHECK(header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Srgb));
 }
 
 namespace {

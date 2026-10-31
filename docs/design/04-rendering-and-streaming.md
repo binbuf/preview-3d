@@ -353,6 +353,23 @@ The renderer always selects from resources in Ready state:
 
 Requests include generation, cluster, desired LOD, priority, and last visible frame. The scheduler favors visible center-screen clusters, then silhouette-relevant large projected error, then near-camera prefetch. A bounded cancellation-aware priority queue prevents a camera sweep from producing unbounded obsolete work.
 
+The detail replay is a bounded background refinement session, not part of the
+forward load. The broker keeps it available for a generous bounded window before
+the first visible request, then for a short bounded idle window between
+requests, and ends it cleanly with `ControlOpcode::EndDetail` (or at a bounded
+request count). The worker returns to the pooled process; the generation is
+already reported complete and every accepted detail chunk is in host memory. An
+outstanding detail reply that never arrives still terminates at the absolute
+generation deadline. This prevents a fully loaded model from turning into a
+late `ResourceLimit` merely because the viewer stayed idle.
+
+Complete-load readiness is terminal and resident, not brightness-based. A
+capture requires the expected generation, `Ready`/complete (or an explicit
+degraded completion), resident geometry and texture counters, no pending detail
+request, settled pixels and quiet counters. A terminal error observed before or
+after the first visible geometry is a failed load, so a previously visible model
+is never treated as qualified evidence (ADR-0081).
+
 ## Video-memory budget and residency
 
 IDXGIAdapter3::QueryVideoMemoryInfo is the authority for current local/non-local usage and budget. The app registers for budget-change notifications and also samples at a low frequency while streaming. On UMA, “local” memory is shared system memory and the CPU working-set limit also constrains allocations.

@@ -498,6 +498,18 @@ The metallic-roughness map follows the ORM convention: R is ambient occlusion, G
 
 Validated DDS/KTX2 mip chains may upload directly when their DXGI formats are supported. Basis payloads transcode to a supported BC7/BC5/BC3/BC1 target selected by semantic and adapter capabilities, with RGBA8 fallback. Existing small mip levels are uploaded first. For ordinary raster images, decoder-native downscaling is requested when trustworthy and CPU mip generation otherwise happens in cancellable tiles. The JPEG native path sizes its copy scratch for the full `uiWidth*uiHeight` extent that `IWICBitmapSourceTransform::CopyPixels` requires, even though `prc` clips each 32-row iteration, so the buffer cannot be overrun by a codec that honors the extent over `cbBufferSize` (ADR-0054). Tangents are generated only for visible geometry whose material actually requires tangent-space normal mapping. A missing, corrupt, or unsupported optional texture uses a deterministic checker/neutral fallback without hiding the mesh.
 
+T23 accounting treats one immutable image source as one decode. Distinct glTF
+image entries that name the same URI, bufferView, or content bytes (and share a
+semantic and color space) reuse one pending image instead of charging the
+aggregate byte/pixel budget twice; a color map and a data map of the same source
+remain distinct chunks because their decode differs. The progressive low-mip
+copy and the full refinement are both charged while simultaneously resident.
+A first refused optional texture records a bounded `TextureBudgetDiagnostic`
+(resource, requested, allowed, decoded totals, scratch reserve/limit); Debug
+emits one value-only line and Release logs stay silent. No aggregate limit is
+raised. A detail-service replay never re-decodes the image/material catalog the
+scan batch already delivered. See [ADR-0081](adr/0081-texture-budget-accounting-and-complete-load-readiness.md).
+
 ## Error taxonomy
 
 Adapters return the closed `model_core::ImportErrorCode` set, not localized

@@ -422,6 +422,55 @@ def material_semantics(path: Path) -> Path:
     return _glb(document, binary, path)
 
 
+def texture_reuse(path: Path) -> Path:
+    """T23: authored texture reuse and distinct color/data semantics.
+
+    Two glTF image entries name the *same* 128x128 color map, and two materials
+    use both entries. A third image is a distinct 64x64 data map used as
+    metallicRoughness by both materials. The adapter must emit one sRGB color
+    chunk and one linear data chunk for the whole model, not one per slot or
+    per image entry. The lane asserts the viewer reports exactly two resident
+    model textures.
+    """
+    color_width = 128
+    color_pixels = bytearray()
+    for y in range(color_width):
+        for x in range(color_width):
+            color_pixels += bytes((32 + (x * 160 // (color_width - 1)),
+                                   200 - (y * 120 // (color_width - 1)), 96))
+    color_uri = _png_data_uri(bytes(color_pixels), color_width, color_width)
+    data_uri = _png_data_uri(_solid(64, 64, (51, 128, 255)), 64, 64)
+    materials = [
+        {'name': 'reused color and data',
+         'pbrMetallicRoughness': {'baseColorTexture': {'index': 0},
+                                  'metallicRoughnessTexture': {'index': 2}}},
+        {'name': 'second use of the same color',
+         'pbrMetallicRoughness': {'baseColorTexture': {'index': 1},
+                                  'metallicRoughnessTexture': {'index': 2}}},
+    ]
+    positions, normals, uvs, indices = uv_sphere(segments=24, rings=16)
+    add_mesh, finish = _mesh_builder()
+    base = add_mesh(positions, normals, uvs, indices)
+    document = {
+        'asset': {'version': '2.0',
+                  'generator': 'preview-3d tests/render-quality/fixtures.py'},
+        'scene': 0, 'scenes': [{'nodes': [0]}],
+        'nodes': [{'mesh': 0}],
+        'meshes': [{'primitives': [
+            {'attributes': {'POSITION': base, 'NORMAL': base + 1, 'TEXCOORD_0': base + 2},
+             'indices': base + 3, 'material': 0},
+            {'attributes': {'POSITION': base, 'NORMAL': base + 1, 'TEXCOORD_0': base + 2},
+             'indices': base + 3, 'material': 1},
+        ]}],
+        # Entries 0 and 1 are byte-identical color maps; entry 2 is distinct.
+        'images': [{'uri': color_uri}, {'uri': color_uri}, {'uri': data_uri}],
+        'textures': [{'source': 0}, {'source': 1}, {'source': 2}],
+        'materials': materials,
+    }
+    document, binary = finish(document)
+    return _glb(document, binary, path)
+
+
 def stl_box(path: Path) -> Path:
     """Binary STL box: hard edges, planar faces and a ground contact face."""
     corners = [
@@ -447,8 +496,13 @@ FIXTURES = {
     'glass-reference': (glass_reference, 'glass-reference.glb'),
     'material-probe': (material_probe, 'material-probe.glb'),
     'material-semantics': (material_semantics, 'material-semantics.glb'),
+    'texture-reuse': (texture_reuse, 'texture-reuse.glb'),
     'stl-box': (stl_box, 'stl-box.stl'),
 }
+
+# T23: unique decoded textures the viewer must report for a generated fixture.
+# The reused color map is one sRGB chunk; the data map is one linear chunk.
+EXPECTED_TEXTURE_COUNTS = {'texture-reuse': 2}
 
 # Source-authoritative material values for the T21 probe. The viewer must report
 # these through its validated wire snapshot; the test tooling reads this table
@@ -557,6 +611,7 @@ def generate(output: Path):
                                         'clear lens dielectric'],
                     'material-probe': [item['name'] for item in EXPECTED_MATERIALS['material-probe']],
                     'material-semantics': [item['name'] for item in EXPECTED_MATERIALS['material-semantics']],
+                    'texture-reuse': ['one reused sRGB color map', 'one linear data map'],
                     'stl-box': ['hard-edged STEP/STL-like surface', 'ground contact'],
                 }[name],
             },

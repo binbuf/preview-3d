@@ -154,6 +154,9 @@ bool HandleGltfImportFileRequest(HANDLE stdIn, HANDLE stdOut, const model_core::
                             &sidecarClient, &batchSink, textureOptions);
         if (!ReportResult(stdOut, request.generationId, result)) return false;
     }
+    // EndDetail is a clean end of the background replay: the generation was
+    // already reported and the worker returns to the pool for the next Start.
+    if (batchSink.DetailEnded()) return true;
     if (batchSink.DetailService() && batchSink.Cancelled())
         return ReportError(stdOut, request.generationId, model_core::ImportErrorCode::Cancelled);
     return true;

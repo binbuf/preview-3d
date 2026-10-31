@@ -8,6 +8,7 @@ import tempfile
 from common import crop, encoded_png, image_stats, write_json
 from compare import camera_contract, capture_contract, compare_frames, lane_contract
 from corpus import external_lane_status
+from viewer import readiness_failure
 
 
 def gradient(width, height, offset=0):
@@ -58,6 +59,26 @@ def run(output: Path):
         'width': width, 'height': height, 'settled': False, 'complete': False,
         'generationMatched': False, 'stats': image_stats(width, height, reference)})
     record('stale-proxy-only-capture', not stale['pass'], stale['reasons'])
+
+    # T23 complete-load readiness: a late terminal error must never be
+    # accepted just because an earlier frame was complete.
+    late = readiness_failure({'state': 3, 'errorCode': 2, 'complete': True,
+                              'requestedDetails': 0, 'vertices': 20631})
+    record('late-terminal-error-after-geometry', late is not None, late)
+    still_error = readiness_failure({'state': 2, 'errorCode': 2, 'complete': True,
+                                     'requestedDetails': 0, 'vertices': 20631})
+    record('complete-with-terminal-error', still_error is not None, still_error)
+    pending = readiness_failure({'state': 2, 'errorCode': 0, 'complete': True,
+                                 'requestedDetails': 1, 'vertices': 20631})
+    record('complete-with-pending-detail', pending is not None, pending)
+    incomplete = readiness_failure({'state': 2, 'errorCode': 0, 'complete': False,
+                                    'requestedDetails': 0, 'vertices': 0})
+    record('bright-but-incomplete-capture', incomplete is not None, incomplete)
+    resident = readiness_failure({'state': 2, 'errorCode': 0, 'complete': True,
+                                  'requestedDetails': 0, 'vertices': 20631})
+    results.append({'scenario': 'terminal-resident-load-accepted',
+                    'expected': 'accepted', 'observedFailure': resident is not None,
+                    'detail': resident, 'pass': resident is None})
 
     changed = camera_contract(
         {'yawDegrees': 30, 'pitchDegrees': -22, 'distanceScale': 1.0,

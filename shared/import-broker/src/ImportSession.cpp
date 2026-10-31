@@ -1651,6 +1651,20 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         if (!request.enableCoarseProxy || !request.onBatch || !request.onInitialComplete)
             return fail(ImportStage::UnexpectedReply);
         request.onInitialComplete(sourceIdentity);
+        // T23: the replay is a background refinement session, not the forward
+        // load. End it cleanly (EndDetail) once the caller has been idle for
+        // its bounded grace or has consumed its bounded request budget.
+        // Otherwise a fully loaded model would remain in AwaitDetail until the
+        // absolute generation deadline and then surface as a late
+        // ResourceLimit failure after a perfectly good image.
+        const auto idleGrace = std::chrono::milliseconds(
+            request.detailIdleGraceMs ? request.detailIdleGraceMs : 1500u);
+        const auto initialGrace = std::chrono::milliseconds(
+            request.initialDetailGraceMs ? request.initialDetailGraceMs : 60000u);
+        const uint32_t detailCap = request.maxDetailRequestsPerGeneration
+            ? request.maxDetailRequestsPerGeneration : 4096u;
+        auto idleSince = std::chrono::steady_clock::now();
+        bool detailEnded = false;
         // A single outstanding request owns the reused section. No new sidecar
         // requests are permitted: replay uses only the worker's pinned handles.
         for (;;) {
@@ -1671,8 +1685,19 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             if (WaitForSingleObject(workerProcess, 0) == WAIT_OBJECT_0)
                 return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::WorkerCrashed);
             if (!cpuBudgetAllows()) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit);
+            if (result.detailRequestCount >= detailCap) { detailEnded = true; break; }
             const uint32_t identity = request.nextDetail();
-            if (!identity) { Sleep(20); continue; }
+            if (!identity) {
+                const auto grace = result.detailRequestCount == 0 ? initialGrace : idleGrace;
+                if (std::chrono::steady_clock::now() - idleSince >= grace) {
+                    detailEnded = true;
+                    break;
+                }
+                Sleep(20);
+                continue;
+            }
+            ++result.detailRequestCount;
+            idleSince = std::chrono::steady_clock::now();
             const auto region = acceptance.regions.find(identity);
             if (region == acceptance.regions.end()) return fail(ImportStage::UnexpectedReply);
             model_core::DetailRequest detail{request.generationId, region->second.scan};
@@ -1734,6 +1759,18 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::FileChanged);
             if (!cpuBudgetAllows()) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit);
             request.onBatch(std::move(validation.chunks));
+            idleSince = std::chrono::steady_clock::now();
+        }
+        result.detailEndedByIdle = detailEnded;
+        if (detailEnded) {
+            // Tell the worker to leave AwaitDetail and return to the pool. The
+            // generation is already reported (ChunksReady) and every accepted
+            // detail chunk is in host memory, so this is a normal completion.
+            // No reply is expected; the next Start request follows EndDetail on
+            // the same FIFO control pipe.
+            if (!model_core::WriteControlMessage(controlInput, model_core::ControlOpcode::EndDetail,
+                                                 nullptr, 0))
+                return fail(ImportStage::AwaitReply);
         }
     }
     if (pooledLease) pooledLease->reusable = true;

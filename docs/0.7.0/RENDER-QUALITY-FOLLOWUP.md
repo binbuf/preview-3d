@@ -105,6 +105,16 @@ These are mechanisms to fix or test, not proof that each one caused a specific
 pixel in the exploratory captures. T21 isolates the contributions before
 claiming a measured fix.
 
+**T23 disposition (measured).** The microscope's late overlay was the broker's
+absolute 300 s generation wall clock (`ImportStage::GenerationDeadline`,
+`ResourceLimit`) applied to an idle background detail replay, not a decoded
+byte/pixel, mip, catalog or GPU-residency limit: the complete set was
+2048 px / 12 mips and used 134,742,016 GPU bytes against a 1,023,410,176-byte
+detail target. T23 ends an idle replay cleanly, deduplicates identical image
+sources (the diffuse map drops from four resident textures to three), and makes
+capture readiness require terminal complete/resident state. See
+[ADR-0081](../design/adr/0081-texture-budget-accounting-and-complete-load-readiness.md).
+
 ### Why Camera and Car differ
 
 Camera has four materials; its glass uses transmission 1, base RGB about 0.8,

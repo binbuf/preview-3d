@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <iterator>
@@ -350,6 +351,45 @@ struct DecodedMeshoptView {
     ImportErrorCode errorCode = ImportErrorCode::None;
 };
 
+// T23: bounded, path-free texture accounting. Recorded only when an optional
+// texture is refused by a budget; the image name/URI never enters it. Debug
+// builds emit one bounded line so a first failure names the exact resource and
+// its requested/allowed quantities; Release logs stay silent.
+enum class TextureBudgetKind : uint32_t {
+    None = 0,
+    EncodedBytes,
+    Scratch,
+    AggregateBytes,
+    AggregatePixels,
+    Catalog,
+};
+
+struct TextureBudgetDiagnostic {
+    TextureBudgetKind kind = TextureBudgetKind::None;
+    uint64_t requested = 0;
+    uint64_t allowed = 0;
+    uint64_t decodedBytes = 0;
+    uint64_t decodedPixels = 0;
+    uint64_t scratchReserve = 0;
+    uint64_t scratchLimit = 0;
+    uint32_t images = 0;
+    uint32_t duplicateImageReuses = 0;
+    bool logged = false;
+};
+
+inline const char* TextureBudgetKindName(TextureBudgetKind kind)
+{
+    switch (kind) {
+    case TextureBudgetKind::EncodedBytes: return "encoded-bytes";
+    case TextureBudgetKind::Scratch: return "scratch";
+    case TextureBudgetKind::AggregateBytes: return "aggregate-bytes";
+    case TextureBudgetKind::AggregatePixels: return "aggregate-pixels";
+    case TextureBudgetKind::Catalog: return "catalog";
+    case TextureBudgetKind::None:
+    default: return "none";
+    }
+}
+
 struct WalkState {
     const fastgltf::Asset& asset;
     std::vector<fastgltf::math::dmat4x4> localTransforms;
@@ -359,6 +399,18 @@ struct WalkState {
     std::unordered_map<size_t, size_t> materialIndexToPendingIndex; // glTF material index -> pendingMaterials index
     std::vector<PendingImage> pendingImages;
     std::unordered_map<size_t, size_t> imageIndexToPendingIndex; // glTF image index -> pendingImages index
+    // T23: identical encoded sources (same URI/bufferView/content bytes) with
+    // the same color space and semantic decode once. glTF exporters routinely
+    // repeat one texture as separate image entries; charging it twice is
+    // neither a distinct authored image nor a distinct residency.
+    std::unordered_map<std::string, size_t> imageSourceToPendingIndex;
+    uint32_t duplicateImageReuses = 0;
+    TextureBudgetDiagnostic textureDiagnostic;
+    // A detail-service replay rebuilds one requested geometry range. The
+    // immutable image/material catalog was already delivered by the scan
+    // batch; decoding it again costs the full texture set per replay and makes
+    // refinement latency depend on texture count. Skip image decode here.
+    bool detailReplay = false;
     std::function<bool(PendingChunk&&)> emit;
     const model_core::ChunkDescriptor* requested = nullptr;
     uint32_t emittedGeometry = 0;
@@ -404,6 +456,37 @@ struct WalkState {
     std::unordered_map<size_t, DecodedMeshoptView> decodedMeshoptViews;
     SidecarFileClient* sidecarClient = nullptr;
 };
+
+inline void RecordTextureBudgetLimit(WalkState& state, TextureBudgetKind kind, uint64_t requested,
+                                     uint64_t allowed)
+{
+    if (state.textureDiagnostic.kind != TextureBudgetKind::None) return; // keep the first failure
+    auto& diagnostic = state.textureDiagnostic;
+    diagnostic.kind = kind;
+    diagnostic.requested = requested;
+    diagnostic.allowed = allowed;
+    diagnostic.decodedBytes = state.totalDecodedImageBytes;
+    diagnostic.decodedPixels = state.totalDecodedImagePixels;
+    diagnostic.scratchReserve = state.scratchReserve;
+    diagnostic.scratchLimit = state.scratchLimit;
+    diagnostic.images = uint32_t((std::min)(state.pendingImages.size(), size_t(UINT32_MAX)));
+    diagnostic.duplicateImageReuses = state.duplicateImageReuses;
+#ifdef _DEBUG
+    // Bounded and value-only: no source path, URI, or model text.
+    std::fprintf(stderr,
+                 "texture-budget limit=%s requested=%llu allowed=%llu decodedBytes=%llu "
+                 "decodedPixels=%llu scratchReserve=%llu scratchLimit=%llu images=%u reuses=%u\n",
+                 TextureBudgetKindName(kind),
+                 static_cast<unsigned long long>(diagnostic.requested),
+                 static_cast<unsigned long long>(diagnostic.allowed),
+                 static_cast<unsigned long long>(diagnostic.decodedBytes),
+                 static_cast<unsigned long long>(diagnostic.decodedPixels),
+                 static_cast<unsigned long long>(diagnostic.scratchReserve),
+                 static_cast<unsigned long long>(diagnostic.scratchLimit),
+                 diagnostic.images, diagnostic.duplicateImageReuses);
+    diagnostic.logged = true;
+#endif
+}
 
 bool RequiresExtension(const WalkState& state, std::string_view name)
 {
@@ -893,6 +976,50 @@ std::string ImageSidecarReference(const fastgltf::URI& uri)
     return leaf.empty() ? reference : std::string(leaf);
 }
 
+// T23: a path-free identity for one encoded image source. Two glTF image
+// entries that name the same sidecar (or the same embedded bufferView) are the
+// same immutable bytes; resolving them twice both costs a decode and charges
+// the aggregate texture budget twice. Content sources are hashed so distinct
+// images that happen to share a length never alias.
+std::string ImageSourceIdentity(const WalkState& state, size_t imageIndex)
+{
+    if (imageIndex >= state.asset.images.size()) return {};
+    const fastgltf::Image& image = state.asset.images[imageIndex];
+    uint32_t mime = 0;
+    std::visit([&](const auto& source) {
+        if constexpr (requires { source.mimeType; }) mime = uint32_t(source.mimeType);
+    }, image.data);
+    std::string key;
+    std::visit([&](const auto& source) {
+        using T = std::decay_t<decltype(source)>;
+        if constexpr (std::is_same_v<T, fastgltf::sources::URI>) {
+            key = "u:" + std::string(source.uri.path());
+        } else if constexpr (std::is_same_v<T, fastgltf::sources::BufferView>) {
+            key = "b:" + std::to_string(source.bufferViewIndex);
+        } else {
+            const auto* bytes = [&]() -> const std::byte* {
+                if constexpr (std::is_same_v<T, fastgltf::sources::ByteView>) return source.bytes.data();
+                else if constexpr (std::is_same_v<T, fastgltf::sources::Array>) return source.bytes.data();
+                else return nullptr;
+            }();
+            const size_t count = [&]() -> size_t {
+                if constexpr (std::is_same_v<T, fastgltf::sources::ByteView>) return source.bytes.size();
+                else if constexpr (std::is_same_v<T, fastgltf::sources::Array>) return source.bytes.size();
+                else return 0;
+            }();
+            if (bytes == nullptr) return;
+            uint64_t hash = 1469598103934665603ull;
+            for (size_t i = 0; i < count; ++i) {
+                hash ^= std::to_integer<uint8_t>(bytes[i]);
+                hash *= 1099511628211ull;
+            }
+            key = "c:" + std::to_string(count) + ":" + std::to_string(hash);
+        }
+    }, image.data);
+    if (key.empty()) return key;
+    return key + "|m" + std::to_string(mime);
+}
+
 std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state, size_t imageIndex,
                                                                uint64_t maxEncodedBytes)
 {
@@ -959,15 +1086,39 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
         state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
         return std::nullopt;
     }
+    if (state.detailReplay) {
+        // The immutable material/image catalog already crossed in the scan
+        // batch. A requested geometry range must not spend the full texture
+        // budget again (or depend on texture count for its replay latency).
+        return std::nullopt;
+    }
     const size_t semanticKey = imageIndex*4 + static_cast<size_t>(semantic);
     auto existing = state.imageIndexToPendingIndex.find(semanticKey);
     if (existing != state.imageIndexToPendingIndex.end()) {
         return existing->second;
     }
 
+    // Distinct authored semantics/color spaces stay distinct chunks (sRGB
+    // color versus linear data is a decode difference, not a duplicate); the
+    // same immutable source under the same semantics is decoded once.
+    std::string sourceKey = ImageSourceIdentity(state, imageIndex);
+    std::string reuseKey;
+    if (!sourceKey.empty()) {
+        reuseKey = sourceKey + "|s" + std::to_string(uint32_t(colorSpace))
+            + "|t" + std::to_string(uint32_t(semantic));
+        auto reuse = state.imageSourceToPendingIndex.find(reuseKey);
+        if (reuse != state.imageSourceToPendingIndex.end()) {
+            ++state.duplicateImageReuses;
+            state.imageIndexToPendingIndex.emplace(semanticKey, reuse->second);
+            return reuse->second;
+        }
+    }
+
     const uint64_t reserved = state.scratchReserve + state.totalDecodedImageBytes;
     if (reserved >= state.scratchLimit)
     {
+        RecordTextureBudgetLimit(state, TextureBudgetKind::Scratch, 0,
+                                 state.scratchLimit - (std::min)(reserved, state.scratchLimit));
         state.error = ImportErrorCode::ScratchLimit;
         return std::nullopt;
     }
@@ -1097,8 +1248,14 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
         }
         decoded=std::move(fallback);
     }
-    if (decoded->pixelBytes.size()>kMaxAggregateTextureBytes-state.totalDecodedImageBytes) {
-        // Budget exhausted: retain the material's deterministic neutral factors.
+    if (state.totalDecodedImageBytes > kMaxAggregateTextureBytes
+        || decoded->pixelBytes.size() > kMaxAggregateTextureBytes - state.totalDecodedImageBytes) {
+        // Budget exhausted: retain the material's deterministic neutral
+        // factors rather than failing the whole model for an optional map.
+        RecordTextureBudgetLimit(state, TextureBudgetKind::AggregateBytes,
+                                 decoded->pixelBytes.size(),
+                                 state.totalDecodedImageBytes > kMaxAggregateTextureBytes
+                                     ? 0 : kMaxAggregateTextureBytes - state.totalDecodedImageBytes);
         state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
         return std::nullopt;
     }
@@ -1107,6 +1264,10 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     auto pixelCount = pixelBytes ? std::optional<uint64_t>(*pixelBytes/4) : std::nullopt;
     auto newTotal = pixelCount ? CheckedAdd(state.totalDecodedImagePixels, *pixelCount) : std::nullopt;
     if (!pixelCount || !newTotal || *newTotal > kMaxAggregateDecodedTexturePixels) {
+        RecordTextureBudgetLimit(state, TextureBudgetKind::AggregatePixels,
+                                 pixelCount ? *pixelCount : 0,
+                                 state.totalDecodedImagePixels >= kMaxAggregateTexturePixels
+                                     ? 0 : kMaxAggregateTexturePixels - state.totalDecodedImagePixels);
         state.error = ImportErrorCode::ResourceLimit;
         return std::nullopt;
     }
@@ -1115,6 +1276,10 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     if (state.chunks.size() + state.pendingMaterials.size() + state.pendingImages.size() >=
         (state.emit ? kTierACatalogLimit : state.maxChunkCount))
     {
+        RecordTextureBudgetLimit(state, TextureBudgetKind::Catalog,
+                                 state.chunks.size() + state.pendingMaterials.size()
+                                     + state.pendingImages.size() + 1,
+                                 state.emit ? kTierACatalogLimit : state.maxChunkCount);
         state.error = ImportErrorCode::ResourceLimit;
         return std::nullopt;
     }
@@ -1122,6 +1287,8 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     size_t pendingIndex = state.pendingImages.size();
     state.pendingImages.push_back(std::move(*decoded));
     state.imageIndexToPendingIndex.emplace(semanticKey, pendingIndex);
+    if (!reuseKey.empty())
+        state.imageSourceToPendingIndex.emplace(std::move(reuseKey), pendingIndex);
     return pendingIndex;
 }
 
@@ -3476,6 +3643,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     };
     if (batchSink) {
         state.requested = batchSink->RequestedSource();
+        state.detailReplay = state.requested != nullptr;
         state.emit = [&](PendingChunk&& chunk) {
             if (!emitDependencies())
                 return false;

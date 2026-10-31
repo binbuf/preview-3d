@@ -81,6 +81,16 @@ enum class ControlOpcode : uint32_t {
     // worker's pool. Assimp never replaces a native adapter; this opcode is
     // the only route into the compatibility importer.
     StartAssimpImportFromFile = 23, // host -> worker
+    // T23 host -> worker, no payload. The detail-service replay holds the
+    // worker in AwaitDetail() for as long as the viewer may ask for another
+    // visible region. The broker ends that replay explicitly once the viewer
+    // has been idle for its bounded grace (or reached its detail-request cap);
+    // the worker then leaves the replay loop and returns to the pool. Without
+    // this, an idle replay could only end by cancellation or by the
+    // generation wall-clock deadline, which would turn a fully loaded model
+    // into a late ResourceLimit failure. Strictly a bounded lifecycle signal:
+    // it carries no data and grants no authority.
+    EndDetail = 24, // host -> worker
 };
 
 enum : uint32_t {

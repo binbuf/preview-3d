@@ -164,7 +164,11 @@ TEST_CASE("Image refinements reject missing roots, semantic changes and stale re
     auto bad=full;bad.reserved0=3;CHECK_FALSE(validate(bad).ok);
     bad=full;bad.colorSpace=uint32_t(ColorSpaceId::Linear);CHECK_FALSE(validate(bad).ok);
     bad=low;bad.reserved0=1;CHECK_FALSE(validate(bad).ok);
+    // T23 boundary: exactly at each aggregate cap is accepted; one unit above
+    // is rejected by the independent trust-boundary accounting.
+    CHECK(validate(full,kMaxAggregateTextureBytes-84).ok);
     CHECK_FALSE(validate(full,kMaxAggregateTextureBytes-83).ok);
+    CHECK(validate(full,20,kMaxAggregateTexturePixels-21).ok);
     CHECK_FALSE(validate(full,20,kMaxAggregateTexturePixels-20).ok);
     bad=full;bad.mipLevels=4;CHECK_FALSE(validate(bad).ok);
     // A refinement cannot resolve through a forward root even if material

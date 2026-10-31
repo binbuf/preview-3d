@@ -6,6 +6,7 @@
 #include "model_core/VertexLayouts.h"
 #include <catch2/catch_test_macros.hpp>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -225,6 +226,64 @@ TEST_CASE("Pinned worker re-decodes selected immutable source ranges repeatedly"
         CAPTURE(result.stage,result.errorCode);
         REQUIRE(complete); CHECK(replies==2); CHECK(result.stage==import_broker::ImportStage::Cancelled);
     }
+}
+
+// T23: the microscope's late ResourceLimit was not a texture-byte or pixel
+// cap. Its coarse proxy, scan catalog and full 2048px texture set all fit, but
+// the background detail replay kept the generation open until the absolute
+// wall-clock deadline and the broker then reported GenerationDeadline /
+// ResourceLimit after a perfectly good image. The replay must end cleanly when
+// the viewer has nothing more to ask for. This case shortens both the deadline
+// and the idle grace so the old behavior would fail in seconds, and asserts the
+// exact boundary: one serviced detail, then a successful completion well
+// before GenerationDeadline.
+TEST_CASE("An idle detail replay ends successfully instead of hitting the generation deadline",
+          "[detail-budget][texture-budget]") {
+    auto request = Request(std::wstring(PREVIEW3D_TEST_ASSETS_DIR) + L"corpus/A-small-stl.stl",
+                           import_broker::ImportFormat::Stl);
+    request.sectionByteCapacity = 4096;
+    request.generationWallClockBudgetMs = 5000;
+    request.detailIdleGraceMs = 250;
+    request.initialDetailGraceMs = 250;
+    request.maxDetailRequestsPerGeneration = 8;
+
+    std::map<uint32_t, ChunkDescriptor> scans;
+    bool complete = false;
+    uint32_t selected = 0;
+    unsigned replies = 0;
+    request.onInitialComplete = [&](const auto&) {
+        complete = true;
+        REQUIRE_FALSE(scans.empty());
+        selected = scans.rbegin()->first;
+    };
+    request.nextDetail = [&]() -> uint32_t {
+        return replies == 0 ? selected : 0u;
+    };
+    request.onBatch = [&](auto&& chunks) {
+        if (complete) {
+            REQUIRE(chunks.size() == 1);
+            CHECK(chunks.front().descriptor.chunkId == selected);
+            ++replies;
+        } else {
+            for (const auto& chunk : chunks)
+                if (chunk.descriptor.lodLevel == kScanLod)
+                    scans.emplace(chunk.descriptor.chunkId & ~kScanIdentity, chunk.descriptor);
+        }
+    };
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = import_broker::RunImportSession(request);
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+
+    CAPTURE(result.stage, result.errorCode, result.detailRequestCount);
+    CHECK(complete);
+    CHECK(replies == 1);
+    REQUIRE(result.ok);
+    CHECK(result.stage == import_broker::ImportStage::Completed);
+    CHECK(result.detailRequestCount == 1);
+    CHECK(result.detailEndedByIdle);
+    // Well below the shortened deadline: an idle end, not a limit failure.
+    CHECK(elapsed < std::chrono::seconds(4));
 }
 
 TEST_CASE("Detail requests reject ids outside the validated source catalog", "[detail-budget]") {
