@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "task": "T29",
+  "date": "2026-10-31",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug draw-state/material records, channel readback and the T29 Clay report",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T29",
+  "imagesInspected": [
+    "TestResults/render-quality/T29/images/generated-clay-review-clay-front.png",
+    "TestResults/render-quality/T29/images/generated-clay-review-clay-oblique.png",
+    "TestResults/render-quality/T29/images/generated-clay-review-studio-front.png",
+    "TestResults/render-quality/T29/images/generated-clay-review-directional-front.png",
+    "TestResults/render-quality/T29/images/generated-lighting-probe-clay-front.png",
+    "TestResults/render-quality/T29/images/generated-sphere-grid-clay-front.png",
+    "TestResults/render-quality/T29/images/generated-glass-reference-clay-front.png",
+    "TestResults/render-quality/T29/images/generated-stl-box-clay-oblique.png",
+    "TestResults/render-quality/T29/images/generated-line-point-obj-clay-front.png",
+    "TestResults/render-quality/T29/images/generated-step-assembly-clay-front.png",
+    "TestResults/render-quality/T29/images/external-car-clay-front.png",
+    "TestResults/render-quality/T29/images/external-car-clay-oblique.png",
+    "TestResults/render-quality/T29/images/external-car-studio-oblique.png",
+    "TestResults/render-quality/T29/images/external-camera-clay-front.png",
+    "TestResults/render-quality/T29/images/external-microscope-clay-front.png",
+    "TestResults/render-quality/T29/images/external-stl-clay-oblique.png",
+    "TestResults/render-quality/T29/images/external-lid-clay-front.png",
+    "TestResults/render-quality/T29/images/external-lid-clay-oblique.png",
+    "TestResults/render-quality/T29/images/external-cartridge-clay-oblique.png"
+  ],
+  "observations": [
+    "The controlled clay-review identity row renders four authored materials (metal+coat+sheen, emissive+specular, normal-mapped, neutral) as the same neutral gray with no authored chroma and no washed-out white.",
+    "The MASK sheet keeps its modelled texture-alpha hole in Clay: the hole reveals the backdrop while the surrounding sheet remains gray. The hole is not filled by the neutral material.",
+    "The BLEND/transmissive sheet over the cyan sphere is solid gray in Clay and hides the interior geometry; in Studio the same view shows the sphere through the sheet. No interior mesh leaks through the overridden glass.",
+    "Overlapping authored-alpha sheets and the OPAQUE transmissive panel show no tint or blend-order seam in Clay; they are uniform gray and depth-resolve to the nearest surface.",
+    "Three small curved parts and the mirrored instance keep readable silhouettes and curved shading; neither clips to a flat white blob nor disappears.",
+    "The OBJ line/point control keeps its line and point primitives visible in Clay; the mode round-trip restores Studio pixels and the same pick id.",
+    "lighting-probe and sphere-grid in Clay show all material families as one matte gray with soft form and stable exposure; dark and light parts remain ordered.",
+    "The STL box keeps hard edges and planar faces; base/lid/cartridge keep cavities and thin-plate silhouettes without washed-out whites.",
+    "Car Clay shows solid gray windows with no coloured glass banding, no blend-order seam and no visible interior through the windshield/side glass. The small white speckles along the windshield/roof edges also appear in the Studio capture; they are the pre-existing authored speckle, not a Clay blend seam.",
+    "Camera Clay keeps body, lens ring, lens recess and base/strap separation. Microscope Clay keeps brass/enamel part separation and dark cavities. The STEP assembly keeps its two-part separation.",
+    "No per-asset-name or per-material-name exception is present in the renderer or the lane."
+  ],
+  "defects": [
+    {
+      "id": "car-authored-window-speckle",
+      "label": "known-defect",
+      "where": "Car windshield/roof/window edges in both Studio and Clay",
+      "description": "Small bright speckles along authored window/trim seams are visible in both modes. They are not introduced or caused by the Clay override, but they remain an authored-geometry/edge-quality defect.",
+      "assignedTo": "T33/T34"
+    },
+    {
+      "id": "clay-authored-ao-unused",
+      "label": "limitation",
+      "where": "Clay material shading",
+      "description": "Clay suppresses authored ORM occlusion with the rest of the material decoration. Cavity/contact darkening will come from the geometry-derived T31/T32 interfaces; T29 deliberately does not use authored AO to hide depth defects.",
+      "assignedTo": "T31/T32"
+    },
+    {
+      "id": "microscope-resource-limit",
+      "label": "known-defect",
+      "where": "external microscope",
+      "description": "The external microscope can still report a terminal generation deadline after visible geometry. The T29 run loaded it completely; a future late failure stays a non-passing observation.",
+      "assignedTo": "T23/T34"
+    }
+  ],
+  "positives": [
+    "Clay rewrites the effective draw bucket on the CPU: BLEND and transmissive triangles join an opaque, depth-writing overlay bucket; the authored Blend PSO and OIT pass are not used.",
+    "MASK cutouts are sampled independently of gray shading, so foliage/geometric holes survive the material override.",
+    "The neutral matte suppresses colour, metallic, clearcoat, sheen, emission, transmission, specular and normal maps while preserving geometric normals, hard edges and double-sided orientation.",
+    "The Studio->Clay->Directional->Studio round-trip leaves vertices, triangles, materials, texture residency, camera, exposure and picking unchanged.",
+    "The controlled fixture and the Car/Camera/microscope/base/lid/cartridge/STEP crops give form-readability evidence rather than PBR texture similarity."
+  ],
+  "acceptance": {
+    "effectiveDrawDepthStateVerified": true,
+    "alphaCutoutPolicyVerified": true,
+    "neutralMatteVerified": true,
+    "mirroredTransparentMixedScenesVerified": true,
+    "modeRoundTripVerified": true,
+    "carClaySeamInteriorReviewed": true,
+    "corpusCropsReviewed": true,
+    "imageReviewPerformed": true,
+    "acceptedReferencesPromotedBy": "not applicable for T29 (no accepted reference promoted)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "The controlled fixture owns the numeric verdicts; external crops are reviewed qualitatively. Pre-existing Car window speckle is recorded as a known defect, not attributed to this task."
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "task": "T28",
+  "date": "2026-10-31",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug HDR/channel readback, material records, environment provenance fields and the T28 Studio lighting report",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T28",
+  "imagesInspected": [
+    "TestResults/render-quality/T28/images/generated-lighting-probe-studio-front.png",
+    "TestResults/render-quality/T28/images/generated-lighting-probe-studio-oblique.png",
+    "TestResults/render-quality/T28/images/generated-lighting-probe-directional-front.png",
+    "TestResults/render-quality/T28/images/generated-sphere-grid-studio-front.png",
+    "TestResults/render-quality/T28/images/generated-sphere-grid-studio-oblique.png",
+    "TestResults/render-quality/T28/images/generated-glass-reference-studio-front.png",
+    "TestResults/render-quality/T28/images/generated-stl-box-studio-oblique.png",
+    "TestResults/render-quality/T28/images/external-car-studio-front.png",
+    "TestResults/render-quality/T28/images/external-car-studio-oblique.png",
+    "TestResults/render-quality/T28/images/external-camera-studio-front.png",
+    "TestResults/render-quality/T28/images/external-suit-studio-front.png"
+  ],
+  "observations": [
+    "The lighting-probe row reads as the intended material families: white plastic/CAD, neutral gray, black leather/enamel, red paint, brass, chrome, emission and a dark blue glass sphere. Highlights are broad and soft rather than point-like, dark leather and enamel retain visible reflections, and the white patch keeps highlight headroom without clipping.",
+    "The white/gray/black reference patches stay neutral and ordered; the background remains the Windows Photos dark tone and the ground/grid are readable without washing out the dark materials.",
+    "The sphere grid shows distinct white, black, red, brass and chrome responses plus a glass sphere that transmits the grid. The brass/chrome highlights are broad and the black sphere keeps a useful reflection instead of going flat.",
+    "The glass-reference fixture reads as tinted glass: the peach and neutral spheres transmit the ground grid, keep a reflection and do not collapse into opaque alpha-blended disks.",
+    "Directional mode increases form contrast relative to Studio while preserving the same material identity and the white/gray/black ordering. Studio and Directional share the environment/BRDF path but keep their documented direct-light difference.",
+    "The STL box is neutral, evenly lit and reads as CAD rather than a scan; the soft contact footprint and grid keep the object grounded without a heavy shadow.",
+    "Car: the red paint, windshield reflection and dark interior are readable from the front and oblique views; the glass is not a flat overlay and the paint does not clip.",
+    "Camera: the black body keeps edge and top highlights, the lens ring/depth is visible, and the dark body remains distinguishable from the backdrop. It retains the reflection/depth behaviour the earlier reviews required.",
+    "Suit: the orange fabric, gray helmet and blue cuffs/gloves read as separate materials with no ghosting, opacity workaround or whole-model brightening.",
+    "No per-model-name or per-material-name exception is present in the renderer or the lane; the presentation choice follows contributed surface shares and the catalog profile."
+  ],
+  "defects": [
+    {
+      "id": "studio-warm-cool-panel-separation",
+      "label": "limitation",
+      "where": "procedural Studio environment, visible on lighting-probe, sphere-grid, Car and Camera",
+      "description": "The product-owned procedural bake still mixes warm/cool panel separations rather than matching a measured third-party studio HDRI. T28 calibrates the shipped bake and records the neutral reference comparison; it does not ship an external HDR.",
+      "assignedTo": "T28"
+    },
+    {
+      "id": "procedural-environment-no-external-hdr",
+      "label": "limitation",
+      "where": "Studio environment source",
+      "description": "The shipping environment remains a product-owned procedural bake. The neutral reference exists only for the measured T28 comparison and is never selected automatically; a licensed external HDR bake remains future work rather than a hidden asset dependency.",
+      "assignedTo": "T28/T30"
+    }
+  ],
+  "positives": [
+    "The camera-relative key/fill/rim rig and the world-stable IBL are explicitly separated: the CPU owns the base intensities and the shader has no second undocumented intensity source.",
+    "Environment intensity scales the direct rig and IBL together, preserving the F3D-style intensity relationship and the existing exposure/background preferences.",
+    "The automatic preset decision uses contributed triangle shares, so a small glass detail cannot force the transparency checker and density alone cannot turn an authored PBR mesh into a scan.",
+    "Environment provenance (version 2, product variant, identity hash, resident bytes and bake time) is exposed read-only for evidence and stays bounded.",
+    "The generated material matrix, glass fixture and Car/Camera/Suit external views all render without a per-asset exception; review evidence is separated from ordinary verification and no reference was promoted."
+  ],
+  "acceptance": {
+    "studioCalibrationVerified": true,
+    "neutralReferenceComparisonRecorded": true,
+    "directIblRelationshipVerified": true,
+    "exposureBackgroundIndependenceVerified": true,
+    "presentationSelectionByContributionVerified": true,
+    "firstOpenFramingReviewed": true,
+    "darkLightGlassMaterialsReviewed": true,
+    "carCameraNonregressionReviewed": true,
+    "imageReviewPerformed": true,
+    "acceptedReferencesPromotedBy": "not applicable for T28 (observed evidence only)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "Reviewed the T28 lane, the generated Studio/Directional material matrix, the glass fixture and the external Car/Camera/Suit captures under TestResults/render-quality/T28. The review record is evidence that the images were inspected; it does not promote any capture to a regression reference."
+  }
+}

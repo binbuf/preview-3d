@@ -1,0 +1,94 @@
+{
+  "task": "T32",
+  "schema": 1,
+  "description": "Scale-aware screen-space ambient occlusion. Proves depth reconstruction, scene-scale radius, edge-aware filtering, indirect-only compositing, transparent/masked pass participation, perspective/orthographic and zoom/orbit stability, bounded targets and the AO-off fallback. AO-only masks and same-camera on/off images are captured in Studio, Clay and Directional.",
+  "viewport": {"width": 1280, "height": 900, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0},
+    {"id": "clay", "lighting": 1},
+    {"id": "directional", "lighting": 2}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 18.0, "distanceScale": 1.0},
+    "oblique": {"yawDegrees": 10.0, "pitchDegrees": 22.0, "distanceScale": 1.0},
+    "low": {"yawDegrees": 24.0, "pitchDegrees": 42.0, "distanceScale": 1.1}
+  },
+  "regions": {
+    "ao-probe": {
+      "recess": [0.24, 0.28, 0.42, 0.52],
+      "contact": [0.42, 0.45, 0.60, 0.68],
+      "ring-hole": [0.50, 0.40, 0.62, 0.52],
+      "glass-window": [0.62, 0.12, 0.78, 0.36],
+      "cutout-sheet": [0.76, 0.12, 0.90, 0.36]
+    },
+    "ao-probe-large": {
+      "recess": [0.24, 0.28, 0.42, 0.52],
+      "contact": [0.42, 0.45, 0.60, 0.68]
+    },
+    "stl-box": {"box": [0.2, 0.15, 0.8, 0.9]},
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "paint": [0.34, 0.55, 0.72, 0.9],
+      "trim": [0.12, 0.4, 0.4, 0.72]
+    },
+    "camera": {
+      "lens": [0.60, 0.40, 0.76, 0.62],
+      "black-body": [0.42, 0.40, 0.58, 0.66],
+      "strap": [0.36, 0.62, 0.70, 0.96]
+    },
+    "stl": {"relief": [0.2, 0.15, 0.8, 0.9]}
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "ao-probe", "modes": ["studio", "clay", "directional"],
+         "views": ["oblique", "low"]},
+        {"id": "ao-probe-large", "modes": ["studio"], "views": ["oblique"]},
+        {"id": "stl-box", "modes": ["studio", "clay", "directional"], "views": ["oblique"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "car", "modes": ["studio", "clay", "directional"],
+         "views": ["oblique", "low"]},
+        {"id": "camera", "modes": ["studio", "clay", "directional"],
+         "views": ["front"]},
+        {"id": "stl", "modes": ["studio", "directional"], "views": ["oblique"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "car-authored-window-speckle",
+      "assets": ["car"],
+      "description": "Car windshield/roof/window edge speckles also appear in Studio and Clay; they are an authored/AA defect, not an AO defect.",
+      "label": "known-defect",
+      "assignedTo": "T33/T34"
+    },
+    {
+      "id": "camera-lens-ao-need",
+      "assets": ["camera"],
+      "description": "The Camera lens remains a dark reflective region; AO must not become a dark sheet over it or over the strap loop.",
+      "label": "nonregression",
+      "assignedTo": "T32"
+    }
+  ]
+}

@@ -6,6 +6,7 @@
 #include "Model.h"
 #include "NavGizmo.h"
 #include "OpenWithIcon.h"
+#include "Presentation.h"
 
 #include <DirectXMath.h>
 #include <windows.h>
@@ -80,9 +81,37 @@ struct OpenWithTileOverlay
     bool enabled = true;
 };
 
+// One row of the D2D-drawn "..." settings menu. Geometry is computed on the
+// UI thread and consumed by both hit-testing (Preview3D.cpp) and painting
+// (D3D11On12Overlay.cpp), so they can never disagree.
+struct MenuRowOverlay
+{
+    std::wstring label;
+    std::wstring value;       // trailing detail for action rows (background, speed)
+    std::wstring shortcut;    // keyboard accelerator hint, right-aligned
+    RECT rect{};              // whole-row hit target
+    RECT switchRect{};        // toggle knob, empty for action rows
+    RECT sliderTrack{};       // inline slider track, empty for non-slider rows
+    float sliderT = 0.0f;     // 0..1 thumb position for slider rows
+    bool toggle = false;
+    bool on = false;
+    bool hovered = false;
+    bool pressed = false;
+    bool emphasized = false;  // warning rows use the amber accent
+    bool dividerBefore = false;
+    bool showChevron = false; // action rows that open another surface
+    bool expanded = false;    // chevron points down; child rows are visible
+    bool nested = false;      // indented child option (e.g. background choices)
+    bool checked = false;     // nested radio-style option is the current value
+    bool slider = false;      // row is an inline slider track
+};
+
 struct OverlayInfo
 {
     ViewerState state = ViewerState::Empty;
+    // Debug capture evidence: suppress viewport overlays. Never set by the
+    // shipping UI; only the Debug test-control surface toggles it.
+    bool captureClean = false;
     std::wstring filename;
     std::wstring errorSummary;
     std::wstring errorDetails;
@@ -149,6 +178,25 @@ struct OverlayInfo
     bool fullscreenButtonPressed = false;
     bool isFullscreen = false;
     LightingMode lightingMode = LightingMode::Studio;
+    // Catalog presentation profile for the current document. Drives only the
+    // viewport clear color (a preset never changes source materials).
+    model_core::PresentationProfile presentationProfile = model_core::PresentationProfile::Default;
+    // T15: full-screen resolve state. The object shaders write linear HDR and
+    // never apply the display transform; the resolve pass owns exposure,
+    // tone-map selection, background compositing and the sRGB transfer.
+    viewer_presentation::PresentationPreset presentationPreset =
+        viewer_presentation::PresentationPreset::StudioPbr;
+    viewer_presentation::ToneMapMode toneMap = viewer_presentation::ToneMapMode::Neutral;
+    viewer_presentation::BackgroundMode background = viewer_presentation::BackgroundMode::Dark;
+    uint32_t backgroundColor = 0x001C1C1Eu;
+    float exposure = 1.0f;
+    // T21a: independent illuminated ground area; the contact shadow keeps its
+    // own flag and neither implies the other.
+    bool groundHighlightVisible = true;
+    float studioIntensity = 1.0f;
+    float keyLightScale = 1.0f;
+    float fillLightScale = 1.0f;
+    float rimLightScale = 1.0f;
     float directionalLightAngle = 0.0f; // normalized 0..1 horizontal rotation
     float directionalLightElevation = 0.502f; // radians above the horizon, 0..~85deg
     bool lightDragging = false; // LMB held on the gizmo's sun (drag affordance)
@@ -167,13 +215,16 @@ struct OverlayInfo
     bool wireframeButtonPressed = false;
     bool hasModel = false;
     bool gridVisible = true;
+    // T16: ground contact shadow is its own layer, independent of the grid.
+    bool shadowVisible = true;
+    // T32: screen-space AO is a user-visible indirect-light layer. The mode
+    // palette supplies its defaults; the two override fields are Debug test
+    // controls (-1 means "use the mode default").
+    bool ambientOcclusionVisible = true;
+    float ambientOcclusionStrengthOverride = -1.0f;
+    float ambientOcclusionRadiusScale = -1.0f;
     bool axisSnapEnabled = false;
     bool infoPanelVisible = false;
-    bool speedFlyoutOpen = false;
-    RECT speedFlyoutRect{};        // client px, valid only while speedFlyoutOpen
-    RECT speedFlyoutTrackRect{};   // the draggable track within it
-    float speedSliderT = 0.0f;     // 0..1 normalized thumb position
-    std::wstring speedValueText;   // e.g. "×1.00"
     // Orbit (turntable auto-rotate) state plus the speed flyout that appears
     // while hovering the Orbit button with auto-orbit enabled.
     bool orbitEnabled = false;
@@ -197,29 +248,19 @@ struct OverlayInfo
     std::wstring openWithMoreAppsLabel;
     std::vector<OpenWithTileOverlay> openWithTiles;
     OpenWithPopupPalette openWithPalette{};
-    bool settingsPanelOpen = false;
-    RECT settingsPanelRect{};        // client px, valid only while settingsPanelOpen
-    RECT nativeOrientationRowRect{};
-    RECT nativeOrientationSwitchRect{};
-    RECT hideCursorRowRect{};
-    RECT hideCursorSwitchRect{};
-    RECT hideUntilCompleteRowRect{};
-    RECT hideUntilCompleteSwitchRect{};
-    RECT languageRowRect{};
-    bool showNativeOrientation = false;   // current value, for drawing the switch's on/off state
+    bool settingsMenuOpen = false;
+    RECT settingsMenuRect{};         // client px, valid only while settingsMenuOpen
+    RECT settingsMenuHeaderRect{};   // "Settings" caption above the rows
+    std::wstring settingsMenuTitle;
+    std::vector<MenuRowOverlay> settingsMenuRows;
+    bool showNativeOrientation = false;   // current value, for the renderer
     bool hideCursorWhileDragging = true;
     bool hideModelUntilComplete = true;
     // Localized strings for the D2D-drawn chrome. The render thread must never
     // call Loc() itself, so the UI thread resolves these when it builds the
     // OverlayInfo snapshot each frame. See Localization.h.
     std::wstring statsPanelTitle;
-    std::wstring speedFlyoutTitle;
     std::wstring orbitFlyoutTitle;
-    std::wstring nativeOrientationLabel;
-    std::wstring hideCursorLabel;
-    std::wstring hideUntilCompleteLabel;
-    std::wstring languageLabel;
-    std::wstring languageValue;
     std::wstring emptyDropTitle;
     std::wstring emptySupportedFormats;
     GroundAxis groundAxis = GroundAxis::Automatic; // persisted selection used by rendering
@@ -330,7 +371,6 @@ struct Camera
     // instead of look snapping ahead of movement (see AccumulateLook).
     double pendingLookX = 0.0;
     double pendingLookY = 0.0;
-
     void SetBounds(const DirectX::XMFLOAT3& minimum, const DirectX::XMFLOAT3& maximum, float aspect);
     void Fit(float aspect);
     // Frames an arbitrary world-space box (used for "frame selected").
@@ -368,6 +408,16 @@ struct Camera
     void SnapToView(DirectX::XMVECTOR viewOrientation);
     void SetProjection(ProjectionMode mode);
     ProjectionMode Projection() const { return projection; }
+    // Debug-only deterministic capture controls. Set a canonical orientation
+    // from world yaw/pitch (degrees) and a distance as a multiple of the home
+    // fit distance. The target is the home bounds centre, so two runs with the
+    // same values produce the same camera independent of interaction history.
+    void SetTestView(float yawDegrees, float pitchDegrees, double distanceScale);
+    void ResetTestView(float aspect);
+    void SetTestProjection(ProjectionMode mode);
+    float TestYawDegrees() const;
+    float TestPitchDegrees() const;
+    double TestDistanceScale() const { return homeDistance > 0.0 ? distance / homeDistance : 0.0; }
     void SetFlySpeedScale(double scale);
     double FlySpeedScale() const { return flySpeedScale; }
     // Continuous turntable auto-orbit, in radians per second about world up.

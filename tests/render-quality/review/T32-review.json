@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "task": "T32",
+  "date": "2026-10-31",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug AO-state/readback, the T32 screen-space-AO report and the generated/external capture manifest",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T32",
+  "imagesInspected": [
+    "TestResults/render-quality/T32/images/ao-mask-studio.png",
+    "TestResults/render-quality/T32/images/ao-mask-clay.png",
+    "TestResults/render-quality/T32/images/ao-mask-directional.png",
+    "TestResults/render-quality/T32/images/ao-studio-on.png",
+    "TestResults/render-quality/T32/images/ao-studio-off.png",
+    "TestResults/render-quality/T32/images/ao-clay-on.png",
+    "TestResults/render-quality/T32/images/ao-clay-off.png",
+    "TestResults/render-quality/T32/images/ao-directional-on.png",
+    "TestResults/render-quality/T32/images/ao-directional-off.png",
+    "TestResults/render-quality/T32/images/ao-perspective-mask.png",
+    "TestResults/render-quality/T32/images/ao-orthographic-mask.png",
+    "TestResults/render-quality/T32/images/ao-zoom-near-mask.png",
+    "TestResults/render-quality/T32/images/ao-zoom-far-mask.png",
+    "TestResults/render-quality/T32/images/ao-large-mask.png",
+    "TestResults/render-quality/T32/images/ao-orbit-08.png",
+    "TestResults/render-quality/T32/images/ao-orbit-12.png",
+    "TestResults/render-quality/T32/images/ao-orbit-16.png",
+    "TestResults/render-quality/T32/images/ao-forced-on.png",
+    "TestResults/render-quality/T32/images/ao-disabled-reference.png",
+    "TestResults/render-quality/T32/images/ao-after-device-reset.png",
+    "TestResults/render-quality/T32/images/generated-ao-probe-studio-oblique.png",
+    "TestResults/render-quality/T32/images/generated-ao-probe-studio-low.png",
+    "TestResults/render-quality/T32/images/generated-ao-probe-clay-oblique.png",
+    "TestResults/render-quality/T32/images/generated-ao-probe-directional-oblique.png",
+    "TestResults/render-quality/T32/images/generated-ao-probe-large-studio-oblique.png",
+    "TestResults/render-quality/T32/images/generated-stl-box-studio-oblique.png",
+    "TestResults/render-quality/T32/images/external-car-studio-low.png",
+    "TestResults/render-quality/T32/images/external-car-clay-low.png",
+    "TestResults/render-quality/T32/images/external-car-directional-low.png",
+    "TestResults/render-quality/T32/images/external-car-studio-mask.png",
+    "TestResults/render-quality/T32/images/external-camera-studio-front.png",
+    "TestResults/render-quality/T32/images/external-camera-clay-front.png",
+    "TestResults/render-quality/T32/images/external-camera-directional-front.png",
+    "TestResults/render-quality/T32/images/external-camera-studio-mask.png",
+    "TestResults/render-quality/T32/images/external-stl-studio-on.png",
+    "TestResults/render-quality/T32/images/external-stl-directional-on.png"
+  ],
+  "observations": [
+    "The AO-only masks in Studio, Clay and Directional show a dark inside-corner/box cavity, a contact ring under the resting sphere and the thin strap, while the background, the ring hole, the transmissive window and the MASK cutout hole stay bright. The mask is edge-aligned with the depth buffer and is not a shifted or full-screen layer.",
+    "AO on/off pairs darken the cavity walls, the recess interior and the local contact under the sphere/ring/strap. The strongest connected darkening is Clay (about 2.5-3.5% of the viewport at strengths 0.85), with Studio and Directional smaller. The whole-frame mean luma changes by well under one display unit, so this is not a global exposure change.",
+    "The emissive orange panel remains visually unchanged between AO on/off in Studio and Directional (numeric mean delta about 0.3-1.4/255). Clay deliberately suppresses authored emission (T29) and renders its neutral matte instead, so the emission invariant is not claimed there.",
+    "The transmissive window and the MASK cutout sheet are in front of background; their on/off images and the upper-right transparent/cutout region are unchanged. Transparent surfaces do not write the opaque depth sampled by the AO passes, so neither becomes an opaque AO sheet.",
+    "Perspective and orthographic masks both contain cavity/contact darkening. Near and far zoom keep a mask; the pixel radius is capped, so close zoom does not allocate more work. The same assembly scaled 8x keeps a comparable mask fraction, which is the scene-scale evidence.",
+    "Three small orbit steps keep the occlusion set overlap high and the covered fraction within a narrow band; no frame-wide popping or mask shift is visible. The fixed spiral is stable for a stationary camera; there is no temporal history.",
+    "The forced AO-off fallback is pixel-identical to the ordinary AO-disabled image and is labelled with its own reason. The Debug allocation-failure launch records the allocation fallback and still draws the model.",
+    "Resize recreates the viewport-sized AO targets (the allocation changes with the extent), a superseded import publishes AO for the final generation, and device loss rebuilds the targets on the recovered device. The 1280x900 profile accounts 10,747,904 bytes and the GPU timestamp pass reads 304-312 microseconds on this Debug workstation; the whole-frame Debug timings are recorded but not used as a cost claim.",
+    "Car and Camera keep readable dark bodies, lens/strap separation and paint/trim detail; AO adds local crevice/contact shading without turning the car windows or the camera lens into dark sheets. The STL relief gains local cavity shading with unchanged silhouette.",
+    "No asset-name or material-name exception exists in the renderer or lane; AO is a depth-derived layer over the existing indirect term."
+  ],
+  "defects": [
+    {
+      "id": "ao-subtle-on-smooth-convex-bodies",
+      "label": "observation",
+      "where": "smooth exterior body panels (Car paint, Camera body)",
+      "description": "A horizon/kernel AO pass is intentionally restrained on smooth convex surfaces; the visible improvement is concentrated in cavities, recesses, narrow gaps, ring/strap holes and local contact. This is expected and must not be 'fixed' by darkening the whole image.",
+      "assignedTo": "T33/T34"
+    },
+    {
+      "id": "transmission-snapshot-pre-ao",
+      "label": "known-limitation",
+      "where": "scene-color transmission behind glass",
+      "description": "The T27 transmission snapshot is copied from the opaque HDR scene before the resolve applies the AO subtraction, so an already-occluded cavity seen only through glass does not receive a second screen-space occlusion pass. Glass reflection/transmission are deliberately not multiplied by the AO mask. Revisit only with a dedicated transmitted-radiance AO path.",
+      "assignedTo": "T34/T35"
+    },
+    {
+      "id": "car-authored-window-speckle",
+      "label": "known-defect",
+      "where": "Car windshield/roof/window edges in Studio and Directional",
+      "description": "Small bright speckles along authored window/trim seams remain. They also appear with AO off and in earlier tasks; they are not caused by AO.",
+      "assignedTo": "T33/T34"
+    },
+    {
+      "id": "camera-lens-dark-body",
+      "label": "nonregression",
+      "where": "external Camera lens/black body/strap",
+      "description": "The dark lens and black body stay dark and reflective; AO does not paint a pale or opaque sheet over them, and the strap remains legible. The authored dark body is a nonregression region, not a target for global lightening.",
+      "assignedTo": "T34/T35"
+    }
+  ],
+  "positives": [
+    "Depth is the only geometry input; the inverse view-projection reconstructs camera-target-relative positions for perspective, orthographic and the blended projection.",
+    "The world radius is a per-mode fraction of the fitted scene radius converted to a bounded pixel radius from the reconstructed frame, not a fixed model-unit constant.",
+    "The opaque material pass writes its indirect (environment/IBL/ambient) share separately; the resolve subtracts only that share before tone mapping. Direct light, emission, glass reflection and the display transform are not multiplied by the mask.",
+    "Twelve deterministic spiral samples plus an edge-aware 5x5 bilateral filter preserve silhouettes and narrow features; background/discontinuity neighbours are rejected.",
+    "The indirect HDR target plus two R8 masks are viewport-sized, accounted in the GPU budget, recreated on resize and device loss, and have a recorded AO-off fallback.",
+    "Debug fields 287-298 stay inside the existing Debug test-control guard; no Release test authority was added."
+  ],
+  "acceptance": {
+    "aoOnlyMasksAllThreeModes": true,
+    "indirectOnlyCompositingVerified": true,
+    "authoredAndScreenAoComposited": true,
+    "transparentMaskedNoOpaqueSheet": true,
+    "narrowGapSilhouetteThinStrapPreserved": true,
+    "perspectiveOrthographicNearFarZoomOrbitVerified": true,
+    "backgroundDepthDiscontinuityHaloFree": true,
+    "twoSidedMirroredStreamedAlphaCutoutVerified": true,
+    "clayStudioDirectionalCalibrationVerified": true,
+    "budgetResizeDeviceLossGenerationFallbackVerified": true,
+    "gpuCostRecorded": true,
+    "imageReviewPerformed": true,
+    "acceptedReferencesPromotedBy": "not applicable for T32 (no accepted reference promoted)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "Generated AO-only masks, numeric on/off/cavity/emission/background checks and lifecycle checks own the verdicts; external Car/Camera/STL are reviewed qualitatively. The transmission snapshot limitation is recorded, not hidden."
+  }
+}

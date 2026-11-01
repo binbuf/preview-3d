@@ -2,8 +2,10 @@
 #include "import_broker/SharedSectionValidator.h"
 
 #include "model_core/Checksum.h"
+#include "model_core/Compatibility.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
+#include "model_core/SceneMetadataRules.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/GeometryBounds.h"
 #include "platform/CheckedMath.h"
@@ -204,7 +206,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         return Reject(ImportErrorCode::ImportProtocolViolation, "header changed during copy");
     if (header.reserved || header.scene.reserved || header.scene.generationId != expectedGenerationId)
         return Reject(ImportErrorCode::ImportProtocolViolation, "stale or malformed scene metadata");
-    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::Step))
+    if (uint32_t(header.scene.format) > uint32_t(model_core::SourceFormatId::X3d))
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
     const bool usdFormat = header.scene.format == model_core::SourceFormatId::Usda
         || header.scene.format == model_core::SourceFormatId::Usdc
@@ -215,6 +217,17 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         || header.scene.format == model_core::SourceFormatId::Obj
         || header.scene.format == model_core::SourceFormatId::Fbx
         || header.scene.format == model_core::SourceFormatId::Step
+        || header.scene.format == model_core::SourceFormatId::Iges
+        || header.scene.format == model_core::SourceFormatId::Brep
+        || header.scene.format == model_core::SourceFormatId::Xbf
+        || header.scene.format == model_core::SourceFormatId::Fcstd
+        || header.scene.format == model_core::SourceFormatId::Dae
+        || header.scene.format == model_core::SourceFormatId::ThreeDs
+        || header.scene.format == model_core::SourceFormatId::Dxf
+        || header.scene.format == model_core::SourceFormatId::DirectX
+        || header.scene.format == model_core::SourceFormatId::Off
+        || header.scene.format == model_core::SourceFormatId::Amf
+        || header.scene.format == model_core::SourceFormatId::X3d
         || usdFormat;
     const uint32_t objectLimit = tierBFormat ? model_core::kTierBObjectLimit
                                              : model_core::kTierAObjectLimit;
@@ -224,31 +237,12 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         header.scene.nodeCount > objectLimit || header.scene.skinCount > 1'000'000 ||
         header.scene.animationCount > 1'000'000 || header.scene.boneCount > 1'000'000)
         return Reject(ImportErrorCode::MalformedData, "invalid scene metadata");
-    if ((header.scene.format == model_core::SourceFormatId::Gltf || header.scene.format == model_core::SourceFormatId::Glb)
-        && (header.scene.upAxis != model_core::UpAxisId::Y || header.scene.metersPerUnit != 1.0))
-        return Reject(ImportErrorCode::MalformedData, "invalid glTF units/up axis");
-    if ((header.scene.format == model_core::SourceFormatId::Stl
-         || header.scene.format == model_core::SourceFormatId::Ply
-         || header.scene.format == model_core::SourceFormatId::AsciiStl
-         || header.scene.format == model_core::SourceFormatId::AsciiPly
-         || header.scene.format == model_core::SourceFormatId::Obj)
-        && (header.scene.upAxis != model_core::UpAxisId::Unknown || header.scene.metersPerUnit != 0))
-        return Reject(ImportErrorCode::MalformedData, "unspecified source units/up axis must stay unknown");
-    if (header.scene.format == model_core::SourceFormatId::Fbx
-        && (header.scene.upAxis != model_core::UpAxisId::Y || header.scene.metersPerUnit != 1.0))
-        return Reject(ImportErrorCode::MalformedData, "invalid normalized FBX units/up axis");
-    if (usdFormat
-        && (header.scene.upAxis == model_core::UpAxisId::Unknown
-            || header.scene.metersPerUnit <= 0.0))
-        return Reject(ImportErrorCode::MalformedData, "USD units/up axis must be specified");
-    // STEP declares no universal display-up axis, so Unknown is required, but
-    // the authored length unit must convert to a verified positive metre
-    // factor -- an absent/zero unit is a typed failure, never an assumed
-    // millimetre.
-    if (header.scene.format == model_core::SourceFormatId::Step
-        && (header.scene.upAxis != model_core::UpAxisId::Unknown
-            || header.scene.metersPerUnit <= 0.0))
-        return Reject(ImportErrorCode::MalformedData, "STEP requires unknown up axis and a positive metre factor");
+    // Per-format up-axis/unit policy is a pure function shared with the unit
+    // tests (model_core/SceneMetadataRules.h), so the OBJ Y-up default and the
+    // untouched glTF/FBX/USD/STEP rules cannot drift between broker and tests.
+    if (!model_core::SceneUnitsAndUpAxisAllowed(
+            header.scene.format, header.scene.upAxis, header.scene.metersPerUnit))
+        return Reject(ImportErrorCode::MalformedData, "invalid units/up axis for source format");
 
     // 10. Recompute the section checksum over [header, sectionLength).
     auto payloadRegion
@@ -277,10 +271,10 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         // 12a. chunkId 0 is the "no dependency" sentinel -- a chunk must not
         // claim it as its own identity.
         const auto& bounded = descriptors[i];
-        if ((bounded.topology == model_core::ChunkTopology::TriangleList ||
-             bounded.topology == model_core::ChunkTopology::PointList) &&
+        if (model_core::IsGeometryTopology(bounded.topology) &&
             (bounded.byteSize > 16ull * 1024 * 1024 || bounded.vertexCount > 1048576 ||
-             (bounded.topology == model_core::ChunkTopology::TriangleList &&
+             ((bounded.topology == model_core::ChunkTopology::TriangleList ||
+               bounded.topology == model_core::ChunkTopology::LineList) &&
               bounded.indexCount > 262144u * 3)))
             return Reject(ImportErrorCode::ResourceLimit, "normalized geometry cluster limit");
         if (descriptors[i].chunkId == 0) {
@@ -329,6 +323,10 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
     KnownSceneCatalog scenes = sceneCatalog ? *sceneCatalog : KnownSceneCatalog{};
     std::unordered_map<uint32_t, model_core::NodePayload> pendingNodes;
     std::unordered_map<uint32_t, model_core::MeshInstancePayload> pendingInstances;
+    // A compatibility report is generation-scoped state, not a per-batch
+    // stream. The fixed chunk id already makes a later batch collide with the
+    // generation catalog; this catches a second report in the same section.
+    bool compatibilityReportSeen = false;
 
     for (uint32_t i = 0; i < header.chunkCount; ++i) {
         const ChunkDescriptor& descriptor = descriptors[i];
@@ -345,7 +343,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
         }
         if (descriptor.lodLevel > model_core::kPreviewLod)
             return Reject(ImportErrorCode::MalformedData, "unknown geometry role");
-        if (descriptor.topology != ChunkTopology::TriangleList && descriptor.topology != ChunkTopology::PointList) {
+        if (!model_core::IsGeometryTopology(descriptor.topology)) {
             if (descriptor.lodLevel || descriptor.meshId || descriptor.nodeId || descriptor.geometryFlags || descriptor.sourceElementOffset
                 || descriptor.boundsState != model_core::BoundsState::Unknown)
                 return Reject(ImportErrorCode::MalformedData, "non-geometry chunk declares geometry metadata");
@@ -404,8 +402,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             const auto* nodeTopology = resolveTopology(instance.nodeId);
             const auto* materialTopology = instance.materialChunkId
                 ? resolveTopology(instance.materialChunkId) : nullptr;
-            if (!geometryTopology || (*geometryTopology != ChunkTopology::TriangleList
-                                      && *geometryTopology != ChunkTopology::PointList)
+            if (!geometryTopology || !model_core::IsGeometryTopology(*geometryTopology)
                 || !nodeTopology || *nodeTopology != ChunkTopology::Node
                 || (instance.materialChunkId && (!materialTopology || *materialTopology != ChunkTopology::Material)))
                 return Reject(ImportErrorCode::MalformedData, "instance dependency has the wrong topology");
@@ -437,6 +434,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             break;
         }
         case ChunkTopology::TriangleList:
+        case ChunkTopology::LineList:
         case ChunkTopology::PointList: {
             // Unrecognized layout ID is never guessed.
             size_t stride = VertexStrideForLayout(
@@ -454,7 +452,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             }
 
             uint64_t expectedByteSize = 0;
-            if (descriptor.topology == ChunkTopology::TriangleList) {
+            if (descriptor.topology != ChunkTopology::PointList) {
                 auto indexBytes = CheckedMultiply(static_cast<uint64_t>(descriptor.indexCount),
                                                    static_cast<uint64_t>(sizeof(uint32_t)));
                 if (!indexBytes) {
@@ -517,8 +515,13 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                     if (!std::isfinite(value)) return Reject(ImportErrorCode::MalformedData, "non-finite vertex");
                 }
             }
-            if (!scanSummary && descriptor.topology == ChunkTopology::TriangleList) {
-                if (descriptor.indexCount % 3) return Reject(ImportErrorCode::MalformedData, "partial triangle");
+            if (!scanSummary && descriptor.topology != ChunkTopology::PointList) {
+                if (descriptor.topology == ChunkTopology::TriangleList && descriptor.indexCount % 3)
+                    return Reject(ImportErrorCode::MalformedData, "partial triangle");
+                // LineList is an independent segment list: an odd index count
+                // leaves a half segment and is never guessed/truncated.
+                if (descriptor.topology == ChunkTopology::LineList && descriptor.indexCount % 2)
+                    return Reject(ImportErrorCode::MalformedData, "partial line segment");
                 for (uint32_t index = 0; index < descriptor.indexCount; ++index) {
                     uint32_t value;
                     std::memcpy(&value, section.data() + descriptor.normalizedRangeOffset + *vertexBytes
@@ -527,7 +530,7 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
                 }
             }
 
-            // dependencyIds on a TriangleList/PointList chunk predates this
+            // dependencyIds on a TriangleList/LineList/PointList chunk predates this
             // chunk's Material/Image work -- SyntheticSceneGenerator.cpp
             // already uses it for a PointList-depends-on-TriangleList
             // LOD/derivation relationship, unrelated to materials. Only
@@ -596,22 +599,31 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             } else if (payload.transmissionFactor != 0.0f) {
                 return Reject(ImportErrorCode::MalformedData, "material transmissionFactor set without its flag");
             }
+            if (const char* lobeError = model_core::ValidateMaterialLobeFields(payload))
+                return Reject(ImportErrorCode::MalformedData, lobeError);
             if (descriptor.dependencyCount > model_core::kMaxDependencyIds) {
                 return Reject(ImportErrorCode::MalformedData, "material dependencyCount exceeds cap");
             }
-            // Unlike a mesh's single optional dependency, a material's 4
+            // Unlike a mesh's single optional dependency, a material's five
             // slots carry per-position semantic meaning
-            // (baseColor/metallicRoughness/normal/emissive per WireFormat.h)
-            // and may be sparsely populated -- e.g. a normal-map-only
-            // material has only slot 2 nonzero. Every slot is therefore
-            // checked independently (0 = no texture in that slot, always
-            // valid) rather than treating dependencyCount as a contiguous
-            // prefix length; dependencyCount itself is cross-checked
-            // against the actual count of nonzero slots so a lying worker
-            // can't understate it.
+            // (baseColor/metallicRoughness/normal/emissive/occlusion per
+            // WireFormat.h) and may be sparsely populated -- e.g. a
+            // normal-map-only material has only slot 2 nonzero. Every slot is
+            // therefore checked independently (0 = no texture in that slot,
+            // always valid) rather than treating dependencyCount as a
+            // contiguous prefix length; dependencyCount itself is
+            // cross-checked against the actual count of nonzero slots so a
+            // lying worker can't understate it. Slots beyond the semantic set
+            // stay zero.
             {
+                for (uint32_t d = model_core::kMaterialTextureSlotCount;
+                     d < model_core::kMaxDependencyIds; ++d) {
+                    if (descriptor.dependencyIds[d] != 0)
+                        return Reject(ImportErrorCode::MalformedData,
+                                      "material uses a dependency slot without a texture semantic");
+                }
                 uint32_t populatedCount = 0;
-                for (uint32_t d = 0; d < model_core::kMaxDependencyIds; ++d) {
+                for (uint32_t d = 0; d < model_core::kMaterialTextureSlotCount; ++d) {
                     if (descriptor.dependencyIds[d] == 0) {
                         continue;
                     }
@@ -639,6 +651,45 @@ ValidationResult ValidateAndCopySection(std::span<const std::byte> sectionView,
             if ((status.flags & ~model_core::kStatusKnownMask) || status.optionalFeatureWarnings > 64
                 || status.textureWarnings > 64 || status.reserved)
                 return Reject(ImportErrorCode::ImportProtocolViolation,"unknown or over-limit import status");
+            break;
+        }
+        case ChunkTopology::CompatibilityReport: {
+            if (compatibilityReportSeen)
+                return Reject(ImportErrorCode::ImportProtocolViolation,
+                              "duplicate compatibility report");
+            compatibilityReportSeen = true;
+            if (descriptor.chunkId != model_core::kCompatibilityReportChunkId
+                || descriptor.vertexCount || descriptor.indexCount || descriptor.vertexLayoutId
+                || descriptor.dependencyCount
+                || descriptor.byteSize != sizeof(model_core::CompatibilityReportPayload))
+                return Reject(ImportErrorCode::MalformedData, "malformed compatibility report");
+            for (auto id : descriptor.dependencyIds)
+                if (id)
+                    return Reject(ImportErrorCode::MalformedData,
+                                  "compatibility report dependency");
+            model_core::CompatibilityReportPayload report{};
+            std::memcpy(&report, section.data() + descriptor.normalizedRangeOffset, sizeof(report));
+            if (report.reserved
+                || report.recordCount > model_core::kMaxCompatibilityRecords)
+                return Reject(ImportErrorCode::MalformedData,
+                              "compatibility report count out of range");
+            for (uint32_t record = 0; record < model_core::kMaxCompatibilityRecords; ++record) {
+                const auto& entry = report.records[record];
+                if (record >= report.recordCount) {
+                    // Unused slots are padding, not worker-controlled space.
+                    if (entry.featureId || entry.severity || entry.reserved[0] || entry.reserved[1]
+                        || entry.reserved[2] || entry.count)
+                        return Reject(ImportErrorCode::MalformedData,
+                                      "compatibility report has nonzero padding");
+                    continue;
+                }
+                if (!model_core::IsKnownFeatureId(entry.featureId)
+                    || entry.severity > model_core::kCompatibilitySeverityLast
+                    || entry.reserved[0] || entry.reserved[1] || entry.reserved[2]
+                    || entry.count == 0 || entry.count > model_core::kCompatibilityCountCap)
+                    return Reject(ImportErrorCode::MalformedData,
+                                  "invalid compatibility record");
+            }
             break;
         }
         case ChunkTopology::TextureWarning: {

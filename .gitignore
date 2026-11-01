@@ -60,6 +60,11 @@ TestResults/
 *.coverage
 *.coveragexml
 
+# Render-quality promotion evidence. The promotion JSON record (reason, reviewer,
+# hashes, stats) and the accepted references are tracked; the candidate/before/
+# diff/crop copies are local review artifacts and stay out of the tree.
+tests/render-quality/baselines/accepted/promotions/*.png
+
 # Local logs and temporary files
 *.log
 *.tmp

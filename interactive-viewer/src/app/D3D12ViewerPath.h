@@ -25,7 +25,10 @@
 #include "D3D12ImportBridge.h"
 #include "D3D12SwapChain.h"
 #include "D3D12UploadRing.h"
+#include "AntiAliasing.h"
 #include "FrameStats.h"
+#include "Presentation.h"
+#include "ScreenSpaceAo.h"
 
 #include <DirectXMath.h>
 #include <platform/Generation.h>
@@ -39,6 +42,15 @@
 struct D3D12ViewerPath
 {
     HRESULT lastPresentResult = E_PENDING;
+    // Debug-only evidence: the exact exposure/tone-map pair the last resolve
+    // pass used. T24 compares the CPU reference against the same values rather
+    // than assuming the UI state reached the GPU.
+    float lastResolveExposure = 1.0f;
+    uint32_t lastResolveToneMap = 0;
+    bool lastResolveUsedOit = false;
+    // Debug-only OIT resolve inspection: 0 product resolve, 1 accumulation,
+    // 2 revealage, 3 opaque scene. It never changes the material pass.
+    uint32_t oitResolveDiagnostic = 0;
     D3D12Device device;
     D3D12Device::CreateOptions deviceOptions;
     D3D12CommandQueue directQueue;
@@ -73,13 +85,249 @@ struct D3D12ViewerPath
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
     Microsoft::WRL::ComPtr<ID3D12Resource> depthBuffer;
+    // T15: geometry renders into a linear HDR scene target; a full-screen
+    // resolve pass tone maps and writes sRGB to the swap-chain back buffer.
+    // The pick target remains a separate R32_UINT MRT.
+    Microsoft::WRL::ComPtr<ID3D12Resource> sceneColor;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sceneColorRtvHeap;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sceneColorSrvHeap;
+    uint64_t sceneColorAllocationBytes = 0;
+
+    // T33 edge anti-aliasing. The filter runs inside the existing resolve pass
+    // against the single-sample HDR scene, the D32 depth buffer and the OIT
+    // coverage. It allocates no render target: the depth SRV shares the
+    // resolve descriptor heap. The pick target is never sampled or resolved.
+    bool aaForceDisabled = false;                   // Debug A/B control only
+    uint32_t lastAaMode = static_cast<uint32_t>(viewer_aa::Mode::DepthAwareFxaa);
+    uint32_t lastAaFallbackReason = static_cast<uint32_t>(viewer_aa::FallbackReason::None);
+    uint32_t lastAaTapCount = viewer_aa::kTapCount;
+    double lastAaResolveMilliseconds = 0.0;         // CPU record time of the resolve
+    bool depthSrvAvailable = false;
+
+    // T26 bounded order-independent transparency. Weighted blended OIT needs
+    // exactly two full-screen targets: premultiplied weighted colour plus a
+    // revealage product. There is no per-pixel linked list and no peel-count
+    // allocation, so memory is fixed by the viewport and work is one extra
+    // transparent geometry pass. The sorted path is retained only as a
+    // recorded fallback when these targets cannot be allocated.
+    struct OitResources
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> accumulation;
+        Microsoft::WRL::ComPtr<ID3D12Resource> revealage;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;
+        uint64_t accumulationAllocationBytes = 0;
+        uint64_t revealageAllocationBytes = 0;
+        bool available = false;
+        uint32_t fallbackReason = 0; // OitFallback* below
+    };
+    OitResources oit;
+
+    // T27 scene-color transmission. Transmissive fragments sample the opaque
+    // scene through a bounded mip pyramid in linear HDR; the opaque target is
+    // copied once per frame so no pass ever samples a render target that is
+    // simultaneously bound for writing. Every transmissive surface is treated
+    // as a thin (zero-thickness) interface: no volume thickness is fabricated.
+    struct TransmissionResources
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> sceneCopy;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap; // mips 1..N-1
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mipSrvHeap;
+        uint64_t allocationBytes = 0;
+        uint32_t mipCount = 0;
+        bool available = false;
+        uint32_t fallbackReason = 0; // TransmissionFallback* below
+    };
+    TransmissionResources transmission;
+    static constexpr uint32_t kTransmissionMipCount = 8;    enum TransmissionFallbackReason : uint32_t
+    {
+        TransmissionFallbackNone = 0,
+        TransmissionFallbackAllocationFailed = 1,
+        TransmissionFallbackUnsupportedExtent = 2,
+        TransmissionFallbackForced = 3,
+        TransmissionFallbackDeviceLoss = 4,
+    };
+    uint32_t lastTransmissionFallbackReason = TransmissionFallbackNone;
+    uint32_t lastForwardTransmissionDrawCount = 0;
+    uint64_t transmissionTargetBytes = 0;
+    bool transmissionAllocationForcedFailure = false;
+    bool TransmissionUsable() const noexcept
+    {
+        return transmission.available && !transmissionAllocationForcedFailure;
+    }
+
+    // T31 geometry-derived ground contact shadow. One fitted orthographic
+    // depth target (D32_FLOAT) plus one R8 caster-attenuation target. Both are
+    // bounded and viewport-independent; the depth pass re-renders from the
+    // current drawable model each frame, so generation swaps and streamed
+    // updates cannot leave stale casters. Allocation failure or the Debug
+    // switch falls back to the labelled analytic bounds ellipse.
+    struct ShadowResources
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> depth;
+        Microsoft::WRL::ComPtr<ID3D12Resource> mask;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap; // mask
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap; // depth, mask
+        uint64_t depthBytes = 0;
+        uint64_t maskBytes = 0;
+        uint32_t size = 0;
+        bool available = false;
+        uint32_t fallbackReason = 0; // ShadowFallback* below
+    };
+    ShadowResources shadow;
+    enum ShadowFallbackReason : uint32_t
+    {
+        ShadowFallbackNone = 0,
+        ShadowFallbackAllocationFailed = 1,
+        ShadowFallbackForced = 2,
+        ShadowFallbackUnsupportedExtent = 3,
+        ShadowFallbackDeviceLoss = 4,
+        ShadowFallbackNoTriangleCasters = 5,
+    };
+    // 0 none (off or no triangle casters), 1 fitted shadow map, 2 labelled
+    // analytic bounds ellipse.
+    uint32_t lastShadowMode = 0;
+    uint32_t lastShadowFallbackReason = ShadowFallbackNone;
+    uint32_t lastShadowCasterCount = 0;
+    double lastShadowPassMilliseconds = 0.0;
+    uint64_t shadowAllocationBytes = 0;
+    bool shadowFallbackForced = false;          // Debug: exercise fallback
+    bool shadowAllocationForcedFailure = false; // Debug: simulate low memory
+
+    // T32 scale-aware screen-space ambient occlusion. The opaque material pass
+    // writes its environment/IBL share into a second HDR target; the AO passes
+    // reconstruct camera-relative positions from the existing depth buffer and
+    // produce two viewport-sized R8 masks (raw and edge-filtered). The resolve
+    // subtracts the occluded indirect share before tone mapping, so direct
+    // light, emission, transparent reflection and the final display transform
+    // are never multiplied by an AO mask.
+    struct AoResources
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> indirect;
+        Microsoft::WRL::ComPtr<ID3D12Resource> raw;
+        Microsoft::WRL::ComPtr<ID3D12Resource> filtered;
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap; // raw, filtered
+        Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap; // raw, depth, filtered
+        uint64_t indirectBytes = 0;
+        uint64_t rawBytes = 0;
+        uint64_t filteredBytes = 0;
+        bool available = false;
+        uint32_t fallbackReason = 0; // AoFallback* below
+    };
+    AoResources ao;
+    enum AoFallbackReason : uint32_t
+    {
+        AoFallbackNone = 0,
+        AoFallbackAllocationFailed = 1,
+        AoFallbackForced = 2,
+        AoFallbackUnsupportedExtent = 3,
+        AoFallbackDeviceLoss = 4,
+        AoFallbackDiagnostic = 5,
+        AoFallbackNoTriangleGeometry = 6,
+        AoFallbackDisabled = 7,
+    };
+    // 0 off, 1 active (mask available and applied), 2 unavailable/degraded.
+    uint32_t lastAoMode = 0;
+    uint32_t lastAoFallbackReason = AoFallbackNone;
+    uint32_t lastAoSampleCount = 0;
+    float lastAoStrength = 0.0f;
+    float lastAoRadiusFraction = 0.0f;
+    float lastAoWorldRadius = 0.0f;
+    float lastAoPixelRadius = 0.0f;
+    double lastAoPassMilliseconds = 0.0;
+    uint64_t aoAllocationBytes = 0;
+    bool aoForceFallback = false;          // Debug: exercise the AO-off path
+    bool aoAllocationForcedFailure = false; // Debug: simulate low memory
+    // Bounded GPU timestamps around the AO raw/filter draws. One 2-query heap
+    // and a 16-byte readback; the result is consumed a frame later, never
+    // waited on in the frame that recorded it.
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> aoQueryHeap;
+    Microsoft::WRL::ComPtr<ID3D12Resource> aoQueryReadback;
+    uint64_t aoQueryFence = 0;
+    bool aoQueryInFlight = false;
+    bool aoQueryRecorded = false;
+    double lastAoGpuMilliseconds = 0.0;
+    // Debug-only mask inspection: 0 product mask, 1 reconstructed distance,
+    // 2 normal.x, 3 depth-discontinuity gap, 4 pixel radius.
+    uint32_t aoDebugView = 0;
+    static const char* AoRawPixelShaderSource();
+    static const char* AoBlurPixelShaderSource();
+    static uint64_t AoTargetBytesForExtent(uint32_t width, uint32_t height) noexcept;
+
+    // T28 environment provenance/cost evidence. Read-only.
+    uint32_t StudioEnvironmentVersion() const noexcept { return environment.version; }
+    uint32_t StudioEnvironmentVariant() const noexcept { return environment.variant; }
+    uint64_t StudioEnvironmentIdentityHash() const noexcept { return environment.identityHash; }
+    uint64_t StudioEnvironmentResidentBytes() const noexcept { return environment.residentBytes; }
+    uint64_t StudioEnvironmentUploadBytes() const noexcept { return environment.uploadBytes; }
+    double StudioEnvironmentBakeMilliseconds() const noexcept { return environment.bakeMilliseconds; }
+    // Roughness maps to the transmitted-radiance mip pyramid; coverage stays
+    // the authored alpha for BLEND and the opaque coverage (1) otherwise.
+    static uint32_t TransmissionMipLevel(float roughness, uint32_t mipCount) noexcept;
+    static float TransmissionInterfaceFresnel(float f0, float nv) noexcept;
+    static float TransmissionTintWeight(float transmission, float fresnel) noexcept;
+    static float TransmissionCoverage(bool blend, float authoredAlpha) noexcept;
+    static uint64_t TransmissionTargetBytesForExtent(uint32_t width, uint32_t height) noexcept;
+
+    // The validated supported overlap range. Weighted OIT remains stable past
+    // it but resolves to a weighted average rather than an exact front-to-back
+    // composite; see docs/design/04-rendering-and-streaming.md.
+    static constexpr uint32_t kOitSupportedLayerLimit = 8;
+    enum OitFallbackReason : uint32_t
+    {
+        OitFallbackNone = 0,
+        OitFallbackAllocationFailed = 1,
+        OitFallbackForced = 2,
+        OitFallbackUnsupportedExtent = 3,
+        OitFallbackDeviceLoss = 4,
+        OitFallbackDiagnostic = 5,
+    };
+    // Actual algorithm used by the last submitted frame: 0 sorted, 1 WBOIT.
+    uint32_t lastTransparencyAlgorithm = 0;
+    uint32_t lastTransparencyFallbackReason = OitFallbackAllocationFailed;
+    uint32_t lastTransparentDrawCount = 0;
+    uint64_t oitTargetBytes = 0;
+    bool oitForceFallback = false;                 // Debug explicit fallback
+    bool oitAllocationForcedFailure = false;       // Debug low-memory simulation
+    bool reverseTransparentDrawOrderForTesting = false;
+    bool OitUsable() const noexcept { return oit.available && !oitForceFallback && debugChannel == 0; }
+    static float OitWeightForDepth(float viewDepth, float sceneScale) noexcept;
+    static float OitResolveCoverage(float revealage) noexcept;
+    static float OitResolveAlpha(float accumulatedAlpha) noexcept;
+    static uint64_t OitTargetBytesForExtent(uint32_t width, uint32_t height) noexcept;
+    // T21a display-space backdrop. It is cleared to the selected display color
+    // and receives the local ground highlight/contact shadow; the resolve pass
+    // composites the tone-mapped scene over it. This is what keeps #1C1C1E
+    // independent of exposure and tone mapping.
+    Microsoft::WRL::ComPtr<ID3D12Resource> backdropColor;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> backdropRtvHeap;
+    uint64_t backdropAllocationBytes = 0;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> aoRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> aoRawPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> aoBlurPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> resolveRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> resolvePipelineState;
+    // T27 full-screen transparent-radiance downsample (one draw per mip).
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> transmissionRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> transmissionPipelineState;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> rootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> blendPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> gridPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> groundPipelineState;
+    // T31 geometry-derived contact shadow: one depth-only caster pipeline
+    // (opaque/transmissive) plus a masked variant that samples base-colour
+    // alpha, and the HDR ground layer that samples the fitted map.
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> shadowRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> shadowPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> shadowMaskPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> shadowGroundRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> shadowGroundPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pointPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> coloredPointPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> linePipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyAoPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> wireframePipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> positionOnlyWireframePipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> completeVertexPipelineState;
@@ -90,6 +338,28 @@ struct D3D12ViewerPath
     uint32_t lastPickedId = 0;
     bool pickInFlight = false;
     int pickX = -1, pickY = -1;
+
+    // T21 Debug diagnostics. `debugChannel` selects a raw linear inspection
+    // view (0 = normal render); it travels to the shader in gPresentation.w.
+    // The HDR sample copies the requested scene-color region into a readback
+    // resource and averages it on the CPU so tests can assert numeric values
+    // without relying on the display transform.
+    uint32_t debugChannel = 0;
+    struct DebugSample
+    {
+        float rgba[4]{};
+        uint32_t width = 0, height = 0;
+    };
+    Microsoft::WRL::ComPtr<ID3D12Resource> debugReadback;
+    DebugSample debugSample;
+    uint64_t debugSampleFence = 0;
+    int debugSampleState = 0; // 0 idle, 1 pending, 2 ready, 3 failed
+    bool debugSampleArmed = false;
+    bool debugSampleRecorded = false;
+    int debugSampleX0 = 0, debugSampleY0 = 0, debugSampleX1 = 0, debugSampleY1 = 0;
+    static constexpr UINT kDebugSampleMaxExtent = 64;
+    void RequestDebugSample(int x0, int y0, int x1, int y1);
+    int PollDebugSample(DebugSample& out);
     // Complete material variant: base-color, metallic/roughness, normal, and
     // emissive maps plus normalized factors, alpha, unlit, UV transform, and
     // double-sided behavior. Legacy position-only meshes keep using
@@ -98,19 +368,79 @@ struct D3D12ViewerPath
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedMirroredPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedDoubleSidedPipelineState;
+    // T32: the AO-off/low-memory fallback uses the historical two-target
+    // (scene + pick) material layout. The primary opaque variants above write
+    // scene + indirect + pick.
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedLegacyPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedLegacyMirroredPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedLegacyDoubleSidedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelineStateLegacy;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> clayPipelineStateLegacy;
+    // T29 Clay overridden surfaces use the opaque shader with LESS_EQUAL depth
+    // so a coplanar authored glass/trim pair resolves deterministically after
+    // the solid prepass instead of z-fighting, while still writing depth.
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedClayPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedClayMirroredPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedClayDoubleSidedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> clayPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedLegacyClayPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedLegacyClayMirroredPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedLegacyClayDoubleSidedPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendMirroredPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedBlendDoubleSidedPipelineState;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedWireframePipelineState;
-    // kFrameCount slots of 256 bytes (D3D12's CBV alignment), bound at
-    // GetGPUVirtualAddress() + frameIndex * kConstantBufferSlotBytes. One
+    // T26 weighted blended OIT and nearest-visible transparent pick variants.
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedOitPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedOitMirroredPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedOitDoubleSidedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPickPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPickMirroredPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> texturedPickDoubleSidedPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> oitPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> pickPipelineState;
+    // kFrameCount slots of 512 bytes (D3D12's CBV alignment, sized to hold the
+    // view-projection, eye/viewport/lighting vectors, the world-from-camera
+    // quaternion, the environment constants and the 9 SH coefficients), bound
+    // at GetGPUVirtualAddress() + frameIndex * kConstantBufferSlotBytes. One
     // shared slot was correct only while every frame stalled to idle first;
     // without that stall it is a CPU/GPU race -- the CPU would overwrite
     // frame N-1's matrix while the GPU was still reading it, which shows up
     // as an intermittently wrong camera rather than as a crash.
-    static constexpr UINT kConstantBufferSlotBytes = 256;
+    static constexpr UINT kConstantBufferSlotBytes = 512;
     Microsoft::WRL::ComPtr<ID3D12Resource> frameConstantBuffer;
     std::byte* frameConstantBufferMapped = nullptr;
+    // T22/T25: per-material cbuffer stride. The v14 record is 560 bytes
+    // (thirteen per-slot UV/param float4 pairs plus the lobe scalars) but the
+    // binding address must be 256-byte aligned, so each draw/frame region is
+    // 1024 bytes. The record stays a fixed-size bounded layout: root constants
+    // are never extended with per-slot data.
+    static constexpr UINT kMaterialConstantStride = 1024;
+
+    // T14: the product-owned procedural studio environment, baked once at
+    // initialization into an RGB float cubemap with a GGX-prefiltered mip
+    // chain. sh[] holds the SH9 diffuse irradiance/pi used by the shader;
+    // parameters is (intensity, yaw, exposure, last specular mip).
+    struct StudioEnvironmentResources
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> cube;
+        // T24 split-sum DFG integration LUT (R32G32_FLOAT, x=NoV, y=roughness).
+        Microsoft::WRL::ComPtr<ID3D12Resource> brdfLut;
+        UINT mipCount = 0;
+        UINT brdfLutSize = 0;
+        DirectX::XMFLOAT4 sh[9]{};
+        DirectX::XMFLOAT4 parameters{ 1.0f, 0.0f, 1.0f, 0.0f };
+        // T28 bake provenance and bounded startup cost. These are read-only
+        // evidence fields; they never feed the shader.
+        uint32_t version = 0;
+        uint32_t variant = 0;
+        uint32_t specularSampleCount = 0;
+        uint64_t identityHash = 0;
+        uint64_t residentBytes = 0;
+        uint64_t uploadBytes = 0;
+        double bakeMilliseconds = 0.0;
+    };
+    StudioEnvironmentResources environment;
 
     struct GpuMesh
     {
@@ -133,6 +463,7 @@ struct D3D12ViewerPath
         UINT indexCount = 0;
         UINT vertexCount = 0;
         bool points = false;
+        bool lines = false; // LineList: independent index pairs, drawn with the line PSO
         bool positionOnly = false;
         bool completeVertex = false;
         bool drawEnabled = true;
@@ -141,9 +472,39 @@ struct D3D12ViewerPath
         double instanceBoundsMin[3]{}, instanceBoundsMax[3]{};
         bool mirrored = false;
         int textureIndex = -1; // base-color index retained for pressure compatibility
-        int textureIndices[4]{-1,-1,-1,-1};
-        Microsoft::WRL::ComPtr<ID3D12Resource> neutralResources[4];
+        int textureIndices[model_core::kMaterialTextureSlotCount]{
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
+        // T21: validated source identity and color-space of each bound slot.
+        // Zero/first entries mean the slot is unbound and samples the neutral
+        // fallback; the diagnostics report that explicitly. T22 adds the
+        // independent occlusion slot 4 and T25 the eight extension-lobe slots.
+        struct TextureInfo
+        {
+            uint32_t chunkId = 0;
+            model_core::PixelFormatId pixelFormat = model_core::PixelFormatId::Unknown;
+            model_core::ColorSpaceId colorSpace = model_core::ColorSpaceId::Linear;
+            bool bound = false;
+        };
+        TextureInfo textureInfo[model_core::kMaterialTextureSlotCount]{};
+        Microsoft::WRL::ComPtr<ID3D12Resource> neutralResources[model_core::kMaterialTextureSlotCount];
         UINT neutralDescriptorBase = 0;
+        // T22 per-material constant buffer. It is a CPU-writable UPLOAD-heap
+        // resource with one kMaterialConstantStride region per swap-chain
+        // frame, so a material update can never race a frame still reading the
+        // previous copy. A distinct buffer is shared by every draw that uses
+        // the same material chunk.
+        struct MaterialConstantBuffer
+        {
+            Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+            std::byte* mapped = nullptr;
+            uint64_t allocationBytes = 0;
+            // Ownership tag. A buffer may be shared only by draws with the same
+            // material chunk and mirrored sign, because those are the only
+            // per-draw values in the record.
+            uint32_t materialChunkId = 0;
+            bool mirrored = false;
+        };
+        MaterialConstantBuffer materialConstants;
         model_core::MaterialPayload material{};
         bool hasMaterial = false;
     };
@@ -175,6 +536,16 @@ struct D3D12ViewerPath
         // neutral slots. Progressive publications rebuild it atomically.
         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
         UINT srvDescriptorSize = 0;
+        // Two extra slots beyond the material maps own the global Studio
+        // cubemap and the T24 split-sum BRDF LUT. D3D12 allows only one
+        // shader-visible CBV/SRV/UAV heap at a time, so the environment cannot
+        // live in its own heap while a model's material heap is bound.
+        UINT environmentDescriptorIndex = 0;
+        UINT brdfLutDescriptorIndex = 0;
+        // T27: the current frame's transmission mip pyramid. It is written on
+        // scene-target creation/resize and kept in the same shader-visible heap
+        // because D3D12 allows only one such heap at a time.
+        UINT transmissionDescriptorIndex = 0;
     };
 
     // What RenderFrame draws. Deliberately untouched while a new model is
@@ -185,6 +556,20 @@ struct D3D12ViewerPath
     // against.
     ModelResources model;
     static void UpdateCoarseVisibility(ModelResources& resources);
+    // The exact textured PBR shader text, exposed so the material/UV/normal/AO
+    // contract can be asserted and compiled without a GPU device.
+    static const char* TexturedPixelShaderSource();
+    static const char* TexturedVertexShaderSource();
+    // The full-screen resolve shader text, exposed so the tone-map/background
+    // contract and the FL11_0 compile baseline can be asserted without a GPU.
+    static const char* ResolvePixelShaderSource();
+    // T16 analytic ground contact-shadow pixel shader, exposed for the no-GPU
+    // source-contract test.
+    static const char* GroundPixelShaderSource();
+    // T31 depth-only caster and map-sampling ground shaders, exposed for the
+    // no-GPU silhouette/bias source contract.
+    static const char* ShadowDepthPixelShaderSource();
+    static const char* ShadowGroundPixelShaderSource();
     void EvictFineChunks(std::span<const uint32_t> identities);
     void RetirePreviewChunks(ModelResources& resources);
     uint64_t AccountedAllocationBytes(const ModelResources* extra = nullptr) const;
@@ -283,6 +668,12 @@ struct D3D12ViewerPath
     // observes the whole batch retire. Supersedes any upload already in
     // flight by advancing uploadGeneration, which makes the abandoned one's
     // publications stale rather than merely unwanted.
+    // Ensures `mesh` owns a material cbuffer tagged for its current material
+    // chunk and mirrored sign. Instances copied from a shared geometry must
+    // call this when their effective material differs from the source draw;
+    // otherwise two draws would overwrite one buffer's per-frame region.
+    bool EnsureMaterialConstants(GpuMesh& mesh, std::wstring& error);
+
     bool BeginUploadModel(const std::vector<d3d12_import_bridge::ImportedMesh>& importedMeshes,
                            const std::vector<d3d12_import_bridge::ImportedMaterial>& importedMaterials,
                            const std::vector<d3d12_import_bridge::ImportedImage>& importedImages,
@@ -337,9 +728,57 @@ private:
     void RetireInFlightUpload();
     bool CreateDepthBuffer(UINT width, UINT height, std::wstring& error);
     bool CreatePickTarget(UINT width, UINT height, std::wstring& error);
+    bool CreateSceneColorTarget(UINT width, UINT height, std::wstring& error);
+    // Creates the T32 viewport-sized AO resources (indirect HDR, raw/filtered
+    // R8). Allocation failure is a recorded AO-off fallback, never a startup
+    // failure. Recreated on resize and device recovery.
+    bool CreateAoTargets(UINT width, UINT height);
+    void WriteAoDescriptors();
+    // Records the depth-based AO raw/filtered passes. Returns false when the
+    // resources or the command list are not usable.
+    bool RenderScreenSpaceAo(const DirectX::XMFLOAT4X4& inverseViewProjection,
+                             const viewer_ao::Parameters& parameters, float sceneScale,
+                             const DirectX::XMFLOAT4& viewportRect,
+                             const DirectX::XMFLOAT4& eyePosition);
+    // Creates the T32 AO root signature and the raw/bilateral PSOs.
+    bool CreateAoPipelines(std::wstring& error);
+    // Consumes the previous frame's AO GPU timestamps once its fence retires.
+    void PollAoGpuTiming();
+    // Creates the T31 shadow targets once per device. Allocation failure is a
+    // recorded analytic fallback, never a startup failure.
+    bool CreateShadowTargets();
+    // Creates the depth-only caster root signature/PSOs and the map-sampling
+    // ground layer. Compile failures are a startup error (program contract).
+    bool CreateShadowPipelines(std::wstring& error);
+    // Creates the two bounded OIT targets. A failure is a recorded sorted
+    // fallback, not a startup failure: the viewport must still draw.
+    bool CreateOitTargets(UINT width, UINT height);
+    // T27: bounded scene-color copy with a mip pyramid for roughness-filtered
+    // transmitted radiance. Failure is a recorded degradation (transmissive
+    // surfaces fall back to their authored dielectric response), never a
+    // startup failure.
+    bool CreateTransmissionTargets(UINT width, UINT height);
+    void WriteTransmissionSrv(ID3D12DescriptorHeap& heap, UINT index, UINT descriptorSize);
+    void RefreshTransmissionDescriptors();
+    void GenerateTransmissionMips();
+    bool CreateResolvePipeline(std::wstring& error);
+    // Transitions the HDR scene target to a shader resource, binds the
+    // full-screen resolve pipeline against `backBufferRtv`, then returns the
+    // target to RENDER_TARGET for the next frame. Leaves the back buffer in
+    // RENDER_TARGET so the D2D/D3D11On12 overlay still draws on top.
+    // `allowAa` is false for the model-free clear frame: its depth buffer has
+    // no current-scene content, so the edge filter must not read stale depth.
+    void ResolveSceneToBackBuffer(D3D12_CPU_DESCRIPTOR_HANDLE backBufferRtv,
+                                  const OverlayInfo& info, bool allowAa = true);
     bool CreatePipeline(std::wstring& error);
     bool CreateTexturedPipeline(std::wstring& error);
     bool CreateFrameConstantBuffer(std::wstring& error);
+    // Bakes the procedural Studio environment and uploads its base cubemap and
+    // prefilters once. One bounded startup copy, never per frame or per camera
+    // move; the direct queue is idle here (before the first frame).
+    bool CreateStudioEnvironment(std::wstring& error);
+    void WriteEnvironmentSrv(ID3D12DescriptorHeap& heap, UINT index, UINT descriptorSize);
+    void WriteBrdfLutSrv(ID3D12DescriptorHeap& heap, UINT index, UINT descriptorSize);
     // Creates a DEFAULT-heap buffer in COMMON and queues its copy onto the
     // upload ring. No explicit barrier to VERTEX_AND_CONSTANT_BUFFER /
     // INDEX_BUFFER: a copy queue cannot record one, and none is needed --

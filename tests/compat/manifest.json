@@ -1,0 +1,569 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "id": "tri_tight-glb",
+      "path": "interactive-viewer/test-assets/tri_tight.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "geometry"]
+    },
+    {
+      "id": "tri_interleaved-glb",
+      "path": "interactive-viewer/test-assets/tri_interleaved.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "geometry"]
+    },
+    {
+      "id": "tri_transformed_node-glb",
+      "path": "interactive-viewer/test-assets/tri_transformed_node.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "hierarchy"]
+    },
+    {
+      "id": "unsupported_extension-glb",
+      "path": "interactive-viewer/test-assets/unsupported_extension.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "extension"]
+    },
+    {
+      "id": "tri_external-gltf",
+      "path": "interactive-viewer/test-assets/tri_external.gltf",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "baseline", "sidecar"]
+    },
+    {
+      "id": "A-small-glb",
+      "path": "interactive-viewer/test-assets/corpus/A-small-glb.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "geometry"]
+    },
+    {
+      "id": "A-small-stl",
+      "path": "interactive-viewer/test-assets/corpus/A-small-stl.stl",
+      "format": "stl",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["stl", "corpus", "geometry"]
+    },
+    {
+      "id": "A-small-ply-mesh-le",
+      "path": "interactive-viewer/test-assets/corpus/A-small-ply-mesh-le.ply",
+      "format": "ply",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["ply", "corpus", "geometry"]
+    },
+    {
+      "id": "A-small-ply-mesh-be",
+      "path": "interactive-viewer/test-assets/corpus/A-small-ply-mesh-be.ply",
+      "format": "ply",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["ply", "corpus", "geometry"]
+    },
+    {
+      "id": "A-small-ply-points-le",
+      "path": "interactive-viewer/test-assets/corpus/A-small-ply-points-le.ply",
+      "format": "ply",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["ply", "corpus", "points"]
+    },
+    {
+      "id": "A-small-ply-points-be",
+      "path": "interactive-viewer/test-assets/corpus/A-small-ply-points-be.ply",
+      "format": "ply",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["ply", "corpus", "points"]
+    },
+    {
+      "id": "Draw-heavy",
+      "path": "interactive-viewer/test-assets/corpus/Draw-heavy.glb",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "ResourceLimit",
+      "tags": ["gltf", "corpus", "instancing", "known-failure"]
+    },
+    {
+      "id": "draco_triangle",
+      "path": "interactive-viewer/test-assets/corpus/draco_triangle.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "compressed"]
+    },
+    {
+      "id": "draco_position_only",
+      "path": "interactive-viewer/test-assets/corpus/draco_position_only.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "compressed"]
+    },
+    {
+      "id": "basisu_textured_triangle",
+      "path": "interactive-viewer/test-assets/corpus/basisu_textured_triangle.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "texture"]
+    },
+    {
+      "id": "basisu_corrupt_ktx2",
+      "path": "interactive-viewer/test-assets/corpus/basisu_corrupt_ktx2.glb",
+      "format": "gltf",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["texture-fallback"],
+      "tags": ["gltf", "corpus", "texture", "degraded"]
+    },
+    {
+      "id": "meshopt",
+      "path": "interactive-viewer/test-assets/corpus/meshopt.glb",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "compressed"]
+    },
+    {
+      "id": "webp-gltf",
+      "path": "interactive-viewer/test-assets/corpus/webp.gltf",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "texture"]
+    },
+    {
+      "id": "sparse-valid",
+      "path": "interactive-viewer/test-assets/corpus/sparse-valid.gltf",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "sparse"]
+    },
+    {
+      "id": "sidecar-approved",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-approved.gltf",
+      "format": "gltf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["gltf", "corpus", "sidecar"]
+    },
+    {
+      "id": "sidecar-missing",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-missing.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "FileUnavailable",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-traversal",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-traversal.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-encoded-traversal",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-encoded-traversal.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-absolute",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-absolute.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-network",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-network.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-unc",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-unc.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-ads",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-ads.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-nul-extension",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-nul-extension.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sidecar-nul-trailing",
+      "path": "interactive-viewer/test-assets/corpus/sidecar-nul-trailing.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["gltf", "corpus", "sidecar", "negative"]
+    },
+    {
+      "id": "sparse-invalid",
+      "path": "interactive-viewer/test-assets/corpus/sparse-invalid.gltf",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["gltf", "corpus", "sparse", "negative"]
+    },
+    {
+      "id": "truncated-glb",
+      "path": "interactive-viewer/test-assets/corpus/truncated.glb",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["gltf", "corpus", "malformed", "negative"]
+    },
+    {
+      "id": "over-limit-stl",
+      "path": "interactive-viewer/test-assets/corpus/over-limit.stl",
+      "format": "stl",
+      "expected": "failed",
+      "expectedError": "ResourceLimit",
+      "tags": ["stl", "corpus", "limit", "negative"]
+    },
+    {
+      "id": "truncated-stl",
+      "path": "interactive-viewer/test-assets/corpus/truncated.stl",
+      "format": "stl",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["stl", "corpus", "malformed", "negative"]
+    },
+    {
+      "id": "over-limit-ply",
+      "path": "interactive-viewer/test-assets/corpus/over-limit.ply",
+      "format": "ply",
+      "expected": "failed",
+      "expectedError": "ResourceLimit",
+      "tags": ["ply", "corpus", "limit", "negative"]
+    },
+    {
+      "id": "empty-ply",
+      "path": "interactive-viewer/test-assets/corpus/empty.ply",
+      "format": "ply",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "tags": ["ply", "corpus", "empty", "negative"]
+    },
+    {
+      "id": "step-part-ap214",
+      "path": "tests/fixtures/stp-spike/part_ap214.stp",
+      "format": "step",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["step", "cad", "baseline"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "fbx-hierarchy-ascii",
+      "path": "tests/fixtures/fbx-spike/hierarchy-instances-pivots-ascii.fbx",
+      "format": "fbx",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["texture-fallback"],
+      "tags": ["fbx", "0.7.0-portable", "hierarchy"]
+    },
+    {
+      "id": "fbx-binary-cube",
+      "path": "tests/fixtures/fbx/cube-binary.fbx",
+      "format": "fbx",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["fbx", "0.7.0-portable", "geometry"]
+    },
+    {
+      "id": "fbx-nurbs-required",
+      "path": "tests/fixtures/fbx-spike/nurbs-only-ascii.fbx",
+      "format": "fbx",
+      "expected": "failed",
+      "expectedError": "UnsupportedRequiredFeature",
+      "tags": ["fbx", "0.7.0-portable", "negative"]
+    },
+    {
+      "id": "fbx-layered-textures",
+      "path": "tests/fixtures/fbx-spike/layered-textures-ascii.fbx",
+      "format": "fbx",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["optional-feature", "texture-fallback"],
+      "tags": ["fbx", "0.7.0-portable", "degraded"]
+    },
+    {
+      "id": "usd-mesh-usda",
+      "path": "tests/fixtures/usd-spike/mesh.usda",
+      "format": "usd",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["usd", "0.7.0-portable", "geometry"]
+    },
+    {
+      "id": "usd-cube-usdz",
+      "path": "tests/fixtures/usd/cube.usdz",
+      "format": "usd",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["optional-feature"],
+      "tags": ["usd", "0.7.0-portable", "usdz"]
+    },
+    {
+      "id": "usd-subdiv-cube-crease",
+      "path": "tests/fixtures/usd-spike/subdiv_cube_cc.usda",
+      "format": "usd",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["optional-feature"],
+      "tags": ["usd", "0.7.0-portable", "tessellation", "degraded"]
+    },
+    {
+      "id": "usd-points-rgb",
+      "path": "tests/fixtures/usd-spike/usd_points_rgb.usda",
+      "format": "usd",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["optional-feature"],
+      "tags": ["usd", "0.7.0-portable", "points", "degraded"]
+    },
+    {
+      "id": "3mf-core-box",
+      "path": "tests/fixtures/3mf/core-box.3mf",
+      "format": "3mf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["3mf", "0.7.0-portable", "geometry"]
+    },
+    {
+      "id": "3mf-materials-texture",
+      "path": "tests/fixtures/3mf/materials-texture.3mf",
+      "format": "3mf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["3mf", "0.7.0-portable", "material", "texture"]
+    },
+    {
+      "id": "3mf-production-required-slice",
+      "path": "tests/fixtures/3mf/production-boxes.3mf",
+      "format": "3mf",
+      "expected": "failed",
+      "expectedError": "UnsupportedRequiredFeature",
+      "tags": ["3mf", "0.7.0-portable", "negative"]
+    },
+    {
+      "id": "obj-textured-mtl",
+      "path": "tests/fixtures/textures/package/scene.obj",
+      "format": "obj",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["obj", "0.7.0-portable", "texture", "sidecar"]
+    },
+    {
+      "id": "iges-part",
+      "path": "tests/fixtures/cad-spike/part.igs",
+      "format": "iges",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["iges", "0.7.0-portable", "cad"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "brep-part",
+      "path": "tests/fixtures/cad-spike/part.brep",
+      "format": "brep",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["optional-feature"],
+      "tags": ["brep", "0.7.0-portable", "cad"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "xbf-assembly",
+      "path": "tests/fixtures/cad-spike/assembly.xbf",
+      "format": "xbf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["xbf", "0.7.0-portable", "cad"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "fcstd-partdesign",
+      "path": "tests/fixtures/cad-spike/partdesign.FCStd",
+      "format": "fcstd",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["optional-feature"],
+      "tags": ["fcstd", "0.7.0-portable", "cad"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "fcstd-external-link",
+      "path": "tests/fixtures/cad-spike/external_link.FCStd",
+      "format": "fcstd",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["optional-feature"],
+      "tags": ["fcstd", "0.7.0-portable", "degraded"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "assimp-dae-box",
+      "path": "tests/fixtures/assimp-spike/box.dae",
+      "format": "dae",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["assimp", "dae", "0.7.0-portable"]
+    },
+    {
+      "id": "assimp-3ds-box",
+      "path": "tests/fixtures/assimp-spike/box.3ds",
+      "format": "3ds",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["assimp", "3ds", "0.7.0-portable"]
+    },
+    {
+      "id": "assimp-off-box",
+      "path": "tests/fixtures/assimp-spike/box.off",
+      "format": "off",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["assimp", "off", "0.7.0-portable"]
+    },
+    {
+      "id": "assimp-amf-box",
+      "path": "tests/fixtures/assimp-spike/box.amf",
+      "format": "amf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["assimp", "amf", "0.7.0-portable"]
+    },
+    {
+      "id": "assimp-x3d-box",
+      "path": "tests/fixtures/assimp-spike/box.x3d",
+      "format": "x3d",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["assimp", "x3d", "0.7.0-portable"]
+    },
+    {
+      "id": "assimp-directx-box",
+      "path": "tests/fixtures/assimp-spike/box.x",
+      "format": "x",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["assimp", "directx", "0.7.0-portable"]
+    },
+    {
+      "id": "assimp-dxf-tetrahedron",
+      "path": "tests/fixtures/assimp-spike/triangle.dxf",
+      "format": "dxf",
+      "expected": "opened",
+      "expectedError": "none",
+      "tags": ["assimp", "dxf", "0.7.0-portable"]
+    },
+    {
+      "id": "assimp-missing-texture",
+      "path": "tests/fixtures/assimp-spike/missing-texture.dae",
+      "format": "dae",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedWarnings": ["texture-fallback"],
+      "tags": ["assimp", "dae", "0.7.0-portable", "degraded"]
+    },
+    {
+      "id": "assimp-traversal-texture",
+      "path": "tests/fixtures/assimp-spike/traversal-texture.dae",
+      "format": "dae",
+      "expected": "failed",
+      "expectedError": "UnsafeReference",
+      "tags": ["assimp", "dae", "0.7.0-portable", "negative"]
+    },
+    {
+      "id": "iges-truncated",
+      "path": "tests/fixtures/cad-spike/truncated.igs",
+      "format": "iges",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["iges", "0.7.0-portable", "negative"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "brep-malformed",
+      "path": "tests/fixtures/cad-spike/malformed.brep",
+      "format": "brep",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["brep", "0.7.0-portable", "negative"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "xbf-malformed",
+      "path": "tests/fixtures/cad-spike/malformed.xbf",
+      "format": "xbf",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["xbf", "0.7.0-portable", "negative"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "fcstd-malformed",
+      "path": "tests/fixtures/cad-spike/malformed.FCStd",
+      "format": "fcstd",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["fcstd", "0.7.0-portable", "negative"],
+      "requiresStepHost": true
+    },
+    {
+      "id": "assimp-truncated-dae",
+      "path": "tests/fixtures/assimp-spike/truncated.dae",
+      "format": "dae",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["assimp", "dae", "0.7.0-portable", "negative"]
+    },
+    {
+      "id": "assimp-truncated-3ds",
+      "path": "tests/fixtures/assimp-spike/truncated.3ds",
+      "format": "3ds",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "tags": ["assimp", "3ds", "0.7.0-portable", "negative"]
+    }
+  ]
+}

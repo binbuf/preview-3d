@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "task": "T31",
+  "date": "2026-10-31",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug shadow-state/readback, the T31 contact-shadow report and the generated/external capture manifest",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T31",
+  "imagesInspected": [
+    "TestResults/render-quality/T31/images/contact-studio-shadow-on.png",
+    "TestResults/render-quality/T31/images/contact-studio-shadow-off.png",
+    "TestResults/render-quality/T31/images/contact-clay-shadow-on.png",
+    "TestResults/render-quality/T31/images/contact-directional-shadow-on.png",
+    "TestResults/render-quality/T31/images/contact-directional-shadow-off.png",
+    "TestResults/render-quality/T31/images/contact-grid-on-shadow-on.png",
+    "TestResults/render-quality/T31/images/contact-highlight-on-shadow-off.png",
+    "TestResults/render-quality/T31/images/contact-exposure-05-shadow-on.png",
+    "TestResults/render-quality/T31/images/contact-exposure-20-shadow-on.png",
+    "TestResults/render-quality/T31/images/contact-fallback-shadow-on.png",
+    "TestResults/render-quality/T31/images/contact-line-point-shadow-on.png",
+    "TestResults/render-quality/T31/images/contact-after-resize.png",
+    "TestResults/render-quality/T31/images/contact-after-device-reset.png",
+    "TestResults/render-quality/T31/images/generated-contact-shadow-probe-studio-oblique.png",
+    "TestResults/render-quality/T31/images/generated-contact-shadow-probe-studio-low.png",
+    "TestResults/render-quality/T31/images/generated-contact-shadow-probe-clay-low.png",
+    "TestResults/render-quality/T31/images/generated-contact-shadow-probe-directional-oblique.png",
+    "TestResults/render-quality/T31/images/generated-stl-box-studio-oblique.png",
+    "TestResults/render-quality/T31/images/generated-step-assembly-studio-front.png",
+    "TestResults/render-quality/T31/images/generated-line-point-obj-studio-low.png",
+    "TestResults/render-quality/T31/images/external-car-studio-low.png",
+    "TestResults/render-quality/T31/images/external-car-clay-low.png",
+    "TestResults/render-quality/T31/images/external-car-directional-low.png",
+    "TestResults/render-quality/T31/images/external-camera-studio-front.png",
+    "TestResults/render-quality/T31/images/external-camera-clay-front.png",
+    "TestResults/render-quality/T31/images/external-camera-directional-front.png",
+    "TestResults/render-quality/T31/images/external-camera-studio-shadow-on.png",
+    "TestResults/render-quality/T31/images/external-camera-studio-shadow-off.png",
+    "TestResults/render-quality/T31/images/external-stl-studio-shadow-on.png",
+    "TestResults/render-quality/T31/images/external-stl-directional-shadow-off.png"
+  ],
+  "observations": [
+    "Studio, Clay and Directional same-camera shadow on/off pairs show the contact shadow changing only the ground. The model itself is pixel-identical between the pair; the off image is a flat backdrop with the same highlighted ground, and the on image adds discrete dark regions under the casters.",
+    "The generated suspended ring's shadow is a ring with a clearly enclosed bright hole, not a filled ellipse. A separate MASK cutout sheet likewise keeps its authored square hole in the caster pass, and the numeric lane finds an enclosed hole region in Studio and Clay.",
+    "Disconnected parts stay disconnected: the ring, two tyre-like contacts, suspended sphere, opaque panel, clear panel, cutout sheet and mirrored part produce separate shadow regions (six to nine connected components in the numeric report), and most of the floor remains untouched empty space.",
+    "The clear transmission panel casts a visibly weaker shadow than the equal opaque panel at the same height (component mean darkening about 7.9 vs 23 display units). No clear-glass surface paints a solid black silhouette.",
+    "Car (Studio low/oblique): the whole body and four tyre contact patches read against the grid; the ground shadow follows the wheelbase and does not sweep the whole floor. Camera (Studio/Clay/Directional front): the black body, lens, and leather strap cast a bounded shadow, with the strap still legible at the base.",
+    "The STL plate keeps a hard-edged shadow and the open STEP assembly keeps two separate part shadows instead of one merged blob. The line/point-only view has no invented ellipse; shadow on/off frames are identical.",
+    "The grid toggle changes only the grid and leaves the contact shadow; the Ground highlight toggle changes the local backdrop lift while shadows-off still leaves the highlight visible. Exposure 0.5/2.0 keeps comparable shadow coverage because the contact layer is coverage in the HDR scene resolved over the display backdrop.",
+    "The Debug-forced fallback is recognisably the documented broad bounds ellipse and is labelled fallback-only in the diagnostics and design record. The fitted map returns immediately when the force is cleared.",
+    "Resize keeps the fitted map and renders the model; device loss rebuilds the shadow targets and the aperture is sampled again on the recovered device (recovery count increments, model drawable).",
+    "A superseded fixture→STL import publishes only the second generation, and the depth pass rebuilds from that published drawable set instead of leaving the earlier casters in the map.",
+    "No z-fighting seam between the ground layer and the grid was observed, and the shadow does not extend below the model as a light leak. No asset-name or material-name exception exists in the renderer or lane."
+  ],
+  "defects": [
+    {
+      "id": "analytic-bounds-fallback",
+      "label": "labelled-fallback",
+      "where": "shadow target allocation failure or the Debug force switch",
+      "description": "The T16 analytic bounds ellipse remains only as the documented lower-quality fallback. It is deliberately broader than the fitted map and must not be described as the shipping shadow.",
+      "assignedTo": "T34/T35"
+    },
+    {
+      "id": "external-camera-strap-hole",
+      "label": "observation",
+      "where": "external Camera strap shadow",
+      "description": "The external Camera strap casts a visible shadow, but this asset's draped strap does not project a fully enclosed hole at the reviewed view. The generated suspended ring and MASK cutout sheet are the controlled evidence that caster-pass holes survive; T34 can add a top-down strap close-up if release evidence needs the external loop specifically.",
+      "assignedTo": "T34/T35"
+    },
+    {
+      "id": "car-authored-window-speckle",
+      "label": "known-defect",
+      "where": "Car windshield/roof/window edges in Studio and Directional",
+      "description": "Small bright speckles along authored window/trim seams remain. They also appear with shadows off and in Studio/Clay, so they are not caused by the contact shadow.",
+      "assignedTo": "T33/T34"
+    }
+  ],
+  "positives": [
+    "The fitted 2048x2048 orthographic light map is derived from verified bounds and the same world sun/key direction as shading; bounds only size the frustum and ground quad.",
+    "Texel snapping, a scale-invariant depth bias and a 3x3 comparison-sampler PCF keep tiny/large models and camera motion stable.",
+    "Depth-only casters with MASK alpha test, cull-none mirrored/double-sided support and bounded transmission attenuation cover the requested geometry classes.",
+    "Ground highlight, contact shadow and grid remain independent; the shadow is coverage in the linear HDR target and survives exposure/mode changes.",
+    "Shadow targets participate in the accounted GPU budget, are not viewport-sized, survive resize, are rebuilt on device loss, and have a recorded lower-quality fallback.",
+    "Debug fields 279-286 stay inside the existing Debug test-control guard; no Release test authority was added."
+  ],
+  "acceptance": {
+    "independentHighlightGridShadowVerified": true,
+    "geometryDerivedShadowMapVerified": true,
+    "sameSunAndStudioKeyVerified": true,
+    "silhouetteContactBiasTestsVerified": true,
+    "holesDisconnectedPartsEmptySpaceVerified": true,
+    "alphaCutoutDoubleSidedTransmissionVerified": true,
+    "noZfightSeamLeakBroadDarkeningVerified": true,
+    "budgetResizeCancellationStreamingDeviceLossFallbackVerified": true,
+    "sameCameraShadowOnOffAllThreeModesReviewed": true,
+    "cameraStrapAndCarTireContactReviewed": true,
+    "imageReviewPerformed": true,
+    "acceptedReferencesPromotedBy": "not applicable for T31 (no accepted reference promoted)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "Generated same-camera pairs and numeric component/hole/bias checks own the verdicts; external Car/Camera/STL are reviewed qualitatively. The analytic ellipse is labelled fallback only."
+  }
+}

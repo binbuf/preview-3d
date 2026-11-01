@@ -1,7 +1,8 @@
 # 0041 — Active-instance IPC hardening: minimum rights, peer identity, squatter rejection
 
 ## Status
-accepted
+accepted (runtime use retired: the viewer now allows independent instances and does not create these
+objects; the hardened helpers remain in `ActiveInstance.cpp` and stay unit tested)
 
 ## Context
 The per-session singleton objects (`Local\Binbuf.Preview3D.<session>.<SID-hash>` mutex, its `.Ready`

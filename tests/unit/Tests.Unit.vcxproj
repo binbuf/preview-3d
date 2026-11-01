@@ -27,7 +27,11 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <!-- The test executable is not shipped. MSVC 14.51's c2 crashes during
+         LTCG code generation for this test-only link (C1001 in
+         GltfDataUriPreflightTests.cpp, independent of the T02 sources), so the
+         Release verification binary opts out of whole-program optimization. -->
+    <WholeProgramOptimization>false</WholeProgramOptimization>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -152,6 +156,31 @@
     <ClCompile Include="..\..\shared\parser-core\src\PlyParserCore.cpp" />
     <ClCompile Include="FixtureManifestTests.cpp" />
     <ClCompile Include="WireFormatTests.cpp" />
+    <!-- T18 protocol-v12 material lobes: layout, mapping defaults, F0 and the
+         layered shader source contract. -->
+    <ClCompile Include="MaterialLobesTests.cpp" />
+    <!-- T27 scene-color transmission: coverage/tint/Fresnel invariants,
+         roughness mip selection and the shader-source/compile contract. -->
+    <ClCompile Include="SceneTransmissionTests.cpp" />
+    <!-- T26 bounded weighted blended OIT: order invariance, coverage math,
+         target budgeting and the shader-source/compile contract. -->
+    <ClCompile Include="LayeredTransparencyTests.cpp" />
+    <ClCompile Include="PresentationTests.cpp" />
+    <!-- T14 procedural Studio environment baker, SH irradiance and neutral
+         tone curve, compiled from the shipped viewer source. -->
+    <ClCompile Include="..\..\interactive-viewer\src\render\StudioEnvironment.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\render\Presentation.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\render\GroundShadow.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\render\ScreenSpaceAo.cpp" />
+    <ClCompile Include="ScreenSpaceAoTests.cpp" />
+    <ClCompile Include="..\..\interactive-viewer\src\render\AntiAliasing.cpp" />
+    <ClCompile Include="AntiAliasingTests.cpp" />
+    <ClCompile Include="StudioIblTests.cpp" />
+    <ClCompile Include="StudioLightingTests.cpp" />
+    <ClCompile Include="PresentationToneMapTests.cpp" />
+    <ClCompile Include="GroundShadowTests.cpp" />
+    <ClCompile Include="DirectionalLightTests.cpp" />
+    <ClCompile Include="CompatibilityTests.cpp" />
     <ClCompile Include="CoarseProxyTests.cpp" />
     <ClCompile Include="GraphicsDeviceTests.cpp" />
     <ClCompile Include="CommandQueueTests.cpp" />
@@ -193,6 +222,11 @@
     <ClCompile Include="..\..\shared\platform\src\MappedView.cpp" />
     <ClCompile Include="..\..\shared\platform\src\Sha256.cpp" />
     <ClCompile Include="..\..\shared\model-core\src\MappedFile.cpp" />
+    <!-- T02 format catalog and bounded content sniffer, compiled from the
+         shipped shared sources so the table and probe are tested directly. -->
+    <ClCompile Include="..\..\shared\model-core\src\FormatSniffer.cpp" />
+    <ClCompile Include="FormatCatalogTests.cpp" />
+    <ClCompile Include="FormatRegistrationTests.cpp" />
     <!-- SPIKE-8a (T02) prototype CPU rasterizer + deterministic fixtures. -->
     <ClCompile Include="..\..\thumbnail-spike\rasterizer\ThumbnailRasterizer.cpp" />
     <ClCompile Include="..\..\thumbnail-spike\rasterizer\SceneFixtures.cpp" />
@@ -205,6 +239,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\model-core\include\model_core\WireFormat.h" />
+    <ClInclude Include="..\..\shared\model-core\include\model_core\Compatibility.h" />
+    <ClInclude Include="..\..\interactive-viewer\src\app\CompatibilityText.h" />
     <ClInclude Include="..\..\shared\import-broker\include\import_broker\UsdFallbackState.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\Checksum.h" />

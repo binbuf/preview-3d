@@ -2,6 +2,7 @@
 #include "ChunkBatchSink.h"
 #include "CoarseSampler.h"
 #include "model_core/Checksum.h"
+#include "model_core/Compatibility.h"
 #include "model_core/ImportError.h"
 #include "model_core/MappedFile.h"
 #include "model_core/TierALimits.h"
@@ -68,7 +69,7 @@ class BoundedChunkWriter
              std::span<const std::byte> b = {})
     {
         using namespace model_core;
-        const bool geometry = descriptor.topology == ChunkTopology::TriangleList || descriptor.topology == ChunkTopology::PointList;
+        const bool geometry = IsGeometryTopology(descriptor.topology);
         std::optional<model_core::ScanSummaryPayload> scanSummary;
         if (sink_ && sink_->ProxyEnabled()) {
             if (sink_->Preview()) {
@@ -80,13 +81,16 @@ class BoundedChunkWriter
             } else if (sink_->Refinement()) {
                 if (!geometry) return true; // immutable dependency catalog was delivered during scan
             } else if (geometry) {
-                const uint64_t count = descriptor.topology == ChunkTopology::PointList ? descriptor.vertexCount : descriptor.indexCount/3;
+                const uint64_t count = GeometryPrimitiveCount(descriptor.topology, descriptor.indexCount, descriptor.vertexCount);
                 validPrimitives_ += count;
                 const uint32_t quota = uint32_t(count < 20 ? (validPrimitives_<20 ? count : 1) :
                     (std::min)(count/20,(std::max)(8ull,count/1024)));
                 // Reserve before sampling; payload + single-cluster candidates are bounded.
                 const uint64_t stride=VertexStrideForLayout(VertexLayoutId(descriptor.vertexLayoutId));
-                const uint64_t reserve = uint64_t(quota) * (descriptor.topology == ChunkTopology::PointList ? stride : 3*stride+12);
+                const uint64_t corners = descriptor.topology == ChunkTopology::PointList ? 1
+                    : descriptor.topology == ChunkTopology::LineList ? 2 : 3;
+                const uint64_t reserve = uint64_t(quota) * (descriptor.topology == ChunkTopology::PointList
+                    ? stride : corners*stride+corners*4);
                 if (reserve > kCoarseReservedBytes - coarseBytes_) return Fail(ImportErrorCode::ResourceLimit);
                 CoarseSample sample;
                 uint64_t fullChecksum=0;
@@ -143,6 +147,19 @@ class BoundedChunkWriter
         descriptor.dependencyIds[2] = instance.nodeId;
         descriptor.dependencyCount = instance.materialChunkId ? 3u : 2u;
         return AddRaw(descriptor, std::as_bytes(std::span(&instance, 1)));
+    }
+    // Emits the already-deduplicated/saturated report, or nothing when the
+    // adapter observed no optional-feature degradation. A report is a
+    // generation-scoped fact with a fixed identity, so it is emitted at most
+    // once and never carries dependencies.
+    bool AddCompatibilityReport(const model_core::CompatibilityReportBuilder& report)
+    {
+        if (report.Empty())
+            return true;
+        model_core::ChunkDescriptor descriptor{};
+        descriptor.topology = model_core::ChunkTopology::CompatibilityReport;
+        descriptor.chunkId = model_core::kCompatibilityReportChunkId;
+        return Add(descriptor, std::as_bytes(std::span(&report.Payload(), 1)));
     }
     bool Complete() {
         using namespace model_core;

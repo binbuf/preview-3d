@@ -70,6 +70,27 @@ enum class ControlOpcode : uint32_t {
     // broker records the last event and enforces a per-generation cap so a
     // hostile host cannot flood the control channel.
     StepProgress = 21, // STEP host -> broker, non-terminal
+    // T08 generalized CAD route. It carries the same bounded request plus a
+    // closed CadFormat discriminator, and is accepted only by the dedicated
+    // Preview3DStepHost.exe. STEP keeps its existing opcode/request unchanged;
+    // IGES and BREP use this opcode so a worker or other host can never accept
+    // a CAD request by reusing a general-import opcode.
+    StartCadImportFromFile = 22, // broker -> CAD host
+    // T10 bounded Assimp compatibility route. The request carries a closed
+    // AssimpFormat discriminator and is accepted only by the general import
+    // worker's pool. Assimp never replaces a native adapter; this opcode is
+    // the only route into the compatibility importer.
+    StartAssimpImportFromFile = 23, // host -> worker
+    // T23 host -> worker, no payload. The detail-service replay holds the
+    // worker in AwaitDetail() for as long as the viewer may ask for another
+    // visible region. The broker ends that replay explicitly once the viewer
+    // has been idle for its bounded grace (or reached its detail-request cap);
+    // the worker then leaves the replay loop and returns to the pool. Without
+    // this, an idle replay could only end by cancellation or by the
+    // generation wall-clock deadline, which would turn a fully loaded model
+    // into a late ResourceLimit failure. Strictly a bounded lifecycle signal:
+    // it carries no data and grants no authority.
+    EndDetail = 24, // host -> worker
 };
 
 enum : uint32_t {
@@ -92,7 +113,51 @@ enum : uint32_t {
     // parallel and serial paths emit byte-identical normalized output. Product
     // callers never set it.
     kImportRequestStepForceSerialForTesting = 1u << 8,
+    // STEP import quality, encoded as a closed two-bit field on the STEP request
+    // only (Balanced is both bits clear, preserving every existing caller).
+    // Draft/Full select a coarser/finer versioned tessellation profile; Balanced
+    // is exactly the pre-T07 default. The value is part of the STEP importer and
+    // cache identity, so two qualities never share normalized bytes.
+    kImportRequestStepQualityDraft = 1u << 9,
+    kImportRequestStepQualityFull = 1u << 10,
+    kImportRequestStepQualityMask =
+        kImportRequestStepQualityDraft | kImportRequestStepQualityFull,
+    // T10 test-only seam: constrains the Assimp adapter's object, material,
+    // triangle and vertex caps so a small fixture can prove typed ResourceLimit
+    // rejection. Product callers never set it.
+    kImportRequestAssimpTinyLimitsForTesting = 1u << 11,
 };
+
+// Closed product-level STEP import-quality selection. `Balanced` is the default
+// and maps to the established STEP-004 display deflection.
+enum class StepImportQuality : uint32_t {
+    Draft = 0,
+    Balanced = 1,
+    Full = 2,
+};
+
+// Pure mapping from the STEP request flag bits. Both quality bits set is an
+// invalid protocol value; callers validate it before dispatch and the host
+// rejects it as ImportProtocolViolation.
+inline bool StepImportQualityFromFlags(uint32_t flags, StepImportQuality& quality) noexcept
+{
+    const uint32_t bits = flags & kImportRequestStepQualityMask;
+    if (bits == kImportRequestStepQualityMask) return false;
+    if (bits == kImportRequestStepQualityDraft) quality = StepImportQuality::Draft;
+    else if (bits == kImportRequestStepQualityFull) quality = StepImportQuality::Full;
+    else quality = StepImportQuality::Balanced;
+    return true;
+}
+
+inline uint32_t StepImportQualityFlags(StepImportQuality quality) noexcept
+{
+    switch (quality) {
+    case StepImportQuality::Draft: return kImportRequestStepQualityDraft;
+    case StepImportQuality::Full: return kImportRequestStepQualityFull;
+    case StepImportQuality::Balanced: break;
+    }
+    return 0;
+}
 
 // Bounded so a corrupt/oversized declared payload size can never drive an
 // unbounded allocation or read in ControlChannelIo::ReadControlMessage.
@@ -104,7 +169,7 @@ struct DetailRequest {
     uint64_t generationId;
     ChunkDescriptor source;
 };
-static_assert(sizeof(DetailRequest) == 168);
+static_assert(sizeof(DetailRequest) == 216);
 
 struct ControlMessageHeader {
     uint32_t opcode;      // ControlOpcode value
@@ -313,6 +378,79 @@ struct ParseStepFileRequest {
 };
 static_assert(sizeof(ParseStepFileRequest) == 48,
               "ParseStepFileRequest layout changed");
+
+// T08 closed CAD discriminator. Step keeps the existing dedicated STEP opcode;
+// the generalized StartCadImportFromFile route carries Iges/Brep (and may carry
+// Step for a future merged caller). The value is validated by the host before
+// any preflight or OCCT call.
+enum class CadFormat : uint32_t {
+    Step = 0,
+    Iges = 1,
+    Brep = 2,
+    // T09: OCCT binary XCAF document and the FreeCAD Standard ZIP package.
+    Xbf = 3,
+    Fcstd = 4,
+};
+
+constexpr bool IsKnownCadFormat(CadFormat format) noexcept
+{
+    return format == CadFormat::Step || format == CadFormat::Iges || format == CadFormat::Brep
+        || format == CadFormat::Xbf || format == CadFormat::Fcstd;
+}
+
+// Generalized CAD host request. The first seven fields are layout-identical to
+// ParseStepFileRequest so existing handle transfer/framing rules stay common;
+// cadFormat selects the product-owned admission scanner and OCCT adapter.
+struct ParseCadFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue;
+    uint64_t sectionHandleValue;
+    uint64_t sectionByteCapacity;
+    uint32_t maxChunkCount;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
+    uint32_t cadFormat; // closed CadFormat value
+    uint32_t reserved0; // zero
+};
+static_assert(sizeof(ParseCadFileRequest) == 56,
+              "ParseCadFileRequest layout changed");
+
+// T10 closed compatibility-format discriminator. The worker validates this
+// against the request before selecting an Assimp importer hint; it is never a
+// free-form extension.
+enum class AssimpFormat : uint32_t {
+    Dae = 0,
+    ThreeDs = 1,
+    Dxf = 2,
+    DirectX = 3,
+    Off = 4,
+    Amf = 5,
+    X3d = 6,
+};
+
+constexpr bool IsKnownAssimpFormat(AssimpFormat format) noexcept
+{
+    return format == AssimpFormat::Dae || format == AssimpFormat::ThreeDs
+        || format == AssimpFormat::Dxf || format == AssimpFormat::DirectX
+        || format == AssimpFormat::Off || format == AssimpFormat::Amf
+        || format == AssimpFormat::X3d;
+}
+
+// The first seven fields are layout-identical to every other real-file
+// request; assimpFormat selects the product-owned compatibility importer.
+struct ParseAssimpFileRequest {
+    uint64_t generationId;
+    uint64_t sourceFileHandleValue;
+    uint64_t sectionHandleValue;
+    uint64_t sectionByteCapacity;
+    uint32_t maxChunkCount;
+    uint32_t requestFlags;
+    uint64_t cancellationEventHandleValue;
+    uint32_t assimpFormat; // closed AssimpFormat value
+    uint32_t reserved0;    // zero
+};
+static_assert(sizeof(ParseAssimpFileRequest) == 56,
+              "ParseAssimpFileRequest layout changed");
 
 // Closed STEP phase identities for StepProgressNotice::phase. They name the
 // product's own pipeline stages, not OCCT internals, so the viewer can render

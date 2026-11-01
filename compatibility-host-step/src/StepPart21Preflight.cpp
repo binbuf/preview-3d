@@ -53,18 +53,56 @@ std::string_view FirstWord(std::string_view text)
     return text.substr(0, end);
 }
 
-bool ContainsIgnoreCase(std::string_view text, std::string_view needle)
+bool EqualsIgnoreCase(std::string_view text, std::string_view expected)
 {
-    if (needle.empty() || needle.size() > text.size()) return false;
-    const std::size_t limit = text.size() - needle.size();
-    for (std::size_t i = 0; i <= limit; ++i) {
-        bool match = true;
-        for (std::size_t j = 0; j < needle.size(); ++j) {
-            if (ToUpperAscii(text[i + j]) != ToUpperAscii(needle[j])) { match = false; break; }
-        }
-        if (match) return true;
+    if (text.size() != expected.size()) return false;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (ToUpperAscii(text[i]) != ToUpperAscii(expected[i])) return false;
     }
-    return false;
+    return true;
+}
+
+// Returns the Part-21 instance/header name that starts the supplied text, or an
+// empty view. Only the identifier outside comments and quoted strings is
+// considered, so a FILE_POPULATION/DOCUMENT_FILE literal inside a description
+// or comment can never be mistaken for a declaration. `text` for a data record
+// starts immediately after the `#id =` introducer.
+std::string_view EntityName(std::string_view text)
+{
+    bool inString = false;
+    bool inComment = false;
+    char quote = '\'';
+    bool previousSlash = false;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (inComment) {
+            if (previousSlash && c == '/') { inComment = false; previousSlash = false; }
+            else previousSlash = (c == '*');
+            continue;
+        }
+        if (inString) {
+            if (c == quote) {
+                if (i + 1 < text.size() && text[i + 1] == quote) { ++i; continue; }
+                inString = false;
+            }
+            continue;
+        }
+        if (c == '/') {
+            if (!previousSlash) { previousSlash = true; continue; }
+            previousSlash = false;
+            continue;
+        }
+        if (previousSlash) {
+            previousSlash = false;
+            if (c == '*') { inComment = true; continue; }
+        }
+        if (c == '\'' || c == '"') { inString = true; quote = c; continue; }
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v') continue;
+        std::size_t end = i;
+        while (end < text.size() && IsKeywordChar(text[end])) ++end;
+        return text.substr(i, end - i);
+    }
+    return {};
 }
 
 } // namespace
@@ -278,6 +316,14 @@ void StepPart21Scanner::ParseRecord(std::string_view raw)
             Fail(StepPreflightStatus::EntityLimit);
             return;
         }
+        const std::string_view entity = EntityName(text.substr(index + 1));
+        if (EqualsIgnoreCase(entity, "FILE_POPULATION")
+            || EqualsIgnoreCase(entity, "DOCUMENT_FILE")) {
+            if (++result_.externalDocuments > limits_.maxExternalDocuments) {
+                Fail(StepPreflightStatus::ExternalDocument);
+                return;
+            }
+        }
         ScanTokens(text.substr(index + 1));
         return;
     }
@@ -321,6 +367,14 @@ void StepPart21Scanner::ParseRecord(std::string_view raw)
                 }
                 std::memcpy(result_.schema, schema.c_str(), schema.size());
                 result_.schema[schema.size()] = '\0';
+            }
+        }
+        const std::string_view entity = EntityName(text);
+        if (EqualsIgnoreCase(entity, "FILE_POPULATION")
+            || EqualsIgnoreCase(entity, "DOCUMENT_FILE")) {
+            if (++result_.externalDocuments > limits_.maxExternalDocuments) {
+                Fail(StepPreflightStatus::ExternalDocument);
+                return;
             }
         }
         ScanTokens(text);
@@ -420,14 +474,8 @@ void StepPart21Scanner::ScanTokens(std::string_view text)
         }
     }
 
-    // External STEP documents are declared through FILE_POPULATION /
-    // DOCUMENT_FILE. STEP-005 is a no-go, so any declaration is a required
-    // unsupported feature until a brokered stream resolver exists.
-    if (ContainsIgnoreCase(text, "FILE_POPULATION") || ContainsIgnoreCase(text, "DOCUMENT_FILE")) {
-        if (++result_.externalDocuments > limits_.maxExternalDocuments) {
-            Fail(StepPreflightStatus::ExternalDocument);
-        }
-    }
+    // External declarations are counted by ParseRecord from the instance name,
+    // outside comments and strings. ScanTokens stays purely structural.
 }
 
 bool StepPart21Scanner::Finish()

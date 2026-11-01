@@ -5,6 +5,10 @@
 #include "ChunkBatchSink.h"
 #include "DracoDecodeAdapter.h"
 #include "ImageFormatSniff.h"
+#include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
+#include "TgaImageDecode.h"
 #include "MeshoptDecodeAdapter.h"
 #include "SidecarFileClient.h"
 #include "TextureTranscodeAdapter.h"
@@ -12,6 +16,7 @@
 #include "WicImageDecodeAdapter.h"
 
 #include "model_core/Checksum.h"
+#include "model_core/Compatibility.h"
 #include "model_core/GltfDataUriPreflight.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
@@ -30,6 +35,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <iterator>
@@ -78,6 +84,7 @@ struct PendingChunk {
     std::vector<VertexPositionNormalUv0TangentColorF32> vertices;
     std::vector<uint32_t> indices;
     ChunkDescriptor geometry{};
+    ChunkTopology topology = ChunkTopology::TriangleList;
     std::optional<size_t> pendingMaterialIndex; // index into WalkState::pendingMaterials
 };
 
@@ -95,19 +102,19 @@ struct PendingMaterial {
     MaterialPayload data{};
     // Indices into WalkState::pendingImages, fixed slot order per
     // WireFormat.h's documented ChunkDescriptor::dependencyIds contract:
-    // {baseColor, metallicRoughness, normal, emissive}.
-    std::optional<size_t> pendingBaseColorImageIndex;
-    std::optional<size_t> pendingMetallicRoughnessImageIndex;
-    std::optional<size_t> pendingNormalImageIndex;
-    std::optional<size_t> pendingEmissiveImageIndex;
+    // {baseColor, metallicRoughness, normal, emissive, occlusion,
+    //  clearcoat, clearcoatRoughness, clearcoatNormal, specular,
+    //  specularColor, sheenColor, sheenRoughness, transmission}.
+    std::optional<size_t> pendingImageIndex[model_core::kMaterialTextureSlotCount];
 };
 
 // This codebase's ImportErrorCode enum is a deliberately small subset of
 // the full taxonomy in .docs/design/03-file-formats-and-ingestion.md --
-// every fastgltf-reported failure (bad JSON, missing/unrecognized
-// extension, bad GLB container, etc.) maps to MalformedData until that enum
-// is expanded with finer-grained codes, a known simplification for this
-// slice.
+// every fastgltf-reported failure (bad JSON, bad GLB container, etc.) maps to
+// MalformedData until that enum is expanded with finer-grained codes.
+// Missing/unknown required extensions reach this mapping only after the
+// compatibility retry has failed: geometry-critical names are never filtered,
+// so this remains the typed failure for a model whose usable geometry is lost.
 ImportErrorCode MapFastgltfError(fastgltf::Error error)
 {
     if (error == fastgltf::Error::MissingExtensions || error == fastgltf::Error::UnknownRequiredExtension)
@@ -342,6 +349,45 @@ struct DecodedMeshoptView {
     ImportErrorCode errorCode = ImportErrorCode::None;
 };
 
+// T23: bounded, path-free texture accounting. Recorded only when an optional
+// texture is refused by a budget; the image name/URI never enters it. Debug
+// builds emit one bounded line so a first failure names the exact resource and
+// its requested/allowed quantities; Release logs stay silent.
+enum class TextureBudgetKind : uint32_t {
+    None = 0,
+    EncodedBytes,
+    Scratch,
+    AggregateBytes,
+    AggregatePixels,
+    Catalog,
+};
+
+struct TextureBudgetDiagnostic {
+    TextureBudgetKind kind = TextureBudgetKind::None;
+    uint64_t requested = 0;
+    uint64_t allowed = 0;
+    uint64_t decodedBytes = 0;
+    uint64_t decodedPixels = 0;
+    uint64_t scratchReserve = 0;
+    uint64_t scratchLimit = 0;
+    uint32_t images = 0;
+    uint32_t duplicateImageReuses = 0;
+    bool logged = false;
+};
+
+inline const char* TextureBudgetKindName(TextureBudgetKind kind)
+{
+    switch (kind) {
+    case TextureBudgetKind::EncodedBytes: return "encoded-bytes";
+    case TextureBudgetKind::Scratch: return "scratch";
+    case TextureBudgetKind::AggregateBytes: return "aggregate-bytes";
+    case TextureBudgetKind::AggregatePixels: return "aggregate-pixels";
+    case TextureBudgetKind::Catalog: return "catalog";
+    case TextureBudgetKind::None:
+    default: return "none";
+    }
+}
+
 struct WalkState {
     const fastgltf::Asset& asset;
     std::vector<fastgltf::math::dmat4x4> localTransforms;
@@ -351,6 +397,18 @@ struct WalkState {
     std::unordered_map<size_t, size_t> materialIndexToPendingIndex; // glTF material index -> pendingMaterials index
     std::vector<PendingImage> pendingImages;
     std::unordered_map<size_t, size_t> imageIndexToPendingIndex; // glTF image index -> pendingImages index
+    // T23: identical encoded sources (same URI/bufferView/content bytes) with
+    // the same color space and semantic decode once. glTF exporters routinely
+    // repeat one texture as separate image entries; charging it twice is
+    // neither a distinct authored image nor a distinct residency.
+    std::unordered_map<std::string, size_t> imageSourceToPendingIndex;
+    uint32_t duplicateImageReuses = 0;
+    TextureBudgetDiagnostic textureDiagnostic;
+    // A detail-service replay rebuilds one requested geometry range. The
+    // immutable image/material catalog was already delivered by the scan
+    // batch; decoding it again costs the full texture set per replay and makes
+    // refinement latency depend on texture count. Skip image decode here.
+    bool detailReplay = false;
     std::function<bool(PendingChunk&&)> emit;
     const model_core::ChunkDescriptor* requested = nullptr;
     uint32_t emittedGeometry = 0;
@@ -375,6 +433,12 @@ struct WalkState {
     uint64_t totalDecodedImageBytes = 0;
     uint64_t totalDecodedMeshoptBytes = 0;
     uint32_t textureWarningCount = 0;
+    // T22 specific, tested compatibility records. Generic textureWarnings are
+    // still emitted for dropped maps; these counters name the authored
+    // semantics that were deliberately not applied as authored.
+    uint32_t unsupportedUvSetCount = 0;
+    uint32_t transmissionNoInterfaceCount = 0;
+    uint32_t degenerateBlendCount = 0;
     TextureDecodeOptions textureOptions;
     uint32_t maxChunkCount = 0;
     ImportErrorCode error = ImportErrorCode::None;
@@ -391,23 +455,169 @@ struct WalkState {
     SidecarFileClient* sidecarClient = nullptr;
 };
 
+inline void RecordTextureBudgetLimit(WalkState& state, TextureBudgetKind kind, uint64_t requested,
+                                     uint64_t allowed)
+{
+    if (state.textureDiagnostic.kind != TextureBudgetKind::None) return; // keep the first failure
+    auto& diagnostic = state.textureDiagnostic;
+    diagnostic.kind = kind;
+    diagnostic.requested = requested;
+    diagnostic.allowed = allowed;
+    diagnostic.decodedBytes = state.totalDecodedImageBytes;
+    diagnostic.decodedPixels = state.totalDecodedImagePixels;
+    diagnostic.scratchReserve = state.scratchReserve;
+    diagnostic.scratchLimit = state.scratchLimit;
+    diagnostic.images = uint32_t((std::min)(state.pendingImages.size(), size_t(UINT32_MAX)));
+    diagnostic.duplicateImageReuses = state.duplicateImageReuses;
+#ifdef _DEBUG
+    // Bounded and value-only: no source path, URI, or model text.
+    std::fprintf(stderr,
+                 "texture-budget limit=%s requested=%llu allowed=%llu decodedBytes=%llu "
+                 "decodedPixels=%llu scratchReserve=%llu scratchLimit=%llu images=%u reuses=%u\n",
+                 TextureBudgetKindName(kind),
+                 static_cast<unsigned long long>(diagnostic.requested),
+                 static_cast<unsigned long long>(diagnostic.allowed),
+                 static_cast<unsigned long long>(diagnostic.decodedBytes),
+                 static_cast<unsigned long long>(diagnostic.decodedPixels),
+                 static_cast<unsigned long long>(diagnostic.scratchReserve),
+                 static_cast<unsigned long long>(diagnostic.scratchLimit),
+                 diagnostic.images, diagnostic.duplicateImageReuses);
+    diagnostic.logged = true;
+#endif
+}
+
 bool RequiresExtension(const WalkState& state, std::string_view name)
 {
     return std::find(state.asset.extensionsRequired.begin(), state.asset.extensionsRequired.end(), name)
         != state.asset.extensionsRequired.end();
 }
 
+// Required-extension policy. The class decides what may be filtered from
+// extensionsRequired before fastgltf parses the file; adapterSupported decides
+// whether the host needs a compatibility warning. Geometry-critical names are
+// never filtered -- if their parser support is disabled the import fails typed
+// instead of silently dropping geometry.
+enum class GltfExtensionClass {
+    Core,
+    GeometryCritical,
+    TextureCritical,
+    Visual,
+    Scene,
+    Instance,
+    Unknown,
+};
+
+struct GltfExtensionPolicy {
+    std::string_view name;
+    GltfExtensionClass extensionClass;
+    fastgltf::Extensions parserMask; // None means fastgltf must not parse it
+    bool adapterSupported;           // no compatibility warning is needed
+};
+
+constexpr GltfExtensionPolicy kGltfExtensionPolicies[] = {
+    // Geometry/decoder-critical: decode or fail typed.
+    {"KHR_draco_mesh_compression", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::KHR_draco_mesh_compression, true},
+    {"EXT_meshopt_compression", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::EXT_meshopt_compression, true},
+    {"KHR_mesh_quantization", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::KHR_mesh_quantization, true},
+    // Compiled out of the pinned fastgltf build, or whose geometry path this
+    // adapter cannot read. A required use is a typed failure, never a filter.
+    {"KHR_implicit_shapes", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::None, false},
+    {"KHR_accessor_float64", GltfExtensionClass::GeometryCritical,
+     fastgltf::Extensions::None, false},
+    // Texture-critical: use the documented fallback instead of failing
+    // otherwise-usable geometry.
+    {"KHR_texture_basisu", GltfExtensionClass::TextureCritical,
+     fastgltf::Extensions::KHR_texture_basisu, true},
+    {"EXT_texture_webp", GltfExtensionClass::TextureCritical,
+     fastgltf::Extensions::EXT_texture_webp, true},
+    // No DDS decoder yet (T12): a required DDS texture is filtered and reported,
+    // never allowed to fail core geometry.
+    {"MSFT_texture_dds", GltfExtensionClass::TextureCritical,
+     fastgltf::Extensions::None, false},
+    // Core/extensions the adapter already consumes completely.
+    {"KHR_texture_transform", GltfExtensionClass::Core,
+     fastgltf::Extensions::KHR_texture_transform, true},
+    {"KHR_materials_unlit", GltfExtensionClass::Core,
+     fastgltf::Extensions::KHR_materials_unlit, true},
+    {"KHR_materials_transmission", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_transmission, true},
+    {"KHR_materials_ior", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_ior, true},
+    {"KHR_materials_pbrSpecularGlossiness", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_pbrSpecularGlossiness, true},
+    // T18 PBR lobes are normalized into MaterialPayload and approximated by the
+    // Studio shader, so a required use needs no degradation record.
+    {"KHR_materials_clearcoat", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_clearcoat, true},
+    {"KHR_materials_sheen", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_sheen, true},
+    {"KHR_materials_specular", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_specular, true},
+    {"KHR_materials_emissive_strength", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_emissive_strength, true},
+    // Still parsed but not rendered: parse/ignore with a specific Degraded
+    // record rather than silently replacing the authored lobe.
+    {"KHR_materials_iridescence", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_iridescence, false},
+    {"KHR_materials_anisotropy", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_anisotropy, false},
+    {"KHR_materials_volume", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_volume, false},
+    {"KHR_materials_dispersion", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_dispersion, false},
+    {"KHR_materials_diffuse_transmission", GltfExtensionClass::Visual,
+     fastgltf::Extensions::KHR_materials_diffuse_transmission, false},
+    // Scene/metadata: ignored for the default static studio view.
+    {"KHR_materials_variants", GltfExtensionClass::Scene,
+     fastgltf::Extensions::KHR_materials_variants, false},
+    {"KHR_lights_punctual", GltfExtensionClass::Scene,
+     fastgltf::Extensions::KHR_lights_punctual, false},
+    // Instance-critical: out of scope for expansion; show one instance.
+    {"EXT_mesh_gpu_instancing", GltfExtensionClass::Instance,
+     fastgltf::Extensions::None, false},
+};
+
+const GltfExtensionPolicy* FindGltfExtensionPolicy(std::string_view name)
+{
+    for (const auto& policy : kGltfExtensionPolicies)
+        if (policy.name == name)
+            return &policy;
+    return nullptr;
+}
+
 bool IsSupportedExtension(std::string_view extension)
 {
-    return extension == "KHR_draco_mesh_compression"
-        || extension == "KHR_texture_basisu"
-        || extension == "KHR_texture_transform"
-        || extension == "KHR_mesh_quantization"
-        || extension == "EXT_meshopt_compression"
-        || extension == "EXT_texture_webp"
-        || extension == "KHR_materials_unlit"
-        || extension == "KHR_materials_transmission"
-        || extension == "KHR_materials_pbrSpecularGlossiness";
+    const auto* policy = FindGltfExtensionPolicy(extension);
+    return policy != nullptr && policy->adapterSupported;
+}
+
+bool IsGltfExtensionFilterable(std::string_view name)
+{
+    const auto* policy = FindGltfExtensionPolicy(name);
+    if (policy == nullptr)
+        return true; // truly unknown required extension: keep core geometry
+    return policy->parserMask == fastgltf::Extensions::None
+        && policy->extensionClass != GltfExtensionClass::GeometryCritical;
+}
+
+fastgltf::Extensions GltfParserExtensionMask()
+{
+    fastgltf::Extensions mask = fastgltf::Extensions::None;
+    for (const auto& policy : kGltfExtensionPolicies)
+        if (policy.parserMask != fastgltf::Extensions::None)
+            mask = mask | policy.parserMask;
+    return mask;
+}
+
+model_core::CompatibilitySeverity GltfExtensionSeverity(GltfExtensionClass extensionClass)
+{
+    return extensionClass == GltfExtensionClass::Scene || extensionClass == GltfExtensionClass::Core
+        ? model_core::CompatibilitySeverity::Ignored
+        : model_core::CompatibilitySeverity::Degraded;
 }
 
 std::optional<std::span<const std::byte>> ResolveBufferBytes(WalkState& state, size_t bufferIndex)
@@ -764,6 +974,50 @@ std::string ImageSidecarReference(const fastgltf::URI& uri)
     return leaf.empty() ? reference : std::string(leaf);
 }
 
+// T23: a path-free identity for one encoded image source. Two glTF image
+// entries that name the same sidecar (or the same embedded bufferView) are the
+// same immutable bytes; resolving them twice both costs a decode and charges
+// the aggregate texture budget twice. Content sources are hashed so distinct
+// images that happen to share a length never alias.
+std::string ImageSourceIdentity(const WalkState& state, size_t imageIndex)
+{
+    if (imageIndex >= state.asset.images.size()) return {};
+    const fastgltf::Image& image = state.asset.images[imageIndex];
+    uint32_t mime = 0;
+    std::visit([&](const auto& source) {
+        if constexpr (requires { source.mimeType; }) mime = uint32_t(source.mimeType);
+    }, image.data);
+    std::string key;
+    std::visit([&](const auto& source) {
+        using T = std::decay_t<decltype(source)>;
+        if constexpr (std::is_same_v<T, fastgltf::sources::URI>) {
+            key = "u:" + std::string(source.uri.path());
+        } else if constexpr (std::is_same_v<T, fastgltf::sources::BufferView>) {
+            key = "b:" + std::to_string(source.bufferViewIndex);
+        } else {
+            const auto* bytes = [&]() -> const std::byte* {
+                if constexpr (std::is_same_v<T, fastgltf::sources::ByteView>) return source.bytes.data();
+                else if constexpr (std::is_same_v<T, fastgltf::sources::Array>) return source.bytes.data();
+                else return nullptr;
+            }();
+            const size_t count = [&]() -> size_t {
+                if constexpr (std::is_same_v<T, fastgltf::sources::ByteView>) return source.bytes.size();
+                else if constexpr (std::is_same_v<T, fastgltf::sources::Array>) return source.bytes.size();
+                else return 0;
+            }();
+            if (bytes == nullptr) return;
+            uint64_t hash = 1469598103934665603ull;
+            for (size_t i = 0; i < count; ++i) {
+                hash ^= std::to_integer<uint8_t>(bytes[i]);
+                hash *= 1099511628211ull;
+            }
+            key = "c:" + std::to_string(count) + ":" + std::to_string(hash);
+        }
+    }, image.data);
+    if (key.empty()) return key;
+    return key + "|m" + std::to_string(mime);
+}
+
 std::optional<std::vector<std::byte>> ResolveImageEncodedBytes(WalkState& state, size_t imageIndex,
                                                                uint64_t maxEncodedBytes)
 {
@@ -830,15 +1084,39 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
         state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
         return std::nullopt;
     }
+    if (state.detailReplay) {
+        // The immutable material/image catalog already crossed in the scan
+        // batch. A requested geometry range must not spend the full texture
+        // budget again (or depend on texture count for its replay latency).
+        return std::nullopt;
+    }
     const size_t semanticKey = imageIndex*4 + static_cast<size_t>(semantic);
     auto existing = state.imageIndexToPendingIndex.find(semanticKey);
     if (existing != state.imageIndexToPendingIndex.end()) {
         return existing->second;
     }
 
+    // Distinct authored semantics/color spaces stay distinct chunks (sRGB
+    // color versus linear data is a decode difference, not a duplicate); the
+    // same immutable source under the same semantics is decoded once.
+    std::string sourceKey = ImageSourceIdentity(state, imageIndex);
+    std::string reuseKey;
+    if (!sourceKey.empty()) {
+        reuseKey = sourceKey + "|s" + std::to_string(uint32_t(colorSpace))
+            + "|t" + std::to_string(uint32_t(semantic));
+        auto reuse = state.imageSourceToPendingIndex.find(reuseKey);
+        if (reuse != state.imageSourceToPendingIndex.end()) {
+            ++state.duplicateImageReuses;
+            state.imageIndexToPendingIndex.emplace(semanticKey, reuse->second);
+            return reuse->second;
+        }
+    }
+
     const uint64_t reserved = state.scratchReserve + state.totalDecodedImageBytes;
     if (reserved >= state.scratchLimit)
     {
+        RecordTextureBudgetLimit(state, TextureBudgetKind::Scratch, 0,
+                                 state.scratchLimit - (std::min)(reserved, state.scratchLimit));
         state.error = ImportErrorCode::ScratchLimit;
         return std::nullopt;
     }
@@ -872,6 +1150,40 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     switch (encodedBytes ? SniffImageFormat(*encodedBytes) : SniffedImageFormat::Unknown) {
     case SniffedImageFormat::Ktx2: {
         if (auto transcoded = TranscodeKtx2BasisImage(*encodedBytes,options)) {
+            PendingImage pending;
+            pending.pixelFormat = transcoded->pixelFormat;
+            pending.mipLevels = transcoded->mipLevels;
+            pending.width = transcoded->width;
+            pending.height = transcoded->height;
+            pending.colorSpace = colorSpace;
+            pending.pixelBytes = std::move(transcoded->pixelBytes);
+            decoded = std::move(pending);
+        }
+        break;
+    }
+    case SniffedImageFormat::Tga:
+    case SniffedImageFormat::Dds: {
+        auto transcoded = SniffImageFormat(*encodedBytes) == SniffedImageFormat::Tga
+            ? DecodeTgaImage(*encodedBytes, colorSpace, options)
+            : DecodeDdsImage(*encodedBytes, colorSpace, options);
+        if (transcoded) {
+            PendingImage pending;
+            pending.pixelFormat = transcoded->pixelFormat;
+            pending.mipLevels = transcoded->mipLevels;
+            pending.width = transcoded->width;
+            pending.height = transcoded->height;
+            pending.colorSpace = colorSpace;
+            pending.pixelBytes = std::move(transcoded->pixelBytes);
+            decoded = std::move(pending);
+        }
+        break;
+    }
+    case SniffedImageFormat::Hdr:
+    case SniffedImageFormat::Exr: {
+        auto transcoded = SniffImageFormat(*encodedBytes) == SniffedImageFormat::Hdr
+            ? DecodeRadianceHdrImage(*encodedBytes, colorSpace, options)
+            : DecodeOpenExrImage(*encodedBytes, colorSpace, options);
+        if (transcoded) {
             PendingImage pending;
             pending.pixelFormat = transcoded->pixelFormat;
             pending.mipLevels = transcoded->mipLevels;
@@ -922,20 +1234,32 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
         state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
         PendingImage fallback;
         fallback.pixelFormat=PixelFormatId::RGBA8_UNORM; fallback.colorSpace=colorSpace;
-        fallback.width=fallback.height=semantic==TextureSemantic::Color ? 2u : 1u;
+        const bool colorCoverage = semantic==TextureSemantic::Color
+            || semantic==TextureSemantic::ColorCoverage;
+        fallback.width=fallback.height=colorCoverage ? 2u : 1u;
         fallback.pixelBytes.resize(size_t(fallback.width)*fallback.height*4,std::byte{255});
-        if (semantic==TextureSemantic::Color) {
+        if (colorCoverage) {
             for (unsigned i=0;i<4;++i) for (unsigned c=0;c<3;++c)
                 fallback.pixelBytes[i*4+c]=std::byte((i==0 || i==3) ? 64 : 192);
         } else if (semantic==TextureSemantic::Normal) {
             fallback.pixelBytes[0]=fallback.pixelBytes[1]=std::byte{128};
         } else if (semantic==TextureSemantic::Emissive) {
             fallback.pixelBytes[0]=fallback.pixelBytes[1]=fallback.pixelBytes[2]=std::byte{0};
+        } else if (semantic==TextureSemantic::MetallicRoughness) {
+            // Neutral fallback: opaque, fully rough, non-metal.
+            fallback.pixelBytes[1]=std::byte{255};
+            fallback.pixelBytes[2]=std::byte{0};
         }
         decoded=std::move(fallback);
     }
-    if (decoded->pixelBytes.size()>kMaxAggregateTextureBytes-state.totalDecodedImageBytes) {
-        // Budget exhausted: retain the material's deterministic neutral factors.
+    if (state.totalDecodedImageBytes > kMaxAggregateTextureBytes
+        || decoded->pixelBytes.size() > kMaxAggregateTextureBytes - state.totalDecodedImageBytes) {
+        // Budget exhausted: retain the material's deterministic neutral
+        // factors rather than failing the whole model for an optional map.
+        RecordTextureBudgetLimit(state, TextureBudgetKind::AggregateBytes,
+                                 decoded->pixelBytes.size(),
+                                 state.totalDecodedImageBytes > kMaxAggregateTextureBytes
+                                     ? 0 : kMaxAggregateTextureBytes - state.totalDecodedImageBytes);
         state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
         return std::nullopt;
     }
@@ -944,6 +1268,10 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     auto pixelCount = pixelBytes ? std::optional<uint64_t>(*pixelBytes/4) : std::nullopt;
     auto newTotal = pixelCount ? CheckedAdd(state.totalDecodedImagePixels, *pixelCount) : std::nullopt;
     if (!pixelCount || !newTotal || *newTotal > kMaxAggregateDecodedTexturePixels) {
+        RecordTextureBudgetLimit(state, TextureBudgetKind::AggregatePixels,
+                                 pixelCount ? *pixelCount : 0,
+                                 state.totalDecodedImagePixels >= kMaxAggregateTexturePixels
+                                     ? 0 : kMaxAggregateTexturePixels - state.totalDecodedImagePixels);
         state.error = ImportErrorCode::ResourceLimit;
         return std::nullopt;
     }
@@ -952,6 +1280,10 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     if (state.chunks.size() + state.pendingMaterials.size() + state.pendingImages.size() >=
         (state.emit ? kTierACatalogLimit : state.maxChunkCount))
     {
+        RecordTextureBudgetLimit(state, TextureBudgetKind::Catalog,
+                                 state.chunks.size() + state.pendingMaterials.size()
+                                     + state.pendingImages.size() + 1,
+                                 state.emit ? kTierACatalogLimit : state.maxChunkCount);
         state.error = ImportErrorCode::ResourceLimit;
         return std::nullopt;
     }
@@ -959,6 +1291,8 @@ std::optional<size_t> ResolveImage(WalkState& state, size_t imageIndex, ColorSpa
     size_t pendingIndex = state.pendingImages.size();
     state.pendingImages.push_back(std::move(*decoded));
     state.imageIndexToPendingIndex.emplace(semanticKey, pendingIndex);
+    if (!reuseKey.empty())
+        state.imageSourceToPendingIndex.emplace(std::move(reuseKey), pendingIndex);
     return pendingIndex;
 }
 
@@ -1011,9 +1345,81 @@ bool TextureImageHasNoAlpha(const WalkState& state, const fastgltf::TextureInfo&
     }, image.data);
 }
 
+TextureAddressId MapWrap(fastgltf::Wrap wrap)
+{
+    switch (wrap) {
+    case fastgltf::Wrap::ClampToEdge: return TextureAddressId::Clamp;
+    case fastgltf::Wrap::MirroredRepeat: return TextureAddressId::Mirror;
+    case fastgltf::Wrap::Repeat:
+    default: return TextureAddressId::Wrap;
+    }
+}
+
+// T22: maps one glTF TextureInfo's UV set and sampler intent into the bounded
+// per-slot flags. The authored texCoordIndex is preserved even when this build
+// cannot sample it; the caller then leaves the slot unbound instead of aliasing
+// it to UV0 and records a specific compatibility entry.
+uint32_t ResolveSlotFlags(WalkState& state, const fastgltf::TextureInfo& info)
+{
+    TextureAddressId addressU = TextureAddressId::Wrap;
+    TextureAddressId addressV = TextureAddressId::Wrap;
+    bool nearest = false;
+    if (info.textureIndex < state.asset.textures.size()) {
+        const fastgltf::Texture& texture = state.asset.textures[info.textureIndex];
+        if (texture.samplerIndex.has_value()
+            && *texture.samplerIndex < state.asset.samplers.size()) {
+            const fastgltf::Sampler& sampler = state.asset.samplers[*texture.samplerIndex];
+            addressU = MapWrap(sampler.wrapS);
+            addressV = MapWrap(sampler.wrapT);
+            nearest = sampler.magFilter.has_value()
+                && (*sampler.magFilter == fastgltf::Filter::Nearest
+                    || *sampler.magFilter == fastgltf::Filter::NearestMipMapNearest
+                    || *sampler.magFilter == fastgltf::Filter::NearestMipMapLinear);
+        }
+    }
+    const uint32_t uvSet = info.texCoordIndex <= 0xFFFFFFFFull
+        ? static_cast<uint32_t>(info.texCoordIndex) : 0xFFFFFFFFu;
+    if (uvSet > model_core::kMaterialMaxSupportedUvSet)
+        state.unsupportedUvSetCount = (std::min)(64u, state.unsupportedUvSetCount + 1);
+    return model_core::MaterialSlotFlags(uvSet, addressU, addressV, nearest);
+}
+
+// True when the authored UV set can actually be sampled by the normalized
+// vertex layout (the wire carries TEXCOORD_0 only).
+bool SlotUvSetSupported(const fastgltf::TextureInfo& info)
+{
+    return info.texCoordIndex <= model_core::kMaterialMaxSupportedUvSet;
+}
+
+void StoreSlotTransform(MaterialPayload& material, uint32_t slot,
+                        const fastgltf::TextureInfo& info)
+{
+    const fastgltf::TextureTransform* transform = info.transform ? &*info.transform : nullptr;
+    const float offsetU = transform ? float(transform->uvOffset.x()) : 0.0f;
+    const float offsetV = transform ? float(transform->uvOffset.y()) : 0.0f;
+    const float scaleU = transform ? float(transform->uvScale.x()) : 1.0f;
+    const float scaleV = transform ? float(transform->uvScale.y()) : 1.0f;
+    const float rotation = transform ? float(transform->rotation) : 0.0f;
+    if (slot == model_core::kMaterialSlotIndexBaseColor) {
+        // Slot 0 keeps the legacy fields as its single source of truth.
+        material.uvOffset[0] = offsetU;
+        material.uvOffset[1] = offsetV;
+        material.uvScale[0] = scaleU;
+        material.uvScale[1] = scaleV;
+        material.uvRotation = rotation;
+        return;
+    }
+    const uint32_t index = slot - 1;
+    material.slotUvOffset[index][0] = offsetU;
+    material.slotUvOffset[index][1] = offsetV;
+    material.slotUvScale[index][0] = scaleU;
+    material.slotUvScale[index][1] = scaleV;
+    material.slotUvRotation[index] = rotation;
+}
+
 // Resolves (with dedup by glTF material index) the pending-material index
-// for asset.materials[materialIndex]. All four PBR texture slots
-// (baseColor/metallicRoughness/normal/emissive) are inspected, each
+// for asset.materials[materialIndex]. All five PBR texture slots
+// (baseColor/metallicRoughness/normal/emissive/occlusion) are inspected, each
 // resolved through ResolveTextureSlotImage/ResolveImage -- a texture this
 // chunk can't decode/transcode (or that's simply absent) leaves that slot
 // unpopulated, matching the design doc's "missing/unsupported optional
@@ -1054,11 +1460,66 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     pending.data.uvScale[0] = 1.0f;
     pending.data.uvScale[1] = 1.0f;
     pending.data.uvRotation = 0.0f;
+    for (uint32_t slot = 0; slot < model_core::kMaterialTextureSlotCount; ++slot)
+        pending.data.slotFlags[slot] = 0;
+    for (uint32_t slot = 1; slot < model_core::kMaterialTextureSlotCount; ++slot) {
+        pending.data.slotUvOffset[slot - 1][0] = 0.0f;
+        pending.data.slotUvOffset[slot - 1][1] = 0.0f;
+        pending.data.slotUvScale[slot - 1][0] = 1.0f;
+        pending.data.slotUvScale[slot - 1][1] = 1.0f;
+        pending.data.slotUvRotation[slot - 1] = 0.0f;
+    }
+    pending.data.normalScale = 1.0f;
+    pending.data.clearcoatNormalScale = 1.0f;
     pending.data.alphaMode = static_cast<uint32_t>(material.alphaMode); // AlphaMode/AlphaModeId share numeric values
     pending.data.alphaCutoff = material.alphaCutoff;
     pending.data.flags = (material.doubleSided ? kMaterialFlagDoubleSided : 0u)
         | (material.unlit ? kMaterialFlagUnlit : 0u);
     pending.data.transmissionFactor = 0.0f;
+
+    // Protocol v12 PBR lobes. fastgltf always exposes the scalar defaults, so
+    // a material that does not author an extension keeps the exact pre-v12
+    // appearance: emissive scale 1, no clearcoat/sheen, specular factor 1 and
+    // IOR 1.5 (F0 0.04), occlusion strength 1.
+    if (std::isfinite(material.emissiveStrength))
+        pending.data.emissiveStrength = std::clamp(float(material.emissiveStrength), 0.0f, 1024.0f);
+    // T25: the extension maps are fixed slots in the v14 material record, so a
+    // supported map keeps its authored per-texel variation instead of being
+    // dropped to its scalar factor. Each texture still follows the extension's
+    // own channel and color space; see the resolveSlot calls below.
+    if (material.clearcoat) {
+        const float factor = float(material.clearcoat->clearcoatFactor);
+        const float roughness = float(material.clearcoat->clearcoatRoughnessFactor);
+        if (std::isfinite(factor)) pending.data.clearcoatFactor = std::clamp(factor, 0.0f, 1.0f);
+        if (std::isfinite(roughness)) pending.data.clearcoatRoughness = std::clamp(roughness, 0.0f, 1.0f);
+        if (material.clearcoat->clearcoatNormalTexture
+            && std::isfinite(material.clearcoat->clearcoatNormalTexture->scale))
+            pending.data.clearcoatNormalScale = std::clamp(
+                float(material.clearcoat->clearcoatNormalTexture->scale), -16.0f, 16.0f);
+    }
+    if (material.sheen) {
+        const auto& sheen = *material.sheen;
+        for (int channel = 0; channel < 3; ++channel) {
+            const float value = float(sheen.sheenColorFactor[channel]);
+            pending.data.sheenColor[channel] = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
+        }
+        const float roughness = float(sheen.sheenRoughnessFactor);
+        if (std::isfinite(roughness)) pending.data.sheenRoughness = std::clamp(roughness, 0.0f, 1.0f);
+    }
+    if (material.specular) {
+        const float factor = float(material.specular->specularFactor);
+        if (std::isfinite(factor)) pending.data.specularFactor = std::clamp(factor, 0.0f, 1.0f);
+        for (int channel = 0; channel < 3; ++channel) {
+            const float value = float(material.specular->specularColorFactor[channel]);
+            pending.data.specularColor[channel] = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
+        }
+    }
+    if (std::isfinite(material.ior))
+        pending.data.ior = std::clamp(float(material.ior), 1.0f, 4.0f);
+    if (material.occlusionTexture && std::isfinite(material.occlusionTexture->strength))
+        pending.data.occlusionStrength = std::clamp(float(material.occlusionTexture->strength), 0.0f, 1.0f);
+    if (material.normalTexture && std::isfinite(material.normalTexture->scale))
+        pending.data.normalScale = std::clamp(float(material.normalTexture->scale), -16.0f, 16.0f);
 
     // KHR_materials_pbrSpecularGlossiness is archived in the Khronos registry
     // but still emitted as a required extension by current exporters (the
@@ -1097,11 +1558,11 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
 
     // KHR_materials_transmission: there is no refraction/transmission pass, so
     // the transmitted fraction is carried to the shader, which approximates it
-    // with a Fresnel-driven blend alpha plus suppressed transmitted diffuse. A
-    // per-texel transmissionTexture is not representable in MaterialPayload (it
-    // has no slot for one), so the scalar factor -- what the common "glass"
-    // export carries -- is what is applied. A Mask material keeps its authored
-    // discard test untouched rather than silently reinterpreting it.
+    // with a Fresnel-driven blend alpha plus suppressed transmitted diffuse.
+    // The per-texel transmissionTexture multiplies the scalar factor in the
+    // same fixed slot model as the other extension maps (protocol v14). A Mask
+    // material keeps its authored discard test untouched rather than silently
+    // reinterpreting it.
     //
     // A dielectric whose index of refraction is at or below 1 has no optical
     // interface: it neither bends nor reflects light, so an authored
@@ -1111,19 +1572,29 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
     // case -- which must stay the opaque surface it is rather than becoming a
     // see-through ghost.
     const bool hasOpticalInterface = material.ior > 1.0f + 1.0e-4f;
-    if (material.transmission && material.alphaMode != fastgltf::AlphaMode::Mask
-        && hasOpticalInterface) {
+    if (material.transmission) {
         float transmission = material.transmission->transmissionFactor;
         if (!std::isfinite(transmission)) {
             transmission = 0.0f;
         }
         transmission = std::clamp(transmission, 0.0f, 1.0f);
-        if (transmission > 0.0f) {
+        if (transmission > 0.0f && material.alphaMode == fastgltf::AlphaMode::Mask) {
+            // A MASK material keeps its authored discard test; transmission is
+            // not silently reinterpreted as coverage.
+        } else if (transmission > 0.0f && !hasOpticalInterface) {
+            // Deliberate, diagnosed conversion (not a model/material-name
+            // hack): an IOR of 1 has no optical interface, so the authored
+            // transmission would make an opaque object vanish. Keep the
+            // surface opaque and tell the user exactly why.
+            state.transmissionNoInterfaceCount =
+                (std::min)(64u, state.transmissionNoInterfaceCount + 1);
+        } else if (transmission > 0.0f) {
+            // The authored alphaMode is preserved independently in normalized
+            // data. The renderer derives its blend bucket from the transmissive
+            // flag, so an authored OPAQUE transmission still composites
+            // correctly without rewriting what the source said.
             pending.data.transmissionFactor = transmission;
             pending.data.flags |= kMaterialFlagTransmissive;
-            if (material.alphaMode == fastgltf::AlphaMode::Opaque) {
-                pending.data.alphaMode = static_cast<uint32_t>(AlphaModeId::Blend);
-            }
         }
     }
 
@@ -1143,51 +1614,374 @@ std::optional<size_t> ResolveMaterial(WalkState& state, size_t materialIndex)
         pending.data.transmissionFactor = 1.0f;
         pending.data.flags |= kMaterialFlagTransmissive;
         state.textureWarningCount = (std::min)(64u, state.textureWarningCount + 1);
+        state.degenerateBlendCount = (std::min)(64u, state.degenerateBlendCount + 1);
     }
 
-    if (baseColorTexture) {
-        const fastgltf::TextureInfo& textureInfo = *baseColorTexture;
-        if (textureInfo.transform) {
-            pending.data.uvOffset[0] = textureInfo.transform->uvOffset.x();
-            pending.data.uvOffset[1] = textureInfo.transform->uvOffset.y();
-            pending.data.uvScale[0] = textureInfo.transform->uvScale.x();
-            pending.data.uvScale[1] = textureInfo.transform->uvScale.y();
-            pending.data.uvRotation = textureInfo.transform->rotation;
-        }
-        pending.pendingBaseColorImageIndex = ResolveTextureSlotImage(state, &textureInfo, ColorSpaceId::Srgb,TextureSemantic::Color);
-        if (state.error != ImportErrorCode::None) {
-            return std::nullopt;
-        }
-    }
-    if (material.pbrData.metallicRoughnessTexture.has_value()) {
-        pending.pendingMetallicRoughnessImageIndex
-            = ResolveTextureSlotImage(state, &*material.pbrData.metallicRoughnessTexture, ColorSpaceId::Linear,TextureSemantic::Data);
-        if (state.error != ImportErrorCode::None) {
-            return std::nullopt;
-        }
-    }
-    if (material.normalTexture.has_value()) {
-        // NormalTextureInfo derives from TextureInfo -- ResolveTextureSlotImage
-        // only needs the base; its extra .scale field is dropped (no
-        // MaterialPayload field exists for it this chunk, a deliberate
-        // scope call, not an oversight).
-        pending.pendingNormalImageIndex = ResolveTextureSlotImage(state, &*material.normalTexture, ColorSpaceId::Linear,TextureSemantic::Normal);
-        if (state.error != ImportErrorCode::None) {
-            return std::nullopt;
-        }
-    }
-    if (material.emissiveTexture.has_value()) {
-        pending.pendingEmissiveImageIndex
-            = ResolveTextureSlotImage(state, &*material.emissiveTexture, ColorSpaceId::Srgb,TextureSemantic::Emissive);
-        if (state.error != ImportErrorCode::None) {
-            return std::nullopt;
-        }
-    }
+    // Every texture slot carries its own UV set, sampler intent and
+    // KHR_texture_transform. A slot on an unsupported set is left unbound with
+    // a specific compatibility record; it is never sampled against UV0.
+    const auto resolveSlot = [&](const fastgltf::TextureInfo* info, uint32_t slot,
+                                 std::optional<size_t>& pendingImage,
+                                 ColorSpaceId colorSpace, TextureSemantic semantic) -> bool {
+        if (info == nullptr)
+            return true;
+        pending.data.slotFlags[slot] = ResolveSlotFlags(state, *info);
+        StoreSlotTransform(pending.data, slot, *info);
+        if (!SlotUvSetSupported(*info))
+            return true; // left unbound; warning already counted
+        pendingImage = ResolveTextureSlotImage(state, info, colorSpace, semantic);
+        return state.error == ImportErrorCode::None;
+    };
+    if (!resolveSlot(baseColorTexture, model_core::kMaterialSlotIndexBaseColor,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexBaseColor],
+                     ColorSpaceId::Srgb, TextureSemantic::ColorCoverage))
+        return std::nullopt;
+    if (!resolveSlot(material.pbrData.metallicRoughnessTexture
+                         ? &*material.pbrData.metallicRoughnessTexture : nullptr,
+                     model_core::kMaterialSlotIndexMetallicRoughness,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexMetallicRoughness],
+                     ColorSpaceId::Linear, TextureSemantic::MetallicRoughness))
+        return std::nullopt;
+    if (!resolveSlot(material.normalTexture ? &*material.normalTexture : nullptr,
+                     model_core::kMaterialSlotIndexNormal,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexNormal],
+                     ColorSpaceId::Linear, TextureSemantic::Normal))
+        return std::nullopt;
+    if (!resolveSlot(material.emissiveTexture ? &*material.emissiveTexture : nullptr,
+                     model_core::kMaterialSlotIndexEmissive,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexEmissive],
+                     ColorSpaceId::Srgb, TextureSemantic::Emissive))
+        return std::nullopt;
+    // Independent occlusion map. glTF AO lives only here; the
+    // metallicRoughness red channel is never reinterpreted as AO.
+    if (!resolveSlot(material.occlusionTexture ? &*material.occlusionTexture : nullptr,
+                     model_core::kMaterialSlotIndexOcclusion,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexOcclusion],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+
+    // T25 Khronos extension maps. Channels are fixed by each extension and
+    // selected in the shader by slot index:
+    //   clearcoat (R factor), clearcoatRoughness (G), clearcoatNormal (RGB),
+    //   specular (A factor), specularColor (RGB), sheenColor (RGB),
+    //   sheenRoughness (A), transmission (R).
+    // Every one keeps its own sampler/UV set/transform through resolveSlot.
+    const auto* clearcoat = material.clearcoat ? &*material.clearcoat : nullptr;
+    if (!resolveSlot(clearcoat && clearcoat->clearcoatTexture
+                         ? &*clearcoat->clearcoatTexture : nullptr,
+                     model_core::kMaterialSlotIndexClearcoat,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexClearcoat],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+    if (!resolveSlot(clearcoat && clearcoat->clearcoatRoughnessTexture
+                         ? &*clearcoat->clearcoatRoughnessTexture : nullptr,
+                     model_core::kMaterialSlotIndexClearcoatRoughness,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexClearcoatRoughness],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+    if (!resolveSlot(clearcoat && clearcoat->clearcoatNormalTexture
+                         ? &*clearcoat->clearcoatNormalTexture : nullptr,
+                     model_core::kMaterialSlotIndexClearcoatNormal,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexClearcoatNormal],
+                     ColorSpaceId::Linear, TextureSemantic::Normal))
+        return std::nullopt;
+    const auto* sheen = material.sheen ? &*material.sheen : nullptr;
+    if (!resolveSlot(sheen && sheen->sheenColorTexture ? &*sheen->sheenColorTexture : nullptr,
+                     model_core::kMaterialSlotIndexSheenColor,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexSheenColor],
+                     ColorSpaceId::Srgb, TextureSemantic::Color))
+        return std::nullopt;
+    if (!resolveSlot(sheen && sheen->sheenRoughnessTexture
+                         ? &*sheen->sheenRoughnessTexture : nullptr,
+                     model_core::kMaterialSlotIndexSheenRoughness,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexSheenRoughness],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+    const auto* specular = material.specular ? &*material.specular : nullptr;
+    if (!resolveSlot(specular && specular->specularTexture
+                         ? &*specular->specularTexture : nullptr,
+                     model_core::kMaterialSlotIndexSpecular,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexSpecular],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
+    if (!resolveSlot(specular && specular->specularColorTexture
+                         ? &*specular->specularColorTexture : nullptr,
+                     model_core::kMaterialSlotIndexSpecularColor,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexSpecularColor],
+                     ColorSpaceId::Srgb, TextureSemantic::Color))
+        return std::nullopt;
+    if (!resolveSlot(material.transmission && material.transmission->transmissionTexture
+                         ? &*material.transmission->transmissionTexture : nullptr,
+                     model_core::kMaterialSlotIndexTransmission,
+                     pending.pendingImageIndex[model_core::kMaterialSlotIndexTransmission],
+                     ColorSpaceId::Linear, TextureSemantic::Data))
+        return std::nullopt;
 
     size_t pendingIndex = state.pendingMaterials.size();
     state.pendingMaterials.push_back(std::move(pending));
     state.materialIndexToPendingIndex.emplace(materialIndex, pendingIndex);
     return pendingIndex;
+}
+
+// Appends one fully normalized chunk. The progressive path publishes through
+// the batch sink; the bounded single-section path retains it in state.chunks.
+bool StoreGeometryChunk(WalkState& state, PendingChunk&& chunk)
+{
+    if (state.emit)
+        return state.emit(std::move(chunk));
+    state.chunks.push_back(std::move(chunk));
+    return true;
+}
+
+// T17 bounded converter for the non-triangle-list primitive modes. Strip/fan
+// modes become ordinary indexed triangles here (no wire change); LINES,
+// LINE_STRIP and LINE_LOOP become LineList segment pairs; POINTS becomes the
+// existing PointList. This path is intentionally simple rather than sharing
+// the dense triangle fast path: these primitives are typically small, and a
+// deterministic per-chunk remap keeps the payload bounded.
+bool ConvertNonTrianglePrimitive(WalkState& state, const fastgltf::Primitive& primitive,
+                                 const fastgltf::math::dmat4x4& world,
+                                 const fastgltf::math::fmat3x3& normalMatrix,
+                                 uint32_t meshId, uint32_t nodeId, uint32_t primitiveId)
+{
+    using PrimitiveType = fastgltf::PrimitiveType;
+    const PrimitiveType type = primitive.type;
+    const bool points = type == PrimitiveType::Points;
+    const bool lines = type == PrimitiveType::Lines || type == PrimitiveType::LineStrip
+        || type == PrimitiveType::LineLoop;
+    const bool triangles = type == PrimitiveType::TriangleStrip || type == PrimitiveType::TriangleFan;
+    if (!points && !lines && !triangles)
+        return true; // unknown/unsupported mode remains a non-fatal skip
+
+    auto positionIt = primitive.findAttribute("POSITION");
+    if (positionIt == primitive.attributes.end())
+        return true;
+    const fastgltf::Accessor& positionAccessor = state.asset.accessors[positionIt->accessorIndex];
+    const auto normalIt = primitive.findAttribute("NORMAL");
+    const auto uvIt = primitive.findAttribute("TEXCOORD_0");
+    const auto tangentIt = primitive.findAttribute("TANGENT");
+    const auto colorIt = primitive.findAttribute("COLOR_0");
+    const bool hasNormal = normalIt != primitive.attributes.end();
+    const bool hasUv = uvIt != primitive.attributes.end();
+    const bool hasTangent = tangentIt != primitive.attributes.end();
+    const bool hasColor = colorIt != primitive.attributes.end();
+
+    std::vector<uint32_t> source;
+    source.reserve(primitive.indicesAccessor ? state.asset.accessors[*primitive.indicesAccessor].count
+                                             : positionAccessor.count);
+    if (primitive.indicesAccessor) {
+        const auto& indexAccessor = state.asset.accessors[*primitive.indicesAccessor];
+        SidecarBufferDataAdapter adapter(state);
+        for (size_t i = 0; i < indexAccessor.count; ++i) {
+            const uint32_t value = fastgltf::getAccessorElement<uint32_t>(state.asset, indexAccessor, i, adapter);
+            if (value >= positionAccessor.count) {
+                state.error = ImportErrorCode::MalformedData;
+                return false;
+            }
+            source.push_back(value);
+        }
+    } else {
+        for (uint32_t i = 0; i < positionAccessor.count; ++i) source.push_back(i);
+    }
+
+    std::vector<uint32_t> expanded;
+    ChunkTopology topology = ChunkTopology::TriangleList;
+    if (points) {
+        topology = ChunkTopology::PointList;
+        expanded = source;
+    } else if (triangles) {
+        if (source.size() >= 2) {
+            const bool strip = type == PrimitiveType::TriangleStrip;
+            for (size_t i = 2; i < source.size(); ++i) {
+                uint32_t a, b, c;
+                if (strip) {
+                    if (i % 2 == 0) { a = source[i - 2]; b = source[i - 1]; c = source[i]; }
+                    else { a = source[i - 1]; b = source[i - 2]; c = source[i]; }
+                } else {
+                    a = source[0]; b = source[i - 1]; c = source[i];
+                }
+                // A strip's stitched degenerates carry no area; drop them rather
+                // than smuggling zero-area triangles to the renderer.
+                if (a == b || b == c || a == c) continue;
+                expanded.push_back(a); expanded.push_back(b); expanded.push_back(c);
+            }
+        }
+    } else {
+        topology = ChunkTopology::LineList;
+        if (type == PrimitiveType::Lines) {
+            if (source.size() % 2) { state.error = ImportErrorCode::MalformedData; return false; }
+            expanded = source;
+        } else if (type == PrimitiveType::LineStrip) {
+            for (size_t i = 0; i + 1 < source.size(); ++i) {
+                expanded.push_back(source[i]); expanded.push_back(source[i + 1]);
+            }
+        } else { // LineLoop
+            if (source.size() >= 2) {
+                for (size_t i = 0; i < source.size(); ++i) {
+                    expanded.push_back(source[i]);
+                    expanded.push_back(source[(i + 1) % source.size()]);
+                }
+            }
+        }
+    }
+    if (expanded.empty() && !points) return true;
+    if (expanded.size() > kMaxVertices
+        || expanded.size() > kMaxVertices - state.totalVertices
+        || expanded.size() > kMaxIndices
+        || expanded.size() > kMaxIndices - state.totalIndices) {
+        state.error = ImportErrorCode::ResourceLimit;
+        return false;
+    }
+
+    const uint64_t perChunkElements = points
+        ? uint64_t(kChunkPoints)
+        : uint64_t(state.chunkTriangles) * 3;
+    const size_t perChunk = size_t(std::max<uint64_t>(1, perChunkElements));
+    // Resolve the material once for the whole primitive.
+    std::optional<size_t> material;
+    if (!state.preview && !state.requested && primitive.materialIndex) {
+        material = ResolveMaterial(state, *primitive.materialIndex);
+        if (state.error != ImportErrorCode::None) return false;
+    }
+
+    const double worldTranslation[3] = { world[3][0], world[3][1], world[3][2] };
+    SidecarBufferDataAdapter adapter(state);
+    size_t emitted = 0;
+    while (emitted < expanded.size()) {
+        size_t count = std::min(perChunk, expanded.size() - emitted);
+        if (topology == ChunkTopology::LineList && (count & 1u)) --count;
+        if (topology == ChunkTopology::TriangleList) count -= count % 3;
+        if (!count) break;
+
+        PendingChunk part;
+        part.topology = topology;
+        part.pendingMaterialIndex = material;
+        part.geometry.meshId = meshId;
+        part.geometry.nodeId = nodeId;
+        part.geometry.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
+        part.geometry.geometryFlags = hasUv ? kGeometryHasUv0 : 0;
+        if (hasColor) part.geometry.geometryFlags |= kGeometryHasColors;
+        if (primitive.findAttribute("TEXCOORD_1") != primitive.attributes.end())
+            part.geometry.geometryFlags |= kGeometryHasUv1;
+        for (unsigned axis = 0; axis < 3; ++axis) part.geometry.origin[axis] = worldTranslation[axis];
+
+        // Separate the first referenced position into the double origin so the
+        // emitted local floats stay small even for a far-from-world-origin node.
+        double localShift[3]{};
+        {
+            const auto& firstAccessor = state.asset.accessors[positionIt->accessorIndex];
+            const auto first = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                state.asset, firstAccessor, expanded[emitted], adapter);
+            const auto worldPoint = world * fastgltf::math::dvec4(first.x(), first.y(), first.z(), 1);
+            for (unsigned axis = 0; axis < 3; ++axis) {
+                const double candidate = worldTranslation[axis] + worldPoint[axis];
+                if (candidate - worldTranslation[axis] == worldPoint[axis]) {
+                    localShift[axis] = worldPoint[axis];
+                    part.geometry.origin[axis] = candidate;
+                }
+            }
+        }
+
+        std::unordered_map<uint32_t, uint32_t> remap;
+        remap.reserve(std::min<size_t>(count, 4096));
+        bool haveBounds = false;
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t sourceIndex = expanded[emitted + i];
+            uint32_t localIndex;
+            if (points) {
+                localIndex = uint32_t(part.vertices.size());
+            } else {
+                auto [it, inserted] = remap.emplace(sourceIndex, uint32_t(part.vertices.size()));
+                localIndex = it->second;
+                if (!inserted) { part.indices.push_back(localIndex); continue; }
+            }
+            const auto position = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                state.asset, positionAccessor, sourceIndex, adapter);
+            const auto worldPosition = world * fastgltf::math::dvec4(
+                position.x(), position.y(), position.z(), 1);
+            VertexPositionNormalUv0TangentColorF32 vertex{};
+            vertex.tx = 1.0f; vertex.tw = 1.0f;
+            vertex.r = vertex.g = vertex.b = vertex.a = 1.0f;
+            float* local = &vertex.px;
+            for (unsigned axis = 0; axis < 3; ++axis) {
+                local[axis] = float(worldPosition[axis] - localShift[axis]);
+                if (!std::isfinite(local[axis])) { state.error = ImportErrorCode::MalformedData; return false; }
+                if (!haveBounds) part.geometry.localMin[axis] = part.geometry.localMax[axis] = local[axis];
+                else {
+                    part.geometry.localMin[axis] = (std::min)(part.geometry.localMin[axis], local[axis]);
+                    part.geometry.localMax[axis] = (std::max)(part.geometry.localMax[axis], local[axis]);
+                }
+            }
+            haveBounds = true;
+            if (hasNormal) {
+                const auto normal = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                    state.asset, state.asset.accessors[normalIt->accessorIndex], sourceIndex, adapter);
+                const auto transformed = fastgltf::math::normalize(normalMatrix * normal);
+                vertex.nx = transformed.x(); vertex.ny = transformed.y(); vertex.nz = transformed.z();
+                if (!std::isfinite(vertex.nx) || !std::isfinite(vertex.ny)
+                    || !std::isfinite(vertex.nz)) {
+                    state.error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+            } else {
+                vertex.nz = 1.0f;
+            }
+            if (hasUv) {
+                const auto uv = fastgltf::getAccessorElement<fastgltf::math::fvec2>(
+                    state.asset, state.asset.accessors[uvIt->accessorIndex], sourceIndex, adapter);
+                vertex.u = uv.x(); vertex.v = uv.y();
+                // T34: authored UV is a GPU-visible input. A NaN/Inf texcoord
+                // must be rejected at import, not uploaded and left to produce
+                // unstable texture derivatives.
+                if (!std::isfinite(vertex.u) || !std::isfinite(vertex.v)) {
+                    state.error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+            }
+            if (hasTangent) {
+                const auto tangent = fastgltf::getAccessorElement<fastgltf::math::fvec4>(
+                    state.asset, state.asset.accessors[tangentIt->accessorIndex], sourceIndex, adapter);
+                const auto transformed = fastgltf::math::normalize(normalMatrix *
+                    fastgltf::math::fvec3(tangent.x(), tangent.y(), tangent.z()));
+                vertex.tx = transformed.x(); vertex.ty = transformed.y(); vertex.tz = transformed.z();
+                vertex.tw = tangent.w();
+                if (!std::isfinite(vertex.tx) || !std::isfinite(vertex.ty)
+                    || !std::isfinite(vertex.tz) || !std::isfinite(vertex.tw)) {
+                    state.error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+            }
+            if (hasColor) {
+                const auto& accessor = state.asset.accessors[colorIt->accessorIndex];
+                if (accessor.type == fastgltf::AccessorType::Vec3) {
+                    const auto color = fastgltf::getAccessorElement<fastgltf::math::fvec3>(
+                        state.asset, accessor, sourceIndex, adapter);
+                    vertex.r = color.x(); vertex.g = color.y(); vertex.b = color.z();
+                } else {
+                    const auto color = fastgltf::getAccessorElement<fastgltf::math::fvec4>(
+                        state.asset, accessor, sourceIndex, adapter);
+                    vertex.r = color.x(); vertex.g = color.y(); vertex.b = color.z(); vertex.a = color.w();
+                }
+                if (!std::isfinite(vertex.r) || !std::isfinite(vertex.g)
+                    || !std::isfinite(vertex.b) || !std::isfinite(vertex.a)) {
+                    state.error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+            }
+            part.vertices.push_back(vertex);
+            if (!points) part.indices.push_back(localIndex);
+        }
+        part.geometry.vertexCount = uint32_t(part.vertices.size());
+        part.geometry.indexCount = uint32_t(part.indices.size());
+        part.geometry.boundsState = BoundsState::Verified;
+        part.geometry.sourceRangeOffset = (uint64_t(primitiveId) << 32) | uint32_t(emitted);
+        part.geometry.sourceRangeLength = points ? part.geometry.vertexCount : part.geometry.indexCount;
+        state.totalVertices += part.vertices.size();
+        state.totalIndices += part.indices.size();
+        if (!StoreGeometryChunk(state, std::move(part))) return false;
+        emitted += count;
+    }
+    return true;
 }
 
 bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
@@ -1207,8 +2001,16 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             selected |= state.primitiveOccurrences-1 == stratum*state.previewOccurrences/8;
         if (!selected) return true;
     }
-    if (primitive.type != fastgltf::PrimitiveType::Triangles) {
-        return true; // skip, not fatal -- mirrors Model.cpp's leniency for non-triangle primitives
+    const auto primitiveType = primitive.type;
+    const bool supportedMode = primitiveType == fastgltf::PrimitiveType::Triangles
+        || primitiveType == fastgltf::PrimitiveType::TriangleStrip
+        || primitiveType == fastgltf::PrimitiveType::TriangleFan
+        || primitiveType == fastgltf::PrimitiveType::Lines
+        || primitiveType == fastgltf::PrimitiveType::LineStrip
+        || primitiveType == fastgltf::PrimitiveType::LineLoop
+        || primitiveType == fastgltf::PrimitiveType::Points;
+    if (!supportedMode) {
+        return true; // unknown mode remains a non-fatal skip
     }
 
     auto positionIt = primitive.findAttribute("POSITION");
@@ -1255,7 +2057,11 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
         state.error = ImportErrorCode::MalformedData;
         return false;
     }
-    if (indexAccessor.count % 3 != 0) {
+    if (primitiveType == fastgltf::PrimitiveType::Triangles && indexAccessor.count % 3 != 0) {
+        state.error = ImportErrorCode::MalformedData;
+        return false;
+    }
+    if (primitiveType == fastgltf::PrimitiveType::Lines && indexAccessor.count % 2 != 0) {
         state.error = ImportErrorCode::MalformedData;
         return false;
     }
@@ -1301,6 +2107,13 @@ bool ConvertPrimitive(WalkState& state, const fastgltf::Primitive& primitive,
             state.error = ImportErrorCode::MalformedData;
             return false;
         }
+    }
+    // T17: strip/fan/lines/points use the bounded generic converter. They are
+    // validated above exactly like triangles, then normalized without the
+    // triangle fast path's three-corner assumptions.
+    if (primitiveType != fastgltf::PrimitiveType::Triangles) {
+        return ConvertNonTrianglePrimitive(state, primitive, world, normalMatrix,
+                                           meshId, nodeId, primitiveId);
     }
     // fastgltf stores a primitive's material index even when the material array
     // is absent or the index is out of range (a mutated/broken JSON object key
@@ -2192,6 +3005,240 @@ size_t CountChunksThatFit(std::span<const PlannedChunk> remaining, uint64_t wind
     return taken;
 }
 
+// ---------------------------------------------------------------------------
+// Bounded JSON text helpers for the required-extension compatibility retry.
+// They operate only on the already bounded metadata region.
+// ---------------------------------------------------------------------------
+
+bool SkipJsonWhitespace(std::span<const char> text, size_t& offset)
+{
+    while (offset < text.size()) {
+        const char c = text[offset];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') ++offset;
+        else break;
+    }
+    return offset < text.size();
+}
+
+bool SkipJsonString(std::span<const char> text, size_t& offset)
+{
+    if (offset >= text.size() || text[offset] != '"') return false;
+    ++offset;
+    while (offset < text.size()) {
+        const char c = text[offset++];
+        if (c == '\\') {
+            if (offset >= text.size()) return false;
+            ++offset;
+        } else if (c == '"') {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SkipJsonValue(std::span<const char> text, size_t& offset, unsigned depth)
+{
+    if (depth > 256 || !SkipJsonWhitespace(text, offset)) return false;
+    const char first = text[offset];
+    if (first == '"') return SkipJsonString(text, offset);
+    if (first != '{' && first != '[') {
+        const size_t start = offset;
+        while (offset < text.size() && text[offset] != ',' && text[offset] != '}'
+               && text[offset] != ']' && text[offset] != ' ' && text[offset] != '\t'
+               && text[offset] != '\r' && text[offset] != '\n')
+            ++offset;
+        return offset > start;
+    }
+    const char close = first == '{' ? '}' : ']';
+    ++offset;
+    if (!SkipJsonWhitespace(text, offset)) return false;
+    if (text[offset] == close) {
+        ++offset;
+        return true;
+    }
+    while (offset < text.size()) {
+        if (first == '{') {
+            if (!SkipJsonString(text, offset) || !SkipJsonWhitespace(text, offset)
+                || text[offset] != ':')
+                return false;
+            ++offset;
+        }
+        if (!SkipJsonValue(text, offset, depth + 1) || !SkipJsonWhitespace(text, offset))
+            return false;
+        if (text[offset] == ',') {
+            ++offset;
+            if (!SkipJsonWhitespace(text, offset)) return false;
+            continue;
+        }
+        if (text[offset] == close) {
+            ++offset;
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+struct JsonArrayBounds {
+    size_t begin; // index of '['
+    size_t end;   // index of the matching ']'
+};
+
+std::optional<JsonArrayBounds> FindRootJsonArray(std::span<const char> text, std::string_view key)
+{
+    size_t offset = 0;
+    if (!SkipJsonWhitespace(text, offset) || text[offset] != '{') return std::nullopt;
+    ++offset;
+    while (true) {
+        if (!SkipJsonWhitespace(text, offset)) return std::nullopt;
+        if (text[offset] == '}') return std::nullopt;
+        const size_t keyStart = offset;
+        if (!SkipJsonString(text, offset)) return std::nullopt;
+        const std::string_view rawKey(text.data() + keyStart + 1, offset - keyStart - 2);
+        if (!SkipJsonWhitespace(text, offset) || text[offset] != ':') return std::nullopt;
+        ++offset;
+        if (!SkipJsonWhitespace(text, offset)) return std::nullopt;
+        if (rawKey == key) {
+            if (text[offset] != '[') return std::nullopt;
+            const size_t begin = offset;
+            unsigned depth = 0;
+            ++offset;
+            while (offset < text.size()) {
+                const char c = text[offset];
+                if (c == '"') {
+                    if (!SkipJsonString(text, offset)) return std::nullopt;
+                    continue;
+                }
+                if (c == '[') {
+                    ++depth;
+                } else if (c == ']') {
+                    if (depth == 0) return JsonArrayBounds{begin, offset};
+                    --depth;
+                }
+                ++offset;
+            }
+            return std::nullopt;
+        }
+        if (!SkipJsonValue(text, offset, 0) || !SkipJsonWhitespace(text, offset))
+            return std::nullopt;
+        if (text[offset] == ',') {
+            ++offset;
+            continue;
+        }
+        return std::nullopt;
+    }
+}
+
+// Rewrites only the contents of the root `extensionsRequired` array, removing
+// names that may be degraded, and pads the replacement with spaces so the JSON
+// text keeps its exact length. For a GLB that preserves the header and every
+// following byte offset, so the already-mapped BIN chunk is not re-packed.
+std::optional<std::vector<std::byte>> BuildFilteredRequiredExtensions(
+    std::span<const std::byte> jsonBytes)
+{
+    const auto text = std::span(reinterpret_cast<const char*>(jsonBytes.data()), jsonBytes.size());
+    const auto array = FindRootJsonArray(text, "extensionsRequired");
+    if (!array) return std::nullopt;
+    const size_t contentBegin = array->begin + 1;
+    const size_t contentEnd = array->end;
+
+    std::vector<std::pair<size_t, size_t>> kept;
+    size_t offset = contentBegin;
+    while (offset < contentEnd) {
+        if (!SkipJsonWhitespace(text, offset) || offset >= contentEnd) break;
+        const size_t tokenStart = offset;
+        if (!SkipJsonString(text, offset) || offset > contentEnd) return std::nullopt;
+        const std::string_view name(text.data() + tokenStart + 1, offset - tokenStart - 2);
+        if (!IsGltfExtensionFilterable(name))
+            kept.emplace_back(tokenStart, offset);
+        if (!SkipJsonWhitespace(text, offset) || offset >= contentEnd) break;
+        if (text[offset] == ',') {
+            ++offset;
+            continue;
+        }
+        if (text[offset] == ']') break;
+        return std::nullopt;
+    }
+
+    std::string replacement;
+    for (size_t i = 0; i < kept.size(); ++i) {
+        if (i) replacement.push_back(',');
+        replacement.append(text.data() + kept[i].first, kept[i].second - kept[i].first);
+    }
+    const size_t capacity = contentEnd - contentBegin;
+    if (replacement.size() > capacity) return std::nullopt;
+
+    std::vector<std::byte> filtered(jsonBytes.begin(), jsonBytes.end());
+    auto* destination = reinterpret_cast<char*>(filtered.data());
+    std::fill(destination + contentBegin, destination + contentEnd, ' ');
+    std::memcpy(destination + contentBegin, replacement.data(), replacement.size());
+    return filtered;
+}
+
+// Builds the source passed to fastgltf after one failed parse. Only the JSON
+// text changes; a GLB keeps its original byte layout. Bounded by the source
+// size, which the caller has already capped.
+std::optional<std::vector<std::byte>> BuildFilteredGltfSource(
+    std::span<const std::byte> source, std::span<const std::byte> jsonBytes)
+{
+    auto filteredJson = BuildFilteredRequiredExtensions(jsonBytes);
+    if (!filteredJson) return std::nullopt;
+    const bool isGlb = source.size() >= 4 && std::memcmp(source.data(), "glTF", 4) == 0;
+    if (!isGlb) return filteredJson;
+    std::vector<std::byte> filtered(source.begin(), source.end());
+    if (static_cast<size_t>(20) + filteredJson->size() > filtered.size()) return std::nullopt;
+    std::memcpy(filtered.data() + 20, filteredJson->data(), filteredJson->size());
+    return filtered;
+}
+
+void BuildGltfCompatibilityReport(const fastgltf::Asset& asset,
+                                  std::span<const std::string> requiredExtensions,
+                                  model_core::CompatibilityReportBuilder& compatibility,
+                                  model_core::ImportStatusPayload& status)
+{
+    auto add = [&](std::string_view name) {
+        const auto* policy = FindGltfExtensionPolicy(name);
+        if (policy != nullptr && policy->adapterSupported)
+            return;
+        status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
+        // Older hosts still read the saturated count; the report adds the
+        // stable identity behind each warning.
+        compatibility.Add(model_core::GltfExtensionFeatureId(name),
+                          GltfExtensionSeverity(policy != nullptr ? policy->extensionClass
+                                                                  : GltfExtensionClass::Unknown));
+    };
+    for (const auto& extension : asset.extensionsUsed)
+        add(std::string_view(extension));
+    // extensionsRequired is a subset of extensionsUsed in a valid file, but a
+    // hostile file can omit the used entry. Still report the decision.
+    for (const auto& extension : requiredExtensions) {
+        const bool alreadyUsed = std::any_of(
+            asset.extensionsUsed.begin(), asset.extensionsUsed.end(),
+            [&](const auto& used) { return std::string_view(used) == extension; });
+        if (!alreadyUsed)
+            add(extension);
+    }
+}
+
+// T22: appends the specific material-semantic conversions/limitations that are
+// not glTF extensions. Counts are saturated and the severity is stable so the
+// host can localize a precise message instead of a generic warning.
+void AppendMaterialCompatibilityRecords(const WalkState& state,
+                                        model_core::CompatibilityReportBuilder& compatibility,
+                                        model_core::ImportStatusPayload& status)
+{
+    const auto add = [&](uint32_t featureId, uint32_t count) {
+        if (count == 0)
+            return;
+        status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
+        compatibility.Add(featureId, model_core::CompatibilitySeverity::Degraded, count);
+    };
+    add(model_core::kTextureFeatureUnsupportedUvSet, state.unsupportedUvSetCount);
+    add(model_core::kGltfFeatureTransmissionNoInterfaceSuppressed,
+        state.transmissionNoInterfaceCount);
+    add(model_core::kGltfFeatureDegenerateBlendRecovered, state.degenerateBlendCount);
+}
+
 } // namespace
 
 std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::byte> sourceGlbBytes,
@@ -2246,9 +3293,10 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     // Preflight only the bounded JSON DOM, then release it before constructing
     // that asset. Include conservative storage for every nested array entry.
     uint64_t parserReserve = 160ull * 1024 * 1024 + metadataBytes * 8ull;
+    const bool isGlb = !bin.empty() || std::memcmp(sourceGlbBytes.data(), "glTF", 4) == 0;
+    const auto json = sourceGlbBytes.subspan(isGlb ? 20 : 0, metadataBytes);
+    std::vector<std::string> requiredExtensionNames;
     {
-        const auto json = sourceGlbBytes.subspan(
-            bin.empty() && std::memcmp(sourceGlbBytes.data(), "glTF", 4) != 0 ? 0 : 20, metadataBytes);
         simdjson::dom::parser preflight;
         simdjson::dom::element root;
         if (preflight.parse(reinterpret_cast<const char*>(json.data()), json.size()).get(root))
@@ -2256,6 +3304,21 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         simdjson::dom::object object;
         if (root.get_object().get(object))
             return ImportErrorCode::MalformedData;
+        // Pre-scan the required list before fastgltf sees it. A visual or truly
+        // unknown required name must not turn an otherwise usable file into an
+        // "unsupported feature" failure.
+        simdjson::dom::array required;
+        if (!object["extensionsRequired"].get_array().get(required)) {
+            if (required.size() > kTierAObjectLimit)
+                return ImportErrorCode::ResourceLimit;
+            requiredExtensionNames.reserve(required.size());
+            for (auto value : required) {
+                std::string_view name;
+                if (value.get_string().get(name))
+                    return ImportErrorCode::MalformedData;
+                requiredExtensionNames.emplace_back(name);
+            }
+        }
         for (const auto& field : object)
         {
             simdjson::dom::array array;
@@ -2346,6 +3409,25 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             }
         }
     }
+    // Classify required names before fastgltf runs. Geometry-critical names are
+    // never filtered; everything else (visual, scene, texture fallback, truly
+    // unknown, instancing) may be dropped from the required list once, so the
+    // core scene still opens. A required geometry extension this build cannot
+    // decode stays a typed failure.
+    bool requiredGeometryCriticalUnsupported = false;
+    bool hasFilterableRequiredExtensions = false;
+    for (const auto& name : requiredExtensionNames) {
+        const auto* policy = FindGltfExtensionPolicy(name);
+        if (policy != nullptr && policy->extensionClass == GltfExtensionClass::GeometryCritical
+            && policy->parserMask == fastgltf::Extensions::None) {
+            requiredGeometryCriticalUnsupported = true;
+        } else if (IsGltfExtensionFilterable(name)) {
+            hasFilterableRequiredExtensions = true;
+        }
+    }
+    if (requiredGeometryCriticalUnsupported)
+        return ImportErrorCode::UnsupportedRequiredFeature;
+
     // fastgltf receives bounded padded JSON and aliases the already mapped BIN.
     // Its buffer allocation callback returns the BIN address; read(void*) detects
     // that exact alias and performs no write to the read-only file mapping.
@@ -2353,6 +3435,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     {
       public:
         std::span<const std::byte> source, bin;
+        size_t binOffset = 0; // BIN payload offset within the original source
         size_t offset = 0;
         std::vector<std::byte> metadata;
         std::vector<std::vector<std::byte>> decoded;
@@ -2387,49 +3470,90 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     } getter;
     getter.source = sourceGlbBytes;
     getter.bin = bin;
-    // Only the documented static-scene extensions are enabled -- a file requiring any other
-    // one still fails cleanly with MissingExtensions/UnknownRequiredExtension
-    // rather than being parsed. KHR_texture_transform is enabled read-only,
-    // purely so MaterialPayload's uvOffset/uvScale/uvRotation fields can be
-    // populated when present; if that ever proves troublesome it can be
-    // dropped independently of Draco/basisu support (uv transform would
-    // just stay at identity). Never LoadExternalBuffers/LoadExternalImages:
-    // the worker has no path authority. LoadGLBBuffers is deprecated in
-    // 0.9.0 (now default behaviour) and deliberately not passed.
+    if (!bin.empty())
+        getter.binOffset = static_cast<size_t>(bin.data() - sourceGlbBytes.data());
+    // The parser mask enables every extension whose data path this adapter can
+    // consume. Visual/scene extensions are parsed so a file that requires them
+    // opens with core PBR; the adapter reports the unrendered lobe instead.
+    // MSFT_texture_dds stays disabled until T12 lands a DDS decoder. Never
+    // LoadExternalBuffers/LoadExternalImages: the worker has no path authority.
+    // KHR_texture_transform is read-only for uvOffset/uvScale/uvRotation.
     // KHR_materials_ior is enabled only so the transmission guard can read the
-    // authored index of refraction; fastgltf otherwise leaves material.ior at
-    // its 1.5 default and an authored ior=1 would be misread as an optical
-    // interface, turning the whole model into see-through glass.
-    fastgltf::Parser parser(fastgltf::Extensions::KHR_draco_mesh_compression
-                             | fastgltf::Extensions::KHR_texture_basisu
-                             | fastgltf::Extensions::KHR_texture_transform
-                             | fastgltf::Extensions::KHR_mesh_quantization
-                             | fastgltf::Extensions::EXT_meshopt_compression
-                             | fastgltf::Extensions::EXT_texture_webp
-                             | fastgltf::Extensions::KHR_materials_unlit
-                             | fastgltf::Extensions::KHR_materials_transmission
-                             | fastgltf::Extensions::KHR_materials_ior
-                             | fastgltf::Extensions::KHR_materials_pbrSpecularGlossiness);
-    // loadGltf (rather than loadGltfBinary) auto-detects GLB vs. plain-JSON
-    // .gltf via fastgltf::determineGltfFileType internally -- needed so a
-    // real multi-file .gltf (this chunk's whole point) parses at all; a
-    // self-contained .glb continues to work identically either way.
+    // authored index of refraction.
+    // One Parser lives for the whole function: fastgltf may allocate asset
+    // storage from its internal pool, so the parser must outlive the asset.
+    fastgltf::Parser parser(GltfParserExtensionMask());
     parser.setUserPointer(&getter);
     parser.setBufferAllocationCallback(+[](uint64_t bytes, void* user) -> fastgltf::BufferInfo {
         auto& data = *static_cast<MappedGetter*>(user);
-        if (!data.bin.empty() && data.source.data() + data.offset == data.bin.data() &&
-            bytes <= data.bin.size())
+        if (!data.bin.empty() && data.offset == data.binOffset && bytes <= data.bin.size())
             return {const_cast<std::byte*>(data.bin.data()), 0};
         if (bytes > kMaxDataUriDecodedBytes)
             throw std::out_of_range("data URI limit");
         data.decoded.emplace_back(size_t(bytes));
         return {data.decoded.back().data(), uint32_t(data.decoded.size())};
     });
-    auto assetResult = parser.loadGltf(getter, std::filesystem::path{}, fastgltf::Options::None);
-    if (!assetResult) {
-        return MapFastgltfError(assetResult.error());
+    auto parseSource = [&](std::span<const std::byte> source) {
+        getter.source = source;
+        // A filtered GLB retry is a same-layout copy. Point the BIN alias into
+        // that copy so read() sees the exact alias and never writes the mapped
+        // BIN bytes back through the read-only source view.
+        if (!bin.empty())
+            getter.bin = source.data() == sourceGlbBytes.data()
+                ? bin
+                : std::span<const std::byte>(source.data() + getter.binOffset, bin.size());
+        getter.offset = 0;
+        getter.metadata.clear();
+        getter.decoded.clear();
+        // loadGltf (rather than loadGltfBinary) auto-detects GLB vs. plain-JSON
+        // .gltf. The BIN alias is tracked by offset so a filtered JSON retry
+        // (which keeps the exact GLB byte layout) still points at the original
+        // read-only BIN mapping.
+        return parser.loadGltf(getter, std::filesystem::path{}, fastgltf::Options::None);
+    };
+
+    // Retry exactly once with non-critical required names filtered out. The
+    // filtered copy must outlive the parsed asset because it is the getter's
+    // source for the successful attempt.
+    std::vector<std::byte> filteredSource;
+    std::optional<fastgltf::Asset> parsedAsset;
+    {
+        // The pre-scan already found at least one non-critical required name;
+        // build the bounded filtered JSON now rather than forcing fastgltf to
+        // reject the file first. Geometry-critical names were never removed.
+        if (hasFilterableRequiredExtensions) {
+            auto filtered = BuildFilteredGltfSource(sourceGlbBytes, json);
+            if (!filtered)
+                return ImportErrorCode::MalformedData;
+            filteredSource = std::move(*filtered);
+            auto result = parseSource(filteredSource);
+            if (!result)
+                return MapFastgltfError(result.error());
+            parsedAsset = std::move(result.get());
+        } else {
+            auto first = parseSource(sourceGlbBytes);
+            if (!first) {
+                const auto error = first.error();
+                // A filterable name the pre-scan missed (for example a policy
+                // table gap) still gets exactly one filtered retry.
+                const bool extensionError = error == fastgltf::Error::MissingExtensions
+                    || error == fastgltf::Error::UnknownRequiredExtension;
+                if (!extensionError)
+                    return MapFastgltfError(error);
+                auto filtered = BuildFilteredGltfSource(sourceGlbBytes, json);
+                if (!filtered)
+                    return MapFastgltfError(error);
+                filteredSource = std::move(*filtered);
+                auto second = parseSource(filteredSource);
+                if (!second)
+                    return MapFastgltfError(second.error());
+                parsedAsset = std::move(second.get());
+            } else {
+                parsedAsset = std::move(first.get());
+            }
+        }
     }
-    auto& asset = assetResult.get();
+    fastgltf::Asset& asset = *parsedAsset;
     if (!bin.empty())
     {
         if (asset.buffers.empty() || asset.buffers[0].byteLength > bin.size())
@@ -2578,13 +3702,10 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             ChunkDescriptor d{};
             d.topology = ChunkTopology::Material;
             d.chunkId = materialBase + uint32_t(emittedMaterials) + 1;
-            const std::optional<size_t> images[]{
-                material.pendingBaseColorImageIndex, material.pendingMetallicRoughnessImageIndex,
-                material.pendingNormalImageIndex, material.pendingEmissiveImageIndex};
-            for (unsigned i = 0; i < 4; ++i)
-                if (images[i])
+            for (unsigned i = 0; i < model_core::kMaterialTextureSlotCount; ++i)
+                if (material.pendingImageIndex[i])
                 {
-                    d.dependencyIds[i] = imageBase + uint32_t(*images[i]) + 1;
+                    d.dependencyIds[i] = imageBase + uint32_t(*material.pendingImageIndex[i]) + 1;
                     ++d.dependencyCount;
                 }
             if (!streamingWriter.Add(d, ChunkBytes(material.data)))
@@ -2598,11 +3719,12 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     };
     if (batchSink) {
         state.requested = batchSink->RequestedSource();
+        state.detailReplay = state.requested != nullptr;
         state.emit = [&](PendingChunk&& chunk) {
             if (!emitDependencies())
                 return false;
             auto d = chunk.geometry;
-            d.topology = ChunkTopology::TriangleList;
+            d.topology = chunk.topology;
             d.chunkId = ++state.emittedGeometry;
             d.vertexCount = uint32_t(chunk.vertices.size());
             d.indexCount = uint32_t(chunk.indices.size());
@@ -2658,9 +3780,9 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
                     return state.error;
             }
         ImportStatusPayload status{};
-        for (const auto& extension : asset.extensionsUsed)
-            if (!IsSupportedExtension(extension))
-                status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
+        model_core::CompatibilityReportBuilder compatibility;
+        BuildGltfCompatibilityReport(asset, requiredExtensionNames, compatibility, status);
+        AppendMaterialCompatibilityRecords(state, compatibility, status);
         if (status.optionalFeatureWarnings)
         {
             ChunkDescriptor d{};
@@ -2669,6 +3791,8 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
             if (!streamingWriter.Add(d, ChunkBytes(status)))
                 return streamingWriter.Error();
         }
+        if (!streamingWriter.AddCompatibilityReport(compatibility))
+            return streamingWriter.Error();
         if (state.textureWarningCount)
         {
             ChunkDescriptor d{};
@@ -2779,7 +3903,7 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         plan.descriptor = chunk.geometry;
         plan.descriptor.sourceRangeOffset = 0;
         plan.descriptor.sourceRangeLength = 0;
-        plan.descriptor.topology = ChunkTopology::TriangleList;
+        plan.descriptor.topology = chunk.topology;
         plan.descriptor.indexCount = static_cast<uint32_t>(chunk.indices.size());
         plan.descriptor.vertexCount = static_cast<uint32_t>(chunk.vertices.size());
         plan.descriptor.vertexLayoutId = static_cast<uint32_t>(VertexLayoutId::PositionNormalUv0TangentColor_F32);
@@ -2808,27 +3932,18 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         plan.descriptor.vertexLayoutId = 0;
         plan.descriptor.lodLevel = 0;
         plan.descriptor.chunkId = materialChunkId(j);
-        // Fixed slot order {baseColor, metallicRoughness, normal, emissive}
-        // per WireFormat.h; sparsely populated is valid (e.g. a normal-map-
-        // only material leaves slots 0/1/3 at their zero-initialized
-        // default) -- SharedSectionValidator checks each slot independently,
-        // not as a contiguous prefix.
+        // Fixed slot order {baseColor, metallicRoughness, normal, emissive,
+        // occlusion, clearcoat, clearcoatRoughness, clearcoatNormal, specular,
+        // specularColor, sheenColor, sheenRoughness, transmission} per
+        // WireFormat.h; sparsely populated is valid (e.g. a normal-map-only
+        // material leaves the other slots at their zero-initialized default) --
+        // SharedSectionValidator checks each slot independently, not as a
+        // contiguous prefix.
         plan.descriptor.dependencyCount = 0;
-        if (material.pendingBaseColorImageIndex.has_value()) {
-            plan.descriptor.dependencyIds[0] = imageChunkId(*material.pendingBaseColorImageIndex);
-            ++plan.descriptor.dependencyCount;
-        }
-        if (material.pendingMetallicRoughnessImageIndex.has_value()) {
-            plan.descriptor.dependencyIds[1]
-                = imageChunkId(*material.pendingMetallicRoughnessImageIndex);
-            ++plan.descriptor.dependencyCount;
-        }
-        if (material.pendingNormalImageIndex.has_value()) {
-            plan.descriptor.dependencyIds[2] = imageChunkId(*material.pendingNormalImageIndex);
-            ++plan.descriptor.dependencyCount;
-        }
-        if (material.pendingEmissiveImageIndex.has_value()) {
-            plan.descriptor.dependencyIds[3] = imageChunkId(*material.pendingEmissiveImageIndex);
+        for (uint32_t slot = 0; slot < model_core::kMaterialTextureSlotCount; ++slot) {
+            if (!material.pendingImageIndex[slot].has_value())
+                continue;
+            plan.descriptor.dependencyIds[slot] = imageChunkId(*material.pendingImageIndex[slot]);
             ++plan.descriptor.dependencyCount;
         }
         plan.pieceA = BytesOf(material.data);
@@ -2900,10 +4015,9 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
     size_t initialPlanCount=plans.size();
     plans.insert(plans.end(),refinements.begin(),refinements.end());
     model_core::ImportStatusPayload status{};
-    for (const auto& extension : asset.extensionsUsed) {
-        if (!IsSupportedExtension(extension))
-            status.optionalFeatureWarnings = (std::min)(64u, status.optionalFeatureWarnings + 1);
-    }
+    model_core::CompatibilityReportBuilder compatibility;
+    BuildGltfCompatibilityReport(asset, requiredExtensionNames, compatibility, status);
+    AppendMaterialCompatibilityRecords(state, compatibility, status);
     if (!refinements.empty()) status.flags |= model_core::kStatusRefining;
     if (status.flags || status.optionalFeatureWarnings) {
         if (plans.size()>=maxChunkCount) return ImportErrorCode::ResourceLimit;
@@ -2912,6 +4026,16 @@ std::variant<GltfImportResult, ImportErrorCode> ImportGltf(std::span<const std::
         statusChunk.descriptor.chunkId=static_cast<uint32_t>(meshChunkCount+materialChunkCount+imageChunkCount+2);
         statusChunk.pieceA=BytesOf(status); statusChunk.payloadBytes=sizeof(status);
         plans.insert(plans.begin(),statusChunk);
+        ++initialPlanCount;
+    }
+    if (!compatibility.Empty()) {
+        if (plans.size()>=maxChunkCount) return ImportErrorCode::ResourceLimit;
+        PlannedChunk reportChunk;
+        reportChunk.descriptor.topology=ChunkTopology::CompatibilityReport;
+        reportChunk.descriptor.chunkId=model_core::kCompatibilityReportChunkId;
+        reportChunk.pieceA=BytesOf(compatibility.Payload());
+        reportChunk.payloadBytes=sizeof(compatibility.Payload());
+        plans.insert(plans.begin(),reportChunk);
         ++initialPlanCount;
     }
     uint32_t warningCount=state.textureWarningCount;

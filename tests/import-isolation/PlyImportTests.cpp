@@ -15,6 +15,7 @@
 #include "import_broker/SourceFileAccess.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
+#include "model_core/FormatCatalog.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
 #include "platform/MappedView.h"
@@ -466,6 +467,49 @@ TEST_CASE("A vertex-only PLY (no face element) emits a PointList chunk", "[ply-i
     model_core::VertexPositionOnlyF32 points[2]{};
     std::memcpy(points, chunk.payload.data(), sizeof(points));
     CHECK(run.validation.chunks[0].descriptor.origin[0] + points[1].x == Catch::Approx(4.0f));
+}
+
+TEST_CASE("An imported PLY point fixture selects the point preset and a mesh keeps PBR",
+          "[ply-import][presentation][orientation]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    const auto* descriptor = model_core::FindBySourceFormatId(model_core::SourceFormatId::Ply);
+    REQUIRE(descriptor != nullptr);
+
+    // Point-only fixture: the validated summary must resolve to PointCloud.
+    std::vector<std::array<float, 3>> points{ { 1.0f, 2.0f, 3.0f }, { 4.0f, 5.0f, 6.0f } };
+    ScratchPlyFile pointFile(BuildPointCloudPly(false, points, /*declareEmptyFaceElement=*/false));
+    auto pointRun = RunPlyImportFromRealFile(fixture.sid, pointFile.path, 30, 4);
+    REQUIRE(pointRun.ready);
+    REQUIRE(pointRun.validation.ok);
+    model_core::PresentationSummary pointSummary{};
+    for (const auto& chunk : pointRun.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::PointList)
+            pointSummary.pointCount += chunk.descriptor.vertexCount;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            pointSummary.triangleCount += chunk.descriptor.indexCount / 3;
+    }
+    CHECK(pointSummary.pointCount > 0);
+    CHECK(pointSummary.triangleCount == 0);
+    CHECK(model_core::ResolvePresentationProfile(*descriptor, pointSummary)
+          == model_core::PresentationProfile::PointCloud);
+
+    // The same format with triangles must keep Studio PBR.
+    std::vector<std::array<float, 3>> normals(6, std::array<float, 3>{ 0.0f, 0.0f, 1.0f });
+    ScratchPlyFile meshFile(BuildMeshPly(false, true, TwoTrianglePositions(), normals, TwoTriangleFaces()));
+    auto meshRun = RunPlyImportFromRealFile(fixture.sid, meshFile.path, 31, 4);
+    REQUIRE(meshRun.ready);
+    REQUIRE(meshRun.validation.ok);
+    model_core::PresentationSummary meshSummary{};
+    for (const auto& chunk : meshRun.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::PointList)
+            meshSummary.pointCount += chunk.descriptor.vertexCount;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            meshSummary.triangleCount += chunk.descriptor.indexCount / 3;
+    }
+    CHECK(meshSummary.triangleCount > 0);
+    CHECK(model_core::ResolvePresentationProfile(*descriptor, meshSummary)
+          == model_core::PresentationProfile::StudioPbr);
 }
 
 TEST_CASE("A declared-but-empty face element is treated as a point cloud, not a mesh", "[ply-import]")

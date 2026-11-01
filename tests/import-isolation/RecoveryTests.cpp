@@ -36,7 +36,12 @@ TEST_CASE("Empty malformed and unsupported-feature failures remain typed and rec
         {std::string(84,'\0'),L".stl",import_broker::ImportFormat::Stl,model_core::ImportErrorCode::EmptyGeometry},
         {"ply\nformat binary_little_endian 1.0\nelement vertex 0\nproperty float x\nproperty float y\nproperty float z\nend_header\n",L".ply",import_broker::ImportFormat::Ply,model_core::ImportErrorCode::EmptyGeometry},
         {R"({"asset":{"version":"2.0"},"scenes":[{"nodes":[]}]})",L".gltf",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::EmptyGeometry},
-        {R"({"asset":{"version":"2.0"},"extensionsRequired":["UNSUPPORTED_private"]})",L".gltf",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::UnsupportedRequiredFeature},
+        // Geometry-critical required extensions are never filtered; with no
+        // usable core geometry the import stays a typed failure.
+        {R"({"asset":{"version":"2.0"},"extensionsRequired":["KHR_implicit_shapes"]})",L".gltf",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::UnsupportedRequiredFeature},
+        // A truly unknown required name is filtered, but this file has no
+        // scene at all, so the normal empty-geometry outcome still applies.
+        {R"({"asset":{"version":"2.0"},"extensionsRequired":["UNSUPPORTED_private"]})",L".gltf",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::EmptyGeometry},
         {"not a glTF",L".glb",import_broker::ImportFormat::Gltf,model_core::ImportErrorCode::MalformedData}
     };
     for (const auto& fixture : fixtures) {
@@ -67,6 +72,23 @@ TEST_CASE("Status facts reject unknown flags excessive counts reserved values an
         CAPTURE(mode); auto request=Request(Triangle()); request.workerExePath=sandbox_test_support::HostileWorkerExePath(); request.workerArgumentsOverride=mode;
         auto result=import_broker::RunImportSession(request);
         CHECK_FALSE(result.ok); CHECK(result.stage==import_broker::ImportStage::ValidateSection); CHECK(result.errorCode==model_core::ImportErrorCode::ImportProtocolViolation);
+    }
+}
+
+TEST_CASE("Malformed compatibility reports are rejected by the hostile-worker path",
+          "[compatibility][hostile-worker]")
+{
+    for (auto mode : {L"--compat-count", L"--compat-size", L"--compat-severity",
+                      L"--compat-reserved", L"--compat-feature", L"--compat-padding",
+                      L"--compat-dependency"}) {
+        CAPTURE(mode);
+        auto request = Request(Triangle());
+        request.workerExePath = sandbox_test_support::HostileWorkerExePath();
+        request.workerArgumentsOverride = mode;
+        auto result = import_broker::RunImportSession(request);
+        CHECK_FALSE(result.ok);
+        CHECK(result.stage == import_broker::ImportStage::ValidateSection);
+        CHECK(result.chunks.empty());
     }
 }
 
@@ -102,6 +124,48 @@ TEST_CASE("Copied diagnostics name source format and phase without source paths"
         == d3d12_import_bridge::SourceFormat::ThreeMf);
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.3mf") == L"3MF");
     CHECK(d3d12_import_bridge::SourceFormatLabel(L"C:\\private\\model.bad\npath")==L"Unknown");
+}
+
+TEST_CASE("A GLB renamed .bin classifies by content but the open gate stays extension-only",
+    "[recovery][format-catalog]") {
+    // 12-byte GLB header: magic, version 2, declared length == file length.
+    std::string glb("glTF", 4);
+    glb.append("\x02\x00\x00\x00", 4);
+    glb.append("\x0c\x00\x00\x00", 4);
+    ScratchSource source(glb, L".bin");
+
+    CHECK_FALSE(d3d12_import_bridge::ClassifyByExtension(source.path.wstring()));
+    CHECK(d3d12_import_bridge::ClassifyByContent(source.path.wstring())
+        == model_core::FormatId::Glb);
+
+    const auto classification = d3d12_import_bridge::ClassifyForOpen(source.path.wstring());
+    CHECK(classification.reason == model_core::ClassificationReason::Content);
+    REQUIRE(classification.selected != nullptr);
+    CHECK(classification.selected->id == model_core::FormatId::Glb);
+    CHECK_FALSE(d3d12_import_bridge::ExtensionSourceFormat(classification));
+    CHECK(d3d12_import_bridge::ClassificationDiagnostic(classification).find(L"content=glb")
+        != std::wstring::npos);
+}
+
+TEST_CASE("A forced format opens a renamed GLB and a wrong forced format fails typed",
+    "[recovery][open-as]") {
+    std::ifstream input(Triangle(), std::ios::binary);
+    REQUIRE(input.is_open());
+    const std::string bytes((std::istreambuf_iterator<char>(input)),
+        std::istreambuf_iterator<char>());
+    REQUIRE_FALSE(bytes.empty());
+    ScratchSource source(bytes, L".bin");
+
+    auto result = d3d12_import_bridge::RunImport(
+        d3d12_import_bridge::SourceFormat::Glb, source.path.wstring(), 900);
+    CAPTURE(result.errorStage, result.errorCode, result.errorSummary);
+    REQUIRE(result.ok);
+    CHECK_FALSE(result.meshes.empty());
+
+    auto wrong = d3d12_import_bridge::RunImport(
+        d3d12_import_bridge::SourceFormat::Step, source.path.wstring(), 901);
+    CHECK_FALSE(wrong.ok);
+    CHECK(wrong.errorCode != model_core::ImportErrorCode::None);
 }
 
 TEST_CASE("Shipping viewer bridge opens fast and compatibility USD stages", "[recovery][usd-008]") {

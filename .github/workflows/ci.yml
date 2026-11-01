@@ -45,7 +45,7 @@ on:
         type: boolean
         default: true
   # release.yml calls this with a Release-only matrix and fuzz disabled, so the
-  # tag gate does not repeat the Debug build and seven fuzz runners whose
+  # tag gate does not repeat the Debug build and eight fuzz runners whose
   # evidence the tagged commit already carries from the full push/PR lane. The
   # full matrix stays available on every pull request, every push to main, and
   # a manual dispatch of this workflow.
@@ -418,7 +418,7 @@ jobs:
   # glTF+codecs; SEC-17/T25 added ProviderFuzz and promoted this lane into the
   # required gate (SEC-13/T13): it runs on every pull_request/push and on a
   # manual dispatch of this workflow. release.yml passes `fuzz: false` so the tag
-  # gate does not rebuild seven fuzz runners whose evidence the tagged commit
+  # gate does not rebuild eight fuzz runners whose evidence the tagged commit
   # already carries; dispatch this workflow on the tag to re-run them on demand.
   # One target per runner: the fuzz projects share the
   # tests\fuzz\x64\Release intermediate directory, so a fresh runner per target
@@ -475,6 +475,11 @@ jobs:
             exe: tests\fuzz\x64\Release\ObjFuzz.exe
             prepare: tests/fuzz/prepare_obj_seeds.py
             seeds: TestResults/security-t15/obj-seeds
+          - target: Assimp
+            project: tests\fuzz\AssimpFuzz.vcxproj
+            exe: tests\fuzz\x64\Release\AssimpFuzz.exe
+            prepare: tests/fuzz/prepare_assimp_seeds.py
+            seeds: TestResults/security-t10/assimp-seeds
           - target: glTF
             project: tests\fuzz\GltfFuzz.vcxproj
             exe: tests\fuzz\x64\Release\GltfFuzz.exe

@@ -52,7 +52,16 @@ public:
             Sleep(1);
         }
         auto message = model_core::ReadControlMessage(stdIn_);
-        if (!message || message->header.opcode != uint32_t(model_core::ControlOpcode::RequestDetail)
+        if (!message) return false;
+        if (message->header.opcode == uint32_t(model_core::ControlOpcode::EndDetail)
+            && message->payload.empty()) {
+            // A clean end of the replay: the host has no further visible
+            // region to request. This is success, not cancellation, so the
+            // worker returns to the pool with the generation already reported.
+            detailEnded_ = true;
+            return false;
+        }
+        if (message->header.opcode != uint32_t(model_core::ControlOpcode::RequestDetail)
             || message->payload.size() != sizeof(model_core::DetailRequest)) return false;
         model_core::DetailRequest request;
         std::memcpy(&request, message->payload.data(), sizeof(request));
@@ -62,6 +71,10 @@ public:
         return true;
     }
     bool ProxyEnabled() const { return proxyEnabled_ || (requestFlags_ & model_core::kImportRequestCoarseProxy); }
+    // True only when the host ended the replay cleanly with EndDetail. The
+    // import handler uses it to distinguish a normal end from a cancelled or
+    // broken generation.
+    bool DetailEnded() const { return detailEnded_; }
     // One-shot workers enable proxy mode through their command-line switch,
     // while the reusable product pool supplies the same mode per request.
     // Both paths must enter the representative preview pass before scanning;
@@ -106,6 +119,7 @@ private:
     std::optional<model_core::ChunkDescriptor> requested_;
     bool refinement_ = false;
     bool scanStarted_ = false;
+    bool detailEnded_ = false;
     inline static unsigned delayMs_ = 0;
     HANDLE stdIn_;
     HANDLE stdOut_;

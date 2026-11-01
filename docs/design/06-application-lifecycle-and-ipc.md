@@ -4,9 +4,9 @@
 
 interactive-viewer is a standalone native GUI executable. It is not a daemon, service, tray application, browser host, or child of the thumbnail provider. It links no third-party format parser or decoder itself; it brokers a zero-capability AppContainer `Preview3DImportWorker.exe` for ordinary format parsing and, for USD generations outside the TinyUSDZ subset, a second zero-capability AppContainer `Preview3DImportHost.exe` for OpenUSD composition. Neither child has UI and neither is persistent background infrastructure — the worker is reused across generations within a session but is not a daemon, and the host starts only per USD generation.
 
-There is at most one normal viewer process per interactive Windows user session while a viewer window is open. Launching another model forwards an Open request to that visible instance and activates it. Closing the last viewer window requests cancellation, terminates any import-worker and compatibility-host jobs, and terminates the process; there is no warm background mode in the MVP.
+Every launch is an independent viewer process with its own window, GPU device, import children and document state. Users can keep several models open side by side, and launching Preview 3D again never forwards to or activates an existing window. Closing a window requests cancellation, terminates that process's import-worker and compatibility-host jobs, and exits the process; there is no warm background mode in the MVP.
 
-This is a usability policy, not an architectural dependency. A developer-only switch may bypass forwarding for debugging, but it is not registered with Explorer.
+The earlier per-session singleton/forwarding protocol is no longer part of the runtime path. `ActiveInstance.cpp` remains the home of the shared command-line path rules (`NormalizeForwardPath`) and its protocol helpers are still unit tested, but `wWinMain` initializes the coordinator in bypass mode so no mutex, ready event, pipe or listener is created.
 
 ## Command line
 
@@ -21,7 +21,7 @@ Rules:
 - exactly one path opens that document;
 - options are parsed with CommandLineToArgvW and ordinal, case-insensitive option names;
 - an unknown option, missing value, or multiple primary paths shows usage and returns exit code 2;
-- relative paths are resolved against the launcher's current directory before forwarding;
+- relative paths are resolved against the launcher's current directory before opening;
 - paths remain UTF-16 internally and are never round-tripped through the active code page.
 
 Developer-only switches such as --warp or --diagnostics are compiled out or rejected by production registration. The import children follow the same rule for fault injection: every `Preview3DImportWorker.exe`/`Preview3DImportHost.exe`/`Preview3DStepHost.exe` fault switch is Debug-only and a Release child rejects it with a usage exit (ADR-0038).
@@ -33,16 +33,16 @@ The viewer's external test-control surface is gated the same way (ADR-0040). `--
 The executable separates first-visible work from heavy initialization:
 
 1. Set process DPI awareness and install fail-fast/diagnostic handlers.
-2. Parse the command line and determine current user SID hash and session ID.
-3. Attempt to become the per-session primary via the secured singleton protocol.
-4. If secondary, authenticate to the pipe, forward the normalized path, await an acknowledgement, and exit.
-5. If primary, initialize COM STA on the UI thread, register the window class, create/show the HWND, and begin the message pump.
-6. Start the active-instance IPC listener, render thread, upload coordinator, cache coordinator, and bounded loader/broker pool without waiting for device/file readiness on the UI thread. Do not load OpenUSD, start the compatibility host, or start the import worker before the first Open request.
-7. Send any startup path through the same UI command path as IPC and drag/drop opens.
+2. Parse the command line and normalize an optional model path.
+3. Initialize COM STA on the UI thread, register the window class, create/show the HWND, and begin the message pump. Every launch takes this path; there is no election, forwarding or secondary exit.
+4. Start the render thread, upload coordinator, cache coordinator, and bounded loader/broker pool without waiting for device/file readiness on the UI thread. Do not load OpenUSD, start the compatibility host, or start the import worker before the first Open request.
+5. Send any startup path through the same UI command path as drag/drop and dialog opens.
 
 The solid client background is painted by the window until the first swap-chain frame is ready, so device creation never presents an unresponsive black window. Startup failures become a native error surface or message box while the message pump remains operational.
 
-## Singleton names and access
+## Legacy singleton protocol
+
+The secured singleton objects and named-pipe frames below are retained in `ActiveInstance.cpp` for unit tests and for a possible future reuse, but the shipping viewer does not create them and never forwards an activation. Names, ACLs and framing are documented here so the helpers keep their tested contract.
 
 Names are scoped by both interactive session and user identity:
 
@@ -103,9 +103,7 @@ Repeated selection of the current canonical file activates the window and reload
 
 ## Window activation
 
-The primary handles an accepted request by restoring a minimized window, bringing it to the current virtual desktop when permitted, flashing the taskbar if foreground activation is denied by Windows, and starting the Open command. IPC does not call SetForegroundWindow from the server thread.
-
-Drag/drop and the File > Open dialog normalize into the same OpenCommand and format/error pipeline. WM_COPYDATA is not used because its synchronous send could block the UI thread and has weaker framing/control.
+Each window is activated normally by Windows. There is no cross-process activation request: opening a file through the command line, Shell association, Open With, or drag/drop starts or updates that process's own window. Drag/drop and the File > Open dialog normalize into the same OpenCommand and format/error pipeline. WM_COPYDATA is not used because its synchronous send could block the UI thread and has weaker framing/control.
 
 ## Cancellation
 
@@ -132,7 +130,7 @@ Targets:
 
 WM_CLOSE begins an asynchronous close:
 
-1. AppState enters Closing, rejects/negatively acknowledges new IPC Open requests, and hides the window promptly.
+1. AppState enters Closing, rejects new open requests, and hides the window promptly.
 2. UI requests stop on the document, active-instance pipe, import-worker and compatibility-host jobs, cache coordinator, workers, upload coordinator, and render thread.
 3. The hidden UI thread continues pumping messages; it does not join threads or wait for GPU fences.
 4. Owners drain/cancel their bounded queues. The GPU lanes perform the finite shutdown sequence in [04-rendering-and-streaming.md](./04-rendering-and-streaming.md).
@@ -159,9 +157,9 @@ Exit codes:
 
 | Code | Meaning |
 | ---: | --- |
-| 0 | Normal primary shutdown or accepted secondary forward |
+| 0 | Normal shutdown |
 | 2 | Command-line error |
-| 3 | IPC primary unavailable/rejected |
+| 3 | Legacy activation protocol unavailable/rejected (not used by the viewer runtime) |
 | 4 | Unsupported system/device at startup |
 | 5 | Fatal initialization failure |
 | 6 | Forced shutdown after graphics timeout |

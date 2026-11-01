@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "task": "T34",
+  "date": "2026-10-31",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug import/pass state, the T34 full-corpus report and the local corpus inventory",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoots": [
+    "TestResults/render-quality/T34-capture",
+    "TestResults/render-quality/T34-dev"
+  ],
+  "note": "The capture-only run supplies the external corpus images; the focused T34-dev run supplies portable FBX/USD/3MF/OBJ/STEP, hostile-input and lifecycle images. The final gate re-emits the same cases under TestResults/render-quality/T34 with the same binary and profile.",
+  "imagesInspected": [
+    "TestResults/render-quality/T34-capture/images/external-car-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/external-car-clay-front.png",
+    "TestResults/render-quality/T34-capture/images/external-car-directional-front.png",
+    "TestResults/render-quality/T34-capture/images/external-car-studio-window.png",
+    "TestResults/render-quality/T34-capture/images/external-car-studio-orbit-090.png",
+    "TestResults/render-quality/T34-capture/images/external-camera-studio-lens.png",
+    "TestResults/render-quality/T34-capture/images/external-camera-clay-lens.png",
+    "TestResults/render-quality/T34-capture/images/external-camera-directional-lens.png",
+    "TestResults/render-quality/T34-capture/images/external-camera-studio-lettering.png",
+    "TestResults/render-quality/T34-capture/images/external-microscope-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/external-stl-base-studio-oblique.png",
+    "TestResults/render-quality/T34-capture/images/external-stl-lid-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/external-tinker-studio-front.png",
+    "TestResults/render-quality/T34-dev/images/tinker-default-after-fix.png",
+    "TestResults/render-quality/T34-capture/images/external-house-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/external-kimono-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/external-choco-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/external-lioness-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/external-food-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/external-suit-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/external-mint-failed-load.png",
+    "TestResults/render-quality/T34-capture/images/generated-step-assembly-studio-front.png",
+    "TestResults/render-quality/T34-capture/images/generated-textured-obj-studio-front.png",
+    "TestResults/render-quality/T34-dev/images/t34-portable-portable-step-studio-front.png",
+    "TestResults/render-quality/T34-dev/images/t34-portable-portable-3mf-clay-front.png",
+    "TestResults/render-quality/T34-dev/images/t34-portable-portable-fbx-hierarchy-directional-front.png",
+    "TestResults/render-quality/T34-dev/images/t34-portable-portable-usdz-studio-front.png",
+    "TestResults/render-quality/T34-dev/images/t34-portable-portable-obj-studio-front.png",
+    "TestResults/render-quality/T34-dev/images/t34-hostile-oversized-image-recovered.png",
+    "TestResults/render-quality/T34-dev/images/t34-low-budget-reopen.png",
+    "TestResults/render-quality/T34-dev/images/t34-lifecycle-after-device-loss.png"
+  ],
+  "observations": [
+    "Car: Studio shows red paint, readable grille/headlights, dark glass with interior depth; Clay converts every authored surface to the same neutral matte and hides the interior behind solid glass; Directional keeps paint/trim separation with a contact shadow. The window close-up shows the steering wheel, seats and glass layers. The pre-existing authored window/trim speckle remains and is recorded, not hidden.",
+    "Camera: the lens stays a dark reflective disc with depth in Studio and Directional, becomes neutral matte in Clay, and the ring lettering remains legible. It does not collapse to the pale disk observed in the F3D reference.",
+    "Microscope, STL base/lid/cartridge, House USDZ, Kimono USDZ, suit, choco bunny and food collection load and render in all three modes. STL hard edges and planar faces are preserved; USDZ house/character textures resolve; the FBX suit keeps its material partition; the food collection is a very wide flat layout and is small in the fitted frame (presentation limitation, not a renderer failure).",
+    "Tinker OBJ: the authored obj.mtl is absent. Before the T34 fix Studio/Directional rendered it as an almost black silhouette while Clay showed the geometry. The normalized OBJ default material now uses a neutral PBR base and the model is reviewable with its geometry intact; optional-feature warnings remain recorded.",
+    "Lioness FBX has a very dark authored texture; geometry, eyes and red-tinted material variation are visible. It is recorded as an asset-appearance observation, not a normalized-material defect.",
+    "Mint swimsuit FBX fails with typed MalformedData at ValidateSection (stage 16). The partial/failed image is retained as a typed failure, never as a successful capture.",
+    "STEP: the checked-in AP214 assembly renders as separated red bodies in Studio/Clay/Directional with per-part shadows; the 241 MiB Voron assembly is a typed local-corpus resource-budget disposition, not an image skip.",
+    "Portable FBX, USD/USDZ, 3MF, textured OBJ and STEP all load with resident geometry, mode-distinct images and recorded source-format/up-axis/transform facts. The USD Catmull-Clark control-cage case is explicitly degraded with an optional-feature warning.",
+    "The oversized-image hostile input is rejected before upload: the optional texture falls back to a 2x2-neutral map with a texture warning and no 32000x32000 allocation. A NaN/Inf texcoord is rejected as a typed protocol violation before a drawable scene is published.",
+    "Lifecycle captures cover rapid open/cancel, stale generations, three mode changes, 1600x1000 and 1024x768 resize, simulated 96/144/192 DPI, coarse-to-full residency, eviction, device loss recovery and reopen. The 32 MiB low-budget open ends with a typed ResourceLimit while a fresh normal open still succeeds."
+  ],
+  "defects": [
+    {
+      "id": "mint-fbx-typed-import-failure",
+      "label": "release-blocking-disposition",
+      "where": "mint-swimsuit-animated-neverness-to-everness/source/Mint Swimsuit1.fbx",
+      "description": "The 10.8 MiB skinned FBX fails with MalformedData before publishing geometry. It is recorded as a typed failure with the failed-load image; it is not counted as a successful model/mode image.",
+      "assignedTo": "T35 or a dedicated FBX follow-up"
+    },
+    {
+      "id": "food-collection-fitted-framing",
+      "label": "presentation-limitation",
+      "where": "food-collection-game-ready in the controlled fit camera",
+      "description": "The flat, very wide layout is small vertically in the fitted frame. Geometry/materials render; this is a first-open framing limitation for an extreme aspect ratio, not an exposure or material-name exception.",
+      "assignedTo": "T35"
+    },
+    {
+      "id": "car-authored-window-speckle",
+      "label": "known-defect",
+      "where": "Car window/trim seams",
+      "description": "The pre-existing authored speckle remains in Studio/Directional. It is visible in the window close-up and is not hidden by a global blur or exposure change.",
+      "assignedTo": "T35"
+    },
+    {
+      "id": "f3d-reference-condition",
+      "label": "limitation",
+      "where": "installed F3D 3.5.0 references",
+      "description": "The F3D preset is DPI-aware and its Camera lens is a flat pale disk; the reference is qualitative and is not an accepted glass target.",
+      "assignedTo": "T35"
+    }
+  ],
+  "positives": [
+    "Every local corpus root entry is either captured or has an explicit typed disposition; the matrix has no unaccounted entries.",
+    "Camera lens/lettering and Car windshield/paint are mandatory paired regions with all three modes present.",
+    "No restricted model or screenshot is committed; portable coverage uses generated or in-repository licensed fixtures.",
+    "Hostile import rejection happens before GPU resource creation, and the Release dependency closure excludes OCCT/Assimp/fastgltf/lib3mf/TinyUSDZ/ufbx/Draco/Basis decoders.",
+    "Measured per-asset GPU/CPU/memory and per-pass costs are recorded with hardware identity; no reference-hardware timing claim is made."
+  ],
+  "acceptance": {
+    "externalMatrixCapturedOrTypedDisposition": true,
+    "portableCompatibilityManifestExtended": true,
+    "hostileUvMaterialTextureCoverage": true,
+    "lifecycleCovered": true,
+    "formatReviewPerFamily": true,
+    "measuredCostRecorded": true,
+    "mandatoryCarCameraRegions": true,
+    "visualReviewPerformed": true,
+    "restrictedModelsNotCommitted": true
+  }
+}

@@ -82,6 +82,26 @@ enum class Control
     // Appended after OpenWithMoreApps so earlier numeric runtime IDs stay
     // stable. Visible only while a newer release is known.
     UpdateAvailable,
+    // Appended after UpdateAvailable so earlier numeric runtime IDs stay stable.
+    ErrorOpenAs,
+    // T21a appearance controls, appended to keep all earlier runtime IDs.
+    BackgroundMode,
+    GroundHighlight,
+    // The "..." settings menu exposes the newer render layers and its footer
+    // commands as rows too. Appended so every earlier runtime ID stays stable.
+    GroundShadow,
+    AmbientOcclusion,
+    ModelWarnings,
+    MenuControls,
+    MenuAbout,
+    Language,
+    OrbitSpeed,
+    BackgroundDark,
+    BackgroundGray,
+    BackgroundCustom,
+    BackgroundTransparent,
+    BackgroundChecker,
+    StopOrbitOnInteraction,
     Count,
 };
 

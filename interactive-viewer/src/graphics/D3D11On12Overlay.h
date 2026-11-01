@@ -130,20 +130,21 @@ private:
     void DrawResetViewButton(const OverlayInfo& overlay, float scale);
     static D2D1_RECT_F ToRectF(RECT rect);
     void DrawTitleBar(const OverlayInfo& overlay, const Chrome& chrome, float clientWidth, float scale);
-    void DrawSpeedFlyout(const OverlayInfo& overlay, float scale);
     void DrawSliderFlyout(bool open, const RECT& panelRect, const RECT& trackRect, float sliderT,
         const std::wstring& title, const std::wstring& value, float scale);
     void DrawOrbitFlyout(const OverlayInfo& overlay, float scale);
     void DrawToggleRow(const D2D1_RECT_F& rowRect, const D2D1_RECT_F& switchRect,
-        const std::wstring& label, bool on, float scale);
-    void DrawSettingsPanel(const OverlayInfo& overlay, float scale);
+        const std::wstring& label, const std::wstring& shortcut, bool on, float scale);
+    void DrawMenuSlider(const MenuRowOverlay& row, float scale);
+    void DrawMenuRow(const MenuRowOverlay& row, float scale);
+    void DrawSettingsMenu(const OverlayInfo& overlay, float scale);
     void DrawOpenWithPopup(const OverlayInfo& overlay, float scale);
     void DrawOpenWithTile(const OpenWithTileOverlay& tile, const OverlayInfo& overlay, float scale);
     ID2D1Bitmap* OpenWithIconBitmap(const OpenWithTileOverlay& tile);
     void DrawTextEllipsized(const std::wstring& text, IDWriteTextFormat* format, D2D1_RECT_F rectangle,
         D2D1_COLOR_F color, DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING);
     void DrawTooltip(const OverlayInfo& overlay, float clientWidth, float scale);
-    void DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome);
+    void DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome, bool captureClean = false);
 
     bool CreateTargetsForBackBuffers(D3D12SwapChain& swapChain, std::wstring& error);
 

@@ -60,4 +60,27 @@ The release tag itself must be protected. Maintainers configure a tag protection
 
 Code signing is applied per executable image, and Smart App Control evaluates every image separately. A signed `Preview3D.exe` alone is not enough: the DLLs bundled beside it (the worker/OpenUSD/OCCT dependency closure) are signed in the same `Create-PortableRelease.ps1` pass, or SAC can still refuse one of them. If Windows nonetheless blocks an image, use the steps above rather than disabling protection globally.
 
+### What the viewer does with a hostile or malformed file
+
+Preview 3D parses and decodes untrusted models outside the viewer process: the
+loader requests a brokered import, the worker/host applies bounded parsing and
+the viewer only accepts validated, bounded wire data. The 0.7.0 render
+qualification exercises that boundary:
+
+- An oversized image (declared 32000×32000) falls back to a bounded placeholder
+  with a texture warning; the full-size texture is never uploaded. A NaN/Inf
+  texture coordinate is rejected as a typed protocol error before a drawable
+  scene exists.
+- Device loss rebuilds the render targets and returns to a complete scene; a
+  32 MiB low-budget import ends as a typed `ResourceLimit` and does not poison
+  the next normal open.
+- The Release viewer contains no OCCT, Assimp, fastgltf, lib3mf, TinyUSDZ,
+  ufbx, Draco, Basis or zlib parser/codec dependency, and the Debug-only
+  test-control flags and messages (`--app-smoke`, `WM_APP+104`) are not present
+  in a shipping build: the flag exits with the unknown-option usage code and
+  the messages return zero.
+
+The accepted evidence is `TestResults/render-quality/T34/report.json`; exact
+limits and format subsets are in [FORMAT-SUPPORT.md](FORMAT-SUPPORT.md).
+
 For the technical details, see Microsoft’s [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions) and the [related Microsoft Q&A discussion](https://learn.microsoft.com/en-us/answers/questions/5637638/smart-app-blocked-my-app).

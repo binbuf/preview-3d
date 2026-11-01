@@ -5,6 +5,7 @@
 #include <shlobj.h>
 
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <span>
 #include <string>
@@ -112,6 +113,10 @@ ViewerSettings LoadSettings()
     if (hideCursorText == "true") settings.hideCursorWhileDragging = true;
     else if (hideCursorText == "false") settings.hideCursorWhileDragging = false;
 
+    const std::string stopOrbitText = FindJsonValue(content, "stopOrbitOnInteraction");
+    if (stopOrbitText == "true") settings.stopOrbitOnInteraction = true;
+    else if (stopOrbitText == "false") settings.stopOrbitOnInteraction = false;
+
     const std::string hideUntilCompleteText = FindJsonValue(content, "hideModelUntilComplete");
     if (hideUntilCompleteText == "true") settings.hideModelUntilComplete = true;
     else if (hideUntilCompleteText == "false") settings.hideModelUntilComplete = false;
@@ -122,6 +127,47 @@ ViewerSettings LoadSettings()
         const std::string code = languageText.substr(1, languageText.size() - 2);
         // The code is a plain ASCII token; widen it directly.
         settings.language.assign(code.begin(), code.end());
+    }
+
+    const std::string toneMapText = FindJsonValue(content, "toneMapMode");
+    if (!toneMapText.empty())
+    {
+        const int value = std::atoi(toneMapText.c_str());
+        if (value >= 0 && value <= 3) settings.toneMapMode = value;
+    }
+    const std::string backgroundText = FindJsonValue(content, "backgroundMode");
+    if (!backgroundText.empty())
+    {
+        const int value = std::atoi(backgroundText.c_str());
+        if (value >= 0 && value <= 4) settings.backgroundMode = value;
+    }
+    const std::string backgroundColorText = FindJsonValue(content, "backgroundColor");
+    if (!backgroundColorText.empty())
+    {
+        char* end = nullptr;
+        const unsigned long value = std::strtoul(backgroundColorText.c_str(), &end, 0);
+        if (end && end != backgroundColorText.c_str() && value <= 0x00FFFFFFul)
+            settings.backgroundColor = static_cast<unsigned int>(value);
+    }
+    const std::string highlightText = FindJsonValue(content, "groundHighlightEnabled");
+    if (highlightText == "true") settings.groundHighlightEnabled = true;
+    else if (highlightText == "false") settings.groundHighlightEnabled = false;
+    const std::string shadowText = FindJsonValue(content, "groundShadowEnabled");
+    if (shadowText == "true") settings.groundShadowEnabled = true;
+    else if (shadowText == "false") settings.groundShadowEnabled = false;
+    const std::string shadowOverrideText = FindJsonValue(content, "groundShadowOverridden");
+    if (shadowOverrideText == "true") settings.groundShadowOverridden = true;
+    else if (shadowOverrideText == "false") settings.groundShadowOverridden = false;
+    const std::string aoText = FindJsonValue(content, "ambientOcclusionEnabled");
+    if (aoText == "true") settings.ambientOcclusionEnabled = true;
+    else if (aoText == "false") settings.ambientOcclusionEnabled = false;
+    const std::string exposureText = FindJsonValue(content, "exposure");
+    if (!exposureText.empty())
+    {
+        char* end = nullptr;
+        const float value = std::strtof(exposureText.c_str(), &end);
+        if (end && end != exposureText.c_str() && std::isfinite(value))
+            settings.exposure = std::clamp(value, 0.05f, 8.0f);
     }
 
     return settings;
@@ -161,7 +207,16 @@ void SaveSettings(const ViewerSettings& settings)
         ",\n  \"groundAxis\": \"" + groundAxis + "\"" +
         ",\n  \"groundAxisInverted\": " + (settings.groundAxisInverted ? "true" : "false") +
         ",\n  \"hideCursorWhileDragging\": " + (settings.hideCursorWhileDragging ? "true" : "false") +
+        ",\n  \"stopOrbitOnInteraction\": " + (settings.stopOrbitOnInteraction ? "true" : "false") +
         ",\n  \"hideModelUntilComplete\": " + (settings.hideModelUntilComplete ? "true" : "false") +
+        ",\n  \"toneMapMode\": " + std::to_string(settings.toneMapMode) +
+        ",\n  \"backgroundMode\": " + std::to_string(settings.backgroundMode) +
+        ",\n  \"backgroundColor\": " + std::to_string(settings.backgroundColor & 0x00FFFFFFu) +
+        ",\n  \"groundHighlightEnabled\": " + (settings.groundHighlightEnabled ? "true" : "false") +
+        ",\n  \"exposure\": " + std::to_string(settings.exposure) +
+        ",\n  \"groundShadowEnabled\": " + (settings.groundShadowEnabled ? "true" : "false") +
+        ",\n  \"groundShadowOverridden\": " + (settings.groundShadowOverridden ? "true" : "false") +
+        ",\n  \"ambientOcclusionEnabled\": " + (settings.ambientOcclusionEnabled ? "true" : "false") +
         ",\n  \"language\": \"" + escapedLanguage + "\"\n}\n";
 
     std::wstring writeError;

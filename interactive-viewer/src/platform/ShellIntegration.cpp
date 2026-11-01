@@ -3,6 +3,7 @@
 #include "OpenWithCache.h"
 #include "OpenWithNaming.h"
 #include "SafeFileOps.h"
+#include "model_core/FormatSelection.h"
 
 #include <shellapi.h>
 #include <shlobj.h>
@@ -37,10 +38,15 @@ constexpr std::uint32_t kCatalogRevision = 8;
 constexpr std::uint64_t kDiscoveryInterval = 7ull * 24 * 60 * 60 * 10'000'000;
 constexpr std::size_t kMaximumCacheBytes = 256 * 1024;
 constexpr wchar_t kCacheFileName[] = L"open-with-apps-v1.dat";
-constexpr std::array<const wchar_t*, 13> kSupportedExtensions{
-    L".glb", L".gltf", L".stl", L".ply", L".obj", L".fbx", L".3mf",
-    L".usd", L".usda", L".usdc", L".usdz", L".step", L".stp"
-};
+
+// Direct-open extensions come from the format catalog; this list must never be
+// hand-maintained alongside it (the [format-installer] test covers the
+// installer and the catalog-level test covers this helper).
+const std::vector<std::wstring>& SupportedExtensions()
+{
+    static const std::vector<std::wstring> extensions = model_core::DirectOpenExtensions();
+    return extensions;
+}
 
 struct CatalogApp
 {
@@ -110,8 +116,8 @@ std::wstring ExtensionOf(const std::wstring& path)
 
 bool SupportedExtension(const std::wstring& extension)
 {
-    for (const auto* supported : kSupportedExtensions)
-        if (_wcsicmp(supported, extension.c_str()) == 0) return true;
+    for (const auto& supported : SupportedExtensions())
+        if (_wcsicmp(supported.c_str(), extension.c_str()) == 0) return true;
     return false;
 }
 
@@ -413,10 +419,10 @@ void AddDiscoveredHandlers(const wchar_t* extension, ASSOC_FILTER filter, bool p
 std::vector<open_with::CachedHandler> DiscoverHandlers()
 {
     std::unordered_map<std::wstring, open_with::CachedHandler> discovered;
-    for (const auto* extension : kSupportedExtensions)
+    for (const auto& extension : SupportedExtensions())
     {
-        AddDiscoveredHandlers(extension, ASSOC_FILTER_RECOMMENDED, false, discovered);
-        AddDiscoveredHandlers(extension, ASSOC_FILTER_NONE, true, discovered);
+        AddDiscoveredHandlers(extension.c_str(), ASSOC_FILTER_RECOMMENDED, false, discovered);
+        AddDiscoveredHandlers(extension.c_str(), ASSOC_FILTER_NONE, true, discovered);
     }
     std::vector<open_with::CachedHandler> records;
     records.reserve(discovered.size());

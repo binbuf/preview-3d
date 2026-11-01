@@ -8,20 +8,62 @@ This document defines what “supports a format” means, how untrusted files en
 
 ## Support matrix
 
+The extension column below is an index for readers, not the authority. The
+compile-time catalog at `shared/model-core/include/model_core/FormatCatalog.h`
+is the single authority for which extensions a format owns, its stable
+`FormatId`, importer kind, default up axis/unit policy, presentation profile,
+thumbnail family and capabilities. UI filters, broker registration, Open As
+names and the installer registration lists are generated from that table. This
+document and the catalog must agree, and the catalog wins when they do not. The
+catalog is data plus pure lookups: it never parses a file, includes no
+third-party parser, and carries no path or network authority.
+
+`PresentationProfile` is declared per family in the same table. The viewer maps
+it once at document open to its own view state: `StudioPbr` selects the
+material-aware Studio shader, `StudioCad` selects the neutral Clay review
+material with the ground grid, and `PointCloud` keeps the unlit round splat
+pipeline and hides the grid. `ResolvePresentationProfile` is a pure function of
+the descriptor plus the validated point/triangle totals, so a PLY point cloud
+selects the point preset while a PLY mesh keeps Studio PBR. The preset never
+rewrites source materials. An explicit toolbar lighting or grid choice pins the
+session override; reloads and refinements do not re-apply the preset.
+
 | Input | Parser | MVP content | Deliberate limits | Performance tier |
 | --- | --- | --- | --- | --- |
-| .glb, .gltf | fastgltf + Draco + KTX/Basis | glTF 2.0 scenes, nodes, triangle meshes, PBR metallic/roughness and unlit materials, vertex colors, PNG/JPEG/WebP/KTX2 textures, `KHR_texture_transform`, `KHR_mesh_quantization`, `KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `EXT_texture_webp`, `KHR_materials_transmission` (approximated as Fresnel-weighted alpha-blended glass; no refraction pass), `KHR_materials_pbrSpecularGlossiness` (archived; approximated as diffuse base color with metallic 0 and roughness `1 - glossiness`; the specular-glossiness texture has no matching slot) | No animation playback, skins, morph targets, lights, cameras, or advanced material lobes. External URIs must resolve to approved local files contained within the primary file's directory tree (its own directory or a subdirectory). A single oversized compressed primitive/view may fail its decode-working-set limit. | A for ordinary/meshopt data; compressed primitives are bounded decode units |
+| .glb, .gltf | fastgltf + Draco + KTX/Basis | glTF 2.0 scenes, nodes, triangle meshes, PBR metallic/roughness and unlit materials, vertex colors, PNG/JPEG/WebP/KTX2 textures, `KHR_texture_transform`, `KHR_mesh_quantization`, `KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `EXT_texture_webp`, `KHR_materials_transmission` (thin-surface scene-color transmission in linear HDR through a bounded roughness-selected mip pyramid; no refraction or inter-layer transmission), `KHR_materials_pbrSpecularGlossiness` (archived; approximated as diffuse base color with metallic 0 and roughness `1 - glossiness`; the specular-glossiness texture has no matching slot), `normalTexture.scale`, per-texture `texCoord`/sampler/`KHR_texture_transform`, an independent `occlusionTexture`, and the `KHR_materials_clearcoat`/`sheen`/`specular`/`transmission` texture maps (fixed v14 slots, including clearcoat normal/roughness) | No animation playback, skins, morph targets, lights, cameras, or advanced material lobes (anisotropy, iridescence, volume, dispersion, diffuse transmission). Only TEXCOORD_0 is rendered; a texture whose `texCoord` is above 0 stays unbound with an explicit unsupported-UV-set record rather than sampling UV0. External URIs must resolve to approved local files contained within the primary file's directory tree (its own directory or a subdirectory). A single oversized compressed primitive/view may fail its decode-working-set limit. | A for ordinary/meshopt data; compressed primitives are bounded decode units |
 | .stl | Product code | Binary and ASCII triangles; supplied normals or generated flat normals | No color/material dialect guarantee | A for binary; B for ASCII |
 | .ply | Product code | ASCII and binary little/big-endian PLY mesh or point cloud; positions, normals, common UV/color properties, polygon faces triangulated on import | Unknown elements/properties are skipped within bounds; no volumetric, range-grid, material, or arbitrary custom-property visualization | A for supported binary layouts; B for ASCII |
 | .obj with optional .mtl | ufbx OBJ loader | Faces, smoothing, normals, UVs, vertex colors where available, MTL colors and approved local texture maps | Triangulated on import; .mtl is never opened as a primary document | B |
 | .fbx | ufbx | Binary/ASCII FBX, static hierarchy, instancing, polygon geometry, unified PBR materials, and a deterministic evaluated start pose including supported skin and blend deformers | No animation playback, geometry caches, dynamic constraints, NURBS/subdivision tessellation, cameras, or lights | B |
-| .3mf | lib3mf | Core, Materials, Production, and bounded Beam Lattice preview subsets; components, build items, transforms, colors/materials, textures | Slice, Secure Content, Volumetric, and Implicit extensions are not supported; any unsupported required extension fails | B |
-| .usd, .usda, .usdc, .usdz | TinyUSDZ fast path; OpenUSD compatibility host | Static meshes, transforms, instances/point instances, display color, bounded Preview Surface materials, packaged textures, and bounded local composition including sublayers, references, inherits/specializes, authored variant selections, and payloads; skeletal bindings are ignored and the authored rest pose is previewed statically | No animation playback, skeletal deformation, variants UI, MaterialX, remote assets, procedural schemas, or arbitrary renderer plug-ins | B |
-| .step, .stp | OCCT in the dedicated STEP host | ISO 10303-21 clear-text AP203/AP214/AP242 product/assembly structure, B-rep and faceted geometry including supported AP242 tessellated representations, occurrence transforms, units, representable colors/transparency | Self-contained documents only: external STEP documents (`FILE_POPULATION`/`DOCUMENT_FILE`) are out of scope by recorded product decision (ADR-017) and fail `UnsupportedRequiredFeature`; no PMI/GD&T, editing, exact-kernel operations, or shape healing; `UpAxisId::Unknown` by design | B |
+| .3mf | lib3mf | Core, Materials, Production, and bounded Beam Lattice preview subsets; components, build items, transforms, colors/materials, textures | Slice, Secure Content, Volumetric, and Implicit extensions are terminal (`UnsupportedRequiredFeature`). Any other required namespace that only annotates the package is ignored with an `Ignored` compatibility record, per ADR-0066. | B |
+| .usd, .usda, .usdc, .usdz | TinyUSDZ fast path; OpenUSD compatibility host | Static meshes, procedural `Sphere`/`Cube`/`Cylinder`/`Cone`/`Capsule`, `Points` as point splats, creased/subdivided meshes as a control cage, transforms, instances/point instances, display color/opacity, bounded Preview Surface materials, packaged textures, and bounded local composition including sublayers, references, inherits/specializes, authored variant selections, and payloads; skeletal bindings are ignored and the authored rest pose is previewed statically | No animation playback, skeletal deformation, curves/NURBS, variants UI, MaterialX, remote assets, other procedural schemas, or arbitrary renderer plug-ins | B |
+| .igs, .iges | OCCT IGES in the dedicated CAD host | Fixed 80-column S/G/D/P/T record streams, analytic B-rep geometry, subfigure/assembly structure, and representable colors | Bounded record/entity/reference preflight before OCCT; no temporary file or path (the admitted records are fed to the pinned in-memory parser). Missing global unit flag assumes millimetres and warns; authored units convert to the verified OCCT system millimetre. No PMI/GD&T or exact-kernel operations; `UpAxisId::Unknown` | B |
+| .brep | OCCT `BRepTools` in the dedicated CAD host | `CASCADE Topology` V1-V3 shape sets: topology and geometry, including compounds | Bounded `TShapes`/`Locations` shape-set preflight before `BRepTools::Read`; no authored colors or units (zero metres-per-unit). No PMI/GD&T; `UpAxisId::Unknown` | B |
+| .step, .stp | OCCT in the dedicated STEP host | ISO 10303-21 clear-text AP203/AP214/AP242 product/assembly structure, B-rep and faceted geometry including supported AP242 tessellated representations, occurrence transforms, authored length units with tolerant assumptions, representable colors/transparency, and Draft/Balanced/Full import quality | External STEP document declarations (`FILE_POPULATION`/`DOCUMENT_FILE`) are counted from Part-21 instance names outside comments/strings and never opened; an unresolved declaration is a warning and the main document still opens. A missing length unit assumes millimetres (0.001 m per unit) and contradictory units use the reader's first/dominant factor, both with warnings; a positive factor above the validated bound still fails typed. An opt-in bounded `ShapeFix` pass runs only after a definition transfers but cannot tessellate. No PMI/GD&T, editing, exact-kernel operations, or measurement; `UpAxisId::Unknown` by design | B |
+| .dae, .3ds, .dxf, .x, .off, .amf, .x3d | Assimp in the general worker (compatibility adapter) | Static triangle meshes, node transforms, vertex normals/UVs/colors, diffuse/metallic/roughness/emissive material factors, and approved local or embedded textures. DAE keeps its scene hierarchy; 3DS/DXF/X/OFF/AMF/X3D expose their supported static mesh subsets. | No animation, cameras/lights, plug-ins, file writes or default IOSystem. Assimp never serves a native format. DXF is limited to Assimp's 3DFACE/polyline entities (not full DXF). Line/point-only content is skipped with a warning; a scene with no triangles fails typed. Tier-B object/material/triangle/vertex caps and scratch/texture/sidecar budgets apply. `UpAxisId` is the exporter-family convention and units are unspecified (`0.0`) | B |
 
 Tier A is the release-gated out-of-core path for the multi-gigabyte workload in [01-product-scope.md](./01-product-scope.md). Tier B formats are still MVP features, but their parser libraries may materialize more intermediate state and therefore have lower enforced limits. Draco primitives are independently bounded because their decoded topology cannot be demand-paged from the compressed bitstream. A format badge is shown when a file uses an ignored or approximated optional feature; unsupported required geometry/composition fails instead of silently presenting an apparently faithful model.
 
 ## Input boundary
+
+Extension classification and content sniffing are **dispatch hints**, never a
+trust decision. `FormatCatalog` decides which extension names a format owns.
+`FormatSniffer` reads at most a bounded head window (64 KiB) and, for ZIP
+containers, a bounded End-Of-Central-Directory plus central-directory window
+(1 MiB and at most 8,192 entries) to produce a candidate; it never decompresses
+an archive and never parses model structure. The worker/host still performs the
+real parse with the same containment, budgets and typed errors. A malformed
+container therefore fails in the parser exactly as it did before. Extension and
+content are combined by `model_core::DecideOpenFormat`: a known suffix keeps the
+existing extension-only open path; content-only evidence or a cross-family
+disagreement never opens silently but raises the failure card's **Open As**
+choice with both candidates listed. `--format <stable-name>` and Open As force a
+catalog importer (still fully validated by the worker/host), while
+`--skip-content-check` selects by suffix only. `--list-formats` prints one
+`stable-name<TAB>extensions<TAB>display-name` line per directly registered
+catalog entry. The same catalog feeds the open-dialog filter, command-line and
+Shell path acceptance, Shell Open With discovery and the NSIS install/uninstall
+registration checked by `[format-installer]` ([ADR-0058](./adr/0058-catalog-driven-open-as-and-installer-drift.md)).
 
 All primary inputs are local, regular, non-empty files. The loader rejects:
 
@@ -37,7 +79,7 @@ All primary inputs are local, regular, non-empty files. The loader rejects:
 - files that change identity or size after opening;
 - integer overflow, overlapping ranges where prohibited by the format, invalid UTF encoding, non-finite geometry, and counts that exceed the applicable budget.
 
-The sidecar extension set is per requesting format. A `.gltf`/`.glb` may request a `.bin` buffer or an approved image; an OBJ a `.mtl` or an image; FBX an image (geometry caches are never evaluated); USD a `.usd`/`.usda`/`.usdc` layer or an image (direct image assets are dependencies, not layer composition). STL, PLY, self-contained STEP, and the in-archive 3MF/USDZ package entries resolve no sidecar at all, so a request from those formats fails closed. The requesting format is the trusted host's own `ImportSessionRequest::format`, never text from the worker.
+The sidecar extension set is per requesting format. A `.gltf`/`.glb` may request a `.bin` buffer or an approved image; an OBJ a `.mtl` or an image; FBX an image (geometry caches are never evaluated); USD a `.usd`/`.usda`/`.usdc` layer or an image (direct image assets are dependencies, not layer composition); the Assimp compatibility formats request images only. STL, PLY, STEP, and the in-archive 3MF/USDZ package entries resolve no sidecar at all, so a request from those formats fails closed. STEP external-document declarations are counted only as unresolved metadata: the host has no path authority and never brokers or opens the referenced file. The requesting format is the trusted host's own `ImportSessionRequest::format`, never text from the worker.
 
 One deliberate package convenience: for a local file import, an image reference that does not resolve directly is looked up by file name in exactly these directories, closest first -- beside the model, `<model dir>/texture`, `<model dir>/textures`, then the same under the parent package root. The first directory with a match wins, so sibling model packages cannot collide, and the fallback is image-only: required buffers, MTL files, and USD layers must stay where the document references them. Names match exactly first, then with case, space/underscore, and `jpg`/`jpeg`/`tif`/`tiff` spelling normalized, so files renamed by a download site still match. Traversal, UNC/device, ADS, and URL text never reach the lookup and keep failing closed; a name containing wildcards is never used as a pattern, and the matched file still passes the ordinary canonical containment and size checks. A glTF *image* URI that contains `..` (what exporters write for a model inside `source/`) is reduced to its file name before the request for the same reason -- the authored traversal is still never followed, and required buffers and USD layers keep the strict rejection.
 
@@ -71,11 +113,11 @@ Normalized output crosses the process boundary only as chunk descriptors over a 
 
 A new protocol version is a breaking change requiring updated fixtures, fuzz corpora, and an explicit compatibility decision — the host never attempts to interpret a section whose version it does not recognize. This wire format, not the shared-memory mechanism by itself, is what lets the host snapshot rule in [02-system-architecture.md](./02-system-architecture.md) be a cheap, bounded, fully-checkable copy rather than an open-ended deserialization of untrusted structure.
 
-The viewer uses protocol v10: an 88-byte header, 160-byte chunk
+The viewer uses protocol v12: an 88-byte header, 160-byte chunk
 descriptor, 40-byte scan-summary payload, and 168-byte detail request. A scan
 summary retains counts, verified bounds, source provenance, layout and the
 normalized-detail checksum without transferring a second copy of normalized
-geometry. Protocol-v10 section and payload integrity uses XXH64 directly below
+geometry. Protocol-v12 section and payload integrity uses XXH64 directly below
 10 MiB and a split-invariant fixed-256-KiB-leaf XXH64 tree at or above 10 MiB;
 this is an incidental-corruption check, not an authentication boundary. A
 validated deindexed flag lets proxy sampling traverse identity-indexed triangle
@@ -85,11 +127,156 @@ re-decoded exactly. Detail replies must match the original verified scan's
 geometry, provenance, checksum and metadata. They reuse pinned primary and
 approved sidecar handles; new sidecar requests are forbidden during replay.
 Viewer and worker binaries ship from the same build. Compatibility decision:
-reject v9 and every other unknown version; there is no migration or mixed-
+reject v11 and every other unknown version; there is no migration or mixed-
 version fallback. Updated protocol fixtures and hostile-worker cases exercise
-the v10 checksum, scan-summary, scene-record, flag and copy-then-validate paths.
+the v12 material record, v11 checksum, LineList, scan-summary, scene-record,
+flag and copy-then-validate paths.
 
-Protocol v10 adds two fixed payloads. `NodePayload` is 144 bytes: a stable
+Protocol v11 is append-only. `ChunkTopology::LineList = 11` keeps every earlier
+numeric identity unchanged, but the version bump is deliberate: a v10 consumer
+would reject the new topology rather than misinterpret its indices. A LineList
+chunk uses the same `[vertices][uint32 indices]` payload packing as
+TriangleList. `indexCount` is even and every pair `{indices[2i],
+indices[2i+1]}` is one independent, non-indexed line segment; strips, loops and
+fans are converted to this list by the adapter rather than carried on the wire.
+Points continue to use `PointList` (no index buffer). The validator rejects an
+odd index count, an index outside `vertexCount`, a byte size that does not
+match `vertexCount * stride + indexCount * 4`, and the same non-finite vertex/
+bounds rules as triangles. Coarse proxy sampling treats a line primitive as two
+corners (one segment) and PointList as one; progressive primitive accounting
+divides the index count by two. The renderer draws LineList with a dedicated
+depth-biased, depth-write-disabled line PSO and a stable grey-blue color; line
+geometry participates in bounds, visibility, proxy/LOD, and picking through the
+existing geometry pipeline.
+
+### Protocol v12 material lobes
+
+Protocol v12 grows the fixed `MaterialPayload` from 72 to 140 bytes. This is a
+new record, not a reinterpretation of the old reserved bytes, so the version
+bump is mandatory and every producer/consumer moves together. Layout:
+
+| Offset | Field | Meaning |
+| --- | --- | --- |
+| 0 | `baseColorFactor[4]` | linear RGBA |
+| 16 | `metallicFactor`, `roughnessFactor` | scalars |
+| 24 | `emissiveFactor[3]` | linear RGB before the strength multiplier |
+| 36 | `uvOffset[2]`, `uvScale[2]`, `uvRotation` | base-color transform |
+| 56 | `alphaMode`, `alphaCutoff`, `flags`, `transmissionFactor` | alpha/closed flags plus KHR transmission |
+| 72 | `emissiveStrength` | KHR emissive multiplier, default 1 |
+| 76 | `clearcoatFactor`, `clearcoatRoughness` | scalar clearcoat layer |
+| 84 | `sheenColor[3]`, `sheenRoughness` | velvet lobe |
+| 100 | `specularFactor`, `specularColor[3]` | dielectric F0 scale/tint |
+| 116 | `ior` | KHR IOR, default 1.5; F0 = ((ior-1)/(ior+1))² |
+| 120 | `occlusionStrength` | ORM AO strength, default 1 |
+| 124 | `reserved[4]` | zero in v12; future anisotropy/iridescence/volume/dispersion |
+
+The validator rejects non-finite or out-of-range lobe values, any non-zero
+reserved word, and an unrecognized flag bit. A value-initialized record keeps
+the pre-v12 appearance: emissive scale 1, no clearcoat/sheen, specular factor 1,
+IOR 1.5 (F0 0.04), occlusion strength 1.
+
+Mapping table:
+
+| Authored source | Normalized field | Rendering approximation |
+| --- | --- | --- |
+| `KHR_materials_clearcoat` scalar factor/roughness | `clearcoatFactor`, `clearcoatRoughness` | second dielectric GGX lobe; base specular scaled by (1 - factor) |
+| `KHR_materials_sheen` color/roughness | `sheenColor`, `sheenRoughness` | grazing-only velvet lobe |
+| `KHR_materials_specular` factor/color | `specularFactor`, `specularColor` | scales/tints the IOR-derived dielectric F0 |
+| `KHR_materials_ior` | `ior` | replaces the fixed 0.04 F0; <=1 means no optical interface |
+| `KHR_materials_emissive_strength` | `emissiveStrength` | multiplies emissive radiance before the HDR tone map |
+| glTF `occlusionTexture.strength` | `occlusionStrength` | glTF ORM strength formula |
+| FBX PBR coat/sheen/specular/IOR maps | same fields where ufbx exposes them | same approximations |
+
+Protocol v14 (below) adds texture-driven clearcoat/sheen/specular/transmission
+maps to the fixed record. `KHR_materials_iridescence`, `anisotropy`, `volume`,
+`dispersion` and `diffuse_transmission` remain parsed-but-unrendered: a required
+use yields a specific `Degraded` compatibility record rather than silently
+disappearing. Anisotropy/iridescence/volume rendering and refraction remain
+deferred; transparent composition uses bounded weighted blended OIT with a
+recorded sorted fallback (ADR-0084), not mesh-centre sorting.
+
+### Protocol v13 authored texture inputs
+
+Protocol v13 grows `MaterialPayload` from 140 to 244 bytes and widens the
+material chunk's dependency array to eight ids (`{baseColor,
+metallicRoughness, normal, emissive, occlusion}` in slots 0-4; slots 5-7 must be
+zero). The record is replaced, not reinterpreted in place, so every producer,
+consumer, validator and cache identity moves with the protocol number.
+
+| Offset | Field | Meaning |
+| --- | --- | --- |
+| 124 | `normalScale` | glTF `normalTexture.scale`; multiplies tangent-space XY only |
+| 128 | `slotFlags[5]` | per-slot authored UV set (0-15), U/V address mode, nearest filter |
+| 148 | `slotUvOffset[4][2]` | offset for slots 1-4 (slot 0 keeps `uvOffset`) |
+| 180 | `slotUvScale[4][2]` | scale for slots 1-4 (slot 0 keeps `uvScale`) |
+| 212 | `slotUvRotation[4]` | radians for slots 1-4 (slot 0 keeps `uvRotation`) |
+| 228 | `reserved[4]` | must be zero |
+
+Only UV set 0 is addressable because the normalized vertex layouts carry one
+TEXCOORD set. A texture that references a higher set is left unbound rather
+than aliased to UV0 and emits
+`kTextureFeatureUnsupportedUvSet` (feature id 4000). The supported set count is
+bounded by `kMaterialMaxSupportedUvSet`; adding a second TEXCOORD set is a
+vertex-layout and wire change. The validator bounds the uv-set number (0-15),
+address modes, normal scale magnitude, and every transform component, and
+rejects unknown slot-flag bits and non-zero reserved words.
+
+Color textures stay in their authored color space (`ColorSpaceId` is per image)
+and data maps stay linear; an image shared by color and data semantics is
+decoded into distinct chunks. Authored `alphaMode`/`cutoff` are preserved
+verbatim. `KHR_materials_transmission` with IOR <= 1 is suppressed with
+compatibility record 9; a BLEND material with no alpha source is recovered with
+record 10. Both are visible, tested conversions, never name-based exceptions.
+Authored OPAQUE/MASK transmission keeps its alpha mode: the renderer routes an
+OPAQUE transmissive surface through the transparent pass without rewriting the
+mode or coverage, while MASK keeps its cutout. `KHR_materials_volume` remains
+parsed-but-unrendered with its specific compatibility record: no absorption
+thickness is fabricated (ADR-0085).
+
+### Protocol v14 extension-lobe maps
+
+Protocol v14 grows `MaterialPayload` from 244 to 440 bytes and widens the
+material chunk's dependency array from 8 to 16 ids. Thirteen slots are now
+semantic, in this fixed order:
+
+| Slot | Semantic | Channel / color space |
+| --- | --- | --- |
+| 0 | baseColor | RGB(A) sRGB |
+| 1 | metallicRoughness | B/G linear data |
+| 2 | normal | RGB linear normal |
+| 3 | emissive | RGB sRGB |
+| 4 | occlusion | R linear data |
+| 5 | clearcoat factor | R linear data |
+| 6 | clearcoat roughness | G linear data |
+| 7 | clearcoat normal | RGB linear normal |
+| 8 | specular factor | A linear data |
+| 9 | specular color | RGB sRGB |
+| 10 | sheen color | RGB sRGB |
+| 11 | sheen roughness | A linear data |
+| 12 | transmission factor | R linear data |
+
+Slots 13-15 must stay zero. Each extension map multiplies its own scalar
+factor (glTF semantics) and keeps its own sampler, UV set and
+`KHR_texture_transform` through `slotFlags`/`slotUv*`; a slot above UV0 stays
+unbound with `kTextureFeatureUnsupportedUvSet` rather than aliasing UV0. The
+record layout after `normalScale` is:
+
+| Offset | Field | Meaning |
+| --- | --- | --- |
+| 128 | `clearcoatNormalScale` | `clearcoatNormalTexture.scale`, tangent-space XY |
+| 132 | `slotFlags[13]` | per-slot UV set, U/V address mode, nearest filter |
+| 184 | `slotUvOffset[12][2]` | offsets for slots 1-12 (slot 0 keeps `uvOffset`) |
+| 280 | `slotUvScale[12][2]` | scales for slots 1-12 |
+| 376 | `slotUvRotation[12]` | radians for slots 1-12 |
+| 424 | `reserved[4]` | must be zero |
+
+The validator applies the same finite/range checks to every slot and rejects
+unknown slot-flag bits, non-finite transforms and non-zero reserved words. An
+image shared between a color map (for example `specularColorTexture`) and a data
+map (for example `specularTexture`) is still decoded into distinct sRGB/linear
+chunks; the two slots reference different image chunk ids.
+
+Protocol v10 adds three fixed payloads. `NodePayload` is 144 bytes: a stable
 nonzero ID, optional parent ID, closed visibility flags, and a finite
 double-precision row-vector affine 4x4 local transform. `MeshInstancePayload`
 is 80 bytes: a stable nonzero ID, node/geometry/material IDs, closed visibility
@@ -104,10 +291,10 @@ Dependency slots have closed meanings for scene records:
 
 | Record | Dependency slots |
 | --- | --- |
-| Triangle/point geometry | Existing bounded association slots remain compatible; slot 0 may identify a legacy geometry material. Geometry marked `ReusableInstanceSource` is a resource template and is drawn only through instance records. |
+| Triangle/line/point geometry | Existing bounded association slots remain compatible; slot 0 may identify a legacy geometry material. Geometry marked `ReusableInstanceSource` is a resource template and is drawn only through instance records. |
 | Material | Slots 0–3 are base-color, metallic/roughness, normal, and emissive image IDs; sparse slots are allowed and the populated count must be exact. |
 | Node | Slot 0 is the optional parent Node ID; slots 1–3 are zero; count is 0 or 1. |
-| Mesh instance | Slot 0 is required triangle/point geometry, slot 1 is an optional Material, slot 2 is required Node, and slot 3 is zero; count is 2 or 3. |
+| Mesh instance | Slot 0 is required triangle/line/point geometry, slot 1 is an optional Material, slot 2 is required Node, and slot 3 is zero; count is 2 or 3. |
 
 References within a section resolve against its copied descriptor table;
 references to earlier progressive batches resolve only through the bounded
@@ -115,6 +302,39 @@ generation catalog. Scene references do not reach outside that catalog, and
 the terminal generation check requires the accepted Node catalog to match the
 declared node count. This makes cross-window edges strictly backward, so a
 worker cannot hide a cycle or an unbounded late dependency graph.
+
+### Compatibility report chunk
+
+Optional-feature degradation is no longer only a count. A generation may carry
+at most one `CompatibilityReport` chunk (topology 10, fixed chunk ID
+`0xf0000003`) whose payload is a 776-byte `CompatibilityReportPayload`:
+`recordCount` (0–64), a zero `reserved` word, and 64 packed 12-byte
+`CompatibilityRecord` entries. Each entry is `featureId` (uint32), a closed
+`severity` byte (`Critical=0`, `Degraded=1`, `Ignored=2`), three zero reserved
+bytes, and a `count` in `[1, 1,000,000]`. Unused record slots must be all zero.
+A report chunk declares no dependencies, no geometry fields, and must use its
+fixed chunk ID, so the generation-wide chunk-ID uniqueness rule also makes it
+appear once per generation. The section and chunk checksums cover the report
+like any other payload; there is no side channel.
+
+The worker never sends feature names or text. `FeatureId` ranges are
+append-only and reserved per producer family:
+
+| Range | Owner |
+| --- | --- |
+| 1–999 | glTF extensions and glTF-level features |
+| 1000–1999 | 3MF extensions/features |
+| 2000–2999 | USD schemas/primitives |
+| 3000–3999 | STEP/IGES/BREP header and unit features |
+| 4000–4999 | texture features (any format) |
+| 5000–5999 | container/archive features (any format) |
+
+The trusted host owns a `FeatureId -> localized text` table
+(`interactive-viewer/src/app/CompatibilityText.h`) and composes the warning
+banner from it; unknown IDs keep the legacy generic text. `Critical` remains
+diagnostic only: it never replaces the typed error code. The existing
+`ImportStatusPayload::optionalFeatureWarnings` count is retained while
+adapters migrate, so older producers keep their generic warning.
 
 ## Import generations
 
@@ -134,13 +354,25 @@ Opening another file requests stop on the prior generation and immediately makes
 
 ### glTF and GLB
 
-fastgltf validates glTF 2.0 structure while the adapter owns URI resolution and data access. GLB headers, JSON/BIN ranges, buffer views, accessors, strides, sparse accessors, and component conversions are checked before use. `KHR_mesh_quantization`, `EXT_meshopt_compression`, `KHR_draco_mesh_compression`, `KHR_texture_basisu`, `EXT_texture_webp`, `KHR_texture_transform`, `KHR_materials_unlit`, `KHR_materials_transmission`, and the archived `KHR_materials_pbrSpecularGlossiness` are accepted when their required data passes validation. Transmission is approximated: with no refraction pass, the transmitted fraction is carried to the shader as a material flag plus factor, which suppresses transmitted diffuse and adds a view-dependent Fresnel term to the blend alpha (preserving the authored base-color alpha), and a per-texel `transmissionTexture` is not applied. Specular/glossiness is approximated as diffuse albedo (factor and texture) with metallic 0 and roughness `1 - glossiness`; the combined specular-glossiness texture is dropped with a bounded warning because the normalized material has no matching slot. meshoptimizer, the pinned Draco decoder, KTX/Basis transcoder, and libwebp handle their corresponding payloads behind the same budgets. Unknown required extensions fail clearly. Unknown optional extensions are ignored only when core geometry remains valid and are reported in diagnostics.
+fastgltf validates glTF 2.0 structure while the adapter owns URI resolution and data access. GLB headers, JSON/BIN ranges, buffer views, accessors, strides, sparse accessors, and component conversions are checked before use. `KHR_mesh_quantization`, `EXT_meshopt_compression`, `KHR_draco_mesh_compression`, `KHR_texture_basisu`, `EXT_texture_webp`, `KHR_texture_transform`, `KHR_materials_unlit`, `KHR_materials_transmission`, and the archived `KHR_materials_pbrSpecularGlossiness` are accepted when their required data passes validation. Transmission is approximated: with no refraction pass, the transmitted fraction is carried to the shader as a material flag plus factor, which suppresses transmitted diffuse and adds a view-dependent Fresnel term to the blend alpha (preserving the authored base-color alpha); a per-texel `transmissionTexture` multiplies that factor through the v14 slot model. Specular/glossiness is approximated as diffuse albedo (factor and texture) with metallic 0 and roughness `1 - glossiness`; the combined specular-glossiness texture is dropped with a bounded warning because the normalized material has no matching slot. meshoptimizer, the pinned Draco decoder, KTX/Basis transcoder, and libwebp handle their corresponding payloads behind the same budgets.
+
+Required-extension policy is table-driven (ADR-0060). The parser mask enables every extension whose data path the adapter can consume, including the visual/scene extensions `KHR_materials_clearcoat`, `sheen`, `specular`, `iridescence`, `anisotropy`, `volume`, `dispersion`, `diffuse_transmission`, `emissive_strength`, `KHR_materials_variants`, and `KHR_lights_punctual`; parsing them lets the core PBR material open even before the renderer draws those lobes, and each unrendered feature produces a specific `CompatibilityReport` record. `MSFT_texture_dds` stays disabled: DDS is decoded as a direct sidecar/image container, and the glTF extension's alternate image indexing is not implemented. Before fastgltf runs, the adapter pre-scans `extensionsRequired` with simdjson and classifies each name:
+
+| Class | Examples | Action |
+| --- | --- | --- |
+| Geometry/decoder-critical | Draco, meshopt, quantization, implicit shapes, float64 accessors | Decode when enabled; otherwise fail typed (`UnsupportedRequiredFeature`). Never filtered. |
+| Texture-critical | BasisU, WebP, DDS | Decode or use the documented texture fallback; a required name is filtered only when its parser support is absent, so core geometry survives. |
+| Visual material / scene / instance | clearcoat, sheen, specular, iridescence, anisotropy, volume, dispersion, emissive strength, variants, lights, `EXT_mesh_gpu_instancing` | Parse or ignore; report `Degraded` (visual/instance) or `Ignored` (scene). |
+| Truly unknown | any other name | Keep the core scene if present, report `Degraded`, and fail only when no usable geometry remains. |
+
+If a non-critical required name is present, the adapter rewrites only the root `extensionsRequired` array in a bounded JSON copy, pads the replacement with spaces to preserve GLB byte offsets, and parses that copy once. `extensionsUsed` is never edited, so reporting still names every seen extension. A required geometry extension that this build cannot decode is rejected before the copy is built; there is no filtered retry that could hide missing geometry.
 
 Draco decode is scheduled per primitive inside the import worker and publishes nothing across the process boundary until the decoded attributes and indices pass count/range/finite validation there. Before the decoder is invoked, the declared Draco connectivity counts are parsed from the compressed span and must agree with the primitive's glTF accessors and fit the working-set budget; KTX2 headers are likewise bounded before the KTX library is called (ADR-0030). A primitive whose decoded working set would exceed 512 MiB or 10 million triangles fails with `ResourceLimit`; the design does not claim out-of-core decoding within one Draco bitstream. Neither Draco nor KTX exposes a cancellation callback, so these decodes are bounded but not interruptible mid-payload; the product honours a request deadline between compressed payloads. Meshopt-compressed buffer views remain suitable for bounded range decode.
 
 Accessor min/max values may produce provisional scene bounds quickly, but they are not trusted as verified bounds. A bounded position scan verifies them while geometry is normalized. If verified bounds materially differ and the user has not moved the camera, the app eases to the corrected frame. If the user has interacted, camera target and scale are corrected without overriding their orientation.
 
-A .gltf may reference approved local `.bin`, `.png`, `.jpg/.jpeg`, `.webp`, and `.ktx2` files contained within the primary file's directory tree, including subdirectories such as `textures/`. Data URIs have encoded- and decoded-byte caps. Unsupported image MIME types use the material fallback only when the image is not required to recover valid geometry.
+A .gltf may reference approved local `.bin`, `.png`, `.jpg/.jpeg`, `.webp`,
+`.ktx2`, `.tga`, and `.dds` files contained within the primary file's directory tree, including subdirectories such as `textures/`. Data URIs have encoded- and decoded-byte caps. Unsupported image MIME types use the material fallback only when the image is not required to recover valid geometry.
 
 ### STL
 
@@ -172,13 +404,43 @@ ufbx's unified PBR material mapping feeds the normalized base-color/metallic/rou
 
 Before lib3mf reads the bounded OPC stream, product code preflights local and central ZIP records, OPC part/relationship names, archive entry paths, per-entry sizes, aggregate expansion, compression ratio, and the required-extension allowlist. The preflight rejects encrypted, multi-disk, and general-purpose-bit-3 (streaming data-descriptor) entries, requires each entry's local CRC, compressed/uncompressed sizes and name bytes to equal the central directory, and bounds the attacker-controlled ZIP64 locator offset with checked addition before use while accepting the spec-correct single-disk locator total of 1. The adapter then validates object/component recursion and build-item counts before allocating normalized resources. Components and all occurrences reachable from the root build use reusable geometry instances where possible; child-model build sections are not interpreted as additional plates. The allowlist covers Core, Materials and Properties, Production, and a bounded Beam Lattice preview subset. A lattice prefers its validated authored representation mesh; otherwise deterministic product tessellation emits the complete beam/ball set under a 262,144-triangle per-lattice ceiling. Parametric clipping is limited to `inside` clipping against a closed, axis-aligned box with uniform appearance; other clipping requires a valid authored representation mesh. Nonrepresentable optional display/translucent features preserve the supported base appearance with a bounded warning, while unsupported required extensions fail.
 
+### Assimp compatibility formats (DAE, 3DS, DXF, X, OFF, AMF, X3D)
+
+A single worker adapter runs Assimp for the seven formats with no native
+adapter (ADR-0065). The closed request discriminator selects the importer hint;
+the extension is never used as a trusted path or free-form argument. Assimp is
+configured with `Triangulate`, `JoinIdenticalVertices`, `GenNormals` (only
+missing normals are generated), `ValidateDataStructure` and `SortByPType`; it
+does not evaluate animation, geometry caches, plug-ins, cameras, lights or
+file writes. The custom `IOSystem` answers every external reference through the
+broker: absolute/rooted, UNC/device, ADS, URL, drive-relative, `..` and
+non-image references are rejected before a request, and the broker applies the
+same image allowlist, canonical containment and size caps as OBJ/FBX.
+Embedded textures are read from Assimp's scene memory under the existing encoded
+and decoded texture budgets.
+
+The adapter validates object/material/triangle/vertex counts before emission,
+skips line/point primitives with a bounded compatibility warning, fails typed
+when no triangles remain, and normalizes world-space triangles, material
+factors and texture images into the same chunk contract as the native adapters.
+Before Assimp runs, product admission checks control bytes and a well-formed XML
+DOM (pugixml) for DAE/AMF/X3D, DAE numeric count/offset/stride attributes and
+token lists, the full ASCII OFF header/vertex/face/token graph, and the 3DS
+main-chunk magic/length. This crash boundary is deliberately separate from
+Assimp's own sniffers. DXF coverage is deliberately limited to the
+3DFACE/polyline entities Assimp supports; it is not a full DXF importer.
+Assimp's source objects never leave the adapter, and the `AssimpFuzz`
+dispatcher target covers all seven container hints. The pinned overlay port
+carries one product finding fix: Assimp 6.0.4's X3D importer called `front()`
+on an empty node list for an XML document its own tokenizer rejected.
+
 ### USD and USDZ
 
-TinyUSDZ runs inside `Preview3DImportWorker.exe` and first handles USDA, USDC, and USDZ files in the common static subset there. The fast subset is a self-contained root layer: every USD composition arc (including sublayers, references, payloads, inherits/specializes, variants, clips, and relocates) returns a distinct `UnsupportedComposition` result before candidate output is published. Direct image assets are dependencies rather than layer composition and may be read only as contained USDZ entries or broker-approved local bytes. Only `UnsupportedComposition` asks the broker to start the separate `Preview3DImportHost.exe` for the same generation; malformed data, unsafe references, archive violations, unsupported required schemas, and resource-limit failures do not receive a more permissive retry in either process. The exact static-time, purpose, visibility, topology/primvar, orientation/subdivision, instancing, material-subset, and omission policy is recorded in [USD-001-SPIKE-RESULTS.md](../legacy/USD-001-SPIKE-RESULTS.md) and is shared by both adapters.
+TinyUSDZ runs inside `Preview3DImportWorker.exe` and first handles USDA, USDC, and USDZ files in the common static subset there. The fast subset is a self-contained root layer: every USD composition arc (including sublayers, references, payloads, inherits/specializes, variants, clips, and relocates) returns a distinct `UnsupportedComposition` result before candidate output is published. Direct image assets are dependencies rather than layer composition and may be read only as contained USDZ entries or broker-approved local bytes. Visible procedural `Sphere`/`Cube`/`Cylinder`/`Cone`/`Capsule` prims, `UsdGeomPoints`, and meshes with authored creases or an authored non-`none` subdivision scheme are also classified `UnsupportedComposition` before any candidate batch is published, because the compatibility host owns their tessellation and control-cage emission. Only that pre-publication `UnsupportedComposition` asks the broker to start the separate `Preview3DImportHost.exe` for the same generation; malformed data, unsafe references, archive violations, unsupported required schemas (including curves/NURBS until line topology lands), and resource-limit failures do not receive a more permissive retry in either process. The exact static-time, purpose, visibility, topology/primvar, orientation/subdivision, instancing, material-subset, and omission policy is recorded in [USD-001-SPIKE-RESULTS.md](../legacy/USD-001-SPIKE-RESULTS.md) and is shared by both adapters.
 
 TinyUSDZ 0.9.1 has no allocation, progress, or cancellation callback, and its memory-limit option is advisory. The adapter therefore preflights input/archive structure, checks product-owned counts and normalized-output growth between library phases, and relies on the import worker's Job Object commit ceiling as the hard allocation backstop. A cancellation observed outside a library call is cooperative; a call still running after the existing 500 ms grace causes the worker to be terminated and replaced. A successful parser return alone is never evidence that a stage belongs to the accepted subset.
 
-The AppContainer compatibility host opens the stage through pinned OpenUSD with initial payload loading disabled. Its composition policy permits sublayers, references, inherits/specializes, and authored default variant selections; its brokered resolver admits only approved local asset dependencies. Discovery and payload loading proceed breadth-first under dependency-count, byte, depth, time, and memory limits. Payloads needed for the build/default stage are loaded incrementally. The host emits only the normalized static subset: meshes, transforms, instances/point instances, display color, and supported Preview Surface bindings. Skeletal schemas are non-geometry and are skipped, so skinned meshes preview their authored rest pose; animation, MaterialX, procedural schemas, renderer plug-ins, remote assets, and interactive variant selection remain outside MVP. USDZ archive entries use the same archive/path limits regardless of adapter.
+The AppContainer compatibility host opens the stage through pinned OpenUSD with initial payload loading disabled. Its composition policy permits sublayers, references, inherits/specializes, and authored default variant selections; its brokered resolver admits only approved local asset dependencies. Discovery and payload loading proceed breadth-first under dependency-count, byte, depth, time, and memory limits. Payloads needed for the build/default stage are loaded incrementally. The host emits only the normalized static subset: meshes, bounded deterministic tessellations of `Sphere`/`Cube`/`Cylinder`/`Cone`/`Capsule` (24x16 sphere, 12-triangle cube, 24-segment capped cylinders/cones, 24x8-per-hemisphere capsules with X/Y/Z `axis` support), `UsdGeomPoints` as colored/opacity-carrying `PointList` chunks, transforms, instances/point instances, display color, and supported Preview Surface bindings. Creases and authored non-`none` subdivision render the control cage with a `Degraded` warning and no smoothing; `extent` is a hint and actual bounds are recomputed from generated vertices. Skeletal schemas are non-geometry and are skipped, so skinned meshes preview their authored rest pose; animation, MaterialX, curves/NURBS, other procedural schemas, renderer plug-ins, remote assets, and interactive variant selection remain outside MVP. USDZ archive entries use the same archive/path limits regardless of adapter.
 
 ## Normalized scene
 
@@ -189,7 +451,7 @@ Importer-specific objects never cross into Streaming or Graphics. Model Core pro
 | SceneMetadata | generation, source format, source units/up axis, node/material/triangle counts, warnings, provisional/verified bounds |
 | Node | stable ID, parent, double-precision local transform, visibility |
 | MeshInstance | stable ID, node, reusable geometry, per-instance material, verified world bounds, visibility |
-| Material | base color factor/texture, metallic, roughness, emissive, normal texture, UV transform, unlit, alpha mode/cutoff, double-sided flag, transmission factor/flag |
+| Material | base color factor/texture, metallic, roughness, emissive, normal/occlusion maps, UV transform, unlit, alpha mode/cutoff, double-sided flag, PBR lobes and the clearcoat/specular/sheen/transmission maps, transmission factor/flag |
 | TextureSource | bounded encoded bytes or validated mapping range, MIME/container, mip metadata, color space, sampler |
 | MeshCluster | mesh/node IDs, triangle-or-point topology, double-precision origin, local AABB/sphere, material, LOD descriptors |
 | ChunkDescriptor | source/normalized range, topology, index/vertex counts, vertex layout, LOD, byte size, dependencies |
@@ -252,25 +514,66 @@ The texture layer accepts format/container combinations explicitly enabled by th
 
 - inbox WIC paths for PNG, JPEG, BMP, TIFF, and GIF;
 - pinned libwebp for WebP;
-- TGA, HDR, and DDS are *not* decoded: the planned DirectXTex path was dropped (ADR-0048), so those containers remain unsupported as listed in [FORMAT-SUPPORT.md](../FORMAT-SUPPORT.md);
+- product-owned bounded TGA and DDS decoders (ADR-0068). TGA accepts only
+  true-color type 2/10, 24/32-bit, non-paletted, non-interleaved images with a
+  zero origin; RLE packets, dimensions, and payload extent are checked before
+  allocation. DDS accepts legacy DXT1/DXT5/ATI2 (BC1/BC3/BC5) and DX10
+  BC1/BC3/BC5/BC7 UNORM or SRGB blocks plus uncompressed 24/32-bit RGB(A);
+  cubemaps, arrays, volumes, 3D textures, and every other DXGI format are
+  rejected typed. Valid block mip chains are preserved and may upload directly;
+  uncompressed DDS level 0 is converted to RGBA8 and mip-generated. Declared
+  sizes are never trusted: block/level byte counts are cross-checked against the
+  actual payload;
+- product-owned Radiance HDR (`#?RADIANCE`/`#?RGBE`, `32-bit_rle_rgbe`) with
+  strict header/resolution validation; new-style per-channel RLE and flat RGBE
+  scanlines (ADR-0069);
+- pinned tinyexr (BSD-3-Clause, vendored from the TinyUSDZ closure) for
+  single-part scanline OpenEXR with NONE/RLE/ZIPS/ZIP/PIZ compression, HALF/FLOAT
+  channels and sampling 1. Tiled, deep, multipart, UINT channels and every
+  other compression are rejected before the decoder allocates (ADR-0069);
 - KTX-Software/Basis transcoding for KTX2 and `KHR_texture_basisu`.
 
-It does not enumerate or invoke arbitrary installed WIC codecs. Encoded type is verified from bytes and declared MIME/container metadata rather than extension alone. Color textures are sRGB; data/normal textures remain linear. Dimensions, row pitch, mip/array/depth counts, multiplication, total pixels, and compressed input size are checked before decode or direct upload.
+HDR and EXR stay linear internally and are converted on the CPU to the existing
+RGBA8 contract: color/emissive slots use a Reinhard curve (exposure 1.0) then
+sRGB, while normal/data slots are clamped and remain linear. No float pixel
+format is added; the environment hook keeps a separate linear equirect float
+buffer for Studio IBL work. The pinned TinyUSDZ copy of tinyexr is built in the
+import-worker translation unit (never the viewer) and needs no new vcpkg port.
+
+It does not enumerate or invoke arbitrary installed WIC codecs. Encoded type is verified from bytes and declared MIME/container metadata rather than extension alone; TGA is selected by the decodable-extension candidate filter because it has no magic, then every header field is validated from bytes. Color textures are sRGB; data/normal textures remain linear. Dimensions, row pitch, mip/array/depth counts, multiplication, total pixels, and compressed input size are checked before decode or direct upload. A texture over the decoded budget, or a TGA beyond the non-scalable source allocation bound, uses the deterministic fallback with one warning.
+
+The metallic-roughness map follows the ORM convention: R is ambient occlusion, G roughness, B metallic. The studio PBR shader samples R as AO and multiplies only indirect diffuse/environment terms; direct-light specular is left unoccluded so metals keep clean highlights. Protocol v12 carries the authored `occlusionStrength` (default 1) in the 140-byte material payload, so glTF's strength formula is applied without changing formats that do not author it.
 
 Validated DDS/KTX2 mip chains may upload directly when their DXGI formats are supported. Basis payloads transcode to a supported BC7/BC5/BC3/BC1 target selected by semantic and adapter capabilities, with RGBA8 fallback. Existing small mip levels are uploaded first. For ordinary raster images, decoder-native downscaling is requested when trustworthy and CPU mip generation otherwise happens in cancellable tiles. The JPEG native path sizes its copy scratch for the full `uiWidth*uiHeight` extent that `IWICBitmapSourceTransform::CopyPixels` requires, even though `prc` clips each 32-row iteration, so the buffer cannot be overrun by a codec that honors the extent over `cbBufferSize` (ADR-0054). Tangents are generated only for visible geometry whose material actually requires tangent-space normal mapping. A missing, corrupt, or unsupported optional texture uses a deterministic checker/neutral fallback without hiding the mesh.
 
+T23 accounting treats one immutable image source as one decode. Distinct glTF
+image entries that name the same URI, bufferView, or content bytes (and share a
+semantic and color space) reuse one pending image instead of charging the
+aggregate byte/pixel budget twice; a color map and a data map of the same source
+remain distinct chunks because their decode differs. The progressive low-mip
+copy and the full refinement are both charged while simultaneously resident.
+A first refused optional texture records a bounded `TextureBudgetDiagnostic`
+(resource, requested, allowed, decoded totals, scratch reserve/limit); Debug
+emits one value-only line and Release logs stay silent. No aggregate limit is
+raised. A detail-service replay never re-decodes the image/material catalog the
+scan batch already delivered. See [ADR-0081](adr/0081-texture-budget-accounting-and-complete-load-readiness.md).
+
 ## Error taxonomy
 
-Adapters return typed errors, not localized strings:
+Adapters return the closed `model_core::ImportErrorCode` set, not localized
+strings:
 
-- FileUnavailable, FileChanged, UnsafeReference;
-- UnsupportedVersion, UnsupportedRequiredFeature, UnsupportedEncoding;
-- MalformedData, IntegerOverflow, ArchiveLimit;
-- ResourceLimit, OutOfMemory, Cancelled;
-- NoSupportedGeometry, TextureDecodeFailed;
-- UnsupportedComposition, CompatibilityHostFailure, CompatibilityHostLimit;
-- ImportWorkerFailure, ImportWorkerLimit, ImportProtocolViolation;
-- InternalImporterFailure.
+- source identity/containment: `FileUnavailable`, `FileChanged`,
+  `UnsafeReference`, `UnsupportedFormat`;
+- parser outcome: `MalformedData`, `UnsupportedEncoding`,
+  `UnsupportedRequiredFeature`, `EmptyGeometry`, `UnsupportedComposition`;
+- budgets: `ResourceLimit`, `PrimarySourceLimit`, `AggregateSourceLimit`,
+  `ScratchLimit`, `ChunkCatalogLimit`, `DracoPrimitiveLimit`, `ArchiveLimit`,
+  `CompatibilityHostLimit`, `StepHostLimit`, `OutOfMemory`;
+- process/transport: `WorkerCrashed`, `WorkerTimedOut`, `UploadFailure`,
+  `ImportProtocolViolation`, `CompatibilityHostFailure`, `StepHostFailure`,
+  `TessellationFailed`, `InternalImporterFailure`;
+- cancellation: `Cancelled`.
 
 The application maps these to user text and preserves format, byte offset/object path where safe, and a correlation ID in diagnostic logs. Third-party exceptions never cross a module boundary.
 
@@ -281,3 +584,19 @@ Every adapter requires valid, malformed, truncated, adversarial-count, cancellat
 Every adapter's isolation, not only its parsing correctness, is verified: a synthetic hostile-worker build (deliberately mutating shared-section bytes after the host's first read, replaying stale generations, or lying about a chunk's declared layout ID) proves the copy-then-validate rule in [02-system-architecture.md](./02-system-architecture.md) actually rejects the mutation, rather than only proving that well-formed workers behave. This test exists once per wire-format version, not once per format, since the host's validator is format-agnostic — but it must be in place before any real parser adapter ships behind it, per Gate 2 in [10-delivery-plan.md](./10-delivery-plan.md).
 
 Primary references: [Windows file mapping](https://learn.microsoft.com/windows/win32/memory/file-mapping), [fastgltf](https://github.com/spnda/fastgltf), [Google Draco](https://github.com/google/draco), [KTX-Software](https://github.com/KhronosGroup/KTX-Software), [ufbx](https://github.com/ufbx/ufbx), [lib3mf](https://github.com/3MFConsortium/lib3mf), [TinyUSDZ](https://github.com/lighttransport/tinyusdz), [OpenUSD](https://openusd.org/release/) and [meshoptimizer](https://github.com/zeux/meshoptimizer).
+
+## T22 authored material inputs (protocol v13; extended by v14)
+
+The v13 slice introduced `normalScale`, per-texture `slotFlags` (authored UV
+set, U/V address mode, nearest intent), per-slot UV transforms and the
+independent occlusion slot. Protocol v14 (above) extends the same model to
+thirteen slots and 440 bytes; `ChunkDescriptor` is now 208 bytes. The
+metallic-roughness red channel is never treated as authored AO.
+
+Only UV set 0 is carried by the normalized vertex layouts. A slot that
+references another set is left unbound and produces the specific
+`kTextureFeatureUnsupportedUvSet` compatibility record; it is never sampled
+with UV0. IOR<=1 transmission suppression and degenerate-BLEND recovery are
+explicit `CompatibilityRecord` entries (`kGltfFeature...` ids 9 and 10), not
+silent rewrites. The authored `alphaMode` is preserved; the transmissive flag
+selects the blend bucket independently.

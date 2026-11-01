@@ -67,9 +67,17 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
 {
     using namespace model_core;
     MaterialPayload result{};
-    const bool usePbrBase = !fbxPolicy || material.pbr.base_color.has_value;
-    const auto base = usePbrBase ? material.pbr.base_color.value_vec4
-                                 : material.fbx.diffuse_color.value_vec4;
+    // A missing-MTL OBJ still creates a ufbx material node, but neither the PBR
+    // nor the legacy diffuse slot carries an authored value. Reading the
+    // union's value_vec4 then yields black and the model renders as an
+    // unlit-looking silhouette in Studio/Directional even though Clay shows
+    // the geometry. Use the neutral PBR base instead of an unauthored zero.
+    ufbx_vec4 base = {1.0, 1.0, 1.0, 1.0};
+    if (material.pbr.base_color.has_value) {
+        base = material.pbr.base_color.value_vec4;
+    } else if (material.fbx.diffuse_color.has_value) {
+        base = material.fbx.diffuse_color.value_vec4;
+    }
     const double baseFactor = material.pbr.base_factor.has_value
         ? material.pbr.base_factor.value_real
         : (fbxPolicy && material.fbx.diffuse_factor.has_value
@@ -128,6 +136,38 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
     result.emissiveFactor[0] = SafeFloat(emission.x * emissionFactor);
     result.emissiveFactor[1] = SafeFloat(emission.y * emissionFactor);
     result.emissiveFactor[2] = SafeFloat(emission.z * emissionFactor);
+    // T18 PBR lobes: ufbx exposes the same dielectric/coat/sheen concepts as
+    // glTF. Values are optional; absent maps leave the normalized defaults
+    // (no coat/sheen, specular 1, IOR 1.5, emissive strength 1).
+    if (material.pbr.coat_factor.has_value)
+        result.clearcoatFactor = Saturate(material.pbr.coat_factor.value_real);
+    if (material.pbr.coat_roughness.has_value)
+        result.clearcoatRoughness = Saturate(material.pbr.coat_roughness.value_real);
+    const bool hasSheen = material.pbr.sheen_color.has_value
+        || material.pbr.sheen_factor.has_value;
+    if (hasSheen) {
+        const ufbx_vec3 sheen = material.pbr.sheen_color.value_vec3;
+        const double factor = material.pbr.sheen_factor.has_value
+            ? material.pbr.sheen_factor.value_real : 1.0;
+        result.sheenColor[0] = Saturate(sheen.x * factor);
+        result.sheenColor[1] = Saturate(sheen.y * factor);
+        result.sheenColor[2] = Saturate(sheen.z * factor);
+        if (material.pbr.sheen_roughness.has_value)
+            result.sheenRoughness = Saturate(material.pbr.sheen_roughness.value_real);
+    }
+    if (material.pbr.specular_factor.has_value)
+        result.specularFactor = Saturate(material.pbr.specular_factor.value_real);
+    if (material.pbr.specular_color.has_value) {
+        const ufbx_vec3 specular = material.pbr.specular_color.value_vec3;
+        result.specularColor[0] = Saturate(specular.x);
+        result.specularColor[1] = Saturate(specular.y);
+        result.specularColor[2] = Saturate(specular.z);
+    }
+    if (material.pbr.specular_ior.has_value && Finite(material.pbr.specular_ior.value_real))
+        result.ior = std::clamp(float(material.pbr.specular_ior.value_real), 1.0f, 4.0f);
+    if (material.pbr.ambient_occlusion.has_value
+        && Finite(material.pbr.ambient_occlusion.value_real))
+        result.occlusionStrength = Saturate(material.pbr.ambient_occlusion.value_real);
     result.uvScale[0] = result.uvScale[1] = 1.0f;
     result.alphaMode = uint32_t(result.baseColorFactor[3] < 0.999f
         ? AlphaModeId::Blend : AlphaModeId::Opaque);
@@ -161,8 +201,6 @@ model_core::MaterialPayload ConvertUfbxMaterial(const ufbx_material& material,
         if (material.features.unlit.is_explicit && material.features.unlit.enabled)
             result.flags |= kMaterialFlagUnlit;
         if ((material.features.transmission.is_explicit && material.features.transmission.enabled)
-            || (material.features.coat.is_explicit && material.features.coat.enabled)
-            || (material.features.sheen.is_explicit && material.features.sheen.enabled)
             || (material.features.thin_walled.is_explicit && material.features.thin_walled.enabled)
             || (material.features.caustics.is_explicit && material.features.caustics.enabled))
             Warn(optionalWarnings);

@@ -1223,7 +1223,7 @@ void D3D11On12Overlay::DrawTitleBar(const OverlayInfo& overlay, const Chrome& ch
     drawActionButton(Chrome::Part::Orbit, OverlayIconKind::Orbit, overlay.orbitEnabled);
     drawActionButton(Chrome::Part::Fit, OverlayIconKind::Fit, false);
     drawActionButton(Chrome::Part::Share, OverlayIconKind::Share, false);
-    drawActionButton(Chrome::Part::Overflow, OverlayIconKind::Overflow, false);
+    drawActionButton(Chrome::Part::Overflow, OverlayIconKind::Overflow, overlay.settingsMenuOpen);
     drawActionButton(Chrome::Part::OpenWith, OverlayIconKind::OpenWith, overlay.openWithOpen);
 
     // Update badge: a small circled up-arrow between Open With and Minimize.
@@ -1332,12 +1332,6 @@ void D3D11On12Overlay::DrawSliderFlyout(bool open, const RECT& panelRect, const 
     d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(thumbX, trackY), Scale(7, scale), Scale(7, scale)), overlayBrush.Get());
 }
 
-void D3D11On12Overlay::DrawSpeedFlyout(const OverlayInfo& overlay, float scale)
-{
-    DrawSliderFlyout(overlay.speedFlyoutOpen, overlay.speedFlyoutRect, overlay.speedFlyoutTrackRect,
-        overlay.speedSliderT, overlay.speedFlyoutTitle, overlay.speedValueText, scale);
-}
-
 void D3D11On12Overlay::DrawOrbitFlyout(const OverlayInfo& overlay, float scale)
 {
     DrawSliderFlyout(overlay.orbitFlyoutOpen, overlay.orbitFlyoutRect, overlay.orbitFlyoutTrackRect,
@@ -1345,13 +1339,22 @@ void D3D11On12Overlay::DrawOrbitFlyout(const OverlayInfo& overlay, float scale)
 }
 
 // Reusable "label + switch" row: a leading text label and a trailing
-// pill-shaped on/off switch. Drawing only — SettingsPanel-related rects
+// pill-shaped on/off switch. Drawing only — the settings-menu row rects
 // are hit-tested by Preview3D.cpp against the same rects this is given.
 void D3D11On12Overlay::DrawToggleRow(const D2D1_RECT_F& rowRect, const D2D1_RECT_F& switchRect,
-    const std::wstring& label, bool on, float scale)
+    const std::wstring& label, const std::wstring& shortcut, bool on, float scale)
 {
-    DrawText(label, smallFormat.Get(),
-        D2D1::RectF(rowRect.left, rowRect.top, switchRect.left - Scale(8, scale), rowRect.bottom),
+    float labelRight = switchRect.left - Scale(8, scale);
+    if (!shortcut.empty())
+    {
+        const float shortcutRight = switchRect.left - Scale(10, scale);
+        DrawText(shortcut, smallFormat.Get(),
+            D2D1::RectF(rowRect.left, rowRect.top, shortcutRight, rowRect.bottom),
+            D2D1::ColorF(0x8E8E93), DWRITE_TEXT_ALIGNMENT_TRAILING);
+        labelRight = shortcutRight - Scale(16, scale);
+    }
+    DrawTextEllipsized(label, smallFormat.Get(),
+        D2D1::RectF(rowRect.left, rowRect.top, labelRight, rowRect.bottom),
         D2D1::ColorF(0xF5F5F7));
     const float radius = (switchRect.bottom - switchRect.top) * 0.5f;
     SetBrush(on ? D2D1::ColorF(0x0A84FF) : D2D1::ColorF(0x3A3A3C));
@@ -1363,31 +1366,162 @@ void D3D11On12Overlay::DrawToggleRow(const D2D1_RECT_F& rowRect, const D2D1_RECT
     d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(thumbX, thumbY), thumbRadius, thumbRadius), overlayBrush.Get());
 }
 
-void D3D11On12Overlay::DrawSettingsPanel(const OverlayInfo& overlay, float scale)
+void D3D11On12Overlay::DrawMenuSlider(const MenuRowOverlay& row, float scale)
 {
-    if (!overlay.settingsPanelOpen) return;
-    const D2D1_RECT_F panel = ToRectF(overlay.settingsPanelRect);
-    SetBrush(D2D1::ColorF(0x242426, 0.98f));
-    d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(panel, Scale(10, scale), Scale(10, scale)), overlayBrush.Get());
+    const D2D1_RECT_F track = ToRectF(row.sliderTrack);
+    const float centerY = (track.top + track.bottom) * 0.5f;
+    const float halfHeight = Scale(2.0f, scale);
+    const float radius = halfHeight;
     SetBrush(D2D1::ColorF(0x3A3A3C));
-    d2dContext_->DrawRoundedRectangle(D2D1::RoundedRect(panel, Scale(10, scale), Scale(10, scale)), overlayBrush.Get(), 1.0f);
+    d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(
+        D2D1::RectF(track.left, centerY - halfHeight, track.right, centerY + halfHeight), radius, radius),
+        overlayBrush.Get());
+    const float t = std::clamp(row.sliderT, 0.0f, 1.0f);
+    const float thumbX = track.left + (track.right - track.left) * t;
+    if (thumbX > track.left + halfHeight)
+    {
+        SetBrush(D2D1::ColorF(0x0A84FF));
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(
+            D2D1::RectF(track.left, centerY - halfHeight, thumbX, centerY + halfHeight), radius, radius),
+            overlayBrush.Get());
+    }
+    SetBrush(D2D1::ColorF(0xF5F5F7));
+    d2dContext_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(thumbX, centerY),
+        Scale(7.0f, scale), Scale(7.0f, scale)), overlayBrush.Get());
+}
 
-    DrawToggleRow(ToRectF(overlay.nativeOrientationRowRect), ToRectF(overlay.nativeOrientationSwitchRect),
-        overlay.nativeOrientationLabel, overlay.showNativeOrientation, scale);
-    DrawToggleRow(ToRectF(overlay.hideCursorRowRect), ToRectF(overlay.hideCursorSwitchRect),
-        overlay.hideCursorLabel, overlay.hideCursorWhileDragging, scale);
-    DrawToggleRow(ToRectF(overlay.hideUntilCompleteRowRect), ToRectF(overlay.hideUntilCompleteSwitchRect),
-        overlay.hideUntilCompleteLabel, overlay.hideModelUntilComplete, scale);
+// One row of the modern "..." settings menu. Toggle rows reuse the same
+// label + pill switch as before; action rows follow the standard menu row
+// shape (label, trailing value/shortcut/chevron); nested options get a radio
+// check. Every interactive row gets a hover/press wash.
+void D3D11On12Overlay::DrawMenuRow(const MenuRowOverlay& row, float scale)
+{
+    const D2D1_RECT_F rect = ToRectF(row.rect);
+    const float radius = Scale(6, scale);
 
-    // Language row: label on the left, current pack endonym trailing on the
-    // right (the whole row is the click target — see ShowLanguageMenu).
-    const D2D1_RECT_F languageRow = ToRectF(overlay.languageRowRect);
-    DrawText(overlay.languageLabel, smallFormat.Get(),
-        D2D1::RectF(languageRow.left, languageRow.top, languageRow.right, languageRow.bottom),
-        D2D1::ColorF(0xF5F5F7));
-    DrawText(overlay.languageValue, smallFormat.Get(),
-        D2D1::RectF(languageRow.left, languageRow.top, languageRow.right, languageRow.bottom),
-        D2D1::ColorF(0x0A84FF), DWRITE_TEXT_ALIGNMENT_TRAILING);
+    if (row.dividerBefore)
+    {
+        const float dividerY = rect.top - Scale(4.5f, scale);
+        SetBrush(D2D1::ColorF(0x3A3A3C));
+        d2dContext_->DrawLine(D2D1::Point2F(rect.left + Scale(6, scale), dividerY),
+            D2D1::Point2F(rect.right - Scale(6, scale), dividerY), overlayBrush.Get(), 1.0f);
+    }
+
+    if (row.hovered || row.pressed)
+    {
+        SetBrush(row.pressed ? D2D1::ColorF(0x3A3A3C) : D2D1::ColorF(0x303033));
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(rect, radius, radius), overlayBrush.Get());
+    }
+
+    if (row.slider)
+    {
+        DrawMenuSlider(row, scale);
+        return;
+    }
+
+    const float labelInset = Scale(row.nested ? 24.0f : 10.0f, scale);
+    const D2D1_RECT_F labelRect = D2D1::RectF(rect.left + labelInset, rect.top,
+        rect.right - Scale(10, scale), rect.bottom);
+
+    if (row.nested && row.checked)
+    {
+        const float cx = rect.left + Scale(11, scale);
+        const float cy = (rect.top + rect.bottom) * 0.5f;
+        SetBrush(D2D1::ColorF(0x0A84FF));
+        d2dContext_->DrawLine(D2D1::Point2F(cx - Scale(3.5f, scale), cy),
+            D2D1::Point2F(cx - Scale(1.0f, scale), cy + Scale(3.0f, scale)),
+            overlayBrush.Get(), Scale(1.6f, scale));
+        d2dContext_->DrawLine(D2D1::Point2F(cx - Scale(1.0f, scale), cy + Scale(3.0f, scale)),
+            D2D1::Point2F(cx + Scale(4.0f, scale), cy - Scale(3.0f, scale)),
+            overlayBrush.Get(), Scale(1.6f, scale));
+    }
+
+    if (row.toggle)
+    {
+        const D2D1_RECT_F toggleRect = D2D1::RectF(rect.left + Scale(6, scale), rect.top,
+            rect.right - Scale(6, scale), rect.bottom);
+        DrawToggleRow(toggleRect, ToRectF(row.switchRect), row.label, row.shortcut, row.on, scale);
+        return;
+    }
+
+    const D2D1_COLOR_F labelColor = row.emphasized ? D2D1::ColorF(0xFF9F0A) : D2D1::ColorF(0xF5F5F7);
+    const float chevronLeft = rect.right - Scale(16, scale);
+    float textRight = row.showChevron ? chevronLeft - Scale(8, scale) : rect.right - Scale(10, scale);
+    D2D1_RECT_F textRect = labelRect;
+    if (!row.shortcut.empty())
+    {
+        DrawText(row.shortcut, smallFormat.Get(),
+            D2D1::RectF(rect.left + Scale(10, scale), rect.top, textRight, rect.bottom),
+            D2D1::ColorF(0x8E8E93), DWRITE_TEXT_ALIGNMENT_TRAILING);
+        textRight -= Scale(16, scale);
+    }
+    if (!row.value.empty())
+    {
+        DrawText(row.value, smallFormat.Get(),
+            D2D1::RectF(rect.left + Scale(10, scale), rect.top, textRight, rect.bottom),
+            D2D1::ColorF(0xA1A1A6), DWRITE_TEXT_ALIGNMENT_TRAILING);
+        textRight -= Scale(10, scale);
+    }
+    textRect.right = textRight;
+    DrawTextEllipsized(row.label, smallFormat.Get(), textRect, labelColor);
+
+    if (row.showChevron)
+    {
+        const float cx = chevronLeft;
+        const float cy = (rect.top + rect.bottom) * 0.5f;
+        const float arm = Scale(3.5f, scale);
+        SetBrush(D2D1::ColorF(0x8E8E93));
+        if (row.expanded)
+        {
+            d2dContext_->DrawLine(D2D1::Point2F(cx - arm, cy - arm * 0.45f),
+                D2D1::Point2F(cx, cy + arm * 0.45f), overlayBrush.Get(), Scale(1.4f, scale));
+            d2dContext_->DrawLine(D2D1::Point2F(cx, cy + arm * 0.45f),
+                D2D1::Point2F(cx + arm, cy - arm * 0.45f), overlayBrush.Get(), Scale(1.4f, scale));
+        }
+        else
+        {
+            d2dContext_->DrawLine(D2D1::Point2F(cx - arm * 0.45f, cy - arm),
+                D2D1::Point2F(cx + arm * 0.45f, cy), overlayBrush.Get(), Scale(1.4f, scale));
+            d2dContext_->DrawLine(D2D1::Point2F(cx + arm * 0.45f, cy),
+                D2D1::Point2F(cx - arm * 0.45f, cy + arm), overlayBrush.Get(), Scale(1.4f, scale));
+        }
+    }
+}
+
+void D3D11On12Overlay::DrawSettingsMenu(const OverlayInfo& overlay, float scale)
+{
+    if (!overlay.settingsMenuOpen) return;
+    const D2D1_RECT_F panel = ToRectF(overlay.settingsMenuRect);
+    const float radius = Scale(10, scale);
+
+    // Same soft, layered shadow as the Open With flyout so both menus share
+    // one visual language.
+    for (int layer = 3; layer >= 1; --layer)
+    {
+        const float grow = Scale(static_cast<float>(layer) * 2.0f, scale);
+        const D2D1_RECT_F shadow = D2D1::RectF(panel.left - grow, panel.top + Scale(2, scale),
+            panel.right + grow, panel.bottom + Scale(2, scale) + grow);
+        overlayBrush->SetColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.10f));
+        d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(shadow, radius + grow, radius + grow),
+            overlayBrush.Get());
+    }
+
+    SetBrush(D2D1::ColorF(0x242426, 0.98f));
+    d2dContext_->FillRoundedRectangle(D2D1::RoundedRect(panel, radius, radius), overlayBrush.Get());
+    SetBrush(D2D1::ColorF(0x3A3A3C));
+    d2dContext_->DrawRoundedRectangle(D2D1::RoundedRect(panel, radius, radius), overlayBrush.Get(),
+        Scale(1.0f, scale));
+
+    d2dContext_->PushAxisAlignedClip(panel, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    if (!overlay.settingsMenuTitle.empty())
+    {
+        const D2D1_RECT_F header = ToRectF(overlay.settingsMenuHeaderRect);
+        DrawText(overlay.settingsMenuTitle, smallFormat.Get(), header,
+            D2D1::ColorF(0xA1A1A6));
+    }
+    for (const auto& row : overlay.settingsMenuRows)
+        DrawMenuRow(row, scale);
+    d2dContext_->PopAxisAlignedClip();
 }
 
 ID2D1Bitmap* D3D11On12Overlay::OpenWithIconBitmap(const OpenWithTileOverlay& tile)
@@ -1603,7 +1737,7 @@ void D3D11On12Overlay::DrawTooltip(const OverlayInfo& overlay, float clientWidth
     d2dContext_->DrawTextLayout(D2D1::Point2F(left + paddingX, top + paddingY), layout.Get(), overlayBrush.Get());
 }
 
-void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome)
+void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const OverlayInfo& overlay, const NavGizmo& gizmo, const Chrome& chrome, bool captureClean)
 {
     if (!d2dContext_ || !overlayBrush) return;
     highContrastFrame_ = overlay.highContrast;
@@ -1634,8 +1768,8 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     // above) keeps its real value so the bar still draws and its buttons
     // still hit-test as ordinary client-area ones.
     DrawTitleBar(overlay, chrome, clientWidth, scale);
-    if (overlay.state == ViewerState::Loading || overlay.state == ViewerState::Partial
-        || overlay.renderTimerRunning)
+    if (!captureClean && (overlay.state == ViewerState::Loading || overlay.state == ViewerState::Partial
+        || overlay.renderTimerRunning))
     {
         const float centerX = clientWidth * 0.5f;
         const float centerY = clientHeight * 0.5f;
@@ -1685,7 +1819,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
             D2D1::ColorF(0x747B86), DWRITE_TEXT_ALIGNMENT_CENTER);
     }
 
-    if (overlay.state == ViewerState::Failed)
+    if (overlay.state == ViewerState::Failed && !captureClean)
     {
         SetBrush(D2D1::ColorF(0x0B0C0F, 0.40f));
         d2dContext_->FillRectangle(D2D1::RectF(0, toolbar, clientWidth, clientHeight), overlayBrush.Get());
@@ -1714,7 +1848,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
             right, static_cast<float>(cardPixels.bottom) - Scale(76, scale)), D2D1::ColorF(0x777F8B));
     }
 
-    if (!overlay.warning.empty() && overlay.hasModel)
+    if (!overlay.warning.empty() && overlay.hasModel && !captureClean)
     {
         const float size = Scale(30, scale);
         RECT badge = overlay.warningButtonRect;
@@ -1740,6 +1874,7 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     // Transient mode readouts (fly speed, grid/projection toggles).
     auto drawHud = [&](const std::wstring& text, float alpha, float bottomOffset)
     {
+        if (captureClean) return;
         if (alpha <= 0.01f || text.empty() || overlay.state != ViewerState::Ready) return;
         const float pillHeight = Scale(26, scale);
         const float pillWidth = std::min(contentRight - Scale(28, scale),
@@ -1757,18 +1892,18 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     drawHud(overlay.modeHud, overlay.modeHudAlpha, Scale(50, scale));
 
     DrawBottomBar(overlay, clientWidth, clientHeight, scale);
+    if (captureClean) return;
     DrawInfoPanel(overlay, clientWidth, clientHeight, scale);
     DrawResetViewButton(overlay, scale);
 
     // Navigation gizmo on top of everything else, except a floating
-    // flyout (Speed, Settings), which floats above even that.
+    // flyout (Speed, settings menu), which floats above even that.
     if ((overlay.state == ViewerState::Ready || overlay.state == ViewerState::Partial) && overlay.hasModel)
     {
         DrawGizmo(orientation, gizmo, overlay, scale);
     }
-    DrawSpeedFlyout(overlay, scale);
     DrawOrbitFlyout(overlay, scale);
-    DrawSettingsPanel(overlay, scale);
+    DrawSettingsMenu(overlay, scale);
     DrawTooltip(overlay, clientWidth, scale);
     if (overlay.keyboardFocusVisible)
     {
@@ -1787,6 +1922,6 @@ HRESULT D3D11On12Overlay::DrawChrome(UINT backBufferIndex, const DirectX::XMFLOA
                                     const OverlayFrame& frame)
 {
     if (BeginDraw(backBufferIndex) == nullptr) return E_FAIL;
-    DrawOverlay(orientation, frame.info, frame.gizmo, frame.chrome);
+    DrawOverlay(orientation, frame.info, frame.gizmo, frame.chrome, frame.info.captureClean);
     return EndDraw(backBufferIndex);
 }

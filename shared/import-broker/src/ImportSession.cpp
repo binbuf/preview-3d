@@ -117,10 +117,16 @@ const wchar_t* ParseFlagFor(ImportFormat format)
         return L"--parse-usd";
     case ImportFormat::ThreeMf:
         return L"--parse-3mf";
+    case ImportFormat::Assimp:
+        return L"--parse-assimp";
     case ImportFormat::Step:
-        // Unreachable: STEP always runs in the pooled dedicated host, never
-        // the one-shot fast-worker path. Kept explicit so the closed format
-        // set is auditable next to its opcode/request mapping.
+    case ImportFormat::Iges:
+    case ImportFormat::Brep:
+    case ImportFormat::Xbf:
+    case ImportFormat::Fcstd:
+        // Unreachable: CAD always runs in the pooled dedicated host, never the
+        // one-shot fast-worker path. Kept explicit so the closed format set is
+        // auditable next to its opcode/request mapping.
         return L"--parse-step";
     case ImportFormat::Gltf:
     default:
@@ -216,9 +222,35 @@ Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFile
         | (session.fbxTinyTextureLimitForTesting
             ? model_core::kImportRequestFbxTinyTextureLimitForTesting : 0)
         | (session.stepForceSerialForTesting
-            ? model_core::kImportRequestStepForceSerialForTesting : 0);
+            ? model_core::kImportRequestStepForceSerialForTesting : 0)
+        | (session.assimpTinyLimitsForTesting
+            ? model_core::kImportRequestAssimpTinyLimitsForTesting : 0);
     request.cancellationEventHandleValue = cancellationEventHandle;
     return request;
+}
+
+model_core::SourceFormatId AssimpSourceFormat(model_core::AssimpFormat format)
+{
+    using A = model_core::AssimpFormat;
+    using S = model_core::SourceFormatId;
+    switch (format) {
+    case A::Dae: return S::Dae;
+    case A::ThreeDs: return S::ThreeDs;
+    case A::Dxf: return S::Dxf;
+    case A::DirectX: return S::DirectX;
+    case A::Off: return S::Off;
+    case A::Amf: return S::Amf;
+    case A::X3d: return S::X3d;
+    }
+    return S::Unknown;
+}
+
+bool IsAssimpSourceFormat(model_core::SourceFormatId format)
+{
+    using S = model_core::SourceFormatId;
+    return format == S::Dae || format == S::ThreeDs || format == S::Dxf
+        || format == S::DirectX || format == S::Off || format == S::Amf
+        || format == S::X3d;
 }
 
 bool SendStartRequest(const ImportSessionRequest& session, ImportProducer producer,
@@ -281,6 +313,15 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
             controlInWrite, model_core::ControlOpcode::StartThreeMfImportFromFile,
             &request, sizeof(request));
     }
+    case ImportFormat::Assimp: {
+        if (!model_core::IsKnownAssimpFormat(session.assimpFormat)) return false;
+        auto request = MakeFileRequest<model_core::ParseAssimpFileRequest>(
+            session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+        request.assimpFormat = static_cast<uint32_t>(session.assimpFormat);
+        return model_core::WriteControlMessage(
+            controlInWrite, model_core::ControlOpcode::StartAssimpImportFromFile,
+            &request, sizeof(request));
+    }
     case ImportFormat::Step: {
         // Only the dedicated STEP host may receive this opcode; the caller
         // (RunImportSessionForProducer) has already enforced producer/format
@@ -288,8 +329,28 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         // 10303-21 by bytes, never by extension.
         auto request = MakeFileRequest<model_core::ParseStepFileRequest>(
             session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+        request.requestFlags |= model_core::StepImportQualityFlags(session.stepImportQuality);
         return model_core::WriteControlMessage(
             controlInWrite, model_core::ControlOpcode::StartStepImportFromFile,
+            &request, sizeof(request));
+    }
+    case ImportFormat::Iges:
+    case ImportFormat::Brep:
+    case ImportFormat::Xbf:
+    case ImportFormat::Fcstd: {
+        // Generalized CAD route: the closed cadFormat field is validated by
+        // the host before preflight, so an Iges request can never be read by
+        // the BREP adapter (or vice versa) through a stale field.
+        auto request = MakeFileRequest<model_core::ParseCadFileRequest>(
+            session, sourceFileHandle, sectionHandle, cancellationEventHandle);
+        request.requestFlags |= model_core::StepImportQualityFlags(session.stepImportQuality);
+        request.cadFormat = static_cast<uint32_t>(
+            session.format == ImportFormat::Iges ? model_core::CadFormat::Iges
+            : session.format == ImportFormat::Brep ? model_core::CadFormat::Brep
+            : session.format == ImportFormat::Xbf ? model_core::CadFormat::Xbf
+                                                  : model_core::CadFormat::Fcstd);
+        return model_core::WriteControlMessage(
+            controlInWrite, model_core::ControlOpcode::StartCadImportFromFile,
             &request, sizeof(request));
     }
     }
@@ -348,7 +409,7 @@ struct BatchAcceptance {
     KnownImageCatalog images;
     KnownSceneCatalog sceneCatalog;
     uint64_t textureBytes=0,texturePixels=0;
-    bool haveTextureWarning=false, haveStatus=false;
+    bool haveTextureWarning=false, haveStatus=false, haveCompatibilityReport=false;
     std::optional<model_core::SceneMetadata> scene;
     std::optional<std::array<double, 3>> origin;
     struct Region { model_core::ChunkDescriptor scan; bool coarse=false, fine=false; };
@@ -392,6 +453,7 @@ struct BatchAcceptance {
             }
             if (chunk.descriptor.topology==model_core::ChunkTopology::TextureWarning) haveTextureWarning=true;
             if (chunk.descriptor.topology==model_core::ChunkTopology::ImportStatus) haveStatus=true;
+            if (chunk.descriptor.topology==model_core::ChunkTopology::CompatibilityReport) haveCompatibilityReport=true;
         }
         totalChunks += static_cast<uint32_t>(chunks.size());
         ++nextBatchIndex;
@@ -629,9 +691,14 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
     // the general worker.
     if (producer == ImportProducer::CompatibilityHost && request.format != ImportFormat::Usd)
         return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
-    if (producer == ImportProducer::StepHost && request.format != ImportFormat::Step)
+    if (producer == ImportProducer::StepHost && request.format != ImportFormat::Step
+        && request.format != ImportFormat::Iges && request.format != ImportFormat::Brep
+        && request.format != ImportFormat::Xbf && request.format != ImportFormat::Fcstd)
         return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
-    if (producer == ImportProducer::FastWorker && request.format == ImportFormat::Step)
+    if (producer == ImportProducer::FastWorker
+        && (request.format == ImportFormat::Step || request.format == ImportFormat::Iges
+            || request.format == ImportFormat::Brep || request.format == ImportFormat::Xbf
+            || request.format == ImportFormat::Fcstd))
         return Fail(ImportStage::SendRequest, model_core::ImportErrorCode::ImportProtocolViolation);
     // Cheapest possible cancellation: a generation already superseded before
     // it started launches no worker and touches no file at all.
@@ -887,7 +954,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             failure = Fail(ImportStage::ValidateSection, validation.errorCode);
             return false;
         }
-        bool batchHasWarning=false, batchHasStatus=false;
+        bool batchHasWarning=false, batchHasStatus=false, batchHasCompatibilityReport=false;
         for (const auto& chunk : validation.chunks) {
             if (chunk.descriptor.topology==model_core::ChunkTopology::ImportStatus) {
                 if (acceptance.haveStatus || batchHasStatus) {
@@ -901,8 +968,13 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 }
                 batchHasWarning=true;
             }
-            if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList
-                || chunk.descriptor.topology == model_core::ChunkTopology::PointList) {
+            if (chunk.descriptor.topology==model_core::ChunkTopology::CompatibilityReport) {
+                if (acceptance.haveCompatibilityReport || batchHasCompatibilityReport) {
+                    failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ImportProtocolViolation);return false;
+                }
+                batchHasCompatibilityReport=true;
+            }
+            if (model_core::IsGeometryTopology(chunk.descriptor.topology)) {
                 const auto& geometry = chunk.descriptor;
                 if (!acceptance.origin) acceptance.origin = std::array<double,3>{geometry.origin[0],geometry.origin[1],geometry.origin[2]};
                 for (unsigned axis = 0; axis < 3; ++axis) {
@@ -939,6 +1011,16 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                     ? chunk.scene.format == model_core::SourceFormatId::ThreeMf
                                 : request.format == ImportFormat::Step
                                     ? chunk.scene.format == model_core::SourceFormatId::Step
+                                : request.format == ImportFormat::Iges
+                                    ? chunk.scene.format == model_core::SourceFormatId::Iges
+                                : request.format == ImportFormat::Brep
+                                    ? chunk.scene.format == model_core::SourceFormatId::Brep
+                                : request.format == ImportFormat::Xbf
+                                    ? chunk.scene.format == model_core::SourceFormatId::Xbf
+                                : request.format == ImportFormat::Fcstd
+                                    ? chunk.scene.format == model_core::SourceFormatId::Fcstd
+                                : request.format == ImportFormat::Assimp
+                                    ? chunk.scene.format == AssimpSourceFormat(request.assimpFormat)
                                 : (chunk.scene.format == model_core::SourceFormatId::Usda
                                    || chunk.scene.format == model_core::SourceFormatId::Usdc
                                    || chunk.scene.format == model_core::SourceFormatId::Usdz);
@@ -961,7 +1043,12 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 || acceptance.scene->format == model_core::SourceFormatId::Usdc
                 || acceptance.scene->format == model_core::SourceFormatId::Usdz
                 || acceptance.scene->format == model_core::SourceFormatId::ThreeMf
-                || acceptance.scene->format == model_core::SourceFormatId::Step);
+                || acceptance.scene->format == model_core::SourceFormatId::Step
+                || acceptance.scene->format == model_core::SourceFormatId::Iges
+                || acceptance.scene->format == model_core::SourceFormatId::Brep
+                || acceptance.scene->format == model_core::SourceFormatId::Xbf
+                || acceptance.scene->format == model_core::SourceFormatId::Fcstd
+                || IsAssimpSourceFormat(acceptance.scene->format));
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -1018,8 +1105,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 newTriangles += d.indexCount / 3;
             if (d.topology == model_core::ChunkTopology::PointList)
                 newPoints += d.vertexCount;
-            if (d.topology == model_core::ChunkTopology::TriangleList ||
-                d.topology == model_core::ChunkTopology::PointList)
+            if (model_core::IsGeometryTopology(d.topology))
                 newVertices += d.vertexCount;
         }
         const uint64_t triangleLimit = tierBFormat ? model_core::kTierBTriangleLimit : model_core::kTierATriangleLimit;
@@ -1045,8 +1131,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         for (const auto& chunk : validation.chunks)
         {
             const auto& d = chunk.descriptor;
-            if (d.topology != model_core::ChunkTopology::TriangleList &&
-                d.topology != model_core::ChunkTopology::PointList)
+            if (!model_core::IsGeometryTopology(d.topology))
                 continue;
             if (!d.sourceRangeLength && chunk.scene.format != model_core::SourceFormatId::Unknown)
             {
@@ -1077,7 +1162,9 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierAObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > 300000000 ||
                      d.sourceRangeLength > 300000000 - uint32_t(d.sourceRangeOffset) ||
-                     (d.lodLevel != model_core::kCoarseLod && d.sourceRangeLength != d.indexCount)))
+                     (d.lodLevel != model_core::kCoarseLod &&
+                      d.sourceRangeLength != model_core::GeometrySourceElementCount(
+                          d.topology, d.indexCount, d.vertexCount))))
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
@@ -1091,18 +1178,20 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
                      d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
-                     d.sourceRangeLength != (d.topology == model_core::ChunkTopology::PointList
-                         ? d.vertexCount : d.indexCount)))
+                     d.sourceRangeLength != model_core::GeometrySourceElementCount(
+                         d.topology, d.indexCount, d.vertexCount)))
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
                 }
                 if ((chunk.scene.format == model_core::SourceFormatId::Obj
-                     || chunk.scene.format == model_core::SourceFormatId::Fbx) &&
+                     || chunk.scene.format == model_core::SourceFormatId::Fbx
+                     || IsAssimpSourceFormat(chunk.scene.format)) &&
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
                      d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
-                     d.sourceRangeLength != d.indexCount))
+                     d.sourceRangeLength != model_core::GeometrySourceElementCount(
+                         d.topology, d.indexCount, d.vertexCount)))
                 {
                     failure = Fail(ImportStage::ValidateSection, model_core::ImportErrorCode::MalformedData);
                     return false;
@@ -1115,7 +1204,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         bool havePreview=false,haveOtherGeometry=false;
         for (const auto& chunk:validation.chunks) {
             const auto& d=chunk.descriptor;
-            if (d.topology!=model_core::ChunkTopology::TriangleList && d.topology!=model_core::ChunkTopology::PointList) continue;
+            if (!model_core::IsGeometryTopology(d.topology)) continue;
             if (d.lodLevel==model_core::kPreviewLod) havePreview=true; else haveOtherGeometry=true;
         }
         // Provisional preview publications are separate from the validated
@@ -1141,7 +1230,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         }
         for (const auto& chunk:validation.chunks) {
             const auto& d=chunk.descriptor;
-            const bool geometry=d.topology==model_core::ChunkTopology::TriangleList || d.topology==model_core::ChunkTopology::PointList;
+            const bool geometry=model_core::IsGeometryTopology(d.topology);
             if (!coarseProtocol) {
                 if (d.lodLevel>=model_core::kScanLod || d.topology==model_core::ChunkTopology::CoarseComplete) {
                     failure=Fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData); return false;
@@ -1155,7 +1244,8 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 if (d.lodLevel==model_core::kPreviewLod) {
                     if (d.chunkId!=(identity|model_core::kPreviewIdentity) || !acceptance.regions.empty()
                         || acceptance.coarseComplete || d.dependencyCount) return invalid();
-                    acceptance.previewPrimitives+=d.topology==model_core::ChunkTopology::PointList ? d.vertexCount : d.indexCount/3;
+                    acceptance.previewPrimitives+=model_core::GeometryPrimitiveCount(
+                        d.topology,d.indexCount,d.vertexCount);
                     acceptance.previewBytes+=d.byteSize;
                     if (acceptance.previewPrimitives>model_core::kPreviewPrimitiveLimit || acceptance.previewBytes>model_core::kPreviewByteLimit) return invalid();
                 } else if (d.lodLevel==model_core::kScanLod) {
@@ -1174,8 +1264,10 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                         if (d.chunkId!=(identity|model_core::kCoarseIdentity) || region->second.coarse || acceptance.coarseComplete) return invalid();
                         for (unsigned axis=0;axis<3;++axis)
                             if (d.localMin[axis]<scan.localMin[axis] || d.localMax[axis]>scan.localMax[axis]) return invalid();
-                        const uint64_t primitives=d.topology==model_core::ChunkTopology::PointList ? d.vertexCount : d.indexCount/3;
-                        if (!primitives || primitives>(scan.topology==model_core::ChunkTopology::PointList ? scan.vertexCount : scan.indexCount/3)) return invalid();
+                        const uint64_t primitives=model_core::GeometryPrimitiveCount(
+                            d.topology,d.indexCount,d.vertexCount);
+                        if (!primitives || primitives>model_core::GeometryPrimitiveCount(
+                                scan.topology,scan.indexCount,scan.vertexCount)) return invalid();
                         acceptance.coarsePrimitives+=primitives; acceptance.coarseBytes+=d.byteSize;
                         if (acceptance.coarsePrimitives>model_core::kCoarsePrimitiveLimit || acceptance.coarseBytes>model_core::kCoarseReservedBytes) return invalid();
                         region->second.coarse=true; ++acceptance.coarseRegions;
@@ -1520,7 +1612,12 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             || acceptance.scene->format == model_core::SourceFormatId::Usdc
             || acceptance.scene->format == model_core::SourceFormatId::Usdz
             || acceptance.scene->format == model_core::SourceFormatId::ThreeMf
-            || acceptance.scene->format == model_core::SourceFormatId::Step);
+            || acceptance.scene->format == model_core::SourceFormatId::Step
+            || acceptance.scene->format == model_core::SourceFormatId::Iges
+            || acceptance.scene->format == model_core::SourceFormatId::Brep
+            || acceptance.scene->format == model_core::SourceFormatId::Xbf
+            || acceptance.scene->format == model_core::SourceFormatId::Fcstd
+            || IsAssimpSourceFormat(acceptance.scene->format));
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)
@@ -1537,7 +1634,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::FileChanged);
     bool haveGeometry = false;
     for (const auto& [id, topology] : acceptance.catalog)
-        haveGeometry |= topology == model_core::ChunkTopology::TriangleList || topology == model_core::ChunkTopology::PointList;
+        haveGeometry |= model_core::IsGeometryTopology(topology);
     if (!haveGeometry) return fail(ImportStage::WorkerReportedError, model_core::ImportErrorCode::EmptyGeometry);
     ImportSessionResult result;
     result.ok = true;
@@ -1554,6 +1651,20 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
         if (!request.enableCoarseProxy || !request.onBatch || !request.onInitialComplete)
             return fail(ImportStage::UnexpectedReply);
         request.onInitialComplete(sourceIdentity);
+        // T23: the replay is a background refinement session, not the forward
+        // load. End it cleanly (EndDetail) once the caller has been idle for
+        // its bounded grace or has consumed its bounded request budget.
+        // Otherwise a fully loaded model would remain in AwaitDetail until the
+        // absolute generation deadline and then surface as a late
+        // ResourceLimit failure after a perfectly good image.
+        const auto idleGrace = std::chrono::milliseconds(
+            request.detailIdleGraceMs ? request.detailIdleGraceMs : 1500u);
+        const auto initialGrace = std::chrono::milliseconds(
+            request.initialDetailGraceMs ? request.initialDetailGraceMs : 60000u);
+        const uint32_t detailCap = request.maxDetailRequestsPerGeneration
+            ? request.maxDetailRequestsPerGeneration : 4096u;
+        auto idleSince = std::chrono::steady_clock::now();
+        bool detailEnded = false;
         // A single outstanding request owns the reused section. No new sidecar
         // requests are permitted: replay uses only the worker's pinned handles.
         for (;;) {
@@ -1574,8 +1685,19 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             if (WaitForSingleObject(workerProcess, 0) == WAIT_OBJECT_0)
                 return fail(ImportStage::AwaitReply, model_core::ImportErrorCode::WorkerCrashed);
             if (!cpuBudgetAllows()) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit);
+            if (result.detailRequestCount >= detailCap) { detailEnded = true; break; }
             const uint32_t identity = request.nextDetail();
-            if (!identity) { Sleep(20); continue; }
+            if (!identity) {
+                const auto grace = result.detailRequestCount == 0 ? initialGrace : idleGrace;
+                if (std::chrono::steady_clock::now() - idleSince >= grace) {
+                    detailEnded = true;
+                    break;
+                }
+                Sleep(20);
+                continue;
+            }
+            ++result.detailRequestCount;
+            idleSince = std::chrono::steady_clock::now();
             const auto region = acceptance.regions.find(identity);
             if (region == acceptance.regions.end()) return fail(ImportStage::UnexpectedReply);
             model_core::DetailRequest detail{request.generationId, region->second.scan};
@@ -1637,6 +1759,18 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 return fail(ImportStage::ValidateSection, model_core::ImportErrorCode::FileChanged);
             if (!cpuBudgetAllows()) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::ResourceLimit);
             request.onBatch(std::move(validation.chunks));
+            idleSince = std::chrono::steady_clock::now();
+        }
+        result.detailEndedByIdle = detailEnded;
+        if (detailEnded) {
+            // Tell the worker to leave AwaitDetail and return to the pool. The
+            // generation is already reported (ChunksReady) and every accepted
+            // detail chunk is in host memory, so this is a normal completion.
+            // No reply is expected; the next Start request follows EndDetail on
+            // the same FIFO control pipe.
+            if (!model_core::WriteControlMessage(controlInput, model_core::ControlOpcode::EndDetail,
+                                                 nullptr, 0))
+                return fail(ImportStage::AwaitReply);
         }
     }
     if (pooledLease) pooledLease->reusable = true;
@@ -1728,9 +1862,11 @@ ImportSessionResult MapStepFailure(ImportSessionResult result)
 
 ImportSessionResult RunImportSession(const ImportSessionRequest& request)
 {
-    // STEP has no fast-worker candidate and no fallback: the dedicated host is
-    // the only producer allowed to emit SourceFormatId::Step.
-    if (request.format == ImportFormat::Step) {
+    // CAD formats have no fast-worker candidate and no fallback: the dedicated
+    // host is the only producer allowed to emit their SourceFormatId.
+    if (request.format == ImportFormat::Step || request.format == ImportFormat::Iges
+        || request.format == ImportFormat::Brep || request.format == ImportFormat::Xbf
+        || request.format == ImportFormat::Fcstd) {
         if (request.stepHostExePath.empty())
             return Fail(ImportStage::LaunchWorker, model_core::ImportErrorCode::StepHostFailure);
         return MapStepFailure(RunImportSessionForProducer(request, ImportProducer::StepHost));

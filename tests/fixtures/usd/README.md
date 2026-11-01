@@ -19,7 +19,8 @@ AppContainer, or fuzz qualification:
 python tests/fixtures/usd/verify.py --output TestResults/usd-009/corpus
 ```
 
-The focused `[usd-004]`, `[usd-005]`, and `[usd-007]` ImportIsolation tests are
+The focused `[usd-004]`, `[usd-005]`, `[usd-007]`, and `[usd-primitives]`
+ImportIsolation tests are
 the numeric oracle for normalized geometry, hierarchy, instances, transforms,
 materials, texture pixels, warnings, composition outcomes, recovery, and exact
 fast/compatibility overlap. This manifest deliberately records expectations

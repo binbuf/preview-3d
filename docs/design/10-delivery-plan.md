@@ -143,7 +143,7 @@ Deliver, all of it running inside `Preview3DImportWorker.exe` behind the Gate 2 
 - bounded Draco geometry decode and KTX2/Basis transcode paths;
 - verified bounds, double-origin cluster normalization, normal/tangent policy;
 - meshoptimizer cluster LOD/proxy builder;
-- inbox WIC/libwebp PNG/JPEG/BMP/TIFF/GIF/WebP and mip pipeline (the planned DirectXTex TGA/DDS/HDR path was dropped; ADR-0048);
+- inbox WIC/libwebp PNG/JPEG/BMP/TIFF/GIF/WebP and mip pipeline, plus product-owned bounded TGA/DDS/Radiance HDR decoders and the repository-vendored tinyexr decoder (DirectXTex is not linked; ADR-0048, ADR-0068, ADR-0069);
 - source-order-independent stratified first-proxy sampling;
 - persistent derived-cache production path (validated and written host-side from worker-produced chunks) plus transient Tier-A normalized store inside the worker where needed;
 - draw sorting/instancing and measured direct-versus-ExecuteIndirect threshold;
@@ -172,7 +172,7 @@ Every slice includes adapter wrapper, dependency allocation/I/O/cancel callbacks
 
 Exit:
 
-- every direct extension opens from command line/dialog/drop/secondary activation;
+- every direct extension opens from command line/dialog/drop and a fresh instance;
 - conformance and product fixtures preserve expected hierarchy/instances/transforms within the documented subset;
 - lower Tier B limits fail safely and do not affect the next open;
 - archive bombs, recursive graphs, unsafe references, missing MTL/textures, deformed FBX poses, 3MF lattices, and unsupported/over-limit USD composition have specified outcomes;
@@ -197,7 +197,7 @@ Deliver:
 Exit:
 
 - all acceptance scenarios in [07-user-experience.md](./07-user-experience.md) pass;
-- simultaneous launch/IPC spoof/open-storm/cancellation tests pass;
+- simultaneous launch independence/open-storm/cancellation tests pass;
 - there is no tray icon, startup task, hidden post-close window, or lingering process;
 - automated UI heartbeat shows no load-time message gap above 100 ms;
 - accessibility audit passes keyboard, 200% scale, high contrast, and screen-reader smoke.
@@ -266,7 +266,7 @@ Exit:
 | --- | --- | --- |
 | FR-01 formats | 3, 4, 6 | adapter corpus, extension routes |
 | FR-02 thumbnails | 6, 7 | COM/surrogate/MSI tests |
-| FR-03 viewer activation | 3–5, 7 | shell/dialog/drop/IPC scenarios |
+| FR-03 viewer activation | 3–5, 7 | shell/dialog/drop scenarios |
 | FR-04/FR-05 responsive isolation | 1–4 | heartbeat, frame traces, ownership assertions |
 | FR-06 camera | 1, 5 | deterministic input/visual tests |
 | FR-07 progressive safe chunks | 2–4 | fence delay/publication/LOD tests |

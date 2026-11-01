@@ -17,7 +17,12 @@
 
 #include "StepXdeAdapter.h"
 
+#include "FcstdPreflight.h"
+#include "FcstdReader.h"
+#include "IgesStreamReader.h"
+
 #include "model_core/Checksum.h"
+#include "model_core/Compatibility.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
@@ -26,6 +31,18 @@
 
 #pragma warning(push, 0)
 #include <BRepBndLib.hxx>
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepTools.hxx>
+#include <BRep_Builder.hxx>
+#include <IGESCAFControl_Reader.hxx>
+#include <IGESData_GlobalSection.hxx>
+#include <IGESData_IGESModel.hxx>
+#include <IGESData_Protocol.hxx>
+#include <Interface_InterfaceModel.hxx>
+#include <StepBasic_ConversionBasedUnitAndLengthUnit.hxx>
+#include <StepBasic_LengthUnit.hxx>
+#include <StepBasic_SiUnitAndLengthUnit.hxx>
+#include <BinXCAFDrivers.hxx>
 #include <BRepLib_ToolTriangulatedShape.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
@@ -37,6 +54,8 @@
 #include <Quantity_Color.hxx>
 #include <Quantity_ColorRGBA.hxx>
 #include <STEPCAFControl_Reader.hxx>
+#include <ShapeFix_Shape.hxx>
+#include <XSControl_WorkSession.hxx>
 #include <Standard_Failure.hxx>
 #include <Standard_Version.hxx>
 #include <StepData_StepModel.hxx>
@@ -45,6 +64,7 @@
 #include <TDF_Label.hxx>
 #include <TDF_LabelSequence.hxx>
 #include <TDF_Tool.hxx>
+#include <TDocStd_Application.hxx>
 #include <TDocStd_Document.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopAbs_Orientation.hxx>
@@ -75,10 +95,12 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <streambuf>
 #include <string>
 #include <unordered_map>
@@ -280,6 +302,26 @@ bool IsCancelled(HANDLE event)
 {
     return event && event != INVALID_HANDLE_VALUE && WaitForSingleObject(event, 0) == WAIT_OBJECT_0;
 }
+
+// OCCT's ShapeSet/BRepTools readers report bad input with std::cout. The host's
+// stdout is the binary control channel, so a malformed BREP/IGES file must not
+// be able to write kernel text there. Redirect std::cout into a bounded sink
+// for the duration of the reader call; product control messages use WriteFile
+// on the handle directly and are unaffected.
+class ScopedCoutSilencer {
+public:
+    ScopedCoutSilencer()
+        : previous_(std::cout.rdbuf(sink_.rdbuf()))
+    {
+    }
+    ~ScopedCoutSilencer() { std::cout.rdbuf(previous_); }
+    ScopedCoutSilencer(const ScopedCoutSilencer&) = delete;
+    ScopedCoutSilencer& operator=(const ScopedCoutSilencer&) = delete;
+
+private:
+    std::ostringstream sink_;
+    std::streambuf* previous_;
+};
 
 // --- exact double affine helpers, matching SharedSectionValidator -------------
 
@@ -791,12 +833,14 @@ struct GeometryRecord {
 // semantics are byte-compatible with the STEP-003 single-window writer.
 class SceneEmitter {
 public:
-    SceneEmitter(std::span<std::byte> section, std::uint64_t generationId, double metersPerUnit,
+    SceneEmitter(std::span<std::byte> section, std::uint64_t generationId,
+                 model_core::SourceFormatId sourceFormat, double metersPerUnit,
                  std::uint32_t meshes, std::uint32_t nodes, std::uint32_t warningCount,
                  std::uint32_t maxChunkCount, StepBatchPublisher publish,
                  std::function<bool()> cancelled)
         : section_(section)
         , generationId_(generationId)
+        , sourceFormat_(sourceFormat)
         , metersPerUnit_(metersPerUnit)
         , meshCount_(meshes)
         , nodeCount_(nodes)
@@ -949,6 +993,18 @@ public:
             reinterpret_cast<const std::byte*>(&status), sizeof(status)));
     }
 
+    // T07: stable numeric STEP feature records (external declarations assumed
+    // unresolved, millimetre assumption, contradictory units, bounded repair).
+    bool AddCompatibility(const CompatibilityReportPayload& payload)
+    {
+        if (payload.recordCount == 0) return true;
+        ChunkDescriptor descriptor{};
+        descriptor.topology = ChunkTopology::CompatibilityReport;
+        descriptor.chunkId = kCompatibilityReportChunkId;
+        return Add(descriptor, std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(&payload), sizeof(payload)));
+    }
+
     // Finalizes the terminal window into the section.
     bool Finalize(std::uint32_t& chunkCount, std::uint64_t& sectionBytesWritten)
     {
@@ -1047,7 +1103,7 @@ private:
         header.sectionLength = offset;
         header.chunkCount = static_cast<std::uint32_t>(pending_.size());
         header.scene.generationId = generationId_;
-        header.scene.format = SourceFormatId::Step;
+        header.scene.format = sourceFormat_;
         header.scene.upAxis = UpAxisId::Unknown;
         header.scene.metersPerUnit = metersPerUnit_;
         header.scene.meshCount = meshCount_;
@@ -1083,6 +1139,7 @@ private:
 
     std::span<std::byte> section_;
     std::uint64_t generationId_;
+    model_core::SourceFormatId sourceFormat_;
     double metersPerUnit_;
     std::uint32_t meshCount_;
     std::uint32_t nodeCount_;
@@ -1101,8 +1158,9 @@ private:
 
 class DefinitionMesher {
 public:
-    DefinitionMesher(const StepTessellationProfile& profile, const StepXdeLimits& limits)
-        : profile_(profile), limits_(limits)
+    DefinitionMesher(const StepTessellationProfile& profile, const StepXdeLimits& limits,
+                     StepTessellationQuality quality)
+        : profile_(profile), limits_(limits), quality_(quality)
     {
     }
 
@@ -1118,6 +1176,9 @@ public:
     double meshMilliseconds() const { return meshMilliseconds_; }
     double extractMilliseconds() const { return extractMilliseconds_; }
     std::uint32_t unmeshedFaces() const { return unmeshedFaces_; }
+    // True only when the last failure was a mesh/triangulation failure that a
+    // bounded repair may address. Budget and cancellation failures are false.
+    bool repairEligible() const { return repairEligible_; }
 
     // Tessellates `shape` at the display profile and appends bounded,
     // de-indexed, material-homogeneous geometry chunks (each <= the profile's
@@ -1129,6 +1190,8 @@ public:
         bool hasShapeColor, std::uint32_t shapeMaterialId, std::uint32_t meshId,
         std::uint32_t& nextGeometryId, std::vector<GeometryRecord>& chunks)
     {
+        repairEligible_ = false;
+        const std::uint32_t unmeshedBefore = unmeshedFaces_;
         double diagonal = 0.0;
         {
             Bnd_Box box;
@@ -1145,9 +1208,9 @@ public:
 
         IMeshTools_Parameters parameters;
         parameters.Deflection = StepDeriveLinearDeflection(
-            diagonal, profile_.displayRelativeDeflection, profile_.minAbsoluteDeflection,
+            diagonal, profile_.RelativeDeflection(quality_), profile_.minAbsoluteDeflection,
             profile_.maxAbsoluteDeflection);
-        parameters.Angle = profile_.displayAngularDeflection;
+        parameters.Angle = profile_.AngularDeflection(quality_);
         parameters.MinSize = StepDeriveMinEdge(diagonal, profile_.relativeMinEdge,
                                                profile_.minAbsoluteEdgeLength);
         parameters.Relative = Standard_False;
@@ -1159,10 +1222,19 @@ public:
         parameters.AllowQualityDecrease = Standard_False;
 
         const auto meshStart = SteadyClock::now();
-        BRepMesh_IncrementalMesh mesher(shape, parameters);
+        bool meshReportedDone = false;
+        try {
+            BRepMesh_IncrementalMesh mesher(shape, parameters);
+            meshReportedDone = mesher.IsDone();
+        } catch (const Standard_Failure&) {
+            meshReportedDone = false;
+        }
         meshMilliseconds_ += ElapsedMilliseconds(meshStart);
         if (!StepWithinDefinitionTime(ElapsedMilliseconds(meshStart), profile_.maxDefinitionMilliseconds))
             return model_core::ImportErrorCode::TessellationFailed;
+        // Do not fail solely because BRepMesh reports "not done": an authored
+        // AP242 tessellated representation is already present on the faces and
+        // must be extracted even when no regeneration was needed.
 
         const auto extractStart = SteadyClock::now();
 
@@ -1262,6 +1334,10 @@ public:
         }
         if (definitionTriangles == 0) {
             extractMilliseconds_ += ElapsedMilliseconds(extractStart);
+            // No triangles but at least one face could not be triangulated is a
+            // tessellation failure a bounded repair may address; a genuinely
+            // empty/unsupported definition stays a silent skip.
+            repairEligible_ = !meshReportedDone || unmeshedFaces_ > unmeshedBefore;
             return model_core::ImportErrorCode::None; // nothing visible
         }
 
@@ -1319,12 +1395,72 @@ private:
 
     const StepTessellationProfile& profile_;
     const StepXdeLimits& limits_;
+    StepTessellationQuality quality_;
     std::function<bool()> cancelledProbe_;
     bool forceSerial_ = false;
+    bool repairEligible_ = false;
     double meshMilliseconds_ = 0.0;
     double extractMilliseconds_ = 0.0;
     std::uint32_t unmeshedFaces_ = 0;
 };
+
+// T07 opt-in repair. Runs only when a definition transferred but produced no
+// tessellation. The face/edge walk and elapsed check enforce the versioned
+// budget; a repaired shape must also pass a read-only validity check, so a
+// failed repair preserves the caller's original typed outcome instead of
+// publishing a half-fixed shape. ShapeFix has no cancellable progress range, so
+// the elapsed bound is a post-condition rather than a mid-call interruption.
+// T07: FileUnits reports the dominant unit per representation context, so a
+// context that attaches more than one length unit is collapsed before this
+// adapter sees it. Count the authored length-unit entities in the transferred
+// model instead, so contradictory units are still detected and warned about.
+std::uint32_t CountAuthoredLengthUnits(const Handle(Interface_InterfaceModel)& model)
+{
+    if (model.IsNull()) return 0;
+    std::uint32_t count = 0;
+    for (Standard_Integer index = 1; index <= model->NbEntities(); ++index) {
+        const Handle(Standard_Transient) entity = model->Value(index);
+        if (entity.IsNull()) continue;
+        // OCCT's complex SI/conversion units carry LengthUnit through multiple
+        // inheritance, which Standard_Type's single-parent chain does not
+        // expose; check the concrete length-unit combinations as well.
+        if (entity->IsKind(STANDARD_TYPE(StepBasic_SiUnitAndLengthUnit))
+            || entity->IsKind(STANDARD_TYPE(StepBasic_ConversionBasedUnitAndLengthUnit))
+            || entity->IsKind(STANDARD_TYPE(StepBasic_LengthUnit))) ++count;
+    }
+    return count;
+}
+
+bool TryBoundedRepair(const TopoDS_Shape& shape, const StepRepairBudget& budget,
+                      TopoDS_Shape& repaired)
+{
+    if (shape.IsNull()) return false;
+    std::uint32_t faces = 0;
+    std::uint32_t edges = 0;
+    for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
+        if (++faces > budget.maxFaces) return false;
+    }
+    for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+        if (++edges > budget.maxEdges) return false;
+    }
+    if (faces == 0) return false;
+
+    const auto start = SteadyClock::now();
+    try {
+        ShapeFix_Shape fixer(shape);
+        fixer.Perform();
+        if (!StepWithinDefinitionTime(ElapsedMilliseconds(start), budget.maxMilliseconds))
+            return false;
+        const TopoDS_Shape fixed = fixer.Shape();
+        if (fixed.IsNull()) return false;
+        BRepCheck_Analyzer analyzer(fixed);
+        if (!analyzer.IsValid()) return false;
+        repaired = fixed;
+        return true;
+    } catch (const Standard_Failure&) {
+        return false;
+    }
+}
 
 } // namespace
 
@@ -1332,7 +1468,8 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                 std::span<std::byte> section, HANDLE sourceHandle,
                                 HANDLE cancellationEvent, std::span<const std::byte> mappedSource,
                                 const StepXdeLimits& limits, const StepBatchPublisher& publish,
-                                const StepProgressSink& progress)
+                                const StepProgressSink& progress, const StepImportPolicy& policy,
+                                model_core::CadFormat cadFormat)
 {
     StepXdeResult result;
     const auto totalStart = SteadyClock::now();
@@ -1367,8 +1504,12 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
     }
 
     Handle(TDocStd_Document) document;
+    // XBF is opened through its own TDocStd_Application with the BinXCAF
+    // drivers registered, so the close path must use that application rather
+    // than the XCAF singleton.
+    Handle(TDocStd_Application) documentApp = XCAFApp_Application::GetApplication();
     auto closeDocument = [&] {
-        if (!document.IsNull()) XCAFApp_Application::GetApplication()->Close(document);
+        if (!document.IsNull()) documentApp->Close(document);
     };
 
     try {
@@ -1377,14 +1518,6 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             result.errorCode = model_core::ImportErrorCode::InternalImporterFailure;
             return result;
         }
-
-        STEPCAFControl_Reader reader;
-        reader.SetColorMode(Standard_True);
-        reader.SetNameMode(Standard_True);
-        reader.SetLayerMode(Standard_True);
-        reader.SetPropsMode(Standard_False);
-        reader.SetGDTMode(Standard_False);
-        reader.SetViewMode(Standard_False);
 
         // STEP-005: consume the single read-only mapping created by the host
         // when available, so preflight and OCCT transfer do not each read the
@@ -1410,94 +1543,314 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                 static_cast<std::uint64_t>(size.QuadPart) - bomBytes, bomBytes);
         }
         std::istream stream(source.get());
+
+        // T07: a declared external document no longer vetoes the main document.
+        // It is unresolved by contract (the host has no path authority) and is
+        // reported as a warning even when the transferred main geometry is
+        // usable. IGES/BREP cannot declare external STEP documents.
+        CompatibilityReportBuilder compatibility;
+        std::uint32_t policyWarnings = 0;
+        if (cadFormat == model_core::CadFormat::Step && policy.unresolvedExternalDocuments > 0) {
+            if (compatibility.Add(model_core::kStepFeatureExternalDocumentUnresolved,
+                                  CompatibilitySeverity::Degraded,
+                                  policy.unresolvedExternalDocuments))
+                ++policyWarnings;
+        }
+
+        double metersPerUnit = 0.0;
         const auto readStart = SteadyClock::now();
         IFSelect_ReturnStatus readStatus = IFSelect_RetFail;
-        try {
-            readStatus = reader.ReadStream("preview3d.step", stream);
-        } catch (...) {
-            // A malformed or adversarial Part-21 topology can make OCCT throw
-            // while building its in-memory model. That is bad input, not a
-            // product defect, so classify it as MalformedData rather than
-            // letting the generic boundary handler report an internal failure.
-            result.errorCode = model_core::ImportErrorCode::MalformedData;
-            closeDocument();
-            return result;
+        bool transferred = false;
+        const auto transferStart = SteadyClock::now();
+
+        if (cadFormat == model_core::CadFormat::Step) {
+            STEPCAFControl_Reader reader;
+            reader.SetColorMode(Standard_True);
+            reader.SetNameMode(Standard_True);
+            reader.SetLayerMode(Standard_True);
+            reader.SetPropsMode(Standard_False);
+            reader.SetGDTMode(Standard_False);
+            reader.SetViewMode(Standard_False);
+            try {
+                readStatus = reader.ReadStream("preview3d.step", stream);
+            } catch (...) {
+                // A malformed or adversarial Part-21 topology can make OCCT
+                // throw while building its in-memory model. That is bad input,
+                // not a product defect, so classify it as MalformedData rather
+                // than letting the generic boundary handler report an internal
+                // failure.
+                result.errorCode = model_core::ImportErrorCode::MalformedData;
+                closeDocument();
+                return result;
+            }
+            result.timings.readMilliseconds =
+                static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
+            emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
+            if (readStatus == IFSelect_RetDone) {
+                // A syntactically valid Part-21 file can carry product/layer
+                // metadata but no transferable shape representation. Classify
+                // the geometry-free family explicitly.
+                if (reader.ChangeReader().NbRootsForTransfer() <= 0) {
+                    result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
+                    closeDocument();
+                    return result;
+                }
+                try {
+                    if (progress) {
+                        // STEP-008 follow-up: bound the broker reply-timeout gap
+                        // during the long XDE build with a progress-driven
+                        // heartbeat. The indicator is stack-owned and outlives
+                        // the Transfer call.
+                        StepTransferHeartbeat heartbeat(progress, totalStart, transferStart);
+                        transferred = reader.Transfer(document, heartbeat.Start());
+                    } else {
+                        transferred = reader.Transfer(document);
+                    }
+                } catch (...) {
+                    result.errorCode = model_core::ImportErrorCode::MalformedData;
+                    closeDocument();
+                    return result;
+                }
+            }
+            if (transferred) {
+                // The pinned reader normalizes transferred coordinates to the
+                // Cascade system unit; GetLengthUnit reports that verified
+                // metre factor for the geometry as stored. FileUnits is
+                // name-only and proves whether a length unit was written. T07
+                // tolerates the common imperfect header: absent units assume
+                // millimetres, contradictory units use the reader's
+                // first/dominant factor, and both are reported as warnings.
+                const std::uint32_t authoredLengthUnits =
+                    CountAuthoredLengthUnits(reader.ChangeReader().WS()->Model());
+                double reportedMetersPerUnit = 0.0;
+                const bool unitReported =
+                    XCAFDoc_DocumentTool::GetLengthUnit(document, reportedMetersPerUnit);
+                const StepLengthUnitResolution units = ResolveStepLengthUnit(
+                    authoredLengthUnits, unitReported ? reportedMetersPerUnit : 0.0);
+                if (units.overflow) {
+                    result.errorCode = model_core::ImportErrorCode::UnsupportedRequiredFeature;
+                    closeDocument();
+                    return result;
+                }
+                if (units.assumedMillimetres
+                    && compatibility.Add(model_core::kStepFeatureLengthUnitAssumedMillimetre,
+                                         CompatibilitySeverity::Degraded))
+                    ++policyWarnings;
+                if (units.contradictory
+                    && compatibility.Add(model_core::kStepFeatureLengthUnitContradictory,
+                                         CompatibilitySeverity::Degraded))
+                    ++policyWarnings;
+                metersPerUnit = units.metersPerUnit;
+            }
+        } else if (cadFormat == model_core::CadFormat::Iges) {
+            ScopedCoutSilencer silence;
+            IGESCAFControl_Reader reader;
+            reader.SetColorMode(Standard_True);
+            reader.SetNameMode(Standard_True);
+            reader.SetLayerMode(Standard_True);
+            try {
+                // OCCT's IGES work library has no ReadStream implementation,
+                // so the admitted records are fed to the pinned C parser and
+                // the resulting model is installed on the reader's session.
+                const Handle(IGESData_Protocol) protocol =
+                    Handle(IGESData_Protocol)::DownCast(reader.WS()->Protocol());
+                const Handle(IGESData_IGESModel) model =
+                    protocol.IsNull() ? Handle(IGESData_IGESModel){}
+                                      : ReadIgesModelFromStream(stream, protocol);
+                if (!model.IsNull()) {
+                    reader.WS()->SetModel(model);
+                    reader.WS()->InitTransferReader(4);
+                    readStatus = IFSelect_RetDone;
+                }
+            } catch (...) {
+                result.errorCode = model_core::ImportErrorCode::MalformedData;
+                closeDocument();
+                return result;
+            }
+            result.timings.readMilliseconds =
+                static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
+            emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
+            if (readStatus == IFSelect_RetDone) {
+                if (reader.NbRootsForTransfer() <= 0) {
+                    result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
+                    closeDocument();
+                    return result;
+                }
+                try {
+                    if (progress) {
+                        StepTransferHeartbeat heartbeat(progress, totalStart, transferStart);
+                        transferred = reader.Transfer(document, heartbeat.Start());
+                    } else {
+                        transferred = reader.Transfer(document);
+                    }
+                } catch (...) {
+                    result.errorCode = model_core::ImportErrorCode::MalformedData;
+                    closeDocument();
+                    return result;
+                }
+            }
+            if (transferred) {
+                // The IGES actor converts authored coordinates into OCCT's
+                // system unit; the verified stored factor is therefore the
+                // system millimetre. Global parameter 14 is the only authored
+                // unit declaration, and it is optional.
+                const Handle(IGESData_IGESModel) model = reader.IGESModel();
+                const std::uint32_t unitFlag =
+                    model.IsNull() ? 0u : static_cast<std::uint32_t>(model->GlobalSection().UnitFlag());
+                double cascadeMillimetres = 1.0;
+                if (!model.IsNull()) {
+                    const double reported = model->GlobalSection().CascadeUnit();
+                    if (std::isfinite(reported) && reported > 0.0) cascadeMillimetres = reported;
+                }
+                metersPerUnit = cascadeMillimetres * 0.001;
+                if (unitFlag == 0) {
+                    if (compatibility.Add(model_core::kCadFeatureIgesUnitAssumedMillimetre,
+                                          CompatibilitySeverity::Degraded))
+                        ++policyWarnings;
+                } else if (unitFlag != 2) {
+                    if (compatibility.Add(model_core::kCadFeatureIgesUnitNonMillimetre,
+                                          CompatibilitySeverity::Degraded))
+                        ++policyWarnings;
+                }
+            }
+        } else if (cadFormat == model_core::CadFormat::Brep) {
+            // OCCT BREP is a topology/shape-set serialization with no unit and
+            // no XDE document. Read it into an ordinary XCAF shape document so
+            // the existing planner/emitter contract is reused unchanged.
+            ScopedCoutSilencer silence;
+            BRep_Builder builder;
+            TopoDS_Shape shape;
+            try {
+                BRepTools::Read(shape, stream, builder);
+            } catch (...) {
+                result.errorCode = model_core::ImportErrorCode::MalformedData;
+                closeDocument();
+                return result;
+            }
+            result.timings.readMilliseconds =
+                static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
+            emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
+            if (shape.IsNull()) {
+                result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
+                closeDocument();
+                return result;
+            }
+            const Handle(XCAFDoc_ShapeTool) shapes =
+                XCAFDoc_DocumentTool::ShapeTool(document->Main());
+            if (shapes.IsNull() || shapes->AddShape(shape, Standard_False).IsNull()) {
+                result.errorCode = model_core::ImportErrorCode::InternalImporterFailure;
+                closeDocument();
+                return result;
+            }
+            shapes->UpdateAssemblies();
+            // BREP carries no authored unit. Zero is the explicit unspecified
+            // value; the scene is never silently relabeled as millimetres.
+            metersPerUnit = 0.0;
+            if (compatibility.Add(model_core::kCadFeatureBrepUnitsUnspecified,
+                                  CompatibilitySeverity::Ignored))
+                ++policyWarnings;
+            readStatus = IFSelect_RetDone;
+            transferred = true;
+        } else if (cadFormat == model_core::CadFormat::Xbf) {
+            // OCCT binary XCAF document. The product-owned admission checked
+            // the BINFILE/version header before this branch; the document is
+            // read through the mapped stream with the BinXCAF drivers, so
+            // colors, assembly structure and placements are preserved.
+            ScopedCoutSilencer silence;
+            Handle(TDocStd_Application) app = new TDocStd_Application();
+            BinXCAFDrivers::DefineFormat(app);
+            Handle(TDocStd_Document) opened;
+            PCDM_ReaderStatus openStatus = PCDM_RS_DriverFailure;
+            try {
+                openStatus = app->Open(stream, opened);
+            } catch (...) {
+                result.errorCode = model_core::ImportErrorCode::MalformedData;
+                closeDocument();
+                return result;
+            }
+            result.timings.readMilliseconds =
+                static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
+            emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
+            if (openStatus != PCDM_RS_OK || opened.IsNull()) {
+                result.errorCode = model_core::ImportErrorCode::MalformedData;
+                closeDocument();
+                return result;
+            }
+            document = opened;
+            documentApp = app;
+            const Handle(XCAFDoc_ShapeTool) shapes =
+                XCAFDoc_DocumentTool::ShapeTool(document->Main());
+            if (shapes.IsNull()) {
+                result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
+                closeDocument();
+                return result;
+            }
+            double reportedMetersPerUnit = 0.0;
+            if (XCAFDoc_DocumentTool::GetLengthUnit(document, reportedMetersPerUnit)
+                && std::isfinite(reportedMetersPerUnit) && reportedMetersPerUnit > 0.0
+                && reportedMetersPerUnit <= 1e12) {
+                metersPerUnit = reportedMetersPerUnit;
+            } else {
+                // XCAF's documented default system unit is the millimetre.
+                metersPerUnit = 0.001;
+                if (compatibility.Add(model_core::kCadFeatureXbfUnitAssumedMillimetre,
+                                      CompatibilitySeverity::Degraded))
+                    ++policyWarnings;
+            }
+            readStatus = IFSelect_RetDone;
+            transferred = true;
+        } else {
+            // FreeCAD Standard: a bounded ZIP/XML read that builds the same
+            // XCAF shape document the planner already understands. Unsupported
+            // FreeCAD objects and external links degrade to warnings; only
+            // malformed packages/XML or an empty visible result fail.
+            ScopedCoutSilencer silence;
+            if (mappedSource.empty()) {
+                result.errorCode = model_core::ImportErrorCode::FileUnavailable;
+                closeDocument();
+                return result;
+            }
+            FcstdPackage package;
+            const FcstdPreflightStatus preflight =
+                InspectFcstd(mappedSource, &package, FcstdLimits{});
+            if (preflight != FcstdPreflightStatus::Ok) {
+                result.errorCode =
+                    MapFcstdPreflightStatus(static_cast<std::uint32_t>(preflight));
+                closeDocument();
+                return result;
+            }
+            result.timings.readMilliseconds =
+                static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
+            emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
+            FcstdReadResult read = BuildFcstdDocument(
+                package, mappedSource, document, FcstdLimits{}, compatibility,
+                [cancellationEvent] { return IsCancelled(cancellationEvent); });
+            policyWarnings += read.warningCount;
+            if (read.errorCode != model_core::ImportErrorCode::None) {
+                result.errorCode = read.errorCode;
+                closeDocument();
+                return result;
+            }
+            // FreeCAD stores the evaluated Part payload in millimetres; the
+            // reader reports that assumption on the compatibility channel.
+            metersPerUnit = 0.001;
+            readStatus = IFSelect_RetDone;
+            transferred = true;
         }
-        result.timings.readMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(readStart));
-        emitProgress(model_core::kStepPhaseRead, 0, 0, 0, result.timings.readMilliseconds);
-        if (readStatus != IFSelect_RetDone) {
+
+        result.timings.transferMilliseconds =
+            static_cast<std::uint64_t>(ElapsedMilliseconds(transferStart));
+        if (cadFormat != model_core::CadFormat::Brep
+            && cadFormat != model_core::CadFormat::Fcstd)
+            emitProgress(model_core::kStepPhaseTransfer, 0, 0, 0,
+                         result.timings.transferMilliseconds);
+        if (readStatus != IFSelect_RetDone || !transferred) {
             result.errorCode = model_core::ImportErrorCode::MalformedData;
             closeDocument();
             return result;
         }
         if (IsCancelled(cancellationEvent)) {
             result.errorCode = model_core::ImportErrorCode::Cancelled;
-            closeDocument();
-            return result;
-        }
-        // A syntactically valid Part-21 file can carry product/layer metadata
-        // but no transferable shape representation. `Transfer` reports that as
-        // a generic failure, which would otherwise be indistinguishable from a
-        // malformed file; classify the geometry-free family explicitly so the
-        // viewer shows the fixed "no supported geometry" result instead.
-        if (reader.ChangeReader().NbRootsForTransfer() <= 0) {
-            result.errorCode = model_core::ImportErrorCode::EmptyGeometry;
-            closeDocument();
-            return result;
-        }
-        const auto transferStart = SteadyClock::now();
-        bool transferred = false;
-        try {
-            if (progress) {
-                // STEP-008 follow-up: bound the broker reply-timeout gap during
-                // the long XDE build with a progress-driven heartbeat. The
-                // indicator is stack-owned and outlives the Transfer call.
-                StepTransferHeartbeat heartbeat(progress, totalStart, transferStart);
-                transferred = reader.Transfer(document, heartbeat.Start());
-            } else {
-                transferred = reader.Transfer(document);
-            }
-        } catch (...) {
-            // Same reasoning as ReadStream: invalid shape/tessellation data is
-            // rejected as malformed rather than surfacing a kernel exception.
-            result.errorCode = model_core::ImportErrorCode::MalformedData;
-            closeDocument();
-            return result;
-        }
-        result.timings.transferMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(transferStart));
-        emitProgress(model_core::kStepPhaseTransfer, 0, 0, 0, result.timings.transferMilliseconds);
-        if (!transferred) {
-            result.errorCode = model_core::ImportErrorCode::MalformedData;
-            closeDocument();
-            return result;
-        }
-
-        // The pinned reader normalizes transferred coordinates to the Cascade
-        // system unit; GetLengthUnit reports that verified metre factor for the
-        // geometry as stored. FileUnits is name-only and is required to prove a
-        // length unit was actually authored (absent/contradictory units fail
-        // rather than assuming millimetres).
-        TColStd_SequenceOfAsciiString lengthUnits, angleUnits, solidAngleUnits;
-        reader.ChangeReader().FileUnits(lengthUnits, angleUnits, solidAngleUnits);
-        if (lengthUnits.Length() == 0) {
-            result.errorCode = model_core::ImportErrorCode::UnsupportedRequiredFeature;
-            closeDocument();
-            return result;
-        }
-        // More than one distinct authored length unit is contradictory under
-        // the static-preview contract; do not guess which representation wins.
-        for (Standard_Integer index = 2; index <= lengthUnits.Length(); ++index) {
-            if (std::strcmp(lengthUnits.Value(index).ToCString(),
-                            lengthUnits.Value(1).ToCString()) != 0) {
-                result.errorCode = model_core::ImportErrorCode::UnsupportedRequiredFeature;
-                closeDocument();
-                return result;
-            }
-        }
-        double metersPerUnit = 0.0;
-        if (!XCAFDoc_DocumentTool::GetLengthUnit(document, metersPerUnit)
-            || !std::isfinite(metersPerUnit) || metersPerUnit <= 0.0 || metersPerUnit > 1e12) {
-            result.errorCode = model_core::ImportErrorCode::UnsupportedRequiredFeature;
             closeDocument();
             return result;
         }
@@ -1525,11 +1878,18 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         // after planning so every progressive batch carries identical
         // generation-wide metadata.
         const auto emitStart = SteadyClock::now();
-        SceneEmitter emitter(section, request.generationId, metersPerUnit, planner.definitionCount(),
+        const SourceFormatId sourceFormat = cadFormat == model_core::CadFormat::Iges
+            ? SourceFormatId::Iges
+            : cadFormat == model_core::CadFormat::Brep ? SourceFormatId::Brep
+            : cadFormat == model_core::CadFormat::Xbf ? SourceFormatId::Xbf
+            : cadFormat == model_core::CadFormat::Fcstd ? SourceFormatId::Fcstd
+                                                        : SourceFormatId::Step;
+        SceneEmitter emitter(section, request.generationId, sourceFormat, metersPerUnit,
+                             planner.definitionCount(),
                              static_cast<std::uint32_t>(planner.nodes().size()),
                              planner.warningCount(), request.maxChunkCount, publish,
                              [cancellationEvent] { return IsCancelled(cancellationEvent); });
-        DefinitionMesher mesher(limits.profile, limits);
+        DefinitionMesher mesher(limits.profile, limits, policy.quality);
         mesher.SetCancellationProbe([cancellationEvent] { return IsCancelled(cancellationEvent); });
         mesher.SetForceSerial((request.requestFlags & model_core::kImportRequestStepForceSerialForTesting) != 0);
 
@@ -1546,15 +1906,44 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         const std::uint32_t definitionTotal = planner.definitionCount();
         const std::uint32_t progressStride = definitionTotal > 256 ? (definitionTotal + 255) / 256 : 1;
         std::uint32_t definitionsDone = 0;
+        std::uint32_t repairedDefinitions = 0;
         double reportedMeshMs = 0.0;
         std::uint32_t nextGeometryId = kGeometryIdBase;
         for (const PlannedDefinition& definition : planner.definitions()) {
             if (emitter.error() != model_core::ImportErrorCode::None) break;
+            // T07 bounded repair is opt-in and runs only after this definition
+            // transferred but produced no tessellation. Valid geometry never
+            // enters ShapeFix.
             std::vector<GeometryRecord> chunks;
-            const model_core::ImportErrorCode meshed = mesher.Mesh(
-                definition.shape, definition.faceColors, definition.hiddenFaces, definition.hasShapeColor,
-                definition.shapeMaterialId, definition.meshId, nextGeometryId, chunks);
+            model_core::ImportErrorCode meshed = mesher.Mesh(
+                definition.shape, definition.faceColors, definition.hiddenFaces,
+                definition.hasShapeColor, definition.shapeMaterialId, definition.meshId,
+                nextGeometryId, chunks);
             ++definitionsDone;
+            // If the first attempt failed only because of a mesh-related
+            // failure, make one bounded repair attempt and retry. A failed
+            // repair keeps the original typed outcome (including a silent skip
+            // for a non-fatal definition); a repaired definition is published
+            // with a degraded warning.
+            if (chunks.empty() && mesher.repairEligible()
+                && policy.healing == StepHealingPolicy::BoundedRepairOnFailure) {
+                TopoDS_Shape repaired;
+                if (TryBoundedRepair(definition.shape, policy.repairBudget, repaired)) {
+                    const std::uint32_t retryGeometryId = nextGeometryId;
+                    std::vector<GeometryRecord> repairedChunks;
+                    const model_core::ImportErrorCode retry = mesher.Mesh(
+                        repaired, definition.faceColors, definition.hiddenFaces,
+                        definition.hasShapeColor, definition.shapeMaterialId, definition.meshId,
+                        nextGeometryId, repairedChunks);
+                    if (retry == model_core::ImportErrorCode::None && !repairedChunks.empty()) {
+                        chunks = std::move(repairedChunks);
+                        meshed = model_core::ImportErrorCode::None;
+                        ++repairedDefinitions;
+                    } else {
+                        nextGeometryId = retryGeometryId;
+                    }
+                }
+            }
             if ((definitionsDone % progressStride) == 0 || definitionsDone == definitionTotal) {
                 const double totalMeshMs = mesher.meshMilliseconds();
                 emitProgress(model_core::kStepPhaseMesh, definitionsDone, definitionTotal, 0,
@@ -1599,7 +1988,22 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             closeDocument();
             return result;
         }
+        if (repairedDefinitions > 0) {
+            if (compatibility.Add(model_core::kStepFeatureBoundedRepair,
+                                  CompatibilitySeverity::Degraded, repairedDefinitions))
+                policyWarnings += repairedDefinitions;
+        }
+        if (mesher.unmeshedFaces() > 0) {
+            compatibility.Add(model_core::kStepFeatureUnmeshedDefinition,
+                              CompatibilitySeverity::Ignored, mesher.unmeshedFaces());
+        }
+        emitter.AddWarnings(policyWarnings);
         emitter.AddWarnings(mesher.unmeshedFaces());
+        if (!emitter.AddCompatibility(compatibility.Payload())) {
+            result.errorCode = emitter.error();
+            closeDocument();
+            return result;
+        }
         if (!emitter.AddStatus()) {
             result.errorCode = emitter.error();
             closeDocument();
@@ -1626,7 +2030,8 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         result.nodeCount = static_cast<std::uint32_t>(planner.nodes().size());
         result.instanceCount = emitter.nextInstanceSerial();
         result.materialCount = static_cast<std::uint32_t>(planner.materials().size());
-        result.warningCount = (std::min)(64u, planner.warningCount() + mesher.unmeshedFaces());
+        result.warningCount = (std::min)(64u, planner.warningCount() + policyWarnings
+            + mesher.unmeshedFaces());
         result.timings.meshMilliseconds = static_cast<std::uint64_t>(mesher.meshMilliseconds());
         result.timings.extractMilliseconds = static_cast<std::uint64_t>(mesher.extractMilliseconds());
         result.timings.emitMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(emitStart));

@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "task": "T30",
+  "date": "2026-10-31",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug sun/channel readback, the T30 directional report and the generated/external capture manifest",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T30",
+  "imagesInspected": [
+    "TestResults/render-quality/T30/images/directional-front-lit.png",
+    "TestResults/render-quality/T30/images/directional-orbit-yaw-060.png",
+    "TestResults/render-quality/T30/images/directional-azimuth-0250.png",
+    "TestResults/render-quality/T30/images/directional-elevation-015.png",
+    "TestResults/render-quality/T30/images/directional-elevation-120.png",
+    "TestResults/render-quality/T30/images/directional-zero-intensity.png",
+    "TestResults/render-quality/T30/images/generated-directional-probe-studio-front.png",
+    "TestResults/render-quality/T30/images/generated-directional-probe-directional-oblique.png",
+    "TestResults/render-quality/T30/images/generated-stl-box-directional-oblique.png",
+    "TestResults/render-quality/T30/images/generated-step-assembly-directional-front.png",
+    "TestResults/render-quality/T30/images/external-car-directional-oblique.png",
+    "TestResults/render-quality/T30/images/external-car-directional-low.png",
+    "TestResults/render-quality/T30/images/external-camera-directional-front.png",
+    "TestResults/render-quality/T30/images/external-microscope-directional-front.png",
+    "TestResults/render-quality/T30/external/car-e022-front.png",
+    "TestResults/render-quality/T30/external/car-e022-back.png",
+    "TestResults/render-quality/T30/external/car-e062-front.png",
+    "TestResults/render-quality/T30/external/car-e062-back.png",
+    "TestResults/render-quality/T30/external/car-e120-front.png",
+    "TestResults/render-quality/T30/external/camera-e022-back.png",
+    "TestResults/render-quality/T30/external/camera-e062-front.png",
+    "TestResults/render-quality/T30/external/camera-e120-front.png",
+    "TestResults/render-quality/T30/external/microscope-e062-front.png",
+    "TestResults/render-quality/T30/external/microscope-e062-back.png",
+    "TestResults/render-quality/T30/external/stl-e062-front.png",
+    "TestResults/render-quality/T30/external/stl-e062-back.png"
+  ],
+  "observations": [
+    "The controlled directional-probe wall is a set of flat, constant-normal panels. Its Lambert direct response stays at the same numeric value (1.038) across camera orbit yaws 0/20/40/60 while the sun stays at azimuth 0.75, elevation 0.45. The sun does not follow the camera.",
+    "At a stationary camera, moving the sun from front (0.75) through side (0.875/1.0) to behind (0.25) reduces the Lambert direct term monotonically to zero. Clearcoat direct changes in the same direction (front 0.0166 linear vs 0.0012 ambient-only behind), so the base and coat lobes share one sun instead of the old Studio key.",
+    "The horizontal floor panel brightens as elevation rises from 0.15 to 1.2 rad. The orbit sequence keeps the camera orientation's up axis and the wall/floor relation stable; no clipped, NaN or black discontinuity appears in any sweep.",
+    "The zero-intensity capture is black for every lit panel and the floor, while the emissive panel keeps its authored magenta emission. No flat ambient wash survives, and no channel reads a negative or non-finite value.",
+    "Gold metal keeps a Fresnel/BRDF-weighted ambient reflection well above black paint (env specular 0.021 vs 0.0012 luma at the same view). Black paint remains dark (max linear <0.12), and thin glass keeps its own transmitted/reflection channel. Metals remain visible without washing black paint or glass to white.",
+    "Studio and Directional at the same camera/fixture have a measured mean-luma ratio of about 1.10; exposure and tone-map state are unchanged by the mode switch. The two modes share the same IBL floor, so the difference is the single direct sun.",
+    "The mode switch and an imported-up-axis change preserve the global sun azimuth/elevation. Opening another asset keeps the Directional mode and sun state; there is no per-asset light exception. The up-axis command deliberately refits bounds and resets the camera to the new home view, which is recorded separately from the sun state.",
+    "Car: red paint and dark trim separate under both front and back sun; windshield/roof/side-glass detail remains visible without a flat white wash. The known authored window/roof speckles also appear in Studio and are unchanged by this work.",
+    "Camera: the black body, lens ring and lens recess keep dark-side depth and a visible reflection; the leather strap remains legible against the dark backdrop. The lens is not turned into a white disk.",
+    "Microscope: brass and black enamel retain part separation and cavity detail at elevation 0.62 in both front and back sun. This run loaded the asset completely; no ResourceLimit overlay occurred.",
+    "CAD relief: the STL plate front/back views show clearly different face shading and readable chamfers/raised inner plate; the STEP assembly shows lit and shadowed red faces. The generated stl-box directional oblique view keeps hard edges and planar face contrast.",
+    "The analytic ground contact shadow now follows the same world sun: the Directional ground ellipse shifts when azimuth changes and is absent when the shadow layer is turned off. It remains a bounds-projected presentation cue rather than a geometry-accurate shadow (T31).",
+    "No asset-name or material-name exception is present in the renderer or the lane."
+  ],
+  "defects": [
+    {
+      "id": "car-authored-window-speckle",
+      "label": "known-defect",
+      "where": "Car windshield/roof/window edges in Studio and Directional",
+      "description": "Small bright speckles along authored window/trim seams remain. They also appear in Studio and are not caused by the Directional sun transform; they are an authored-geometry/edge-quality defect.",
+      "assignedTo": "T33/T34"
+    },
+    {
+      "id": "analytic-ground-shadow",
+      "label": "limitation",
+      "where": "Directional ground contact shadow",
+      "description": "The shadow is still the T16 analytic bounds ellipse projected along the correct world sun, not a geometry-derived occluder. T31 owns the geometry-derived contact shadow and must keep consuming the same sun direction.",
+      "assignedTo": "T31"
+    },
+    {
+      "id": "microscope-resource-limit",
+      "label": "known-defect",
+      "where": "external microscope",
+      "description": "The external microscope can still report a terminal generation deadline after visible geometry on slower runs. This T30 run loaded it completely and produced the brass/enamel crops; a future late failure stays a non-passing observation.",
+      "assignedTo": "T23/T34"
+    }
+  ],
+  "positives": [
+    "One documented world-space Z-up sun direction drives the base and clearcoat direct lobes, the nav-gizmo bearing, the legacy compact shader and the contact-shadow input.",
+    "The shading vectors are world-frame with a camera-relative origin, so the camera transform lives in the view matrix; the sun is used directly and a stationary sun cannot orbit with the camera.",
+    "Light/environment intensity zero removes direct, IBL, clearcoat and the background-only transmission fallback while preserving emission.",
+    "The environment response remains the T24 split-sum Fresnel/BRDF path; no second unweighted reflection or leftover Studio key was added to Directional.",
+    "Sun controls, keyboard/accessibility paths and the existing gizmo ring/sun drag behaviour are unchanged; the new Debug fields 277/278 are read/write state only and remain inside the Debug test-control guard."
+  ],
+  "acceptance": {
+    "worldAnchoredSunVerified": true,
+    "coordinateConventionDocumented": true,
+    "baseAndCoatSameSunVerified": true,
+    "gizmoBearingAndShadingAgree": true,
+    "shadowInputUsesSameSun": true,
+    "zeroIntensityAndZeroEnvironmentVerified": true,
+    "exposureBetweenModesPredictable": true,
+    "azimuthElevationGrazingSweepsFinite": true,
+    "cameraOrbitStationarySunVerified": true,
+    "manualSunStationaryCameraVerified": true,
+    "importedUpAxisStateVerified": true,
+    "carCameraMicroscopeCadReviewed": true,
+    "imageReviewPerformed": true,
+    "acceptedReferencesPromotedBy": "not applicable for T30 (no accepted reference promoted)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "The controlled fixture owns the numeric verdicts; external crops are reviewed qualitatively. T31 must reuse viewer_lighting::DirectionalSunDirection for its geometry shadow."
+  }
+}

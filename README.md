@@ -2,7 +2,7 @@
 
 **A fast, secure, and native 3D object viewer for Windows**
 
-[![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install) [![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP-6e7681?style=flat-square)](#supported-formats)
+[![Release](https://img.shields.io/github/v/release/binbuf/preview-3d?style=flat-square&label=release&color=0a7bbb)](https://github.com/binbuf/preview-3d/releases/latest) [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0078D4?style=flat-square&logo=windows11&logoColor=white)](#install) [![Formats](https://img.shields.io/badge/formats-glTF%20%C2%B7%20OBJ%20%C2%B7%20FBX%20%C2%B7%20STL%20%C2%B7%20PLY%20%C2%B7%203MF%20%C2%B7%20USD%20%C2%B7%20STEP%20%C2%B7%20IGES%20%C2%B7%20BREP%20%C2%B7%20DAE%20%C2%B7%203DS%20%C2%B7%20OFF%20%C2%B7%20AMF%20%C2%B7%20X3D-6e7681?style=flat-square)](#supported-formats)
 
 [Download the latest release](https://github.com/binbuf/preview-3d/releases/latest) · [Report an issue](https://github.com/binbuf/preview-3d/issues) · [Contributing](CONTRIBUTING.md) · [Windows security help](docs/WINDOWS-SECURITY.md)
 
@@ -13,10 +13,10 @@
 
 ## Highlights
 
-- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, and STEP/STP** files locally.
+- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, STEP/STP, IGES, BREP, XBF, FreeCAD, COLLADA, 3DS, DXF, DirectX, OFF, AMF, and X3D** files locally.
 - Navigate with familiar Blender-style orbit, pan, and frame controls, plus Unreal-style right-mouse fly, a navigation gizmo with 90° roll controls, and a keyboard-friendly command set.
-- Inspect models with Studio, Clay, and rotatable Directional lighting, Wireframe mode, an information panel, and point-cloud rendering.
-- Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration.
+- Inspect models with Studio, Clay, and rotatable Directional lighting, Wireframe mode, an information panel, and point-cloud rendering. Studio adds a procedural image-based environment, neutral tone mapping with exposure, five presentation presets (PBR, CAD, Scan/Sculpt, Transparent, Point cloud), an HDR scene target with linear compositing, a soft ground-contact shadow, ORM ambient occlusion, and protocol-v12 material lobes (clearcoat, sheen, specular/IOR, emissive strength). Transparent draws are sorted back-to-front; weighted OIT is not shipped.
+- Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration. The installed Explorer thumbnail provider covers glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ and STEP/STP; it has no adapter yet for IGES, BREP, XBF, FCStd, DAE, 3DS, DXF, X, OFF, AMF or X3D, so those formats do not claim a thumbnail.
 - Parse and decode in a zero-capability AppContainer worker: models stay local, are never modified, and nothing is uploaded.
 - Follow your Windows display language automatically, with 38 interface language packs (see the [supported languages](interactive-viewer/lang)) and an in-app language override under **Settings**.
 - Install with the setup program, or use the portable ZIP with no installer.
@@ -25,14 +25,19 @@
 
 | Format | Support |
 | --- | --- |
-| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, Draco/meshopt geometry, KTX2/Basis and PNG/JPEG/WebP textures |
-| Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars |
-| FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, and a deterministic baked start pose |
+| glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, Draco/meshopt geometry, KTX2/Basis and PNG/JPEG/WebP/TGA/DDS/HDR/EXR textures, line/point topology, and protocol-v12 PBR material lobes with a Fresnel-weighted transmission approximation |
+| Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars, line/point elements, and the same texture set as glTF |
+| FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures with PBR coat/sheen/specular/IOR factors, line curves, and a deterministic baked start pose |
 | STL | ASCII and binary |
 | PLY | ASCII and binary triangle meshes and point clouds |
-| 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews |
-| Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`: static meshes, hierarchy/instances, common primvars, display color, bounded USD Preview Surface materials/textures, and bounded local composition |
-| STEP | `.step` and `.stp`: self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies, instance/shape/face colors, and authored length units |
+| 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews. Non-terminal required namespaces are ignored with a compatibility record; Slice/Volumetric/Implicit/Secure Content remain terminal |
+| Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`: static meshes, procedural Sphere/Cube/Cylinder/Cone/Capsule, `Points`, hierarchy/instances, common primvars, display color/opacity, creased/subdivided control cages, bounded USD Preview Surface materials/textures, and bounded local composition |
+| STEP | `.step` and `.stp`: self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality |
+| IGES | `.igs` and `.iges`: bounded fixed-column record streams, analytic B-rep geometry, assemblies, and representable colors |
+| BREP | `.brep`: OCCT `CASCADE Topology` shape sets with bounded shape/location admission; no authored units or colors |
+| XBF | `.xbf`: OCCT binary XCAF documents with colors, assembly structure, and placements |
+| FreeCAD Standard | `.fcstd`: the common Part/PartDesign layout with evaluated `*.brp` shapes, colors, visibility, and nested placements |
+| Compatibility formats | `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, and `.x3d` through a bounded Assimp adapter: static triangles, transforms, material factors, and approved local/embedded textures. DXF is limited to Assimp's 3DFACE/polyline subset; no animation, cameras, lights, plug-ins, or file writes |
 
 For the exact supported subset, resource ceilings, and known limitations of each format, see [Format support and limits](docs/FORMAT-SUPPORT.md).
 
@@ -66,7 +71,7 @@ vcpkg integrate install
 
 Then open `Preview3D.slnx`, pick **Release | x64** (or **Debug | x64**), and build. With integration installed, the first build restores every manifest the solution needs, with no manual `vcpkg install` required:
 
-- the repository root manifest into `vcpkg_installed\x64-windows-static-md` (fastgltf, draco, lib3mf, TinyUSDZ, OpenUSD, and the rest);
+- the repository root manifest into `vcpkg_installed\x64-windows-static-md` (fastgltf, draco, lib3mf, TinyUSDZ, OpenUSD, Assimp, and the rest);
 - the STEP host's isolated OCCT manifest into `compatibility-host-step\vcpkg_installed`;
 - the thumbnail provider's isolated OCCT manifest into `thumbnail-provider\step-occt\vcpkg_installed`.
 

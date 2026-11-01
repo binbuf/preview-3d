@@ -121,8 +121,14 @@ def run(exe, directory, fbx_only=False):
         for name in ['zero.glb','zero.gltf','zero.stl','zero.ply']:
             failure(directory/name,11,'opening source')
             valid_reopen()
-        for name, code in [('unsupported.3mf',8),('malformed.FBX',1),('ascii.STL',9),('ascii.PLY',9),('empty.stl',11),('empty.ply',11),('empty.gltf',11),('required.gltf',10),('malformed.glb',1),('malformed.stl',1),('malformed.ply',1)]:
-            failure(directory/name,code, 'opening source' if code==8 else 'parsing geometry')
+        # .3mf is a shipped format since 0.7.0 (T10b); bytes that are not an OPC
+        # archive now fail through the product archive policy (ArchiveLimit=25)
+        # instead of the pre-3MF UnsupportedFormat=8 placeholder.
+        # T05/ADR-0060 keeps the core scene for an unknown required extension and
+        # reports it as Degraded; this document carries no geometry, so it now
+        # fails EmptyGeometry instead of the old UnsupportedRequiredFeature veto.
+        for name, code in [('unsupported.3mf',25),('malformed.FBX',1),('ascii.STL',11),('empty.stl',11),('empty.ply',11),('empty.gltf',11),('required.gltf',11),('malformed.glb',1),('malformed.stl',1),('malformed.ply',1)]:
+            failure(directory/name,code, None if code==25 else ('opening source' if code==8 else 'parsing geometry'))
             valid_reopen()
         corpus = ROOT/'interactive-viewer/test-assets/corpus'
         for name, code in [('sidecar-missing.gltf',6),('sidecar-traversal.gltf',5)]:
@@ -143,7 +149,7 @@ def run(exe, directory, fbx_only=False):
         retry_path.write_bytes(triangle.read_bytes())
         send(hwnd,0x111,32775)
         wait(lambda: query(0)==3,'same-path corrected Retry')
-        failure(directory/'unsupported.3mf',8,'opening source')
+        failure(directory/'unsupported.3mf',25,'parsing / decoding')
         open_file(triangle,106)  # bounded stand-in for picker selection
         send(hwnd,0x111,32776)  # actual Open another card command
         wait(lambda: query(0)==3,'Open another Ready')
@@ -153,7 +159,7 @@ def run(exe, directory, fbx_only=False):
         report['warningCharacters'] = query(40)
         # Cancel before old replies can enter the UI, followed by invalid activation.
         open_file(triangle,105)
-        failure(directory/'unsupported.3mf',8)
+        failure(directory/'unsupported.3mf',25)
         time.sleep(.3)
         assert query(0)==4, 'stale result replaced failure card'
         valid_reopen()

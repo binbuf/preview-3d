@@ -1,5 +1,6 @@
 #include "ContainmentProbes.h"
 #include "ChunkBatchSink.h"
+#include "AssimpImportWorker.h"
 #include "GenerationWorker.h"
 #include "FbxSpikeWorker.h"
 #include "ThreeMfSpikeWorker.h"
@@ -194,6 +195,9 @@ int main(int argc, char* argv[])
     }
     if (ArgEquals(argv[1], "--parse-3mf")) {
         return import_worker::RunThreeMfImport();
+    }
+    if (ArgEquals(argv[1], "--parse-assimp")) {
+        return import_worker::RunAssimpImport();
     }
 
     // Backward-compatible aliases retained for older parser regression commands.

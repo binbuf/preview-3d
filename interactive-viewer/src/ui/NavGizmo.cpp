@@ -1,4 +1,5 @@
 #include "NavGizmo.h"
+#include "LightRig.h"
 
 #include <algorithm>
 #include <cmath>
@@ -522,10 +523,13 @@ NavGizmo::SunGeometry NavGizmo::ComputeSun(XMVECTOR cameraOrientation, float dir
     float directionalLightElevation) const
 {
     SunGeometry sun;
-    const float azimuth = directionalLightAngle * XM_2PI;
-    const float elevation = std::clamp(directionalLightElevation, 0.0f, 1.4835f);
-    const float cosine = std::cos(azimuth);
-    const float sine = std::sin(azimuth);
+    const float elevation = std::clamp(directionalLightElevation, 0.0f,
+                                       viewer_lighting::kMaxSunElevation);
+    // T30: the gizmo consumes the one documented world-space sun direction.
+    // The bar lighting, the shadow projection and the CPU tests use the same
+    // helper, so the marker cannot drift from the lit face.
+    float lightWorld[3]{};
+    viewer_lighting::DirectionalSunDirection(directionalLightAngle, elevation, lightWorld);
 
     // Compass bearing: measure the light's horizontal direction against the
     // camera's own ground-plane heading rather than projecting the 3D vector.
@@ -536,7 +540,13 @@ NavGizmo::SunGeometry NavGizmo::ComputeSun(XMVECTOR cameraOrientation, float dir
     XMVECTOR right = XMVectorZero();
     XMVECTOR forward = XMVectorZero();
     HorizontalCameraFrame(cameraOrientation, right, forward);
-    const XMVECTOR light = XMVectorSet(cosine, sine, 0.0f, 0.0f);
+    const float horizontalLength = std::sqrt(lightWorld[0] * lightWorld[0]
+                                             + lightWorld[1] * lightWorld[1]);
+    // At the zenith the horizontal bearing is undefined; the marker converges
+    // on the centre, so any stable bearing is equivalent there.
+    const float horizontalScale = horizontalLength > 1e-6f ? 1.0f / horizontalLength : 0.0f;
+    const XMVECTOR light = XMVectorSet(lightWorld[0] * horizontalScale,
+                                       lightWorld[1] * horizontalScale, 0.0f, 0.0f);
     const float along = XMVectorGetX(XMVector3Dot(light, right));   // screen +x
     const float ahead = XMVectorGetX(XMVector3Dot(light, forward)); // screen -y
 
@@ -548,11 +558,14 @@ NavGizmo::SunGeometry NavGizmo::ComputeSun(XMVECTOR cameraOrientation, float dir
     sun.y = -ahead * radius;
 
     // Keep a true 3D depth so the renderer can tell when the light is on the
-    // far side of the model.
-    const XMVECTOR light3D = XMVector3Normalize(XMVectorSet(
-        cosine * std::cos(elevation), sine * std::cos(elevation), std::sin(elevation), 0.0f));
-    const XMVECTOR inverse = XMQuaternionConjugate(XMQuaternionNormalize(cameraOrientation));
-    sun.depth = XMVectorGetZ(XMVector3Rotate(light3D, inverse));
+    // far side of the model. The same world->camera rotation is used by the
+    // object and shadow shaders.
+    const XMVECTOR normalizedOrientation = XMQuaternionNormalize(cameraOrientation);
+    XMFLOAT4 worldFromCamera{};
+    XMStoreFloat4(&worldFromCamera, normalizedOrientation);
+    float lightCamera[3]{};
+    viewer_lighting::CameraFromWorldDirection(lightWorld, &worldFromCamera.x, lightCamera);
+    sun.depth = lightCamera[2];
     sun.visible = true;
     return sun;
 }

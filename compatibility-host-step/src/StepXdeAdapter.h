@@ -85,6 +85,17 @@ struct StepPhaseTimings {
     std::uint64_t totalMilliseconds = 0;
 };
 
+// T07 per-request import policy. It is derived by the host from the closed
+// request-flag quality field and the admission result; the adapter never reads
+// an ambient setting. `unresolvedExternalDocuments` is a count only -- the host
+// still has no path authority and never tries to open one.
+struct StepImportPolicy {
+    StepTessellationQuality quality = StepTessellationQuality::Balanced;
+    StepHealingPolicy healing = kStepHealingPolicy;
+    StepRepairBudget repairBudget{};
+    std::uint32_t unresolvedExternalDocuments = 0;
+};
+
 struct StepXdeResult {
     model_core::ImportErrorCode errorCode = model_core::ImportErrorCode::None;
     std::uint32_t chunkCount = 0;        // terminal window only
@@ -110,12 +121,18 @@ struct StepXdeResult {
 // (single read for preflight plus transfer); otherwise it falls back to the
 // proven `HandleStreamBuf` over `sourceHandle`. `progress` receives bounded
 // phase events; it is optional.
+// T08: `cadFormat` selects the reader. Step keeps the existing STEPCAF path;
+// Iges uses IGESCAFControl_Reader into the same XCAF document; Brep reads the
+// OCCT shape set and adds it to an XCAF document. Planning, tessellation,
+// transforms, bounds and emission are identical for all three.
 StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                                 std::span<std::byte> section, HANDLE sourceHandle,
                                 HANDLE cancellationEvent,
                                 std::span<const std::byte> mappedSource = {},
                                 const StepXdeLimits& limits = {},
                                 const StepBatchPublisher& publish = {},
-                                const StepProgressSink& progress = {});
+                                const StepProgressSink& progress = {},
+                                const StepImportPolicy& policy = {},
+                                model_core::CadFormat cadFormat = model_core::CadFormat::Step);
 
 } // namespace step_host

@@ -123,12 +123,25 @@ TEST_CASE("OBJ missing MTL remains visible with a bounded warning", "[obj][mtl][
     CAPTURE(result.stage, result.errorCode, result.chunks.size());
     REQUIRE(result.ok);
     bool geometry = false, status = false;
+    const import_broker::ValidatedChunk* material = nullptr;
     for (const auto& chunk : result.chunks) {
         geometry |= chunk.descriptor.topology == model_core::ChunkTopology::TriangleList;
         status |= chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material) material = &chunk;
     }
     CHECK(geometry);
     CHECK(status);
+    // A missing MTL must not turn the unauthored material black. The normalized
+    // base color is a neutral PBR white so Studio/Directional stay reviewable.
+    if (material) {
+        REQUIRE(material->payload.size() == sizeof(model_core::MaterialPayload));
+        model_core::MaterialPayload payload{};
+        std::memcpy(&payload, material->payload.data(), sizeof(payload));
+        CHECK(payload.baseColorFactor[0] > 0.5f);
+        CHECK(payload.baseColorFactor[1] > 0.5f);
+        CHECK(payload.baseColorFactor[2] > 0.5f);
+        CHECK(payload.baseColorFactor[3] > 0.5f);
+    }
 }
 
 TEST_CASE("OBJ mtllib that is only separators is ignored instead of faulting", "[obj][mtl][security][recovery]")
@@ -254,4 +267,36 @@ TEST_CASE("Malformed and empty OBJ files fail without poisoning the next import"
     good.Write(good.obj, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
     result = import_broker::RunImportSession(Request(good.obj));
     REQUIRE(result.ok);
+}
+
+TEST_CASE("A known Y-up OBJ reports Y-up metadata and keeps its native bounds",
+          "[obj][orientation]")
+{
+    ScratchObj source;
+    source.Write(source.obj,
+        "o y_up_triangle\n"
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 0 2 0\n"
+        "f 1 2 3\n");
+
+    const auto result = import_broker::RunImportSession(Request(source.obj));
+    CAPTURE(result.stage, result.errorCode, result.errorPhase, result.chunks.size());
+    REQUIRE(result.ok);
+    REQUIRE_FALSE(result.chunks.empty());
+
+    const import_broker::ValidatedChunk* mesh = nullptr;
+    for (const auto& chunk : result.chunks)
+    {
+        CHECK(chunk.scene.format == model_core::SourceFormatId::Obj);
+        CHECK(chunk.scene.upAxis == model_core::UpAxisId::Y);
+        CHECK(chunk.scene.metersPerUnit == 0.0);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList) mesh = &chunk;
+    }
+    REQUIRE(mesh);
+    // The file is Y-tall (height 2) and Z-flat: nothing rotated or scaled it
+    // in the adapter. The viewer's ground-axis transform turns Y into up.
+    CHECK(mesh->descriptor.localMax[0] >= 0.99f);
+    CHECK(mesh->descriptor.localMax[1] >= 1.99f);
+    CHECK(mesh->descriptor.localMax[2] <= 0.01f);
 }

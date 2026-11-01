@@ -95,7 +95,7 @@ void Chrome::UpdateLayout(int clientWidth, int titleBarHeight, float dpiScale, b
     const Entry entries[] = {
         { &grid_, iconButtonWidth, true }, { &groundAxis_, iconButtonWidth, true },
         { &groundDirection_, iconButtonWidth, true }, { &axisSnap_, iconButtonWidth, true },
-        { &speed_, iconButtonWidth, true }, { &orbit_, iconButtonWidth, true },
+        { &speed_, iconButtonWidth, false }, { &orbit_, iconButtonWidth, true },
         { &fit_, iconButtonWidth, kShowFitButton }, { &share_, iconButtonWidth, true },
         { &overflow_, overflowWidth, true },
     };

@@ -1,0 +1,88 @@
+{
+  "task": "T28",
+  "schema": 1,
+  "description": "Studio environment and first-open presentation calibration. Adds the generated lighting-probe fixture (white plastic/CAD, neutral gray, black leather/enamel, red clearcoat paint, brass/chrome, emission and reference white/gray/black patches), measures the shipped procedural bake for neutral diffuse response, broad highlights and a dark-reflection floor against a product-owned neutral reference bake, checks the explicit world IBL/camera-rig split, exposure/background independence, world-stable IBL vs camera-relative key/fill/rim, preset/override stability, first-open framing and Car/Camera/Suit nonregression regions.",
+  "viewport": {"width": 1280, "height": 900, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0},
+    {"id": "directional", "lighting": 2}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 1.0},
+    "oblique": {"yawDegrees": 30.0, "pitchDegrees": 70.0, "distanceScale": 1.0}
+  },
+  "regions": {
+    "lighting-probe": {
+      "probe-grid": [0.02, 0.1, 0.98, 0.9]
+    },
+    "sphere-grid": {
+      "spheres": [0.02, 0.12, 0.98, 0.88]
+    },
+    "stl-box": {
+      "box": [0.2, 0.15, 0.8, 0.9]
+    },
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "paint": [0.34, 0.55, 0.72, 0.9]
+    },
+    "camera": {
+      "lens": [0.33, 0.22, 0.68, 0.7],
+      "black-body": [0.18, 0.45, 0.55, 0.92]
+    },
+    "suit": {
+      "body": [0.35, 0.2, 0.65, 0.85]
+    }
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "lighting-probe", "modes": ["studio", "directional"],
+         "views": ["front", "oblique"]},
+        {"id": "sphere-grid", "modes": ["studio"], "views": ["front", "oblique"]},
+        {"id": "stl-box", "modes": ["studio"], "views": ["front", "oblique"]},
+        {"id": "glass-reference", "modes": ["studio"], "views": ["front"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "car", "modes": ["studio"], "views": ["front", "oblique"]},
+        {"id": "camera", "modes": ["studio"], "views": ["front"]},
+        {"id": "suit", "modes": ["studio"], "views": ["front"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "studio-warm-cool-panel-separation",
+      "assets": ["lighting-probe", "sphere-grid", "car", "camera"],
+      "description": "The shipping procedural Studio bake keeps a slightly warm key and cool fill (neutral diffuse chroma at or below 0.08). The product-owned neutral reference bake has zero panel chroma but a narrower highlight and lower dark-reflection floor, so it is measured and not selected.",
+      "label": "limitation",
+      "assignedTo": "T28"
+    },
+    {
+      "id": "procedural-environment-no-external-hdr",
+      "assets": ["lighting-probe"],
+      "description": "No third-party HDR environment is shipped. The default is the product-owned analytic bake, selected because it is license-free, deterministic and measured at 128 texels/face; a 256-texel bake costs over 3x the residency for a response change below the calibration tolerance.",
+      "label": "limitation",
+      "assignedTo": "T28/T30"
+    }
+  ]
+}

@@ -63,7 +63,9 @@ std::optional<TranscodedImage> CopyKtxLevels(ktxTexture2* texture, PixelFormatId
         result.pixelBytes.insert(result.pixelBytes.end(),begin,begin+size);
     }
     if (result.mipLevels==1 && (result.width>64 || result.height>64) && format==PixelFormatId::RGBA8_UNORM) {
-        const auto space=options.semantic==TextureSemantic::Color || options.semantic==TextureSemantic::Emissive
+        const auto space=options.semantic==TextureSemantic::Color
+            || options.semantic==TextureSemantic::ColorCoverage
+            || options.semantic==TextureSemantic::Emissive
             ? model_core::ColorSpaceId::Srgb : model_core::ColorSpaceId::Linear;
         if (!GenerateRasterMips(result.pixelBytes,result.width,result.height,space,options,result.mipLevels)) return std::nullopt;
     }
@@ -100,6 +102,7 @@ std::optional<TranscodedImage> TranscodeKtx2BasisImage(std::span<const std::byte
         // images do not promise that packing. RGBA is the validated semantic
         // fallback for normal/data; BC7 preserves all color/emissive channels.
         format = options.semantic==TextureSemantic::Normal || options.semantic==TextureSemantic::Data
+            || options.semantic==TextureSemantic::MetallicRoughness
             || (levels==1 && (width>64 || height>64))
             ? PixelFormatId::RGBA8_UNORM : PixelFormatId::BC7_UNORM;
         auto target = format==PixelFormatId::BC7_UNORM ? KTX_TTF_BC7_RGBA : KTX_TTF_RGBA32;
@@ -113,7 +116,9 @@ std::optional<TranscodedImage> TranscodeKtx2BasisImage(std::span<const std::byte
             return CopyKtxLevels(retryRaw,PixelFormatId::RGBA8_UNORM,options);
         }
     } else if (format==PixelFormatId::Unknown || (format==PixelFormatId::BC5_UNORM
-        && (options.semantic==TextureSemantic::Color || options.semantic==TextureSemantic::Emissive))) return std::nullopt;
+        && (options.semantic==TextureSemantic::Color
+            || options.semantic==TextureSemantic::ColorCoverage
+            || options.semantic==TextureSemantic::Emissive))) return std::nullopt;
     return CopyKtxLevels(texture,format,options);
 }
 

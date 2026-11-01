@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -406,4 +407,69 @@ TEST_CASE("KTX2 and Basis preserve all validated mip levels and semantic targets
         hostile=bytes;std::memcpy(hostile.data()+104,hostile.data()+80,8);CHECK_FALSE(TranscodeKtx2BasisImage(hostile));
         hostile=bytes;hostile.resize(90);CHECK_FALSE(TranscodeKtx2BasisImage(hostile));
     }
+}
+
+TEST_CASE("Color mip reduction averages in linear light and preserves alpha coverage",
+          "[texture-mips]")
+{
+    TextureDecodeOptions options;options.semantic=TextureSemantic::ColorCoverage;
+    std::vector<std::byte> pixels{
+        std::byte{0},std::byte{0},std::byte{0},std::byte{255},
+        std::byte{255},std::byte{255},std::byte{255},std::byte{255}};
+    uint32_t levels=0;
+    REQUIRE(GenerateRasterMips(pixels,2,1,ColorSpaceId::Srgb,options,levels));
+    REQUIRE(levels==2);
+    // Mid-grey in linear light encodes to about 188, not the 128 an
+    // sRGB-code average would produce.
+    CHECK(std::abs(int(std::to_integer<uint8_t>(pixels[8]))-188)<=2);
+    CHECK(std::to_integer<uint8_t>(pixels[11])==255);
+
+    // A transparent texel must not bleed its arbitrary RGB into the covered
+    // texel; alpha itself stays an area average (coverage fraction).
+    pixels={std::byte{255},std::byte{0},std::byte{0},std::byte{255},
+            std::byte{0},std::byte{255},std::byte{0},std::byte{0}};
+    REQUIRE(GenerateRasterMips(pixels,2,1,ColorSpaceId::Srgb,options,levels));
+    CHECK(std::to_integer<uint8_t>(pixels[8])>=250);
+    CHECK(std::to_integer<uint8_t>(pixels[9])<=4);
+    CHECK(std::abs(int(std::to_integer<uint8_t>(pixels[11]))-128)<=2);
+}
+
+TEST_CASE("Normal mip reduction renormalizes the averaged tangent vector",
+          "[texture-mips]")
+{
+    TextureDecodeOptions options;options.semantic=TextureSemantic::Normal;
+    // Two opposing tangent-space X slopes average to a flat (0,0,1) normal.
+    std::vector<std::byte> pixels{
+        std::byte{0},std::byte{128},std::byte{255},std::byte{255},
+        std::byte{255},std::byte{128},std::byte{255},std::byte{255}};
+    uint32_t levels=0;
+    REQUIRE(GenerateRasterMips(pixels,2,1,ColorSpaceId::Linear,options,levels));
+    REQUIRE(levels==2);
+    CHECK(std::abs(int(std::to_integer<uint8_t>(pixels[8]))-128)<=2);
+    CHECK(std::abs(int(std::to_integer<uint8_t>(pixels[9]))-128)<=2);
+    CHECK(std::to_integer<uint8_t>(pixels[10])>=250);
+}
+
+TEST_CASE("Metallic-roughness mips preserve GGX variance without raising roughness",
+          "[texture-mips]")
+{
+    TextureDecodeOptions options;options.semantic=TextureSemantic::MetallicRoughness;
+    const std::vector<std::byte> source{
+        std::byte{0},std::byte{26},std::byte{0},std::byte{255},
+        std::byte{0},std::byte{230},std::byte{255},std::byte{255}};
+    std::vector<std::byte> pixels=source;
+    uint32_t levels=0;
+    REQUIRE(GenerateRasterMips(pixels,2,1,ColorSpaceId::Linear,options,levels));
+    REQUIRE(levels==2);
+    // sqrt((0.102^2 + 0.902^2)/2) is about 0.642 -> 164. A plain arithmetic
+    // mean would be 128 and would lose the authored highlight variance.
+    CHECK(std::abs(int(std::to_integer<uint8_t>(pixels[9]))-164)<=2);
+    // Metallic stays linear.
+    CHECK(std::abs(int(std::to_integer<uint8_t>(pixels[10]))-128)<=2);
+
+    options.semantic=TextureSemantic::Data;
+    std::vector<std::byte> data=source;
+    REQUIRE(GenerateRasterMips(data,2,1,ColorSpaceId::Linear,options,levels));
+    // AO/factor maps keep a plain linear average.
+    CHECK(std::abs(int(std::to_integer<uint8_t>(data[9]))-128)<=2);
 }

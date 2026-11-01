@@ -97,6 +97,12 @@
     <ClCompile Include="src\DracoDecodeAdapter.cpp" />
     <ClCompile Include="src\MeshoptDecodeAdapter.cpp" />
     <ClCompile Include="src\TextureTranscodeAdapter.cpp" />
+    <ClCompile Include="src\DdsImageDecode.cpp" />
+    <ClCompile Include="src\TgaImageDecode.cpp" />
+    <ClCompile Include="src\HdrFloatDecode.cpp" />
+    <ClCompile Include="src\RadianceHdrDecode.cpp" />
+    <ClCompile Include="src\OpenExrDecode.cpp" />
+    <ClCompile Include="src\EnvironmentAssetDecode.cpp" />
     <ClCompile Include="src\ImageFormatSniff.cpp" />
     <ClCompile Include="src\WebpDecodeAdapter.cpp" />
     <ClCompile Include="src\WicImageDecodeAdapter.cpp" />
@@ -109,6 +115,9 @@
     <ClCompile Include="src\ObjImportWorker.cpp" />
     <ClCompile Include="src\ObjAdapter.cpp" />
     <ClCompile Include="src\UfbxMaterialConversion.cpp" />
+    <ClCompile Include="src\AssimpImportWorker.cpp" />
+    <ClCompile Include="src\AssimpAdapter.cpp" />
+    <ClCompile Include="src\AssimpTextureDecode.cpp" />
     <ClCompile Include="src\FbxImportWorker.cpp" />
     <ClCompile Include="src\FbxAdapter.cpp" />
     <ClCompile Include="..\shared\parser-core\src\AsciiTokenizer.cpp" />
@@ -131,6 +140,7 @@
     <ClInclude Include="src\ThreeMfOpcPreflight.h" />
     <ClInclude Include="src\ThreeMfDisplayProperties.h" />
     <ClInclude Include="src\ThreeMfAdapter.h" />
+    <ClInclude Include="src\ThreeMfMaterialPlan.h" />
     <ClInclude Include="src\ThreeMfImportWorker.h" />
     <ClInclude Include="src\ThreeMfImporterVersion.h" />
     <ClInclude Include="src\SyntheticSceneGenerator.h" />
@@ -139,6 +149,13 @@
     <ClInclude Include="src\DracoDecodeAdapter.h" />
     <ClInclude Include="src\MeshoptDecodeAdapter.h" />
     <ClInclude Include="src\TextureTranscodeAdapter.h" />
+    <ClInclude Include="src\DdsImageDecode.h" />
+    <ClInclude Include="src\TgaImageDecode.h" />
+    <ClInclude Include="src\HdrFloatDecode.h" />
+    <ClInclude Include="src\RadianceHdrDecode.h" />
+    <ClInclude Include="src\OpenExrDecode.h" />
+    <ClInclude Include="src\EnvironmentAssetDecode.h" />
+    <ClInclude Include="src\RasterRgbaSupport.h" />
     <ClInclude Include="src\ImageFormatSniff.h" />
     <ClInclude Include="src\WebpDecodeAdapter.h" />
     <ClInclude Include="src\WicImageDecodeAdapter.h" />
@@ -160,6 +177,7 @@
     <ClInclude Include="..\shared\platform\include\platform\Win32Handle.h" />
     <ClInclude Include="..\shared\platform\include\platform\CheckedMath.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\Compatibility.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\PixelFormats.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\MaterialPayload.h" />

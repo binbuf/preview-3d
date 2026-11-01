@@ -2,6 +2,10 @@
 
 #include "BoundedChunkWriter.h"
 #include "ImageFormatSniff.h"
+#include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
+#include "TgaImageDecode.h"
 #include "SidecarFileClient.h"
 #include "TextureTranscodeAdapter.h"
 #include "UfbxMaterialConversion.h"
@@ -726,6 +730,26 @@ std::optional<DecodedImage> DecodeTexture(MaterialContext& context, const ufbx_t
             image.pixels = std::move(decoded->pixelBytes);
         }
         break;
+    case SniffedImageFormat::Tga:
+    case SniffedImageFormat::Dds:
+        if (auto decoded = SniffImageFormat(encoded) == SniffedImageFormat::Tga
+                ? DecodeTgaImage(encoded, space, options)
+                : DecodeDdsImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = space;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Hdr:
+    case SniffedImageFormat::Exr:
+        if (auto decoded = SniffImageFormat(encoded) == SniffedImageFormat::Hdr
+                ? DecodeRadianceHdrImage(encoded, space, options)
+                : DecodeOpenExrImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = space;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
     case SniffedImageFormat::WebP:
         if (auto decoded = DecodeWebpImage(encoded, space, options)) {
             image.format = decoded->pixelFormat; image.space = decoded->colorSpace;
@@ -865,16 +889,22 @@ uint32_t ResolveImage(BoundedChunkWriter& writer, MaterialContext& context,
         if (context.error != ImportErrorCode::None) return 0;
         DecodedImage fallback;
         fallback.format = PixelFormatId::RGBA8_UNORM; fallback.space = space;
-        fallback.width = fallback.height = semantic == TextureSemantic::Color ? 2u : 1u;
+        const bool colorCoverage = semantic == TextureSemantic::Color
+            || semantic == TextureSemantic::ColorCoverage;
+        fallback.width = fallback.height = colorCoverage ? 2u : 1u;
         fallback.levels = 1;
         fallback.pixels.resize(size_t(fallback.width) * fallback.height * 4, std::byte{255});
-        if (semantic == TextureSemantic::Color) {
+        if (colorCoverage) {
             for (unsigned i = 0; i < 4; ++i) for (unsigned c = 0; c < 3; ++c)
                 fallback.pixels[i * 4 + c] = std::byte((i == 0 || i == 3) ? 64 : 192);
         } else if (semantic == TextureSemantic::Normal) {
             fallback.pixels[0] = fallback.pixels[1] = std::byte{128};
         } else if (semantic == TextureSemantic::Emissive) {
             fallback.pixels[0] = fallback.pixels[1] = fallback.pixels[2] = std::byte{0};
+        } else if (semantic == TextureSemantic::MetallicRoughness) {
+            // Neutral fallback: opaque, fully rough, non-metal.
+            fallback.pixels[1] = std::byte{255};
+            fallback.pixels[2] = std::byte{0};
         }
         image = std::move(fallback);
     }
@@ -900,7 +930,7 @@ bool EmitMaterials(const ufbx_scene& scene, BoundedChunkWriter& writer, Material
         const ufbx_texture* roughness = MapTexture(material->pbr.roughness, context);
         const ufbx_texture* metalness = MapTexture(material->pbr.metalness, context);
         uint32_t images[4]{};
-        images[0] = ResolveImage(writer, context, base, ColorSpaceId::Srgb, TextureSemantic::Color, imageIds);
+        images[0] = ResolveImage(writer, context, base, ColorSpaceId::Srgb, TextureSemantic::ColorCoverage, imageIds);
         if (context.error != ImportErrorCode::None || (base && !images[0])) return false;
         if (!base && !images[0]) {
             images[0] = TryInferBaseColor(writer, context,
@@ -908,7 +938,7 @@ bool EmitMaterials(const ufbx_scene& scene, BoundedChunkWriter& writer, Material
             if (context.error != ImportErrorCode::None) return false;
         }
         if (roughness && roughness == metalness) {
-            images[1] = ResolveImage(writer, context, roughness, ColorSpaceId::Linear, TextureSemantic::Data, imageIds);
+            images[1] = ResolveImage(writer, context, roughness, ColorSpaceId::Linear, TextureSemantic::MetallicRoughness, imageIds);
             if (context.error != ImportErrorCode::None || !images[1]) return false;
         } else if (roughness || metalness) {
             Warn(context.optionalWarnings);
@@ -959,6 +989,89 @@ bool TransformBounds(const ChunkDescriptor& geometry, const double world[16],
             if (!Finite(value)) return false;
             minimum[axis] = (std::min)(minimum[axis], value);
             maximum[axis] = (std::max)(maximum[axis], value);
+        }
+    }
+    return true;
+}
+
+// T17: FBX line curves are not meshes but ufbx exposes them as first-class
+// elements on a node. Each authored segment becomes independent LineList
+// pairs; only positions are carried because a curve has no surface normal or
+// UV. The conversion is deterministic and uses the same bounded chunk writer
+// as meshes.
+bool EmitLineCurves(const ufbx_scene& scene, BoundedChunkWriter& writer,
+                    const FbxImportOptions& options, uint64_t& emittedSegments,
+                    ImportErrorCode& error)
+{
+    const uint64_t maxIndices = uint64_t(kChunkTriangles) * 3;
+    for (const ufbx_node* node : scene.nodes) {
+        if (!node || !node->attrib || options.Cancelled()) {
+            if (options.Cancelled()) error = ImportErrorCode::Cancelled;
+            if (error != ImportErrorCode::None) return false;
+            continue;
+        }
+        const ufbx_line_curve* curve = ufbx_as_line_curve(node->attrib);
+        if (!curve || !curve->control_points.count) continue;
+        std::vector<ufbx_vec3> points;
+        for (const ufbx_line_segment& segment : curve->segments) {
+            if (uint64_t(segment.index_begin) + segment.num_indices > curve->point_indices.count) {
+                error = ImportErrorCode::MalformedData; return false;
+            }
+            points.clear();
+            for (uint32_t i = 0; i < segment.num_indices; ++i) {
+                const uint32_t pointIndex = curve->point_indices.data[segment.index_begin + i];
+                if (pointIndex >= curve->control_points.count) {
+                    error = ImportErrorCode::MalformedData; return false;
+                }
+                const ufbx_vec3 source = curve->control_points.data[pointIndex];
+                const ufbx_vec3 transformed = ufbx_transform_position(&node->geometry_to_world, source);
+                if (!Finite(transformed.x) || !Finite(transformed.y) || !Finite(transformed.z)) {
+                    error = ImportErrorCode::MalformedData; return false;
+                }
+                points.push_back(transformed);
+            }
+            if (points.size() < 2) continue;
+            size_t begin = 0;
+            while (begin + 1 < points.size()) {
+                const size_t count = size_t((std::min)(uint64_t(points.size() - 1 - begin), maxIndices));
+                ChunkDescriptor descriptor{};
+                descriptor.topology = ChunkTopology::LineList;
+                descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionOnly_F32);
+                descriptor.chunkId = writer.NextId();
+                descriptor.boundsState = BoundsState::Verified;
+                descriptor.nodeId = node->typed_id;
+                descriptor.sourceRangeOffset = uint64_t(node->typed_id) << 32;
+                // One local vertex per segment endpoint; no adjacency is shared
+                // between independently authored curve segments.
+                std::vector<VertexPositionOnlyF32> vertices;
+                vertices.reserve(count * 2);
+                std::vector<uint32_t> indices;
+                indices.reserve(count * 2);
+                const double origin[3]{points[begin].x, points[begin].y, points[begin].z};
+                std::copy(std::begin(origin), std::end(origin), descriptor.origin);
+                for (size_t i = 0; i < count; ++i) {
+                    for (unsigned corner = 0; corner < 2; ++corner) {
+                        const auto& point = points[begin + i + corner];
+                        vertices.push_back(VertexPositionOnlyF32{
+                            float(point.x - origin[0]), float(point.y - origin[1]),
+                            float(point.z - origin[2])});
+                        indices.push_back(uint32_t(indices.size()));
+                    }
+                }
+                descriptor.vertexCount = uint32_t(vertices.size());
+                descriptor.indexCount = uint32_t(indices.size());
+                descriptor.sourceRangeLength = descriptor.indexCount;
+                if (!SetLocalBounds(descriptor, ChunkBytes(vertices))) {
+                    error = ImportErrorCode::MalformedData; return false;
+                }
+                if (!writer.Add(descriptor, ChunkBytes(vertices), ChunkBytes(indices))) {
+                    error = writer.Error() == ImportErrorCode::None
+                        ? ImportErrorCode::ResourceLimit : writer.Error();
+                    return false;
+                }
+                emittedSegments += count;
+                begin += count;
+            }
         }
     }
     return true;
@@ -1049,6 +1162,9 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
         || loadedScene->nurbs_trim_surfaces.count || loadedScene->nurbs_trim_boundaries.count;
     const bool hasProcedural = loadedScene->procedural_geometries.count != 0;
     const bool hasConstraints = loadedScene->constraints.count != 0;
+    // T17: authored line curves are renderable through the non-indexed segment
+    // list, so they are not "omitted geometry" any more.
+    const bool hasLineCurves = loadedScene->line_curves.count != 0;
     const bool omittedGeometry = hasCaches || hasNurbs || hasProcedural || hasSubdivision;
 
     const ufbx_anim* animation = loadedScene->anim;
@@ -1081,6 +1197,18 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
     if (importOptions.Cancelled()) return Fail(ImportErrorCode::Cancelled);
     const ufbx_scene* scene = evaluatedScene.get();
 
+    // ufbx exposes the authored axes/unit scale even after the load options
+    // above normalized geometry to the product's Y-up/metres convention.
+    // Reading them here documents that the values exist; they are deliberately
+    // not put on the wire because SceneMetadata.upAxis/metersPerUnit describe
+    // the geometry that was actually delivered. A future wire revision can
+    // carry the authored pair separately. We never guess a unit: the toolbar
+    // ground axis is the user override, and an absent authored unit stays
+    // normalized rather than being treated as metres by assumption.
+    const ufbx_coordinate_axis authoredUpAxis = loadedScene->settings.axes.up;
+    const double authoredUnitMeters = loadedScene->settings.original_unit_meters;
+    (void)authoredUpAxis;
+    (void)authoredUnitMeters;
     SceneMetadata metadata{};
     metadata.generationId = generationId;
     metadata.format = SourceFormatId::Fbx;
@@ -1172,11 +1300,11 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
         }
         found->nodes.push_back(node);
     }
-    if (omittedGeometry && !hasSupportedVisibleGeometry)
+    if (omittedGeometry && !hasSupportedVisibleGeometry && !hasLineCurves)
         return Fail(ImportErrorCode::UnsupportedRequiredFeature);
-    if (omittedVisibleGeometry && !hasSupportedVisibleGeometry)
+    if (omittedVisibleGeometry && !hasSupportedVisibleGeometry && !hasLineCurves)
         return Fail(ImportErrorCode::UnsupportedRequiredFeature);
-    if (!sourceTriangles || variants.empty())
+    if ((!sourceTriangles || variants.empty()) && !hasLineCurves)
         return Fail(omittedGeometry ? ImportErrorCode::UnsupportedRequiredFeature
                                     : ImportErrorCode::EmptyGeometry);
 
@@ -1212,7 +1340,13 @@ FbxImportOutcome ImportFbx(std::span<const std::byte> sourceBytes,
                             normalizedTriangles, normalizedVertices, emitError))
             return Fail(emitError == ImportErrorCode::None ? ImportErrorCode::ResourceLimit : emitError);
     }
-    if (!normalizedTriangles) return Fail(ImportErrorCode::EmptyGeometry);
+    uint64_t emittedLineSegments = 0;
+    if (hasLineCurves) {
+        ImportErrorCode lineError = ImportErrorCode::None;
+        if (!EmitLineCurves(*scene, writer, importOptions, emittedLineSegments, lineError))
+            return Fail(lineError == ImportErrorCode::None ? ImportErrorCode::MalformedData : lineError);
+    }
+    if (!normalizedTriangles && !emittedLineSegments) return Fail(ImportErrorCode::EmptyGeometry);
 
     std::vector<const ufbx_node*> orderedNodes(scene->nodes.begin(), scene->nodes.end());
     std::stable_sort(orderedNodes.begin(), orderedNodes.end(), [](const ufbx_node* left,
