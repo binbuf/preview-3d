@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ThreeMfOpcPreflight.h"
+#include "model_core/Compatibility.h"
 #include "model_core/ImportError.h"
 
 #include <array>
@@ -70,6 +71,9 @@ struct ThreeMfDisplayProperty {
 
 struct ThreeMfDisplayPropertySet {
     ThreeMfDisplayKind kind = ThreeMfDisplayKind::Unsupported;
+    // Feature ID reported when `kind` is Unsupported: translucent is a named
+    // visual-only surface, textured PBR display properties are generic.
+    uint32_t ignoredFeatureId = 0;
     std::vector<ThreeMfDisplayProperty> properties;
 };
 
@@ -81,6 +85,11 @@ struct ThreeMfDisplayCatalog {
     // compatible reader accepts several malformed optional attributes.  The
     // product-owned XML boundary retains the validated source semantics here.
     std::unordered_map<std::string, ThreeMfLatticeDefinition> lattices;
+    // Required-extension policy facts gathered by the XML pre-scan. Unknown
+    // required namespaces become Ignored records; a geometry-critical required
+    // namespace records its feature ID and fails typed before lib3mf runs.
+    model_core::CompatibilityReportBuilder compatibility;
+    uint32_t requiredExtensionFailureId = 0;
 };
 
 std::string ThreeMfResourceKey(std::string_view packagePart, uint32_t localResourceId);

@@ -24,8 +24,8 @@ TEST_CASE("SectionHeader and ChunkDescriptor match the documented fixed-width wi
           "[wire-format]")
 {
     REQUIRE(sizeof(model_core::SectionHeader) == 88);
-    REQUIRE(sizeof(model_core::ChunkDescriptor) == 160);
-    REQUIRE(model_core::kCurrentProtocolVersion == 10);
+    REQUIRE(sizeof(model_core::ChunkDescriptor) == 208);
+    REQUIRE(model_core::kCurrentProtocolVersion == 14);
     REQUIRE(sizeof(model_core::NodePayload) == 144);
     REQUIRE(sizeof(model_core::MeshInstancePayload) == 80);
 
@@ -36,14 +36,41 @@ TEST_CASE("SectionHeader and ChunkDescriptor match the documented fixed-width wi
 
     CHECK(offsetof(model_core::ChunkDescriptor, topology) == 32);
     CHECK(offsetof(model_core::ChunkDescriptor, byteSize) == 56);
-    CHECK(offsetof(model_core::ChunkDescriptor, chunkChecksum) == 84);
-    CHECK(offsetof(model_core::ChunkDescriptor, origin) == 92);
-    CHECK(offsetof(model_core::ChunkDescriptor, localMin) == 116);
-    CHECK(offsetof(model_core::ChunkDescriptor, boundsState) == 152);
-    CHECK(offsetof(model_core::ChunkDescriptor, sourceElementOffset) == 156);
+    CHECK(offsetof(model_core::ChunkDescriptor, chunkChecksum) == 132);
+    CHECK(offsetof(model_core::ChunkDescriptor, origin) == 140);
+    CHECK(offsetof(model_core::ChunkDescriptor, localMin) == 164);
+    CHECK(offsetof(model_core::ChunkDescriptor, boundsState) == 200);
+    CHECK(offsetof(model_core::ChunkDescriptor, sourceElementOffset) == 204);
     CHECK(sizeof(model_core::SceneMetadata) == 48);
     CHECK(sizeof(double) == 8);
     CHECK(std::numeric_limits<double>::is_iec559);
+}
+
+TEST_CASE("Protocol v11 appends LineList without changing earlier topology identities",
+          "[wire-format][topology]")
+{
+    using namespace model_core;
+    // Append-only: every protocol-v10 value keeps its numeric identity.
+    CHECK(static_cast<uint32_t>(ChunkTopology::Unknown) == 0);
+    CHECK(static_cast<uint32_t>(ChunkTopology::TriangleList) == 1);
+    CHECK(static_cast<uint32_t>(ChunkTopology::PointList) == 2);
+    CHECK(static_cast<uint32_t>(ChunkTopology::Material) == 3);
+    CHECK(static_cast<uint32_t>(ChunkTopology::Image) == 4);
+    CHECK(static_cast<uint32_t>(ChunkTopology::CompatibilityReport) == 10);
+    CHECK(static_cast<uint32_t>(ChunkTopology::LineList) == 11);
+
+    CHECK(IsGeometryTopology(ChunkTopology::TriangleList));
+    CHECK(IsGeometryTopology(ChunkTopology::LineList));
+    CHECK(IsGeometryTopology(ChunkTopology::PointList));
+    CHECK_FALSE(IsGeometryTopology(ChunkTopology::Material));
+    CHECK_FALSE(IsGeometryTopology(ChunkTopology::Node));
+
+    // LineList: two indices per independent segment.
+    CHECK(GeometryPrimitiveCount(ChunkTopology::LineList, 8, 5) == 4);
+    CHECK(GeometryPrimitiveCount(ChunkTopology::TriangleList, 9, 5) == 3);
+    CHECK(GeometryPrimitiveCount(ChunkTopology::PointList, 0, 5) == 5);
+    CHECK(GeometrySourceElementCount(ChunkTopology::LineList, 8, 5) == 8);
+    CHECK(GeometrySourceElementCount(ChunkTopology::PointList, 0, 5) == 5);
 }
 
 TEST_CASE("Double cluster origins preserve tiny local geometry and finite exact bounds", "[wire-format][bounds][precision]")

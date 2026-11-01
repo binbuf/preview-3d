@@ -229,7 +229,9 @@ LinearRgb AddEmissive(const LinearRgb& color, const LinearRgb& emissive) noexcep
 
 LinearRgb EmissiveOf(const model_core::MaterialPayload& material) noexcept
 {
-    return {material.emissiveFactor[0], material.emissiveFactor[1], material.emissiveFactor[2]};
+    const double strength = static_cast<double>(material.emissiveStrength);
+    return {material.emissiveFactor[0] * strength, material.emissiveFactor[1] * strength,
+            material.emissiveFactor[2] * strength};
 }
 
 void CompositePixel(std::vector<float>& color, std::vector<float>& depth, int ssize, int x, int y,

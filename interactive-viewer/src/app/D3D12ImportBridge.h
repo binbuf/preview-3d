@@ -11,6 +11,10 @@
 // session failure to user-facing text, and unpacking validated chunks into
 // the renderer-facing structs below.
 //
+#include "model_core/Compatibility.h"
+#include "model_core/FormatCatalog.h"
+#include "model_core/FormatSelection.h"
+#include "model_core/FormatSniffer.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
@@ -37,16 +41,61 @@ enum class SourceFormat {
     // `.step`/`.stp`; the STEP host's Part-21 admission still verifies the
     // ISO 10303-21 byte envelope before any OCCT work.
     Step,
+    // T08: IGES and OCCT BREP share the dedicated STEP host process and its
+    // zero-capability AppContainer payload; no OCCT code is linked here.
+    Iges,
+    Brep,
+    // T09 OCCT-native formats: binary XCAF document and FreeCAD Standard
+    // package, both still handled only by the dedicated CAD host.
+    Xbf,
+    Fcstd,
+    // T10 bounded Assimp compatibility formats. They use the general worker,
+    // never a native adapter or the CAD host.
+    Dae,
+    ThreeDs,
+    Dxf,
+    DirectX,
+    Off,
+    Amf,
+    X3d,
 };
 
-// nullopt for any extension this slice doesn't recognize.
+// nullopt for any extension this slice doesn't recognize. This remains the
+// open-path decision until T03 adds the override/Open As surface.
 std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path);
+
+// Bounded, trusted-process content probe. Returns model_core::FormatId::Unknown
+// when the bytes do not match a catalog signature (including malformed GLB).
+model_core::FormatId ClassifyByContent(const std::wstring& path);
+
+// Combined extension/content candidate with the reason. The selected format
+// prefers a strong content signature; a cross-family disagreement is recorded
+// as Mismatch for DecideOpenFormat/the Open As prompt to resolve.
+// `skipContentCheck` trusts the suffix only (still no parse, still validated by
+// the worker); it never bypasses the worker's own admission.
+model_core::FormatClassification ClassifyForOpen(const std::wstring& path,
+    bool skipContentCheck = false);
+
+// Maps any catalog descriptor with a shipped importer to the bridge's
+// SourceFormat. Used by --format and Open As, which force an importer but still
+// go through the normal worker/host validation.
+std::optional<SourceFormat> SourceFormatForFormatDescriptor(
+    const model_core::FormatDescriptor* descriptor);
+
+// The legacy open-path decision carried by a classification's extension
+// candidate. Keeps callers from re-reading the file just to recover it.
+std::optional<SourceFormat> ExtensionSourceFormat(
+    const model_core::FormatClassification& classification);
+
+// Bounded, path-free diagnostic text for debug logging ("extension=...,
+// content=..., reason=..."). Safe to call from the trusted process only.
+std::wstring ClassificationDiagnostic(const model_core::FormatClassification& classification);
 
 // One validated chunk, ready for the upload coordinator. payload is
 // vertex bytes immediately followed by index bytes (index bytes only when
-// topology == TriangleList), matching GltfAdapter.cpp/StlAdapter.cpp/
-// PlyAdapter.cpp's wire packing -- no further chunk-table bookkeeping is
-// needed at this layer.
+// topology == TriangleList or LineList), matching GltfAdapter.cpp/
+// StlAdapter.cpp/PlyAdapter.cpp's wire packing -- no further chunk-table
+// bookkeeping is needed at this layer.
 struct ImportedMesh {
     model_core::ChunkTopology topology = model_core::ChunkTopology::Unknown;
     model_core::VertexLayoutId vertexLayoutId = model_core::VertexLayoutId::Unknown;
@@ -64,12 +113,33 @@ struct ImportedMesh {
 struct ImportedMaterial {
     uint32_t chunkId = 0;
     model_core::MaterialPayload data{};
-    // All four slots are populated and consumed: GltfAdapter.cpp resolves
-    // metallicRoughness/normal/emissive alongside base color. 0 = none.
+    // All thirteen v14 slots are populated and consumed: GltfAdapter.cpp
+    // resolves metallicRoughness/normal/emissive/occlusion alongside base color,
+    // plus the eight extension-lobe maps. The occlusion map is independent; the
+    // metallic-roughness red channel is not treated as AO. 0 = none.
     uint32_t baseColorImageChunkId = 0;
     uint32_t metallicRoughnessImageChunkId = 0;
     uint32_t normalImageChunkId = 0;
     uint32_t emissiveImageChunkId = 0;
+    uint32_t occlusionImageChunkId = 0;
+    uint32_t clearcoatImageChunkId = 0;
+    uint32_t clearcoatRoughnessImageChunkId = 0;
+    uint32_t clearcoatNormalImageChunkId = 0;
+    uint32_t specularImageChunkId = 0;
+    uint32_t specularColorImageChunkId = 0;
+    uint32_t sheenColorImageChunkId = 0;
+    uint32_t sheenRoughnessImageChunkId = 0;
+    uint32_t transmissionImageChunkId = 0;
+    // Fixed slot order accessor used by the renderer, diagnostics and tests.
+    uint32_t ImageChunkId(uint32_t slot) const noexcept {
+        const uint32_t ids[model_core::kMaterialTextureSlotCount] = {
+            baseColorImageChunkId, metallicRoughnessImageChunkId, normalImageChunkId,
+            emissiveImageChunkId, occlusionImageChunkId, clearcoatImageChunkId,
+            clearcoatRoughnessImageChunkId, clearcoatNormalImageChunkId,
+            specularImageChunkId, specularColorImageChunkId, sheenColorImageChunkId,
+            sheenRoughnessImageChunkId, transmissionImageChunkId};
+        return slot < model_core::kMaterialTextureSlotCount ? ids[slot] : 0u;
+    }
 };
 
 struct ImportedImage {
@@ -102,6 +172,9 @@ struct ImportResult {
     model_core::FileIdentity sourceIdentity{};
     uint32_t textureWarningCount = 0;
     model_core::ImportStatusPayload status{};
+    // Stable numeric optional-feature records from a CompatibilityReport
+    // chunk. Never worker-authored text.
+    std::vector<model_core::CompatibilityRecord> compatibility;
     // Authored relative references whose sidecar assets could not be found,
     // deduplicated, in request order. Non-empty only when the model loaded but
     // some referenced asset is missing; the viewer offers a folder picker to

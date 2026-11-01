@@ -32,6 +32,21 @@ repository's license. Their immutable SHA-256 hashes are:
 | `compat-ref.usda` | `ccd77a3bb27608639b1a178766a00c5905c1c7a89718deb67c7033d85874129a` |
 | `compat-sub.usda` | `a11a3798ebabeeb81f7cbada0397bb7294e83ff71fa42173b48a405798884df4` |
 
+`primitives.usda`, `primitivesZ.usda`, `usd_points_rgb.usda`,
+`subdiv_cube_cc.usda` and `mixed_mesh_primitives.usda` are original Preview3D
+USD-T11 fixtures covered by the repository's license. They cover the five
+procedural Gprims with authored X/Y/Z and default-Z axes, per-point
+displayColor/displayOpacity with ignored widths, a creased Catmull-Clark control
+cage, and a mixed mesh+primitive scene. Their immutable SHA-256 hashes are:
+
+| Fixture | SHA-256 |
+| --- | --- |
+| `primitives.usda` | `86aff0e47d2af7cd26e7d5b215896818b4ac3d82e4e3c0f462d6023c6e31dc2e` |
+| `primitivesZ.usda` | `17f3b2764b9e3908aa28c4dbf7a18fc211b8eeccadf1f1ab1bfe0b3bc6c2173b` |
+| `usd_points_rgb.usda` | `37be4445b834d92cbe6c78ce7b11a674515ab3d41f31bb25ef7af56a00387418` |
+| `subdiv_cube_cc.usda` | `64b80ce1b04b56b97fedc28ef22fdb22a1e2f90b124d6a8290ea71d16583e50f` |
+| `mixed_mesh_primitives.usda` | `81a307d8dc80e57129730a182eb02295b1a6096f189666511fd7c7d8b388194c` |
+
 `cube.usdc.base64` and `cube.usdz.base64` are byte-for-byte base64 encodings of
 `models/cube.usdc` and `models/cube.usdz` from TinyUSDZ v0.9.1, immutable commit
 `a04ee0bcbd1a930e30cc40938fcee3526a6fa8eb`. They are redistributed under

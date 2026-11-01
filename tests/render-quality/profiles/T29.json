@@ -1,0 +1,100 @@
+{
+  "task": "T29",
+  "schema": 1,
+  "description": "Clay as a coherent opaque geometry-review mode. Proves the effective draw bucket/depth state (not just a shader alpha), MASK cutout preservation, opaque hiding of authored transparent interiors, neutral matte shading with no authored colour/metal/coat/sheen/emission/transmission/normal-map decoration, mirrored/small/mixed-primitive visibility, picking, and a Studio->Clay->Directional->Studio round-trip with unchanged imported data, texture residency, camera and exposure. Adds controlled and external Clay crops for form readability rather than PBR texture similarity.",
+  "viewport": {"width": 1280, "height": 900, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0},
+    {"id": "clay", "lighting": 1},
+    {"id": "directional", "lighting": 2}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 1.0},
+    "oblique": {"yawDegrees": 30.0, "pitchDegrees": 70.0, "distanceScale": 1.0}
+  },
+  "regions": {
+    "clay-review": {
+      "identity-row": [0.04, 0.08, 0.96, 0.42],
+      "geometry-row": [0.04, 0.45, 0.96, 0.78],
+      "small-parts": [0.06, 0.72, 0.55, 0.95]
+    },
+    "lighting-probe": {"probe-grid": [0.02, 0.1, 0.98, 0.9]},
+    "sphere-grid": {"spheres": [0.02, 0.12, 0.98, 0.88]},
+    "stl-box": {"box": [0.2, 0.15, 0.8, 0.9]},
+    "glass-reference": {"panels": [0.03, 0.2, 0.97, 0.9]},
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "paint": [0.34, 0.55, 0.72, 0.9]
+    },
+    "camera": {
+      "lens": [0.60, 0.40, 0.76, 0.62],
+      "black-body": [0.42, 0.40, 0.58, 0.66]
+    },
+    "microscope": {
+      "brass": [0.3, 0.16, 0.68, 0.5],
+      "enamel": [0.18, 0.45, 0.6, 0.9]
+    },
+    "lid": {"box": [0.2, 0.15, 0.8, 0.9]},
+    "cartridge": {"box": [0.2, 0.15, 0.8, 0.9]},
+    "step-assembly": {"assembly": [0.05, 0.1, 0.95, 0.9]}
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "clay-review", "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique"]},
+        {"id": "lighting-probe", "modes": ["clay"], "views": ["front"]},
+        {"id": "sphere-grid", "modes": ["clay"], "views": ["front"]},
+        {"id": "glass-reference", "modes": ["clay"], "views": ["front"]},
+        {"id": "stl-box", "modes": ["clay"], "views": ["oblique"]},
+        {"id": "line-point-obj", "modes": ["studio", "clay"], "views": ["front"]},
+        {"id": "step-assembly", "modes": ["clay"], "views": ["front"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "car", "modes": ["studio", "clay"], "views": ["front", "oblique"]},
+        {"id": "camera", "modes": ["clay"], "views": ["front"]},
+        {"id": "microscope", "modes": ["clay"], "views": ["front"],
+         "knownDefect": "resource-limit"},
+        {"id": "stl", "modes": ["clay"], "views": ["front", "oblique"]},
+        {"id": "lid", "modes": ["clay"], "views": ["front", "oblique"]},
+        {"id": "cartridge", "modes": ["clay"], "views": ["front", "oblique"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "microscope-resource-limit",
+      "assets": ["microscope"],
+      "description": "The external microscope can still report a terminal generation deadline after visible geometry. T29 records the Clay crop only when the load is complete; a failed load stays a non-passing observation.",
+      "label": "known-defect",
+      "assignedTo": "T23/T34"
+    },
+    {
+      "id": "clay-authored-ao-unused",
+      "assets": ["car", "camera", "microscope"],
+      "description": "Clay suppresses authored ORM occlusion together with the rest of the material decoration. Cavity/contact darkening will come from the geometry-derived T31/T32 interfaces; T29 deliberately does not use authored AO to hide depth defects.",
+      "label": "limitation",
+      "assignedTo": "T31/T32"
+    }
+  ]
+}

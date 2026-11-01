@@ -274,3 +274,26 @@ TEST_CASE("A stray .tmp file left behind is cleaned up on the next Open", "[cach
 
     CHECK(GetFileAttributesW(strayPath.c_str()) == INVALID_FILE_ATTRIBUTES);
 }
+
+TEST_CASE("T22 cache key carries the real parser/protocol identity", "[cache][material-semantics]")
+{
+    using namespace model_core;
+    CacheEntryKey key;
+    CHECK(key.parserVersion == kDerivedCacheParserIdentity);
+    CHECK(((key.parserVersion >> 24) & 0xFFu) == kCurrentProtocolVersion);
+    CHECK(((key.parserVersion >> 16) & 0xFFu) == kGltfImporterVersion);
+    CHECK(((key.parserVersion >> 8) & 0xFFu) == kMaterialSemanticsVersion);
+    // A caller that reuses the identity but changes any component must not hit
+    // the same on-disk entry.
+    ScratchCacheDir dir;
+    std::wstring error;
+    auto cache = DerivedCache::Open(dir.path, {}, error);
+    REQUIRE(cache.has_value());
+    const std::vector<std::byte> payload{std::byte{1}, std::byte{2}, std::byte{3}};
+    key.identity = MakeIdentity(0x1234, payload.size());
+    REQUIRE(cache->Put(key, payload, error));
+    REQUIRE(cache->TryGet(key).has_value());
+    CacheEntryKey stale = key;
+    stale.parserVersion = kDerivedCacheParserIdentity - 1;
+    CHECK_FALSE(cache->TryGet(stale).has_value());
+}

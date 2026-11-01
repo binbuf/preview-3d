@@ -1,0 +1,183 @@
+---
+timeoutMin: 180
+verify: python tests/render-quality/verify.py --task T32 --configuration Debug --output TestResults/render-quality/T32
+---
+# T32 — Scale-aware screen-space ambient occlusion
+
+## Goal
+
+Improve cavities and local contact on untextured/CAD and PBR models with restrained, geometry-based AO.
+
+## Context (read first)
+
+- Depends on **T24, T26, T27, T31**; execute in roadmap order.
+- Current ORM AO shader and T16 ground hand-off.
+- `D3D12ViewerPath.cpp` depth/normal/HDR resources and F3D SSAO pass construction.
+- T20 cavity, contact, glass and thin-feature fixtures.
+- Shared acceptance and safety contract: `docs/0.7.0/RENDER-QUALITY-FOLLOWUP.md`.
+
+## Scope
+
+- [x] Implement a bounded SSAO/GTAO-class path with correct depth reconstruction, scene-scale-aware radius, edge-aware filtering and stable sampling. Use the existing projection/precision conventions rather than assuming one model size or perspective only.
+- [x] Apply AO to the appropriate indirect illumination; do not multiply all direct light, emission, glass reflection or the final tone-mapped image by an AO mask. Combine authored AO with screen-space AO without severe double darkening.
+- [x] Define transparent/masked handling in the pass graph so windows neither produce opaque AO sheets nor inherit background halos. Preserve narrow gaps, silhouettes, thin parts and the camera strap.
+- [x] Test perspective/orthographic, near/far scale, zoom/orbit, background/depth discontinuities, two-sided/mirrored instances, streamed geometry and alpha cutouts. Record AO-only, on/off crops and motion evidence.
+- [x] Calibrate separate sensible strengths/radii for geometry-review Clay and material-aware Studio/Directional while keeping controls/defaults understandable. Do not use AO to cover wrong normals, light transforms or missing shadows.
+- [x] Budget intermediate targets and work, include resize/device-loss/generation retirement, and document the unsupported/low-budget fallback. Measure GPU cost on recorded hardware.
+
+## Verification
+
+The front-matter command is a planned interface introduced by T20. Extend its profile in this task; unimplemented profiles must fail.
+The wrapper must run the task's meaningful unit/import checks and actual GPU
+image lane, propagate failures and save exact commands/results. Build changed
+binaries first. Keep import-worker suites serial. Image review and explicit
+reference promotion are separate from ordinary verification; source-string
+checks and self-created goldens do not prove rendering quality.
+
+### Verification economy
+
+The front-matter gate launches a real GPU viewer and takes minutes. Spend runs
+deliberately:
+
+- Run it in the foreground with an explicit long timeout (900000 ms or more).
+  Do not background it and poll with short `Start-Sleep` loops; if the tool
+  moves it to the background, wait once for completion instead of polling.
+- Iterate with `--fast` (add `--no-build` once the binary is current). `--fast`
+  keeps the build, generated fixtures and this task's focused lane, and skips
+  the contract self-tests, external corpus, F3D references and review gate. It
+  is iteration evidence, not acceptance evidence.
+- Keep agent-run full gates to at most two: one early proof of the lane and
+  one final after the last edit. The harness repeats the front-matter command
+  once after you finish. Corpus or baseline re-promotion is one run, not a
+  per-fix loop.
+- Use focused unit/import filters between runs. Do not re-run a passing gate to
+  "confirm" it, and do not repeat a failing configuration without a change.
+
+## Done when
+
+- [x] T32 verification includes AO-only correctness fixtures, halo/scale/motion checks and reviewed cavity/contact crops in all three modes.
+- [x] Glass/lens, black body, thin strap and emission remain nonregression regions; improvements do not come from globally darkening the scene.
+- [x] Update AO/pass/budget design and hand-off.
+
+## Out of scope
+
+Baked global illumination, ray tracing, temporal history without its required reprojection/lifecycle work, or unbounded resolution-independent AO allocations.
+
+## Design notes
+
+Preserve worker-only parsing/decoding, brokered sidecars, validated bounded
+wire data, generation/fence retirement, GPU budget and feature-level 11_0.
+Do not add Release test-control authority. Update relevant design records
+and cache identities when contracts change. No per-asset-name rendering hacks.
+
+## Hand-off
+
+**Status: done.** Full front-matter gate passes with 0 failures at
+`TestResults/render-quality/T32` (27 captures, external qualification
+`available`, F3D reference `available`, review `recorded`, 75/75 focused
+checks). The `--fast` lane also passed (13 captures). Full details and reusable
+facts are in `docs/0.7.0/progress/T32.md`.
+
+### Implemented behavior
+
+- New pure module `interactive-viewer/src/render/ScreenSpaceAo.{h,cpp}`:
+  per-mode strength/radius calibration, scene-radius -> bounded pixel-radius
+  conversion, indirect-only composite, authored/screen OC combination and the
+  target budget. `Tests.Unit.exe "[screen-space-ao]"` passes 67 assertions,
+  including shader compilation and the `AO_INDIRECT` material variant.
+- `D3D12ViewerPath` AO pass graph: opaque/Clay geometry writes scene + indirect
+  + pick; the fixed 12-sample depth-reconstructed mask and its 5x5 bilateral
+  filter run after opaque/clay and before the transmission snapshot/OIT/pick;
+  the resolve subtracts `indirect * (1 - ao)` before OIT, exposure, tone map and
+  sRGB. Direct light, emission, glass reflection/transmission and the display
+  transform are not multiplied by the mask. Authored ORM AO remains inside the
+  indirect term and is never re-multiplied.
+- Transparent/masked policy: BLEND/transmissive surfaces do not write the
+  opaque depth or indirect target, and MASK keeps authored discard, so windows,
+  cutout holes and background get no opaque AO sheet or halo. Narrow gaps,
+  silhouettes, thin rings/straps and ring holes are preserved by the neighbour
+  discontinuity rejection and the edge-aware filter.
+- Perspective/orthographic/blended projection share one reconstruction. The
+  world radius is a fraction of the fitted scene radius, converted from the
+  reconstructed frame (measured evidence: 0.303-0.471 world units at the
+  profile scene; bounded 36-48 px cap). No model-size assumption.
+- Calibration/defaults: Studio 0.60/0.10, Clay 0.85/0.14, Directional
+  0.55/0.09. `A`, the More menu item and persisted
+  `ambientOcclusionEnabled` toggle it. Debug fields 287-299 expose toggle,
+  bounded overrides, bytes, CPU/GPU pass time, fallback reason and raw
+  reconstruction/normal/gap/radius views.
+- Lifecycle: viewport-sized RGBA16F indirect target + two R8 masks, accounted,
+  recreated on resize/device recovery, derived from the current drawable set
+  every frame. A two-query GPU timestamp heap with a 16-byte readback records
+  the AO pass one frame later. Allocation failure/forced/unsupported/diagnostic
+  or point/line-only content records an AO-off fallback; the legacy two-target
+  PSOs keep that path tested. The AO layer never gates the contact shadow.
+- Fixtures/lane: `ao-probe`/`ao-probe-large` (corner and recess, shelf, contact
+  sphere, narrow plate gap, thin ring, recessed + front emission, transmissive
+  window, MASK cutout, mirrored copy, 8x root scale); `screen_space_ao.py`,
+  `profiles/T32.json`, `review/T32-review.json`; `verify.py` routes T32 and
+  includes it in the unit-test build tuple.
+
+### Deviations / limitations
+
+- The T27 transmission snapshot is copied before the resolve subtraction, so a
+  cavity seen only through glass keeps its unoccluded transmitted colour. This
+  is deliberate for the glass/lens nonregression requirement and recorded as a
+  follow-up (T34/T35) rather than hidden.
+- End-to-end Debug frame time was dominated by adaptive refresh/settle work and
+  is recorded but not asserted as a cost. The real bounded AO GPU pass time
+  (field 299) is 304-312 µs on this workstation; release-hardware timing is
+  T34/T35 evidence.
+- Clay deliberately suppresses authored emission (T29), so the emission
+  invariance check applies to Studio/Directional only; Clay is still checked
+  for indirect-only, black-body and transparent-region behavior.
+
+### Checks / commands
+
+```powershell
+& 'C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe' `
+  Preview3D.slnx /t:Preview3D /p:Configuration=Debug /p:Platform=x64 /m /v:minimal
+& 'C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe' `
+  tests/unit/Tests.Unit.vcxproj /p:Configuration=Debug /p:Platform=x64 `
+  /p:SolutionDir=D:\repos\binbuf\preview-3d\ /m /v:minimal
+.\x64\Debug\Tests.Unit.exe "[screen-space-ao]"   # 67 assertions, pass
+python tests/render-quality/verify.py --task T32 --configuration Debug `
+  --output TestResults/render-quality/T32       # pass, 75/75 checks, 27 captures
+```
+
+### Visual evidence
+
+AO-only masks, same-camera on/off pairs and lifecycle images are under
+`TestResults/render-quality/T32/images/` (`ao-mask-*`, `ao-*-on/off`,
+`ao-perspective/orthographic-mask`, `ao-zoom-*`, `ao-large-mask`,
+`ao-orbit-*`, `ao-forced-on`, `ao-disabled-reference`,
+`ao-after-device-reset`, `external-*`). The review record is
+`tests/render-quality/review/T32-review.json`; the machine report is
+`TestResults/render-quality/T32/diagnostics/screen-space-ao.json`. The
+generated/reviewed crops show a dark inside-corner/recess, contact rings under
+the sphere/ring/strap, unchanged emission/glass/cutout/background regions and no
+global exposure change.
+
+### Measured numbers
+
+- Studio/Clay/Directional changed pixels 30,457 / 25,042 / 27,494 (3.0-3.7%);
+  max darkening 29 / 49 / 23; frame mean luma delta -0.20 / -0.41 / -0.20.
+- AO mask occluded fraction 2.4-3.1%; background corners 255. Emission delta
+  0.88-1.37, dark-region delta <=1.2, transparent/cutout delta 0, background
+  delta 0.
+- Perspective/orthographic occluded 0.0246/0.0208; near/far zoom
+  0.0629/0.0136; orbit overlap 0.661/0.662.
+- AO targets 10,747,904 bytes at 1280x900 (~10.3 MiB); GPU pass 304-312 µs;
+  CPU record 29-55 µs. Device loss/resize/generation/forced and
+  allocation-failure fallbacks all pass.
+
+### Design records / docs updated
+
+- `docs/design/04-rendering-and-streaming.md` — T32 pass graph, indirect-only
+  resolve, transparent policy, radius/calibration, budget/lifecycle and GPU
+  timing.
+- `docs/design/adr/0089-scale-aware-screen-space-ao.md` — accepted decision.
+- `docs/0.7.0/progress/T32.md` — reusable facts, commands, gotchas and
+  follow-ups.
+- `tests/render-quality/review/T32-review.json` — reviewed images and defects.
+

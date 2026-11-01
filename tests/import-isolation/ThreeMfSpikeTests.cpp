@@ -4,10 +4,12 @@
 #include "../../interactive-viewer/src/app/D3D12ImportBridge.h"
 #include "ThreeMfSpikeWorker.h"
 #include "ThreeMfDisplayProperties.h"
+#include "ThreeMfMaterialPlan.h"
 #include "ThreeMfOpcPreflight.h"
 #include "import_broker/SharedSection.h"
 #include "import_broker/ImportSession.h"
 #include "import_broker/WorkerPool.h"
+#include "model_core/Compatibility.h"
 #include "model_core/ControlProtocol.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
@@ -56,13 +58,12 @@ std::vector<std::byte> ReadFile(const char* name)
     return bytes;
 }
 
-std::vector<std::byte> DecodeBase64(const char* name)
+std::vector<std::byte> DecodeBase64Bytes(std::span<const std::byte> encodedBytes)
 {
-    const auto encoded = ReadFile(name);
     std::vector<std::byte> decoded;
     uint32_t accumulator = 0;
     unsigned bits = 0;
-    for (const std::byte raw : encoded) {
+    for (const std::byte raw : encodedBytes) {
         const unsigned char ch = std::to_integer<unsigned char>(raw);
         if (std::isspace(ch)) continue;
         if (ch == '=') break;
@@ -81,6 +82,12 @@ std::vector<std::byte> DecodeBase64(const char* name)
         }
     }
     return decoded;
+}
+
+std::vector<std::byte> DecodeBase64(const char* name)
+{
+    const auto encoded = ReadFile(name);
+    return DecodeBase64Bytes(encoded);
 }
 
 std::string Hex(std::span<const std::byte> bytes)
@@ -558,6 +565,32 @@ import_broker::ImportSessionResult ImportThreeMfPath(const std::filesystem::path
     return import_broker::RunImportSession(request);
 }
 
+std::vector<model_core::CompatibilityRecord> CompatibilityRecords(
+    const import_broker::ImportSessionResult& result)
+{
+    std::vector<model_core::CompatibilityRecord> records;
+    for (const auto& chunk : result.chunks) {
+        if (chunk.descriptor.topology != model_core::ChunkTopology::CompatibilityReport)
+            continue;
+        REQUIRE(chunk.payload.size() == sizeof(model_core::CompatibilityReportPayload));
+        model_core::CompatibilityReportPayload payload{};
+        std::memcpy(&payload, chunk.payload.data(), sizeof(payload));
+        REQUIRE(payload.recordCount <= model_core::kMaxCompatibilityRecords);
+        for (uint32_t index = 0; index < payload.recordCount; ++index)
+            records.push_back(payload.records[index]);
+    }
+    return records;
+}
+
+bool HasCompatibilityRecord(const std::vector<model_core::CompatibilityRecord>& records,
+                            uint32_t featureId, model_core::CompatibilitySeverity severity)
+{
+    return std::any_of(records.begin(), records.end(), [&](const auto& record) {
+        return record.featureId == featureId
+            && record.severity == static_cast<uint8_t>(severity) && record.count > 0;
+    });
+}
+
 struct Fixture {
     const char* name;
     const char* sha256;
@@ -576,7 +609,9 @@ constexpr Fixture kFixtures[] = {
 };
 
 std::vector<std::byte> CoreBoxVariant(bool unknownRequired, bool privateMetadata,
-                                      bool buildReferencesOther = false)
+                                      bool buildReferencesOther = false,
+                                      const char* requiredAttribute = nullptr,
+                                      const char* requiredNamespace = nullptr)
 {
     const auto source = DecodeBase64("core-box.3mf.base64");
     import_worker::ThreeMfOpcPackage package;
@@ -596,6 +631,19 @@ std::vector<std::byte> CoreBoxVariant(bool unknownRequired, bool privateMetadata
         REQUIRE(marker != std::string::npos);
         model.insert(marker + 7,
             "requiredextensions=\"evil\" xmlns:evil=\"http://example.invalid/3mf/evil\" ");
+    }
+    if (requiredAttribute && requiredNamespace) {
+        const auto marker = model.find("<model ");
+        REQUIRE(marker != std::string::npos);
+        model.insert(marker + 7, std::string("xmlns:x=\"") + requiredNamespace + "\" "
+            + "requiredextensions=\"" + requiredAttribute + "\" ");
+    }
+    if (privateMetadata) {
+        const auto marker = model.find("<model ");
+        REQUIRE(marker != std::string::npos);
+        model.insert(marker + 7,
+            "xmlns:prusa=\"http://schemas.prusa3d.com/3mf/2023/02\" "
+            "xmlns:bambu=\"http://schemas.bambulab.com/3mf/2023/02\" ");
     }
     if (buildReferencesOther) {
         const auto mesh = model.find("<object id=\"1\">");
@@ -1124,6 +1172,165 @@ TEST_CASE("3MF preview composes slicer component and build transforms in source 
     CHECK(result.instances.front().data.worldMax[0] == 105.0);
 }
 
+TEST_CASE("3MF compatibility accepts slicer metadata and ignores unknown required namespaces",
+          "[3mf-compat][compatibility]")
+{
+    uint64_t generation = 0x336d66090000ull;
+    const auto slicer = ImportThreeMfBytes(CoreBoxVariant(false, true), ++generation);
+    CAPTURE(uint32_t(slicer.stage), uint32_t(slicer.errorCode));
+    REQUIRE(slicer.ok);
+    CHECK(CompatibilityRecords(slicer).empty());
+    CHECK(std::count_if(slicer.chunks.begin(), slicer.chunks.end(), [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::TriangleList;
+    }) >= 1);
+
+    const auto unknown = ImportThreeMfBytes(CoreBoxVariant(true, false), ++generation);
+    CAPTURE(uint32_t(unknown.stage), uint32_t(unknown.errorCode));
+    REQUIRE(unknown.ok);
+    const auto records = CompatibilityRecords(unknown);
+    REQUIRE(HasCompatibilityRecord(records, model_core::kThreeMfFeatureUnknownRequiredExtension,
+                                   model_core::CompatibilitySeverity::Ignored));
+    CHECK(std::count_if(records.begin(), records.end(), [](const auto& record) {
+        return record.featureId == model_core::kThreeMfFeatureUnknownRequiredExtension;
+    }) == 1);
+    CHECK(std::any_of(unknown.chunks.begin(), unknown.chunks.end(), [](const auto& chunk) {
+        return chunk.descriptor.topology == model_core::ChunkTopology::TriangleList;
+    }));
+}
+
+TEST_CASE("3MF compatibility keeps required geometry extensions terminal",
+          "[3mf-compat][required-extension]")
+{
+    constexpr const char* sliceNamespace =
+        "http://schemas.microsoft.com/3dmanufacturing/slice/2015/07";
+    const auto required = CoreBoxVariant(false, false, false, "x", sliceNamespace);
+    import_worker::ThreeMfOpcPackage package;
+    REQUIRE(import_worker::InspectThreeMfOpc(required, &package)
+            == import_worker::ThreeMfOpcError::None);
+    import_worker::ThreeMfDisplayCatalog catalog;
+    CHECK(import_worker::ScanThreeMfDisplayProperties(required, package, catalog)
+          == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+    CHECK(catalog.requiredExtensionFailureId == model_core::kThreeMfFeatureSliceExtension);
+
+    const auto failed = ImportThreeMfBytes(required, 0x336d66091000ull);
+    CHECK_FALSE(failed.ok);
+    CHECK(failed.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+
+    // Production-boxes carries a required slice stack whose visible geometry
+    // only exists as slice data, so it remains a typed failure.
+    const auto production = ImportThreeMfBytes(
+        DecodeBase64("production-boxes.3mf.base64"), 0x336d66091001ull);
+    CHECK_FALSE(production.ok);
+    CHECK(production.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+}
+
+TEST_CASE("3MF per-corner material planning splits within budget and degrades otherwise",
+          "[3mf-compat][per-corner]")
+{
+    using namespace import_worker;
+    const ThreeMfCornerGrouping red{1, 0, false, false};
+    const ThreeMfCornerGrouping blue{2, 0, false, false};
+    const ThreeMfCornerGrouping nearest{1, 4, false, false};
+
+    {
+        const ThreeMfCornerGrouping corners[3]{red, red, red};
+        const auto plan = PlanThreeMfTriangleMaterials(corners, true);
+        CHECK(plan.choice == ThreeMfTriangleMaterialChoice::Uniform);
+        CHECK(plan.distinctGroupings == 1);
+        CHECK(plan.dominantCorner == 0);
+    }
+    {
+        const ThreeMfCornerGrouping corners[3]{red, red, blue};
+        const auto plan = PlanThreeMfTriangleMaterials(corners, true);
+        CHECK(plan.choice == ThreeMfTriangleMaterialChoice::Split);
+        CHECK(plan.distinctGroupings == 2);
+        CHECK(plan.dominantCorner == 0);
+    }
+    {
+        const ThreeMfCornerGrouping corners[3]{red, blue, blue};
+        const auto plan = PlanThreeMfTriangleMaterials(corners, true);
+        CHECK(plan.choice == ThreeMfTriangleMaterialChoice::Split);
+        CHECK(plan.dominantCorner == 1);
+    }
+    {
+        const ThreeMfCornerGrouping corners[3]{red, blue, nearest};
+        const auto plan = PlanThreeMfTriangleMaterials(corners, true);
+        CHECK(plan.choice == ThreeMfTriangleMaterialChoice::Split);
+        CHECK(plan.distinctGroupings == 3);
+        CHECK(plan.dominantCorner == 0);
+    }
+    {
+        const ThreeMfCornerGrouping corners[3]{red, blue, nearest};
+        const auto plan = PlanThreeMfTriangleMaterials(corners, false);
+        CHECK(plan.choice == ThreeMfTriangleMaterialChoice::Dominant);
+        CHECK(plan.dominantCorner == 0);
+    }
+}
+
+TEST_CASE("3MF per-corner texture coordinates open with one deterministic material",
+          "[3mf-compat][per-corner][texture]")
+{
+    // 3MF binds one property resource to a triangle, so the typed API cannot
+    // produce differing texture identities across corners. This fixture keeps
+    // per-corner UVs in one texture group: the adapter must keep a single
+    // material and never fail. The planner above covers the split/degrade rule
+    // for producers that do expose differing corner groupings.
+    constexpr char png[] = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const auto textureBytes = DecodeBase64Bytes(std::as_bytes(std::span(png, sizeof(png) - 1)));
+    const std::string texture(reinterpret_cast<const char*>(textureBytes.data()),
+                              textureBytes.size());
+    const std::string model = R"(<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
+<resources>
+<m:texture2d id="1" path="/3D/Textures/tex.png" contenttype="image/png" tilestyleu="wrap" tilestylev="wrap"/>
+<m:texture2dgroup id="2" texid="1"><m:tex2coord u="0" v="0"/><m:tex2coord u="1" v="0"/><m:tex2coord u="0" v="1"/></m:texture2dgroup>
+<object id="3" type="model"><mesh><vertices>
+<vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/>
+</vertices><triangles><triangle v1="0" v2="1" v3="2" pid="2" p1="0" p2="1" p3="2"/></triangles></mesh></object>
+</resources><build><item objectid="3"/></build></model>)";
+    const std::string contentTypes = R"(<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/><Default Extension="png" ContentType="image/png"/></Types>)";
+    const std::string relationships = R"(<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>)";
+    const std::string modelRelationships = R"(<?xml version="1.0" encoding="utf-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dtexture" Target="/3D/Textures/tex.png" Id="rel2"/></Relationships>)";
+    const auto bytes = BuildStoredPackage({ { "[Content_Types].xml", contentTypes },
+                                            { "_rels/.rels", relationships },
+                                            { "3D/_rels/3dmodel.model.rels", modelRelationships },
+                                            { "3D/3dmodel.model", model },
+                                            { "3D/Textures/tex.png", texture } });
+    const auto result = ImportThreeMfBytes(bytes, 0x336d66092000ull);
+    CAPTURE(uint32_t(result.stage), uint32_t(result.errorCode));
+    REQUIRE(result.ok);
+    const auto materials = std::count_if(result.chunks.begin(), result.chunks.end(),
+        [](const auto& chunk) {
+            return chunk.descriptor.topology == model_core::ChunkTopology::Material;
+        });
+    CHECK(materials == 1);
+    const auto geometry = std::count_if(result.chunks.begin(), result.chunks.end(),
+        [](const auto& chunk) {
+            return chunk.descriptor.topology == model_core::ChunkTopology::TriangleList;
+        });
+    CHECK(geometry == 1);
+}
+
+TEST_CASE("3MF compatibility leaves archive and required-list limits unchanged",
+          "[3mf-compat][archive][limits]")
+{
+    const auto valid = DecodeBase64("core-box.3mf.base64");
+    const auto truncated = std::vector<std::byte>(valid.begin(), valid.end() - 11);
+    const auto malformed = ImportThreeMfBytes(truncated, 0x336d66093000ull);
+    CHECK_FALSE(malformed.ok);
+    CHECK(malformed.errorCode == model_core::ImportErrorCode::ArchiveLimit);
+
+    std::string overlong(129, 'a');
+    const auto overBudget = ImportThreeMfBytes(
+        CoreBoxVariant(false, false, false, overlong.c_str(),
+                       "http://example.invalid/3mf/overlong"),
+        0x336d66093001ull);
+    CHECK_FALSE(overBudget.ok);
+    CHECK(overBudget.errorCode == model_core::ImportErrorCode::ResourceLimit);
+    const auto recovered = ImportThreeMfBytes(valid, 0x336d66093002ull);
+    CHECK(recovered.ok);
+}
+
 TEST_CASE("3MF-004 normalizes object defaults, corner colors, composites, and multi-properties",
           "[3mf-004][materials][properties]")
 {
@@ -1517,8 +1724,10 @@ TEST_CASE("3MF-007 malformed OPC inputs and unknown requirements recover in the 
     const auto privateMetadata = ImportThreeMfBytes(CoreBoxVariant(false, true), ++generation);
     CHECK(privateMetadata.ok);
     const auto unknownRequired = ImportThreeMfBytes(CoreBoxVariant(true, false), ++generation);
-    CHECK_FALSE(unknownRequired.ok);
-    CHECK(unknownRequired.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+    CHECK(unknownRequired.ok);
+    CHECK(HasCompatibilityRecord(CompatibilityRecords(unknownRequired),
+                                 model_core::kThreeMfFeatureUnknownRequiredExtension,
+                                 model_core::CompatibilitySeverity::Ignored));
     const auto requiredSlice = ImportThreeMfBytes(
         DecodeBase64("production-boxes.3mf.base64"), ++generation);
     CHECK_FALSE(requiredSlice.ok);

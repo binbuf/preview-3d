@@ -12,7 +12,7 @@
 // and this is never surfaced to the user as an error.
 struct ViewerSettings
 {
-    static constexpr int kCurrentVersion = 5;
+    static constexpr int kCurrentVersion = 10;
     int version = kCurrentVersion;
 
     // Display the model in the orientation its source file authored (true)
@@ -30,6 +30,11 @@ struct ViewerSettings
     // camera gestures do not show the cursor jumping across the screen.
     bool hideCursorWhileDragging = true;
 
+    // Stop turntable auto-orbit as soon as the user moves the camera or uses
+    // another control, so a manual gesture never fights the rotation. On by
+    // default; turning it off lets orbit keep running through interactions.
+    bool stopOrbitOnInteraction = true;
+
     // Keep a newly opened model out of the viewport until its import has
     // finished and the visible refinement pass has drained (true, the
     // default), instead of showing coarse chunks as they stream in. Turning
@@ -39,6 +44,28 @@ struct ViewerSettings
     // UI language pack code (e.g. "fr", "pt-BR", "zh_Hans"). Empty means
     // "follow the Windows display language".
     std::wstring language;
+
+    // T15 view presentation. Stored as small integers/float so this header
+    // stays independent of the renderer's enums; unknown values fall back to
+    // the defaults on load.
+    int toneMapMode = 0;   // viewer_presentation::ToneMapMode
+    int backgroundMode = 0; // viewer_presentation::BackgroundMode
+    float exposure = 1.0f;
+    // T21a appearance preferences. They are global user choices: opening a
+    // different model or applying a presentation preset never rewrites them.
+    // `backgroundColor` is packed 0xRRGGBB and persists even while another
+    // background mode is selected.
+    unsigned int backgroundColor = 0x001C1C1Eu;
+    bool groundHighlightEnabled = true;
+    // T16 contact shadow. Off on a fresh install; toggling the row in the "..."
+    // menu pins the choice (groundShadowOverridden) and persists it for later
+    // launches. Presets may still pick a per-document default until then.
+    bool groundShadowEnabled = false;
+    // True once the user toggled the shadow, so presets must not replace the
+    // saved choice on the next launch/document.
+    bool groundShadowOverridden = false;
+    // T32 screen-space AO. A global view preference; presets never rewrite it.
+    bool ambientOcclusionEnabled = true;
 
     // Future preferences are added here as additional flat fields with their
     // own defaults — see Settings.cpp for why this needs no migration step.

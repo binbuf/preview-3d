@@ -7,9 +7,9 @@
 // END-ISO-10303-21 structure, counts entity records/references/sections/
 // nesting and lexed bytes with checked arithmetic, rejects duplicate or
 // impossible entity identifiers and unterminated strings/comments, refuses
-// binary/XML/compressed encodings, and discovers external-document
-// declarations so the broker policy can be applied before any semantic
-// transfer. It never resolves a filesystem path, URL, or child process.
+// binary/XML/compressed encodings, and counts external-document declarations
+// (only as Part-21 instance names outside comments and strings) so the caller
+// can warn without ever resolving a filesystem path, URL, or child process.
 //
 // The production OCCT reader cannot be reached until this returns Ok.
 
@@ -37,7 +37,7 @@ enum class StepPreflightStatus : std::uint32_t {
     RecordLengthLimit = 8,
     StringLengthLimit = 9,
     SourceLimit = 10,
-    ExternalDocument = 11,  // declares required external STEP content
+    ExternalDocument = 11,  // too many declared external STEP documents
     ReadFailure = 12,
 };
 
@@ -52,7 +52,13 @@ struct StepPreflightLimits {
     std::uint32_t maxRecordBytes = 1u << 20; // 1 MiB
     std::uint32_t maxStringBytes = 1u << 20; // 1 MiB
     std::uint32_t maxDataSections = 4096;
-    std::uint32_t maxExternalDocuments = 0; // STEP-005 is a no-go; any is required-unsupported
+    // External-document declarations are counted from Part-21 instance names and
+    // are not a veto: the main document is still attempted and unresolved
+    // references become a compatibility warning. The cap only stops a file from
+    // declaring unbounded externals (each declaration is metadata, never a path
+    // the host opens). Consumers that still require self-contained input, such
+    // as the thumbnail provider, set this to zero explicitly.
+    std::uint32_t maxExternalDocuments = 64;
 };
 
 struct StepPreflightResult {

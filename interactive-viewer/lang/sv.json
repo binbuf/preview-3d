@@ -444,5 +444,14 @@
   "update.downloadFailed": "The update could not be downloaded. Please try again later.",
   "update.applyFailed": "The update could not be started. Please try again later.",
   "hud.updateDownloading": "Downloading update {0}...",
-  "hud.updateRestarting": "Restarting to install update {0}..."
+  "hud.updateRestarting": "Restarting to install update {0}...",
+  "presentation.title": "Presentation",
+  "presentation.preset": "Preset",
+  "presentation.sourceUpAxis": "Source up axis",
+  "presentation.sourceUnits": "Source units",
+  "presentation.upAxis.unknown": "Unknown",
+  "presentation.profile.default": "Default",
+  "presentation.profile.studioPbr": "Studio PBR",
+  "presentation.profile.studioCad": "Studio CAD",
+  "presentation.profile.pointCloud": "Point cloud"
 }

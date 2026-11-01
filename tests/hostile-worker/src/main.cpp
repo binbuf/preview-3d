@@ -64,6 +64,10 @@ int main(int argc, char* argv[])
         return hostile_worker::RunLieLayout();
     }
 
+    if (ArgEquals(argv[1], "--lie-line-topology")) {
+        return hostile_worker::RunLieLineTopology();
+    }
+
     if (ArgEquals(argv[1], "--texture-missing-root")) return hostile_worker::RunTextureAttack(0);
     if (ArgEquals(argv[1], "--texture-semantic-change")) return hostile_worker::RunTextureAttack(1);
     if (ArgEquals(argv[1], "--texture-repeat-refinement")) return hostile_worker::RunTextureAttack(2);
@@ -73,10 +77,18 @@ int main(int argc, char* argv[])
     if (ArgEquals(argv[1], "--status-count")) return hostile_worker::RunTextureAttack(6);
     if (ArgEquals(argv[1], "--status-reserved")) return hostile_worker::RunTextureAttack(7);
     if (ArgEquals(argv[1], "--status-duplicate")) return hostile_worker::RunTextureAttack(8);
+if (ArgEquals(argv[1], "--compat-count")) return hostile_worker::RunCompatibilityAttack(0);
+if (ArgEquals(argv[1], "--compat-size")) return hostile_worker::RunCompatibilityAttack(1);
+if (ArgEquals(argv[1], "--compat-severity")) return hostile_worker::RunCompatibilityAttack(2);
+if (ArgEquals(argv[1], "--compat-reserved")) return hostile_worker::RunCompatibilityAttack(3);
+if (ArgEquals(argv[1], "--compat-feature")) return hostile_worker::RunCompatibilityAttack(4);
+if (ArgEquals(argv[1], "--compat-padding")) return hostile_worker::RunCompatibilityAttack(5);
+if (ArgEquals(argv[1], "--compat-dependency")) return hostile_worker::RunCompatibilityAttack(6);
     if (ArgEquals(argv[1], "--catalog-forward")) return hostile_worker::RunCatalogBatches(0);
     if (ArgEquals(argv[1], "--catalog-wrong-image")) return hostile_worker::RunCatalogBatches(1);
     if (ArgEquals(argv[1], "--catalog-missing-image")) return hostile_worker::RunCatalogBatches(2);
     if (ArgEquals(argv[1], "--catalog-wrong-material")) return hostile_worker::RunCatalogBatches(3);
+    if (ArgEquals(argv[1], "--catalog-bad-material-lobes")) return hostile_worker::RunCatalogBatches(4);
     if (ArgEquals(argv[1], "--origin-nan")) return hostile_worker::RunMetadataAttack(0);
     if (ArgEquals(argv[1], "--origin-inf")) return hostile_worker::RunMetadataAttack(1);
     if (ArgEquals(argv[1], "--bounds-fabricated")) return hostile_worker::RunMetadataAttack(2);

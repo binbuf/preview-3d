@@ -167,12 +167,17 @@ TEST_CASE("STEP-008 admission gives every malformed or unsupported family a type
         {"top-level-omitted", Part21("#1=T('',,());\n"), StepPreflightStatus::Ok},
         {"nested-list-values", Part21("#1=T('',((0.,0.),(0.,0.)));\n"),
          StepPreflightStatus::Ok},
+        // T07: declarations are a bounded warning count, not an admission
+        // failure; only exceeding the configured cap is typed.
         {"external-file-population",
          Part21("#1=FILE_POPULATION(('AP214'),('x'),($),$);\n"),
-         StepPreflightStatus::ExternalDocument},
+         StepPreflightStatus::Ok},
         {"external-document-relative",
          Part21("#1=DOCUMENT_FILE('sub/other.stp',('AUTOMOTIVE_DESIGN'),'x',#2);\n"),
-         StepPreflightStatus::ExternalDocument},
+         StepPreflightStatus::Ok},
+        {"external-name-in-string",
+         Part21("#1=PRODUCT('FILE_POPULATION','DOCUMENT_FILE','',());\n"),
+         StepPreflightStatus::Ok},
     };
     for (const TypedCase& item : cases) {
         const auto result = Preflight(item.text);

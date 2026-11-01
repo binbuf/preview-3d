@@ -1,0 +1,77 @@
+{
+  "task": "T23",
+  "schema": 1,
+  "description": "Texture-budget accounting and complete-load readiness. Adds the generated reused-image fixture, counts resident model textures, holds the microscope past its former late-ResourceLimit window, and records Camera/Car non-regression captures.",
+  "viewport": {"width": 1280, "height": 860, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 1.0},
+    "oblique": {"yawDegrees": 30.0, "pitchDegrees": 60.0, "distanceScale": 1.0}
+  },
+  "regions": {
+    "texture-reuse": {
+      "sphere": [0.25, 0.2, 0.75, 0.8]
+    },
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "paint": [0.34, 0.55, 0.72, 0.9]
+    },
+    "camera": {
+      "lens": [0.33, 0.22, 0.68, 0.7],
+      "black-body": [0.18, 0.45, 0.55, 0.92]
+    },
+    "microscope": {
+      "brass": [0.3, 0.3, 0.7, 0.75]
+    }
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "texture-reuse", "modes": ["studio"], "views": ["front"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "microscope", "modes": ["studio"], "views": ["front"]},
+        {"id": "camera", "modes": ["studio"], "views": ["front"]},
+        {"id": "car", "modes": ["studio"], "views": ["front"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "car-glass-order-depth",
+      "assets": ["car"],
+      "description": "Car windshield/side glass ordering and tint stay T26/T27 work; T23 only requires a complete, settled, error-free load.",
+      "label": "limitation",
+      "assignedTo": "T26/T27"
+    },
+    {
+      "id": "mobile-gpu-budget",
+      "assets": ["microscope"],
+      "description": "The 2048px texture set fits this workstation's detail target comfortably. A lower GPU target may still shed detail; that is a bounded degradation, not a terminal ResourceLimit.",
+      "label": "limitation",
+      "assignedTo": "T34/T35"
+    }
+  ]
+}

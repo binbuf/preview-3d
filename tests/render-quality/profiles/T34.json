@@ -1,0 +1,202 @@
+{
+  "task": "T34",
+  "schema": 1,
+  "description": "Complete corpus, cross-format and hostile-input render qualification. Every local-corpus root entry is captured for Studio/Clay/Directional at front/oblique/grazing views (with targeted close-ups and an orbit for the required regions) or receives an explicit typed disposition. Portable FBX/USD/3MF/OBJ/STEP fixtures add committed cross-format coverage; the lane also exercises lifecycle, Debug-only control isolation, parser/codec dependency closure and measured pass cost.",
+  "viewport": {"width": 1280, "height": 860, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0},
+    {"id": "clay", "lighting": 1},
+    {"id": "directional", "lighting": 2}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 1.0},
+    "oblique": {"yawDegrees": 30.0, "pitchDegrees": 60.0, "distanceScale": 1.0},
+    "grazing": {"yawDegrees": 72.0, "pitchDegrees": 18.0, "distanceScale": 1.0},
+    "window": {"yawDegrees": 18.0, "pitchDegrees": 70.0, "distanceScale": 0.48},
+    "lens": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 0.42},
+    "lettering": {"yawDegrees": 8.0, "pitchDegrees": 72.5, "distanceScale": 0.95},
+    "detail": {"yawDegrees": 20.0, "pitchDegrees": 62.0, "distanceScale": 0.55}
+  },
+  "orbit": [
+    {"id": "000", "yawDegrees": 0.0, "pitchDegrees": 75.0, "distanceScale": 1.0},
+    {"id": "090", "yawDegrees": 90.0, "pitchDegrees": 75.0, "distanceScale": 1.0},
+    {"id": "180", "yawDegrees": 180.0, "pitchDegrees": 75.0, "distanceScale": 1.0},
+    {"id": "270", "yawDegrees": 270.0, "pitchDegrees": 75.0, "distanceScale": 1.0}
+  ],
+  "regions": {
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "side-window": [0.02, 0.28, 0.4, 0.7],
+      "paint": [0.34, 0.55, 0.72, 0.9]
+    },
+    "camera": {
+      "lens": [0.33, 0.22, 0.68, 0.7],
+      "lettering": [0.55, 0.36, 0.80, 0.60],
+      "black-body": [0.18, 0.45, 0.55, 0.92],
+      "strap": [0.55, 0.25, 0.9, 0.85]
+    },
+    "microscope": {
+      "brass": [0.3, 0.16, 0.68, 0.5],
+      "enamel": [0.18, 0.45, 0.6, 0.9]
+    },
+    "stl": {"box": [0.2, 0.15, 0.8, 0.9]}
+  },
+  "mandatoryRegions": {
+    "car": {"windshield": [0.28, 0.16, 0.72, 0.58],
+            "paint": [0.34, 0.55, 0.72, 0.9]},
+    "camera": {"lens": [0.33, 0.22, 0.68, 0.7],
+               "lettering": [0.55, 0.36, 0.80, 0.60]}
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "textured-obj", "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"]},
+        {"id": "step-assembly", "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique"]},
+        {"id": "stl-box", "modes": ["studio", "clay", "directional"],
+         "views": ["front", "grazing"]}
+      ]
+    },
+    "external": {
+      "required": true,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "maxEntryBytes": 33554432,
+      "assets": [
+        {"id": "car", "rootName": "Car.glb", "family": "glb",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "closeups": ["window"],
+         "orbit": true, "allowFailureDisposition": true},
+        {"id": "camera", "rootName": "Camera_01_4k.gltf", "family": "gltf",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "closeups": ["lens", "lettering"],
+         "allowFailureDisposition": true},
+        {"id": "microscope", "rootName": "vintage_microscope_4k.gltf", "family": "gltf",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "closeups": ["detail"],
+         "allowFailureDisposition": true},
+        {"id": "suit", "rootName": "Advanced Crew Escape Suit.glb", "family": "glb",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "apollo", "rootName": "Apollo Lunar Module.glb", "family": "glb",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "dish", "rootName": "70 meter dish.glb", "family": "glb",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "ace", "rootName": "Advanced Composition Explorer.glb", "family": "glb",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "d57", "rootName": "d57dc95e-f972-57fe.glb", "family": "glb",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "nba", "rootName": "NBA Wilson Official Game basketball 2023", "family": "glb",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "stl-base", "rootName": "base.stl", "family": "stl",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "stl-lid", "rootName": "lid.stl", "family": "stl",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "stl-cartridge", "rootName": "cartridge.stl", "family": "stl",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "tinker", "rootName": "tinker.obj", "family": "obj",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "house", "rootName": "House.usdz", "family": "usdz",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "kimono", "rootName": "Japanese_Kimono_V1.usdz", "family": "usdz",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "choco", "rootName": "choco-bunny", "family": "fbx",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "food", "rootName": "food-collection-game-ready", "family": "fbx",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "lioness", "rootName": "lioness-realistic-3d-model-demo-free", "family": "fbx",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "mint", "rootName": "mint-swimsuit-animated-neverness-to-everness", "family": "fbx",
+         "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "grazing"], "allowFailureDisposition": true},
+        {"id": "backrooms", "rootName": "backrooms-vr", "family": "glb",
+         "modes": ["studio"], "views": ["front"], "maxEntryBytes": 1,
+         "allowFailureDisposition": true},
+        {"id": "honda", "rootName": "free-honda-e-detailed-interior-2021", "family": "fbx",
+         "modes": ["studio"], "views": ["front"], "maxEntryBytes": 1,
+         "allowFailureDisposition": true},
+        {"id": "ram", "rootName": "RAM+OBJ.obj", "family": "obj",
+         "modes": ["studio"], "views": ["front"], "maxEntryBytes": 1,
+         "allowFailureDisposition": true},
+        {"id": "space-ship", "rootName": "space_ship.glb", "family": "glb",
+         "modes": ["studio"], "views": ["front"], "maxEntryBytes": 1,
+         "allowFailureDisposition": true},
+        {"id": "voron", "rootName": "Voron_2.4r2_Assembly.step", "family": "step",
+         "modes": ["studio"], "views": ["front"], "maxEntryBytes": 1,
+         "allowFailureDisposition": true}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": ["car", "camera"],
+        "configurations": ["shipped-preset", "controlled"]
+      }
+    }
+  },
+  "dispositions": {
+    "backrooms-vr": {"family": "glb", "disposition": "resource-budget",
+      "reason": "86.8 MiB source GLB exceeds the 32 MiB local render-matrix cap; it is exercised by the import corpus, not the render lane."},
+    "free-honda-e-detailed-interior-2021": {"family": "fbx", "disposition": "resource-budget",
+      "reason": "58.5 MiB FBX exceeds the local render-matrix cap."},
+    "RAM+OBJ.obj": {"family": "obj", "disposition": "resource-budget",
+      "reason": "214.4 MiB OBJ exceeds the local render-matrix cap; the portable textured OBJ fixture covers OBJ/MTL rendering."},
+    "space_ship.glb": {"family": "glb", "disposition": "resource-budget",
+      "reason": "127.6 MiB GLB exceeds the local render-matrix cap."},
+    "Voron_2.4r2_Assembly.step": {"family": "step", "disposition": "resource-budget",
+      "reason": "241.5 MiB AP214 STEP assembly exceeds the local render-matrix cap and the STEP host's measured time budget; the checked-in STEP assembly fixture is captured in all three modes."}
+  },
+  "knownDefects": [
+    {
+      "id": "car-authored-window-speckle",
+      "assets": ["car"],
+      "description": "Small bright speckles along authored Car window/trim seams remain an authored/edge defect carried from T20-T33. T34 records them in the review; it does not hide them with exposure or material-name exceptions.",
+      "label": "known-defect",
+      "assignedTo": "T35"
+    },
+    {
+      "id": "camera-lens-lettering",
+      "assets": ["camera"],
+      "description": "Camera lens and ring lettering are mandatory paired review regions; the dark lens must keep reflection/depth and must not become a pale disk.",
+      "label": "nonregression",
+      "assignedTo": "T34/T35"
+    },
+    {
+      "id": "f3d-reference-condition",
+      "assets": ["car", "camera"],
+      "description": "Installed F3D 3.5.0 is a qualitative reference. Its shipped preset is DPI-aware (different physical resolution) and its gray Camera lens is not an accepted target.",
+      "label": "limitation",
+      "assignedTo": "T35"
+    },
+    {
+      "id": "local-corpus-restricted",
+      "assets": ["all"],
+      "description": "External models/screenshots are local evidence only. No restricted model or screenshot is committed; portable coverage uses in-repository generated/licensed fixtures.",
+      "label": "limitation",
+      "assignedTo": "T35"
+    }
+  ]
+}

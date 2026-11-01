@@ -1,0 +1,84 @@
+{
+  "task": "T27",
+  "schema": 1,
+  "description": "Scene-color transmission and tinted/rough glass. A generated fixture places neutral, tinted, dark, rough, IOR=1, OPAQUE-transmissive, BLEND-coverage and MASK-cutout glass over a high-frequency opaque checker and an actual interior box, with a two-layer overlap and a double-sided thin plane. The focused lane checks independent coverage/tint/transmission numeric invariants, roughness filtering, OPAQUE pass routing, order-stable multi-layer sampling, resize/device-loss/allocation-failure behaviour, and the Car windshield/Camera lens/Suit suppression rubric.",
+  "viewport": {"width": 1280, "height": 900, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0},
+    {"id": "directional", "lighting": 2}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 1.55},
+    "oblique": {"yawDegrees": 22.0, "pitchDegrees": 72.0, "distanceScale": 1.55}
+  },
+  "regions": {
+    "transmission-glass": {
+      "checker": [0.1, 0.2, 0.9, 0.85],
+      "interior": [0.45, 0.55, 0.7, 0.85]
+    },
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "paint": [0.34, 0.55, 0.72, 0.9]
+    },
+    "camera": {
+      "lens": [0.33, 0.22, 0.68, 0.7],
+      "black-body": [0.18, 0.45, 0.55, 0.92]
+    }
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "transmission-glass", "modes": ["studio", "directional"],
+         "views": ["front", "oblique"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "car", "modes": ["studio"], "views": ["front", "oblique"]},
+        {"id": "camera", "modes": ["studio"], "views": ["front"]},
+        {"id": "suit", "modes": ["studio"], "views": ["front"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "transmission-is-thin-surface-screen-space",
+      "assets": ["transmission-glass", "car", "camera"],
+      "description": "Transmission samples the finished opaque scene at the fragment's own screen position through a bounded mip pyramid. It does not refract, does not see other transmissive layers (the two-layer fixture defines that sampling order), does not contain offscreen content and never invents volume thickness. KHR_materials_volume absorption/refraction stays an explicit compatibility degradation.",
+      "label": "limitation",
+      "assignedTo": "T27"
+    },
+    {
+      "id": "double-sided-transmissive-single-plane",
+      "assets": ["transmission-glass"],
+      "description": "A double-sided transmissive surface shades whichever authored face the camera sees, so a single authored plane is one thin interface and stays visible from both sides. A closed shell contributes its two surfaces as two bounded thin interfaces to the OIT composite; no volume thickness is fabricated.",
+      "label": "limitation",
+      "assignedTo": "T27"
+    },
+    {
+      "id": "weighted-oit-is-approximate",
+      "assets": ["transmission-glass", "car", "camera"],
+      "description": "T26 weighted blended OIT resolves a weighted colour average, not an exact front-to-back stack. T27 keeps that composite and adds transmitted radiance; beyond eight layers the result remains stable but is not exact.",
+      "label": "limitation",
+      "assignedTo": "T26"
+    }
+  ]
+}

@@ -9,7 +9,11 @@
 
 namespace import_worker {
 
-enum class TextureSemantic { Color, Data, Normal, Emissive };
+// ColorCoverage is the base-color map, whose alpha is authored MASK/BLEND
+// coverage. Other sRGB color maps (sheen/specular color) keep a plain linear
+// average even when their unused alpha channel is zero.
+enum class TextureSemantic {
+    Color, Data, Normal, Emissive, MetallicRoughness, ColorCoverage };
 
 struct TextureDecodeOptions {
     // Aggregate encoded (compressed source) bytes read for one generation's
@@ -27,6 +31,19 @@ struct TextureDecodeOptions {
 
 // In-place tightly packed RGBA chain. Each output tile is at most 64x64;
 // cancellation is checked before allocation and between tiles, never per image.
+//
+// T33 semantic-aware reduction:
+//  * Color/Emissive are averaged in linear light. The base-color map
+//    (ColorCoverage) is additionally alpha-weighted, so a transparent texel
+//    cannot bleed its arbitrary RGB into a MASK cutout edge. The alpha channel
+//    itself is a plain area average, which preserves the covered fraction of a
+//    cutout with distance.
+//  * Normal mips average the decoded tangent-space vectors and renormalize.
+//  * MetallicRoughness averages the green roughness channel in squared
+//    perceptual-roughness (GGX alpha) space and converts back to roughness.
+//    That preserves the highlight variance that caused sub-pixel sparkle
+//    instead of artificially smoothing every material's authored roughness.
+//  * Data (AO, masks, factors) and the metallic-blue channel stay linear.
 inline bool GenerateRasterMips(std::vector<std::byte>& pixels, uint32_t width, uint32_t height,
                                model_core::ColorSpaceId space, const TextureDecodeOptions& options,
                                uint32_t& levels)
@@ -36,6 +53,8 @@ inline bool GenerateRasterMips(std::vector<std::byte>& pixels, uint32_t width, u
     const auto base = model_core::ComputeImagePixelBytes(model_core::PixelFormatId::RGBA8_UNORM, width, height, 1);
     if (options.Cancelled() || !bytes || !base || pixels.size() != *base || *bytes > options.maxDecodedBytes) return false;
     pixels.resize(static_cast<size_t>(*bytes));
+    const bool alphaWeighted = options.semantic == TextureSemantic::ColorCoverage;
+    const bool roughnessVariance = options.semantic == TextureSemantic::MetallicRoughness;
     size_t sourceOffset = 0, targetOffset = static_cast<size_t>(*base);
     for (uint32_t level = 1; level < levels; ++level) {
         const uint32_t nextW = (std::max)(1u, width/2), nextH = (std::max)(1u, height/2);
@@ -49,21 +68,44 @@ inline bool GenerateRasterMips(std::vector<std::byte>& pixels, uint32_t width, u
                         const uint32_t x0 = x*width/nextW, x1 = (x+1)*width/nextW;
                         const uint32_t y0 = y*height/nextH, y1 = (y+1)*height/nextH;
                         for (uint32_t sy=y0; sy<y1; ++sy) for (uint32_t sx=x0; sx<x1; ++sx) {
+                            float sample[4]{};
                             for (unsigned c=0; c<4; ++c) {
                                 float v = float(std::to_integer<uint8_t>(pixels[sourceOffset+(size_t(sy)*width+sx)*4+c]))/255.0f;
                                 if (space == model_core::ColorSpaceId::Srgb && c<3)
                                     v = v <= 0.04045f ? v/12.92f : std::pow((v+0.055f)/1.055f,2.4f);
-                                sum[c] += v;
+                                sample[c] = v;
                             }
+                            if (alphaWeighted) {
+                                // Coverage-weighted colour: a transparent texel
+                                // contributes no colour, so cutout edges do not
+                                // gain a dark/coloured fringe.
+                                const float alpha = sample[3];
+                                for (unsigned c=0; c<3; ++c) sample[c] *= alpha;
+                            }
+                            if (roughnessVariance) {
+                                // Preserve GGX alpha variance (r^2) rather than
+                                // the mean perceptual roughness.
+                                sample[1] *= sample[1];
+                            }
+                            for (unsigned c=0; c<4; ++c) sum[c] += sample[c];
                         }
-                        for (float& v : sum) v /= float((x1-x0)*(y1-y0));
+                        const float texels = float((x1-x0)*(y1-y0));
+                        for (float& v : sum) v /= texels;
+                        if (alphaWeighted) {
+                            const float alpha = sum[3];
+                            for (unsigned c=0; c<3; ++c)
+                                sum[c] = alpha > 1e-5f ? std::clamp(sum[c]/alpha,0.0f,1.0f) : 0.0f;
+                        }
+                        if (roughnessVariance && options.semantic == TextureSemantic::MetallicRoughness) {
+                            sum[1] = std::sqrt(std::clamp(sum[1],0.0f,1.0f));
+                        }
                         if (options.semantic == TextureSemantic::Normal) {
                             float n[3]{sum[0]*2-1,sum[1]*2-1,sum[2]*2-1};
                             const float length = std::sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
                             for (unsigned c=0;c<3;++c) sum[c] = length>1e-6f ? n[c]/length*0.5f+0.5f : (c==2 ? 1.0f : 0.5f);
                         }
                         for (unsigned c=0;c<4;++c) {
-                            float v=sum[c];
+                            float v=std::clamp(sum[c],0.0f,1.0f);
                             if (space == model_core::ColorSpaceId::Srgb && c<3)
                                 v = v<=0.0031308f ? v*12.92f : 1.055f*std::pow(v,1.0f/2.4f)-0.055f;
                             pixels[targetOffset+(size_t(y)*nextW+x)*4+c] = std::byte(uint8_t(std::clamp(std::lround(v*255),0l,255l)));

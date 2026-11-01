@@ -1,0 +1,102 @@
+{
+  "configuration": "Debug",
+  "screenshots": {
+    "preset-studio-pbr.png": [
+      1258,
+      849
+    ],
+    "preset-studio-cad.png": [
+      1258,
+      849
+    ],
+    "preset-scan-sculpt.png": [
+      1258,
+      849
+    ],
+    "preset-transparent.png": [
+      1258,
+      849
+    ],
+    "preset-point-cloud.png": [
+      1258,
+      849
+    ],
+    "transparent-asset.png": [
+      1258,
+      849
+    ]
+  },
+  "mae": {
+    "studio-pbr-vs-studio-cad": 0.020201439950980393,
+    "studio-pbr-vs-scan-sculpt": 0.11498736213235294,
+    "studio-pbr-vs-transparent": 0.05188610600490196,
+    "studio-pbr-vs-point-cloud": 0.0045486749387254905,
+    "studio-pbr-vs-transparent-asset": 0.08022077971813725,
+    "studio-cad-vs-scan-sculpt": 0.13278186274509804,
+    "studio-cad-vs-transparent": 0.07141416462418301,
+    "studio-cad-vs-point-cloud": 0.022360409007352942,
+    "studio-cad-vs-transparent-asset": 0.07549434487336601,
+    "scan-sculpt-vs-transparent": 0.07996961805555557,
+    "scan-sculpt-vs-point-cloud": 0.11611168555964052,
+    "scan-sculpt-vs-transparent-asset": 0.10066284977532679,
+    "transparent-vs-point-cloud": 0.05466930912990196,
+    "transparent-vs-transparent-asset": 0.029911854064542484,
+    "point-cloud-vs-transparent-asset": 0.07945389093137255
+  },
+  "ssim": {
+    "studio-pbr-vs-studio-cad": 0.7958870883770188,
+    "studio-pbr-vs-scan-sculpt": 0.8144837261224767,
+    "studio-pbr-vs-transparent": 0.8642185666778173,
+    "studio-pbr-vs-point-cloud": 0.9911976300191921,
+    "studio-pbr-vs-transparent-asset": 0.48376308171113125,
+    "studio-cad-vs-scan-sculpt": 0.5818606652895841,
+    "studio-cad-vs-transparent": 0.6730257818193163,
+    "studio-cad-vs-point-cloud": 0.7562824360519927,
+    "studio-cad-vs-transparent-asset": 0.5705270947452469,
+    "scan-sculpt-vs-transparent": 0.8221106834645345,
+    "scan-sculpt-vs-point-cloud": 0.824944660051515,
+    "scan-sculpt-vs-transparent-asset": 0.5330818664048995,
+    "transparent-vs-point-cloud": 0.8611258013550718,
+    "transparent-vs-transparent-asset": 0.6884332586086501,
+    "point-cloud-vs-transparent-asset": 0.48304274162082705
+  },
+  "golden": {
+    "studio-pbr": {
+      "mae": 0.0,
+      "ssim": 1.0
+    },
+    "studio-cad": {
+      "mae": 0.0,
+      "ssim": 1.0
+    },
+    "scan-sculpt": {
+      "mae": 0.0,
+      "ssim": 1.0
+    },
+    "transparent": {
+      "mae": 0.0,
+      "ssim": 1.0
+    },
+    "point-cloud": {
+      "mae": 0.0,
+      "ssim": 1.0
+    },
+    "transparent-asset": {
+      "mae": 3.1913807189542485e-05,
+      "ssim": 0.9998509865924529
+    }
+  },
+  "tolerances": {
+    "mae": 0.06,
+    "ssim": 0.9
+  },
+  "failure": null,
+  "performance": {
+    "mean_frame_ms": 43.01703529411763,
+    "p95_frame_ms": 300.1246,
+    "accounted_gpu_bytes": 37224448,
+    "private_bytes": 632061952,
+    "presented_frames": 120
+  },
+  "diagnostics": ""
+}

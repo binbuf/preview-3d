@@ -46,6 +46,11 @@ int RunLieOffset();
 // guessing a stride.
 int RunLieLayout();
 
+// T17: a structurally honest LineList chunk with an odd index count. Proves
+// the validator rejects a half segment instead of truncating or reinterpreting
+// it as triangles/points.
+int RunLieLineTopology();
+
 // ---------------------------------------------------------------------------
 // Progressive delivery (ChunkBatchReady/ChunkBatchConsumed).
 //
@@ -68,6 +73,10 @@ int RunLieLayout();
 int RunHonestBatches();
 int RunCatalogBatches(int mode);
 int RunTextureAttack(int mode);
+// CompatibilityReport chunk attacks: over-cap record count, truncated size,
+// out-of-range severity, nonzero reserved byte, unknown feature ID, nonzero
+// padding, and a declared dependency.
+int RunCompatibilityAttack(int mode);
 int RunMetadataAttack(int mode);
 // Protocol-v10 scene-record attacks: invalid parent, cycle, non-finite
 // transforms, topology/reference lies, duplicate/oversized catalogs, a late

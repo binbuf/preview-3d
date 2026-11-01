@@ -2,6 +2,7 @@
 
 #include "Model.h"
 #include "GroundAxis.h"
+#include "model_core/FormatCatalog.h"
 
 #include <cstdint>
 #include <string>
@@ -34,7 +35,8 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
     model_core::SourceFormatId format = model_core::SourceFormatId::Gltf, const double* dimensions = nullptr);
 
 std::vector<InfoPanelSection> BuildInfoPanelSections(
-    const ModelData& metadata, bool showNativeOrientation, GroundAxis groundAxis = GroundAxis::Automatic);
+    const ModelData& metadata, bool showNativeOrientation, GroundAxis groundAxis = GroundAxis::Automatic,
+    model_core::PresentationProfile preset = model_core::PresentationProfile::Default);
 
 // Fixed-width panel docked to the right edge of the viewport, below the title
 // bar and above the bottom bar.

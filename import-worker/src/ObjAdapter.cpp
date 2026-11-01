@@ -2,6 +2,10 @@
 
 #include "BoundedChunkWriter.h"
 #include "ImageFormatSniff.h"
+#include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
+#include "TgaImageDecode.h"
 #include "SidecarFileClient.h"
 #include "TextureTranscodeAdapter.h"
 #include "UfbxMaterialConversion.h"
@@ -15,7 +19,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -218,6 +224,26 @@ std::optional<DecodedImage> DecodeTexture(BrokerContext& context, const ufbx_tex
             image.pixels = std::move(decoded->pixelBytes);
         }
         break;
+    case SniffedImageFormat::Tga:
+    case SniffedImageFormat::Dds:
+        if (auto decoded = SniffImageFormat(encoded) == SniffedImageFormat::Tga
+                ? DecodeTgaImage(encoded, space, options)
+                : DecodeDdsImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = space;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Hdr:
+    case SniffedImageFormat::Exr:
+        if (auto decoded = SniffImageFormat(encoded) == SniffedImageFormat::Hdr
+                ? DecodeRadianceHdrImage(encoded, space, options)
+                : DecodeOpenExrImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = space;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
     case SniffedImageFormat::WebP:
         if (auto decoded = DecodeWebpImage(encoded, space, options)) {
             image.format = decoded->pixelFormat; image.space = decoded->colorSpace;
@@ -282,15 +308,21 @@ uint32_t ResolveImage(BoundedChunkWriter& writer, BrokerContext& context,
         if (context.error != ImportErrorCode::None) return 0;
         DecodedImage fallback;
         fallback.format = PixelFormatId::RGBA8_UNORM; fallback.space = space;
-        fallback.width = fallback.height = semantic == TextureSemantic::Color ? 2u : 1u;
+        const bool colorCoverage = semantic == TextureSemantic::Color
+            || semantic == TextureSemantic::ColorCoverage;
+        fallback.width = fallback.height = colorCoverage ? 2u : 1u;
         fallback.levels = 1; fallback.pixels.resize(size_t(fallback.width) * fallback.height * 4, std::byte{255});
-        if (semantic == TextureSemantic::Color) {
+        if (colorCoverage) {
             for (unsigned i = 0; i < 4; ++i) for (unsigned c = 0; c < 3; ++c)
                 fallback.pixels[i * 4 + c] = std::byte((i == 0 || i == 3) ? 64 : 192);
         } else if (semantic == TextureSemantic::Normal) {
             fallback.pixels[0] = fallback.pixels[1] = std::byte{128};
         } else if (semantic == TextureSemantic::Emissive) {
             fallback.pixels[0] = fallback.pixels[1] = fallback.pixels[2] = std::byte{0};
+        } else if (semantic == TextureSemantic::MetallicRoughness) {
+            // Neutral fallback: opaque, fully rough, non-metal.
+            fallback.pixels[1] = std::byte{255};
+            fallback.pixels[2] = std::byte{0};
         }
         image = std::move(fallback);
     }
@@ -314,10 +346,10 @@ bool EmitMaterials(const ufbx_scene& scene, BoundedChunkWriter& writer, BrokerCo
         const ufbx_texture* roughness = MapTexture(material->pbr.roughness);
         const ufbx_texture* metalness = MapTexture(material->pbr.metalness);
         uint32_t images[4]{};
-        images[0] = ResolveImage(writer, context, base, ColorSpaceId::Srgb, TextureSemantic::Color, imageIds);
+        images[0] = ResolveImage(writer, context, base, ColorSpaceId::Srgb, TextureSemantic::ColorCoverage, imageIds);
         if (context.error != ImportErrorCode::None || (base && !images[0])) return false;
         if (roughness && roughness == metalness) {
-            images[1] = ResolveImage(writer, context, roughness, ColorSpaceId::Linear, TextureSemantic::Data, imageIds);
+            images[1] = ResolveImage(writer, context, roughness, ColorSpaceId::Linear, TextureSemantic::MetallicRoughness, imageIds);
             if (context.error != ImportErrorCode::None || !images[1]) return false;
         } else if (roughness || metalness) {
             // The normalized wire format has one packed metallic/roughness slot.
@@ -342,6 +374,161 @@ bool EmitMaterials(const ufbx_scene& scene, BoundedChunkWriter& writer, BrokerCo
         if (!writer.Add(descriptor, ChunkBytes(payload))) return false;
         materialIds.emplace(material, descriptor.chunkId);
     }
+    return true;
+}
+
+// ufbx materializes OBJ faces only; the OBJ `l` and `p` elements are not
+// exposed through its scene. T17 therefore scans the bounded text source
+// directly when no triangle geometry exists, producing the same LineList /
+// PointList wire records the normalized adapters emit. The scan is
+// deterministic, ignores everything but `v`/`l`/`p`, and never allocates more
+// than the Tier B vertex/index budgets.
+bool ParseObjScalar(const char*& cursor, const char* end, double& value)
+{
+    while (cursor < end && (*cursor == ' ' || *cursor == '\t')) ++cursor;
+    if (cursor >= end) return false;
+    char* parsedEnd = nullptr;
+    const std::string token(cursor, end);
+    value = std::strtod(token.c_str(), &parsedEnd);
+    if (parsedEnd == token.c_str() || !std::isfinite(value)) return false;
+    cursor += parsedEnd - token.c_str();
+    return true;
+}
+
+// Returns true when a token was consumed. `malformed` distinguishes a real
+// syntax/range fault from the normal end-of-line case, so a `p`/`l` element
+// can fail typed rather than silently collapsing to EmptyGeometry.
+bool ParseObjVertexIndex(const char*& cursor, const char* end, size_t vertexCount,
+                         uint32_t& index, bool& malformed)
+{
+    while (cursor < end && (*cursor == ' ' || *cursor == '\t')) ++cursor;
+    if (cursor >= end) return false;
+    bool negative = false;
+    if (*cursor == '-') { negative = true; ++cursor; }
+    else if (*cursor == '+') ++cursor;
+    uint64_t value = 0;
+    bool digits = false;
+    while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+        digits = true;
+        value = value * 10 + uint64_t(*cursor - '0');
+        if (value > uint64_t(kTierBIndexLimit)) { malformed = true; return false; }
+        ++cursor;
+    }
+    if (!digits || !value) { malformed = true; return false; }
+    // Anything after the vertex token (a /vt /vn suffix) belongs to the same
+    // element; the wire carries positions only.
+    while (cursor < end && *cursor != ' ' && *cursor != '\t') ++cursor;
+    if (negative) {
+        if (uint64_t(value) > vertexCount) { malformed = true; return false; }
+        index = uint32_t(vertexCount - uint64_t(value));
+    } else {
+        if (value > vertexCount) { malformed = true; return false; }
+        index = uint32_t(value - 1);
+    }
+    return true;
+}
+
+bool EmitObjLinePointGeometry(std::span<const std::byte> sourceBytes, BoundedChunkWriter& writer,
+                              BrokerContext& context)
+{
+    std::vector<float> positions; // 3 floats per `v`
+    std::vector<uint32_t> segments; // pairs
+    std::vector<uint32_t> points;
+    const char* cursor = reinterpret_cast<const char*>(sourceBytes.data());
+    const char* const end = cursor + sourceBytes.size();
+    while (cursor < end) {
+        if (context.textureOptions->Cancelled()) { context.error = ImportErrorCode::Cancelled; return false; }
+        const char* lineEnd = cursor;
+        while (lineEnd < end && *lineEnd != '\n') ++lineEnd;
+        const char* p = cursor;
+        while (p < lineEnd && (*p == ' ' || *p == '\t')) ++p;
+        if (p + 1 < lineEnd && (p[1] == ' ' || p[1] == '\t')) {
+            if (*p == 'v') {
+                const char* token = p + 1;
+                double xyz[3]{};
+                if (!ParseObjScalar(token, lineEnd, xyz[0]) || !ParseObjScalar(token, lineEnd, xyz[1])
+                    || !ParseObjScalar(token, lineEnd, xyz[2]))
+                    { context.error = ImportErrorCode::MalformedData; return false; }
+                const size_t vertexCount = positions.size() / 3;
+                if (vertexCount >= kTierBVertexLimit) { context.error = ImportErrorCode::ResourceLimit; return false; }
+                for (double value : xyz) {
+                    if (std::abs(value) > 1e30) { context.error = ImportErrorCode::ResourceLimit; return false; }
+                    positions.push_back(float(value));
+                }
+            } else if (*p == 'l' || *p == 'p') {
+                const bool isLine = *p == 'l';
+                const size_t vertexCount = positions.size() / 3;
+                const char* token = p + 1;
+                std::vector<uint32_t> indices;
+                uint32_t index = 0;
+                bool malformed = false;
+                while (ParseObjVertexIndex(token, lineEnd, vertexCount, index, malformed))
+                    indices.push_back(index);
+                while (token < lineEnd && (*token == ' ' || *token == '\t')) ++token;
+                if (malformed || token < lineEnd) {
+                    context.error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+                // `l` needs at least one segment; `p` needs at least one point.
+                if (indices.size() < (isLine ? 2u : 1u)) {
+                    context.error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+                if (isLine) {
+                    for (size_t i = 0; i + 1 < indices.size(); ++i) {
+                        segments.push_back(indices[i]); segments.push_back(indices[i + 1]);
+                        if (segments.size() > kTierBIndexLimit) { context.error = ImportErrorCode::ResourceLimit; return false; }
+                    }
+                } else {
+                    points.insert(points.end(), indices.begin(), indices.end());
+                    if (points.size() > kTierBVertexLimit) { context.error = ImportErrorCode::ResourceLimit; return false; }
+                }
+            }
+        }
+        cursor = lineEnd < end ? lineEnd + 1 : end;
+    }
+    if (segments.empty() && points.empty()) return false;
+
+    const uint64_t maxIndices = uint64_t(kChunkTriangles) * 3;
+    auto emit = [&](const std::vector<uint32_t>& source, ChunkTopology topology, uint64_t max) {
+        size_t emitted = 0;
+        while (emitted < source.size()) {
+            const size_t count = size_t((std::min)(uint64_t(source.size() - emitted), max));
+            std::vector<VertexPositionOnlyF32> vertices;
+            std::vector<uint32_t> indices;
+            std::unordered_map<uint32_t, uint32_t> remap;
+            for (size_t i = 0; i < count; ++i) {
+                const uint32_t sourceIndex = source[emitted + i];
+                auto [it, inserted] = remap.emplace(sourceIndex, uint32_t(vertices.size()));
+                if (inserted) {
+                    const size_t offset = size_t(sourceIndex) * 3;
+                    if (offset + 2 >= positions.size()) { context.error = ImportErrorCode::MalformedData; return false; }
+                    vertices.push_back(VertexPositionOnlyF32{positions[offset], positions[offset + 1], positions[offset + 2]});
+                }
+                if (topology != ChunkTopology::PointList) indices.push_back(it->second);
+            }
+            ChunkDescriptor descriptor{};
+            descriptor.topology = topology;
+            descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionOnly_F32);
+            descriptor.vertexCount = uint32_t(vertices.size());
+            descriptor.indexCount = uint32_t(indices.size());
+            descriptor.chunkId = writer.NextId();
+            descriptor.boundsState = BoundsState::Verified;
+            descriptor.sourceRangeOffset = emitted;
+            descriptor.sourceRangeLength = topology == ChunkTopology::PointList
+                ? descriptor.vertexCount : descriptor.indexCount;
+            if (!SetLocalBounds(descriptor, ChunkBytes(vertices))) {
+                context.error = ImportErrorCode::MalformedData; return false;
+            }
+            if (!writer.Add(descriptor, ChunkBytes(vertices), ChunkBytes(indices))) {
+                context.error = writer.Error(); return false;
+            }
+            emitted += count;
+        }
+        return true;
+    };
+    if (!segments.empty() && !emit(segments, ChunkTopology::LineList, maxIndices & ~uint64_t(1))) return false;
+    if (!points.empty() && !emit(points, ChunkTopology::PointList, kChunkPoints)) return false;
     return true;
 }
 
@@ -547,7 +734,24 @@ std::variant<ObjImportResult, ImportErrorCode> ImportObj(
     ufbx_error loadError{};
     ScenePtr scene(ufbx_load_memory(sourceBytes.data(), sourceBytes.size(), &options, &loadError));
     if (context.error != ImportErrorCode::None) return context.error;
-    if (!scene) return MapLoadError(loadError);
+    if (!scene) {
+        const ImportErrorCode loadCode = MapLoadError(loadError);
+        // A document containing only `v`/`l`/`p` elements may have no mesh at
+        // all. Try the bounded line/point scan before declaring it empty.
+        if (loadCode != ImportErrorCode::EmptyGeometry && loadCode != ImportErrorCode::MalformedData)
+            return loadCode;
+        SceneMetadata metadata{};
+        metadata.generationId = generationId;
+        metadata.format = SourceFormatId::Obj;
+        metadata.upAxis = UpAxisId::Y;
+        BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
+        if (!EmitObjLinePointGeometry(sourceBytes, writer, context)) {
+            if (context.error == ImportErrorCode::None) context.error = ImportErrorCode::EmptyGeometry;
+            return context.error;
+        }
+        if (!writer.Complete()) return writer.Error();
+        return ObjImportResult{writer.Count(), writer.Length()};
+    }
     context.optionalWarnings = (std::min)(64u,
         context.optionalWarnings + uint32_t((std::min)(size_t(64), scene->metadata.warnings.count)));
     if (scene->meshes.count > kTierBObjectLimit || scene->materials.count > kTierBMaterialLimit ||
@@ -558,7 +762,12 @@ std::variant<ObjImportResult, ImportErrorCode> ImportObj(
     metadata.format = SourceFormatId::Obj;
     metadata.meshCount = uint32_t(scene->meshes.count);
     metadata.nodeCount = uint32_t(scene->nodes.count);
-    metadata.upAxis = UpAxisId::Unknown;
+    // OBJ has no standard up axis. Y-up is the ecosystem default (matching
+    // F3D) and keeps common exports upright without a manual ground-axis
+    // change. The viewer still applies its existing ground-axis transform and
+    // the toolbar override remains authoritative. OBJ never authors a length
+    // unit, so metersPerUnit stays zero ("unspecified").
+    metadata.upAxis = UpAxisId::Y;
     BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
     constexpr uint64_t kNormalizedTriangleBytes =
         3 * sizeof(VertexPositionNormalUv0TangentColorF32) + 3 * sizeof(uint32_t);
@@ -570,8 +779,18 @@ std::variant<ObjImportResult, ImportErrorCode> ImportObj(
     std::unordered_map<const ufbx_material*, uint32_t> materialIds;
     if (!EmitMaterials(*scene, writer, context, materialIds))
         return context.error != ImportErrorCode::None ? context.error : writer.Error();
-    if (!EmitGeometry(*scene, writer, context, materialIds, chunkTriangleLimit))
-        return context.error != ImportErrorCode::None ? context.error : writer.Error();
+    if (!EmitGeometry(*scene, writer, context, materialIds, chunkTriangleLimit)) {
+        if (context.error != ImportErrorCode::EmptyGeometry)
+            return context.error != ImportErrorCode::None ? context.error : writer.Error();
+        // ufbx does not expose OBJ `l`/`p` elements, so a line-only or
+        // point-only document reaches this branch with no triangles. Scan the
+        // bounded text source for those elements before reporting EmptyGeometry.
+        context.error = ImportErrorCode::None;
+        if (!EmitObjLinePointGeometry(sourceBytes, writer, context)) {
+            if (context.error == ImportErrorCode::None) context.error = ImportErrorCode::EmptyGeometry;
+            return context.error;
+        }
+    }
     if (context.textureWarnings) {
         ChunkDescriptor descriptor{}; descriptor.topology = ChunkTopology::TextureWarning;
         descriptor.chunkId = writer.NextId();

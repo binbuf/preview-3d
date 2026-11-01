@@ -9,6 +9,10 @@
 
 #include "BoundedChunkWriter.h"
 #include "ImageFormatSniff.h"
+#include "DdsImageDecode.h"
+#include "OpenExrDecode.h"
+#include "RadianceHdrDecode.h"
+#include "TgaImageDecode.h"
 #include "SidecarFileClient.h"
 #include "TextureDecodePolicy.h"
 #include "TextureTranscodeAdapter.h"
@@ -310,6 +314,12 @@ struct StagePolicy {
     uint32_t primCount = 0;
     uint32_t optionalWarnings = 0;
     bool hasComposition = false;
+    // Valid features the TinyUSDZ render-scene converter cannot represent but
+    // the OpenUSD compatibility host can (procedural Gprims, Points and
+    // creased/subdivided meshes). This is a retryable classification, not a
+    // terminal unsupported-required failure, and the broker only accepts it
+    // before any fast-path batch has been published.
+    bool needsCompatibilityHost = false;
     bool unsupportedRequired = false;
     bool omittedPurpose = false;
 };
@@ -368,9 +378,18 @@ void ClassifyPrim(const Prim& prim, double time, bool parentVisible,
         const bool hasCreases = mesh->cornerIndices.authored() || mesh->cornerSharpnesses.authored()
             || mesh->creaseIndices.authored() || mesh->creaseLengths.authored()
             || mesh->creaseSharpnesses.authored();
-        if (hasCreases) policy.unsupportedRequired = true;
-        if (mesh->subdivisionScheme.get_value() != GeomMesh::SubdivisionScheme::SubdivisionSchemeNone)
-            SaturatingWarn(policy); // bounded control-cage approximation
+        // Creases and subdivision are valid content. The host renders the
+        // authored control cage with a Degraded warning instead of failing, so
+        // hand these meshes to OpenUSD rather than treating them as terminal.
+        if (hasCreases)
+            policy.needsCompatibilityHost = true;
+        // An unauthored scheme keeps the historical fast-path treatment
+        // (plain triangle cage without a subdivision warning); only an
+        // explicit non-none scheme needs the host's control-cage path.
+        if (mesh->subdivisionScheme.authored()
+            && mesh->subdivisionScheme.get_value()
+                != GeomMesh::SubdivisionScheme::SubdivisionSchemeNone)
+            policy.needsCompatibilityHost = true;
     } else if (const auto* instancer = AsExact<PointInstancer>(prim)) {
         if (visible && includedPurpose) {
             if (instancer->velocities.authored() || instancer->accelerations.authored()
@@ -391,11 +410,16 @@ void ClassifyPrim(const Prim& prim, double time, bool parentVisible,
                 }
             }
         }
-    } else if ((AsExact<tinyusdz::GeomBasisCurves>(prim) || AsExact<tinyusdz::GeomNurbsCurves>(prim)
-                || AsExact<tinyusdz::GeomSphere>(prim) || AsExact<tinyusdz::GeomCube>(prim)
+    } else if ((AsExact<tinyusdz::GeomSphere>(prim) || AsExact<tinyusdz::GeomCube>(prim)
                 || AsExact<tinyusdz::GeomCone>(prim) || AsExact<tinyusdz::GeomCylinder>(prim)
                 || AsExact<tinyusdz::GeomCapsule>(prim) || AsExact<tinyusdz::GeomPoints>(prim))
                && visible && includedPurpose) {
+        // The OpenUSD host owns procedural tessellation and PointList output.
+        policy.needsCompatibilityHost = true;
+    } else if ((AsExact<tinyusdz::GeomBasisCurves>(prim)
+                || AsExact<tinyusdz::GeomNurbsCurves>(prim))
+               && visible && includedPurpose) {
+        // Curves/NURBS stay terminal until line topology lands (T17).
         policy.unsupportedRequired = true;
     } else if (AsExact<tinyusdz::GeomCamera>(prim)) {
         SaturatingWarn(policy);
@@ -826,6 +850,10 @@ bool ImageExtensionMatches(std::string_view path, SniffedImageFormat format)
     case SniffedImageFormat::Tiff: return extension == ".tif" || extension == ".tiff";
     case SniffedImageFormat::WebP: return extension == ".webp";
     case SniffedImageFormat::Ktx2: return extension == ".ktx2";
+    case SniffedImageFormat::Dds: return extension == ".dds";
+    case SniffedImageFormat::Tga: return extension == ".tga";
+    case SniffedImageFormat::Hdr: return extension == ".hdr";
+    case SniffedImageFormat::Exr: return extension == ".exr";
     // An unrecognized/corrupt payload is an optional-texture decode failure.
     // Only a positively identified format that disagrees with the authored
     // extension is a terminal type-mismatch classification.
@@ -872,6 +900,26 @@ std::optional<DecodedUsdImage> DecodeImage(MaterialContext& context, int64_t ima
     case SniffedImageFormat::Ktx2:
         if (auto decoded = TranscodeKtx2BasisImage(encoded, options)) {
             image.format = decoded->pixelFormat;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Tga:
+    case SniffedImageFormat::Dds:
+        if (auto decoded = sniffed == SniffedImageFormat::Tga
+                ? DecodeTgaImage(encoded, space, options)
+                : DecodeDdsImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = space;
+            image.width = decoded->width; image.height = decoded->height;
+            image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
+        }
+        break;
+    case SniffedImageFormat::Hdr:
+    case SniffedImageFormat::Exr:
+        if (auto decoded = sniffed == SniffedImageFormat::Hdr
+                ? DecodeRadianceHdrImage(encoded, space, options)
+                : DecodeOpenExrImage(encoded, space, options)) {
+            image.format = decoded->pixelFormat; image.space = space;
             image.width = decoded->width; image.height = decoded->height;
             image.levels = decoded->mipLevels; image.pixels = std::move(decoded->pixelBytes);
         }
@@ -953,10 +1001,12 @@ uint32_t ResolveTexture(BoundedChunkWriter& writer, MaterialContext& context,
         DecodedUsdImage fallback;
         fallback.format = PixelFormatId::RGBA8_UNORM;
         fallback.space = space;
-        fallback.width = fallback.height = semantic == TextureSemantic::Color ? 2u : 1u;
+        const bool colorCoverage = semantic == TextureSemantic::Color
+            || semantic == TextureSemantic::ColorCoverage;
+        fallback.width = fallback.height = colorCoverage ? 2u : 1u;
         fallback.levels = 1;
         fallback.pixels.resize(size_t(fallback.width) * fallback.height * 4, std::byte{255});
-        if (semantic == TextureSemantic::Color) {
+        if (colorCoverage) {
             for (unsigned pixel = 0; pixel < 4; ++pixel)
                 for (unsigned channel = 0; channel < 3; ++channel)
                     fallback.pixels[pixel * 4 + channel]
@@ -965,6 +1015,10 @@ uint32_t ResolveTexture(BoundedChunkWriter& writer, MaterialContext& context,
             fallback.pixels[0] = fallback.pixels[1] = std::byte{128};
         } else if (semantic == TextureSemantic::Emissive) {
             fallback.pixels[0] = fallback.pixels[1] = fallback.pixels[2] = std::byte{0};
+        } else if (semantic == TextureSemantic::MetallicRoughness) {
+            // Neutral fallback: opaque, fully rough, non-metal.
+            fallback.pixels[1] = std::byte{255};
+            fallback.pixels[2] = std::byte{0};
         }
         image = std::move(fallback);
     }
@@ -1050,7 +1104,7 @@ bool EmitMaterials(BoundedChunkWriter& writer, const RenderScene& scene,
 
         uint32_t images[4]{};
         images[0] = ResolveTexture(writer, context, shader.diffuseColor.texture_id,
-                                   ColorSpaceId::Srgb, TextureSemantic::Color);
+                                   ColorSpaceId::Srgb, TextureSemantic::ColorCoverage);
         if (context.error != ImportErrorCode::None) return false;
         if (shader.opacity.is_texture()
             && shader.opacity.texture_id != shader.diffuseColor.texture_id) {
@@ -1068,7 +1122,7 @@ bool EmitMaterials(BoundedChunkWriter& writer, const RenderScene& scene,
             && shader.metallic.texture_id == shader.roughness.texture_id
             && TextureAssetAvailable(context, shader.roughness.texture_id)) {
             images[1] = ResolveTexture(writer, context, shader.roughness.texture_id,
-                                       ColorSpaceId::Linear, TextureSemantic::Data);
+                                       ColorSpaceId::Linear, TextureSemantic::MetallicRoughness);
             combinedMetallicRoughness = images[1] != 0;
         } else if (shader.metallic.is_texture() || shader.roughness.is_texture()) {
             Warn(context.optionalWarnings);
@@ -1461,6 +1515,10 @@ UsdImportOutcome ImportUsd(std::span<const std::byte> sourceBytes,
                                            ImportFailurePhase::Geometry);
     if (policy.unsupportedRequired)
         return Fail(ImportErrorCode::UnsupportedRequiredFeature);
+    // Host-supported primitives/points/creases are valid content: signal a
+    // pre-publication retry using the existing closed fallback classification.
+    if (policy.needsCompatibilityHost)
+        return Fail(ImportErrorCode::UnsupportedComposition, ImportFailurePhase::Geometry);
     if (options.Cancelled()) return Fail(ImportErrorCode::Cancelled);
 
     tinyusdz::tydra::RenderSceneConverterEnv environment(stage);

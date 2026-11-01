@@ -204,7 +204,7 @@ TEST_CASE("STEP-002 viewer bridge routes an explicit Step format and extension d
     CHECK_FALSE(result.meshes.empty());
 }
 
-TEST_CASE("STEP-002 host rejects malformed and external Part-21 before OCCT transfer",
+TEST_CASE("STEP-002 host rejects malformed Part-21 and treats external-only input as empty",
           "[step-002][step-host][admission][negative]")
 {
     SECTION("non Part-21 bytes") {
@@ -214,7 +214,7 @@ TEST_CASE("STEP-002 host rejects malformed and external Part-21 before OCCT tran
         CHECK(result.producer == import_broker::ImportProducer::StepHost);
         CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
     }
-    SECTION("required external document") {
+    SECTION("external declaration without main geometry") {
         constexpr std::string_view external =
             "ISO-10303-21;\nHEADER;\n"
             "FILE_POPULATION(('AP214'),('x'),($),$);\n"
@@ -222,8 +222,11 @@ TEST_CASE("STEP-002 host rejects malformed and external Part-21 before OCCT tran
             "END-ISO-10303-21;\n";
         TempFileGuard source{WriteTempSource(external, L".stp")};
         const auto result = import_broker::RunImportSession(BaseRequest(source.path, 0x5703));
+        // T07: the declaration no longer vetoes admission. The host attempts
+        // the main document and reports its empty geometry, never an
+        // unsupported-file failure caused only by the declaration.
         CHECK_FALSE(result.ok);
-        CHECK(result.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature);
+        CHECK(result.errorCode == model_core::ImportErrorCode::EmptyGeometry);
     }
 }
 

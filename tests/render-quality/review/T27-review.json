@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "task": "T27",
+  "date": "2026-10-31",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent (image-capable)",
+    "tool": "agent image read tool on the captured PNGs listed below; numeric Debug HDR/channel readback (coverage, transmission, raw scene sample, transmitted radiance), material records and pass counters",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T27",
+  "imagesInspected": [
+    "TestResults/render-quality/T27/images/transmission-oit-front.png",
+    "TestResults/render-quality/T27/images/transmission-oit-permuted.png",
+    "TestResults/render-quality/T27/images/transmission-channel-01-base-color.png",
+    "TestResults/render-quality/T27/images/transmission-channel-09-coverage.png",
+    "TestResults/render-quality/T27/images/transmission-channel-10-transmission.png",
+    "TestResults/render-quality/T27/images/transmission-channel-22-composite-inputs.png",
+    "TestResults/render-quality/T27/images/transmission-channel-31-transmitted-radiance.png",
+    "TestResults/render-quality/T27/images/transmission-channel-32-transmission-source.png",
+    "TestResults/render-quality/T27/images/transmission-edge-oblique.png",
+    "TestResults/render-quality/T27/images/transmission-edge-left.png",
+    "TestResults/render-quality/T27/images/transmission-allocation-failure.png",
+    "TestResults/render-quality/T27/images/transmission-after-device-reset.png",
+    "TestResults/render-quality/T27/images/car-front-transmission.png",
+    "TestResults/render-quality/T27/images/car-oblique-transmission.png",
+    "TestResults/render-quality/T27/images/camera-lens-transmission.png",
+    "TestResults/render-quality/T27/images/suit-transmission.png",
+    "TestResults/render-quality/T27/images/generated-transmission-glass-studio-front.png",
+    "TestResults/render-quality/T27/images/generated-transmission-glass-studio-oblique.png",
+    "TestResults/render-quality/T27/images/generated-transmission-glass-directional-front.png"
+  ],
+  "observations": [
+    "The generated fixture reads as glass rather than a darkened alpha blend: the neutral panel transmits the checker, the orange panel tints it, and the dark panel keeps a blue-black transmission while retaining its reflection.",
+    "The rough panel's transmitted checker is visibly filtered (lower-contrast, soft cells) while the smooth neutral panel keeps the sharp checker; the numeric p90 ratio agrees (rough below 0.8x smooth).",
+    "The two BLEND coverage panels keep identical authored coverage (0.4) and differ only in optical transmission (0.25 vs 1.0); the transmitted term scales with the factor.",
+    "The two-layer overlap shows a stable composite and is pixel-identical under the reversed transparent draw order; each layer samples the opaque snapshot, not the other glass layer. The front layer is visible in the nearest-visible debug sample and the back layer is correctly covered.",
+    "The IOR=1 panel renders as an opaque green dielectric with zero transmission; the MASK panel keeps its authored cutout hole and zero optical transmission. Both match the importer policy and the material records.",
+    "The double-sided thin plane shades its camera-facing authored face, so it is one thin interface and remains visible from either side; a closed shell contributes two bounded thin interfaces to OIT.",
+    "The edge/offscreen orbit and close-up frames remain finite, non-blank and order-stable; the transmitted sample is the fragment's own screen pixel with a clamped sampler, not an offscreen claim.",
+    "Allocation failure degrades transmissive materials to their authored dielectric surface without changing coverage (channel 9 remains 1.0, channel 10 is 0) and records reason 3; resize and injected device removal rebuild the eight-level hierarchy.",
+    "Car: the windshield shows the dark interior through the grass rather than a flat overlay; the tinted side glass and headlamps keep their reflection and authored coverage. Front windshield coverage is 0.25 while interface Fresnel is ~0.10, so coverage is not the Fresnel term.",
+    "Camera: the OPAQUE transmissive lens is routed through the transparent pass, keeps a Fresnel reflection ring/depth and now also shows the interior transmission. It is no longer the flat pale disk observed from F3D and it retains the reflection/depth advantage noted in the T24 review.",
+    "Suit: all IOR=1 materials remain transmission 0; no ghosting or global opacity workaround was applied.",
+    "No asset-name or material-name exception exists in the renderer or lane; the only suppression is the documented IOR<=1 optical-interface rule."
+  ],
+  "defects": [
+    {
+      "id": "transmission-thin-surface-screen-space",
+      "label": "limitation",
+      "where": "generated fixture, Car windows and Camera lens",
+      "description": "Transmission samples the opaque scene at the same screen position through a bounded mip pyramid. It does not refract, does not see other transmissive layers, and never contains offscreen or occluded content. Where the opaque target has no coverage the studio environment in the transmitted direction is used.",
+      "assignedTo": "T27"
+    },
+    {
+      "id": "double-sided-transmissive-single-plane",
+      "label": "limitation",
+      "where": "generated double-sided thin panel",
+      "description": "A double-sided transmissive surface shades whichever authored face the camera sees, so a single authored plane is one thin interface and stays visible from both sides. A closed shell contributes its two surfaces as two bounded thin interfaces to the OIT composite; no volume thickness is fabricated.",
+      "assignedTo": "T27"
+    },
+    {
+      "id": "volume-not-rendered",
+      "label": "compatibility degradation",
+      "where": "glTF KHR_materials_volume",
+      "description": "Volume absorption/refraction is not implemented and no thickness is fabricated from bounds or material names. The adapter retains its specific parsed-but-unrendered compatibility record.",
+      "assignedTo": "T27"
+    },
+    {
+      "id": "weighted-oit-is-approximate",
+      "label": "limitation",
+      "where": "overlapping transmissive layers",
+      "description": "The T26 weighted blended OIT composite remains a weighted average past the eight-layer validated range. T27 keeps that composite and adds transmitted radiance.",
+      "assignedTo": "T26"
+    }
+  ],
+  "positives": [
+    "Coverage, base-color tint, transmission factor and IOR Fresnel are independent inputs; the shader has no interim alpha-carries-Fresnel composite.",
+    "OPAQUE transmissive materials use the transparent pass without rewriting their authored alpha mode; MASK keeps its cutout.",
+    "The transmitted-radiance copy is taken after the opaque pass and before any transmissive draw, so no pass samples a render target it is writing.",
+    "The eight-level hierarchy and the opaque snapshot are part of the accounted GPU budget and the resize/device-loss/cancellation lifecycle.",
+    "Transmission is invariant to transparent draw order and stable across the tested edge/offscreen frames.",
+    "Both Car and Camera pass the reviewed glass rubric; the Camera lens keeps reflection/depth and the Car windows keep tint and authored coverage."
+  ],
+  "acceptance": {
+    "coverageTintTransmissionVerified": true,
+    "opaqueTransmissionRoutingVerified": true,
+    "multiLayerOrderingVerified": true,
+    "edgeOffscreenVerified": true,
+    "resourceLifecycleVerified": true,
+    "carCameraRubricVerified": true,
+    "imageReviewPerformed": true,
+    "khronosRenderedReference": "incomplete: no Khronos Sample Viewer is installed on this workstation; the lane records the published thin-surface transmission equation as a formula reference and does not present it as a rendered comparison",
+    "acceptedReferencesPromotedBy": "not applicable for T27 (observed evidence only)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "Reviewed the T27 lane and the generated/external evidence; the final T27 run writes the same image names under TestResults/render-quality/T27. No baseline or reference was promoted."
+  }
+}

@@ -32,9 +32,18 @@ the committed files are the durable artifact.
 | `faceted_invalid_ap242.stp` | Derived from `tessellated_only_ap242.stp` with two out-of-range triangle indices (must fail `MalformedData`) |
 | `no_geometry_ap242.stp` | Valid AP242 product metadata with no visual geometry (must fail `EmptyGeometry`) |
 | `unsupported_schema.stp` | Geometry-free unknown `FILE_SCHEMA` (schema is classification only) |
-| `external_document_ap214.stp` | `FILE_POPULATION` required external document (must fail `UnsupportedRequiredFeature`) |
-| `external_document_relative_ap214.stp` | Relative `DOCUMENT_FILE` reference |
-| `external_document_absolute_ap214.stp` | Absolute, UNC, and URL `DOCUMENT_FILE` references |
+| `external_document_ap214.stp` | `FILE_POPULATION` declaration with no main geometry (warns, then `EmptyGeometry`) |
+| `external_document_relative_ap214.stp` | Relative `DOCUMENT_FILE` reference (warns, then `EmptyGeometry`) |
+| `external_document_absolute_ap214.stp` | Absolute, UNC, and URL `DOCUMENT_FILE` references (warns, then `EmptyGeometry`) |
+| `external_document_self_contained_ap214.stp` | T07: external declaration plus usable self-contained main geometry (warns, opens) |
+| `no_unit_ap214.stp` | T07: no authored length unit; assumes millimetres with a warning |
+| `contradictory_units_ap214.stp` | T07: millimetre and metre units; chooses the first/dominant mm factor and warns |
+| `repair_needed_ap214.stp` | T07: one transferable face with an empty edge loop; bounded repair is attempted and the typed `EmptyGeometry` outcome is preserved |
+| `unrepairable_ap214.stp` | T07: missing face entity; `ShapeFix` cannot reconstruct it and the typed failure is preserved |
+
+T07 tolerance fixtures are generated from `part_ap214.stp`/`face_color_ap214.stp`
+by `GenerateStepToleranceFixtures.py`; they change only header/unit/topology
+text and stay byte-reproducible without linking OCCT.
 
 Sizes and SHA-256 hashes are recorded in
 [`../../.docs/STEP-003-VERIFICATION.md`](../../.docs/STEP-003-VERIFICATION.md)

@@ -1,0 +1,91 @@
+{
+  "task": "T30",
+  "schema": 1,
+  "description": "Directional lighting, reflection and sun consistency. Proves one documented world-anchored sun drives the base/coat lobes, nav-gizmo bearing and contact-shadow input; stationary-camera azimuth/elevation sweeps and stationary-sun camera orbit; intensity-zero direct/IBL/coat/transmission behaviour; mode-switch camera and sun-state preservation; imported-up-axis changes; and reviewed generated/external stills at several elevations.",
+  "viewport": {"width": 1280, "height": 900, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0},
+    {"id": "clay", "lighting": 1},
+    {"id": "directional", "lighting": 2}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 1.0},
+    "oblique": {"yawDegrees": 30.0, "pitchDegrees": 60.0, "distanceScale": 1.0},
+    "low": {"yawDegrees": 20.0, "pitchDegrees": 82.0, "distanceScale": 1.0}
+  },
+  "regions": {
+    "directional-probe": {
+      "wall": [0.04, 0.3, 0.96, 0.62],
+      "floor": [0.25, 0.62, 0.75, 0.9]
+    },
+    "stl-box": {"box": [0.2, 0.15, 0.8, 0.9]},
+    "step-assembly": {"assembly": [0.05, 0.1, 0.95, 0.9]},
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "paint": [0.34, 0.55, 0.72, 0.9],
+      "trim": [0.12, 0.4, 0.4, 0.72]
+    },
+    "camera": {
+      "lens": [0.60, 0.40, 0.76, 0.62],
+      "black-body": [0.42, 0.40, 0.58, 0.66]
+    },
+    "microscope": {
+      "brass": [0.3, 0.16, 0.68, 0.5],
+      "enamel": [0.18, 0.45, 0.6, 0.9]
+    },
+    "stl": {"relief": [0.2, 0.15, 0.8, 0.9]}
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "directional-probe", "modes": ["studio", "directional"],
+         "views": ["front", "oblique"]},
+        {"id": "stl-box", "modes": ["directional"], "views": ["oblique"]},
+        {"id": "step-assembly", "modes": ["directional"], "views": ["front"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "car", "modes": ["directional"], "views": ["oblique", "low"]},
+        {"id": "camera", "modes": ["directional"], "views": ["front"]},
+        {"id": "microscope", "modes": ["directional"], "views": ["front"],
+         "knownDefect": "resource-limit"},
+        {"id": "stl", "modes": ["directional"], "views": ["oblique"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "microscope-resource-limit",
+      "assets": ["microscope"],
+      "description": "The external microscope can still report a terminal generation deadline after visible geometry. T30 records a brass/enamel crop only when the load is complete; a failed load stays an honest non-passing known-defect observation, not evidence of quality.",
+      "label": "known-defect",
+      "assignedTo": "T23/T34"
+    },
+    {
+      "id": "car-authored-window-speckle",
+      "assets": ["car"],
+      "description": "Car windshield/roof/window edge speckles also appear in Studio and Clay; they are an authored/AA defect, not a Directional sun transform defect.",
+      "label": "known-defect",
+      "assignedTo": "T33/T34"
+    }
+  ]
+}

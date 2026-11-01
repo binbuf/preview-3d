@@ -675,6 +675,37 @@ model_core::MaterialPayload ToMaterialPayload(const fastgltf::Material& material
         payload.flags |= model_core::kMaterialFlagUnlit;
     }
     payload.transmissionFactor = 0.0f;
+    // T18 lobes: the thumbnail rasterizer consumes emissive strength and the
+    // material table records the authored values; its CPU lighting does not
+    // yet draw clearcoat/sheen, which is a documented provider limitation.
+    if (std::isfinite(material.emissiveStrength))
+        payload.emissiveStrength = std::clamp(float(material.emissiveStrength), 0.0f, 1024.0f);
+    if (material.clearcoat) {
+        const float factor = float(material.clearcoat->clearcoatFactor);
+        const float roughness = float(material.clearcoat->clearcoatRoughnessFactor);
+        if (std::isfinite(factor)) payload.clearcoatFactor = std::clamp(factor, 0.0f, 1.0f);
+        if (std::isfinite(roughness)) payload.clearcoatRoughness = std::clamp(roughness, 0.0f, 1.0f);
+    }
+    if (material.sheen) {
+        for (int i = 0; i < 3; ++i) {
+            const float value = float(material.sheen->sheenColorFactor[static_cast<std::size_t>(i)]);
+            payload.sheenColor[i] = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
+        }
+        if (std::isfinite(material.sheen->sheenRoughnessFactor))
+            payload.sheenRoughness = std::clamp(float(material.sheen->sheenRoughnessFactor), 0.0f, 1.0f);
+    }
+    if (material.specular) {
+        if (std::isfinite(material.specular->specularFactor))
+            payload.specularFactor = std::clamp(float(material.specular->specularFactor), 0.0f, 1.0f);
+        for (int i = 0; i < 3; ++i) {
+            const float value = float(material.specular->specularColorFactor[static_cast<std::size_t>(i)]);
+            payload.specularColor[i] = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
+        }
+    }
+    if (std::isfinite(material.ior))
+        payload.ior = std::clamp(float(material.ior), 1.0f, 4.0f);
+    if (material.occlusionTexture && std::isfinite(material.occlusionTexture->strength))
+        payload.occlusionStrength = std::clamp(float(material.occlusionTexture->strength), 0.0f, 1.0f);
     return payload;
 }
 

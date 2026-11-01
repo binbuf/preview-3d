@@ -10,9 +10,11 @@
 #include "InfoPanel.h"
 #include "Localization.h"
 #include "Model.h"
+#include "LightRig.h"
 #include "Renderer.h"
 #include "NavGizmo.h"
 #include "OpenWithPopup.h"
+#include "OpenOptions.h"
 #include "Settings.h"
 #include "ShellIntegration.h"
 #include "SafeFileOps.h"
@@ -24,6 +26,7 @@
 #include "platform/SourcePathPolicy.h"
 
 #include <commctrl.h>
+#include <commdlg.h>
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <shobjidl.h>
@@ -33,6 +36,7 @@
 #include <iomanip>
 #include <sstream>
 #include <bit>
+#include <cmath>
 #include <atomic>
 #include <cstddef>
 #include <deque>
@@ -164,6 +168,7 @@ struct ViewerApp
     HWND window = nullptr;
     HWND retryButton = nullptr;
     HWND openAnotherButton = nullptr;
+    HWND openAsButton = nullptr;
     HWND copyButton = nullptr;
     HWND tooltip = nullptr;
     // Owns the text buffers referenced by the tooltip control for its lifetime
@@ -176,8 +181,6 @@ struct ViewerApp
     int bottomBarHeight = 44;
     bool infoPanelVisible = false;
     float infoPanelScrollOffset = 0.0f;   // logical px, clamped against content on wheel input
-    bool speedFlyoutOpen = false;
-    bool speedSliderDragging = false;
     // Orbit (turntable auto-rotate): while enabled, hovering the Orbit toolbar
     // button reveals a speed slider (see OrbitFlyoutRect / OrbitSpeedFlyoutVisible).
     bool orbitEnabled = false;
@@ -213,6 +216,28 @@ struct ViewerApp
     float rollGlyphFadeTarget = 0.0f;
     double lastRollGlyphFadeSeconds = 0.0;
     LightingMode lightingMode = LightingMode::Studio;
+    // Catalog-driven view state applied once when a document first opens.
+    // `activePresentation` is what the info panel reports; an explicit user
+    // action (lighting button or grid toggle) pins the session so a reload or
+    // refinement cannot stomp the override.
+    model_core::PresentationProfile activePresentation = model_core::PresentationProfile::Default;
+    bool presentationOverridden = false;
+    std::wstring presentationSourcePath;
+    // T15 view state. Presets seed these defaults; explicit exposure/background
+    // changes pin their field for the rest of the session so a later preset
+    // application cannot stomp the user's choice.
+    viewer_presentation::PresentationPreset activePreset = viewer_presentation::PresentationPreset::StudioPbr;
+    viewer_presentation::ToneMapMode toneMapMode = viewer_presentation::ToneMapMode::Neutral;
+    viewer_presentation::BackgroundMode backgroundMode = viewer_presentation::BackgroundMode::Dark;
+    uint32_t backgroundColor = 0x001C1C1Eu;
+    bool groundHighlightVisible = true;
+    float exposure = 1.0f;
+    float studioIntensity = 1.0f;
+    float keyLightScale = 1.0f;
+    float fillLightScale = 1.0f;
+    float rimLightScale = 1.0f;
+    bool exposureOverridden = false;
+    bool toneMapOverridden = false;
     float directionalLightAngle = 0.875f;
     // Elevation above the horizon in radians; atan(0.55) matches the previous
     // fixed key elevation. The gizmo sun's distance from center encodes it.
@@ -253,6 +278,14 @@ struct ViewerApp
     bool benchmarkInputSent = false;
     std::jthread benchmarkSampler;
     bool appSmoke = false; // opt-in, bounded test commands; no normal activation IPC
+    bool captureClean = false; // T20: omit viewport overlays from capture evidence
+    // T21 Debug inspection state. UI-thread only; the render thread owns the
+    // channel, readback and material snapshot behind RenderThread methods.
+    int debugMaterialIndex = 0;
+    int debugMaterialExtensionSlot = 0;
+    int debugSampleX0 = 0, debugSampleY0 = 0, debugSampleX1 = 1, debugSampleY1 = 1;
+    // Initialized in bypass mode by wWinMain: every process is its own
+    // viewer instance, so this never owns a mutex, pipe or listener.
     active_instance::Coordinator activeInstance;
     IAccessible* accessible = nullptr;
     IRawElementProviderSimple* uiaAccessible = nullptr;
@@ -302,6 +335,13 @@ struct ViewerApp
     POINT touchCenter{};
     double touchSpan = 0.0;
     std::wstring initialPath;
+    // --format / Open As: a catalog descriptor that replaces extension/content
+    // candidate selection. Null means normal classification.
+    const model_core::FormatDescriptor* forcedFormat = nullptr;
+    bool skipContentCheck = false;
+    // Path-free "opened as X; detected Y" text kept across the import so the
+    // success warning and diagnostics can report the user override.
+    std::wstring openFormatNotice;
     std::wstring currentPath;
     std::wstring failedPath;
     std::wstring filename;
@@ -329,6 +369,15 @@ struct ViewerApp
     uint64_t smokePickRequests = 0;
     bool meshSelected = false;
     bool gridVisible = true;
+    // Contact shadow is off on a fresh install (see ViewerSettings).
+    bool shadowVisible = false;
+    // T32 screen-space ambient occlusion. It follows the same global-preference
+    // policy as the grid/shadow toggles; the renderer selects mode-specific
+    // strength/radius defaults. -1 means "use the mode default".
+    bool ambientOcclusionVisible = true;
+    float ambientOcclusionStrengthOverride = -1.0f;
+    float ambientOcclusionRadiusScale = -1.0f;
+    bool shadowOverridden = false;
     bool axisSnapEnabled = false;
     // Display the loaded model in its native/source orientation instead of
     // this app's normalized Z-up correction (Model.h's ModelData::
@@ -338,11 +387,23 @@ struct ViewerApp
     GroundAxis groundAxis = GroundAxis::Automatic;
     bool groundAxisInverted = false;
     bool hideCursorWhileDragging = true;
+    // Stop turntable auto-orbit on the first camera/control interaction.
+    bool stopOrbitOnInteraction = true;
     // Persisted via Settings.h; mirrors RenderThread::SetHideModelUntilComplete.
     bool hideModelUntilComplete = true;
-    bool settingsPanelOpen = false;
+    // The "..." overflow dropdown hosts every setting plus Controls/About.
+    bool settingsMenuOpen = false;
+    int settingsMenuHover = -1;
+    int settingsMenuPressed = -1;
+    int settingsMenuScroll = 0;
+    // Inline expansion state. One section at a time keeps the menu compact.
+    bool settingsMenuBackgroundExpanded = false;
+    bool settingsMenuSpeedExpanded = false;
+    bool settingsMenuOrbitExpanded = false;
+    // 0 none, 1 flight speed, 2 orbit speed.
+    int settingsMenuSliderDragging = 0;
     // Active UI language pack code ("" == follow the Windows display language),
-    // mirrored from ViewerSettings so the Settings panel can show and change it.
+    // mirrored from ViewerSettings so the "..." menu can show and change it.
     std::wstring language;
     std::wstring speedHudText;
     double speedHudUntil = 0.0;
@@ -737,7 +798,7 @@ float InfoPanelMaxScroll(const ViewerApp& app)
     const float panelHeight = static_cast<float>(panel.bottom - panel.top);
     if (panelHeight <= 0.0f) return 0.0f;
     const std::vector<InfoPanelSection> sections = BuildInfoPanelSections(
-        *app.loadedModel, app.showNativeOrientation, app.groundAxis);
+        *app.loadedModel, app.showNativeOrientation, app.groundAxis, app.activePresentation);
     const InfoPanelScrollMetrics metrics = ComputeInfoPanelScrollMetrics(sections, app.dpiScale);
     const float visibleHeight = std::max(0.0f, panelHeight - metrics.headerHeight);
     return std::max(0.0f, metrics.contentHeight - visibleHeight);
@@ -915,6 +976,16 @@ void SetOrbitEnabled(ViewerApp& app, bool enabled)
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
+// Called from every user interaction that should cancel turntable rotation.
+// Orbit-specific controls (the Orbit button, its hover slider, and the orbit
+// speed rows in the "..." menu) deliberately do not call this, so speed can
+// still be adjusted while rotation runs.
+void StopOrbitFromInteraction(ViewerApp& app)
+{
+    if (!app.stopOrbitOnInteraction || !app.orbitEnabled) return;
+    SetOrbitEnabled(app, false);
+}
+
 void AdjustOrbitSpeed(ViewerApp& app, double deltaDegrees)
 {
     app.orbitSpeedDegreesPerSecond = std::clamp(app.orbitSpeedDegreesPerSecond + deltaDegrees,
@@ -971,32 +1042,7 @@ void UpdateChromeLayout(ViewerApp& app)
         !app.updateVersion.empty());
 }
 
-// Speed flyout panel/track geometry, shared by drawing (BuildOverlayInfo) and
-// input handling (WM_LBUTTONDOWN/MOUSEMOVE) so they can never disagree.
-RECT SpeedFlyoutRect(const ViewerApp& app)
-{
-    const RECT speedButton = app.chrome.Button(Chrome::Part::Speed).rect;
-    const int width = Scale(app, 220);
-    const int height = Scale(app, 64);
-    const int gap = Scale(app, 6);
-    RECT client{};
-    GetClientRect(app.window, &client);
-    int left = std::min(speedButton.left, client.right - Scale(app, 8) - width);
-    left = std::max(left, Scale(app, 8));
-    const int top = app.toolbarHeight + gap;
-    return RECT{ left, top, left + width, top + height };
-}
-
-RECT SpeedFlyoutTrackRect(const ViewerApp& app)
-{
-    const RECT panel = SpeedFlyoutRect(app);
-    const int marginX = Scale(app, 16);
-    const int trackCenterY = panel.top + Scale(app, 44);
-    const int halfHeight = Scale(app, 8);
-    return RECT{ panel.left + marginX, trackCenterY - halfHeight, panel.right - marginX, trackCenterY + halfHeight };
-}
-
-// Orbit speed flyout: same geometry as the Speed flyout, anchored under the
+// Orbit speed flyout: same geometry as the old Speed flyout, anchored under the
 // Orbit button. Only visible while auto-orbit is on and the pointer is over
 // the button or the panel itself.
 RECT OrbitFlyoutRect(const ViewerApp& app)
@@ -1058,85 +1104,314 @@ void SetOrbitSpeedFromFlyoutX(ViewerApp& app, int clientX)
     ApplyOrbitRate(app);
 }
 
-// Settings popup panel/row/switch geometry, shared by drawing (BuildOverlayInfo)
-// and input handling (WM_LBUTTONDOWN) so they can never disagree. Mirrors
-// SpeedFlyoutRect/SpeedFlyoutTrackRect just above, anchored under the
-// Overflow ("...") button instead of the Speed button.
-RECT SettingsPanelRect(const ViewerApp& app)
+// The "..." overflow dropdown. It now owns every view preference (including
+// the ground contact shadow and ambient occlusion toggles that used to live in
+// the native menu) plus the Controls/About rows, so there is one place for
+// settings instead of a panel and a context menu side by side.
+//
+// Geometry is shared by drawing (BuildOverlayInfo), input handling
+// (WM_MOUSEMOVE / WM_LBUTTONDOWN / WM_LBUTTONUP) and accessibility, so the
+// three can never disagree. All values are logical pixels scaled by DPI.
+enum class SettingsMenuRowId
 {
-    const RECT overflowButton = app.chrome.Button(Chrome::Part::Overflow).rect;
-    const int width = Scale(app, 280);
-    const int height = Scale(app, 200);
-    const int gap = Scale(app, 6);
+    None = -1,
+    Warnings = 0,
+    NativeOrientation,
+    GroundHighlight,
+    GroundShadow,
+    AmbientOcclusion,
+    FlightSpeed,
+    SpeedSlider,
+    OrbitSpeed,
+    OrbitSlider,
+    StopOrbitOnInteraction,
+    HideCursorWhileDragging,
+    HideModelUntilComplete,
+    Background,
+    BackgroundDark,
+    BackgroundGray,
+    BackgroundCustom,
+    BackgroundTransparent,
+    BackgroundChecker,
+    Language,
+    Controls,
+    About,
+    Count
+};
+
+struct SettingsMenuRowLayout
+{
+    SettingsMenuRowId id = SettingsMenuRowId::None;
+    RECT rect{};
+    RECT switchRect{};
+    RECT sliderTrack{};
+    bool toggle = false;
+    bool dividerBefore = false;
+    bool showChevron = false;
+    bool emphasized = false;
+    bool expanded = false;
+    bool nested = false;
+    bool checked = false;
+};
+
+struct SettingsMenuLayout
+{
+    RECT panel{};
+    RECT header{};
+    std::vector<SettingsMenuRowLayout> rows;
+    int contentHeight = 0;
+    int maxScroll = 0;
+    int scrollOffset = 0;
+};
+
+SettingsMenuLayout ComputeSettingsMenuLayout(const ViewerApp& app)
+{
+    constexpr int kPadding = 6;
+    constexpr int kHeaderHeight = 28;
+    constexpr int kRowHeight = 34;
+    constexpr int kNestedRowHeight = 30;
+    constexpr int kSliderHeight = 46;
+    constexpr int kDividerGap = 9;
+
+    SettingsMenuLayout layout;
     RECT client{};
     GetClientRect(app.window, &client);
-    int left = std::min(overflowButton.left, client.right - Scale(app, 8) - width);
-    left = std::max(left, Scale(app, 8));
-    const int top = app.toolbarHeight + gap;
-    return RECT{ left, top, left + width, top + height };
+
+    const RECT overflowButton = app.chrome.Button(Chrome::Part::Overflow).rect;
+    const int clientWidth = static_cast<int>(client.right - client.left);
+    const int width = std::min(Scale(app, 360),
+        std::max(Scale(app, 240), clientWidth - Scale(app, 16)));
+    int left = overflowButton.right - width;
+    left = std::max(static_cast<int>(client.left) + Scale(app, 8),
+        std::min(left, static_cast<int>(client.right) - Scale(app, 8) - width));
+    const int top = std::max(Scale(app, 8), std::max(app.toolbarHeight + Scale(app, 2),
+        static_cast<int>(overflowButton.bottom) + Scale(app, 6)));
+
+    layout.header = RECT{ left + Scale(app, 14), top + Scale(app, kPadding),
+        left + width - Scale(app, 14), top + Scale(app, kPadding) + Scale(app, kHeaderHeight) };
+
+    int y = top + Scale(app, kPadding) + Scale(app, kHeaderHeight);
+    auto appendRow = [&](SettingsMenuRowId id, bool toggle, bool dividerBefore, bool chevron,
+        bool emphasized, bool nested, bool expanded, bool checked)
+    {
+        if (dividerBefore) y += Scale(app, kDividerGap);
+        SettingsMenuRowLayout row;
+        row.id = id;
+        row.toggle = toggle;
+        row.dividerBefore = dividerBefore;
+        row.showChevron = chevron;
+        row.emphasized = emphasized;
+        row.expanded = expanded;
+        row.nested = nested;
+        row.checked = checked;
+        const int indent = kPadding + (nested ? 16 : 0);
+        row.rect = RECT{ left + Scale(app, indent), y,
+            left + width - Scale(app, kPadding), y + Scale(app, nested ? kNestedRowHeight : kRowHeight) };
+        if (toggle)
+        {
+            const int switchWidth = Scale(app, 36);
+            const int switchHeight = Scale(app, 20);
+            const int centerY = (row.rect.top + row.rect.bottom) / 2;
+            row.switchRect = RECT{ row.rect.right - Scale(app, 12) - switchWidth,
+                centerY - switchHeight / 2, row.rect.right - Scale(app, 12),
+                centerY + switchHeight / 2 };
+        }
+        y += Scale(app, nested ? kNestedRowHeight : kRowHeight);
+        layout.rows.push_back(row);
+    };
+    auto appendSlider = [&](SettingsMenuRowId id)
+    {
+        SettingsMenuRowLayout row;
+        row.id = id;
+        row.rect = RECT{ left + Scale(app, kPadding), y,
+            left + width - Scale(app, kPadding), y + Scale(app, kSliderHeight) };
+        const int centerY = (row.rect.top + row.rect.bottom) / 2;
+        row.sliderTrack = RECT{ row.rect.left + Scale(app, 16), centerY - Scale(app, 8),
+            row.rect.right - Scale(app, 16), centerY + Scale(app, 8) };
+        y += Scale(app, kSliderHeight);
+        layout.rows.push_back(row);
+    };
+
+    if (!app.warning.empty())
+        appendRow(SettingsMenuRowId::Warnings, false, false, false, true, false, false, false);
+    appendRow(SettingsMenuRowId::NativeOrientation, true, !app.warning.empty(), false, false, false, false, false);
+    appendRow(SettingsMenuRowId::GroundHighlight, true, false, false, false, false, false, false);
+    appendRow(SettingsMenuRowId::GroundShadow, true, false, false, false, false, false, false);
+    appendRow(SettingsMenuRowId::AmbientOcclusion, true, false, false, false, false, false, false);
+
+    appendRow(SettingsMenuRowId::FlightSpeed, false, true, true, false, false,
+        app.settingsMenuSpeedExpanded, false);
+    if (app.settingsMenuSpeedExpanded) appendSlider(SettingsMenuRowId::SpeedSlider);
+
+    appendRow(SettingsMenuRowId::OrbitSpeed, false, false, true, false, false,
+        app.settingsMenuOrbitExpanded, false);
+    if (app.settingsMenuOrbitExpanded) appendSlider(SettingsMenuRowId::OrbitSlider);
+
+    appendRow(SettingsMenuRowId::StopOrbitOnInteraction, true, false, false, false, false, false, false);
+    appendRow(SettingsMenuRowId::HideCursorWhileDragging, true, true, false, false, false, false, false);
+    appendRow(SettingsMenuRowId::HideModelUntilComplete, true, false, false, false, false, false, false);
+    appendRow(SettingsMenuRowId::Background, false, false, true, false, false,
+        app.settingsMenuBackgroundExpanded, false);
+    if (app.settingsMenuBackgroundExpanded)
+    {
+        const auto mode = app.backgroundMode;
+        appendRow(SettingsMenuRowId::BackgroundDark, false, false, false, false, true, false,
+            mode == viewer_presentation::BackgroundMode::Dark);
+        appendRow(SettingsMenuRowId::BackgroundGray, false, false, false, false, true, false,
+            mode == viewer_presentation::BackgroundMode::MidGrey);
+        appendRow(SettingsMenuRowId::BackgroundCustom, false, false, false, false, true, false,
+            mode == viewer_presentation::BackgroundMode::Custom);
+        appendRow(SettingsMenuRowId::BackgroundTransparent, false, false, false, false, true, false,
+            mode == viewer_presentation::BackgroundMode::Transparent);
+        appendRow(SettingsMenuRowId::BackgroundChecker, false, false, false, false, true, false,
+            mode == viewer_presentation::BackgroundMode::Checkerboard);
+    }
+    appendRow(SettingsMenuRowId::Language, false, false, true, false, false, false, false);
+    appendRow(SettingsMenuRowId::Controls, false, true, false, false, false, false, false);
+    appendRow(SettingsMenuRowId::About, false, false, false, false, false, false, false);
+
+    layout.contentHeight = y + Scale(app, kPadding) - top;
+    const int available = std::max(Scale(app, 80),
+        static_cast<int>(client.bottom) - top - Scale(app, 8));
+    const int panelHeight = std::min(layout.contentHeight, available);
+    layout.panel = RECT{ left, top, left + width, top + panelHeight };
+    layout.maxScroll = std::max(0, layout.contentHeight - panelHeight);
+    layout.scrollOffset = std::clamp(app.settingsMenuScroll, 0, layout.maxScroll);
+
+    if (layout.scrollOffset != 0)
+    {
+        const int shift = layout.scrollOffset;
+        OffsetRect(&layout.header, 0, -shift);
+        for (auto& row : layout.rows)
+        {
+            OffsetRect(&row.rect, 0, -shift);
+            if (row.toggle) OffsetRect(&row.switchRect, 0, -shift);
+            if (!IsRectEmpty(&row.sliderTrack)) OffsetRect(&row.sliderTrack, 0, -shift);
+        }
+    }
+    return layout;
 }
 
-RECT SettingsToggleRowRect(const ViewerApp& app)
+const SettingsMenuRowLayout* FindSettingsMenuRow(const SettingsMenuLayout& layout, SettingsMenuRowId id)
 {
-    const RECT panel = SettingsPanelRect(app);
-    const int marginX = Scale(app, 16);
-    return RECT{ panel.left + marginX, panel.top + Scale(app, 8),
-        panel.right - marginX, panel.top + Scale(app, 52) };
+    for (const auto& row : layout.rows)
+        if (row.id == id) return &row;
+    return nullptr;
 }
 
-RECT SettingsSwitchRect(const ViewerApp& app)
+// Existing language packs carry native-menu accelerators as "Label\tKey".
+// A D2D row has no accelerator column, so drop the tab suffix rather than
+// letting the raw shortcut letter leak into the label (and duplicate the
+// right-aligned value).
+std::wstring SettingsMenuLabel(std::wstring text)
 {
-    const RECT row = SettingsToggleRowRect(app);
-    const int switchWidth = Scale(app, 36);
-    const int switchHeight = Scale(app, 20);
-    const int centerY = (row.top + row.bottom) / 2;
-    return RECT{ row.right - switchWidth, centerY - switchHeight / 2, row.right, centerY + switchHeight / 2 };
+    const std::size_t tab = text.find(L'\t');
+    if (tab != std::wstring::npos) text.resize(tab);
+    return text;
 }
 
-RECT SettingsCursorToggleRowRect(const ViewerApp& app)
+std::wstring SettingsMenuShortcut(const std::wstring& text)
 {
-    const RECT panel = SettingsPanelRect(app);
-    const int marginX = Scale(app, 16);
-    return RECT{ panel.left + marginX, panel.top + Scale(app, 56),
-        panel.right - marginX, panel.top + Scale(app, 100) };
+    const std::size_t tab = text.find(L'\t');
+    return tab == std::wstring::npos ? std::wstring{} : text.substr(tab + 1);
 }
 
-RECT SettingsCursorSwitchRect(const ViewerApp& app)
+// The menu header reuses the existing localized "Settings…" command label so
+// no new catalogue key (or translation work) is needed for the caption.
+std::wstring SettingsMenuTitleText()
 {
-    const RECT row = SettingsCursorToggleRowRect(app);
-    const int switchWidth = Scale(app, 36);
-    const int switchHeight = Scale(app, 20);
-    const int centerY = (row.top + row.bottom) / 2;
-    return RECT{ row.right - switchWidth, centerY - switchHeight / 2, row.right, centerY + switchHeight / 2 };
+    std::wstring text = SettingsMenuLabel(Loc("menu.settings", L"Settings\u2026"));
+    while (!text.empty() && (text.back() == L'\u2026' || text.back() == L' ')) text.pop_back();
+    return text;
 }
 
-RECT SettingsHideUntilCompleteRowRect(const ViewerApp& app)
+RECT SettingsMenuRowRect(const ViewerApp& app, SettingsMenuRowId id)
 {
-    const RECT panel = SettingsPanelRect(app);
-    const int marginX = Scale(app, 16);
-    return RECT{ panel.left + marginX, panel.top + Scale(app, 104),
-        panel.right - marginX, panel.top + Scale(app, 148) };
+    const SettingsMenuLayout layout = ComputeSettingsMenuLayout(app);
+    const SettingsMenuRowLayout* row = FindSettingsMenuRow(layout, id);
+    return row ? row->rect : RECT{};
 }
 
-RECT SettingsHideUntilCompleteSwitchRect(const ViewerApp& app)
+int SettingsMenuRowAtPoint(const ViewerApp& app, POINT point)
 {
-    const RECT row = SettingsHideUntilCompleteRowRect(app);
-    const int switchWidth = Scale(app, 36);
-    const int switchHeight = Scale(app, 20);
-    const int centerY = (row.top + row.bottom) / 2;
-    return RECT{ row.right - switchWidth, centerY - switchHeight / 2, row.right, centerY + switchHeight / 2 };
+    const SettingsMenuLayout layout = ComputeSettingsMenuLayout(app);
+    if (!PtInRect(&layout.panel, point)) return static_cast<int>(SettingsMenuRowId::None);
+    for (const auto& row : layout.rows)
+    {
+        if (PtInRect(&row.rect, point)) return static_cast<int>(row.id);
+    }
+    return static_cast<int>(SettingsMenuRowId::None);
 }
 
-// Fourth row: a language selector. Unlike the three on/off switches above it,
-// the whole row is a button that opens a native popup menu of installed packs
-// (TrackPopupMenu scales to dozens of entries far better than a custom-drawn
-// dropdown would).
-RECT SettingsLanguageRowRect(const ViewerApp& app)
+// Orbit-specific surfaces must not cancel orbit: the toolbar Orbit button, its
+// hover speed flyout, and the orbit rows in the settings menu all exist to
+// control rotation and should keep it running while used.
+bool PointIsOrbitControl(const ViewerApp& app, POINT point)
 {
-    const RECT panel = SettingsPanelRect(app);
-    const int marginX = Scale(app, 16);
-    return RECT{ panel.left + marginX, panel.top + Scale(app, 152),
-        panel.right - marginX, panel.bottom - Scale(app, 8) };
+    const RECT orbitButton = app.chrome.Button(Chrome::Part::Orbit).rect;
+    if (!IsRectEmpty(&orbitButton) && PtInRect(&orbitButton, point)) return true;
+    if (OrbitSpeedFlyoutVisible(app))
+    {
+        const RECT flyout = OrbitFlyoutRect(app);
+        if (PtInRect(&flyout, point)) return true;
+    }
+    if (app.settingsMenuOpen)
+    {
+        const int row = SettingsMenuRowAtPoint(app, point);
+        if (row == static_cast<int>(SettingsMenuRowId::OrbitSpeed) ||
+            row == static_cast<int>(SettingsMenuRowId::OrbitSlider) ||
+            row == static_cast<int>(SettingsMenuRowId::StopOrbitOnInteraction))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SettingsMenuPointInPanel(const ViewerApp& app, POINT point)
+{
+    const SettingsMenuLayout layout = ComputeSettingsMenuLayout(app);
+    return PtInRect(&layout.panel, point) != FALSE;
+}
+
+void ScrollSettingsMenu(ViewerApp& app, int direction)
+{
+    const SettingsMenuLayout layout = ComputeSettingsMenuLayout(app);
+    if (layout.maxScroll <= 0) return;
+    app.settingsMenuScroll = std::clamp(app.settingsMenuScroll + direction * Scale(app, 64),
+        0, layout.maxScroll);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+bool IsSettingsMenuSliderRow(int row)
+{
+    return row == static_cast<int>(SettingsMenuRowId::SpeedSlider) ||
+        row == static_cast<int>(SettingsMenuRowId::OrbitSlider);
+}
+
+RECT SettingsMenuSliderTrackRect(const ViewerApp& app, SettingsMenuRowId id)
+{
+    const SettingsMenuLayout layout = ComputeSettingsMenuLayout(app);
+    const SettingsMenuRowLayout* row = FindSettingsMenuRow(layout, id);
+    return row ? row->sliderTrack : RECT{};
+}
+
+// After expanding a section, make sure its newly revealed child row is inside
+// the scrollable panel rather than silently falling below the fold.
+void RevealSettingsMenuRow(ViewerApp& app, SettingsMenuRowId id)
+{
+    if (!app.settingsMenuOpen) return;
+    SettingsMenuLayout layout = ComputeSettingsMenuLayout(app);
+    const SettingsMenuRowLayout* row = FindSettingsMenuRow(layout, id);
+    if (!row) return;
+    const int margin = Scale(app, 8);
+    int adjusted = app.settingsMenuScroll;
+    if (row->rect.bottom > layout.panel.bottom - margin)
+        adjusted += row->rect.bottom - (layout.panel.bottom - margin);
+    else if (row->rect.top < layout.panel.top + margin)
+        adjusted -= (layout.panel.top + margin) - row->rect.top;
+    app.settingsMenuScroll = std::clamp(adjusted, 0, layout.maxScroll);
+    InvalidateRect(app.window, nullptr, FALSE);
 }
 
 void BeginWrappedDrag(ViewerApp& app, const POINT& point)
@@ -1295,6 +1570,25 @@ double SpeedForSliderPosition(int position)
     return kSpeedSliderMin * std::pow(kSpeedSliderTop / kSpeedSliderMin, t);
 }
 
+void SetSettingsMenuSliderFromX(ViewerApp& app, SettingsMenuRowId row, int clientX)
+{
+    const RECT track = SettingsMenuSliderTrackRect(app, row);
+    if (IsRectEmpty(&track)) return;
+    const float t = std::clamp(static_cast<float>(clientX - track.left) /
+        static_cast<float>(std::max(1L, track.right - track.left)), 0.0f, 1.0f);
+    if (row == SettingsMenuRowId::SpeedSlider)
+    {
+        app.renderThread.LockCamera()->SetFlySpeedScale(
+            SpeedForSliderPosition(static_cast<int>(std::lround(t * kSpeedSliderMax))));
+    }
+    else if (row == SettingsMenuRowId::OrbitSlider)
+    {
+        app.orbitSpeedDegreesPerSecond = OrbitSpeedForSliderPosition(
+            static_cast<int>(std::lround(t * kOrbitSliderMax)));
+        ApplyOrbitRate(app);
+    }
+}
+
 void AdjustFlySpeed(ViewerApp& app, float wheelSteps)
 {
     // One lock for the read-modify-write. Two LockCamera() calls in a single
@@ -1307,16 +1601,6 @@ void AdjustFlySpeed(ViewerApp& app, float wheelSteps)
         scaled = cam->FlySpeedScale();
     }
     ShowSpeedHud(app, LocFormat("hud.travelSpeed", L"Travel speed ×{0}", { FormatMultiplier(scaled) }));
-}
-
-// Direct manipulation: sets speed immediately from a drag position within
-// the Speed flyout's track (SpeedFlyoutTrackRect), same non-eased feel as
-// the zoom slider's own direct-drag handling.
-void SetFlySpeedFromFlyoutX(ViewerApp& app, int clientX)
-{
-    const RECT track = SpeedFlyoutTrackRect(app);
-    const float t = std::clamp(static_cast<float>(clientX - track.left) / static_cast<float>(std::max(1L, track.right - track.left)), 0.0f, 1.0f);
-    app.renderThread.LockCamera()->SetFlySpeedScale(SpeedForSliderPosition(static_cast<int>(std::lround(t * kSpeedSliderMax))));
 }
 
 constexpr int kZoomSliderMax = 1000;
@@ -1540,8 +1824,167 @@ bool SetDirectionalLightFromGizmoPoint(ViewerApp& app, POINT point)
     return true;
 }
 
+// Applies a material-aware presentation preset exactly once for a document.
+// Point clouds use the existing round colored splat pipeline (which is unlit),
+// so they keep Studio selected for the toolbar while the grid is suppressed.
+// Studio CAD uses the neutral Clay review material; the PBR profile uses the
+// material-aware Studio shader. This function does not call SetLightingMode,
+// because that would mark the choice as a user override.
+void SaveViewerPreferences(const ViewerApp& app);
+
+void ApplyPresentationSettings(ViewerApp& app, model_core::PresentationProfile profile,
+                               viewer_presentation::PresentationPreset preset)
+{
+    const auto settings = viewer_presentation::SettingsForPreset(preset);
+    app.activePresentation = profile;
+    app.activePreset = preset;
+    app.studioIntensity = settings.environmentIntensity;
+    app.keyLightScale = settings.keyScale;
+    app.fillLightScale = settings.fillScale;
+    app.rimLightScale = settings.rimScale;
+    if (!app.exposureOverridden) app.exposure = settings.exposure;
+    if (!app.toneMapOverridden) app.toneMapMode = settings.toneMap;
+    // T21a: background and ground highlight are global user preferences. A
+    // preset (including Scan/Transparent) never rewrites them.
+    app.shadowVisible = viewer_presentation::ResolveShadowVisible(
+        app.shadowOverridden, app.shadowVisible, settings.shadowEnabled);
+    switch (preset)
+    {
+    case viewer_presentation::PresentationPreset::StudioCad:
+        app.lightingMode = LightingMode::Clay;
+        break;
+    case viewer_presentation::PresentationPreset::PointCloud:
+    case viewer_presentation::PresentationPreset::ScanSculpt:
+    case viewer_presentation::PresentationPreset::Transparent:
+    case viewer_presentation::PresentationPreset::StudioPbr:
+    default:
+        app.lightingMode = LightingMode::Studio;
+        break;
+    }
+    app.gridVisible = settings.gridVisible;
+}
+
+void ApplyPresentationProfile(ViewerApp& app, model_core::PresentationProfile profile,
+                              const viewer_presentation::MaterialSummary& summary)
+{
+    const auto preset = viewer_presentation::SelectPresentationPreset(summary, profile);
+    ApplyPresentationSettings(app, profile, preset);
+}
+
+void ApplyManualPresentationPreset(ViewerApp& app, viewer_presentation::PresentationPreset preset)
+{
+    app.presentationOverridden = true;
+    // An explicit preset choice is the user's view state: apply its exposure
+    // rather than preserving an earlier manual exposure. Background and ground
+    // highlight remain global appearance preferences.
+    app.exposureOverridden = false;
+    app.toneMapOverridden = false;
+    app.shadowOverridden = false;
+    const auto profile = model_core::FindBySourceFormatId(
+        app.loadedModel ? app.loadedModel->source.format : model_core::SourceFormatId::Unknown);
+    ApplyPresentationSettings(app, profile ? profile->presentation : model_core::PresentationProfile::Default,
+                              preset);
+}
+
+void ShowPresentationHud(ViewerApp& app)
+{
+    app.modeHudText = std::wstring(viewer_presentation::PresetName(app.activePreset)) + L"  \u2022  "
+        + viewer_presentation::BackgroundName(app.backgroundMode) + L"  \u2022  "
+        + viewer_presentation::ToneMapName(app.toneMapMode) + L"  \u2022  exp "
+        + std::to_wstring(app.exposure).substr(0, 4);
+    app.modeHudUntil = NowSeconds() + kHudVisibleSeconds;
+}
+
+std::wstring BackgroundDisplayLabel(const ViewerApp& app)
+{
+    switch (app.backgroundMode)
+    {
+    case viewer_presentation::BackgroundMode::MidGrey:
+        return Loc("settings.background.gray", L"Studio gray");
+    case viewer_presentation::BackgroundMode::Custom:
+    {
+        wchar_t text[16]{};
+        swprintf_s(text, L"#%06X", app.backgroundColor & 0x00FFFFFFu);
+        return text;
+    }
+    case viewer_presentation::BackgroundMode::Transparent:
+        return Loc("settings.background.transparent", L"Transparent (capture alpha)");
+    case viewer_presentation::BackgroundMode::Checkerboard:
+        return Loc("settings.background.checker", L"Checkerboard (transparency review)");
+    case viewer_presentation::BackgroundMode::Dark:
+    default:
+        return Loc("settings.background.dark", L"Windows Dark");
+    }
+}
+
+void AdjustExposure(ViewerApp& app, float delta)
+{
+    app.exposure = viewer_presentation::ClampExposure(app.exposure + delta);
+    app.exposureOverridden = true;
+    ShowPresentationHud(app);
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void SetBackgroundMode(ViewerApp& app, viewer_presentation::BackgroundMode mode)
+{
+    app.backgroundMode = mode;
+    ShowPresentationHud(app);
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void CycleBackground(ViewerApp& app)
+{
+    const int next = (static_cast<int>(app.backgroundMode) + 1) % 5;
+    SetBackgroundMode(app, static_cast<viewer_presentation::BackgroundMode>(next));
+}
+
+void ToggleGroundHighlight(ViewerApp& app)
+{
+    app.groundHighlightVisible = !app.groundHighlightVisible;
+    ShowModeHud(app, app.groundHighlightVisible
+        ? Loc("hud.groundHighlightShown", L"Ground highlight shown")
+        : Loc("hud.groundHighlightHidden", L"Ground highlight hidden"));
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+// Native custom-color picker used by the inline Background submenu. Cancel
+// leaves both the saved color and the current background mode untouched.
+void ChooseCustomBackgroundColor(ViewerApp& app)
+{
+    static COLORREF customColors[16]{};
+    CHOOSECOLORW choose{};
+    choose.lStructSize = sizeof(choose);
+    choose.hwndOwner = app.window;
+    choose.rgbResult = RGB((app.backgroundColor >> 16) & 0xFFu,
+                           (app.backgroundColor >> 8) & 0xFFu,
+                           app.backgroundColor & 0xFFu);
+    choose.lpCustColors = customColors;
+    choose.Flags = CC_FULLOPEN | CC_RGBINIT;
+    if (!ChooseColorW(&choose)) return;
+    app.backgroundColor = (static_cast<uint32_t>(GetRValue(choose.rgbResult)) << 16)
+        | (static_cast<uint32_t>(GetGValue(choose.rgbResult)) << 8)
+        | static_cast<uint32_t>(GetBValue(choose.rgbResult));
+    SetBackgroundMode(app, viewer_presentation::BackgroundMode::Custom);
+}
+
+void CycleToneMap(ViewerApp& app)
+{
+    const int next = (static_cast<int>(app.toneMapMode) + 1) % 4;
+    app.toneMapMode = static_cast<viewer_presentation::ToneMapMode>(next);
+    app.toneMapOverridden = true;
+    ShowPresentationHud(app);
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
 void SetLightingMode(ViewerApp& app,LightingMode mode)
 {
+    // An explicit toolbar choice wins for the rest of the session; opening or
+    // reloading a document must not silently replace it.
+    app.presentationOverridden = true;
     app.lightingMode=mode;
     app.modeHudText=mode==LightingMode::Studio ? Loc("hud.studioLighting", L"Studio lighting")
         : mode==LightingMode::Clay ? Loc("hud.claySolid", L"Clay / Solid")
@@ -1569,9 +2012,9 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     // pressed, the Speed flyout open) rather than just delayed, so a tooltip
     // never appears over something the user is actively using.
     if (app.chrome.pressed != Chrome::Part::None || app.infoButtonPressed || app.infoPanelCloseButtonPressed ||
-        app.fullscreenButtonPressed || app.resetViewButtonPressed || app.speedSliderDragging ||
+        app.fullscreenButtonPressed || app.resetViewButtonPressed ||
         app.zoomSliderDragging || app.lightingButtonPressed>=0 || app.orbitSpeedSliderDragging ||
-        OrbitSpeedFlyoutVisible(app) || app.speedFlyoutOpen || app.settingsPanelOpen)
+        OrbitSpeedFlyoutVisible(app) || app.settingsMenuOpen)
     {
         return {};
     }
@@ -1604,7 +2047,6 @@ TooltipInfo ComputeTooltipInfo(const ViewerApp& app)
     static constexpr Entry kEntries[] = {
         { Chrome::Part::Grid, "tooltip.grid", L"Toggle ground grid" },
         { Chrome::Part::AxisSnap, "tooltip.axisSnap", L"Snap truck to axis" },
-        { Chrome::Part::Speed, "tooltip.speed", L"Flight speed" },
         { Chrome::Part::Orbit, "tooltip.orbit", L"Orbit model (auto-rotate)" },
         { Chrome::Part::Fit, "tooltip.fit", L"Frame model in view" },
         { Chrome::Part::Share, "tooltip.share", L"Share" },
@@ -1694,9 +2136,32 @@ bool ConsumeToggleCommand(ViewerApp& app, int id)
 void ToggleGrid(ViewerApp& app)
 {
     if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_GRID)) return;
+    app.presentationOverridden = true;
     app.gridVisible = !app.gridVisible;
     ShowModeHud(app, app.gridVisible ? Loc("hud.gridShown", L"Ground grid shown")
                                      : Loc("hud.gridHidden", L"Ground grid hidden"));
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void ToggleShadow(ViewerApp& app)
+{
+    if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_SHADOW)) return;
+    app.shadowVisible = !app.shadowVisible;
+    app.shadowOverridden = true;
+    ShowModeHud(app, app.shadowVisible ? Loc("hud.shadowShown", L"Contact shadow shown")
+                                       : Loc("hud.shadowHidden", L"Contact shadow hidden"));
+    SaveViewerPreferences(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+void ToggleAmbientOcclusion(ViewerApp& app)
+{
+    if (!CanNavigate(app) || !ConsumeToggleCommand(app, ID_VIEW_AMBIENT_OCCLUSION)) return;
+    app.ambientOcclusionVisible = !app.ambientOcclusionVisible;
+    ShowModeHud(app, app.ambientOcclusionVisible
+        ? Loc("hud.aoShown", L"Ambient occlusion shown")
+        : Loc("hud.aoHidden", L"Ambient occlusion hidden"));
+    SaveViewerPreferences(app);
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
@@ -1722,12 +2187,22 @@ void ToggleAxisSnap(ViewerApp& app)
 void SaveViewerPreferences(const ViewerApp& app)
 {
     ViewerSettings settings;
+    settings.version = ViewerSettings::kCurrentVersion;
     settings.showNativeOrientation = app.showNativeOrientation;
     settings.groundAxis = app.groundAxis;
     settings.groundAxisInverted = app.groundAxisInverted;
     settings.hideCursorWhileDragging = app.hideCursorWhileDragging;
+    settings.stopOrbitOnInteraction = app.stopOrbitOnInteraction;
     settings.hideModelUntilComplete = app.hideModelUntilComplete;
     settings.language = app.language;
+    settings.toneMapMode = static_cast<int>(app.toneMapMode);
+    settings.backgroundMode = static_cast<int>(app.backgroundMode);
+    settings.backgroundColor = app.backgroundColor & 0x00FFFFFFu;
+    settings.groundHighlightEnabled = app.groundHighlightVisible;
+    settings.exposure = app.exposure;
+    settings.groundShadowEnabled = app.shadowVisible;
+    settings.groundShadowOverridden = app.shadowOverridden;
+    settings.ambientOcclusionEnabled = app.ambientOcclusionVisible;
     SaveSettings(settings);
 }
 
@@ -1794,6 +2269,14 @@ void ToggleHideCursorWhileDragging(ViewerApp& app)
     SaveViewerPreferences(app);
 }
 
+void ToggleStopOrbitOnInteraction(ViewerApp& app)
+{
+    app.stopOrbitOnInteraction = !app.stopOrbitOnInteraction;
+    if (app.stopOrbitOnInteraction) StopOrbitFromInteraction(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+    SaveViewerPreferences(app);
+}
+
 void ToggleHideModelUntilComplete(ViewerApp& app)
 {
     app.hideModelUntilComplete = !app.hideModelUntilComplete;
@@ -1838,8 +2321,10 @@ void UpdateButtonAvailability(ViewerApp& app)
 {
     SetControlVisible(app.retryButton, app.state == ViewerState::Failed);
     SetControlVisible(app.openAnotherButton, app.state == ViewerState::Failed);
+    SetControlVisible(app.openAsButton, app.state == ViewerState::Failed);
     SetControlVisible(app.copyButton, app.state == ViewerState::Failed);
     EnableWindow(app.retryButton, app.failedPath.empty() ? FALSE : TRUE);
+    EnableWindow(app.openAsButton, app.failedPath.empty() ? FALSE : TRUE);
 }
 
 void LayoutControls(ViewerApp& app)
@@ -1852,11 +2337,13 @@ void LayoutControls(ViewerApp& app)
     const int actionGap = Scale(app, 8);
     const int retryWidth = Scale(app, 78);
     const int anotherWidth = Scale(app, 112);
+    const int openAsWidth = Scale(app, 96);
     const int copyWidth = Scale(app, 104);
     int actionX = card.left + Scale(app, 28);
     const int actionY = card.bottom - Scale(app, 52);
     MoveWindow(app.retryButton, actionX, actionY, retryWidth, actionHeight, TRUE); actionX += retryWidth + actionGap;
     MoveWindow(app.openAnotherButton, actionX, actionY, anotherWidth, actionHeight, TRUE); actionX += anotherWidth + actionGap;
+    MoveWindow(app.openAsButton, actionX, actionY, openAsWidth, actionHeight, TRUE); actionX += openAsWidth + actionGap;
     MoveWindow(app.copyButton, actionX, actionY, copyWidth, actionHeight, TRUE);
 
 }
@@ -1944,7 +2431,7 @@ void RecreateButtonFont(ViewerApp& app)
     if (app.buttonFont) DeleteObject(app.buttonFont);
     app.buttonFont = CreateFontW(-Scale(app, 12), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI Variable Text");
-    for (HWND button : { app.retryButton, app.openAnotherButton, app.copyButton })
+    for (HWND button : { app.retryButton, app.openAnotherButton, app.openAsButton, app.copyButton })
     {
         if (button) SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(app.buttonFont), TRUE);
     }
@@ -1991,8 +2478,9 @@ void CreateControls(ViewerApp& app)
     // error-state action buttons remain real HWND controls.
     app.retryButton = CreateButton(app, ID_VIEW_RETRY, Loc("action.retry", L"Retry").c_str());
     app.openAnotherButton = CreateButton(app, ID_VIEW_OPEN_ANOTHER, Loc("action.openAnother", L"Open another").c_str());
+    app.openAsButton = CreateButton(app, ID_VIEW_OPEN_AS, Loc("action.openAs", L"Open as\u2026").c_str());
     app.copyButton = CreateButton(app, ID_VIEW_COPY_DETAILS, Loc("action.copyDetails", L"Copy details").c_str());
-    for (HWND button : { app.retryButton, app.openAnotherButton, app.copyButton })
+    for (HWND button : { app.retryButton, app.openAnotherButton, app.openAsButton, app.copyButton })
         SetWindowSubclass(button, ErrorButtonAccessibilitySubclass, 1, 0);
     app.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
         CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, app.window, nullptr, app.instance, nullptr);
@@ -2000,6 +2488,7 @@ void CreateControls(ViewerApp& app)
     SendMessageW(app.tooltip, TTM_SETMAXTIPWIDTH, 0, Scale(app, 360));
     AddTooltip(app, app.retryButton, Loc("action.retryTip", L"Try opening this file again"));
     AddTooltip(app, app.openAnotherButton, Loc("action.openAnotherTip", L"Choose a different supported 3D model"));
+    AddTooltip(app, app.openAsButton, Loc("action.openAsTip", L"Open this file with a chosen 3D format"));
     AddTooltip(app, app.copyButton, Loc("action.copyDetailsTip", L"Copy technical error details without the file path"));
     RecreateButtonFont(app);
     UpdateButtonAvailability(app);
@@ -2013,6 +2502,10 @@ void SyncDisplayedModel(ViewerApp& app)
         app.loadedModel = displayed->metadata;
         app.currentPath = displayed->path;
         app.warning = displayed->metadata->warning;
+        if (!app.openFormatNotice.empty()) {
+            if (!app.warning.empty()) app.warning += L"\n";
+            app.warning += app.openFormatNotice;
+        }
         if (displayed->metadata->source.format == model_core::SourceFormatId::Step
             && displayed->metadata->importStatus.optionalFeatureWarnings)
             app.warning = Loc("warning.stepSurfaces", L"Some STEP surfaces or assembly items could not be displayed.");
@@ -2031,6 +2524,10 @@ void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring&
     app.state = ViewerState::Failed;
     app.errorSummary = summary;
     app.errorDetails = details;
+    if (!app.openFormatNotice.empty()) {
+        if (!app.errorDetails.empty()) app.errorDetails += L"\r\n\r\n";
+        app.errorDetails += app.openFormatNotice;
+    }
     app.failedPath = failedPath;
     app.diagnosticPath = failedPath;
     app.errorCode = code;
@@ -2066,11 +2563,14 @@ void CancelOpen(ViewerApp& app)
     viewer_accessibility::Announce(app.window, app.uiaAccessible, AccessibilityStatus(app));
 }
 
-void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> assetSearchRoots = {})
+void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> assetSearchRoots = {},
+    const model_core::FormatDescriptor* forcedFormat = nullptr)
 {
     if (path.empty()) return;
     CloseOpenWithPopup(app);
     app.assetSearchRoots = assetSearchRoots;
+    app.forcedFormat = forcedFormat;
+    app.openFormatNotice.clear();
     ++app.generation;
     if (app.cancellation)
     {
@@ -2091,15 +2591,97 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
             path, model_core::ImportErrorCode::UnsafeReference);
         return;
     }
-    const auto d3d12Format = d3d12_import_bridge::ClassifyByExtension(path);
+    // One bounded probe supplies the extension candidate, the content
+    // candidate and diagnostics. --skip-content-check deliberately treats the
+    // suffix as the only candidate. A forced format (--format / Open As)
+    // replaces candidate selection but is still validated by the worker/host.
+    const auto classification = d3d12_import_bridge::ClassifyForOpen(
+        path, app.skipContentCheck && !forcedFormat);
+    if (classification.reason == model_core::ClassificationReason::Mismatch
+        || classification.reason == model_core::ClassificationReason::Content)
+    {
+        const auto diagnostic = d3d12_import_bridge::ClassificationDiagnostic(classification);
+        OutputDebugStringW((L"Preview3D " + diagnostic + L"\n").c_str());
+    }
+
+    const model_core::FormatDescriptor* chosen = forcedFormat;
+    if (!chosen)
+    {
+        const auto decision = model_core::DecideOpenFormat(classification);
+        if (decision.action == model_core::OpenFormatAction::AskUser)
+        {
+            // Never silently pick one side of a weak/missing-suffix match. The
+            // failure card offers Open As with both candidates listed.
+            const auto detected = decision.format && decision.format->displayName
+                ? Loc(decision.format->displayNameKey, decision.format->displayName)
+                : Loc("format.unknown", L"Unknown");
+            app.openFormatNotice = LocFormat("info.detectedAs",
+                L"Detected {0}.", { detected });
+            app.filename = FileNameFromPath(path);
+            UpdateTitle(app);
+            if (decision.reason == model_core::ClassificationReason::Mismatch) {
+                const auto suffix = decision.extensionCandidate && decision.extensionCandidate->displayName
+                    ? Loc(decision.extensionCandidate->displayNameKey, decision.extensionCandidate->displayName)
+                    : Loc("format.unknown", L"Unknown");
+                SetFailure(app,
+                    Loc("failure.openAs.summary", L"The file suffix does not match its content."),
+                    LocFormat("failure.openAs.details",
+                        L"Detected {0}, but the suffix selects {1}. Choose Open As to pick the importer.",
+                        { detected, suffix }),
+                    path, model_core::ImportErrorCode::UnsupportedFormat);
+            } else {
+                SetFailure(app,
+                    Loc("failure.openAs.noSuffixSummary", L"This file needs an explicit format."),
+                    LocFormat("failure.openAs.noSuffixDetails",
+                        L"Detected {0}, but the suffix is missing or unknown. Choose Open As to open it with the {0} importer.",
+                        { detected }),
+                    path, model_core::ImportErrorCode::UnsupportedFormat);
+            }
+            return;
+        }
+        chosen = decision.format;
+    }
+
+    const auto d3d12Format = d3d12_import_bridge::SourceFormatForFormatDescriptor(chosen);
     if (!d3d12Format)
     {
         app.filename = FileNameFromPath(path);
         UpdateTitle(app);
-        SetFailure(app, Loc("failure.unsupported.summary", L"This model format is not supported."),
-            Loc("failure.unsupported.details", L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, .usdz, .step, or .stp file. Other model formats are deferred."),
-            path, model_core::ImportErrorCode::UnsupportedFormat);
+        if (chosen) {
+            // A forced catalog entry whose importer is not shipped in this
+            // release (reserved identity) is a typed failure, not a crash.
+            app.openFormatNotice = LocFormat("info.openedAsUnavailable",
+                L"The {0} importer is not available in this build.",
+                { Loc(chosen->displayNameKey, chosen->displayName) });
+            SetFailure(app,
+                Loc("failure.formatUnavailable.summary", L"This format is not supported by this build."),
+                Loc("failure.formatUnavailable.details",
+                    L"Choose a supported format in Open As or update Preview 3D."),
+                path, model_core::ImportErrorCode::UnsupportedFormat);
+        } else {
+            SetFailure(app, Loc("failure.unsupported.summary", L"This model format is not supported."),
+                Loc("failure.unsupported.details", L"Open a .glb, .gltf, .stl, .ply, .obj, .fbx, .3mf, .usd, .usda, .usdc, .usdz, .step, or .stp file. Other model formats are deferred."),
+                path, model_core::ImportErrorCode::UnsupportedFormat);
+        }
         return;
+    }
+
+    if (forcedFormat)
+    {
+        const auto opened = Loc(forcedFormat->displayNameKey, forcedFormat->displayName);
+        app.openFormatNotice = LocFormat("info.openedAs", L"Opened as {0}.", { opened });
+        if (classification.content && classification.content->family != forcedFormat->family)
+        {
+            const auto detected = Loc(classification.content->displayNameKey,
+                classification.content->displayName);
+            app.openFormatNotice += L" " + LocFormat("info.detectedAs",
+                L"Detected {0}.", { detected });
+        }
+        app.forcedFormat = forcedFormat;
+    }
+    else
+    {
+        app.forcedFormat = nullptr;
     }
 
     const auto alive = app.alive;
@@ -2147,7 +2729,12 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     // min(4 GiB, 35% of RAM); the general Tier-B scratch cap would reject a
     // legitimate large transfer as a resource limit. The host Job remains the
     // hard bound.
-    const uint64_t hostCommitCap = format == d3d12_import_bridge::SourceFormat::Step
+    const uint64_t hostCommitCap =
+        (format == d3d12_import_bridge::SourceFormat::Step
+         || format == d3d12_import_bridge::SourceFormat::Iges
+         || format == d3d12_import_bridge::SourceFormat::Brep
+         || format == d3d12_import_bridge::SourceFormat::Xbf
+         || format == d3d12_import_bridge::SourceFormat::Fcstd)
         ? import_broker::DedicatedHostCommitLimitBytes() : 0;
     auto cpuGuard = app.renderThread.CpuBudgetGuard(hostCommitCap);
     auto* stepPhase = &app.stepProgressPhase;
@@ -2200,10 +2787,62 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
             result.errorDetails = Loc("failure.generic.details", L"The importer stopped unexpectedly while reading the model.");
         }
         if (!alive->load(std::memory_order_relaxed) || (initialComplete && cancellation->load())) return;
+        // The coarse-proxy handoff already posted the successful completion.
+        // A later success from the background detail replay is a no-op; a
+        // later failure is still posted below so a terminal error after the
+        // first visible geometry is never silently treated as success.
+        if (initialComplete && result.ok) return;
         auto* message = new (std::nothrow) D3D12CompleteMessage{ generation, path, std::move(result) };
         if (message && !PostMessageW(window, kD3D12ImportCompleteMessage, 0, reinterpret_cast<LPARAM>(message)))
             delete message;
     });
+}
+
+// Failure/open-flow Open As: show the detected/suffix candidates first, then
+// every importable catalog format. Stable names are ASCII and kept in the
+// menu label so power users can map the choice to --format.
+void ShowOpenAsMenu(ViewerApp& app)
+{
+    if (app.failedPath.empty()) return;
+    const auto classification = d3d12_import_bridge::ClassifyForOpen(
+        app.failedPath, app.skipContentCheck && !app.forcedFormat);
+    std::vector<const model_core::FormatDescriptor*> choices;
+    auto addChoice = [&](const model_core::FormatDescriptor* descriptor) {
+        if (!model_core::IsImportableFormat(descriptor)) return;
+        for (const auto* existing : choices) if (existing == descriptor) return;
+        choices.push_back(descriptor);
+    };
+    // Detected content and the suffix candidate are offered first; a
+    // disagreement therefore exposes both sides rather than silently picking.
+    if (classification.selected) addChoice(classification.selected);
+    if (classification.extension && classification.extension != classification.selected)
+        addChoice(classification.extension);
+    const std::size_t preferred = choices.size();
+    for (const auto* descriptor : open_options::OpenAsFormats()) addChoice(descriptor);
+    if (choices.empty()) return;
+
+    HMENU menu = CreatePopupMenu();
+    constexpr UINT kOpenAsMenuBase = 60000;
+    for (std::size_t index = 0; index < choices.size(); ++index) {
+        if (index == preferred && preferred > 0) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        const auto* descriptor = choices[index];
+        std::wstring label = Loc(descriptor->displayNameKey, descriptor->displayName);
+        label += L"  (";
+        label += std::wstring(descriptor->stableName.begin(), descriptor->stableName.end());
+        label += L")";
+        AppendMenuW(menu, MF_STRING, kOpenAsMenuBase + static_cast<UINT>(index), label.c_str());
+    }
+    RECT button = app.chrome.Button(Chrome::Part::Overflow).rect;
+    POINT anchor{ button.right, button.bottom };
+    ClientToScreen(app.window, &anchor);
+    const int selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+        anchor.x, anchor.y, 0, app.window, nullptr);
+    DestroyMenu(menu);
+    if (selected >= static_cast<int>(kOpenAsMenuBase)
+        && selected < static_cast<int>(kOpenAsMenuBase + choices.size())) {
+        const auto* forced = choices[static_cast<std::size_t>(selected - kOpenAsMenuBase)];
+        BeginOpen(app, app.failedPath, app.assetSearchRoots, forced);
+    }
 }
 
 void OpenDialog(ViewerApp& app)
@@ -2219,33 +2858,46 @@ void OpenDialog(ViewerApp& app)
         Loc("failure.openDialogUnavailable.details", L"Windows could not create the system file picker."));
         return;
     }
-    // Filter labels are localized; the extension patterns are not. The label
-    // strings must outlive SetFileTypes, so they live in these arrays.
-    const std::wstring filterNames[] = {
-        Loc("open.filter.all", L"Supported 3D models"),
-        Loc("open.filter.gltf", L"glTF models (*.glb; *.gltf)"),
-        Loc("open.filter.stl", L"STL (*.stl)"),
-        Loc("open.filter.ply", L"PLY meshes and points (*.ply)"),
-        Loc("open.filter.obj", L"Wavefront OBJ with MTL (*.obj)"),
-        Loc("open.filter.fbx", L"Autodesk FBX (*.fbx)"),
-        Loc("open.filter.3mf", L"3D Manufacturing Format (*.3mf)"),
-        Loc("open.filter.usd", L"Universal Scene Description (*.usd; *.usda; *.usdc; *.usdz)"),
-        Loc("open.filter.step", L"STEP CAD models (*.step; *.stp)"),
-        Loc("open.filter.allFiles", L"All files (*.*)"),
+    // Filter labels are localized; the extension patterns are not. Both are
+    // generated from the format catalog so a new format cannot be added to the
+    // open dialog by hand. The vectors outlive SetFileTypes.
+    std::wstring allPattern;
+    std::vector<std::wstring> filterNames;
+    std::vector<std::wstring> filterPatterns;
+    auto appendPattern = [](std::wstring& pattern, const std::wstring& extension) {
+        if (!pattern.empty()) pattern += L';';
+        pattern += L"*." + extension;
     };
-    const wchar_t* const filterPatterns[] = {
-        L"*.glb;*.gltf;*.stl;*.ply;*.obj;*.fbx;*.3mf;*.usd;*.usda;*.usdc;*.usdz;*.step;*.stp",
-        L"*.glb;*.gltf", L"*.stl", L"*.ply", L"*.obj", L"*.fbx", L"*.3mf",
-        L"*.usd;*.usda;*.usdc;*.usdz", L"*.step;*.stp", L"*.*",
-    };
-    static_assert(ARRAYSIZE(filterNames) == ARRAYSIZE(filterPatterns), "filter arrays must match");
-    COMDLG_FILTERSPEC filters[ARRAYSIZE(filterNames)];
-    for (std::size_t index = 0; index < ARRAYSIZE(filterNames); ++index)
+    std::vector<model_core::FormatId> families;
+    for (const auto& descriptor : model_core::Formats()) {
+        if (!model_core::ProgIdForFormat(descriptor) || descriptor.extensions.empty()) continue;
+        for (const auto extension : descriptor.extensions)
+            appendPattern(allPattern, std::wstring(extension));
+        bool knownFamily = false;
+        for (const auto family : families) if (family == descriptor.family) { knownFamily = true; break; }
+        if (knownFamily) continue;
+        families.push_back(descriptor.family);
+        std::wstring pattern;
+        for (const auto& candidate : model_core::Formats()) {
+            if (candidate.family != descriptor.family) continue;
+            for (const auto extension : candidate.extensions)
+                appendPattern(pattern, std::wstring(extension));
+        }
+        const std::wstring display = Loc(descriptor.displayNameKey, descriptor.displayName);
+        filterNames.push_back(LocFormat("open.filter.format", L"{0} (*{1})", { display, pattern }));
+        filterPatterns.push_back(pattern);
+    }
+    filterNames.insert(filterNames.begin(), Loc("open.filter.all", L"Supported 3D models"));
+    filterPatterns.insert(filterPatterns.begin(), allPattern);
+    filterNames.push_back(Loc("open.filter.allFiles", L"All files (*.*)"));
+    filterPatterns.push_back(L"*.*");
+    std::vector<COMDLG_FILTERSPEC> filters(filterNames.size());
+    for (std::size_t index = 0; index < filterNames.size(); ++index)
     {
         filters[index].pszName = filterNames[index].c_str();
-        filters[index].pszSpec = filterPatterns[index];
+        filters[index].pszSpec = filterPatterns[index].c_str();
     }
-    dialog->SetFileTypes(ARRAYSIZE(filters), filters);
+    dialog->SetFileTypes(static_cast<UINT>(filters.size()), filters.data());
     dialog->SetDefaultExtension(L"glb");
     dialog->SetOptions(FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
     const HRESULT shown = dialog->Show(app.window);
@@ -2291,32 +2943,144 @@ void CopyErrorDetails(const ViewerApp& app)
     }
 }
 
-void ShowMoreMenu(ViewerApp& app)
+void ShowModelWarnings(ViewerApp& app);
+void ShowLanguageMenu(ViewerApp& app);
+void PublishOverlayNow(ViewerApp& app);
+
+void ResetSettingsMenuSections(ViewerApp& app)
 {
-    HMENU menu = CreatePopupMenu();
-    if (!app.warning.empty())
+    app.settingsMenuBackgroundExpanded = false;
+    app.settingsMenuSpeedExpanded = false;
+    app.settingsMenuOrbitExpanded = false;
+    app.settingsMenuSliderDragging = 0;
+}
+
+void CloseSettingsMenu(ViewerApp& app)
+{
+    if (!app.settingsMenuOpen && app.settingsMenuHover < 0 && app.settingsMenuPressed < 0) return;
+    const bool menuHadCapture = (app.settingsMenuPressed >= 0 || app.settingsMenuSliderDragging != 0) &&
+        GetCapture() == app.window;
+    app.settingsMenuOpen = false;
+    app.settingsMenuHover = -1;
+    app.settingsMenuPressed = -1;
+    app.settingsMenuScroll = 0;
+    ResetSettingsMenuSections(app);
+    if (menuHadCapture) ReleaseCapture();
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+// The overflow button is a real dropdown toggle now: the same click opens and
+// dismisses the D2D menu, and opening it closes whichever other flyout shares
+// the column underneath the title bar.
+void ToggleSettingsMenu(ViewerApp& app)
+{
+    CloseOpenWithPopup(app);
+    app.orbitSpeedFlyoutHover = false;
+    app.settingsMenuOpen = !app.settingsMenuOpen;
+    app.settingsMenuHover = -1;
+    app.settingsMenuPressed = -1;
+    app.settingsMenuScroll = 0;
+    ResetSettingsMenuSections(app);
+    InvalidateRect(app.window, nullptr, FALSE);
+}
+
+// Accordion behaviour keeps the dropdown compact: opening one inline section
+// closes the others, then scrolls the newly revealed control into view.
+void ToggleSettingsMenuSection(ViewerApp& app, SettingsMenuRowId section)
+{
+    switch (section)
     {
-        AppendMenuW(menu, MF_STRING, ID_VIEW_DIAGNOSTICS, Loc("menu.modelWarnings", L"Model warnings…").c_str());
-        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    case SettingsMenuRowId::Background:
+        app.settingsMenuBackgroundExpanded = !app.settingsMenuBackgroundExpanded;
+        if (app.settingsMenuBackgroundExpanded)
+        {
+            app.settingsMenuSpeedExpanded = false;
+            app.settingsMenuOrbitExpanded = false;
+            RevealSettingsMenuRow(app, SettingsMenuRowId::BackgroundChecker);
+        }
+        break;
+    case SettingsMenuRowId::FlightSpeed:
+        app.settingsMenuSpeedExpanded = !app.settingsMenuSpeedExpanded;
+        if (app.settingsMenuSpeedExpanded)
+        {
+            app.settingsMenuBackgroundExpanded = false;
+            app.settingsMenuOrbitExpanded = false;
+            RevealSettingsMenuRow(app, SettingsMenuRowId::SpeedSlider);
+        }
+        break;
+    case SettingsMenuRowId::OrbitSpeed:
+        app.settingsMenuOrbitExpanded = !app.settingsMenuOrbitExpanded;
+        if (app.settingsMenuOrbitExpanded)
+        {
+            app.settingsMenuBackgroundExpanded = false;
+            app.settingsMenuSpeedExpanded = false;
+            RevealSettingsMenuRow(app, SettingsMenuRowId::OrbitSlider);
+        }
+        break;
+    default:
+        return;
     }
-    AppendMenuW(menu, MF_STRING, ID_VIEW_CONTROLS, Loc("menu.controls", L"Controls\t?").c_str());
-    AppendMenuW(menu, MF_STRING, ID_VIEW_SETTINGS, Loc("menu.settings", L"Settings…").c_str());
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, IDM_ABOUT, Loc("menu.about", L"About Preview 3D").c_str());
-    RECT button = app.chrome.Button(Chrome::Part::Overflow).rect;
-    POINT anchor{ button.right, button.bottom };
-    ClientToScreen(app.window, &anchor);
-    TrackPopupMenu(menu, TPM_RIGHTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON, anchor.x, anchor.y, 0, app.window, nullptr);
-    DestroyMenu(menu);
+    InvalidateRect(app.window, nullptr, FALSE);
 }
 
 // Menu-invoked, not keyboard-repeatable, so no ConsumeToggleCommand guard is
 // needed (unlike ToggleGrid/ToggleAxisSnap).
-void ToggleSettingsPanel(ViewerApp& app)
+void InvokeSettingsMenuRow(ViewerApp& app, int row)
 {
-    CloseOpenWithPopup(app);
-    app.settingsPanelOpen = !app.settingsPanelOpen;
-    InvalidateRect(app.window, nullptr, FALSE);
+    switch (static_cast<SettingsMenuRowId>(row))
+    {
+    case SettingsMenuRowId::Warnings:
+        CloseSettingsMenu(app);
+        PublishOverlayNow(app);
+        ShowModelWarnings(app);
+        break;
+    case SettingsMenuRowId::NativeOrientation: ToggleShowNativeOrientation(app); break;
+    case SettingsMenuRowId::GroundHighlight: ToggleGroundHighlight(app); break;
+    case SettingsMenuRowId::GroundShadow: ToggleShadow(app); break;
+    case SettingsMenuRowId::AmbientOcclusion: ToggleAmbientOcclusion(app); break;
+    case SettingsMenuRowId::FlightSpeed:
+        ToggleSettingsMenuSection(app, SettingsMenuRowId::FlightSpeed);
+        break;
+    case SettingsMenuRowId::OrbitSpeed:
+        ToggleSettingsMenuSection(app, SettingsMenuRowId::OrbitSpeed);
+        break;
+    case SettingsMenuRowId::StopOrbitOnInteraction:
+        ToggleStopOrbitOnInteraction(app);
+        break;
+    case SettingsMenuRowId::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
+    case SettingsMenuRowId::HideModelUntilComplete: ToggleHideModelUntilComplete(app); break;
+    case SettingsMenuRowId::Background:
+        ToggleSettingsMenuSection(app, SettingsMenuRowId::Background);
+        break;
+    case SettingsMenuRowId::BackgroundDark:
+        SetBackgroundMode(app, viewer_presentation::BackgroundMode::Dark);
+        break;
+    case SettingsMenuRowId::BackgroundGray:
+        SetBackgroundMode(app, viewer_presentation::BackgroundMode::MidGrey);
+        break;
+    case SettingsMenuRowId::BackgroundCustom:
+        ChooseCustomBackgroundColor(app);
+        break;
+    case SettingsMenuRowId::BackgroundTransparent:
+        SetBackgroundMode(app, viewer_presentation::BackgroundMode::Transparent);
+        break;
+    case SettingsMenuRowId::BackgroundChecker:
+        SetBackgroundMode(app, viewer_presentation::BackgroundMode::Checkerboard);
+        break;
+    case SettingsMenuRowId::Language: ShowLanguageMenu(app); break;
+    case SettingsMenuRowId::Controls:
+        CloseSettingsMenu(app);
+        PublishOverlayNow(app);
+        ShowControlsDialog(app.window);
+        break;
+    case SettingsMenuRowId::About:
+        CloseSettingsMenu(app);
+        PublishOverlayNow(app);
+        ShowAboutDialog(app.window);
+        break;
+    default:
+        break;
+    }
 }
 
 constexpr UINT kLanguageMenuBase = 50000;
@@ -2356,7 +3120,7 @@ void ShowLanguageMenu(ViewerApp& app)
         AppendMenuW(menu, flags, kLanguageMenuBase + 1 + static_cast<UINT>(index), labels.back().c_str());
     }
 
-    const RECT row = SettingsLanguageRowRect(app);
+    const RECT row = SettingsMenuRowRect(app, SettingsMenuRowId::Language);
     POINT anchor{ row.left, row.bottom };
     ClientToScreen(app.window, &anchor);
     const int selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
@@ -2397,7 +3161,7 @@ void DrawOwnerButton(ViewerApp& app, const DRAWITEMSTRUCT& item)
     if (disabled) { fill = RGB(44, 44, 46); border = RGB(51, 51, 53); foreground = RGB(112, 112, 117); }
 
     const bool errorAction = item.CtlID == ID_VIEW_RETRY || item.CtlID == ID_VIEW_OPEN_ANOTHER ||
-        item.CtlID == ID_VIEW_COPY_DETAILS;
+        item.CtlID == ID_VIEW_OPEN_AS || item.CtlID == ID_VIEW_COPY_DETAILS;
     HBRUSH surfaceBrush = CreateSolidBrush(errorAction ? RGB(36, 36, 38) : RGB(44, 44, 46));
     FillRect(item.hDC, &bounds, surfaceBrush);
     DeleteObject(surfaceBrush);
@@ -2563,6 +3327,7 @@ void HandleCommand(ViewerApp& app, int id)
     {
     case ID_VIEW_OPEN:
     case ID_VIEW_OPEN_ANOTHER: OpenDialog(app); break;
+    case ID_VIEW_OPEN_AS: ShowOpenAsMenu(app); break;
     case ID_VIEW_FIT: FrameSelectedOrAll(app); break;
     case ID_VIEW_RESET:
         if (app.renderThread.HasModel())
@@ -2575,6 +3340,8 @@ void HandleCommand(ViewerApp& app, int id)
         }
         break;
     case ID_VIEW_GRID: ToggleGrid(app); break;
+    case ID_VIEW_SHADOW: ToggleShadow(app); break;
+    case ID_VIEW_AMBIENT_OCCLUSION: ToggleAmbientOcclusion(app); break;
     case ID_VIEW_GROUND_AXIS: CycleGroundAxis(app); break;
     case ID_VIEW_GROUND_DIRECTION: ToggleGroundDirection(app); break;
     case ID_VIEW_AXIS_SNAP: ToggleAxisSnap(app); break;
@@ -2584,12 +3351,12 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_RIGHT: SnapViewCommand(app, ViewDir::Right); break;
     case ID_VIEW_TOP: SnapViewCommand(app, ViewDir::Top); break;
     case ID_VIEW_PROJECTION: ToggleProjection(app); break;
-    case ID_VIEW_MENU: ShowMoreMenu(app); break;
-    case ID_VIEW_RETRY: if (!app.failedPath.empty()) BeginOpen(app, app.failedPath); break;
+    case ID_VIEW_MENU: ToggleSettingsMenu(app); break;
+    case ID_VIEW_RETRY: if (!app.failedPath.empty()) BeginOpen(app, app.failedPath, app.assetSearchRoots, app.forcedFormat); break;
     case ID_VIEW_COPY_DETAILS: CopyErrorDetails(app); break;
     case ID_VIEW_CANCEL: CancelOpen(app); break;
     case ID_VIEW_CONTROLS: ShowControlsDialog(app.window); break;
-    case ID_VIEW_SETTINGS: ToggleSettingsPanel(app); break;
+    case ID_VIEW_SETTINGS: ToggleSettingsMenu(app); break;
     case ID_VIEW_DIAGNOSTICS:
         ShowModelWarnings(app);
         break;
@@ -2790,8 +3557,7 @@ void ShowOpenWithPopup(ViewerApp& app, bool keyboard)
     }
     app.openWith.loading = catalog.loading;
     app.openWith.extension = OpenWithExtension(app.currentPath);
-    app.speedFlyoutOpen = false;
-    app.settingsPanelOpen = false;
+    CloseSettingsMenu(app);
     app.openWith.open = true;
     app.openWith.hovered = -1;
     app.openWith.pressed = -1;
@@ -2996,14 +3762,6 @@ void DoShare(ViewerApp& app)
     }
 }
 
-void ToggleSpeedFlyout(ViewerApp& app)
-{
-    if (!CanNavigate(app)) return;
-    CloseOpenWithPopup(app);
-    app.speedFlyoutOpen = !app.speedFlyoutOpen;
-    InvalidateRect(app.window, nullptr, FALSE);
-}
-
 // Clicking the badge used to open the Releases page. For a per-machine
 // install it now downloads the published setup, verifies its SHA-256 against
 // the adjacent release asset, and hands the restart to a non-elevated helper
@@ -3080,7 +3838,6 @@ void HandleChromeAction(ViewerApp& app, Chrome::Part part)
     case Chrome::Part::GroundAxis: HandleCommand(app, ID_VIEW_GROUND_AXIS); break;
     case Chrome::Part::GroundDirection: HandleCommand(app, ID_VIEW_GROUND_DIRECTION); break;
     case Chrome::Part::AxisSnap: HandleCommand(app, ID_VIEW_AXIS_SNAP); break;
-    case Chrome::Part::Speed: ToggleSpeedFlyout(app); break;
     case Chrome::Part::Orbit: ToggleOrbit(app); break;
     case Chrome::Part::Fit: HandleCommand(app, ID_VIEW_FIT); break;
     case Chrome::Part::Share: DoShare(app); break;
@@ -3125,7 +3882,12 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         break;
     }
     case Control::AxisSnap: chrome(Chrome::Part::AxisSnap, Loc("a11y.axisSnap", L"Axis snap"), Loc("a11y.axisSnapDesc", L"Snap truck movement to the nearest world axis")); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.axisSnapEnabled; break;
-    case Control::Speed: chrome(Chrome::Part::Speed, Loc("chrome.travelSpeed", L"Travel speed"), Loc("a11y.speedDesc", L"Open the flight-speed control")); break;
+    case Control::Speed:
+        info.name=Loc("tooltip.speed", L"Flight speed");
+        info.description=Loc("a11y.speedDesc", L"Open the flight-speed control");
+        info.value=L"\u00D7"+FormatMultiplier(app.renderThread.LockCamera()->FlySpeedScale());
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::FlightSpeed);
+        info.visible=app.settingsMenuOpen; info.role=ROLE_SYSTEM_PUSHBUTTON; break;
     case Control::Orbit: chrome(Chrome::Part::Orbit, Loc("a11y.orbit", L"Orbit model"), Loc("a11y.orbitDesc", L"Continuously rotate the model; hover for speed")); info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.orbitEnabled; break;
     case Control::Fit: chrome(Chrome::Part::Fit, Loc("a11y.fit", L"Fit selection or model")); break;
     case Control::Reset:
@@ -3205,28 +3967,125 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.checked=app.lightingMode==LightingMode::Wireframe;break;
     case Control::SpeedSlider:
     {
-        info.name=Loc("chrome.travelSpeed", L"Travel speed"); info.description=Loc("a11y.speedSliderDesc", L"Adjust flight speed"); info.rect=SpeedFlyoutTrackRect(app);
-        info.visible=app.speedFlyoutOpen; info.role=ROLE_SYSTEM_SLIDER;
+        info.name=Loc("chrome.travelSpeed", L"Travel speed"); info.description=Loc("a11y.speedSliderDesc", L"Adjust flight speed");
+        info.rect=SettingsMenuSliderTrackRect(app, SettingsMenuRowId::SpeedSlider);
+        info.visible=app.settingsMenuOpen && app.settingsMenuSpeedExpanded; info.role=ROLE_SYSTEM_SLIDER;
         auto camera=app.renderThread.LockCamera(); info.value=LocFormat("a11y.times", L"times {0}", { FormatMultiplier(camera->FlySpeedScale()) }); break;
     }
+    case Control::OrbitSpeed:
+        info.name=Loc("chrome.orbitSpeed", L"Orbit speed");
+        info.description=Loc("a11y.orbitSliderDesc", L"Adjust the auto-orbit speed");
+        info.value=std::to_wstring(static_cast<int>(std::lround(app.orbitSpeedDegreesPerSecond)))+L"\u00B0/s";
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::OrbitSpeed);
+        info.visible=app.settingsMenuOpen; info.role=ROLE_SYSTEM_PUSHBUTTON; break;
     case Control::OrbitSlider:
-    {
         info.name=Loc("chrome.orbitSpeed", L"Orbit speed"); info.description=Loc("a11y.orbitSliderDesc", L"Adjust the auto-orbit speed");
-        info.rect=OrbitFlyoutTrackRect(app); info.visible=OrbitSpeedFlyoutVisible(app); info.role=ROLE_SYSTEM_SLIDER;
+        if (app.settingsMenuOpen && app.settingsMenuOrbitExpanded)
+        {
+            info.rect=SettingsMenuSliderTrackRect(app, SettingsMenuRowId::OrbitSlider);
+            info.visible=true;
+        }
+        else
+        {
+            info.rect=OrbitFlyoutTrackRect(app);
+            info.visible=OrbitSpeedFlyoutVisible(app);
+        }
+        info.role=ROLE_SYSTEM_SLIDER;
         info.value=std::to_wstring(static_cast<int>(std::lround(app.orbitSpeedDegreesPerSecond)))+L"\u00B0/s"; break;
-    }
+    case Control::StopOrbitOnInteraction:
+        info.name=Loc("settings.stopOrbitOnInteraction", L"Stop orbit on interaction");
+        info.description=Loc("a11y.stopOrbitOnInteractionDesc", L"Stop auto-orbit whenever you move the camera or use a control");
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::StopOrbitOnInteraction);
+        info.visible=app.settingsMenuOpen; info.role=ROLE_SYSTEM_CHECKBUTTON;
+        info.checked=app.stopOrbitOnInteraction; break;
     case Control::NativeOrientation:
-        info.name=Loc("settings.nativeOrientation", L"Show model in its original orientation"); info.rect=SettingsToggleRowRect(app);
-        info.visible=app.settingsPanelOpen; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.showNativeOrientation; break;
+        info.name=Loc("settings.nativeOrientation", L"Show model in its original orientation");
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::NativeOrientation);
+        info.visible=app.settingsMenuOpen; info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.showNativeOrientation; break;
     case Control::HideCursorWhileDragging:
         info.name=Loc("settings.hideCursor", L"Hide cursor while dragging"); info.description=Loc("a11y.hideCursorDesc", L"Hide the mouse pointer during viewport camera drags");
-        info.rect=SettingsCursorToggleRowRect(app); info.visible=app.settingsPanelOpen;
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::HideCursorWhileDragging); info.visible=app.settingsMenuOpen;
         info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.hideCursorWhileDragging; break;
     case Control::HideModelUntilComplete:
         info.name=Loc("settings.hideUntilComplete", L"Show model only when fully loaded");
         info.description=Loc("a11y.hideUntilCompleteDesc", L"Keep the model hidden until loading and refinement complete");
-        info.rect=SettingsHideUntilCompleteRowRect(app); info.visible=app.settingsPanelOpen;
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::HideModelUntilComplete); info.visible=app.settingsMenuOpen;
         info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.hideModelUntilComplete; break;
+    case Control::BackgroundMode:
+        info.name=Loc("settings.background", L"Background");
+        info.description=Loc("a11y.backgroundDesc", L"Choose the viewport backdrop; it does not change model lighting");
+        info.value=BackgroundDisplayLabel(app);
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::Background); info.visible=app.settingsMenuOpen;
+        info.role=ROLE_SYSTEM_PUSHBUTTON; break;
+    case Control::BackgroundDark:
+    case Control::BackgroundGray:
+    case Control::BackgroundCustom:
+    case Control::BackgroundTransparent:
+    case Control::BackgroundChecker:
+    {
+        struct BackgroundChoice
+        {
+            viewer_accessibility::Control control;
+            SettingsMenuRowId row;
+            const char* key;
+            const wchar_t* text;
+            viewer_presentation::BackgroundMode mode;
+        };
+        static constexpr BackgroundChoice choices[] = {
+            { viewer_accessibility::Control::BackgroundDark, SettingsMenuRowId::BackgroundDark,
+                "settings.background.dark", L"Windows Dark", viewer_presentation::BackgroundMode::Dark },
+            { viewer_accessibility::Control::BackgroundGray, SettingsMenuRowId::BackgroundGray,
+                "settings.background.gray", L"Studio gray", viewer_presentation::BackgroundMode::MidGrey },
+            { viewer_accessibility::Control::BackgroundCustom, SettingsMenuRowId::BackgroundCustom,
+                "settings.background.custom", L"Custom color\u2026", viewer_presentation::BackgroundMode::Custom },
+            { viewer_accessibility::Control::BackgroundTransparent, SettingsMenuRowId::BackgroundTransparent,
+                "settings.background.transparent", L"Transparent (capture alpha)", viewer_presentation::BackgroundMode::Transparent },
+            { viewer_accessibility::Control::BackgroundChecker, SettingsMenuRowId::BackgroundChecker,
+                "settings.background.checker", L"Checkerboard (transparency review)", viewer_presentation::BackgroundMode::Checkerboard },
+        };
+        for (const auto& choice : choices)
+        {
+            if (choice.control != control) continue;
+            info.name=SettingsMenuLabel(Loc(choice.key, choice.text));
+            info.rect=SettingsMenuRowRect(app, choice.row);
+            info.visible=app.settingsMenuOpen && app.settingsMenuBackgroundExpanded;
+            info.role=ROLE_SYSTEM_RADIOBUTTON;
+            info.checked=app.backgroundMode==choice.mode;
+            break;
+        }
+        break;
+    }
+    case Control::Language:
+        info.name=SettingsMenuLabel(Loc("settings.language", L"Language"));
+        info.value=LocalizationDisplayName(LocalizationLanguage());
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::Language); info.visible=app.settingsMenuOpen;
+        info.role=ROLE_SYSTEM_PUSHBUTTON; break;
+    case Control::GroundHighlight:
+        info.name=Loc("settings.groundHighlight", L"Ground highlight");
+        info.description=Loc("a11y.groundHighlightDesc", L"Show a subtle illuminated area at the model base; contact shadows stay independent");
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::GroundHighlight); info.visible=app.settingsMenuOpen;
+        info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.groundHighlightVisible; break;
+    case Control::GroundShadow:
+        info.name=SettingsMenuLabel(Loc("menu.groundShadow", L"Ground contact shadow\tH"));
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::GroundShadow); info.visible=app.settingsMenuOpen;
+        info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.shadowVisible; break;
+    case Control::AmbientOcclusion:
+        info.name=SettingsMenuLabel(Loc("menu.ambientOcclusion", L"Ambient occlusion\tA"));
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::AmbientOcclusion); info.visible=app.settingsMenuOpen;
+        info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.ambientOcclusionVisible; break;
+    case Control::ModelWarnings:
+        info.name=SettingsMenuLabel(Loc("menu.modelWarnings", L"Model warnings\u2026"));
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::Warnings);
+        info.visible=app.settingsMenuOpen && !app.warning.empty();
+        info.role=ROLE_SYSTEM_PUSHBUTTON; break;
+    case Control::MenuControls:
+        info.name=SettingsMenuLabel(Loc("menu.controls", L"Controls\t?"));
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::Controls);
+        info.visible=app.settingsMenuOpen; info.role=ROLE_SYSTEM_PUSHBUTTON; break;
+    case Control::MenuAbout:
+        info.name=Loc("menu.about", L"About Preview 3D");
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::About);
+        info.visible=app.settingsMenuOpen; info.role=ROLE_SYSTEM_PUSHBUTTON; break;
     case Control::GizmoPositiveX: case Control::GizmoNegativeX: case Control::GizmoPositiveY:
     case Control::GizmoNegativeY: case Control::GizmoPositiveZ: case Control::GizmoNegativeZ:
     {
@@ -3301,9 +4160,14 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.role = ROLE_SYSTEM_PUSHBUTTON;
         break;
     case Control::ErrorRetry: case Control::ErrorOpenAnother: case Control::ErrorCopyDetails:
+    case Control::ErrorOpenAs:
     {
-        HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton:app.copyButton;
-        info.name=control==Control::ErrorRetry?Loc("action.retry", L"Retry"):control==Control::ErrorOpenAnother?Loc("action.openAnother", L"Open another"):Loc("action.copyDetails", L"Copy details");
+        HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton
+            :control==Control::ErrorOpenAs?app.openAsButton:app.copyButton;
+        info.name=control==Control::ErrorRetry?Loc("action.retry", L"Retry")
+            :control==Control::ErrorOpenAnother?Loc("action.openAnother", L"Open another")
+            :control==Control::ErrorOpenAs?Loc("action.openAs", L"Open as\u2026")
+            :Loc("action.copyDetails", L"Copy details");
         RECT screen{};GetWindowRect(button,&screen);POINT corners[2]={{screen.left,screen.top},{screen.right,screen.bottom}};
         MapWindowPoints(nullptr,app.window,corners,2);info.rect={corners[0].x,corners[0].y,corners[1].x,corners[1].y};
         info.visible=app.state==ViewerState::Failed;info.enabled=IsWindowEnabled(button)!=FALSE;info.focused=GetFocus()==button;
@@ -3338,6 +4202,7 @@ void FocusAccessible(ViewerApp& app, viewer_accessibility::Control control)
     }
     if (control==viewer_accessibility::Control::ErrorRetry) SetFocus(app.retryButton);
     else if (control==viewer_accessibility::Control::ErrorOpenAnother) SetFocus(app.openAnotherButton);
+    else if (control==viewer_accessibility::Control::ErrorOpenAs) SetFocus(app.openAsButton);
     else if (control==viewer_accessibility::Control::ErrorCopyDetails) SetFocus(app.copyButton);
     InvalidateRect(app.window, nullptr, FALSE);
 }
@@ -3373,18 +4238,23 @@ std::wstring AccessibilityStatusMarshaled(ViewerApp& app)
 void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
 {
     using viewer_accessibility::Control;
+    if (control != Control::Orbit && control != Control::OrbitSpeed &&
+        control != Control::OrbitSlider && control != Control::StopOrbitOnInteraction)
+    {
+        StopOrbitFromInteraction(app);
+    }
     switch (control)
     {
     case Control::Grid: HandleCommand(app,ID_VIEW_GRID); break;
     case Control::GroundAxis: HandleCommand(app,ID_VIEW_GROUND_AXIS); break;
     case Control::GroundDirection: HandleCommand(app,ID_VIEW_GROUND_DIRECTION); break;
     case Control::AxisSnap: HandleCommand(app,ID_VIEW_AXIS_SNAP); break;
-    case Control::Speed: ToggleSpeedFlyout(app); break;
+    case Control::Speed: ToggleSettingsMenuSection(app, SettingsMenuRowId::FlightSpeed); break;
     case Control::Orbit: ToggleOrbit(app); break;
     case Control::Fit: HandleCommand(app,ID_VIEW_FIT); break;
     case Control::Reset: HandleCommand(app,ID_VIEW_RESET); break;
     case Control::Share: DoShare(app); break;
-    case Control::More: ShowMoreMenu(app); break;
+    case Control::More: ToggleSettingsMenu(app); break;
     case Control::OpenWith: ToggleOpenWithPopup(app, true); break;
     case Control::OpenWithTile0: case Control::OpenWithTile1: case Control::OpenWithTile2:
     case Control::OpenWithTile3: case Control::OpenWithTile4: case Control::OpenWithTile5:
@@ -3412,6 +4282,33 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::NativeOrientation: ToggleShowNativeOrientation(app); break;
     case Control::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
     case Control::HideModelUntilComplete: ToggleHideModelUntilComplete(app); break;
+    case Control::BackgroundMode: ToggleSettingsMenuSection(app, SettingsMenuRowId::Background); break;
+    case Control::BackgroundDark: SetBackgroundMode(app, viewer_presentation::BackgroundMode::Dark); break;
+    case Control::BackgroundGray: SetBackgroundMode(app, viewer_presentation::BackgroundMode::MidGrey); break;
+    case Control::BackgroundCustom: ChooseCustomBackgroundColor(app); break;
+    case Control::BackgroundTransparent: SetBackgroundMode(app, viewer_presentation::BackgroundMode::Transparent); break;
+    case Control::BackgroundChecker: SetBackgroundMode(app, viewer_presentation::BackgroundMode::Checkerboard); break;
+    case Control::Language: ShowLanguageMenu(app); break;
+    case Control::GroundHighlight: ToggleGroundHighlight(app); break;
+    case Control::GroundShadow: ToggleShadow(app); break;
+    case Control::AmbientOcclusion: ToggleAmbientOcclusion(app); break;
+    case Control::OrbitSpeed: ToggleSettingsMenuSection(app, SettingsMenuRowId::OrbitSpeed); break;
+    case Control::StopOrbitOnInteraction: ToggleStopOrbitOnInteraction(app); break;
+    case Control::ModelWarnings:
+        CloseSettingsMenu(app);
+        PublishOverlayNow(app);
+        ShowModelWarnings(app);
+        break;
+    case Control::MenuControls:
+        CloseSettingsMenu(app);
+        PublishOverlayNow(app);
+        ShowControlsDialog(app.window);
+        break;
+    case Control::MenuAbout:
+        CloseSettingsMenu(app);
+        PublishOverlayNow(app);
+        ShowAboutDialog(app.window);
+        break;
     case Control::GizmoPositiveX: SnapViewCommand(app,ViewDir::Right); break;
     case Control::GizmoNegativeX: SnapViewCommand(app,ViewDir::Left); break;
     case Control::GizmoPositiveY: SnapViewCommand(app,ViewDir::Back); break;
@@ -3422,6 +4319,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::GizmoRollClockwise: TurnViewCommand(app,ViewTurn::RollClockwise); break;
     case Control::ErrorRetry: HandleCommand(app,ID_VIEW_RETRY); break;
     case Control::ErrorOpenAnother: HandleCommand(app,ID_VIEW_OPEN_ANOTHER); break;
+    case Control::ErrorOpenAs: HandleCommand(app,ID_VIEW_OPEN_AS); break;
     case Control::ErrorCopyDetails: HandleCommand(app,ID_VIEW_COPY_DETAILS); break;
     default: break;
     }
@@ -3761,7 +4659,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     if (overlay.infoPanelWidth > 0 && app.loadedModel)
     {
         overlay.infoPanelSections = BuildInfoPanelSections(
-            *app.loadedModel, app.showNativeOrientation, app.groundAxis);
+            *app.loadedModel, app.showNativeOrientation, app.groundAxis, app.activePresentation);
         overlay.infoPanelScrollOffset = app.infoPanelScrollOffset;
         overlay.infoPanelCloseButtonRect = InfoPanelCloseButtonRect(app);
         overlay.infoPanelCloseButtonHover = app.infoPanelCloseButtonHover;
@@ -3795,10 +4693,22 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     }
     overlay.isFullscreen = app.isFullscreen;
     overlay.lightingMode=app.lightingMode;
+    overlay.presentationProfile=app.activePresentation;
+    overlay.presentationPreset=app.activePreset;
+    overlay.toneMap=app.toneMapMode;
+    overlay.background=app.backgroundMode;
+    overlay.backgroundColor=app.backgroundColor;
+    overlay.groundHighlightVisible=app.groundHighlightVisible;
+    overlay.exposure=app.exposure;
+    overlay.studioIntensity=app.studioIntensity;
+    overlay.keyLightScale=app.keyLightScale;
+    overlay.fillLightScale=app.fillLightScale;
+    overlay.rimLightScale=app.rimLightScale;
     overlay.directionalLightAngle=app.directionalLightAngle;
     overlay.directionalLightElevation=app.directionalLightElevation;
     overlay.lightDragging=app.pointerMode==PointerMode::LightDrag;
     overlay.hasModel = app.renderThread.HasModel();
+    overlay.captureClean = app.captureClean;
     overlay.resetViewButtonAlpha = app.resetViewButtonAlpha;
     if (overlay.resetViewButtonAlpha > 0.001f)
     {
@@ -3808,6 +4718,10 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     }
     overlay.rollGlyphAlpha = app.rollGlyphAlpha;
     overlay.gridVisible = app.gridVisible;
+    overlay.shadowVisible = app.shadowVisible;
+    overlay.ambientOcclusionVisible = app.ambientOcclusionVisible;
+    overlay.ambientOcclusionStrengthOverride = app.ambientOcclusionStrengthOverride;
+    overlay.ambientOcclusionRadiusScale = app.ambientOcclusionRadiusScale;
     overlay.axisSnapEnabled = app.axisSnapEnabled;
     overlay.groundAxis = app.groundAxis;
     overlay.groundAxisInverted = app.groundAxisInverted;
@@ -3815,14 +4729,6 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         ? ResolveGroundAxis(app.groundAxis, app.loadedModel->source.upAxis) : GroundAxis::Z;
     DirectX::XMStoreFloat4x4(&overlay.modelTransform, ActiveModelTransform(app));
     overlay.infoPanelVisible = app.infoPanelVisible;
-    overlay.speedFlyoutOpen = app.speedFlyoutOpen && HasNavigableModel(app);
-    if (overlay.speedFlyoutOpen)
-    {
-        overlay.speedFlyoutRect = SpeedFlyoutRect(app);
-        overlay.speedFlyoutTrackRect = SpeedFlyoutTrackRect(app);
-        overlay.speedSliderT = static_cast<float>(SpeedSliderPositionFor(app.renderThread.LockCamera()->FlySpeedScale())) / kSpeedSliderMax;
-        overlay.speedValueText = L"×" + FormatMultiplier(app.renderThread.LockCamera()->FlySpeedScale());
-    }
     overlay.orbitEnabled = app.orbitEnabled;
     overlay.orbitFlyoutOpen = OrbitSpeedFlyoutVisible(app);
     if (overlay.orbitFlyoutOpen)
@@ -3832,30 +4738,166 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
         overlay.orbitSliderT = static_cast<float>(OrbitSliderPositionFor(app.orbitSpeedDegreesPerSecond)) / static_cast<float>(kOrbitSliderMax);
         overlay.orbitValueText = std::to_wstring(static_cast<int>(std::lround(app.orbitSpeedDegreesPerSecond))) + L"\u00B0/s";
     }
-    overlay.settingsPanelOpen = app.settingsPanelOpen;
+    overlay.settingsMenuOpen = app.settingsMenuOpen;
     overlay.showNativeOrientation = app.showNativeOrientation;
     overlay.hideCursorWhileDragging = app.hideCursorWhileDragging;
     overlay.hideModelUntilComplete = app.hideModelUntilComplete;
+    overlay.groundHighlightVisible = app.groundHighlightVisible;
     overlay.statsPanelTitle = Loc("info.statsShading", L"Stats & Shading");
-    overlay.speedFlyoutTitle = Loc("chrome.travelSpeed", L"Travel speed");
     overlay.orbitFlyoutTitle = Loc("chrome.orbitSpeed", L"Orbit speed");
-    overlay.nativeOrientationLabel = Loc("settings.nativeOrientation", L"Show model in its original orientation");
-    overlay.hideCursorLabel = Loc("settings.hideCursor", L"Hide cursor while dragging");
-    overlay.hideUntilCompleteLabel = Loc("settings.hideUntilComplete", L"Show model only when fully loaded");
-    overlay.languageLabel = Loc("settings.language", L"Language");
-    overlay.languageValue = LocalizationDisplayName(LocalizationLanguage());
     overlay.emptyDropTitle = Loc("empty.dropTitle", L"Drop a 3D model here");
     overlay.emptySupportedFormats = Loc("empty.supportedFormats", L"Supported formats: GLB/GLTF, STL, PLY, OBJ/MTL, FBX, USD/Z, 3MF, STEP/STP");
-    if (overlay.settingsPanelOpen)
+    if (overlay.settingsMenuOpen)
     {
-        overlay.settingsPanelRect = SettingsPanelRect(app);
-        overlay.nativeOrientationRowRect = SettingsToggleRowRect(app);
-        overlay.nativeOrientationSwitchRect = SettingsSwitchRect(app);
-        overlay.hideCursorRowRect = SettingsCursorToggleRowRect(app);
-        overlay.hideCursorSwitchRect = SettingsCursorSwitchRect(app);
-        overlay.hideUntilCompleteRowRect = SettingsHideUntilCompleteRowRect(app);
-        overlay.hideUntilCompleteSwitchRect = SettingsHideUntilCompleteSwitchRect(app);
-        overlay.languageRowRect = SettingsLanguageRowRect(app);
+        const SettingsMenuLayout layout = ComputeSettingsMenuLayout(app);
+        overlay.settingsMenuRect = layout.panel;
+        overlay.settingsMenuHeaderRect = layout.header;
+        overlay.settingsMenuTitle = SettingsMenuTitleText();
+        const double flySpeedScale = app.renderThread.LockCamera()->FlySpeedScale();
+        overlay.settingsMenuRows.reserve(layout.rows.size());
+        for (const auto& layoutRow : layout.rows)
+        {
+            MenuRowOverlay row;
+            row.rect = layoutRow.rect;
+            row.switchRect = layoutRow.switchRect;
+            row.sliderTrack = layoutRow.sliderTrack;
+            row.toggle = layoutRow.toggle;
+            row.dividerBefore = layoutRow.dividerBefore;
+            row.showChevron = layoutRow.showChevron;
+            row.emphasized = layoutRow.emphasized;
+            row.expanded = layoutRow.expanded;
+            row.nested = layoutRow.nested;
+            row.checked = layoutRow.checked;
+            row.hovered = app.settingsMenuHover == static_cast<int>(layoutRow.id);
+            row.pressed = app.settingsMenuPressed == static_cast<int>(layoutRow.id);
+            switch (layoutRow.id)
+            {
+            case SettingsMenuRowId::Warnings:
+            {
+                const std::wstring text = Loc("menu.modelWarnings", L"Model warnings\u2026");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                break;
+            }
+            case SettingsMenuRowId::NativeOrientation:
+            {
+                const std::wstring text = Loc("settings.nativeOrientation", L"Show model in its original orientation");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                row.on = app.showNativeOrientation;
+                break;
+            }
+            case SettingsMenuRowId::GroundHighlight:
+            {
+                const std::wstring text = Loc("settings.groundHighlight", L"Ground highlight");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                row.on = app.groundHighlightVisible;
+                break;
+            }
+            case SettingsMenuRowId::GroundShadow:
+            {
+                const std::wstring text = Loc("menu.groundShadow", L"Ground contact shadow\tH");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                row.on = app.shadowVisible;
+                break;
+            }
+            case SettingsMenuRowId::AmbientOcclusion:
+            {
+                // No accelerator: A is the strafe-left key, so only the label
+                // is shown even though older packs carry a stale "\tA" suffix.
+                row.label = SettingsMenuLabel(Loc("menu.ambientOcclusion", L"Ambient occlusion\tA"));
+                row.on = app.ambientOcclusionVisible;
+                break;
+            }
+            case SettingsMenuRowId::FlightSpeed:
+                row.label = Loc("tooltip.speed", L"Flight speed");
+                row.value = L"\u00D7" + FormatMultiplier(flySpeedScale);
+                break;
+            case SettingsMenuRowId::SpeedSlider:
+                row.slider = true;
+                row.sliderT = static_cast<float>(SpeedSliderPositionFor(flySpeedScale)) / kSpeedSliderMax;
+                break;
+            case SettingsMenuRowId::OrbitSpeed:
+                row.label = Loc("chrome.orbitSpeed", L"Orbit speed");
+                row.value = std::to_wstring(static_cast<int>(std::lround(app.orbitSpeedDegreesPerSecond))) + L"\u00B0/s";
+                break;
+            case SettingsMenuRowId::OrbitSlider:
+                row.slider = true;
+                row.sliderT = static_cast<float>(OrbitSliderPositionFor(app.orbitSpeedDegreesPerSecond)) /
+                    static_cast<float>(kOrbitSliderMax);
+                break;
+            case SettingsMenuRowId::StopOrbitOnInteraction:
+                row.label = SettingsMenuLabel(Loc("settings.stopOrbitOnInteraction", L"Stop orbit on interaction"));
+                row.on = app.stopOrbitOnInteraction;
+                break;
+            case SettingsMenuRowId::HideCursorWhileDragging:
+            {
+                const std::wstring text = Loc("settings.hideCursor", L"Hide cursor while dragging");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                row.on = app.hideCursorWhileDragging;
+                break;
+            }
+            case SettingsMenuRowId::HideModelUntilComplete:
+            {
+                const std::wstring text = Loc("settings.hideUntilComplete", L"Show model only when fully loaded");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                row.on = app.hideModelUntilComplete;
+                break;
+            }
+            case SettingsMenuRowId::Background:
+            {
+                const std::wstring text = Loc("settings.background", L"Background");
+                row.label = SettingsMenuLabel(text);
+                row.value = BackgroundDisplayLabel(app);
+                row.shortcut = L"\\";
+                break;
+            }
+            case SettingsMenuRowId::BackgroundDark:
+                row.label = SettingsMenuLabel(Loc("settings.background.dark", L"Windows Dark"));
+                break;
+            case SettingsMenuRowId::BackgroundGray:
+                row.label = SettingsMenuLabel(Loc("settings.background.gray", L"Studio gray"));
+                break;
+            case SettingsMenuRowId::BackgroundCustom:
+                row.label = SettingsMenuLabel(Loc("settings.background.custom", L"Custom color\u2026"));
+                break;
+            case SettingsMenuRowId::BackgroundTransparent:
+                row.label = SettingsMenuLabel(Loc("settings.background.transparent", L"Transparent (capture alpha)"));
+                break;
+            case SettingsMenuRowId::BackgroundChecker:
+                row.label = SettingsMenuLabel(Loc("settings.background.checker", L"Checkerboard (transparency review)"));
+                break;
+            case SettingsMenuRowId::Language:
+            {
+                const std::wstring text = Loc("settings.language", L"Language");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                row.value = LocalizationDisplayName(LocalizationLanguage());
+                break;
+            }
+            case SettingsMenuRowId::Controls:
+            {
+                const std::wstring text = Loc("menu.controls", L"Controls\t?");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                break;
+            }
+            case SettingsMenuRowId::About:
+            {
+                const std::wstring text = Loc("menu.about", L"About Preview 3D");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                break;
+            }
+            default:
+                break;
+            }
+            overlay.settingsMenuRows.push_back(std::move(row));
+        }
     }
 
     overlay.openWithOpen = app.openWith.open && HasNavigableModel(app) && !app.isFullscreen;
@@ -3930,6 +4972,16 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     return overlay;
 }
 
+void PublishOverlayNow(ViewerApp& app)
+{
+    auto overlay = std::make_shared<OverlayFrame>();
+    overlay->info = BuildOverlayInfo(app);
+    overlay->gizmo = app.gizmo;
+    overlay->chrome = app.chrome;
+    app.renderThread.PublishFrameInputs(BuildFlightInput(app), ViewportAspect(app), std::move(overlay));
+    app.renderThread.Invalidate();
+}
+
 void RefreshSystemPreferences(ViewerApp& app)
 {
     HIGHCONTRASTW contrast{sizeof(contrast)};
@@ -4002,7 +5054,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Shipping builds cannot be driven by local WM_APP messages.
         return 0;
 #else
-        if (!app->appSmoke || wParam > 86) return 0;
+        if (!app->appSmoke || wParam > 308) return 0;
         if (wParam == 67 && (lParam == 96 || lParam == 144 || lParam == 192)) {
             app->dpi=static_cast<UINT>(lParam); app->dpiScale=static_cast<float>(app->dpi)/96.0f;
             app->toolbarHeight=Scale(*app,52); app->bottomBarHeight=Scale(*app,44);
@@ -4052,6 +5104,493 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (wParam == 79) return app->groundAxisInverted;
         if (wParam == 34) return app->smokePickRequests;
+        // T20 deterministic capture controls. Fields 31/32/33/35/36 are free
+        // after the existing smoke surface; lParam == -1 reads the current
+        // canonical value. These remain inside the Debug-only block above.
+        if (wParam == 31 || wParam == 32 || wParam == 33 || wParam == 35 || wParam == 36) {
+            auto camera = app->renderThread.LockCamera();
+            constexpr LPARAM kRead = -1;
+            if (wParam == 31) {
+                if (lParam != kRead)
+                    camera->SetTestView(static_cast<float>(lParam) / 100.0f,
+                        camera->TestPitchDegrees(), camera->TestDistanceScale());
+                InvalidateRect(window, nullptr, FALSE);
+                return static_cast<LRESULT>(std::lround(camera->TestYawDegrees() * 100.0f));
+            }
+            if (wParam == 32) {
+                if (lParam != kRead)
+                    camera->SetTestView(camera->TestYawDegrees(),
+                        static_cast<float>(lParam) / 100.0f, camera->TestDistanceScale());
+                InvalidateRect(window, nullptr, FALSE);
+                return static_cast<LRESULT>(std::lround(camera->TestPitchDegrees() * 100.0f));
+            }
+            if (wParam == 33) {
+                if (lParam != kRead)
+                    camera->SetTestView(camera->TestYawDegrees(), camera->TestPitchDegrees(),
+                        static_cast<double>(lParam) / 1000.0);
+                InvalidateRect(window, nullptr, FALSE);
+                return static_cast<LRESULT>(std::lround(camera->TestDistanceScale() * 1000.0));
+            }
+            if (wParam == 35) {
+                if (lParam != kRead) {
+                    if (lParam != 0 && lParam != 1) return static_cast<LRESULT>(camera->Projection());
+                    camera->SetTestProjection(lParam ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
+                }
+                InvalidateRect(window, nullptr, FALSE);
+                return static_cast<LRESULT>(camera->Projection());
+            }
+            // 36: restore the captured first-open framing immediately.
+            if (lParam == kRead) return 1;
+            camera->ResetTestView(ViewportAspect(*app));
+            InvalidateRect(window, nullptr, FALSE);
+            return 1;
+        }
+        if (wParam == 105) {
+            app->captureClean = lParam != 0;
+            InvalidateRect(window, nullptr, FALSE);
+            return app->captureClean ? 1 : 0;
+        }
+        if (wParam == 106) {
+            // Force one render-thread pass and a synchronous WM_PAINT before a
+            // capture reads the swap chain. Returns the presented-frame count.
+            app->renderThread.Invalidate();
+            InvalidateRect(window, nullptr, FALSE);
+            UpdateWindow(window);
+            return static_cast<LRESULT>(app->renderThread.SmokeValue(7));
+        }
+        if (wParam == 107) {
+            // T20 capture capabilities: bit 0 canonical camera, bit 1
+            // capture-clean viewport, bit 2 forced present.
+            return 0x7;
+        }
+        if (wParam >= 108 && wParam <= 123) {
+            // T20 evidence: the effective source-to-viewer transform in row-major
+            // float order, one element per query. Recorded with every capture.
+            if (!app->loadedModel) return 0;
+            const DirectX::XMMATRIX transform = ActiveModelTransform(*app);
+            DirectX::XMFLOAT4X4 value{};
+            DirectX::XMStoreFloat4x4(&value, transform);
+            const float* elements = &value._11;
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(elements[wParam - 108]));
+        }
+        // T21 Debug material/light diagnostics. All of these live inside the
+        // existing PREVIEW3D_ENABLE_TEST_CONTROL + --app-smoke guard, so a
+        // shipped/Release build still rejects the message without reading any
+        // path or adding a message authority surface.
+        if (wParam == 124) {
+            if (lParam >= 0 && lParam <= 32) app->renderThread.SetDebugChannel(static_cast<uint32_t>(lParam));
+            return static_cast<LRESULT>(app->renderThread.DebugChannel());
+        }
+        if (wParam == 125) {
+            const uint64_t mask = app->renderThread.DebugChannelMask();
+            uint64_t supported = 0;
+            for (uint32_t channel = 0; channel <= 32; ++channel)
+                if ((mask & (uint64_t(1) << channel)) && RenderThread::DebugChannelSupported(channel))
+                    supported |= uint64_t(1) << channel;
+            return static_cast<LRESULT>(supported);
+        }
+        if (wParam == 126) {
+            app->debugSampleX0 = static_cast<int>(LOWORD(lParam));
+            app->debugSampleY0 = static_cast<int>(HIWORD(lParam));
+            return 1;
+        }
+        if (wParam == 127) {
+            app->debugSampleX1 = static_cast<int>(LOWORD(lParam));
+            app->debugSampleY1 = static_cast<int>(HIWORD(lParam));
+            return 1;
+        }
+        if (wParam == 128) {
+            app->renderThread.RequestDebugSample(app->debugSampleX0, app->debugSampleY0,
+                                                 app->debugSampleX1, app->debugSampleY1);
+            return 1;
+        }
+        if (wParam == 129) return static_cast<LRESULT>(app->renderThread.DebugSampleStatus());
+        if (wParam >= 130 && wParam <= 133) {
+            float rgba[4]{};
+            if (!app->renderThread.DebugSample(rgba)) return 0;
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(rgba[wParam - 130]));
+        }
+        if (wParam == 134) return static_cast<LRESULT>(app->renderThread.DebugMaterialCount());
+        if (wParam == 135) {
+            const uint32_t count = app->renderThread.DebugMaterialCount();
+            if (lParam >= 0 && static_cast<uint32_t>(lParam) < count)
+                app->debugMaterialIndex = static_cast<int>(lParam);
+            return static_cast<LRESULT>(app->debugMaterialIndex);
+        }
+        if ((wParam >= 136 && wParam <= 230)
+            || (wParam >= 233 && wParam <= 242)
+            || (wParam >= 274 && wParam <= 276)) {
+            DebugMaterialRecord record;
+            if (!app->renderThread.DebugMaterial(static_cast<uint32_t>(app->debugMaterialIndex), record))
+                return 0;
+            auto f32 = [](float value) { return static_cast<LRESULT>(std::bit_cast<uint32_t>(value)); };
+            switch (wParam) {
+            case 136: return static_cast<LRESULT>(record.chunkId);
+            case 137: return static_cast<LRESULT>(record.materialChunkId);
+            case 138: return static_cast<LRESULT>(record.sourceMeshId);
+            case 139: return static_cast<LRESULT>(record.sourceNodeId);
+            case 140: return static_cast<LRESULT>(record.instanceId);
+            case 141: return static_cast<LRESULT>(record.vertexCount);
+            case 142: return static_cast<LRESULT>(record.indexCount);
+            case 143: return static_cast<LRESULT>(record.bucket);
+            case 144: return record.depthWrite ? 1 : 0;
+            case 145: return static_cast<LRESULT>(record.cullMode);
+            case 146: return record.hasMaterial ? 1 : 0;
+            case 147: return static_cast<LRESULT>(record.alphaMode);
+            case 148: return static_cast<LRESULT>(record.flags);
+            case 149: return f32(record.baseColor[0]);
+            case 150: return f32(record.baseColor[1]);
+            case 151: return f32(record.baseColor[2]);
+            case 152: return f32(record.baseColor[3]);
+            case 153: return f32(record.metallic);
+            case 154: return f32(record.roughness);
+            case 155: return f32(record.alphaCutoff);
+            case 156: return f32(record.emissive[0]);
+            case 157: return f32(record.emissive[1]);
+            case 158: return f32(record.emissive[2]);
+            case 159: return f32(record.emissiveStrength);
+            case 160: return f32(record.clearcoatFactor);
+            case 161: return f32(record.clearcoatRoughness);
+            case 162: return f32(record.occlusionStrength);
+            case 163: return f32(record.sheenRoughness);
+            case 164: return f32(record.sheen[0]);
+            case 165: return f32(record.sheen[1]);
+            case 166: return f32(record.sheen[2]);
+            case 167: return f32(record.specularFactor);
+            case 168: return f32(record.ior);
+            case 169: return f32(record.specularColor[0]);
+            case 170: return f32(record.specularColor[1]);
+            case 171: return f32(record.specularColor[2]);
+            case 172: return f32(record.transmissionFactor);
+            case 173: return f32(record.uvOffset[0]);
+            case 174: return f32(record.uvOffset[1]);
+            case 175: return f32(record.uvScale[0]);
+            case 176: return f32(record.uvScale[1]);
+            case 177: return f32(record.uvRotation);
+            case 178: {
+                uint32_t packed = 0;
+                for (int slot = 0; slot < 4; ++slot)
+                    if (record.textureIndices[slot] >= 0)
+                        packed |= uint32_t(record.textureIndices[slot] & 0xFF) << (slot * 8);
+                return static_cast<LRESULT>(packed);
+            }
+            case 179: case 180: case 181: case 182:
+                return static_cast<LRESULT>(record.textureChunkIds[wParam - 179]);
+            case 183: case 184: case 185: case 186:
+                return static_cast<LRESULT>(record.textureFormats[wParam - 183]);
+            case 187: case 188: case 189: case 190:
+                return static_cast<LRESULT>(record.textureColorSpaces[wParam - 187]);
+            case 191: return static_cast<LRESULT>(record.mapMask);
+            case 192: return record.points ? 1 : 0;
+            case 193: return record.lines ? 1 : 0;
+            case 194: return record.completeVertex ? 1 : 0;
+            // T22 authored-input diagnostics. Slot 0 keeps the legacy uv fields
+            // above; these add normal scale, per-slot metadata and slot 4.
+            case 201: return f32(record.normalScale);
+            case 202: case 203: case 204: case 205: case 206:
+                return static_cast<LRESULT>(record.slotFlags[wParam - 202]);
+            case 207: case 208: case 209: case 210:
+                return f32(record.slotUvOffset[wParam - 207][0]);
+            case 211: case 212: case 213: case 214:
+                return f32(record.slotUvOffset[wParam - 211][1]);
+            case 215: case 216: case 217: case 218:
+                return f32(record.slotUvScale[wParam - 215][0]);
+            case 219: case 220: case 221: case 222:
+                return f32(record.slotUvScale[wParam - 219][1]);
+            case 223: case 224: case 225: case 226:
+                return f32(record.slotUvRotation[wParam - 223]);
+            case 227: return static_cast<LRESULT>(record.textureIndices[4] >= 0
+                ? uint32_t(record.textureIndices[4]) : 0u);
+            case 228: return static_cast<LRESULT>(record.textureChunkIds[4]);
+            case 229: return static_cast<LRESULT>(record.textureFormats[4]);
+            case 230: return static_cast<LRESULT>(record.textureColorSpaces[4]);
+            // T25 extension-lobe slot diagnostics. Field 233 selects one of
+            // the eight extension slots (material slots 5..12); 234..240 then
+            // expose its validated metadata through a bounded window instead of
+            // widening every per-slot field range.
+            case 233: {
+                const int selected = static_cast<int>(lParam);
+                if (selected >= 0 && selected < 8)
+                    app->debugMaterialExtensionSlot = selected;
+                return static_cast<LRESULT>(app->debugMaterialExtensionSlot);
+            }            case 234: case 235: case 236: case 237: case 238: case 239:
+            case 240: case 241: case 242: {
+                const int slot = 5 + app->debugMaterialExtensionSlot;
+                if (slot < 0 || slot >= int(model_core::kMaterialTextureSlotCount))
+                    return 0;
+                switch (wParam) {
+                case 234: return static_cast<LRESULT>(record.slotFlags[slot]);
+                case 235: return f32(record.slotUvOffset[slot - 1][0]);
+                case 236: return f32(record.slotUvOffset[slot - 1][1]);
+                case 237: return f32(record.slotUvScale[slot - 1][0]);
+                case 238: return f32(record.slotUvScale[slot - 1][1]);
+                case 239: return f32(record.slotUvRotation[slot - 1]);
+                case 240: {
+                    const uint32_t index = record.textureIndices[slot] >= 0
+                        ? uint32_t(record.textureIndices[slot]) & 0xFFu : 0u;
+                    const uint32_t format = uint32_t(record.textureFormats[slot]) & 0xFFu;
+                    const uint32_t colorSpace = uint32_t(record.textureColorSpaces[slot]) & 0xFFu;
+                    const uint32_t bound = record.textureBound[slot] ? 1u << 24 : 0u;
+                    return static_cast<LRESULT>(index | (format << 8) | (colorSpace << 16) | bound);
+                }
+                case 241: return static_cast<LRESULT>(record.textureChunkIds[slot]);
+                case 242: return f32(record.clearcoatNormalScale);
+                }
+                return 0;
+            }
+            // T29 Clay effective draw-state evidence. 143-145 already report
+            // the effective bucket/depth/cull for the current mode; these
+            // expose the authored state and whether the Clay override rewrote
+            // the draw, so a fixture can prove the PSO/bucket change itself.
+            case 274: return static_cast<LRESULT>(record.authoredBucket);
+            case 275: return record.authoredDepthWrite ? 1 : 0;
+            case 276: return record.clayOverride ? 1 : 0;
+            }
+        }
+        // T30 Directional sun state. The floats travel as their IEEE bit
+        // pattern, matching the other Debug test-control value fields;
+        // lParam == -1 reads. Azimuth stays normalized (wrapped), elevation is
+        // clamped to the documented horizon..85-degree range. The value is
+        // app-level sun state: switching lighting modes or opening another
+        // document neither resets it nor creates a per-asset exception.
+        if (wParam == 277 || wParam == 278) {
+            if (lParam != -1) {
+                const float value = std::bit_cast<float>(static_cast<uint32_t>(lParam));
+                if (std::isfinite(value)) {
+                    if (wParam == 277) {
+                        const float wrapped = value - std::floor(value);
+                        app->directionalLightAngle = wrapped;
+                    } else {
+                        app->directionalLightElevation =
+                            std::clamp(value, 0.0f, viewer_lighting::kMaxSunElevation);
+                    }
+                    InvalidateRect(window, nullptr, FALSE);
+                }
+            }
+            const float result = wParam == 277 ? app->directionalLightAngle
+                                               : app->directionalLightElevation;
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(result));
+        }
+        // T31 geometry-derived contact shadow evidence. 279 mode (0 none,
+        // 1 fitted shadow map, 2 labelled analytic fallback), 280 fallback
+        // reason, 281/282 target bytes, 283 caster draw count, 284 map extent,
+        // 285 last caster-pass microseconds, 286 query/force the analytic
+        // fallback (lParam == -1 reads). All remain inside the Debug guard.
+        if (wParam == 279) return static_cast<LRESULT>(app->renderThread.ShadowMode());
+        if (wParam == 280) return static_cast<LRESULT>(app->renderThread.ShadowFallbackReason());
+        if (wParam == 281)
+            return static_cast<LRESULT>(app->renderThread.ShadowAllocationBytes() & 0xFFFFFFFFu);
+        if (wParam == 282)
+            return static_cast<LRESULT>(app->renderThread.ShadowAllocationBytes() >> 32);
+        if (wParam == 283) return static_cast<LRESULT>(app->renderThread.ShadowCasterCount());
+        if (wParam == 284) return static_cast<LRESULT>(app->renderThread.ShadowMapSize());
+        if (wParam == 285) return static_cast<LRESULT>(app->renderThread.ShadowPassMicroseconds());
+        if (wParam == 286) {
+            if (lParam != -1) app->renderThread.SetShadowFallbackForced(lParam != 0);
+            InvalidateRect(window, nullptr, FALSE);
+            return app->renderThread.ShadowFallbackForced() ? 1 : 0;
+        }
+        // T32 screen-space AO evidence. 287 is the global visibility toggle,
+        // 288/289 are the bounded Debug strength/radius overrides (0xBF800000
+        // resets to the mode default), 290/291 the target bytes, 292 the
+        // recorded pass time, 293 the fallback reason, 294 the forced fallback,
+        // and 295-297 the effective strength/world radius/sample count.
+        if (wParam == 287) {
+            if (lParam != -1) {
+                app->ambientOcclusionVisible = lParam != 0;
+                SaveViewerPreferences(*app);
+            }
+            InvalidateRect(window, nullptr, FALSE);
+            return app->ambientOcclusionVisible ? 1 : 0;
+        }
+        if (wParam == 288 || wParam == 289) {
+            if (lParam != -1) {
+                const uint32_t bits = static_cast<uint32_t>(lParam);
+                if (bits == 0xBF800000u) {
+                    if (wParam == 288) app->ambientOcclusionStrengthOverride = -1.0f;
+                    else app->ambientOcclusionRadiusScale = -1.0f;
+                } else {
+                    const float value = std::bit_cast<float>(bits);
+                    if (std::isfinite(value)) {
+                        if (wParam == 288)
+                            app->ambientOcclusionStrengthOverride = std::clamp(value, 0.0f, 1.0f);
+                        else
+                            app->ambientOcclusionRadiusScale = std::clamp(value, 0.1f, 4.0f);
+                    }
+                }
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            const float result = wParam == 288 ? app->ambientOcclusionStrengthOverride
+                                               : app->ambientOcclusionRadiusScale;
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(result));
+        }
+        if (wParam == 290)
+            return static_cast<LRESULT>(app->renderThread.AoAllocationBytes() & 0xFFFFFFFFu);
+        if (wParam == 291)
+            return static_cast<LRESULT>(app->renderThread.AoAllocationBytes() >> 32);
+        if (wParam == 292) return static_cast<LRESULT>(app->renderThread.AoPassMicroseconds());
+        if (wParam == 293) return static_cast<LRESULT>(app->renderThread.AoFallbackReason());
+        if (wParam == 294) {
+            if (lParam != -1) app->renderThread.SetAoFallbackForced(lParam != 0);
+            InvalidateRect(window, nullptr, FALSE);
+            return app->renderThread.AoFallbackForced() ? 1 : 0;
+        }
+        if (wParam == 295)
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->renderThread.AoStrength()));
+        if (wParam == 296)
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->renderThread.AoWorldRadius()));
+        if (wParam == 297) return static_cast<LRESULT>(app->renderThread.AoSampleCount());
+        if (wParam == 298) {
+            if (lParam >= 0 && lParam <= 9) app->renderThread.SetAoDebugView(
+                static_cast<uint32_t>(lParam));
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(app->renderThread.AoDebugView());
+        }
+        if (wParam == 299) return static_cast<LRESULT>(app->renderThread.AoGpuMicroseconds());
+        // T33 edge anti-aliasing evidence. 300 is the Debug enable/disable A/B
+        // control, 301 the effective mode (0 off, 1 depth-aware FXAA, 2
+        // unavailable), 302 the fallback reason, 303 additional target bytes
+        // (always zero: the filter shares the resolve), 304 the bounded tap
+        // count and 305 the resolve CPU record time in microseconds.
+        if (wParam == 300) {
+            if (lParam != -1) app->renderThread.SetAaEnabled(lParam != 0);
+            InvalidateRect(window, nullptr, FALSE);
+            return app->renderThread.AaEnabled() ? 1 : 0;
+        }
+        if (wParam == 301) return static_cast<LRESULT>(app->renderThread.AaMode());
+        if (wParam == 302) return static_cast<LRESULT>(app->renderThread.AaFallbackReason());
+        if (wParam == 303)
+            return static_cast<LRESULT>(app->renderThread.AaAdditionalTargetBytes() & 0xFFFFFFFFu);
+        if (wParam == 304) return static_cast<LRESULT>(app->renderThread.AaTapCount());
+        if (wParam == 305) return static_cast<LRESULT>(app->renderThread.AaResolveMicroseconds());
+        // T34 corpus qualification: closed compatibility-warning facts so the
+        // render lane can record a typed degraded result instead of inferring
+        // it from warning text. 306 compatibility records, 307 optional-feature
+        // warnings, 308 texture-fallback warnings. Debug-only, like every other
+        // value field above.
+        if (wParam >= 306 && wParam <= 308) {
+            if (!app->loadedModel) return 0;
+            const auto& metadata = *app->loadedModel;
+            if (wParam == 306)
+                return static_cast<LRESULT>(metadata.compatibility.size());
+            if (wParam == 307)
+                return static_cast<LRESULT>(metadata.importStatus.optionalFeatureWarnings);
+            return static_cast<LRESULT>(metadata.importStatus.textureWarnings);
+        }
+        // T26 transparency evidence. 243/244 name the algorithm and fallback
+        // actually used by the last submitted frame; 245 is the validated
+        // supported layer range; 246/247 are the transparent draw count and
+        // the bounded OIT target bytes; 248/249 force the fallback and reverse
+        // the transparent draw order for the permuted-order regression; 250 is
+        // the high half of the target byte count; 251 is the deterministic
+        // nearest-visible pick id (never an averaged value).
+        if (wParam == 243) return static_cast<LRESULT>(app->renderThread.TransparencyAlgorithm());
+        if (wParam == 244) return static_cast<LRESULT>(app->renderThread.TransparencyFallbackReason());
+        if (wParam == 245) return static_cast<LRESULT>(app->renderThread.TransparencyLayerLimit());
+        if (wParam == 246) return static_cast<LRESULT>(app->renderThread.TransparentDrawCount());
+        if (wParam == 247) return static_cast<LRESULT>(app->renderThread.OitTargetBytes() & 0xFFFFFFFFu);
+        if (wParam == 248) {
+            if (lParam != -1) app->renderThread.SetOitForcedFallback(lParam != 0);
+            InvalidateRect(window, nullptr, FALSE);
+            return app->renderThread.OitForcedFallback() ? 1 : 0;
+        }
+        if (wParam == 249) {
+            if (lParam != -1) app->renderThread.SetTransparentOrderPermutation(lParam != 0);
+            InvalidateRect(window, nullptr, FALSE);
+            return app->renderThread.TransparentOrderPermutation() ? 1 : 0;
+        }
+        if (wParam == 250) return static_cast<LRESULT>(app->renderThread.OitTargetBytes() >> 32);
+        if (wParam == 251) return static_cast<LRESULT>(app->renderThread.LastPickedId());
+        if (wParam == 252) return app->renderThread.LastResolveUsedOit() ? 1 : 0;
+        if (wParam == 253) {
+            if (lParam >= 0 && lParam <= 7) app->renderThread.SetOitResolveDiagnostic(
+                static_cast<uint32_t>(lParam));
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(app->renderThread.OitResolveDiagnostic());
+        }
+        if (wParam == 254) return static_cast<LRESULT>(app->renderThread.PickCompletions());
+        if (wParam == 256) {
+            const RECT viewport = ViewportRect(*app);
+            return MAKELPARAM(viewport.left, viewport.top);
+        }
+        if (wParam == 257) {
+            const RECT viewport = ViewportRect(*app);
+            return MAKELPARAM(viewport.right, viewport.bottom);
+        }
+        if (wParam == 258) {
+            // T26: absolute physical client pick, used when the capture image
+            // is a DPI-downscaled viewport crop.
+            if (!app->loadedModel) return 0;
+            const int px = int(LOWORD(lParam));
+            const int py = int(HIWORD(lParam));
+            app->renderThread.RequestPick(px, py, app->loadedModel->source.generationId);
+            return 1;
+        }
+        // T27 scene-color transmission evidence. 259/260 are the bounded
+        // snapshot+mip allocation bytes, 261 the mip count, 262 the recorded
+        // degradation reason (0 none) and 263 the number of OPAQUE transmissive
+        // draws routed through the transparent pass.
+        if (wParam == 259)
+            return static_cast<LRESULT>(app->renderThread.TransmissionTargetBytes() & 0xFFFFFFFFu);
+        if (wParam == 260)
+            return static_cast<LRESULT>(app->renderThread.TransmissionTargetBytes() >> 32);
+        if (wParam == 261) return static_cast<LRESULT>(app->renderThread.TransmissionMipCount());
+        if (wParam == 262) return static_cast<LRESULT>(app->renderThread.TransmissionFallbackReason());
+        if (wParam == 263)
+            return static_cast<LRESULT>(app->renderThread.ForwardTransmissionDrawCount());
+        // T28 Studio calibration evidence. 264-266 set the camera-relative
+        // key/fill/rim scales independently of the preset so the IBL and direct
+        // contributions can be isolated; 267-273 report the immutable baked
+        // environment identity and bounded startup cost.
+        if (wParam >= 264 && wParam <= 266) {
+            const float value = std::bit_cast<float>(static_cast<uint32_t>(lParam));
+            if (std::isfinite(value)) {
+                const float clamped = std::clamp(value, 0.0f, 4.0f);
+                if (wParam == 264) app->keyLightScale = clamped;
+                else if (wParam == 265) app->fillLightScale = clamped;
+                else app->rimLightScale = clamped;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            const float result = wParam == 264 ? app->keyLightScale
+                : (wParam == 265 ? app->fillLightScale : app->rimLightScale);
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(result));
+        }
+        if (wParam == 267) return static_cast<LRESULT>(app->renderThread.StudioEnvironmentVersion());
+        if (wParam == 268)
+            return static_cast<LRESULT>(app->renderThread.StudioEnvironmentIdentityHash() & 0xFFFFFFFFu);
+        if (wParam == 269)
+            return static_cast<LRESULT>(app->renderThread.StudioEnvironmentIdentityHash() >> 32);
+        if (wParam == 270)
+            return static_cast<LRESULT>(app->renderThread.StudioEnvironmentResidentBytes() & 0xFFFFFFFFu);
+        if (wParam == 271)
+            return static_cast<LRESULT>(app->renderThread.StudioEnvironmentResidentBytes() >> 32);
+        if (wParam == 272)
+            return static_cast<LRESULT>(app->renderThread.StudioEnvironmentBakeMicroseconds());
+        if (wParam == 273)
+            return static_cast<LRESULT>(app->renderThread.StudioEnvironmentVariant());
+        if (wParam == 255) {
+            // T26: request a pick from viewport-normalized coordinates. The
+            // caller's image crop is the 3D viewport, so this avoids any
+            // window/DPI client-coordinate ambiguity in the evidence lane.
+            if (!app->loadedModel) return 0;
+            const RECT viewport = ViewportRect(*app);
+            const int nx = int(LOWORD(lParam));
+            const int ny = int(HIWORD(lParam));
+            const int width = std::max(1, int(viewport.right - viewport.left));
+            const int height = std::max(1, int(viewport.bottom - viewport.top));
+            const int px = viewport.left + (nx * (width - 1)) / 65535;
+            const int py = viewport.top + (ny * (height - 1)) / 65535;
+            app->renderThread.RequestPick(px, py, app->loadedModel->source.generationId);
+            return 1;
+        }
+        // T24: the exposure and tone-map mode the last resolve pass actually
+        // used. This proves the CPU tone-map reference is compared with the
+        // GPU's effective values, not with a stale UI snapshot.
+        if (wParam == 231) {
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(
+                app->renderThread.DebugResolveExposure()));
+        }
+        if (wParam == 232) return static_cast<LRESULT>(app->renderThread.DebugResolveToneMap());
         if (wParam >= 13 && wParam <= 29) {
             if (!app->loadedModel) return 0;
             const auto& metadata = *app->loadedModel;
@@ -4098,6 +5637,105 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (wParam == 84) return static_cast<LRESULT>(app->stepProgressPhase.load(std::memory_order_relaxed));
         if (wParam == 85) return static_cast<LRESULT>(app->stepProgressDone.load(std::memory_order_relaxed));
         if (wParam == 86) return static_cast<LRESULT>(app->stepProgressTotal.load(std::memory_order_relaxed));
+        // T14 studio evidence: query (87) and select (88) the lighting mode
+        // through the same SetLightingMode path the toolbar uses.
+        if (wParam == 87) return static_cast<LRESULT>(app->lightingMode);
+        if (wParam == 88) {
+            if (lParam < static_cast<LPARAM>(LightingMode::Studio)
+                || lParam > static_cast<LPARAM>(LightingMode::Wireframe)) return static_cast<LRESULT>(app->lightingMode);
+            SetLightingMode(*app, static_cast<LightingMode>(lParam));
+            return static_cast<LRESULT>(app->lightingMode);
+        }
+        // T15 presentation evidence: preset / exposure / background / tone map.
+        if (wParam == 89) return static_cast<LRESULT>(app->activePreset);
+        if (wParam == 90) {
+            if (lParam >= 0 && lParam <= static_cast<LPARAM>(viewer_presentation::PresentationPreset::PointCloud)) {
+                ApplyManualPresentationPreset(*app,
+                    static_cast<viewer_presentation::PresentationPreset>(lParam));
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return static_cast<LRESULT>(app->activePreset);
+        }
+        if (wParam == 91) return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->exposure));
+        if (wParam == 92) {
+            const float value = std::bit_cast<float>(static_cast<uint32_t>(lParam));
+            app->exposure = viewer_presentation::ClampExposure(value);
+            app->exposureOverridden = true;
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->exposure));
+        }
+        if (wParam == 93) return static_cast<LRESULT>(app->backgroundMode);
+        if (wParam == 94) {
+            if (lParam >= 0 && lParam <= static_cast<LPARAM>(viewer_presentation::BackgroundMode::Custom)) {
+                app->backgroundMode = static_cast<viewer_presentation::BackgroundMode>(lParam);
+                SaveViewerPreferences(*app);
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return static_cast<LRESULT>(app->backgroundMode);
+        }
+        if (wParam == 95) return static_cast<LRESULT>(app->toneMapMode);
+        if (wParam == 96) {
+            if (lParam >= 0 && lParam <= static_cast<LPARAM>(viewer_presentation::ToneMapMode::None)) {
+                app->toneMapMode = static_cast<viewer_presentation::ToneMapMode>(lParam);
+                app->toneMapOverridden = true;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return static_cast<LRESULT>(app->toneMapMode);
+        }
+        if (wParam == 97) return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->studioIntensity));
+        if (wParam == 98) {
+            const float value = std::bit_cast<float>(static_cast<uint32_t>(lParam));
+            if (std::isfinite(value)) app->studioIntensity = std::clamp(value, 0.0f, 4.0f);
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(std::bit_cast<uint32_t>(app->studioIntensity));
+        }
+        if (wParam == 99) {
+            const auto stats = app->renderThread.Stats();
+            return static_cast<LRESULT>(std::bit_cast<uint64_t>(stats.meanMs));
+        }
+        if (wParam == 100) {
+            const auto stats = app->renderThread.Stats();
+            return static_cast<LRESULT>(std::bit_cast<uint64_t>(stats.p95Ms));
+        }
+        // T16 ground-shadow evidence: query (101) and set (102) the layer.
+        if (wParam == 101) return static_cast<LRESULT>(app->shadowVisible ? 1 : 0);
+        if (wParam == 102) {
+            app->shadowVisible = lParam != 0;
+            app->shadowOverridden = true;
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(app->shadowVisible ? 1 : 0);
+        }
+        // Grid independence evidence: query (103) and set (104).
+        if (wParam == 103) return static_cast<LRESULT>(app->gridVisible ? 1 : 0);
+        if (wParam == 104) {
+            app->gridVisible = lParam != 0;
+            app->presentationOverridden = true;
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(app->gridVisible ? 1 : 0);
+        }
+        // T21a appearance evidence: ground highlight query/set (195/196) and
+        // custom background color query/set (197/198). 199 flushes the same
+        // persisted state the Settings UI and the background shortcut write.
+        if (wParam == 195) return static_cast<LRESULT>(app->groundHighlightVisible ? 1 : 0);
+        if (wParam == 196) {
+            app->groundHighlightVisible = lParam != 0;
+            SaveViewerPreferences(*app);
+            InvalidateRect(window, nullptr, FALSE);
+            return static_cast<LRESULT>(app->groundHighlightVisible ? 1 : 0);
+        }
+        if (wParam == 197) return static_cast<LRESULT>(app->backgroundColor & 0x00FFFFFFu);
+        if (wParam == 198) {
+            if (lParam >= 0 && lParam <= 0x00FFFFFF) {
+                app->backgroundColor = static_cast<uint32_t>(lParam) & 0x00FFFFFFu;
+                SaveViewerPreferences(*app);
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return static_cast<LRESULT>(app->backgroundColor & 0x00FFFFFFu);
+        }
+        if (wParam == 199) {
+            SaveViewerPreferences(*app);
+            return 1;
+        }
         if (wParam >= 80 && wParam <= 83) {
             if (!app->loadedModel) return 0;
             const auto& stats = app->loadedModel->stats;
@@ -4210,7 +5848,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         std::wstring activationError;
         if (!app->activeInstance.StartListener(window, kActivationMessage, activationError))
             SetFailure(*app, Loc("failure.activationUnavailable.summary", L"Single-instance activation is unavailable."), activationError);
-        if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath);
+        if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath, {}, app->forcedFormat);
         return 0;
     }
     // --- Custom title bar: removes the native caption (WM_NCCALCSIZE) while
@@ -4303,6 +5941,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     }
     case WM_NCLBUTTONDOWN:
     {
+        StopOrbitFromInteraction(*app);
         LRESULT dwmResult = 0;
         if (DwmDefWindowProc(window, message, wParam, lParam, &dwmResult)) return dwmResult;
         if (wParam == HTMINBUTTON || wParam == HTMAXBUTTON || wParam == HTCLOSE)
@@ -4363,7 +6002,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         break;
     }
     case WM_COMMAND:
-        if (LOWORD(wParam) == ID_VIEW_OPEN_INITIAL) BeginOpen(*app, app->initialPath);
+        if (LOWORD(wParam) == ID_VIEW_OPEN_INITIAL) BeginOpen(*app, app->initialPath, {}, app->forcedFormat);
         else HandleCommand(*app, LOWORD(wParam));
         return 0;
     case WM_DRAWITEM:
@@ -4390,6 +6029,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     }
     case WM_SIZE:
         if (app->openWith.open && wParam != SIZE_MINIMIZED) CloseOpenWithPopup(*app);
+        if (app->settingsMenuOpen && wParam != SIZE_MINIMIZED) CloseSettingsMenu(*app);
         LayoutControls(*app);
         UpdateGizmoLayout(*app);
         UpdateChromeLayout(*app);
@@ -4406,6 +6046,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_DPICHANGED:
     {
         if (app->openWith.open) CloseOpenWithPopup(*app);
+        if (app->settingsMenuOpen) CloseSettingsMenu(*app);
         app->dpi = HIWORD(wParam);
         app->dpiScale = static_cast<float>(app->dpi) / 96.0f;
         app->toolbarHeight = Scale(*app, 52);
@@ -4433,6 +6074,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     }
     case WM_DROPFILES:
     {
+        StopOrbitFromInteraction(*app);
         HDROP drop = reinterpret_cast<HDROP>(wParam);
         const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
         if (count != 1)
@@ -4451,6 +6093,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     }
     case WM_POINTERDOWN:
+        StopOrbitFromInteraction(*app);
         if (CanNavigate(*app))
         {
             const UINT32 pointerId = GET_POINTERID_WPARAM(wParam);
@@ -4523,6 +6166,12 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
             }
+            if (app->settingsMenuOpen && app->settingsMenuHover >= 0 &&
+                !IsSettingsMenuSliderRow(app->settingsMenuHover))
+            {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
             if (app->gizmo.hover != NavGizmo::Part::None && app->pointerMode == PointerMode::None && CanNavigate(*app))
             {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
@@ -4546,6 +6195,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (app->openWith.hovered >= 0)
         {
             app->openWith.hovered = -1;
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        if (app->settingsMenuHover >= 0)
+        {
+            app->settingsMenuHover = -1;
             InvalidateRect(window, nullptr, FALSE);
         }
         if (app->gizmo.hover != NavGizmo::Part::None)
@@ -4576,6 +6230,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_LBUTTONDOWN:
     {
         const POINT downPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (!PointIsOrbitControl(*app, downPoint)) StopOrbitFromInteraction(*app);
         if (app->openWith.open)
         {
             const int hit = OpenWithIndexAtPoint(*app, downPoint);
@@ -4616,61 +6271,36 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             const RECT panel = OrbitFlyoutRect(*app);
             if (PtInRect(&panel, downPoint)) return 0;
         }
-        if (app->speedFlyoutOpen)
+        if (app->settingsMenuOpen)
         {
-            const RECT track = SpeedFlyoutTrackRect(*app);
-            const RECT panel = SpeedFlyoutRect(*app);
-            RECT hitTrack = track;
-            InflateRect(&hitTrack, 0, Scale(*app, 8));
-            if (PtInRect(&hitTrack, downPoint))
+            const int hit = SettingsMenuRowAtPoint(*app, downPoint);
+            if (IsSettingsMenuSliderRow(hit))
             {
                 SetCapture(window);
-                app->speedSliderDragging = true;
-                SetFlySpeedFromFlyoutX(*app, downPoint.x);
+                app->settingsMenuSliderDragging =
+                    hit == static_cast<int>(SettingsMenuRowId::SpeedSlider) ? 1 : 2;
+                SetSettingsMenuSliderFromX(*app, static_cast<SettingsMenuRowId>(hit), downPoint.x);
                 InvalidateRect(window, nullptr, FALSE);
-                UpdateTooltipTracking(*app);
                 return 0;
             }
-            app->speedFlyoutOpen = false;
-            InvalidateRect(window, nullptr, FALSE);
-            if (PtInRect(&panel, downPoint)) return 0;
-            // A click outside the panel closes it and still falls through,
-            // so clicking a different title-bar button both dismisses the
-            // flyout and performs that click in one action.
-        }
-        if (app->settingsPanelOpen)
-        {
-            const RECT switchRect = SettingsSwitchRect(*app);
-            const RECT cursorSwitchRect = SettingsCursorSwitchRect(*app);
-            const RECT hideUntilCompleteSwitchRect = SettingsHideUntilCompleteSwitchRect(*app);
-            const RECT languageRowRect = SettingsLanguageRowRect(*app);
-            const RECT panel = SettingsPanelRect(*app);
-            if (PtInRect(&switchRect, downPoint))
+            if (hit >= 0)
             {
-                ToggleShowNativeOrientation(*app);
+                SetCapture(window);
+                app->settingsMenuPressed = hit;
+                app->settingsMenuHover = hit;
+                InvalidateRect(window, nullptr, FALSE);
                 return 0;
             }
-            if (PtInRect(&cursorSwitchRect, downPoint))
+            const RECT overflowButton = app->chrome.Button(Chrome::Part::Overflow).rect;
+            if (PtInRect(&overflowButton, downPoint))
             {
-                ToggleHideCursorWhileDragging(*app);
+                ToggleSettingsMenu(*app);
                 return 0;
             }
-            if (PtInRect(&hideUntilCompleteSwitchRect, downPoint))
-            {
-                ToggleHideModelUntilComplete(*app);
-                return 0;
-            }
-            if (PtInRect(&languageRowRect, downPoint))
-            {
-                ShowLanguageMenu(*app);
-                return 0;
-            }
-            app->settingsPanelOpen = false;
-            InvalidateRect(window, nullptr, FALSE);
-            if (PtInRect(&panel, downPoint)) return 0;
-            // Same outside-click semantics as the Speed flyout above: close
-            // and still fall through, so a click on another button both
-            // dismisses this panel and performs that click in one action.
+            if (SettingsMenuPointInPanel(*app, downPoint)) return 0;
+            CloseSettingsMenu(*app);
+            // Outside clicks dismiss the dropdown and still fall through to
+            // the control under the pointer, matching the other flyouts.
         }
         if (app->infoPanelVisible)
         {
@@ -4823,6 +6453,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     }
     case WM_MBUTTONDOWN:
+        StopOrbitFromInteraction(*app);
         if (PointInViewport(*app, POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) }) && CanNavigate(*app))
         {
             SetFocus(window);
@@ -4842,6 +6473,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         return 0;
     case WM_RBUTTONDOWN:
+        StopOrbitFromInteraction(*app);
         if (PointInViewport(*app, POINT{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) }) && CanNavigate(*app))
         {
             SetFocus(window);
@@ -4873,11 +6505,27 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 return 0;
             }
         }
-        if (app->speedSliderDragging)
+        if (app->settingsMenuOpen)
         {
-            if (GetCapture() == window) SetFlySpeedFromFlyoutX(*app, movePoint.x);
-            InvalidateRect(window, nullptr, FALSE);
-            return 0;
+            if (app->settingsMenuSliderDragging != 0)
+            {
+                const auto row = app->settingsMenuSliderDragging == 1
+                    ? SettingsMenuRowId::SpeedSlider : SettingsMenuRowId::OrbitSlider;
+                if (GetCapture() == window) SetSettingsMenuSliderFromX(*app, row, movePoint.x);
+                InvalidateRect(window, nullptr, FALSE);
+                return 0;
+            }
+            const int hit = SettingsMenuRowAtPoint(*app, movePoint);
+            if (hit != app->settingsMenuHover)
+            {
+                app->settingsMenuHover = hit;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            if (SettingsMenuPointInPanel(*app, movePoint) || app->settingsMenuPressed >= 0)
+            {
+                UpdateTooltipTracking(*app);
+                return 0;
+            }
         }
         if (app->orbitSpeedSliderDragging)
         {
@@ -4934,11 +6582,6 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 if (effective != app->chrome.hover)
                 {
                     app->chrome.hover = effective;
-                    // The two flyouts share the same column below the title
-                    // bar; don't let the hover-only Orbit slider cover an
-                    // explicitly opened Travel speed panel.
-                    if (effective == Chrome::Part::Orbit && app->speedFlyoutOpen)
-                        app->speedFlyoutOpen = false;
                     if (effective != Chrome::Part::None)
                     {
                         TRACKMOUSEEVENT track{ sizeof(track), TME_LEAVE, window, 0 };
@@ -5097,6 +6740,26 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
     }
     case WM_LBUTTONUP:
+        if (app->settingsMenuSliderDragging != 0)
+        {
+            app->settingsMenuSliderDragging = 0;
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+            UpdateTooltipTracking(*app);
+            return 0;
+        }
+        if (app->settingsMenuPressed >= 0)
+        {
+            const POINT upPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            const int pressed = app->settingsMenuPressed;
+            app->settingsMenuPressed = -1;
+            if (GetCapture() == window) ReleaseCapture();
+            InvalidateRect(window, nullptr, FALSE);
+            if (SettingsMenuRowAtPoint(*app, upPoint) == pressed)
+                InvokeSettingsMenuRow(*app, pressed);
+            UpdateTooltipTracking(*app);
+            return 0;
+        }
         if (app->openWith.pressed >= 0)
         {
             const POINT upPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -5106,13 +6769,6 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             InvalidateRect(window, nullptr, FALSE);
             if (OpenWithIndexAtPoint(*app, upPoint) == pressed)
                 InvokeOpenWithItem(*app, pressed);
-            UpdateTooltipTracking(*app);
-            return 0;
-        }
-        if (app->speedSliderDragging)
-        {
-            app->speedSliderDragging = false;
-            if (GetCapture() == window) ReleaseCapture();
             UpdateTooltipTracking(*app);
             return 0;
         }
@@ -5258,6 +6914,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     {
         POINT wheelPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };   // screen coords for this message
         ScreenToClient(window, &wheelPoint);
+        StopOrbitFromInteraction(*app);
         if (app->openWith.open && OpenWithPointInPanel(*app, wheelPoint))
         {
             ScrollOpenWith(*app, GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? 1 : -1);
@@ -5269,7 +6926,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     {
         POINT wheelPoint{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };   // screen coords for this message
         ScreenToClient(window, &wheelPoint);
+        StopOrbitFromInteraction(*app);
         const float steps = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / WHEEL_DELTA;
+        if (app->settingsMenuOpen && SettingsMenuPointInPanel(*app, wheelPoint))
+        {
+            ScrollSettingsMenu(*app, GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? -1 : 1);
+            return 0;
+        }
         if (app->openWith.open && OpenWithPointInPanel(*app, wheelPoint))
         {
             ScrollOpenWith(*app, GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? -1 : 1);
@@ -5317,7 +6980,9 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         return DefWindowProcW(window, message, wParam, lParam);
     case WM_KEYDOWN:
+        StopOrbitFromInteraction(*app);
         if (HandleOpenWithKey(*app, wParam)) return 0;
+        if (wParam == VK_ESCAPE && app->settingsMenuOpen) { CloseSettingsMenu(*app); return 0; }
         if (wParam == VK_OEM_2 && GetKeyState(VK_SHIFT) < 0) { ShowControlsDialog(window); return 0; }
         if (wParam == VK_F11) { ToggleFullscreen(*app); return 0; }
         if (wParam == VK_ESCAPE)
@@ -5328,6 +6993,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (HandleAccessibleKey(*app, wParam)) return 0;
         if (!CanNavigate(*app)) break;
+        if (wParam == VK_OEM_4) { AdjustExposure(*app, -0.1f); return 0; }
+        if (wParam == VK_OEM_6) { AdjustExposure(*app, 0.1f); return 0; }
+        if (wParam == VK_OEM_5) { CycleBackground(*app); return 0; }
+        if (wParam == VK_OEM_3) { CycleToneMap(*app); return 0; }
+        if (wParam == 'H') { ToggleShadow(*app); return 0; }
         if (SetNavigationKey(*app, wParam, true)) return 0;
         if (wParam == VK_OEM_PLUS || wParam == VK_ADD) app->renderThread.LockCamera()->Dolly(1.0f);
         else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) app->renderThread.LockCamera()->Dolly(-1.0f);
@@ -5341,8 +7011,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         StopNavigation(*app);
         EndPointer(*app);
         if (app->openWith.open) CloseOpenWithPopup(*app);
-        if (app->speedFlyoutOpen) { app->speedFlyoutOpen = false; InvalidateRect(window, nullptr, FALSE); }
-        if (app->settingsPanelOpen) { app->settingsPanelOpen = false; InvalidateRect(window, nullptr, FALSE); }
+        if (app->settingsMenuOpen) CloseSettingsMenu(*app);
         app->orbitSpeedFlyoutHover = false;
         app->orbitSpeedSliderDragging = false;
         app->resetViewButtonHover = false;
@@ -5351,7 +7020,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_CONTEXTMENU:
         return 0;
     case WM_SYSKEYDOWN:
-        if (wParam == 'M' && (lParam & (1u << 29))) { ShowMoreMenu(*app); return 0; }
+        StopOrbitFromInteraction(*app);
+        if (wParam == 'M' && (lParam & (1u << 29))) { ToggleSettingsMenu(*app); return 0; }
         break;
     case kUpdateCheckCompleteMessage:
     {
@@ -5467,7 +7137,32 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (!app->loadedModel || app->loadedModel->source.generationId != uploaded->generation) app->meshSelected = false;
             app->loadedModel = uploaded->metadata;
             app->warning=uploaded->metadata->warning;
+            if (!app->openFormatNotice.empty()) {
+                if (!app->warning.empty()) app->warning += L"\n";
+                app->warning += app->openFormatNotice;
+            }
             app->missingAssets=uploaded->metadata->missingAssets;
+        }
+        // Apply the format catalog's presentation profile once, at the first
+        // completed upload for a new document. Refinements, per-frame work and
+        // reloads of the same path must not re-apply it; an explicit lighting
+        // or grid change pins the session override.
+        if (uploaded->metadata && uploaded->terminal && !uploaded->refinement
+            && app->presentationSourcePath != uploaded->path)
+        {
+            app->presentationSourcePath = uploaded->path;
+            if (!app->presentationOverridden)
+            {
+                if (const auto* descriptor =
+                        model_core::FindBySourceFormatId(uploaded->metadata->source.format))
+                {
+                    const auto profile = model_core::ResolvePresentationProfile(*descriptor,
+                        { uploaded->metadata->pointCount, uploaded->metadata->triangleCount });
+                    ApplyPresentationProfile(*app, profile,
+                        uploaded->hasMaterialSummary ? uploaded->materialSummary
+                                                     : viewer_presentation::MaterialSummary{});
+                }
+            }
         }
         app->currentPath = uploaded->path;
         app->filename = FileNameFromPath(uploaded->path);
@@ -5624,11 +7319,23 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     app.groundAxis = settings.groundAxis;
     app.groundAxisInverted = settings.groundAxisInverted;
     app.hideCursorWhileDragging = settings.hideCursorWhileDragging;
+    app.stopOrbitOnInteraction = settings.stopOrbitOnInteraction;
     app.hideModelUntilComplete = settings.hideModelUntilComplete;
+    app.toneMapMode = static_cast<viewer_presentation::ToneMapMode>(settings.toneMapMode);
+    app.backgroundMode = static_cast<viewer_presentation::BackgroundMode>(settings.backgroundMode);
+    app.backgroundColor = settings.backgroundColor & 0x00FFFFFFu;
+    app.groundHighlightVisible = settings.groundHighlightEnabled;
+    app.exposure = viewer_presentation::ClampExposure(settings.exposure);
+    app.shadowVisible = settings.groundShadowEnabled;
+    // First launch defaults the contact shadow off. Treat that default as a
+    // pinned preference so a presentation preset cannot silently turn it back
+    // on before the user has ever touched the toggle; once toggled, the saved
+    // groundShadowOverridden value carries the choice forward.
+    app.shadowOverridden = settings.groundShadowOverridden || !settings.groundShadowEnabled;
+    app.ambientOcclusionVisible = settings.ambientOcclusionEnabled;
     app.renderThread.SetHideModelUntilComplete(app.hideModelUntilComplete);
     bool commandLineInvalid = false;
-    bool bypassSingleInstance = false;
-    bool activationSmoke = false;
+    bool listFormats = false;
     int argumentCount = 0;
     PWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
     if (arguments)
@@ -5642,8 +7349,26 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
                 if (++i >= argumentCount || !app.initialPath.empty() || arguments[i][0] == L'\0') commandLineInvalid = true;
                 else app.initialPath = arguments[i];
             }
-            else if (_wcsicmp(arguments[i], L"--new-instance") == 0) bypassSingleInstance = true;
+            // Retained as an accepted no-op: every launch is now an
+            // independent window, so the former single-instance bypass has
+            // nothing left to bypass.
+            else if (_wcsicmp(arguments[i], L"--new-instance") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
+            else if (_wcsicmp(arguments[i], L"--skip-content-check") == 0) app.skipContentCheck = true;
+            else if (_wcsicmp(arguments[i], L"--list-formats") == 0) listFormats = true;
+            else if (_wcsicmp(arguments[i], L"--format") == 0) {
+                if (++i >= argumentCount) commandLineInvalid = true;
+                else {
+                    const auto option = open_options::ParseFormatName(arguments[i]);
+                    if (!option.valid) commandLineInvalid = true;
+                    else app.forcedFormat = option.descriptor;
+                }
+            }
+            else if (_wcsnicmp(arguments[i], L"--format=", 9) == 0) {
+                const auto option = open_options::ParseFormatName(arguments[i] + 9);
+                if (!option.valid) commandLineInvalid = true;
+                else app.forcedFormat = option.descriptor;
+            }
             // The external test-control surface (--app-smoke plus the WM_APP+104
             // and WM_COPYDATA message handlers) is compiled only into Debug
             // developer/test builds. In a Release (shipping) binary these flags
@@ -5667,8 +7392,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             }
             else if (_wcsicmp(arguments[i], L"--app-smoke") == 0) app.appSmoke = true;
             else if (_wcsicmp(arguments[i], L"--activation-smoke") == 0) {
+                // Kept as an accepted Debug alias for --app-smoke. Launch
+                // election is gone, so there is no forwarding lane to test.
                 app.appSmoke = true;
-                activationSmoke = true;
             }
             else if (_wcsicmp(arguments[i], L"--uma-budget-smoke") == 0) {
                 app.appSmoke=true; app.renderThread.SetSmokeUmaDevice();
@@ -5736,6 +7462,37 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         LocalFree(arguments);
     }
 
+    if (listFormats)
+    {
+        // Stable machine-readable listing: one
+        // stable-name<TAB>extensions<TAB>display-name line per catalog format.
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
+        const std::wstring text = open_options::BuildFormatListText(
+            [](const model_core::FormatDescriptor& descriptor) {
+                return Loc(descriptor.displayNameKey, descriptor.displayName);
+            });
+        const int required = WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
+            static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+        std::string utf8(required > 0 ? static_cast<std::size_t>(required) : 0, '\0');
+        if (required > 0) {
+            WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()),
+                utf8.data(), required, nullptr, nullptr);
+        }
+        HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+        bool closeOutput = false;
+        if (!output || output == INVALID_HANDLE_VALUE || GetFileType(output) == FILE_TYPE_UNKNOWN) {
+            output = CreateFileW(L"CONOUT$", GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+            closeOutput = true;
+        }
+        DWORD written = 0;
+        if (output && output != INVALID_HANDLE_VALUE && !utf8.empty())
+            WriteFile(output, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+        if (closeOutput && output && output != INVALID_HANDLE_VALUE) CloseHandle(output);
+        if (gBackgroundBrush) DeleteObject(gBackgroundBrush);
+        return 0;
+    }
+
     if (!app.initialPath.empty())
     {
         std::wstring normalized, pathError;
@@ -5793,24 +7550,13 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         });
     }
 
+    // Every launch owns its window, GPU device and import processes. The
+    // former per-session singleton election (which forwarded a second launch
+    // to the first window and exited) is deliberately bypassed so users can
+    // compare several models side by side. NormalizeForwardPath below still
+    // comes from the same module, so the command-line path rules are shared.
     std::wstring instanceError;
-    const bool developerRun = bypassSingleInstance || (app.appSmoke && !activationSmoke)
-        || app.benchmarkMode || app.benchFrames > 0;
-    const auto instanceRole = app.activeInstance.Initialize(developerRun, instanceError);
-    if (instanceRole == active_instance::Coordinator::Role::Failed)
-    {
-        // MessageBoxW(nullptr, instanceError.c_str(), kApplicationName, MB_OK | MB_ICONERROR);
-        return 5;
-    }
-    if (instanceRole == active_instance::Coordinator::Role::Secondary)
-    {
-        active_instance::Command command;
-        command.type = app.initialPath.empty() ? active_instance::CommandType::Activate : active_instance::CommandType::Open;
-        command.path = app.initialPath;
-        if (app.activeInstance.Forward(command, instanceError)) return 0;
-        // MessageBoxW(nullptr, instanceError.c_str(), kApplicationName, MB_OK | MB_ICONERROR);
-        return 3;
-    }
+    app.activeInstance.Initialize(/*bypass=*/true, instanceError);
 
     // Explain an unsigned engineering build up front on Smart App Control
     // machines. It cannot be bypassed per app, and it may later refuse a bundled

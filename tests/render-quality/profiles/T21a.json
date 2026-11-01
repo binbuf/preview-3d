@@ -1,0 +1,48 @@
+{
+  "task": "T21a",
+  "schema": 1,
+  "description": "Windows Photos-style background and independent ground highlight. Verifies actual GPU backdrop pixels against #1C1C1E, studio gray and a custom color across exposure/tone-map changes, plus persistence, preset precedence and highlight/shadow/grid independence.",
+  "viewport": {"width": 1280, "height": 860, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 1.0}
+  },
+  "regions": {
+    "sphere-grid": {
+      "backdrop-corner": [0.01, 0.01, 0.10, 0.10],
+      "ground": [0.36, 0.86, 0.64, 0.97],
+      "model": [0.355, 0.30, 0.395, 0.36]
+    }
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "sphere-grid", "modes": ["studio"], "views": ["front"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": []
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": []
+}

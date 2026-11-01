@@ -80,7 +80,8 @@ std::wstring LowerCopy(std::wstring s)
 bool IsImageExtension(const std::wstring& lowerExtension)
 {
     static const std::wstring kImage[] = { L".png", L".jpg", L".jpeg", L".bmp",
-                                           L".tif", L".tiff", L".webp", L".ktx2" };
+                                           L".tif", L".tiff", L".webp", L".ktx2",
+                                           L".tga", L".dds", L".hdr", L".exr" };
     for (const auto& allowed : kImage) {
         if (lowerExtension == allowed) {
             return true;
@@ -110,6 +111,11 @@ bool IsAllowedSidecarExtension(ImportFormat format, const std::filesystem::path&
     case ImportFormat::Fbx:
         // FBX geometry caches are never evaluated (FBX-005), but the unified
         // PBR material path brokers approved local textures.
+        return IsImageExtension(extension);
+    case ImportFormat::Assimp:
+        // T10 compatibility formats reference textures only. The adapter's
+        // IOSystem still enforces relative/local/extension rules before asking
+        // the broker, so both layers must agree on the image allowlist.
         return IsImageExtension(extension);
     case ImportFormat::Usd:
         // The fast path brokers contained image assets; the compatibility host

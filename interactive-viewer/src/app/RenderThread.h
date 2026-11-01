@@ -67,11 +67,83 @@ struct RenderUploadResult
     std::wstring errorSummary;
     std::wstring errorDetails;
     std::shared_ptr<const ModelData> metadata;
+    // T15: bounded material/geometry summary for the material-aware preset
+    // decision. Computed on the render thread from the same imported catalog
+    // it uploads, then consumed by the UI thread once per document.
+    viewer_presentation::MaterialSummary materialSummary;
+    bool hasMaterialSummary = false;
 };
 
 struct RenderDisplaySnapshot {
     std::wstring path;
     std::shared_ptr<const ModelData> metadata;
+};
+
+// T21 per-material draw diagnostic. A bounded copy of the validated wire
+// material plus the effective draw state (bucket, depth-write, cull) as the
+// renderer actually applies it. Source-file metadata stays in the test tooling;
+// this record only reflects values the viewer validated and bound.
+struct DebugMaterialRecord
+{
+    uint32_t chunkId = 0;
+    uint32_t materialChunkId = 0;
+    uint32_t sourceMeshId = 0;
+    uint32_t sourceNodeId = 0;
+    uint32_t instanceId = 0;
+    uint32_t vertexCount = 0;
+    uint32_t indexCount = 0;
+    uint32_t alphaMode = 0;
+    uint32_t flags = 0;
+    // Effective state as the renderer applies it in the current lighting mode.
+    // T29 Clay rewrites every triangle bucket to opaque (MASK stays a cutout)
+    // and enables depth writes; the authored values remain available below.
+    uint32_t bucket = 0; // 0 opaque, 1 masked, 2 blended, 3 transmissive
+    uint32_t cullMode = 0; // 0 none, 1 back
+    bool depthWrite = true;
+    uint32_t authoredBucket = 0;
+    bool authoredDepthWrite = true;
+    bool clayOverride = false;
+    bool hasMaterial = false;
+    bool points = false;
+    bool lines = false;
+    bool completeVertex = false;
+    float baseColor[4]{};
+    float metallic = 0.0f;
+    float roughness = 0.0f;
+    float alphaCutoff = 0.0f;
+    float emissive[3]{};
+    float emissiveStrength = 1.0f;
+    float clearcoatFactor = 0.0f;
+    float clearcoatRoughness = 0.0f;
+    float occlusionStrength = 1.0f;
+    float sheenRoughness = 0.0f;
+    float sheen[3]{};
+    float specularFactor = 1.0f;
+    float ior = 1.5f;
+    float specularColor[3]{};
+    float transmissionFactor = 0.0f;
+    float uvOffset[2]{};
+    float uvScale[2]{1.0f, 1.0f};
+    float uvRotation = 0.0f;
+    // T22/T25 authored normal-map scales and the per-slot sampler/UV metadata
+    // the renderer actually applies. slotUv* arrays carry slots 1..12; slot 0
+    // is the legacy uvOffset/uvScale/uvRotation block above.
+    float normalScale = 1.0f;
+    float clearcoatNormalScale = 1.0f;
+    uint32_t slotFlags[model_core::kMaterialTextureSlotCount]{};
+    float slotUvOffset[model_core::kMaterialTextureSlotCount - 1][2]{};
+    float slotUvScale[model_core::kMaterialTextureSlotCount - 1][2]{
+        {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f},
+        {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f},
+        {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 1.0f}};
+    float slotUvRotation[model_core::kMaterialTextureSlotCount - 1]{};
+    int textureIndices[model_core::kMaterialTextureSlotCount]{
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+    uint32_t textureChunkIds[model_core::kMaterialTextureSlotCount]{};
+    uint32_t textureFormats[model_core::kMaterialTextureSlotCount]{};
+    uint32_t textureColorSpaces[model_core::kMaterialTextureSlotCount]{};
+    bool textureBound[model_core::kMaterialTextureSlotCount]{};
+    uint32_t mapMask = 0;
 };
 
 // A locked view of the Camera shared between the two threads.
@@ -308,6 +380,121 @@ public:
     void RequestPick(int x, int y, uint64_t generation);
     void InjectDeviceRemovalForTesting() { injectDeviceRemoval_.store(true); Invalidate(); }
 
+    // --- T21 Debug material/light diagnostics (Debug test control only) ---
+    // Channel 0 is the normal render; 1..20 select the diagnostic views the
+    // textured shader documents. The mask reports unsupported channels.
+    void SetDebugChannel(uint32_t channel) { debugChannel_.store(channel); Invalidate(); }
+    uint32_t DebugChannel() const noexcept { return debugChannel_.load(); }
+    // T24: the exposure/tone-map pair the last resolve actually used.
+    float DebugResolveExposure() const noexcept { return resolveExposure_.load(); }
+    uint32_t DebugResolveToneMap() const noexcept { return resolveToneMap_.load(); }
+    uint64_t DebugChannelMask() const noexcept {
+        // Channels 0..32. Bit 32 is the T27 raw transmitted-radiance sample;
+        // the mask is 64-bit so it is advertised rather than silently absent.
+        return (uint64_t(1) << 33) - 1u;
+    }
+    static bool DebugChannelSupported(uint32_t channel) noexcept {
+        return channel <= 32u && channel != 5u; // UV1 is not on the wire
+    }
+    // Numeric HDR sampling of the scene target. Status: 0 none, 1 pending,
+    // 2 ready, 3 failed (optically) 4 consumed.
+    void RequestDebugSample(int x0, int y0, int x1, int y1);
+    uint32_t DebugSampleStatus() const noexcept { return debugSampleStatus_.load(); }
+    bool DebugSample(float rgba[4]) const;
+    // Bounded per-material draw records, rebuilt when a model is published.
+    uint32_t DebugMaterialCount() const;
+    bool DebugMaterial(uint32_t index, DebugMaterialRecord& out) const;
+
+    // --- T26 transparency diagnostics (Debug test control only) ---
+    // Effective algorithm: 0 sorted fallback, 1 bounded weighted blended OIT.
+    uint32_t TransparencyAlgorithm() const noexcept { return transparencyAlgorithm_.load(); }
+    uint32_t TransparencyFallbackReason() const noexcept { return transparencyFallbackReason_.load(); }
+    uint32_t TransparencyLayerLimit() const noexcept {
+        return D3D12ViewerPath::kOitSupportedLayerLimit;
+    }
+    uint32_t TransparentDrawCount() const noexcept { return transparentDrawCount_.load(); }
+    uint64_t OitTargetBytes() const noexcept { return oitTargetBytes_.load(); }
+    bool OitForcedFallback() const noexcept { return oitForceFallback_.load(); }
+    void SetOitForcedFallback(bool enabled) { oitForceFallback_.store(enabled); Invalidate(); }
+    bool TransparentOrderPermutation() const noexcept { return transparentOrderPermutation_.load(); }
+    void SetTransparentOrderPermutation(bool enabled) {
+        transparentOrderPermutation_.store(enabled); Invalidate();
+    }
+    uint32_t LastPickedId() const noexcept { return lastPickedId_.load(); }
+    uint64_t PickCompletions() const noexcept { return pickCompletions_.load(); }
+    bool LastResolveUsedOit() const noexcept { return lastResolveUsedOit_.load(); }
+    void SetOitResolveDiagnostic(uint32_t mode) { oitResolveDiagnostic_.store(mode); Invalidate(); }
+    uint32_t OitResolveDiagnostic() const noexcept { return oitResolveDiagnostic_.load(); }
+
+    // --- T27 scene-color transmission diagnostics (Debug test control only) ---
+    uint64_t TransmissionTargetBytes() const noexcept { return transmissionTargetBytes_.load(); }
+    uint32_t TransmissionMipCount() const noexcept { return transmissionMipCount_.load(); }
+    uint32_t TransmissionFallbackReason() const noexcept {
+        return transmissionFallbackReason_.load();
+    }
+    uint32_t ForwardTransmissionDrawCount() const noexcept {
+        return forwardTransmissionDrawCount_.load();
+    }
+
+    // --- T31 geometry-derived contact shadow diagnostics (Debug only) ---
+    uint32_t ShadowMode() const noexcept { return shadowMode_.load(); }
+    uint32_t ShadowFallbackReason() const noexcept { return shadowFallbackReason_.load(); }
+    uint64_t ShadowAllocationBytes() const noexcept { return shadowAllocationBytes_.load(); }
+    uint32_t ShadowCasterCount() const noexcept { return shadowCasterCount_.load(); }
+    uint32_t ShadowMapSize() const noexcept { return shadowMapSize_.load(); }
+    uint32_t ShadowPassMicroseconds() const noexcept { return shadowPassMicroseconds_.load(); }
+    // T32 screen-space AO evidence.
+    uint32_t AoMode() const noexcept { return aoMode_.load(); }
+    uint32_t AoFallbackReason() const noexcept { return aoFallbackReason_.load(); }
+    uint64_t AoAllocationBytes() const noexcept { return aoAllocationBytes_.load(); }
+    uint32_t AoPassMicroseconds() const noexcept { return aoPassMicroseconds_.load(); }
+    uint32_t AoGpuMicroseconds() const noexcept { return aoGpuMicroseconds_.load(); }
+    float AoStrength() const noexcept { return aoStrength_.load(); }
+    float AoWorldRadius() const noexcept { return aoWorldRadius_.load(); }
+    uint32_t AoSampleCount() const noexcept { return aoSampleCount_.load(); }
+    uint32_t AoDebugView() const noexcept { return aoDebugView_.load(); }
+    void SetAoDebugView(uint32_t view) {
+        aoDebugView_.store(view);
+        path_.aoDebugView = view;
+        Invalidate();
+    }
+    bool AoFallbackForced() const noexcept { return aoFallbackForced_.load(); }
+    void SetAoFallbackForced(bool enabled) {
+        aoFallbackForced_.store(enabled);
+        path_.aoForceFallback = enabled;
+        Invalidate();
+    }
+    bool ShadowFallbackForced() const noexcept { return shadowFallbackForced_.load(); }
+    void SetShadowFallbackForced(bool enabled) {
+        shadowFallbackForced_.store(enabled); Invalidate();
+    }
+
+    // --- T33 edge anti-aliasing diagnostics (Debug test control only) ---
+    // 0 off, 1 depth-aware FXAA, 2 unavailable. The pick target and the UI
+    // overlay are outside this pass.
+    uint32_t AaMode() const noexcept { return aaMode_.load(); }
+    uint32_t AaFallbackReason() const noexcept { return aaFallbackReason_.load(); }
+    uint32_t AaTapCount() const noexcept { return aaTapCount_.load(); }
+    uint32_t AaResolveMicroseconds() const noexcept { return aaResolveMicroseconds_.load(); }
+    uint64_t AaAdditionalTargetBytes() const noexcept { return 0; }
+    bool AaEnabled() const noexcept { return !aaForceDisabled_.load(); }
+    void SetAaEnabled(bool enabled) { aaForceDisabled_.store(!enabled); Invalidate(); }
+
+    // --- T28 Studio environment provenance/cost (Debug test control only) ---
+    uint32_t StudioEnvironmentVersion() const noexcept { return studioEnvironmentVersion_.load(); }
+    uint64_t StudioEnvironmentIdentityHash() const noexcept {
+        return studioEnvironmentIdentityHash_.load();
+    }
+    uint64_t StudioEnvironmentResidentBytes() const noexcept {
+        return studioEnvironmentResidentBytes_.load();
+    }
+    uint32_t StudioEnvironmentBakeMicroseconds() const noexcept {
+        return studioEnvironmentBakeMicroseconds_.load();
+    }
+    uint32_t StudioEnvironmentVariant() const noexcept {
+        return studioEnvironmentVariant_.load();
+    }
+
 private:
     void ThreadMain(HWND window);
     bool InitializeOnThread(HWND window, std::wstring& error);
@@ -363,6 +550,30 @@ private:
     std::atomic<uint64_t> debugErrors_{0}, debugAvailable_{0};
     std::atomic<uint64_t> textureExtent_{0},textureCount_{0},textureMips_{0};
     std::atomic<uint64_t> pickCompletions_{0}, pickHits_{0};
+    std::atomic<uint32_t> lastPickedId_{0};
+    std::atomic<uint32_t> transparencyAlgorithm_{0}, transparencyFallbackReason_{0};
+    std::atomic<uint32_t> transparentDrawCount_{0};
+    std::atomic<uint64_t> oitTargetBytes_{0};
+    std::atomic<uint64_t> transmissionTargetBytes_{0};
+    std::atomic<uint32_t> transmissionMipCount_{0}, transmissionFallbackReason_{0};
+    std::atomic<uint32_t> studioEnvironmentVersion_{0};
+    std::atomic<uint32_t> studioEnvironmentVariant_{0};
+    std::atomic<uint64_t> studioEnvironmentIdentityHash_{0}, studioEnvironmentResidentBytes_{0};
+    std::atomic<uint32_t> studioEnvironmentBakeMicroseconds_{0};
+    std::atomic<uint32_t> forwardTransmissionDrawCount_{0};
+    std::atomic<bool> oitForceFallback_{false}, transparentOrderPermutation_{false};
+    std::atomic<bool> lastResolveUsedOit_{false};
+    std::atomic<uint32_t> oitResolveDiagnostic_{0};
+    std::atomic<uint32_t> aoMode_{0}, aoFallbackReason_{0}, aoPassMicroseconds_{0};
+    std::atomic<uint32_t> aoGpuMicroseconds_{0};
+    std::atomic<uint32_t> aoSampleCount_{0};
+    std::atomic<uint64_t> aoAllocationBytes_{0};
+    std::atomic<float> aoStrength_{0.0f}, aoWorldRadius_{0.0f};
+    std::atomic<bool> aoFallbackForced_{false};
+    std::atomic<uint32_t> aoDebugView_{0};
+    std::atomic<uint32_t> aaMode_{0}, aaFallbackReason_{0}, aaTapCount_{0},
+        aaResolveMicroseconds_{0};
+    std::atomic<bool> aaForceDisabled_{false};
     std::uint64_t modelGeneration_ = 0; // render-thread-owned
 
     // Guards `camera_`, `flightInput_`, `viewportAspect_` and `frameOverlay_`, all
@@ -381,6 +592,9 @@ private:
     struct PickRequest { int x, y; uint64_t generation; };
     std::optional<PickRequest> pickRequest_;
     std::optional<PickRequest> pendingPick_;
+    struct DebugSampleRequest { int x0, y0, x1, y1; };
+    std::optional<DebugSampleRequest> debugSampleRequest_;
+    void RefreshDebugMaterials();
     struct UploadTask {
         d3d12_import_bridge::ImportResult result;
         std::uint64_t generation = 0;
@@ -446,8 +660,23 @@ private:
     bool recoveryAttempted_ = false;
     bool deviceFatal_ = false;
     std::atomic<bool> injectDeviceRemoval_{false};
+    std::atomic<uint32_t> debugChannel_{0};
+    // T29: the last lighting mode whose effective draw state was copied into
+    // debugMaterials_. A mode change refreshes the bounded records once; no
+    // per-frame material copy is added to the frame path.
+    LightingMode debugLightingMode_ = LightingMode::Studio;
+    std::atomic<float> resolveExposure_{1.0f};
+    std::atomic<uint32_t> resolveToneMap_{0};
+    std::atomic<uint32_t> debugSampleStatus_{0};
+    mutable std::mutex debugMutex_;
+    float debugSampleRgba_[4]{};
+    std::vector<DebugMaterialRecord> debugMaterials_;
     std::atomic<bool> recoveryRequested_{false};
     std::atomic<uint64_t> recoveryCount_{0};
+    std::atomic<uint32_t> shadowMode_{0}, shadowFallbackReason_{0}, shadowCasterCount_{0},
+        shadowMapSize_{0}, shadowPassMicroseconds_{0};
+    std::atomic<uint64_t> shadowAllocationBytes_{0};
+    std::atomic<bool> shadowFallbackForced_{false};
     double pauseDetailUntil_=0;
     std::unordered_map<uint32_t,model_core::ChunkDescriptor> scanCatalog_;
 

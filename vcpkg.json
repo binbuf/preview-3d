@@ -16,6 +16,8 @@
     "lib3mf",
     "zlib",
     "tinyusdz",
-    "openusd"
+    "openusd",
+    "assimp",
+    "pugixml"
   ]
 }

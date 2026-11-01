@@ -1,0 +1,76 @@
+{
+  "task": "T26",
+  "schema": 1,
+  "description": "Bounded weighted blended order-independent transparency. A generated layered-glass scene exercises intersecting triangles in one primitive, primitive/draw order permutations, nested front/back glass, alpha decals, cutouts and emissive blends. The focused lane proves OIT is permutation-invariant while the recorded sorted fallback is not, then checks nearest-visible picking, resize/cancel/device-loss/low-memory behavior and Car/Camera paired visual cases.",
+  "viewport": {"width": 1280, "height": 900, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 2.0},
+    "oblique": {"yawDegrees": 20.0, "pitchDegrees": 70.0, "distanceScale": 2.0}
+  },
+  "regions": {
+    "layered-glass": {
+      "left-column": [0.28, 0.3, 0.5, 0.75],
+      "centre-column": [0.4, 0.3, 0.62, 0.75],
+      "right-column": [0.52, 0.3, 0.78, 0.75]
+    },
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "paint": [0.34, 0.55, 0.72, 0.9]
+    },
+    "camera": {
+      "lens": [0.33, 0.22, 0.68, 0.7],
+      "black-body": [0.18, 0.45, 0.55, 0.92]
+    }
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "layered-glass", "modes": ["studio"], "views": ["front", "oblique"]},
+        {"id": "layered-glass-permuted", "modes": ["studio"], "views": ["front", "oblique"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "car", "modes": ["studio"], "views": ["front", "oblique"]},
+        {"id": "camera", "modes": ["studio"], "views": ["front"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "weighted-oit-is-approximate",
+      "assets": ["layered-glass", "car", "camera"],
+      "description": "Weighted blended OIT is order-independent but resolves a weighted colour average and a coverage product, not an exact front-to-back layer stack. The validated overlap range is eight layers; beyond it the image remains stable but is not claimed exact.",
+      "label": "limitation",
+      "assignedTo": "T26"
+    },
+    {
+      "id": "transmission-interim-alpha",
+      "assets": ["layered-glass", "car", "camera"],
+      "description": "OIT composites coverage, reflection and transmission as separate material terms but provides no refraction. T27 owns transmitted-scene sampling, tint and rough refraction.",
+      "label": "limitation",
+      "assignedTo": "T27"
+    }
+  ]
+}

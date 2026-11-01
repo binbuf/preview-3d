@@ -89,9 +89,15 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="src\ui\NavGizmo.h" />
     <ClInclude Include="src\app\Preview3D.h" />
     <ClInclude Include="src\render\Renderer.h" />
+    <ClInclude Include="src\render\Presentation.h" />
+    <ClInclude Include="src\render\AntiAliasing.h" />
+    <ClInclude Include="src\render\GroundShadow.h" />
+    <ClInclude Include="src\render\ScreenSpaceAo.h" />
+    <ClInclude Include="src\render\LightRig.h" />
     <ClInclude Include="src\app\Resource.h" />
     <ClInclude Include="src\app\Settings.h" />
     <ClInclude Include="src\app\Localization.h" />
+    <ClInclude Include="src\app\CompatibilityText.h" />
     <ClInclude Include="src\app\Version.h" />
     <ClInclude Include="src\app\GroundAxis.h" />
     <ClInclude Include="src\platform\ShellIntegration.h" />
@@ -130,6 +136,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClInclude Include="..\shared\import-broker\include\import_broker\SidecarPathResolver.h" />
     <ClInclude Include="..\shared\import-broker\include\import_broker\SidecarRequestServicer.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\WireFormat.h" />
+    <ClInclude Include="..\shared\model-core\include\model_core\Compatibility.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\VertexLayouts.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\shared\model-core\include\model_core\ImportError.h" />
@@ -149,6 +156,11 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClCompile Include="src\app\Settings.cpp" />
     <ClCompile Include="src\app\Localization.cpp" />
     <ClCompile Include="src\render\Renderer.cpp" />
+    <ClCompile Include="src\render\StudioEnvironment.cpp" />
+    <ClCompile Include="src\render\Presentation.cpp" />
+    <ClCompile Include="src\render\AntiAliasing.cpp" />
+    <ClCompile Include="src\render\GroundShadow.cpp" />
+    <ClCompile Include="src\render\ScreenSpaceAo.cpp" />
     <ClCompile Include="src\platform\ShellIntegration.cpp" />
     <ClCompile Include="src\platform\OpenWithCache.cpp" />
     <ClCompile Include="src\platform\OpenWithNaming.cpp" />
@@ -182,6 +194,7 @@ xcopy /Y /I /Q "$(ProjectDir)lang\*.json" "$(OutDir)lang\" &gt;nul</Command>
     <ClCompile Include="..\shared\import-broker\src\SidecarPathResolver.cpp" />
     <ClCompile Include="..\shared\import-broker\src\SidecarRequestServicer.cpp" />
     <ClCompile Include="..\shared\model-core\src\ControlChannelIo.cpp" />
+    <ClCompile Include="..\shared\model-core\src\FormatSniffer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources\Preview3D.rc" />

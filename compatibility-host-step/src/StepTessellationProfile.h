@@ -32,11 +32,19 @@ namespace step_host {
 // curved-face normals, honor XDE visibility/face colors, and mark reusable
 // geometry as instance-only sources.
 // v5: lower the minimum meshing edge to preserve small valid STEP features.
-constexpr std::uint32_t kStepTessellationProfileVersion = 5;
+// v6 (T07): Draft/Balanced/Full import quality (Balanced keeps the v5 display
+// values), plus the opt-in bounded repair policy that can change emitted
+// geometry for a file whose definitions fail to tessellate.
+constexpr std::uint32_t kStepTessellationProfileVersion = 6;
 
+// The pre-T07 names remain as aliases of the Balanced/Draft mapping so existing
+// callers and tests keep their meaning: Coarse == Draft, Display == Balanced.
 enum class StepTessellationQuality : std::uint32_t {
-    Coarse = 0,
-    Display = 1,
+    Draft = 0,
+    Balanced = 1,
+    Full = 2,
+    Coarse = Draft,
+    Display = Balanced,
 };
 
 // Deterministic, model-independent release-quality parameters. The deflection
@@ -48,12 +56,17 @@ struct StepTessellationProfile {
     // Relative linear deflection (fraction of the definition bounding diagonal).
     double coarseRelativeDeflection = 0.02;
     double displayRelativeDeflection = 0.003;
+    // Full is only reachable through an explicit import-quality request. It
+    // stays inside the same absolute window and all per-definition budgets, so
+    // a finer request cannot turn a bounded file into an unbounded one.
+    double fullRelativeDeflection = 0.001;
     // Absolute linear-deflection window in transferred (Cascade) length units.
     double minAbsoluteDeflection = 0.001; // 1 micrometre (mm space)
     double maxAbsoluteDeflection = 5.0;   // 5 millimetres (mm space)
     // Angular chord deflection in radians.
     double coarseAngularDeflection = 0.6;
     double displayAngularDeflection = 0.25;
+    double fullAngularDeflection = 0.12;
     // Minimum triangle edge as a fraction of the diagonal, clamped absolutely
     // so distorted surfaces cannot amplify into unbounded tessellation.
     double relativeMinEdge = 0.0001;
@@ -84,13 +97,21 @@ struct StepTessellationProfile {
 
     double RelativeDeflection(StepTessellationQuality quality) const noexcept
     {
-        return quality == StepTessellationQuality::Coarse ? coarseRelativeDeflection
-                                                          : displayRelativeDeflection;
+        switch (quality) {
+        case StepTessellationQuality::Draft: return coarseRelativeDeflection;
+        case StepTessellationQuality::Full: return fullRelativeDeflection;
+        case StepTessellationQuality::Balanced: break;
+        }
+        return displayRelativeDeflection;
     }
     double AngularDeflection(StepTessellationQuality quality) const noexcept
     {
-        return quality == StepTessellationQuality::Coarse ? coarseAngularDeflection
-                                                          : displayAngularDeflection;
+        switch (quality) {
+        case StepTessellationQuality::Draft: return coarseAngularDeflection;
+        case StepTessellationQuality::Full: return fullAngularDeflection;
+        case StepTessellationQuality::Balanced: break;
+        }
+        return displayAngularDeflection;
     }
 };
 
@@ -155,13 +176,63 @@ inline bool StepWithinDefinitionTime(double elapsedMilliseconds, double limitMil
 //     result depend on unmeasured OCCT heuristics, and can turn a typed
 //     unsupported result into an apparently faithful but altered model.
 //
-// This does not participate in `kStepImporterVersion`: choosing the existing
-// behavior does not change any emitted byte. If a future task adopts a pinned
-// healing sequence, it must bump the profile/importer version because output
-// could change.
+// T07 adopts the narrow opt-in path permitted by that decision: a bounded,
+// deterministic `ShapeFix_Shape` pass that runs only after a definition has
+// transferred but produced no tessellation. It never runs on a definition that
+// meshed successfully, never raises a per-definition budget, and if it cannot
+// produce a valid shape the original typed outcome is preserved. A successful
+// repair is reported as `Degraded` and bumps the profile version because the
+// emitted bytes can differ from the no-repair path.
 enum class StepHealingPolicy : std::uint32_t {
     None = 0,
+    BoundedRepairOnFailure = 1,
 };
-constexpr StepHealingPolicy kStepHealingPolicy = StepHealingPolicy::None;
+constexpr StepHealingPolicy kStepHealingPolicy =
+    StepHealingPolicy::BoundedRepairOnFailure;
+
+// Hard pre/post bounds for the repair pass. The face/edge counts are checked
+// before entering ShapeFix; the elapsed check after `Perform` rejects a result
+// that took too long (ShapeFix has no cancellable progress range). The repair
+// is per definition, so the backstop stays the existing per-generation limits.
+struct StepRepairBudget {
+    std::uint32_t maxFaces = 20'000;
+    std::uint32_t maxEdges = 200'000;
+    double maxMilliseconds = 30'000.0;
+};
+
+// T07 length-unit policy. The pinned reader normalizes transferred coordinates
+// to the Cascade system unit; this resolves the reported metre factor into the
+// product's display assumption without ever claiming an authored unit that was
+// not present.
+//
+//   * zero authored length units, or a non-finite/non-positive reported factor,
+//     means "assume millimetres" (0.001 m per transferred unit);
+//   * more than one distinct authored unit is contradictory: the reader's
+//     first/dominant factor is used and `contradictory` is reported;
+//   * a positive factor above the validated bound is retained so the caller can
+//     reject it with the existing typed overflow failure.
+struct StepLengthUnitResolution {
+    double metersPerUnit = 0.001;
+    bool assumedMillimetres = false;
+    bool contradictory = false;
+    bool overflow = false;
+};
+
+inline StepLengthUnitResolution ResolveStepLengthUnit(
+    std::uint32_t distinctAuthoredUnits, double reportedMetersPerUnit) noexcept
+{
+    StepLengthUnitResolution resolution;
+    resolution.contradictory = distinctAuthoredUnits > 1;
+    const bool reportedUsable = std::isfinite(reportedMetersPerUnit)
+        && reportedMetersPerUnit > 0.0;
+    if (distinctAuthoredUnits == 0 || !reportedUsable) {
+        resolution.assumedMillimetres = true;
+        resolution.metersPerUnit = 0.001;
+        return resolution;
+    }
+    resolution.metersPerUnit = reportedMetersPerUnit;
+    resolution.overflow = reportedMetersPerUnit > 1e12;
+    return resolution;
+}
 
 } // namespace step_host

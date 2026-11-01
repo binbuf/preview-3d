@@ -338,7 +338,7 @@ std::vector<Control> VisibleControls(const Query& query)
 {
     std::vector<Control> result;
     static constexpr Control ordered[] = {
-        Control::Grid, Control::GroundAxis, Control::GroundDirection, Control::AxisSnap, Control::Speed,
+        Control::Grid, Control::GroundAxis, Control::GroundDirection, Control::AxisSnap,
         Control::Orbit,
         Control::Fit, Control::Reset, Control::Share, Control::More,
         Control::OpenWith,
@@ -349,14 +349,20 @@ std::vector<Control> VisibleControls(const Query& query)
         Control::Minimize, Control::Maximize, Control::Close,
         Control::Info, Control::InfoPanelClose, Control::LightingStudio, Control::LightingClay,
         Control::LightingDirectional, Control::DirectionalLightAngle, Control::DirectionalLightElevation, Control::Wireframe,
-        Control::Zoom, Control::Fullscreen, Control::SpeedSlider, Control::OrbitSlider,
-        Control::NativeOrientation, Control::HideCursorWhileDragging,
-        Control::HideModelUntilComplete,
+        Control::Zoom, Control::Fullscreen,
+        Control::ModelWarnings, Control::NativeOrientation, Control::GroundHighlight, Control::GroundShadow,
+        Control::AmbientOcclusion, Control::Speed, Control::SpeedSlider,
+        Control::OrbitSpeed, Control::OrbitSlider,
+        Control::StopOrbitOnInteraction,
+        Control::HideCursorWhileDragging, Control::HideModelUntilComplete,
+        Control::BackgroundMode, Control::BackgroundDark, Control::BackgroundGray,
+        Control::BackgroundCustom, Control::BackgroundTransparent, Control::BackgroundChecker,
+        Control::Language, Control::MenuControls, Control::MenuAbout,
         Control::GizmoPositiveX, Control::GizmoNegativeX,
         Control::GizmoPositiveY, Control::GizmoNegativeY,
         Control::GizmoPositiveZ, Control::GizmoNegativeZ,
         Control::GizmoRollCounterClockwise, Control::GizmoRollClockwise,
-        Control::ErrorRetry, Control::ErrorOpenAnother, Control::ErrorCopyDetails,
+        Control::ErrorRetry, Control::ErrorOpenAnother, Control::ErrorCopyDetails, Control::ErrorOpenAs,
     };
     for (const Control control : ordered) {
         if (query(control).visible) result.push_back(control);

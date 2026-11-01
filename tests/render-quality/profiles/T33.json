@@ -1,0 +1,91 @@
+{
+  "task": "T33",
+  "schema": 1,
+  "description": "Edge, specular and texture sampling quality. Same-camera AA on/off pairs on sub-pixel wires, a high-frequency grille, engraved lettering, chrome, normal-map detail, clear glass and an alpha cutout; a 2x box-reduced supersampled reference; picking identity; UI text outside scene AA; orbit, 1080p and fractional resize; and resize/device-loss lifecycle.",
+  "viewport": {"width": 1280, "height": 900, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0},
+    {"id": "clay", "lighting": 1},
+    {"id": "directional", "lighting": 2}
+  ],
+  "views": {
+    "front": {"yawDegrees": 8.0, "pitchDegrees": 72.5, "distanceScale": 1.23},
+    "oblique": {"yawDegrees": 12.0, "pitchDegrees": 71.0, "distanceScale": 1.3},
+    "low": {"yawDegrees": 15.0, "pitchDegrees": 68.0, "distanceScale": 1.42},
+    "lettering": {"yawDegrees": 8.0, "pitchDegrees": 72.5, "distanceScale": 0.95}
+  },
+  "regions": {
+    "edge-probe": {
+      "digits": [0.33, 0.37, 0.52, 0.50],
+      "grille": [0.51, 0.36, 0.68, 0.51],
+      "wires": [0.30, 0.47, 0.72, 0.55],
+      "chrome": [0.37, 0.55, 0.47, 0.70],
+      "normal-detail": [0.45, 0.55, 0.55, 0.70],
+      "lens": [0.51, 0.55, 0.62, 0.70]
+    },
+    "stl-box": {"box": [0.2, 0.15, 0.8, 0.9]},
+    "car": {
+      "grille": [0.12, 0.40, 0.42, 0.72],
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "paint": [0.34, 0.55, 0.72, 0.9]
+    },
+    "camera": {
+      "lettering": [0.55, 0.36, 0.80, 0.60],
+      "lens": [0.60, 0.40, 0.76, 0.62],
+      "strap": [0.36, 0.62, 0.70, 0.96]
+    }
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "edge-probe", "modes": ["studio", "clay", "directional"],
+         "views": ["front", "oblique", "low"]},
+        {"id": "stl-box", "modes": ["studio", "directional"],
+         "views": ["oblique"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "car", "modes": ["studio", "clay", "directional"],
+         "views": ["oblique", "low"]},
+        {"id": "camera", "modes": ["studio", "clay", "directional"],
+         "views": ["front"], "closeups": ["lettering"]},
+        {"id": "stl", "modes": ["studio", "directional"], "views": ["oblique"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "car-authored-window-speckle",
+      "assets": ["car"],
+      "description": "Small bright speckles along authored Car window/trim seams remain an authored/edge defect. T33 must not hide them with a global blur; the depth-aware filter only treats geometry/coverage discontinuities as geometric edges.",
+      "label": "known-defect",
+      "assignedTo": "T34/T35"
+    },
+    {
+      "id": "camera-lens-lettering",
+      "assets": ["camera"],
+      "description": "The Camera lens and its ring lettering stay crisp; AA must not wash out engraving or turn the dark lens into a pale disk.",
+      "label": "nonregression",
+      "assignedTo": "T33"
+    }
+  ]
+}

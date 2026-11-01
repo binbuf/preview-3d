@@ -13,6 +13,7 @@
 #include "import_broker/SharedSectionValidator.h"
 #include "import_broker/SidecarRequestServicer.h"
 #include "import_broker/SourceFileAccess.h"
+#include "model_core/Compatibility.h"
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
 #include "model_core/MaterialPayload.h"
@@ -35,6 +36,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -397,6 +399,78 @@ struct ScratchExternalGltf {
                                     reinterpret_cast<const std::byte*>(json.data()), json.size()));
     }
 
+    // T23: the same encoded image named by two distinct glTF image entries
+    // (the microscope's duplicate diffuse map) must decode and upload once
+    // when both use the same color space and semantic.
+    void WriteReusedImageGltf(const std::string& imageUri)
+    {
+        std::string json
+            = "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+              "\"meshes\":[{\"primitives\":["
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0},"
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":1}]}],"
+              "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+              "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+              "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+              "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+              "\"buffers\":[{\"uri\":\"mesh.bin\",\"byteLength\":48}],"
+              "\"images\":[{\"uri\":\""
+            + imageUri + "\",\"mimeType\":\"image/png\"},{\"uri\":\"" + imageUri
+            + "\",\"mimeType\":\"image/png\"}],"
+              "\"textures\":[{\"source\":0},{\"source\":1}],"
+              "\"materials\":["
+              "{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}},"
+              "{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":1}}}]}";
+        WriteRaw(L"scene.gltf", std::span<const std::byte>(
+                                    reinterpret_cast<const std::byte*>(json.data()), json.size()));
+    }
+
+    // T22: authored material semantics. Three materials exercise normal scale,
+    // independent occlusion, per-slot transforms/samplers, an unsupported UV
+    // set and an alpha cutout. All textures share one PNG so the assertions are
+    // about metadata and slot wiring, not image content.
+    void WriteMaterialSemanticsGltf(const std::string& imageUri)
+    {
+        std::string json
+            = "{\"asset\":{\"version\":\"2.0\"},\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0}],"
+              "\"meshes\":[{\"primitives\":["
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0},"
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":1},"
+              "{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":2}]}],"
+              "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+              "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+              "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+              "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],"
+              "\"buffers\":[{\"uri\":\"mesh.bin\",\"byteLength\":48}],"
+              "\"extensionsUsed\":[\"KHR_texture_transform\"],"
+              "\"samplers\":[{\"wrapS\":10497,\"wrapT\":10497},"
+              "{\"wrapS\":33071,\"wrapT\":33648,\"magFilter\":9728},"
+              "{\"wrapS\":33648,\"wrapT\":33071}],"
+              "\"images\":[{\"uri\":\""
+            + imageUri + "\",\"mimeType\":\"image/png\"}],"
+              "\"textures\":[{\"source\":0,\"sampler\":0},{\"source\":0,\"sampler\":1},"
+              "{\"source\":0,\"sampler\":2}],"
+              "\"materials\":["
+              "{\"name\":\"semantic main\","
+              "\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0,"
+              "\"extensions\":{\"KHR_texture_transform\":{\"offset\":[0.25,0.5],"
+              "\"scale\":[2.0,3.0],\"rotation\":0.5}}},"
+              "\"metallicRoughnessTexture\":{\"index\":2}},"
+              "\"normalTexture\":{\"index\":1,\"scale\":0.45,"
+              "\"extensions\":{\"KHR_texture_transform\":{\"offset\":[0.1,0.2],"
+              "\"scale\":[0.5,0.5]}}},"
+              "\"occlusionTexture\":{\"index\":2,\"strength\":0.35,"
+              "\"extensions\":{\"KHR_texture_transform\":{\"scale\":[4.0,4.0]}}},"
+              "\"emissiveTexture\":{\"index\":0}},"
+              "{\"name\":\"uv1 unsupported\","
+              "\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0,\"texCoord\":1}}},"
+              "{\"name\":\"cutout\",\"alphaMode\":\"MASK\",\"alphaCutoff\":0.25,"
+              "\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.9,0.1,0.7,1.0]}}"
+              "]}";
+        WriteRaw(L"scene.gltf", std::span<const std::byte>(
+                                    reinterpret_cast<const std::byte*>(json.data()), json.size()));
+    }
+
     void WriteBin(const std::wstring& name, size_t byteCount)
     {
         auto bytes = TriangleBufferBytes();
@@ -699,8 +773,8 @@ TEST_CASE("a malformed base64 data URI buffer is rejected before fastgltf (SEC-1
     CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
 }
 
-TEST_CASE("A file requiring an unrecognized extension is rejected as a clean GenerationError",
-          "[gltf-import]")
+TEST_CASE("A file requiring an unrecognized extension keeps its core geometry and reports Degraded",
+          "[gltf-import][gltf-extensions]")
 {
     sandbox_test_support::SandboxFixture fixture;
 
@@ -709,7 +783,9 @@ TEST_CASE("A file requiring an unrecognized extension is rejected as a clean Gen
     // The historical fixture names KHR_materials_unlit, which became part of
     // the documented static-material subset in TSK-208. Keep exercising a
     // genuinely unknown required extension with an equal-length mutation so
-    // the frozen GLB container lengths remain valid.
+    // the frozen GLB container lengths remain valid. With the T05 policy the
+    // core triangle still opens; only the unknown name is filtered from
+    // extensionsRequired for the retry.
     constexpr std::string_view oldName = "KHR_materials_unlit";
     constexpr std::string_view newName = "UNSUPPORTED_private";
     auto chars = std::span(reinterpret_cast<char*>(bytes->data()), bytes->size());
@@ -718,8 +794,26 @@ TEST_CASE("A file requiring an unrecognized extension is rejected as a clean Gen
             std::memcpy(chars.data() + offset, newName.data(), newName.size());
 
     auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/14, /*maxChunkCount=*/8);
-    CHECK_FALSE(run.ready);
-    CHECK(run.errorNotice.errorCode == static_cast<uint32_t>(model_core::ImportErrorCode::UnsupportedRequiredFeature));
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const import_broker::ValidatedChunk* reportChunk = nullptr;
+    const import_broker::ValidatedChunk* triangleChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport)
+            reportChunk = &chunk;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            triangleChunk = &chunk;
+    }
+    REQUIRE(reportChunk != nullptr);
+    REQUIRE(triangleChunk != nullptr);
+    CHECK(triangleChunk->descriptor.vertexCount == 3);
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, reportChunk->payload.data(), sizeof(report));
+    REQUIRE(report.recordCount == 1);
+    CHECK(report.records[0].featureId == model_core::kGltfFeatureUnspecifiedExtension);
+    CHECK(report.records[0].severity
+          == static_cast<uint8_t>(model_core::CompatibilitySeverity::Degraded));
 }
 
 TEST_CASE("maxChunkCount of 0 against a 1-primitive fixture is rejected as ResourceLimit",
@@ -964,9 +1058,11 @@ TEST_CASE("KHR_materials_transmission is accepted and approximated as alpha-blen
     REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
     model_core::MaterialPayload payload{};
     std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
-    // Approximated as blend, not left opaque: the transmission factor is
-    // carried to the shader and the authored base-color alpha is preserved.
-    CHECK(payload.alphaMode == static_cast<uint32_t>(model_core::AlphaModeId::Blend));
+    // T22: the authored alphaMode stays OPAQUE in normalized data. The
+    // transmissive flag is what makes the renderer choose its blend bucket, so
+    // the preview still composites the transmission without rewriting the
+    // source's alpha semantics.
+    CHECK(payload.alphaMode == static_cast<uint32_t>(model_core::AlphaModeId::Opaque));
     CHECK(payload.baseColorFactor[0] == Catch::Approx(0.8f));
     CHECK(payload.baseColorFactor[3] == Catch::Approx(1.0f));
     CHECK((payload.flags & model_core::kMaterialFlagTransmissive) != 0);
@@ -1041,8 +1137,10 @@ TEST_CASE("KHR_materials_ior at or below 1 keeps the authored transmission opaqu
     REQUIRE(run.validation.ok);
 
     const import_broker::ValidatedChunk* materialChunk = nullptr;
+    const import_broker::ValidatedChunk* reportChunk = nullptr;
     for (const auto& c : run.validation.chunks) {
         if (c.descriptor.topology == model_core::ChunkTopology::Material) materialChunk = &c;
+        if (c.descriptor.topology == model_core::ChunkTopology::CompatibilityReport) reportChunk = &c;
     }
     REQUIRE(materialChunk != nullptr);
     REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
@@ -1052,6 +1150,17 @@ TEST_CASE("KHR_materials_ior at or below 1 keeps the authored transmission opaqu
     CHECK((payload.flags & model_core::kMaterialFlagTransmissive) == 0);
     CHECK(payload.transmissionFactor == Catch::Approx(0.0f));
     CHECK((payload.flags & model_core::kMaterialFlagDoubleSided) != 0);
+    // The suppression is an explicit, tested diagnostic, not a silent hack.
+    REQUIRE(reportChunk != nullptr);
+    REQUIRE(reportChunk->payload.size() == sizeof(model_core::CompatibilityReportPayload));
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, reportChunk->payload.data(), sizeof(report));
+    bool sawDiagnostic = false;
+    for (uint32_t i = 0; i < report.recordCount; ++i)
+        if (report.records[i].featureId
+            == model_core::kGltfFeatureTransmissionNoInterfaceSuppressed)
+            sawDiagnostic = true;
+    CHECK(sawDiagnostic);
 }
 
 TEST_CASE("KHR_materials_pbrSpecularGlossiness is accepted and approximated as a diffuse dielectric",
@@ -1431,6 +1540,160 @@ TEST_CASE("A glTF image in a textures/ subdirectory resolves through the brokere
     CHECK(material->descriptor.dependencyIds[0] == image->descriptor.chunkId);
 }
 
+TEST_CASE("T22 preserves normal scale, per-slot metadata and independent occlusion",
+          "[gltf-import][material][material-semantics]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    ScratchExternalGltf scratch;
+    auto png = ReadFileBytes(TestAssetPath(L"textures\\gray.png"));
+    REQUIRE(png.has_value());
+    scratch.WriteRaw(L"textures\\gray.png", *png);
+    scratch.WriteBin(L"mesh.bin", 48);
+    scratch.WriteMaterialSemanticsGltf("textures/gray.png");
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, scratch.gltfPath, 2244, 16);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    std::vector<const import_broker::ValidatedChunk*> materials;
+    std::unordered_map<uint32_t, const import_broker::ValidatedChunk*> images;
+    const import_broker::ValidatedChunk* report = nullptr;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materials.push_back(&chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image)
+            images.emplace(chunk.descriptor.chunkId, &chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport)
+            report = &chunk;
+    }
+    REQUIRE(materials.size() == 3);
+
+    const auto payloadOf = [](const import_broker::ValidatedChunk& chunk) {
+        model_core::MaterialPayload payload{};
+        REQUIRE(chunk.payload.size() == sizeof(payload));
+        std::memcpy(&payload, chunk.payload.data(), sizeof(payload));
+        return payload;
+    };
+
+    // Material 0: authored normal scale, five image slots including the
+    // independent occlusion map, and per-slot transforms/samplers.
+    const auto mainMaterial = payloadOf(*materials[0]);
+    CHECK(mainMaterial.normalScale == Catch::Approx(0.45f));
+    CHECK(mainMaterial.occlusionStrength == Catch::Approx(0.35f));
+    CHECK(materials[0]->descriptor.dependencyCount == 5);
+    for (int slot = 0; slot < 5; ++slot)
+        CHECK(materials[0]->descriptor.dependencyIds[slot] != 0);
+    for (uint32_t slot = 5; slot < model_core::kMaterialTextureSlotCount; ++slot)
+        CHECK(materials[0]->descriptor.dependencyIds[slot] == 0);
+    // MR (slot 1) and occlusion (slot 4) deliberately point at the same authored
+    // image here; they are still distinct authored slots, and neither is
+    // inferred from the other's channel. T23 decodes per semantic, so each slot
+    // carries its own image chunk rather than sharing one across semantics.
+    CHECK(materials[0]->descriptor.dependencyIds[1] != 0);
+    CHECK(materials[0]->descriptor.dependencyIds[4] != 0);
+    CHECK(images.contains(materials[0]->descriptor.dependencyIds[1]));
+    CHECK(images.contains(materials[0]->descriptor.dependencyIds[4]));
+
+    CHECK(model_core::MaterialSlotUvSet(mainMaterial.slotFlags[0]) == 0);
+    CHECK(((mainMaterial.slotFlags[0] >> model_core::kMaterialSlotAddressUShift)
+           & model_core::kMaterialSlotAddressMask) == 0); // repeat
+    CHECK(((mainMaterial.slotFlags[1] >> model_core::kMaterialSlotAddressUShift)
+           & model_core::kMaterialSlotAddressMask) == 1); // mirrored U
+    CHECK(((mainMaterial.slotFlags[2] >> model_core::kMaterialSlotAddressVShift)
+           & model_core::kMaterialSlotAddressMask) == 1); // mirrored V
+    CHECK((mainMaterial.slotFlags[2] & model_core::kMaterialSlotNearest) != 0);
+    CHECK(mainMaterial.uvOffset[0] == Catch::Approx(0.25f));
+    CHECK(mainMaterial.uvScale[1] == Catch::Approx(3.0f));
+    CHECK(mainMaterial.uvRotation == Catch::Approx(0.5f));
+    // Slot arrays index slots 1..4 (MR, normal, emissive, occlusion).
+    CHECK(mainMaterial.slotUvOffset[1][0] == Catch::Approx(0.1f));   // normal slot
+    CHECK(mainMaterial.slotUvScale[1][0] == Catch::Approx(0.5f));
+    CHECK(mainMaterial.slotUvScale[3][0] == Catch::Approx(4.0f));    // occlusion slot
+
+    // Material 1 references TEXCOORD_1, which the wire does not carry. It must
+    // be left unbound (not aliased to UV0) and produce a specific record.
+    const auto uv1Material = payloadOf(*materials[1]);
+    CHECK(model_core::MaterialSlotUvSet(uv1Material.slotFlags[0]) == 1);
+    CHECK_FALSE(model_core::MaterialSlotUvSetSupported(uv1Material.slotFlags[0]));
+    CHECK(materials[1]->descriptor.dependencyIds[0] == 0);
+    CHECK(materials[1]->descriptor.dependencyCount == 0);
+    REQUIRE(report != nullptr);
+    REQUIRE(report->payload.size() == sizeof(model_core::CompatibilityReportPayload));
+    model_core::CompatibilityReportPayload reportPayload{};
+    std::memcpy(&reportPayload, report->payload.data(), sizeof(reportPayload));
+    bool sawUnsupportedUvSet = false;
+    for (uint32_t i = 0; i < reportPayload.recordCount; ++i) {
+        if (reportPayload.records[i].featureId == model_core::kTextureFeatureUnsupportedUvSet) {
+            sawUnsupportedUvSet = true;
+            CHECK(reportPayload.records[i].count >= 1);
+        }
+    }
+    CHECK(sawUnsupportedUvSet);
+
+    // Material 2 keeps its authored alpha mode and cutoff independently.
+    const auto cutoutMaterial = payloadOf(*materials[2]);
+    CHECK(cutoutMaterial.alphaMode == static_cast<uint32_t>(model_core::AlphaModeId::Mask));
+    CHECK(cutoutMaterial.alphaCutoff == Catch::Approx(0.25f));
+
+    // Color and data maps live in the correct color spaces.
+    for (const auto& [id, image] : images) {
+        (void)id;
+        REQUIRE(image->payload.size() >= sizeof(model_core::ImagePayloadHeader));
+        model_core::ImagePayloadHeader header{};
+        std::memcpy(&header, image->payload.data(), sizeof(header));
+        // Every image here comes from the same gray PNG, but the adapter may
+        // emit one chunk per semantic. Data maps must never be sRGB.
+        if (header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Linear)) {
+            CHECK(header.pixelFormat
+                  != static_cast<uint32_t>(model_core::PixelFormatId::Unknown));
+        }
+    }
+}
+
+// T23: two glTF image entries naming the same immutable sidecar under the same
+// semantic/color space are one decoded image, not two independently charged
+// ones. This is the microscope's duplicate diffuse-map pattern.
+TEST_CASE("T23 decodes one identical image source once across distinct image entries",
+          "[gltf-import][texture][texture-budget]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    ScratchExternalGltf scratch;
+    auto png = ReadFileBytes(TestAssetPath(L"textures\\gray.png"));
+    REQUIRE(png.has_value());
+    scratch.WriteRaw(L"textures\\gray.png", *png);
+    scratch.WriteBin(L"mesh.bin", 48);
+    scratch.WriteReusedImageGltf("textures/gray.png");
+
+    auto run = RunGltfImportFromRealFile(fixture.sid, scratch.gltfPath, 2301, 16);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    std::vector<const import_broker::ValidatedChunk*> materials;
+    std::unordered_map<uint32_t, const import_broker::ValidatedChunk*> images;
+    bool textureWarning = false;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materials.push_back(&chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image)
+            images.emplace(chunk.descriptor.chunkId, &chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TextureWarning)
+            textureWarning = true;
+    }
+    REQUIRE(images.size() == 1);
+    REQUIRE(materials.size() == 2);
+    CHECK(materials[0]->descriptor.dependencyCount == 1);
+    CHECK(materials[1]->descriptor.dependencyCount == 1);
+    CHECK(materials[0]->descriptor.dependencyIds[0]
+          == materials[1]->descriptor.dependencyIds[0]);
+    CHECK(images.contains(materials[0]->descriptor.dependencyIds[0]));
+    CHECK_FALSE(textureWarning);
+
+    model_core::ImagePayloadHeader header{};
+    REQUIRE(images.begin()->second->payload.size() >= sizeof(header));
+    std::memcpy(&header, images.begin()->second->payload.data(), sizeof(header));
+    CHECK(header.colorSpace == static_cast<uint32_t>(model_core::ColorSpaceId::Srgb));
+}
+
 namespace {
 
 // Wraps JSON (and optional BIN) in the glTF 2.0 container framing. Mirrors
@@ -1532,4 +1795,370 @@ TEST_CASE("A mesh-bearing doubling DAG fails fast with ResourceLimit instead of 
           == static_cast<uint32_t>(model_core::ImportErrorCode::ResourceLimit));
     std::cout << "SEC-01 mesh-bearing doubling-DAG elapsed-ms=" << elapsedMs << '\n';
     CHECK(elapsedMs < 5000);
+}
+
+TEST_CASE("An unrendered visual glTF extension emits a stable Degraded compatibility record",
+          "[compatibility][gltf-import]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    // KHR_materials_iridescence is optional/visual-only: the model still
+    // loads, but the preview must say which feature was approximated instead
+    // of only incrementing the legacy count. Clearcoat/sheen/specular/emissive
+    // strength are normalized by T18 and no longer warn.
+    const char* json =
+        "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],"
+        "\"nodes\":[{\"mesh\":0}],"
+        "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],"
+        "\"extensionsUsed\":[\"KHR_materials_iridescence\"],"
+        "\"materials\":[{\"name\":\"soap\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0.2,0.4,0.6,1.0]},"
+        "\"extensions\":{\"KHR_materials_iridescence\":{\"iridescenceFactor\":1.0}}}],"
+        "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},"
+        "{\"bufferView\":1,\"componentType\":5125,\"count\":3,\"type\":\"SCALAR\"}],"
+        "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36},"
+        "{\"buffer\":0,\"byteOffset\":36,\"byteLength\":12}],\"buffers\":[{\"byteLength\":48}]}";
+    const auto glb = BuildGlb(json, TriangleBin());
+    auto run = RunGltfImport(fixture.sid, glb, /*generationId=*/3201, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const import_broker::ValidatedChunk* statusChunk = nullptr;
+    const import_broker::ValidatedChunk* reportChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus)
+            statusChunk = &chunk;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport)
+            reportChunk = &chunk;
+    }
+    REQUIRE(statusChunk != nullptr);
+    REQUIRE(reportChunk != nullptr);
+    REQUIRE(reportChunk->payload.size() == sizeof(model_core::CompatibilityReportPayload));
+
+    model_core::ImportStatusPayload status{};
+    std::memcpy(&status, statusChunk->payload.data(), sizeof(status));
+    CHECK(status.optionalFeatureWarnings == 1); // legacy count retained
+
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, reportChunk->payload.data(), sizeof(report));
+    REQUIRE(report.recordCount == 1);
+    CHECK(report.records[0].featureId == model_core::kGltfFeatureIridescence);
+    CHECK(report.records[0].severity
+          == static_cast<uint8_t>(model_core::CompatibilitySeverity::Degraded));
+    CHECK(report.records[0].count == 1);
+    CHECK(report.records[0].reserved[0] == 0);
+    CHECK(report.records[0].reserved[1] == 0);
+    CHECK(report.records[0].reserved[2] == 0);
+}
+
+namespace {
+
+struct GltfCompatibilityChunks {
+    const import_broker::ValidatedChunk* status = nullptr;
+    const import_broker::ValidatedChunk* report = nullptr;
+    const import_broker::ValidatedChunk* triangle = nullptr;
+    uint32_t materialCount = 0;
+};
+
+GltfCompatibilityChunks FindGltfCompatibilityChunks(const import_broker::ValidationResult& validation)
+{
+    GltfCompatibilityChunks found;
+    for (const auto& chunk : validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::ImportStatus)
+            found.status = &chunk;
+        else if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport)
+            found.report = &chunk;
+        else if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            found.triangle = &chunk;
+        else if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            ++found.materialCount;
+    }
+    return found;
+}
+
+bool ReportHasFeature(const model_core::CompatibilityReportPayload& report, uint32_t featureId,
+                      model_core::CompatibilitySeverity severity)
+{
+    for (uint32_t i = 0; i < report.recordCount; ++i)
+        if (report.records[i].featureId == featureId
+            && report.records[i].severity == static_cast<uint8_t>(severity))
+            return true;
+    return false;
+}
+
+} // namespace
+
+TEST_CASE("KHR_materials_clearcoat opens and normalizes its scalar lobe without a warning",
+          "[gltf-extensions][material]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-clearcoat.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3301, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.triangle->descriptor.vertexCount == 3);
+    CHECK(chunks.triangle->descriptor.indexCount == 3);
+    CHECK(chunks.materialCount == 1);
+    // T18 consumes the extension, so it is no longer a degraded optional
+    // feature and no compatibility report (or warning status) is needed.
+    CHECK(chunks.report == nullptr);
+
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materialChunk = &chunk;
+    REQUIRE(materialChunk != nullptr);
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    CHECK(payload.clearcoatFactor == Catch::Approx(1.0f));
+    CHECK(payload.clearcoatRoughness == Catch::Approx(0.1f));
+    CHECK(payload.emissiveStrength == 1.0f);
+    CHECK(payload.ior == Catch::Approx(1.5f));
+}
+
+TEST_CASE("KHR_materials_sheen opens and normalizes the velvet lobe without a warning",
+          "[gltf-extensions][material]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-sheen.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3305, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.materialCount == 1);
+    CHECK(chunks.report == nullptr);
+
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materialChunk = &chunk;
+    REQUIRE(materialChunk != nullptr);
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    CHECK(payload.sheenColor[0] == Catch::Approx(0.85f));
+    CHECK(payload.sheenColor[1] == Catch::Approx(0.35f));
+    CHECK(payload.sheenColor[2] == Catch::Approx(0.25f));
+    CHECK(payload.sheenRoughness == Catch::Approx(0.65f));
+    // A distinct grazing response, not an opaque emissive tint.
+    CHECK(model_core::SheenLobeWeight(payload, 0.1f)
+          > model_core::SheenLobeWeight(payload, 0.9f) * 10.0f);
+}
+
+TEST_CASE("KHR_materials_specular opens and maps factor/color/IOR without a warning",
+          "[gltf-extensions][material]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-specular.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3302, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.triangle->descriptor.vertexCount == 3);
+    CHECK(chunks.materialCount == 1);
+    CHECK(chunks.report == nullptr);
+
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materialChunk = &chunk;
+    REQUIRE(materialChunk != nullptr);
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    CHECK(payload.specularFactor == Catch::Approx(0.8f));
+    CHECK(payload.specularColor[0] == Catch::Approx(1.0f));
+    CHECK(payload.specularColor[1] == Catch::Approx(0.9f));
+    CHECK(payload.specularColor[2] == Catch::Approx(0.8f));
+    CHECK(payload.ior == Catch::Approx(1.5f));
+    float f0[3]{};
+    model_core::MaterialDielectricF0(payload, f0);
+    // KHR_materials_specular: specularColor tints the IOR F0 at normal
+    // incidence; specularFactor is F90 and does not scale F0.
+    CHECK(f0[0] == Catch::Approx(0.04f).margin(1e-5f));
+    CHECK(f0[1] == Catch::Approx(0.036f).margin(1e-5f));
+    CHECK(f0[2] == Catch::Approx(0.032f).margin(1e-5f));
+    CHECK(model_core::MaterialSpecularF90(payload) == Catch::Approx(0.8f));
+}
+
+TEST_CASE("KHR_materials_emissive_strength opens and maps the multiplier without a warning",
+          "[gltf-extensions][material]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-emissive-strength.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3303, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.triangle->descriptor.vertexCount == 3);
+    CHECK(chunks.materialCount == 1);
+    CHECK(chunks.report == nullptr);
+
+    const import_broker::ValidatedChunk* materialChunk = nullptr;
+    for (const auto& chunk : run.validation.chunks)
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materialChunk = &chunk;
+    REQUIRE(materialChunk != nullptr);
+    REQUIRE(materialChunk->payload.size() == sizeof(model_core::MaterialPayload));
+    model_core::MaterialPayload payload{};
+    std::memcpy(&payload, materialChunk->payload.data(), sizeof(payload));
+    CHECK(payload.emissiveStrength == Catch::Approx(5.0f));
+    CHECK(payload.emissiveFactor[0] == Catch::Approx(1.0f));
+    CHECK(payload.emissiveFactor[1] == Catch::Approx(0.7f));
+    CHECK(payload.emissiveFactor[2] == Catch::Approx(0.2f));
+}
+
+TEST_CASE("A truly unknown required extension keeps core geometry and reports Degraded",
+          "[gltf-extensions]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"unknown-required.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3304, /*maxChunkCount=*/8);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    const auto chunks = FindGltfCompatibilityChunks(run.validation);
+    REQUIRE(chunks.report != nullptr);
+    REQUIRE(chunks.triangle != nullptr);
+    CHECK(chunks.triangle->descriptor.vertexCount == 3);
+    CHECK(chunks.materialCount == 1);
+
+    model_core::CompatibilityReportPayload report{};
+    std::memcpy(&report, chunks.report->payload.data(), sizeof(report));
+    CHECK(ReportHasFeature(report, model_core::kGltfFeatureUnspecifiedExtension,
+                           model_core::CompatibilitySeverity::Degraded));
+}
+
+TEST_CASE("A required geometry-replacing extension that cannot be decoded fails typed",
+          "[gltf-extensions]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-geometry-unknown.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3305, /*maxChunkCount=*/8);
+    CHECK_FALSE(run.ready);
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::UnsupportedRequiredFeature));
+}
+
+TEST_CASE("A required Draco primitive with corrupt compressed bytes fails typed",
+          "[gltf-extensions]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"required-draco-bad.glb"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3306, /*maxChunkCount=*/8);
+    CHECK_FALSE(run.ready);
+    // The zeroed payload loses the DRACO magic, so the bounded decoder layer
+    // rejects it as malformed instead of degrading the model.
+    CHECK(run.errorNotice.errorCode
+          == static_cast<uint32_t>(model_core::ImportErrorCode::MalformedData));
+}
+TEST_CASE("T25 extension-lobe maps keep their fixed slot semantics and color spaces",
+          "[gltf-import][material][textured-lobes]")
+{
+    sandbox_test_support::SandboxFixture fixture;
+    auto bytes = ReadFileBytes(TestAssetPath(L"textured-lobe-maps.gltf"));
+    REQUIRE(bytes.has_value());
+
+    auto run = RunGltfImport(fixture.sid, *bytes, /*generationId=*/3401,
+                             /*maxChunkCount=*/16);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+
+    std::vector<const import_broker::ValidatedChunk*> materials;
+    std::unordered_map<uint32_t, model_core::ColorSpaceId> imageColorSpaces;
+    bool sawUnsupportedUvSet = false;
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Material)
+            materials.push_back(&chunk);
+        if (chunk.descriptor.topology == model_core::ChunkTopology::CompatibilityReport) {
+            model_core::CompatibilityReportPayload report{};
+            REQUIRE(chunk.payload.size() >= sizeof(report));
+            std::memcpy(&report, chunk.payload.data(), sizeof(report));
+            for (uint32_t i = 0; i < report.recordCount; ++i)
+                if (report.records[i].featureId == model_core::kTextureFeatureUnsupportedUvSet)
+                    sawUnsupportedUvSet = true;
+        }
+        if (chunk.descriptor.topology == model_core::ChunkTopology::Image) {
+            REQUIRE(chunk.payload.size() >= sizeof(model_core::ImagePayloadHeader));
+            model_core::ImagePayloadHeader header{};
+            std::memcpy(&header, chunk.payload.data(), sizeof(header));
+            imageColorSpaces[chunk.descriptor.chunkId] = static_cast<model_core::ColorSpaceId>(header.colorSpace);
+        }
+    }
+    REQUIRE(materials.size() == 3);
+    const auto payloadOf = [](const import_broker::ValidatedChunk& chunk) {
+        model_core::MaterialPayload payload{};
+        REQUIRE(chunk.payload.size() == sizeof(payload));
+        std::memcpy(&payload, chunk.payload.data(), sizeof(payload));
+        return payload;
+    };
+
+    // Material 0 authors all eight extension maps.
+    const auto allMaps = payloadOf(*materials[0]);
+    CHECK(allMaps.clearcoatFactor == Catch::Approx(0.8f));
+    CHECK(allMaps.clearcoatRoughness == Catch::Approx(0.6f));
+    CHECK(allMaps.clearcoatNormalScale == Catch::Approx(0.5f));
+    CHECK(allMaps.specularFactor == Catch::Approx(0.7f));
+    CHECK(allMaps.specularColor[1] == Catch::Approx(0.8f));
+    CHECK(allMaps.sheenColor[2] == Catch::Approx(0.7f));
+    CHECK(allMaps.sheenRoughness == Catch::Approx(0.4f));
+    CHECK(allMaps.transmissionFactor == Catch::Approx(0.6f));
+    CHECK(materials[0]->descriptor.dependencyCount == 8);
+    for (uint32_t slot = model_core::kMaterialSlotIndexClearcoat;
+         slot < model_core::kMaterialTextureSlotCount; ++slot)
+        CHECK(materials[0]->descriptor.dependencyIds[slot] != 0);
+
+    // The same authored image is used as a linear specular-factor map (A) and
+    // an sRGB specular-color map (RGB): two decoded chunks, two color spaces.
+    const uint32_t specularId = materials[0]->descriptor.dependencyIds[
+        model_core::kMaterialSlotIndexSpecular];
+    const uint32_t specularColorId = materials[0]->descriptor.dependencyIds[
+        model_core::kMaterialSlotIndexSpecularColor];
+    CHECK(specularId != specularColorId);
+    REQUIRE(imageColorSpaces.contains(specularId));
+    REQUIRE(imageColorSpaces.contains(specularColorId));
+    CHECK(imageColorSpaces[specularId] == model_core::ColorSpaceId::Linear);
+    CHECK(imageColorSpaces[specularColorId] == model_core::ColorSpaceId::Srgb);
+
+    // Material 1 authors a UV1 clearcoat map. The slot keeps its authored set
+    // but stays unbound rather than being aliased to UV0.
+    const auto uv1Map = payloadOf(*materials[1]);
+    CHECK(model_core::MaterialSlotUvSet(
+        uv1Map.slotFlags[model_core::kMaterialSlotIndexClearcoat]) == 1);
+    CHECK(materials[1]->descriptor.dependencyIds[
+        model_core::kMaterialSlotIndexClearcoat] == 0);
+    CHECK(sawUnsupportedUvSet);
+
+    // Material 2 carries its own per-slot UV transform on slot 5.
+    const auto transformed = payloadOf(*materials[2]);
+    const uint32_t slotIndex = model_core::kMaterialSlotIndexClearcoat - 1;
+    CHECK(transformed.slotUvOffset[slotIndex][0] == Catch::Approx(0.25f));
+    CHECK(transformed.slotUvOffset[slotIndex][1] == Catch::Approx(0.1f));
+    CHECK(transformed.slotUvScale[slotIndex][0] == Catch::Approx(2.0f));
+    CHECK(transformed.slotUvScale[slotIndex][1] == Catch::Approx(3.0f));
+    CHECK(transformed.slotUvRotation[slotIndex] == Catch::Approx(0.35f));
+    CHECK(materials[2]->descriptor.dependencyIds[
+        model_core::kMaterialSlotIndexClearcoat] != 0);
 }

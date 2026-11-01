@@ -164,7 +164,11 @@ TEST_CASE("Image refinements reject missing roots, semantic changes and stale re
     auto bad=full;bad.reserved0=3;CHECK_FALSE(validate(bad).ok);
     bad=full;bad.colorSpace=uint32_t(ColorSpaceId::Linear);CHECK_FALSE(validate(bad).ok);
     bad=low;bad.reserved0=1;CHECK_FALSE(validate(bad).ok);
+    // T23 boundary: exactly at each aggregate cap is accepted; one unit above
+    // is rejected by the independent trust-boundary accounting.
+    CHECK(validate(full,kMaxAggregateTextureBytes-84).ok);
     CHECK_FALSE(validate(full,kMaxAggregateTextureBytes-83).ok);
+    CHECK(validate(full,20,kMaxAggregateTexturePixels-21).ok);
     CHECK_FALSE(validate(full,20,kMaxAggregateTexturePixels-20).ok);
     bad=full;bad.mipLevels=4;CHECK_FALSE(validate(bad).ok);
     // A refinement cannot resolve through a forward root even if material
@@ -314,6 +318,105 @@ TEST_CASE("A Material transmission factor without its flag is rejected",
     CHECK(result.errorCode == ImportErrorCode::MalformedData);
 }
 
+TEST_CASE("Protocol v12 Material lobe fields are range-checked at the trust boundary",
+          "[shared-section-validator][texture][material-lobes]")
+{
+    auto accepted = ValidTriple();
+    MaterialPayload p = ValidMaterialPayload();
+    p.emissiveStrength = 5.0f;
+    p.clearcoatFactor = 1.0f;
+    p.clearcoatRoughness = 0.2f;
+    p.sheenColor[0] = 0.8f;
+    p.sheenRoughness = 0.6f;
+    p.specularFactor = 0.5f;
+    p.specularColor[1] = 0.75f;
+    p.ior = 1.33f;
+    p.occlusionStrength = 0.4f;
+    accepted[1].payload = ToBytes(p);
+    CHECK(import_broker::ValidateAndCopySection(BuildSection(accepted, 1), 1, 8).ok);
+
+    auto reject = [](auto mutate) {
+        auto chunks = ValidTriple();
+        MaterialPayload bad = ValidMaterialPayload();
+        mutate(bad);
+        chunks[1].payload = ToBytes(bad);
+        const auto result = import_broker::ValidateAndCopySection(BuildSection(chunks, 1), 1, 8);
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == ImportErrorCode::MalformedData);
+    };
+    reject([](MaterialPayload& m) { m.clearcoatFactor = 1.5f; });
+    reject([](MaterialPayload& m) { m.sheenRoughness = -0.1f; });
+    reject([](MaterialPayload& m) { m.specularColor[2] = 1.1f; });
+    reject([](MaterialPayload& m) { m.ior = 4.5f; });
+    reject([](MaterialPayload& m) { m.occlusionStrength = 1.5f; });
+    reject([](MaterialPayload& m) { m.emissiveStrength = -1.0f; });
+    reject([](MaterialPayload& m) { m.reserved[1] = 1; });
+}
+
+TEST_CASE("T22 texture-slot metadata and normal scale are range-checked at the trust boundary",
+          "[shared-section-validator][texture][material-semantics]")
+{
+    auto accepted = ValidTriple();
+    MaterialPayload p = ValidMaterialPayload();
+    p.normalScale = 0.45f;
+    p.slotFlags[model_core::kMaterialSlotIndexNormal]
+        = model_core::MaterialSlotFlags(0, TextureAddressId::Clamp,
+                                        TextureAddressId::Mirror, true);
+    p.slotUvOffset[1][0] = 0.25f;
+    p.slotUvScale[1][1] = 2.0f;
+    p.slotUvRotation[1] = 0.5f;
+    accepted[1].payload = ToBytes(p);
+    CHECK(import_broker::ValidateAndCopySection(BuildSection(accepted, 1), 1, 8).ok);
+
+    auto reject = [](auto mutate) {
+        auto chunks = ValidTriple();
+        MaterialPayload bad = ValidMaterialPayload();
+        mutate(bad);
+        chunks[1].payload = ToBytes(bad);
+        const auto result = import_broker::ValidateAndCopySection(BuildSection(chunks, 1), 1, 8);
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == ImportErrorCode::MalformedData);
+    };
+    reject([](MaterialPayload& m) { m.normalScale = 17.0f; });
+    reject([](MaterialPayload& m) { m.normalScale = std::numeric_limits<float>::quiet_NaN(); });
+    reject([](MaterialPayload& m) { m.slotFlags[0] = 0x80000000u; });
+    reject([](MaterialPayload& m) {
+        m.slotFlags[0] = model_core::MaterialSlotFlags(16, TextureAddressId::Wrap,
+                                                       TextureAddressId::Wrap, false);
+    });
+    reject([](MaterialPayload& m) { m.slotUvOffset[0][1] = 5000.0f; });
+    reject([](MaterialPayload& m) { m.slotUvScale[2][0] = std::numeric_limits<float>::infinity(); });
+}
+
+TEST_CASE("T22 material accepts an independent occlusion image in slot 4",
+          "[shared-section-validator][texture][material-semantics]")
+{
+    auto chunks = ValidTriple();
+    // Add a second image chunk and point the occlusion slot at it.
+    ChunkSpec occlusionImage = chunks[2];
+    occlusionImage.descriptor.chunkId = 4;
+    occlusionImage.descriptor.dependencyCount = 0;
+    chunks.push_back(occlusionImage);
+    chunks[1].descriptor.dependencyIds[4] = 4;
+    chunks[1].descriptor.dependencyCount = 2;
+    const auto result = import_broker::ValidateAndCopySection(BuildSection(chunks, 1), 1, 8);
+    CHECK(result.ok);
+
+    // Slots beyond the thirteen semantic slots are rejected rather than
+    // silently treated as another image.
+    auto invalid = ValidTriple();
+    ChunkSpec extra = invalid[2];
+    extra.descriptor.chunkId = 4;
+    extra.descriptor.dependencyCount = 0;
+    invalid.push_back(extra);
+    invalid[1].descriptor.dependencyIds[13] = 4;
+    invalid[1].descriptor.dependencyCount = 2;
+    const auto rejected = import_broker::ValidateAndCopySection(
+        BuildSection(invalid, 1), 1, 8);
+    CHECK_FALSE(rejected.ok);
+    CHECK(rejected.errorCode == ImportErrorCode::MalformedData);
+}
+
 TEST_CASE("A Material chunk whose dependency resolves to a non-Image chunk is rejected",
           "[shared-section-validator][texture]")
 {
@@ -411,3 +514,63 @@ TEST_CASE("Hostile dimensions fail before accepting fabricated image expansion",
     auto result=import_broker::ValidateAndCopySection(BuildSection({image},1),1,8);
     CHECK_FALSE(result.ok);CHECK(result.errorCode==ImportErrorCode::ResourceLimit);
 }
+
+TEST_CASE("T34 hostile UV/material/sampler/descriptor combinations are rejected before GPU creation",
+          "[shared-section-validator][texture][t34-hostile]")
+{
+    auto reject = [](const char* label, auto mutate) {
+        INFO(label);
+        auto chunks = ValidTriple();
+        mutate(chunks, chunks[1].descriptor, *reinterpret_cast<MaterialPayload*>(
+            chunks[1].payload.data()));
+        const auto result = import_broker::ValidateAndCopySection(
+            BuildSection(chunks, 1), 1, 8);
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == ImportErrorCode::MalformedData);
+    };
+    // Every one of the thirteen semantic texture slots may legally resolve to
+    // the same image. More descriptors than slots is not a valid material.
+    {
+        auto chunks = ValidTriple();
+        chunks[1].descriptor.dependencyCount = 13;
+        for (unsigned slot = 0; slot < 13; ++slot)
+            chunks[1].descriptor.dependencyIds[slot] = 3;
+        CHECK(import_broker::ValidateAndCopySection(
+            BuildSection(chunks, 1), 1, 8).ok);
+        chunks[1].descriptor.dependencyCount = 14;
+        CHECK_FALSE(import_broker::ValidateAndCopySection(
+            BuildSection(chunks, 1), 1, 8).ok);
+    }
+    reject("NaN UV rotation", [](auto&, auto&, MaterialPayload& m) {
+        m.slotUvRotation[0] = std::numeric_limits<float>::quiet_NaN();
+    });
+    reject("infinite UV scale", [](auto&, auto&, MaterialPayload& m) {
+        m.slotUvScale[4][1] = std::numeric_limits<float>::infinity();
+    });
+    reject("unknown slot-flag bit", [](auto&, auto&, MaterialPayload& m) {
+        m.slotFlags[0] = 1u << 13;
+    });
+    // Address fields are confined to their documented two bits; an out-of-range
+    // enum value cannot leak into the neighbouring field or an unknown bit.
+    CHECK((model_core::MaterialSlotFlags(
+               0, static_cast<TextureAddressId>(9), static_cast<TextureAddressId>(7),
+               false) & ~model_core::kMaterialSlotFlagsKnownMask) == 0);
+    reject("NaN emissive strength", [](auto&, auto&, MaterialPayload& m) {
+        m.emissiveStrength = std::numeric_limits<float>::quiet_NaN();
+    });
+    reject("infinite clearcoat roughness", [](auto&, auto&, MaterialPayload& m) {
+        m.clearcoatRoughness = std::numeric_limits<float>::infinity();
+    });
+    reject("NaN specular colour", [](auto&, auto&, MaterialPayload& m) {
+        m.specularColor[0] = std::numeric_limits<float>::quiet_NaN();
+    });
+    reject("impossible image mip chain", [](auto& chunks, auto&, MaterialPayload&) {
+        // An image declaring an impossible mip chain is rejected from the
+        // header, before any fabricated pixel expansion is charged.
+        ImagePayloadHeader h = ValidImageHeader(4, 4);
+        h.mipLevels = 9;
+        h.pixelDataByteSize = 4;
+        chunks[2].payload = ToBytes(h, std::vector<std::byte>(4));
+    });
+}
+

@@ -141,13 +141,18 @@ const MatrixRow kMatrix[] = {
      model_core::ImportErrorCode::EmptyGeometry, 0, 0},
     {L"unsupported_schema.stp", "unknown", "geometry-free unknown schema (schema is classification only)",
      false, model_core::ImportErrorCode::EmptyGeometry, 0, 0},
-    {L"external_document_ap214.stp", "AP214", "required external document declaration", false,
-     model_core::ImportErrorCode::UnsupportedRequiredFeature, 0, 0},
-    {L"external_document_relative_ap214.stp", "AP214", "relative external document declaration", false,
-     model_core::ImportErrorCode::UnsupportedRequiredFeature, 0, 0},
+    {L"external_document_self_contained_ap214.stp", "AP214",
+     "external declaration with usable self-contained main geometry", true,
+     model_core::ImportErrorCode::None, 1, 1},
+    // The declaration no longer vetoes the file; these fixtures have no main
+    // geometry, so the typed outcome is the main document's EmptyGeometry.
+    {L"external_document_ap214.stp", "AP214", "external declaration only", false,
+     model_core::ImportErrorCode::EmptyGeometry, 0, 0},
+    {L"external_document_relative_ap214.stp", "AP214", "relative external declaration only", false,
+     model_core::ImportErrorCode::EmptyGeometry, 0, 0},
     {L"external_document_absolute_ap214.stp", "AP214",
-     "absolute/UNC/URL external document declaration", false,
-     model_core::ImportErrorCode::UnsupportedRequiredFeature, 0, 0},
+     "absolute/UNC/URL external declaration only", false,
+     model_core::ImportErrorCode::EmptyGeometry, 0, 0},
     {L"faceted_invalid_ap242.stp", "AP242", "tessellated representation with an out-of-range triangle index",
      false, model_core::ImportErrorCode::MalformedData, 0, 0},
 };
@@ -214,18 +219,24 @@ TEST_CASE("STEP-006 healing decision is explicit and output-affecting steps are 
     // repair mutates geometry and makes the visual result
     // producer-dependent, while a pinned sequence had no measured
     // deterministic benefit on the accepted corpus. Invalid geometry must fail
-    // typed rather than be silently repaired.
-    CHECK(step_host::kStepHealingPolicy == step_host::StepHealingPolicy::None);
+    // typed rather than be silently repaired. T07 keeps that default for valid
+    // geometry and adds only the opt-in bounded path that runs after a
+    // tessellation failure.
+    CHECK(step_host::kStepHealingPolicy
+          == step_host::StepHealingPolicy::BoundedRepairOnFailure);
+    CHECK(step_host::kStepTessellationProfileVersion >= 6);
+    CHECK(step_host::StepRepairBudget{}.maxFaces > 0);
+    CHECK(step_host::StepRepairBudget{}.maxMilliseconds > 0.0);
 }
 
-TEST_CASE("STEP-006 external declaration discovery rejects every path form before OCCT",
+TEST_CASE("STEP-006 external declaration discovery counts every path form without resolving it",
           "[step-006][external][no-bypass]")
 {
-    // A declaration is discovered from the lexical token stream, so the
-    // no-go boundary does not depend on the declaration's path shape, quoting,
-    // case, or whitespace. None of these ever reaches a filesystem or network
-    // call: the preflight is the only component that sees them and it returns
-    // a typed result without resolving anything.
+    // T07: a declaration is counted from the entity name, so discovery does
+    // not depend on the declaration's path shape, quoting, case, or whitespace.
+    // None of these ever reaches a filesystem or network call: the preflight is
+    // the only component that sees them, and they are a bounded warning rather
+    // than a veto.
     const std::array<std::string_view, 8> declarations{
         "FILE_POPULATION(('AP214'),('x'),($),$);",
         "file_population(('AP214'),('x'),($),$);",
@@ -242,7 +253,7 @@ TEST_CASE("STEP-006 external declaration discovery rejects every path form befor
               "END-ISO-10303-21;\n";
         const auto result = Preflight(file);
         INFO(declaration);
-        CHECK(result.status == step_host::StepPreflightStatus::ExternalDocument);
+        CHECK(result.status == step_host::StepPreflightStatus::Ok);
         CHECK(result.externalDocuments >= 1);
     }
 }

@@ -25,6 +25,7 @@
 // provider. Not wired into Preview3D.vcxproj/Preview3D.cpp yet -- proven
 // via Tests.Unit first, same discipline as every D3D12 graphics primitive.
 
+#include <model_core/CacheIdentity.h>
 #include <model_core/MappedFile.h>
 
 #include <cstdint>
@@ -36,7 +37,11 @@
 struct CacheEntryKey
 {
     model_core::FileIdentity identity;
-    uint32_t parserVersion = 0; // "parser/normalizer versions" per the design doc's opaque-key wording
+    // "parser/normalizer versions" per the design doc's opaque-key wording.
+    // T22 makes the actual identity authoritative: the wire protocol version
+    // plus the glTF importer/material/vertex-layout versions. Callers must not
+    // leave this at an unrelated default.
+    uint32_t parserVersion = model_core::kDerivedCacheParserIdentity;
 };
 
 class DerivedCache

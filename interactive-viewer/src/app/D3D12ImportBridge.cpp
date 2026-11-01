@@ -1,5 +1,6 @@
 #include "model_core/TierALimits.h"
 #include "D3D12ImportBridge.h"
+#include "CompatibilityText.h"
 #include "Localization.h"
 #include <cstdio>
 
@@ -53,6 +54,72 @@ std::wstring ExtensionOf(const std::wstring& path)
         return {};
     }
     return ToLower(path.substr(dot + 1));
+}
+
+model_core::FormatId FormatIdForSource(SourceFormat format)
+{
+    switch (format) {
+    case SourceFormat::Glb: return model_core::FormatId::Glb;
+    case SourceFormat::Stl: return model_core::FormatId::Stl;
+    case SourceFormat::Ply: return model_core::FormatId::Ply;
+    case SourceFormat::Obj: return model_core::FormatId::Obj;
+    case SourceFormat::Fbx: return model_core::FormatId::Fbx;
+    case SourceFormat::ThreeMf: return model_core::FormatId::ThreeMf;
+    case SourceFormat::Usd: return model_core::FormatId::Usd;
+    case SourceFormat::Step: return model_core::FormatId::Step;
+    case SourceFormat::Iges: return model_core::FormatId::Iges;
+    case SourceFormat::Brep: return model_core::FormatId::Brep;
+    case SourceFormat::Xbf: return model_core::FormatId::Xbf;
+    case SourceFormat::Fcstd: return model_core::FormatId::Fcstd;
+    case SourceFormat::Dae: return model_core::FormatId::Dae;
+    case SourceFormat::ThreeDs: return model_core::FormatId::ThreeDs;
+    case SourceFormat::Dxf: return model_core::FormatId::Dxf;
+    case SourceFormat::DirectX: return model_core::FormatId::DirectX;
+    case SourceFormat::Off: return model_core::FormatId::Off;
+    case SourceFormat::Amf: return model_core::FormatId::Amf;
+    case SourceFormat::X3d: return model_core::FormatId::X3d;
+    }
+    return model_core::FormatId::Unknown;
+}
+
+std::optional<SourceFormat> SourceFormatForCatalogDescriptor(
+    const model_core::FormatDescriptor* descriptor)
+{
+    if (!descriptor) return std::nullopt;
+    switch (descriptor->id) {
+    case model_core::FormatId::Gltf:
+    case model_core::FormatId::Glb: return SourceFormat::Glb;
+    case model_core::FormatId::Stl:
+    case model_core::FormatId::AsciiStl: return SourceFormat::Stl;
+    case model_core::FormatId::Ply:
+    case model_core::FormatId::AsciiPly: return SourceFormat::Ply;
+    case model_core::FormatId::Obj: return SourceFormat::Obj;
+    case model_core::FormatId::Fbx: return SourceFormat::Fbx;
+    case model_core::FormatId::ThreeMf: return SourceFormat::ThreeMf;
+    case model_core::FormatId::Usd:
+    case model_core::FormatId::Usda:
+    case model_core::FormatId::Usdc:
+    case model_core::FormatId::Usdz: return SourceFormat::Usd;
+    case model_core::FormatId::Step: return SourceFormat::Step;
+    case model_core::FormatId::Iges: return SourceFormat::Iges;
+    case model_core::FormatId::Brep: return SourceFormat::Brep;
+    case model_core::FormatId::Xbf: return SourceFormat::Xbf;
+    case model_core::FormatId::Fcstd: return SourceFormat::Fcstd;
+    case model_core::FormatId::Dae: return SourceFormat::Dae;
+    case model_core::FormatId::ThreeDs: return SourceFormat::ThreeDs;
+    case model_core::FormatId::Dxf: return SourceFormat::Dxf;
+    case model_core::FormatId::DirectX: return SourceFormat::DirectX;
+    case model_core::FormatId::Off: return SourceFormat::Off;
+    case model_core::FormatId::Amf: return SourceFormat::Amf;
+    case model_core::FormatId::X3d: return SourceFormat::X3d;
+    default: return std::nullopt;
+    }
+}
+
+std::wstring StableNameOf(const model_core::FormatDescriptor* descriptor)
+{
+    if (!descriptor) return L"unknown";
+    return std::wstring(descriptor->stableName.begin(), descriptor->stableName.end());
 }
 
 std::wstring ResolveWorkerExePath()
@@ -265,24 +332,50 @@ void DescribeSessionFailureInternal(const import_broker::ImportSessionResult& se
     }
 }
 
-import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
+model_core::AssimpFormat AssimpFormatForSource(SourceFormat format)
 {
     switch (format) {
-    case SourceFormat::Stl:
+    case SourceFormat::ThreeDs: return model_core::AssimpFormat::ThreeDs;
+    case SourceFormat::Dxf: return model_core::AssimpFormat::Dxf;
+    case SourceFormat::DirectX: return model_core::AssimpFormat::DirectX;
+    case SourceFormat::Off: return model_core::AssimpFormat::Off;
+    case SourceFormat::Amf: return model_core::AssimpFormat::Amf;
+    case SourceFormat::X3d: return model_core::AssimpFormat::X3d;
+    case SourceFormat::Dae:
+    default: return model_core::AssimpFormat::Dae;
+    }
+}
+
+import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
+{
+    const auto* descriptor = model_core::FindById(FormatIdForSource(format));
+    if (!descriptor) return import_broker::ImportFormat::Gltf;
+    // The catalog names the owning importer; this switch only translates that
+    // closed identity to the broker's existing protocol route.
+    switch (descriptor->importer) {
+    case model_core::ImporterKind::StlWorker:
         return import_broker::ImportFormat::Stl;
-    case SourceFormat::Ply:
+    case model_core::ImporterKind::PlyWorker:
         return import_broker::ImportFormat::Ply;
-    case SourceFormat::Obj:
+    case model_core::ImporterKind::ObjWorker:
         return import_broker::ImportFormat::Obj;
-    case SourceFormat::Fbx:
+    case model_core::ImporterKind::FbxWorker:
         return import_broker::ImportFormat::Fbx;
-    case SourceFormat::ThreeMf:
+    case model_core::ImporterKind::ThreeMfWorker:
         return import_broker::ImportFormat::ThreeMf;
-    case SourceFormat::Usd:
+    case model_core::ImporterKind::UsdFastPath:
+    case model_core::ImporterKind::UsdCompatibilityHost:
         return import_broker::ImportFormat::Usd;
-    case SourceFormat::Step:
+    case model_core::ImporterKind::StepHost:
         return import_broker::ImportFormat::Step;
-    case SourceFormat::Glb:
+    case model_core::ImporterKind::CadHost:
+        return format == SourceFormat::Iges ? import_broker::ImportFormat::Iges
+            : format == SourceFormat::Brep ? import_broker::ImportFormat::Brep
+            : format == SourceFormat::Xbf ? import_broker::ImportFormat::Xbf
+                                          : import_broker::ImportFormat::Fcstd;
+    case model_core::ImporterKind::AssimpCompat:
+        return import_broker::ImportFormat::Assimp;
+    case model_core::ImporterKind::GltfWorker:
     default:
         return import_broker::ImportFormat::Gltf;
     }
@@ -361,16 +454,9 @@ void DescribeSessionFailure(const import_broker::ImportSessionResult& session, s
 std::wstring SourceFormatLabel(const std::wstring& path)
 {
     const auto ext = ExtensionOf(path);
-    if (ext == L"gltf") return L"glTF";
-    if (ext == L"glb") return L"GLB";
-    if (ext == L"stl") return L"STL";
-    if (ext == L"ply") return L"PLY";
-    if (ext == L"obj") return L"OBJ";
-    if (ext == L"fbx") return L"FBX";
-    if (ext == L"3mf") return L"3MF";
-    if (ext == L"step" || ext == L"stp") return L"STEP";
-    if (ext == L"usd" || ext == L"usda" || ext == L"usdc") return L"USD";
-    if (ext == L"usdz") return L"USDZ";
+    if (const auto* descriptor = model_core::FindByExtension(ext)) {
+        return Loc(descriptor->displayNameKey, descriptor->displayName);
+    }
     // Extension only, capped and restricted to printable alphanumerics.
     if (ext.empty() || ext.size() > 16) return Loc("format.unknown", L"Unknown");
     std::wstring label;
@@ -406,6 +492,14 @@ std::wstring DiagnosticDetails(const std::wstring& path, const ImportResult& res
     text += LocalizedJoin(Loc("diagnostics.format", L"Format:"), SourceFormatLabel(path));
     text += L"\r\n" + LocalizedJoin(Loc("diagnostics.phase", L"Phase:"), FailurePhaseLabel(result));
     text += L"\r\n" + LocalizedJoin(Loc("diagnostics.code", L"Code:"), std::to_wstring(uint32_t(result.errorCode)));
+    // Stable numeric compatibility facts only: feature ID, closed severity,
+    // saturated count. No source path and no worker-authored text.
+    for (const auto& record : result.compatibility) {
+        text += L"\r\n" + LocFormat("diagnostics.compatibility",
+            L"Compatibility: feature {0} ({1}) x{2}",
+            { std::to_wstring(record.featureId), CompatibilitySeverityLabel(record.severity),
+              std::to_wstring(record.count) });
+    }
     return text;
 }
 
@@ -424,20 +518,57 @@ std::wstring FailurePhaseLabel(const ImportResult& result)
 
 std::optional<SourceFormat> ClassifyByExtension(const std::wstring& path)
 {
-    std::wstring ext = ExtensionOf(path);
-    if (ext == L"glb" || ext == L"gltf") return SourceFormat::Glb;
-    if (ext == L"stl") return SourceFormat::Stl;
-    if (ext == L"ply") return SourceFormat::Ply;
-    if (ext == L"obj") return SourceFormat::Obj;
-    if (ext == L"fbx") return SourceFormat::Fbx;
-    if (ext == L"3mf") return SourceFormat::ThreeMf;
     // `.step`/`.stp` select the dedicated STEP host, but the extension alone
     // never bypasses STEP-002 admission: StepPart21Preflight verifies the
     // ISO 10303-21 byte envelope on the inherited handle before OCCT runs.
-    if (ext == L"step" || ext == L"stp") return SourceFormat::Step;
-    if (ext == L"usd" || ext == L"usda" || ext == L"usdc" || ext == L"usdz")
-        return SourceFormat::Usd;
-    return std::nullopt;
+    return SourceFormatForCatalogDescriptor(model_core::FindByExtension(ExtensionOf(path)));
+}
+
+model_core::FormatId ClassifyByContent(const std::wstring& path)
+{
+    return model_core::SniffFile(path).format;
+}
+
+model_core::FormatClassification ClassifyForOpen(const std::wstring& path, bool skipContentCheck)
+{
+    const auto extension = ExtensionOf(path);
+    if (skipContentCheck) {
+        // --skip-content-check trusts the suffix only. The worker/host still
+        // performs full admission; this merely leaves the content candidate
+        // unknown so a deliberate wrong-suffix choice is not second-guessed.
+        return model_core::ClassifyFormat(extension, model_core::SniffResult{});
+    }
+    return model_core::ClassifyFormat(extension, model_core::SniffFile(path));
+}
+
+std::optional<SourceFormat> SourceFormatForFormatDescriptor(
+    const model_core::FormatDescriptor* descriptor)
+{
+    return SourceFormatForCatalogDescriptor(descriptor);
+}
+
+std::optional<SourceFormat> ExtensionSourceFormat(
+    const model_core::FormatClassification& classification)
+{
+    return SourceFormatForCatalogDescriptor(classification.extension);
+}
+
+std::wstring ClassificationDiagnostic(const model_core::FormatClassification& classification)
+{
+    const wchar_t* reason = L"none";
+    switch (classification.reason) {
+    case model_core::ClassificationReason::Extension: reason = L"extension"; break;
+    case model_core::ClassificationReason::Content: reason = L"content"; break;
+    case model_core::ClassificationReason::Both: reason = L"both"; break;
+    case model_core::ClassificationReason::Mismatch: reason = L"mismatch"; break;
+    case model_core::ClassificationReason::None: break;
+    }
+    // Path-free: only stable catalog names and the closed reason, so the text
+    // is safe for the redacted diagnostics stream.
+    return L"classification extension=" + StableNameOf(classification.extension)
+        + L" content=" + StableNameOf(classification.content)
+        + L" selected=" + StableNameOf(classification.selected)
+        + L" reason=" + reason;
 }
 
 void EnsureImportSandboxPrepared()
@@ -471,13 +602,20 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     import_broker::ImportSessionRequest sessionRequest;
     sessionRequest.additionalSidecarSearchRoots = std::move(additionalSidecarSearchRoots);
     sessionRequest.onSidecarUnavailable = recordMissing;
+    const bool cadFormat = format == SourceFormat::Step || format == SourceFormat::Iges
+        || format == SourceFormat::Brep || format == SourceFormat::Xbf
+        || format == SourceFormat::Fcstd;
+    const bool assimpFormat = format == SourceFormat::Dae || format == SourceFormat::ThreeDs
+        || format == SourceFormat::Dxf || format == SourceFormat::DirectX
+        || format == SourceFormat::Off || format == SourceFormat::Amf
+        || format == SourceFormat::X3d;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
         && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd && format != SourceFormat::Step;
+        && format != SourceFormat::Usd && !cadFormat && !assimpFormat;
     sessionRequest.useWorkerPool = !faultForTesting;
     sessionRequest.cpuBudgetAllows=std::move(cpuBudgetAllows);
     if (!delayBatchesForTesting && !faultForTesting && format != SourceFormat::ThreeMf
-        && format != SourceFormat::Usd && format != SourceFormat::Step) {
+        && format != SourceFormat::Usd && !cadFormat && !assimpFormat) {
         sessionRequest.nextDetail = std::move(nextDetail);
         sessionRequest.onInitialComplete = std::move(onInitialComplete);
     }
@@ -485,12 +623,13 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     sessionRequest.workerExePath = ResolveWorkerExePath();
     if (format == SourceFormat::Usd)
         sessionRequest.compatibilityHostExePath = ResolveCompatibilityHostExePath();
-    if (format == SourceFormat::Step) {
+    if (cadFormat) {
         sessionRequest.stepHostExePath = ResolveStepHostExePath();
         sessionRequest.onStepProgress = std::move(onStepProgress);
     }
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
+    if (assimpFormat) sessionRequest.assimpFormat = AssimpFormatForSource(format);
     sessionRequest.generationId = generationId;
     sessionRequest.sectionByteCapacity = sectionBytes;
     if (delayBatchesForTesting && format == SourceFormat::Glb)
@@ -511,9 +650,9 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         sessionRequest.commitLimitBytes = 1ull * 1024 * 1024;
         sessionRequest.replyTimeoutMs = 500;
     }
-    // The dedicated STEP host owns its own attack-mode flags; the general
+    // The dedicated CAD host owns its own attack-mode flags; the general
     // worker override above never reaches it.
-    if (format == SourceFormat::Step) {
+    if (cadFormat) {
         if (faultForTesting == 1) sessionRequest.stepHostArgumentsOverride = L"--pool-crash";
         if (faultForTesting == 2) {
             sessionRequest.stepHostArgumentsOverride = L"--pool-hang";
@@ -564,6 +703,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.coarseComplete = true;
                 break;
             case model_core::ChunkTopology::TriangleList:
+            case model_core::ChunkTopology::LineList:
             case model_core::ChunkTopology::PointList: {
                 ImportedMesh mesh;
                 mesh.geometry = chunk.descriptor;
@@ -597,6 +737,15 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 if (chunk.descriptor.dependencyIds[1]) material.metallicRoughnessImageChunkId = chunk.descriptor.dependencyIds[1];
                 if (chunk.descriptor.dependencyIds[2]) material.normalImageChunkId = chunk.descriptor.dependencyIds[2];
                 if (chunk.descriptor.dependencyIds[3]) material.emissiveImageChunkId = chunk.descriptor.dependencyIds[3];
+                if (chunk.descriptor.dependencyIds[4]) material.occlusionImageChunkId = chunk.descriptor.dependencyIds[4];
+                if (chunk.descriptor.dependencyIds[5]) material.clearcoatImageChunkId = chunk.descriptor.dependencyIds[5];
+                if (chunk.descriptor.dependencyIds[6]) material.clearcoatRoughnessImageChunkId = chunk.descriptor.dependencyIds[6];
+                if (chunk.descriptor.dependencyIds[7]) material.clearcoatNormalImageChunkId = chunk.descriptor.dependencyIds[7];
+                if (chunk.descriptor.dependencyIds[8]) material.specularImageChunkId = chunk.descriptor.dependencyIds[8];
+                if (chunk.descriptor.dependencyIds[9]) material.specularColorImageChunkId = chunk.descriptor.dependencyIds[9];
+                if (chunk.descriptor.dependencyIds[10]) material.sheenColorImageChunkId = chunk.descriptor.dependencyIds[10];
+                if (chunk.descriptor.dependencyIds[11]) material.sheenRoughnessImageChunkId = chunk.descriptor.dependencyIds[11];
+                if (chunk.descriptor.dependencyIds[12]) material.transmissionImageChunkId = chunk.descriptor.dependencyIds[12];
                 result.materials.push_back(std::move(material));
                 break;
             }
@@ -622,6 +771,14 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 break;
             case model_core::ChunkTopology::TextureWarning:
                 std::memcpy(&result.textureWarningCount,chunk.payload.data(),sizeof(uint32_t));
+                break;
+            case model_core::ChunkTopology::CompatibilityReport:
+                if (chunk.payload.size() == sizeof(model_core::CompatibilityReportPayload)) {
+                    model_core::CompatibilityReportPayload report{};
+                    std::memcpy(&report, chunk.payload.data(), sizeof(report));
+                    result.compatibility.assign(report.records,
+                                                report.records + report.recordCount);
+                }
                 break;
             default:
                 break; // unrecognized topology already rejected by the validator; never reached
@@ -697,6 +854,16 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.errorDetails = Loc("fb.detail.step.files.are.limited.to.the.bounded.tier.b.pri", L"STEP files are limited to the bounded Tier B primary-source size.");
             } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
                 result.errorDetails = Loc("fb.detail.step.parsing.or.tessellation.exceeded.the.bounde", L"STEP parsing or tessellation exceeded the bounded Tier B scratch budget.");
+            }
+        } else if (format == SourceFormat::Iges || format == SourceFormat::Brep
+                   || format == SourceFormat::Xbf || format == SourceFormat::Fcstd) {
+            if (session.errorCode == model_core::ImportErrorCode::PrimarySourceLimit) {
+                result.errorDetails = Loc("fb.detail.cad.files.are.limited.to.the.bounded.tier.b.prim", L"CAD files are limited to the bounded Tier B primary-source size.");
+            } else if (session.errorCode == model_core::ImportErrorCode::ScratchLimit) {
+                result.errorDetails = Loc("fb.detail.cad.parsing.or.tessellation.exceeded.the.bounde", L"CAD parsing or tessellation exceeded the bounded Tier B scratch budget.");
+            } else if (format == SourceFormat::Fcstd
+                       && session.errorCode == model_core::ImportErrorCode::UnsupportedRequiredFeature) {
+                result.errorDetails = Loc("fb.detail.fcstd.only.stored.or.deflate.parts.are.supported", L"FreeCAD packages must use an unencrypted ZIP container with stored or Deflate entries and a Document.xml plus evaluated Part shape.");
             }
         }
         return result;

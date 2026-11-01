@@ -1,0 +1,143 @@
+{
+  "task": "T20",
+  "schema": 1,
+  "description": "Deterministic visual comparison harness and observed baseline. Cases are generated from this profile so later tasks register additional profiles without editing verify.py.",
+  "viewport": {"width": 1280, "height": 860, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0},
+    {"id": "clay", "lighting": 1},
+    {"id": "directional", "lighting": 2}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 1.0},
+    "oblique": {"yawDegrees": 30.0, "pitchDegrees": 60.0, "distanceScale": 1.0},
+    "lens": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 0.42},
+    "window": {"yawDegrees": 18.0, "pitchDegrees": 70.0, "distanceScale": 0.48}
+  },
+  "orbit": [
+    {"id": "000", "yawDegrees": 0.0, "pitchDegrees": 75.0, "distanceScale": 1.0},
+    {"id": "090", "yawDegrees": 90.0, "pitchDegrees": 75.0, "distanceScale": 1.0},
+    {"id": "180", "yawDegrees": 180.0, "pitchDegrees": 75.0, "distanceScale": 1.0},
+    {"id": "270", "yawDegrees": 270.0, "pitchDegrees": 75.0, "distanceScale": 1.0}
+  ],
+  "regions": {
+    "sphere-grid": {
+      "left-glass": [0.04, 0.3, 0.34, 0.82],
+      "centre-metal": [0.35, 0.22, 0.66, 0.8],
+      "right-glass": [0.66, 0.3, 0.97, 0.82]
+    },
+    "glass-reference": {
+      "tinted-panel": [0.03, 0.22, 0.36, 0.88],
+      "rough-panel": [0.34, 0.22, 0.66, 0.88],
+      "clear-lens": [0.64, 0.22, 0.97, 0.88]
+    },
+    "stl-box": {"hard-edge": [0.28, 0.18, 0.72, 0.82]},
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "side-window": [0.02, 0.28, 0.4, 0.7],
+      "paint": [0.34, 0.55, 0.72, 0.9]
+    },
+    "camera": {
+      "lens": [0.33, 0.22, 0.68, 0.7],
+      "black-body": [0.18, 0.45, 0.55, 0.92],
+      "strap": [0.55, 0.25, 0.9, 0.85]
+    },
+    "microscope": {
+      "brass": [0.3, 0.16, 0.68, 0.5],
+      "enamel": [0.18, 0.45, 0.6, 0.9]
+    }
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": true,
+      "fixtures": [
+        {"id": "sphere-grid", "modes": ["studio", "clay", "directional"], "views": ["front", "oblique"]},
+        {"id": "glass-reference", "modes": ["studio", "clay", "directional"], "views": ["front"]},
+        {"id": "stl-box", "modes": ["studio", "clay", "directional"], "views": ["front", "oblique"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "car", "modes": ["studio", "clay", "directional"], "views": ["front", "oblique"], "closeups": ["window"], "orbit": true},
+        {"id": "camera", "modes": ["studio", "clay", "directional"], "views": ["front", "oblique"], "closeups": ["lens"]},
+        {"id": "microscope", "modes": ["studio", "clay", "directional"], "views": ["front"], "knownDefect": "resource-limit"},
+        {"id": "stl", "modes": ["studio", "clay", "directional"], "views": ["front", "oblique"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": ["car", "camera"],
+        "configurations": ["shipped-preset", "controlled"]
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "car-windshield-speckle",
+      "assets": ["car"],
+      "description": "Bright windshield/side glass with dotted white speckles on the upper edge and wiper line; authored coverage alpha and transmission are not separated.",
+      "label": "known-defect",
+      "assignedTo": "T22/T26/T27"
+    },
+    {
+      "id": "car-glass-order-depth",
+      "assets": ["car"],
+      "description": "Roof/window interpenetration reads as a flat white plate without layered glass depth; mesh-centre sorting cannot order these transparent surfaces.",
+      "label": "known-defect",
+      "assignedTo": "T26"
+    },
+    {
+      "id": "delayed-first-drawable-frame",
+      "assets": ["car", "camera", "microscope"],
+      "description": "A verified complete model can present background-only frames for several seconds while texture counters already look stable. T20 refuses blank frames; T23 owns the complete-load readiness contract.",
+      "label": "known-defect",
+      "assignedTo": "T23"
+    },
+    {
+      "id": "microscope-resource-limit",
+      "assets": ["microscope"],
+      "description": "The T19 terminal ResourceLimit after visible geometry did not reproduce in the T20 run. The label remains; a passing local load is not proof of a fix.",
+      "label": "known-defect",
+      "assignedTo": "T23"
+    },
+    {
+      "id": "khronos-glass-roles-collapse",
+      "assets": ["glass-reference"],
+      "description": "The generated Khronos-style tinted, rough and clear transmission spheres render nearly identically as clear glass; transmission/volume/ior roles are not differentiated.",
+      "label": "known-defect",
+      "assignedTo": "T22/T25/T26/T27"
+    },
+    {
+      "id": "f3d-camera-gray-lens",
+      "assets": ["camera"],
+      "description": "The installed F3D 3.5.0 preset renders the Camera lens as a flat pale/gray disk; it is a reference observation, not an accepted glass target.",
+      "label": "known-defect",
+      "assignedTo": "T26/T27"
+    },
+    {
+      "id": "f3d-dpi-resolution",
+      "assets": ["all"],
+      "description": "The shipped F3D preset is DPI-aware (1920x1350 for a 1280x900 request); the controlled no-config render is 1280x900. They are different reference conditions.",
+      "label": "limitation",
+      "assignedTo": "T34/T35"
+    },
+    {
+      "id": "per-machine-capture-tolerance",
+      "assets": ["all"],
+      "description": "GPU/driver/OS differences are expected. Global tolerances supplement local region checks; they are not a cross-renderer quality score.",
+      "label": "limitation",
+      "assignedTo": "T34/T35"
+    }
+  ]
+}

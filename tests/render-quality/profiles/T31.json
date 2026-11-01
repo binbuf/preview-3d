@@ -1,0 +1,82 @@
+{
+  "task": "T31",
+  "schema": 1,
+  "description": "Geometry-derived ground and contact shadows. Proves a fitted, texel-stable shadow map replaces the bounds ellipse for triangle content, preserves strap-loop/cutout holes, keeps clear glass from casting a solid silhouette, preserves the independent Ground highlight and grid flags, and degrades to a labelled fallback with recorded timing/memory. Same-camera shadow on/off images are captured in Studio, Clay and Directional.",
+  "viewport": {"width": 1280, "height": 900, "dpiAware": true},
+  "camera": {"fovYDegrees": 45.0, "target": "home bounds centre", "projection": "perspective"},
+  "requiredCapabilities": {
+    "canonical-camera": 1,
+    "capture-clean": 2,
+    "forced-present": 4
+  },
+  "modes": [
+    {"id": "studio", "lighting": 0},
+    {"id": "clay", "lighting": 1},
+    {"id": "directional", "lighting": 2}
+  ],
+  "views": {
+    "front": {"yawDegrees": 0.0, "pitchDegrees": 90.0, "distanceScale": 1.0},
+    "oblique": {"yawDegrees": 25.0, "pitchDegrees": 40.0, "distanceScale": 1.05},
+    "low": {"yawDegrees": 8.0, "pitchDegrees": 52.0, "distanceScale": 1.05}
+  },
+  "regions": {
+    "contact-shadow-probe": {
+      "ground": [0.05, 0.45, 0.95, 0.95],
+      "ring": [0.08, 0.45, 0.42, 0.8],
+      "panels": [0.5, 0.45, 0.95, 0.85]
+    },
+    "stl-box": {"box": [0.2, 0.15, 0.8, 0.9]},
+    "step-assembly": {"assembly": [0.05, 0.1, 0.95, 0.9]},
+    "car": {
+      "windshield": [0.28, 0.16, 0.72, 0.58],
+      "paint": [0.34, 0.55, 0.72, 0.9],
+      "trim": [0.12, 0.4, 0.4, 0.72]
+    },
+    "camera": {
+      "lens": [0.60, 0.40, 0.76, 0.62],
+      "black-body": [0.42, 0.40, 0.58, 0.66]
+    },
+    "stl": {"relief": [0.2, 0.15, 0.8, 0.9]}
+  },
+  "lanes": {
+    "generated": {
+      "required": true,
+      "regression": false,
+      "fixtures": [
+        {"id": "contact-shadow-probe", "modes": ["studio", "clay", "directional"],
+         "views": ["oblique", "low"]},
+        {"id": "stl-box", "modes": ["studio", "directional"], "views": ["oblique"]},
+        {"id": "step-assembly", "modes": ["studio", "directional"], "views": ["front"]},
+        {"id": "line-point-obj", "modes": ["studio"], "views": ["low"]}
+      ]
+    },
+    "external": {
+      "required": false,
+      "regression": false,
+      "root": "D:/repos/binbuf/preview-3d-test-models",
+      "assets": [
+        {"id": "car", "modes": ["studio", "clay", "directional"],
+         "views": ["oblique", "low"]},
+        {"id": "camera", "modes": ["studio", "clay", "directional"],
+         "views": ["front"]},
+        {"id": "stl", "modes": ["studio", "directional"], "views": ["oblique"]}
+      ]
+    },
+    "reference": {
+      "required": false,
+      "f3d": {
+        "assets": [],
+        "configurations": []
+      }
+    }
+  },
+  "knownDefects": [
+    {
+      "id": "car-authored-window-speckle",
+      "assets": ["car"],
+      "description": "Car windshield/roof/window edge speckles also appear in Studio and Clay; they are an authored/AA defect, not a contact-shadow defect.",
+      "label": "known-defect",
+      "assignedTo": "T33/T34"
+    }
+  ]
+}

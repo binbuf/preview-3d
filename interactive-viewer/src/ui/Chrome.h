@@ -15,11 +15,11 @@
 // input. All rects are in client pixel coordinates.
 //
 // Layout, left to right: the navigation action buttons (Grid/Ground axis/Ground
-// direction/Snap/Speed/Orbit/Share/Overflow), an empty drag strip, the centered
+// direction/Snap/Orbit/Share/Overflow), an empty drag strip, the centered
 // filename, more empty drag strip, then Open With and the system min/max/close.
-// Fit is laid out but currently hidden behind Chrome.cpp's kShowFitButton flag;
-// Reset has moved out of the title bar to a floating viewport button that only
-// appears once the camera has left its home framing.
+// Fit and Speed are laid out but hidden (Speed moved into the "..." settings
+// menu); Reset has moved out of the title bar to a floating viewport button
+// that only appears once the camera has left its home framing.
 class Chrome
 {
 public:
@@ -35,7 +35,7 @@ public:
         Orbit,
         Fit,
         Share,
-        Overflow,      // "..." menu (Controls/warnings/About)
+        Overflow,      // "..." settings dropdown (preferences, Controls, About)
         OpenWith,
         Update,        // circular up-arrow shown when a newer release exists
         Minimize,

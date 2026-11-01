@@ -1,0 +1,28 @@
+#usda 1.0
+(
+    defaultPrim = "Cage"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Cage"
+{
+    double3 xformOp:translate = (0, 0, 2)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Mesh "Cube"
+    {
+        int[] cornerIndices = [0, 1, 2, 3]
+        float[] cornerSharpnesses = [1, 1, 1, 1]
+        int[] creaseIndices = [0, 1, 1, 2]
+        int[] creaseLengths = [2, 2]
+        float[] creaseSharpnesses = [1, 1]
+        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
+        int[] faceVertexIndices = [0, 1, 2, 3, 4, 7, 6, 5, 0, 4, 5, 1, 1, 5, 6, 2, 2, 6, 7, 3, 3, 7, 4, 0]
+        point3f[] points = [
+            (-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
+            (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1)
+        ]
+        uniform token subdivisionScheme = "catmullClark"
+    }
+}

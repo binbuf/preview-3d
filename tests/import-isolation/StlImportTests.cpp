@@ -18,6 +18,7 @@
 #include "model_core/ControlChannelIo.h"
 #include "model_core/ControlProtocol.h"
 #include "model_core/VertexLayouts.h"
+#include "model_core/FormatCatalog.h"
 #include "model_core/WireFormat.h"
 #include "platform/MappedView.h"
 #include "platform/Win32Handle.h"
@@ -301,6 +302,35 @@ TEST_CASE("A valid binary STL with several facets round-trips through the real s
         CHECK(v.ny == Catch::Approx(0.0f).margin(1e-5));
         CHECK(v.nz == Catch::Approx(1.0f).margin(1e-5));
     }
+}
+
+TEST_CASE("An imported STL fixture selects the CAD presentation profile",
+          "[stl-import][presentation][orientation]")
+{
+    const auto* descriptor = model_core::FindBySourceFormatId(model_core::SourceFormatId::Stl);
+    REQUIRE(descriptor != nullptr);
+    CHECK(descriptor->presentation == model_core::PresentationProfile::StudioCad);
+    CHECK(model_core::ResolvePresentationProfile(*descriptor, { 0, 2 })
+          == model_core::PresentationProfile::StudioCad);
+
+    // Prove the same declaration against a real normalized import, not just
+    // the table: the preset decision sees the validated triangle total.
+    sandbox_test_support::SandboxFixture fixture;
+    std::vector<StlFacet> facets{ MakeTriangle(0.0f, 0.0f, 0.0f, 1.0f) };
+    ScratchStlFile file(BuildBinaryStl(facets));
+    auto run = RunStlImportFromRealFile(fixture.sid, file.path, 32, 4);
+    REQUIRE(run.ready);
+    REQUIRE(run.validation.ok);
+    model_core::PresentationSummary summary{};
+    for (const auto& chunk : run.validation.chunks) {
+        if (chunk.descriptor.topology == model_core::ChunkTopology::TriangleList)
+            summary.triangleCount += chunk.descriptor.indexCount / 3;
+        if (chunk.descriptor.topology == model_core::ChunkTopology::PointList)
+            summary.pointCount += chunk.descriptor.vertexCount;
+    }
+    CHECK(summary.triangleCount > 0);
+    CHECK(model_core::ResolvePresentationProfile(*descriptor, summary)
+          == model_core::PresentationProfile::StudioCad);
 }
 
 TEST_CASE("A plausible (unit-length) supplied normal is used even when it disagrees with the flat "

@@ -1,0 +1,24 @@
+#usda 1.0
+(
+    defaultPrim = "Points"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "Points"
+{
+    double3 xformOp:translate = (1, 2, 3)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+
+    def Points "Cloud"
+    {
+        float[] widths = [0.1, 0.1, 0.1, 0.1]
+        color3f[] primvars:displayColor = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0)] (
+            interpolation = "vertex"
+        )
+        float[] primvars:displayOpacity = [1, 0.5, 0.25, 1] (
+            interpolation = "vertex"
+        )
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)]
+    }
+}

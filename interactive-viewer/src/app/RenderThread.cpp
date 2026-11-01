@@ -5,7 +5,9 @@
 #define NOMINMAX
 
 #include "RenderThread.h"
+#include "CompatibilityText.h"
 #include "Localization.h"
+#include "model_core/FormatCatalog.h"
 #include <cstdio>
 
 #include <windows.h>
@@ -55,14 +57,40 @@ void MergeMissingAssets(ModelData& metadata, const std::vector<std::wstring>& as
     }
 }
 
+// Merge one batch's compatibility records into the generation's accumulating
+// list, deduplicating by (featureId, severity) and saturating counts. The
+// worker cannot grow this list beyond the wire cap, and the host re-caps it.
+void MergeCompatibility(ModelData& metadata,
+                        const std::vector<model_core::CompatibilityRecord>& records)
+{
+    for (const auto& record : records) {
+        auto existing = std::find_if(metadata.compatibility.begin(), metadata.compatibility.end(),
+            [&](const model_core::CompatibilityRecord& candidate) {
+                return candidate.featureId == record.featureId
+                    && candidate.severity == record.severity;
+            });
+        if (existing != metadata.compatibility.end()) {
+            const uint64_t total = uint64_t(existing->count) + record.count;
+            existing->count = total > model_core::kCompatibilityCountCap
+                ? model_core::kCompatibilityCountCap : static_cast<uint32_t>(total);
+            continue;
+        }
+        if (metadata.compatibility.size() < model_core::kMaxCompatibilityRecords)
+            metadata.compatibility.push_back(record);
+    }
+}
+
 // The single place the user-visible warning banner text is composed, so the
 // existing feature/texture warnings and the missing-asset warning can never
 // drift apart across the terminal/detail/per-batch metadata snapshots.
 void RebuildModelWarning(ModelData& metadata)
 {
     metadata.warning.clear();
-    if (metadata.importStatus.optionalFeatureWarnings)
-        metadata.warning = Loc("warning.optionalFeatures", L"Some optional glTF features are not supported. Their fallback representation is shown.");
+    // Prefer specific, host-localized messages for known IDs. Older adapters
+    // still send only a count, so CompatibilityWarningText keeps the generic
+    // fallback when no record maps to host text.
+    metadata.warning = CompatibilityWarningText(metadata.compatibility,
+                                                metadata.importStatus.optionalFeatureWarnings);
     if (metadata.importStatus.textureWarnings) {
         metadata.warning += (metadata.warning.empty() ? L"" : L"\n");
         metadata.warning += Loc("warning.textures", L"Some textures could not be loaded. Fallback textures are shown.");
@@ -228,6 +256,123 @@ void RenderThread::RequestPick(int x, int y, uint64_t generation)
 {
     { std::lock_guard<std::mutex> lock(commandMutex_); pickRequest_ = PickRequest{x,y,generation}; }
     Invalidate();
+}
+
+void RenderThread::RequestDebugSample(int x0, int y0, int x1, int y1)
+{
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        debugSampleRequest_ = DebugSampleRequest{x0,y0,x1,y1};
+    }
+    debugSampleStatus_.store(1, std::memory_order_release);
+    Invalidate();
+}
+
+bool RenderThread::DebugSample(float rgba[4]) const
+{
+    std::lock_guard<std::mutex> lock(debugMutex_);
+    if (debugSampleStatus_.load(std::memory_order_acquire) != 2) return false;
+    std::memcpy(rgba, debugSampleRgba_, sizeof(debugSampleRgba_));
+    return true;
+}
+
+uint32_t RenderThread::DebugMaterialCount() const
+{
+    std::lock_guard<std::mutex> lock(debugMutex_);
+    return static_cast<uint32_t>(debugMaterials_.size());
+}
+
+bool RenderThread::DebugMaterial(uint32_t index, DebugMaterialRecord& out) const
+{
+    std::lock_guard<std::mutex> lock(debugMutex_);
+    if (index >= debugMaterials_.size()) return false;
+    out = debugMaterials_[index];
+    return true;
+}
+
+void RenderThread::RefreshDebugMaterials()
+{
+    std::vector<DebugMaterialRecord> records;
+    records.reserve(path_.model.meshes.size());
+    for (const auto& mesh : path_.model.meshes) {
+        if (!mesh.drawEnabled) continue;
+        DebugMaterialRecord record;
+        record.chunkId = mesh.chunkId;
+        record.materialChunkId = mesh.materialChunkId;
+        record.sourceMeshId = mesh.sourceMeshId;
+        record.sourceNodeId = mesh.sourceNodeId;
+        record.instanceId = mesh.instanceId;
+        record.vertexCount = mesh.vertexCount;
+        record.indexCount = mesh.indexCount;
+        record.alphaMode = mesh.material.alphaMode;
+        record.flags = mesh.material.flags;
+        record.hasMaterial = mesh.hasMaterial;
+        record.points = mesh.points;
+        record.lines = mesh.lines;
+        record.completeVertex = mesh.completeVertex;
+        const bool blended = mesh.material.alphaMode == uint32_t(model_core::AlphaModeId::Blend);
+        const bool masked = mesh.material.alphaMode == uint32_t(model_core::AlphaModeId::Mask);
+        const bool transmissive = (mesh.material.flags & model_core::kMaterialFlagTransmissive) != 0;
+        // The PSO selection in RenderFrame is the authority; mirror it exactly.
+        record.authoredBucket = transmissive ? 3u : blended ? 2u : masked ? 1u : 0u;
+        record.authoredDepthWrite = !blended;
+        const bool clay = debugLightingMode_ == LightingMode::Clay
+            && !mesh.points && !mesh.lines;
+        if (clay) {
+            // T29: the Clay override rewrites authored BLEND/transmission into
+            // the opaque bucket with depth writes. MASK remains a cutout, so
+            // its authored holes survive; lines/points never use this path.
+            record.bucket = masked ? 1u : 0u;
+            record.depthWrite = true;
+            record.clayOverride = blended || transmissive;
+        } else {
+            record.bucket = record.authoredBucket;
+            record.depthWrite = record.authoredDepthWrite;
+            record.clayOverride = false;
+        }
+        const bool twoSided = !mesh.hasMaterial
+            || (mesh.material.flags & model_core::kMaterialFlagDoubleSided) != 0;
+        record.cullMode = twoSided ? 0u : 1u;
+        std::memcpy(record.baseColor, mesh.material.baseColorFactor, sizeof(record.baseColor));
+        record.metallic = mesh.material.metallicFactor;
+        record.roughness = mesh.material.roughnessFactor;
+        record.alphaCutoff = mesh.material.alphaCutoff;
+        std::memcpy(record.emissive, mesh.material.emissiveFactor, sizeof(record.emissive));
+        record.emissiveStrength = mesh.material.emissiveStrength;
+        record.clearcoatFactor = mesh.material.clearcoatFactor;
+        record.clearcoatRoughness = mesh.material.clearcoatRoughness;
+        record.occlusionStrength = mesh.material.occlusionStrength;
+        record.sheenRoughness = mesh.material.sheenRoughness;
+        std::memcpy(record.sheen, mesh.material.sheenColor, sizeof(record.sheen));
+        record.specularFactor = mesh.material.specularFactor;
+        record.ior = mesh.material.ior;
+        std::memcpy(record.specularColor, mesh.material.specularColor, sizeof(record.specularColor));
+        record.transmissionFactor = mesh.material.transmissionFactor;
+        std::memcpy(record.uvOffset, mesh.material.uvOffset, sizeof(record.uvOffset));
+        std::memcpy(record.uvScale, mesh.material.uvScale, sizeof(record.uvScale));
+        record.uvRotation = mesh.material.uvRotation;
+        record.normalScale = mesh.material.normalScale;
+        record.clearcoatNormalScale = mesh.material.clearcoatNormalScale;
+        for (int slot = 0; slot < int(model_core::kMaterialTextureSlotCount); ++slot) {
+            record.slotFlags[slot] = mesh.material.slotFlags[slot];
+            if (slot > 0) {
+                record.slotUvOffset[slot - 1][0] = mesh.material.slotUvOffset[slot - 1][0];
+                record.slotUvOffset[slot - 1][1] = mesh.material.slotUvOffset[slot - 1][1];
+                record.slotUvScale[slot - 1][0] = mesh.material.slotUvScale[slot - 1][0];
+                record.slotUvScale[slot - 1][1] = mesh.material.slotUvScale[slot - 1][1];
+                record.slotUvRotation[slot - 1] = mesh.material.slotUvRotation[slot - 1];
+            }
+            record.textureIndices[slot] = mesh.textureIndices[slot];
+            record.textureBound[slot] = mesh.textureInfo[slot].bound;
+            record.textureChunkIds[slot] = mesh.textureInfo[slot].chunkId;
+            record.textureFormats[slot] = static_cast<uint32_t>(mesh.textureInfo[slot].pixelFormat);
+            record.textureColorSpaces[slot] = static_cast<uint32_t>(mesh.textureInfo[slot].colorSpace);
+            if (mesh.textureInfo[slot].bound) record.mapMask |= 1u << slot;
+        }
+        records.push_back(record);
+    }
+    std::lock_guard<std::mutex> lock(debugMutex_);
+    debugMaterials_ = std::move(records);
 }
 
 void RenderThread::CancelUploads()
@@ -539,6 +684,13 @@ bool RenderThread::InitializeOnThread(HWND window, std::wstring& error)
 {
     window_=window;
     if (!path_.Initialize(window, error) || !budgetMonitor_.Initialize(path_.device,{},error)) return false;
+    studioEnvironmentVersion_.store(path_.StudioEnvironmentVersion());
+    studioEnvironmentVariant_.store(path_.StudioEnvironmentVariant());
+    studioEnvironmentIdentityHash_.store(path_.StudioEnvironmentIdentityHash());
+    studioEnvironmentResidentBytes_.store(path_.StudioEnvironmentResidentBytes());
+    const double bakeMilliseconds = path_.StudioEnvironmentBakeMilliseconds();
+    studioEnvironmentBakeMicroseconds_.store(static_cast<uint32_t>(
+        std::clamp(bakeMilliseconds * 1000.0, 0.0, 4294967295.0)));
     D3D12_FEATURE_DATA_ARCHITECTURE architecture{};
     if (SUCCEEDED(path_.device.Device()->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE,&architecture,sizeof(architecture)))) isUma_=architecture.UMA;
     UpdateBudget();
@@ -560,6 +712,7 @@ void RenderThread::ThreadMain(HWND window)
     startOk_ = InitializeOnThread(window, startError_);
     SetEvent(startedEvent_.get());
     if (!startOk_) {
+        std::fwprintf(stderr, L"render init failed: %ls\n", startError_.c_str());
         auto failure = std::make_unique<RenderStartFailure>();
         failure->details = startError_;
         if (PostMessageW(window, kRenderStartFailedMessage, 0,
@@ -596,6 +749,7 @@ void RenderThread::ThreadMain(HWND window)
         bool picked = false;
         if (pendingPick_ && path_.PollPick(picked)) {
             ++pickCompletions_; pickHits_.store(picked);
+            lastPickedId_.store(path_.LastPickedId());
             auto reply = std::make_unique<RenderPickResult>(RenderPickResult{pendingPick_->generation,picked});
             if (pendingPick_->generation == modelGeneration_
                 && PostMessageW(window,kRenderPickCompleteMessage,0,reinterpret_cast<LPARAM>(reply.get()))) (void)reply.release();
@@ -610,6 +764,28 @@ void RenderThread::ThreadMain(HWND window)
                     invalidated_.store(true);
                 }
                 pickRequest_.reset();
+            }
+            if (debugSampleRequest_) {
+                path_.RequestDebugSample(debugSampleRequest_->x0, debugSampleRequest_->y0,
+                                         debugSampleRequest_->x1, debugSampleRequest_->y1);
+                debugSampleRequest_.reset();
+                debugSampleStatus_.store(1, std::memory_order_release);
+                invalidated_.store(true);
+            }
+        }
+        {
+            D3D12ViewerPath::DebugSample sample;
+            const int state = path_.PollDebugSample(sample);
+            if (state == 2) {
+                std::lock_guard<std::mutex> lock(debugMutex_);
+                std::memcpy(debugSampleRgba_, sample.rgba, sizeof(debugSampleRgba_));
+                debugSampleStatus_.store(2, std::memory_order_release);
+            } else if (state == 3) {
+                debugSampleStatus_.store(3, std::memory_order_release);
+            } else if (state == 1) {
+                // Keep the loop awake until the copy fence retires; otherwise
+                // it would sleep on the next idle wait with the sample pending.
+                invalidated_.store(true, std::memory_order_release);
             }
         }
 
@@ -723,6 +899,8 @@ void RenderThread::DrainCommands()
         texturedChunks_.store(0, std::memory_order_release);
         textureExtent_.store(0);textureCount_.store(0);textureMips_.store(0);
         stagedScene_ = {}; stagedGeneration_ = 0; materials_.clear();
+        { std::lock_guard<std::mutex> lock(debugMutex_); debugMaterials_.clear(); debugSampleRgba_[0]=debugSampleRgba_[1]=debugSampleRgba_[2]=debugSampleRgba_[3]=0.0f; }
+        debugSampleStatus_.store(0, std::memory_order_release);
 
     }
 
@@ -771,6 +949,7 @@ void RenderThread::PumpUploads(HWND window)
     message->refinement=pub.task.result.detail;
     if (pub.task.terminal) {
         if (stagedMetadata_) {
+            MergeCompatibility(*stagedMetadata_, pub.task.result.compatibility);
             MergeMissingAssets(*stagedMetadata_, pub.task.result.missingAssets);
             RebuildModelWarning(*stagedMetadata_);
         }
@@ -782,6 +961,44 @@ void RenderThread::PumpUploads(HWND window)
             initialTerminal_=true;
             completeModelAwaitingPresentGeneration_.store(pub.task.generation, std::memory_order_release);
             stagedMetadata_->importStatus.flags = rejectedDetailCount_.load() ? model_core::kStatusPressure : 0;
+            // T15: bounded material-aware preset summary. Only the same
+            // generation-wide catalog the renderer just uploaded is inspected,
+            // and SummarizeMaterials caps the loop independently of the file.
+            std::vector<model_core::MaterialPayload> materialPayloads;
+            std::vector<uint32_t> baseColorIds;
+            std::vector<uint64_t> materialTriangles;
+            std::vector<uint32_t> materialMapMasks;
+            materialPayloads.reserve(std::min<size_t>(materials_.size(), viewer_presentation::kMaterialScanCap));
+            baseColorIds.reserve(materialPayloads.capacity());
+            materialTriangles.reserve(materialPayloads.capacity());
+            materialMapMasks.reserve(materialPayloads.capacity());
+            std::unordered_map<uint32_t, size_t> materialIndex;
+            for (const auto& entry : materials_) {
+                if (materialPayloads.size() >= viewer_presentation::kMaterialScanCap) break;
+                materialIndex.emplace(entry.second.chunkId, materialPayloads.size());
+                materialPayloads.push_back(entry.second.data);
+                baseColorIds.push_back(entry.second.baseColorImageChunkId);
+                materialTriangles.push_back(0);
+                uint32_t mapMask = 0;
+                for (uint32_t slot = 0; slot < model_core::kMaterialTextureSlotCount; ++slot)
+                    if (entry.second.ImageChunkId(slot) != 0) mapMask |= (1u << slot);
+                materialMapMasks.push_back(mapMask);
+            }
+            const auto addContribution = [&](const D3D12ViewerPath::GpuMesh& mesh) {
+                if (!mesh.drawEnabled || mesh.points || mesh.lines) return;
+                const auto found = materialIndex.find(mesh.materialChunkId);
+                if (found == materialIndex.end()) return;
+                materialTriangles[found->second] += mesh.indexCount / 3u;
+            };
+            for (const auto& mesh : path_.model.meshes) addContribution(mesh);
+            for (const auto& mesh : stagedScene_.meshes) addContribution(mesh);
+            bool cadFormat = false;
+            if (const auto* descriptor = model_core::FindBySourceFormatId(stagedMetadata_->source.format))
+                cadFormat = descriptor->presentation == model_core::PresentationProfile::StudioCad;
+            message->materialSummary = viewer_presentation::SummarizeMaterials(
+                materialPayloads, stagedMetadata_->pointCount, stagedMetadata_->triangleCount,
+                cadFormat, baseColorIds, materialTriangles, materialMapMasks);
+            message->hasMaterialSummary = true;
             message->metadata = std::make_shared<const ModelData>(*stagedMetadata_);
         }
     } else if (!pub.task.result.ok) {
@@ -797,26 +1014,32 @@ void RenderThread::PumpUploads(HWND window)
             path_.model.neutralTextures=std::move(pub.resources.neutralTextures);
         std::wstring descriptorError;
         const bool descriptorsReady=path_.RebuildMaterialDescriptors(path_.model,descriptorError);
+        bool materialBuffersReady=descriptorsReady;
         D3D12ViewerPath::UpdateCoarseVisibility(path_.model);
         for (auto& mesh:path_.model.meshes) {
             const auto mat=materials_.find(mesh.materialChunkId);
             if (mat==materials_.end()) continue;
             mesh.material=mat->second.data;mesh.hasMaterial=true;
-            const uint32_t ids[4]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
-                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId};
-            for (UINT slot=0;slot<4;++slot) for (const auto& texture:path_.model.textures) if (texture.chunkId==ids[slot]) {
-                mesh.textureIndices[slot]=int(texture.srvHeapIndex);
-                if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
-                break;
+            if (!path_.EnsureMaterialConstants(mesh,descriptorError)) materialBuffersReady=false;
+            for (UINT slot=0;slot<model_core::kMaterialTextureSlotCount;++slot) {
+                for (const auto& texture:path_.model.textures) {
+                    if (texture.chunkId!=mat->second.ImageChunkId(slot)) continue;
+                    mesh.textureIndices[slot]=int(texture.srvHeapIndex);
+                    mesh.textureInfo[slot].chunkId=texture.chunkId;
+                    mesh.textureInfo[slot].bound=true;
+                    if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
+                    break;
+                }
             }
         }
         UpdateResidencySmoke();
         stagedMetadata_->stats.drawCallCount=int(displayedChunks_.load());
-        message->ok=descriptorsReady; message->terminal=true;
-        if (!descriptorsReady) {
+        message->ok=materialBuffersReady; message->terminal=true;
+        if (!materialBuffersReady) {
             message->errorCode=model_core::ImportErrorCode::UploadFailure;
             message->errorDetails=descriptorError;
         }
+        MergeCompatibility(*stagedMetadata_, pub.task.result.compatibility);
         MergeMissingAssets(*stagedMetadata_, pub.task.result.missingAssets);
         RebuildModelWarning(*stagedMetadata_);
         message->metadata=std::make_shared<const ModelData>(*stagedMetadata_);
@@ -927,7 +1150,17 @@ void RenderThread::PumpUploads(HWND window)
             std::memcpy(draw.instanceTransform,instance.worldTransform,sizeof(draw.instanceTransform));
             std::memcpy(draw.instanceBoundsMin,instance.data.worldMin,sizeof(draw.instanceBoundsMin));
             std::memcpy(draw.instanceBoundsMax,instance.data.worldMax,sizeof(draw.instanceBoundsMax));
-            draw.mirrored=instance.mirrored;destination.meshes.push_back(std::move(draw));
+            draw.mirrored=instance.mirrored;
+            // The clone shares the source geometry's buffer, which may be
+            // tagged for another material or handedness. Give it its own
+            // before publication.
+            std::wstring materialError;
+            if (!path_.EnsureMaterialConstants(draw,materialError)) {
+                stagedFailed_=true;
+                message->errorCode=model_core::ImportErrorCode::UploadFailure;
+                message->errorDetails=materialError;
+            }
+            destination.meshes.push_back(std::move(draw));
         }
         if (destination.neutralTextures.empty())
             destination.neutralTextures=std::move(pub.resources.neutralTextures);
@@ -972,22 +1205,26 @@ void RenderThread::PumpUploads(HWND window)
             const auto desc=texture.resource->GetDesc();extent=std::max(extent,desc.Width);mips=std::max(mips,uint64_t(desc.MipLevels));
         }
         textureExtent_.store(extent);textureCount_.store(destination.textures.size());textureMips_.store(mips);
+        bool materialBuffersReady=descriptorsReady;
         for (auto& mesh : destination.meshes) {
             auto mat = materials_.find(mesh.materialChunkId);
             if (mat == materials_.end()) continue; // Neutral, immutable until a dependency arrives.
             mesh.material=mat->second.data;mesh.hasMaterial=true;
-            const uint32_t ids[4]{mat->second.baseColorImageChunkId,mat->second.metallicRoughnessImageChunkId,
-                                  mat->second.normalImageChunkId,mat->second.emissiveImageChunkId};
-            for (UINT slot=0;slot<4;++slot) for (const auto& texture:destination.textures) {
-                if (texture.chunkId!=ids[slot]) continue;
-                mesh.textureIndices[slot]=static_cast<int>(texture.srvHeapIndex);
-                if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
-                break;
+            if (!path_.EnsureMaterialConstants(mesh,descriptorError)) materialBuffersReady=false;
+            for (UINT slot=0;slot<model_core::kMaterialTextureSlotCount;++slot) {
+                for (const auto& texture:destination.textures) {
+                    if (texture.chunkId!=mat->second.ImageChunkId(slot)) continue;
+                    mesh.textureIndices[slot]=static_cast<int>(texture.srvHeapIndex);
+                    mesh.textureInfo[slot].chunkId=texture.chunkId;
+                    mesh.textureInfo[slot].bound=true;
+                    if (slot==0) mesh.textureIndex=mesh.textureIndices[0];
+                    break;
+                }
             }
         }
         const bool hasVisibleDraw = std::any_of(destination.meshes.begin(), destination.meshes.end(),
             [](const auto& draw) { return draw.drawEnabled; });
-        if (descriptorsReady && stagedHaveBounds_ && hasVisibleDraw
+        if (materialBuffersReady && stagedHaveBounds_ && hasVisibleDraw
             && (!stagedProxyMode_ || stagedProxyComplete_ || !path_.hasModel)) {
             if (modelGeneration_ != pub.task.generation) {
                 uint64_t fence = 0;
@@ -1014,6 +1251,7 @@ void RenderThread::PumpUploads(HWND window)
             displayedChunks_.store(std::count_if(path_.model.meshes.begin(),path_.model.meshes.end(),[](const auto& mesh) { return mesh.drawEnabled; }), std::memory_order_release);
             texturedChunks_.store(std::count_if(path_.model.meshes.begin(), path_.model.meshes.end(),
                 [](const auto& mesh) { return mesh.drawEnabled && mesh.textureIndex >= 0 && mesh.textureHeap; }), std::memory_order_release);
+            RefreshDebugMaterials();
         }
         metadata.stats.drawCallCount = int(displayedChunks_.load());
         if (stagedHaveBounds_ && modelGeneration_ == pub.task.generation) {
@@ -1038,7 +1276,12 @@ void RenderThread::PumpUploads(HWND window)
             }
         }
         message->metadata = std::make_shared<const ModelData>(metadata);
-        message->ok = descriptorsReady;
+        message->ok = materialBuffersReady;
+        if (!materialBuffersReady) {
+            stagedFailed_=true;
+            message->errorCode=model_core::ImportErrorCode::UploadFailure;
+            message->errorDetails=descriptorError;
+        }
         if (modelGeneration_ != pub.task.generation) return;
     }
     // Align cancel/recovery UI with the representation already accepted by the
@@ -1137,10 +1380,97 @@ void RenderThread::RenderOneFrame()
         displayModel = complete;
     }
     if (displayModel) {
+        path_.debugChannel = debugChannel_.load(std::memory_order_acquire);
+        path_.oitForceFallback = oitForceFallback_.load(std::memory_order_acquire);
+        path_.oitResolveDiagnostic = oitResolveDiagnostic_.load(std::memory_order_acquire);
+        path_.reverseTransparentDrawOrderForTesting =
+            transparentOrderPermutation_.load(std::memory_order_acquire);
+        if (overlay->info.lightingMode != debugLightingMode_) {
+            // T29: the effective bucket/depth state depends on the lighting
+            // mode. Rebuild the bounded records once per mode change so debug
+            // fields 143-145 report what RenderFrame applies, not the authored
+            // intent.
+            debugLightingMode_ = overlay->info.lightingMode;
+            RefreshDebugMaterials();
+        }
+        path_.shadowFallbackForced = shadowFallbackForced_.load(std::memory_order_acquire);
+        path_.aoForceFallback = aoFallbackForced_.load(std::memory_order_acquire);
+        path_.aoDebugView = aoDebugView_.load(std::memory_order_acquire);
+        path_.aaForceDisabled = aaForceDisabled_.load(std::memory_order_acquire);
         path_.RenderFrame(viewProjection, orientation, *overlay, cameraTarget, eyeSelection);
+        transparencyAlgorithm_.store(path_.lastTransparencyAlgorithm, std::memory_order_release);
+        transparencyFallbackReason_.store(path_.lastTransparencyFallbackReason,
+                                          std::memory_order_release);
+        transparentDrawCount_.store(path_.lastTransparentDrawCount, std::memory_order_release);
+        oitTargetBytes_.store(path_.oitTargetBytes, std::memory_order_release);
+        transmissionTargetBytes_.store(path_.transmissionTargetBytes, std::memory_order_release);
+        transmissionMipCount_.store(path_.transmission.mipCount, std::memory_order_release);
+        transmissionFallbackReason_.store(path_.lastTransmissionFallbackReason,
+                                          std::memory_order_release);
+        forwardTransmissionDrawCount_.store(path_.lastForwardTransmissionDrawCount,
+                                            std::memory_order_release);
+        lastResolveUsedOit_.store(path_.lastResolveUsedOit, std::memory_order_release);
+        shadowMode_.store(path_.lastShadowMode, std::memory_order_release);
+        shadowFallbackReason_.store(path_.lastShadowFallbackReason, std::memory_order_release);
+        shadowCasterCount_.store(path_.lastShadowCasterCount, std::memory_order_release);
+        shadowMapSize_.store(path_.shadow.size, std::memory_order_release);
+        shadowAllocationBytes_.store(path_.shadowAllocationBytes, std::memory_order_release);
+        shadowPassMicroseconds_.store(static_cast<uint32_t>(std::min(
+            4294967295.0, path_.lastShadowPassMilliseconds * 1000.0)),
+            std::memory_order_release);
+        aoMode_.store(path_.lastAoMode, std::memory_order_release);
+        aoFallbackReason_.store(path_.lastAoFallbackReason, std::memory_order_release);
+        aoAllocationBytes_.store(path_.aoAllocationBytes, std::memory_order_release);
+        aoPassMicroseconds_.store(static_cast<uint32_t>(std::min(
+            4294967295.0, path_.lastAoPassMilliseconds * 1000.0)),
+            std::memory_order_release);
+        aoGpuMicroseconds_.store(static_cast<uint32_t>(std::min(
+            4294967295.0, path_.lastAoGpuMilliseconds * 1000.0)),
+            std::memory_order_release);
+        aoStrength_.store(path_.lastAoStrength, std::memory_order_release);
+        aoWorldRadius_.store(path_.lastAoWorldRadius, std::memory_order_release);
+        aoSampleCount_.store(path_.lastAoSampleCount, std::memory_order_release);
+        aaMode_.store(path_.lastAaMode, std::memory_order_release);
+        aaFallbackReason_.store(path_.lastAaFallbackReason, std::memory_order_release);
+        aaTapCount_.store(path_.lastAaTapCount, std::memory_order_release);
+        aaResolveMicroseconds_.store(static_cast<uint32_t>(std::min(
+            4294967295.0, path_.lastAaResolveMilliseconds * 1000.0)),
+            std::memory_order_release);
     } else {
+        path_.debugChannel = debugChannel_.load(std::memory_order_acquire);
         path_.RenderClearFrame(orientation, *overlay);
+        transparencyAlgorithm_.store(0, std::memory_order_release);
+        transparencyFallbackReason_.store(path_.oit.fallbackReason, std::memory_order_release);
+        transparentDrawCount_.store(0, std::memory_order_release);
+        oitTargetBytes_.store(path_.oitTargetBytes, std::memory_order_release);
+        transmissionTargetBytes_.store(path_.transmissionTargetBytes, std::memory_order_release);
+        transmissionMipCount_.store(path_.transmission.mipCount, std::memory_order_release);
+        transmissionFallbackReason_.store(path_.lastTransmissionFallbackReason,
+                                          std::memory_order_release);
+        forwardTransmissionDrawCount_.store(0, std::memory_order_release);
+        shadowMode_.store(0, std::memory_order_release);
+        shadowFallbackReason_.store(path_.shadow.fallbackReason, std::memory_order_release);
+        shadowCasterCount_.store(0, std::memory_order_release);
+        shadowMapSize_.store(path_.shadow.size, std::memory_order_release);
+        shadowAllocationBytes_.store(path_.shadowAllocationBytes, std::memory_order_release);
+        shadowPassMicroseconds_.store(0, std::memory_order_release);
+        aoMode_.store(0, std::memory_order_release);
+        aoFallbackReason_.store(path_.ao.fallbackReason, std::memory_order_release);
+        aoAllocationBytes_.store(path_.aoAllocationBytes, std::memory_order_release);
+        aoPassMicroseconds_.store(0, std::memory_order_release);
+        aoGpuMicroseconds_.store(0, std::memory_order_release);
+        aoStrength_.store(0.0f, std::memory_order_release);
+        aoWorldRadius_.store(0.0f, std::memory_order_release);
+        aoSampleCount_.store(0, std::memory_order_release);
+        aaMode_.store(path_.lastAaMode, std::memory_order_release);
+        aaFallbackReason_.store(path_.lastAaFallbackReason, std::memory_order_release);
+        aaTapCount_.store(path_.lastAaTapCount, std::memory_order_release);
+        aaResolveMicroseconds_.store(static_cast<uint32_t>(std::min(
+            4294967295.0, path_.lastAaResolveMilliseconds * 1000.0)),
+            std::memory_order_release);
     }
+    resolveExposure_.store(path_.lastResolveExposure, std::memory_order_release);
+    resolveToneMap_.store(path_.lastResolveToneMap, std::memory_order_release);
     if (injectDeviceRemoval_.exchange(false)) path_.lastPresentResult = DXGI_ERROR_DEVICE_REMOVED;
     if (IsDeviceLoss(path_.lastPresentResult)) {
         deviceFatal_ = !RecoverDevice();

@@ -51,6 +51,17 @@ enum class ImportFormat : uint32_t {
     // zero-capability Preview3DStepHost.exe; the general worker never accepts
     // this format. Product extension discovery stays disabled until STEP-006.
     Step,
+    // T08 CAD interchange through the same dedicated OCCT host. IGES/BREP use
+    // the generalized CAD opcode/request; the general worker never accepts it.
+    Iges,
+    Brep,
+    // T09 OCCT-native formats through the same dedicated host.
+    Xbf,
+    Fcstd,
+    // T10 bounded Assimp compatibility route in the general worker. The
+    // concrete compatibility format travels separately in
+    // ImportSessionRequest::assimpFormat.
+    Assimp,
 };
 
 enum class ImportProducer : uint32_t {
@@ -187,8 +198,15 @@ struct ImportSessionRequest {
     // STEP-005 test-only seam: forces the STEP host's mesher serial so a test
     // can compare parallel and serial normalized output byte-for-byte.
     bool stepForceSerialForTesting = false;
+    // STEP import quality. Balanced keeps the established display deflection;
+    // Draft/Full are opt-in and are part of the STEP cache identity. Only the
+    // dedicated STEP host consumes it.
+    model_core::StepImportQuality stepImportQuality = model_core::StepImportQuality::Balanced;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;
+    // Meaningful only when format == ImportFormat::Assimp. The closed value
+    // selects the compatibility importer hint and the expected wire identity.
+    model_core::AssimpFormat assimpFormat = model_core::AssimpFormat::Dae;
     uint64_t generationId = 0;
     uint64_t sectionByteCapacity = 0;
     uint32_t maxChunkCount = 0;
@@ -255,6 +273,27 @@ struct ImportSessionRequest {
     // which is the loosest value that constrains nothing a caller did not
     // already allow.
     uint32_t maxChunksPerGeneration = 0;
+    // T23: the detail-service replay (nextDetail/onInitialComplete) is a
+    // background refinement session, not part of the forward load. It must
+    // end cleanly when the viewer stops asking for visible regions; otherwise
+    // a fully loaded model would sit in the replay until the absolute
+    // generation wall-clock deadline and then be reported as a late
+    // ResourceLimit. After this many consecutive milliseconds of nextDetail()
+    // returning 0, the broker sends EndDetail and completes the generation.
+    // Injectable so a test can prove the end-to-end path quickly.
+    uint32_t detailIdleGraceMs = 1500;
+    // The first visible-detail request can only arrive after the render thread
+    // has uploaded and framed the coarse proxy, which may be slower than the
+    // short post-request grace. Keep the replay available for this generous
+    // bounded window before the first request; once refinement has started,
+    // detailIdleGraceMs applies between requests.
+    uint32_t initialDetailGraceMs = 60000;
+    // Hard upper bound on serviced detail requests for one generation. The
+    // viewer asks for each visible region at most once while it stays
+    // resident, but a hostile/buggy caller returning ids forever must not
+    // churn a pooled worker indefinitely. Exceeding it ends the replay the
+    // same way an idle grace does (successful/degraded completion).
+    uint32_t maxDetailRequestsPerGeneration = 4096;
     // Called once per validated batch, in delivery order, before the import
     // completes. Chunks passed here are already copied into host-owned
     // memory, so the callee may keep them.
@@ -300,6 +339,9 @@ struct ImportSessionRequest {
     // FBX qualification seam: constrains the aggregate decoded texture budget
     // so pressure and same-worker recovery are practical to exercise.
     bool fbxTinyTextureLimitForTesting = false;
+    // T10 qualification seam: constrains every Assimp adapter cap so a small
+    // fixture proves typed ResourceLimit rejection.
+    bool assimpTinyLimitsForTesting = false;
 };
 
 struct SourceChunkRange
@@ -344,6 +386,13 @@ struct ImportSessionResult {
     // the last one received. Zero/empty for every non-STEP producer.
     uint32_t stepProgressCount = 0;
     model_core::StepProgressNotice lastStepProgress{};
+    // T23 detail replay evidence. Count is meaningful for a coarse-proxy
+    // generation with a detail callback; zero otherwise. EndedByIdle records
+    // that the replay was closed by the bounded idle grace/cap rather than by
+    // cancellation, so the caller can describe the surviving representation
+    // truthfully without inventing a failure.
+    uint32_t detailRequestCount = 0;
+    bool detailEndedByIdle = false;
     // True only for an exact, first-result UnsupportedComposition from the
     // USD fast worker. USD-006 consumes this without reinterpreting generic
     // parser/resource failures as permission to launch OpenUSD.

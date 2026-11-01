@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "task": "T23",
+  "date": "2026-10-30",
+  "reviewer": {
+    "identity": "DeepSeek V4.1 Flash coding agent",
+    "tool": "captured PNG evidence, Debug terminal/residency readback and local image inspection; local Symphony vision disabled",
+    "symphonyVision": "disabled",
+    "providerSettingsChanged": false
+  },
+  "evidenceRoot": "TestResults/render-quality/T23 (acceptance), T23-dev and T23-review-dev",
+  "imagesInspected": [
+    {
+      "path": "TestResults/render-quality/T23/images/external-microscope-studio-front.png",
+      "sha256": "ce9a89d81d302aa30d28d573d78fc6390d70e2ae1d9537ea072b1b4fe05152fb",
+      "observation": "Acceptance-run microscope: fully textured, complete/Ready, no failure overlay."
+    },
+    {
+      "path": "TestResults/render-quality/T23/images/external-camera-default.png",
+      "sha256": "c1a6c988bc130f220290609a58b2a3d08b7625704b3413dcb41f530dc91bc27a",
+      "observation": "Acceptance-run Camera: dark lens with reflection/depth, body and strap readable, no terminal error."
+    },
+    {
+      "path": "TestResults/render-quality/T23/images/external-car-default.png",
+      "sha256": "012495de4e0d3342a4b99f6260e472fa4cc4d860f333f9b8d9d068dbb3fa706c",
+      "observation": "Acceptance-run Car: complete red body and interior; known windshield/side-glass speckle/order remains T26/T27."
+    },
+    {
+      "path": "TestResults/render-quality/T23/images/generated-texture-reuse-default.png",
+      "sha256": "9e9009f814cfc54969f65e1e2caca7ed306c8afc69745df5ceb6b535d23e8406",
+      "observation": "Acceptance-run reused-image fixture: one sphere from the reused color map and distinct data map; exactly two resident textures."
+    },
+    {
+      "path": "TestResults/render-quality/T23-dev/fixtures/texture-reuse-studio-front.png",
+      "sha256": "9e9009f814cfc54969f65e1e2caca7ed306c8afc69745df5ceb6b535d23e8406",
+      "observation": "One sphere shaded by the reused 128px color map and the distinct data map; the model reports exactly two resident textures and reaches complete/Ready with no terminal error."
+    },
+    {
+      "path": "TestResults/render-quality/T23-dev/external/microscope-studio-front.png",
+      "sha256": "ce9a89d81d302aa30d28d573d78fc6390d70e2ae1d9537ea072b1b4fe05152fb",
+      "observation": "Fully textured microscope (brass, enamel, glass), complete/Ready, no failure overlay. Textures are 3 x 2048px with 12 mips; GPU 112,263,168 bytes against a 1,023,410,176-byte detail target."
+    },
+    {
+      "path": "TestResults/render-quality/T23-review-dev/external/camera-default.png",
+      "sha256": "13d85b173d3d4329d9a332669a3a31ef2f74f0b44eee9cd91989b0a9146ddfe7",
+      "observation": "Camera keeps its dark lens with visible reflection/depth and its strap/body separation; complete load, no terminal error."
+    },
+    {
+      "path": "TestResults/render-quality/T23-review-dev/external/car-default.png",
+      "sha256": "14626341fc6f7642dec801ac19f06f843ad69ce6403488dd27f37a5ccf3b4c79",
+      "observation": "Car renders complete with the known windshield/side-glass speckle and ordering owned by T26/T27; no late ResourceLimit and no missing textures."
+    }
+  ],
+  "observations": [
+    "The microscope's former failure is measured, not inferred: Debug import/capture reported ImportStage::GenerationDeadline (17) and ImportErrorCode::ResourceLimit (2) at ~301 s while the model was already visible. Its 2048px/12-mip texture set used 134,742,016 GPU bytes against a ~976 MiB detail target, so no texture byte/pixel, mip-chain, catalog or GPU-residency cap was the limiter.",
+    "The limiter was the broker's absolute 300 s generation wall-clock deadline applied to the background detail replay: the replay loop waited for a visible-detail request forever after the viewer had stopped asking. The broker now ends an idle replay cleanly with EndDetail (bounded initial grace, bounded post-request idle grace and a bounded request count); the worker returns to the pool and the generation completes instead of failing after the model is fully usable.",
+    "The microscope's duplicate diffuse map (two glTF image entries naming the same sidecar) now decodes and uploads once per semantic/color space: resident model textures fall from 4 to 3 and the complete set uses 112,263,168 bytes.",
+    "Capture readiness now requires terminal complete/degraded import, the expected generation, geometry residency, no pending detail request, settled pixels and quiet texture counters. A terminal error discovered before or after the first visible geometry raises instead of producing a qualified capture.",
+    "The hostile/oversized/decompression/cancellation/texture boundary lanes remain green; the reused-image fixture and the shortened-deadline idle-replay case are the new T23 regressions."
+  ],
+  "defects": [
+    {
+      "id": "car-windshield-ordering",
+      "label": "known-defect",
+      "where": "car-default.png",
+      "description": "Car windshield/side-glass speckle and interpenetration ordering remain T26/T27 work; T23 only establishes a complete, settled, error-free load.",
+      "assignedTo": "T26/T27"
+    }
+  ],
+  "positives": [
+    "The microscope opens safely and reaches a truthfully complete state; the late ResourceLimit is not reproduced in the Debug lane.",
+    "The reused-image accounting is measured end-to-end (resident texture count, extent, mips and GPU bytes), not inferred from the overlay or compressed file size.",
+    "An idle detail replay ends as a successful/degraded completion with a typed, bounded lifecycle signal; an outstanding detail reply still fails at the deadline.",
+    "Camera and Car remain complete and error-free after the change."
+  ],
+  "acceptance": {
+    "terminalCompleteReadinessReviewed": true,
+    "reusedImageAccountingVerified": true,
+    "lateErrorDetected": true,
+    "acceptedReferencesPromotedBy": "not applicable for T23 (observed evidence only)",
+    "acceptedReferencesAreQualityTargets": false,
+    "note": "T23 image review used captured PNGs plus terminal/residency readback. Car glass ordering is explicitly deferred to T26/T27; no reference promotion is made."
+  }
+}
