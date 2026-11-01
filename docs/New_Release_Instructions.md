@@ -50,7 +50,8 @@ heading, every version file, the commit subject, and the tag must all agree.
 - [ ] The full `CI` workflow is green on the `main` commit you are about to
       release. It builds Debug and Release x64 and runs
       `Tests.Unit.exe "~[graphics]"`, `Tests.ImportIsolation.exe`, and
-      `Tests.ProviderHost.exe`, plus the bounded fuzz-smoke matrix.
+      `Tests.ProviderHost.exe`. The bounded fuzz-smoke matrix is **not** part of
+      that gate (ADR-0092); run it locally as described in step 4.
 - [ ] The `Localization` workflow is green if any user-facing string changed.
 - [ ] The `Dependencies` workflow is green if `vcpkg.json`,
       `vcpkg-configuration.json`, or the overlay ports/triplets changed.
@@ -58,8 +59,7 @@ heading, every version file, the commit subject, and the tag must all agree.
       (`.github/workflows/release.yml` uses `cancel-in-progress: false`).
 
 The tag build deliberately re-runs only the Release configuration and skips the
-fuzz matrix, on the assumption that the tagged commit already carried the full
-matrix on `main`. Do not tag a commit whose full `main` checks were not green.
+fuzz matrix. Do not tag a commit whose full `main` checks were not green.
 
 ---
 
@@ -189,6 +189,32 @@ msbuild Preview3D.slnx /p:Configuration=Release /p:Platform=x64
 `[graphics]` is excluded on headless CI. Run those cases locally when the
 release touches rendering, and say so in the release PR/notes if GPU coverage
 was manual.
+
+### Fuzz smoke (advisory; required before a minor or major bump)
+
+The bounded fuzz-smoke matrix is not in CI (ADR-0092). Run it locally on your
+own schedule, and **always before a minor (`X.Y.0`) or major (`X.0.0`) release**.
+A patch release inherits the last run unless a parser, codec, or dependency
+changed in the release.
+
+```powershell
+# Build one target (one project per invocation: they share tests\fuzz\x64\Release).
+msbuild tests\fuzz\AssimpFuzz.vcxproj /p:Configuration=Release /p:Platform=x64
+
+# Run it. Repeat for every target.
+# Targets: STEP, 3MF, STL, PLY, OBJ, Assimp, glTF, Provider
+pwsh -File tests/fuzz/Invoke-FuzzSmoke.ps1 -Target Assimp `
+  -Executable tests/fuzz/x64/Release/AssimpFuzz.exe `
+  -PrepareScript tests/fuzz/prepare_assimp_seeds.py `
+  -Seeds TestResults/security-t10/assimp-seeds
+```
+
+See `tests/fuzz/README.md` for the per-target arguments, seed scripts, and the
+longer local budgets (`-MaxTotalTime`, `-Timeout`).
+Record the run (target, duration, exit status, findings) in the release notes or
+the release PR. The result is advisory: triage a finding as a fix, a mitigation,
+or a known follow-up in the changelog. It does not block the tag by itself, but
+do not tag while an unexplained crash is open.
 
 Recommended: produce both packages locally once before the tag, so packaging
 problems are found before CI:

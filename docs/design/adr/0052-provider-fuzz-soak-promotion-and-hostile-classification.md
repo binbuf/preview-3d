@@ -1,7 +1,9 @@
 # 0052 — Promote the `fuzz-smoke` lane and classify hostile surrogate deaths
 
 ## Status
-accepted
+accepted (the promotion clause is superseded by
+[ADR-0092](0092-fuzz-smoke-local-advisory-check.md): `fuzz-smoke` is a local,
+advisory check again)
 
 ## Context
 ADR-0042 kept the bounded libFuzzer smoke as an opt-in/nightly job and said

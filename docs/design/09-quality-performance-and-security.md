@@ -226,8 +226,8 @@ preflight (`Etc1sTablePreflight.h`), called from `PreflightKtx2` before
 `ktxTexture2_TranscodeBasis`; see
 [ADR-0046](adr/0046-etc1s-global-data-preflight.md). Both minimized findings and
 the valid BasisLZ sample are promoted into the generated smoke seeds, and
-`GltfFuzz` is in the `fuzz-smoke` matrix (SEC-17/T25 promoted that lane into the
-required merge gate).
+`GltfFuzz` is in the `fuzz-smoke` matrix (a local, advisory check since
+ADR-0092).
 
 SEC-17 adds `ProviderFuzz` (`tests/fuzz/ProviderFuzz.cpp`) over the provider
 boundary the worker targets do not reach: `BoundedStreamSource`, every family
@@ -246,9 +246,10 @@ surrogate death is the documented allowed failure (see "End-to-end soak").
 
 SEC-17/T25 completes the lane. `ProviderFuzz` joins the `fuzz-smoke` matrix, and
 that target's runner restores the isolated `thumbnail-provider/step-occt`
-manifest it links (ADR-0002); `fuzz-smoke` now runs on every `pull_request`/`push`
-and on a manual `CI` dispatch instead of only the nightly schedule (the tag gate
-does not repeat it — see ADR-0042). The surrogate
+manifest it links (ADR-0002). ADR-0092 keeps `fuzz-smoke` out of the required
+push/PR gate: it runs only on a manual `CI` dispatch, and maintainers run the
+same bounded smoke locally on their own schedule and before minor or major
+releases (see `docs/New_Release_Instructions.md`). The surrogate
 soak classifies hostile input rather than treating any failure as an anonymous
 crash: a contained access violation is recorded as a quarantine
 failure-with-reason (exit nonzero), a stack-overflow/`__fastfail` surrogate death
@@ -363,8 +364,10 @@ disabled and will not package until it passes; the tagged commit has already
 carried the full matrix on `main`, and a manual `CI` dispatch can re-run it
 against a candidate or tag. The `[graphics]` unit cases are excluded on the
 headless runner. The bounded libFuzzer smoke (`.github/workflows/ci.yml` job
-`fuzz-smoke`) is part of that required merge gate as of SEC-17/T25: it runs on
-every pull request, every push, and a manual dispatch. Lint/static analysis, the
+`fuzz-smoke`) is **not** part of the merge gate: since ADR-0092 it runs only on a
+manual dispatch, and the same targets are expected to be run locally on the
+maintainer's own schedule and before a minor or major release (advisory, see
+`docs/New_Release_Instructions.md`). Lint/static analysis, the
 headless adapter corpus, and package-manifest validation remain manual
 per-change skills on top of the gate (release packaging already restores and
 validates the manifests).

@@ -10,10 +10,10 @@ name: CI
 # release.yml calls this workflow as a reusable workflow and gates packaging on
 # it, so a red test stops a signed artifact. The tag call passes a Release-only
 # matrix and `fuzz: false`: a tag normally points at a commit that already ran
-# the full Debug + Release + fuzz matrix on main, and rebuilding all of it at
-# tag time only lengthens the release without adding evidence. The Release build
-# and all three suites still run against the exact tagged source before anything
-# is packaged. Do not add steps here that need an interactive desktop or a GPU:
+# the full Debug + Release matrix on main, and rebuilding all of it at tag time
+# only lengthens the release without adding evidence. The Release build and all
+# three suites still run against the exact tagged source before anything is
+# packaged. Do not add steps here that need an interactive desktop or a GPU:
 # the runner is headless, so the unit lane excludes the [graphics] cases (the
 # same filter as the harness verify command) and the import/STEP AppContainer
 # suites run as-is.
@@ -40,15 +40,14 @@ on:
           - '["Debug"]'
         default: '["Debug","Release"]'
       fuzz:
-        description: Run the bounded fuzz-smoke matrix.
+        description: Run the bounded fuzz-smoke matrix (manual dispatch only; see ADR-0092).
         required: false
         type: boolean
         default: true
   # release.yml calls this with a Release-only matrix and fuzz disabled, so the
-  # tag gate does not repeat the Debug build and eight fuzz runners whose
-  # evidence the tagged commit already carries from the full push/PR lane. The
-  # full matrix stays available on every pull request, every push to main, and
-  # a manual dispatch of this workflow.
+  # tag gate does not repeat the Debug build. The Debug lane stays available on
+  # every pull request, every push to main, and a manual dispatch of this
+  # workflow.
   workflow_call:
     inputs:
       configurations:
@@ -415,30 +414,29 @@ jobs:
 
   # Bounded libFuzzer smoke covering every format lane plus the provider
   # pipeline. SEC-15 added the STL/PLY/OBJ fast-path targets; SEC-16/16b added
-  # glTF+codecs; SEC-17/T25 added ProviderFuzz and promoted this lane into the
-  # required gate (SEC-13/T13): it runs on every pull_request/push and on a
-  # manual dispatch of this workflow. release.yml passes `fuzz: false` so the tag
-  # gate does not rebuild eight fuzz runners whose evidence the tagged commit
-  # already carries; dispatch this workflow on the tag to re-run them on demand.
-  # One target per runner: the fuzz projects share the
+  # glTF+codecs; SEC-17/T25 added ProviderFuzz. ADR-0092 takes the lane back out
+  # of the required push/PR gate: fuzzing is a local, advisory check that a
+  # maintainer runs on their own schedule and before a minor or major release
+  # (see docs/New_Release_Instructions.md). It still runs on an explicit
+  # workflow_dispatch with `fuzz: true`, so the matrix stays exercisable in CI
+  # without gating a merge. One target per runner: the fuzz projects share the
   # tests\fuzz\x64\Release intermediate directory, so a fresh runner per target
   # avoids the MSB8028 shared-intermediate-dir hazard. ProviderFuzz links all
   # eight adapters including STEP/OCCT (ADR-0047), so its runner also restores
   # the isolated thumbnail-provider STEP manifest (ADR-0002).
   fuzz-smoke:
     name: Fuzz smoke (${{ matrix.target }})
-    # `inputs` is null on pull_request/push (toJSON -> "null") and a real
-    # boolean only for workflow_call/workflow_dispatch, so release.yml can
-    # disable this matrix without breaking the event-triggered runs.
-    if: ${{ toJSON(inputs.fuzz) != 'false' }}
+    # Manual dispatch only. `inputs` is null on pull_request/push (toJSON ->
+    # "null") and a real boolean only for workflow_call/workflow_dispatch, so
+    # push, pull_request and the release.yml call all skip this matrix.
+    if: ${{ github.event_name == 'workflow_dispatch' && toJSON(inputs.fuzz) != 'false' }}
     runs-on: windows-2025
     timeout-minutes: 120
 
     env:
       # Reuse the test/dependencies binary cache so a warm restore keeps a
-      # per-PR smoke feasible. This lane holds no Packages credentials, so it is
-      # safe on a fork pull_request; a cache miss rebuilds from source as the
-      # previous nightly-only lane already did.
+      # manual dispatch bounded. This lane holds no Packages credentials, so it
+      # is safe on a fork pull request; a cache miss rebuilds from source.
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.vcpkg-binary-cache
       VCPKG_SCRATCH: ${{ github.workspace }}\..\.vcpkg-scratch
 

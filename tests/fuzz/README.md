@@ -1,10 +1,12 @@
 # No-GPU format fuzz targets
 
 `tests/fuzz/Invoke-FuzzSmoke.ps1` wraps a seed-preparation script and the
-bounded libFuzzer run for one target. The `CI` workflow's `fuzz-smoke` matrix
-calls it; invoke it locally with the same `-Target`, `-Executable`,
-`-PrepareScript`, `-Seeds`, and optional `-Timeout` arguments to reproduce a CI
-smoke.
+bounded libFuzzer run for one target. Since ADR-0092 these are local, advisory
+checks: run them on your own schedule and before a minor or major release (see
+`docs/New_Release_Instructions.md`). The `CI` workflow keeps the same
+`fuzz-smoke` matrix for an explicit `workflow_dispatch` only. Invoke a target
+with `-Target`, `-Executable`, `-PrepareScript`, `-Seeds`, and optional
+`-Timeout`/`-MaxTotalTime` arguments.
 
 ## STEP
 
