@@ -8,6 +8,72 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.7.0] - 2026-11-01
+
+This is the format-breadth and Studio-lighting release: eleven more model
+formats, a real material and lighting model in Studio, Clay and Directional, and
+a render-quality harness that now gates visual changes. Per-family supported
+subsets and limits are in [Format support and limits](docs/FORMAT-SUPPORT.md).
+
+### Added
+
+- **Eleven more formats, selected by content.** COLLADA `.dae`, 3DS, DXF,
+  DirectX `.x`, OFF, AMF and X3D open through a bounded Assimp adapter; IGES
+  `.igs`/`.iges` and BREP `.brep` open in the dedicated CAD host; XBF and
+  FreeCAD `Part`/`PartDesign` files open through OCCT's XCAF reader. File
+  dialogs, **Open As**, drag-and-drop and shell registration now come from a
+  format catalog, and a bounded byte sniffer routes mistyped files to the right
+  importer instead of trusting the extension.
+- **Per-file compatibility warnings.** Optional or approximated features now
+  produce a specific, localized message in the info panel (clearcoat, sheen,
+  specular, USD variants, 3MF non-terminal namespaces, the DXF entity subset and
+  other narrow cases) instead of one generic optional-feature warning.
+- **TGA and DDS textures, HDR and EXR environments.** TGA (uncompressed and RLE)
+  and DDS (BC1/BC3/BC5/BC7 and uncompressed) join PNG/JPEG/WebP; HDR and EXR
+  decoders add environment assets. glTF occlusion and ORM maps are read as
+  independent authored inputs.
+- **A real lighting and material model.** Studio uses a procedural image-based
+  environment with neutral tone mapping and exposure; Clay is a coherent opaque
+  geometry-review mode; Directional uses a world-anchored sun with 3D azimuth.
+  Five presentation presets (PBR, CAD, Scan/Sculpt, Transparent, Point cloud)
+  set orientation, lighting and background per format family, and are saved as
+  view state rather than baked into the model.
+- **Material lobes and layered glass.** Clearcoat, sheen, specular/IOR and
+  emissive strength, authored normal scale, independent occlusion, per-slot UV
+  transforms, and Fresnel-weighted transmission for clear, tinted and rough
+  glass. Transparent geometry resolves through bounded weighted-blended OIT, so
+  intersecting and shuffled glass no longer depends on draw order.
+- **Contact shadows, ambient occlusion and anti-aliasing.** Geometry-derived
+  ground shadows, ORM and screen-space ambient occlusion, scale-aware SSAO, and
+  depth-aware edge anti-aliasing with semantic texture sampling.
+- **Multiple windows.** Launching Preview 3D again opens an independent window
+  instead of forwarding the path to the running copy, so several models can be
+  compared side by side.
+- **Auto-rotate toggle**, reworked settings and context menu, and a rebuilt
+  information panel.
+
+### Changed
+
+- **STEP import reports import quality.** Tolerance, units and bounded repair
+  are recorded as typed compatibility entries instead of failing or silently
+  guessing, and IGES/BREP/XBF/FCStd share the same preflight and error model.
+- **Texture loading is budgeted end to end.** Decoded pixels, encoded bytes and
+  scratch are accounted together, duplicate sources are decoded once, and the
+  viewer waits for a complete, textured first frame instead of presenting a
+  partially built model.
+- Rendering composites in a linear HDR target before exposure and tone mapping.
+
+### Fixed
+
+- **Single-sided textured meshes no longer invert the normal map on back
+  faces.** The geometric normal is flipped before the tangent basis is built,
+  instead of flipping the perturbed normal toward the eye afterwards.
+- **Glass no longer uses fixed-opacity blending.** Interface reflection,
+  authored coverage and transmission are separate terms, so tinted and rough
+  panels keep their colour and depth.
+- **Model orientation and units for CAD formats**, including contradictory or
+  missing STEP unit declarations.
+
 ## [0.6.7] - 2026-10-29
 
 ### Added
