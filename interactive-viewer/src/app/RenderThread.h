@@ -339,6 +339,12 @@ public:
     // --- published state, safe from the UI thread ---
 
     bool HasModel() const noexcept { return hasModel_.load(std::memory_order_acquire); }
+    // True only while the render thread is actually drawing the model. With
+    // SetHideModelUntilComplete on, that stays false during a first load (and
+    // while a replacement generation has not finished) even though HasModel()
+    // is already true from the first upload. The UI gates camera navigation and
+    // the NavGizmo on this so the hidden loading scene cannot be moved.
+    bool HasDisplayedModel() const noexcept { return modelDisplayed_.load(std::memory_order_acquire); }
     std::shared_ptr<const RenderDisplaySnapshot> DisplaySnapshot() const noexcept { return displaySnapshot_.load(); }
     bool HasCompleteModel() const noexcept {
         const auto snapshot = DisplaySnapshot();
@@ -523,6 +529,7 @@ private:
     std::atomic<bool> invalidated_{ true };
     std::atomic<bool> uiAnimating_{ false };
     std::atomic<bool> hasModel_{ false };
+    std::atomic<bool> modelDisplayed_{ false };
     std::atomic<bool> hideModelUntilComplete_{ true };
     std::atomic<bool> revealIncompleteModel_{ false };
     std::atomic<std::shared_ptr<const RenderDisplaySnapshot>> displaySnapshot_;

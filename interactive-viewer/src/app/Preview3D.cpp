@@ -681,12 +681,16 @@ bool WriteBenchmarkResult(ViewerApp& app, int& exitCode)
 }
 
 // The bottom bar and Information panel only reserve screen space while a
-// model is actually loaded and navigable (same condition as CanNavigate,
-// inlined here since CanNavigate is defined later in this file).
+// model is actually loaded and visible. HasDisplayedModel (not HasModel) is the
+// gate: a first load uploads coarse chunks and marks the document Ready at the
+// terminal import marker before the render thread reveals the complete model,
+// and none of that hidden content may be navigated or expose viewport chrome.
 bool HasNavigableModel(const ViewerApp& app)
 {
-    // Loading/error cards do not suspend interaction with usable prior content.
-    return app.renderThread.HasModel();
+    // Loading/error cards do not suspend interaction with usable prior content;
+    // HasDisplayedModel is true while that previous generation is still drawn
+    // and stays false for a hidden replacement.
+    return app.renderThread.HasDisplayedModel();
 }
 
 // Reserved bottom-bar VIEWPORT inset (not the bar's own drawn height, see
@@ -923,6 +927,10 @@ void ResetTouchBaseline(ViewerApp& app)
 
 bool CanNavigate(const ViewerApp& app)
 {
+    // Do not let input move a model the render thread is still hiding behind
+    // the loading card (or has not finished replacing). This also covers the
+    // "show model only when fully loaded" preference: when it is off, the
+    // first coarse upload is displayed immediately and becomes navigable.
     return HasNavigableModel(app);
 }
 
@@ -1532,7 +1540,7 @@ void ApplySelection(ViewerApp& app, bool hit)
 
 void FrameSelectedOrAll(ViewerApp& app)
 {
-    if (!app.renderThread.HasModel()) return;
+    if (!CanNavigate(app)) return;
     const float aspect = ViewportAspect(app);
     if (app.meshSelected && app.loadedModel)
     {
@@ -3330,7 +3338,7 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_OPEN_AS: ShowOpenAsMenu(app); break;
     case ID_VIEW_FIT: FrameSelectedOrAll(app); break;
     case ID_VIEW_RESET:
-        if (app.renderThread.HasModel())
+        if (CanNavigate(app))
         {
             app.renderThread.LockCamera()->Reset(ViewportAspect(app));
             // Keep the UI loop polling until the camera actually reaches home,
@@ -4348,6 +4356,7 @@ bool HandleAccessibleKey(ViewerApp& app, WPARAM key)
     if (!direction) return false;
     if (app.keyboardControl==Control::Zoom)
     {
+        if (!CanNavigate(app)) return false;
         auto camera=app.renderThread.LockCamera();
         const int position=std::clamp(ZoomSliderPositionFor(*camera)+direction*25,0,kZoomSliderMax);
         const double distance=ZoomDistanceForSliderPosition(*camera,position); camera->distance=distance; camera->targetDistance=distance;
@@ -4698,7 +4707,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.directionalLightAngle=app.directionalLightAngle;
     overlay.directionalLightElevation=app.directionalLightElevation;
     overlay.lightDragging=app.pointerMode==PointerMode::LightDrag;
-    overlay.hasModel = app.renderThread.HasModel();
+    overlay.hasModel = HasNavigableModel(app);
     overlay.captureClean = app.captureClean;
     overlay.resetViewButtonAlpha = app.resetViewButtonAlpha;
     if (overlay.resetViewButtonAlpha > 0.001f)

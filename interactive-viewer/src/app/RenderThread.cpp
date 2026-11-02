@@ -892,6 +892,7 @@ void RenderThread::DrainCommands()
         path_.ClearModel();
         modelGeneration_ = 0;
         hasModel_.store(false, std::memory_order_release);
+        modelDisplayed_.store(false, std::memory_order_release);
         displaySnapshot_.store({});
         displayedChunks_.store(0, std::memory_order_release);
         coarseChunks_.store(0); fineChunks_.store(0); suppressedCoarse_.store(0);
@@ -1379,6 +1380,7 @@ void RenderThread::RenderOneFrame()
                 && !visibleDetailPending);
         displayModel = complete;
     }
+    modelDisplayed_.store(displayModel, std::memory_order_release);
     if (displayModel) {
         path_.debugChannel = debugChannel_.load(std::memory_order_acquire);
         path_.oitForceFallback = oitForceFallback_.load(std::memory_order_acquire);
@@ -1573,6 +1575,7 @@ bool RenderThread::RecoverDevice()
     if (uploadThread_.joinable()) uploadThread_.join();
 
     hasModel_.store(false, std::memory_order_release);
+    modelDisplayed_.store(false, std::memory_order_release);
     displaySnapshot_.store({});
     debugInfo_.Reset();
     path_.overlay.Shutdown();

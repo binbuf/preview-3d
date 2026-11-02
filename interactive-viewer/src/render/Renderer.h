@@ -213,6 +213,10 @@ struct OverlayInfo
     bool clayButtonPressed = false;
     bool directionalButtonPressed = false;
     bool wireframeButtonPressed = false;
+    // True only while model content is actually being displayed. A load that
+    // is still hidden (see RenderThread::HasDisplayedModel) and the resulting
+    // hidden replacement generation leave this false, so the loading scene
+    // never exposes viewport chrome such as the navigation gizmo.
     bool hasModel = false;
     bool gridVisible = true;
     // T16: ground contact shadow is its own layer, independent of the grid.

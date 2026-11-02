@@ -1898,7 +1898,12 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
 
     // Navigation gizmo on top of everything else, except a floating
     // flyout (Speed, settings menu), which floats above even that.
-    if ((overlay.state == ViewerState::Ready || overlay.state == ViewerState::Partial) && overlay.hasModel)
+    // overlay.hasModel is true only while the render thread is actually
+    // drawing model content, so a hidden first load (or a hidden replacement
+    // generation) never reveals the gizmo. A progressive load with "show model
+    // only when fully loaded" off is visible and therefore interactive.
+    if (overlay.hasModel && overlay.state != ViewerState::Failed
+        && overlay.state != ViewerState::Empty)
     {
         DrawGizmo(orientation, gizmo, overlay, scale);
     }
