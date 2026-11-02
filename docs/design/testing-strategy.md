@@ -31,8 +31,10 @@
 | Install verification | `packaging/` + clean VM | Each CLSID loads into the isolated surrogate, not `explorer.exe`; no `DisableProcessIsolation`; conflict/repair/uninstall |
 
 The `CI` workflow (`.github/workflows/ci.yml`) builds Debug and Release x64 and runs `Tests.Unit.exe`
-(`~[graphics]`), `Tests.ImportIsolation.exe` and `Tests.ProviderHost.exe` on every pull request and
-push to `main`, and `Release` gates packaging on that workflow. Routine provider checks still use
+(`~[graphics]`) and `Tests.ProviderHost.exe` on every pull request and push to `main`, and `Release`
+gates packaging on that workflow. `Tests.ImportIsolation.exe` is local-only (ADR-0093): run it in
+Debug and Release before a minor/major release and before any importer, wire-format, broker, fixture
+or dependency change; a low-risk patch may rely on CI. Routine provider checks still use
 `Tests.Unit.exe` and scoped `Tests.ImportIsolation.exe` filters locally in Debug and Release. See
 [adr/0042-ci-test-gate.md](adr/0042-ci-test-gate.md).
 

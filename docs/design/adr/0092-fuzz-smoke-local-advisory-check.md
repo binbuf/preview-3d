@@ -41,10 +41,10 @@ In practice the lane is a poor fit for the merge gate:
   mitigate, or record as a known follow-up in the release notes). It does not
   block CI, and it does not block a tag by itself.
 - The required gate stays what it was before ADR-0052: Debug and Release x64
-  builds plus `Tests.Unit.exe "~[graphics]"`, `Tests.ImportIsolation.exe`, and
-  `Tests.ProviderHost.exe` on every pull request and push to `main`; the tag
-  build re-runs the Release lane against the tagged source before packaging
-  (ADR-0042).
+  builds plus `Tests.Unit.exe "~[graphics]"` and `Tests.ProviderHost.exe` on
+  every pull request and push to `main`; `Tests.ImportIsolation.exe` is local
+  per [ADR-0093](0093-import-isolation-local-suite.md); the tag build re-runs
+  the Release lane against the tagged source before packaging (ADR-0042).
 
 ## Consequences
 

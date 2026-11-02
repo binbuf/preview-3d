@@ -51,8 +51,9 @@ heading, every version file, the commit subject, and the tag must all agree.
       release. It builds Debug and Release x64 and runs
       `Tests.Unit.exe "~[graphics]"` and `Tests.ProviderHost.exe`. The
       import-isolation suite and the bounded fuzz-smoke matrix are **not** part
-      of that gate (ADR-0092, ADR-0093); run both locally as described in
-      step 4.
+      of that gate (ADR-0092, ADR-0093); run them locally for a minor or major
+      release, or for any release that touches an importer, the wire format,
+      the broker, a fixture, or a third-party dependency (step 4).
 - [ ] The `Localization` workflow is green if any user-facing string changed.
 - [ ] The `Dependencies` workflow is green if `vcpkg.json`,
       `vcpkg-configuration.json`, or the overlay ports/triplets changed.
@@ -171,8 +172,24 @@ licenses entry, has no SPDX mapping, or lacks an installed copyright file.
 
 ## 4. Run the local verification gates
 
-At minimum, run these locally before tagging (CI runs only the unit and
-provider-host suites):
+The remote `CI` workflow already builds Debug and Release x64 and runs
+`Tests.Unit.exe "~[graphics]"` and `Tests.ProviderHost.exe` on the commit you
+are releasing. Local runs exist to cover what CI cannot: the import-isolation
+corpus, GPU cases, and packaging.
+
+**Cheap checks, required on every release:**
+
+```powershell
+# The version gate plus the license/SBOM gates and their negative self-tests
+pwsh -File packaging/Test-ReleaseMetadata.ps1 -SelfTest
+
+# Only if user-facing strings changed
+pwsh interactive-viewer/tools/generate-language-packs.ps1 -Verify
+```
+
+**Required for a minor (`X.Y.0`) or major (`X.0.0`) release, and for any
+release (patch included) that changes an importer, the wire format, the broker,
+a fixture, or a third-party dependency:**
 
 ```powershell
 # Debug
@@ -188,17 +205,23 @@ msbuild Preview3D.slnx /p:Configuration=Release /p:Platform=x64
 & ./x64/Release/Tests.ProviderHost.exe
 ```
 
-`[graphics]` is excluded on headless CI. Run those cases locally when the
-release touches rendering, and say so in the release PR/notes if GPU coverage
-was manual.
+**Optional for a low-risk patch.** When the release changes none of those
+areas, a patch may rely on the required `CI` checks plus the cheap checks
+above; the tag build re-runs the Release lane before packaging anyway. Run the
+local suites anyway if CI is unavailable, if the change is in a risky area, or
+if you simply want the extra confidence. For a patch that touches rendering,
+the useful local addition is:
 
-`Tests.ImportIsolation.exe` is **required locally before every release**,
-patch releases included: CI builds it but does not run it (ADR-0093). It owns
-the format corpus, the CAD hosts, and the optional `test-models/` corpus, so a
-clean checkout with only the committed fixtures must still pass. Run it after
-any change to an importer, the wire format, the broker, a fixture, or a
-third-party dependency, and paste the case/assertion counts into the release
-notes.
+```powershell
+& ./x64/Release/Tests.Unit.exe "[graphics]"
+```
+
+`Tests.ImportIsolation.exe` owns the format corpus, the CAD hosts, and the
+optional `test-models/` corpus, so it is the only gate for importer
+regressions: CI builds it but does not run it (ADR-0093). When you do run it,
+use a clean checkout with only the committed fixtures (or confirm the optional
+corpus is not hiding a missing fixture), and paste the case/assertion counts
+into the release notes.
 
 ### Fuzz smoke (advisory; required before a minor or major bump)
 
@@ -226,8 +249,9 @@ the release PR. The result is advisory: triage a finding as a fix, a mitigation,
 or a known follow-up in the changelog. It does not block the tag by itself, but
 do not tag while an unexplained crash is open.
 
-Recommended: produce both packages locally once before the tag, so packaging
-problems are found before CI:
+Optional but recommended: produce both packages locally once before the tag, so
+packaging problems are found before CI. The tag workflow builds the same two
+packages, so this is not a release gate.
 
 ```powershell
 msbuild Preview3D.slnx /t:CreatePortableRelease /p:Configuration=Release /p:Platform=x64
@@ -423,6 +447,9 @@ git log --oneline (git describe --tags --abbrev=0)..HEAD
 # 3. Verify
 pwsh -File packaging/Test-ReleaseMetadata.ps1 -SelfTest
 pwsh interactive-viewer/tools/generate-language-packs.ps1 -Verify
+
+# Required for a minor/major release, or a patch that touches an importer,
+# the wire format, the broker, a fixture, or a third-party dependency.
 msbuild Preview3D.slnx /p:Configuration=Release /p:Platform=x64
 & ./x64/Release/Tests.Unit.exe "~[graphics]"
 & ./x64/Release/Tests.ImportIsolation.exe

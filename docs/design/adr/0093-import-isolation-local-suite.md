@@ -1,6 +1,9 @@
 # 0093 - The import-isolation suite runs locally, not in CI
 
-Status: accepted (2026-11-01).
+Status: accepted (2026-11-01). The "required before every release, patch
+releases included" clause is superseded by
+[ADR-0094](0094-release-testing-scoped-to-risk.md) (2026-11-02); the suite
+stays local-only and remains required for import-affecting changes.
 
 ## Context
 

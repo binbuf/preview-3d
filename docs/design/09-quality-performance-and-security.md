@@ -363,7 +363,9 @@ gate**: it enforces the per-change Debug/Release build and the unit and
 provider-host suites on every pull request and push to `main`, and a
 branch-protection rule must require both matrix checks before merge. The
 import-isolation suite is built but **not** run there: since ADR-0093 it is a
-local, required pre-release check (Debug and Release) that owns the format
+local pre-release check, required in Debug and Release before a minor or major
+release and before any importer, wire-format, broker, fixture or dependency
+change (a low-risk patch may rely on CI). It owns the format
 corpus, the CAD hosts, and the optional `test-models/` corpus. `Release` calls
 the same workflow with a Release-only matrix and will not package until it
 passes; a manual `CI` dispatch can re-run it against a candidate or tag. The
