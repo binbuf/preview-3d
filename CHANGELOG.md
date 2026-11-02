@@ -8,6 +8,41 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.7.1] - 2026-11-02
+
+### Added
+
+- **Take a screenshot.** **Ctrl+Shift+S** or **⋯ menu > Take screenshot**
+  writes a transparent PNG of the current viewport to the Desktop as
+  `<model>_YYYYMMDD_HHMMSS.png`. The capture uses a clean backdrop (no grid,
+  ground highlight, contact shadow or selection tint), never overwrites an
+  existing file, and creates the folder if needed.
+- **Export to STL.** For any non-STL source with triangle geometry, **⋯ menu >
+  Export to STL** re-imports the file at full detail and writes a binary STL,
+  baking the displayed up-axis correction and converting a declared unit to
+  millimetres. Degenerate or non-finite triangles and point-only content are
+  skipped and reported, and a progress spinner stays visible until the export
+  finishes.
+
+### Changed
+
+- **Clicking the update badge installs immediately.** The redundant
+  confirmation dialog is gone; clicking the badge is the confirmation and the
+  download starts right away.
+- **CI and release jobs use the `windows-2025-vs2026` runners** so the required
+  v145 (Visual Studio 2026) toolset is available to the build.
+
+### Fixed
+
+- **A no longer toggles ambient occlusion during right-mouse flight.** Holding
+  or auto-repeating **A** while flying with WASD was toggling ambient occlusion
+  mid-move; the toggle now ignores auto-repeat and is suppressed while flight
+  is active.
+- **The view can no longer be moved before the model is visible.** Orbit, pan,
+  zoom, fit and reset are gated on displayed content, so input during a hidden
+  first load or a hidden replacement cannot move geometry the user cannot see.
+  The navigation gizmo is hidden until a model is actually drawn.
+
 ## [0.7.0] - 2026-11-01
 
 This is the format-breadth and Studio-lighting release: eleven more model

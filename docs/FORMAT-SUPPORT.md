@@ -277,6 +277,21 @@ and SSAO are not used: the OIT composite is order-independent but a weighted
 average past eight layers, and the contact shadow does not depend on a
 depth/normal chain.
 
+## Export
+
+- **Screenshot.** **Ctrl+Shift+S** or **⋯ menu > Take screenshot** writes the
+  current viewport as a transparent PNG at window resolution on the Desktop.
+  The capture excludes the grid, ground highlight, contact shadow and selection
+  tint, uses straight (non-premultiplied) alpha, crops to the 3D viewport, and
+  never overwrites an existing file.
+- **Export to STL.** Offered for any non-STL source with triangle geometry.
+  The rendered GPU scene is not the source: the exporter re-imports the file at
+  full import detail, expands instances, bakes the displayed up-axis correction
+  and converts a declared unit to millimetres, then writes a binary STL.
+  Degenerate/non-finite triangles are skipped and point-only content is omitted;
+  the completion message reports both counts. A source that is already STL is
+  not offered export.
+
 ## Not included
 
 Animation playback, editing, other CAD formats (IFC/JT/Parasolid/DWG/native
