@@ -73,6 +73,10 @@ subsets and limits are in [Format support and limits](docs/FORMAT-SUPPORT.md).
   panels keep their colour and depth.
 - **Model orientation and units for CAD formats**, including contradictory or
   missing STEP unit declarations.
+- **Portable packaging accepts `comdlg32.dll`.** The colour picker imports the
+  Windows common-dialog library, so the portable payload's closed system-DLL
+  allowlist now includes it. The release build had aborted before producing a
+  package.
 
 ## [0.6.7] - 2026-10-29
 

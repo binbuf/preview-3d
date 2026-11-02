@@ -346,7 +346,7 @@ if (-not [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
 
 $dumpbin = Find-Dumpbin $visualStudioRoot
 $systemDlls = @(
-    'advapi32.dll', 'bcrypt.dll', 'comctl32.dll', 'd2d1.dll', 'd3d11.dll', 'd3d12.dll', 'dbghelp.dll',
+    'advapi32.dll', 'bcrypt.dll', 'comctl32.dll', 'comdlg32.dll', 'd2d1.dll', 'd3d11.dll', 'd3d12.dll', 'dbghelp.dll',
     'd3dcompiler_47.dll', 'dwrite.dll', 'dwmapi.dll', 'dxgi.dll', 'gdi32.dll',
     'kernel32.dll', 'ole32.dll', 'oleacc.dll', 'oleaut32.dll', 'runtimeobject.dll',
     'shell32.dll', 'shlwapi.dll', 'uiautomationcore.dll', 'user32.dll', 'userenv.dll',
