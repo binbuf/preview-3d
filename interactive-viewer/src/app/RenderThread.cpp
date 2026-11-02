@@ -622,6 +622,16 @@ void RenderThread::RequestClearModel()
     Invalidate();
 }
 
+bool RenderThread::RequestScreenshot()
+{
+    bool expected = false;
+    if (!screenshotRequested_.compare_exchange_strong(expected, true,
+            std::memory_order_acq_rel, std::memory_order_acquire))
+        return false;
+    Invalidate();
+    return true;
+}
+
 void RenderThread::Invalidate()
 {
     invalidated_.store(true, std::memory_order_release);
@@ -807,6 +817,7 @@ void RenderThread::ThreadMain(HWND window)
         // live, still presenting the previous model, while bytes land.
         const bool uploading = path_.UploadInFlight() || pendingPick_.has_value();
         const bool wanted = invalidated_.exchange(false, std::memory_order_acq_rel)
+            || screenshotRequested_.load(std::memory_order_acquire)
             || uiAnimating_.load(std::memory_order_acquire) || cameraMoving || benching || uploading;
 
         if (!wanted) {
@@ -1352,6 +1363,33 @@ void RenderThread::RenderOneFrame()
         DirectX::XMStoreFloat4(&eyeSelection,relative.EyePosition()); eyeSelection.w = overlay->info.selectionAmount;
         DirectX::XMStoreFloat4x4(&viewProjection,
                                   relative.ViewMatrix() * camera_.ProjectionMatrix(viewportAspect_));
+    }
+
+    if (screenshotRequested_.exchange(false, std::memory_order_acq_rel)) {
+        auto result = std::make_unique<RenderScreenshotResult>();
+        if (!modelDisplayed_.load(std::memory_order_acquire)) {
+            result->error = L"No model is currently displayed.";
+        } else {
+            // Capture the scene exactly as framed, but on a clean transparent
+            // backdrop: the ground grid, illuminated ground area, contact
+            // shadow and selection tint are presentation, not model geometry.
+            OverlayFrame captureFrame = *overlay;
+            captureFrame.info.state = ViewerState::Ready;
+            captureFrame.info.background = viewer_presentation::BackgroundMode::Transparent;
+            captureFrame.info.captureClean = true;
+            captureFrame.info.gridVisible = false;
+            captureFrame.info.groundHighlightVisible = false;
+            captureFrame.info.shadowVisible = false;
+            captureFrame.info.selectionAmount = 0.0f;
+            DirectX::XMFLOAT4 captureEyeSelection = eyeSelection;
+            captureEyeSelection.w = 0.0f;
+            result->ok = path_.CaptureFrame(viewProjection, orientation, captureFrame, cameraTarget,
+                captureEyeSelection, result->width, result->height, result->rgba, result->error);
+        }
+        if (PostMessageW(window_, kRenderScreenshotCompleteMessage, 0,
+                reinterpret_cast<LPARAM>(result.get())))
+            (void)result.release();
+        return;
     }
 
     DirectX::XMFLOAT4X4 modelTransform{};

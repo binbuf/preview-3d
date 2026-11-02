@@ -43,7 +43,9 @@ jobs:
   release:
     name: Build, package, and release
     needs: gate
-    runs-on: windows-2025
+    # Directory.Build.props requires the v145 (Visual Studio 2026) toolset; the
+    # plain windows-2025 image still carries Visual Studio 2022/v143.
+    runs-on: windows-2025-vs2026
     # A required-reviewer environment gates the whole job before it starts: the
     # tag push alone cannot publish. The maintainer configures the `release`
     # environment's protection rules (required reviewers, deployment branches =

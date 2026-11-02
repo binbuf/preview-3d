@@ -81,7 +81,9 @@ concurrency:
 jobs:
   test:
     name: Build and test (${{ matrix.configuration }})
-    runs-on: windows-2025
+    # Directory.Build.props requires the v145 (Visual Studio 2026) toolset; the
+    # plain windows-2025 image still carries Visual Studio 2022/v143.
+    runs-on: windows-2025-vs2026
     # The root manifest (OpenUSD) and the isolated STEP provider manifest (OCCT)
     # both build from source on a cold runner; the binary cache keeps a warm run
     # short. Same budget as release so a timeout here is a release-only failure.
@@ -425,7 +427,8 @@ jobs:
     # "null") and a real boolean only for workflow_call/workflow_dispatch, so
     # push, pull_request and the release.yml call all skip this matrix.
     if: ${{ github.event_name == 'workflow_dispatch' && toJSON(inputs.fuzz) != 'false' }}
-    runs-on: windows-2025
+    # Same v145/Visual Studio 2026 requirement as the test lane.
+    runs-on: windows-2025-vs2026
     timeout-minutes: 120
 
     env:

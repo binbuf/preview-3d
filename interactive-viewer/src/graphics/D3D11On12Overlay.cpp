@@ -1768,8 +1768,9 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
     // above) keeps its real value so the bar still draws and its buttons
     // still hit-test as ordinary client-area ones.
     DrawTitleBar(overlay, chrome, clientWidth, scale);
-    if (!captureClean && (overlay.state == ViewerState::Loading || overlay.state == ViewerState::Partial
-        || overlay.renderTimerRunning))
+    if (!captureClean && !overlay.exportInProgress
+        && (overlay.state == ViewerState::Loading || overlay.state == ViewerState::Partial
+            || overlay.renderTimerRunning))
     {
         const float centerX = clientWidth * 0.5f;
         const float centerY = clientHeight * 0.5f;
@@ -1777,6 +1778,20 @@ void D3D11On12Overlay::DrawOverlay(const DirectX::XMFLOAT4& orientation, const O
             DrawSpinner(D2D1::Point2F(centerX, centerY), overlay.animationPhase,
                 Scale(10.0f, scale), Scale(17.0f, scale), Scale(2.4f, scale));
         DrawText(overlay.loadingStatus, smallFormat.Get(), D2D1::RectF(centerX - Scale(240, scale),
+            centerY + Scale(25, scale), centerX + Scale(240, scale), centerY + Scale(55, scale)),
+            D2D1::ColorF(0xA1A1A6), DWRITE_TEXT_ALIGNMENT_CENTER);
+    }
+
+    // Export to STL runs on a background thread after the Save dialog; keep a
+    // centered activity wheel over the viewport until the completion message
+    // clears exportInProgress.
+    if (!captureClean && overlay.exportInProgress)
+    {
+        const float centerX = contentRight * 0.5f;
+        const float centerY = toolbar + (contentBottom - toolbar) * 0.5f;
+        DrawSpinner(D2D1::Point2F(centerX, centerY), overlay.animationPhase,
+            Scale(10.0f, scale), Scale(17.0f, scale), Scale(2.4f, scale));
+        DrawText(overlay.exportStatus, smallFormat.Get(), D2D1::RectF(centerX - Scale(240, scale),
             centerY + Scale(25, scale), centerX + Scale(240, scale), centerY + Scale(55, scale)),
             D2D1::ColorF(0xA1A1A6), DWRITE_TEXT_ALIGNMENT_CENTER);
     }

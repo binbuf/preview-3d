@@ -52,7 +52,16 @@ constexpr UINT kRenderUploadCompleteMessage = WM_APP + 4;
 constexpr UINT kRenderPickCompleteMessage = WM_APP + 5;
 constexpr UINT kRenderStartFailedMessage = WM_APP + 6;
 constexpr UINT kRenderDeviceRecoveryMessage = WM_APP + 7;
+constexpr UINT kRenderScreenshotCompleteMessage = WM_APP + 18;
 struct RenderPickResult { uint64_t generation; bool hit; };
+struct RenderScreenshotResult
+{
+    bool ok = false;
+    int width = 0;
+    int height = 0;
+    std::vector<std::uint8_t> rgba;
+    std::wstring error;
+};
 struct RenderStartFailure { std::wstring details; };
 struct RenderDeviceRecoveryResult { bool recovered = false; std::wstring path; std::wstring details; };
 
@@ -296,6 +305,10 @@ public:
     uint64_t SmokeSectionBytes() const { return smokeSectionBytes_; }
     bool DelayBatches() const { return delayBatches_; }
     void RequestClearModel();
+    // Coalesced one-shot transparent-background viewport capture. Returns false
+    // while another request is already pending. The render thread posts
+    // kRenderScreenshotCompleteMessage with a heap-owned RenderScreenshotResult.
+    bool RequestScreenshot();
     // When true (the default), a model that is still importing is uploaded and
     // prepared as usual but is not presented until the terminal import and its
     // visible refinement have completed; the previous model stays up until the
@@ -527,6 +540,7 @@ private:
     std::atomic<bool> running_{ false };
     std::atomic<bool> stopRequested_{ false };
     std::atomic<bool> invalidated_{ true };
+    std::atomic<bool> screenshotRequested_{ false };
     std::atomic<bool> uiAnimating_{ false };
     std::atomic<bool> hasModel_{ false };
     std::atomic<bool> modelDisplayed_{ false };

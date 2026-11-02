@@ -144,6 +144,10 @@ struct OverlayInfo
     // True while the load-to-render timer above is still running. The bottom
     // bar uses this to occupy the eventual duration slot with a spinner.
     bool renderTimerRunning = false;
+    // Background Export to STL progress: a centered spinner and caption over
+    // the viewport while the trusted process re-imports and writes the file.
+    bool exportInProgress = false;
+    std::wstring exportStatus;
     float animationPhase = 0.0f;
     float dpiScale = 1.0f;
     // Reserved viewport inset: how much of the client area the title/bottom

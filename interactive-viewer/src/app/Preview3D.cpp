@@ -18,6 +18,7 @@
 #include "Settings.h"
 #include "ShellIntegration.h"
 #include "SafeFileOps.h"
+#include "StlExport.h"
 #include "UpdateApply.h"
 #include "UpdateCheck.h"
 #include "Version.h"
@@ -28,9 +29,12 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <knownfolders.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl.h>
 #include <tlhelp32.h>
+#include <wincodec.h>
 #include <wrl/client.h>
 
 #include <iomanip>
@@ -95,6 +99,19 @@ struct UpdateDownloadResult
     bool ok = false;
     std::wstring installerPath;
     std::wstring expectedSha256;
+    std::wstring error;
+};
+
+constexpr UINT kExportStlCompleteMessage = WM_APP + 19;
+
+struct ExportStlResult
+{
+    bool ok = false;
+    std::uint64_t facetCount = 0;
+    std::uint64_t droppedFacets = 0;
+    std::uint64_t omittedPoints = 0;
+    double appliedScale = 1.0;
+    std::wstring path;
     std::wstring error;
 };
 
@@ -391,6 +408,9 @@ struct ViewerApp
     bool stopOrbitOnInteraction = true;
     // Persisted via Settings.h; mirrors RenderThread::SetHideModelUntilComplete.
     bool hideModelUntilComplete = true;
+    // True while the background Export to STL re-import/write is running. Hides
+    // the menu row so a second export cannot start on top of it.
+    bool exportInProgress = false;
     // The "..." overflow dropdown hosts every setting plus Controls/About.
     bool settingsMenuOpen = false;
     int settingsMenuHover = -1;
@@ -691,6 +711,22 @@ bool HasNavigableModel(const ViewerApp& app)
     // HasDisplayedModel is true while that previous generation is still drawn
     // and stays false for a hidden replacement.
     return app.renderThread.HasDisplayedModel();
+}
+
+bool IsStlSource(const ViewerApp& app)
+{
+    if (!app.loadedModel) return false;
+    const auto format = app.loadedModel->source.format;
+    return format == model_core::SourceFormatId::Stl
+        || format == model_core::SourceFormatId::AsciiStl;
+}
+
+// Export to STL is a conversion, so it is only offered when the current source
+// is not already STL and there is fine-detail triangle geometry to write.
+bool CanExportStl(const ViewerApp& app)
+{
+    return HasNavigableModel(app) && app.loadedModel && !IsStlSource(app)
+        && app.loadedModel->triangleCount > 0 && !app.exportInProgress;
 }
 
 // Reserved bottom-bar VIEWPORT inset (not the bar's own drawn height, see
@@ -1141,6 +1177,8 @@ enum class SettingsMenuRowId
     BackgroundCustom,
     BackgroundTransparent,
     BackgroundChecker,
+    Screenshot,
+    ExportStl,
     Language,
     Controls,
     About,
@@ -1275,6 +1313,12 @@ SettingsMenuLayout ComputeSettingsMenuLayout(const ViewerApp& app)
             mode == viewer_presentation::BackgroundMode::Checkerboard);
     }
     appendRow(SettingsMenuRowId::Language, false, false, true, false, false, false, false);
+    if (HasNavigableModel(app))
+    {
+        appendRow(SettingsMenuRowId::Screenshot, false, true, false, false, false, false, false);
+        if (CanExportStl(app))
+            appendRow(SettingsMenuRowId::ExportStl, false, false, false, false, false, false, false);
+    }
     appendRow(SettingsMenuRowId::Controls, false, true, false, false, false, false, false);
     appendRow(SettingsMenuRowId::About, false, false, false, false, false, false, false);
 
@@ -3031,6 +3075,236 @@ void ToggleSettingsMenuSection(ViewerApp& app, SettingsMenuRowId section)
     InvalidateRect(app.window, nullptr, FALSE);
 }
 
+std::wstring SanitizeFileStem(std::wstring value)
+{
+    for (wchar_t& character : value)
+    {
+        if (character < 32 || wcschr(L"<>:\"/\\|?*", character) != nullptr)
+            character = L'_';
+    }
+    while (!value.empty() && (value.back() == L'.' || value.back() == L' ')) value.pop_back();
+    if (value.empty()) value = L"model";
+    return value;
+}
+
+bool EnsureScreenshotDirectory(const std::wstring& path)
+{
+    const int result = SHCreateDirectoryExW(nullptr, path.c_str(), nullptr);
+    return result == ERROR_SUCCESS || result == ERROR_ALREADY_EXISTS;
+}
+
+std::wstring ScreenshotDirectory()
+{
+    PWSTR desktop = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, KF_FLAG_CREATE, nullptr, &desktop))
+        && desktop != nullptr)
+    {
+        std::wstring directory(desktop);
+        CoTaskMemFree(desktop);
+        return directory;
+    }
+    wchar_t temporary[MAX_PATH]{};
+    if (GetTempPathW(ARRAYSIZE(temporary), temporary) != 0)
+        return temporary;
+    return L".";
+}
+
+// WIC PNG write of the render thread's straight-alpha RGBA pixels. The buffer
+// is converted to BGRA here because that is the format the inbox PNG encoder
+// accepts without an extra WIC converter pass.
+bool SaveScreenshotPng(const RenderScreenshotResult& shot, const std::wstring& path,
+                       std::wstring& error)
+{
+    if (shot.width <= 0 || shot.height <= 0
+        || shot.rgba.size() < static_cast<std::size_t>(shot.width) * shot.height * 4)
+    {
+        error = L"The screenshot has no pixels.";
+        return false;
+    }
+
+    std::vector<std::uint8_t> bgra(static_cast<std::size_t>(shot.width) * shot.height * 4);
+    for (std::size_t index = 0; index < bgra.size(); index += 4)
+    {
+        bgra[index + 0] = shot.rgba[index + 2];
+        bgra[index + 1] = shot.rgba[index + 1];
+        bgra[index + 2] = shot.rgba[index + 0];
+        bgra[index + 3] = shot.rgba[index + 3];
+    }
+
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT result = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory));
+    ComPtr<IWICStream> stream;
+    if (SUCCEEDED(result)) result = factory->CreateStream(&stream);
+    if (SUCCEEDED(result)) result = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+    ComPtr<IWICBitmapEncoder> encoder;
+    if (SUCCEEDED(result)) result = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+    if (SUCCEEDED(result)) result = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    ComPtr<IWICBitmapFrameEncode> frame;
+    if (SUCCEEDED(result)) result = encoder->CreateNewFrame(&frame, nullptr);
+    if (SUCCEEDED(result)) result = frame->Initialize(nullptr);
+    if (SUCCEEDED(result))
+        result = frame->SetSize(static_cast<UINT>(shot.width), static_cast<UINT>(shot.height));
+    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+    if (SUCCEEDED(result)) result = frame->SetPixelFormat(&format);
+    ComPtr<IWICBitmap> bitmap;
+    if (SUCCEEDED(result))
+    {
+        result = factory->CreateBitmapFromMemory(static_cast<UINT>(shot.width),
+            static_cast<UINT>(shot.height), GUID_WICPixelFormat32bppBGRA,
+            static_cast<UINT>(shot.width) * 4u, static_cast<UINT>(bgra.size()),
+            bgra.data(), &bitmap);
+    }
+    if (SUCCEEDED(result)) result = frame->WriteSource(bitmap.Get(), nullptr);
+    if (SUCCEEDED(result)) result = frame->Commit();
+    if (SUCCEEDED(result)) result = encoder->Commit();
+
+    if (FAILED(result))
+    {
+        DeleteFileW(path.c_str());
+        error = L"The screenshot could not be written.";
+        return false;
+    }
+    return true;
+}
+
+void TakeScreenshot(ViewerApp& app)
+{
+    if (!HasNavigableModel(app))
+    {
+        ShowModeHud(app, Loc("hud.screenshotNoModel", L"No model to capture"));
+        return;
+    }
+    CloseSettingsMenu(app);
+    if (!app.renderThread.RequestScreenshot())
+    {
+        ShowModeHud(app, Loc("hud.screenshotPending", L"Capturing screenshot\u2026"));
+        return;
+    }
+    ShowModeHud(app, Loc("hud.screenshotCapturing", L"Capturing screenshot\u2026"));
+}
+
+void StartExportStl(ViewerApp& app, std::wstring destination);
+
+void BeginExportStl(ViewerApp& app)
+{
+    if (!CanExportStl(app) || app.currentPath.empty()) return;
+
+    std::wstring stem = FileNameFromPath(app.currentPath);
+    const std::size_t dot = stem.find_last_of(L'.');
+    if (dot != std::wstring::npos) stem.resize(dot);
+    stem = SanitizeFileStem(std::move(stem));
+
+    wchar_t file[MAX_PATH]{};
+    const std::wstring suggested = stem + L".stl";
+    wcsncpy_s(file, suggested.c_str(), _TRUNCATE);
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = app.window;
+    dialog.lpstrFilter = L"STL files (*.stl)\0*.stl\0All files (*.*)\0*.*\0";
+    dialog.lpstrFile = file;
+    dialog.nMaxFile = ARRAYSIZE(file);
+    dialog.lpstrDefExt = L"stl";
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetSaveFileNameW(&dialog)) return;
+
+    StartExportStl(app, file);
+}
+
+void StartExportStl(ViewerApp& app, std::wstring destination)
+{
+    if (!CanExportStl(app) || app.currentPath.empty() || destination.empty()) return;
+
+    const model_core::FormatDescriptor* descriptor =
+        model_core::FindBySourceFormatId(app.loadedModel->source.format);
+    const auto format = descriptor
+        ? d3d12_import_bridge::SourceFormatForFormatDescriptor(descriptor)
+        : std::nullopt;
+    if (!format)
+    {
+        ShowModeHud(app, Loc("hud.exportStlUnavailable", L"Export to STL is not available for this model"));
+        return;
+    }
+
+    const d3d12_import_bridge::SourceFormat sourceFormat = *format;
+    const std::wstring sourcePath = app.currentPath;
+    const auto alive = app.alive;
+    const std::uint64_t generation = app.generation;
+    const auto searchRoots = app.assetSearchRoots;
+    const HWND window = app.window;
+    const bool cadFormat = sourceFormat == d3d12_import_bridge::SourceFormat::Step
+        || sourceFormat == d3d12_import_bridge::SourceFormat::Iges
+        || sourceFormat == d3d12_import_bridge::SourceFormat::Brep
+        || sourceFormat == d3d12_import_bridge::SourceFormat::Xbf
+        || sourceFormat == d3d12_import_bridge::SourceFormat::Fcstd;
+    auto cpuGuard = app.renderThread.CpuBudgetGuard(
+        cadFormat ? import_broker::DedicatedHostCommitLimitBytes() : 0);
+
+    app.exportInProgress = true;
+    CloseSettingsMenu(app);
+    ShowModeHud(app, Loc("hud.exportingStl", L"Exporting STL\u2026"));
+    InvalidateRect(app.window, nullptr, FALSE);
+
+    app.importThreads.emplace_back([=]()
+    {
+        auto post = [&](std::unique_ptr<ExportStlResult> result)
+        {
+            if (!alive->load(std::memory_order_relaxed)) return;
+            if (PostMessageW(window, kExportStlCompleteMessage, 0,
+                    reinterpret_cast<LPARAM>(result.get())))
+                (void)result.release();
+        };
+        try
+        {
+            d3d12_import_bridge::ImportResult imported = d3d12_import_bridge::RunImport(
+                sourceFormat, sourcePath, generation,
+                [alive] { return !alive->load(std::memory_order_relaxed); },
+                {}, 64ull * 1024 * 1024, false, 0, {}, {}, cpuGuard, {}, searchRoots);
+            if (!imported.ok)
+            {
+                auto result = std::make_unique<ExportStlResult>();
+                result->path = destination;
+                result->error = imported.errorSummary.empty()
+                    ? L"This model could not be previewed."
+                    : imported.errorSummary;
+                if (!imported.errorDetails.empty()) result->error += L" " + imported.errorDetails;
+                post(std::move(result));
+                return;
+            }
+
+            viewer_stl_export::Options options;
+            options.metersPerUnit = imported.scene.metersPerUnit;
+            options.sourceUpAxis = imported.scene.upAxis;
+            const viewer_stl_export::Result exported =
+                viewer_stl_export::ExportBinaryStl(imported, destination, options);
+
+            auto result = std::make_unique<ExportStlResult>();
+            result->ok = exported.ok;
+            result->facetCount = exported.facetCount;
+            result->droppedFacets = exported.droppedFacets;
+            result->omittedPoints = exported.omittedPoints;
+            result->appliedScale = exported.appliedScale;
+            result->path = destination;
+            result->error = exported.error;
+            post(std::move(result));
+        }
+        catch (const std::bad_alloc&)
+        {
+            auto result = std::make_unique<ExportStlResult>();
+            result->path = destination;
+            result->error = L"There is not enough memory to export this model.";
+            post(std::move(result));
+        }
+        catch (...)
+        {
+            auto result = std::make_unique<ExportStlResult>();
+            result->path = destination;
+            result->error = L"This model could not be exported.";
+            post(std::move(result));
+        }
+    });
+}
+
 // Menu-invoked, not keyboard-repeatable, so no ConsumeToggleCommand guard is
 // needed (unlike ToggleGrid/ToggleAxisSnap).
 void InvokeSettingsMenuRow(ViewerApp& app, int row)
@@ -3075,6 +3349,8 @@ void InvokeSettingsMenuRow(ViewerApp& app, int row)
     case SettingsMenuRowId::BackgroundChecker:
         SetBackgroundMode(app, viewer_presentation::BackgroundMode::Checkerboard);
         break;
+    case SettingsMenuRowId::Screenshot: TakeScreenshot(app); break;
+    case SettingsMenuRowId::ExportStl: BeginExportStl(app); break;
     case SettingsMenuRowId::Language: ShowLanguageMenu(app); break;
     case SettingsMenuRowId::Controls:
         CloseSettingsMenu(app);
@@ -4054,6 +4330,16 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         }
         break;
     }
+    case Control::Screenshot:
+        info.name=SettingsMenuLabel(Loc("menu.screenshot", L"Take screenshot\tCtrl+Shift+S"));
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::Screenshot);
+        info.visible=app.settingsMenuOpen && HasNavigableModel(app);
+        info.role=ROLE_SYSTEM_PUSHBUTTON; break;
+    case Control::ExportStl:
+        info.name=Loc("menu.exportStl", L"Export to STL");
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::ExportStl);
+        info.visible=app.settingsMenuOpen && CanExportStl(app);
+        info.role=ROLE_SYSTEM_PUSHBUTTON; break;
     case Control::Language:
         info.name=SettingsMenuLabel(Loc("settings.language", L"Language"));
         info.value=LocalizationDisplayName(LocalizationLanguage());
@@ -4287,6 +4573,8 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::BackgroundCustom: ChooseCustomBackgroundColor(app); break;
     case Control::BackgroundTransparent: SetBackgroundMode(app, viewer_presentation::BackgroundMode::Transparent); break;
     case Control::BackgroundChecker: SetBackgroundMode(app, viewer_presentation::BackgroundMode::Checkerboard); break;
+    case Control::Screenshot: TakeScreenshot(app); break;
+    case Control::ExportStl: BeginExportStl(app); break;
     case Control::Language: ShowLanguageMenu(app); break;
     case Control::GroundHighlight: ToggleGroundHighlight(app); break;
     case Control::GroundShadow: ToggleShadow(app); break;
@@ -4502,6 +4790,7 @@ bool IsAnimatingWithoutCamera(const ViewerApp& app)
 {
     const double now = NowSeconds();
     return (app.state == ViewerState::Loading && !app.reduceMotion) || app.renderPresentationPending
+        || (app.exportInProgress && !app.reduceMotion)
         || HasNavigationInput(app) || app.resetViewPending || app.resetViewButtonFading
         || app.rollGlyphFading
         || now < app.speedHudUntil || now < app.modeHudUntil;
@@ -4646,6 +4935,9 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     overlay.renderDurationText = app.renderDurationText;
     overlay.renderTimerRunning = app.renderStartedMicroseconds != 0
         && (app.state == ViewerState::Loading || app.renderPresentationPending);
+    overlay.exportInProgress = app.exportInProgress;
+    if (app.exportInProgress)
+        overlay.exportStatus = Loc("hud.generatingStl", L"Generating STL...");
     overlay.animationPhase = app.reduceMotion ? 0.0f : static_cast<float>(GetTickCount64() % 1400) / 1400.0f;
     overlay.dpiScale = app.dpiScale;
     overlay.toolbarHeight = EffectiveToolbarHeight(app);
@@ -4870,6 +5162,16 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
                 break;
             case SettingsMenuRowId::BackgroundChecker:
                 row.label = SettingsMenuLabel(Loc("settings.background.checker", L"Checkerboard (transparency review)"));
+                break;
+            case SettingsMenuRowId::Screenshot:
+            {
+                const std::wstring text = Loc("menu.screenshot", L"Take screenshot\tCtrl+Shift+S");
+                row.label = SettingsMenuLabel(text);
+                row.shortcut = SettingsMenuShortcut(text);
+                break;
+            }
+            case SettingsMenuRowId::ExportStl:
+                row.label = Loc("menu.exportStl", L"Export to STL");
                 break;
             case SettingsMenuRowId::Language:
             {
@@ -6985,6 +7287,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (wParam == VK_ESCAPE && app->settingsMenuOpen) { CloseSettingsMenu(*app); return 0; }
         if (wParam == VK_OEM_2 && GetKeyState(VK_SHIFT) < 0) { ShowControlsDialog(window); return 0; }
         if (wParam == VK_F11) { ToggleFullscreen(*app); return 0; }
+        if (wParam == 'S' && (lParam & (1u << 30)) == 0
+            && (GetKeyState(VK_CONTROL) & 0x8000) != 0
+            && (GetKeyState(VK_SHIFT) & 0x8000) != 0)
+        {
+            TakeScreenshot(*app);
+            return 0;
+        }
         if (wParam == VK_ESCAPE)
         {
             if (app->isFullscreen) { ToggleFullscreen(*app); return 0; }
@@ -7130,6 +7439,89 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         std::unique_ptr<RenderPickResult> picked(reinterpret_cast<RenderPickResult*>(lParam));
         if (picked && app->loadedModel && picked->generation == app->loadedModel->source.generationId)
             ApplySelection(*app, picked->hit);
+        return 0;
+    }
+    case kRenderScreenshotCompleteMessage:
+    {
+        std::unique_ptr<RenderScreenshotResult> screenshot(
+            reinterpret_cast<RenderScreenshotResult*>(lParam));
+        if (!screenshot) return 0;
+        if (!screenshot->ok)
+        {
+            ShowModeHud(*app, LocFormat("hud.screenshotFailed", L"Screenshot failed: {0}",
+                { screenshot->error }));
+            return 0;
+        }
+
+        std::wstring directory = ScreenshotDirectory();
+        if (!EnsureScreenshotDirectory(directory))
+        {
+            ShowModeHud(*app, LocFormat("hud.screenshotFailed", L"Screenshot failed: {0}",
+                { Loc("screenshot.directoryFailed", L"The screenshots folder could not be created.") }));
+            return 0;
+        }
+        std::wstring stem = FileNameFromPath(app->currentPath);
+        const std::size_t dot = stem.find_last_of(L'.');
+        if (dot != std::wstring::npos) stem.resize(dot);
+        stem = SanitizeFileStem(std::move(stem));
+
+        SYSTEMTIME local{};
+        GetLocalTime(&local);
+        wchar_t suffix[64]{};
+        swprintf_s(suffix, L"_%04u%02u%02u_%02u%02u%02u.png",
+            local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute, local.wSecond);
+        std::wstring path = directory + L"\\" + stem + suffix;
+        for (int attempt = 1; attempt < 1000
+            && GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; ++attempt)
+        {
+            path = directory + L"\\" + stem + L"_" + std::to_wstring(attempt) + suffix;
+        }
+
+        std::wstring error;
+        if (SaveScreenshotPng(*screenshot, path, error))
+        {
+            ShowModeHud(*app, LocFormat("hud.screenshotSaved", L"Screenshot saved to {0}", { path }));
+        }
+        else
+        {
+            ShowModeHud(*app, LocFormat("hud.screenshotFailed", L"Screenshot failed: {0}", { error }));
+        }
+        return 0;
+    }
+    case kExportStlCompleteMessage:
+    {
+        std::unique_ptr<ExportStlResult> exported(reinterpret_cast<ExportStlResult*>(lParam));
+        app->exportInProgress = false;
+        InvalidateRect(window, nullptr, FALSE);
+        if (!exported) return 0;
+        const std::wstring caption = Loc("menu.exportStl", L"Export to STL");
+        if (!exported->ok)
+        {
+            MessageBoxW(window, exported->error.c_str(), caption.c_str(), MB_OK | MB_ICONERROR);
+            return 0;
+        }
+        std::wstring summary = LocFormat("exportStl.complete",
+            L"Exported {0} triangles to {1}.", { std::to_wstring(exported->facetCount), exported->path });
+        if (exported->droppedFacets != 0)
+        {
+            summary += L"\n" + LocFormat("exportStl.dropped",
+                L"{0} degenerate or non-finite triangles were skipped.",
+                { std::to_wstring(exported->droppedFacets) });
+        }
+        if (exported->omittedPoints != 0)
+        {
+            summary += L"\n" + LocFormat("exportStl.omittedPoints",
+                L"{0} points were omitted because STL has no point primitive.",
+                { std::to_wstring(exported->omittedPoints) });
+        }
+        if (exported->appliedScale != 1.0)
+        {
+            wchar_t scaleText[32]{};
+            swprintf_s(scaleText, L"%.6g", exported->appliedScale);
+            summary += L"\n" + LocFormat("exportStl.scale",
+                L"Coordinates were scaled by {0} to millimetres.", { scaleText });
+        }
+        MessageBoxW(window, summary.c_str(), caption.c_str(), MB_OK | MB_ICONINFORMATION);
         return 0;
     }
     case kRenderUploadCompleteMessage:

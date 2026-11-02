@@ -509,5 +509,20 @@
   "presentation.title": "推介会",
   "presentation.preset": "预设",
   "presentation.sourceUpAxis": "源上轴",
-  "presentation.sourceUnits": "源单位"
+  "presentation.sourceUnits": "源单位",
+  "hud.screenshotNoModel": "No model to capture",
+  "hud.screenshotPending": "Capturing screenshot…",
+  "hud.screenshotCapturing": "Capturing screenshot…",
+  "hud.exportStlUnavailable": "Export to STL is not available for this model",
+  "hud.exportingStl": "Exporting STL…",
+  "menu.screenshot": "Take screenshot\tCtrl+Shift+S",
+  "menu.exportStl": "Export to STL",
+  "hud.generatingStl": "Generating STL...",
+  "hud.screenshotFailed": "Screenshot failed: {0}",
+  "screenshot.directoryFailed": "The screenshots folder could not be created.",
+  "hud.screenshotSaved": "Screenshot saved to {0}",
+  "exportStl.complete": "Exported {0} triangles to {1}.",
+  "exportStl.dropped": "{0} degenerate or non-finite triangles were skipped.",
+  "exportStl.omittedPoints": "{0} points were omitted because STL has no point primitive.",
+  "exportStl.scale": "Coordinates were scaled by {0} to millimetres."
 }
