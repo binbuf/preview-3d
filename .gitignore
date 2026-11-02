@@ -47,6 +47,12 @@ interactive-viewer/obj_test/
 ipch/
 *.ipch
 
+# Wavefront model fixtures share the MSVC object extension. Keep them tracked:
+# a missing OBJ fixture passes on a warm working tree and fails on a clean
+# checkout, which is exactly how T12/T17 shipped three uncommitted fixtures.
+!tests/fixtures/**/*.obj
+!interactive-viewer/test-assets/**/*.obj
+
 # Visual Studio database files
 *.VC.db
 *.VC.db-shm
