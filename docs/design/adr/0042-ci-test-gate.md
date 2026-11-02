@@ -1,7 +1,10 @@
 # 0042 — CI test gate for pull requests and releases
 
 ## Status
-accepted
+accepted (narrowed by [ADR-0092](0092-fuzz-smoke-local-advisory-check.md): the
+fuzz smoke is a local, advisory check, and by
+[ADR-0093](0093-import-isolation-local-suite.md): the import-isolation suite is
+local-only)
 
 ## Context
 `docs/design/09-quality-performance-and-security.md` promises a per-change

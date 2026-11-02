@@ -355,18 +355,23 @@ Per change:
 - short ASan/fuzz smoke;
 - package manifest validation.
 
+The headless adapter corpus and the fuzz smoke are local checks (ADR-0092,
+ADR-0093), not CI steps.
+
 The `CI` workflow (`.github/workflows/ci.yml`; ADR-0042) is a **mandatory merge
-gate**: it enforces the per-change Debug/Release build and the unit,
-import-isolation and provider-host suites on every pull request and push to
-`main`, and a branch-protection rule must require both matrix checks before
-merge. `Release` calls the same workflow with a Release-only matrix and fuzz
-disabled and will not package until it passes; the tagged commit has already
-carried the full matrix on `main`, and a manual `CI` dispatch can re-run it
-against a candidate or tag. The `[graphics]` unit cases are excluded on the
-headless runner. The bounded libFuzzer smoke (`.github/workflows/ci.yml` job
-`fuzz-smoke`) is **not** part of the merge gate: since ADR-0092 it runs only on a
-manual dispatch, and the same targets are expected to be run locally on the
-maintainer's own schedule and before a minor or major release (advisory, see
+gate**: it enforces the per-change Debug/Release build and the unit and
+provider-host suites on every pull request and push to `main`, and a
+branch-protection rule must require both matrix checks before merge. The
+import-isolation suite is built but **not** run there: since ADR-0093 it is a
+local, required pre-release check (Debug and Release) that owns the format
+corpus, the CAD hosts, and the optional `test-models/` corpus. `Release` calls
+the same workflow with a Release-only matrix and will not package until it
+passes; a manual `CI` dispatch can re-run it against a candidate or tag. The
+`[graphics]` unit cases are excluded on the headless runner. The bounded
+libFuzzer smoke (`.github/workflows/ci.yml` job `fuzz-smoke`) is **not** part of
+the merge gate: since ADR-0092 it runs only on a manual dispatch, and the same
+targets are expected to be run locally on the maintainer's own schedule and
+before a minor or major release (advisory, see
 `docs/New_Release_Instructions.md`). Lint/static analysis, the
 headless adapter corpus, and package-manifest validation remain manual
 per-change skills on top of the gate (release packaging already restores and

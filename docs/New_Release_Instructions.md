@@ -49,9 +49,10 @@ heading, every version file, the commit subject, and the tag must all agree.
 - [ ] Local `main` is up to date and matches `origin/main`.
 - [ ] The full `CI` workflow is green on the `main` commit you are about to
       release. It builds Debug and Release x64 and runs
-      `Tests.Unit.exe "~[graphics]"`, `Tests.ImportIsolation.exe`, and
-      `Tests.ProviderHost.exe`. The bounded fuzz-smoke matrix is **not** part of
-      that gate (ADR-0092); run it locally as described in step 4.
+      `Tests.Unit.exe "~[graphics]"` and `Tests.ProviderHost.exe`. The
+      import-isolation suite and the bounded fuzz-smoke matrix are **not** part
+      of that gate (ADR-0092, ADR-0093); run both locally as described in
+      step 4.
 - [ ] The `Localization` workflow is green if any user-facing string changed.
 - [ ] The `Dependencies` workflow is green if `vcpkg.json`,
       `vcpkg-configuration.json`, or the overlay ports/triplets changed.
@@ -189,6 +190,14 @@ msbuild Preview3D.slnx /p:Configuration=Release /p:Platform=x64
 `[graphics]` is excluded on headless CI. Run those cases locally when the
 release touches rendering, and say so in the release PR/notes if GPU coverage
 was manual.
+
+`Tests.ImportIsolation.exe` is **required locally before every release**,
+patch releases included: CI builds it but does not run it (ADR-0093). It owns
+the format corpus, the CAD hosts, and the optional `test-models/` corpus, so a
+clean checkout with only the committed fixtures must still pass. Run it after
+any change to an importer, the wire format, the broker, a fixture, or a
+third-party dependency, and paste the case/assertion counts into the release
+notes.
 
 ### Fuzz smoke (advisory; required before a minor or major bump)
 
@@ -330,10 +339,11 @@ produced a published release; release artifacts are immutable by policy.
 
 Pushing `v*` starts `.github/workflows/release.yml`:
 
-1. **`gate`** calls `ci.yml` as a reusable workflow with `Release` only and
-   `fuzz: false`. It builds the tagged source in Release x64 and runs the unit,
-   import-isolation, and provider-host suites. This is fail-closed: no artifact
-   is produced if it fails.
+1. **`gate`** calls `ci.yml` as a reusable workflow with `Release` only. It
+   builds the tagged source in Release x64 and runs the unit and provider-host
+   suites. The import-isolation suite is local-only (ADR-0093), so the tag gate
+   does not run it: the release checklist is its gate. This is fail-closed: no
+   artifact is produced if the build or those suites fail.
 2. **`release`** waits for `gate`, then waits for approval from the `release`
    GitHub environment (required reviewers; deployment branches are tags). The
    tag push alone cannot publish.

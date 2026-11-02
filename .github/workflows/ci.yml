@@ -2,8 +2,11 @@ name: CI
 
 # The test gate the design promises (docs/design/09-quality-performance-and-security.md,
 # "CI and release evidence"): every pull request and every push to main builds
-# Debug and Release x64 and runs the unit, import-isolation, and provider-host
-# suites. It is intentionally *not* path-filtered: GitHub branch protection can
+# Debug and Release x64 and runs the unit and provider-host suites. The
+# import-isolation suite and the bounded fuzz smoke are local checks (ADR-0092,
+# ADR-0093): they need the full fixture tree and hours of runner time, so they
+# run on the maintainer's machine and before a release instead of gating every
+# merge. It is intentionally *not* path-filtered: GitHub branch protection can
 # only require a check that actually reports on every pull request, so skipping
 # the lane on docs-only changes would leave a required check permanently pending.
 #
@@ -368,6 +371,8 @@ jobs:
 
       # One step per suite so a failure is legible without moving multi-GB
       # build output between jobs. Each executable returns nonzero on failure.
+      # Tests.ImportIsolation.exe is built but not run here: ADR-0093 keeps that
+      # suite local (it owns the format corpus and CAD hosts).
       - name: Run unit suite (${{ matrix.configuration }})
         shell: pwsh
         env:
@@ -378,16 +383,6 @@ jobs:
           & ".\x64\$env:CONFIGURATION\Tests.Unit.exe" "~[graphics]"
           if ($LASTEXITCODE -ne 0) {
             throw "Tests.Unit ($env:CONFIGURATION) failed with exit code $LASTEXITCODE."
-          }
-
-      - name: Run import-isolation suite (${{ matrix.configuration }})
-        shell: pwsh
-        env:
-          CONFIGURATION: ${{ matrix.configuration }}
-        run: |
-          & ".\x64\$env:CONFIGURATION\Tests.ImportIsolation.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Tests.ImportIsolation ($env:CONFIGURATION) failed with exit code $LASTEXITCODE."
           }
 
       - name: Run provider-host suite (${{ matrix.configuration }})
