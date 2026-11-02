@@ -31,7 +31,9 @@ on:
 jobs:
   restore:
     name: Restore vcpkg manifests
-    runs-on: windows-2025
+    # Match the build/release toolset so the warmed binary cache is ABI-compatible
+    # with the v145 (Visual Studio 2026) build.
+    runs-on: windows-2025-vs2026
     # Cold OpenUSD + OCCT from source is the long pole; the binary cache keeps
     # repeat runs short. Same budget as release so a timeout here means the
     # release would have timed out too.

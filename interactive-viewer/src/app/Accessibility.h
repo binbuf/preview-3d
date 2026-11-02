@@ -102,6 +102,10 @@ enum class Control
     BackgroundTransparent,
     BackgroundChecker,
     StopOrbitOnInteraction,
+    // Screenshot/export menu actions, appended so earlier runtime IDs stay
+    // stable.
+    Screenshot,
+    ExportStl,
     Count,
 };
 

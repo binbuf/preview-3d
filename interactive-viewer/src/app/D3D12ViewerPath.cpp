@@ -5043,25 +5043,44 @@ void D3D12ViewerPath::RenderClearFrame(const DirectX::XMFLOAT4& orientation, con
 void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
                                    const DirectX::XMFLOAT4& orientation, const OverlayFrame& chrome, const double cameraTarget[3], const DirectX::XMFLOAT4& eyeSelection)
 {
+    RenderFrameInternal(viewProjection, orientation, chrome, cameraTarget, eyeSelection, CaptureTarget{});
+}
+
+void D3D12ViewerPath::RenderFrameInternal(const DirectX::XMFLOAT4X4& viewProjection,
+                                          const DirectX::XMFLOAT4& orientation, const OverlayFrame& chrome,
+                                          const double cameraTarget[3], const DirectX::XMFLOAT4& eyeSelection,
+                                          const CaptureTarget& capture)
+{
     PollAoGpuTiming();
-    const UINT index = BeginFrame();
+    lastCaptureFence = 0;
+    UINT index = 0;
+    if (capture.active) {
+        // A capture is a one-off: wait on the slot's own fence rather than
+        // consuming a swap-chain frame-latency signal without presenting.
+        index = swapChain.CurrentBackBufferIndex();
+        if (frames[index].fenceValue != 0)
+            directQueue.WaitForValue(frames[index].fenceValue, kIdleWaitTimeoutMs);
+    } else {
+        index = BeginFrame();
+    }
 
     if (FAILED(frames[index].allocator->Reset())) return;
     if (FAILED(commandList->Reset(frames[index].allocator.Get(), pipelineState.Get()))) return;
 
-    ID3D12Resource* backBuffer = swapChain.BackBuffer(index);
-
-    D3D12_RESOURCE_BARRIER toRenderTarget{};
-    toRenderTarget.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    toRenderTarget.Transition.pResource = backBuffer;
-    toRenderTarget.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    toRenderTarget.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-    toRenderTarget.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    commandList->ResourceBarrier(1, &toRenderTarget);
+    if (!capture.active) {
+        ID3D12Resource* backBuffer = swapChain.BackBuffer(index);
+        D3D12_RESOURCE_BARRIER toRenderTarget{};
+        toRenderTarget.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toRenderTarget.Transition.pResource = backBuffer;
+        toRenderTarget.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        toRenderTarget.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        toRenderTarget.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        commandList->ResourceBarrier(1, &toRenderTarget);
+    }
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = sceneColorRtvHeap
         ? sceneColorRtvHeap->GetCPUDescriptorHandleForHeapStart()
-        : swapChain.BackBufferRtv(index);
+        : (capture.active ? capture.rtv : swapChain.BackBufferRtv(index));
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
     const auto backgroundDisplay = viewer_presentation::BackgroundDisplayColor(
@@ -5977,13 +5996,50 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
         commandList->ResourceBarrier(1, &barrier);
     }
 
+    if (capture.active) {
+        D3D12_RESOURCE_BARRIER toRenderTarget{};
+        toRenderTarget.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toRenderTarget.Transition.pResource = capture.texture;
+        toRenderTarget.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        toRenderTarget.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+        toRenderTarget.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        commandList->ResourceBarrier(1, &toRenderTarget);
+    }
+
     // Full-screen resolve: linear HDR -> background composite -> exposure ->
     // tone map -> sRGB back buffer. The overlay still draws afterwards.
-    ResolveSceneToBackBuffer(swapChain.BackBufferRtv(index), chrome.info);
+    ResolveSceneToBackBuffer(capture.active ? capture.rtv : swapChain.BackBufferRtv(index), chrome.info);
+
+    if (capture.active) {
+        D3D12_RESOURCE_BARRIER toCopy{};
+        toCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        toCopy.Transition.pResource = capture.texture;
+        toCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        toCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        toCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        commandList->ResourceBarrier(1, &toCopy);
+        D3D12_TEXTURE_COPY_LOCATION source{};
+        source.pResource = capture.texture;
+        source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        source.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION destination{};
+        destination.pResource = capture.readback;
+        destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        destination.PlacedFootprint.Footprint = {
+            DXGI_FORMAT_R8G8B8A8_UNORM, swapChain.Width(), swapChain.Height(), 1, capture.rowPitch};
+        commandList->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+    }
 
     if (FAILED(commandList->Close())) return;
     ID3D12CommandList* lists[] = { commandList.Get() };
     directQueue.Queue()->ExecuteCommandLists(1, lists);
+
+    if (capture.active) {
+        const uint64_t signaled = directQueue.SignalNext();
+        if (signaled != 0) frames[index].fenceValue = signaled;
+        lastCaptureFence = signaled;
+        return;
+    }
 
     DrawChrome(index, orientation, chrome);
     EndFrame(index);
@@ -5995,6 +6051,126 @@ void D3D12ViewerPath::RenderFrame(const DirectX::XMFLOAT4X4& viewProjection,
     if (debugSampleRecorded && debugSampleFence == UINT64_MAX) {
         debugSampleFence = frames[index].fenceValue;
     }    if (picking) { pickFence = frames[index].fenceValue; pickInFlight = true; pickX = pickY = -1; }
+}
+
+bool D3D12ViewerPath::CaptureFrame(const DirectX::XMFLOAT4X4& viewProjection,
+                                   const DirectX::XMFLOAT4& orientation, const OverlayFrame& chrome,
+                                   const double cameraTarget[3], const DirectX::XMFLOAT4& eyeSelection,
+                                   int& width, int& height, std::vector<std::uint8_t>& rgba,
+                                   std::wstring& error)
+{
+    width = 0;
+    height = 0;
+    rgba.clear();
+    const UINT targetWidth = swapChain.Width();
+    const UINT targetHeight = swapChain.Height();
+    if (targetWidth == 0 || targetHeight == 0 || !sceneColorRtvHeap || !resolvePipelineState) {
+        error = L"The viewport is not ready to capture.";
+        return false;
+    }
+
+    D3D12_HEAP_PROPERTIES heapProperties{};
+    heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC textureDesc{};
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Width = targetWidth;
+    textureDesc.Height = targetHeight;
+    textureDesc.DepthOrArraySize = 1;
+    textureDesc.MipLevels = 1;
+    textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    ComPtr<ID3D12Resource> texture;
+    if (FAILED(device.Device()->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_NONE,
+            &textureDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture)))) {
+        error = L"The screenshot target could not be created.";
+        return false;
+    }
+
+    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc{};
+    rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    rtvHeapDesc.NumDescriptors = 1;
+    ComPtr<ID3D12DescriptorHeap> rtvHeap;
+    if (FAILED(device.Device()->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&rtvHeap)))) {
+        error = L"The screenshot target could not be created.";
+        return false;
+    }
+    device.Device()->CreateRenderTargetView(texture.Get(), nullptr,
+        rtvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    const UINT rowPitch = (targetWidth * 4u + 255u) & ~255u;
+    ComPtr<ID3D12Resource> readback = CreateBuffer(device.Device(),
+        static_cast<uint64_t>(rowPitch) * targetHeight, D3D12_HEAP_TYPE_READBACK,
+        D3D12_RESOURCE_STATE_COPY_DEST);
+    if (!readback) {
+        error = L"The screenshot readback buffer could not be created.";
+        return false;
+    }
+
+    CaptureTarget capture;
+    capture.active = true;
+    capture.rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    capture.texture = texture.Get();
+    capture.readback = readback.Get();
+    capture.rowPitch = rowPitch;
+
+    RenderFrameInternal(viewProjection, orientation, chrome, cameraTarget, eyeSelection, capture);
+    if (lastCaptureFence == 0) {
+        error = L"The screenshot frame could not be recorded.";
+        return false;
+    }
+    if (directQueue.WaitForValue(lastCaptureFence, kIdleWaitTimeoutMs)
+            != D3D12CommandQueue::WaitResult::Signaled) {
+        error = L"The screenshot could not be read back in time.";
+        return false;
+    }
+
+    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(rowPitch) * targetHeight};
+    void* mapped = nullptr;
+    if (FAILED(readback->Map(0, &readRange, &mapped)) || !mapped) {
+        error = L"The screenshot pixels could not be read.";
+        return false;
+    }
+
+    // Crop to the 3D viewport, not the whole client area. The same insets
+    // RenderFrameInternal used for its viewport/scissor.
+    const bool loading = chrome.info.state == ViewerState::Loading;
+    const LONG top = loading ? 0 : chrome.info.toolbarHeight;
+    const LONG right = (std::max)(1L, static_cast<LONG>(targetWidth)
+        - (loading ? 0 : chrome.info.infoPanelWidth));
+    const LONG bottom = (std::max)(top + 1, static_cast<LONG>(targetHeight)
+        - (loading ? 0 : chrome.info.bottomBarHeight));
+    width = static_cast<int>(right);
+    height = static_cast<int>(bottom - top);
+    rgba.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u);
+
+    const auto* source = static_cast<const std::uint8_t*>(mapped);
+    for (int y = 0; y < height; ++y)
+    {
+        const std::uint8_t* row = source + static_cast<std::size_t>(top + y) * rowPitch;
+        std::uint8_t* destination = rgba.data() + static_cast<std::size_t>(y) * width * 4u;
+        for (int x = 0; x < width; ++x)
+        {
+            const std::uint8_t* pixel = row + static_cast<std::size_t>(x) * 4u;
+            std::uint8_t* out = destination + static_cast<std::size_t>(x) * 4u;
+            const unsigned alpha = pixel[3];
+            if (alpha == 0) {
+                out[0] = out[1] = out[2] = out[3] = 0;
+            } else if (alpha == 255) {
+                out[0] = pixel[0]; out[1] = pixel[1]; out[2] = pixel[2]; out[3] = 255;
+            } else {
+                // The resolve stores premultiplied display-space color; PNG
+                // wants straight alpha.
+                out[0] = static_cast<std::uint8_t>((std::min)(255u, (unsigned(pixel[0]) * 255u + alpha / 2u) / alpha));
+                out[1] = static_cast<std::uint8_t>((std::min)(255u, (unsigned(pixel[1]) * 255u + alpha / 2u) / alpha));
+                out[2] = static_cast<std::uint8_t>((std::min)(255u, (unsigned(pixel[2]) * 255u + alpha / 2u) / alpha));
+                out[3] = static_cast<std::uint8_t>(alpha);
+            }
+        }
+    }
+    readback->Unmap(0, nullptr);
+    return true;
 }
 
 bool D3D12ViewerPath::CreateAndQueueBuffer(const void* data, uint64_t sizeBytes, uint32_t clusterId,

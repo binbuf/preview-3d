@@ -139,6 +139,8 @@ separate deliverable.
 | Rotate directional light | Drag the sun around the navigation gizmo's outer ring in Directional mode |
 | Wireframe | The mesh icon beside the lighting modes; hides all triangle surfaces |
 | Share the open file | The title bar's Share button (Windows Share) |
+| Take a transparent-background screenshot | `Ctrl+Shift+S` or the `...` menu's Take screenshot |
+| Export the open model as binary STL | The `...` menu's Export to STL (hidden for STL sources) |
 | Open the file in another app | The title bar's Open With strip |
 | Reset view | `Home` or `R`, or the button that appears at the top-left of the viewport once the camera has moved |
 | Open | `Ctrl+O` (primarily launched via file-type registration or drag/drop instead) |

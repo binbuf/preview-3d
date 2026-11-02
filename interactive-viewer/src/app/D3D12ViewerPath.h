@@ -652,6 +652,17 @@ struct D3D12ViewerPath
     // camera and computes this under the lock, then releases it and renders.
     void RenderFrame(const DirectX::XMFLOAT4X4& viewProjection, const DirectX::XMFLOAT4& orientation,
                      const OverlayFrame& chrome, const double cameraTarget[3], const DirectX::XMFLOAT4& eyeSelection);
+
+    // One-shot screenshot: renders the same scene as RenderFrame with the
+    // caller-supplied capture OverlayFrame (transparent background, no grid,
+    // ground highlight, contact shadow or selection), resolves into an
+    // offscreen target instead of the swap chain, and returns straight-alpha
+    // RGBA8 pixels cropped to the 3D viewport. Does not present or draw chrome.
+    bool CaptureFrame(const DirectX::XMFLOAT4X4& viewProjection, const DirectX::XMFLOAT4& orientation,
+                      const OverlayFrame& chrome, const double cameraTarget[3],
+                      const DirectX::XMFLOAT4& eyeSelection, int& width, int& height,
+                      std::vector<std::uint8_t>& rgba, std::wstring& error);
+
     bool PollPick(bool& hit);
     uint32_t LastPickedId() const noexcept { return lastPickedId; }
 
@@ -709,6 +720,26 @@ struct D3D12ViewerPath
     void WaitForIdle();
 
 private:
+    // Optional offscreen destination for RenderFrameInternal. `active` is false
+    // for the ordinary swap-chain frame.
+    struct CaptureTarget
+    {
+        bool active = false;
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv{};
+        ID3D12Resource* texture = nullptr;
+        ID3D12Resource* readback = nullptr;
+        UINT rowPitch = 0;
+    };
+
+    // Shared frame body. `capture.active` routes the resolve to the offscreen
+    // target, records a texture copy, and skips Present/DrawChrome. On success
+    // lastCaptureFence holds the direct-queue fence that covers the copy.
+    void RenderFrameInternal(const DirectX::XMFLOAT4X4& viewProjection,
+                             const DirectX::XMFLOAT4& orientation, const OverlayFrame& chrome,
+                             const double cameraTarget[3], const DirectX::XMFLOAT4& eyeSelection,
+                             const CaptureTarget& capture);
+    std::uint64_t lastCaptureFence = 0;
+
     // The per-frame wait that replaced WaitForIdle(): blocks on the swap
     // chain's frame-latency waitable object, then on this slot's own fence so
     // its allocator is only reset once its last submission has completed.
