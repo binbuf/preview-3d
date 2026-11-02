@@ -171,7 +171,8 @@ licenses entry, has no SPDX mapping, or lacks an installed copyright file.
 
 ## 4. Run the local verification gates
 
-At minimum, run what CI runs before tagging:
+At minimum, run these locally before tagging (CI runs only the unit and
+provider-host suites):
 
 ```powershell
 # Debug
