@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Deschide cu nu este disponibil momentan",
   "hud.appUnavailable": "Aplicația respectivă nu mai este disponibilă",
   "hud.shareUnavailable": "Distribuirea nu este disponibilă momentan",
-  "update.confirmRestart": "Previzualizarea 3D {0} se va închide, va instala actualizarea și va redeschide fișierul curent.",
   "update.caption": "Previzualizează actualizarea 3D",
   "hud.updateDownloading": "Se descarcă actualizarea {0}...",
   "a11y.grid": "Grilă de pământ",

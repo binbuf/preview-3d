@@ -3783,16 +3783,7 @@ void BeginUpdateFromBadge(ViewerApp& app)
         return;
     }
 
-    const std::wstring message = LocFormat("update.confirmRestart",
-        L"Preview 3D {0} will close, install the update, and reopen your current file.",
-        { L"v" + app.updateVersion });
-    if (MessageBoxW(app.window, message.c_str(),
-            Loc("update.caption", L"Preview 3D update").c_str(),
-            MB_OKCANCEL | MB_ICONINFORMATION | MB_DEFBUTTON1) != IDOK)
-    {
-        return;
-    }
-
+    // Clicking the badge is the confirmation: start the download immediately.
     app.updateDownloading = true;
     ShowModeHud(app, LocFormat("hud.updateDownloading", L"Downloading update {0}...",
         { L"v" + app.updateVersion }));
@@ -6998,6 +6989,15 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         if (wParam == VK_OEM_5) { CycleBackground(*app); return 0; }
         if (wParam == VK_OEM_3) { CycleToneMap(*app); return 0; }
         if (wParam == 'H') { ToggleShadow(*app); return 0; }
+        // A is both the ambient-occlusion toggle and strafe-left during RMB
+        // flight. Do not consume it as a toggle while flight is active, and
+        // ignore auto-repeat so a held A cannot strobe the toggle or toggle
+        // once flight ends with the key still down.
+        if (wParam == 'A' && !app->flyLook && (lParam & (1u << 30)) == 0)
+        {
+            ToggleAmbientOcclusion(*app);
+            return 0;
+        }
         if (SetNavigationKey(*app, wParam, true)) return 0;
         if (wParam == VK_OEM_PLUS || wParam == VK_ADD) app->renderThread.LockCamera()->Dolly(1.0f);
         else if (wParam == VK_OEM_MINUS || wParam == VK_SUBTRACT) app->renderThread.LockCamera()->Dolly(-1.0f);

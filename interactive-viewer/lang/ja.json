@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "現在、「次から開く」は利用できません",
   "hud.appUnavailable": "そのアプリはもう利用できません",
   "hud.shareUnavailable": "現在、共有は利用できません",
-  "update.confirmRestart": "Preview 3D {0} が終了し、更新プログラムがインストールされ、現在のファイルが再度開きます。",
   "update.caption": "3D アップデートのプレビュー",
   "hud.updateDownloading": "アップデートをダウンロード中 {0}...",
   "a11y.grid": "グラウンドグリッド",

@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Otvoriť pomocou nie je momentálne k dispozícii",
   "hud.appUnavailable": "Táto aplikácia už nie je k dispozícii",
   "hud.shareUnavailable": "Zdieľanie nie je momentálne k dispozícii",
-  "update.confirmRestart": "Náhľad 3D {0} sa zatvorí, nainštaluje aktualizáciu a znova otvorí váš aktuálny súbor.",
   "update.caption": "Ukážka 3D aktualizácie",
   "hud.updateDownloading": "Sťahuje sa aktualizácia {0}...",
   "a11y.grid": "Pozemná mriežka",

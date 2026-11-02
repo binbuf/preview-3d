@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Open with isn't available right now",
   "hud.appUnavailable": "That app is no longer available",
   "hud.shareUnavailable": "Share isn't available right now",
-  "update.confirmRestart": "Preview 3D {0} will close, install the update, and reopen your current file.",
   "update.caption": "Preview 3D update",
   "hud.updateDownloading": "Downloading update {0}...",
   "a11y.grid": "Ground grid",

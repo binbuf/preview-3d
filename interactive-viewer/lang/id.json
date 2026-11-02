@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Buka dengan tidak tersedia saat ini",
   "hud.appUnavailable": "Aplikasi itu tidak lagi tersedia",
   "hud.shareUnavailable": "Berbagi tidak tersedia saat ini",
-  "update.confirmRestart": "Pratinjau 3D {0} akan ditutup, menginstal pembaruan, dan membuka kembali file Anda saat ini.",
   "update.caption": "Pratinjau pembaruan 3D",
   "hud.updateDownloading": "Mengunduh pembaruan {0}...",
   "a11y.grid": "Jaringan tanah",

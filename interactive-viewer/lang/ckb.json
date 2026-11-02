@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Open with لە ئێستادا بەردەست نییە",
   "hud.appUnavailable": "ئەو ئەپە ئێستا بەردەست نییە",
   "hud.shareUnavailable": "شەیر لە ئێستادا بەردەست نییە",
-  "update.confirmRestart": "پێشبینی 3D {0} دادەخرێت و نوێکردنەوەکە دادەمەزرێنێت و فایلە ئێستاکەت دەکاتەوە.",
   "update.caption": "پێشبینی نوێکردنەوەی سێ ڕەهەندی",
   "hud.updateDownloading": "نوێکردنەوەی دابەزاندن {0}...",
   "a11y.grid": "تۆڕی زەوی",

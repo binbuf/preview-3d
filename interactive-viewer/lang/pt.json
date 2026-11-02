@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Abrir com não está disponível de momento",
   "hud.appUnavailable": "Esta aplicação não está mais disponível",
   "hud.shareUnavailable": "A partilha não está disponível no momento",
-  "update.confirmRestart": "Preview 3D {0} irá fechar, instalar a atualização e reabrir o seu ficheiro atual.",
   "update.caption": "Visualizar atualização 3D",
   "hud.updateDownloading": "A descarregar atualização {0}...",
   "a11y.grid": "Grelha terrestre",

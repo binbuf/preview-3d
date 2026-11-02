@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Відкрити за допомогою зараз недоступно",
   "hud.appUnavailable": "Ця програма більше не доступна",
   "hud.shareUnavailable": "Поділитися зараз недоступне",
-  "update.confirmRestart": "Preview 3D {0} закриється, установить оновлення та знову відкриє поточний файл.",
   "update.caption": "Попередній перегляд 3D оновлення",
   "hud.updateDownloading": "Завантаження оновлення {0}...",
   "a11y.grid": "Грунтова сітка",

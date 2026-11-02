@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "الفتح باستخدام غير متاح حاليًا",
   "hud.appUnavailable": "هذا التطبيق لم يعد متاحا",
   "hud.shareUnavailable": "المشاركة غير متاحة الآن",
-  "update.confirmRestart": "سيتم إغلاق Preview 3D {0}، وتثبيت التحديث، وإعادة فتح الملف الحالي.",
   "update.caption": "معاينة التحديث ثلاثي الأبعاد",
   "hud.updateDownloading": "جارٍ تنزيل التحديث {0}...",
   "a11y.grid": "الشبكة الأرضية",

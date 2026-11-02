@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "সঙ্গে খুলুন এই মুহূর্তে উপলব্ধ নয়",
   "hud.appUnavailable": "সেই অ্যাপটি আর উপলব্ধ নেই",
   "hud.shareUnavailable": "শেয়ার এই মুহূর্তে উপলব্ধ নয়",
-  "update.confirmRestart": "প্রিভিউ 3D {0} বন্ধ হবে, আপডেট ইনস্টল করবে এবং আপনার বর্তমান ফাইলটি আবার খুলবে।",
   "update.caption": "3D আপডেটের পূর্বরূপ দেখুন",
   "hud.updateDownloading": "আপডেট ডাউনলোড হচ্ছে {0}...",
   "a11y.grid": "গ্রাউন্ড গ্রিড",

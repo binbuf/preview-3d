@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "„Öffnen mit“ ist derzeit nicht verfügbar",
   "hud.appUnavailable": "Diese App ist nicht mehr verfügbar",
   "hud.shareUnavailable": "„Teilen“ ist derzeit nicht verfügbar",
-  "update.confirmRestart": "Preview 3D {0} wird geschlossen, das Update installiert und Ihre aktuelle Datei erneut geöffnet.",
   "update.caption": "Vorschau des 3D-Updates",
   "hud.updateDownloading": "Update {0} wird heruntergeladen...",
   "a11y.grid": "Erdungsgitter",

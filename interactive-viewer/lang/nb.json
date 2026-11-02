@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Åpne med er ikke tilgjengelig akkurat nå",
   "hud.appUnavailable": "Den appen er ikke lenger tilgjengelig",
   "hud.shareUnavailable": "Del er ikke tilgjengelig akkurat nå",
-  "update.confirmRestart": "Preview 3D {0} lukkes, installerer oppdateringen og åpner den nåværende filen på nytt.",
   "update.caption": "Forhåndsvis 3D-oppdatering",
   "hud.updateDownloading": "Laster ned oppdatering {0}...",
   "a11y.grid": "Jordnett",

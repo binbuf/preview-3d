@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "ilə açmaq hazırda mövcud deyil",
   "hud.appUnavailable": "Həmin proqram artıq mövcud deyil",
   "hud.shareUnavailable": "Paylaşım hazırda əlçatan deyil",
-  "update.confirmRestart": "Preview 3D {0} bağlanacaq, yeniləməni quraşdıracaq və cari faylınızı yenidən açacaq.",
   "update.caption": "3D yeniləməsini önizləyin",
   "hud.updateDownloading": "Yeniləmə endirilir {0}...",
   "a11y.grid": "Torpaq şəbəkəsi",

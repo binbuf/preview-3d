@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Atidaryti naudojant šiuo metu negalima",
   "hud.appUnavailable": "Ši programa nebepasiekiama",
   "hud.shareUnavailable": "Bendrinti šiuo metu negalima",
-  "update.confirmRestart": "Peržiūra 3D {0} užsidarys, įdiegs naujinimą ir iš naujo atidarys dabartinį failą.",
   "update.caption": "Peržiūrėkite 3D naujinimą",
   "hud.updateDownloading": "Atsisiunčiamas naujinimas {0}...",
   "a11y.grid": "Žemės tinklelis",

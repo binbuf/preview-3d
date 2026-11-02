@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Opcja Otwórz za pomocą nie jest obecnie dostępna",
   "hud.appUnavailable": "Ta aplikacja nie jest już dostępna",
   "hud.shareUnavailable": "Udostępnianie jest obecnie niedostępne",
-  "update.confirmRestart": "Podgląd 3D {0} zostanie zamknięty, zainstaluj aktualizację i ponownie otwórz bieżący plik.",
   "update.caption": "Podgląd aktualizacji 3D",
   "hud.updateDownloading": "Pobieram aktualizację {0}...",
   "a11y.grid": "Siatka uziemiająca",

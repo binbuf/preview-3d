@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Otevřít pomocí není momentálně k dispozici",
   "hud.appUnavailable": "Tato aplikace již není k dispozici",
   "hud.shareUnavailable": "Sdílení momentálně není k dispozici",
-  "update.confirmRestart": "Náhled 3D {0} se zavře, nainstaluje aktualizaci a znovu otevře aktuální soubor.",
   "update.caption": "Náhled 3D aktualizace",
   "hud.updateDownloading": "Stahování aktualizace {0}...",
   "a11y.grid": "Zemní mřížka",

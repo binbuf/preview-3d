@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Otvori pomoću trenutno nije dostupno",
   "hud.appUnavailable": "Ta aplikacija više nije dostupna",
   "hud.shareUnavailable": "Dijeljenje trenutno nije dostupno",
-  "update.confirmRestart": "Preview 3D {0} će se zatvoriti, instalirati ažuriranje i ponovno otvoriti trenutnu datoteku.",
   "update.caption": "Pregledajte 3D ažuriranje",
   "hud.updateDownloading": "Preuzimanje ažuriranja {0}...",
   "a11y.grid": "Prizemna rešetka",

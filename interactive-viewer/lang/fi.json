@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Open with ei ole saatavilla juuri nyt",
   "hud.appUnavailable": "Sovellus ei ole enää saatavilla",
   "hud.shareUnavailable": "Jaa ei ole saatavilla juuri nyt",
-  "update.confirmRestart": "Preview 3D {0} sulkeutuu, asentaa päivityksen ja avaa nykyisen tiedostosi uudelleen.",
   "update.caption": "Esikatsele 3D-päivitystä",
   "hud.updateDownloading": "Ladataan päivitystä {0}...",
   "a11y.grid": "Maaverkko",

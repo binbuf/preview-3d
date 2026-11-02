@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "ओपन विथ अभी उपलब्ध नहीं है",
   "hud.appUnavailable": "वह ऐप अब उपलब्ध नहीं है",
   "hud.shareUnavailable": "शेयर अभी उपलब्ध नहीं है",
-  "update.confirmRestart": "पूर्वावलोकन 3D {0} बंद हो जाएगा, अपडेट इंस्टॉल हो जाएगा, और आपकी वर्तमान फ़ाइल फिर से खुल जाएगी।",
   "update.caption": "3डी अपडेट का पूर्वावलोकन करें",
   "hud.updateDownloading": "अद्यतन डाउनलोड हो रहा है {0}...",
   "a11y.grid": "ग्राउंड ग्रिड",

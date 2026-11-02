@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Birlikte aç şu anda kullanılamıyor",
   "hud.appUnavailable": "Bu uygulama artık kullanılamıyor",
   "hud.shareUnavailable": "Paylaşım şu anda kullanılamıyor",
-  "update.confirmRestart": "Preview 3D {0} kapatılacak, güncelleme yüklenecek ve mevcut dosyanız yeniden açılacaktır.",
   "update.caption": "3D güncellemeyi önizleyin",
   "hud.updateDownloading": "Güncelleme indiriliyor {0}...",
   "a11y.grid": "Zemin ızgarası",

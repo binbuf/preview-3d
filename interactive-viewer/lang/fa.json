@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "باز کردن با در حال حاضر در دسترس نیست",
   "hud.appUnavailable": "آن برنامه دیگر در دسترس نیست",
   "hud.shareUnavailable": "اشتراک‌گذاری در حال حاضر در دسترس نیست",
-  "update.confirmRestart": "Preview 3D {0} بسته می‌شود، به‌روزرسانی را نصب می‌کند و فایل فعلی شما را دوباره باز می‌کند.",
   "update.caption": "پیش نمایش به روز رسانی سه بعدی",
   "hud.updateDownloading": "در حال دانلود به روز رسانی {0}...",
   "a11y.grid": "شبکه زمینی",

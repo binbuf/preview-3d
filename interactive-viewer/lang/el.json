@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Το Open with δεν είναι διαθέσιμο αυτήν τη στιγμή",
   "hud.appUnavailable": "Αυτή η εφαρμογή δεν είναι πλέον διαθέσιμη",
   "hud.shareUnavailable": "Η κοινή χρήση δεν είναι διαθέσιμη αυτήν τη στιγμή",
-  "update.confirmRestart": "Το Preview 3D {0} θα κλείσει, θα εγκαταστήσει την ενημέρωση και θα ανοίξει ξανά το τρέχον αρχείο σας.",
   "update.caption": "Προεπισκόπηση ενημέρωσης 3D",
   "hud.updateDownloading": "Λήψη ενημέρωσης {0}...",
   "a11y.grid": "Πλέγμα εδάφους",

@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Mở bằng hiện không khả dụng",
   "hud.appUnavailable": "Ứng dụng đó không còn khả dụng nữa",
   "hud.shareUnavailable": "Chia sẻ hiện không khả dụng",
-  "update.confirmRestart": "Xem trước 3D {0} sẽ đóng, cài đặt bản cập nhật và mở lại tệp hiện tại của bạn.",
   "update.caption": "Xem trước bản cập nhật 3D",
   "hud.updateDownloading": "Đang tải xuống bản cập nhật {0}...",
   "a11y.grid": "Lưới đất",

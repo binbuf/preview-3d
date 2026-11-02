@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "지금은 다음 프로그램으로 열기를 사용할 수 없습니다.",
   "hud.appUnavailable": "해당 앱은 더 이상 사용할 수 없습니다.",
   "hud.shareUnavailable": "지금은 공유할 수 없습니다.",
-  "update.confirmRestart": "Preview 3D {0}이 닫히고 업데이트를 설치한 다음 현재 파일을 다시 엽니다.",
   "update.caption": "3D 업데이트 미리보기",
   "hud.updateDownloading": "{0} 업데이트 다운로드 중...",
   "a11y.grid": "접지 그리드",

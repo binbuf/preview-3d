@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Openen met is momenteel niet beschikbaar",
   "hud.appUnavailable": "Die app is niet meer beschikbaar",
   "hud.shareUnavailable": "Delen is momenteel niet beschikbaar",
-  "update.confirmRestart": "Preview 3D {0} wordt afgesloten, installeert de update en opent uw huidige bestand opnieuw.",
   "update.caption": "Preview 3D-update",
   "hud.updateDownloading": "Update {0} downloaden...",
   "a11y.grid": "Grondraster",

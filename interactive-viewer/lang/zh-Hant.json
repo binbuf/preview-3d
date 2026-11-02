@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "目前無法使用開啟方式",
   "hud.appUnavailable": "該應用程式不再可用",
   "hud.shareUnavailable": "目前無法分享",
-  "update.confirmRestart": "Preview 3D {0} 將關閉、安裝更新並重新開啟目前檔案。",
   "update.caption": "預覽 3D 更新",
   "hud.updateDownloading": "正在下載更新{0}...",
   "a11y.grid": "地網",

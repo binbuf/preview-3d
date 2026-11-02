@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "Öppna med är inte tillgängligt just nu",
   "hud.appUnavailable": "Den appen är inte längre tillgänglig",
   "hud.shareUnavailable": "Delning är inte tillgänglig just nu",
-  "update.confirmRestart": "Preview 3D {0} stängs, installerar uppdateringen och öppnar din nuvarande fil igen.",
   "update.caption": "Förhandsgranska 3D-uppdatering",
   "hud.updateDownloading": "Laddar ner uppdatering {0}...",
   "a11y.grid": "Marknät",

@@ -253,7 +253,6 @@
   "hud.openWithUnavailable": "A Megnyitás ezzel: jelenleg nem érhető el",
   "hud.appUnavailable": "Ez az alkalmazás már nem érhető el",
   "hud.shareUnavailable": "A megosztás jelenleg nem érhető el",
-  "update.confirmRestart": "A Preview 3D {0} bezárul, telepíti a frissítést, és újra megnyitja az aktuális fájlt.",
   "update.caption": "3D-s frissítés előnézete",
   "hud.updateDownloading": "Frissítés letöltése {0}...",
   "a11y.grid": "Földi rács",
