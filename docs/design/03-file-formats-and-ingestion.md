@@ -44,6 +44,25 @@ session override; reloads and refinements do not re-apply the preset.
 
 Tier A is the release-gated out-of-core path for the multi-gigabyte workload in [01-product-scope.md](./01-product-scope.md). Tier B formats are still MVP features, but their parser libraries may materialize more intermediate state and therefore have lower enforced limits. Draco primitives are independently bounded because their decoded topology cannot be demand-paged from the compressed bitstream. A format badge is shown when a file uses an ignored or approximated optional feature; unsupported required geometry/composition fails instead of silently presenting an apparently faithful model.
 
+### Per-format import options
+
+CAD and USD imports carry one closed `model_core::ImportOptions` record
+([ADR-0100](./adr/0100-generic-per-format-import-options.md)): Draft/Balanced/Full
+quality, tri-state `read_wire`, bounded linear/angular/relative deflection, an
+optional unit-scale assertion, and a bounded USD subdivision level. The viewer
+parses repeated `--import-option <FORMAT>.<name>=<value>` arguments and the
+Settings surface; the broker validates the record before launching a process;
+the worker/host re-validate the fixed 48-byte payload appended to the STEP,
+generalized CAD, USD fast-worker and OpenUSD host requests. A version-0 payload
+keeps every pre-T06 zero-filled request valid (the STEP quality flag bits remain
+authoritative). Unknown names, non-finite/out-of-range values and fields that
+do not apply to the selected format fail typed `ImportProtocolViolation` before
+a parser runs. Every output-changing option is folded into
+`ImportOptionsCacheIdentity`, which `CacheEntryKey` carries with the source and
+importer identities. This build links no subdivision evaluator, so a nonzero
+USD subdivision level is a typed `UnsupportedRequiredFeature`, not a silent
+control-cage render.
+
 ## Input boundary
 
 Extension classification and content sniffing are **dispatch hints**, never a

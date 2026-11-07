@@ -71,7 +71,7 @@ TEST_CASE("STEP-005 records the parallel meshing policy and delivery strategy",
           "[step-005][profile]")
 {
     using namespace step_host;
-    CHECK(kStepTessellationProfileVersion == 7);
+    CHECK(kStepTessellationProfileVersion == 8);
     CHECK(kStepImporterVersion == 1 + kStepTessellationProfileVersion);
 
     const StepTessellationProfile profile;

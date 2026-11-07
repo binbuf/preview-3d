@@ -226,7 +226,7 @@ TEST_CASE("T07 import quality maps to distinct, versioned deflection profiles",
     CHECK(draft != balanced);
     CHECK(balanced != full);
     CHECK(draft != full);
-    CHECK(kStepTessellationProfileVersion == 7);
+    CHECK(kStepTessellationProfileVersion == 8);
     CHECK(kStepImporterVersion == 1 + kStepTessellationProfileVersion);
 }
 

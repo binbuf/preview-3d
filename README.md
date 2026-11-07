@@ -42,6 +42,36 @@
 
 For the exact supported subset, resource ceilings, and known limitations of each format, see [Format support and limits](docs/FORMAT-SUPPORT.md).
 
+### Import options
+
+CAD and USD imports expose a small, validated option set instead of hiding the
+adapter defaults. Options are accepted as repeated
+`--import-option <FORMAT>.<name>=<value>` arguments (format and name are
+case-insensitive), from **Settings → Import options…**, or from persisted
+`settings.json` keys `import.<FORMAT>.<name>`. An unknown name, a non-finite or
+out-of-range value, or an option that does not apply to the format fails typed
+before any parser runs.
+
+| Format(s) | Option | Default | Values |
+| --- | --- | --- | --- |
+| STEP, IGES, BREP, XBF, FCStd | `quality` | `balanced` | `draft`, `balanced`, `full` |
+| STEP, IGES, BREP, XBF, FCStd | `read_wire` | fallback | `0`/`false` = never, `1`/`true` = always; absent = edges only when a definition has no faces |
+| STEP, IGES, BREP, XBF, FCStd | `linear_deflection` | quality profile | finite `> 0`; `<= 0.5` relative or `<= 1,000,000` absolute |
+| STEP, IGES, BREP, XBF, FCStd | `angular_deflection` | quality profile | finite `> 0` and `<= pi` radians |
+| STEP, IGES, BREP, XBF, FCStd | `relative_deflection` | `true` | `0`/`false` = absolute units, `1`/`true` = fraction of the bounding diagonal |
+| STEP, IGES, BREP, XBF, FCStd | `unit_scale` | format resolution | finite `> 0` and `<= 1e9` metres per transferred unit |
+| USD | `subdivision_level` | `0` | `0`..`4`; this build rejects `> 0` as an unsupported feature |
+
+```powershell
+Preview3D.exe --import-option STEP.quality=full --import-option STEP.read_wire=1 model.stp
+Preview3D.exe --import-option USD.subdivision_level=0 scene.usda
+```
+
+The options that change normalized output are included in the import cache
+identity, so two imports of the same file with different options never share a
+cached result. See [Format support and limits](docs/FORMAT-SUPPORT.md#import-options)
+for the exact ranges and application rules.
+
 ## Install
 
 1. Download the installer or portable ZIP from [Releases](https://github.com/binbuf/preview-3d/releases/latest).

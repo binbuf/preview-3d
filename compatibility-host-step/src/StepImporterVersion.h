@@ -10,6 +10,7 @@
 #include "StepTessellationProfile.h"
 
 #include "model_core/ControlProtocol.h"
+#include "model_core/ImportOptions.h"
 
 #include <cstdint>
 
@@ -25,6 +26,18 @@ constexpr std::uint32_t StepImporterCacheIdentity(
 {
     return (kStepImporterVersion << 2)
         | static_cast<std::uint32_t>(quality);
+}
+
+// T06: every option that changes normalized CAD output is part of the identity.
+// The generic hash already names the format, quality, wire mode, deflections
+// and unit override; the importer version is mixed in so a profile change also
+// invalidates an old entry.
+inline std::uint32_t StepImporterCacheIdentity(
+    model_core::ImportOptionFormat format,
+    const model_core::ImportOptions& options) noexcept
+{
+    return (kStepImporterVersion << 2)
+        ^ model_core::ImportOptionsCacheIdentity(format, options);
 }
 
 } // namespace step_host

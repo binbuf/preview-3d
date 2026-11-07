@@ -330,7 +330,7 @@ TEST_CASE("USD-003 extends protocol-v10 with closed additive identities", "[usd-
     CHECK(uint32_t(model_core::UpAxisId::Y) == 1);
     CHECK(uint32_t(model_core::UpAxisId::Z) == 2);
     CHECK(uint32_t(model_core::UpAxisId::X) == 3);
-    CHECK(sizeof(model_core::ParseUsdFileRequest) == 48);
+    CHECK(sizeof(model_core::ParseUsdFileRequest) == 96);
     CHECK(uint32_t(model_core::ControlOpcode::StartUsdImportFromFile) == 17);
     for (uint32_t code = uint32_t(model_core::ImportErrorCode::UnsupportedComposition);
          code <= uint32_t(model_core::ImportErrorCode::ArchiveLimit); ++code)
@@ -962,7 +962,7 @@ TEST_CASE("USD-006 lazily launches an isolated compatibility producer and discar
           "[usd-006][fallback][openusd][sandbox][recovery]")
 {
     CHECK(uint32_t(model_core::ControlOpcode::StartOpenUsdImportFromFile) == 18);
-    CHECK(sizeof(model_core::ParseOpenUsdFileRequest) == 48);
+    CHECK(sizeof(model_core::ParseOpenUsdFileRequest) == 96);
 
     ScratchUsd composed(L"usda");
     const std::string source =

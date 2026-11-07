@@ -37,7 +37,7 @@ parallel after T01.
 
 ## Phase 3 — Options and reader selection
 
-- [ ] T06 - Per-format import options and quality surface → [../tasks/0.8.0/T06-per-format-import-options.md](../tasks/0.8.0/T06-per-format-import-options.md)
+- [~] T06 - Per-format import options and quality surface → [../tasks/0.8.0/T06-per-format-import-options.md](../tasks/0.8.0/T06-per-format-import-options.md) ⟵ failed
 - [ ] T07 - Reader registry, scores and force-reader → [../tasks/0.8.0/T07-reader-registry-force-reader.md](../tasks/0.8.0/T07-reader-registry-force-reader.md)
 - [ ] T08 - Compatibility readers and bounded fallback → [../tasks/0.8.0/T08-compatibility-readers-fallback.md](../tasks/0.8.0/T08-compatibility-readers-fallback.md)
 
@@ -55,11 +55,11 @@ parallel after T01.
 - Animation playback, cameras and lights.
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-11-07T17:56:51Z · 5/10 done
+**Pipeline status** — updated 2026-11-07T19:17:57Z · 5/10 done
 
 - Completed: T01, T02, T03, T04, T05
 - Blocked: none
-- Failed: none
-- Remaining: T06, T07, T08, T09, T10
-- Last finished: T05 — done · CAD edge/wire fallback emits validated LineList chunks for wireframe STEP/IGES/BREP/FCStd, solids remain triangle-only, over-budget edges fail typed, Release/Debug [cad-wires] and valid-file gates pass; docs/ADR/progress updated.
+- Failed: T06
+- Remaining: T07, T08, T09, T10
+- Last finished: T06 — failed · interrupted during retry backoff
 <!-- /symphony:status -->

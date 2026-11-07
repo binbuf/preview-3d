@@ -168,6 +168,7 @@ int RunProductionPool(PoolMode mode)
             request.maxChunkCount = cadRequest.maxChunkCount;
             request.requestFlags = cadRequest.requestFlags;
             request.cancellationEventHandleValue = cadRequest.cancellationEventHandleValue;
+            request.importOptions = cadRequest.importOptions;
         } else {
             return 74;
         }

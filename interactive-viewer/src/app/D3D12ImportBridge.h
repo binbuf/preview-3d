@@ -15,6 +15,7 @@
 #include "model_core/FormatCatalog.h"
 #include "model_core/FormatSelection.h"
 #include "model_core/FormatSniffer.h"
+#include "model_core/ImportOptions.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/VertexLayouts.h"
@@ -81,6 +82,12 @@ model_core::FormatClassification ClassifyForOpen(const std::wstring& path,
 // go through the normal worker/host validation.
 std::optional<SourceFormat> SourceFormatForFormatDescriptor(
     const model_core::FormatDescriptor* descriptor);
+
+// T06: the closed import-option format a SourceFormat consumes, or nullopt for
+// a format with no product-owned options. Used by the viewer to select the
+// persisted per-format record before an open.
+std::optional<model_core::ImportOptionFormat> ImportOptionFormatForSource(
+    SourceFormat format);
 
 // The legacy open-path decision carried by a classification's extension
 // candidate. Keeps callers from re-reading the file just to recover it.
@@ -215,7 +222,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<void(const model_core::FileIdentity&)> onInitialComplete = {},
                         std::function<bool(uint64_t)> cpuBudgetAllows = {},
                         std::function<void(const model_core::StepProgressNotice&)> onStepProgress = {},
-                        std::vector<std::wstring> additionalSidecarSearchRoots = {});
+                        std::vector<std::wstring> additionalSidecarSearchRoots = {},
+                        model_core::ImportOptions importOptions = {});
 
 // Creates the import worker's AppContainer profile and grants it
 // read+execute on the worker's own directory -- without this the sandboxed

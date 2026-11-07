@@ -106,6 +106,8 @@ enum class Control
     // stable.
     Screenshot,
     ExportStl,
+    // T06 import-options row, appended so every earlier runtime ID stays stable.
+    ImportOptions,
     Count,
 };
 

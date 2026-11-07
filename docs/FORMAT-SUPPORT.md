@@ -343,8 +343,8 @@ visible: when a definition produces no triangles, the host meshes its edges
 with the same versioned profile and emits `LineList` chunks of independent
 segments with verified finite bounds. Authored curve colors are preserved
 where the XDE reader exposes them; otherwise lines use the neutral line
-appearance. Solids still emit triangles only and gain no default edge overlay;
-the explicit `read_wire` edge overlay is a later import option. Edge and
+appearance. Solids emit triangles only by default and gain no edge overlay;
+an explicit `read_wire=1` import option adds edges alongside faces. Edge and
 segment counts are bounded per definition, and an over-budget edge shape fails
 typed (`TessellationFailed`) before the kernel allocates its polygons.
 
@@ -375,6 +375,56 @@ FBX geometry caches, dynamic constraints, NURBS/subdivision tessellation,
 cameras, and lights are outside the supported static subset. Animation playback,
 advanced material lobes, meshoptimizer-built LOD/hierarchies, and the persistent
 derived cache remain deferred work.
+
+## Import options
+
+The import-option set is closed and product-owned. It is not a free-form
+reader key/value bag: an unknown format or name, a non-finite or out-of-range
+number, or an option that does not apply to the selected format fails typed
+(`ImportProtocolViolation`) before the parser runs. The viewer, broker, worker
+and hosts validate the same record; the trusted process is not the only guard.
+
+| Format(s) | Option | Type | Default | Accepted values |
+| --- | --- | --- | --- | --- |
+| STEP, IGES, BREP, XBF, FCStd | `quality` | enum | `balanced` | `draft`, `balanced`, `full` |
+| STEP, IGES, BREP, XBF, FCStd | `read_wire` | bool | fallback | `0`/`false` = never, `1`/`true` = always; absent = edges only when a definition has no faces |
+| STEP, IGES, BREP, XBF, FCStd | `linear_deflection` | double | quality profile | finite, `> 0`; `<= 0.5` while `relative_deflection=1`, `<= 1,000,000` absolute |
+| STEP, IGES, BREP, XBF, FCStd | `angular_deflection` | double | quality profile | finite, `> 0` and `<= pi` radians |
+| STEP, IGES, BREP, XBF, FCStd | `relative_deflection` | bool | `true` | `0`/`false` = absolute transferred units, `1`/`true` = fraction of the definition bounding diagonal |
+| STEP, IGES, BREP, XBF, FCStd | `unit_scale` | double | format resolution | finite, `> 0` and `<= 1e9` metres per transferred unit |
+| USD | `subdivision_level` | unsigned | `0` | `0`..`4`; this build has no subdivision evaluator, so `> 0` is rejected as `UnsupportedRequiredFeature` |
+
+`quality` selects the versioned tessellation profile: `draft` is coarser,
+`balanced` is the pre-T06 default, and `full` is finer. An explicit
+`linear_deflection`/`angular_deflection` overrides the quality value but stays
+inside the same bounded window, so a finer request cannot turn a bounded file
+into an unbounded one. Accepted absolute values are clamped to the profile's
+applied 0.001-5.0 transferred-unit window; a relative fraction is multiplied by
+the definition diagonal and clamped the same way. `relative_deflection=0`
+without an explicit linear value uses the quality-mapped absolute default
+(0.5/0.1/0.02 transferred units for Draft/Balanced/Full).
+
+`unit_scale` is a user assertion, not a silent guess. The format's authored-unit
+resolution and overflow checks still run first; the override then replaces the
+reported `metersPerUnit` and adds an `Ignored` compatibility record
+(`kCadFeatureUnitOverrideApplied`, feature id 3018) so diagnostics state that
+the displayed scale is user-chosen.
+
+The same values are available through:
+
+- repeated CLI arguments:
+  `Preview3D.exe --import-option STEP.quality=full --import-option STEP.read_wire=1 model.stp`
+  (format and name are ASCII case-insensitive; `--import-option=<value>` is
+  also accepted);
+- the **Settings → Import options…** surface, with reset-to-defaults;
+- the persisted `settings.json` keys `import.<FORMAT>.<name>`, written only for
+  validated non-default values.
+
+Every option that changes normalized output is part of the import cache
+identity (format, quality, wire mode, deflections, unit override and USD
+subdivision level), together with the existing source identity and importer
+version. Two imports of the same file with different options therefore never
+share a derived-cache entry.
 
 ## Tier B ceilings
 

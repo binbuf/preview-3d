@@ -255,6 +255,37 @@ bool IsAssimpSourceFormat(model_core::SourceFormatId format)
         || format == S::X3d;
 }
 
+// T06: the broker's closed format identity maps to the shared option format.
+// Formats with no options return false; a caller that supplies options for one
+// of them is rejected rather than having the record silently dropped.
+bool ImportOptionFormatForBrokerFormat(ImportFormat format,
+                                       model_core::ImportOptionFormat& optionFormat)
+{
+    switch (format) {
+    case ImportFormat::Step: optionFormat = model_core::ImportOptionFormat::Step; return true;
+    case ImportFormat::Iges: optionFormat = model_core::ImportOptionFormat::Iges; return true;
+    case ImportFormat::Brep: optionFormat = model_core::ImportOptionFormat::Brep; return true;
+    case ImportFormat::Xbf: optionFormat = model_core::ImportOptionFormat::Xbf; return true;
+    case ImportFormat::Fcstd: optionFormat = model_core::ImportOptionFormat::Fcstd; return true;
+    case ImportFormat::Usd: optionFormat = model_core::ImportOptionFormat::Usd; return true;
+    default: return false;
+    }
+}
+
+// The pre-T06 `stepImportQuality` field remains a supported producer surface.
+// An explicit generic record wins; otherwise the legacy field seeds quality and
+// every other option keeps its documented default.
+model_core::ImportOptions EffectiveImportOptions(const ImportSessionRequest& session)
+{
+    if (session.importOptions) return *session.importOptions;
+    model_core::ImportOptions options;
+    // The legacy quality field is a STEP/CAD surface. USD has no quality
+    // option and must keep the neutral Balanced value.
+    if (session.format != ImportFormat::Usd)
+        options.quality = static_cast<model_core::ImportQuality>(session.stepImportQuality);
+    return options;
+}
+
 bool SendStartRequest(const ImportSessionRequest& session, ImportProducer producer,
                       HANDLE controlInWrite, uint64_t sourceFileHandle,
                       uint64_t sectionHandle, uint64_t cancellationEventHandle)
@@ -293,10 +324,14 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
     case ImportFormat::Usd: {
         auto expected = UsdExpectedEncodingFlags(session.sourcePath);
         if (!expected) return false;
+        const model_core::ImportOptions options = EffectiveImportOptions(session);
+        const model_core::ImportOptionsPayload optionPayload =
+            model_core::MakeImportOptionsPayload(options);
         if (producer == ImportProducer::CompatibilityHost) {
             auto request = MakeFileRequest<model_core::ParseOpenUsdFileRequest>(
                 session, sourceFileHandle, sectionHandle, cancellationEventHandle);
             request.requestFlags |= *expected;
+            request.importOptions = optionPayload;
             return model_core::WriteControlMessage(
                 controlInWrite, model_core::ControlOpcode::StartOpenUsdImportFromFile,
                 &request, sizeof(request));
@@ -304,6 +339,7 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         auto request = MakeFileRequest<model_core::ParseUsdFileRequest>(
             session, sourceFileHandle, sectionHandle, cancellationEventHandle);
         request.requestFlags |= *expected;
+        request.importOptions = optionPayload;
         return model_core::WriteControlMessage(
             controlInWrite, model_core::ControlOpcode::StartUsdImportFromFile,
             &request, sizeof(request));
@@ -331,7 +367,10 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         // 10303-21 by bytes, never by extension.
         auto request = MakeFileRequest<model_core::ParseStepFileRequest>(
             session, sourceFileHandle, sectionHandle, cancellationEventHandle);
-        request.requestFlags |= model_core::StepImportQualityFlags(session.stepImportQuality);
+        const model_core::ImportOptions options = EffectiveImportOptions(session);
+        request.requestFlags |= model_core::StepImportQualityFlags(
+            static_cast<model_core::StepImportQuality>(options.quality));
+        request.importOptions = model_core::MakeImportOptionsPayload(options);
         return model_core::WriteControlMessage(
             controlInWrite, model_core::ControlOpcode::StartStepImportFromFile,
             &request, sizeof(request));
@@ -345,7 +384,10 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         // the BREP adapter (or vice versa) through a stale field.
         auto request = MakeFileRequest<model_core::ParseCadFileRequest>(
             session, sourceFileHandle, sectionHandle, cancellationEventHandle);
-        request.requestFlags |= model_core::StepImportQualityFlags(session.stepImportQuality);
+        const model_core::ImportOptions options = EffectiveImportOptions(session);
+        request.requestFlags |= model_core::StepImportQualityFlags(
+            static_cast<model_core::StepImportQuality>(options.quality));
+        request.importOptions = model_core::MakeImportOptionsPayload(options);
         request.cadFormat = static_cast<uint32_t>(
             session.format == ImportFormat::Iges ? model_core::CadFormat::Iges
             : session.format == ImportFormat::Brep ? model_core::CadFormat::Brep
@@ -374,6 +416,7 @@ ImportSessionResult Fail(ImportStage stage, model_core::ImportErrorCode code = m
         case ImportStage::SendRequest: case ImportStage::AwaitReply: case ImportStage::ChunkBatchAckFailed: code = E::WorkerCrashed; break;
         case ImportStage::SidecarRequestLimit: case ImportStage::ChunkBatchLimit: case ImportStage::ChunkCountLimit: code = E::ResourceLimit; break;
         case ImportStage::StepProgressLimit: code = E::ResourceLimit; break;
+        case ImportStage::ValidateOptions: code = E::ImportProtocolViolation; break;
         case ImportStage::UnexpectedReply: case ImportStage::ChunkBatchOutOfOrder: code = E::ImportProtocolViolation; break;
         case ImportStage::CreateOutputSection: case ImportStage::MapOutputSection: code = E::OutOfMemory; break;
         default: code = E::InternalImporterFailure; break;
@@ -1864,6 +1907,30 @@ ImportSessionResult MapStepFailure(ImportSessionResult result)
 
 ImportSessionResult RunImportSession(const ImportSessionRequest& request)
 {
+    // T06: validate the closed option record on the trusted side before any
+    // process is launched. The worker/host repeat this validation on the packed
+    // wire form; neither side trusts the other.
+    if (request.stepImportQuality != model_core::StepImportQuality::Draft
+        && request.stepImportQuality != model_core::StepImportQuality::Balanced
+        && request.stepImportQuality != model_core::StepImportQuality::Full) {
+        return Fail(ImportStage::ValidateOptions);
+    }
+    model_core::ImportOptionFormat optionFormat = model_core::ImportOptionFormat::Step;
+    const bool hasOptionFormat = ImportOptionFormatForBrokerFormat(request.format, optionFormat);
+    if (request.importOptions) {
+        if (!hasOptionFormat) return Fail(ImportStage::ValidateOptions);
+        model_core::ImportOptionError optionError = model_core::ImportOptionError::None;
+        if (!model_core::ValidateImportOptions(optionFormat, *request.importOptions, optionError))
+            return Fail(ImportStage::ValidateOptions);
+    }
+    const model_core::ImportOptions effectiveOptions = EffectiveImportOptions(request);
+    const uint32_t optionsIdentity = hasOptionFormat
+        ? model_core::ImportOptionsCacheIdentity(optionFormat, effectiveOptions) : 0;
+    const auto withIdentity = [optionsIdentity](ImportSessionResult result) {
+        result.importOptionsCacheIdentity = optionsIdentity;
+        return result;
+    };
+
     // CAD formats have no fast-worker candidate and no fallback: the dedicated
     // host is the only producer allowed to emit their SourceFormatId.
     if (request.format == ImportFormat::Step || request.format == ImportFormat::Iges
@@ -1871,7 +1938,19 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         || request.format == ImportFormat::Fcstd) {
         if (request.stepHostExePath.empty())
             return Fail(ImportStage::LaunchWorker, model_core::ImportErrorCode::StepHostFailure);
-        return MapStepFailure(RunImportSessionForProducer(request, ImportProducer::StepHost));
+        return withIdentity(
+            MapStepFailure(RunImportSessionForProducer(request, ImportProducer::StepHost)));
+    }
+
+    // A nonzero USD subdivision level has no fast-worker evaluator. Route it
+    // straight to the compatibility host when one is configured so the host
+    // owns the typed unsupported-feature decision; without a host the fast
+    // worker still validates and rejects the record.
+    if (request.format == ImportFormat::Usd && effectiveOptions.usdSubdivisionLevel > 0
+        && !request.compatibilityHostExePath.empty()) {
+        ImportSessionResult compatibility = MapCompatibilityFailure(
+            RunImportSessionForProducer(request, ImportProducer::CompatibilityHost));
+        return withIdentity(std::move(compatibility));
     }
 
     ImportSessionResult fast = RunImportSessionForProducer(request, ImportProducer::FastWorker);
@@ -1879,7 +1958,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
 
     if (request.format != ImportFormat::Usd || !fast.compatibilityFallbackRequired
         || request.compatibilityHostExePath.empty()) {
-        return fast;
+        return withIdentity(std::move(fast));
     }
 
     UsdFallbackState fallback(request.generationId);
@@ -1891,7 +1970,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         fast.stage = ImportStage::UnexpectedReply;
         fast.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
         fast.compatibilityFallbackRequired = false;
-        return fast;
+        return withIdentity(std::move(fast));
     }
 
     // RunImportSessionForProducer creates a fresh section, catalog, source
@@ -1917,7 +1996,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             compatibility.errorCode = model_core::ImportErrorCode::CompatibilityHostFailure;
         }
     }
-    return compatibility;
+    return withIdentity(std::move(compatibility));
 }
 
 } // namespace import_broker

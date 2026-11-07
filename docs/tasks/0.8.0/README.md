@@ -120,6 +120,29 @@ is out of scope and needs a separate ADR.
 | [T09](T09-real-world-coverage-corpus.md) | Real-world per-format corpus and coverage report | T01–T08 | `x64\Release\Tests.ImportIsolation.exe "[format-coverage]"` |
 | [T10](T10-support-matrix-qualification.md) | Support matrix, docs and 0.8.0 qualification | T01–T09 | `x64\Release\Tests.ImportIsolation.exe "[compat],[valid-file],[format-coverage]"` |
 
+## Import options (T06)
+
+`--import-option <FORMAT>.<name>=<value>` is repeatable; format and name are
+ASCII case-insensitive. The same record is validated by the viewer, broker,
+worker and host, and every output-changing value is part of the import cache
+identity. Unknown names, non-finite/out-of-range values, and options that do
+not apply to the selected format fail typed before a parser runs.
+
+| Format(s) | Option | Default | Range/values |
+| --- | --- | --- | --- |
+| STEP, IGES, BREP, XBF, FCStd | `quality` | `balanced` | `draft`, `balanced`, `full` |
+| STEP, IGES, BREP, XBF, FCStd | `read_wire` | fallback | `0`/`1`; absent = edges only when no faces |
+| STEP, IGES, BREP, XBF, FCStd | `linear_deflection` | quality profile | finite `> 0`; `<= 0.5` relative or `<= 1e6` absolute |
+| STEP, IGES, BREP, XBF, FCStd | `angular_deflection` | quality profile | finite `> 0` and `<= pi` radians |
+| STEP, IGES, BREP, XBF, FCStd | `relative_deflection` | `true` | `0`/`1` |
+| STEP, IGES, BREP, XBF, FCStd | `unit_scale` | format resolution | finite `> 0` and `<= 1e9` metres/unit |
+| USD | `subdivision_level` | `0` | `0..4`; `> 0` rejected as unsupported in this build |
+
+`read_wire=1` adds edges alongside faces; `read_wire=0` suppresses both the
+T05 edge-only fallback and the overlay. `unit_scale` still runs the format's
+authored-unit checks and records the override as a compatibility diagnostic.
+The UI exposes the same surface under **Settings → Import options…**.
+
 ## Execution notes
 
 - T01 is the measurement gate. Do not fix importer behaviour in it; later tasks

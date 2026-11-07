@@ -1212,8 +1212,8 @@ private:
 class DefinitionMesher {
 public:
     DefinitionMesher(const StepTessellationProfile& profile, const StepXdeLimits& limits,
-                     StepTessellationQuality quality)
-        : profile_(profile), limits_(limits), quality_(quality)
+                     StepTessellationQuality quality, const model_core::ImportOptions& options)
+        : profile_(profile), limits_(limits), quality_(quality), options_(options)
     {
     }
 
@@ -1222,11 +1222,6 @@ public:
     // STEP-005 test-only seam: force `IMeshTools_Parameters::InParallel = false`
     // so the parallel and serial paths can be compared byte-for-byte.
     void SetForceSerial(bool value) { forceSerial_ = value; }
-
-    // T06 seam: when true, the edge pass runs even for a definition that
-    // produced triangles (an explicit user `read_wire` request). T05 leaves it
-    // false so solids never get a default edge overlay.
-    void SetReadWire(bool value) { readWire_ = value; }
 
     // STEP-004 work item 7 / STEP-005 work item 2: bounded per-definition
     // mesh/extract cost accumulators for the delivery-strategy and
@@ -1268,10 +1263,29 @@ public:
         }
 
         IMeshTools_Parameters parameters;
-        parameters.Deflection = StepDeriveLinearDeflection(
-            diagonal, profile_.RelativeDeflection(quality_), profile_.minAbsoluteDeflection,
-            profile_.maxAbsoluteDeflection);
-        parameters.Angle = profile_.AngularDeflection(quality_);
+        // T06: an explicit user deflection wins over the quality profile, but
+        // stays inside the same absolute window so a hostile or mistaken value
+        // cannot drive unbounded tessellation. `relative_deflection` selects
+        // whether the value is a fraction of the definition diagonal or an
+        // absolute transferred-unit distance.
+        double linearDeflection = 0.0;
+        if (options_.relativeDeflection) {
+            const double relative = options_.linearDeflection.value_or(
+                profile_.RelativeDeflection(quality_));
+            linearDeflection = StepDeriveLinearDeflection(
+                diagonal, relative, profile_.minAbsoluteDeflection,
+                profile_.maxAbsoluteDeflection);
+        } else if (options_.linearDeflection) {
+            linearDeflection = (std::max)(profile_.minAbsoluteDeflection,
+                (std::min)(*options_.linearDeflection, profile_.maxAbsoluteDeflection));
+        } else {
+            linearDeflection = (std::max)(profile_.minAbsoluteDeflection,
+                (std::min)(profile_.AbsoluteDeflection(quality_),
+                           profile_.maxAbsoluteDeflection));
+        }
+        parameters.Deflection = linearDeflection;
+        parameters.Angle = options_.angularDeflection.value_or(
+            profile_.AngularDeflection(quality_));
         parameters.MinSize = StepDeriveMinEdge(diagonal, profile_.relativeMinEdge,
                                                profile_.minAbsoluteEdgeLength);
         parameters.Relative = Standard_False;
@@ -1401,12 +1415,14 @@ public:
         // still visible when it carries edges (wireframe STEP/IGES/BREP/FCStd
         // parts or free curves). The edge pass reuses the same versioned
         // deflection profile; edges are meshed as one compound because
-        // BRepMesh only discretizes edges as part of a shape. `readWire_` is
-        // the T06 seam for an explicit user request to add edges alongside
-        // faces; T05 leaves it false so a solid gets no default edge overlay.
+        // BRepMesh only discretizes edges as part of a shape. T06 makes this
+        // tri-state: Fallback keeps the T05 rule, On adds edges alongside
+        // faces, Off suppresses both the fallback and the overlay.
         std::uint64_t definitionSegments = 0;
         std::map<std::uint32_t, LineGroup> lineGroups;
-        const bool emitEdges = definitionTriangles == 0 || readWire_;
+        const bool emitEdges = options_.wireMode == model_core::ImportWireMode::On
+            || (options_.wireMode == model_core::ImportWireMode::Fallback
+                && definitionTriangles == 0);
         if (emitEdges && edges > 0) {
             TopTools_DataMapOfShapeInteger edgeMaterialByShape;
             for (const auto& [edge, material] : edgeColors)
@@ -1622,9 +1638,9 @@ private:
     const StepTessellationProfile& profile_;
     const StepXdeLimits& limits_;
     StepTessellationQuality quality_;
+    model_core::ImportOptions options_{};
     std::function<bool()> cancelledProbe_;
     bool forceSerial_ = false;
-    bool readWire_ = false;
     bool repairEligible_ = false;
     double meshMilliseconds_ = 0.0;
     double extractMilliseconds_ = 0.0;
@@ -2070,6 +2086,17 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             transferred = true;
         }
 
+        // T06: a user unit assertion is applied only after the format's own
+        // authored-unit resolution and overflow checks have run. It never
+        // suppresses those records; the override itself is recorded so the
+        // diagnostics state that the displayed scale is a user choice.
+        if (transferred && policy.options.unitScaleOverride) {
+            metersPerUnit = *policy.options.unitScaleOverride;
+            if (compatibility.Add(model_core::kCadFeatureUnitOverrideApplied,
+                                  CompatibilitySeverity::Ignored))
+                ++policyWarnings;
+        }
+
         result.timings.transferMilliseconds =
             static_cast<std::uint64_t>(ElapsedMilliseconds(transferStart));
         if (cadFormat != model_core::CadFormat::Brep
@@ -2121,10 +2148,9 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                              static_cast<std::uint32_t>(planner.nodes().size()),
                              planner.warningCount(), request.maxChunkCount, publish,
                              [cancellationEvent] { return IsCancelled(cancellationEvent); });
-        DefinitionMesher mesher(limits.profile, limits, policy.quality);
+        DefinitionMesher mesher(limits.profile, limits, policy.quality, policy.options);
         mesher.SetCancellationProbe([cancellationEvent] { return IsCancelled(cancellationEvent); });
         mesher.SetForceSerial((request.requestFlags & model_core::kImportRequestStepForceSerialForTesting) != 0);
-        mesher.SetReadWire(policy.readWire);
 
         for (const NodeRecord& node : planner.nodes()) {
             if (!emitter.AddNode(node)) break;

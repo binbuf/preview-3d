@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -109,6 +110,10 @@ enum class ImportStage : uint32_t {
     ChunkBatchAckFailed,  // the ack could not be written (worker gone mid-batch)
     StepProgressLimit,    // a STEP host sent more bounded progress events than the cap allows
     Upload,
+    // T06: the caller supplied an option record that is unknown, out of range,
+    // or not applicable to the selected format. Rejected before any process is
+    // launched, so a parser never sees it.
+    ValidateOptions,
 };
 
 // Job Object private-commit ceiling every import worker runs under.
@@ -204,8 +209,15 @@ struct ImportSessionRequest {
     bool stepTinyEdgeBudgetForTesting = false;
     // STEP import quality. Balanced keeps the established display deflection;
     // Draft/Full are opt-in and are part of the STEP cache identity. Only the
-    // dedicated STEP host consumes it.
+    // dedicated STEP host consumes it. Retained as the pre-T06 caller surface;
+    // when `importOptions` is set, its quality field is authoritative and the
+    // broker writes both encodings so legacy hosts/tests keep agreeing.
     model_core::StepImportQuality stepImportQuality = model_core::StepImportQuality::Balanced;
+    // T06: closed, validated per-format options. The broker re-validates this
+    // before launching any process; the worker/host validate the packed wire
+    // form again. Unset means documented defaults (and the legacy
+    // stepImportQuality field above).
+    std::optional<model_core::ImportOptions> importOptions;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;
     // Meaningful only when format == ImportFormat::Assimp. The closed value
@@ -401,6 +413,11 @@ struct ImportSessionResult {
     // USD fast worker. USD-006 consumes this without reinterpreting generic
     // parser/resource failures as permission to launch OpenUSD.
     bool compatibilityFallbackRequired = false;
+    // T06: the deterministic cache identity the generation ran with, or 0 when
+    // the format has no import options. It names the format and every option
+    // that can change normalized output; callers combine it with the existing
+    // source identity and importer version.
+    uint32_t importOptionsCacheIdentity = 0;
 };
 
 // Creates (or opens) the single AppContainer profile every import runs

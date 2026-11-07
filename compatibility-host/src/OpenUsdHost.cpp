@@ -2172,6 +2172,18 @@ int RunOpenUsdProduction(const model_core::ParseOpenUsdFileRequest& request,
     const auto fail = [&](ImportErrorCode code, ImportFailurePhase phase = ImportFailurePhase::Geometry) {
         result.errorCode = code; result.phase = phase; return 0;
     };
+    // T06: validate the closed option record before any source bytes are
+    // touched. This build links no subdivision evaluator, so a nonzero USD
+    // subdivision level is a typed unsupported feature rather than a silent
+    // control-cage render.
+    model_core::ImportOptions importOptions{};
+    model_core::ImportOptionError optionError = model_core::ImportOptionError::None;
+    if (!model_core::ImportOptionsFromPayload(request.importOptions,
+                                              model_core::ImportOptionFormat::Usd,
+                                              importOptions, optionError))
+        return fail(ImportErrorCode::ImportProtocolViolation);
+    if (importOptions.usdSubdivisionLevel > 0)
+        return fail(ImportErrorCode::UnsupportedRequiredFeature);
     HANDLE duplicate = nullptr;
     const HANDLE sourceHandle = reinterpret_cast<HANDLE>(
         static_cast<std::uintptr_t>(request.sourceFileHandleValue));

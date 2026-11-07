@@ -143,6 +143,10 @@ constexpr uint32_t kCadFeatureFcstdUnsupportedObject = 3016;
 // still publish other edges or its faces, so this is a per-definition warning,
 // not a terminal failure.
 constexpr uint32_t kCadFeatureUnmeshedEdge = 3017;
+// T06: the user supplied an explicit unit scale. The authored-unit resolution
+// still ran and its own records are preserved; this record states that the
+// displayed scale is an assertion rather than source data.
+constexpr uint32_t kCadFeatureUnitOverrideApplied = 3018;
 
 // Maps a glTF extension name to its stable numeric feature ID. This is a pure
 // lookup; it does not change whether the adapter supports the extension.

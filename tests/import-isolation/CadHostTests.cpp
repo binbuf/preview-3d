@@ -204,8 +204,9 @@ TEST_CASE("T08 CAD protocol additions are closed and append-only", "[cad-iges][p
     CHECK(uint32_t(model_core::SourceFormatId::Brep) == 15);
     CHECK(uint32_t(model_core::ControlOpcode::StartStepImportFromFile) == 20);
     CHECK(uint32_t(model_core::ControlOpcode::StartCadImportFromFile) == 22);
-    CHECK(sizeof(model_core::ParseStepFileRequest) == 48);
-    CHECK(sizeof(model_core::ParseCadFileRequest) == 56);
+    CHECK(sizeof(model_core::ParseStepFileRequest) == 96);
+    CHECK(sizeof(model_core::ParseCadFileRequest) == 104);
+    CHECK(sizeof(model_core::ImportOptionsPayload) == 48);
     CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Step));
     CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Iges));
     CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Brep));

@@ -13,6 +13,9 @@
 namespace {
 
 constexpr uint32_t kCacheEntryMagic = 0x43443350; // "P3DC"
+// v5 (T06): the key and header carry the source format and the validated
+// import-option identity, so an entry produced under different options cannot
+// be reused even if the source file and importer version match.
 // v4: protocol v13 grows MaterialPayload to 244 bytes for the authored texture
 // inputs and widens the material dependency array to five image slots. The
 // entry key's parserVersion now carries model_core::kDerivedCacheParserIdentity
@@ -24,7 +27,7 @@ constexpr uint32_t kCacheEntryMagic = 0x43443350; // "P3DC"
 // v2: normalized geometry may carry ChunkTopology::LineList (protocol v11) and
 // glTF strip/fan primitives now normalize to different triangle counts. A v1
 // entry cannot be reused without reinterpreting its payload under new rules.
-constexpr uint32_t kCurrentCacheSchemaVersion = 4;
+constexpr uint32_t kCurrentCacheSchemaVersion = 5;
 
 #pragma pack(push, 1)
 struct CacheEntryHeader
@@ -35,11 +38,13 @@ struct CacheEntryHeader
     uint8_t fileId128[16];
     uint64_t sourceSizeBytes;
     uint32_t parserVersion;
+    uint32_t format;
+    uint32_t importOptionsIdentity;
     uint32_t reserved0;
     uint64_t payloadLength;
     uint8_t payloadSha256[32];
 };
-static_assert(sizeof(CacheEntryHeader) == 88, "CacheEntryHeader layout changed");
+static_assert(sizeof(CacheEntryHeader) == 96, "CacheEntryHeader layout changed");
 #pragma pack(pop)
 
 std::wstring HexEncode(std::span<const std::byte> bytes)
@@ -104,11 +109,15 @@ std::wstring DerivedCache::EntryPath(const CacheEntryKey& key) const
 {
     std::vector<std::byte> packed;
     packed.reserve(sizeof(key.identity.volumeSerialNumber) + key.identity.fileId128.size()
-                    + sizeof(key.identity.sizeBytes) + sizeof(key.parserVersion));
+                    + sizeof(key.identity.sizeBytes) + sizeof(key.parserVersion)
+                    + sizeof(uint32_t) * 2);
     AppendBytes(packed, &key.identity.volumeSerialNumber, sizeof(key.identity.volumeSerialNumber));
     AppendBytes(packed, key.identity.fileId128.data(), key.identity.fileId128.size());
     AppendBytes(packed, &key.identity.sizeBytes, sizeof(key.identity.sizeBytes));
     AppendBytes(packed, &key.parserVersion, sizeof(key.parserVersion));
+    const uint32_t format = static_cast<uint32_t>(key.format);
+    AppendBytes(packed, &format, sizeof(format));
+    AppendBytes(packed, &key.importOptionsIdentity, sizeof(key.importOptionsIdentity));
 
     auto digest = platform::ComputeSha256(packed);
     // ComputeSha256 failing here would indicate a real environment
@@ -154,7 +163,9 @@ std::optional<std::vector<std::byte>> DerivedCache::TryGet(const CacheEntryKey& 
     if (std::memcmp(header.fileId128, key.identity.fileId128.data(), sizeof(header.fileId128)) != 0) {
         return std::nullopt;
     }
-    if (header.sourceSizeBytes != key.identity.sizeBytes || header.parserVersion != key.parserVersion) {
+    if (header.sourceSizeBytes != key.identity.sizeBytes || header.parserVersion != key.parserVersion
+        || header.format != static_cast<uint32_t>(key.format)
+        || header.importOptionsIdentity != key.importOptionsIdentity) {
         return std::nullopt;
     }
 
@@ -193,6 +204,8 @@ bool DerivedCache::Put(const CacheEntryKey& key, std::span<const std::byte> payl
     std::memcpy(header.fileId128, key.identity.fileId128.data(), sizeof(header.fileId128));
     header.sourceSizeBytes = key.identity.sizeBytes;
     header.parserVersion = key.parserVersion;
+    header.format = static_cast<uint32_t>(key.format);
+    header.importOptionsIdentity = key.importOptionsIdentity;
     header.payloadLength = payload.size();
     std::memcpy(header.payloadSha256, digest->data(), digest->size());
 

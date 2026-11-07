@@ -39,7 +39,11 @@ namespace step_host {
 // meshed with this same deflection profile, so wireframe/edge-only CAD files
 // open instead of failing EmptyGeometry. Per-definition and per-chunk line
 // segment budgets are part of the profile.
-constexpr std::uint32_t kStepTessellationProfileVersion = 7;
+// v8 (T06): explicit user deflection/quality/read-wire/unit options are folded
+// into the policy; the absolute-deflection defaults below are new so
+// `relative_deflection=0` has a deterministic quality-mapped value. The
+// Balanced relative/angular values are unchanged.
+constexpr std::uint32_t kStepTessellationProfileVersion = 8;
 
 // The pre-T07 names remain as aliases of the Balanced/Draft mapping so existing
 // callers and tests keep their meaning: Coarse == Draft, Display == Balanced.
@@ -67,6 +71,13 @@ struct StepTessellationProfile {
     // Absolute linear-deflection window in transferred (Cascade) length units.
     double minAbsoluteDeflection = 0.001; // 1 micrometre (mm space)
     double maxAbsoluteDeflection = 5.0;   // 5 millimetres (mm space)
+    // Absolute linear deflection in transferred units, used only when the
+    // caller explicitly selects `relative_deflection=0` without an explicit
+    // linear value. Quality still selects the value, and every value stays
+    // inside the same absolute window as the relative path.
+    double coarseAbsoluteDeflection = 0.5;
+    double displayAbsoluteDeflection = 0.1;
+    double fullAbsoluteDeflection = 0.02;
     // Angular chord deflection in radians.
     double coarseAngularDeflection = 0.6;
     double displayAngularDeflection = 0.25;
@@ -125,6 +136,15 @@ struct StepTessellationProfile {
         case StepTessellationQuality::Balanced: break;
         }
         return displayAngularDeflection;
+    }
+    double AbsoluteDeflection(StepTessellationQuality quality) const noexcept
+    {
+        switch (quality) {
+        case StepTessellationQuality::Draft: return coarseAbsoluteDeflection;
+        case StepTessellationQuality::Full: return fullAbsoluteDeflection;
+        case StepTessellationQuality::Balanced: break;
+        }
+        return displayAbsoluteDeflection;
     }
 };
 

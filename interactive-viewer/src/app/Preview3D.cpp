@@ -15,6 +15,7 @@
 #include "NavGizmo.h"
 #include "OpenWithPopup.h"
 #include "OpenOptions.h"
+#include "ImportOptionsCli.h"
 #include "Settings.h"
 #include "ShellIntegration.h"
 #include "SafeFileOps.h"
@@ -356,6 +357,10 @@ struct ViewerApp
     // candidate selection. Null means normal classification.
     const model_core::FormatDescriptor* forcedFormat = nullptr;
     bool skipContentCheck = false;
+    // T06: closed per-format import options, loaded from Settings and
+    // overridable by repeated --import-option arguments. Only the selected
+    // format's record reaches the broker.
+    model_core::ImportOptionsTable importOptions;
     // Path-free "opened as X; detected Y" text kept across the import so the
     // success warning and diagnostics can report the user override.
     std::wstring openFormatNotice;
@@ -1171,6 +1176,7 @@ enum class SettingsMenuRowId
     StopOrbitOnInteraction,
     HideCursorWhileDragging,
     HideModelUntilComplete,
+    ImportOptions,
     Background,
     BackgroundDark,
     BackgroundGray,
@@ -1296,6 +1302,7 @@ SettingsMenuLayout ComputeSettingsMenuLayout(const ViewerApp& app)
     appendRow(SettingsMenuRowId::StopOrbitOnInteraction, true, false, false, false, false, false, false);
     appendRow(SettingsMenuRowId::HideCursorWhileDragging, true, true, false, false, false, false, false);
     appendRow(SettingsMenuRowId::HideModelUntilComplete, true, false, false, false, false, false, false);
+    appendRow(SettingsMenuRowId::ImportOptions, false, false, false, false, false, false, false);
     appendRow(SettingsMenuRowId::Background, false, false, true, false, false,
         app.settingsMenuBackgroundExpanded, false);
     if (app.settingsMenuBackgroundExpanded)
@@ -2255,6 +2262,7 @@ void SaveViewerPreferences(const ViewerApp& app)
     settings.groundShadowEnabled = app.shadowVisible;
     settings.groundShadowOverridden = app.shadowOverridden;
     settings.ambientOcclusionEnabled = app.ambientOcclusionVisible;
+    settings.importOptions = app.importOptions;
     SaveSettings(settings);
 }
 
@@ -2772,6 +2780,11 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     const auto cancellation = app.cancellation;
 
     d3d12_import_bridge::SourceFormat format = *d3d12Format;
+    // T06: only the selected format's validated record is carried. Formats
+    // without options keep the defaults and never send an option record.
+    const auto optionFormat = d3d12_import_bridge::ImportOptionFormatForSource(format);
+    const model_core::ImportOptions selectedImportOptions = optionFormat
+        ? app.importOptions[*optionFormat] : model_core::ImportOptions{};
     auto sink = app.renderThread.BeginImport(generation, path, cancellation);
     const uint64_t sectionBytes = app.renderThread.SmokeSectionBytes();
     const bool delayBatches = app.renderThread.DelayBatches();
@@ -2792,7 +2805,7 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     auto* stepPhase = &app.stepProgressPhase;
     auto* stepDone = &app.stepProgressDone;
     auto* stepTotal = &app.stepProgressTotal;
-    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting, stepPhase, stepDone, stepTotal, assetSearchRoots]()
+    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting, stepPhase, stepDone, stepTotal, assetSearchRoots, selectedImportOptions]()
     {
         d3d12_import_bridge::ImportResult result;
         bool initialComplete = false;
@@ -2815,7 +2828,7 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
             result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
             {
                 return cancellation->load(std::memory_order_relaxed);
-            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard, stepProgress, assetSearchRoots);
+            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard, stepProgress, assetSearchRoots, selectedImportOptions);
         }
         catch (const std::length_error&)
         {
@@ -2997,6 +3010,7 @@ void CopyErrorDetails(const ViewerApp& app)
 
 void ShowModelWarnings(ViewerApp& app);
 void ShowLanguageMenu(ViewerApp& app);
+void ShowImportOptionsMenu(ViewerApp& app);
 void PublishOverlayNow(ViewerApp& app);
 
 void ResetSettingsMenuSections(ViewerApp& app)
@@ -3331,6 +3345,7 @@ void InvokeSettingsMenuRow(ViewerApp& app, int row)
         break;
     case SettingsMenuRowId::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
     case SettingsMenuRowId::HideModelUntilComplete: ToggleHideModelUntilComplete(app); break;
+    case SettingsMenuRowId::ImportOptions: ShowImportOptionsMenu(app); break;
     case SettingsMenuRowId::Background:
         ToggleSettingsMenuSection(app, SettingsMenuRowId::Background);
         break;
@@ -3419,6 +3434,148 @@ void ShowLanguageMenu(ViewerApp& app)
     {
         const std::size_t index = static_cast<std::size_t>(selected - (kLanguageMenuBase + 1));
         if (index < languages.size()) ApplyLanguage(app, languages[index].code);
+    }
+}
+
+// T06 import-options surface. A native popup keeps the custom menu simple and
+// gives every option a labelled choice instead of a raw key/value box. CAD
+// choices are applied to every CAD format because the product runs one CAD
+// host policy; the CLI and Settings JSON remain per-format for scripts.
+void ShowImportOptionsMenu(ViewerApp& app)
+{
+    constexpr UINT kQualityBase = 52000;
+    constexpr UINT kWireBase = 52010;
+    constexpr UINT kDeflectionBase = 52020;
+    constexpr UINT kUnitBase = 52030;
+    constexpr UINT kUsdBase = 52040;
+    constexpr UINT kReset = 52050;
+
+    const auto cadOptions = [&app](auto&& apply) {
+        for (uint32_t index = 0; index <= model_core::kImportOptionFormatLast; ++index) {
+            const auto format = static_cast<model_core::ImportOptionFormat>(index);
+            if (model_core::IsCadImportOptionFormat(format)) apply(app.importOptions[format]);
+        }
+    };
+    const model_core::ImportOptions& cad = app.importOptions[model_core::ImportOptionFormat::Step];
+    const model_core::ImportOptions& usd = app.importOptions[model_core::ImportOptionFormat::Usd];
+
+    HMENU menu = CreatePopupMenu();
+    HMENU qualityMenu = CreatePopupMenu();
+    AppendMenuW(qualityMenu, MF_STRING | (cad.quality == model_core::ImportQuality::Draft ? MF_CHECKED : 0u),
+                kQualityBase, L"Draft");
+    AppendMenuW(qualityMenu, MF_STRING | (cad.quality == model_core::ImportQuality::Balanced ? MF_CHECKED : 0u),
+                kQualityBase + 1, L"Balanced (default)");
+    AppendMenuW(qualityMenu, MF_STRING | (cad.quality == model_core::ImportQuality::Full ? MF_CHECKED : 0u),
+                kQualityBase + 2, L"Full");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(qualityMenu), L"CAD quality");
+
+    HMENU wire = CreatePopupMenu();
+    AppendMenuW(wire, MF_STRING | (cad.wireMode == model_core::ImportWireMode::Fallback ? MF_CHECKED : 0u),
+                kWireBase, L"Automatic (edges only when no faces)");
+    AppendMenuW(wire, MF_STRING | (cad.wireMode == model_core::ImportWireMode::On ? MF_CHECKED : 0u),
+                kWireBase + 1, L"Always read edges");
+    AppendMenuW(wire, MF_STRING | (cad.wireMode == model_core::ImportWireMode::Off ? MF_CHECKED : 0u),
+                kWireBase + 2, L"Never read edges");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(wire), L"CAD wires");
+
+    HMENU deflection = CreatePopupMenu();
+    const bool deflectionDefault = !cad.linearDeflection && !cad.angularDeflection;
+    const bool deflectionFine = cad.linearDeflection == 0.001 && cad.angularDeflection == 0.12;
+    const bool deflectionBalanced = cad.linearDeflection == 0.003 && cad.angularDeflection == 0.25;
+    const bool deflectionCoarse = cad.linearDeflection == 0.02 && cad.angularDeflection == 0.6;
+    AppendMenuW(deflection, MF_STRING | (deflectionDefault ? MF_CHECKED : 0u),
+                kDeflectionBase, L"Default (quality profile)");
+    AppendMenuW(deflection, MF_STRING | (deflectionFine ? MF_CHECKED : 0u),
+                kDeflectionBase + 1, L"Fine (0.001 / 0.12 rad)");
+    AppendMenuW(deflection, MF_STRING | (deflectionBalanced ? MF_CHECKED : 0u),
+                kDeflectionBase + 2, L"Balanced (0.003 / 0.25 rad)");
+    AppendMenuW(deflection, MF_STRING | (deflectionCoarse ? MF_CHECKED : 0u),
+                kDeflectionBase + 3, L"Coarse (0.02 / 0.6 rad)");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(deflection), L"CAD deflection");
+
+    HMENU units = CreatePopupMenu();
+    const bool unitDefault = !cad.unitScaleOverride;
+    AppendMenuW(units, MF_STRING | (unitDefault ? MF_CHECKED : 0u),
+                kUnitBase, L"Use file units (default)");
+    const struct { const wchar_t* label; double scale; } unitChoices[] = {
+        { L"Millimetres (0.001 m/unit)", 0.001 },
+        { L"Centimetres (0.01 m/unit)", 0.01 },
+        { L"Metres (1 m/unit)", 1.0 },
+        { L"Inches (0.0254 m/unit)", 0.0254 },
+    };
+    for (UINT index = 0; index < 4; ++index) {
+        const bool checked = cad.unitScaleOverride
+            && *cad.unitScaleOverride == unitChoices[index].scale;
+        AppendMenuW(units, MF_STRING | (checked ? MF_CHECKED : 0u),
+                    kUnitBase + 1 + index, unitChoices[index].label);
+    }
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(units), L"CAD unit override");
+
+    HMENU usdLevels = CreatePopupMenu();
+    for (UINT level = 0; level <= 3; ++level) {
+        std::wstring label = std::to_wstring(level);
+        if (level == 0) label += L" (control cage, default)";
+        else label += L" (unsupported in this build)";
+        AppendMenuW(usdLevels, MF_STRING | (usd.usdSubdivisionLevel == level ? MF_CHECKED : 0u),
+                    kUsdBase + level, label.c_str());
+    }
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(usdLevels), L"USD subdivision level");
+
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kReset, L"Reset import options to defaults");
+
+    const RECT row = SettingsMenuRowRect(app, SettingsMenuRowId::ImportOptions);
+    POINT anchor{ row.left, row.bottom };
+    ClientToScreen(app.window, &anchor);
+    const int selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+        anchor.x, anchor.y, 0, app.window, nullptr);
+    DestroyMenu(menu);
+
+    bool changed = true;
+    if (selected >= static_cast<int>(kQualityBase) && selected < static_cast<int>(kQualityBase) + 3) {
+        const auto chosenQuality = static_cast<model_core::ImportQuality>(selected - kQualityBase);
+        cadOptions([chosenQuality](model_core::ImportOptions& options) { options.quality = chosenQuality; });
+    } else if (selected >= static_cast<int>(kWireBase) && selected < static_cast<int>(kWireBase) + 3) {
+        const auto wireMode = static_cast<model_core::ImportWireMode>(selected - kWireBase);
+        cadOptions([wireMode](model_core::ImportOptions& options) { options.wireMode = wireMode; });
+    } else if (selected >= static_cast<int>(kDeflectionBase) && selected < static_cast<int>(kDeflectionBase) + 4) {
+        const int choice = selected - static_cast<int>(kDeflectionBase);
+        cadOptions([choice](model_core::ImportOptions& options) {
+            options.relativeDeflection = true;
+            if (choice == 0) {
+                options.linearDeflection.reset();
+                options.angularDeflection.reset();
+            } else if (choice == 1) {
+                options.linearDeflection = 0.001;
+                options.angularDeflection = 0.12;
+            } else if (choice == 2) {
+                options.linearDeflection = 0.003;
+                options.angularDeflection = 0.25;
+            } else {
+                options.linearDeflection = 0.02;
+                options.angularDeflection = 0.6;
+            }
+        });
+    } else if (selected >= static_cast<int>(kUnitBase) && selected < static_cast<int>(kUnitBase) + 5) {
+        const int choice = selected - static_cast<int>(kUnitBase);
+        cadOptions([choice](model_core::ImportOptions& options) {
+            if (choice == 0) options.unitScaleOverride.reset();
+            else options.unitScaleOverride = choice == 1 ? 0.001
+                : choice == 2 ? 0.01 : choice == 3 ? 1.0 : 0.0254;
+        });
+    } else if (selected >= static_cast<int>(kUsdBase) && selected < static_cast<int>(kUsdBase) + 4) {
+        app.importOptions[model_core::ImportOptionFormat::Usd].usdSubdivisionLevel =
+            static_cast<uint32_t>(selected - kUsdBase);
+    } else if (selected == static_cast<int>(kReset)) {
+        app.importOptions = model_core::ImportOptionsTable{};
+    } else {
+        changed = false;
+    }
+
+    if (changed) {
+        SaveViewerPreferences(app);
+        ShowModeHud(app, Loc("hud.importOptions", L"Import options updated"));
+        InvalidateRect(app.window, nullptr, FALSE);
     }
 }
 
@@ -4286,6 +4443,13 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.description=Loc("a11y.hideUntilCompleteDesc", L"Keep the model hidden until loading and refinement complete");
         info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::HideModelUntilComplete); info.visible=app.settingsMenuOpen;
         info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.hideModelUntilComplete; break;
+    case Control::ImportOptions:
+        info.name=Loc("settings.importOptions", L"Import options");
+        info.description=Loc("a11y.importOptionsDesc",
+            L"Adjust CAD quality, wires, deflection and units, or USD subdivision");
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::ImportOptions);
+        info.visible=app.settingsMenuOpen;
+        info.role=ROLE_SYSTEM_PUSHBUTTON; break;
     case Control::BackgroundMode:
         info.name=Loc("settings.background", L"Background");
         info.description=Loc("a11y.backgroundDesc", L"Choose the viewport backdrop; it does not change model lighting");
@@ -4567,6 +4731,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::NativeOrientation: ToggleShowNativeOrientation(app); break;
     case Control::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
     case Control::HideModelUntilComplete: ToggleHideModelUntilComplete(app); break;
+    case Control::ImportOptions: ShowImportOptionsMenu(app); break;
     case Control::BackgroundMode: ToggleSettingsMenuSection(app, SettingsMenuRowId::Background); break;
     case Control::BackgroundDark: SetBackgroundMode(app, viewer_presentation::BackgroundMode::Dark); break;
     case Control::BackgroundGray: SetBackgroundMode(app, viewer_presentation::BackgroundMode::MidGrey); break;
@@ -5140,6 +5305,9 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
                 row.on = app.hideModelUntilComplete;
                 break;
             }
+            case SettingsMenuRowId::ImportOptions:
+                row.label = Loc("settings.importOptions", L"Import options\u2026");
+                break;
             case SettingsMenuRowId::Background:
             {
                 const std::wstring text = Loc("settings.background", L"Background");
@@ -7734,6 +7902,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     // groundShadowOverridden value carries the choice forward.
     app.shadowOverridden = settings.groundShadowOverridden || !settings.groundShadowEnabled;
     app.ambientOcclusionVisible = settings.ambientOcclusionEnabled;
+    app.importOptions = settings.importOptions;
     app.renderThread.SetHideModelUntilComplete(app.hideModelUntilComplete);
     bool commandLineInvalid = false;
     bool listFormats = false;
@@ -7756,6 +7925,21 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             else if (_wcsicmp(arguments[i], L"--new-instance") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--skip-content-check") == 0) app.skipContentCheck = true;
+            else if (_wcsicmp(arguments[i], L"--import-option") == 0) {
+                if (++i >= argumentCount) commandLineInvalid = true;
+                else {
+                    model_core::ImportOptionError optionError = model_core::ImportOptionError::None;
+                    if (!import_options_cli::ParseImportOptionArgument(arguments[i], app.importOptions,
+                                                                      optionError))
+                        commandLineInvalid = true;
+                }
+            }
+            else if (_wcsnicmp(arguments[i], L"--import-option=", 16) == 0) {
+                model_core::ImportOptionError optionError = model_core::ImportOptionError::None;
+                if (!import_options_cli::ParseImportOptionArgument(arguments[i] + 16, app.importOptions,
+                                                                  optionError))
+                    commandLineInvalid = true;
+            }
             else if (_wcsicmp(arguments[i], L"--list-formats") == 0) listFormats = true;
             else if (_wcsicmp(arguments[i], L"--format") == 0) {
                 if (++i >= argumentCount) commandLineInvalid = true;

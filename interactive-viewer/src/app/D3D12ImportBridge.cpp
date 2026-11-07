@@ -547,6 +547,20 @@ std::optional<SourceFormat> SourceFormatForFormatDescriptor(
     return SourceFormatForCatalogDescriptor(descriptor);
 }
 
+std::optional<model_core::ImportOptionFormat> ImportOptionFormatForSource(
+    SourceFormat format)
+{
+    switch (format) {
+    case SourceFormat::Step: return model_core::ImportOptionFormat::Step;
+    case SourceFormat::Iges: return model_core::ImportOptionFormat::Iges;
+    case SourceFormat::Brep: return model_core::ImportOptionFormat::Brep;
+    case SourceFormat::Xbf: return model_core::ImportOptionFormat::Xbf;
+    case SourceFormat::Fcstd: return model_core::ImportOptionFormat::Fcstd;
+    case SourceFormat::Usd: return model_core::ImportOptionFormat::Usd;
+    default: return std::nullopt;
+    }
+}
+
 std::optional<SourceFormat> ExtensionSourceFormat(
     const model_core::FormatClassification& classification)
 {
@@ -581,7 +595,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<uint32_t()> nextDetail,
                         std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows,
                         std::function<void(const model_core::StepProgressNotice&)> onStepProgress,
-                        std::vector<std::wstring> additionalSidecarSearchRoots)
+                        std::vector<std::wstring> additionalSidecarSearchRoots,
+                        model_core::ImportOptions importOptions)
 {
     ImportResult result;
     // Aggregated on the import thread only: the onSidecarUnavailable callback
@@ -629,6 +644,10 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     }
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
+    // T06: only the closed option-bearing formats carry a record. The broker
+    // rejects an option record on any other format instead of ignoring it.
+    if (cadFormat || format == SourceFormat::Usd)
+        sessionRequest.importOptions = importOptions;
     if (assimpFormat) sessionRequest.assimpFormat = AssimpFormatForSource(format);
     sessionRequest.generationId = generationId;
     sessionRequest.sectionByteCapacity = sectionBytes;

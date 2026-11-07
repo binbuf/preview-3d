@@ -4,6 +4,7 @@
 // design-doc cache (identity source, opaque payload shape).
 
 #include "DerivedCache.h"
+#include "model_core/ImportOptions.h"
 
 #include <platform/Win32Handle.h>
 
@@ -273,6 +274,38 @@ TEST_CASE("A stray .tmp file left behind is cleaned up on the next Open", "[cach
     REQUIRE(cache.has_value());
 
     CHECK(GetFileAttributesW(strayPath.c_str()) == INVALID_FILE_ATTRIBUTES);
+}
+
+TEST_CASE("T06 cache key carries format and import-option identity", "[cache][import-options]")
+{
+    using namespace model_core;
+    ImportOptions first;
+    first.quality = ImportQuality::Balanced;
+    ImportOptions second = first;
+    second.quality = ImportQuality::Full;
+
+    CacheEntryKey key;
+    key.identity = MakeIdentity(0x1234, 3);
+    key.format = SourceFormatId::Step;
+    key.importOptionsIdentity = ImportOptionsCacheIdentity(ImportOptionFormat::Step, first);
+
+    ScratchCacheDir dir;
+    std::wstring error;
+    auto cache = DerivedCache::Open(dir.path, {}, error);
+    REQUIRE(cache.has_value());
+    const std::vector<std::byte> payload{std::byte{1}, std::byte{2}, std::byte{3}};
+    REQUIRE(cache->Put(key, payload, error));
+    REQUIRE(cache->TryGet(key).has_value());
+
+    CacheEntryKey differentFormat = key;
+    differentFormat.format = SourceFormatId::Iges;
+    CHECK_FALSE(cache->TryGet(differentFormat).has_value());
+
+    CacheEntryKey differentOptions = key;
+    differentOptions.importOptionsIdentity =
+        ImportOptionsCacheIdentity(ImportOptionFormat::Step, second);
+    CHECK(differentOptions.importOptionsIdentity != key.importOptionsIdentity);
+    CHECK_FALSE(cache->TryGet(differentOptions).has_value());
 }
 
 TEST_CASE("T22 cache key carries the real parser/protocol identity", "[cache][material-semantics]")

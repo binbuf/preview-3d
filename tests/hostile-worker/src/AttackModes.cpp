@@ -361,8 +361,13 @@ std::optional<BatchSession> ReadFileImportRequestAndMapSection()
     }
 
     auto received = model_core::ReadControlMessage(stdIn);
-    if (!received || !IsFileImportOpcode(received->header.opcode)
-        || received->payload.size() != sizeof(model_core::ParseGltfFileRequest)) {
+    // T06: the USD request grew by the packed option payload; every other
+    // file request keeps the original 48-byte shape. The fields this attack
+    // reads are at identical offsets in both layouts.
+    const bool knownSize = received
+        && (received->payload.size() == sizeof(model_core::ParseGltfFileRequest)
+            || received->payload.size() == sizeof(model_core::ParseUsdFileRequest));
+    if (!received || !IsFileImportOpcode(received->header.opcode) || !knownSize) {
         return std::nullopt;
     }
 
