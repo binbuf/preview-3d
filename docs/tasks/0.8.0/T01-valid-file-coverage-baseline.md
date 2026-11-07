@@ -29,25 +29,25 @@ measurable target instead of anecdotal “it should open” claims.
   invalid/edge cases). Do not copy files without checking licenses/provenance.
 
 ## Scope
-- [ ] Factor the minimal JSON manifest reader/loader out of
+- [x] Factor the minimal JSON manifest reader/loader out of
   `CompatCorpusTests.cpp` into a shared test helper (for example
   `tests/import-isolation/CompatManifest.{h,cpp}`) without changing the
   existing `[compat]` behaviour.
-- [ ] Add `tests/compat/valid-file-manifest.json` (schema 1) with entries:
+- [x] Add `tests/compat/valid-file-manifest.json` (schema 1) with entries:
   `id`, `path`, `format`, `expected` (`opened` | `degraded` | `failed`),
   `expectedError`, `expectedGeometry` (`triangles` | `lines` | `points` |
   `mixed` | `none`), `failureClass` (`none` | `extension` | `primitive` |
   `sniffer` | `importer` | `resource`), optional `expectedWarnings`, optional
   `requiresHost`/`requiresStepHost`, and `tags`.
-- [ ] Add `tests/import-isolation/ValidFileCorpusTests.cpp` tagged
+- [x] Add `tests/import-isolation/ValidFileCorpusTests.cpp` tagged
   `[valid-file]`. Load the new manifest, call `RunImportSession`, and assert
   the outcome, typed error, and geometry kind. Collect a bounded `INFO`
   summary (id, outcome, error, chunks, triangles/lines/points, elapsed ms).
-- [ ] Add a hidden `[write-valid-file-report]` case or a small
+- [x] Add a hidden `[write-valid-file-report]` case or a small
   `tests/compat/run-valid-file.ps1` wrapper that writes
   `artifacts/valid-file/<Configuration>.json`. The report contains manifest
   ids only, never source paths or model names.
-- [ ] Seed the manifest with small, licensed/generated fixtures covering the
+- [x] Seed the manifest with small, licensed/generated fixtures covering the
   failure classes:
   - extension aliases: `.stpnc`, `.p21`, `.210` copies of a small STEP file;
   - line-only content: DXF, OFF, DAE, X3D;
@@ -57,10 +57,10 @@ measurable target instead of anecdotal “it should open” claims.
     renamed `.txt`;
   - a small real-world sample from each family where a licensed fixture is
     already available.
-- [ ] Record the baseline in the hand-off: counts by format and by
+- [x] Record the baseline in the hand-off: counts by format and by
   `failureClass`, and every `failed` entry with its typed error. Do not “fix”
   failures in this task; later tasks own them.
-- [ ] Add the new test file and helper to `Tests.ImportIsolation.vcxproj` and
+- [x] Add the new test file and helper to `Tests.ImportIsolation.vcxproj` and
   update the task README if the verify command changes.
 
 ## Out of scope
@@ -214,3 +214,4 @@ Use the shared `compat_test` helper; do not add a second manifest reader. When
 an owning task changes behaviour, update its manifest row in the same change
 so `[valid-file]` stays the gate. See `docs/0.8.0/progress/T01.md` for
 commands, gotchas and follow-ups.
+
