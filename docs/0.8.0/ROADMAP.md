@@ -23,7 +23,7 @@ parallel after T01.
 
 ## Phase 0 — Baseline
 
-- [~] T01 - Valid-file coverage baseline and failure triage → [../tasks/0.8.0/T01-valid-file-coverage-baseline.md](../tasks/0.8.0/T01-valid-file-coverage-baseline.md) ⟵ failed
+- [~] T01 - Valid-file coverage baseline and failure triage → [../tasks/0.8.0/T01-valid-file-coverage-baseline.md](../tasks/0.8.0/T01-valid-file-coverage-baseline.md) ⟵ running
 
 ## Phase 1 — Extension and detection completeness
 
