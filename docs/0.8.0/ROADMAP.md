@@ -37,7 +37,7 @@ parallel after T01.
 
 ## Phase 3 — Options and reader selection
 
-- [~] T06 - Per-format import options and quality surface → [../tasks/0.8.0/T06-per-format-import-options.md](../tasks/0.8.0/T06-per-format-import-options.md) ⟵ failed
+- [x] T06 - Per-format import options and quality surface → [../tasks/0.8.0/T06-per-format-import-options.md](../tasks/0.8.0/T06-per-format-import-options.md)
 - [ ] T07 - Reader registry, scores and force-reader → [../tasks/0.8.0/T07-reader-registry-force-reader.md](../tasks/0.8.0/T07-reader-registry-force-reader.md)
 - [ ] T08 - Compatibility readers and bounded fallback → [../tasks/0.8.0/T08-compatibility-readers-fallback.md](../tasks/0.8.0/T08-compatibility-readers-fallback.md)
 
