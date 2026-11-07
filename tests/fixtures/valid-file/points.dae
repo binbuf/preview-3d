@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><unit name="meter" meter="1"/><up_axis>Y_UP</up_axis></asset>
+  <library_geometries>
+    <geometry id="cloud" name="cloud"><mesh>
+      <source id="cloud-pos">
+        <float_array id="cloud-pos-array" count="12">0 0 0 1 0 0 1 1 0 0 1 0</float_array>
+        <technique_common><accessor source="#cloud-pos-array" count="4" stride="3">
+          <param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/>
+        </accessor></technique_common>
+      </source>
+      <vertices id="cloud-verts"><input semantic="POSITION" source="#cloud-pos"/></vertices>
+      <points count="4">
+        <input semantic="VERTEX" source="#cloud-verts" offset="0"/>
+        <p>0 1 2 3</p>
+      </points>
+    </mesh></geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene"><node id="node"><instance_geometry url="#cloud"/></node></visual_scene>
+  </library_visual_scenes>
+  <scene><instance_visual_scene url="#Scene"/></scene>
+</COLLADA>

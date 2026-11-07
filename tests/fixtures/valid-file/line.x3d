@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<X3D profile="Interchange" version="3.2">
+  <Scene>
+    <Shape>
+      <Appearance><Material diffuseColor="0.2 0.6 0.8"/></Appearance>
+      <IndexedLineSet coordIndex="0 1 -1 1 2 -1 2 3">
+        <Coordinate point="0.0 0.0 0.0 1.0 0.0 0.0 1.0 1.0 0.0 0.0 1.0 0.0"/>
+      </IndexedLineSet>
+    </Shape>
+  </Scene>
+</X3D>

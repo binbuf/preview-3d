@@ -1,0 +1,210 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "id": "step-alias-stpnc",
+      "path": "tests/fixtures/valid-file/step-alias.stpnc",
+      "format": "step",
+      "expected": "failed",
+      "expectedError": "UnsupportedFormat",
+      "expectedGeometry": "none",
+      "failureClass": "extension",
+      "tags": ["step", "alias", "extension", "t02"]
+    },
+    {
+      "id": "step-alias-p21",
+      "path": "tests/fixtures/valid-file/step-alias.p21",
+      "format": "step",
+      "expected": "failed",
+      "expectedError": "UnsupportedFormat",
+      "expectedGeometry": "none",
+      "failureClass": "extension",
+      "tags": ["step", "alias", "extension", "t02"]
+    },
+    {
+      "id": "step-alias-210",
+      "path": "tests/fixtures/valid-file/step-alias.210",
+      "format": "step",
+      "expected": "failed",
+      "expectedError": "UnsupportedFormat",
+      "expectedGeometry": "none",
+      "failureClass": "extension",
+      "tags": ["step", "alias", "extension", "t02"]
+    },
+    {
+      "id": "line-dxf-polyline",
+      "path": "tests/fixtures/valid-file/line.dxf",
+      "format": "dxf",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "expectedGeometry": "none",
+      "failureClass": "primitive",
+      "tags": ["dxf", "line", "primitive", "t04"]
+    },
+    {
+      "id": "line-off-edges",
+      "path": "tests/fixtures/valid-file/line.off",
+      "format": "off",
+      "expected": "failed",
+      "expectedError": "MalformedData",
+      "expectedGeometry": "none",
+      "failureClass": "importer",
+      "tags": ["off", "line", "primitive", "t04"]
+    },
+    {
+      "id": "line-dae-lines",
+      "path": "tests/fixtures/valid-file/line.dae",
+      "format": "dae",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "expectedGeometry": "none",
+      "failureClass": "primitive",
+      "tags": ["dae", "line", "primitive", "t04"]
+    },
+    {
+      "id": "line-x3d-indexedlineset",
+      "path": "tests/fixtures/valid-file/line.x3d",
+      "format": "x3d",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "expectedGeometry": "none",
+      "failureClass": "primitive",
+      "tags": ["x3d", "line", "primitive", "t04"]
+    },
+    {
+      "id": "points-dae-points",
+      "path": "tests/fixtures/valid-file/points.dae",
+      "format": "dae",
+      "expected": "opened",
+      "expectedError": "none",
+      "expectedGeometry": "triangles",
+      "failureClass": "none",
+      "tags": ["dae", "points", "t04", "point-content-as-triangles"]
+    },
+    {
+      "id": "points-x3d-pointset",
+      "path": "tests/fixtures/valid-file/points.x3d",
+      "format": "x3d",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "expectedGeometry": "none",
+      "failureClass": "primitive",
+      "tags": ["x3d", "points", "primitive", "t04"]
+    },
+    {
+      "id": "wire-step",
+      "path": "tests/fixtures/valid-file/wire.step",
+      "format": "step",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "expectedGeometry": "none",
+      "failureClass": "primitive",
+      "requiresStepHost": true,
+      "tags": ["step", "wireframe", "primitive", "t05"]
+    },
+    {
+      "id": "wire-iges",
+      "path": "tests/fixtures/valid-file/wire.igs",
+      "format": "iges",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "expectedGeometry": "none",
+      "failureClass": "primitive",
+      "requiresStepHost": true,
+      "tags": ["iges", "wireframe", "primitive", "t05"]
+    },
+    {
+      "id": "wire-brep",
+      "path": "tests/fixtures/valid-file/wire.brep",
+      "format": "brep",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "expectedGeometry": "none",
+      "failureClass": "primitive",
+      "requiresStepHost": true,
+      "tags": ["brep", "wireframe", "primitive", "t05"]
+    },
+    {
+      "id": "wire-fcstd",
+      "path": "tests/fixtures/valid-file/wire.FCStd",
+      "format": "fcstd",
+      "expected": "failed",
+      "expectedError": "EmptyGeometry",
+      "expectedGeometry": "none",
+      "failureClass": "primitive",
+      "requiresStepHost": true,
+      "tags": ["fcstd", "wireframe", "primitive", "t05"]
+    },
+    {
+      "id": "renamed-glb-bin",
+      "path": "tests/fixtures/valid-file/renamed-glb.bin",
+      "format": "gltf",
+      "expected": "failed",
+      "expectedError": "UnsupportedFormat",
+      "expectedGeometry": "none",
+      "failureClass": "extension",
+      "tags": ["gltf", "renamed", "content-detected", "open-as", "t03"]
+    },
+    {
+      "id": "renamed-dae-xml",
+      "path": "tests/fixtures/valid-file/renamed-dae.xml",
+      "format": "dae",
+      "expected": "failed",
+      "expectedError": "UnsupportedFormat",
+      "expectedGeometry": "none",
+      "failureClass": "sniffer",
+      "tags": ["dae", "renamed", "sniffer", "t03"]
+    },
+    {
+      "id": "renamed-dxf-txt",
+      "path": "tests/fixtures/valid-file/renamed-dxf.txt",
+      "format": "dxf",
+      "expected": "failed",
+      "expectedError": "UnsupportedFormat",
+      "expectedGeometry": "none",
+      "failureClass": "sniffer",
+      "tags": ["dxf", "renamed", "sniffer", "t03"]
+    },
+    {
+      "id": "real-teapot-off",
+      "path": "tests/fixtures/valid-file/teapot.off",
+      "format": "off",
+      "expected": "opened",
+      "expectedError": "none",
+      "expectedGeometry": "triangles",
+      "failureClass": "none",
+      "tags": ["off", "real-world", "public-domain"]
+    },
+    {
+      "id": "real-pinkegg-dxf",
+      "path": "tests/fixtures/valid-file/PinkEggFromLW.dxf",
+      "format": "dxf",
+      "expected": "opened",
+      "expectedError": "none",
+      "expectedGeometry": "triangles",
+      "failureClass": "none",
+      "tags": ["dxf", "real-world", "bsd-3-clause"]
+    },
+    {
+      "id": "real-animatedworld-fbx",
+      "path": "tests/fixtures/valid-file/animatedWorld.fbx",
+      "format": "fbx",
+      "expected": "degraded",
+      "expectedError": "none",
+      "expectedGeometry": "triangles",
+      "expectedWarnings": ["texture-fallback"],
+      "failureClass": "none",
+      "tags": ["fbx", "real-world", "bsd-3-clause", "degraded"]
+    },
+    {
+      "id": "real-cubegears-3mf",
+      "path": "tests/fixtures/valid-file/cube_gears.3mf",
+      "format": "3mf",
+      "expected": "failed",
+      "expectedError": "ArchiveLimit",
+      "expectedGeometry": "none",
+      "failureClass": "resource",
+      "tags": ["3mf", "real-world", "bsd-2-clause", "resource", "t09"]
+    }
+  ]
+}
