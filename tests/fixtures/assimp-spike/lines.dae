@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><unit name="meter" meter="1"/><up_axis>Y_UP</up_axis></asset>
+  <library_effects>
+    <effect id="fx"><profile_COMMON><technique sid="common"><lambert>
+      <diffuse><color>0.2 0.8 0.4 1</color></diffuse>
+    </lambert></technique></profile_COMMON></effect>
+  </library_effects>
+  <library_materials>
+    <material id="mat" name="green"><instance_effect url="#fx"/></material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="lines" name="lines"><mesh>
+      <source id="pos"><float_array id="pos-array" count="12">0.0 0.0 0.0 1.0 0.0 0.0 1.0 1.0 0.0 0.0 1.0 0.0</float_array>
+        <technique_common><accessor source="#pos-array" count="4" stride="3">
+          <param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/>
+        </accessor></technique_common></source>
+      <vertices id="verts"><input semantic="POSITION" source="#pos"/></vertices>
+      <lines count="3" material="green">
+        <input semantic="VERTEX" source="#verts" offset="0"/>
+        <p>0 1 1 2 2 3</p>
+      </lines>
+    </mesh></geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene"><node id="node">
+      <instance_geometry url="#lines"><bind_material><technique_common>
+        <instance_material symbol="green" target="#mat"/>
+      </technique_common></bind_material></instance_geometry>
+    </node></visual_scene>
+  </library_visual_scenes>
+  <scene><instance_visual_scene url="#Scene"/></scene>
+</COLLADA>

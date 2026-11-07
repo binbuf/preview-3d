@@ -1,6 +1,6 @@
 # ADR-0065 — Bounded Assimp compatibility adapter
 
-**Status:** Accepted (amends ADR-006 narrowly).
+**Status:** Accepted (amends ADR-006 narrowly; primitive scope amended by ADR-0098).
 
 ## Context
 
@@ -29,9 +29,10 @@ Add one worker-only Assimp compatibility adapter:
   vertices, generate missing normals, validate, sort by primitive type), no
   animation evaluation, no geometry caches, no file writes and no plug-ins.
 - Tier-B object/material/triangle/vertex caps and the existing scratch,
-  texture, sidecar, chunk and generation budgets apply. Unsupported primitive
-  types are skipped with a compatibility warning; a scene with no triangles
-  fails typed rather than fabricating geometry.
+  texture, sidecar, chunk and generation budgets apply. One-index faces
+  (points) and two-index faces (line segments) are normalized to
+  `PointList`/`LineList`; larger faces are triangulated. A scene with no
+  supported primitive fails typed rather than fabricating geometry (ADR-0098).
 - A single `AssimpFuzz` dispatcher target covers all seven container hints.
 - Formats stay unregistered until their fixture and test land; DXF is
   documented as Assimp's limited 3DFACE/polyline subset.

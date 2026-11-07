@@ -19,7 +19,7 @@ python tests/fixtures/valid-file/generate_fixtures.py
 | --- | --- |
 | `step-alias.stpnc`, `step-alias.p21`, `step-alias.210` | Copies of the repository-generated `tests/fixtures/stp-spike/part_ap214.stp`; valid STEP bytes behind an alias suffix |
 | `line.dxf` | Open 3D `POLYLINE` with four vertices and three segments |
-| `line.off` | OFF vertex list with an optional edge list and no faces |
+| `line.off` | OFF with three two-index edge faces and no triangles |
 | `line.dae` | COLLADA `<lines>` primitive with three segments |
 | `line.x3d` | X3D `IndexedLineSet` with three segments |
 | `points.dae` | COLLADA `<points>` primitive with four vertices |
@@ -32,9 +32,13 @@ python tests/fixtures/valid-file/generate_fixtures.py
 | `renamed-dae.xml` | Copy of `tests/fixtures/assimp-spike/box.dae` |
 | `renamed-dxf.txt` | Copy of `tests/fixtures/assimp-spike/triangle.dxf` |
 
-`line.off` currently reaches Assimp's OFF loader but the product's
-`aiProcess_Triangulate`/validation pipeline rejects its two-index edge faces as
-`MalformedData`. That is a measured gap owned by T04, not a fixture defect.
+The Assimp line/point fixtures were recorded as typed failures in the T01
+baseline. T04 normalizes one-index faces to `PointList` and two-index faces to
+`LineList`, so `line.dxf`, `line.off`, `line.dae`, `line.x3d` and
+`points.x3d` now open. COLLADA `<points>` is not represented by Assimp's
+COLLADA importer (it has no point primitive); `points.dae` therefore remains a
+typed `EmptyGeometry` failure rather than being misreported through a
+synthetic skeleton mesh.
 
 ## Real-world samples
 

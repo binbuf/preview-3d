@@ -332,11 +332,11 @@ def main() -> int:
     write("points.dae", dae_points())
     write("line.x3d", x3d_lines())
     write("points.x3d", x3d_points())
-    # OFF carries line content in its optional edge list; a 2-index face is
-    # rejected as malformed by the bounded Assimp path.
+    # OFF carries line content as one- or two-index faces. Assimp's OFF loader
+    # accepts them and the adapter emits LineList chunks for two-index faces.
     write("line.off", off(
         [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0)],
-        [], edges=[[0, 1], [1, 2], [2, 3]]))
+        [[0, 1], [1, 2], [2, 3]]))
     write("line.dxf", dxf_polyline())
 
     brep = brep_wire()

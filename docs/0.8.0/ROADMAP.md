@@ -32,7 +32,7 @@ parallel after T01.
 
 ## Phase 2 — Primitive completeness
 
-- [ ] T04 - Assimp point and line primitives → [../tasks/0.8.0/T04-assimp-point-line-primitives.md](../tasks/0.8.0/T04-assimp-point-line-primitives.md)
+- [x] T04 - Assimp point and line primitives → [../tasks/0.8.0/T04-assimp-point-line-primitives.md](../tasks/0.8.0/T04-assimp-point-line-primitives.md)
 - [ ] T05 - CAD edge and wire geometry → [../tasks/0.8.0/T05-cad-edge-wire-geometry.md](../tasks/0.8.0/T05-cad-edge-wire-geometry.md)
 
 ## Phase 3 — Options and reader selection
@@ -55,11 +55,11 @@ parallel after T01.
 - Animation playback, cameras and lights.
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-11-07T16:28:06Z · 3/10 done
+**Pipeline status** — updated 2026-11-07T16:53:30Z · 4/10 done
 
-- Completed: T01, T02, T03
+- Completed: T01, T02, T03, T04
 - Blocked: none
 - Failed: none
-- Remaining: T04, T05, T06, T07, T08, T09, T10
-- Last finished: T03 — done · Catalog-driven sniffer with table-driven signatures for every family, catalog ZIP probing, new DAE/DXF/OFF/X3D/3DS/AMF/IGES/BREP/XBF/FCStd detection, full positive/negative + reachability tests, docs/ADR-0097; Release/Debug format gates and valid-file scoreboard pass.
+- Remaining: T05, T06, T07, T08, T09, T10
+- Last finished: T04 — done · Assimp point/line/triangle emission, mixed chunks, topology-aware budgets, fixtures/tests, valid-file flips, docs/ADR-0098; Release and Debug gates pass.
 <!-- /symphony:status -->

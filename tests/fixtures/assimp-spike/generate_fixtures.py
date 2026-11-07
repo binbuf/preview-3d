@@ -170,6 +170,168 @@ Frame Root {{
 '''
 
 
+LINE_VERTICES = [
+    (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0),
+]
+LINE_FACES = [(0, 1), (1, 2), (2, 3)]
+POINT_VERTICES = LINE_VERTICES
+
+
+def dxf_lines() -> str:
+    # Assimp's DXF importer represents a LINE entity as a two-index face.
+    body = []
+    for a, b in LINE_FACES:
+        body += ["0", "LINE", "8", "0", "62", "1"]
+        for code, index in ((10, a), (11, b)):
+            x, y, z = LINE_VERTICES[index]
+            body += [str(code), f"{x}", str(code + 10), f"{y}", str(code + 20), f"{z}"]
+    return "\n".join(["0", "SECTION", "2", "ENTITIES", *body, "0", "ENDSEC", "0", "EOF", ""])
+
+
+def off_lines() -> str:
+    return off(LINE_VERTICES, LINE_FACES)
+
+
+def off_points() -> str:
+    return off(POINT_VERTICES, [(index,) for index in range(len(POINT_VERTICES))])
+
+
+def off_degenerate_lines() -> str:
+    # The second face repeats vertex 0, so its endpoints are identical and the
+    # adapter must skip it with a bounded warning rather than emit a segment.
+    return off(LINE_VERTICES, [(0, 1), (0, 0), (1, 2), (2, 3)])
+
+
+def off_non_finite_point() -> str:
+    # 1e300 is a finite double at admission but becomes infinity when Assimp
+    # stores it in a float; the adapter must skip that point with a warning and
+    # keep the finite one.
+    return off([(0.0, 0.0, 0.0), (1.0e300, 0.0, 0.0)], [(0,), (1,)])
+
+
+def grid_lines_off(segments: int) -> str:
+    vertices = []
+    faces = []
+    for index in range(segments):
+        base = len(vertices)
+        x = float(index)
+        vertices += [(x, 0.0, 0.0), (x + 0.5, 1.0, 0.0)]
+        faces.append((base, base + 1))
+    return off(vertices, faces)
+
+
+def grid_points_off(points: int) -> str:
+    vertices = [(float(index % 32), float(index // 32), 0.0) for index in range(points)]
+    return off(vertices, [(index,) for index in range(points)])
+
+
+def dae_lines() -> str:
+    positions = " ".join(f"{x} {y} {z}" for x, y, z in LINE_VERTICES)
+    indices = " ".join(f"{a} {b}" for a, b in LINE_FACES)
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><unit name="meter" meter="1"/><up_axis>Y_UP</up_axis></asset>
+  <library_effects>
+    <effect id="fx"><profile_COMMON><technique sid="common"><lambert>
+      <diffuse><color>0.2 0.8 0.4 1</color></diffuse>
+    </lambert></technique></profile_COMMON></effect>
+  </library_effects>
+  <library_materials>
+    <material id="mat" name="green"><instance_effect url="#fx"/></material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="lines" name="lines"><mesh>
+      <source id="pos"><float_array id="pos-array" count="12">{positions}</float_array>
+        <technique_common><accessor source="#pos-array" count="4" stride="3">
+          <param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/>
+        </accessor></technique_common></source>
+      <vertices id="verts"><input semantic="POSITION" source="#pos"/></vertices>
+      <lines count="3" material="green">
+        <input semantic="VERTEX" source="#verts" offset="0"/>
+        <p>{indices}</p>
+      </lines>
+    </mesh></geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene"><node id="node">
+      <instance_geometry url="#lines"><bind_material><technique_common>
+        <instance_material symbol="green" target="#mat"/>
+      </technique_common></bind_material></instance_geometry>
+    </node></visual_scene>
+  </library_visual_scenes>
+  <scene><instance_visual_scene url="#Scene"/></scene>
+</COLLADA>
+'''
+
+
+def dae_empty() -> str:
+    return '''<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><unit name="meter" meter="1"/><up_axis>Y_UP</up_axis></asset>
+  <library_visual_scenes><visual_scene id="Scene"/></library_visual_scenes>
+  <scene><instance_visual_scene url="#Scene"/></scene>
+</COLLADA>
+'''
+
+
+def x3d_lines() -> str:
+    points = " ".join(f"{x} {y} {z}" for x, y, z in LINE_VERTICES)
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<X3D profile="Interchange" version="3.2">
+  <Scene>
+    <Shape>
+      <Appearance><Material diffuseColor="0.2 0.6 0.8"/></Appearance>
+      <IndexedLineSet coordIndex="0 1 -1 1 2 -1 2 3 -1">
+        <Coordinate point="{points}"/>
+      </IndexedLineSet>
+    </Shape>
+  </Scene>
+</X3D>
+'''
+
+
+def x3d_points() -> str:
+    points = " ".join(f"{x} {y} {z}" for x, y, z in POINT_VERTICES)
+    colors = "1 0 0 0 1 0 0 0 1 1 1 0"
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<X3D profile="Interchange" version="3.2">
+  <Scene>
+    <Shape>
+      <Appearance><Material diffuseColor="0.9 0.4 0.1"/></Appearance>
+      <PointSet>
+        <Coordinate point="{points}"/>
+        <Color color="{colors}"/>
+      </PointSet>
+    </Shape>
+  </Scene>
+</X3D>
+'''
+
+
+def x3d_mixed() -> str:
+    # One IndexedFaceSet whose coordIndex groups are a point, a line, a
+    # triangle and a quad. Assimp's X3D helper represents each group by its
+    # face size; the adapter must emit separate PointList, LineList and
+    # TriangleList chunks (the quad is triangulated).
+    points = " ".join(f"{x} {y} {z}" for x, y, z in [
+        (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0),
+        (2.0, 0.0, 0.0), (2.5, 1.0, 0.0), (3.0, 0.0, 0.0),
+        (4.0, 0.0, 0.0), (5.0, 0.0, 0.0), (5.0, 1.0, 0.0), (4.0, 1.0, 0.0),
+    ])
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<X3D profile="Interchange" version="3.2">
+  <Scene>
+    <Shape>
+      <Appearance><Material diffuseColor="0.3 0.5 0.9"/></Appearance>
+      <IndexedFaceSet solid="false" coordIndex="0 -1 1 2 -1 3 4 5 -1 6 7 8 9 -1">
+        <Coordinate point="{points}"/>
+      </IndexedFaceSet>
+    </Shape>
+  </Scene>
+</X3D>
+'''
+
+
 def dxf() -> str:
     # Three 3DFACE entities form a closed tetrahedron-like shell; Assimp's DXF
     # importer supports 3DFACE and polylines only.
@@ -232,6 +394,19 @@ def main() -> None:
     write("box.x", x_text())
     write("triangle.dxf", dxf())
     write("box.3ds", three_ds())
+    # T04 point/line primitives.
+    write("lines.dxf", dxf_lines())
+    write("lines.off", off_lines())
+    write("lines.dae", dae_lines())
+    write("lines.x3d", x3d_lines())
+    write("points.off", off_points())
+    write("points.x3d", x3d_points())
+    write("mixed.x3d", x3d_mixed())
+    write("degenerate-lines.off", off_degenerate_lines())
+    write("non-finite-points.off", off_non_finite_point())
+    write("empty.dae", dae_empty())
+    write("over-budget-lines.off", grid_lines_off(200))
+    write("over-budget-points.off", grid_points_off(200))
     # Negative fixtures are derived from the positive inputs so the only
     # difference is the fault under test.
     write("truncated.dae", dae(None)[:120])

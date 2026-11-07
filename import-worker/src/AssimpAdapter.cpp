@@ -425,7 +425,10 @@ ImportErrorCode OffAdmission(std::span<const std::byte> bytes, const AssimpImpor
     }
     for (uint64_t index = 0; index < faceCount; ++index) {
         uint64_t corners = 0;
-        if (!unsignedNumber(token(), corners) || corners < 3 || corners > 1'000'000
+        // OFF carries polygon faces; a one- or two-index face is a point or
+        // edge primitive that Assimp represents directly, so it is admitted
+        // here rather than rejected as malformed.
+        if (!unsignedNumber(token(), corners) || corners < 1 || corners > 1'000'000
             || corners > vertexCount)
             return ImportErrorCode::MalformedData;
         for (uint64_t corner = 0; corner < corners; ++corner) {
@@ -960,7 +963,7 @@ struct GeometryChunk {
 
 bool AddVertex(GeometryChunk& chunk, const aiMesh& mesh, unsigned vertexIndex,
                const aiVector3D& worldPosition, const aiVector3D& worldNormal,
-               const aiVector3D& faceNormal)
+               const aiVector3D& faceNormal, bool indexed)
 {
     if (vertexIndex >= mesh.mNumVertices) return false;
     if (!Finite(worldPosition) || !Finite(worldNormal) || !Finite(faceNormal)) return false;
@@ -1003,39 +1006,54 @@ bool AddVertex(GeometryChunk& chunk, const aiMesh& mesh, unsigned vertexIndex,
             chunk.descriptor.localMax[axis] = (std::max)(chunk.descriptor.localMax[axis], value);
         }
     }
-    chunk.indices.push_back(uint32_t(chunk.vertices.size()));
+    if (indexed) chunk.indices.push_back(uint32_t(chunk.vertices.size()));
     chunk.vertices.push_back(vertex);
     return true;
 }
 
-bool FlushGeometry(BoundedChunkWriter& writer, GeometryChunk& chunk, uint32_t materialId,
-                   uint32_t meshId, uint32_t nodeId, uint32_t sourceFirst, uint64_t& totalTriangles,
-                   uint64_t& totalVertices, const AssimpImportOptions& options,
-                   ImportErrorCode& error)
+uint64_t PrimitiveCount(ChunkTopology topology, size_t vertexCount, size_t indexCount)
 {
-    if (chunk.indices.empty()) return true;
-    if (totalTriangles + chunk.indices.size() / 3 > options.maxTriangles
+    switch (topology) {
+    case ChunkTopology::TriangleList: return indexCount / 3;
+    case ChunkTopology::LineList: return indexCount / 2;
+    case ChunkTopology::PointList: return vertexCount;
+    default: return 0;
+    }
+}
+
+bool FlushGeometry(BoundedChunkWriter& writer, GeometryChunk& chunk, ChunkTopology topology,
+                   uint32_t materialId, uint32_t meshId, uint32_t nodeId, uint32_t sourceFirst,
+                   uint64_t& totalPrimitives, uint64_t& totalVertices,
+                   const AssimpImportOptions& options, ImportErrorCode& error)
+{
+    const size_t indexCount = topology == ChunkTopology::PointList ? 0 : chunk.indices.size();
+    const uint64_t primitives = PrimitiveCount(topology, chunk.vertices.size(), indexCount);
+    if (!primitives) return true;
+    if (totalPrimitives + primitives > options.maxTriangles
         || totalVertices + chunk.vertices.size() > options.maxVertices) {
         error = ImportErrorCode::ResourceLimit;
         return false;
     }
-    chunk.descriptor.topology = ChunkTopology::TriangleList;
+    chunk.descriptor.topology = topology;
     chunk.descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
     chunk.descriptor.vertexCount = uint32_t(chunk.vertices.size());
-    chunk.descriptor.indexCount = uint32_t(chunk.indices.size());
+    chunk.descriptor.indexCount = uint32_t(indexCount);
     chunk.descriptor.chunkId = writer.NextId();
     chunk.descriptor.meshId = meshId;
     chunk.descriptor.nodeId = nodeId;
     chunk.descriptor.boundsState = BoundsState::Verified;
-    chunk.descriptor.geometryFlags = kGeometryDeindexed
+    // PointList carries no index buffer, so it is never "deindexed"; the
+    // indexed line/triangle paths duplicate corners per primitive.
+    chunk.descriptor.geometryFlags = (topology == ChunkTopology::PointList ? 0u : kGeometryDeindexed)
         | (chunk.hasUv ? kGeometryHasUv0 : 0u) | (chunk.hasColor ? kGeometryHasColors : 0u);
     chunk.descriptor.sourceRangeOffset = (uint64_t(meshId) << 32) | sourceFirst;
-    chunk.descriptor.sourceRangeLength = chunk.indices.size();
+    chunk.descriptor.sourceRangeLength = topology == ChunkTopology::PointList
+        ? chunk.vertices.size() : indexCount;
     if (materialId) {
         chunk.descriptor.dependencyIds[0] = materialId;
         chunk.descriptor.dependencyCount = 1;
     }
-    totalTriangles += chunk.indices.size() / 3;
+    totalPrimitives += primitives;
     totalVertices += chunk.vertices.size();
     if (!writer.Add(chunk.descriptor, ChunkBytes(chunk.vertices), ChunkBytes(chunk.indices))) {
         error = writer.Error();
@@ -1052,7 +1070,9 @@ struct GeometryState {
     const AssimpImportOptions* options = nullptr;
     std::map<uint32_t, uint32_t> materialIds;
     uint32_t chunkTriangleLimit = 0;
-    uint64_t totalTriangles = 0;
+    uint32_t chunkLineLimit = 0;
+    uint32_t chunkPointLimit = 0;
+    uint64_t totalPrimitives = 0;
     uint64_t totalVertices = 0;
 };
 
@@ -1069,62 +1089,172 @@ bool EmitMesh(const aiMesh& mesh, uint32_t meshId, uint32_t nodeId,
     auto material = state.materialIds.find(materialIndex);
     const uint32_t materialId = material == state.materialIds.end() ? 0 : material->second;
 
-    GeometryChunk chunk;
-    uint32_t sourceFirst = 0;
+    // One chunk per topology. A single source mesh may mix points, lines and
+    // triangles; each is normalized to its own wire topology rather than
+    // fabricating triangles from a lower-dimensional primitive.
+    GeometryChunk triangles;
+    GeometryChunk lines;
+    GeometryChunk points;
+    uint32_t triangleFirst = 0;
+    uint32_t lineFirst = 0;
+    uint32_t pointFirst = 0;
+
+    auto flush = [&](GeometryChunk& chunk, ChunkTopology topology, uint32_t sourceFirst) {
+        return FlushGeometry(*state.writer, chunk, topology, materialId, meshId, nodeId,
+                             sourceFirst, state.totalPrimitives, state.totalVertices,
+                             *state.options, state.context->error);
+    };
+
     for (uint32_t faceIndex = 0; faceIndex < mesh.mNumFaces; ++faceIndex) {
         if ((faceIndex & 1023u) == 0 && state.context->Cancelled()) {
             state.context->error = ImportErrorCode::Cancelled;
             return false;
         }
         const aiFace& face = mesh.mFaces[faceIndex];
-        if (face.mNumIndices != 3) {
-            // Lines/points/leftover polygons are not representable as the
-            // normalized triangle contract; fail closed rather than fabricate
-            // triangles. A mesh with no triangles at all is a bounded warning.
+        if (face.mNumIndices == 0) {
             Warn(state.context->optionalWarnings);
             continue;
         }
-        aiVector3D positions[3];
-        aiVector3D normals[3];
-        for (unsigned corner = 0; corner < 3; ++corner) {
-            const unsigned index = face.mIndices[corner];
+
+        if (face.mNumIndices == 1) {
+            // A one-index face is a point. PointList has no index buffer.
+            const unsigned index = face.mIndices[0];
             if (index >= mesh.mNumVertices) {
                 state.context->error = ImportErrorCode::MalformedData;
                 return false;
             }
-            positions[corner] = world * mesh.mVertices[index];
-            if (mesh.HasNormals()) normals[corner] = normalMatrix * mesh.mNormals[index];
-            else normals[corner] = aiVector3D(0, 0, 1);
-            if (!Finite(positions[corner]) || !Finite(normals[corner])) {
+            const aiVector3D position = world * mesh.mVertices[index];
+            if (!Finite(position)) {
+                // A non-finite point is dropped with a bounded warning rather
+                // than failing an otherwise usable scene.
+                Warn(state.context->optionalWarnings);
+                continue;
+            }
+            aiVector3D normal(0, 0, 1);
+            if (mesh.HasNormals()) {
+                const aiVector3D candidate = normalMatrix * mesh.mNormals[index];
+                // Assimp may leave NaN normals on line/point corners of a
+                // mixed mesh; the point itself is still usable.
+                if (Finite(candidate)) normal = candidate;
+            }
+            if (points.vertices.size() >= state.chunkPointLimit
+                && !flush(points, ChunkTopology::PointList, pointFirst)) return false;
+            if (!AddVertex(points, mesh, index, position, normal, aiVector3D(0, 0, 1), false)) {
                 state.context->error = ImportErrorCode::MalformedData;
                 return false;
             }
+            ++pointFirst;
+            continue;
         }
-        aiVector3D faceNormal(0, 0, 1);
-        if (!mesh.HasNormals()) {
-            faceNormal = (positions[1] - positions[0]) ^ (positions[2] - positions[0]);
-            normals[0] = normals[1] = normals[2] = faceNormal;
+
+        if (face.mNumIndices == 2) {
+            // A two-index face is one independent line segment.
+            aiVector3D positions[2];
+            aiVector3D normals[2]{aiVector3D(0, 0, 1), aiVector3D(0, 0, 1)};
+            bool usable = true;
+            for (unsigned corner = 0; corner < 2; ++corner) {
+                const unsigned index = face.mIndices[corner];
+                if (index >= mesh.mNumVertices) {
+                    state.context->error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+                positions[corner] = world * mesh.mVertices[index];
+                if (!Finite(positions[corner])) usable = false;
+                if (mesh.HasNormals()) {
+                    const aiVector3D candidate = normalMatrix * mesh.mNormals[index];
+                    // Assimp may leave NaN normals on line corners of a mixed
+                    // mesh; the line PSO does not need a normal.
+                    if (Finite(candidate)) normals[corner] = candidate;
+                }
+            }
+            if (!usable || positions[0] == positions[1]) {
+                // Degenerate or non-finite segments carry no visible geometry;
+                // skip them with the same bounded warning budget as optional
+                // content.
+                Warn(state.context->optionalWarnings);
+                continue;
+            }
+            if (lines.indices.size() / 2 >= state.chunkLineLimit
+                && !flush(lines, ChunkTopology::LineList, lineFirst)) return false;
+            for (unsigned corner = 0; corner < 2; ++corner) {
+                if (!AddVertex(lines, mesh, face.mIndices[corner], positions[corner],
+                               normals[corner], aiVector3D(0, 0, 1), true)) {
+                    state.context->error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+            }
+            lineFirst += 2;
+            continue;
         }
-        if (chunk.indices.size() / 3 >= state.chunkTriangleLimit) {
-            if (!FlushGeometry(*state.writer, chunk, materialId, meshId, nodeId, sourceFirst,
-                               state.totalTriangles, state.totalVertices, *state.options,
-                               state.context->error)) return false;
-            sourceFirst = faceIndex * 3;
+
+        // Three or more indices form a triangle or polygon. aiProcess_Triangulate
+        // normally already reduced polygons; this bounded fan is the fallback
+        // for an importer that leaves a larger face behind.
+        const unsigned base = face.mIndices[0];
+        if (base >= mesh.mNumVertices) {
+            state.context->error = ImportErrorCode::MalformedData;
+            return false;
         }
-        const size_t firstVertex = chunk.vertices.size();
-        for (unsigned corner = 0; corner < 3; ++corner) {
-            if (!AddVertex(chunk, mesh, face.mIndices[corner], positions[corner],
-                           normals[corner], faceNormal)) {
+        const aiVector3D basePosition = world * mesh.mVertices[base];
+        const aiVector3D baseNormal = mesh.HasNormals()
+            ? normalMatrix * mesh.mNormals[base] : aiVector3D(0, 0, 1);
+        if (!Finite(basePosition) || !Finite(baseNormal)) {
+            state.context->error = ImportErrorCode::MalformedData;
+            return false;
+        }
+        for (unsigned corner = 1; corner + 1 < face.mNumIndices; ++corner) {
+            const unsigned second = face.mIndices[corner];
+            const unsigned third = face.mIndices[corner + 1];
+            if (second >= mesh.mNumVertices || third >= mesh.mNumVertices) {
                 state.context->error = ImportErrorCode::MalformedData;
                 return false;
             }
+            const unsigned triangleIndices[3]{base, second, third};
+            aiVector3D positions[3]{basePosition, world * mesh.mVertices[second],
+                                    world * mesh.mVertices[third]};
+            aiVector3D normals[3]{baseNormal};
+            if (mesh.HasNormals()) {
+                normals[1] = normalMatrix * mesh.mNormals[second];
+                normals[2] = normalMatrix * mesh.mNormals[third];
+            } else {
+                normals[1] = normals[2] = aiVector3D(0, 0, 1);
+            }
+            if (!Finite(positions[1]) || !Finite(positions[2])
+                || !Finite(normals[1]) || !Finite(normals[2])) {
+                state.context->error = ImportErrorCode::MalformedData;
+                return false;
+            }
+            aiVector3D faceNormal(0, 0, 1);
+            if (!mesh.HasNormals()) {
+                faceNormal = (positions[1] - positions[0]) ^ (positions[2] - positions[0]);
+                normals[0] = normals[1] = normals[2] = faceNormal;
+            }
+            if (triangles.indices.size() / 3 >= state.chunkTriangleLimit
+                && !flush(triangles, ChunkTopology::TriangleList, triangleFirst)) return false;
+            const size_t firstVertex = triangles.vertices.size();
+            for (unsigned vertex = 0; vertex < 3; ++vertex) {
+                if (!AddVertex(triangles, mesh, triangleIndices[vertex], positions[vertex],
+                               normals[vertex], faceNormal, true)) {
+                    state.context->error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+            }
+            GenerateTriangleTangent(triangles.vertices.data() + firstVertex);
+            triangleFirst += 3;
         }
-        GenerateTriangleTangent(chunk.vertices.data() + firstVertex);
     }
 
-    return FlushGeometry(*state.writer, chunk, materialId, meshId, nodeId, sourceFirst,
-                         state.totalTriangles, state.totalVertices, *state.options,
-                         state.context->error);
+    return flush(triangles, ChunkTopology::TriangleList, triangleFirst)
+        && flush(lines, ChunkTopology::LineList, lineFirst)
+        && flush(points, ChunkTopology::PointList, pointFirst);
+}
+
+bool HasSupportedPrimitive(const aiMesh& mesh)
+{
+    for (uint32_t faceIndex = 0; faceIndex < mesh.mNumFaces; ++faceIndex) {
+        if (mesh.mFaces[faceIndex].mNumIndices >= 1) return true;
+    }
+    return false;
 }
 
 bool WalkNode(const aiNode& node, const aiMatrix4x4& parent, uint32_t depth,
@@ -1148,7 +1278,10 @@ bool WalkNode(const aiNode& node, const aiMatrix4x4& parent, uint32_t depth,
         }
         const aiMesh* mesh = state.scene->mMeshes[meshId];
         if (!mesh) continue;
-        if ((mesh->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) == 0) {
+        // Points, lines and triangles are all representable. Only a mesh with
+        // no usable face at all is skipped; that is a bounded compatibility
+        // warning, not a hard failure.
+        if (!HasSupportedPrimitive(*mesh)) {
             Warn(state.context->optionalWarnings);
             continue;
         }
@@ -1229,6 +1362,10 @@ AssimpImportOutcome ImportAssimp(std::span<const std::byte> sourceBytes,
         importer.SetProgressHandler(new CancelProgressHandler(context));
         importer.SetPropertyBool(AI_CONFIG_GLOB_MEASURE_TIME, false);
         importer.SetPropertyInteger(AI_CONFIG_PP_SBP_REMOVE, 0);
+        // Animation is out of scope. Assimp otherwise fabricates a synthetic
+        // "skeleton hero" mesh for a COLLADA document with no geometry, which
+        // would make an empty file look like a successful triangle import.
+        importer.SetPropertyBool(AI_CONFIG_IMPORT_NO_SKELETON_MESHES, true);
 
         constexpr unsigned int kFlags = aiProcess_Triangulate
             | aiProcess_JoinIdenticalVertices | aiProcess_GenNormals
@@ -1273,13 +1410,20 @@ AssimpImportOutcome ImportAssimp(std::span<const std::byte> sourceBytes,
         metadata.animationCount = 0;
 
         BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
-        constexpr uint64_t kNormalizedTriangleBytes =
-            3 * sizeof(VertexPositionNormalUv0TangentColorF32) + 3 * sizeof(uint32_t);
+        constexpr uint64_t kVertexBytes = sizeof(VertexPositionNormalUv0TangentColorF32);
+        constexpr uint64_t kNormalizedTriangleBytes = 3 * kVertexBytes + 3 * sizeof(uint32_t);
+        constexpr uint64_t kNormalizedLineBytes = 2 * kVertexBytes + 2 * sizeof(uint32_t);
         if (destination.size() <= kSectionHeaderSize + kChunkDescriptorSize)
             return ImportErrorCode::ResourceLimit;
+        const uint64_t available = destination.size() - kSectionHeaderSize - kChunkDescriptorSize;
         const uint32_t chunkTriangleLimit = uint32_t((std::min<uint64_t>)(kChunkTriangles,
-            (destination.size() - kSectionHeaderSize - kChunkDescriptorSize) / kNormalizedTriangleBytes));
-        if (!chunkTriangleLimit) return ImportErrorCode::ResourceLimit;
+            available / kNormalizedTriangleBytes));
+        const uint32_t chunkLineLimit = uint32_t((std::min<uint64_t>)(kChunkTriangles,
+            available / kNormalizedLineBytes));
+        const uint32_t chunkPointLimit = uint32_t((std::min<uint64_t>)(kChunkPoints,
+            available / kVertexBytes));
+        if (!chunkTriangleLimit || !chunkLineLimit || !chunkPointLimit)
+            return ImportErrorCode::ResourceLimit;
 
         std::map<uint32_t, uint32_t> materialIds;
         if (!EmitMaterials(*scene, writer, context, materialIds))
@@ -1292,10 +1436,14 @@ AssimpImportOutcome ImportAssimp(std::span<const std::byte> sourceBytes,
         geometry.options = &effective;
         geometry.materialIds = std::move(materialIds);
         geometry.chunkTriangleLimit = chunkTriangleLimit;
+        geometry.chunkLineLimit = chunkLineLimit;
+        geometry.chunkPointLimit = chunkPointLimit;
         uint32_t nextNodeOrdinal = 0;
         if (!WalkNode(*scene->mRootNode, aiMatrix4x4(), 0, nextNodeOrdinal, geometry))
             return context.error != ImportErrorCode::None ? context.error : writer.Error();
-        if (!geometry.totalTriangles) return ImportErrorCode::EmptyGeometry;
+        // Success is based on validated emitted primitives (triangles, line
+        // segments or points), never on Assimp's primitive flags alone.
+        if (!geometry.totalPrimitives) return ImportErrorCode::EmptyGeometry;
 
         // Ignored optional content is a bounded degradation record, never a
         // silent claim that it was rendered.

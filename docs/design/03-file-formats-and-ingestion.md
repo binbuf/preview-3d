@@ -40,7 +40,7 @@ session override; reloads and refinements do not re-apply the preset.
 | .igs, .iges | OCCT IGES in the dedicated CAD host | Fixed 80-column S/G/D/P/T record streams, analytic B-rep geometry, subfigure/assembly structure, and representable colors | Bounded record/entity/reference preflight before OCCT; no temporary file or path (the admitted records are fed to the pinned in-memory parser). Missing global unit flag assumes millimetres and warns; authored units convert to the verified OCCT system millimetre. No PMI/GD&T or exact-kernel operations; `UpAxisId::Unknown` | B |
 | .brep | OCCT `BRepTools` in the dedicated CAD host | `CASCADE Topology` V1-V3 shape sets: topology and geometry, including compounds | Bounded `TShapes`/`Locations` shape-set preflight before `BRepTools::Read`; no authored colors or units (zero metres-per-unit). No PMI/GD&T; `UpAxisId::Unknown` | B |
 | .step, .stp, .stpnc, .p21, .210 | OCCT in the dedicated STEP host | ISO 10303-21 clear-text AP203/AP214/AP242 product/assembly structure, B-rep and faceted geometry including supported AP242 tessellated representations, occurrence transforms, authored length units with tolerant assumptions, representable colors/transparency, and Draft/Balanced/Full import quality | External STEP document declarations (`FILE_POPULATION`/`DOCUMENT_FILE`) are counted from Part-21 instance names outside comments/strings and never opened; an unresolved declaration is a warning and the main document still opens. A missing length unit assumes millimetres (0.001 m per unit) and contradictory units use the reader's first/dominant factor, both with warnings; a positive factor above the validated bound still fails typed. An opt-in bounded `ShapeFix` pass runs only after a definition transfers but cannot tessellate. No PMI/GD&T, editing, exact-kernel operations, or measurement; `UpAxisId::Unknown` by design | B |
-| .dae, .3ds, .dxf, .x, .off, .amf, .x3d | Assimp in the general worker (compatibility adapter) | Static triangle meshes, node transforms, vertex normals/UVs/colors, diffuse/metallic/roughness/emissive material factors, and approved local or embedded textures. DAE keeps its scene hierarchy; 3DS/DXF/X/OFF/AMF/X3D expose their supported static mesh subsets. | No animation, cameras/lights, plug-ins, file writes or default IOSystem. Assimp never serves a native format. DXF is limited to Assimp's 3DFACE/polyline entities (not full DXF). Line/point-only content is skipped with a warning; a scene with no triangles fails typed. Tier-B object/material/triangle/vertex caps and scratch/texture/sidecar budgets apply. `UpAxisId` is the exporter-family convention and units are unspecified (`0.0`) | B |
+| .dae, .3ds, .dxf, .x, .off, .amf, .x3d | Assimp in the general worker (compatibility adapter) | Static triangle meshes, one-index point faces and two-index line faces normalized to `PointList`/`LineList` chunks, node transforms, vertex normals/UVs/colors, diffuse/metallic/roughness/emissive material factors, and approved local or embedded textures. DAE keeps its scene hierarchy; 3DS/DXF/X/OFF/AMF/X3D expose their supported static mesh subsets. Mixed meshes emit separate chunks per topology and material. | No animation, cameras/lights, plug-ins, file writes or default IOSystem. Assimp never serves a native format. DXF is limited to Assimp's 3DFACE/LINE/polyline entities (not full DXF). COLLADA `<points>` is not represented by the importer and a point-only DAE fails typed; a scene with no supported primitive at all fails `EmptyGeometry`. Tier-B object/material/triangle/vertex caps and scratch/texture/sidecar budgets apply. `UpAxisId` is the exporter-family convention and units are unspecified (`0.0`) | B |
 
 Tier A is the release-gated out-of-core path for the multi-gigabyte workload in [01-product-scope.md](./01-product-scope.md). Tier B formats are still MVP features, but their parser libraries may materialize more intermediate state and therefore have lower enforced limits. Draco primitives are independently bounded because their decoded topology cannot be demand-paged from the compressed bitstream. A format badge is shown when a file uses an ignored or approximated optional feature; unsupported required geometry/composition fails instead of silently presenting an apparently faithful model.
 
@@ -440,15 +440,21 @@ Embedded textures are read from Assimp's scene memory under the existing encoded
 and decoded texture budgets.
 
 The adapter validates object/material/triangle/vertex counts before emission,
-skips line/point primitives with a bounded compatibility warning, fails typed
-when no triangles remain, and normalizes world-space triangles, material
-factors and texture images into the same chunk contract as the native adapters.
+normalizes one-index faces to `PointList`, two-index faces to `LineList` and
+three-or-larger faces to `TriangleList` (fan-triangulating any polygon that
+`aiProcess_Triangulate` did not reduce), skips degenerate lines and non-finite
+points with bounded warnings, and fails typed only when no supported primitive
+was emitted. A mixed source mesh produces one chunk per topology and material.
+It normalizes world-space geometry, material factors and texture images into the
+same chunk contract as the native adapters. Assimp's synthetic skeleton "hero"
+mesh for an empty COLLADA document is disabled, so an empty file fails
+`EmptyGeometry` instead of presenting fabricated triangles.
 Before Assimp runs, product admission checks control bytes and a well-formed XML
 DOM (pugixml) for DAE/AMF/X3D, DAE numeric count/offset/stride attributes and
 token lists, the full ASCII OFF header/vertex/face/token graph, and the 3DS
 main-chunk magic/length. This crash boundary is deliberately separate from
 Assimp's own sniffers. DXF coverage is deliberately limited to the
-3DFACE/polyline entities Assimp supports; it is not a full DXF importer.
+3DFACE/LINE/polyline entities Assimp supports; it is not a full DXF importer.
 Assimp's source objects never leave the adapter, and the `AssimpFuzz`
 dispatcher target covers all seven container hints. The pinned overlay port
 carries one product finding fix: Assimp 6.0.4's X3D importer called `front()`

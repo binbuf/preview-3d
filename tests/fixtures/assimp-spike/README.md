@@ -18,5 +18,16 @@ requires byte-exact fixtures; rerunning the generator is deterministic.
 | `box.x3d` | Positive X3D IndexedFaceSet box |
 | `box.x` | Positive DirectX text mesh |
 | `triangle.dxf` | Positive DXF 3DFACE tetrahedron |
+| `lines.dxf` | Three DXF `LINE` entities; expects one `LineList` chunk |
+| `lines.off` | OFF with three two-index edge faces |
+| `lines.dae` | COLLADA `<lines>` with a bound material |
+| `lines.x3d` | X3D `IndexedLineSet` |
+| `points.off` | OFF with four one-index point faces |
+| `points.x3d` | X3D `PointSet` with authored vertex colors |
+| `mixed.x3d` | One IndexedFaceSet mixing point, line, triangle and quad groups |
+| `degenerate-lines.off` | Three valid segments plus one identical-endpoint segment |
+| `non-finite-points.off` | One finite point plus one float-overflow point that must be skipped |
+| `empty.dae` | Valid COLLADA with no geometry; must fail typed |
+| `over-budget-lines.off`, `over-budget-points.off` | 200 primitives; fail under the tiny-limit seam |
 | `truncated.dae`, `truncated.3ds` | Truncated containers |
 | `malformed.off`, `malformed.amf` | Structurally invalid syntax |
