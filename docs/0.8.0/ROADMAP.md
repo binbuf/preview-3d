@@ -23,7 +23,7 @@ parallel after T01.
 
 ## Phase 0 — Baseline
 
-- [~] T01 - Valid-file coverage baseline and failure triage → [../tasks/0.8.0/T01-valid-file-coverage-baseline.md](../tasks/0.8.0/T01-valid-file-coverage-baseline.md) ⟵ running
+- [x] T01 - Valid-file coverage baseline and failure triage → [../tasks/0.8.0/T01-valid-file-coverage-baseline.md](../tasks/0.8.0/T01-valid-file-coverage-baseline.md)
 
 ## Phase 1 — Extension and detection completeness
 
@@ -55,11 +55,11 @@ parallel after T01.
 - Animation playback, cameras and lights.
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-11-07T15:08:42Z · 0/10 done
+**Pipeline status** — updated 2026-11-07T15:42:52Z · 1/10 done
 
-- Completed: none
+- Completed: T01
 - Blocked: none
-- Failed: T01
+- Failed: none
 - Remaining: T02, T03, T04, T05, T06, T07, T08, T09, T10
-- Last finished: T01 — failed · interrupted during retry backoff
+- Last finished: T01 — done · Landed the shared manifest helper, 20-entry valid-file scoreboard, fixtures, report writer, ADR-0095 and hand-off; Debug/Release [valid-file] and [compat] pass, and the wrong-expectation probe fails with the fixture id and observed value.
 <!-- /symphony:status -->

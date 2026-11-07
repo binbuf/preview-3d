@@ -11,5 +11,9 @@ The plan, ground rules, and per-task verify commands are in
 <!-- symphony:digest:start -->
 ## Key facts (maintained by symphony — do not edit)
 
-_(no progress recorded yet)_
+- **T01 — Valid-file coverage baseline and failure triage**: `tests/import-isolation/CompatManifest.{h,cpp}` — shared, dependency-free; `tests/compat/valid-file-manifest.json` — schema-1 valid-file scoreboard.
+
+## Task notes (maintained by symphony — do not edit)
+
+- [T01](progress/T01.md) — `tests/import-isolation/CompatManifest.{h,cpp}` — shared, dependency-free
 <!-- symphony:digest:end -->
