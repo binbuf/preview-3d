@@ -155,8 +155,8 @@
       "expected": "failed",
       "expectedError": "UnsupportedFormat",
       "expectedGeometry": "none",
-      "failureClass": "sniffer",
-      "tags": ["dae", "renamed", "sniffer", "t03"]
+      "failureClass": "extension",
+      "tags": ["dae", "renamed", "content-detected", "open-as", "t03"]
     },
     {
       "id": "renamed-dxf-txt",
@@ -165,8 +165,8 @@
       "expected": "failed",
       "expectedError": "UnsupportedFormat",
       "expectedGeometry": "none",
-      "failureClass": "sniffer",
-      "tags": ["dxf", "renamed", "sniffer", "t03"]
+      "failureClass": "extension",
+      "tags": ["dxf", "renamed", "content-detected", "open-as", "t03"]
     },
     {
       "id": "real-teapot-off",

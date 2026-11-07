@@ -30,17 +30,17 @@ the whole catalog rather than only glTF/STL/PLY/OBJ/FBX/USD/STEP.
   path-free probe and sandbox boundary.
 
 ## Scope
-- [ ] Refactor `SniffHead` to iterate `model_core::Formats()` and evaluate each
+- [x] Refactor `SniffHead` to iterate `model_core::Formats()` and evaluate each
   descriptor’s declared signatures in priority order. Keep the result a
   `SniffResult` candidate only; never parse model structure or decompress.
-- [ ] Implement every declared `MagicKind`:
+- [x] Implement every declared `MagicKind`:
   `HeadPrefix`, `HeadPrefixCaseInsensitive`, `GltfJsonAsset`, `BinaryStl`,
   `AsciiStlText`, `PlyHeader`, `ObjText`, `ZipEntryEquals`,
   `ZipEntrySuffix`.
-- [ ] Make `ProbeZipCentralDirectory` evaluate catalog ZIP signatures instead
+- [x] Make `ProbeZipCentralDirectory` evaluate catalog ZIP signatures instead
   of hardcoding 3MF/USDZ. Preserve the current bounded EOCD/central-directory
   limits and reject ZIP64/spanned archives.
-- [ ] Add missing signatures where a bounded probe is reliable:
+- [x] Add missing signatures where a bounded probe is reliable:
   - 3DS: `MM` (`0x4D4D`) main chunk plus a declared length that fits the file;
   - AMF: `<amf` after optional XML declaration/comments;
   - DAE: `<COLLADA` after optional XML declaration/comments/BOM;
@@ -54,14 +54,14 @@ the whole catalog rather than only glTF/STL/PLY/OBJ/FBX/USD/STEP.
   - FCStd: ZIP with `Document.xml` and at least one `.brp` entry (add a
     bounded ZIP-entry pair/suffix kind if the current `MagicKind` cannot
     express the conjunction).
-- [ ] Add `[format-sniffer]` cases for every signature: positive, BOM/
+- [x] Add `[format-sniffer]` cases for every signature: positive, BOM/
   whitespace/comment variants, truncated/malformed negatives, a generic ZIP
   that must stay `Unknown`, a renamed file that should be content-only, and a
   cross-family mismatch that should ask the user.
-- [ ] Add a unit test that every descriptor with a non-empty `signatures` span
+- [x] Add a unit test that every descriptor with a non-empty `signatures` span
   is actually reachable by the table-driven probe, so adding a catalog entry
   cannot silently leave a dead signature.
-- [ ] Update `docs/design/03-file-formats-and-ingestion.md` and the format
+- [x] Update `docs/design/03-file-formats-and-ingestion.md` and the format
   support notes if the sniffing contract changes.
 
 ## Out of scope
@@ -87,12 +87,67 @@ the whole catalog rather than only glTF/STL/PLY/OBJ/FBX/USD/STEP.
 - Keep the catalog data-only; do not include parser or platform headers.
 
 ## Done when
-- [ ] `x64\Release\Tests.Unit.exe "[format-sniffer],[format-catalog]"` passes.
-- [ ] `x64\Debug\Tests.Unit.exe "[format-sniffer],[format-catalog]"` passes.
-- [ ] Every declared signature has at least one positive and one negative case.
-- [ ] A renamed DAE, DXF, OFF, X3D, 3DS, IGES, BREP, XBF, and FCStd file is
+- [x] `x64\Release\Tests.Unit.exe "[format-sniffer],[format-catalog]"` passes.
+- [x] `x64\Debug\Tests.Unit.exe "[format-sniffer],[format-catalog]"` passes.
+- [x] Every declared signature has at least one positive and one negative case.
+- [x] A renamed DAE, DXF, OFF, X3D, 3DS, IGES, BREP, XBF, and FCStd file is
   detected as content-only and routed through the Open As prompt.
-- [ ] No parser, path, network or decompression code was added to the sniffer.
+- [x] No parser, path, network or decompression code was added to the sniffer.
 
 ## Hand-off
-_(filled in by the implementing session: signatures added, false-positive limits, test coverage, and any format deliberately left extension-only)_
+
+**What landed.** `SniffHead` is now table-driven: it iterates
+`model_core::Formats()`, evaluates every non-ZIP `MagicSignature`, and selects
+the strongest match by confidence (strong structural over weak textual) then
+`priority`. The GLB envelope vetoes weaker fallbacks. `ProbeZipCentralDirectory`
+evaluates the catalog's ZIP signatures against the bounded central directory
+and keeps the EOCD/1 MiB/8,192-entry limits plus ZIP64/spanned rejection.
+`SniffHead` still returns Unknown for any ZIP local header.
+
+**Signatures added.** New kinds `GlbHeader`, `ThreeDsChunk`,
+`XmlPrefixCaseInsensitive` (DAE/AMF/X3D after BOM/XML declaration/comments),
+`DxfSection` (first four lines), `OffHeader`, `IgesRecord` (80-column
+S/G/D/P/T), `BrepHeader` (`CASCADE Topology V1-V3` or `DBRep_DrawableShape`),
+`XbfHeader` (`BINFILE` + `0x0000000704030201`), and
+`ZipEntryEqualsAndSuffix` (FCStd `Document.xml` + `*.brp`). DirectX keeps the
+existing `xof 0303`/`xof 0302` prefixes; GLB uses `GlbHeader` instead of a bare
+`glTF` prefix. `MagicSignature` gained a trailing `aux` token for the
+conjunction kind.
+
+**False-positive limits.** The probe reads only the bounded head and ZIP
+central directory; it never parses model structure, opens a path, uses the
+network, or decompresses. Short/ambiguous tokens are weak (`OFF`, FBX ASCII,
+OBJ); XML roots, checked binary STL, GLB, IGES/BREP/XBF/3DS, DXF, and ZIP
+matches are strong. A 3DS main chunk only requires the declared length to fit
+the file, so an ambiguous binary can still produce a candidate; the downstream
+parser remains authoritative and a false positive only yields the Open As
+prompt. The generic `.usd` extension identity and the ASCII STL/PLY wire
+variants are intentionally signature-less (content resolves to the concrete
+encoding/family); all other catalog descriptors now have a bounded signature.
+VRML remains a reserved `FormatId` with no descriptor and stays
+extension-only/not openable.
+
+**Tests.** `[format-sniffer]` adds a positive/negative case for every catalog
+signature, a reachability assertion for every descriptor with a non-empty
+signature span, BOM/whitespace/XML-comment variants, truncated/malformed
+negatives, generic-ZIP/ZIP64/spanned negatives, renamed content-only +
+`DecideOpenFormat` AskUser coverage for DAE/DXF/OFF/X3D/3DS/IGES/BREP/XBF/FCStd,
+a cross-family mismatch prompt, priority checks, and real-fixture detection.
+The two existing valid-file rows now report `route=content` /
+`failureClass=extension`; the report artifact was regenerated.
+
+**Checks.**
+- `x64\Release\Tests.Unit.exe "[format-sniffer],[format-catalog]"` — pass
+  (1032 assertions, 21 cases).
+- `x64\Debug\Tests.Unit.exe "[format-sniffer],[format-catalog]"` — pass
+  (1032 assertions, 21 cases).
+- `x64\Release\Tests.Unit.exe "[format-aliases],[format-installer]"` — pass
+  (329 assertions, 4 cases).
+- `x64\Release\Tests.ImportIsolation.exe "[valid-file]"` — pass
+  (163 assertions, 2 cases).
+- `[valid-file-self-check]` and `[write-valid-file-report]` — pass.
+
+**Docs.** `docs/design/03-file-formats-and-ingestion.md`,
+`docs/design/02-system-architecture.md`, `docs/FORMAT-SUPPORT.md`, and
+`docs/design/adr/0097-catalog-driven-content-sniffer.md`. No remaining
+blockers.

@@ -2,12 +2,13 @@
 
 // Bounded content sniffing for the trusted-process router.
 //
-// The sniffer reads at most a fixed head window and, for ZIP containers, an
-// End-Of-Central-Directory record plus a bounded central-directory window. It
-// never decompresses an archive and never parses model structure. A match is a
-// *candidate selector*: the worker/host still performs the real parse and all
-// containment checks. The catalog remains the authority for extensions,
-// identities and defaults.
+// The format catalog declares the bounded signatures; this file evaluates them
+// in confidence/priority order. The sniffer reads at most a fixed head window
+// and, for ZIP containers, an End-Of-Central-Directory record plus a bounded
+// central-directory window. It never decompresses an archive and never parses
+// model structure. A match is a *candidate selector*: the worker/host still
+// performs the real parse and all containment checks. The catalog remains the
+// authority for extensions, identities and defaults.
 
 #include "model_core/FormatCatalog.h"
 
@@ -38,9 +39,9 @@ struct SniffResult {
     explicit operator bool() const noexcept { return format != FormatId::Unknown; }
 };
 
-// Pure bounded-head probe. This cannot identify ZIP-based formats (3MF/USDZ)
-// because their identity lives in the central directory; use SniffFile for
-// those.
+// Pure bounded-head probe. This cannot identify ZIP-based formats (3MF, USDZ,
+// FCStd) because their identity lives in the central directory; use SniffFile
+// for those.
 SniffResult SniffHead(std::span<const std::byte> head, uint64_t totalBytes) noexcept;
 
 // Reads the bounded head window and, when the head is a ZIP local header, the

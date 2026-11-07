@@ -65,6 +65,26 @@ catalog entry. The same catalog feeds the open-dialog filter, command-line and
 Shell path acceptance, Shell Open With discovery and the NSIS install/uninstall
 registration checked by `[format-installer]` ([ADR-0058](./adr/0058-catalog-driven-open-as-and-installer-drift.md)).
 
+The probe is table-driven ([ADR-0097](./adr/0097-catalog-driven-content-sniffer.md)).
+`FormatSniffer` iterates `model_core::Formats()` and evaluates each descriptor's
+declared `MagicSignature` entries; `priority` breaks ties and a strong
+structural match (GLB header, checked binary STL, ZIP central directory)
+outranks a weak textual token. The implemented kinds cover exact and
+case-insensitive head prefixes, the glTF JSON asset object, binary/ASCII STL,
+PLY headers, OBJ statement lines, ZIP entry equality/suffix and a bounded
+entry-pair conjunction, plus these family signatures: GLB header, 3DS main
+chunk, XML roots after a BOM/XML declaration/comments (DAE, AMF, X3D), DXF
+`0`/`SECTION` in the first four lines, OFF, the IGES 80-column record, the OCCT
+BREP header, the XBF `BINFILE`/supported-version header, and the FCStd
+`Document.xml` + `*.brp` package. `SniffHead` never claims a ZIP package from
+the local header; `SniffFile` performs the bounded EOCD/central-directory probe,
+rejects ZIP64/spanned archives, and leaves a generic ZIP `Unknown`. The generic
+`.usd` extension identity and the ASCII STL/PLY wire variants declare no
+separate signature: content resolves to the concrete encoding or family, and
+the suffix remains the identity hint. A signature is never a trust decision; a
+false positive only produces the Open As prompt, and the worker/host still owns
+acceptance.
+
 All primary inputs are local, regular, non-empty files. The loader rejects:
 
 - UNC paths, device paths, alternate data streams, URLs, and URI schemes other than local relative file references;

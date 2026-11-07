@@ -32,6 +32,17 @@ For install and build instructions, see the [README](../README.md).
 command line, drag/drop, Retry, and Open With all
 accept the same direct formats, case-insensitively.
 
+Extension and content are separate dispatch hints. The compile-time catalog
+declares a bounded signature for every family where a head or
+ZIP-central-directory probe is reliable, and `FormatSniffer` evaluates those
+signatures in priority order. A renamed DAE, DXF, OFF, X3D, 3DS, IGES, BREP,
+XBF, or FCStd file is therefore still offered through **Open As** instead of
+being rejected as an unknown suffix. A generic ZIP, a truncated or ambiguous
+head, and a `.usd` file whose bytes do not identify an encoding stay `Unknown`
+and are selected by suffix. The probe reads only the bounded head/central-
+directory window, never decompresses an archive, and never parses model
+structure; the worker or host still owns acceptance.
+
 ## Orientation, units, and presentation defaults
 
 The format catalog declares each family's source up axis, unit policy and

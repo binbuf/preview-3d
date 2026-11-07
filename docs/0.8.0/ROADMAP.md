@@ -28,7 +28,7 @@ parallel after T01.
 ## Phase 1 — Extension and detection completeness
 
 - [x] T02 - Extension aliases and catalog/installer drift → [../tasks/0.8.0/T02-extension-aliases-registration.md](../tasks/0.8.0/T02-extension-aliases-registration.md)
-- [ ] T03 - Catalog-driven content sniffer → [../tasks/0.8.0/T03-catalog-driven-sniffer.md](../tasks/0.8.0/T03-catalog-driven-sniffer.md)
+- [x] T03 - Catalog-driven content sniffer → [../tasks/0.8.0/T03-catalog-driven-sniffer.md](../tasks/0.8.0/T03-catalog-driven-sniffer.md)
 
 ## Phase 2 — Primitive completeness
 
@@ -55,11 +55,11 @@ parallel after T01.
 - Animation playback, cameras and lights.
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-11-07T16:02:32Z · 2/10 done
+**Pipeline status** — updated 2026-11-07T16:28:06Z · 3/10 done
 
-- Completed: T01, T02
+- Completed: T01, T02, T03
 - Blocked: none
 - Failed: none
-- Remaining: T03, T04, T05, T06, T07, T08, T09, T10
-- Last finished: T02 — done · STEP aliases are catalog-owned and mirrored across NSIS, thumbnail routing/registration, Open With, docs and ADR-0096; Release/Debug format gates and the alias valid-file STEP-host cases pass.
+- Remaining: T04, T05, T06, T07, T08, T09, T10
+- Last finished: T03 — done · Catalog-driven sniffer with table-driven signatures for every family, catalog ZIP probing, new DAE/DXF/OFF/X3D/3DS/AMF/IGES/BREP/XBF/FCStd detection, full positive/negative + reachability tests, docs/ADR-0097; Release/Debug format gates and valid-file scoreboard pass.
 <!-- /symphony:status -->

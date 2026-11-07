@@ -23,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 using namespace model_core;
@@ -84,6 +85,55 @@ std::vector<std::byte> MakeBinaryStl(uint32_t facets)
     for (std::size_t index = 0; index < 4; ++index) {
         bytes[80 + index] = static_cast<std::byte>((facets >> (8 * index)) & 0xFF);
     }
+    return bytes;
+}
+
+// A truncated binary STL: an 84-byte header whose declared facet count does
+// not fit the file.
+std::vector<std::byte> MakeBinaryStlHeader(uint32_t facets)
+{
+    std::vector<std::byte> bytes(84);
+    for (std::size_t index = 0; index < 4; ++index) {
+        bytes[80 + index] = static_cast<std::byte>((facets >> (8 * index)) & 0xFF);
+    }
+    return bytes;
+}
+
+std::vector<std::byte> MakeThreeDs(uint32_t declaredLength, std::size_t actualSize)
+{
+    std::vector<std::byte> bytes(actualSize);
+    if (actualSize >= 2) {
+        bytes[0] = static_cast<std::byte>(0x4D);
+        bytes[1] = static_cast<std::byte>(0x4D);
+    }
+    if (actualSize >= 6) {
+        for (std::size_t index = 0; index < 4; ++index) {
+            bytes[2 + index] = static_cast<std::byte>(
+                (declaredLength >> (8 * index)) & 0xFF);
+        }
+    }
+    return bytes;
+}
+
+std::vector<std::byte> MakeXbf(uint64_t version)
+{
+    std::vector<std::byte> bytes(15);
+    std::memcpy(bytes.data(), "BINFILE", 7);
+    for (std::size_t index = 0; index < 8; ++index) {
+        bytes[7 + index] = static_cast<std::byte>((version >> (8 * index)) & 0xFF);
+    }
+    return bytes;
+}
+
+std::vector<std::byte> MakeIgesRecord(char section)
+{
+    std::vector<std::byte> bytes(81, static_cast<std::byte>(' '));
+    bytes[72] = static_cast<std::byte>(section);
+    constexpr std::string_view sequence = "0000001";
+    for (std::size_t index = 0; index < sequence.size(); ++index) {
+        bytes[73 + index] = static_cast<std::byte>(sequence[index]);
+    }
+    bytes[80] = static_cast<std::byte>('\n');
     return bytes;
 }
 
@@ -478,5 +528,363 @@ TEST_CASE("classification reports extension content both and mismatch", "[format
         CHECK(result.reason == ClassificationReason::Both);
         REQUIRE(result.selected != nullptr);
         CHECK(result.selected->id == FormatId::Usdc);
+    }
+}
+
+TEST_CASE("every catalog signature has a positive and negative probe", "[format-sniffer]")
+{
+    struct SignatureProbeCase {
+        MagicKind kind = MagicKind::HeadPrefix;
+        std::string_view bytes{};
+        uint32_t offset = 0;
+        std::string_view aux{};
+        std::string label;
+        std::vector<std::byte> positive{};
+        FormatId expected = FormatId::Unknown;
+        std::vector<std::byte> negative{};
+        bool zip = false;
+        std::vector<std::string_view> positiveZip{};
+        std::vector<std::string_view> negativeZip{};
+    };
+
+    const auto head = [](MagicKind kind, std::string_view bytes, uint32_t offset,
+                         std::string_view aux, std::string label,
+                         std::vector<std::byte> positive, FormatId expected,
+                         std::vector<std::byte> negative) {
+        return SignatureProbeCase{ kind, bytes, offset, aux, std::move(label),
+            std::move(positive), expected, std::move(negative), false, {}, {} };
+    };
+    const auto zip = [](MagicKind kind, std::string_view bytes, std::string_view aux,
+                        std::string label, std::vector<std::string_view> positiveZip,
+                        FormatId expected, std::vector<std::string_view> negativeZip) {
+        return SignatureProbeCase{ kind, bytes, 0, aux, std::move(label), {}, expected, {},
+            true, std::move(positiveZip), std::move(negativeZip) };
+    };
+
+    const std::vector<SignatureProbeCase> cases{
+        head(MagicKind::GltfJsonAsset, {}, 0, {}, "gltf-json",
+            ToBytes("{\"asset\":{\"version\":\"2.0\"}}"), FormatId::Gltf,
+            ToBytes("{\"asset\":{}}")),
+        head(MagicKind::GlbHeader, {}, 0, {}, "glb",
+            MakeGlb(2, 12), FormatId::Glb, MakeGlb(1, 12)),
+        head(MagicKind::BinaryStl, {}, 0, {}, "stl-binary",
+            MakeBinaryStl(1), FormatId::Stl, MakeBinaryStlHeader(100)),
+        head(MagicKind::AsciiStlText, {}, 0, {}, "stl-ascii",
+            ToBytes("solid s\n facet normal 0 0 1\n endfacet\nendsolid s\n"), FormatId::Stl,
+            ToBytes("solid s\n facet normal 0 0 1\n")),
+        head(MagicKind::PlyHeader, {}, 0, {}, "ply",
+            ToBytes("ply\nformat ascii 1.0\n"), FormatId::Ply,
+            ToBytes("plywood\n")),
+        head(MagicKind::ObjText, {}, 0, {}, "obj",
+            ToBytes("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"), FormatId::Obj,
+            ToBytes("v 0 0 0\nv 1 0 0\n")),
+        head(MagicKind::HeadPrefix, "Kaydara FBX Binary", 0, {}, "fbx-binary",
+            ToBytes("Kaydara FBX Binary  \x00\x1a\x00"), FormatId::Fbx,
+            ToBytes("Kaydara FBX Ascii")),
+        head(MagicKind::HeadPrefixCaseInsensitive, "; FBX", 0, {}, "fbx-ascii",
+            ToBytes("  ; fbx 7.4.0 project file\n"), FormatId::Fbx,
+            ToBytes("; FB")),
+        head(MagicKind::HeadPrefix, "#usda", 0, {}, "usda",
+            ToBytes("#usda 1.0\n"), FormatId::Usda,
+            ToBytes("#usdb 1.0\n")),
+        head(MagicKind::HeadPrefix, "PXR-USDC", 0, {}, "usdc",
+            ToBytes("PXR-USDC"), FormatId::Usdc,
+            ToBytes("PXR-USDT")),
+        zip(MagicKind::ZipEntrySuffix, ".usdc", {}, "usdz-usdc",
+            { "model.usdc" }, FormatId::Usdz, { "readme.txt" }),
+        zip(MagicKind::ZipEntrySuffix, ".usda", {}, "usdz-usda",
+            { "model.usda" }, FormatId::Usdz, { "readme.txt" }),
+        zip(MagicKind::ZipEntrySuffix, ".usd", {}, "usdz-usd",
+            { "model.usd" }, FormatId::Usdz, { "readme.txt" }),
+        zip(MagicKind::ZipEntryEquals, "[Content_Types].xml", {}, "3mf-content-types",
+            { "[Content_Types].xml" }, FormatId::ThreeMf, { "readme.txt" }),
+        zip(MagicKind::ZipEntryEquals, "3D/3dmodel.model", {}, "3mf-model",
+            { "3D/3dmodel.model" }, FormatId::ThreeMf, { "readme.txt" }),
+        head(MagicKind::HeadPrefix, "ISO-10303-21", 0, {}, "step",
+            ToBytes("ISO-10303-21;\nHEADER;\n"), FormatId::Step,
+            ToBytes("ISO-10303-22;\n")),
+        head(MagicKind::IgesRecord, {}, 0, {}, "iges",
+            MakeIgesRecord('S'), FormatId::Iges, MakeIgesRecord('X')),
+        head(MagicKind::BrepHeader, {}, 0, {}, "brep",
+            ToBytes("CASCADE Topology V1, (c) Matra-Datavision\nLocations 0\n"),
+            FormatId::Brep, ToBytes("CASCADE Topology V9\n")),
+        head(MagicKind::XbfHeader, {}, 0, {}, "xbf",
+            MakeXbf(0x0000000704030201ull), FormatId::Xbf,
+            MakeXbf(0x0000000704030202ull)),
+        zip(MagicKind::ZipEntryEqualsAndSuffix, "Document.xml", ".brp", "fcstd",
+            { "Document.xml", "PartShape.brp" }, FormatId::Fcstd, { "Document.xml" }),
+        head(MagicKind::XmlPrefixCaseInsensitive, "<COLLADA", 0, {}, "dae",
+            ToBytes("\xEF\xBB\xBF  <?xml version=\"1.0\"?>\n<!-- c -->\n<COLLADA xmlns=\"x\">"),
+            FormatId::Dae, ToBytes("<?xml version=\"1.0\"?><COLLADABAD>")),
+        head(MagicKind::ThreeDsChunk, {}, 0, {}, "3ds",
+            MakeThreeDs(303, 303), FormatId::ThreeDs, MakeThreeDs(400, 303)),
+        head(MagicKind::DxfSection, {}, 0, {}, "dxf",
+            ToBytes("\xEF\xBB\xBF\n0\nSECTION\n2\nENTITIES\n"), FormatId::Dxf,
+            ToBytes("0\nNOTSECTION\n2\nENTITIES\n")),
+        head(MagicKind::HeadPrefix, "xof 0303", 0, {}, "directx-0303",
+            ToBytes("xof 0303txt 0032\n"), FormatId::DirectX,
+            ToBytes("xof 9999txt 0032\n")),
+        head(MagicKind::HeadPrefix, "xof 0302", 0, {}, "directx-0302",
+            ToBytes("xof 0302txt 0064\n"), FormatId::DirectX,
+            ToBytes("xof 9999txt 0064\n")),
+        head(MagicKind::OffHeader, {}, 0, {}, "off",
+            ToBytes("  \n OFF\n8 6 0\n"), FormatId::Off,
+            ToBytes("OFFICE\n")),
+        head(MagicKind::XmlPrefixCaseInsensitive, "<amf", 0, {}, "amf",
+            ToBytes("\xEF\xBB\xBF<!-- c --><?xml version=\"1.0\"?><amf unit=\"millimeter\">"),
+            FormatId::Amf, ToBytes("<?xml version=\"1.0\"?><amfX>")),
+        head(MagicKind::XmlPrefixCaseInsensitive, "<X3D", 0, {}, "x3d",
+            ToBytes("\xEF\xBB\xBF\n<?xml version=\"1.0\"?>\n<!-- c -->\n<X3D profile=\"Interchange\">"),
+            FormatId::X3d, ToBytes("<?xml version=\"1.0\"?><X3DX>")),
+    };
+
+    // A catalog entry cannot silently add a dead signature: every declared
+    // signature must have a probe case below.
+    for (const auto& descriptor : Formats()) {
+        for (const auto& signature : descriptor.signatures) {
+            INFO("descriptor " << descriptor.stableName << " kind "
+                 << static_cast<uint32_t>(signature.kind) << " bytes "
+                 << std::string(signature.bytes));
+            const auto found = std::find_if(cases.begin(), cases.end(),
+                [&](const SignatureProbeCase& item) {
+                    return item.kind == signature.kind && item.bytes == signature.bytes
+                        && item.offset == signature.offset && item.aux == signature.aux;
+                });
+            REQUIRE(found != cases.end());
+        }
+    }
+
+    std::set<FormatId> selected;
+    for (const auto& item : cases) {
+        INFO("signature probe " << item.label);
+        if (item.zip) {
+            TempFile positive("positive.zip", MakeZip(item.positiveZip));
+            const auto positiveResult = SniffFile(positive.WidePath());
+            CHECK(positiveResult.format == item.expected);
+            CHECK(positiveResult.confidence == SniffConfidence::Strong);
+            selected.insert(positiveResult.format);
+
+            TempFile negative("negative.zip", MakeZip(item.negativeZip));
+            CHECK(SniffFile(negative.WidePath()).format == FormatId::Unknown);
+        } else {
+            const auto positiveResult = SniffHead(item.positive, item.positive.size());
+            CHECK(positiveResult.format == item.expected);
+            CHECK(positiveResult.confidence != SniffConfidence::None);
+            selected.insert(positiveResult.format);
+
+            CHECK(SniffHead(item.negative, item.negative.size()).format == FormatId::Unknown);
+        }
+    }
+
+    // Every descriptor that declares a signature is reachable through the
+    // table-driven probe. Descriptors with an empty signature span are the
+    // wire-only content variants and the generic `.usd` extension identity.
+    for (const auto& descriptor : Formats()) {
+        if (descriptor.signatures.empty()) continue;
+        INFO("reachable descriptor " << descriptor.stableName);
+        CHECK(selected.contains(descriptor.id));
+    }
+}
+
+TEST_CASE("renamed catalog content is detected and asks the user", "[format-sniffer]")
+{
+    struct RenamedCase {
+        std::string label;
+        std::vector<std::byte> bytes;
+        FormatId expected;
+    };
+
+    const std::vector<RenamedCase> cases{
+        { "dae", ToBytes("<?xml version=\"1.0\"?>\n<COLLADA xmlns=\"x\">"), FormatId::Dae },
+        { "dxf", ToBytes("0\nSECTION\n2\nENTITIES\n"), FormatId::Dxf },
+        { "off", ToBytes("OFF\n8 6 0\n"), FormatId::Off },
+        { "x3d", ToBytes("<?xml version=\"1.0\"?>\n<X3D profile=\"Interchange\">"), FormatId::X3d },
+        { "3ds", MakeThreeDs(303, 303), FormatId::ThreeDs },
+        { "iges", MakeIgesRecord('S'), FormatId::Iges },
+        { "brep", ToBytes("CASCADE Topology V1, (c) Matra-Datavision\nLocations 0\n"),
+            FormatId::Brep },
+        { "xbf", MakeXbf(0x0000000704030201ull), FormatId::Xbf },
+        { "fcstd", MakeZip({ "Document.xml", "PartShape.brp" }), FormatId::Fcstd },
+    };
+
+    for (const auto& item : cases) {
+        INFO("renamed " << item.label);
+        TempFile file("renamed-" + item.label + ".bin", item.bytes);
+        const auto sniffed = SniffFile(file.WidePath());
+        CHECK(sniffed.format == item.expected);
+        CHECK(sniffed.confidence != SniffConfidence::None);
+
+        const auto classification = ClassifyFormat(L"bin", sniffed);
+        REQUIRE(classification.content != nullptr);
+        CHECK(classification.content->id == item.expected);
+        CHECK(classification.reason == ClassificationReason::Content);
+        CHECK_FALSE(classification.HasExtension());
+
+        const auto decision = DecideOpenFormat(classification);
+        CHECK(decision.action == OpenFormatAction::AskUser);
+        REQUIRE(decision.format != nullptr);
+        CHECK(decision.format->id == item.expected);
+    }
+}
+
+TEST_CASE("cross-family content mismatch asks the user", "[format-sniffer]")
+{
+    const auto bytes = ToBytes("<?xml version=\"1.0\"?>\n<COLLADA xmlns=\"x\">");
+    const auto sniffed = SniffHead(bytes, bytes.size());
+    REQUIRE(sniffed.format == FormatId::Dae);
+
+    const auto classification = ClassifyFormat(L"obj", sniffed);
+    CHECK(classification.reason == ClassificationReason::Mismatch);
+    REQUIRE(classification.extension != nullptr);
+    CHECK(classification.extension->id == FormatId::Obj);
+    REQUIRE(classification.selected != nullptr);
+    CHECK(classification.selected->id == FormatId::Dae);
+
+    const auto decision = DecideOpenFormat(classification);
+    CHECK(decision.action == OpenFormatAction::AskUser);
+    CHECK(decision.extensionCandidate == classification.extension);
+    REQUIRE(decision.format != nullptr);
+    CHECK(decision.format->id == FormatId::Dae);
+}
+
+TEST_CASE("structural and priority matching selects the strongest candidate", "[format-sniffer]")
+{
+    SECTION("ZIP package priority") {
+        TempFile threeMf("both.3mf", MakeZip({ "[Content_Types].xml", "model.usdc" }));
+        CHECK(SniffFile(threeMf.WidePath()).format == FormatId::ThreeMf);
+    }
+    SECTION("FCStd package outranks a USD layer") {
+        TempFile fcstd("both.fcstd",
+            MakeZip({ "Document.xml", "PartShape.brp", "model.usdc" }));
+        CHECK(SniffFile(fcstd.WidePath()).format == FormatId::Fcstd);
+    }
+    SECTION("strong structural STL outranks weak OBJ statements") {
+        const auto bytes = ToBytes(
+            "solid s\nv 0 0 0\nf 1 2 3\nfacet normal 0 0 1\nendsolid s\n");
+        CHECK(SniffHead(bytes, bytes.size()).format == FormatId::Stl);
+    }
+}
+
+TEST_CASE("generic ZIP packages stay Unknown", "[format-sniffer]")
+{
+    const std::vector<std::vector<std::string_view>> packages{
+        { "readme.txt" },
+        { "Document.xml" },
+        { "PartShape.brp" },
+        { "foo/bar.txt", "baz.bin" },
+    };
+    for (const auto& entries : packages) {
+        TempFile file("generic.zip", MakeZip(entries));
+        CHECK(SniffFile(file.WidePath()).format == FormatId::Unknown);
+    }
+}
+
+TEST_CASE("real catalog fixtures are content-detected", "[format-sniffer]")
+{
+    struct FixtureCase {
+        const wchar_t* path;
+        FormatId expected;
+    };
+    const std::array<FixtureCase, 13> fixtures{
+        FixtureCase{ L"tests/fixtures/assimp-spike/box.dae", FormatId::Dae },
+        FixtureCase{ L"tests/fixtures/assimp-spike/triangle.dxf", FormatId::Dxf },
+        FixtureCase{ L"tests/fixtures/assimp-spike/box.off", FormatId::Off },
+        FixtureCase{ L"tests/fixtures/assimp-spike/box.x3d", FormatId::X3d },
+        FixtureCase{ L"tests/fixtures/assimp-spike/box.3ds", FormatId::ThreeDs },
+        FixtureCase{ L"tests/fixtures/assimp-spike/box.x", FormatId::DirectX },
+        FixtureCase{ L"tests/fixtures/assimp-spike/box.amf", FormatId::Amf },
+        FixtureCase{ L"tests/fixtures/valid-file/wire.igs", FormatId::Iges },
+        FixtureCase{ L"tests/fixtures/valid-file/wire.brep", FormatId::Brep },
+        FixtureCase{ L"tests/fixtures/cad-spike/assembly.xbf", FormatId::Xbf },
+        FixtureCase{ L"tests/fixtures/valid-file/wire.FCStd", FormatId::Fcstd },
+        FixtureCase{ L"tests/fixtures/valid-file/renamed-dae.xml", FormatId::Dae },
+        FixtureCase{ L"tests/fixtures/valid-file/renamed-dxf.txt", FormatId::Dxf },
+    };
+
+    const std::filesystem::path root(PREVIEW3D_REPO_ROOT);
+    for (const auto& fixture : fixtures) {
+        const std::filesystem::path path = root / std::wstring(fixture.path);
+        INFO("fixture " << path.string());
+        REQUIRE(std::filesystem::exists(path));
+        const auto sniffed = SniffFile(path.wstring());
+        CHECK(sniffed.format == fixture.expected);
+        CHECK(sniffed.confidence != SniffConfidence::None);
+    }
+}
+
+TEST_CASE("text signatures tolerate BOM and leading whitespace", "[format-sniffer]")
+{
+    const auto check = [](std::string_view label, std::string_view text, FormatId expected) {
+        INFO("text variant " << std::string(label));
+        const auto bytes = ToBytes(text);
+        CHECK(SniffHead(bytes, bytes.size()).format == expected);
+    };
+
+    check("gltf-bom", "\xEF\xBB\xBF \n {\"asset\":{\"version\":\"2.0\"}}", FormatId::Gltf);
+    check("ply-bom", "\xEF\xBB\xBF \n ply\nformat ascii 1.0\n", FormatId::Ply);
+    check("stl-bom",
+        "\xEF\xBB\xBF \n solid s\n facet normal 0 0 1\nendsolid s\n", FormatId::Stl);
+    check("obj-bom", "\xEF\xBB\xBF \n # comment\n v 0 0 0\n f 1 1 1\n", FormatId::Obj);
+    check("usda-bom", "\xEF\xBB\xBF#usda 1.0\n", FormatId::Usda);
+    check("step-bom", "\xEF\xBB\xBFISO-10303-21;\n", FormatId::Step);
+    check("fbx-ascii-whitespace", "  \n ; FBX 7.4.0 project file\n", FormatId::Fbx);
+    check("brep-blank-line", "\n \nCASCADE Topology V2, (c) Matra-Datavision\n",
+        FormatId::Brep);
+    check("brep-drawable-prefix",
+        "DBRep_DrawableShape\n\nCASCADE Topology V1, (c) Matra-Datavision\n",
+        FormatId::Brep);
+}
+
+TEST_CASE("truncated bounded signatures stay Unknown", "[format-sniffer]")
+{
+    SECTION("IGES shorter than one 80-column record") {
+        const auto bytes = ToBytes("                                        ");
+        CHECK(SniffHead(bytes, bytes.size()).format == FormatId::Unknown);
+    }
+    SECTION("XBF shorter than the BINFILE version header") {
+        const auto bytes = ToBytes("BINFILE");
+        CHECK(SniffHead(bytes, bytes.size()).format == FormatId::Unknown);
+    }
+    SECTION("3DS shorter than the main chunk header") {
+        const auto bytes = ToBytes("MM");
+        CHECK(SniffHead(bytes, bytes.size()).format == FormatId::Unknown);
+    }
+}
+
+TEST_CASE("ZIP64 and spanned archives stay Unknown", "[format-sniffer]")
+{
+    const auto patch16 = [](std::vector<std::byte>& bytes, std::size_t offset, uint16_t value) {
+        for (std::size_t index = 0; index < 2; ++index) {
+            bytes[offset + index] = static_cast<std::byte>((value >> (8 * index)) & 0xFF);
+        }
+    };
+    const auto patch32 = [](std::vector<std::byte>& bytes, std::size_t offset, uint32_t value) {
+        for (std::size_t index = 0; index < 4; ++index) {
+            bytes[offset + index] = static_cast<std::byte>((value >> (8 * index)) & 0xFF);
+        }
+    };
+
+    const auto base = MakeZip({ "[Content_Types].xml" });
+    const std::size_t eocd = base.size() - 22;
+    REQUIRE(base[eocd] == static_cast<std::byte>(0x50));
+
+    SECTION("multi-disk archive") {
+        auto bytes = base;
+        patch16(bytes, eocd + 4, 1);
+        TempFile file("multidisk.zip", bytes);
+        CHECK(SniffFile(file.WidePath()).format == FormatId::Unknown);
+    }
+    SECTION("spanned archive") {
+        auto bytes = base;
+        patch16(bytes, eocd + 6, 1);
+        TempFile file("spanned.zip", bytes);
+        CHECK(SniffFile(file.WidePath()).format == FormatId::Unknown);
+    }
+    SECTION("ZIP64 sentinel central directory") {
+        auto bytes = base;
+        patch32(bytes, eocd + 12, 0xFFFFFFFFu);
+        patch32(bytes, eocd + 16, 0xFFFFFFFFu);
+        TempFile file("zip64.zip", bytes);
+        CHECK(SniffFile(file.WidePath()).format == FormatId::Unknown);
     }
 }
