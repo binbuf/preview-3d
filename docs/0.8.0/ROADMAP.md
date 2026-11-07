@@ -55,11 +55,11 @@ parallel after T01.
 - Animation playback, cameras and lights.
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-11-07T07:11:58Z · 0/10 done
+**Pipeline status** — updated 2026-11-07T15:08:42Z · 0/10 done
 
 - Completed: none
 - Blocked: none
 - Failed: T01
 - Remaining: T02, T03, T04, T05, T06, T07, T08, T09, T10
-- Last finished: T01 — failed · server: provider error: exit_1 provider.no-route: Model unavailable: morphllm/morph-dsv41flash (gave up after 8 retries)
+- Last finished: T01 — failed · interrupted during retry backoff
 <!-- /symphony:status -->
