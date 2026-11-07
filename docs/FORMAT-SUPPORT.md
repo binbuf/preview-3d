@@ -86,6 +86,13 @@ Notes:
   importer. COLLADA `<points>` is not represented by Assimp's COLLADA importer,
   so a point-only DAE still fails typed with `EmptyGeometry`; point-only OFF and
   X3D files open. A file whose only primitives are unsupported fails typed.
+- The `gltf-assimp`, `obj-assimp`, `fbx-assimp` and `3mf-assimp` readers are
+  compatibility fallbacks, not replacements. They reuse the same bounded
+  Assimp adapter and worker sandbox, apply the family's wire unit/up-axis policy
+  (glTF and FBX metres, OBJ and 3MF unspecified), and are selected only by an
+  explicit forced reader or the closed eligible-error fallback. The native
+  adapter remains the default; its security preflight is never bypassed, and a
+  resource/containment failure never retries.
 - PLY point detection is content-based: a file that emits points and no
   triangles selects the point preset; a PLY with any triangle mesh keeps the
   PBR review preset.
@@ -438,11 +445,15 @@ order:
 | Reader | Extensions | Importer | Score | Kind |
 | --- | --- | --- | --- | --- |
 | `3mf` | `.3mf` | `3mf-worker` | 90 | native |
+| `3mf-assimp` | `.3mf` | `assimp-compat` | 35 | compatibility |
 | `assimp` | `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, `.x3d` | `assimp-compat` | 30 | compatibility |
 | `cad` | `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd` | `cad-host` | 100 | native |
 | `fbx` | `.fbx` | `fbx-worker` | 90 | native |
+| `fbx-assimp` | `.fbx` | `assimp-compat` | 35 | compatibility |
 | `gltf` | `.gltf`, `.glb` | `gltf-worker` | 100 | native |
+| `gltf-assimp` | `.gltf`, `.glb` | `assimp-compat` | 35 | compatibility |
 | `obj` | `.obj` | `obj-worker` | 50 | native |
+| `obj-assimp` | `.obj` | `assimp-compat` | 35 | compatibility |
 | `ply` | `.ply` | `ply-worker` | 70 | native |
 | `step` | `.step`, `.stp`, `.stpnc`, `.p21`, `.210` | `step-host` | 100 | native |
 | `stl` | `.stl` | `stl-worker` | 60 | native |
@@ -469,11 +480,44 @@ broker canonicalization and handle duplication, sidecar policy, AppContainer
 access, Job Object limits and every parser budget are unchanged.
 
 **Open as…** lists each family's default reader (marked `[default]`) and its
-shipped alternates; currently only the USD family has an alternate
-(`usd-compat`). Selecting an alternate sets the forced-reader state; selecting
-the default clears it. The selected reader is also named in the info panel's
-Scene Data section and in the forced-reader failure text. See
+shipped alternates. USD has `usd-compat`; glTF/GLB, OBJ, FBX and 3MF have their
+lower-scored Assimp compatibility readers. Selecting an alternate sets the
+forced-reader state; selecting the default clears it. The selected reader is
+also named in the info panel's Scene Data section and in the forced-reader
+failure text. See
 [ADR-0101](design/adr/0101-reader-catalog-scores-force-reader.md).
+
+### Compatibility fallback
+
+A default native glTF/OBJ/FBX/3MF open may fail on a valid file for a
+representational reason. The trusted broker then runs **at most one**
+compatibility attempt in the same worker sandbox, with the same AppContainer,
+Job Object, source handle, budgets and sidecar policy, and only before any
+batch has been published. The closed eligible failures are:
+
+- `UnsupportedFormat`
+- `UnsupportedRequiredFeature`
+- `EmptyGeometry`
+
+Every security, containment, cancellation and resource failure is terminal and
+never retried: `UnsafeReference`, `FileUnavailable`, `FileChanged`,
+`ResourceLimit`, `ArchiveLimit`, `PrimarySourceLimit`, `AggregateSourceLimit`,
+`ScratchLimit`, `Cancelled`, `WorkerCrashed`, `WorkerTimedOut`,
+`ImportProtocolViolation`, and the remaining typed codes. A native preflight
+that rejects a file as unsafe is never reinterpreted by the compatibility
+reader. The compatibility route has its own bounded container admission:
+GLB/JSON header and buffer-view preflight for glTF, bounded text admission for
+OBJ (with broker-only `.mtl`/texture sidecars), binary/ASCII magic and header
+preflight for FBX, and the shared OPC/ZIP preflight for 3MF. It never adds a
+path open, default Assimp IOSystem, plug-in, network call, child process or
+file write.
+
+A forced reader is an explicit choice and never triggers the automatic retry.
+When a forced native reader fails with an eligible error, the failure card
+offers **Try compatibility reader**; that action forces the shipped alternate
+through the same classification, broker and admission path. The diagnostic
+names the native reader, the compatibility reader and the final reader. See
+[ADR-0102](design/adr/0102-compatibility-reader-fallback.md).
 
 ## Tier B ceilings
 

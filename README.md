@@ -84,11 +84,15 @@ names fail before any file is opened.
 | Reader | Extensions | Importer | Default for |
 | --- | --- | --- | --- |
 | `3mf` | `.3mf` | `3mf-worker` | 3MF |
+| `3mf-assimp` | `.3mf` | `assimp-compat` | 3MF (alternate) |
 | `assimp` | `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, `.x3d` | `assimp-compat` | compatibility formats |
 | `cad` | `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd` | `cad-host` | IGES, BREP, XBF, FCStd |
 | `fbx` | `.fbx` | `fbx-worker` | FBX |
+| `fbx-assimp` | `.fbx` | `assimp-compat` | FBX (alternate) |
 | `gltf` | `.gltf`, `.glb` | `gltf-worker` | glTF/GLB |
+| `gltf-assimp` | `.gltf`, `.glb` | `assimp-compat` | glTF/GLB (alternate) |
 | `obj` | `.obj` | `obj-worker` | OBJ |
+| `obj-assimp` | `.obj` | `assimp-compat` | OBJ (alternate) |
 | `ply` | `.ply` | `ply-worker` | PLY |
 | `step` | `.step`, `.stp`, `.stpnc`, `.p21`, `.210` | `step-host` | STEP |
 | `stl` | `.stl` | `stl-worker` | STL |
@@ -98,6 +102,7 @@ names fail before any file is opened.
 ```powershell
 Preview3D.exe --list-readers
 Preview3D.exe --reader gltf model.bin
+Preview3D.exe --reader gltf-assimp model.gltf
 Preview3D.exe --reader usd-compat scene.usda
 ```
 
@@ -109,6 +114,15 @@ fails with a typed diagnostic that names the reader. **Open as…** lists the
 default reader (marked) and any shipped alternates for each family; choosing
 the default clears the forced-reader state. See
 [ADR-0101](docs/design/adr/0101-reader-catalog-scores-force-reader.md).
+
+A default native glTF/OBJ/FBX/3MF open may retry exactly once with its
+lower-scored Assimp compatibility reader, but only for `UnsupportedFormat`,
+`UnsupportedRequiredFeature`, or `EmptyGeometry`, and only before any batch is
+published. Security, containment, cancellation and resource failures are
+terminal and never retry. A forced native reader does not silently switch; the
+failure card offers **Try compatibility reader** instead. Both readers and the
+final reader are named in diagnostics. See
+[ADR-0102](docs/design/adr/0102-compatibility-reader-fallback.md).
 
 ## Install
 

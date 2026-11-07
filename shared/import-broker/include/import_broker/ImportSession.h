@@ -22,6 +22,7 @@
 // format, unpacking validated chunks into renderer-facing structs, and every
 // user-facing string. This layer returns typed results only.
 
+#include "import_broker/ReaderFallback.h"
 #include "import_broker/SharedSectionValidator.h"
 #include "model_core/ControlProtocol.h"
 #include "model_core/ImportError.h"
@@ -229,6 +230,12 @@ struct ImportSessionRequest {
     // Meaningful only when format == ImportFormat::Assimp. The closed value
     // selects the compatibility importer hint and the expected wire identity.
     model_core::AssimpFormat assimpFormat = model_core::AssimpFormat::Dae;
+    // T08: closed compatibility-reader fallback. None disables it. The broker
+    // validates the route against `format`, then runs at most one Assimp
+    // compatibility session in the same sandbox with the same budgets and
+    // sidecar policy. Only the closed eligible error set is retried, and only
+    // before any batch has been published.
+    ReaderFallbackRoute readerFallback = ReaderFallbackRoute::None;
     uint64_t generationId = 0;
     uint64_t sectionByteCapacity = 0;
     uint32_t maxChunkCount = 0;
@@ -419,6 +426,18 @@ struct ImportSessionResult {
     // USD fast worker. USD-006 consumes this without reinterpreting generic
     // parser/resource failures as permission to launch OpenUSD.
     bool compatibilityFallbackRequired = false;
+    // T08 compatibility-reader evidence. Stable ASCII product reader names;
+    // empty when the request carried no ReaderFallbackRoute. The final reader
+    // is always named, whether the native attempt survived or the one
+    // compatibility retry ran. The diagnostic is path-free and names the
+    // native reader, the compatibility reader and the final reader.
+    std::string nativeReaderName;
+    std::string compatibilityReaderName;
+    std::string finalReaderName;
+    bool compatibilityFallbackAttempted = false;
+    bool usedCompatibilityReader = false;
+    uint32_t readerFallbackAttemptCount = 0;
+    std::string readerFallbackDiagnostic;
     // T06: the deterministic cache identity the generation ran with, or 0 when
     // the format has no import options. It names the format and every option
     // that can change normalized output; callers combine it with the existing
@@ -462,6 +481,17 @@ uint64_t DedicatedHostCommitLimitBytes();
 // Synchronous, and blocking for as long as the worker takes to reply. Call
 // from a background thread. Never throws for an ordinary import failure --
 // every expected fault is reported through ImportSessionResult::stage.
+//
+// When `request.readerFallback` is a known route, this is equivalent to
+// RunImportSessionWithFallback: the native attempt runs first and, only for the
+// closed eligible failures and only before any batch is published, exactly one
+// compatibility attempt runs in the same sandbox.
 ImportSessionResult RunImportSession(const ImportSessionRequest& request);
+
+// Explicit entry point for the closed T08 policy. `request.readerFallback` must
+// be a known non-None route that matches `request.format`; anything else is a
+// typed ValidateOptions/ImportProtocolViolation failure before a process is
+// launched. At most one compatibility attempt is made per generation.
+ImportSessionResult RunImportSessionWithFallback(const ImportSessionRequest& request);
 
 } // namespace import_broker

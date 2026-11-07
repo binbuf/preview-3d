@@ -13,8 +13,11 @@ fixtures. Regenerating is deterministic.
 
 from __future__ import annotations
 
+import base64
+import io
 import pathlib
 import struct
+import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent
 
@@ -376,6 +379,182 @@ def three_ds() -> bytes:
     return _chunk(0x4D4D, editor)
 
 
+def gltf(required_extension: bool) -> str:
+    """A minimal glTF 2.0 box with one embedded triangle buffer."""
+    positions = struct.pack("<9f", *[component for vertex in BOX_VERTICES[:3]
+                                     for component in vertex])
+    indices = struct.pack("<3H", 0, 1, 2)
+    payload = positions + indices + b"\0\0"
+    encoded = base64.b64encode(payload).decode("ascii")
+    required = (
+        '  "extensionsUsed": ["KHR_implicit_shapes"],\n'
+        '  "extensionsRequired": ["KHR_implicit_shapes"],\n'
+        if required_extension else "")
+    return f'''{{
+  "asset": {{"version": "2.0", "generator": "preview-3d fixture"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"mesh": 0}}],
+  "meshes": [{{
+    "primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "mode": 4}}]
+  }}],
+  "buffers": [{{"byteLength": {len(payload)}, "uri": "data:application/octet-stream;base64,{encoded}"}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962}},
+    {{"buffer": 0, "byteOffset": 36, "byteLength": 6, "target": 34963}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+      "min": [0, 0, 0], "max": [1, 1, 0]}},
+    {{"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}}
+  ],
+{required}  "extras": {{}}
+}}
+'''
+
+
+def obj(vertices, faces) -> str:
+    lines = [f"v {x} {y} {z}" for x, y, z in vertices]
+    lines += ["f " + " ".join(str(index + 1) for index in face) for face in faces]
+    return "\n".join(lines) + "\n"
+
+
+def ascii_fbx(vertices, faces, name: str) -> str:
+    """A minimal FBX 7.4 ASCII scene with one Mesh geometry object."""
+    vertex_data = ",".join(f"{x},{y},{z}" for x, y, z in vertices)
+    polygon = []
+    for face in faces:
+        for index in face[:-1]:
+            polygon.append(str(index))
+        polygon.append(str(-face[-1] - 1))
+    polygon_data = ",".join(polygon)
+    return f'''; FBX 7.4.0 project file
+; Preview 3D repository-owned compatibility fixture
+FBXHeaderExtension:  {{
+    FBXHeaderVersion: 1003
+    FBXVersion: 7400
+}}
+GlobalSettings:  {{
+    Version: 1000
+}}
+Definitions:  {{
+    Version: 100
+    Count: 2
+    ObjectType: "Geometry" {{
+        Count: 1
+    }}
+    ObjectType: "Model" {{
+        Count: 1
+    }}
+}}
+Objects:  {{
+    Geometry: 1000, "Geometry::{name}", "Mesh" {{
+        Vertices: *{len(vertices) * 3} {{ a: {vertex_data} }}
+        PolygonVertexIndex: *{len(polygon)} {{ a: {polygon_data} }}
+        GeometryVersion: 124
+    }}
+    Model: 2000, "Model::{name}", "Mesh" {{
+        Version: 232
+        Properties70:  {{
+        }}
+    }}
+}}
+Connections:  {{
+    C: "OO",2000,0
+    C: "OO",1000,2000
+}}
+'''
+
+
+def three_mf(required_slice: bool) -> bytes:
+    """A minimal OPC 3MF package with one triangle."""
+    content_types = '''<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+ <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+ <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+</Types>
+'''
+    relationships = '''<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+ <Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+</Relationships>
+'''
+    vertices = "".join(
+        f'<vertex x="{x}" y="{y}" z="{z}"/>' for x, y, z in BOX_VERTICES[:3])
+    triangles = '<triangle v1="0" v2="1" v3="2"/>'
+    required = ' xmlns:s="http://schemas.microsoft.com/3dmanufacturing/slice/2015/07" requiredextensions="s"' \
+        if required_slice else ""
+    model = f'''<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"{required}>
+ <resources>
+  <object id="1" type="model">
+   <mesh>
+    <vertices>{vertices}</vertices>
+    <triangles>{triangles}</triangles>
+   </mesh>
+  </object>
+ </resources>
+ <build><item objectid="1"/></build>
+</model>
+'''
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        # Fixed timestamps/attributes keep the committed package byte-exact
+        # across regenerations (ADR-0029).
+        for name, data in (
+                ("[Content_Types].xml", content_types),
+                ("_rels/.rels", relationships),
+                ("3D/3dmodel.model", model)):
+            info = zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o600 << 16
+            archive.writestr(info, data)
+    return buffer.getvalue()
+
+
+def gltf_with_buffer_uri(uri: str, required_extension: bool) -> str:
+    """The same one-triangle glTF, but with an external buffer URI."""
+    required = (
+        '  "extensionsUsed": ["KHR_implicit_shapes"],\n'
+        '  "extensionsRequired": ["KHR_implicit_shapes"],\n'
+        if required_extension else "")
+    return f'''{{
+  "asset": {{"version": "2.0", "generator": "preview-3d fixture"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"mesh": 0}}],
+  "meshes": [{{
+    "primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "mode": 4}}]
+  }}],
+  "buffers": [{{"byteLength": 44, "uri": "{uri}"}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962}},
+    {{"buffer": 0, "byteOffset": 36, "byteLength": 6, "target": 34963}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+      "min": [0, 0, 0], "max": [1, 1, 0]}},
+    {{"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}}
+  ],
+{required}  "extras": {{}}
+}}
+'''
+
+
+def gltf_resource_dag() -> str:
+    """A 40-level doubling node DAG with no meshes."""
+    levels = 40
+    nodes = []
+    for index in range(levels + 1):
+        if index < levels:
+            nodes.append('{"children":[%d,%d]}' % (index + 1, index + 1))
+        else:
+            nodes.append("{}")
+    return (
+        '{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],'
+        '"nodes":[' + ",".join(nodes) + "]}\n")
+
+
 def write(name: str, data: str | bytes) -> None:
     path = ROOT / name
     path.write_bytes(data.encode("utf-8") if isinstance(data, str) else data)
@@ -413,6 +592,30 @@ def main() -> None:
     write("truncated.3ds", three_ds()[:40])
     write("malformed.off", "OFF\nnot-a-vertex-count\n")
     write("malformed.amf", "<?xml version=\"1.0\"?><amf><object><mesh><vertices>\n")
+    # T08 same-family compatibility fixtures.
+    write("box.gltf", gltf(False))
+    write("required-extension.gltf", gltf(True))
+    write("unsafe-buffer.gltf", gltf_with_buffer_uri("../outside.bin", False))
+    write("required-extension-missing-buffer.gltf",
+          gltf_with_buffer_uri("missing.bin", True))
+    write("resource-dag.gltf", gltf_resource_dag())
+    write("malformed.gltf", '{"asset":{"version":"2.0"},"buffers":[')
+    write("box.obj", obj(BOX_VERTICES, BOX_TRIS))
+    # A syntactically valid but degenerate 2-vertex face: the native OBJ
+    # adapter emits no primitive, while Assimp represents it as a line.
+    write("line-only.obj", obj([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], [(0, 1)]))
+    # A face that references texture coordinates the file never defines. ufbx
+    # rejects it (the native OBJ reader reports EmptyGeometry); Assimp keeps
+    # the position-only triangle.
+    write("missing-vt.obj",
+          "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1/1 2/2 3/3\n")
+    write("box.fbx", ascii_fbx(BOX_VERTICES, BOX_TRIS, "box"))
+    write("line-only.fbx", ascii_fbx([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], [(0, 1)], "line"))
+    write("box.3mf", three_mf(False))
+    write("required-extension.3mf", three_mf(True))
+    write("malformed.obj", "v not-a-number\nf 1 2 3\n")
+    write("malformed.fbx", "FBXHeaderExtension: {\n")
+    write("malformed.3mf", b"PK\x03\x04not-a-zip")
 
 
 if __name__ == "__main__":

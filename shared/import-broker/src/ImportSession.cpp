@@ -243,6 +243,10 @@ model_core::SourceFormatId AssimpSourceFormat(model_core::AssimpFormat format)
     case A::Off: return S::Off;
     case A::Amf: return S::Amf;
     case A::X3d: return S::X3d;
+    case A::Gltf: return S::Gltf;
+    case A::Obj: return S::Obj;
+    case A::Fbx: return S::Fbx;
+    case A::ThreeMf: return S::ThreeMf;
     }
     return S::Unknown;
 }
@@ -252,7 +256,23 @@ bool IsAssimpSourceFormat(model_core::SourceFormatId format)
     using S = model_core::SourceFormatId;
     return format == S::Dae || format == S::ThreeDs || format == S::Dxf
         || format == S::DirectX || format == S::Off || format == S::Amf
-        || format == S::X3d;
+        || format == S::X3d || format == S::Gltf || format == S::Glb
+        || format == S::Obj || format == S::Fbx || format == S::ThreeMf;
+}
+
+// The closed fallback route names a native family. A route can only be used
+// with the matching broker format; anything else is a protocol rejection
+// before a process is launched.
+bool ReaderFallbackRouteMatchesFormat(ReaderFallbackRoute route, ImportFormat format) noexcept
+{
+    switch (route) {
+    case ReaderFallbackRoute::GltfAssimp: return format == ImportFormat::Gltf;
+    case ReaderFallbackRoute::ObjAssimp: return format == ImportFormat::Obj;
+    case ReaderFallbackRoute::FbxAssimp: return format == ImportFormat::Fbx;
+    case ReaderFallbackRoute::ThreeMfAssimp: return format == ImportFormat::ThreeMf;
+    case ReaderFallbackRoute::None: return true;
+    }
+    return false;
 }
 
 // T06: the broker's closed format identity maps to the shared option format.
@@ -1065,7 +1085,11 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                 : request.format == ImportFormat::Fcstd
                                     ? chunk.scene.format == model_core::SourceFormatId::Fcstd
                                 : request.format == ImportFormat::Assimp
-                                    ? chunk.scene.format == AssimpSourceFormat(request.assimpFormat)
+                                    ? (request.assimpFormat == model_core::AssimpFormat::Gltf
+                                        ? (chunk.scene.format == model_core::SourceFormatId::Gltf
+                                           || chunk.scene.format == model_core::SourceFormatId::Glb)
+                                        : chunk.scene.format
+                                            == AssimpSourceFormat(request.assimpFormat))
                                 : (chunk.scene.format == model_core::SourceFormatId::Usda
                                    || chunk.scene.format == model_core::SourceFormatId::Usdc
                                    || chunk.scene.format == model_core::SourceFormatId::Usdz);
@@ -1410,7 +1434,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                                   12ull * 1024 * 1024 * 1024 - allSourceBytes,
                                                   /*allowPackageBasenameLookup=*/true,
                                                   request.additionalSidecarSearchRoots,
-                                                  request.format);
+                                                  request.format, request.assimpFormat);
 
             bool sentReply = false;
             if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {
@@ -1905,7 +1929,11 @@ ImportSessionResult MapStepFailure(ImportSessionResult result)
 
 } // namespace
 
-ImportSessionResult RunImportSession(const ImportSessionRequest& request)
+namespace {
+
+// The pre-T08 body. It is never called with a non-None readerFallback route;
+// the public entry points below own that closed policy.
+ImportSessionResult RunImportSessionCore(const ImportSessionRequest& request)
 {
     // T06: validate the closed option record on the trusted side before any
     // process is launched. The worker/host repeat this validation on the packed
@@ -2016,6 +2044,119 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         }
     }
     return withIdentity(std::move(compatibility));
+}
+
+std::string DescribeReaderFallback(const ReaderFallbackNames& names,
+                                   model_core::ImportErrorCode code, bool attempted,
+                                   bool used)
+{
+    std::string text = "native reader '";
+    text += names.nativeReader ? names.nativeReader : "unknown";
+    text += "' failed with code ";
+    text += std::to_string(uint32_t(code));
+    if (attempted) {
+        text += "; compatibility reader '";
+        text += names.compatibilityReader ? names.compatibilityReader : "unknown";
+        text += "' was tried once and ";
+        text += used ? "succeeded" : "also failed";
+        text += "; final reader '";
+        text += names.compatibilityReader ? names.compatibilityReader : "unknown";
+        text += "'";
+    } else {
+        text += "; compatibility reader '";
+        text += names.compatibilityReader ? names.compatibilityReader : "unknown";
+        text += "' was not attempted (failure is outside the closed eligible set or a batch was already published); final reader '";
+        text += names.nativeReader ? names.nativeReader : "unknown";
+        text += "'";
+    }
+    return text;
+}
+
+} // namespace
+
+ImportSessionResult RunImportSessionWithFallback(const ImportSessionRequest& request)
+{
+    if (request.readerFallback == ReaderFallbackRoute::None
+        || !IsKnownReaderFallbackRoute(request.readerFallback)
+        || !ReaderFallbackRouteMatchesFormat(request.readerFallback, request.format)) {
+        return Fail(ImportStage::ValidateOptions,
+                    model_core::ImportErrorCode::ImportProtocolViolation);
+    }
+
+    const ReaderFallbackRoute route = request.readerFallback;
+    const ReaderFallbackNames names = ReaderFallbackNamesFor(route);
+
+    // The native attempt runs first, with the caller's exact sandbox, budgets
+    // and sidecar policy. A batch delivered to the caller commits the
+    // generation: a later failure can never be retried into the same
+    // generation.
+    bool batchDelivered = false;
+    ImportSessionRequest nativeRequest = request;
+    nativeRequest.readerFallback = ReaderFallbackRoute::None;
+    if (request.onBatch) {
+        nativeRequest.onBatch = [&](std::vector<ValidatedChunk>&& chunks) {
+            batchDelivered = true;
+            request.onBatch(std::move(chunks));
+        };
+    }
+    ImportSessionResult native = RunImportSessionCore(nativeRequest);
+    native.nativeReaderName = names.nativeReader ? names.nativeReader : "";
+    native.compatibilityReaderName = names.compatibilityReader ? names.compatibilityReader : "";
+    native.finalReaderName = native.nativeReaderName;
+    if (native.ok) return native;
+
+    const bool eligible = IsReaderFallbackEligibleError(native.errorCode)
+        && native.batchCount == 0 && !batchDelivered;
+    if (!eligible) {
+        native.readerFallbackDiagnostic =
+            DescribeReaderFallback(names, native.errorCode, false, false);
+        return native;
+    }
+
+    // Exactly one compatibility attempt. Only the routing fields change: the
+    // same worker executable, AppContainer, Job limits, commit/time budgets,
+    // sidecar policy and source path are carried over. Coarse/detail replay and
+    // format-specific options do not apply to the compatibility route.
+    ImportSessionRequest compatibilityRequest = request;
+    compatibilityRequest.readerFallback = ReaderFallbackRoute::None;
+    compatibilityRequest.format = ImportFormat::Assimp;
+    compatibilityRequest.assimpFormat = AssimpFormatForReaderFallback(route);
+    compatibilityRequest.forceCompatibilityHost = false;
+    compatibilityRequest.compatibilityHostExePath.clear();
+    compatibilityRequest.stepHostExePath.clear();
+    compatibilityRequest.enableCoarseProxy = false;
+    compatibilityRequest.nextDetail = {};
+    compatibilityRequest.onInitialComplete = {};
+    compatibilityRequest.onStepProgress = {};
+    compatibilityRequest.importOptions.reset();
+    compatibilityRequest.workerArgumentsOverride.clear();
+    compatibilityRequest.stepForceSerialForTesting = false;
+    compatibilityRequest.stepTinyEdgeBudgetForTesting = false;
+    batchDelivered = false;
+    if (request.onBatch) {
+        compatibilityRequest.onBatch = [&](std::vector<ValidatedChunk>&& chunks) {
+            batchDelivered = true;
+            request.onBatch(std::move(chunks));
+        };
+    }
+
+    ImportSessionResult compatibility = RunImportSessionCore(compatibilityRequest);
+    compatibility.nativeReaderName = native.nativeReaderName;
+    compatibility.compatibilityReaderName = native.compatibilityReaderName;
+    compatibility.finalReaderName = native.compatibilityReaderName;
+    compatibility.compatibilityFallbackAttempted = true;
+    compatibility.usedCompatibilityReader = compatibility.ok;
+    compatibility.readerFallbackAttemptCount = 1;
+    compatibility.readerFallbackDiagnostic = DescribeReaderFallback(
+        names, native.errorCode, true, compatibility.ok);
+    return compatibility;
+}
+
+ImportSessionResult RunImportSession(const ImportSessionRequest& request)
+{
+    if (request.readerFallback != ReaderFallbackRoute::None)
+        return RunImportSessionWithFallback(request);
+    return RunImportSessionCore(request);
 }
 
 } // namespace import_broker

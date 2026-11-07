@@ -18,6 +18,7 @@ The plan, ground rules, and per-task verify commands are in
 - **T05 — CAD edge and wire geometry**: `compatibility-host-step/src/StepXdeAdapter.cpp` now runs a bounded edge; face/edge counts are checked **before** `BRepMesh`, so an over-budget edge
 - **T06 — Per-format import options and quality surface**: `shared/model-core/include/model_core/ImportOptions.h` is the closed shared; `ImportQuality { Draft, Balanced, Full }`;
 - **T07 — Reader registry, scores and force-reader**: `shared/model-core/include/model_core/ReaderCatalog.h` — compile-time,; Pure lookups: `Readers`, `FindReaderByName`, `ReaderOwnsExtension`,
+- **T08 — Compatibility readers and bounded fallback**: `model_core::AssimpFormat` adds `Gltf=7`, `Obj=8`, `Fbx=9`, `ThreeMf=10`; `ReaderCatalog.h` adds the four single-family compatibility readers
 
 ## Task notes (maintained by symphony — do not edit)
 
@@ -28,4 +29,5 @@ The plan, ground rules, and per-task verify commands are in
 - [T05](progress/T05.md) — `compatibility-host-step/src/StepXdeAdapter.cpp` now runs a bounded edge
 - [T06](progress/T06.md) — `shared/model-core/include/model_core/ImportOptions.h` is the closed shared
 - [T07](progress/T07.md) — `shared/model-core/include/model_core/ReaderCatalog.h` — compile-time,
+- [T08](progress/T08.md) — `model_core::AssimpFormat` adds `Gltf=7`, `Obj=8`, `Fbx=9`, `ThreeMf=10`
 <!-- symphony:digest:end -->

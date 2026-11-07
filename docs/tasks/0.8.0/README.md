@@ -155,11 +155,15 @@ typed before any open, and `--reader` wins over `--format` when both are given.
 | Reader | Extensions | Importer | Score |
 | --- | --- | --- | --- |
 | `3mf` | `3mf` | `3mf-worker` | 90 |
+| `3mf-assimp` | `3mf` | `assimp-compat` | 35 |
 | `assimp` | `dae,3ds,dxf,x,off,amf,x3d` | `assimp-compat` | 30 |
 | `cad` | `igs,iges,brep,xbf,fcstd` | `cad-host` | 100 |
 | `fbx` | `fbx` | `fbx-worker` | 90 |
+| `fbx-assimp` | `fbx` | `assimp-compat` | 35 |
 | `gltf` | `gltf,glb` | `gltf-worker` | 100 |
+| `gltf-assimp` | `gltf,glb` | `assimp-compat` | 35 |
 | `obj` | `obj` | `obj-worker` | 50 |
+| `obj-assimp` | `obj` | `assimp-compat` | 35 |
 | `ply` | `ply` | `ply-worker` | 70 |
 | `step` | `step,stp,stpnc,p21,210` | `step-host` | 100 |
 | `stl` | `stl` | `stl-worker` | 60 |
@@ -173,9 +177,26 @@ viewer still classifies the path, the broker still canonicalizes and duplicates
 the handle, and the worker/host still applies admission, containment and every
 budget. The reader name never crosses the process boundary. Open As lists the
 default reader (marked) and shipped alternates for each family; selecting the
-default clears the forced-reader state. T08 adds new compatibility readers and
-the closed retry policy on top of this selection foundation; it does not add a
-new parser here.
+default clears the forced-reader state. T08 adds the same-family compatibility
+readers and the closed retry policy on top of this selection foundation; it
+does not add a new parser here.
+
+## Compatibility readers and fallback (T08)
+
+`gltf-assimp`, `obj-assimp`, `fbx-assimp` and `3mf-assimp` are lower-scored
+readers that use the existing bounded Assimp worker adapter. They can be forced
+explicitly with `--reader`/Open As, or selected by the closed broker fallback
+after a default native open fails with `UnsupportedFormat`,
+`UnsupportedRequiredFeature`, or `EmptyGeometry`. The retry is at most one per
+generation, only before any batch is published, and runs in the same sandbox
+with the same budgets and sidecar policy. `UnsafeReference`, `FileUnavailable`,
+`FileChanged`, `ResourceLimit`, `ArchiveLimit`, `PrimarySourceLimit`,
+`AggregateSourceLimit`, `ScratchLimit`, `Cancelled`, `WorkerCrashed`,
+`WorkerTimedOut`, and `ImportProtocolViolation` never retry. A forced native
+reader does not switch silently; the failure card offers **Try compatibility
+reader**. The diagnostic names the native reader, the compatibility reader and
+the final reader. See
+[ADR-0102](../../design/adr/0102-compatibility-reader-fallback.md).
 
 ## Execution notes
 

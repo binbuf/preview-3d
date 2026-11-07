@@ -39,7 +39,7 @@ parallel after T01.
 
 - [x] T06 - Per-format import options and quality surface → [../tasks/0.8.0/T06-per-format-import-options.md](../tasks/0.8.0/T06-per-format-import-options.md)
 - [x] T07 - Reader registry, scores and force-reader → [../tasks/0.8.0/T07-reader-registry-force-reader.md](../tasks/0.8.0/T07-reader-registry-force-reader.md)
-- [ ] T08 - Compatibility readers and bounded fallback → [../tasks/0.8.0/T08-compatibility-readers-fallback.md](../tasks/0.8.0/T08-compatibility-readers-fallback.md)
+- [x] T08 - Compatibility readers and bounded fallback → [../tasks/0.8.0/T08-compatibility-readers-fallback.md](../tasks/0.8.0/T08-compatibility-readers-fallback.md)
 
 ## Phase 4 — Evidence and qualification
 
@@ -55,11 +55,11 @@ parallel after T01.
 - Animation playback, cameras and lights.
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-11-07T20:18:16Z · 7/10 done
+**Pipeline status** — updated 2026-11-07T22:42:51Z · 8/10 done
 
-- Completed: T01, T02, T03, T04, T05, T06, T07
+- Completed: T01, T02, T03, T04, T05, T06, T07, T08
 - Blocked: none
 - Failed: none
-- Remaining: T08, T09, T10
-- Last finished: T07 — done · Reader catalog, scores, --list-readers/--reader, Open As alternates, forced USD compatibility routing, info-panel reader reporting, docs/ADR-0101, and passing [reader-selection] in Release and Debug all landed; T08 remains as the next task.
+- Remaining: T09, T10
+- Last finished: T08 — done · Compatibility readers (gltf-assimp/obj-assimp/fbx-assimp/3mf-assimp), bounded container admission, closed one-attempt broker fallback, failure-card explicit action, fixtures/fuzz seeds, tests and docs all landed; Release and Debug [reader-fallback] pass.
 <!-- /symphony:status -->

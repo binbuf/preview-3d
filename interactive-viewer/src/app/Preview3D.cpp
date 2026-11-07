@@ -365,6 +365,12 @@ struct ViewerApp
     // Display label of the reader that produced the current document. The
     // info panel reports it; it is path-free and stable.
     std::wstring selectedReaderLabel;
+    // T08: the explicit "Try compatibility reader" action on the failure card.
+    // Set only when the failed native open has a shipped compatibility
+    // alternate for a closed eligible error; the button is the Retry button
+    // relabelled, so no extra card width is needed.
+    const model_core::ReaderDescriptor* compatibilityReader = nullptr;
+    std::wstring compatibilityReaderName;
     bool skipContentCheck = false;
     // T06: closed per-format import options, loaded from Settings and
     // overridable by repeated --import-option arguments. Only the selected
@@ -2395,6 +2401,16 @@ void UpdateButtonAvailability(ViewerApp& app)
     SetControlVisible(app.copyButton, app.state == ViewerState::Failed);
     EnableWindow(app.retryButton, app.failedPath.empty() ? FALSE : TRUE);
     EnableWindow(app.openAsButton, app.failedPath.empty() ? FALSE : TRUE);
+    // T08: the failure card prefers an explicit user action over a silent
+    // reader switch. When the closed policy can offer an alternate, the Retry
+    // button becomes that action; otherwise it stays a plain retry.
+    const bool offerCompatibility = app.state == ViewerState::Failed
+        && !app.compatibilityReaderName.empty() && !app.failedPath.empty();
+    if (app.retryButton) {
+        SetWindowTextW(app.retryButton, offerCompatibility
+            ? Loc("action.tryCompatibility", L"Try compatibility reader").c_str()
+            : Loc("action.retry", L"Retry").c_str());
+    }
 }
 
 void LayoutControls(ViewerApp& app)
@@ -2586,7 +2602,8 @@ void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring&
     const std::wstring& failedPath = {},
     model_core::ImportErrorCode code = model_core::ImportErrorCode::InternalImporterFailure,
     import_broker::ImportStage stage = import_broker::ImportStage::OpenSource,
-    model_core::ImportFailurePhase phase = model_core::ImportFailurePhase::Unspecified)
+    model_core::ImportFailurePhase phase = model_core::ImportFailurePhase::Unspecified,
+    const model_core::ReaderDescriptor* compatibilityReader = nullptr)
 {
     if (app.cancellation) app.cancellation->store(true, std::memory_order_relaxed);
     app.renderThread.CancelUploads();
@@ -2594,6 +2611,9 @@ void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring&
     app.state = ViewerState::Failed;
     app.errorSummary = summary;
     app.errorDetails = details;
+    app.compatibilityReader = compatibilityReader;
+    app.compatibilityReaderName = compatibilityReader
+        ? open_options::ReaderLabel(*compatibilityReader) : std::wstring{};
     if (!app.openFormatNotice.empty()) {
         if (!app.errorDetails.empty()) app.errorDetails += L"\r\n\r\n";
         app.errorDetails += app.openFormatNotice;
@@ -2643,6 +2663,8 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     app.forcedFormat = forcedFormat;
     app.forcedReader = forcedReader;
     app.selectedReaderLabel.clear();
+    app.compatibilityReader = nullptr;
+    app.compatibilityReaderName.clear();
     app.openFormatNotice.clear();
     ++app.generation;
     if (app.cancellation)
@@ -2737,7 +2759,9 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
         chosen = decision.format;
     }
 
-    const auto d3d12Format = d3d12_import_bridge::SourceFormatForFormatDescriptor(chosen);
+    const auto d3d12Format = forcedReader
+        ? d3d12_import_bridge::SourceFormatForReader(*forcedReader, chosen)
+        : d3d12_import_bridge::SourceFormatForFormatDescriptor(chosen);
     if (!d3d12Format)
     {
         app.filename = FileNameFromPath(path);
@@ -2863,7 +2887,11 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     auto* stepPhase = &app.stepProgressPhase;
     auto* stepDone = &app.stepProgressDone;
     auto* stepTotal = &app.stepProgressTotal;
-    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting, stepPhase, stepDone, stepTotal, assetSearchRoots, selectedImportOptions, forceCompatibilityHost]()
+    // A default native open gets the closed automatic fallback. An explicit
+    // forced reader never silently switches; the failure card offers the
+    // compatibility action instead.
+    const bool allowAutomaticReaderFallback = forcedReader == nullptr;
+    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting, stepPhase, stepDone, stepTotal, assetSearchRoots, selectedImportOptions, forceCompatibilityHost, allowAutomaticReaderFallback]()
     {
         d3d12_import_bridge::ImportResult result;
         bool initialComplete = false;
@@ -2886,7 +2914,7 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
             result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
             {
                 return cancellation->load(std::memory_order_relaxed);
-            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard, stepProgress, assetSearchRoots, selectedImportOptions, forceCompatibilityHost);
+            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard, stepProgress, assetSearchRoots, selectedImportOptions, forceCompatibilityHost, allowAutomaticReaderFallback);
         }
         catch (const std::length_error&)
         {
@@ -3875,7 +3903,19 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_TOP: SnapViewCommand(app, ViewDir::Top); break;
     case ID_VIEW_PROJECTION: ToggleProjection(app); break;
     case ID_VIEW_MENU: ToggleSettingsMenu(app); break;
-    case ID_VIEW_RETRY: if (!app.failedPath.empty()) BeginOpen(app, app.failedPath, app.assetSearchRoots, app.forcedFormat, app.forcedReader); break;
+    case ID_VIEW_RETRY:
+        if (!app.failedPath.empty())
+        {
+            // T08: when the failure card offers the explicit compatibility
+            // reader, this button becomes that action. It forces the shipped
+            // compatibility reader through the normal classification, broker
+            // canonicalization, admission and budgets; it is not a silent retry.
+            if (app.compatibilityReader)
+                BeginOpen(app, app.failedPath, app.assetSearchRoots, nullptr, app.compatibilityReader);
+            else
+                BeginOpen(app, app.failedPath, app.assetSearchRoots, app.forcedFormat, app.forcedReader);
+        }
+        break;
     case ID_VIEW_COPY_DETAILS: CopyErrorDetails(app); break;
     case ID_VIEW_CANCEL: CancelOpen(app); break;
     case ID_VIEW_CONTROLS: ShowControlsDialog(app.window); break;
@@ -4695,7 +4735,10 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     {
         HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton
             :control==Control::ErrorOpenAs?app.openAsButton:app.copyButton;
-        info.name=control==Control::ErrorRetry?Loc("action.retry", L"Retry")
+        info.name=control==Control::ErrorRetry
+            ? (app.compatibilityReader
+                ? Loc("action.tryCompatibility", L"Try compatibility reader")
+                : Loc("action.retry", L"Retry"))
             :control==Control::ErrorOpenAnother?Loc("action.openAnother", L"Open another")
             :control==Control::ErrorOpenAs?Loc("action.openAs", L"Open as\u2026")
             :Loc("action.copyDetails", L"Copy details");
@@ -7653,8 +7696,26 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (!complete->result.ok)
         {
-            SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path, complete->result.errorCode, complete->result.errorStage, complete->result.errorPhase);
+            // Offer the explicit compatibility action only when the automatic
+            // retry was not already attempted. A failed compatibility attempt
+            // is final; re-offering the same reader would be a blind retry.
+            const auto* compatibilityReader = complete->result.compatibilityFallbackAttempted
+                ? nullptr
+                : model_core::FindReaderByName(complete->result.compatibilityReaderStableName);
+            SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path,
+                complete->result.errorCode, complete->result.errorStage, complete->result.errorPhase,
+                compatibilityReader);
             return 0;
+        }
+        // T08: report the reader that actually produced the document. A
+        // successful closed fallback is recorded in the info panel/diagnostics
+        // with both reader names; no silent producer change.
+        if (!complete->result.readerName.empty())
+            app->selectedReaderLabel = complete->result.readerName;
+        if (complete->result.usedCompatibilityReader) {
+            app->openFormatNotice = LocFormat("info.readerFallbackOpened",
+                L"Opened with the {0} compatibility reader.",
+                { complete->result.readerName });
         }
         app->renderThread.FinishImport(complete->generation, complete->result.sourceIdentity, complete->result.missingAssets);
         return 0;

@@ -84,7 +84,7 @@ const InfoPanelSection* FindSection(const std::vector<InfoPanelSection>& section
 TEST_CASE("--list-readers includes every shipped reader exactly once", "[reader-selection]")
 {
     const auto readers = Readers();
-    REQUIRE(readers.size() == 11);
+    REQUIRE(readers.size() == 15);
 
     // Stable name order is the listing contract.
     std::set<std::string> names;
@@ -122,15 +122,21 @@ TEST_CASE("--list-readers includes every shipped reader exactly once", "[reader-
     CHECK(readerExtensions == catalogExtensions);
 
     // A reader's direct importer must agree with every catalog descriptor it
-    // owns. The USD compatibility reader is the one deliberate alternate: its
-    // descriptors declare the fast-path importer, and the reader itself is the
-    // separately built OpenUSD host.
+    // owns. The USD compatibility reader and the four T08 single-family
+    // compatibility readers are deliberate alternates: their descriptors
+    // declare the native importer, and the reader itself is the separately
+    // sandboxed compatibility route.
     for (const auto& reader : readers) {
         for (const auto extension : reader.extensions) {
             const auto* descriptor = FindByExtension(extension);
             REQUIRE(descriptor != nullptr);
             if (reader.importer == ImporterKind::UsdCompatibilityHost) {
                 CHECK(descriptor->importer == ImporterKind::UsdFastPath);
+            } else if (reader.isCompatibility && reader.name != "assimp") {
+                INFO("reader " << std::string(reader.name) << " extension "
+                     << std::string(descriptor->stableName));
+                CHECK(descriptor->importer != reader.importer);
+                CHECK(descriptor->importer != ImporterKind::Unknown);
             } else {
                 INFO("reader " << std::string(reader.name) << " extension "
                      << std::string(descriptor->stableName));
@@ -148,6 +154,21 @@ TEST_CASE("--list-readers includes every shipped reader exactly once", "[reader-
     CHECK(usdCompat->score < usd->score);
     CHECK_FALSE(usd->isCompatibility);
     CHECK(FindReaderByName("assimp")->isCompatibility);
+    for (const char* name : { "gltf-assimp", "obj-assimp", "fbx-assimp", "3mf-assimp" }) {
+        INFO("compatibility reader " << name);
+        const auto* reader = FindReaderByName(name);
+        REQUIRE(reader != nullptr);
+        CHECK(reader->isCompatibility);
+        const auto* native = DefaultReaderForFamily(reader->family);
+        REQUIRE(native != nullptr);
+        CHECK_FALSE(native->isCompatibility);
+        CHECK(reader->score < native->score);
+        CHECK(CompatibilityReaderForFamily(reader->family) == reader);
+        model_core::AssimpFormat hint = model_core::AssimpFormat::Dae;
+        CHECK(model_core::AssimpFormatForCompatibilityReader(*reader, hint));
+        CHECK(hint != model_core::AssimpFormat::Dae);
+        CHECK(model_core::IsKnownAssimpFormat(hint));
+    }
 
     // No reserved or unshipped identity is claimable.
     for (const char* name : { "vrml", "unknown", "plugin", "usd-fast", "assimp-native",
@@ -419,22 +440,41 @@ TEST_CASE("Open As lists the default and shipped alternates for every family",
     }
     CHECK(seenFamilies == expectedFamilies);
 
-    // Only the USD family currently has a shipped alternate. It is the OpenUSD
-    // compatibility host, never a native reader.
-    const auto usdFamily = std::find_if(families.begin(), families.end(),
-        [](const auto& entry) { return entry.family == FormatId::Usd; });
-    REQUIRE(usdFamily != families.end());
-    REQUIRE(usdFamily->readers.size() == 2);
-    CHECK(usdFamily->readers[0].reader == FindReaderByName("usd"));
-    CHECK(usdFamily->readers[0].isDefault);
-    CHECK(usdFamily->readers[1].reader == FindReaderByName("usd-compat"));
-    CHECK_FALSE(usdFamily->readers[1].isDefault);
-    CHECK(usdFamily->readers[1].reader->isCompatibility);
+    // The USD family has the OpenUSD compatibility host; the four T08 native
+    // families have their bounded Assimp compatibility reader. Every alternate
+    // is non-default and compatibility-scored below the native reader.
+    const auto findFamily = [&families](FormatId family) {
+        return std::find_if(families.begin(), families.end(),
+            [family](const auto& entry) { return entry.family == family; });
+    };
+    const struct {
+        FormatId family;
+        const char* nativeName;
+        const char* compatibilityName;
+    } alternateFamilies[] = {
+        { FormatId::Usd, "usd", "usd-compat" },
+        { FormatId::Gltf, "gltf", "gltf-assimp" },
+        { FormatId::Obj, "obj", "obj-assimp" },
+        { FormatId::Fbx, "fbx", "fbx-assimp" },
+        { FormatId::ThreeMf, "3mf", "3mf-assimp" },
+    };
+    std::set<FormatId> alternateSet;
+    for (const auto& item : alternateFamilies) {
+        alternateSet.insert(item.family);
+        const auto entry = findFamily(item.family);
+        REQUIRE(entry != families.end());
+        REQUIRE(entry->readers.size() == 2);
+        CHECK(entry->readers[0].reader == FindReaderByName(item.nativeName));
+        CHECK(entry->readers[0].isDefault);
+        CHECK(entry->readers[1].reader == FindReaderByName(item.compatibilityName));
+        CHECK_FALSE(entry->readers[1].isDefault);
+        CHECK(entry->readers[1].reader->isCompatibility);
+    }
 
     // Every other family lists exactly its default reader (no internal host
     // duplication).
     for (const auto& entry : families) {
-        if (entry.family == FormatId::Usd) continue;
+        if (alternateSet.count(entry.family)) continue;
         CHECK(entry.readers.size() == 1);
         CHECK(entry.readers.front().reader == DefaultReaderForFamily(entry.family));
     }
@@ -443,6 +483,13 @@ TEST_CASE("Open As lists the default and shipped alternates for every family",
     CHECK(listing.find(L"usd\tusd\tdefault\n") != std::wstring::npos);
     CHECK(listing.find(L"usd\tusd-compat\talternate\n") != std::wstring::npos);
     CHECK(listing.find(L"gltf\tgltf\tdefault\n") != std::wstring::npos);
+    CHECK(listing.find(L"gltf\tgltf-assimp\talternate\n") != std::wstring::npos);
+    CHECK(listing.find(L"obj\tobj\tdefault\n") != std::wstring::npos);
+    CHECK(listing.find(L"obj\tobj-assimp\talternate\n") != std::wstring::npos);
+    CHECK(listing.find(L"fbx\tfbx\tdefault\n") != std::wstring::npos);
+    CHECK(listing.find(L"fbx\tfbx-assimp\talternate\n") != std::wstring::npos);
+    CHECK(listing.find(L"3mf\t3mf\tdefault\n") != std::wstring::npos);
+    CHECK(listing.find(L"3mf\t3mf-assimp\talternate\n") != std::wstring::npos);
     CHECK(listing.find(L"step\tstep\tdefault\n") != std::wstring::npos);
     CHECK(listing.find(L"iges\tcad\tdefault\n") != std::wstring::npos);
     CHECK(listing.find(L"dae\tassimp\tdefault\n") != std::wstring::npos);

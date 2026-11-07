@@ -72,8 +72,10 @@ catalog family, `ImporterKind`, owned extensions, product-policy score, a
 compatibility flag and the closed option names it honors. The table lists only
 the readers shipped in this build: glTF/GLB, STL, PLY, OBJ, FBX, 3MF, the USD
 fast path, the USD OpenUSD compatibility host, the STEP host, the OCCT CAD host
-(IGES/BREP/XBF/FCStd) and the bounded Assimp compatibility adapter. It is not a
-plugin loader and cannot load code, a path or a URL.
+(IGES/BREP/XBF/FCStd), the bounded Assimp compatibility adapter, and the four
+T08 same-family compatibility readers (`gltf-assimp`, `obj-assimp`,
+`fbx-assimp`, `3mf-assimp`). It is not a plugin loader and cannot load code, a
+path or a URL.
 
 `--list-readers` prints one `name<TAB>extensions<TAB>importer<TAB>score` line
 per reader in stable name order; `--list-formats` remains the family view.
@@ -91,6 +93,34 @@ its shipped alternates; selecting the default clears the forced-reader state.
 Forcing a reader changes importer selection only: path classification, broker
 canonicalization/handle duplication, sidecar policy, AppContainer access, Job
 Object limits and every parser budget are unchanged.
+
+### Compatibility fallback
+
+A default native glTF/OBJ/FBX/3MF open may run exactly one lower-scored Assimp
+compatibility attempt for the same family
+([ADR-0102](./adr/0102-compatibility-reader-fallback.md)). The decision is made
+by the trusted broker after the native attempt, and only when all of these hold:
+
+- the selected reader was the native family default;
+- the typed failure is `UnsupportedFormat`, `UnsupportedRequiredFeature`, or
+  `EmptyGeometry`;
+- no chunk batch has been accepted or published for the generation;
+- the compatibility attempt has not already run.
+
+The retry copies the request and changes only the closed format/hint. It keeps
+the same worker executable, AppContainer, Job Object limits, commit and
+time budgets, source handle, sidecar allowlist, cancellation event and chunk
+caps. It clears coarse/detail replay and format-specific options, which do not
+apply to the compatibility adapter. A security, containment, cancellation or
+resource failure (`UnsafeReference`, `FileUnavailable`, `FileChanged`,
+`ResourceLimit`, `ArchiveLimit`, `PrimarySourceLimit`, `AggregateSourceLimit`,
+`ScratchLimit`, `Cancelled`, `WorkerCrashed`, `WorkerTimedOut`,
+`ImportProtocolViolation`, and the rest of the closed taxonomy) is terminal and
+never retried. A forced reader is an explicit user choice and never triggers
+the automatic retry; an eligible forced-native failure instead offers the
+failure-card action **Try compatibility reader**. The broker records the native
+reader, compatibility reader and final reader as stable product names in the
+result diagnostic.
 
 ## Input boundary
 
@@ -150,7 +180,7 @@ All primary inputs are local, regular, non-empty files. The loader rejects:
 - files that change identity or size after opening;
 - integer overflow, overlapping ranges where prohibited by the format, invalid UTF encoding, non-finite geometry, and counts that exceed the applicable budget.
 
-The sidecar extension set is per requesting format. A `.gltf`/`.glb` may request a `.bin` buffer or an approved image; an OBJ a `.mtl` or an image; FBX an image (geometry caches are never evaluated); USD a `.usd`/`.usda`/`.usdc` layer or an image (direct image assets are dependencies, not layer composition); the Assimp compatibility formats request images only. STL, PLY, STEP, and the in-archive 3MF/USDZ package entries resolve no sidecar at all, so a request from those formats fails closed. STEP external-document declarations are counted only as unresolved metadata: the host has no path authority and never brokers or opens the referenced file. The requesting format is the trusted host's own `ImportSessionRequest::format`, never text from the worker.
+The sidecar extension set is per requesting format. A `.gltf`/`.glb` may request a `.bin` buffer or an approved image; an OBJ a `.mtl` or an image; FBX an image (geometry caches are never evaluated); USD a `.usd`/`.usda`/`.usdc` layer or an image (direct image assets are dependencies, not layer composition); the Assimp compatibility formats request images only, except the T08 glTF hint (a `.bin` buffer or an image) and OBJ hint (a `.mtl` library or an image). STL, PLY, STEP, and the in-archive 3MF/USDZ package entries resolve no sidecar at all, so a request from those formats fails closed. STEP external-document declarations are counted only as unresolved metadata: the host has no path authority and never brokers or opens the referenced file. The requesting format is the trusted host's own `ImportSessionRequest::format`, never text from the worker.
 
 One deliberate package convenience: for a local file import, an image reference that does not resolve directly is looked up by file name in exactly these directories, closest first -- beside the model, `<model dir>/texture`, `<model dir>/textures`, then the same under the parent package root. The first directory with a match wins, so sibling model packages cannot collide, and the fallback is image-only: required buffers, MTL files, and USD layers must stay where the document references them. Names match exactly first, then with case, space/underscore, and `jpg`/`jpeg`/`tif`/`tiff` spelling normalized, so files renamed by a download site still match. Traversal, UNC/device, ADS, and URL text never reach the lookup and keep failing closed; a name containing wildcards is never used as a pattern, and the matched file still passes the ordinary canonical containment and size checks. A glTF *image* URI that contains `..` (what exporters write for a model inside `source/`) is reduced to its file name before the request for the same reason -- the authored traversal is still never followed, and required buffers and USD layers keep the strict rejection.
 
@@ -475,20 +505,23 @@ ufbx's unified PBR material mapping feeds the normalized base-color/metallic/rou
 
 Before lib3mf reads the bounded OPC stream, product code preflights local and central ZIP records, OPC part/relationship names, archive entry paths, per-entry sizes, aggregate expansion, compression ratio, and the required-extension allowlist. The preflight rejects encrypted, multi-disk, and general-purpose-bit-3 (streaming data-descriptor) entries, requires each entry's local CRC, compressed/uncompressed sizes and name bytes to equal the central directory, and bounds the attacker-controlled ZIP64 locator offset with checked addition before use while accepting the spec-correct single-disk locator total of 1. The adapter then validates object/component recursion and build-item counts before allocating normalized resources. Components and all occurrences reachable from the root build use reusable geometry instances where possible; child-model build sections are not interpreted as additional plates. The allowlist covers Core, Materials and Properties, Production, and a bounded Beam Lattice preview subset. A lattice prefers its validated authored representation mesh; otherwise deterministic product tessellation emits the complete beam/ball set under a 262,144-triangle per-lattice ceiling. Parametric clipping is limited to `inside` clipping against a closed, axis-aligned box with uniform appearance; other clipping requires a valid authored representation mesh. Nonrepresentable optional display/translucent features preserve the supported base appearance with a bounded warning, while unsupported required extensions fail.
 
-### Assimp compatibility formats (DAE, 3DS, DXF, X, OFF, AMF, X3D)
+### Assimp compatibility formats (DAE, 3DS, DXF, X, OFF, AMF, X3D, glTF, OBJ, FBX, 3MF)
 
 A single worker adapter runs Assimp for the seven formats with no native
-adapter (ADR-0065). The closed request discriminator selects the importer hint;
-the extension is never used as a trusted path or free-form argument. Assimp is
-configured with `Triangulate`, `JoinIdenticalVertices`, `GenNormals` (only
-missing normals are generated), `ValidateDataStructure` and `SortByPType`; it
-does not evaluate animation, geometry caches, plug-ins, cameras, lights or
-file writes. The custom `IOSystem` answers every external reference through the
-broker: absolute/rooted, UNC/device, ADS, URL, drive-relative, `..` and
-non-image references are rejected before a request, and the broker applies the
-same image allowlist, canonical containment and size caps as OBJ/FBX.
-Embedded textures are read from Assimp's scene memory under the existing encoded
-and decoded texture budgets.
+adapter (ADR-0065) plus the four T08 same-family compatibility hints
+(glTF/GLB, OBJ, FBX, 3MF). The closed request discriminator selects the
+importer hint; the extension is never used as a trusted path or free-form
+argument. Assimp is configured with `Triangulate`, `JoinIdenticalVertices`,
+`GenNormals` (only missing normals are generated), `ValidateDataStructure` and
+`SortByPType`; it does not evaluate animation, geometry caches, plug-ins,
+cameras, lights or file writes. The custom `IOSystem` answers every external
+reference through the broker: absolute/rooted, UNC/device, ADS, URL,
+drive-relative, `..` and non-image references are rejected before a request,
+and the broker applies the same canonical containment and size caps as the
+native readers. The same-family hints additionally allow only the container's
+legitimate dependency class: a glTF external `.bin` buffer and an OBJ `.mtl`
+material library. Embedded textures are read from Assimp's scene memory under
+the existing encoded and decoded texture budgets.
 
 The adapter validates object/material/triangle/vertex counts before emission,
 normalizes one-index faces to `PointList`, two-index faces to `LineList` and
@@ -502,12 +535,15 @@ mesh for an empty COLLADA document is disabled, so an empty file fails
 `EmptyGeometry` instead of presenting fabricated triangles.
 Before Assimp runs, product admission checks control bytes and a well-formed XML
 DOM (pugixml) for DAE/AMF/X3D, DAE numeric count/offset/stride attributes and
-token lists, the full ASCII OFF header/vertex/face/token graph, and the 3DS
-main-chunk magic/length. This crash boundary is deliberately separate from
-Assimp's own sniffers. DXF coverage is deliberately limited to the
+token lists, the full ASCII OFF header/vertex/face/token graph, the 3DS
+main-chunk magic/length, a bounded JSON/GLB header and buffer-view preflight for
+glTF, bounded text admission for OBJ, binary/ASCII magic and a bounded header
+preflight for FBX, and the shared OPC/ZIP preflight for 3MF. This crash
+boundary is deliberately separate from Assimp's own sniffers and never trusts
+Assimp's ZIP handling. DXF coverage is deliberately limited to the
 3DFACE/LINE/polyline entities Assimp supports; it is not a full DXF importer.
 Assimp's source objects never leave the adapter, and the `AssimpFuzz`
-dispatcher target covers all seven container hints. The pinned overlay port
+dispatcher target covers all eleven container hints. The pinned overlay port
 carries one product finding fix: Assimp 6.0.4's X3D importer called `front()`
 on an empty node list for an XML document its own tokenizer rejected.
 

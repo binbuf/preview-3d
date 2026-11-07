@@ -16,6 +16,7 @@
 // output: a compatibility reader always scores below its native counterpart,
 // and ties resolve by stable name.
 
+#include "model_core/ControlProtocol.h"
 #include "model_core/FormatCatalog.h"
 #include "model_core/FormatSniffer.h"
 
@@ -61,6 +62,13 @@ inline constexpr std::wstring_view kCadReaderExtensions[] = {
     L"igs", L"iges", L"brep", L"xbf", L"fcstd" };
 inline constexpr std::wstring_view kAssimpReaderExtensions[] = {
     L"dae", L"3ds", L"dxf", L"x", L"off", L"amf", L"x3d" };
+// T08 single-family compatibility readers declare the same suffixes as their
+// native counterpart. The extension is catalog identity; the reader name is
+// the product identity a user can force.
+inline constexpr std::wstring_view kGltfAssimpReaderExtensions[] = { L"gltf", L"glb" };
+inline constexpr std::wstring_view kObjAssimpReaderExtensions[] = { L"obj" };
+inline constexpr std::wstring_view kFbxAssimpReaderExtensions[] = { L"fbx" };
+inline constexpr std::wstring_view kThreeMfAssimpReaderExtensions[] = { L"3mf" };
 
 inline constexpr std::string_view kCadReaderOptions[] = {
     "quality", "read_wire", "linear_deflection", "angular_deflection",
@@ -72,6 +80,9 @@ inline constexpr std::string_view kUsdReaderOptions[] = { "subdivision_level" };
 inline constexpr ReaderDescriptor kReaders[] = {
     { "3mf", L"3MF", FormatId::ThreeMf, ImporterKind::ThreeMfWorker,
       std::span<const std::wstring_view>(kThreeMfReaderExtensions), 90, false, {} },
+    { "3mf-assimp", L"3MF (Assimp compatibility)", FormatId::ThreeMf,
+      ImporterKind::AssimpCompat,
+      std::span<const std::wstring_view>(kThreeMfAssimpReaderExtensions), 35, true, {} },
     { "assimp", L"Assimp compatibility", FormatId::Dae, ImporterKind::AssimpCompat,
       std::span<const std::wstring_view>(kAssimpReaderExtensions), 30, true, {} },
     { "cad", L"OCCT CAD", FormatId::Iges, ImporterKind::CadHost,
@@ -79,10 +90,19 @@ inline constexpr ReaderDescriptor kReaders[] = {
       std::span<const std::string_view>(kCadReaderOptions) },
     { "fbx", L"FBX", FormatId::Fbx, ImporterKind::FbxWorker,
       std::span<const std::wstring_view>(kFbxReaderExtensions), 90, false, {} },
+    { "fbx-assimp", L"FBX (Assimp compatibility)", FormatId::Fbx,
+      ImporterKind::AssimpCompat,
+      std::span<const std::wstring_view>(kFbxAssimpReaderExtensions), 35, true, {} },
     { "gltf", L"glTF", FormatId::Gltf, ImporterKind::GltfWorker,
       std::span<const std::wstring_view>(kGltfReaderExtensions), 100, false, {} },
+    { "gltf-assimp", L"glTF (Assimp compatibility)", FormatId::Gltf,
+      ImporterKind::AssimpCompat,
+      std::span<const std::wstring_view>(kGltfAssimpReaderExtensions), 35, true, {} },
     { "obj", L"OBJ", FormatId::Obj, ImporterKind::ObjWorker,
       std::span<const std::wstring_view>(kObjReaderExtensions), 50, false, {} },
+    { "obj-assimp", L"OBJ (Assimp compatibility)", FormatId::Obj,
+      ImporterKind::AssimpCompat,
+      std::span<const std::wstring_view>(kObjAssimpReaderExtensions), 35, true, {} },
     { "ply", L"PLY", FormatId::Ply, ImporterKind::PlyWorker,
       std::span<const std::wstring_view>(kPlyReaderExtensions), 70, false, {} },
     { "step", L"STEP", FormatId::Step, ImporterKind::StepHost,
@@ -231,6 +251,34 @@ inline std::vector<ReaderChoice> ReaderChoicesForFamily(FormatId family)
     for (std::size_t index = 0; index < readers.size(); ++index)
         result.push_back({ readers[index], index == 0 });
     return result;
+}
+
+// The single shipped compatibility reader for a family, or nullptr. The
+// multi-family `assimp` reader is deliberately not returned: it owns formats
+// that have no native counterpart, so it is a default reader, not an alternate.
+inline const ReaderDescriptor* CompatibilityReaderForFamily(FormatId family) noexcept
+{
+    for (const auto& reader : Readers()) {
+        if (!reader.isCompatibility) continue;
+        if (reader.name == "assimp") continue;
+        if (ReaderCoversFamily(reader, family)) return &reader;
+    }
+    return nullptr;
+}
+
+// Closed mapping from a single-family compatibility reader to the worker's
+// Assimp hint. Returns false for every native or multi-family reader. This is
+// the table/discriminator sync point: a new compatibility reader must add a
+// closed AssimpFormat value, and a new hint must appear here.
+constexpr bool AssimpFormatForCompatibilityReader(const ReaderDescriptor& reader,
+                                                  AssimpFormat& format) noexcept
+{
+    if (!reader.isCompatibility) return false;
+    if (reader.name == "gltf-assimp") { format = AssimpFormat::Gltf; return true; }
+    if (reader.name == "obj-assimp") { format = AssimpFormat::Obj; return true; }
+    if (reader.name == "fbx-assimp") { format = AssimpFormat::Fbx; return true; }
+    if (reader.name == "3mf-assimp") { format = AssimpFormat::ThreeMf; return true; }
+    return false;
 }
 
 constexpr const char* ImporterKindName(ImporterKind importer) noexcept

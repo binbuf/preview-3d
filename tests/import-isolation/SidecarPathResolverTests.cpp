@@ -274,6 +274,30 @@ TEST_CASE("The allowed sidecar extension set follows the requesting format",
         dir.primaryCanonicalPath, "mesh.bin", 1024, false, noRoots, import_broker::ImportFormat::Stl);
     CHECK_FALSE(stl.file);
     CHECK(stl.rejectionCode == model_core::ImportErrorCode::UnsafeReference);
+
+    // T08 same-family Assimp hints keep their native dependency class:
+    // glTF may pull a .bin buffer, OBJ a .mtl library, and every other
+    // Assimp hint stays image-only.
+    const auto assimpGltfBin = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "mesh.bin", 1024, false, noRoots,
+        import_broker::ImportFormat::Assimp, model_core::AssimpFormat::Gltf);
+    CHECK(assimpGltfBin.file);
+    const auto assimpGltfMtl = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "material.mtl", 1024, false, noRoots,
+        import_broker::ImportFormat::Assimp, model_core::AssimpFormat::Gltf);
+    CHECK_FALSE(assimpGltfMtl.file);
+    const auto assimpObjMtl = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "material.mtl", 1024, false, noRoots,
+        import_broker::ImportFormat::Assimp, model_core::AssimpFormat::Obj);
+    CHECK(assimpObjMtl.file);
+    const auto assimpObjBin = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "mesh.bin", 1024, false, noRoots,
+        import_broker::ImportFormat::Assimp, model_core::AssimpFormat::Obj);
+    CHECK_FALSE(assimpObjBin.file);
+    const auto assimpDaeBin = import_broker::ResolveSidecarPath(
+        dir.primaryCanonicalPath, "mesh.bin", 1024, false, noRoots,
+        import_broker::ImportFormat::Assimp, model_core::AssimpFormat::Dae);
+    CHECK_FALSE(assimpDaeBin.file);
 }
 
 TEST_CASE("A missing sidecar file is rejected as FileUnavailable", "[sidecar-resolver]")

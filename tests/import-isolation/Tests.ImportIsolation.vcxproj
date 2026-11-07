@@ -86,6 +86,7 @@
     <ClCompile Include="PlyImportTests.cpp" />
     <ClCompile Include="ObjImportTests.cpp" />
     <ClCompile Include="AssimpImportTests.cpp" />
+    <ClCompile Include="ReaderFallbackTests.cpp" />
     <ClCompile Include="FbxImportTests.cpp" />
     <ClCompile Include="SourceFileAccessTests.cpp" />
     <ClCompile Include="WorkerPoolTests.cpp" />

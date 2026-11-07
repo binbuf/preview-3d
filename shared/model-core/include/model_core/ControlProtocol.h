@@ -445,9 +445,12 @@ struct ParseCadFileRequest {
 static_assert(sizeof(ParseCadFileRequest) == 104,
               "ParseCadFileRequest layout changed");
 
-// T10 closed compatibility-format discriminator. The worker validates this
+// T10/T08 closed compatibility-format discriminator. The worker validates this
 // against the request before selecting an Assimp importer hint; it is never a
-// free-form extension.
+// free-form extension. The first seven values are the formats with no native
+// adapter. The appended values are the T08 compatibility hints for families
+// that also have a native reader; they are only selected by an explicit forced
+// compatibility reader or by the closed broker fallback policy.
 enum class AssimpFormat : uint32_t {
     Dae = 0,
     ThreeDs = 1,
@@ -456,14 +459,27 @@ enum class AssimpFormat : uint32_t {
     Off = 4,
     Amf = 5,
     X3d = 6,
+    // T08: same-family compatibility hints. The compatibility adapter emits
+    // the native SourceFormatId for the family, so normalized output stays
+    // comparable with the native reader.
+    Gltf = 7,
+    Obj = 8,
+    Fbx = 9,
+    ThreeMf = 10,
 };
+
+// One past the highest closed value. The fuzz dispatcher uses this instead of
+// a hard-coded modulus so a new hint cannot be silently left untested.
+constexpr uint32_t kAssimpFormatCount = 11;
 
 constexpr bool IsKnownAssimpFormat(AssimpFormat format) noexcept
 {
     return format == AssimpFormat::Dae || format == AssimpFormat::ThreeDs
         || format == AssimpFormat::Dxf || format == AssimpFormat::DirectX
         || format == AssimpFormat::Off || format == AssimpFormat::Amf
-        || format == AssimpFormat::X3d;
+        || format == AssimpFormat::X3d || format == AssimpFormat::Gltf
+        || format == AssimpFormat::Obj || format == AssimpFormat::Fbx
+        || format == AssimpFormat::ThreeMf;
 }
 
 // The first seven fields are layout-identical to every other real-file
