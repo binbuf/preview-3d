@@ -255,9 +255,9 @@ def iges_record(data: str, section: str, sequence: int) -> str:
 def iges_wire() -> str:
     # Fixed 80-column S/G/D/P/T stream with two bounded 110 line entities.
     global_records = [
-        ",,31HOpen CASCADE IGES processor 7.8,13Hwire.igs,                     ",
+        ",,31HOpen CASCADE IGES processor 7.8,8Hwire.igs,                     ",
         "16HOpen CASCADE 7.8,31HOpen CASCADE IGES processor 7.8,32,308,15,308,15,",
-        ",1.,2,2HMM,1,0.01,15H20261107.000000,1E-07,30.,12HPreview3D,,11,0,     ",
+        ",1.,2,2HMM,1,0.01,15H20261107.000000,1E-07,30.,9HPreview3D,,11,0,     ",
         "15H20261107.000000,;                                                  ",
     ]
     lines = [iges_record("", "S", 1)]

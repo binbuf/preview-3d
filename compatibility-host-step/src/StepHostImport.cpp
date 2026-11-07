@@ -195,8 +195,15 @@ StepImportResult RunCadHostImportImpl(const model_core::ParseStepFileRequest& re
     StepImportPolicy policy;
     policy.quality = MapImportQuality(importQuality);
     policy.unresolvedExternalDocuments = preflight.unresolvedExternalDocuments;
+    // T05 test-only budget seam: a small wire fixture can then prove typed
+    // TessellationFailed rejection before any large edge allocation.
+    StepXdeLimits limits;
+    if ((request.requestFlags & model_core::kImportRequestStepTinyEdgeBudgetForTesting) != 0) {
+        limits.profile.maxEdgesPerDefinition = 1;
+        limits.profile.maxLineSegmentsPerDefinition = 0;
+    }
     const StepXdeResult scene = RunStepXdeAdapter(request, section, sourceHandle, cancellationEvent,
-                                                  mappedSource, {}, publish, progress, policy,
+                                                  mappedSource, limits, publish, progress, policy,
                                                   cadFormat);
     result.errorCode = scene.errorCode;
     result.chunkCount = scene.chunkCount;

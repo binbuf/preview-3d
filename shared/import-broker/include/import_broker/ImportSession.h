@@ -198,6 +198,10 @@ struct ImportSessionRequest {
     // STEP-005 test-only seam: forces the STEP host's mesher serial so a test
     // can compare parallel and serial normalized output byte-for-byte.
     bool stepForceSerialForTesting = false;
+    // T05 test-only seam: lowers the CAD host's per-definition edge and line
+    // segment budgets so a small wire fixture can prove typed TessellationFailed
+    // rejection. Product callers never set it.
+    bool stepTinyEdgeBudgetForTesting = false;
     // STEP import quality. Balanced keeps the established display deflection;
     // Draft/Full are opt-in and are part of the STEP cache identity. Only the
     // dedicated STEP host consumes it.

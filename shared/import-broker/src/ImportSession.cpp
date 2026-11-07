@@ -223,6 +223,8 @@ Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFile
             ? model_core::kImportRequestFbxTinyTextureLimitForTesting : 0)
         | (session.stepForceSerialForTesting
             ? model_core::kImportRequestStepForceSerialForTesting : 0)
+        | (session.stepTinyEdgeBudgetForTesting
+            ? model_core::kImportRequestStepTinyEdgeBudgetForTesting : 0)
         | (session.assimpTinyLimitsForTesting
             ? model_core::kImportRequestAssimpTinyLimitsForTesting : 0);
     request.cancellationEventHandleValue = cancellationEventHandle;

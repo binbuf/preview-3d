@@ -33,7 +33,7 @@ parallel after T01.
 ## Phase 2 — Primitive completeness
 
 - [x] T04 - Assimp point and line primitives → [../tasks/0.8.0/T04-assimp-point-line-primitives.md](../tasks/0.8.0/T04-assimp-point-line-primitives.md)
-- [ ] T05 - CAD edge and wire geometry → [../tasks/0.8.0/T05-cad-edge-wire-geometry.md](../tasks/0.8.0/T05-cad-edge-wire-geometry.md)
+- [x] T05 - CAD edge and wire geometry → [../tasks/0.8.0/T05-cad-edge-wire-geometry.md](../tasks/0.8.0/T05-cad-edge-wire-geometry.md)
 
 ## Phase 3 — Options and reader selection
 
@@ -55,11 +55,11 @@ parallel after T01.
 - Animation playback, cameras and lights.
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-11-07T16:53:30Z · 4/10 done
+**Pipeline status** — updated 2026-11-07T17:56:51Z · 5/10 done
 
-- Completed: T01, T02, T03, T04
+- Completed: T01, T02, T03, T04, T05
 - Blocked: none
 - Failed: none
-- Remaining: T05, T06, T07, T08, T09, T10
-- Last finished: T04 — done · Assimp point/line/triangle emission, mixed chunks, topology-aware budgets, fixtures/tests, valid-file flips, docs/ADR-0098; Release and Debug gates pass.
+- Remaining: T06, T07, T08, T09, T10
+- Last finished: T05 — done · CAD edge/wire fallback emits validated LineList chunks for wireframe STEP/IGES/BREP/FCStd, solids remain triangle-only, over-budget edges fail typed, Release/Debug [cad-wires] and valid-file gates pass; docs/ADR/progress updated.
 <!-- /symphony:status -->

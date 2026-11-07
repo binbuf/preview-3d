@@ -199,6 +199,7 @@ int RunProductionPool(PoolMode mode)
             || (request.requestFlags & ~(model_core::kImportRequestDetailService
                 | model_core::kImportRequestCoarseProxy
                 | model_core::kImportRequestStepForceSerialForTesting
+                | model_core::kImportRequestStepTinyEdgeBudgetForTesting
                 | model_core::kImportRequestStepQualityMask))
             || (request.requestFlags & model_core::kImportRequestStepQualityMask)
                 == model_core::kImportRequestStepQualityMask

@@ -126,6 +126,10 @@ enum : uint32_t {
     // triangle and vertex caps so a small fixture can prove typed ResourceLimit
     // rejection. Product callers never set it.
     kImportRequestAssimpTinyLimitsForTesting = 1u << 11,
+    // T05 test-only seam: lowers the CAD host's per-definition edge and line
+    // segment budgets so a small wire fixture can prove typed TessellationFailed
+    // rejection before any large allocation. Product callers never set it.
+    kImportRequestStepTinyEdgeBudgetForTesting = 1u << 12,
 };
 
 // Closed product-level STEP import-quality selection. `Balanced` is the default

@@ -323,7 +323,7 @@ TEST_CASE("STEP-008 admission caps are exact at the boundary and typed just over
 TEST_CASE("STEP-008 bounds every progressive batch by maxChunkCount",
           "[step-008][chunk-cap]")
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.format = import_broker::ImportFormat::Step;
     request.sourcePath = std::wstring(PREVIEW3D_STP_FIXTURES_DIR) + L"assembly_nested_ap214.stp";
     request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;
@@ -379,7 +379,7 @@ TEST_CASE("STEP-008 measures the genuine large-file corpus when supplied",
     const std::wstring sourcePath(rawPath);
     std::free(rawPath);
 
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.format = import_broker::ImportFormat::Step;
     request.sourcePath = sourcePath;
     request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;
@@ -492,7 +492,7 @@ TEST_CASE("STEP-008 transfer heartbeat keeps a short broker reply timeout alive"
     const std::wstring sourcePath(rawPath);
     std::free(rawPath);
 
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.format = import_broker::ImportFormat::Step;
     request.sourcePath = sourcePath;
     request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;
@@ -556,7 +556,7 @@ TEST_CASE("STEP planner scene diagnostic for a manual corpus item",
     const std::wstring sourcePath(rawPath);
     std::free(rawPath);
 
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.format = import_broker::ImportFormat::Step;
     request.sourcePath = sourcePath;
     request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;

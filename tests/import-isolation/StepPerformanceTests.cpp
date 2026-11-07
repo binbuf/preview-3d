@@ -35,7 +35,7 @@ std::wstring StpFixture(const wchar_t* name)
 
 import_broker::ImportSessionRequest Request(const wchar_t* fixture, uint64_t generation)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.format = import_broker::ImportFormat::Step;
     request.sourcePath = StpFixture(fixture);
     request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;
@@ -71,7 +71,7 @@ TEST_CASE("STEP-005 records the parallel meshing policy and delivery strategy",
           "[step-005][profile]")
 {
     using namespace step_host;
-    CHECK(kStepTessellationProfileVersion == 6);
+    CHECK(kStepTessellationProfileVersion == 7);
     CHECK(kStepImporterVersion == 1 + kStepTessellationProfileVersion);
 
     const StepTessellationProfile profile;

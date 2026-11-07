@@ -200,7 +200,7 @@ struct ScratchUsd {
 
 import_broker::ImportSessionRequest Request(const std::filesystem::path& path, uint64_t generation)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = path.wstring();
     request.format = import_broker::ImportFormat::Usd;

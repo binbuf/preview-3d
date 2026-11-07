@@ -280,7 +280,7 @@ void ReplaceOnce(std::string& text, std::string_view needle, std::string_view re
 import_broker::ImportSessionRequest Request(const std::filesystem::path& path,
                                              uint64_t generation = 501)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = path.wstring();
     request.format = import_broker::ImportFormat::Fbx;

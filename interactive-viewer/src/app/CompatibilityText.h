@@ -92,6 +92,9 @@ inline std::wstring CompatibilityFeatureText(uint32_t featureId)
     case model_core::kCadFeatureFcstdUnsupportedObject:
         return Loc("compat.fcstd.unsupportedObject",
                    L"Some FreeCAD objects have no supported Part shape and were skipped.");
+    case model_core::kCadFeatureUnmeshedEdge:
+        return Loc("compat.cad.unmeshedEdge",
+                   L"Some CAD edges could not be tessellated and were skipped.");
     default:
         return {};
     }

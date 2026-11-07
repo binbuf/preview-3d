@@ -141,6 +141,7 @@ TEST_CASE("The trusted host owns specific localized text for known feature IDs",
     CHECK_FALSE(CompatibilityFeatureText(kStepFeatureLengthUnitAssumedMillimetre).empty());
     CHECK_FALSE(CompatibilityFeatureText(kStepFeatureLengthUnitContradictory).empty());
     CHECK_FALSE(CompatibilityFeatureText(kStepFeatureBoundedRepair).empty());
+    CHECK_FALSE(CompatibilityFeatureText(kCadFeatureUnmeshedEdge).empty());
     // An ID this build has no table entry for falls back to the generic host
     // warning rather than inventing text.
     CHECK(CompatibilityFeatureText(kFeatureIdStepMax).empty());

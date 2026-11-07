@@ -50,6 +50,7 @@
 #include <IMeshTools_Parameters.hxx>
 #include <Message_ProgressIndicator.hxx>
 #include <Message_ProgressRange.hxx>
+#include <Poly_Polygon3D.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Quantity_Color.hxx>
 #include <Quantity_ColorRGBA.hxx>
@@ -72,6 +73,8 @@
 #include <TopLoc_Location.hxx>
 #include <TopTools_DataMapOfShapeInteger.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
+#include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <XCAFApp_Application.hxx>
@@ -483,7 +486,11 @@ struct PlannedDefinition {
     bool hasShapeColor = false;
     std::uint32_t shapeMaterialId = 0;
     std::vector<std::pair<TopoDS_Shape, std::uint32_t>> faceColors;
+    // T05: authored curve styles (XCAFDoc_ColorCurv/ColorGen) and hidden edge
+    // subshape labels. Empty means the definition-level style or neutral.
+    std::vector<std::pair<TopoDS_Shape, std::uint32_t>> edgeColors;
     std::vector<TopoDS_Shape> hiddenFaces;
+    std::vector<TopoDS_Shape> hiddenEdges;
     std::vector<PlannedOccurrence> occurrences;
 };
 
@@ -578,13 +585,16 @@ private:
 
     void CollectSubshapeStyles(const TDF_Label& label,
         std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors,
-        std::vector<TopoDS_Shape>& hiddenFaces)
+        std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& edgeColors,
+        std::vector<TopoDS_Shape>& hiddenFaces,
+        std::vector<TopoDS_Shape>& hiddenEdges)
     {
         if (!shapeTool_) return;
         TDF_LabelSequence subLabels;
         if (!XCAFDoc_ShapeTool::GetSubShapes(label, subLabels)) return;
         for (Standard_Integer index = 1; index <= subLabels.Length(); ++index) {
-            if (faceColors.size() + hiddenFaces.size() >= limits_.maxSubshapes) {
+            if (faceColors.size() + edgeColors.size() + hiddenFaces.size()
+                    + hiddenEdges.size() >= limits_.maxSubshapes) {
                 error_ = model_core::ImportErrorCode::ResourceLimit;
                 return;
             }
@@ -593,26 +603,52 @@ private:
             const TopoDS_Shape subShape = XCAFDoc_ShapeTool::GetShape(sub);
             if (subShape.IsNull()) continue;
             if (!VisibleLabel(sub)) {
-                bool foundFace = false;
+                // A hidden subshape label can name a face, an edge, or a
+                // compound of either. Preserve the distinction: the face walk
+                // must not silently hide an edge and the edge fallback must not
+                // draw an edge whose authored label is invisible.
+                bool found = false;
                 for (TopExp_Explorer explorer(subShape, TopAbs_FACE); explorer.More(); explorer.Next()) {
-                    if (hiddenFaces.size() >= limits_.maxSubshapes) {
+                    if (hiddenFaces.size() + hiddenEdges.size() >= limits_.maxSubshapes) {
                         error_ = model_core::ImportErrorCode::ResourceLimit;
                         return;
                     }
                     hiddenFaces.push_back(explorer.Current());
-                    foundFace = true;
+                    found = true;
                 }
-                if (!foundFace && subShape.ShapeType() == TopAbs_FACE)
+                for (TopExp_Explorer explorer(subShape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+                    if (hiddenFaces.size() + hiddenEdges.size() >= limits_.maxSubshapes) {
+                        error_ = model_core::ImportErrorCode::ResourceLimit;
+                        return;
+                    }
+                    hiddenEdges.push_back(explorer.Current());
+                    found = true;
+                }
+                if (!found && subShape.ShapeType() == TopAbs_FACE)
                     hiddenFaces.push_back(subShape);
+                else if (!found && subShape.ShapeType() == TopAbs_EDGE)
+                    hiddenEdges.push_back(subShape);
                 continue;
             }
-            if (subShape.ShapeType() != TopAbs_FACE || colorTool_.IsNull()) continue;
+            if (colorTool_.IsNull()) continue;
             Quantity_ColorRGBA color;
-            if (!colorTool_->GetColor(sub, XCAFDoc_ColorSurf, color)
-                && !colorTool_->GetColor(sub, XCAFDoc_ColorGen, color)) {
-                continue;
+            if (subShape.ShapeType() == TopAbs_FACE) {
+                if (!colorTool_->GetColor(sub, XCAFDoc_ColorSurf, color)
+                    && !colorTool_->GetColor(sub, XCAFDoc_ColorGen, color)) {
+                    continue;
+                }
+                faceColors.emplace_back(subShape, ResolveMaterial(ToRgba(color)));
+            } else if (subShape.ShapeType() == TopAbs_EDGE) {
+                // Curves are authored with ColorCurv; some exporters use
+                // ColorGen for the same style. Never infer a surface color for
+                // an edge and never invent a material the source did not
+                // author.
+                if (!colorTool_->GetColor(sub, XCAFDoc_ColorCurv, color)
+                    && !colorTool_->GetColor(sub, XCAFDoc_ColorGen, color)) {
+                    continue;
+                }
+                edgeColors.emplace_back(subShape, ResolveMaterial(ToRgba(color)));
             }
-            faceColors.emplace_back(subShape, ResolveMaterial(ToRgba(color)));
         }
     }
 
@@ -656,7 +692,8 @@ private:
         definition.hasShapeColor = LeafHasColor(label, shapeColor);
         if (definition.hasShapeColor)
             definition.shapeMaterialId = ResolveMaterial(ToRgba(shapeColor));
-        CollectSubshapeStyles(label, definition.faceColors, definition.hiddenFaces);
+        CollectSubshapeStyles(label, definition.faceColors, definition.edgeColors,
+                              definition.hiddenFaces, definition.hiddenEdges);
         if (error_ != model_core::ImportErrorCode::None) {
             unsupportedDefinitions_.insert(key);
             *out = nullptr;
@@ -823,6 +860,10 @@ struct GeometryRecord {
     std::uint32_t chunkId = 0;
     std::uint32_t meshId = 0;
     std::uint32_t materialId = 0;
+    // T05: the CAD host emits TriangleList for faces and LineList for the
+    // edge fallback. Both share the same [vertices][uint32 indices] payload
+    // and PositionNormalUv0_F32 layout; only the topology identity differs.
+    ChunkTopology topology = ChunkTopology::TriangleList;
     double origin[3] = {0, 0, 0};
     std::vector<Vertex> vertices;
 };
@@ -891,6 +932,18 @@ public:
     std::optional<EmittedGeometryRef> AddGeometry(GeometryRecord& chunk)
     {
         if (chunk.vertices.empty()) return std::nullopt;
+        if (chunk.topology != ChunkTopology::TriangleList
+            && chunk.topology != ChunkTopology::LineList) {
+            error_ = model_core::ImportErrorCode::InternalImporterFailure;
+            return std::nullopt;
+        }
+        // LineList is an independent-pair list; a de-indexed segment always
+        // contributes exactly two vertices, so an odd count is a programming
+        // error rather than something the broker should reject later.
+        if (chunk.topology == ChunkTopology::LineList && (chunk.vertices.size() & 1u)) {
+            error_ = model_core::ImportErrorCode::MalformedData;
+            return std::nullopt;
+        }
         float offset[3] = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
                            std::numeric_limits<float>::max()};
         for (const Vertex& vertex : chunk.vertices) {
@@ -927,7 +980,7 @@ public:
         }
 
         ChunkDescriptor descriptor{};
-        descriptor.topology = ChunkTopology::TriangleList;
+        descriptor.topology = chunk.topology;
         descriptor.chunkId = chunk.chunkId;
         descriptor.vertexLayoutId = static_cast<std::uint32_t>(VertexLayoutId::PositionNormalUv0_F32);
         descriptor.lodLevel = kFineLod;
@@ -1170,12 +1223,18 @@ public:
     // so the parallel and serial paths can be compared byte-for-byte.
     void SetForceSerial(bool value) { forceSerial_ = value; }
 
+    // T06 seam: when true, the edge pass runs even for a definition that
+    // produced triangles (an explicit user `read_wire` request). T05 leaves it
+    // false so solids never get a default edge overlay.
+    void SetReadWire(bool value) { readWire_ = value; }
+
     // STEP-004 work item 7 / STEP-005 work item 2: bounded per-definition
     // mesh/extract cost accumulators for the delivery-strategy and
     // where-the-time-goes evidence.
     double meshMilliseconds() const { return meshMilliseconds_; }
     double extractMilliseconds() const { return extractMilliseconds_; }
     std::uint32_t unmeshedFaces() const { return unmeshedFaces_; }
+    std::uint32_t unmeshedEdges() const { return unmeshedEdges_; }
     // True only when the last failure was a mesh/triangulation failure that a
     // bounded repair may address. Budget and cancellation failures are false.
     bool repairEligible() const { return repairEligible_; }
@@ -1186,7 +1245,9 @@ public:
     model_core::ImportErrorCode Mesh(
         const TopoDS_Shape& shape,
         const std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& faceColors,
+        const std::vector<std::pair<TopoDS_Shape, std::uint32_t>>& edgeColors,
         const std::vector<TopoDS_Shape>& hiddenFaces,
+        const std::vector<TopoDS_Shape>& hiddenEdges,
         bool hasShapeColor, std::uint32_t shapeMaterialId, std::uint32_t meshId,
         std::uint32_t& nextGeometryId, std::vector<GeometryRecord>& chunks)
     {
@@ -1221,6 +1282,20 @@ public:
         // is forbidden.
         parameters.AllowQualityDecrease = Standard_False;
 
+        // T05: count faces and edges before the kernel meshes anything. An
+        // over-budget edge shape (for example a compound with millions of
+        // edges) must fail typed before BRepMesh allocates its edge/polygon
+        // structures, not after a long uninterruptible call.
+        std::uint32_t faces = 0, edges = 0;
+        for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
+            if (++faces > limits_.maxSubshapes) return model_core::ImportErrorCode::TessellationFailed;
+        }
+        for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+            if (++edges > limits_.maxSubshapes) return model_core::ImportErrorCode::TessellationFailed;
+        }
+        if (faces > profile_.maxFacesPerDefinition || edges > profile_.maxEdgesPerDefinition)
+            return model_core::ImportErrorCode::TessellationFailed;
+
         const auto meshStart = SteadyClock::now();
         bool meshReportedDone = false;
         try {
@@ -1237,16 +1312,6 @@ public:
         // must be extracted even when no regeneration was needed.
 
         const auto extractStart = SteadyClock::now();
-
-        std::uint32_t faces = 0, edges = 0;
-        for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
-            if (++faces > limits_.maxSubshapes) return model_core::ImportErrorCode::TessellationFailed;
-        }
-        for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
-            if (++edges > limits_.maxSubshapes) return model_core::ImportErrorCode::TessellationFailed;
-        }
-        if (faces > profile_.maxFacesPerDefinition || edges > profile_.maxEdgesPerDefinition)
-            return model_core::ImportErrorCode::TessellationFailed;
 
         // OCCT's shape hasher uses the same TShape/location identity as IsSame.
         // Build this once per definition; a linear search for every face is
@@ -1332,12 +1397,105 @@ public:
                     return model_core::ImportErrorCode::TessellationFailed;
             }
         }
-        if (definitionTriangles == 0) {
+        // T05: edge/wire fallback. A definition that produced no triangles is
+        // still visible when it carries edges (wireframe STEP/IGES/BREP/FCStd
+        // parts or free curves). The edge pass reuses the same versioned
+        // deflection profile; edges are meshed as one compound because
+        // BRepMesh only discretizes edges as part of a shape. `readWire_` is
+        // the T06 seam for an explicit user request to add edges alongside
+        // faces; T05 leaves it false so a solid gets no default edge overlay.
+        std::uint64_t definitionSegments = 0;
+        std::map<std::uint32_t, LineGroup> lineGroups;
+        const bool emitEdges = definitionTriangles == 0 || readWire_;
+        if (emitEdges && edges > 0) {
+            TopTools_DataMapOfShapeInteger edgeMaterialByShape;
+            for (const auto& [edge, material] : edgeColors)
+                if (!edgeMaterialByShape.IsBound(edge))
+                    edgeMaterialByShape.Bind(edge, static_cast<Standard_Integer>(material));
+            TopTools_DataMapOfShapeInteger hiddenEdgeSet;
+            for (const auto& edge : hiddenEdges)
+                if (!hiddenEdgeSet.IsBound(edge)) hiddenEdgeSet.Bind(edge, 1);
+
+            std::vector<TopoDS_Edge> edgeShapes;
+            edgeShapes.reserve(edges);
+            TopoDS_Compound edgeCompound;
+            BRep_Builder edgeBuilder;
+            edgeBuilder.MakeCompound(edgeCompound);
+            for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+                const TopoDS_Edge edge = TopoDS::Edge(explorer.Current());
+                if (hiddenEdgeSet.IsBound(edge)) continue;
+                edgeShapes.push_back(edge);
+                edgeBuilder.Add(edgeCompound, edge);
+            }
+
+            if (!edgeShapes.empty()) {
+                const auto edgeMeshStart = SteadyClock::now();
+                try {
+                    BRepMesh_IncrementalMesh edgeMesher(edgeCompound, parameters);
+                    (void)edgeMesher.IsDone();
+                } catch (const Standard_Failure&) {
+                    // An authored Polygon3D may still be present on the edges;
+                    // the walk below keeps whatever OCCT can expose.
+                }
+                meshMilliseconds_ += ElapsedMilliseconds(edgeMeshStart);
+                if (!StepWithinDefinitionTime(ElapsedMilliseconds(edgeMeshStart),
+                                              profile_.maxDefinitionMilliseconds))
+                    return model_core::ImportErrorCode::TessellationFailed;
+
+                std::uint32_t checkedEdges = 0;
+                for (const TopoDS_Edge& edge : edgeShapes) {
+                    if ((++checkedEdges % kDefinitionCancelCheckInterval) == 0 && Cancelled())
+                        return model_core::ImportErrorCode::Cancelled;
+                    TopLoc_Location location;
+                    const Handle(Poly_Polygon3D) polygon = BRep_Tool::Polygon3D(edge, location);
+                    if (polygon.IsNull() || polygon->NbNodes() < 2) {
+                        if (unmeshedEdges_ < 64) ++unmeshedEdges_;
+                        continue;
+                    }
+                    const std::uint64_t segmentCount =
+                        static_cast<std::uint64_t>(polygon->NbNodes()) - 1;
+                    if (definitionSegments + segmentCount
+                        > profile_.maxLineSegmentsPerDefinition)
+                        return model_core::ImportErrorCode::TessellationFailed;
+                    const std::uint32_t materialId = edgeMaterialByShape.IsBound(edge)
+                        ? static_cast<std::uint32_t>(edgeMaterialByShape.Find(edge))
+                        : (hasShapeColor ? shapeMaterialId : 0u);
+                    LineGroup& group = lineGroups[materialId];
+                    const gp_Trsf& transform = location.Transformation();
+                    const auto& nodes = polygon->Nodes();
+                    bool havePrevious = false;
+                    gp_Pnt previous;
+                    for (Standard_Integer index = 1; index <= polygon->NbNodes(); ++index) {
+                        const gp_Pnt point = nodes(index).Transformed(transform);
+                        if (!FinitePoint(point)) {
+                            havePrevious = false;
+                            if (unmeshedEdges_ < 64) ++unmeshedEdges_;
+                            continue;
+                        }
+                        // LineList indices are independent segments, so a
+                        // polyline is expanded into consecutive pairs instead
+                        // of being emitted as a strip the validator rejects.
+                        if (havePrevious && DistinctPoints(previous, point)) {
+                            if (!AppendLineSegment(group, previous, point)) {
+                                if (unmeshedEdges_ < 64) ++unmeshedEdges_;
+                            } else {
+                                ++definitionSegments;
+                            }
+                        }
+                        previous = point;
+                        havePrevious = true;
+                    }
+                }
+            }
+        }
+        if (definitionTriangles == 0 && definitionSegments == 0) {
             extractMilliseconds_ += ElapsedMilliseconds(extractStart);
-            // No triangles but at least one face could not be triangulated is a
-            // tessellation failure a bounded repair may address; a genuinely
-            // empty/unsupported definition stays a silent skip.
-            repairEligible_ = !meshReportedDone || unmeshedFaces_ > unmeshedBefore;
+            // A definition with faces that failed to triangulate is a
+            // tessellation failure a bounded repair may address. A wire-only
+            // shape with no usable edge is a silent skip; TryBoundedRepair
+            // never invents faces and must not run for it.
+            repairEligible_ = faces > 0
+                && (!meshReportedDone || unmeshedFaces_ > unmeshedBefore);
             return model_core::ImportErrorCode::None; // nothing visible
         }
 
@@ -1360,6 +1518,26 @@ public:
                 begin += takeVertices;
             }
         }
+        for (auto& [materialId, group] : lineGroups) {
+            if (Cancelled()) return model_core::ImportErrorCode::Cancelled;
+            std::size_t begin = 0;
+            while (begin < group.vertices.size()) {
+                const std::size_t remainingSegments = (group.vertices.size() - begin) / 2;
+                const std::size_t takeSegments = (std::min)(
+                    remainingSegments, static_cast<std::size_t>(profile_.chunkLineSegments));
+                const std::size_t takeVertices = takeSegments * 2;
+                GeometryRecord chunk;
+                chunk.chunkId = nextGeometryId++;
+                chunk.meshId = meshId;
+                chunk.materialId = materialId;
+                chunk.topology = ChunkTopology::LineList;
+                std::memcpy(chunk.origin, group.origin, sizeof(chunk.origin));
+                chunk.vertices.assign(group.vertices.begin() + static_cast<std::ptrdiff_t>(begin),
+                                      group.vertices.begin() + static_cast<std::ptrdiff_t>(begin + takeVertices));
+                chunks.push_back(std::move(chunk));
+                begin += takeVertices;
+            }
+        }
         extractMilliseconds_ += ElapsedMilliseconds(extractStart);
         return model_core::ImportErrorCode::None;
     }
@@ -1372,6 +1550,24 @@ private:
         bool hasOrigin = false;
         std::vector<Vertex> vertices;
     };
+
+    struct LineGroup {
+        double origin[3] = {0, 0, 0};
+        bool hasOrigin = false;
+        std::vector<Vertex> vertices;
+    };
+
+    static bool FinitePoint(const gp_Pnt& point)
+    {
+        return std::isfinite(point.X()) && std::isfinite(point.Y())
+            && std::isfinite(point.Z());
+    }
+
+    static bool DistinctPoints(const gp_Pnt& first, const gp_Pnt& second)
+    {
+        return first.X() != second.X() || first.Y() != second.Y()
+            || first.Z() != second.Z();
+    }
 
     static void AppendVertex(VertexGroup& group, const gp_Pnt& point, double nx, double ny, double nz)
     {
@@ -1393,15 +1589,47 @@ private:
         group.vertices.push_back(vertex);
     }
 
+    // De-indexed line segment: both endpoints are appended atomically so a
+    // non-finite narrowed coordinate can never leave an odd/half segment.
+    // Normals are the neutral +Z direction (lines have no surface normal) and
+    // UVs stay zero; the line PSO ignores both.
+    static bool AppendLineSegment(LineGroup& group, const gp_Pnt& first, const gp_Pnt& second)
+    {
+        if (!group.hasOrigin) {
+            group.origin[0] = first.X();
+            group.origin[1] = first.Y();
+            group.origin[2] = first.Z();
+            group.hasOrigin = true;
+        }
+        Vertex a{};
+        Vertex b{};
+        a.px = static_cast<float>(first.X() - group.origin[0]);
+        a.py = static_cast<float>(first.Y() - group.origin[1]);
+        a.pz = static_cast<float>(first.Z() - group.origin[2]);
+        b.px = static_cast<float>(second.X() - group.origin[0]);
+        b.py = static_cast<float>(second.Y() - group.origin[1]);
+        b.pz = static_cast<float>(second.Z() - group.origin[2]);
+        if (!std::isfinite(a.px) || !std::isfinite(a.py) || !std::isfinite(a.pz)
+            || !std::isfinite(b.px) || !std::isfinite(b.py) || !std::isfinite(b.pz)) {
+            return false;
+        }
+        a.nz = b.nz = 1.0f;
+        group.vertices.push_back(a);
+        group.vertices.push_back(b);
+        return true;
+    }
+
     const StepTessellationProfile& profile_;
     const StepXdeLimits& limits_;
     StepTessellationQuality quality_;
     std::function<bool()> cancelledProbe_;
     bool forceSerial_ = false;
+    bool readWire_ = false;
     bool repairEligible_ = false;
     double meshMilliseconds_ = 0.0;
     double extractMilliseconds_ = 0.0;
     std::uint32_t unmeshedFaces_ = 0;
+    std::uint32_t unmeshedEdges_ = 0;
 };
 
 // T07 opt-in repair. Runs only when a definition transferred but produced no
@@ -1443,7 +1671,11 @@ bool TryBoundedRepair(const TopoDS_Shape& shape, const StepRepairBudget& budget,
     for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
         if (++edges > budget.maxEdges) return false;
     }
-    if (faces == 0) return false;
+    // T05: a wire-only shape (edges, no faces) is a valid visible definition,
+    // not a repair candidate. Only a shape with neither faces nor edges is
+    // rejected here; the caller additionally gates repair on a face-bearing
+    // definition that actually failed to tessellate.
+    if (faces == 0 && edges == 0) return false;
 
     const auto start = SteadyClock::now();
     try {
@@ -1892,6 +2124,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         DefinitionMesher mesher(limits.profile, limits, policy.quality);
         mesher.SetCancellationProbe([cancellationEvent] { return IsCancelled(cancellationEvent); });
         mesher.SetForceSerial((request.requestFlags & model_core::kImportRequestStepForceSerialForTesting) != 0);
+        mesher.SetReadWire(policy.readWire);
 
         for (const NodeRecord& node : planner.nodes()) {
             if (!emitter.AddNode(node)) break;
@@ -1916,7 +2149,8 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             // enters ShapeFix.
             std::vector<GeometryRecord> chunks;
             model_core::ImportErrorCode meshed = mesher.Mesh(
-                definition.shape, definition.faceColors, definition.hiddenFaces,
+                definition.shape, definition.faceColors, definition.edgeColors,
+                definition.hiddenFaces, definition.hiddenEdges,
                 definition.hasShapeColor, definition.shapeMaterialId, definition.meshId,
                 nextGeometryId, chunks);
             ++definitionsDone;
@@ -1932,7 +2166,8 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
                     const std::uint32_t retryGeometryId = nextGeometryId;
                     std::vector<GeometryRecord> repairedChunks;
                     const model_core::ImportErrorCode retry = mesher.Mesh(
-                        repaired, definition.faceColors, definition.hiddenFaces,
+                        repaired, definition.faceColors, definition.edgeColors,
+                        definition.hiddenFaces, definition.hiddenEdges,
                         definition.hasShapeColor, definition.shapeMaterialId, definition.meshId,
                         nextGeometryId, repairedChunks);
                     if (retry == model_core::ImportErrorCode::None && !repairedChunks.empty()) {
@@ -1997,8 +2232,13 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
             compatibility.Add(model_core::kStepFeatureUnmeshedDefinition,
                               CompatibilitySeverity::Ignored, mesher.unmeshedFaces());
         }
+        if (mesher.unmeshedEdges() > 0) {
+            compatibility.Add(model_core::kCadFeatureUnmeshedEdge,
+                              CompatibilitySeverity::Ignored, mesher.unmeshedEdges());
+        }
         emitter.AddWarnings(policyWarnings);
         emitter.AddWarnings(mesher.unmeshedFaces());
+        emitter.AddWarnings(mesher.unmeshedEdges());
         if (!emitter.AddCompatibility(compatibility.Payload())) {
             result.errorCode = emitter.error();
             closeDocument();
@@ -2031,7 +2271,7 @@ StepXdeResult RunStepXdeAdapter(const model_core::ParseStepFileRequest& request,
         result.instanceCount = emitter.nextInstanceSerial();
         result.materialCount = static_cast<std::uint32_t>(planner.materials().size());
         result.warningCount = (std::min)(64u, planner.warningCount() + policyWarnings
-            + mesher.unmeshedFaces());
+            + mesher.unmeshedFaces() + mesher.unmeshedEdges());
         result.timings.meshMilliseconds = static_cast<std::uint64_t>(mesher.meshMilliseconds());
         result.timings.extractMilliseconds = static_cast<std::uint64_t>(mesher.extractMilliseconds());
         result.timings.emitMilliseconds = static_cast<std::uint64_t>(ElapsedMilliseconds(emitStart));

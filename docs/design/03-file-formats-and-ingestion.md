@@ -468,6 +468,30 @@ TinyUSDZ 0.9.1 has no allocation, progress, or cancellation callback, and its me
 
 The AppContainer compatibility host opens the stage through pinned OpenUSD with initial payload loading disabled. Its composition policy permits sublayers, references, inherits/specializes, and authored default variant selections; its brokered resolver admits only approved local asset dependencies. Discovery and payload loading proceed breadth-first under dependency-count, byte, depth, time, and memory limits. Payloads needed for the build/default stage are loaded incrementally. The host emits only the normalized static subset: meshes, bounded deterministic tessellations of `Sphere`/`Cube`/`Cylinder`/`Cone`/`Capsule` (24x16 sphere, 12-triangle cube, 24-segment capped cylinders/cones, 24x8-per-hemisphere capsules with X/Y/Z `axis` support), `UsdGeomPoints` as colored/opacity-carrying `PointList` chunks, transforms, instances/point instances, display color, and supported Preview Surface bindings. Creases and authored non-`none` subdivision render the control cage with a `Degraded` warning and no smoothing; `extent` is a hint and actual bounds are recomputed from generated vertices. Skeletal schemas are non-geometry and are skipped, so skinned meshes preview their authored rest pose; animation, MaterialX, curves/NURBS, other procedural schemas, renderer plug-ins, remote assets, and interactive variant selection remain outside MVP. USDZ archive entries use the same archive/path limits regardless of adapter.
 
+### CAD edge and wire fallback
+
+The dedicated CAD host emits the existing `LineList` topology for a
+definition whose visible geometry is edges rather than faces. After the face
+pass, a definition that produced no triangles collects its `TopAbs_EDGE`
+subshapes, meshes them as one compound with the same versioned
+`StepTessellationProfile`, and reads `BRep_Tool::Polygon3D`. A polyline is
+expanded into independent consecutive pairs (never a strip), the polygon's
+`TopLoc_Location` is applied exactly as for faces, and the chunk uses the same
+de-indexed `PositionNormalUv0_F32` layout, double origin, material grouping,
+and instance path as triangles. Authored edge styles come from
+`XCAFDoc_ColorCurv`/`ColorGen`; otherwise material `0` is the neutral line
+appearance. Degenerate/non-finite segments and edges without a usable polygon
+are skipped with a bounded warning. Per-definition edge and line-segment caps
+and the per-chunk segment cap are part of the versioned profile; they are
+checked before the kernel meshes or appends vertices, so an over-budget edge
+shape fails `TessellationFailed` rather than hanging. The fallback is used
+only when a definition has no triangles; solids keep triangle-only output and
+do not get a default edge overlay. `StepImportPolicy::readWire` is the
+internal seam for the explicit user option, which T06 exposes. The wire
+protocol version does not change: `LineList` already exists and the broker
+validates even index counts, finite vertices, verified bounds and the same
+cluster limits.
+
 ## Normalized scene
 
 Importer-specific objects never cross into Streaming or Graphics. Model Core produces immutable metadata plus chunk descriptors:

@@ -139,6 +139,10 @@ constexpr uint32_t kCadFeatureFcstdMillimetresAssumed = 3014;
 constexpr uint32_t kCadFeatureFcstdExternalLinkIgnored = 3015;
 // Unsupported FreeCAD objects are skipped without failing the document.
 constexpr uint32_t kCadFeatureFcstdUnsupportedObject = 3016;
+// T05: an edge that could not be discretized was skipped. The definition may
+// still publish other edges or its faces, so this is a per-definition warning,
+// not a terminal failure.
+constexpr uint32_t kCadFeatureUnmeshedEdge = 3017;
 
 // Maps a glTF extension name to its stable numeric feature ID. This is a pure
 // lookup; it does not change whether the adapter supports the extension.

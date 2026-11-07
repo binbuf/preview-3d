@@ -17,7 +17,7 @@
 namespace {
 import_broker::ImportSessionResult Import(const wchar_t* path, import_broker::ImportFormat format)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = std::wstring(PREVIEW3D_TEST_ASSETS_DIR) + path;
     request.format = format;

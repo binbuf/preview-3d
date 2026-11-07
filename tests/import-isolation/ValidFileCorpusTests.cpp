@@ -501,7 +501,7 @@ std::optional<Observation> Observe(const ManifestEntry& entry, std::string& skip
         return GateFailure(entry, classification, "extension");
     }
 
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = PREVIEW3D_IMPORT_WORKER_EXE;
     request.sourcePath = sourcePath;
     request.format = *brokerFormat;

@@ -44,7 +44,7 @@ std::wstring TestAssetPath(const wchar_t* fileName)
 import_broker::ImportSessionRequest MakeRequest(const wchar_t* asset, import_broker::ImportFormat format,
                                                  uint64_t generationId)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = TestAssetPath(asset);
     request.format = format;

@@ -421,7 +421,7 @@ std::optional<Observation> Observe(const ManifestEntry& entry, std::string& skip
         }
     }
 
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = PREVIEW3D_IMPORT_WORKER_EXE;
     request.sourcePath = JoinPath(PREVIEW3D_REPO_ROOT, Utf8ToWide(entry.relativePath));
     request.format = ToImportFormat(entry.format);

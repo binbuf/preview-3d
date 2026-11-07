@@ -40,6 +40,15 @@ COLLADA importer (it has no point primitive); `points.dae` therefore remains a
 typed `EmptyGeometry` failure rather than being misreported through a
 synthetic skeleton mesh.
 
+The four `wire.*` fixtures were also typed `EmptyGeometry` failures in the T01
+baseline. T05 adds the CAD host's edge fallback: a definition with no
+triangles is meshed through the same versioned deflection profile and emitted
+as `LineList` segments. `wire.step`, `wire.igs`, `wire.brep` and `wire.FCStd`
+now open with visible lines and verified finite bounds; the solid fixtures
+keep triangle-only output. The IGES fixture's global-section Hollerith lengths
+are generated from the actual strings (`8Hwire.igs`, `9HPreview3D`) so the
+pinned parser reads the millimetre unit flag at the correct field.
+
 ## Real-world samples
 
 The following files are copied from the local F3D checkout

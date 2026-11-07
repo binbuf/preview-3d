@@ -94,6 +94,10 @@ struct StepImportPolicy {
     StepHealingPolicy healing = kStepHealingPolicy;
     StepRepairBudget repairBudget{};
     std::uint32_t unresolvedExternalDocuments = 0;
+    // T06 seam: emit authored edges even when the definition produced
+    // triangles (the user-facing `read_wire` option). T05 keeps this false and
+    // only uses the edge pass as a fallback for definitions with no triangles.
+    bool readWire = false;
 };
 
 struct StepXdeResult {

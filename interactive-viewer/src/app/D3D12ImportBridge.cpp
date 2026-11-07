@@ -599,7 +599,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     // depend on that timing. The coordinator makes repeated preparation cheap.
     EnsureImportSandboxPrepared();
 
-    import_broker::ImportSessionRequest sessionRequest;
+    import_broker::ImportSessionRequest sessionRequest{};
     sessionRequest.additionalSidecarSearchRoots = std::move(additionalSidecarSearchRoots);
     sessionRequest.onSidecarUnavailable = recordMissing;
     const bool cadFormat = format == SourceFormat::Step || format == SourceFormat::Iges

@@ -94,7 +94,7 @@ template <class T> void Write(std::ofstream& output, const T& value)
 import_broker::ImportSessionRequest Request(const std::filesystem::path& path,
                                             import_broker::ImportFormat format)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = path.wstring();
     request.format = format;

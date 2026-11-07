@@ -19,7 +19,7 @@ using model_core::AssimpFormat;
 import_broker::ImportSessionRequest Request(const wchar_t* fixture, AssimpFormat format,
                                             uint64_t generationId = 701)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = std::wstring(PREVIEW3D_ASSIMP_FIXTURES_DIR) + fixture;
     request.format = import_broker::ImportFormat::Assimp;

@@ -20,7 +20,7 @@ struct ScratchSource {
     ~ScratchSource() { std::error_code error; std::filesystem::remove(path,error); }
 };
 import_broker::ImportSessionRequest Request(const std::wstring& path) {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath(); request.sourcePath = path;
     request.generationId = 204; request.sectionByteCapacity = import_broker::kImportSectionBytes;
     request.maxChunkCount = 1024; request.maxChunkBatchesPerGeneration = 8;

@@ -338,7 +338,15 @@ XDE reader can represent; assembly/subfigure structure is preserved where
 present. BREP is admitted only as a `CASCADE Topology` V1-V3 shape set with a
 bounded `TShapes`/`Locations` table; it has no colors and no authored units.
 All CAD interchange formats reuse the STEP tessellation profile and
-per-definition failure isolation.
+per-definition failure isolation. Wireframe and edge-only definitions are
+visible: when a definition produces no triangles, the host meshes its edges
+with the same versioned profile and emits `LineList` chunks of independent
+segments with verified finite bounds. Authored curve colors are preserved
+where the XDE reader exposes them; otherwise lines use the neutral line
+appearance. Solids still emit triangles only and gain no default edge overlay;
+the explicit `read_wire` edge overlay is a later import option. Edge and
+segment counts are bounded per definition, and an over-budget edge shape fails
+typed (`TessellationFailed`) before the kernel allocates its polygons.
 
 XBF is admitted by its fixed `BINFILE` magic and supported binary-document
 version, then opened with OCCT's BinXCAF drivers through the mapped handle; no
