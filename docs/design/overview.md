@@ -20,7 +20,7 @@ This program covers the whole capability, not one family:
 - the shared COM/provider foundation (classes, stream backing, adapter routing, sampler, CPU
   rasterizer, deadline and containment);
 - every direct family in FR-01 — `.glb`/`.gltf`, `.stl`, `.ply`, `.obj`, `.fbx`, `.3mf`, `.usd`/
-  `.usda`/`.usdc`/`.usdz`, and `.step`/`.stp`;
+  `.usda`/`.usdc`/`.usdz`, and `.step`/`.stp`/`.stpnc`/`.p21`/`.210`;
 - Shell registration, packaging/signing, adversarial hardening and release qualification.
 
 ## Why this program starts with prerequisites
@@ -49,7 +49,7 @@ things must be settled before adapter work is safe to schedule, and each is an e
 | FBX | `.fbx` | `{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}` |
 | 3MF | `.3mf` | `{D8389A63-8526-454A-9892-72F3149484B9}` |
 | USD | `.usd`, `.usda`, `.usdc`, `.usdz` | `{E938BC70-4C08-4446-A15D-EE31576BFB48}` |
-| STEP | `.step`, `.stp` | `{6EE961AC-AC3B-4958-A898-E30523FEE79D}` |
+| STEP | `.step`, `.stp`, `.stpnc`, `.p21`, `.210` | `{6EE961AC-AC3B-4958-A898-E30523FEE79D}` |
 
 All eight CLSIDs above are product identities and **must not be regenerated**. STEP is the one
 identity added after the original seven; it is frozen here and in

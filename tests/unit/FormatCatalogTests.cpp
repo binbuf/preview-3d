@@ -239,9 +239,10 @@ TEST_CASE("format catalog extensions are unique and resolve", "[format-catalog]"
         }
     }
 
-    const std::array<std::wstring_view, 18> required{
+    const std::array<std::wstring_view, 21> required{
         L"gltf", L"glb", L"stl", L"ply", L"obj", L"fbx", L"3mf",
         L"usd", L"usda", L"usdc", L"usdz", L"step", L"stp",
+        L"stpnc", L"p21", L"210",
         L"igs", L"iges", L"brep", L"xbf", L"fcstd",
     };
     for (const auto extension : required) {

@@ -15,14 +15,19 @@ Preview 3D is a local, read-only viewer for these direct-open types:
 * .usd, .usda, .usdc, and .usdz static stages with meshes, hierarchy,
   instances/point instances, common primvars, display color, supported USD
   Preview Surface materials/textures, and bounded local composition; and
-* self-contained .step and .stp ISO 10303-21 files (AP203/AP214/AP242) with
+* self-contained .step, .stp, .stpnc, .p21, and .210 ISO 10303-21 files (AP203/AP214/AP242) with
   bounded B-rep or authored AP242 tessellated geometry, assemblies and reused
-  definitions, colors, and authored length units.
+  definitions, colors, and authored length units;
+* IGES (.igs/.iges), OCCT BREP (.brep), XBF (.xbf), and FreeCAD Standard (.fcstd)
+  through the private StepHost payload; COLLADA (.dae), 3DS (.3ds), DXF (.dxf),
+  DirectX (.x), OFF (.off), AMF (.amf), and X3D (.x3d) through the bounded
+  compatibility adapter.
 
-Other CAD formats (IGES/IFC/JT/native CAD), Explorer thumbnails (including for
-3MF, USD, FBX, and STEP), editing,
-animation playback, network assets, and a persistent model-derived cache are
-not part of this release. 3MF slicer-private multi-plate grouping/settings,
+Other CAD formats (IFC/JT/native CAD), editing, animation playback, network
+assets, and a persistent model-derived cache are not part of this release. The
+installed Explorer thumbnail provider covers glTF/GLB, OBJ, FBX, STL, PLY, 3MF,
+USD/USDZ and STEP; the remaining families do not claim a thumbnail.
+3MF slicer-private multi-plate grouping/settings,
 Slice, Secure Content, Volumetric, Implicit, toolpath, repair, slicing, and
 export features are not supported; standard root-build items are displayed
 together in authored coordinates. FBX geometry caches, dynamic constraints,
@@ -34,7 +39,9 @@ File associations
 -----------------
 
 Setup registers Preview 3D with Windows Default Apps and Open With for .glb,
-.gltf, .obj, .fbx, .stl, .ply, .3mf, .usd, .usda, .usdc, .usdz, .step, and .stp.
+.gltf, .obj, .fbx, .stl, .ply, .3mf, .usd, .usda, .usdc, .usdz, .step, .stp,
+.stpnc, .p21, .210, .igs, .iges, .brep, .xbf, .fcstd, .dae, .3ds, .dxf, .x,
+.off, .amf, and .x3d.
 Windows 11
 requires the signed-in user to confirm default app choices. Setup offers to
 open Preview 3D's Default Apps page after install;
@@ -57,7 +64,7 @@ after the generation. Local relative stage/image dependencies are supplied as
 brokered bytes; remote assets and model-selected resolvers/plugins are rejected.
 USD follows Tier B ceilings (including 2 GiB primary, 4 GiB aggregate local
 bytes/USDZ expansion, and 20 million triangles or points); the compatibility
-host's commit cap is min(4 GiB, 35% of physical memory). STEP/STP runs in
+host's commit cap is min(4 GiB, 35% of physical memory). STEP runs in
 Binbuf.Preview3D.StepHost, a third zero-capability AppContainer that can
 read/execute only the private StepHost CAD-kernel payload, receives the source
 as an inherited read-only handle rather than a path, and exits after the

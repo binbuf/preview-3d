@@ -290,7 +290,7 @@ build output; packaging as an ordinary build side effect.
 
 **Status:** Accepted for the STEP viewer slice (STEP-006).
 
-Decision: `.step`/`.stp` support is the **bounded static STEP preview subset**
+Decision: `.step`/`.stp`/`.stpnc`/`.p21`/`.210` support is the **bounded static STEP preview subset**
 implemented by the dedicated, zero-capability `Preview3DStepHost.exe` over the
 pinned constrained OCCT 7.8.1 closure. It accepts clear-text ISO 10303-21
 AP203/AP214/AP242 product/assembly structure, B-rep geometry, supported AP242
@@ -322,7 +322,7 @@ external-reference exclusion, the Tier-B limits, and the lack of PMI/editing/
 Explorer thumbnails. IGES/IFC/JT/native CAD formats, a CAD tree/property
 browser, saved views, exact measurement, and export remain separate future
 plans. STEP-007 exposes the extension to the viewer, activation, and installer
-(`Binbuf.Preview3D.STEP.1` for `.step`/`.stp`); Explorer thumbnails remain
+(`Binbuf.Preview3D.STEP.1` for `.step`/`.stp`/`.stpnc`/`.p21`/`.210`); Explorer thumbnails remain
 STEP-009 and are deliberately not registered yet.
 
 ## TSK-209 compressed glTF dependency decisions

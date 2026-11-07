@@ -121,7 +121,7 @@ $families = @(
         Clsid        = '{6EE961AC-AC3B-4958-A898-E30523FEE79D}'
         AppId        = '{6EE961AC-AC3B-4958-A898-E30523FEE79E}'
         Display      = 'Preview 3D STEP Thumbnail Provider'
-        Extensions   = @('.step', '.stp')
+        Extensions   = @('.step', '.stp', '.stpnc', '.p21', '.210')
     }
 )
 

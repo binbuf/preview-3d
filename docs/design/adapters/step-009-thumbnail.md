@@ -26,6 +26,12 @@ implementation rules, Part-21 admission contract, and containment architecture
 in [stp.md](stp.md) remain authoritative and unchanged. Only the execution
 order and the large-file performance work change.
 
+> 0.8.0 T02 extended the same STEP family to the `.stpnc`, `.p21`, and `.210`
+> interchange suffixes. The STEP-007/STEP-009 work statements below that name
+> only `.step`/`.stp` describe the original slice; the catalog, Open With,
+> installer, and thumbnail registration now cover all five suffixes with the
+> same `Binbuf.Preview3D.STEP.1` ProgID and CLSID.
+
 ## Why this revision
 
 A 250 MB STEP file was observed to take a long time in Bambu Studio, which

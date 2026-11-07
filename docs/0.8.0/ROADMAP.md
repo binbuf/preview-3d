@@ -27,7 +27,7 @@ parallel after T01.
 
 ## Phase 1 — Extension and detection completeness
 
-- [ ] T02 - Extension aliases and catalog/installer drift → [../tasks/0.8.0/T02-extension-aliases-registration.md](../tasks/0.8.0/T02-extension-aliases-registration.md)
+- [x] T02 - Extension aliases and catalog/installer drift → [../tasks/0.8.0/T02-extension-aliases-registration.md](../tasks/0.8.0/T02-extension-aliases-registration.md)
 - [ ] T03 - Catalog-driven content sniffer → [../tasks/0.8.0/T03-catalog-driven-sniffer.md](../tasks/0.8.0/T03-catalog-driven-sniffer.md)
 
 ## Phase 2 — Primitive completeness
@@ -55,11 +55,11 @@ parallel after T01.
 - Animation playback, cameras and lights.
 
 <!-- symphony:status -->
-**Pipeline status** — updated 2026-11-07T15:42:52Z · 1/10 done
+**Pipeline status** — updated 2026-11-07T16:02:32Z · 2/10 done
 
-- Completed: T01
+- Completed: T01, T02
 - Blocked: none
 - Failed: none
-- Remaining: T02, T03, T04, T05, T06, T07, T08, T09, T10
-- Last finished: T01 — done · Landed the shared manifest helper, 20-entry valid-file scoreboard, fixtures, report writer, ADR-0095 and hand-off; Debug/Release [valid-file] and [compat] pass, and the wrong-expectation probe fails with the fixture id and observed value.
+- Remaining: T03, T04, T05, T06, T07, T08, T09, T10
+- Last finished: T02 — done · STEP aliases are catalog-owned and mirrored across NSIS, thumbnail routing/registration, Open With, docs and ADR-0096; Release/Debug format gates and the alias valid-file STEP-host cases pass.
 <!-- /symphony:status -->

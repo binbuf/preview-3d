@@ -32,7 +32,7 @@ Distinct CLSIDs let the factory select an adapter without sniffing every grammar
 | FBX | .fbx | {FBC218D4-FD2C-41DF-B168-7F3B9E53C84E} |
 | 3MF | .3mf | {D8389A63-8526-454A-9892-72F3149484B9} |
 | USD | .usd, .usda, .usdc, .usdz | {E938BC70-4C08-4446-A15D-EE31576BFB48} |
-| STEP | .step, .stp | {6EE961AC-AC3B-4958-A898-E30523FEE79D} |
+| STEP | .step, .stp, .stpnc, .p21, .210 | {6EE961AC-AC3B-4958-A898-E30523FEE79D} |
 
 Each class is registered as an InprocServer32 with ThreadingModel=Apartment. T03 validates the
 ShellEx association location with third-party defaults and per-user associations before T41 writes
@@ -169,7 +169,7 @@ External dependencies are unavailable in the provider:
 - .fbx may use bounded embedded geometry/textures;
 - .3mf and .usdz may use contained package entries;
 - .usd/.usda/.usdc do not resolve external references;
-- .step/.stp are self-contained only: the bounded OCCT adapter decodes the bounded seekable stream under the provider ceilings, and external STEP documents (FILE_POPULATION/DOCUMENT_FILE) fall back to the generic icon (ADR-0002, ADR-017).
+- .step/.stp/.stpnc/.p21/.210 are self-contained only: the bounded OCCT adapter decodes the bounded seekable stream under the provider ceilings, and external STEP documents (FILE_POPULATION/DOCUMENT_FILE) fall back to the generic icon (ADR-0002, ADR-017).
 
 The full viewer retains the broader local-sidecar support defined in the format document.
 

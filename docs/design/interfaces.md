@@ -133,7 +133,7 @@ regenerated or renamed.
 | FBX | `.fbx` | `{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}` |
 | 3MF | `.3mf` | `{D8389A63-8526-454A-9892-72F3149484B9}` |
 | USD | `.usd`, `.usda`, `.usdc`, `.usdz` | `{E938BC70-4C08-4446-A15D-EE31576BFB48}` |
-| STEP | `.step`, `.stp` | `{6EE961AC-AC3B-4958-A898-E30523FEE79D}` |
+| STEP | `.step`, `.stp`, `.stpnc`, `.p21`, `.210` | `{6EE961AC-AC3B-4958-A898-E30523FEE79D}` |
 
 Routing is by CLSID only: `RouteForClsid()`/`FamilyForClsid()` return
 `Family::Unknown` for anything else, and T11 maps that to

@@ -21,7 +21,7 @@ Set-StrictMode -Version 3.0
 
 $applicationExe = 'Preview3D.exe'
 $applicationName = 'Preview 3D'
-$extensions = @('.glb', '.gltf', '.stl', '.ply', '.obj', '.fbx', '.3mf', '.usd', '.usda', '.usdc', '.usdz', '.step', '.stp')
+$extensions = @('.glb', '.gltf', '.stl', '.ply', '.obj', '.fbx', '.3mf', '.usd', '.usda', '.usdc', '.usdz', '.step', '.stp', '.stpnc', '.p21', '.210')
 $progIds = @(
     'Binbuf.Preview3D.glTF.1',
     'Binbuf.Preview3D.STL.1',

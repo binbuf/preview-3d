@@ -83,7 +83,7 @@ The broker's per-generation control pipes, cancellation event, and shared sectio
 
 Direct-open extensions:
 
-    .glb .gltf .stl .ply .obj .fbx .3mf .usd .usda .usdc .usdz .step .stp .igs .iges .brep
+    .glb .gltf .stl .ply .obj .fbx .3mf .usd .usda .usdc .usdz .step .stp .stpnc .p21 .210 .igs .iges .brep .xbf .fcstd .dae .3ds .dxf .x .off .amf .x3d
 
 .mtl is deliberately absent. It is resolved only as an OBJ sidecar and is neither an Open With target nor a thumbnail handler.
 
@@ -109,9 +109,18 @@ Stable versioned ProgIDs:
 | FBX | Binbuf.Preview3D.FBX.1 | .fbx |
 | 3MF | Binbuf.Preview3D.ThreeMF.1 | .3mf |
 | USD | Binbuf.Preview3D.USD.1 | .usd, .usda, .usdc, .usdz |
-| STEP | Binbuf.Preview3D.STEP.1 | .step, .stp |
+| STEP | Binbuf.Preview3D.STEP.1 | .step, .stp, .stpnc, .p21, .210 |
 | IGES | Binbuf.Preview3D.IGES.1 | .igs, .iges |
 | BREP | Binbuf.Preview3D.BREP.1 | .brep |
+| XBF | Binbuf.Preview3D.XBF.1 | .xbf |
+| FCStd | Binbuf.Preview3D.FCStd.1 | .fcstd |
+| DAE | Binbuf.Preview3D.DAE.1 | .dae |
+| 3DS | Binbuf.Preview3D.3DS.1 | .3ds |
+| DXF | Binbuf.Preview3D.DXF.1 | .dxf |
+| DirectX | Binbuf.Preview3D.DirectX.1 | .x |
+| OFF | Binbuf.Preview3D.OFF.1 | .off |
+| AMF | Binbuf.Preview3D.AMF.1 | .amf |
+| X3D | Binbuf.Preview3D.X3D.1 | .x3d |
 
 Each ProgID declares:
 

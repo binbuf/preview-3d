@@ -28,22 +28,22 @@ STEP interchange names, but the catalog only owns `.step` and `.stp`.
   documents the same list.
 
 ## Scope
-- [ ] Add `stpnc`, `p21`, and `210` to `kStepExtensions` in the catalog.
-- [ ] Audit every catalog family against `docs/FORMAT-SUPPORT.md`, the README,
+- [x] Add `stpnc`, `p21`, and `210` to `kStepExtensions` in the catalog.
+- [x] Audit every catalog family against `docs/FORMAT-SUPPORT.md`, the README,
   and the installer. Add any other suffix the shipped adapter actually accepts;
   do not add suffixes the parser cannot validate.
-- [ ] Add the new STEP aliases to the NSIS install and uninstall lists.
-- [ ] Add the new STEP aliases to `thumbnail-provider/FamilyRouting.h` if the
+- [x] Add the new STEP aliases to the NSIS install and uninstall lists.
+- [x] Add the new STEP aliases to `thumbnail-provider/FamilyRouting.h` if the
   STEP thumbnail adapter accepts them. Do not add a new family or CLSID.
-- [ ] Add `[format-aliases]` cases asserting:
+- [x] Add `[format-aliases]` cases asserting:
   - `FindByExtension` resolves each alias case-insensitively;
   - `DirectOpenExtensions` contains each alias exactly once;
   - the Open As format list includes the STEP stable name and all aliases;
   - the installer register/unregister lists match the catalog;
   - the thumbnail route contains the aliases.
-- [ ] Add small valid-file entries for `.stpnc`, `.p21`, and `.210` (copies of
+- [x] Add small valid-file entries for `.stpnc`, `.p21`, and `.210` (copies of
   a small STEP fixture are enough) and confirm they reach the STEP host.
-- [ ] Update `docs/FORMAT-SUPPORT.md`, `README.md`, and the task README if the
+- [x] Update `docs/FORMAT-SUPPORT.md`, `README.md`, and the task README if the
   alias list changes.
 
 ## Out of scope
@@ -68,12 +68,61 @@ STEP interchange names, but the catalog only owns `.step` and `.stp`.
 - The installer test reads `Preview3D.nsi`; do not invoke `makensis`.
 
 ## Done when
-- [ ] `x64\Release\Tests.Unit.exe "[format-aliases],[format-catalog],[format-installer]"` passes.
-- [ ] `x64\Debug\Tests.Unit.exe "[format-aliases],[format-catalog],[format-installer]"` passes.
-- [ ] The `.stpnc`, `.p21`, and `.210` valid-file cases open through the STEP
+- [x] `x64\Release\Tests.Unit.exe "[format-aliases],[format-catalog],[format-installer]"` passes.
+- [x] `x64\Debug\Tests.Unit.exe "[format-aliases],[format-catalog],[format-installer]"` passes.
+- [x] The `.stpnc`, `.p21`, and `.210` valid-file cases open through the STEP
   host (or are recorded as a known importer failure with a typed error).
-- [ ] The installer register and uninstall lists contain every catalog alias.
-- [ ] Docs and README list the same suffixes as the catalog.
+- [x] The installer register and uninstall lists contain every catalog alias.
+- [x] Docs and README list the same suffixes as the catalog.
 
 ## Hand-off
-_(filled in by the implementing session: aliases added, files touched, drift-test result, and any alias deliberately rejected)_
+
+**Aliases added.** `catalog_detail::kStepExtensions` now owns `step`, `stp`,
+`stpnc`, `p21`, and `210` (lowercase; `EqualExtension` folds case). They share
+`FormatId::Step`, the `step` stable name, `Binbuf.Preview3D.STEP.1`, the STEP
+thumbnail CLSID and the existing host. No new format, family, CLSID, parser or
+process path was added.
+
+**Files touched.** Catalog (`shared/model-core/include/model_core/FormatCatalog.h`);
+NSIS install/uninstall and test-association reset; thumbnail routing and its
+staged registration table (`thumbnail-provider/FamilyRouting.h`,
+`packaging/installer/Preview3DThumbnailRegistration.ps1`); Open With ranking
+(`interactive-viewer/src/platform/OpenWithRanking.cpp`); tests
+(`tests/unit/FormatRegistrationTests.cpp`, `FormatCatalogTests.cpp`,
+`OpenWithRankingTests.cpp`, `tests/app-smoke/thumbnail_registration.py`,
+`tests/app-smoke/step_package.py`);
+valid-file manifest; README, `docs/FORMAT-SUPPORT.md`, installer/portable
+READMEs, design docs, and ADR-0096.
+
+**Audit result.** The STEP aliases were the only catalog/doc/installer suffix
+gap. Every other family already matched `docs/FORMAT-SUPPORT.md`, the README
+and the NSIS lists. No other suffix the shipped adapters validate was found;
+`.wrl`/`.vrml` remain deliberately unowned because VRML is a reserved
+`FormatId` with no descriptor/parser. The audit also completed stale
+direct-extension lists in `docs/design/07-user-experience.md`,
+`docs/design/08-installation-and-registration.md`, and the installer/portable
+READMEs; the ProgID table in design/08 now covers every catalog family.
+
+**Valid-file evidence.** The three T01 fixtures already exist as byte-identical
+copies of `tests/fixtures/stp-spike/part_ap214.stp`; only the manifest
+expectations changed from `failed`/`extension` to `opened`/`triangles` with
+`requiresStepHost`. The report observes 64 triangles, stage `Completed`, no
+warnings for each alias.
+
+**Checks run.**
+- `x64\Release\Tests.Unit.exe "[format-aliases],[format-catalog],[format-installer]"` → all passed (1072 assertions, 16 cases).
+- `x64\Debug\Tests.Unit.exe "[format-aliases],[format-catalog],[format-installer]"` → all passed (1072 assertions, 16 cases).
+- `x64\Release\Tests.ImportIsolation.exe "[valid-file]"` and the Debug equivalent → all passed (163 assertions, 2 cases); `[write-valid-file-report]` records the aliases as opened.
+- `python tests\app-smoke\thumbnail_registration.py` → static contract plus sandboxed install/conflict/repair/uninstall lifecycle passed.
+- `x64\Release\Tests.Unit.exe "[provider]"` → all passed (60949 assertions, 225 cases).
+- `x64\Release\Tests.Unit.exe "[open-with]"` → all passed (101 assertions, 19 cases).
+
+**Deviations.** None from the task scope. A few consistency surfaces not named
+in the task were updated because they carry the same suffix list: Open With
+ranking affinity, `Reset-Preview3DTestAssociations.ps1`, and the STEP
+app-smoke registration loop. The T01 fixtures were reused rather than copied
+again. `docs/tasks/0.8.0/README.md` already named the three aliases in the
+series definition of done and needed no edit. No `makensis` run was needed.
+
+**Remaining work.** None for T02. T03's sniffer work is independent; T10 should
+keep the support matrix aligned if any later task adds another alias.

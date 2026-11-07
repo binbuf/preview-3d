@@ -189,7 +189,11 @@ inline constexpr std::wstring_view kUsdaExtensions[] = { L"usda" };
 inline constexpr std::wstring_view kUsdcExtensions[] = { L"usdc" };
 inline constexpr std::wstring_view kUsdzExtensions[] = { L"usdz" };
 inline constexpr std::wstring_view kThreeMfExtensions[] = { L"3mf" };
-inline constexpr std::wstring_view kStepExtensions[] = { L"step", L"stp" };
+// `.stpnc`, `.p21` and `.210` are the other names STEP interchange files use
+// in the wild. They select the same STEP descriptor/ProgID; only the suffix
+// differs, and the host still validates the ISO 10303-21 bytes.
+inline constexpr std::wstring_view kStepExtensions[] = {
+    L"step", L"stp", L"stpnc", L"p21", L"210" };
 inline constexpr std::wstring_view kIgesExtensions[] = { L"igs", L"iges" };
 inline constexpr std::wstring_view kBrepExtensions[] = { L"brep" };
 inline constexpr std::wstring_view kXbfExtensions[] = { L"xbf" };
