@@ -1931,6 +1931,13 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         return result;
     };
 
+    // T07: a forced USD compatibility reader is a closed trusted-process
+    // selection, not a parser hint. It can only route USD; every other format
+    // is a typed protocol rejection before any file is opened.
+    if (request.forceCompatibilityHost && request.format != ImportFormat::Usd)
+        return Fail(ImportStage::ValidateOptions,
+                    model_core::ImportErrorCode::ImportProtocolViolation);
+
     // CAD formats have no fast-worker candidate and no fallback: the dedicated
     // host is the only producer allowed to emit their SourceFormatId.
     if (request.format == ImportFormat::Step || request.format == ImportFormat::Iges
@@ -1940,6 +1947,18 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             return Fail(ImportStage::LaunchWorker, model_core::ImportErrorCode::StepHostFailure);
         return withIdentity(
             MapStepFailure(RunImportSessionForProducer(request, ImportProducer::StepHost)));
+    }
+
+    // A forced USD compatibility reader skips the TinyUSDZ candidate but still
+    // runs the host's own admission, containment and budgets. Without a
+    // configured host the forced choice fails typed instead of silently falling
+    // back to the fast path the user did not select.
+    if (request.forceCompatibilityHost) {
+        if (request.compatibilityHostExePath.empty())
+            return Fail(ImportStage::LaunchWorker,
+                        model_core::ImportErrorCode::CompatibilityHostFailure);
+        return withIdentity(MapCompatibilityFailure(
+            RunImportSessionForProducer(request, ImportProducer::CompatibilityHost)));
     }
 
     // A nonzero USD subdivision level has no fast-worker evaluator. Route it

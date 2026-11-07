@@ -143,6 +143,40 @@ T05 edge-only fallback and the overlay. `unit_scale` still runs the format's
 authored-unit checks and records the override as a compatibility diagnostic.
 The UI exposes the same surface under **Settings → Import options…**.
 
+## Reader selection (T07)
+
+`shared/model-core/include/model_core/ReaderCatalog.h` is the compile-time
+table of readers this build ships. `--list-readers` prints
+`name<TAB>extensions<TAB>importer<TAB>score` in stable name order;
+`--list-formats` remains the family view. `--reader <name>` is ASCII,
+case-insensitive and bounded to 64 characters; unknown or unshipped names fail
+typed before any open, and `--reader` wins over `--format` when both are given.
+
+| Reader | Extensions | Importer | Score |
+| --- | --- | --- | --- |
+| `3mf` | `3mf` | `3mf-worker` | 90 |
+| `assimp` | `dae,3ds,dxf,x,off,amf,x3d` | `assimp-compat` | 30 |
+| `cad` | `igs,iges,brep,xbf,fcstd` | `cad-host` | 100 |
+| `fbx` | `fbx` | `fbx-worker` | 90 |
+| `gltf` | `gltf,glb` | `gltf-worker` | 100 |
+| `obj` | `obj` | `obj-worker` | 50 |
+| `ply` | `ply` | `ply-worker` | 70 |
+| `step` | `step,stp,stpnc,p21,210` | `step-host` | 100 |
+| `stl` | `stl` | `stl-worker` | 60 |
+| `usd` | `usd,usda,usdc,usdz` | `usd-fast` | 95 |
+| `usd-compat` | `usd,usda,usdc,usdz` | `usd-compat-host` | 40 |
+
+The default reader for a family is the highest score, with ties by stable name;
+a compatibility reader always scores below its native counterpart. A forced
+reader replaces candidate selection but not the worker/host parse: the trusted
+viewer still classifies the path, the broker still canonicalizes and duplicates
+the handle, and the worker/host still applies admission, containment and every
+budget. The reader name never crosses the process boundary. Open As lists the
+default reader (marked) and shipped alternates for each family; selecting the
+default clears the forced-reader state. T08 adds new compatibility readers and
+the closed retry policy on top of this selection foundation; it does not add a
+new parser here.
+
 ## Execution notes
 
 - T01 is the measurement gate. Do not fix importer behaviour in it; later tasks
@@ -150,7 +184,8 @@ The UI exposes the same surface under **Settings → Import options…**.
 - T02 and T03 are independent after T01 and can run in parallel.
 - T04 and T05 are independent after T01 and can run in parallel.
 - T06 depends on T05 because it exposes the `read_wire` behaviour T05 adds.
-- T07 adds selection only; T08 adds new compatibility readers.
+- T07 adds the reader table, `--list-readers`/`--reader` and Open As
+  alternates; T08 adds new compatibility readers and the bounded retry policy.
 - T09 should run after all behaviour changes so the coverage report is stable.
 - T10 is the final qualification and documentation gate.
 

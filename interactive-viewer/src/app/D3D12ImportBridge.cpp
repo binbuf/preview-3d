@@ -596,7 +596,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows,
                         std::function<void(const model_core::StepProgressNotice&)> onStepProgress,
                         std::vector<std::wstring> additionalSidecarSearchRoots,
-                        model_core::ImportOptions importOptions)
+                        model_core::ImportOptions importOptions,
+                        bool forceCompatibilityHost)
 {
     ImportResult result;
     // Aggregated on the import thread only: the onSidecarUnavailable callback
@@ -644,6 +645,9 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     }
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
+    // T07: a forced USD compatibility reader is a closed boolean selection;
+    // the broker routes it to the host without ever seeing the reader name.
+    sessionRequest.forceCompatibilityHost = forceCompatibilityHost;
     // T06: only the closed option-bearing formats carry a record. The broker
     // rejects an option record on any other format instead of ignoring it.
     if (cadFormat || format == SourceFormat::Usd)

@@ -426,6 +426,55 @@ subdivision level), together with the existing source identity and importer
 version. Two imports of the same file with different options therefore never
 share a derived-cache entry.
 
+## Readers and forced selection
+
+A reader is the stable product identity of an importer this build actually
+ships. The compile-time table lives in
+`shared/model-core/include/model_core/ReaderCatalog.h`; it is not a plugin
+loader and cannot load code, a path or a URL. `--list-readers` prints one
+`name<TAB>extensions<TAB>importer<TAB>score` line per reader in stable name
+order:
+
+| Reader | Extensions | Importer | Score | Kind |
+| --- | --- | --- | --- | --- |
+| `3mf` | `.3mf` | `3mf-worker` | 90 | native |
+| `assimp` | `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, `.x3d` | `assimp-compat` | 30 | compatibility |
+| `cad` | `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd` | `cad-host` | 100 | native |
+| `fbx` | `.fbx` | `fbx-worker` | 90 | native |
+| `gltf` | `.gltf`, `.glb` | `gltf-worker` | 100 | native |
+| `obj` | `.obj` | `obj-worker` | 50 | native |
+| `ply` | `.ply` | `ply-worker` | 70 | native |
+| `step` | `.step`, `.stp`, `.stpnc`, `.p21`, `.210` | `step-host` | 100 | native |
+| `stl` | `.stl` | `stl-worker` | 60 | native |
+| `usd` | `.usd`, `.usda`, `.usdc`, `.usdz` | `usd-fast` | 95 | native (default) |
+| `usd-compat` | `.usd`, `.usda`, `.usdc`, `.usdz` | `usd-compat-host` | 40 | compatibility |
+
+`--list-formats` remains the family-oriented view. `--reader <name>` is
+case-insensitive and bounded to 64 ASCII characters. An unknown or unshipped
+name fails typed before any open. A forced reader is resolved after the same
+extension/content classification as the default path:
+
+- a reader that owns the file's suffix (or content family) opens that exact
+  descriptor;
+- a single-family reader may fall back to its own family when the suffix is
+  outside it, and the worker/host still rejects the actual bytes;
+- a multi-family reader (`cad`, `assimp`) applied to a suffix it does not own
+  fails typed `ReaderCannotOpenFormat` before any open.
+
+The worker/host never receives the reader name. The broker still receives the
+closed format discriminator, plus one boolean for a forced `usd-compat` USD
+open that selects the OpenUSD compatibility host instead of the TinyUSDZ fast
+path. Forcing a reader changes importer selection only: `ClassifySourcePath`,
+broker canonicalization and handle duplication, sidecar policy, AppContainer
+access, Job Object limits and every parser budget are unchanged.
+
+**Open as…** lists each family's default reader (marked `[default]`) and its
+shipped alternates; currently only the USD family has an alternate
+(`usd-compat`). Selecting an alternate sets the forced-reader state; selecting
+the default clears it. The selected reader is also named in the info panel's
+Scene Data section and in the forced-reader failure text. See
+[ADR-0101](design/adr/0101-reader-catalog-scores-force-reader.md).
+
 ## Tier B ceilings
 
 3MF and USD are bounded Tier B paths: among their ceilings are 2 GiB per primary

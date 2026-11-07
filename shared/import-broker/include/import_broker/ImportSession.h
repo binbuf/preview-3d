@@ -220,6 +220,12 @@ struct ImportSessionRequest {
     std::optional<model_core::ImportOptions> importOptions;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;
+    // T07: the trusted viewer selected the shipped USD compatibility reader
+    // explicitly (--reader usd-compat / Open As). Routes this generation
+    // straight to the OpenUSD compatibility host instead of the TinyUSDZ fast
+    // path. Still a closed product value: the host repeats admission,
+    // containment and every budget check. Only meaningful for ImportFormat::Usd.
+    bool forceCompatibilityHost = false;
     // Meaningful only when format == ImportFormat::Assimp. The closed value
     // selects the compatibility importer hint and the expected wire identity.
     model_core::AssimpFormat assimpFormat = model_core::AssimpFormat::Dae;

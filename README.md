@@ -72,6 +72,44 @@ identity, so two imports of the same file with different options never share a
 cached result. See [Format support and limits](docs/FORMAT-SUPPORT.md#import-options)
 for the exact ranges and application rules.
 
+### Reader selection
+
+Each format family is served by one or more shipped readers. `--list-readers`
+prints the exact table this build contains, one
+`name<TAB>extensions<TAB>importer<TAB>score` line per reader in stable name
+order; `--list-formats` remains the family-oriented view. `--reader <name>`
+forces a reader for the next open, case-insensitively. Unknown or unshipped
+names fail before any file is opened.
+
+| Reader | Extensions | Importer | Default for |
+| --- | --- | --- | --- |
+| `3mf` | `.3mf` | `3mf-worker` | 3MF |
+| `assimp` | `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, `.x3d` | `assimp-compat` | compatibility formats |
+| `cad` | `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd` | `cad-host` | IGES, BREP, XBF, FCStd |
+| `fbx` | `.fbx` | `fbx-worker` | FBX |
+| `gltf` | `.gltf`, `.glb` | `gltf-worker` | glTF/GLB |
+| `obj` | `.obj` | `obj-worker` | OBJ |
+| `ply` | `.ply` | `ply-worker` | PLY |
+| `step` | `.step`, `.stp`, `.stpnc`, `.p21`, `.210` | `step-host` | STEP |
+| `stl` | `.stl` | `stl-worker` | STL |
+| `usd` | `.usd`, `.usda`, `.usdc`, `.usdz` | `usd-fast` | USD (default) |
+| `usd-compat` | `.usd`, `.usda`, `.usdc`, `.usdz` | `usd-compat-host` | USD (alternate) |
+
+```powershell
+Preview3D.exe --list-readers
+Preview3D.exe --reader gltf model.bin
+Preview3D.exe --reader usd-compat scene.usda
+```
+
+Forcing a reader changes importer selection, not the security boundary: the
+file is still classified, opened and canonicalized by the trusted viewer, and
+the sandboxed worker/host still validates the actual bytes under the same
+admission, containment and budgets. A forced reader that cannot parse the file
+fails with a typed diagnostic that names the reader. **Open as…** lists the
+default reader (marked) and any shipped alternates for each family; choosing
+the default clears the forced-reader state. See
+[ADR-0101](docs/design/adr/0101-reader-catalog-scores-force-reader.md).
+
 ## Install
 
 1. Download the installer or portable ZIP from [Releases](https://github.com/binbuf/preview-3d/releases/latest).

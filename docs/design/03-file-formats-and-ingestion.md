@@ -63,6 +63,35 @@ importer identities. This build links no subdivision evaluator, so a nonzero
 USD subdivision level is a typed `UnsupportedRequiredFeature`, not a silent
 control-cage render.
 
+### Reader selection
+
+`shared/model-core/include/model_core/ReaderCatalog.h` is the compile-time
+reader registry ([ADR-0101](./adr/0101-reader-catalog-scores-force-reader.md)).
+A reader is a stable ASCII product identity with a display name, primary
+catalog family, `ImporterKind`, owned extensions, product-policy score, a
+compatibility flag and the closed option names it honors. The table lists only
+the readers shipped in this build: glTF/GLB, STL, PLY, OBJ, FBX, 3MF, the USD
+fast path, the USD OpenUSD compatibility host, the STEP host, the OCCT CAD host
+(IGES/BREP/XBF/FCStd) and the bounded Assimp compatibility adapter. It is not a
+plugin loader and cannot load code, a path or a URL.
+
+`--list-readers` prints one `name<TAB>extensions<TAB>importer<TAB>score` line
+per reader in stable name order; `--list-formats` remains the family view.
+`--reader <name>` is case-insensitive and bounded to 64 characters; unknown or
+unshipped names are typed rejections before any open. A forced reader is
+resolved after the same bounded extension/content classification as the default
+path. It opens the descriptor whose suffix it owns, or falls back to its own
+family when it is single-family (the worker/host still validates the bytes). A
+multi-family reader applied to an unowned suffix fails typed
+`ReaderCannotOpenFormat`. The reader name never crosses the process boundary:
+the broker still receives the closed `SourceFormat`/`ImportFormat` value, plus
+one boolean that selects the OpenUSD compatibility host for a forced
+`usd-compat` USD open. Open As lists each family's default reader (marked) and
+its shipped alternates; selecting the default clears the forced-reader state.
+Forcing a reader changes importer selection only: path classification, broker
+canonicalization/handle duplication, sidecar policy, AppContainer access, Job
+Object limits and every parser budget are unchanged.
+
 ## Input boundary
 
 Extension classification and content sniffing are **dispatch hints**, never a
@@ -78,9 +107,12 @@ existing extension-only open path; content-only evidence or a cross-family
 disagreement never opens silently but raises the failure card's **Open As**
 choice with both candidates listed. `--format <stable-name>` and Open As force a
 catalog importer (still fully validated by the worker/host), while
-`--skip-content-check` selects by suffix only. `--list-formats` prints one
-`stable-name<TAB>extensions<TAB>display-name` line per directly registered
-catalog entry. The same catalog feeds the open-dialog filter, command-line and
+`--skip-content-check` selects by suffix only. `--reader <name>` forces a
+shipped reader identity (ADR-0101); it replaces candidate selection but never
+the worker/host parse, admission, containment or budgets. `--list-formats`
+prints one `stable-name<TAB>extensions<TAB>display-name` line per directly
+registered catalog entry, and `--list-readers` prints the shipped reader table.
+The same catalog feeds the open-dialog filter, command-line and
 Shell path acceptance, Shell Open With discovery and the NSIS install/uninstall
 registration checked by `[format-installer]` ([ADR-0058](./adr/0058-catalog-driven-open-as-and-installer-drift.md)).
 

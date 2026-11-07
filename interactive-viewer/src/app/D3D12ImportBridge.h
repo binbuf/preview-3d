@@ -223,7 +223,8 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<bool(uint64_t)> cpuBudgetAllows = {},
                         std::function<void(const model_core::StepProgressNotice&)> onStepProgress = {},
                         std::vector<std::wstring> additionalSidecarSearchRoots = {},
-                        model_core::ImportOptions importOptions = {});
+                        model_core::ImportOptions importOptions = {},
+                        bool forceCompatibilityHost = false);
 
 // Creates the import worker's AppContainer profile and grants it
 // read+execute on the worker's own directory -- without this the sandboxed
