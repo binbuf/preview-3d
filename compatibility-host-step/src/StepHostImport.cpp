@@ -19,12 +19,12 @@ double ElapsedMilliseconds(const std::chrono::steady_clock::time_point& start)
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
-StepTessellationQuality MapImportQuality(model_core::StepImportQuality quality)
+StepTessellationQuality MapImportQuality(model_core::ImportQuality quality)
 {
     switch (quality) {
-    case model_core::StepImportQuality::Draft: return StepTessellationQuality::Draft;
-    case model_core::StepImportQuality::Full: return StepTessellationQuality::Full;
-    case model_core::StepImportQuality::Balanced: break;
+    case model_core::ImportQuality::Draft: return StepTessellationQuality::Draft;
+    case model_core::ImportQuality::Full: return StepTessellationQuality::Full;
+    case model_core::ImportQuality::Balanced: break;
     }
     return StepTessellationQuality::Balanced;
 }
@@ -40,6 +40,7 @@ model_core::ParseStepFileRequest NarrowStepRequest(
     narrow.maxChunkCount = request.maxChunkCount;
     narrow.requestFlags = request.requestFlags;
     narrow.cancellationEventHandleValue = request.cancellationEventHandleValue;
+    narrow.importOptions = request.importOptions;
     return narrow;
 }
 
@@ -136,6 +137,30 @@ StepImportResult RunCadHostImportImpl(const model_core::ParseStepFileRequest& re
         result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
         return result;
     }
+    // T06: the host re-validates the whole option record before any preflight
+    // or OCCT call. A version-0 payload is the pre-T06 zero-filled request; the
+    // existing flag bits remain authoritative for its quality field.
+    model_core::ImportOptionFormat optionFormat = model_core::ImportOptionFormat::Step;
+    if (!model_core::ImportOptionFormatForCadFormat(cadFormat, optionFormat)) {
+        result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
+        return result;
+    }
+    model_core::ImportOptions importOptions{};
+    model_core::ImportOptionError optionError = model_core::ImportOptionError::None;
+    if (!model_core::ImportOptionsFromPayload(request.importOptions, optionFormat,
+                                              importOptions, optionError)) {
+        result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
+        return result;
+    }
+    if (request.importOptions.version == 0) {
+        importOptions.quality = static_cast<model_core::ImportQuality>(importQuality);
+    } else if (static_cast<std::uint32_t>(importOptions.quality)
+               != static_cast<std::uint32_t>(importQuality)) {
+        // The closed flag field and the generic record must agree; a stale or
+        // hostile producer cannot select one quality in each place.
+        result.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
+        return result;
+    }
     if (cancellationEvent && cancellationEvent != INVALID_HANDLE_VALUE
         && WaitForSingleObject(cancellationEvent, 0) == WAIT_OBJECT_0) {
         result.errorCode = model_core::ImportErrorCode::Cancelled;
@@ -193,10 +218,18 @@ StepImportResult RunCadHostImportImpl(const model_core::ParseStepFileRequest& re
     }
 
     StepImportPolicy policy;
-    policy.quality = MapImportQuality(importQuality);
+    policy.quality = MapImportQuality(importOptions.quality);
+    policy.options = importOptions;
     policy.unresolvedExternalDocuments = preflight.unresolvedExternalDocuments;
+    // T05 test-only budget seam: a small wire fixture can then prove typed
+    // TessellationFailed rejection before any large edge allocation.
+    StepXdeLimits limits;
+    if ((request.requestFlags & model_core::kImportRequestStepTinyEdgeBudgetForTesting) != 0) {
+        limits.profile.maxEdgesPerDefinition = 1;
+        limits.profile.maxLineSegmentsPerDefinition = 0;
+    }
     const StepXdeResult scene = RunStepXdeAdapter(request, section, sourceHandle, cancellationEvent,
-                                                  mappedSource, {}, publish, progress, policy,
+                                                  mappedSource, limits, publish, progress, policy,
                                                   cadFormat);
     result.errorCode = scene.errorCode;
     result.chunkCount = scene.chunkCount;

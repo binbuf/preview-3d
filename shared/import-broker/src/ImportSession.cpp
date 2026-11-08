@@ -223,6 +223,8 @@ Request MakeFileRequest(const ImportSessionRequest& session, uint64_t sourceFile
             ? model_core::kImportRequestFbxTinyTextureLimitForTesting : 0)
         | (session.stepForceSerialForTesting
             ? model_core::kImportRequestStepForceSerialForTesting : 0)
+        | (session.stepTinyEdgeBudgetForTesting
+            ? model_core::kImportRequestStepTinyEdgeBudgetForTesting : 0)
         | (session.assimpTinyLimitsForTesting
             ? model_core::kImportRequestAssimpTinyLimitsForTesting : 0);
     request.cancellationEventHandleValue = cancellationEventHandle;
@@ -241,16 +243,72 @@ model_core::SourceFormatId AssimpSourceFormat(model_core::AssimpFormat format)
     case A::Off: return S::Off;
     case A::Amf: return S::Amf;
     case A::X3d: return S::X3d;
+    case A::Gltf: return S::Gltf;
+    case A::Obj: return S::Obj;
+    case A::Fbx: return S::Fbx;
+    case A::ThreeMf: return S::ThreeMf;
     }
     return S::Unknown;
 }
 
-bool IsAssimpSourceFormat(model_core::SourceFormatId format)
+// Scene formats that only the Assimp compatibility reader can produce. The
+// four native-family names Assimp can also emit (glTF/OBJ/FBX/3MF) are
+// deliberately absent: native OBJ/FBX/3MF are already Tier B by their own
+// entries, while native glTF is Tier A and must keep its coarse-proxy
+// protocol. Compatibility output that claims a native family is bounded by
+// the worker's own Tier B limits and the glTF-specific source-range checks.
+bool IsAssimpOnlySourceFormat(model_core::SourceFormatId format)
 {
     using S = model_core::SourceFormatId;
     return format == S::Dae || format == S::ThreeDs || format == S::Dxf
         || format == S::DirectX || format == S::Off || format == S::Amf
         || format == S::X3d;
+}
+
+// The closed fallback route names a native family. A route can only be used
+// with the matching broker format; anything else is a protocol rejection
+// before a process is launched.
+bool ReaderFallbackRouteMatchesFormat(ReaderFallbackRoute route, ImportFormat format) noexcept
+{
+    switch (route) {
+    case ReaderFallbackRoute::GltfAssimp: return format == ImportFormat::Gltf;
+    case ReaderFallbackRoute::ObjAssimp: return format == ImportFormat::Obj;
+    case ReaderFallbackRoute::FbxAssimp: return format == ImportFormat::Fbx;
+    case ReaderFallbackRoute::ThreeMfAssimp: return format == ImportFormat::ThreeMf;
+    case ReaderFallbackRoute::None: return true;
+    }
+    return false;
+}
+
+// T06: the broker's closed format identity maps to the shared option format.
+// Formats with no options return false; a caller that supplies options for one
+// of them is rejected rather than having the record silently dropped.
+bool ImportOptionFormatForBrokerFormat(ImportFormat format,
+                                       model_core::ImportOptionFormat& optionFormat)
+{
+    switch (format) {
+    case ImportFormat::Step: optionFormat = model_core::ImportOptionFormat::Step; return true;
+    case ImportFormat::Iges: optionFormat = model_core::ImportOptionFormat::Iges; return true;
+    case ImportFormat::Brep: optionFormat = model_core::ImportOptionFormat::Brep; return true;
+    case ImportFormat::Xbf: optionFormat = model_core::ImportOptionFormat::Xbf; return true;
+    case ImportFormat::Fcstd: optionFormat = model_core::ImportOptionFormat::Fcstd; return true;
+    case ImportFormat::Usd: optionFormat = model_core::ImportOptionFormat::Usd; return true;
+    default: return false;
+    }
+}
+
+// The pre-T06 `stepImportQuality` field remains a supported producer surface.
+// An explicit generic record wins; otherwise the legacy field seeds quality and
+// every other option keeps its documented default.
+model_core::ImportOptions EffectiveImportOptions(const ImportSessionRequest& session)
+{
+    if (session.importOptions) return *session.importOptions;
+    model_core::ImportOptions options;
+    // The legacy quality field is a STEP/CAD surface. USD has no quality
+    // option and must keep the neutral Balanced value.
+    if (session.format != ImportFormat::Usd)
+        options.quality = static_cast<model_core::ImportQuality>(session.stepImportQuality);
+    return options;
 }
 
 bool SendStartRequest(const ImportSessionRequest& session, ImportProducer producer,
@@ -291,10 +349,14 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
     case ImportFormat::Usd: {
         auto expected = UsdExpectedEncodingFlags(session.sourcePath);
         if (!expected) return false;
+        const model_core::ImportOptions options = EffectiveImportOptions(session);
+        const model_core::ImportOptionsPayload optionPayload =
+            model_core::MakeImportOptionsPayload(options);
         if (producer == ImportProducer::CompatibilityHost) {
             auto request = MakeFileRequest<model_core::ParseOpenUsdFileRequest>(
                 session, sourceFileHandle, sectionHandle, cancellationEventHandle);
             request.requestFlags |= *expected;
+            request.importOptions = optionPayload;
             return model_core::WriteControlMessage(
                 controlInWrite, model_core::ControlOpcode::StartOpenUsdImportFromFile,
                 &request, sizeof(request));
@@ -302,6 +364,7 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         auto request = MakeFileRequest<model_core::ParseUsdFileRequest>(
             session, sourceFileHandle, sectionHandle, cancellationEventHandle);
         request.requestFlags |= *expected;
+        request.importOptions = optionPayload;
         return model_core::WriteControlMessage(
             controlInWrite, model_core::ControlOpcode::StartUsdImportFromFile,
             &request, sizeof(request));
@@ -329,7 +392,10 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         // 10303-21 by bytes, never by extension.
         auto request = MakeFileRequest<model_core::ParseStepFileRequest>(
             session, sourceFileHandle, sectionHandle, cancellationEventHandle);
-        request.requestFlags |= model_core::StepImportQualityFlags(session.stepImportQuality);
+        const model_core::ImportOptions options = EffectiveImportOptions(session);
+        request.requestFlags |= model_core::StepImportQualityFlags(
+            static_cast<model_core::StepImportQuality>(options.quality));
+        request.importOptions = model_core::MakeImportOptionsPayload(options);
         return model_core::WriteControlMessage(
             controlInWrite, model_core::ControlOpcode::StartStepImportFromFile,
             &request, sizeof(request));
@@ -343,7 +409,10 @@ bool SendStartRequest(const ImportSessionRequest& session, ImportProducer produc
         // the BREP adapter (or vice versa) through a stale field.
         auto request = MakeFileRequest<model_core::ParseCadFileRequest>(
             session, sourceFileHandle, sectionHandle, cancellationEventHandle);
-        request.requestFlags |= model_core::StepImportQualityFlags(session.stepImportQuality);
+        const model_core::ImportOptions options = EffectiveImportOptions(session);
+        request.requestFlags |= model_core::StepImportQualityFlags(
+            static_cast<model_core::StepImportQuality>(options.quality));
+        request.importOptions = model_core::MakeImportOptionsPayload(options);
         request.cadFormat = static_cast<uint32_t>(
             session.format == ImportFormat::Iges ? model_core::CadFormat::Iges
             : session.format == ImportFormat::Brep ? model_core::CadFormat::Brep
@@ -372,6 +441,7 @@ ImportSessionResult Fail(ImportStage stage, model_core::ImportErrorCode code = m
         case ImportStage::SendRequest: case ImportStage::AwaitReply: case ImportStage::ChunkBatchAckFailed: code = E::WorkerCrashed; break;
         case ImportStage::SidecarRequestLimit: case ImportStage::ChunkBatchLimit: case ImportStage::ChunkCountLimit: code = E::ResourceLimit; break;
         case ImportStage::StepProgressLimit: code = E::ResourceLimit; break;
+        case ImportStage::ValidateOptions: code = E::ImportProtocolViolation; break;
         case ImportStage::UnexpectedReply: case ImportStage::ChunkBatchOutOfOrder: code = E::ImportProtocolViolation; break;
         case ImportStage::CreateOutputSection: case ImportStage::MapOutputSection: code = E::OutOfMemory; break;
         default: code = E::InternalImporterFailure; break;
@@ -1020,7 +1090,11 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                 : request.format == ImportFormat::Fcstd
                                     ? chunk.scene.format == model_core::SourceFormatId::Fcstd
                                 : request.format == ImportFormat::Assimp
-                                    ? chunk.scene.format == AssimpSourceFormat(request.assimpFormat)
+                                    ? (request.assimpFormat == model_core::AssimpFormat::Gltf
+                                        ? (chunk.scene.format == model_core::SourceFormatId::Gltf
+                                           || chunk.scene.format == model_core::SourceFormatId::Glb)
+                                        : chunk.scene.format
+                                            == AssimpSourceFormat(request.assimpFormat))
                                 : (chunk.scene.format == model_core::SourceFormatId::Usda
                                    || chunk.scene.format == model_core::SourceFormatId::Usdc
                                    || chunk.scene.format == model_core::SourceFormatId::Usdz);
@@ -1048,7 +1122,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 || acceptance.scene->format == model_core::SourceFormatId::Brep
                 || acceptance.scene->format == model_core::SourceFormatId::Xbf
                 || acceptance.scene->format == model_core::SourceFormatId::Fcstd
-                || IsAssimpSourceFormat(acceptance.scene->format));
+                || IsAssimpOnlySourceFormat(acceptance.scene->format));
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -1186,7 +1260,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 }
                 if ((chunk.scene.format == model_core::SourceFormatId::Obj
                      || chunk.scene.format == model_core::SourceFormatId::Fbx
-                     || IsAssimpSourceFormat(chunk.scene.format)) &&
+                     || IsAssimpOnlySourceFormat(chunk.scene.format)) &&
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
                      d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
@@ -1365,7 +1439,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                                                   12ull * 1024 * 1024 * 1024 - allSourceBytes,
                                                   /*allowPackageBasenameLookup=*/true,
                                                   request.additionalSidecarSearchRoots,
-                                                  request.format);
+                                                  request.format, request.assimpFormat);
 
             bool sentReply = false;
             if (const auto* ready = std::get_if<model_core::SidecarFileReadyNotice>(&serviced)) {
@@ -1617,7 +1691,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             || acceptance.scene->format == model_core::SourceFormatId::Brep
             || acceptance.scene->format == model_core::SourceFormatId::Xbf
             || acceptance.scene->format == model_core::SourceFormatId::Fcstd
-            || IsAssimpSourceFormat(acceptance.scene->format));
+            || IsAssimpOnlySourceFormat(acceptance.scene->format));
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)
@@ -1860,8 +1934,43 @@ ImportSessionResult MapStepFailure(ImportSessionResult result)
 
 } // namespace
 
-ImportSessionResult RunImportSession(const ImportSessionRequest& request)
+namespace {
+
+// The pre-T08 body. It is never called with a non-None readerFallback route;
+// the public entry points below own that closed policy.
+ImportSessionResult RunImportSessionCore(const ImportSessionRequest& request)
 {
+    // T06: validate the closed option record on the trusted side before any
+    // process is launched. The worker/host repeat this validation on the packed
+    // wire form; neither side trusts the other.
+    if (request.stepImportQuality != model_core::StepImportQuality::Draft
+        && request.stepImportQuality != model_core::StepImportQuality::Balanced
+        && request.stepImportQuality != model_core::StepImportQuality::Full) {
+        return Fail(ImportStage::ValidateOptions);
+    }
+    model_core::ImportOptionFormat optionFormat = model_core::ImportOptionFormat::Step;
+    const bool hasOptionFormat = ImportOptionFormatForBrokerFormat(request.format, optionFormat);
+    if (request.importOptions) {
+        if (!hasOptionFormat) return Fail(ImportStage::ValidateOptions);
+        model_core::ImportOptionError optionError = model_core::ImportOptionError::None;
+        if (!model_core::ValidateImportOptions(optionFormat, *request.importOptions, optionError))
+            return Fail(ImportStage::ValidateOptions);
+    }
+    const model_core::ImportOptions effectiveOptions = EffectiveImportOptions(request);
+    const uint32_t optionsIdentity = hasOptionFormat
+        ? model_core::ImportOptionsCacheIdentity(optionFormat, effectiveOptions) : 0;
+    const auto withIdentity = [optionsIdentity](ImportSessionResult result) {
+        result.importOptionsCacheIdentity = optionsIdentity;
+        return result;
+    };
+
+    // T07: a forced USD compatibility reader is a closed trusted-process
+    // selection, not a parser hint. It can only route USD; every other format
+    // is a typed protocol rejection before any file is opened.
+    if (request.forceCompatibilityHost && request.format != ImportFormat::Usd)
+        return Fail(ImportStage::ValidateOptions,
+                    model_core::ImportErrorCode::ImportProtocolViolation);
+
     // CAD formats have no fast-worker candidate and no fallback: the dedicated
     // host is the only producer allowed to emit their SourceFormatId.
     if (request.format == ImportFormat::Step || request.format == ImportFormat::Iges
@@ -1869,7 +1978,31 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         || request.format == ImportFormat::Fcstd) {
         if (request.stepHostExePath.empty())
             return Fail(ImportStage::LaunchWorker, model_core::ImportErrorCode::StepHostFailure);
-        return MapStepFailure(RunImportSessionForProducer(request, ImportProducer::StepHost));
+        return withIdentity(
+            MapStepFailure(RunImportSessionForProducer(request, ImportProducer::StepHost)));
+    }
+
+    // A forced USD compatibility reader skips the TinyUSDZ candidate but still
+    // runs the host's own admission, containment and budgets. Without a
+    // configured host the forced choice fails typed instead of silently falling
+    // back to the fast path the user did not select.
+    if (request.forceCompatibilityHost) {
+        if (request.compatibilityHostExePath.empty())
+            return Fail(ImportStage::LaunchWorker,
+                        model_core::ImportErrorCode::CompatibilityHostFailure);
+        return withIdentity(MapCompatibilityFailure(
+            RunImportSessionForProducer(request, ImportProducer::CompatibilityHost)));
+    }
+
+    // A nonzero USD subdivision level has no fast-worker evaluator. Route it
+    // straight to the compatibility host when one is configured so the host
+    // owns the typed unsupported-feature decision; without a host the fast
+    // worker still validates and rejects the record.
+    if (request.format == ImportFormat::Usd && effectiveOptions.usdSubdivisionLevel > 0
+        && !request.compatibilityHostExePath.empty()) {
+        ImportSessionResult compatibility = MapCompatibilityFailure(
+            RunImportSessionForProducer(request, ImportProducer::CompatibilityHost));
+        return withIdentity(std::move(compatibility));
     }
 
     ImportSessionResult fast = RunImportSessionForProducer(request, ImportProducer::FastWorker);
@@ -1877,7 +2010,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
 
     if (request.format != ImportFormat::Usd || !fast.compatibilityFallbackRequired
         || request.compatibilityHostExePath.empty()) {
-        return fast;
+        return withIdentity(std::move(fast));
     }
 
     UsdFallbackState fallback(request.generationId);
@@ -1889,7 +2022,7 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
         fast.stage = ImportStage::UnexpectedReply;
         fast.errorCode = model_core::ImportErrorCode::ImportProtocolViolation;
         fast.compatibilityFallbackRequired = false;
-        return fast;
+        return withIdentity(std::move(fast));
     }
 
     // RunImportSessionForProducer creates a fresh section, catalog, source
@@ -1915,7 +2048,120 @@ ImportSessionResult RunImportSession(const ImportSessionRequest& request)
             compatibility.errorCode = model_core::ImportErrorCode::CompatibilityHostFailure;
         }
     }
+    return withIdentity(std::move(compatibility));
+}
+
+std::string DescribeReaderFallback(const ReaderFallbackNames& names,
+                                   model_core::ImportErrorCode code, bool attempted,
+                                   bool used)
+{
+    std::string text = "native reader '";
+    text += names.nativeReader ? names.nativeReader : "unknown";
+    text += "' failed with code ";
+    text += std::to_string(uint32_t(code));
+    if (attempted) {
+        text += "; compatibility reader '";
+        text += names.compatibilityReader ? names.compatibilityReader : "unknown";
+        text += "' was tried once and ";
+        text += used ? "succeeded" : "also failed";
+        text += "; final reader '";
+        text += names.compatibilityReader ? names.compatibilityReader : "unknown";
+        text += "'";
+    } else {
+        text += "; compatibility reader '";
+        text += names.compatibilityReader ? names.compatibilityReader : "unknown";
+        text += "' was not attempted (failure is outside the closed eligible set or a batch was already published); final reader '";
+        text += names.nativeReader ? names.nativeReader : "unknown";
+        text += "'";
+    }
+    return text;
+}
+
+} // namespace
+
+ImportSessionResult RunImportSessionWithFallback(const ImportSessionRequest& request)
+{
+    if (request.readerFallback == ReaderFallbackRoute::None
+        || !IsKnownReaderFallbackRoute(request.readerFallback)
+        || !ReaderFallbackRouteMatchesFormat(request.readerFallback, request.format)) {
+        return Fail(ImportStage::ValidateOptions,
+                    model_core::ImportErrorCode::ImportProtocolViolation);
+    }
+
+    const ReaderFallbackRoute route = request.readerFallback;
+    const ReaderFallbackNames names = ReaderFallbackNamesFor(route);
+
+    // The native attempt runs first, with the caller's exact sandbox, budgets
+    // and sidecar policy. A batch delivered to the caller commits the
+    // generation: a later failure can never be retried into the same
+    // generation.
+    bool batchDelivered = false;
+    ImportSessionRequest nativeRequest = request;
+    nativeRequest.readerFallback = ReaderFallbackRoute::None;
+    if (request.onBatch) {
+        nativeRequest.onBatch = [&](std::vector<ValidatedChunk>&& chunks) {
+            batchDelivered = true;
+            request.onBatch(std::move(chunks));
+        };
+    }
+    ImportSessionResult native = RunImportSessionCore(nativeRequest);
+    native.nativeReaderName = names.nativeReader ? names.nativeReader : "";
+    native.compatibilityReaderName = names.compatibilityReader ? names.compatibilityReader : "";
+    native.finalReaderName = native.nativeReaderName;
+    if (native.ok) return native;
+
+    const bool eligible = IsReaderFallbackEligibleError(native.errorCode)
+        && native.batchCount == 0 && !batchDelivered;
+    if (!eligible) {
+        native.readerFallbackDiagnostic =
+            DescribeReaderFallback(names, native.errorCode, false, false);
+        return native;
+    }
+
+    // Exactly one compatibility attempt. Only the routing fields change: the
+    // same worker executable, AppContainer, Job limits, commit/time budgets,
+    // sidecar policy and source path are carried over. Coarse/detail replay and
+    // format-specific options do not apply to the compatibility route.
+    ImportSessionRequest compatibilityRequest = request;
+    compatibilityRequest.readerFallback = ReaderFallbackRoute::None;
+    compatibilityRequest.format = ImportFormat::Assimp;
+    compatibilityRequest.assimpFormat = AssimpFormatForReaderFallback(route);
+    compatibilityRequest.forceCompatibilityHost = false;
+    compatibilityRequest.compatibilityHostExePath.clear();
+    compatibilityRequest.stepHostExePath.clear();
+    compatibilityRequest.enableCoarseProxy = false;
+    compatibilityRequest.nextDetail = {};
+    compatibilityRequest.onInitialComplete = {};
+    compatibilityRequest.onStepProgress = {};
+    compatibilityRequest.importOptions.reset();
+    compatibilityRequest.workerArgumentsOverride.clear();
+    compatibilityRequest.stepForceSerialForTesting = false;
+    compatibilityRequest.stepTinyEdgeBudgetForTesting = false;
+    batchDelivered = false;
+    if (request.onBatch) {
+        compatibilityRequest.onBatch = [&](std::vector<ValidatedChunk>&& chunks) {
+            batchDelivered = true;
+            request.onBatch(std::move(chunks));
+        };
+    }
+
+    ImportSessionResult compatibility = RunImportSessionCore(compatibilityRequest);
+    compatibility.nativeReaderName = native.nativeReaderName;
+    compatibility.compatibilityReaderName = native.compatibilityReaderName;
+    compatibility.finalReaderName = native.compatibilityReaderName;
+    compatibility.compatibilityFallbackAttempted = true;
+    compatibility.usedCompatibilityReader = compatibility.ok;
+    compatibility.readerFallbackAttemptCount = 1;
+    compatibility.readerFallbackDiagnostic = DescribeReaderFallback(
+        names, native.errorCode, true, compatibility.ok);
     return compatibility;
+}
+
+ImportSessionResult RunImportSession(const ImportSessionRequest& request)
+{
+    if (request.readerFallback != ReaderFallbackRoute::None)
+        return RunImportSessionWithFallback(request);
+    return RunImportSessionCore(request);
 }
 
 } // namespace import_broker

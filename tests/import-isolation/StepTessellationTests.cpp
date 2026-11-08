@@ -32,7 +32,7 @@ std::wstring StpFixture(const wchar_t* name)
 import_broker::ImportSessionRequest Request(const wchar_t* fixture, uint64_t generation,
                                             uint64_t sectionBytes, uint32_t maxBatches)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.format = import_broker::ImportFormat::Step;
     request.sourcePath = StpFixture(fixture);
     request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;

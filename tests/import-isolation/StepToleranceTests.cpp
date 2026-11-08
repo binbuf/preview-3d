@@ -62,7 +62,7 @@ import_broker::ImportSessionRequest Request(const wchar_t* fixture, uint64_t gen
                                             model_core::StepImportQuality quality
                                                 = model_core::StepImportQuality::Balanced)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.format = import_broker::ImportFormat::Step;
     request.sourcePath = StpFixture(fixture);
     request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;
@@ -226,7 +226,7 @@ TEST_CASE("T07 import quality maps to distinct, versioned deflection profiles",
     CHECK(draft != balanced);
     CHECK(balanced != full);
     CHECK(draft != full);
-    CHECK(kStepTessellationProfileVersion == 6);
+    CHECK(kStepTessellationProfileVersion == 8);
     CHECK(kStepImporterVersion == 1 + kStepTessellationProfileVersion);
 }
 

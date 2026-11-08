@@ -15,11 +15,14 @@
 #include "model_core/FormatCatalog.h"
 #include "model_core/FormatSelection.h"
 #include "model_core/FormatSniffer.h"
+#include "model_core/ImportOptions.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
+#include "model_core/ReaderCatalog.h"
 #include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
 #include "import_broker/ImportSession.h"
+#include "import_broker/ReaderFallback.h"
 
 #include <cstdint>
 #include <functional>
@@ -58,6 +61,13 @@ enum class SourceFormat {
     Off,
     Amf,
     X3d,
+    // T08 same-family compatibility readers. These are explicit/forced routes
+    // or the single closed fallback target for their native family; the worker
+    // still runs the normal admission, containment and budgets.
+    AssimpGltf,
+    AssimpObj,
+    AssimpFbx,
+    AssimpThreeMf,
 };
 
 // nullopt for any extension this slice doesn't recognize. This remains the
@@ -81,6 +91,31 @@ model_core::FormatClassification ClassifyForOpen(const std::wstring& path,
 // go through the normal worker/host validation.
 std::optional<SourceFormat> SourceFormatForFormatDescriptor(
     const model_core::FormatDescriptor* descriptor);
+
+// Maps a shipped reader to the bridge's closed SourceFormat. Native readers
+// resolve through the chosen catalog descriptor; the four single-family
+// compatibility readers resolve to their explicit Assimp route. The
+// multi-family `assimp` reader keeps using its catalog descriptor.
+std::optional<SourceFormat> SourceFormatForReader(
+    const model_core::ReaderDescriptor& reader,
+    const model_core::FormatDescriptor* chosen);
+
+// The closed automatic compatibility route for a native SourceFormat, or
+// None. The compatibility SourceFormats themselves return None: an explicit
+// forced compatibility reader is not a retry.
+import_broker::ReaderFallbackRoute ReaderFallbackForSource(SourceFormat format);
+
+// The shipped compatibility reader that may be offered for a failed native
+// SourceFormat and a closed eligible error. Returns nullptr for ineligible
+// errors, compatibility routes, and families with no alternate.
+const model_core::ReaderDescriptor* CompatibilityReaderForFailedSource(
+    SourceFormat format, model_core::ImportErrorCode code);
+
+// T06: the closed import-option format a SourceFormat consumes, or nullopt for
+// a format with no product-owned options. Used by the viewer to select the
+// persisted per-format record before an open.
+std::optional<model_core::ImportOptionFormat> ImportOptionFormatForSource(
+    SourceFormat format);
 
 // The legacy open-path decision carried by a classification's extension
 // candidate. Keeps callers from re-reading the file just to recover it.
@@ -191,6 +226,17 @@ struct ImportResult {
     std::vector<ImportedInstance> instances;
     std::wstring errorSummary;
     std::wstring errorDetails;
+    // T08 reader provenance. `readerName` is the display label of the reader
+    // that produced the result (native or compatibility). The fallback fields
+    // are populated only when the closed broker policy ran or the failure card
+    // can offer the explicit compatibility action.
+    std::wstring readerName;
+    std::wstring compatibilityReaderName;
+    std::string readerStableName;
+    std::string compatibilityReaderStableName;
+    bool usedCompatibilityReader = false;
+    bool compatibilityFallbackAttempted = false;
+    std::wstring readerFallbackDiagnostic;
 };
 
 std::wstring SourceFormatLabel(const std::wstring& path);
@@ -215,7 +261,10 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<void(const model_core::FileIdentity&)> onInitialComplete = {},
                         std::function<bool(uint64_t)> cpuBudgetAllows = {},
                         std::function<void(const model_core::StepProgressNotice&)> onStepProgress = {},
-                        std::vector<std::wstring> additionalSidecarSearchRoots = {});
+                        std::vector<std::wstring> additionalSidecarSearchRoots = {},
+                        model_core::ImportOptions importOptions = {},
+                        bool forceCompatibilityHost = false,
+                        bool allowAutomaticReaderFallback = true);
 
 // Creates the import worker's AppContainer profile and grants it
 // read+execute on the worker's own directory -- without this the sandboxed

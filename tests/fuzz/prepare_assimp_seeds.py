@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare the T10 Assimp dispatcher seed corpus.
+"""Prepare the T10/T08 Assimp dispatcher seed corpus.
 
 Each seed is a one-byte closed format discriminator (0 DAE, 1 3DS, 2 DXF,
-3 DirectX, 4 OFF, 5 AMF, 6 X3D) followed by the generated fixture bytes. The
-fixtures are repository-owned (see tests/fixtures/assimp-spike/README.md).
+3 DirectX, 4 OFF, 5 AMF, 6 X3D, 7 glTF, 8 OBJ, 9 FBX, 10 3MF) followed by the
+generated fixture bytes. The fixtures are repository-owned (see
+tests/fixtures/assimp-spike/README.md).
 """
 
 from __future__ import annotations
@@ -29,6 +30,19 @@ SEEDS = {
     "amf-box": (5, "box.amf"),
     "amf-malformed": (5, "malformed.amf"),
     "x3d-box": (6, "box.x3d"),
+    # T08 same-family containers.
+    "gltf-box": (7, "box.gltf"),
+    "gltf-required-extension": (7, "required-extension.gltf"),
+    "obj-box": (8, "box.obj"),
+    "obj-line-only": (8, "line-only.obj"),
+    "obj-missing-vt": (8, "missing-vt.obj"),
+    "obj-malformed": (8, "malformed.obj"),
+    "fbx-box": (9, "box.fbx"),
+    "fbx-line-only": (9, "line-only.fbx"),
+    "fbx-malformed": (9, "malformed.fbx"),
+    "3mf-box": (10, "box.3mf"),
+    "3mf-required-extension": (10, "required-extension.3mf"),
+    "3mf-malformed": (10, "malformed.3mf"),
 }
 
 

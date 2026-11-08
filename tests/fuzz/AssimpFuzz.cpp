@@ -2,11 +2,12 @@
 #define NOMINMAX
 #endif
 
-// Standalone sanitizer target for the T10 bounded Assimp compatibility
-// adapter. A one-byte envelope selects one of the seven closed format hints;
-// every other byte is the primary source. The adapter runs with the same
-// in-process object/material/triangle/vertex ceilings as production, a small
-// in-memory destination window and a sidecar callback that denies every
+// Standalone sanitizer target for the bounded Assimp compatibility adapter.
+// A one-byte envelope selects one of the closed format hints (the seven
+// compatibility-only containers plus the T08 glTF/OBJ/FBX/3MF same-family
+// hints); every other byte is the primary source. The adapter runs with the
+// same in-process object/material/triangle/vertex ceilings as production, a
+// small in-memory destination window and a sidecar callback that denies every
 // external reference, so this exercises Assimp container parsing, scene
 // validation, material conversion and normalized chunk emission without any
 // filesystem, broker, GPU or child process.
@@ -68,7 +69,7 @@ extern "C" int LLVMFuzzerInitialize(int*, char***)
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
     if (!data || !size || size > kInputLimit + 1) return 0;
-    const auto format = model_core::AssimpFormat(data[0] % 7u);
+    const auto format = model_core::AssimpFormat(data[0] % model_core::kAssimpFormatCount);
     if (!model_core::IsKnownAssimpFormat(format)) return 0;
     const std::span<const std::byte> primary(
         reinterpret_cast<const std::byte*>(data + 1), size - 1);

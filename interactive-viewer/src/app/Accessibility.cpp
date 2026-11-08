@@ -358,6 +358,7 @@ std::vector<Control> VisibleControls(const Query& query)
         Control::BackgroundMode, Control::BackgroundDark, Control::BackgroundGray,
         Control::BackgroundCustom, Control::BackgroundTransparent, Control::BackgroundChecker,
         Control::Language, Control::Screenshot, Control::ExportStl,
+        Control::ImportOptions,
         Control::MenuControls, Control::MenuAbout,
         Control::GizmoPositiveX, Control::GizmoNegativeX,
         Control::GizmoPositiveY, Control::GizmoNegativeY,

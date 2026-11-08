@@ -13,8 +13,11 @@ fixtures. Regenerating is deterministic.
 
 from __future__ import annotations
 
+import base64
+import io
 import pathlib
 import struct
+import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent
 
@@ -170,6 +173,168 @@ Frame Root {{
 '''
 
 
+LINE_VERTICES = [
+    (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0),
+]
+LINE_FACES = [(0, 1), (1, 2), (2, 3)]
+POINT_VERTICES = LINE_VERTICES
+
+
+def dxf_lines() -> str:
+    # Assimp's DXF importer represents a LINE entity as a two-index face.
+    body = []
+    for a, b in LINE_FACES:
+        body += ["0", "LINE", "8", "0", "62", "1"]
+        for code, index in ((10, a), (11, b)):
+            x, y, z = LINE_VERTICES[index]
+            body += [str(code), f"{x}", str(code + 10), f"{y}", str(code + 20), f"{z}"]
+    return "\n".join(["0", "SECTION", "2", "ENTITIES", *body, "0", "ENDSEC", "0", "EOF", ""])
+
+
+def off_lines() -> str:
+    return off(LINE_VERTICES, LINE_FACES)
+
+
+def off_points() -> str:
+    return off(POINT_VERTICES, [(index,) for index in range(len(POINT_VERTICES))])
+
+
+def off_degenerate_lines() -> str:
+    # The second face repeats vertex 0, so its endpoints are identical and the
+    # adapter must skip it with a bounded warning rather than emit a segment.
+    return off(LINE_VERTICES, [(0, 1), (0, 0), (1, 2), (2, 3)])
+
+
+def off_non_finite_point() -> str:
+    # 1e300 is a finite double at admission but becomes infinity when Assimp
+    # stores it in a float; the adapter must skip that point with a warning and
+    # keep the finite one.
+    return off([(0.0, 0.0, 0.0), (1.0e300, 0.0, 0.0)], [(0,), (1,)])
+
+
+def grid_lines_off(segments: int) -> str:
+    vertices = []
+    faces = []
+    for index in range(segments):
+        base = len(vertices)
+        x = float(index)
+        vertices += [(x, 0.0, 0.0), (x + 0.5, 1.0, 0.0)]
+        faces.append((base, base + 1))
+    return off(vertices, faces)
+
+
+def grid_points_off(points: int) -> str:
+    vertices = [(float(index % 32), float(index // 32), 0.0) for index in range(points)]
+    return off(vertices, [(index,) for index in range(points)])
+
+
+def dae_lines() -> str:
+    positions = " ".join(f"{x} {y} {z}" for x, y, z in LINE_VERTICES)
+    indices = " ".join(f"{a} {b}" for a, b in LINE_FACES)
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><unit name="meter" meter="1"/><up_axis>Y_UP</up_axis></asset>
+  <library_effects>
+    <effect id="fx"><profile_COMMON><technique sid="common"><lambert>
+      <diffuse><color>0.2 0.8 0.4 1</color></diffuse>
+    </lambert></technique></profile_COMMON></effect>
+  </library_effects>
+  <library_materials>
+    <material id="mat" name="green"><instance_effect url="#fx"/></material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="lines" name="lines"><mesh>
+      <source id="pos"><float_array id="pos-array" count="12">{positions}</float_array>
+        <technique_common><accessor source="#pos-array" count="4" stride="3">
+          <param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/>
+        </accessor></technique_common></source>
+      <vertices id="verts"><input semantic="POSITION" source="#pos"/></vertices>
+      <lines count="3" material="green">
+        <input semantic="VERTEX" source="#verts" offset="0"/>
+        <p>{indices}</p>
+      </lines>
+    </mesh></geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene"><node id="node">
+      <instance_geometry url="#lines"><bind_material><technique_common>
+        <instance_material symbol="green" target="#mat"/>
+      </technique_common></bind_material></instance_geometry>
+    </node></visual_scene>
+  </library_visual_scenes>
+  <scene><instance_visual_scene url="#Scene"/></scene>
+</COLLADA>
+'''
+
+
+def dae_empty() -> str:
+    return '''<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset><unit name="meter" meter="1"/><up_axis>Y_UP</up_axis></asset>
+  <library_visual_scenes><visual_scene id="Scene"/></library_visual_scenes>
+  <scene><instance_visual_scene url="#Scene"/></scene>
+</COLLADA>
+'''
+
+
+def x3d_lines() -> str:
+    points = " ".join(f"{x} {y} {z}" for x, y, z in LINE_VERTICES)
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<X3D profile="Interchange" version="3.2">
+  <Scene>
+    <Shape>
+      <Appearance><Material diffuseColor="0.2 0.6 0.8"/></Appearance>
+      <IndexedLineSet coordIndex="0 1 -1 1 2 -1 2 3 -1">
+        <Coordinate point="{points}"/>
+      </IndexedLineSet>
+    </Shape>
+  </Scene>
+</X3D>
+'''
+
+
+def x3d_points() -> str:
+    points = " ".join(f"{x} {y} {z}" for x, y, z in POINT_VERTICES)
+    colors = "1 0 0 0 1 0 0 0 1 1 1 0"
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<X3D profile="Interchange" version="3.2">
+  <Scene>
+    <Shape>
+      <Appearance><Material diffuseColor="0.9 0.4 0.1"/></Appearance>
+      <PointSet>
+        <Coordinate point="{points}"/>
+        <Color color="{colors}"/>
+      </PointSet>
+    </Shape>
+  </Scene>
+</X3D>
+'''
+
+
+def x3d_mixed() -> str:
+    # One IndexedFaceSet whose coordIndex groups are a point, a line, a
+    # triangle and a quad. Assimp's X3D helper represents each group by its
+    # face size; the adapter must emit separate PointList, LineList and
+    # TriangleList chunks (the quad is triangulated).
+    points = " ".join(f"{x} {y} {z}" for x, y, z in [
+        (0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0),
+        (2.0, 0.0, 0.0), (2.5, 1.0, 0.0), (3.0, 0.0, 0.0),
+        (4.0, 0.0, 0.0), (5.0, 0.0, 0.0), (5.0, 1.0, 0.0), (4.0, 1.0, 0.0),
+    ])
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<X3D profile="Interchange" version="3.2">
+  <Scene>
+    <Shape>
+      <Appearance><Material diffuseColor="0.3 0.5 0.9"/></Appearance>
+      <IndexedFaceSet solid="false" coordIndex="0 -1 1 2 -1 3 4 5 -1 6 7 8 9 -1">
+        <Coordinate point="{points}"/>
+      </IndexedFaceSet>
+    </Shape>
+  </Scene>
+</X3D>
+'''
+
+
 def dxf() -> str:
     # Three 3DFACE entities form a closed tetrahedron-like shell; Assimp's DXF
     # importer supports 3DFACE and polylines only.
@@ -214,6 +379,182 @@ def three_ds() -> bytes:
     return _chunk(0x4D4D, editor)
 
 
+def gltf(required_extension: bool) -> str:
+    """A minimal glTF 2.0 box with one embedded triangle buffer."""
+    positions = struct.pack("<9f", *[component for vertex in BOX_VERTICES[:3]
+                                     for component in vertex])
+    indices = struct.pack("<3H", 0, 1, 2)
+    payload = positions + indices + b"\0\0"
+    encoded = base64.b64encode(payload).decode("ascii")
+    required = (
+        '  "extensionsUsed": ["KHR_implicit_shapes"],\n'
+        '  "extensionsRequired": ["KHR_implicit_shapes"],\n'
+        if required_extension else "")
+    return f'''{{
+  "asset": {{"version": "2.0", "generator": "preview-3d fixture"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"mesh": 0}}],
+  "meshes": [{{
+    "primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "mode": 4}}]
+  }}],
+  "buffers": [{{"byteLength": {len(payload)}, "uri": "data:application/octet-stream;base64,{encoded}"}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962}},
+    {{"buffer": 0, "byteOffset": 36, "byteLength": 6, "target": 34963}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+      "min": [0, 0, 0], "max": [1, 1, 0]}},
+    {{"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}}
+  ],
+{required}  "extras": {{}}
+}}
+'''
+
+
+def obj(vertices, faces) -> str:
+    lines = [f"v {x} {y} {z}" for x, y, z in vertices]
+    lines += ["f " + " ".join(str(index + 1) for index in face) for face in faces]
+    return "\n".join(lines) + "\n"
+
+
+def ascii_fbx(vertices, faces, name: str) -> str:
+    """A minimal FBX 7.4 ASCII scene with one Mesh geometry object."""
+    vertex_data = ",".join(f"{x},{y},{z}" for x, y, z in vertices)
+    polygon = []
+    for face in faces:
+        for index in face[:-1]:
+            polygon.append(str(index))
+        polygon.append(str(-face[-1] - 1))
+    polygon_data = ",".join(polygon)
+    return f'''; FBX 7.4.0 project file
+; Preview 3D repository-owned compatibility fixture
+FBXHeaderExtension:  {{
+    FBXHeaderVersion: 1003
+    FBXVersion: 7400
+}}
+GlobalSettings:  {{
+    Version: 1000
+}}
+Definitions:  {{
+    Version: 100
+    Count: 2
+    ObjectType: "Geometry" {{
+        Count: 1
+    }}
+    ObjectType: "Model" {{
+        Count: 1
+    }}
+}}
+Objects:  {{
+    Geometry: 1000, "Geometry::{name}", "Mesh" {{
+        Vertices: *{len(vertices) * 3} {{ a: {vertex_data} }}
+        PolygonVertexIndex: *{len(polygon)} {{ a: {polygon_data} }}
+        GeometryVersion: 124
+    }}
+    Model: 2000, "Model::{name}", "Mesh" {{
+        Version: 232
+        Properties70:  {{
+        }}
+    }}
+}}
+Connections:  {{
+    C: "OO",2000,0
+    C: "OO",1000,2000
+}}
+'''
+
+
+def three_mf(required_slice: bool) -> bytes:
+    """A minimal OPC 3MF package with one triangle."""
+    content_types = '''<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+ <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+ <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+</Types>
+'''
+    relationships = '''<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+ <Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+</Relationships>
+'''
+    vertices = "".join(
+        f'<vertex x="{x}" y="{y}" z="{z}"/>' for x, y, z in BOX_VERTICES[:3])
+    triangles = '<triangle v1="0" v2="1" v3="2"/>'
+    required = ' xmlns:s="http://schemas.microsoft.com/3dmanufacturing/slice/2015/07" requiredextensions="s"' \
+        if required_slice else ""
+    model = f'''<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"{required}>
+ <resources>
+  <object id="1" type="model">
+   <mesh>
+    <vertices>{vertices}</vertices>
+    <triangles>{triangles}</triangles>
+   </mesh>
+  </object>
+ </resources>
+ <build><item objectid="1"/></build>
+</model>
+'''
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        # Fixed timestamps/attributes keep the committed package byte-exact
+        # across regenerations (ADR-0029).
+        for name, data in (
+                ("[Content_Types].xml", content_types),
+                ("_rels/.rels", relationships),
+                ("3D/3dmodel.model", model)):
+            info = zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o600 << 16
+            archive.writestr(info, data)
+    return buffer.getvalue()
+
+
+def gltf_with_buffer_uri(uri: str, required_extension: bool) -> str:
+    """The same one-triangle glTF, but with an external buffer URI."""
+    required = (
+        '  "extensionsUsed": ["KHR_implicit_shapes"],\n'
+        '  "extensionsRequired": ["KHR_implicit_shapes"],\n'
+        if required_extension else "")
+    return f'''{{
+  "asset": {{"version": "2.0", "generator": "preview-3d fixture"}},
+  "scene": 0,
+  "scenes": [{{"nodes": [0]}}],
+  "nodes": [{{"mesh": 0}}],
+  "meshes": [{{
+    "primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1, "mode": 4}}]
+  }}],
+  "buffers": [{{"byteLength": 44, "uri": "{uri}"}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962}},
+    {{"buffer": 0, "byteOffset": 36, "byteLength": 6, "target": 34963}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+      "min": [0, 0, 0], "max": [1, 1, 0]}},
+    {{"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}}
+  ],
+{required}  "extras": {{}}
+}}
+'''
+
+
+def gltf_resource_dag() -> str:
+    """A 40-level doubling node DAG with no meshes."""
+    levels = 40
+    nodes = []
+    for index in range(levels + 1):
+        if index < levels:
+            nodes.append('{"children":[%d,%d]}' % (index + 1, index + 1))
+        else:
+            nodes.append("{}")
+    return (
+        '{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],'
+        '"nodes":[' + ",".join(nodes) + "]}\n")
+
+
 def write(name: str, data: str | bytes) -> None:
     path = ROOT / name
     path.write_bytes(data.encode("utf-8") if isinstance(data, str) else data)
@@ -232,12 +573,49 @@ def main() -> None:
     write("box.x", x_text())
     write("triangle.dxf", dxf())
     write("box.3ds", three_ds())
+    # T04 point/line primitives.
+    write("lines.dxf", dxf_lines())
+    write("lines.off", off_lines())
+    write("lines.dae", dae_lines())
+    write("lines.x3d", x3d_lines())
+    write("points.off", off_points())
+    write("points.x3d", x3d_points())
+    write("mixed.x3d", x3d_mixed())
+    write("degenerate-lines.off", off_degenerate_lines())
+    write("non-finite-points.off", off_non_finite_point())
+    write("empty.dae", dae_empty())
+    write("over-budget-lines.off", grid_lines_off(200))
+    write("over-budget-points.off", grid_points_off(200))
     # Negative fixtures are derived from the positive inputs so the only
     # difference is the fault under test.
     write("truncated.dae", dae(None)[:120])
     write("truncated.3ds", three_ds()[:40])
     write("malformed.off", "OFF\nnot-a-vertex-count\n")
     write("malformed.amf", "<?xml version=\"1.0\"?><amf><object><mesh><vertices>\n")
+    # T08 same-family compatibility fixtures.
+    write("box.gltf", gltf(False))
+    write("required-extension.gltf", gltf(True))
+    write("unsafe-buffer.gltf", gltf_with_buffer_uri("../outside.bin", False))
+    write("required-extension-missing-buffer.gltf",
+          gltf_with_buffer_uri("missing.bin", True))
+    write("resource-dag.gltf", gltf_resource_dag())
+    write("malformed.gltf", '{"asset":{"version":"2.0"},"buffers":[')
+    write("box.obj", obj(BOX_VERTICES, BOX_TRIS))
+    # A syntactically valid but degenerate 2-vertex face: the native OBJ
+    # adapter emits no primitive, while Assimp represents it as a line.
+    write("line-only.obj", obj([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], [(0, 1)]))
+    # A face that references texture coordinates the file never defines. ufbx
+    # rejects it (the native OBJ reader reports EmptyGeometry); Assimp keeps
+    # the position-only triangle.
+    write("missing-vt.obj",
+          "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1/1 2/2 3/3\n")
+    write("box.fbx", ascii_fbx(BOX_VERTICES, BOX_TRIS, "box"))
+    write("line-only.fbx", ascii_fbx([(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], [(0, 1)], "line"))
+    write("box.3mf", three_mf(False))
+    write("required-extension.3mf", three_mf(True))
+    write("malformed.obj", "v not-a-number\nf 1 2 3\n")
+    write("malformed.fbx", "FBXHeaderExtension: {\n")
+    write("malformed.3mf", b"PK\x03\x04not-a-zip")
 
 
 if __name__ == "__main__":

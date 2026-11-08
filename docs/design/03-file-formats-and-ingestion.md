@@ -39,10 +39,88 @@ session override; reloads and refinements do not re-apply the preset.
 | .usd, .usda, .usdc, .usdz | TinyUSDZ fast path; OpenUSD compatibility host | Static meshes, procedural `Sphere`/`Cube`/`Cylinder`/`Cone`/`Capsule`, `Points` as point splats, creased/subdivided meshes as a control cage, transforms, instances/point instances, display color/opacity, bounded Preview Surface materials, packaged textures, and bounded local composition including sublayers, references, inherits/specializes, authored variant selections, and payloads; skeletal bindings are ignored and the authored rest pose is previewed statically | No animation playback, skeletal deformation, curves/NURBS, variants UI, MaterialX, remote assets, other procedural schemas, or arbitrary renderer plug-ins | B |
 | .igs, .iges | OCCT IGES in the dedicated CAD host | Fixed 80-column S/G/D/P/T record streams, analytic B-rep geometry, subfigure/assembly structure, and representable colors | Bounded record/entity/reference preflight before OCCT; no temporary file or path (the admitted records are fed to the pinned in-memory parser). Missing global unit flag assumes millimetres and warns; authored units convert to the verified OCCT system millimetre. No PMI/GD&T or exact-kernel operations; `UpAxisId::Unknown` | B |
 | .brep | OCCT `BRepTools` in the dedicated CAD host | `CASCADE Topology` V1-V3 shape sets: topology and geometry, including compounds | Bounded `TShapes`/`Locations` shape-set preflight before `BRepTools::Read`; no authored colors or units (zero metres-per-unit). No PMI/GD&T; `UpAxisId::Unknown` | B |
-| .step, .stp | OCCT in the dedicated STEP host | ISO 10303-21 clear-text AP203/AP214/AP242 product/assembly structure, B-rep and faceted geometry including supported AP242 tessellated representations, occurrence transforms, authored length units with tolerant assumptions, representable colors/transparency, and Draft/Balanced/Full import quality | External STEP document declarations (`FILE_POPULATION`/`DOCUMENT_FILE`) are counted from Part-21 instance names outside comments/strings and never opened; an unresolved declaration is a warning and the main document still opens. A missing length unit assumes millimetres (0.001 m per unit) and contradictory units use the reader's first/dominant factor, both with warnings; a positive factor above the validated bound still fails typed. An opt-in bounded `ShapeFix` pass runs only after a definition transfers but cannot tessellate. No PMI/GD&T, editing, exact-kernel operations, or measurement; `UpAxisId::Unknown` by design | B |
-| .dae, .3ds, .dxf, .x, .off, .amf, .x3d | Assimp in the general worker (compatibility adapter) | Static triangle meshes, node transforms, vertex normals/UVs/colors, diffuse/metallic/roughness/emissive material factors, and approved local or embedded textures. DAE keeps its scene hierarchy; 3DS/DXF/X/OFF/AMF/X3D expose their supported static mesh subsets. | No animation, cameras/lights, plug-ins, file writes or default IOSystem. Assimp never serves a native format. DXF is limited to Assimp's 3DFACE/polyline entities (not full DXF). Line/point-only content is skipped with a warning; a scene with no triangles fails typed. Tier-B object/material/triangle/vertex caps and scratch/texture/sidecar budgets apply. `UpAxisId` is the exporter-family convention and units are unspecified (`0.0`) | B |
+| .step, .stp, .stpnc, .p21, .210 | OCCT in the dedicated STEP host | ISO 10303-21 clear-text AP203/AP214/AP242 product/assembly structure, B-rep and faceted geometry including supported AP242 tessellated representations, occurrence transforms, authored length units with tolerant assumptions, representable colors/transparency, and Draft/Balanced/Full import quality | External STEP document declarations (`FILE_POPULATION`/`DOCUMENT_FILE`) are counted from Part-21 instance names outside comments/strings and never opened; an unresolved declaration is a warning and the main document still opens. A missing length unit assumes millimetres (0.001 m per unit) and contradictory units use the reader's first/dominant factor, both with warnings; a positive factor above the validated bound still fails typed. An opt-in bounded `ShapeFix` pass runs only after a definition transfers but cannot tessellate. No PMI/GD&T, editing, exact-kernel operations, or measurement; `UpAxisId::Unknown` by design | B |
+| .dae, .3ds, .dxf, .x, .off, .amf, .x3d | Assimp in the general worker (compatibility adapter) | Static triangle meshes, one-index point faces and two-index line faces normalized to `PointList`/`LineList` chunks, node transforms, vertex normals/UVs/colors, diffuse/metallic/roughness/emissive material factors, and approved local or embedded textures. DAE keeps its scene hierarchy; 3DS/DXF/X/OFF/AMF/X3D expose their supported static mesh subsets. Mixed meshes emit separate chunks per topology and material. | No animation, cameras/lights, plug-ins, file writes or default IOSystem. Assimp never serves a native format. DXF is limited to Assimp's 3DFACE/LINE/polyline entities (not full DXF). COLLADA `<points>` is not represented by the importer and a point-only DAE fails typed; a scene with no supported primitive at all fails `EmptyGeometry`. Tier-B object/material/triangle/vertex caps and scratch/texture/sidecar budgets apply. `UpAxisId` is the exporter-family convention and units are unspecified (`0.0`) | B |
 
 Tier A is the release-gated out-of-core path for the multi-gigabyte workload in [01-product-scope.md](./01-product-scope.md). Tier B formats are still MVP features, but their parser libraries may materialize more intermediate state and therefore have lower enforced limits. Draco primitives are independently bounded because their decoded topology cannot be demand-paged from the compressed bitstream. A format badge is shown when a file uses an ignored or approximated optional feature; unsupported required geometry/composition fails instead of silently presenting an apparently faithful model.
+
+### Per-format import options
+
+CAD and USD imports carry one closed `model_core::ImportOptions` record
+([ADR-0100](./adr/0100-generic-per-format-import-options.md)): Draft/Balanced/Full
+quality, tri-state `read_wire`, bounded linear/angular/relative deflection, an
+optional unit-scale assertion, and a bounded USD subdivision level. The viewer
+parses repeated `--import-option <FORMAT>.<name>=<value>` arguments and the
+Settings surface; the broker validates the record before launching a process;
+the worker/host re-validate the fixed 48-byte payload appended to the STEP,
+generalized CAD, USD fast-worker and OpenUSD host requests. A version-0 payload
+keeps every pre-T06 zero-filled request valid (the STEP quality flag bits remain
+authoritative). Unknown names, non-finite/out-of-range values and fields that
+do not apply to the selected format fail typed `ImportProtocolViolation` before
+a parser runs. Every output-changing option is folded into
+`ImportOptionsCacheIdentity`, which `CacheEntryKey` carries with the source and
+importer identities. This build links no subdivision evaluator, so a nonzero
+USD subdivision level is a typed `UnsupportedRequiredFeature`, not a silent
+control-cage render.
+
+### Reader selection
+
+`shared/model-core/include/model_core/ReaderCatalog.h` is the compile-time
+reader registry ([ADR-0101](./adr/0101-reader-catalog-scores-force-reader.md)).
+A reader is a stable ASCII product identity with a display name, primary
+catalog family, `ImporterKind`, owned extensions, product-policy score, a
+compatibility flag and the closed option names it honors. The table lists only
+the readers shipped in this build: glTF/GLB, STL, PLY, OBJ, FBX, 3MF, the USD
+fast path, the USD OpenUSD compatibility host, the STEP host, the OCCT CAD host
+(IGES/BREP/XBF/FCStd), the bounded Assimp compatibility adapter, and the four
+T08 same-family compatibility readers (`gltf-assimp`, `obj-assimp`,
+`fbx-assimp`, `3mf-assimp`). It is not a plugin loader and cannot load code, a
+path or a URL.
+
+`--list-readers` prints one `name<TAB>extensions<TAB>importer<TAB>score` line
+per reader in stable name order; `--list-formats` remains the family view.
+`--reader <name>` is case-insensitive and bounded to 64 characters; unknown or
+unshipped names are typed rejections before any open. A forced reader is
+resolved after the same bounded extension/content classification as the default
+path. It opens the descriptor whose suffix it owns, or falls back to its own
+family when it is single-family (the worker/host still validates the bytes). A
+multi-family reader applied to an unowned suffix fails typed
+`ReaderCannotOpenFormat`. The reader name never crosses the process boundary:
+the broker still receives the closed `SourceFormat`/`ImportFormat` value, plus
+one boolean that selects the OpenUSD compatibility host for a forced
+`usd-compat` USD open. Open As lists each family's default reader (marked) and
+its shipped alternates; selecting the default clears the forced-reader state.
+Forcing a reader changes importer selection only: path classification, broker
+canonicalization/handle duplication, sidecar policy, AppContainer access, Job
+Object limits and every parser budget are unchanged.
+
+### Compatibility fallback
+
+A default native glTF/OBJ/FBX/3MF open may run exactly one lower-scored Assimp
+compatibility attempt for the same family
+([ADR-0102](./adr/0102-compatibility-reader-fallback.md)). The decision is made
+by the trusted broker after the native attempt, and only when all of these hold:
+
+- the selected reader was the native family default;
+- the typed failure is `UnsupportedFormat`, `UnsupportedRequiredFeature`, or
+  `EmptyGeometry`;
+- no chunk batch has been accepted or published for the generation;
+- the compatibility attempt has not already run.
+
+The retry copies the request and changes only the closed format/hint. It keeps
+the same worker executable, AppContainer, Job Object limits, commit and
+time budgets, source handle, sidecar allowlist, cancellation event and chunk
+caps. It clears coarse/detail replay and format-specific options, which do not
+apply to the compatibility adapter. A security, containment, cancellation or
+resource failure (`UnsafeReference`, `FileUnavailable`, `FileChanged`,
+`ResourceLimit`, `ArchiveLimit`, `PrimarySourceLimit`, `AggregateSourceLimit`,
+`ScratchLimit`, `Cancelled`, `WorkerCrashed`, `WorkerTimedOut`,
+`ImportProtocolViolation`, and the rest of the closed taxonomy) is terminal and
+never retried. A forced reader is an explicit user choice and never triggers
+the automatic retry; an eligible forced-native failure instead offers the
+failure-card action **Try compatibility reader**. The broker records the native
+reader, compatibility reader and final reader as stable product names in the
+result diagnostic.
 
 ## Input boundary
 
@@ -59,11 +137,34 @@ existing extension-only open path; content-only evidence or a cross-family
 disagreement never opens silently but raises the failure card's **Open As**
 choice with both candidates listed. `--format <stable-name>` and Open As force a
 catalog importer (still fully validated by the worker/host), while
-`--skip-content-check` selects by suffix only. `--list-formats` prints one
-`stable-name<TAB>extensions<TAB>display-name` line per directly registered
-catalog entry. The same catalog feeds the open-dialog filter, command-line and
+`--skip-content-check` selects by suffix only. `--reader <name>` forces a
+shipped reader identity (ADR-0101); it replaces candidate selection but never
+the worker/host parse, admission, containment or budgets. `--list-formats`
+prints one `stable-name<TAB>extensions<TAB>display-name` line per directly
+registered catalog entry, and `--list-readers` prints the shipped reader table.
+The same catalog feeds the open-dialog filter, command-line and
 Shell path acceptance, Shell Open With discovery and the NSIS install/uninstall
 registration checked by `[format-installer]` ([ADR-0058](./adr/0058-catalog-driven-open-as-and-installer-drift.md)).
+
+The probe is table-driven ([ADR-0097](./adr/0097-catalog-driven-content-sniffer.md)).
+`FormatSniffer` iterates `model_core::Formats()` and evaluates each descriptor's
+declared `MagicSignature` entries; `priority` breaks ties and a strong
+structural match (GLB header, checked binary STL, ZIP central directory)
+outranks a weak textual token. The implemented kinds cover exact and
+case-insensitive head prefixes, the glTF JSON asset object, binary/ASCII STL,
+PLY headers, OBJ statement lines, ZIP entry equality/suffix and a bounded
+entry-pair conjunction, plus these family signatures: GLB header, 3DS main
+chunk, XML roots after a BOM/XML declaration/comments (DAE, AMF, X3D), DXF
+`0`/`SECTION` in the first four lines, OFF, the IGES 80-column record, the OCCT
+BREP header, the XBF `BINFILE`/supported-version header, and the FCStd
+`Document.xml` + `*.brp` package. `SniffHead` never claims a ZIP package from
+the local header; `SniffFile` performs the bounded EOCD/central-directory probe,
+rejects ZIP64/spanned archives, and leaves a generic ZIP `Unknown`. The generic
+`.usd` extension identity and the ASCII STL/PLY wire variants declare no
+separate signature: content resolves to the concrete encoding or family, and
+the suffix remains the identity hint. A signature is never a trust decision; a
+false positive only produces the Open As prompt, and the worker/host still owns
+acceptance.
 
 All primary inputs are local, regular, non-empty files. The loader rejects:
 
@@ -79,7 +180,7 @@ All primary inputs are local, regular, non-empty files. The loader rejects:
 - files that change identity or size after opening;
 - integer overflow, overlapping ranges where prohibited by the format, invalid UTF encoding, non-finite geometry, and counts that exceed the applicable budget.
 
-The sidecar extension set is per requesting format. A `.gltf`/`.glb` may request a `.bin` buffer or an approved image; an OBJ a `.mtl` or an image; FBX an image (geometry caches are never evaluated); USD a `.usd`/`.usda`/`.usdc` layer or an image (direct image assets are dependencies, not layer composition); the Assimp compatibility formats request images only. STL, PLY, STEP, and the in-archive 3MF/USDZ package entries resolve no sidecar at all, so a request from those formats fails closed. STEP external-document declarations are counted only as unresolved metadata: the host has no path authority and never brokers or opens the referenced file. The requesting format is the trusted host's own `ImportSessionRequest::format`, never text from the worker.
+The sidecar extension set is per requesting format. A `.gltf`/`.glb` may request a `.bin` buffer or an approved image; an OBJ a `.mtl` or an image; FBX an image (geometry caches are never evaluated); USD a `.usd`/`.usda`/`.usdc` layer or an image (direct image assets are dependencies, not layer composition); the Assimp compatibility formats request images only, except the T08 glTF hint (a `.bin` buffer or an image) and OBJ hint (a `.mtl` library or an image). STL, PLY, STEP, and the in-archive 3MF/USDZ package entries resolve no sidecar at all, so a request from those formats fails closed. STEP external-document declarations are counted only as unresolved metadata: the host has no path authority and never brokers or opens the referenced file. The requesting format is the trusted host's own `ImportSessionRequest::format`, never text from the worker.
 
 One deliberate package convenience: for a local file import, an image reference that does not resolve directly is looked up by file name in exactly these directories, closest first -- beside the model, `<model dir>/texture`, `<model dir>/textures`, then the same under the parent package root. The first directory with a match wins, so sibling model packages cannot collide, and the fallback is image-only: required buffers, MTL files, and USD layers must stay where the document references them. Names match exactly first, then with case, space/underscore, and `jpg`/`jpeg`/`tif`/`tiff` spelling normalized, so files renamed by a download site still match. Traversal, UNC/device, ADS, and URL text never reach the lookup and keep failing closed; a name containing wildcards is never used as a pattern, and the matched file still passes the ordinary canonical containment and size checks. A glTF *image* URI that contains `..` (what exporters write for a model inside `source/`) is reduced to its file name before the request for the same reason -- the authored traversal is still never followed, and required buffers and USD layers keep the strict rejection.
 
@@ -404,33 +505,45 @@ ufbx's unified PBR material mapping feeds the normalized base-color/metallic/rou
 
 Before lib3mf reads the bounded OPC stream, product code preflights local and central ZIP records, OPC part/relationship names, archive entry paths, per-entry sizes, aggregate expansion, compression ratio, and the required-extension allowlist. The preflight rejects encrypted, multi-disk, and general-purpose-bit-3 (streaming data-descriptor) entries, requires each entry's local CRC, compressed/uncompressed sizes and name bytes to equal the central directory, and bounds the attacker-controlled ZIP64 locator offset with checked addition before use while accepting the spec-correct single-disk locator total of 1. The adapter then validates object/component recursion and build-item counts before allocating normalized resources. Components and all occurrences reachable from the root build use reusable geometry instances where possible; child-model build sections are not interpreted as additional plates. The allowlist covers Core, Materials and Properties, Production, and a bounded Beam Lattice preview subset. A lattice prefers its validated authored representation mesh; otherwise deterministic product tessellation emits the complete beam/ball set under a 262,144-triangle per-lattice ceiling. Parametric clipping is limited to `inside` clipping against a closed, axis-aligned box with uniform appearance; other clipping requires a valid authored representation mesh. Nonrepresentable optional display/translucent features preserve the supported base appearance with a bounded warning, while unsupported required extensions fail.
 
-### Assimp compatibility formats (DAE, 3DS, DXF, X, OFF, AMF, X3D)
+### Assimp compatibility formats (DAE, 3DS, DXF, X, OFF, AMF, X3D, glTF, OBJ, FBX, 3MF)
 
 A single worker adapter runs Assimp for the seven formats with no native
-adapter (ADR-0065). The closed request discriminator selects the importer hint;
-the extension is never used as a trusted path or free-form argument. Assimp is
-configured with `Triangulate`, `JoinIdenticalVertices`, `GenNormals` (only
-missing normals are generated), `ValidateDataStructure` and `SortByPType`; it
-does not evaluate animation, geometry caches, plug-ins, cameras, lights or
-file writes. The custom `IOSystem` answers every external reference through the
-broker: absolute/rooted, UNC/device, ADS, URL, drive-relative, `..` and
-non-image references are rejected before a request, and the broker applies the
-same image allowlist, canonical containment and size caps as OBJ/FBX.
-Embedded textures are read from Assimp's scene memory under the existing encoded
-and decoded texture budgets.
+adapter (ADR-0065) plus the four T08 same-family compatibility hints
+(glTF/GLB, OBJ, FBX, 3MF). The closed request discriminator selects the
+importer hint; the extension is never used as a trusted path or free-form
+argument. Assimp is configured with `Triangulate`, `JoinIdenticalVertices`,
+`GenNormals` (only missing normals are generated), `ValidateDataStructure` and
+`SortByPType`; it does not evaluate animation, geometry caches, plug-ins,
+cameras, lights or file writes. The custom `IOSystem` answers every external
+reference through the broker: absolute/rooted, UNC/device, ADS, URL,
+drive-relative, `..` and non-image references are rejected before a request,
+and the broker applies the same canonical containment and size caps as the
+native readers. The same-family hints additionally allow only the container's
+legitimate dependency class: a glTF external `.bin` buffer and an OBJ `.mtl`
+material library. Embedded textures are read from Assimp's scene memory under
+the existing encoded and decoded texture budgets.
 
 The adapter validates object/material/triangle/vertex counts before emission,
-skips line/point primitives with a bounded compatibility warning, fails typed
-when no triangles remain, and normalizes world-space triangles, material
-factors and texture images into the same chunk contract as the native adapters.
+normalizes one-index faces to `PointList`, two-index faces to `LineList` and
+three-or-larger faces to `TriangleList` (fan-triangulating any polygon that
+`aiProcess_Triangulate` did not reduce), skips degenerate lines and non-finite
+points with bounded warnings, and fails typed only when no supported primitive
+was emitted. A mixed source mesh produces one chunk per topology and material.
+It normalizes world-space geometry, material factors and texture images into the
+same chunk contract as the native adapters. Assimp's synthetic skeleton "hero"
+mesh for an empty COLLADA document is disabled, so an empty file fails
+`EmptyGeometry` instead of presenting fabricated triangles.
 Before Assimp runs, product admission checks control bytes and a well-formed XML
 DOM (pugixml) for DAE/AMF/X3D, DAE numeric count/offset/stride attributes and
-token lists, the full ASCII OFF header/vertex/face/token graph, and the 3DS
-main-chunk magic/length. This crash boundary is deliberately separate from
-Assimp's own sniffers. DXF coverage is deliberately limited to the
-3DFACE/polyline entities Assimp supports; it is not a full DXF importer.
+token lists, the full ASCII OFF header/vertex/face/token graph, the 3DS
+main-chunk magic/length, a bounded JSON/GLB header and buffer-view preflight for
+glTF, bounded text admission for OBJ, binary/ASCII magic and a bounded header
+preflight for FBX, and the shared OPC/ZIP preflight for 3MF. This crash
+boundary is deliberately separate from Assimp's own sniffers and never trusts
+Assimp's ZIP handling. DXF coverage is deliberately limited to the
+3DFACE/LINE/polyline entities Assimp supports; it is not a full DXF importer.
 Assimp's source objects never leave the adapter, and the `AssimpFuzz`
-dispatcher target covers all seven container hints. The pinned overlay port
+dispatcher target covers all eleven container hints. The pinned overlay port
 carries one product finding fix: Assimp 6.0.4's X3D importer called `front()`
 on an empty node list for an XML document its own tokenizer rejected.
 
@@ -441,6 +554,30 @@ TinyUSDZ runs inside `Preview3DImportWorker.exe` and first handles USDA, USDC, a
 TinyUSDZ 0.9.1 has no allocation, progress, or cancellation callback, and its memory-limit option is advisory. The adapter therefore preflights input/archive structure, checks product-owned counts and normalized-output growth between library phases, and relies on the import worker's Job Object commit ceiling as the hard allocation backstop. A cancellation observed outside a library call is cooperative; a call still running after the existing 500 ms grace causes the worker to be terminated and replaced. A successful parser return alone is never evidence that a stage belongs to the accepted subset.
 
 The AppContainer compatibility host opens the stage through pinned OpenUSD with initial payload loading disabled. Its composition policy permits sublayers, references, inherits/specializes, and authored default variant selections; its brokered resolver admits only approved local asset dependencies. Discovery and payload loading proceed breadth-first under dependency-count, byte, depth, time, and memory limits. Payloads needed for the build/default stage are loaded incrementally. The host emits only the normalized static subset: meshes, bounded deterministic tessellations of `Sphere`/`Cube`/`Cylinder`/`Cone`/`Capsule` (24x16 sphere, 12-triangle cube, 24-segment capped cylinders/cones, 24x8-per-hemisphere capsules with X/Y/Z `axis` support), `UsdGeomPoints` as colored/opacity-carrying `PointList` chunks, transforms, instances/point instances, display color, and supported Preview Surface bindings. Creases and authored non-`none` subdivision render the control cage with a `Degraded` warning and no smoothing; `extent` is a hint and actual bounds are recomputed from generated vertices. Skeletal schemas are non-geometry and are skipped, so skinned meshes preview their authored rest pose; animation, MaterialX, curves/NURBS, other procedural schemas, renderer plug-ins, remote assets, and interactive variant selection remain outside MVP. USDZ archive entries use the same archive/path limits regardless of adapter.
+
+### CAD edge and wire fallback
+
+The dedicated CAD host emits the existing `LineList` topology for a
+definition whose visible geometry is edges rather than faces. After the face
+pass, a definition that produced no triangles collects its `TopAbs_EDGE`
+subshapes, meshes them as one compound with the same versioned
+`StepTessellationProfile`, and reads `BRep_Tool::Polygon3D`. A polyline is
+expanded into independent consecutive pairs (never a strip), the polygon's
+`TopLoc_Location` is applied exactly as for faces, and the chunk uses the same
+de-indexed `PositionNormalUv0_F32` layout, double origin, material grouping,
+and instance path as triangles. Authored edge styles come from
+`XCAFDoc_ColorCurv`/`ColorGen`; otherwise material `0` is the neutral line
+appearance. Degenerate/non-finite segments and edges without a usable polygon
+are skipped with a bounded warning. Per-definition edge and line-segment caps
+and the per-chunk segment cap are part of the versioned profile; they are
+checked before the kernel meshes or appends vertices, so an over-budget edge
+shape fails `TessellationFailed` rather than hanging. The fallback is used
+only when a definition has no triangles; solids keep triangle-only output and
+do not get a default edge overlay. `StepImportPolicy::readWire` is the
+internal seam for the explicit user option, which T06 exposes. The wire
+protocol version does not change: `LineList` already exists and the broker
+validates even index counts, finite vertices, verified bounds and the same
+cluster limits.
 
 ## Normalized scene
 

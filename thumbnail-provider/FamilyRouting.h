@@ -41,7 +41,7 @@ inline constexpr const char* kObjExtensions[] = {".obj"};
 inline constexpr const char* kFbxExtensions[] = {".fbx"};
 inline constexpr const char* kThreeMfExtensions[] = {".3mf"};
 inline constexpr const char* kUsdExtensions[] = {".usd", ".usda", ".usdc", ".usdz"};
-inline constexpr const char* kStepExtensions[] = {".step", ".stp"};
+inline constexpr const char* kStepExtensions[] = {".step", ".stp", ".stpnc", ".p21", ".210"};
 
 inline constexpr FamilyRoute kFamilyRoutes[] = {
     {Family::Gltf, "{A592F425-EA68-4C88-BB96-020805D4BE56}", {kGltfExtensions, 2}},
@@ -51,7 +51,7 @@ inline constexpr FamilyRoute kFamilyRoutes[] = {
     {Family::Fbx, "{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}", {kFbxExtensions, 1}},
     {Family::ThreeMf, "{D8389A63-8526-454A-9892-72F3149484B9}", {kThreeMfExtensions, 1}},
     {Family::Usd, "{E938BC70-4C08-4446-A15D-EE31576BFB48}", {kUsdExtensions, 4}},
-    {Family::Step, "{6EE961AC-AC3B-4958-A898-E30523FEE79D}", {kStepExtensions, 2}},
+    {Family::Step, "{6EE961AC-AC3B-4958-A898-E30523FEE79D}", {kStepExtensions, 5}},
 };
 
 inline constexpr std::span<const FamilyRoute> FamilyRoutes() noexcept

@@ -7,10 +7,10 @@ Unicode true
   !error "OUTPUT_FILE must identify the setup executable to create."
 !endif
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.7.1"
+  !define PRODUCT_VERSION "0.8.0"
 !endif
 !ifndef PRODUCT_FILE_VERSION
-  !define PRODUCT_FILE_VERSION "0.7.1.0"
+  !define PRODUCT_FILE_VERSION "0.8.0.0"
 !endif
 
 !define PRODUCT_NAME "Preview 3D"
@@ -451,6 +451,9 @@ Section "Preview 3D" SEC_MAIN
   !insertmacro RegisterExtension ".usdz" "${PROGID_USD}"
   !insertmacro RegisterExtension ".step" "${PROGID_STEP}"
   !insertmacro RegisterExtension ".stp" "${PROGID_STEP}"
+  !insertmacro RegisterExtension ".stpnc" "${PROGID_STEP}"
+  !insertmacro RegisterExtension ".p21" "${PROGID_STEP}"
+  !insertmacro RegisterExtension ".210" "${PROGID_STEP}"
   !insertmacro RegisterExtension ".igs" "${PROGID_IGES}"
   !insertmacro RegisterExtension ".iges" "${PROGID_IGES}"
   !insertmacro RegisterExtension ".brep" "${PROGID_BREP}"
@@ -549,6 +552,9 @@ thumbnail_unregister_done:
   !insertmacro UnregisterExtension ".usdz" "${PROGID_USD}"
   !insertmacro UnregisterExtension ".step" "${PROGID_STEP}"
   !insertmacro UnregisterExtension ".stp" "${PROGID_STEP}"
+  !insertmacro UnregisterExtension ".stpnc" "${PROGID_STEP}"
+  !insertmacro UnregisterExtension ".p21" "${PROGID_STEP}"
+  !insertmacro UnregisterExtension ".210" "${PROGID_STEP}"
   !insertmacro UnregisterExtension ".igs" "${PROGID_IGES}"
   !insertmacro UnregisterExtension ".iges" "${PROGID_IGES}"
   !insertmacro UnregisterExtension ".brep" "${PROGID_BREP}"

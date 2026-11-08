@@ -15,6 +15,7 @@
 #include "NavGizmo.h"
 #include "OpenWithPopup.h"
 #include "OpenOptions.h"
+#include "ImportOptionsCli.h"
 #include "Settings.h"
 #include "ShellIntegration.h"
 #include "SafeFileOps.h"
@@ -39,6 +40,7 @@
 
 #include <iomanip>
 #include <sstream>
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <atomic>
@@ -47,6 +49,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 
 using Microsoft::WRL::ComPtr;
@@ -355,7 +358,24 @@ struct ViewerApp
     // --format / Open As: a catalog descriptor that replaces extension/content
     // candidate selection. Null means normal classification.
     const model_core::FormatDescriptor* forcedFormat = nullptr;
+    // --reader / Open As alternate: a shipped reader identity that replaces
+    // candidate selection for the next open. Null means the family default.
+    // A forced reader never bypasses worker/host admission.
+    const model_core::ReaderDescriptor* forcedReader = nullptr;
+    // Display label of the reader that produced the current document. The
+    // info panel reports it; it is path-free and stable.
+    std::wstring selectedReaderLabel;
+    // T08: the explicit "Try compatibility reader" action on the failure card.
+    // Set only when the failed native open has a shipped compatibility
+    // alternate for a closed eligible error; the button is the Retry button
+    // relabelled, so no extra card width is needed.
+    const model_core::ReaderDescriptor* compatibilityReader = nullptr;
+    std::wstring compatibilityReaderName;
     bool skipContentCheck = false;
+    // T06: closed per-format import options, loaded from Settings and
+    // overridable by repeated --import-option arguments. Only the selected
+    // format's record reaches the broker.
+    model_core::ImportOptionsTable importOptions;
     // Path-free "opened as X; detected Y" text kept across the import so the
     // success warning and diagnostics can report the user override.
     std::wstring openFormatNotice;
@@ -838,7 +858,8 @@ float InfoPanelMaxScroll(const ViewerApp& app)
     const float panelHeight = static_cast<float>(panel.bottom - panel.top);
     if (panelHeight <= 0.0f) return 0.0f;
     const std::vector<InfoPanelSection> sections = BuildInfoPanelSections(
-        *app.loadedModel, app.showNativeOrientation, app.groundAxis, app.activePresentation);
+        *app.loadedModel, app.showNativeOrientation, app.groundAxis, app.activePresentation,
+        app.selectedReaderLabel);
     const InfoPanelScrollMetrics metrics = ComputeInfoPanelScrollMetrics(sections, app.dpiScale);
     const float visibleHeight = std::max(0.0f, panelHeight - metrics.headerHeight);
     return std::max(0.0f, metrics.contentHeight - visibleHeight);
@@ -1171,6 +1192,7 @@ enum class SettingsMenuRowId
     StopOrbitOnInteraction,
     HideCursorWhileDragging,
     HideModelUntilComplete,
+    ImportOptions,
     Background,
     BackgroundDark,
     BackgroundGray,
@@ -1296,6 +1318,7 @@ SettingsMenuLayout ComputeSettingsMenuLayout(const ViewerApp& app)
     appendRow(SettingsMenuRowId::StopOrbitOnInteraction, true, false, false, false, false, false, false);
     appendRow(SettingsMenuRowId::HideCursorWhileDragging, true, true, false, false, false, false, false);
     appendRow(SettingsMenuRowId::HideModelUntilComplete, true, false, false, false, false, false, false);
+    appendRow(SettingsMenuRowId::ImportOptions, false, false, false, false, false, false, false);
     appendRow(SettingsMenuRowId::Background, false, false, true, false, false,
         app.settingsMenuBackgroundExpanded, false);
     if (app.settingsMenuBackgroundExpanded)
@@ -2255,6 +2278,7 @@ void SaveViewerPreferences(const ViewerApp& app)
     settings.groundShadowEnabled = app.shadowVisible;
     settings.groundShadowOverridden = app.shadowOverridden;
     settings.ambientOcclusionEnabled = app.ambientOcclusionVisible;
+    settings.importOptions = app.importOptions;
     SaveSettings(settings);
 }
 
@@ -2377,6 +2401,16 @@ void UpdateButtonAvailability(ViewerApp& app)
     SetControlVisible(app.copyButton, app.state == ViewerState::Failed);
     EnableWindow(app.retryButton, app.failedPath.empty() ? FALSE : TRUE);
     EnableWindow(app.openAsButton, app.failedPath.empty() ? FALSE : TRUE);
+    // T08: the failure card prefers an explicit user action over a silent
+    // reader switch. When the closed policy can offer an alternate, the Retry
+    // button becomes that action; otherwise it stays a plain retry.
+    const bool offerCompatibility = app.state == ViewerState::Failed
+        && !app.compatibilityReaderName.empty() && !app.failedPath.empty();
+    if (app.retryButton) {
+        SetWindowTextW(app.retryButton, offerCompatibility
+            ? Loc("action.tryCompatibility", L"Try compatibility reader").c_str()
+            : Loc("action.retry", L"Retry").c_str());
+    }
 }
 
 void LayoutControls(ViewerApp& app)
@@ -2568,7 +2602,8 @@ void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring&
     const std::wstring& failedPath = {},
     model_core::ImportErrorCode code = model_core::ImportErrorCode::InternalImporterFailure,
     import_broker::ImportStage stage = import_broker::ImportStage::OpenSource,
-    model_core::ImportFailurePhase phase = model_core::ImportFailurePhase::Unspecified)
+    model_core::ImportFailurePhase phase = model_core::ImportFailurePhase::Unspecified,
+    const model_core::ReaderDescriptor* compatibilityReader = nullptr)
 {
     if (app.cancellation) app.cancellation->store(true, std::memory_order_relaxed);
     app.renderThread.CancelUploads();
@@ -2576,6 +2611,9 @@ void SetFailure(ViewerApp& app, const std::wstring& summary, const std::wstring&
     app.state = ViewerState::Failed;
     app.errorSummary = summary;
     app.errorDetails = details;
+    app.compatibilityReader = compatibilityReader;
+    app.compatibilityReaderName = compatibilityReader
+        ? open_options::ReaderLabel(*compatibilityReader) : std::wstring{};
     if (!app.openFormatNotice.empty()) {
         if (!app.errorDetails.empty()) app.errorDetails += L"\r\n\r\n";
         app.errorDetails += app.openFormatNotice;
@@ -2616,12 +2654,17 @@ void CancelOpen(ViewerApp& app)
 }
 
 void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> assetSearchRoots = {},
-    const model_core::FormatDescriptor* forcedFormat = nullptr)
+    const model_core::FormatDescriptor* forcedFormat = nullptr,
+    const model_core::ReaderDescriptor* forcedReader = nullptr)
 {
     if (path.empty()) return;
     CloseOpenWithPopup(app);
     app.assetSearchRoots = assetSearchRoots;
     app.forcedFormat = forcedFormat;
+    app.forcedReader = forcedReader;
+    app.selectedReaderLabel.clear();
+    app.compatibilityReader = nullptr;
+    app.compatibilityReaderName.clear();
     app.openFormatNotice.clear();
     ++app.generation;
     if (app.cancellation)
@@ -2645,10 +2688,11 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     }
     // One bounded probe supplies the extension candidate, the content
     // candidate and diagnostics. --skip-content-check deliberately treats the
-    // suffix as the only candidate. A forced format (--format / Open As)
-    // replaces candidate selection but is still validated by the worker/host.
+    // suffix as the only candidate. A forced format (--format / Open As) or a
+    // forced reader replaces candidate selection but is still validated by the
+    // worker/host.
     const auto classification = d3d12_import_bridge::ClassifyForOpen(
-        path, app.skipContentCheck && !forcedFormat);
+        path, app.skipContentCheck && !forcedFormat && !forcedReader);
     if (classification.reason == model_core::ClassificationReason::Mismatch
         || classification.reason == model_core::ClassificationReason::Content)
     {
@@ -2657,7 +2701,28 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     }
 
     const model_core::FormatDescriptor* chosen = forcedFormat;
-    if (!chosen)
+    bool forceCompatibilityHost = false;
+    if (forcedReader)
+    {
+        // A forced reader replaces candidate selection, not the security
+        // boundary. The resolver is a pure product decision; the worker/host
+        // still validates the actual bytes and every budget.
+        const auto selection = model_core::ResolveForcedReader(*forcedReader, classification);
+        if (!selection)
+        {
+            app.filename = FileNameFromPath(path);
+            UpdateTitle(app);
+            SetFailure(app,
+                Loc("failure.readerCannotOpen.summary", L"This reader cannot open the file."),
+                open_options::ReaderSelectionDiagnostic(selection),
+                path, model_core::ImportErrorCode::UnsupportedFormat);
+            return;
+        }
+        chosen = selection.format;
+        forceCompatibilityHost = selection.forceCompatibilityHost;
+        app.forcedFormat = chosen;
+    }
+    else if (!chosen)
     {
         const auto decision = model_core::DecideOpenFormat(classification);
         if (decision.action == model_core::OpenFormatAction::AskUser)
@@ -2694,7 +2759,9 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
         chosen = decision.format;
     }
 
-    const auto d3d12Format = d3d12_import_bridge::SourceFormatForFormatDescriptor(chosen);
+    const auto d3d12Format = forcedReader
+        ? d3d12_import_bridge::SourceFormatForReader(*forcedReader, chosen)
+        : d3d12_import_bridge::SourceFormatForFormatDescriptor(chosen);
     if (!d3d12Format)
     {
         app.filename = FileNameFromPath(path);
@@ -2718,7 +2785,30 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
         return;
     }
 
-    if (forcedFormat)
+    // The info panel and diagnostics name the reader that actually owns this
+    // open. A forced reader wins over the family default.
+    const model_core::ReaderDescriptor* selectedReader = forcedReader;
+    if (!selectedReader && chosen)
+        selectedReader = model_core::DefaultReaderForFamily(chosen->family);
+    if (selectedReader)
+        app.selectedReaderLabel = open_options::ReaderLabel(*selectedReader);
+
+    if (forcedReader && chosen)
+    {
+        const auto opened = Loc(chosen->displayNameKey, chosen->displayName);
+        app.openFormatNotice = LocFormat("info.openedWithReader",
+            L"Opened as {0} with the {1} reader.",
+            { opened, open_options::ReaderLabel(*forcedReader) });
+        if (classification.content && classification.content->family != chosen->family)
+        {
+            const auto detected = Loc(classification.content->displayNameKey,
+                classification.content->displayName);
+            app.openFormatNotice += L" " + LocFormat("info.detectedAs",
+                L"Detected {0}.", { detected });
+        }
+        app.forcedFormat = chosen;
+    }
+    else if (forcedFormat)
     {
         const auto opened = Loc(forcedFormat->displayNameKey, forcedFormat->displayName);
         app.openFormatNotice = LocFormat("info.openedAs", L"Opened as {0}.", { opened });
@@ -2772,6 +2862,11 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     const auto cancellation = app.cancellation;
 
     d3d12_import_bridge::SourceFormat format = *d3d12Format;
+    // T06: only the selected format's validated record is carried. Formats
+    // without options keep the defaults and never send an option record.
+    const auto optionFormat = d3d12_import_bridge::ImportOptionFormatForSource(format);
+    const model_core::ImportOptions selectedImportOptions = optionFormat
+        ? app.importOptions[*optionFormat] : model_core::ImportOptions{};
     auto sink = app.renderThread.BeginImport(generation, path, cancellation);
     const uint64_t sectionBytes = app.renderThread.SmokeSectionBytes();
     const bool delayBatches = app.renderThread.DelayBatches();
@@ -2792,7 +2887,11 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     auto* stepPhase = &app.stepProgressPhase;
     auto* stepDone = &app.stepProgressDone;
     auto* stepTotal = &app.stepProgressTotal;
-    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting, stepPhase, stepDone, stepTotal, assetSearchRoots]()
+    // A default native open gets the closed automatic fallback. An explicit
+    // forced reader never silently switches; the failure card offers the
+    // compatibility action instead.
+    const bool allowAutomaticReaderFallback = forcedReader == nullptr;
+    app.importThreads.emplace_back([window, generation, path, format, alive, cancellation, sink, detailSource, cpuGuard, delayBatches, sectionBytes, faultForTesting, stepPhase, stepDone, stepTotal, assetSearchRoots, selectedImportOptions, forceCompatibilityHost, allowAutomaticReaderFallback]()
     {
         d3d12_import_bridge::ImportResult result;
         bool initialComplete = false;
@@ -2815,7 +2914,7 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
             result = d3d12_import_bridge::RunImport(format, path, generation, [cancellation]
             {
                 return cancellation->load(std::memory_order_relaxed);
-            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard, stepProgress, assetSearchRoots);
+            }, sink, sectionBytes, delayBatches, faultForTesting, detailSource, complete, cpuGuard, stepProgress, assetSearchRoots, selectedImportOptions, forceCompatibilityHost, allowAutomaticReaderFallback);
         }
         catch (const std::length_error&)
         {
@@ -2850,39 +2949,52 @@ void BeginOpen(ViewerApp& app, std::wstring path, std::vector<std::wstring> asse
     });
 }
 
-// Failure/open-flow Open As: show the detected/suffix candidates first, then
-// every importable catalog format. Stable names are ASCII and kept in the
-// menu label so power users can map the choice to --format.
+// Failure/open-flow Open As: show the detected/suffix families first, then
+// every importable family. Each family lists its default reader and any
+// shipped alternates; the stable reader name is kept in the label so power
+// users can map the choice to --reader.
 void ShowOpenAsMenu(ViewerApp& app)
 {
     if (app.failedPath.empty()) return;
     const auto classification = d3d12_import_bridge::ClassifyForOpen(
-        app.failedPath, app.skipContentCheck && !app.forcedFormat);
-    std::vector<const model_core::FormatDescriptor*> choices;
-    auto addChoice = [&](const model_core::FormatDescriptor* descriptor) {
-        if (!model_core::IsImportableFormat(descriptor)) return;
-        for (const auto* existing : choices) if (existing == descriptor) return;
-        choices.push_back(descriptor);
+        app.failedPath, app.skipContentCheck && !app.forcedFormat && !app.forcedReader);
+    // One entry per importable family, with the default reader and its shipped
+    // alternates. Candidate families are offered first; a disagreement exposes
+    // both sides rather than silently picking one.
+    auto families = open_options::OpenAsFamilyEntries();
+    const auto isCandidate = [&](model_core::FormatId family) {
+        return (classification.selected && classification.selected->family == family)
+            || (classification.extension && classification.extension->family == family);
     };
-    // Detected content and the suffix candidate are offered first; a
-    // disagreement therefore exposes both sides rather than silently picking.
-    if (classification.selected) addChoice(classification.selected);
-    if (classification.extension && classification.extension != classification.selected)
-        addChoice(classification.extension);
-    const std::size_t preferred = choices.size();
-    for (const auto* descriptor : open_options::OpenAsFormats()) addChoice(descriptor);
-    if (choices.empty()) return;
+    std::stable_partition(families.begin(), families.end(),
+        [&](const open_options::OpenAsFamilyEntry& entry) {
+            return isCandidate(entry.family);
+        });
+    if (families.empty()) return;
 
+    struct ReaderChoiceRef {
+        const open_options::OpenAsFamilyEntry* family = nullptr;
+        const open_options::OpenAsReaderEntry* reader = nullptr;
+    };
+    std::vector<ReaderChoiceRef> choices;
     HMENU menu = CreatePopupMenu();
     constexpr UINT kOpenAsMenuBase = 60000;
-    for (std::size_t index = 0; index < choices.size(); ++index) {
-        if (index == preferred && preferred > 0) AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        const auto* descriptor = choices[index];
-        std::wstring label = Loc(descriptor->displayNameKey, descriptor->displayName);
-        label += L"  (";
-        label += std::wstring(descriptor->stableName.begin(), descriptor->stableName.end());
-        label += L")";
-        AppendMenuW(menu, MF_STRING, kOpenAsMenuBase + static_cast<UINT>(index), label.c_str());
+    for (const auto& family : families) {
+        const auto* familyDescriptor = model_core::FindById(family.family);
+        const std::wstring familyLabel = familyDescriptor
+            ? Loc(familyDescriptor->displayNameKey, familyDescriptor->displayName)
+            : Loc("format.unknown", L"Unknown");
+        for (const auto& reader : family.readers) {
+            std::wstring label = familyLabel + L"  \u2014  "
+                + open_options::ReaderLabel(*reader.reader);
+            if (reader.isDefault)
+                label += L"  " + Loc("openAs.defaultReader", L"[default]");
+            if (reader.reader == app.forcedReader)
+                label = L"\u2713 " + label;
+            AppendMenuW(menu, MF_STRING,
+                kOpenAsMenuBase + static_cast<UINT>(choices.size()), label.c_str());
+            choices.push_back({ &family, &reader });
+        }
     }
     RECT button = app.chrome.Button(Chrome::Part::Overflow).rect;
     POINT anchor{ button.right, button.bottom };
@@ -2892,8 +3004,19 @@ void ShowOpenAsMenu(ViewerApp& app)
     DestroyMenu(menu);
     if (selected >= static_cast<int>(kOpenAsMenuBase)
         && selected < static_cast<int>(kOpenAsMenuBase + choices.size())) {
-        const auto* forced = choices[static_cast<std::size_t>(selected - kOpenAsMenuBase)];
-        BeginOpen(app, app.failedPath, app.assetSearchRoots, forced);
+        const auto& choice = choices[static_cast<std::size_t>(selected - kOpenAsMenuBase)];
+        // Prefer the exact suffix/content descriptor when it belongs to the
+        // chosen family, so diagnostics keep the precise format name.
+        const model_core::FormatDescriptor* format = choice.family->format;
+        if (classification.extension && classification.extension->family == choice.family->family)
+            format = classification.extension;
+        else if (classification.selected && classification.selected->family == choice.family->family)
+            format = classification.selected;
+        // Selecting the default reader clears the forced-reader state; an
+        // alternate sets it. Both still force the chosen family, which is what
+        // Open As has always meant.
+        BeginOpen(app, app.failedPath, app.assetSearchRoots, format,
+                  choice.reader->isDefault ? nullptr : choice.reader->reader);
     }
 }
 
@@ -2997,6 +3120,7 @@ void CopyErrorDetails(const ViewerApp& app)
 
 void ShowModelWarnings(ViewerApp& app);
 void ShowLanguageMenu(ViewerApp& app);
+void ShowImportOptionsMenu(ViewerApp& app);
 void PublishOverlayNow(ViewerApp& app);
 
 void ResetSettingsMenuSections(ViewerApp& app)
@@ -3331,6 +3455,7 @@ void InvokeSettingsMenuRow(ViewerApp& app, int row)
         break;
     case SettingsMenuRowId::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
     case SettingsMenuRowId::HideModelUntilComplete: ToggleHideModelUntilComplete(app); break;
+    case SettingsMenuRowId::ImportOptions: ShowImportOptionsMenu(app); break;
     case SettingsMenuRowId::Background:
         ToggleSettingsMenuSection(app, SettingsMenuRowId::Background);
         break;
@@ -3419,6 +3544,148 @@ void ShowLanguageMenu(ViewerApp& app)
     {
         const std::size_t index = static_cast<std::size_t>(selected - (kLanguageMenuBase + 1));
         if (index < languages.size()) ApplyLanguage(app, languages[index].code);
+    }
+}
+
+// T06 import-options surface. A native popup keeps the custom menu simple and
+// gives every option a labelled choice instead of a raw key/value box. CAD
+// choices are applied to every CAD format because the product runs one CAD
+// host policy; the CLI and Settings JSON remain per-format for scripts.
+void ShowImportOptionsMenu(ViewerApp& app)
+{
+    constexpr UINT kQualityBase = 52000;
+    constexpr UINT kWireBase = 52010;
+    constexpr UINT kDeflectionBase = 52020;
+    constexpr UINT kUnitBase = 52030;
+    constexpr UINT kUsdBase = 52040;
+    constexpr UINT kReset = 52050;
+
+    const auto cadOptions = [&app](auto&& apply) {
+        for (uint32_t index = 0; index <= model_core::kImportOptionFormatLast; ++index) {
+            const auto format = static_cast<model_core::ImportOptionFormat>(index);
+            if (model_core::IsCadImportOptionFormat(format)) apply(app.importOptions[format]);
+        }
+    };
+    const model_core::ImportOptions& cad = app.importOptions[model_core::ImportOptionFormat::Step];
+    const model_core::ImportOptions& usd = app.importOptions[model_core::ImportOptionFormat::Usd];
+
+    HMENU menu = CreatePopupMenu();
+    HMENU qualityMenu = CreatePopupMenu();
+    AppendMenuW(qualityMenu, MF_STRING | (cad.quality == model_core::ImportQuality::Draft ? MF_CHECKED : 0u),
+                kQualityBase, L"Draft");
+    AppendMenuW(qualityMenu, MF_STRING | (cad.quality == model_core::ImportQuality::Balanced ? MF_CHECKED : 0u),
+                kQualityBase + 1, L"Balanced (default)");
+    AppendMenuW(qualityMenu, MF_STRING | (cad.quality == model_core::ImportQuality::Full ? MF_CHECKED : 0u),
+                kQualityBase + 2, L"Full");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(qualityMenu), L"CAD quality");
+
+    HMENU wire = CreatePopupMenu();
+    AppendMenuW(wire, MF_STRING | (cad.wireMode == model_core::ImportWireMode::Fallback ? MF_CHECKED : 0u),
+                kWireBase, L"Automatic (edges only when no faces)");
+    AppendMenuW(wire, MF_STRING | (cad.wireMode == model_core::ImportWireMode::On ? MF_CHECKED : 0u),
+                kWireBase + 1, L"Always read edges");
+    AppendMenuW(wire, MF_STRING | (cad.wireMode == model_core::ImportWireMode::Off ? MF_CHECKED : 0u),
+                kWireBase + 2, L"Never read edges");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(wire), L"CAD wires");
+
+    HMENU deflection = CreatePopupMenu();
+    const bool deflectionDefault = !cad.linearDeflection && !cad.angularDeflection;
+    const bool deflectionFine = cad.linearDeflection == 0.001 && cad.angularDeflection == 0.12;
+    const bool deflectionBalanced = cad.linearDeflection == 0.003 && cad.angularDeflection == 0.25;
+    const bool deflectionCoarse = cad.linearDeflection == 0.02 && cad.angularDeflection == 0.6;
+    AppendMenuW(deflection, MF_STRING | (deflectionDefault ? MF_CHECKED : 0u),
+                kDeflectionBase, L"Default (quality profile)");
+    AppendMenuW(deflection, MF_STRING | (deflectionFine ? MF_CHECKED : 0u),
+                kDeflectionBase + 1, L"Fine (0.001 / 0.12 rad)");
+    AppendMenuW(deflection, MF_STRING | (deflectionBalanced ? MF_CHECKED : 0u),
+                kDeflectionBase + 2, L"Balanced (0.003 / 0.25 rad)");
+    AppendMenuW(deflection, MF_STRING | (deflectionCoarse ? MF_CHECKED : 0u),
+                kDeflectionBase + 3, L"Coarse (0.02 / 0.6 rad)");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(deflection), L"CAD deflection");
+
+    HMENU units = CreatePopupMenu();
+    const bool unitDefault = !cad.unitScaleOverride;
+    AppendMenuW(units, MF_STRING | (unitDefault ? MF_CHECKED : 0u),
+                kUnitBase, L"Use file units (default)");
+    const struct { const wchar_t* label; double scale; } unitChoices[] = {
+        { L"Millimetres (0.001 m/unit)", 0.001 },
+        { L"Centimetres (0.01 m/unit)", 0.01 },
+        { L"Metres (1 m/unit)", 1.0 },
+        { L"Inches (0.0254 m/unit)", 0.0254 },
+    };
+    for (UINT index = 0; index < 4; ++index) {
+        const bool checked = cad.unitScaleOverride
+            && *cad.unitScaleOverride == unitChoices[index].scale;
+        AppendMenuW(units, MF_STRING | (checked ? MF_CHECKED : 0u),
+                    kUnitBase + 1 + index, unitChoices[index].label);
+    }
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(units), L"CAD unit override");
+
+    HMENU usdLevels = CreatePopupMenu();
+    for (UINT level = 0; level <= 3; ++level) {
+        std::wstring label = std::to_wstring(level);
+        if (level == 0) label += L" (control cage, default)";
+        else label += L" (unsupported in this build)";
+        AppendMenuW(usdLevels, MF_STRING | (usd.usdSubdivisionLevel == level ? MF_CHECKED : 0u),
+                    kUsdBase + level, label.c_str());
+    }
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(usdLevels), L"USD subdivision level");
+
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kReset, L"Reset import options to defaults");
+
+    const RECT row = SettingsMenuRowRect(app, SettingsMenuRowId::ImportOptions);
+    POINT anchor{ row.left, row.bottom };
+    ClientToScreen(app.window, &anchor);
+    const int selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+        anchor.x, anchor.y, 0, app.window, nullptr);
+    DestroyMenu(menu);
+
+    bool changed = true;
+    if (selected >= static_cast<int>(kQualityBase) && selected < static_cast<int>(kQualityBase) + 3) {
+        const auto chosenQuality = static_cast<model_core::ImportQuality>(selected - kQualityBase);
+        cadOptions([chosenQuality](model_core::ImportOptions& options) { options.quality = chosenQuality; });
+    } else if (selected >= static_cast<int>(kWireBase) && selected < static_cast<int>(kWireBase) + 3) {
+        const auto wireMode = static_cast<model_core::ImportWireMode>(selected - kWireBase);
+        cadOptions([wireMode](model_core::ImportOptions& options) { options.wireMode = wireMode; });
+    } else if (selected >= static_cast<int>(kDeflectionBase) && selected < static_cast<int>(kDeflectionBase) + 4) {
+        const int choice = selected - static_cast<int>(kDeflectionBase);
+        cadOptions([choice](model_core::ImportOptions& options) {
+            options.relativeDeflection = true;
+            if (choice == 0) {
+                options.linearDeflection.reset();
+                options.angularDeflection.reset();
+            } else if (choice == 1) {
+                options.linearDeflection = 0.001;
+                options.angularDeflection = 0.12;
+            } else if (choice == 2) {
+                options.linearDeflection = 0.003;
+                options.angularDeflection = 0.25;
+            } else {
+                options.linearDeflection = 0.02;
+                options.angularDeflection = 0.6;
+            }
+        });
+    } else if (selected >= static_cast<int>(kUnitBase) && selected < static_cast<int>(kUnitBase) + 5) {
+        const int choice = selected - static_cast<int>(kUnitBase);
+        cadOptions([choice](model_core::ImportOptions& options) {
+            if (choice == 0) options.unitScaleOverride.reset();
+            else options.unitScaleOverride = choice == 1 ? 0.001
+                : choice == 2 ? 0.01 : choice == 3 ? 1.0 : 0.0254;
+        });
+    } else if (selected >= static_cast<int>(kUsdBase) && selected < static_cast<int>(kUsdBase) + 4) {
+        app.importOptions[model_core::ImportOptionFormat::Usd].usdSubdivisionLevel =
+            static_cast<uint32_t>(selected - kUsdBase);
+    } else if (selected == static_cast<int>(kReset)) {
+        app.importOptions = model_core::ImportOptionsTable{};
+    } else {
+        changed = false;
+    }
+
+    if (changed) {
+        SaveViewerPreferences(app);
+        ShowModeHud(app, Loc("hud.importOptions", L"Import options updated"));
+        InvalidateRect(app.window, nullptr, FALSE);
     }
 }
 
@@ -3589,7 +3856,7 @@ void LocateMissingAssets(ViewerApp& app)
     if (folder.empty()) return;
     if (std::find(app.assetSearchRoots.begin(), app.assetSearchRoots.end(), folder) == app.assetSearchRoots.end())
         app.assetSearchRoots.push_back(folder);
-    BeginOpen(app, app.currentPath, app.assetSearchRoots);
+    BeginOpen(app, app.currentPath, app.assetSearchRoots, app.forcedFormat, app.forcedReader);
 }
 
 // Shows the warning/missing-asset detail dialog. When the warning stands for
@@ -3636,7 +3903,19 @@ void HandleCommand(ViewerApp& app, int id)
     case ID_VIEW_TOP: SnapViewCommand(app, ViewDir::Top); break;
     case ID_VIEW_PROJECTION: ToggleProjection(app); break;
     case ID_VIEW_MENU: ToggleSettingsMenu(app); break;
-    case ID_VIEW_RETRY: if (!app.failedPath.empty()) BeginOpen(app, app.failedPath, app.assetSearchRoots, app.forcedFormat); break;
+    case ID_VIEW_RETRY:
+        if (!app.failedPath.empty())
+        {
+            // T08: when the failure card offers the explicit compatibility
+            // reader, this button becomes that action. It forces the shipped
+            // compatibility reader through the normal classification, broker
+            // canonicalization, admission and budgets; it is not a silent retry.
+            if (app.compatibilityReader)
+                BeginOpen(app, app.failedPath, app.assetSearchRoots, nullptr, app.compatibilityReader);
+            else
+                BeginOpen(app, app.failedPath, app.assetSearchRoots, app.forcedFormat, app.forcedReader);
+        }
+        break;
     case ID_VIEW_COPY_DETAILS: CopyErrorDetails(app); break;
     case ID_VIEW_CANCEL: CancelOpen(app); break;
     case ID_VIEW_CONTROLS: ShowControlsDialog(app.window); break;
@@ -4286,6 +4565,13 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
         info.description=Loc("a11y.hideUntilCompleteDesc", L"Keep the model hidden until loading and refinement complete");
         info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::HideModelUntilComplete); info.visible=app.settingsMenuOpen;
         info.role=ROLE_SYSTEM_CHECKBUTTON; info.checked=app.hideModelUntilComplete; break;
+    case Control::ImportOptions:
+        info.name=Loc("settings.importOptions", L"Import options");
+        info.description=Loc("a11y.importOptionsDesc",
+            L"Adjust CAD quality, wires, deflection and units, or USD subdivision");
+        info.rect=SettingsMenuRowRect(app, SettingsMenuRowId::ImportOptions);
+        info.visible=app.settingsMenuOpen;
+        info.role=ROLE_SYSTEM_PUSHBUTTON; break;
     case Control::BackgroundMode:
         info.name=Loc("settings.background", L"Background");
         info.description=Loc("a11y.backgroundDesc", L"Choose the viewport backdrop; it does not change model lighting");
@@ -4449,7 +4735,10 @@ viewer_accessibility::ControlInfo AccessibleInfo(ViewerApp& app, viewer_accessib
     {
         HWND button=control==Control::ErrorRetry?app.retryButton:control==Control::ErrorOpenAnother?app.openAnotherButton
             :control==Control::ErrorOpenAs?app.openAsButton:app.copyButton;
-        info.name=control==Control::ErrorRetry?Loc("action.retry", L"Retry")
+        info.name=control==Control::ErrorRetry
+            ? (app.compatibilityReader
+                ? Loc("action.tryCompatibility", L"Try compatibility reader")
+                : Loc("action.retry", L"Retry"))
             :control==Control::ErrorOpenAnother?Loc("action.openAnother", L"Open another")
             :control==Control::ErrorOpenAs?Loc("action.openAs", L"Open as\u2026")
             :Loc("action.copyDetails", L"Copy details");
@@ -4567,6 +4856,7 @@ void InvokeAccessible(ViewerApp& app, viewer_accessibility::Control control)
     case Control::NativeOrientation: ToggleShowNativeOrientation(app); break;
     case Control::HideCursorWhileDragging: ToggleHideCursorWhileDragging(app); break;
     case Control::HideModelUntilComplete: ToggleHideModelUntilComplete(app); break;
+    case Control::ImportOptions: ShowImportOptionsMenu(app); break;
     case Control::BackgroundMode: ToggleSettingsMenuSection(app, SettingsMenuRowId::Background); break;
     case Control::BackgroundDark: SetBackgroundMode(app, viewer_presentation::BackgroundMode::Dark); break;
     case Control::BackgroundGray: SetBackgroundMode(app, viewer_presentation::BackgroundMode::MidGrey); break;
@@ -4951,7 +5241,8 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
     if (overlay.infoPanelWidth > 0 && app.loadedModel)
     {
         overlay.infoPanelSections = BuildInfoPanelSections(
-            *app.loadedModel, app.showNativeOrientation, app.groundAxis, app.activePresentation);
+            *app.loadedModel, app.showNativeOrientation, app.groundAxis, app.activePresentation,
+            app.selectedReaderLabel);
         overlay.infoPanelScrollOffset = app.infoPanelScrollOffset;
         overlay.infoPanelCloseButtonRect = InfoPanelCloseButtonRect(app);
         overlay.infoPanelCloseButtonHover = app.infoPanelCloseButtonHover;
@@ -5140,6 +5431,9 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
                 row.on = app.hideModelUntilComplete;
                 break;
             }
+            case SettingsMenuRowId::ImportOptions:
+                row.label = Loc("settings.importOptionsMenu", L"Import options\u2026");
+                break;
             case SettingsMenuRowId::Background:
             {
                 const std::wstring text = Loc("settings.background", L"Background");
@@ -6150,7 +6444,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         std::wstring activationError;
         if (!app->activeInstance.StartListener(window, kActivationMessage, activationError))
             SetFailure(*app, Loc("failure.activationUnavailable.summary", L"Single-instance activation is unavailable."), activationError);
-        if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath, {}, app->forcedFormat);
+        if (!app->initialPath.empty() && app->rendererReady) BeginOpen(*app, app->initialPath, {}, app->forcedFormat, app->forcedReader);
         return 0;
     }
     // --- Custom title bar: removes the native caption (WM_NCCALCSIZE) while
@@ -6304,7 +6598,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         break;
     }
     case WM_COMMAND:
-        if (LOWORD(wParam) == ID_VIEW_OPEN_INITIAL) BeginOpen(*app, app->initialPath, {}, app->forcedFormat);
+        if (LOWORD(wParam) == ID_VIEW_OPEN_INITIAL) BeginOpen(*app, app->initialPath, {}, app->forcedFormat, app->forcedReader);
         else HandleCommand(*app, LOWORD(wParam));
         return 0;
     case WM_DRAWITEM:
@@ -7402,8 +7696,26 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         if (!complete->result.ok)
         {
-            SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path, complete->result.errorCode, complete->result.errorStage, complete->result.errorPhase);
+            // Offer the explicit compatibility action only when the automatic
+            // retry was not already attempted. A failed compatibility attempt
+            // is final; re-offering the same reader would be a blind retry.
+            const auto* compatibilityReader = complete->result.compatibilityFallbackAttempted
+                ? nullptr
+                : model_core::FindReaderByName(complete->result.compatibilityReaderStableName);
+            SetFailure(*app, complete->result.errorSummary, complete->result.errorDetails, complete->path,
+                complete->result.errorCode, complete->result.errorStage, complete->result.errorPhase,
+                compatibilityReader);
             return 0;
+        }
+        // T08: report the reader that actually produced the document. A
+        // successful closed fallback is recorded in the info panel/diagnostics
+        // with both reader names; no silent producer change.
+        if (!complete->result.readerName.empty())
+            app->selectedReaderLabel = complete->result.readerName;
+        if (complete->result.usedCompatibilityReader) {
+            app->openFormatNotice = LocFormat("info.readerFallbackOpened",
+                L"Opened with the {0} compatibility reader.",
+                { complete->result.readerName });
         }
         app->renderThread.FinishImport(complete->generation, complete->result.sourceIdentity, complete->result.missingAssets);
         return 0;
@@ -7734,9 +8046,11 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     // groundShadowOverridden value carries the choice forward.
     app.shadowOverridden = settings.groundShadowOverridden || !settings.groundShadowEnabled;
     app.ambientOcclusionVisible = settings.ambientOcclusionEnabled;
+    app.importOptions = settings.importOptions;
     app.renderThread.SetHideModelUntilComplete(app.hideModelUntilComplete);
     bool commandLineInvalid = false;
     bool listFormats = false;
+    bool listReaders = false;
     int argumentCount = 0;
     PWSTR* arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
     if (arguments)
@@ -7756,7 +8070,23 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
             else if (_wcsicmp(arguments[i], L"--new-instance") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--d3d12") == 0) continue;
             else if (_wcsicmp(arguments[i], L"--skip-content-check") == 0) app.skipContentCheck = true;
+            else if (_wcsicmp(arguments[i], L"--import-option") == 0) {
+                if (++i >= argumentCount) commandLineInvalid = true;
+                else {
+                    model_core::ImportOptionError optionError = model_core::ImportOptionError::None;
+                    if (!import_options_cli::ParseImportOptionArgument(arguments[i], app.importOptions,
+                                                                      optionError))
+                        commandLineInvalid = true;
+                }
+            }
+            else if (_wcsnicmp(arguments[i], L"--import-option=", 16) == 0) {
+                model_core::ImportOptionError optionError = model_core::ImportOptionError::None;
+                if (!import_options_cli::ParseImportOptionArgument(arguments[i] + 16, app.importOptions,
+                                                                  optionError))
+                    commandLineInvalid = true;
+            }
             else if (_wcsicmp(arguments[i], L"--list-formats") == 0) listFormats = true;
+            else if (_wcsicmp(arguments[i], L"--list-readers") == 0) listReaders = true;
             else if (_wcsicmp(arguments[i], L"--format") == 0) {
                 if (++i >= argumentCount) commandLineInvalid = true;
                 else {
@@ -7769,6 +8099,19 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
                 const auto option = open_options::ParseFormatName(arguments[i] + 9);
                 if (!option.valid) commandLineInvalid = true;
                 else app.forcedFormat = option.descriptor;
+            }
+            else if (_wcsicmp(arguments[i], L"--reader") == 0) {
+                if (++i >= argumentCount) commandLineInvalid = true;
+                else {
+                    const auto option = open_options::ParseReaderName(arguments[i]);
+                    if (!option.valid) commandLineInvalid = true;
+                    else app.forcedReader = option.reader;
+                }
+            }
+            else if (_wcsnicmp(arguments[i], L"--reader=", 9) == 0) {
+                const auto option = open_options::ParseReaderName(arguments[i] + 9);
+                if (!option.valid) commandLineInvalid = true;
+                else app.forcedReader = option.reader;
             }
             // The external test-control surface (--app-smoke plus the WM_APP+104
             // and WM_COPYDATA message handlers) is compiled only into Debug
@@ -7863,15 +8206,18 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
         LocalFree(arguments);
     }
 
-    if (listFormats)
+    if (listFormats || listReaders)
     {
-        // Stable machine-readable listing: one
-        // stable-name<TAB>extensions<TAB>display-name line per catalog format.
+        // Stable machine-readable listings:
+        //   --list-formats: stable-name<TAB>extensions<TAB>display-name
+        //   --list-readers: name<TAB>extensions<TAB>importer<TAB>score
         if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
-        const std::wstring text = open_options::BuildFormatListText(
-            [](const model_core::FormatDescriptor& descriptor) {
-                return Loc(descriptor.displayNameKey, descriptor.displayName);
-            });
+        const std::wstring text = listReaders
+            ? open_options::BuildReaderListText()
+            : open_options::BuildFormatListText(
+                [](const model_core::FormatDescriptor& descriptor) {
+                    return Loc(descriptor.displayNameKey, descriptor.displayName);
+                });
         const int required = WideCharToMultiByte(CP_UTF8, 0, text.c_str(),
             static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
         std::string utf8(required > 0 ? static_cast<std::size_t>(required) : 0, '\0');
@@ -7902,9 +8248,13 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int showCommand)
     }
     if (commandLineInvalid)
     {
-        // TODO: temporarily commented out for testing, undo at some point
-        // MessageBoxW(nullptr, Loc("cli.usage", L"Usage: Preview3D.exe [model-path]\n       Preview3D.exe --open <model-path>").c_str(),
-        //     kApplicationName, MB_OK | MB_ICONERROR);
+        // A malformed --reader/--format name (or any other invalid argument)
+        // exits cleanly with a bounded, non-interactive diagnostic. The full
+        // reader list is one command away.
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) AllocConsole();
+        const char message[] = "Invalid command line. Use --list-formats or --list-readers to inspect the shipped formats and readers.\n";
+        DWORD written = 0;
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), message, sizeof(message) - 1, &written, nullptr);
         return 2;
     }
 

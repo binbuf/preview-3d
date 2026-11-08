@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // Read-only "Stats & Shading" side panel content, adapted from the fields the
@@ -32,11 +33,13 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
     const ModelStats& stats, std::uint64_t triangleCount, std::uint64_t vertexCount,
     const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax,
     double metersPerUnit = 1.0, std::uint64_t pointCount = 0, bool boundsVerified = true,
-    model_core::SourceFormatId format = model_core::SourceFormatId::Gltf, const double* dimensions = nullptr);
+    model_core::SourceFormatId format = model_core::SourceFormatId::Gltf, const double* dimensions = nullptr,
+    std::wstring_view readerLabel = {});
 
 std::vector<InfoPanelSection> BuildInfoPanelSections(
     const ModelData& metadata, bool showNativeOrientation, GroundAxis groundAxis = GroundAxis::Automatic,
-    model_core::PresentationProfile preset = model_core::PresentationProfile::Default);
+    model_core::PresentationProfile preset = model_core::PresentationProfile::Default,
+    std::wstring_view readerLabel = {});
 
 // Fixed-width panel docked to the right edge of the viewport, below the title
 // bar and above the bottom bar.

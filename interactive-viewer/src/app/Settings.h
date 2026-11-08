@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GroundAxis.h"
+#include "model_core/ImportOptions.h"
 
 #include <string>
 
@@ -66,6 +67,12 @@ struct ViewerSettings
     bool groundShadowOverridden = false;
     // T32 screen-space AO. A global view preference; presets never rewrite it.
     bool ambientOcclusionEnabled = true;
+
+    // T06 per-format import options. Only non-default values are written; an
+    // invalid persisted value is ignored on load so a hand-edited file cannot
+    // inject an out-of-range option. The table defaults preserve the
+    // pre-T06 Balanced CAD profile and control-cage USD presentation.
+    model_core::ImportOptionsTable importOptions;
 
     // Future preferences are added here as additional flat fields with their
     // own defaults — see Settings.cpp for why this needs no migration step.

@@ -5,10 +5,12 @@
 #include <shlobj.h>
 
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <span>
 #include <string>
+#include <system_error>
 
 namespace
 {
@@ -79,6 +81,49 @@ std::string FindJsonValue(const std::string& json, const char* key)
         ++valueEnd;
     }
     return json.substr(valueStart, valueEnd - valueStart);
+}
+
+std::string UnquoteJson(const std::string& value)
+{
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
+        return value.substr(1, value.size() - 2);
+    return value;
+}
+
+std::string ImportOptionKey(model_core::ImportOptionFormat format, const char* name)
+{
+    return std::string("import.") + model_core::ImportOptionFormatName(format) + "." + name;
+}
+
+// Preserve the full double value; std::to_string's six decimals would round a
+// valid 1e-9 deflection or unit scale to zero and lose it on the next load.
+std::string FormatImportDouble(double value)
+{
+    char buffer[64]{};
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value,
+                                      std::chars_format::general);
+    if (result.ec != std::errc()) return "0";
+    return std::string(buffer, result.ptr);
+}
+
+// Loads one persisted option through the same closed grammar the CLI and
+// broker use. An absent or invalid value leaves the default in place; a valid
+// value commits the whole candidate record only after it validates.
+void LoadImportOption(const std::string& content, model_core::ImportOptionsTable& table,
+                      model_core::ImportOptionFormat format, const char* name)
+{
+    const std::string key = ImportOptionKey(format, name);
+    const std::string raw = FindJsonValue(content, key.c_str());
+    if (raw.empty()) return;
+    std::string assignment = model_core::ImportOptionFormatName(format);
+    assignment += '.';
+    assignment += name;
+    assignment += '=';
+    assignment += UnquoteJson(raw);
+    auto candidate = table;
+    model_core::ImportOptionError error = model_core::ImportOptionError::None;
+    if (model_core::ParseImportOptionAssignment(assignment, candidate, error))
+        table = candidate;
 }
 }
 
@@ -170,6 +215,17 @@ ViewerSettings LoadSettings()
             settings.exposure = std::clamp(value, 0.05f, 8.0f);
     }
 
+    for (uint32_t index = 0; index <= model_core::kImportOptionFormatLast; ++index) {
+        const auto format = static_cast<model_core::ImportOptionFormat>(index);
+        LoadImportOption(content, settings.importOptions, format, "quality");
+        LoadImportOption(content, settings.importOptions, format, "read_wire");
+        LoadImportOption(content, settings.importOptions, format, "linear_deflection");
+        LoadImportOption(content, settings.importOptions, format, "angular_deflection");
+        LoadImportOption(content, settings.importOptions, format, "relative_deflection");
+        LoadImportOption(content, settings.importOptions, format, "unit_scale");
+        LoadImportOption(content, settings.importOptions, format, "subdivision_level");
+    }
+
     return settings;
 }
 
@@ -202,6 +258,42 @@ void SaveSettings(const ViewerSettings& settings)
         if (character == '"' || character == '\\') escapedLanguage.push_back('\\');
         escapedLanguage.push_back(character);
     }
+    // T06: persist only validated, non-default values. The same closed grammar
+    // used by the CLI and broker validates each record before a byte is
+    // written, so an invalid in-memory value cannot be persisted.
+    std::string importFields;
+    auto appendImport = [&](model_core::ImportOptionFormat format, const char* name,
+                            const std::string& value) {
+        importFields += ",\n  \"" + ImportOptionKey(format, name) + "\": " + value;
+    };
+    for (uint32_t index = 0; index <= model_core::kImportOptionFormatLast; ++index) {
+        const auto format = static_cast<model_core::ImportOptionFormat>(index);
+        const model_core::ImportOptions& options = settings.importOptions[format];
+        model_core::ImportOptionError error = model_core::ImportOptionError::None;
+        if (!model_core::ValidateImportOptions(format, options, error)) continue;
+        if (options.quality != model_core::ImportQuality::Balanced) {
+            appendImport(format, "quality",
+                std::string("\"") + (options.quality == model_core::ImportQuality::Draft
+                    ? "draft" : "full") + "\"");
+        }
+        if (options.wireMode != model_core::ImportWireMode::Fallback) {
+            appendImport(format, "read_wire",
+                std::string("\"") + (options.wireMode == model_core::ImportWireMode::On
+                    ? "on" : "off") + "\"");
+        }
+        if (options.linearDeflection)
+            appendImport(format, "linear_deflection", FormatImportDouble(*options.linearDeflection));
+        if (options.angularDeflection)
+            appendImport(format, "angular_deflection", FormatImportDouble(*options.angularDeflection));
+        if (!options.relativeDeflection)
+            appendImport(format, "relative_deflection", "false");
+        if (options.unitScaleOverride)
+            appendImport(format, "unit_scale", FormatImportDouble(*options.unitScaleOverride));
+        if (options.usdSubdivisionLevel != 0)
+            appendImport(format, "subdivision_level",
+                         std::to_string(options.usdSubdivisionLevel));
+    }
+
     const std::string json = "{\n  \"version\": " + std::to_string(settings.version) +
         ",\n  \"showNativeOrientation\": " + (settings.showNativeOrientation ? "true" : "false") +
         ",\n  \"groundAxis\": \"" + groundAxis + "\"" +
@@ -217,7 +309,7 @@ void SaveSettings(const ViewerSettings& settings)
         ",\n  \"groundShadowEnabled\": " + (settings.groundShadowEnabled ? "true" : "false") +
         ",\n  \"groundShadowOverridden\": " + (settings.groundShadowOverridden ? "true" : "false") +
         ",\n  \"ambientOcclusionEnabled\": " + (settings.ambientOcclusionEnabled ? "true" : "false") +
-        ",\n  \"language\": \"" + escapedLanguage + "\"\n}\n";
+        ",\n  \"language\": \"" + escapedLanguage + "\"" + importFields + "\n}\n";
 
     std::wstring writeError;
     preview3d::safeio::WriteFileAtomically(finalPath, std::as_bytes(std::span(json)), true, writeError);

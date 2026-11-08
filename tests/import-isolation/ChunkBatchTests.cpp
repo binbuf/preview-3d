@@ -63,7 +63,7 @@ std::wstring AnyRealSourceFile()
 // product's own rule and not a test-only limit.
 import_broker::ImportSessionRequest MakeBatchRequest(const wchar_t* mode, uint32_t maxBatches)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::HostileWorkerExePath();
     request.sourcePath = AnyRealSourceFile();
     request.format = import_broker::ImportFormat::Gltf;
@@ -330,7 +330,7 @@ constexpr const wchar_t* kMultiChunkAsset = L"basisu_textured_triangle.glb";
 
 import_broker::ImportSessionRequest MakeRealWorkerRequest(uint64_t sectionBytes, uint32_t maxBatches)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = std::wstring(PREVIEW3D_TEST_ASSETS_DIR) + kMultiChunkAsset;
     request.format = import_broker::ImportFormat::Gltf;

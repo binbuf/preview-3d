@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model_core/ImportError.h"
+#include "model_core/ImportOptions.h"
 #include "model_core/WireFormat.h"
 
 #include <cstdint>
@@ -126,6 +127,10 @@ enum : uint32_t {
     // triangle and vertex caps so a small fixture can prove typed ResourceLimit
     // rejection. Product callers never set it.
     kImportRequestAssimpTinyLimitsForTesting = 1u << 11,
+    // T05 test-only seam: lowers the CAD host's per-definition edge and line
+    // segment budgets so a small wire fixture can prove typed TessellationFailed
+    // rejection before any large allocation. Product callers never set it.
+    kImportRequestStepTinyEdgeBudgetForTesting = 1u << 12,
 };
 
 // Closed product-level STEP import-quality selection. `Balanced` is the default
@@ -327,8 +332,11 @@ struct ParseUsdFileRequest {
     uint32_t maxChunkCount;
     uint32_t requestFlags;
     uint64_t cancellationEventHandleValue;
+    // T06: closed import options. version 0 keeps the pre-T06 request shape
+    // (the trailing bytes are simply zero) and means "documented defaults".
+    ImportOptionsPayload importOptions;
 };
-static_assert(sizeof(ParseUsdFileRequest) == 48, "ParseUsdFileRequest layout changed");
+static_assert(sizeof(ParseUsdFileRequest) == 96, "ParseUsdFileRequest layout changed");
 
 // USD compatibility-host request. The layout remains deliberately identical
 // to the fast request so the broker can reuse its handle-transfer and bounded
@@ -343,8 +351,10 @@ struct ParseOpenUsdFileRequest {
     uint32_t maxChunkCount;
     uint32_t requestFlags;
     uint64_t cancellationEventHandleValue;
+    // T06: closed import options (USD subdivision level today).
+    ImportOptionsPayload importOptions;
 };
-static_assert(sizeof(ParseOpenUsdFileRequest) == 48,
+static_assert(sizeof(ParseOpenUsdFileRequest) == 96,
               "ParseOpenUsdFileRequest layout changed");
 
 // 3MF/OPC imports use the same brokered raw-file-handle contract.  Keeping a
@@ -375,8 +385,11 @@ struct ParseStepFileRequest {
     uint32_t maxChunkCount;         // sanity cap on chunk count the host may emit
     uint32_t requestFlags;          // closed kImportRequest* mask
     uint64_t cancellationEventHandleValue; // duplicated manual-reset event
+    // T06: generic validated import options. The legacy quality flag bits stay
+    // authoritative only when this payload is version 0.
+    ImportOptionsPayload importOptions;
 };
-static_assert(sizeof(ParseStepFileRequest) == 48,
+static_assert(sizeof(ParseStepFileRequest) == 96,
               "ParseStepFileRequest layout changed");
 
 // T08 closed CAD discriminator. Step keeps the existing dedicated STEP opcode;
@@ -398,6 +411,21 @@ constexpr bool IsKnownCadFormat(CadFormat format) noexcept
         || format == CadFormat::Xbf || format == CadFormat::Fcstd;
 }
 
+// T06: the closed CAD discriminator maps to the same closed import-option
+// format identity, so a request can never borrow another format's option set.
+constexpr bool ImportOptionFormatForCadFormat(CadFormat format,
+                                              ImportOptionFormat& optionFormat) noexcept
+{
+    switch (format) {
+    case CadFormat::Step: optionFormat = ImportOptionFormat::Step; return true;
+    case CadFormat::Iges: optionFormat = ImportOptionFormat::Iges; return true;
+    case CadFormat::Brep: optionFormat = ImportOptionFormat::Brep; return true;
+    case CadFormat::Xbf: optionFormat = ImportOptionFormat::Xbf; return true;
+    case CadFormat::Fcstd: optionFormat = ImportOptionFormat::Fcstd; return true;
+    }
+    return false;
+}
+
 // Generalized CAD host request. The first seven fields are layout-identical to
 // ParseStepFileRequest so existing handle transfer/framing rules stay common;
 // cadFormat selects the product-owned admission scanner and OCCT adapter.
@@ -411,13 +439,18 @@ struct ParseCadFileRequest {
     uint64_t cancellationEventHandleValue;
     uint32_t cadFormat; // closed CadFormat value
     uint32_t reserved0; // zero
+    // T06: generic validated import options, interpreted for cadFormat.
+    ImportOptionsPayload importOptions;
 };
-static_assert(sizeof(ParseCadFileRequest) == 56,
+static_assert(sizeof(ParseCadFileRequest) == 104,
               "ParseCadFileRequest layout changed");
 
-// T10 closed compatibility-format discriminator. The worker validates this
+// T10/T08 closed compatibility-format discriminator. The worker validates this
 // against the request before selecting an Assimp importer hint; it is never a
-// free-form extension.
+// free-form extension. The first seven values are the formats with no native
+// adapter. The appended values are the T08 compatibility hints for families
+// that also have a native reader; they are only selected by an explicit forced
+// compatibility reader or by the closed broker fallback policy.
 enum class AssimpFormat : uint32_t {
     Dae = 0,
     ThreeDs = 1,
@@ -426,14 +459,27 @@ enum class AssimpFormat : uint32_t {
     Off = 4,
     Amf = 5,
     X3d = 6,
+    // T08: same-family compatibility hints. The compatibility adapter emits
+    // the native SourceFormatId for the family, so normalized output stays
+    // comparable with the native reader.
+    Gltf = 7,
+    Obj = 8,
+    Fbx = 9,
+    ThreeMf = 10,
 };
+
+// One past the highest closed value. The fuzz dispatcher uses this instead of
+// a hard-coded modulus so a new hint cannot be silently left untested.
+constexpr uint32_t kAssimpFormatCount = 11;
 
 constexpr bool IsKnownAssimpFormat(AssimpFormat format) noexcept
 {
     return format == AssimpFormat::Dae || format == AssimpFormat::ThreeDs
         || format == AssimpFormat::Dxf || format == AssimpFormat::DirectX
         || format == AssimpFormat::Off || format == AssimpFormat::Amf
-        || format == AssimpFormat::X3d;
+        || format == AssimpFormat::X3d || format == AssimpFormat::Gltf
+        || format == AssimpFormat::Obj || format == AssimpFormat::Fbx
+        || format == AssimpFormat::ThreeMf;
 }
 
 // The first seven fields are layout-identical to every other real-file

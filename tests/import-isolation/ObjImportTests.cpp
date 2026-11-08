@@ -38,7 +38,7 @@ struct ScratchObj {
 
 import_broker::ImportSessionRequest Request(const std::filesystem::path& path)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = path.wstring();
     request.format = import_broker::ImportFormat::Obj;

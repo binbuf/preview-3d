@@ -26,7 +26,8 @@ std::variant<model_core::SidecarFileReadyNotice, model_core::SidecarFileUnavaila
 ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonicalPath,
                       const model_core::RequestSidecarFileNotice& request, uint64_t maxSidecarFileBytes,
                       uint64_t remainingSourceBytes, bool allowPackageBasenameLookup,
-                      const std::vector<std::wstring>& additionalSearchRoots, ImportFormat format)
+                      const std::vector<std::wstring>& additionalSearchRoots, ImportFormat format,
+                      model_core::AssimpFormat assimpFormat)
 {
     model_core::SidecarFileUnavailableNotice unavailable{};
     unavailable.generationId = request.generationId;
@@ -44,7 +45,7 @@ ServiceSidecarRequest(HANDLE workerProcess, const std::wstring& primaryCanonical
 
     SidecarResolution resolution = ResolveSidecarPath(primaryCanonicalPath, relativeReferenceUtf8,
                                                       maxSidecarFileBytes, allowPackageBasenameLookup,
-                                                      additionalSearchRoots, format);
+                                                      additionalSearchRoots, format, assimpFormat);
     if (!resolution.file) {
         unavailable.errorCode = static_cast<uint32_t>(resolution.rejectionCode);
         return unavailable;

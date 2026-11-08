@@ -6,7 +6,7 @@ line. Keep the worker directory beside Preview3D.exe. The app does not require
 administrator rights, write file associations, or modify the opened model.
 Keep the OpenUsdHost directory beside Preview3D.exe as well; it is the private
 compatibility payload for composed USD stages. Keep the StepHost directory
-beside Preview3D.exe too; it is the private CAD kernel payload for STEP/STP.
+beside Preview3D.exe too; it is the private CAD kernel payload for STEP.
 
 Supported content
 -----------------
@@ -25,10 +25,14 @@ Supported content
   display color, material subsets, USD Preview Surface factors/textures, and
   bounded local sublayers, references, inherits/specializes, authored default
   variants, and payloads.
-* Self-contained .step and .stp ISO 10303-21 files (AP203/AP214/AP242) with
+* Self-contained .step, .stp, .stpnc, .p21, and .210 ISO 10303-21 files (AP203/AP214/AP242) with
   bounded B-rep or authored AP242 tessellated geometry, assemblies and reused
   definitions, instance/shape/face colors, and authored length units. External
   STEP documents are not supported.
+* IGES (.igs/.iges), OCCT BREP (.brep), XBF (.xbf), and FreeCAD Standard (.fcstd)
+  through the private StepHost payload; COLLADA (.dae), 3DS (.3ds), DXF (.dxf),
+  DirectX (.x), OFF (.off), AMF (.amf), and X3D (.x3d) through the bounded
+  compatibility adapter.
 * The bounded glTF subset includes static meshes/instances, vertex colors,
   metallic/roughness materials, normal/emissive textures, unlit materials,
   alpha modes, KHR_texture_transform, KHR_draco_mesh_compression,
@@ -39,7 +43,7 @@ Important limits
 ----------------
 
 This is a local, read-only static viewer. Animation playback, editing, network
-assets, other CAD formats (IGES/IFC/JT/native CAD), thumbnails (including
+assets, other CAD formats (IFC/JT/native CAD), thumbnails (including
 3MF/USD/FBX/STEP Explorer thumbnails), file associations, and a
 persistent derived cache are outside this limited MVP. Optional unsupported
 glTF material/image features may fall back with a warning; required unsupported

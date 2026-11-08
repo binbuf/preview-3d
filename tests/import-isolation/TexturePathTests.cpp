@@ -106,7 +106,7 @@ struct TempGlb {
     }
     ~TempGlb() { std::error_code error;std::filesystem::remove(path,error); }
     import_broker::ImportSessionRequest Request() const {
-        import_broker::ImportSessionRequest request;
+        import_broker::ImportSessionRequest request{};
         request.workerExePath=sandbox_test_support::WorkerExePath();request.sourcePath=path.wstring();
         request.format=import_broker::ImportFormat::Gltf;request.generationId=203;
         request.maxChunkCount=64;request.maxChunkBatchesPerGeneration=32;request.sectionByteCapacity=1024*1024;return request;
@@ -289,7 +289,7 @@ struct ScratchGltfPackage {
 
 import_broker::ImportSessionRequest PackageRequest(const ScratchGltfPackage& package, uint64_t generation)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = package.path.wstring();
     request.format = import_broker::ImportFormat::Gltf;

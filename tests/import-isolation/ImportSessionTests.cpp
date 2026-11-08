@@ -44,7 +44,7 @@ std::wstring TestAssetPath(const wchar_t* fileName)
 import_broker::ImportSessionRequest MakeRequest(const wchar_t* asset, import_broker::ImportFormat format,
                                                  uint64_t generationId)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = TestAssetPath(asset);
     request.format = format;
@@ -79,6 +79,32 @@ struct PipePair {
 };
 
 } // namespace
+
+TEST_CASE("A forced compatibility-host reader is a closed route, not free-form text",
+          "[import-session]")
+{
+    // T07: the viewer's --reader usd-compat selection reaches the broker as a
+    // closed boolean. It can only ever route USD to the compatibility host;
+    // any other format is a typed protocol rejection before a file is opened.
+    import_broker::ImportSessionRequest request{};
+    request.sourcePath = TestAssetPath(L"missing.glb");
+    request.generationId = 9001;
+    request.format = import_broker::ImportFormat::Gltf;
+    request.forceCompatibilityHost = true;
+    const auto wrongFormat = import_broker::RunImportSession(request);
+    CHECK_FALSE(wrongFormat.ok);
+    CHECK(wrongFormat.stage == import_broker::ImportStage::ValidateOptions);
+    CHECK(wrongFormat.errorCode == model_core::ImportErrorCode::ImportProtocolViolation);
+
+    // Forcing the compatibility host without a configured host fails typed
+    // instead of silently falling back to the fast path the user did not pick.
+    request.format = import_broker::ImportFormat::Usd;
+    request.compatibilityHostExePath.clear();
+    const auto missingHost = import_broker::RunImportSession(request);
+    CHECK_FALSE(missingHost.ok);
+    CHECK(missingHost.stage == import_broker::ImportStage::LaunchWorker);
+    CHECK(missingHost.errorCode == model_core::ImportErrorCode::CompatibilityHostFailure);
+}
 
 TEST_CASE("A real glTF file imports end to end through the product's own session path",
           "[import-session]")

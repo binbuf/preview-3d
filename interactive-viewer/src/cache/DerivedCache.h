@@ -37,6 +37,11 @@
 struct CacheEntryKey
 {
     model_core::FileIdentity identity;
+    // T06: the normalized meaning also depends on the selected format and on
+    // every import option that can change output. Keep both in the key next to
+    // the source identity and the importer/parser identity.
+    model_core::SourceFormatId format = model_core::SourceFormatId::Unknown;
+    uint32_t importOptionsIdentity = 0;
     // "parser/normalizer versions" per the design doc's opaque-key wording.
     // T22 makes the actual identity authoritative: the wire protocol version
     // plus the glTF importer/material/vertex-layout versions. Callers must not

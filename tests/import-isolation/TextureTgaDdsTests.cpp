@@ -47,7 +47,7 @@ std::vector<std::byte> ReadFixture(const std::wstring& relative)
 import_broker::ImportSessionRequest Request(const std::filesystem::path& path,
                                             import_broker::ImportFormat format, uint64_t generation)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = path.wstring();
     request.format = format;

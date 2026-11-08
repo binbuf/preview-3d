@@ -92,6 +92,8 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
                                       uint64_t maxSidecarFileBytes,
                                       bool allowPackageBasenameLookup = false,
                                       const std::vector<std::wstring>& additionalSearchRoots = {},
-                                      ImportFormat format = ImportFormat::Gltf);
+                                      ImportFormat format = ImportFormat::Gltf,
+                                      model_core::AssimpFormat assimpFormat =
+                                          model_core::AssimpFormat::Dae);
 
 } // namespace import_broker

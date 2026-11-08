@@ -18,5 +18,31 @@ requires byte-exact fixtures; rerunning the generator is deterministic.
 | `box.x3d` | Positive X3D IndexedFaceSet box |
 | `box.x` | Positive DirectX text mesh |
 | `triangle.dxf` | Positive DXF 3DFACE tetrahedron |
+| `lines.dxf` | Three DXF `LINE` entities; expects one `LineList` chunk |
+| `lines.off` | OFF with three two-index edge faces |
+| `lines.dae` | COLLADA `<lines>` with a bound material |
+| `lines.x3d` | X3D `IndexedLineSet` |
+| `points.off` | OFF with four one-index point faces |
+| `points.x3d` | X3D `PointSet` with authored vertex colors |
+| `mixed.x3d` | One IndexedFaceSet mixing point, line, triangle and quad groups |
+| `degenerate-lines.off` | Three valid segments plus one identical-endpoint segment |
+| `non-finite-points.off` | One finite point plus one float-overflow point that must be skipped |
+| `empty.dae` | Valid COLLADA with no geometry; must fail typed |
+| `over-budget-lines.off`, `over-budget-points.off` | 200 primitives; fail under the tiny-limit seam |
 | `truncated.dae`, `truncated.3ds` | Truncated containers |
 | `malformed.off`, `malformed.amf` | Structurally invalid syntax |
+| `box.gltf` | Positive glTF 2.0 one-triangle box with an embedded data-URI buffer |
+| `required-extension.gltf` | Same triangle plus a required `KHR_implicit_shapes`; native fails, `gltf-assimp` opens |
+| `unsafe-buffer.gltf` | Authored `../outside.bin`; must fail `UnsafeReference` and never retry |
+| `required-extension-missing-buffer.gltf` | Eligible native failure plus a missing compatibility sidecar; proves one fallback only |
+| `resource-dag.gltf` | 40-level doubling DAG; native `ResourceLimit`, never retried |
+| `malformed.gltf` | Invalid JSON; `MalformedData`, never retried |
+| `box.obj` | Positive OBJ box |
+| `missing-vt.obj` | `f 1/1 2/2 3/3` with no `vt`; native `EmptyGeometry`, `obj-assimp` opens |
+| `line-only.obj` | Two-index `f` face; Assimp validation rejects it (fuzz seed only) |
+| `box.fbx` | Positive ASCII FBX 7.4 box |
+| `line-only.fbx` | Two-vertex polygon; native `EmptyGeometry`, `fbx-assimp` opens as a line |
+| `malformed.fbx` | Incomplete ASCII FBX |
+| `box.3mf` | Positive OPC 3MF one-triangle package |
+| `required-extension.3mf` | Same package with a required Slice namespace; native fails, `3mf-assimp` opens |
+| `malformed.3mf` | Invalid ZIP/OPC package |

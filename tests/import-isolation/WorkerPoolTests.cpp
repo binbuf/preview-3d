@@ -105,7 +105,7 @@ TEST_CASE("Pooled progressive cancellation is acknowledged and the worker remain
 
     std::atomic_bool cancelled = false;
     uint32_t batches = 0;
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = worker;
     request.sourcePath = source;
     request.format = import_broker::ImportFormat::Gltf;

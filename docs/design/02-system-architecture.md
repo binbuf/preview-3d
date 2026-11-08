@@ -74,7 +74,7 @@ Only this thread mutates the active render scene and descriptor-visible draw rec
 A bounded `std::jthread` pool in `Preview3D.exe` no longer runs third-party parser code. Pool width is calculated with saturating arithmetic from available logical processors, initially leaving at least two logical processors outside the pool and capped at eight, and can be lowered when frame latency, input latency, power state, or memory pressure crosses policy thresholds. Pool work runs below UI/render priority and performs only:
 
 - opening and canonicalizing the primary file and approved local dependencies (§ Input boundary in [03-file-formats-and-ingestion.md](./03-file-formats-and-ingestion.md));
-- a trivial extension/magic-number sniff, bounded to the first few dozen bytes, used only to pick which import-worker job type to request — no structural parsing happens here;
+- a bounded catalog-driven content sniff (64 KiB head; for ZIP packages a bounded EOCD plus 1 MiB central directory) used only to pick which import-worker job type to request — no structural parsing or decompression happens here;
 - deriving and validating the persistent-cache key and manifest;
 - dispatching an import job to the broker (below) and receiving its typed result;
 - **copying and validating** every chunk descriptor and its bytes returned by an import process before it is eligible for upload (see Import worker/host below) — this step, not the process boundary alone, is what makes a chunk trustworthy;
@@ -145,7 +145,7 @@ No queue stores references into a remappable file view beyond the mapping lease 
 | --- | --- |
 | `platform` | RAII handles/mappings, checked math, paths, clocks, thread naming, errors |
 | `app` | startup, state machine, command routing, document lifecycle, cancellation |
-| `model-core` | normalized scene/chunk schema and wire-format contracts shared by the viewer and every import process; the format-sniffing magic-number table used by the viewer's dispatch sniff; the actual parser adapters and resource resolver, which link only into `import-worker`/`import-host`/`step-host` |
+| `model-core` | normalized scene/chunk schema and wire-format contracts shared by the viewer and every import process; the catalog-driven bounded format sniffer used by the viewer's dispatch; the actual parser adapters and resource resolver, which link only into `import-worker`/`import-host`/`step-host` |
 | `streaming` | source leases, persistent derived cache, chunk-descriptor validation/copy, view-priority residency requests |
 | `import-worker` | AppContainer general-format (glTF/STL/PLY/OBJ/FBX/3MF/TinyUSDZ) parsing, decode/transcode, and normalized shared-section production |
 | `import-host` | AppContainer OpenUSD stage composition and normalized shared-section production |
@@ -183,7 +183,7 @@ The trusted viewer links no third-party format parser or decoder — not fastglt
 ## End-to-end viewer flow
 
 1. UI validates extension/path and posts `OpenModel(generation, path)`.
-2. The trusted loader/broker pool opens the primary file and its approved local dependencies read-only with a stable share policy, canonicalizes each handle, and records file identity/size. It performs only the trivial extension/magic-number sniff described above — no read-only file mapping of source bytes into the trusted process's address space happens here, because structural access to source bytes now happens only inside the import process.
+2. The trusted loader/broker pool opens the primary file and its approved local dependencies read-only with a stable share policy, canonicalizes each handle, and records file identity/size. It performs only the bounded catalog-driven content sniff described above — no read-only file mapping of source bytes into the trusted process's address space happens here, because structural access to source bytes now happens only inside the import process.
 3. Cache coordinator derives an opaque key from the primary and dependency version evidence and validates any candidate manifest, schema/importer versions, lengths, and checksums. A fast hit requires stable local file/change-journal tokens; otherwise a full content digest is required or the candidate becomes a miss. A valid, revalidated coarse proxy may publish through the normal upload path while optional cached detail is admitted by view priority.
 4. On a cache miss, the broker starts or reuses `Preview3DImportWorker.exe` under its AppContainer token and Job Object, and forwards duplicated read-only handles for the primary and dependencies plus the generation's budgets over the private control channel. No path string crosses the boundary.
 5. Inside the worker, the fast adapter performs the metadata/dependency preflight, creates its own read-only mapping of the handles it was given, and parses into bounded normalized chunks. Full-source heap materialization is forbidden for Tier A. Binary STL and supported binary PLY layouts use sequential windows/prefetch; sparse glTF keeps random/windowed access. TinyUSDZ first attempts the documented common USD subset; a typed `UnsupportedComposition` result asks the broker to start `Preview3DImportHost.exe` for that generation instead — malformed or unsafe input is never retried as a compatibility fallback.

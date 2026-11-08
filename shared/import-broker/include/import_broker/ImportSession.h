@@ -22,12 +22,14 @@
 // format, unpacking validated chunks into renderer-facing structs, and every
 // user-facing string. This layer returns typed results only.
 
+#include "import_broker/ReaderFallback.h"
 #include "import_broker/SharedSectionValidator.h"
 #include "model_core/ControlProtocol.h"
 #include "model_core/ImportError.h"
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -109,6 +111,10 @@ enum class ImportStage : uint32_t {
     ChunkBatchAckFailed,  // the ack could not be written (worker gone mid-batch)
     StepProgressLimit,    // a STEP host sent more bounded progress events than the cap allows
     Upload,
+    // T06: the caller supplied an option record that is unknown, out of range,
+    // or not applicable to the selected format. Rejected before any process is
+    // launched, so a parser never sees it.
+    ValidateOptions,
 };
 
 // Job Object private-commit ceiling every import worker runs under.
@@ -198,15 +204,38 @@ struct ImportSessionRequest {
     // STEP-005 test-only seam: forces the STEP host's mesher serial so a test
     // can compare parallel and serial normalized output byte-for-byte.
     bool stepForceSerialForTesting = false;
+    // T05 test-only seam: lowers the CAD host's per-definition edge and line
+    // segment budgets so a small wire fixture can prove typed TessellationFailed
+    // rejection. Product callers never set it.
+    bool stepTinyEdgeBudgetForTesting = false;
     // STEP import quality. Balanced keeps the established display deflection;
     // Draft/Full are opt-in and are part of the STEP cache identity. Only the
-    // dedicated STEP host consumes it.
+    // dedicated STEP host consumes it. Retained as the pre-T06 caller surface;
+    // when `importOptions` is set, its quality field is authoritative and the
+    // broker writes both encodings so legacy hosts/tests keep agreeing.
     model_core::StepImportQuality stepImportQuality = model_core::StepImportQuality::Balanced;
+    // T06: closed, validated per-format options. The broker re-validates this
+    // before launching any process; the worker/host validate the packed wire
+    // form again. Unset means documented defaults (and the legacy
+    // stepImportQuality field above).
+    std::optional<model_core::ImportOptions> importOptions;
     std::wstring sourcePath;
     ImportFormat format = ImportFormat::Gltf;
+    // T07: the trusted viewer selected the shipped USD compatibility reader
+    // explicitly (--reader usd-compat / Open As). Routes this generation
+    // straight to the OpenUSD compatibility host instead of the TinyUSDZ fast
+    // path. Still a closed product value: the host repeats admission,
+    // containment and every budget check. Only meaningful for ImportFormat::Usd.
+    bool forceCompatibilityHost = false;
     // Meaningful only when format == ImportFormat::Assimp. The closed value
     // selects the compatibility importer hint and the expected wire identity.
     model_core::AssimpFormat assimpFormat = model_core::AssimpFormat::Dae;
+    // T08: closed compatibility-reader fallback. None disables it. The broker
+    // validates the route against `format`, then runs at most one Assimp
+    // compatibility session in the same sandbox with the same budgets and
+    // sidecar policy. Only the closed eligible error set is retried, and only
+    // before any batch has been published.
+    ReaderFallbackRoute readerFallback = ReaderFallbackRoute::None;
     uint64_t generationId = 0;
     uint64_t sectionByteCapacity = 0;
     uint32_t maxChunkCount = 0;
@@ -397,6 +426,23 @@ struct ImportSessionResult {
     // USD fast worker. USD-006 consumes this without reinterpreting generic
     // parser/resource failures as permission to launch OpenUSD.
     bool compatibilityFallbackRequired = false;
+    // T08 compatibility-reader evidence. Stable ASCII product reader names;
+    // empty when the request carried no ReaderFallbackRoute. The final reader
+    // is always named, whether the native attempt survived or the one
+    // compatibility retry ran. The diagnostic is path-free and names the
+    // native reader, the compatibility reader and the final reader.
+    std::string nativeReaderName;
+    std::string compatibilityReaderName;
+    std::string finalReaderName;
+    bool compatibilityFallbackAttempted = false;
+    bool usedCompatibilityReader = false;
+    uint32_t readerFallbackAttemptCount = 0;
+    std::string readerFallbackDiagnostic;
+    // T06: the deterministic cache identity the generation ran with, or 0 when
+    // the format has no import options. It names the format and every option
+    // that can change normalized output; callers combine it with the existing
+    // source identity and importer version.
+    uint32_t importOptionsCacheIdentity = 0;
 };
 
 // Creates (or opens) the single AppContainer profile every import runs
@@ -435,6 +481,17 @@ uint64_t DedicatedHostCommitLimitBytes();
 // Synchronous, and blocking for as long as the worker takes to reply. Call
 // from a background thread. Never throws for an ordinary import failure --
 // every expected fault is reported through ImportSessionResult::stage.
+//
+// When `request.readerFallback` is a known route, this is equivalent to
+// RunImportSessionWithFallback: the native attempt runs first and, only for the
+// closed eligible failures and only before any batch is published, exactly one
+// compatibility attempt runs in the same sandbox.
 ImportSessionResult RunImportSession(const ImportSessionRequest& request);
+
+// Explicit entry point for the closed T08 policy. `request.readerFallback` must
+// be a known non-None route that matches `request.format`; anything else is a
+// typed ValidateOptions/ImportProtocolViolation failure before a process is
+// launched. At most one compatibility attempt is made per generation.
+ImportSessionResult RunImportSessionWithFallback(const ImportSessionRequest& request);
 
 } // namespace import_broker

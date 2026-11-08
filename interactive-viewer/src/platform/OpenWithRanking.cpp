@@ -25,7 +25,8 @@ bool IsUsdExtension(const std::wstring& extension)
 
 bool IsCadExtension(const std::wstring& extension)
 {
-    return extension == L".step" || extension == L".stp";
+    return extension == L".step" || extension == L".stp" || extension == L".stpnc"
+        || extension == L".p21" || extension == L".210";
 }
 
 void MergeInto(RankedHandler& target, const RankedHandler& candidate)

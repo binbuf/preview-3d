@@ -8,6 +8,72 @@ Entries are grouped by release tag, newest first. `0.2.0` was the first tagged
 release; it includes the initial development of the viewer, so its notes cover
 the whole pre-release build-up as well as the changes made in that tag.
 
+## [0.8.0] - 2026-11-07
+
+This is the valid-file coverage release: the formats Preview 3D already claimed
+now open the files users actually have. Extension aliases and content detection
+close the routing gaps, the compatibility and CAD importers emit lines and
+points instead of empty geometry, import quality is user-selectable, and every
+family ships with a named reader and a bounded compatibility fallback. Per-format
+subsets and limits are in [Format support and limits](docs/FORMAT-SUPPORT.md).
+
+### Added
+
+- **STEP interchange aliases.** `.stpnc`, `.p21`, and `.210` now open through
+  the STEP host in file dialogs, **Open as…**, drag-and-drop, and the Explorer
+  thumbnail registration, alongside `.step` and `.stp`.
+- **Content detection for the whole catalog.** A file with a missing or wrong
+  extension is identified from its bytes — COLLADA, DXF, OFF, X3D, 3DS, IGES,
+  BREP, XBF, and FreeCAD — and Preview 3D asks through **Open as…** instead of
+  refusing it.
+- **Line and point geometry in the compatibility formats.** Assimp-backed DXF,
+  OFF, COLLADA and X3D files, and mixed point/line/triangle meshes in the other
+  compatibility formats, now display as lines and points instead of failing
+  with empty geometry.
+- **Wireframe CAD.** STEP, IGES, BREP, and FreeCAD wire and edge-only
+  definitions display as lines, and the new `read_wire` option overlays edges
+  on solid CAD definitions.
+- **Per-format import options.** **Settings → Import options…**, repeatable
+  `--import-option <FORMAT>.<name>=<value>` arguments, and `settings.json` keys
+  `import.<FORMAT>.<name>` expose CAD Draft/Balanced/Full quality, wire mode,
+  linear and angular deflection, relative or absolute deflection, and unit
+  scale, plus the USD subdivision level. Unknown, out-of-range, non-finite, or
+  inapplicable values fail before a parser runs, and options that change output
+  are part of the import cache identity.
+- **Reader listing and forced selection.** `--list-readers` prints the fifteen
+  shipped readers and `--reader <name>` forces one; **Open as…** lists the
+  default and any alternate reader for each family, and the info panel names
+  the reader that produced the scene.
+- **Compatibility readers with a bounded fallback.** `gltf-assimp`,
+  `obj-assimp`, `fbx-assimp`, and `3mf-assimp` can open files the native
+  importer rejects. A default native open retries exactly once, and only for
+  `UnsupportedFormat`, `UnsupportedRequiredFeature`, or `EmptyGeometry`, before
+  any data is displayed; security, containment, cancellation, and resource
+  failures never retry. A forced native reader does not switch silently — the
+  failure card offers **Try compatibility reader** instead.
+
+### Fixed
+
+- **A single collapsed FBX triangle no longer rejects the whole model.** A
+  degenerate triangle with unusable normals is dropped and the rest of the mesh
+  loads, matching the other importers.
+- **Native glTF/GLB previews of large real-world scenes use the coarse proxy
+  again.** The compatibility work had misclassified native glTF as an
+  Assimp-only format, so scan and preview batches failed validation; native
+  glTF is back on the Tier A coarse-proxy path.
+- **Empty COLLADA documents no longer show invented geometry.** Assimp's
+  synthetic skeleton mesh is disabled, so a document with no supported
+  primitive reports a typed empty-geometry failure.
+
+### Security
+
+- **A malformed DirectX `.x` file cannot exhaust the viewer.** Assimp's `.x`
+  parser resizes arrays from the file's declared counts, so a 395-byte file can
+  request several gigabytes. The sandboxed import worker catches the failed
+  allocation and enforces a 4 GiB Job commit cap, so the import fails typed
+  instead of affecting the viewer. A product-side `.x` primitive-count preflight
+  remains a tracked follow-up.
+
 ## [0.7.1] - 2026-11-02
 
 ### Added

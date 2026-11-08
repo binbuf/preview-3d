@@ -466,6 +466,7 @@ bool EmitVariant(BoundedChunkWriter& writer, MeshVariant& variant, uint32_t mesh
                                     triangles[triangle * 3 + 2]};
                 if (reverseWinding) std::swap(corners[1], corners[2]);
                 const size_t firstVertex = chunk.vertices.size();
+                const size_t firstIndex = chunk.indices.size();
                 bool normalUsable[3]{};
                 uint32_t cornerIndex = 0;
                 for (uint32_t corner : corners) {
@@ -487,7 +488,14 @@ bool EmitVariant(BoundedChunkWriter& writer, MeshVariant& variant, uint32_t mesh
                                                edge1.x * edge2.y - edge1.y * edge2.x};
                     float normalized[3]{};
                     if (!Normalize(faceNormal, normalized)) {
-                        error = ImportErrorCode::MalformedData; return false;
+                        // A collapsed/degenerate triangle has no meaningful
+                        // normal. Real exporters emit these; dropping the
+                        // triangle is the bounded choice for the rest of the
+                        // model, not a parse error.
+                        chunk.vertices.resize(firstVertex);
+                        chunk.indices.resize(firstIndex);
+                        sourceCursor += 3;
+                        continue;
                     }
                     for (uint32_t index = 0; index < 3; ++index) {
                         if (normalUsable[index]) continue;

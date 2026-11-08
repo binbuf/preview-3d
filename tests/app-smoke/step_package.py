@@ -51,7 +51,7 @@ def check_registration():
     progid = 'Binbuf.Preview3D.STEP.1'
     assert f'!define PROGID_STEP "{progid}"' in nsi
     assert nsi.count('RegisterProgId "${PROGID_STEP}"') == 1
-    for ext in ('.step', '.stp'):
+    for ext in ('.step', '.stp', '.stpnc', '.p21', '.210'):
         assert nsi.count(f'RegisterExtension "{ext}" "${{PROGID_STEP}}"') == 1, ext
         assert nsi.count(f'UnregisterExtension "{ext}" "${{PROGID_STEP}}"') == 1, ext
         assert f"'{ext}'" in reset, ext

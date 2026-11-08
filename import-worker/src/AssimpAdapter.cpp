@@ -3,6 +3,7 @@
 #include "AssimpTextureDecode.h"
 #include "BoundedChunkWriter.h"
 #include "ChunkBatchSink.h"
+#include "ThreeMfOpcPreflight.h"
 #include "model_core/MaterialPayload.h"
 #include "model_core/PixelFormats.h"
 #include "model_core/TierALimits.h"
@@ -50,6 +51,12 @@ FormatInfo InfoFor(AssimpFormat format)
     case AssimpFormat::Off: return {"off", SourceFormatId::Off, UpAxisId::Y};
     case AssimpFormat::Amf: return {"amf", SourceFormatId::Amf, UpAxisId::Z};
     case AssimpFormat::X3d: return {"x3d", SourceFormatId::X3d, UpAxisId::Y};
+    // T08 same-family compatibility hints. The glTF importer handles both
+    // JSON .gltf and GLB; the wire identity is refined from the bytes below.
+    case AssimpFormat::Gltf: return {"gltf", SourceFormatId::Gltf, UpAxisId::Y};
+    case AssimpFormat::Obj: return {"obj", SourceFormatId::Obj, UpAxisId::Y};
+    case AssimpFormat::Fbx: return {"fbx", SourceFormatId::Fbx, UpAxisId::Y};
+    case AssimpFormat::ThreeMf: return {"3mf", SourceFormatId::ThreeMf, UpAxisId::Z};
     case AssimpFormat::Dae:
     default: return {"dae", SourceFormatId::Dae, UpAxisId::Y};
     }
@@ -156,6 +163,11 @@ bool PassesTextAdmission(std::span<const std::byte> bytes, AssimpFormat format)
         return ContainsCaseInsensitive(bytes, "xof ");
     case AssimpFormat::ThreeDs:
         return false; // binary container, handled separately
+    case AssimpFormat::Gltf:
+    case AssimpFormat::Obj:
+    case AssimpFormat::Fbx:
+    case AssimpFormat::ThreeMf:
+        return false; // same-family containers, handled separately
     }
     return false;
 }
@@ -174,12 +186,6 @@ bool PassesBinaryAdmission(std::span<const std::byte> bytes, AssimpFormat format
         | (uint32_t(std::to_integer<unsigned char>(bytes[4])) << 16)
         | (uint32_t(std::to_integer<unsigned char>(bytes[5])) << 24);
     return length >= 6 && uint64_t(length) <= bytes.size();
-}
-
-bool IsXmlAssimpFormat(AssimpFormat format)
-{
-    return format == AssimpFormat::Dae || format == AssimpFormat::X3d
-        || format == AssimpFormat::Amf;
 }
 
 bool ParseUnsigned(std::string_view value, uint64_t& out)
@@ -425,7 +431,10 @@ ImportErrorCode OffAdmission(std::span<const std::byte> bytes, const AssimpImpor
     }
     for (uint64_t index = 0; index < faceCount; ++index) {
         uint64_t corners = 0;
-        if (!unsignedNumber(token(), corners) || corners < 3 || corners > 1'000'000
+        // OFF carries polygon faces; a one- or two-index face is a point or
+        // edge primitive that Assimp represents directly, so it is admitted
+        // here rather than rejected as malformed.
+        if (!unsignedNumber(token(), corners) || corners < 1 || corners > 1'000'000
             || corners > vertexCount)
             return ImportErrorCode::MalformedData;
         for (uint64_t corner = 0; corner < corners; ++corner) {
@@ -463,6 +472,513 @@ bool IsSafeReference(std::string_view reference, bool requireImage)
     }
     return true;
 }
+
+// T08 sidecar policy for the same-family compatibility hints. Images are always
+// allowed; the two container formats that legitimately reference a sibling
+// dependency additionally allow exactly that dependency class:
+//   - glTF: an external `.bin` buffer;
+//   - OBJ: a `.mtl` material library.
+// The broker repeats its own allowlist and canonical containment; this is the
+// adapter-side boundary, not a replacement for it.
+bool IsSafeAssimpSidecarReference(std::string_view reference, AssimpFormat format)
+{
+    if (IsSafeReference(reference, true)) return true;
+    if (!IsSafeReference(reference, false)) return false;
+    const size_t dot = reference.find_last_of('.');
+    if (dot == std::string_view::npos) return false;
+    const std::string extension = LowerAscii(reference.substr(dot));
+    if (format == AssimpFormat::Gltf) return extension == ".bin";
+    if (format == AssimpFormat::Obj) return extension == ".mtl";
+    return false;
+}
+
+// --- T08 same-family container admission -----------------------------------
+//
+// The native glTF/OBJ/FBX/3MF adapters already own the product preflight for
+// their routes. The compatibility route must not trust Assimp's own container
+// sniffing or ZIP handling either, so each container gets a bounded,
+// product-owned preflight before the importer runs. These are crash/containment
+// boundaries, not syntax validators: Assimp still owns real parsing.
+
+constexpr uint64_t kMaxGltfJsonBytes = 256ull * 1024 * 1024;
+constexpr uint64_t kMaxObjTextBytes = 512ull * 1024 * 1024;
+constexpr uint64_t kMaxFbxTextBytes = 512ull * 1024 * 1024;
+constexpr uint32_t kMaxGltfBuffers = 4096;
+constexpr uint32_t kMaxGltfBufferViews = 262144;
+constexpr uint32_t kMaxJsonDepth = 64;
+constexpr uint64_t kMaxJsonTokens = 2'000'000;
+
+struct GltfBufferDecl {
+    uint64_t byteLength = 0;
+    bool hasUri = false;
+    bool dataUri = false;
+};
+
+struct GltfBufferViewDecl {
+    uint64_t buffer = 0;
+    uint64_t byteOffset = 0;
+    uint64_t byteLength = 0;
+};
+
+uint32_t ReadLittleEndian32(std::span<const std::byte> bytes, size_t offset)
+{
+    return uint32_t(std::to_integer<unsigned char>(bytes[offset]))
+        | (uint32_t(std::to_integer<unsigned char>(bytes[offset + 1])) << 8)
+        | (uint32_t(std::to_integer<unsigned char>(bytes[offset + 2])) << 16)
+        | (uint32_t(std::to_integer<unsigned char>(bytes[offset + 3])) << 24);
+}
+
+struct GltfJsonScanner {
+    std::span<const char> text;
+    size_t offset = 0;
+    uint64_t tokens = 0;
+    bool hasAsset = false;
+    bool versionTwo = false;
+    std::vector<GltfBufferDecl> buffers;
+    std::vector<GltfBufferViewDecl> bufferViews;
+
+    bool SkipWhitespace()
+    {
+        while (offset < text.size()
+               && (text[offset] == ' ' || text[offset] == '\t'
+                   || text[offset] == '\r' || text[offset] == '\n'))
+            ++offset;
+        return true;
+    }
+
+    bool Consume(char expected)
+    {
+        SkipWhitespace();
+        if (offset >= text.size() || text[offset] != expected) return false;
+        ++offset;
+        return true;
+    }
+
+    bool ScanString(std::string_view* out = nullptr)
+    {
+        SkipWhitespace();
+        if (offset >= text.size() || text[offset] != '"') return false;
+        const size_t begin = ++offset;
+        while (offset < text.size()) {
+            const unsigned char value = static_cast<unsigned char>(text[offset]);
+            if (value == '"') {
+                if (out) *out = std::string_view(text.data() + begin, offset - begin);
+                ++offset;
+                return true;
+            }
+            if (value < 0x20) return false;
+            if (value == '\\') {
+                ++offset;
+                if (offset >= text.size()) return false;
+                const char escaped = text[offset];
+                if (escaped == 'u') {
+                    if (offset + 4 >= text.size()) return false;
+                    for (unsigned index = 1; index <= 4; ++index) {
+                        const char digit = text[offset + index];
+                        if (!((digit >= '0' && digit <= '9')
+                              || (digit >= 'a' && digit <= 'f')
+                              || (digit >= 'A' && digit <= 'F')))
+                            return false;
+                    }
+                    offset += 5;
+                    continue;
+                }
+                if (escaped != '"' && escaped != '\\' && escaped != '/'
+                    && escaped != 'b' && escaped != 'f' && escaped != 'n'
+                    && escaped != 'r' && escaped != 't')
+                    return false;
+            }
+            ++offset;
+        }
+        return false;
+    }
+
+    bool ScanNumber(double* out = nullptr)
+    {
+        SkipWhitespace();
+        const size_t begin = offset;
+        if (offset < text.size() && text[offset] == '-') ++offset;
+        if (offset >= text.size()) return false;
+        if (text[offset] == '0') {
+            ++offset;
+        } else if (text[offset] >= '1' && text[offset] <= '9') {
+            while (offset < text.size() && text[offset] >= '0' && text[offset] <= '9') ++offset;
+        } else {
+            return false;
+        }
+        if (offset < text.size() && text[offset] == '.') {
+            ++offset;
+            const size_t digits = offset;
+            while (offset < text.size() && text[offset] >= '0' && text[offset] <= '9') ++offset;
+            if (offset == digits) return false;
+        }
+        if (offset < text.size() && (text[offset] == 'e' || text[offset] == 'E')) {
+            ++offset;
+            if (offset < text.size() && (text[offset] == '+' || text[offset] == '-')) ++offset;
+            const size_t digits = offset;
+            while (offset < text.size() && text[offset] >= '0' && text[offset] <= '9') ++offset;
+            if (offset == digits) return false;
+        }
+        if (out) {
+            double value = 0;
+            const auto parsed = std::from_chars(text.data() + begin, text.data() + offset, value);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + offset
+                || !std::isfinite(value))
+                return false;
+            *out = value;
+        }
+        return true;
+    }
+
+    bool ScanLiteral(std::string_view literal)
+    {
+        SkipWhitespace();
+        if (text.size() - offset < literal.size()) return false;
+        if (std::memcmp(text.data() + offset, literal.data(), literal.size()) != 0) return false;
+        offset += literal.size();
+        return true;
+    }
+
+    bool CountToken()
+    {
+        return ++tokens <= kMaxJsonTokens;
+    }
+
+    bool ScanValue(unsigned depth);
+    bool ScanAssetObject(unsigned depth);
+    bool ScanBuffersArray(unsigned depth);
+    bool ScanBufferViewsArray(unsigned depth);
+    bool ScanObject(unsigned depth, bool root);
+    bool ScanArray(unsigned depth);
+};
+
+bool GltfJsonScanner::ScanValue(unsigned depth)
+{
+    if (depth > kMaxJsonDepth || !CountToken()) return false;
+    SkipWhitespace();
+    if (offset >= text.size()) return false;
+    const char first = text[offset];
+    if (first == '{') return ScanObject(depth + 1, false);
+    if (first == '[') return ScanArray(depth + 1);
+    if (first == '"') return ScanString();
+    if (first == 't') return ScanLiteral("true");
+    if (first == 'f') return ScanLiteral("false");
+    if (first == 'n') return ScanLiteral("null");
+    return ScanNumber();
+}
+
+bool GltfJsonScanner::ScanAssetObject(unsigned depth)
+{
+    if (depth > kMaxJsonDepth || !Consume('{')) return false;
+    SkipWhitespace();
+    if (offset < text.size() && text[offset] == '}') { ++offset; return true; }
+    for (;;) {
+        std::string_view key;
+        if (!ScanString(&key) || !Consume(':')) return false;
+        if (key == "version") {
+            std::string_view version;
+            if (!ScanString(&version)) return false;
+            versionTwo = version.size() >= 2 && version[0] == '2' && version[1] == '.';
+        } else if (!ScanValue(depth + 1)) {
+            return false;
+        }
+        SkipWhitespace();
+        if (offset < text.size() && text[offset] == ',') { ++offset; continue; }
+        if (offset < text.size() && text[offset] == '}') { ++offset; hasAsset = true; return true; }
+        return false;
+    }
+}
+
+bool GltfJsonScanner::ScanBuffersArray(unsigned depth)
+{
+    if (depth > kMaxJsonDepth || !Consume('[')) return false;
+    SkipWhitespace();
+    if (offset < text.size() && text[offset] == ']') { ++offset; return true; }
+    for (;;) {
+        if (buffers.size() >= kMaxGltfBuffers || !Consume('{')) return false;
+        GltfBufferDecl buffer;
+        bool hasByteLength = false;
+        SkipWhitespace();
+        if (offset < text.size() && text[offset] == '}') {
+            ++offset;
+        } else {
+            for (;;) {
+                std::string_view key;
+                if (!ScanString(&key) || !Consume(':')) return false;
+                if (key == "byteLength") {
+                    double value = 0;
+                    if (!ScanNumber(&value) || value < 0 || value > 1.0e18) return false;
+                    buffer.byteLength = uint64_t(value);
+                    hasByteLength = true;
+                } else if (key == "uri") {
+                    std::string_view uri;
+                    if (!ScanString(&uri) || uri.empty() || HasControlByte(uri)) return false;
+                    buffer.hasUri = true;
+                    buffer.dataUri = uri.size() >= 5 && uri.substr(0, 5) == "data:";
+                    if (!buffer.dataUri) {
+                        const size_t dot = uri.find_last_of('.');
+                        if (dot == std::string_view::npos
+                            || LowerAscii(uri.substr(dot)) != ".bin"
+                            || !IsSafeReference(uri, false))
+                            return false;
+                    }
+                } else if (!ScanValue(depth + 1)) {
+                    return false;
+                }
+                SkipWhitespace();
+                if (offset < text.size() && text[offset] == ',') { ++offset; continue; }
+                if (offset < text.size() && text[offset] == '}') { ++offset; break; }
+                return false;
+            }
+        }
+        if (!hasByteLength || !buffer.byteLength) return false;
+        buffers.push_back(buffer);
+        SkipWhitespace();
+        if (offset < text.size() && text[offset] == ',') { ++offset; continue; }
+        if (offset < text.size() && text[offset] == ']') { ++offset; return true; }
+        return false;
+    }
+}
+
+bool GltfJsonScanner::ScanBufferViewsArray(unsigned depth)
+{
+    if (depth > kMaxJsonDepth || !Consume('[')) return false;
+    SkipWhitespace();
+    if (offset < text.size() && text[offset] == ']') { ++offset; return true; }
+    for (;;) {
+        if (bufferViews.size() >= kMaxGltfBufferViews || !Consume('{')) return false;
+        GltfBufferViewDecl view;
+        bool hasBuffer = false;
+        bool hasByteLength = false;
+        SkipWhitespace();
+        if (offset < text.size() && text[offset] == '}') {
+            ++offset;
+        } else {
+            for (;;) {
+                std::string_view key;
+                if (!ScanString(&key) || !Consume(':')) return false;
+                if (key == "buffer") {
+                    double value = 0;
+                    if (!ScanNumber(&value) || value < 0 || value > 1.0e18) return false;
+                    view.buffer = uint64_t(value);
+                    hasBuffer = true;
+                } else if (key == "byteOffset") {
+                    double value = 0;
+                    if (!ScanNumber(&value) || value < 0 || value > 1.0e18) return false;
+                    view.byteOffset = uint64_t(value);
+                } else if (key == "byteLength") {
+                    double value = 0;
+                    if (!ScanNumber(&value) || value < 0 || value > 1.0e18) return false;
+                    view.byteLength = uint64_t(value);
+                    hasByteLength = true;
+                } else if (!ScanValue(depth + 1)) {
+                    return false;
+                }
+                SkipWhitespace();
+                if (offset < text.size() && text[offset] == ',') { ++offset; continue; }
+                if (offset < text.size() && text[offset] == '}') { ++offset; break; }
+                return false;
+            }
+        }
+        if (!hasBuffer || !hasByteLength || !view.byteLength) return false;
+        bufferViews.push_back(view);
+        SkipWhitespace();
+        if (offset < text.size() && text[offset] == ',') { ++offset; continue; }
+        if (offset < text.size() && text[offset] == ']') { ++offset; return true; }
+        return false;
+    }
+}
+
+bool GltfJsonScanner::ScanObject(unsigned depth, bool root)
+{
+    if (depth > kMaxJsonDepth || !Consume('{')) return false;
+    SkipWhitespace();
+    if (offset < text.size() && text[offset] == '}') { ++offset; return true; }
+    for (;;) {
+        std::string_view key;
+        if (!ScanString(&key) || !Consume(':')) return false;
+        if (root && key == "asset") {
+            if (!ScanAssetObject(depth + 1)) return false;
+        } else if (root && key == "buffers") {
+            if (!ScanBuffersArray(depth + 1)) return false;
+        } else if (root && key == "bufferViews") {
+            if (!ScanBufferViewsArray(depth + 1)) return false;
+        } else if (!ScanValue(depth + 1)) {
+            return false;
+        }
+        SkipWhitespace();
+        if (offset < text.size() && text[offset] == ',') { ++offset; continue; }
+        if (offset < text.size() && text[offset] == '}') { ++offset; return true; }
+        return false;
+    }
+}
+
+bool GltfJsonScanner::ScanArray(unsigned depth)
+{
+    if (depth > kMaxJsonDepth || !Consume('[')) return false;
+    SkipWhitespace();
+    if (offset < text.size() && text[offset] == ']') { ++offset; return true; }
+    for (;;) {
+        if (!ScanValue(depth + 1)) return false;
+        SkipWhitespace();
+        if (offset < text.size() && text[offset] == ',') { ++offset; continue; }
+        if (offset < text.size() && text[offset] == ']') { ++offset; return true; }
+        return false;
+    }
+}
+
+ImportErrorCode ValidateGltfJson(std::span<const std::byte> bytes, bool hasBin,
+                                 uint64_t binLength)
+{
+    if (bytes.empty()) return ImportErrorCode::MalformedData;
+    GltfJsonScanner scanner;
+    scanner.text = std::span(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (!scanner.ScanObject(0, true) || !scanner.hasAsset || !scanner.versionTwo)
+        return ImportErrorCode::MalformedData;
+    scanner.SkipWhitespace();
+    if (scanner.offset != scanner.text.size()) return ImportErrorCode::MalformedData;
+
+    if (!scanner.bufferViews.empty() && scanner.buffers.empty())
+        return ImportErrorCode::MalformedData;
+    for (const auto& view : scanner.bufferViews) {
+        if (view.buffer >= scanner.buffers.size()) return ImportErrorCode::MalformedData;
+        const auto& buffer = scanner.buffers[size_t(view.buffer)];
+        if (view.byteOffset > buffer.byteLength
+            || view.byteLength > buffer.byteLength - view.byteOffset)
+            return ImportErrorCode::MalformedData;
+    }
+    if (!scanner.buffers.empty()) {
+        const auto& primary = scanner.buffers.front();
+        if (!primary.hasUri) {
+            // An implicit buffer is the GLB BIN chunk.
+            if (!hasBin || primary.byteLength > binLength)
+                return ImportErrorCode::MalformedData;
+        }
+    }
+    return ImportErrorCode::None;
+}
+
+ImportErrorCode GltfAdmission(std::span<const std::byte> bytes)
+{
+    if (bytes.size() < 4) return ImportErrorCode::MalformedData;
+    const bool isGlb = std::memcmp(bytes.data(), "glTF", 4) == 0;
+    if (!isGlb) {
+        if (bytes.size() > kMaxGltfJsonBytes) return ImportErrorCode::ResourceLimit;
+        return ValidateGltfJson(bytes, false, 0);
+    }
+    if (bytes.size() < 20 || bytes.size() > kTierBPrimarySourceBytes)
+        return ImportErrorCode::MalformedData;
+    const uint32_t version = ReadLittleEndian32(bytes, 4);
+    const uint32_t declaredLength = ReadLittleEndian32(bytes, 8);
+    if (version != 2 || uint64_t(declaredLength) != bytes.size())
+        return ImportErrorCode::MalformedData;
+
+    size_t offset = 12;
+    bool sawJson = false;
+    bool sawBin = false;
+    uint64_t binLength = 0;
+    std::span<const std::byte> jsonBytes;
+    while (offset < bytes.size()) {
+        if (bytes.size() - offset < 8) return ImportErrorCode::MalformedData;
+        const uint32_t chunkLength = ReadLittleEndian32(bytes, offset);
+        const uint32_t chunkType = ReadLittleEndian32(bytes, offset + 4);
+        offset += 8;
+        if (chunkLength > bytes.size() - offset || (chunkLength % 4) != 0)
+            return ImportErrorCode::MalformedData;
+        if (!sawJson) {
+            if (chunkType != 0x4E4F534Au || chunkLength == 0)
+                return ImportErrorCode::MalformedData;
+            jsonBytes = bytes.subspan(offset, chunkLength);
+            sawJson = true;
+        } else if (chunkType == 0x004E4942u && !sawBin) {
+            sawBin = true;
+            binLength = chunkLength;
+        } else {
+            // A valid GLB this build accepts carries one JSON chunk and at
+            // most one BIN chunk; unknown chunk types are not interpreted.
+            return ImportErrorCode::MalformedData;
+        }
+        offset += chunkLength;
+    }
+    if (!sawJson || offset != bytes.size()) return ImportErrorCode::MalformedData;
+    return ValidateGltfJson(jsonBytes, sawBin, binLength);
+}
+
+ImportErrorCode ObjAdmission(std::span<const std::byte> bytes)
+{
+    if (bytes.size() < 4) return ImportErrorCode::MalformedData;
+    if (bytes.size() > kMaxObjTextBytes) return ImportErrorCode::ResourceLimit;
+    for (const std::byte value : bytes) {
+        const unsigned char byte = std::to_integer<unsigned char>(value);
+        if (byte < 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D)
+            return ImportErrorCode::MalformedData;
+        if (byte == 0x7F) return ImportErrorCode::MalformedData;
+    }
+    const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    bool hasVertex = false;
+    bool hasPrimitive = false;
+    size_t start = 0;
+    while (start < text.size()) {
+        const size_t end = text.find('\n', start);
+        const size_t lineEnd = end == std::string_view::npos ? text.size() : end;
+        size_t cursor = start;
+        while (cursor < lineEnd && (text[cursor] == ' ' || text[cursor] == '\t')) ++cursor;
+        if (cursor + 1 < lineEnd && (text[cursor + 1] == ' ' || text[cursor + 1] == '\t')) {
+            switch (text[cursor]) {
+            case 'v': hasVertex = true; break;
+            case 'f':
+            case 'l':
+            case 'p': hasPrimitive = true; break;
+            default: break;
+            }
+        }
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return hasVertex && hasPrimitive ? ImportErrorCode::None
+                                     : ImportErrorCode::MalformedData;
+}
+
+ImportErrorCode FbxAdmission(std::span<const std::byte> bytes)
+{
+    if (bytes.size() < 4) return ImportErrorCode::MalformedData;
+    if (bytes.size() > kMaxFbxTextBytes) return ImportErrorCode::ResourceLimit;
+    if (bytes.size() >= 18 && std::memcmp(bytes.data(), "Kaydara FBX Binary", 18) == 0) {
+        if (bytes.size() < 27) return ImportErrorCode::MalformedData;
+        const uint32_t version = ReadLittleEndian32(bytes, 23);
+        if (version < 7000 || version > 7700) return ImportErrorCode::MalformedData;
+        return ImportErrorCode::None;
+    }
+    // ASCII FBX. Reject binary control bytes outside whitespace, then require
+    // the authored version record near the header. The importer owns syntax.
+    for (const std::byte value : bytes) {
+        const unsigned char byte = std::to_integer<unsigned char>(value);
+        if (byte < 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D)
+            return ImportErrorCode::MalformedData;
+        if (byte == 0x7F) return ImportErrorCode::MalformedData;
+    }
+    const size_t probe = (std::min)(bytes.size(), size_t(64) * 1024);
+    const std::string_view head(reinterpret_cast<const char*>(bytes.data()), probe);
+    if (head.find("FBXVersion") == std::string_view::npos)
+        return ImportErrorCode::MalformedData;
+    return ImportErrorCode::None;
+}
+
+ImportErrorCode ThreeMfAssimpAdmission(std::span<const std::byte> bytes,
+                                       const AssimpImportOptions& options)
+{
+    if (bytes.size() < 4) return ImportErrorCode::MalformedData;
+    const ThreeMfOpcError result = InspectThreeMfOpc(
+        bytes, nullptr, {}, [&options] { return options.Cancelled(); });
+    if (result == ThreeMfOpcError::None) return ImportErrorCode::None;
+    if (result == ThreeMfOpcError::Cancelled) return ImportErrorCode::Cancelled;
+    // The OPC/ZIP structure is the compatibility route's archive boundary.
+    // Semantic required-extension policy stays with the native adapter; the
+    // whole point of this route is to let Assimp read the core model when a
+    // native-only extension is required.
+    return ImportErrorCode::ArchiveLimit;
+}
+
 
 class MemoryStream final : public Assimp::IOStream {
 public:
@@ -539,22 +1055,23 @@ struct ImportContext {
 
 class BrokerIOSystem final : public Assimp::IOSystem {
 public:
-    explicit BrokerIOSystem(ImportContext& context) : context_(context) {}
+    BrokerIOSystem(ImportContext& context, AssimpFormat format)
+        : context_(context), format_(format) {}
 
     bool Exists(const char* file) const override
     {
         // Existence is answered statically: the broker is only consulted by
         // Open, so a hostile document cannot make Exists touch a path.
-        return file && IsSafeReference(file, true);
+        return file && IsSafeAssimpSidecarReference(file, format_);
     }
 
     Assimp::IOStream* Open(const char* file, const char* mode) override
     {
         if (!file || !mode || (std::strcmp(mode, "rb") != 0 && std::strcmp(mode, "r") != 0))
             return nullptr;
-        if (!IsSafeReference(file, true)) {
-            // A reference outside the image allowlist is a containment fault,
-            // not an optional missing texture.
+        if (!IsSafeAssimpSidecarReference(file, format_)) {
+            // A reference outside the format's allowlist is a containment
+            // fault, not an optional missing texture.
             context_.error = ImportErrorCode::UnsafeReference;
             return nullptr;
         }
@@ -585,6 +1102,7 @@ public:
 
 private:
     ImportContext& context_;
+    AssimpFormat format_;
 };
 
 class CancelProgressHandler final : public Assimp::ProgressHandler {
@@ -960,7 +1478,7 @@ struct GeometryChunk {
 
 bool AddVertex(GeometryChunk& chunk, const aiMesh& mesh, unsigned vertexIndex,
                const aiVector3D& worldPosition, const aiVector3D& worldNormal,
-               const aiVector3D& faceNormal)
+               const aiVector3D& faceNormal, bool indexed)
 {
     if (vertexIndex >= mesh.mNumVertices) return false;
     if (!Finite(worldPosition) || !Finite(worldNormal) || !Finite(faceNormal)) return false;
@@ -1003,39 +1521,54 @@ bool AddVertex(GeometryChunk& chunk, const aiMesh& mesh, unsigned vertexIndex,
             chunk.descriptor.localMax[axis] = (std::max)(chunk.descriptor.localMax[axis], value);
         }
     }
-    chunk.indices.push_back(uint32_t(chunk.vertices.size()));
+    if (indexed) chunk.indices.push_back(uint32_t(chunk.vertices.size()));
     chunk.vertices.push_back(vertex);
     return true;
 }
 
-bool FlushGeometry(BoundedChunkWriter& writer, GeometryChunk& chunk, uint32_t materialId,
-                   uint32_t meshId, uint32_t nodeId, uint32_t sourceFirst, uint64_t& totalTriangles,
-                   uint64_t& totalVertices, const AssimpImportOptions& options,
-                   ImportErrorCode& error)
+uint64_t PrimitiveCount(ChunkTopology topology, size_t vertexCount, size_t indexCount)
 {
-    if (chunk.indices.empty()) return true;
-    if (totalTriangles + chunk.indices.size() / 3 > options.maxTriangles
+    switch (topology) {
+    case ChunkTopology::TriangleList: return indexCount / 3;
+    case ChunkTopology::LineList: return indexCount / 2;
+    case ChunkTopology::PointList: return vertexCount;
+    default: return 0;
+    }
+}
+
+bool FlushGeometry(BoundedChunkWriter& writer, GeometryChunk& chunk, ChunkTopology topology,
+                   uint32_t materialId, uint32_t meshId, uint32_t nodeId, uint32_t sourceFirst,
+                   uint64_t& totalPrimitives, uint64_t& totalVertices,
+                   const AssimpImportOptions& options, ImportErrorCode& error)
+{
+    const size_t indexCount = topology == ChunkTopology::PointList ? 0 : chunk.indices.size();
+    const uint64_t primitives = PrimitiveCount(topology, chunk.vertices.size(), indexCount);
+    if (!primitives) return true;
+    if (totalPrimitives + primitives > options.maxTriangles
         || totalVertices + chunk.vertices.size() > options.maxVertices) {
         error = ImportErrorCode::ResourceLimit;
         return false;
     }
-    chunk.descriptor.topology = ChunkTopology::TriangleList;
+    chunk.descriptor.topology = topology;
     chunk.descriptor.vertexLayoutId = uint32_t(VertexLayoutId::PositionNormalUv0TangentColor_F32);
     chunk.descriptor.vertexCount = uint32_t(chunk.vertices.size());
-    chunk.descriptor.indexCount = uint32_t(chunk.indices.size());
+    chunk.descriptor.indexCount = uint32_t(indexCount);
     chunk.descriptor.chunkId = writer.NextId();
     chunk.descriptor.meshId = meshId;
     chunk.descriptor.nodeId = nodeId;
     chunk.descriptor.boundsState = BoundsState::Verified;
-    chunk.descriptor.geometryFlags = kGeometryDeindexed
+    // PointList carries no index buffer, so it is never "deindexed"; the
+    // indexed line/triangle paths duplicate corners per primitive.
+    chunk.descriptor.geometryFlags = (topology == ChunkTopology::PointList ? 0u : kGeometryDeindexed)
         | (chunk.hasUv ? kGeometryHasUv0 : 0u) | (chunk.hasColor ? kGeometryHasColors : 0u);
     chunk.descriptor.sourceRangeOffset = (uint64_t(meshId) << 32) | sourceFirst;
-    chunk.descriptor.sourceRangeLength = chunk.indices.size();
+    chunk.descriptor.sourceRangeLength = topology == ChunkTopology::PointList
+        ? chunk.vertices.size() : indexCount;
     if (materialId) {
         chunk.descriptor.dependencyIds[0] = materialId;
         chunk.descriptor.dependencyCount = 1;
     }
-    totalTriangles += chunk.indices.size() / 3;
+    totalPrimitives += primitives;
     totalVertices += chunk.vertices.size();
     if (!writer.Add(chunk.descriptor, ChunkBytes(chunk.vertices), ChunkBytes(chunk.indices))) {
         error = writer.Error();
@@ -1052,7 +1585,9 @@ struct GeometryState {
     const AssimpImportOptions* options = nullptr;
     std::map<uint32_t, uint32_t> materialIds;
     uint32_t chunkTriangleLimit = 0;
-    uint64_t totalTriangles = 0;
+    uint32_t chunkLineLimit = 0;
+    uint32_t chunkPointLimit = 0;
+    uint64_t totalPrimitives = 0;
     uint64_t totalVertices = 0;
 };
 
@@ -1069,62 +1604,172 @@ bool EmitMesh(const aiMesh& mesh, uint32_t meshId, uint32_t nodeId,
     auto material = state.materialIds.find(materialIndex);
     const uint32_t materialId = material == state.materialIds.end() ? 0 : material->second;
 
-    GeometryChunk chunk;
-    uint32_t sourceFirst = 0;
+    // One chunk per topology. A single source mesh may mix points, lines and
+    // triangles; each is normalized to its own wire topology rather than
+    // fabricating triangles from a lower-dimensional primitive.
+    GeometryChunk triangles;
+    GeometryChunk lines;
+    GeometryChunk points;
+    uint32_t triangleFirst = 0;
+    uint32_t lineFirst = 0;
+    uint32_t pointFirst = 0;
+
+    auto flush = [&](GeometryChunk& chunk, ChunkTopology topology, uint32_t sourceFirst) {
+        return FlushGeometry(*state.writer, chunk, topology, materialId, meshId, nodeId,
+                             sourceFirst, state.totalPrimitives, state.totalVertices,
+                             *state.options, state.context->error);
+    };
+
     for (uint32_t faceIndex = 0; faceIndex < mesh.mNumFaces; ++faceIndex) {
         if ((faceIndex & 1023u) == 0 && state.context->Cancelled()) {
             state.context->error = ImportErrorCode::Cancelled;
             return false;
         }
         const aiFace& face = mesh.mFaces[faceIndex];
-        if (face.mNumIndices != 3) {
-            // Lines/points/leftover polygons are not representable as the
-            // normalized triangle contract; fail closed rather than fabricate
-            // triangles. A mesh with no triangles at all is a bounded warning.
+        if (face.mNumIndices == 0) {
             Warn(state.context->optionalWarnings);
             continue;
         }
-        aiVector3D positions[3];
-        aiVector3D normals[3];
-        for (unsigned corner = 0; corner < 3; ++corner) {
-            const unsigned index = face.mIndices[corner];
+
+        if (face.mNumIndices == 1) {
+            // A one-index face is a point. PointList has no index buffer.
+            const unsigned index = face.mIndices[0];
             if (index >= mesh.mNumVertices) {
                 state.context->error = ImportErrorCode::MalformedData;
                 return false;
             }
-            positions[corner] = world * mesh.mVertices[index];
-            if (mesh.HasNormals()) normals[corner] = normalMatrix * mesh.mNormals[index];
-            else normals[corner] = aiVector3D(0, 0, 1);
-            if (!Finite(positions[corner]) || !Finite(normals[corner])) {
+            const aiVector3D position = world * mesh.mVertices[index];
+            if (!Finite(position)) {
+                // A non-finite point is dropped with a bounded warning rather
+                // than failing an otherwise usable scene.
+                Warn(state.context->optionalWarnings);
+                continue;
+            }
+            aiVector3D normal(0, 0, 1);
+            if (mesh.HasNormals()) {
+                const aiVector3D candidate = normalMatrix * mesh.mNormals[index];
+                // Assimp may leave NaN normals on line/point corners of a
+                // mixed mesh; the point itself is still usable.
+                if (Finite(candidate)) normal = candidate;
+            }
+            if (points.vertices.size() >= state.chunkPointLimit
+                && !flush(points, ChunkTopology::PointList, pointFirst)) return false;
+            if (!AddVertex(points, mesh, index, position, normal, aiVector3D(0, 0, 1), false)) {
                 state.context->error = ImportErrorCode::MalformedData;
                 return false;
             }
+            ++pointFirst;
+            continue;
         }
-        aiVector3D faceNormal(0, 0, 1);
-        if (!mesh.HasNormals()) {
-            faceNormal = (positions[1] - positions[0]) ^ (positions[2] - positions[0]);
-            normals[0] = normals[1] = normals[2] = faceNormal;
+
+        if (face.mNumIndices == 2) {
+            // A two-index face is one independent line segment.
+            aiVector3D positions[2];
+            aiVector3D normals[2]{aiVector3D(0, 0, 1), aiVector3D(0, 0, 1)};
+            bool usable = true;
+            for (unsigned corner = 0; corner < 2; ++corner) {
+                const unsigned index = face.mIndices[corner];
+                if (index >= mesh.mNumVertices) {
+                    state.context->error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+                positions[corner] = world * mesh.mVertices[index];
+                if (!Finite(positions[corner])) usable = false;
+                if (mesh.HasNormals()) {
+                    const aiVector3D candidate = normalMatrix * mesh.mNormals[index];
+                    // Assimp may leave NaN normals on line corners of a mixed
+                    // mesh; the line PSO does not need a normal.
+                    if (Finite(candidate)) normals[corner] = candidate;
+                }
+            }
+            if (!usable || positions[0] == positions[1]) {
+                // Degenerate or non-finite segments carry no visible geometry;
+                // skip them with the same bounded warning budget as optional
+                // content.
+                Warn(state.context->optionalWarnings);
+                continue;
+            }
+            if (lines.indices.size() / 2 >= state.chunkLineLimit
+                && !flush(lines, ChunkTopology::LineList, lineFirst)) return false;
+            for (unsigned corner = 0; corner < 2; ++corner) {
+                if (!AddVertex(lines, mesh, face.mIndices[corner], positions[corner],
+                               normals[corner], aiVector3D(0, 0, 1), true)) {
+                    state.context->error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+            }
+            lineFirst += 2;
+            continue;
         }
-        if (chunk.indices.size() / 3 >= state.chunkTriangleLimit) {
-            if (!FlushGeometry(*state.writer, chunk, materialId, meshId, nodeId, sourceFirst,
-                               state.totalTriangles, state.totalVertices, *state.options,
-                               state.context->error)) return false;
-            sourceFirst = faceIndex * 3;
+
+        // Three or more indices form a triangle or polygon. aiProcess_Triangulate
+        // normally already reduced polygons; this bounded fan is the fallback
+        // for an importer that leaves a larger face behind.
+        const unsigned base = face.mIndices[0];
+        if (base >= mesh.mNumVertices) {
+            state.context->error = ImportErrorCode::MalformedData;
+            return false;
         }
-        const size_t firstVertex = chunk.vertices.size();
-        for (unsigned corner = 0; corner < 3; ++corner) {
-            if (!AddVertex(chunk, mesh, face.mIndices[corner], positions[corner],
-                           normals[corner], faceNormal)) {
+        const aiVector3D basePosition = world * mesh.mVertices[base];
+        const aiVector3D baseNormal = mesh.HasNormals()
+            ? normalMatrix * mesh.mNormals[base] : aiVector3D(0, 0, 1);
+        if (!Finite(basePosition) || !Finite(baseNormal)) {
+            state.context->error = ImportErrorCode::MalformedData;
+            return false;
+        }
+        for (unsigned corner = 1; corner + 1 < face.mNumIndices; ++corner) {
+            const unsigned second = face.mIndices[corner];
+            const unsigned third = face.mIndices[corner + 1];
+            if (second >= mesh.mNumVertices || third >= mesh.mNumVertices) {
                 state.context->error = ImportErrorCode::MalformedData;
                 return false;
             }
+            const unsigned triangleIndices[3]{base, second, third};
+            aiVector3D positions[3]{basePosition, world * mesh.mVertices[second],
+                                    world * mesh.mVertices[third]};
+            aiVector3D normals[3]{baseNormal};
+            if (mesh.HasNormals()) {
+                normals[1] = normalMatrix * mesh.mNormals[second];
+                normals[2] = normalMatrix * mesh.mNormals[third];
+            } else {
+                normals[1] = normals[2] = aiVector3D(0, 0, 1);
+            }
+            if (!Finite(positions[1]) || !Finite(positions[2])
+                || !Finite(normals[1]) || !Finite(normals[2])) {
+                state.context->error = ImportErrorCode::MalformedData;
+                return false;
+            }
+            aiVector3D faceNormal(0, 0, 1);
+            if (!mesh.HasNormals()) {
+                faceNormal = (positions[1] - positions[0]) ^ (positions[2] - positions[0]);
+                normals[0] = normals[1] = normals[2] = faceNormal;
+            }
+            if (triangles.indices.size() / 3 >= state.chunkTriangleLimit
+                && !flush(triangles, ChunkTopology::TriangleList, triangleFirst)) return false;
+            const size_t firstVertex = triangles.vertices.size();
+            for (unsigned vertex = 0; vertex < 3; ++vertex) {
+                if (!AddVertex(triangles, mesh, triangleIndices[vertex], positions[vertex],
+                               normals[vertex], faceNormal, true)) {
+                    state.context->error = ImportErrorCode::MalformedData;
+                    return false;
+                }
+            }
+            GenerateTriangleTangent(triangles.vertices.data() + firstVertex);
+            triangleFirst += 3;
         }
-        GenerateTriangleTangent(chunk.vertices.data() + firstVertex);
     }
 
-    return FlushGeometry(*state.writer, chunk, materialId, meshId, nodeId, sourceFirst,
-                         state.totalTriangles, state.totalVertices, *state.options,
-                         state.context->error);
+    return flush(triangles, ChunkTopology::TriangleList, triangleFirst)
+        && flush(lines, ChunkTopology::LineList, lineFirst)
+        && flush(points, ChunkTopology::PointList, pointFirst);
+}
+
+bool HasSupportedPrimitive(const aiMesh& mesh)
+{
+    for (uint32_t faceIndex = 0; faceIndex < mesh.mNumFaces; ++faceIndex) {
+        if (mesh.mFaces[faceIndex].mNumIndices >= 1) return true;
+    }
+    return false;
 }
 
 bool WalkNode(const aiNode& node, const aiMatrix4x4& parent, uint32_t depth,
@@ -1148,7 +1793,10 @@ bool WalkNode(const aiNode& node, const aiMatrix4x4& parent, uint32_t depth,
         }
         const aiMesh* mesh = state.scene->mMeshes[meshId];
         if (!mesh) continue;
-        if ((mesh->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) == 0) {
+        // Points, lines and triangles are all representable. Only a mesh with
+        // no usable face at all is skipped; that is a bounded compatibility
+        // warning, not a hard failure.
+        if (!HasSupportedPrimitive(*mesh)) {
             Warn(state.context->optionalWarnings);
             continue;
         }
@@ -1206,17 +1854,48 @@ AssimpImportOutcome ImportAssimp(std::span<const std::byte> sourceBytes,
     AssimpImportOptions effective = options;
     if (options.maxObjects == 0 || options.maxMaterials == 0 || options.maxTriangles == 0
         || options.maxVertices == 0) return ImportErrorCode::ResourceLimit;
-    if (effective.format == AssimpFormat::ThreeDs) {
+    switch (effective.format) {
+    case AssimpFormat::ThreeDs:
         if (!PassesBinaryAdmission(sourceBytes, effective.format))
             return ImportErrorCode::MalformedData;
-    } else if (IsXmlAssimpFormat(effective.format)) {
+        break;
+    case AssimpFormat::Dae:
+    case AssimpFormat::X3d:
+    case AssimpFormat::Amf: {
         const ImportErrorCode admission = XmlAdmission(sourceBytes, effective.format, effective);
         if (admission != ImportErrorCode::None) return admission;
-    } else if (effective.format == AssimpFormat::Off) {
+        break;
+    }
+    case AssimpFormat::Off: {
         const ImportErrorCode admission = OffAdmission(sourceBytes, effective);
         if (admission != ImportErrorCode::None) return admission;
-    } else if (!PassesTextAdmission(sourceBytes, effective.format)) {
-        return ImportErrorCode::MalformedData;
+        break;
+    }
+    case AssimpFormat::Gltf: {
+        const ImportErrorCode admission = GltfAdmission(sourceBytes);
+        if (admission != ImportErrorCode::None) return admission;
+        break;
+    }
+    case AssimpFormat::Obj: {
+        const ImportErrorCode admission = ObjAdmission(sourceBytes);
+        if (admission != ImportErrorCode::None) return admission;
+        break;
+    }
+    case AssimpFormat::Fbx: {
+        const ImportErrorCode admission = FbxAdmission(sourceBytes);
+        if (admission != ImportErrorCode::None) return admission;
+        break;
+    }
+    case AssimpFormat::ThreeMf: {
+        const ImportErrorCode admission = ThreeMfAssimpAdmission(sourceBytes, effective);
+        if (admission != ImportErrorCode::None) return admission;
+        break;
+    }
+    case AssimpFormat::Dxf:
+    case AssimpFormat::DirectX:
+        if (!PassesTextAdmission(sourceBytes, effective.format))
+            return ImportErrorCode::MalformedData;
+        break;
     }
 
     ImportContext context;
@@ -1225,10 +1904,14 @@ AssimpImportOutcome ImportAssimp(std::span<const std::byte> sourceBytes,
 
     try {
         Assimp::Importer importer;
-        importer.SetIOHandler(new BrokerIOSystem(context));
+        importer.SetIOHandler(new BrokerIOSystem(context, effective.format));
         importer.SetProgressHandler(new CancelProgressHandler(context));
         importer.SetPropertyBool(AI_CONFIG_GLOB_MEASURE_TIME, false);
         importer.SetPropertyInteger(AI_CONFIG_PP_SBP_REMOVE, 0);
+        // Animation is out of scope. Assimp otherwise fabricates a synthetic
+        // "skeleton hero" mesh for a COLLADA document with no geometry, which
+        // would make an empty file look like a successful triangle import.
+        importer.SetPropertyBool(AI_CONFIG_IMPORT_NO_SKELETON_MESHES, true);
 
         constexpr unsigned int kFlags = aiProcess_Triangulate
             | aiProcess_JoinIdenticalVertices | aiProcess_GenNormals
@@ -1262,24 +1945,46 @@ AssimpImportOutcome ImportAssimp(std::span<const std::byte> sourceBytes,
         SceneMetadata metadata{};
         metadata.generationId = generationId;
         metadata.format = format.wire;
+        // The glTF hint covers both JSON .gltf and GLB; the wire identity is a
+        // content fact, not a suffix guess.
+        if (effective.format == AssimpFormat::Gltf && sourceBytes.size() >= 4
+            && std::memcmp(sourceBytes.data(), "glTF", 4) == 0)
+            metadata.format = SourceFormatId::Glb;
         metadata.meshCount = scene->mNumMeshes;
         metadata.nodeCount = uint32_t((std::min<uint64_t>)(CountNodes(scene->mRootNode, 0),
                                                            effective.maxObjects));
-        // Assimp compatibility formats author no length unit this adapter can
-        // verify. Zero is the explicit "unspecified" value; the viewer never
-        // treats it as metres.
-        metadata.metersPerUnit = 0.0;
+        // The wire unit policy is the family policy: glTF and FBX are metres,
+        // OBJ and 3MF carry no authored length unit. Assimp's FBX importer
+        // bakes the authored UnitScaleFactor into the root transform, so the
+        // emitted geometry is in centimetres; convert it to metres. Other
+        // compatibility families keep the historical unspecified (0) unit.
+        double metersPerUnit = 0.0;
+        double linearScale = 1.0;
+        if (effective.format == AssimpFormat::Gltf) {
+            metersPerUnit = 1.0;
+        } else if (effective.format == AssimpFormat::Fbx) {
+            metersPerUnit = 1.0;
+            linearScale = 0.01;
+        }
+        metadata.metersPerUnit = metersPerUnit;
         metadata.upAxis = format.upAxis;
         metadata.animationCount = 0;
 
         BoundedChunkWriter writer(destination, generationId, maxChunkCount, metadata, batchSink);
-        constexpr uint64_t kNormalizedTriangleBytes =
-            3 * sizeof(VertexPositionNormalUv0TangentColorF32) + 3 * sizeof(uint32_t);
+        constexpr uint64_t kVertexBytes = sizeof(VertexPositionNormalUv0TangentColorF32);
+        constexpr uint64_t kNormalizedTriangleBytes = 3 * kVertexBytes + 3 * sizeof(uint32_t);
+        constexpr uint64_t kNormalizedLineBytes = 2 * kVertexBytes + 2 * sizeof(uint32_t);
         if (destination.size() <= kSectionHeaderSize + kChunkDescriptorSize)
             return ImportErrorCode::ResourceLimit;
+        const uint64_t available = destination.size() - kSectionHeaderSize - kChunkDescriptorSize;
         const uint32_t chunkTriangleLimit = uint32_t((std::min<uint64_t>)(kChunkTriangles,
-            (destination.size() - kSectionHeaderSize - kChunkDescriptorSize) / kNormalizedTriangleBytes));
-        if (!chunkTriangleLimit) return ImportErrorCode::ResourceLimit;
+            available / kNormalizedTriangleBytes));
+        const uint32_t chunkLineLimit = uint32_t((std::min<uint64_t>)(kChunkTriangles,
+            available / kNormalizedLineBytes));
+        const uint32_t chunkPointLimit = uint32_t((std::min<uint64_t>)(kChunkPoints,
+            available / kVertexBytes));
+        if (!chunkTriangleLimit || !chunkLineLimit || !chunkPointLimit)
+            return ImportErrorCode::ResourceLimit;
 
         std::map<uint32_t, uint32_t> materialIds;
         if (!EmitMaterials(*scene, writer, context, materialIds))
@@ -1292,10 +1997,20 @@ AssimpImportOutcome ImportAssimp(std::span<const std::byte> sourceBytes,
         geometry.options = &effective;
         geometry.materialIds = std::move(materialIds);
         geometry.chunkTriangleLimit = chunkTriangleLimit;
+        geometry.chunkLineLimit = chunkLineLimit;
+        geometry.chunkPointLimit = chunkPointLimit;
         uint32_t nextNodeOrdinal = 0;
-        if (!WalkNode(*scene->mRootNode, aiMatrix4x4(), 0, nextNodeOrdinal, geometry))
+        aiMatrix4x4 rootTransform;
+        if (linearScale != 1.0) {
+            rootTransform.a1 = ai_real(linearScale);
+            rootTransform.b2 = ai_real(linearScale);
+            rootTransform.c3 = ai_real(linearScale);
+        }
+        if (!WalkNode(*scene->mRootNode, rootTransform, 0, nextNodeOrdinal, geometry))
             return context.error != ImportErrorCode::None ? context.error : writer.Error();
-        if (!geometry.totalTriangles) return ImportErrorCode::EmptyGeometry;
+        // Success is based on validated emitted primitives (triangles, line
+        // segments or points), never on Assimp's primitive flags alone.
+        if (!geometry.totalPrimitives) return ImportErrorCode::EmptyGeometry;
 
         // Ignored optional content is a bounded degradation record, never a
         // silent claim that it was rendered.

@@ -18,10 +18,13 @@
 #include "model_core/ControlProtocol.h"
 #include "model_core/FormatSelection.h"
 #include "model_core/ImportError.h"
+#include "model_core/VertexLayouts.h"
 #include "model_core/WireFormat.h"
 
 #include <windows.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -36,6 +39,9 @@
 #endif
 #ifndef PREVIEW3D_CAD_FIXTURES_DIR
 #error "PREVIEW3D_CAD_FIXTURES_DIR must be defined by Tests.ImportIsolation.vcxproj"
+#endif
+#ifndef PREVIEW3D_REPO_ROOT
+#error "PREVIEW3D_REPO_ROOT must be defined by Tests.ImportIsolation.vcxproj"
 #endif
 
 namespace {
@@ -63,7 +69,7 @@ std::vector<std::byte> ReadFixture(const wchar_t* name)
 import_broker::ImportSessionRequest Request(import_broker::ImportFormat format,
                                             const wchar_t* fixture, uint64_t generation)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.format = format;
     request.sourcePath = CadFixture(fixture);
     request.stepHostExePath = PREVIEW3D_STEP_HOST_EXE;
@@ -73,6 +79,21 @@ import_broker::ImportSessionRequest Request(import_broker::ImportFormat format,
     request.maxChunksPerGeneration = 1024;
     request.maxChunkBatchesPerGeneration = 1;
     request.replyTimeoutMs = 30'000;
+    return request;
+}
+
+// T05 wireframe fixtures live with the valid-file corpus so the same bytes
+// drive both the `[cad-wires]` gate and the `[valid-file]` scoreboard.
+std::wstring WireFixture(const wchar_t* name)
+{
+    return std::wstring(PREVIEW3D_REPO_ROOT) + L"tests\\fixtures\\valid-file\\" + name;
+}
+
+import_broker::ImportSessionRequest RequestPath(import_broker::ImportFormat format,
+                                                std::wstring sourcePath, uint64_t generation)
+{
+    auto request = Request(format, L"", generation);
+    request.sourcePath = std::move(sourcePath);
     return request;
 }
 
@@ -183,8 +204,9 @@ TEST_CASE("T08 CAD protocol additions are closed and append-only", "[cad-iges][p
     CHECK(uint32_t(model_core::SourceFormatId::Brep) == 15);
     CHECK(uint32_t(model_core::ControlOpcode::StartStepImportFromFile) == 20);
     CHECK(uint32_t(model_core::ControlOpcode::StartCadImportFromFile) == 22);
-    CHECK(sizeof(model_core::ParseStepFileRequest) == 48);
-    CHECK(sizeof(model_core::ParseCadFileRequest) == 56);
+    CHECK(sizeof(model_core::ParseStepFileRequest) == 96);
+    CHECK(sizeof(model_core::ParseCadFileRequest) == 104);
+    CHECK(sizeof(model_core::ImportOptionsPayload) == 48);
     CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Step));
     CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Iges));
     CHECK(model_core::IsKnownCadFormat(model_core::CadFormat::Brep));
@@ -566,5 +588,224 @@ TEST_CASE("T09 XBF/FCStd section metadata rules match T08", "[cad-validator]")
             MetadataSection(model_core::SourceFormatId::Fcstd, axis, units), 91, 4);
         CHECK_FALSE(result.ok);
         CHECK(result.errorCode == model_core::ImportErrorCode::MalformedData);
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// T05 -- CAD edge and wire geometry
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct WireStats {
+    std::uint32_t lineChunks = 0;
+    std::uint32_t triangleChunks = 0;
+    std::uint32_t pointChunks = 0;
+    std::uint32_t materials = 0;
+    std::uint64_t segments = 0;
+    std::uint64_t triangles = 0;
+    std::uint32_t instances = 0;
+    double minX = 0.0;
+    double maxX = 0.0;
+    double minY = 0.0;
+    double maxY = 0.0;
+    bool firstInstance = true;
+};
+
+WireStats TallyWire(const import_broker::ImportSessionResult& result)
+{
+    WireStats stats;
+    for (const auto& chunk : result.chunks) {
+        const auto& descriptor = chunk.descriptor;
+        switch (descriptor.topology) {
+        case model_core::ChunkTopology::LineList: {
+            ++stats.lineChunks;
+            stats.segments += descriptor.indexCount / 2;
+            CHECK(descriptor.boundsState == model_core::BoundsState::Verified);
+            CHECK(descriptor.indexCount >= 2);
+            CHECK(descriptor.indexCount % 2 == 0);
+            CHECK(descriptor.vertexCount == descriptor.indexCount);
+            CHECK(descriptor.vertexCount > 0);
+            for (int axis = 0; axis < 3; ++axis) {
+                CHECK(std::isfinite(descriptor.origin[axis]));
+                CHECK(std::isfinite(descriptor.localMin[axis]));
+                CHECK(std::isfinite(descriptor.localMax[axis]));
+                CHECK(descriptor.localMin[axis] <= descriptor.localMax[axis]);
+            }
+            const std::size_t stride = sizeof(model_core::VertexPositionNormalUv0F32);
+            REQUIRE(chunk.payload.size()
+                    == std::size_t(descriptor.vertexCount) * stride
+                        + std::size_t(descriptor.indexCount) * sizeof(std::uint32_t));
+            const auto* vertices =
+                reinterpret_cast<const model_core::VertexPositionNormalUv0F32*>(
+                    chunk.payload.data());
+            for (std::uint32_t i = 0; i < descriptor.vertexCount; ++i) {
+                CHECK(std::isfinite(vertices[i].px));
+                CHECK(std::isfinite(vertices[i].py));
+                CHECK(std::isfinite(vertices[i].pz));
+            }
+            const auto* indices = reinterpret_cast<const std::uint32_t*>(
+                chunk.payload.data() + std::size_t(descriptor.vertexCount) * stride);
+            for (std::uint32_t i = 0; i < descriptor.indexCount; i += 2) {
+                const std::uint32_t first = indices[i];
+                const std::uint32_t second = indices[i + 1];
+                CHECK(first < descriptor.vertexCount);
+                CHECK(second < descriptor.vertexCount);
+                CHECK(first != second);
+                const auto& a = vertices[first];
+                const auto& b = vertices[second];
+                CHECK((a.px != b.px || a.py != b.py || a.pz != b.pz));
+            }
+            break;
+        }
+        case model_core::ChunkTopology::TriangleList:
+            ++stats.triangleChunks;
+            stats.triangles += descriptor.indexCount / 3;
+            break;
+        case model_core::ChunkTopology::PointList:
+            ++stats.pointChunks;
+            break;
+        case model_core::ChunkTopology::Material:
+            ++stats.materials;
+            break;
+        case model_core::ChunkTopology::MeshInstance: {
+            ++stats.instances;
+            model_core::MeshInstancePayload payload{};
+            REQUIRE(chunk.payload.size() == sizeof(payload));
+            std::memcpy(&payload, chunk.payload.data(), sizeof(payload));
+            for (int axis = 0; axis < 3; ++axis) {
+                CHECK(std::isfinite(payload.worldMin[axis]));
+                CHECK(std::isfinite(payload.worldMax[axis]));
+                CHECK(payload.worldMin[axis] <= payload.worldMax[axis]);
+            }
+            if (stats.firstInstance) {
+                stats.minX = payload.worldMin[0];
+                stats.maxX = payload.worldMax[0];
+                stats.minY = payload.worldMin[1];
+                stats.maxY = payload.worldMax[1];
+                stats.firstInstance = false;
+            } else {
+                stats.minX = (std::min)(stats.minX, payload.worldMin[0]);
+                stats.maxX = (std::max)(stats.maxX, payload.worldMax[0]);
+                stats.minY = (std::min)(stats.minY, payload.worldMin[1]);
+                stats.maxY = (std::max)(stats.maxY, payload.worldMax[1]);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return stats;
+}
+
+void CheckWireOpen(import_broker::ImportFormat format, const wchar_t* fixture,
+                   std::uint64_t generation, model_core::SourceFormatId expectedFormat)
+{
+    const auto result = import_broker::RunImportSession(
+        RequestPath(format, WireFixture(fixture), generation));
+    INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
+    CAPTURE(fixture);
+    REQUIRE(result.ok);
+    REQUIRE_FALSE(result.chunks.empty());
+    CHECK(result.producer == import_broker::ImportProducer::StepHost);
+    CHECK(result.chunks.front().scene.format == expectedFormat);
+    const WireStats stats = TallyWire(result);
+    CHECK(stats.lineChunks >= 1);
+    CHECK(stats.segments >= 1);
+    CHECK(stats.triangleChunks == 0);
+    CHECK(stats.pointChunks == 0);
+    // The generated wire fixtures author no edge color; the neutral material
+    // is the absence of a Material chunk, not an invented grey record.
+    CHECK(stats.materials == 0);
+    CHECK(stats.instances >= 1);
+    CHECK(stats.maxX - stats.minX > 5.0);
+    CHECK(stats.maxY - stats.minY > 5.0);
+}
+
+} // namespace
+
+TEST_CASE("T05 wireframe STEP/IGES/BREP/FCStd fixtures open with LineList geometry",
+          "[cad-wires]")
+{
+    SECTION("STEP")
+    {
+        CheckWireOpen(import_broker::ImportFormat::Step, L"wire.step", 0x9501,
+                      model_core::SourceFormatId::Step);
+    }
+    SECTION("IGES")
+    {
+        CheckWireOpen(import_broker::ImportFormat::Iges, L"wire.igs", 0x9502,
+                      model_core::SourceFormatId::Iges);
+    }
+    SECTION("BREP")
+    {
+        CheckWireOpen(import_broker::ImportFormat::Brep, L"wire.brep", 0x9503,
+                      model_core::SourceFormatId::Brep);
+    }
+    SECTION("FCStd")
+    {
+        CheckWireOpen(import_broker::ImportFormat::Fcstd, L"wire.FCStd", 0x9504,
+                      model_core::SourceFormatId::Fcstd);
+    }
+}
+
+TEST_CASE("T05 solid CAD fixtures keep triangles with no default edge overlay",
+          "[cad-wires]")
+{
+    struct SolidCase {
+        import_broker::ImportFormat format;
+        const wchar_t* fixture;
+        model_core::SourceFormatId expectedFormat;
+        std::uint64_t generation;
+    };
+    const SolidCase cases[] = {
+        {import_broker::ImportFormat::Step, L"..\\stp-spike\\part_ap214.stp",
+         model_core::SourceFormatId::Step, 0x9511},
+        {import_broker::ImportFormat::Iges, L"part.igs",
+         model_core::SourceFormatId::Iges, 0x9512},
+        {import_broker::ImportFormat::Brep, L"part.brep",
+         model_core::SourceFormatId::Brep, 0x9513},
+        {import_broker::ImportFormat::Fcstd, L"partdesign.FCStd",
+         model_core::SourceFormatId::Fcstd, 0x9514},
+    };
+    for (const SolidCase& test : cases) {
+        const auto result = import_broker::RunImportSession(
+            Request(test.format, test.fixture, test.generation));
+        INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
+        CAPTURE(test.fixture);
+        REQUIRE(result.ok);
+        CHECK(result.chunks.front().scene.format == test.expectedFormat);
+        const WireStats stats = TallyWire(result);
+        CHECK(stats.triangleChunks >= 1);
+        CHECK(stats.triangles > 0);
+        CHECK(stats.lineChunks == 0);
+        CHECK(stats.instances >= 1);
+    }
+}
+
+TEST_CASE("T05 over-budget edge definitions fail typed before allocation",
+          "[cad-wires]")
+{
+    SECTION("edge count budget")
+    {
+        auto request = RequestPath(import_broker::ImportFormat::Brep,
+                                   WireFixture(L"wire.brep"), 0x9521);
+        request.stepTinyEdgeBudgetForTesting = true;
+        const auto result = import_broker::RunImportSession(request);
+        INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::TessellationFailed);
+    }
+    SECTION("line segment budget")
+    {
+        auto request = RequestPath(import_broker::ImportFormat::Step,
+                                   WireFixture(L"wire.step"), 0x9522);
+        request.stepTinyEdgeBudgetForTesting = true;
+        const auto result = import_broker::RunImportSession(request);
+        INFO("code " << uint32_t(result.errorCode) << " stage " << uint32_t(result.stage));
+        CHECK_FALSE(result.ok);
+        CHECK(result.errorCode == model_core::ImportErrorCode::TessellationFailed);
     }
 }

@@ -86,7 +86,8 @@ std::wstring FormatDimension(double value, double metersPerUnit)
 std::vector<InfoPanelSection> BuildInfoPanelSections(
     const ModelStats& stats, std::uint64_t triangleCount, std::uint64_t vertexCount,
     const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax,
-    double metersPerUnit, std::uint64_t pointCount, bool boundsVerified, model_core::SourceFormatId format, const double* dimensions)
+    double metersPerUnit, std::uint64_t pointCount, bool boundsVerified, model_core::SourceFormatId format, const double* dimensions,
+    std::wstring_view readerLabel)
 {
     std::vector<InfoPanelSection> sections;
 
@@ -135,34 +136,38 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
             { Loc("infopanel.draw.calls", L"Draw Calls"), std::to_wstring(stats.drawCallCount) },
         } });
 
-    sections.push_back({ Loc("infopanel.scene.data", L"Scene Data"),
-        {
-            { Loc("infopanel.nodes", L"Nodes"), std::to_wstring(stats.nodeCount) },
-            { Loc("infopanel.meshes", L"Meshes"), std::to_wstring(stats.meshCount) },
-            { Loc("infopanel.format", L"Format"), format == model_core::SourceFormatId::Gltf ? Loc("infopanel.gltf", L"glTF") : format == model_core::SourceFormatId::Glb ? Loc("infopanel.glb", L"GLB")
-                : format == model_core::SourceFormatId::Stl ? Loc("infopanel.stl.binary", L"STL (binary)")
-                : format == model_core::SourceFormatId::AsciiStl ? Loc("infopanel.stl.ascii", L"STL (ASCII)")
-                : format == model_core::SourceFormatId::Ply ? Loc("infopanel.ply.binary", L"PLY (binary)")
-                : format == model_core::SourceFormatId::AsciiPly ? Loc("infopanel.ply.ascii", L"PLY (ASCII)")
-                : format == model_core::SourceFormatId::Obj ? Loc("infopanel.obj", L"OBJ")
-                : format == model_core::SourceFormatId::Fbx ? Loc("infopanel.fbx", L"FBX")
-                : format == model_core::SourceFormatId::Usda ? Loc("infopanel.usd.ascii", L"USD (ASCII)")
-                : format == model_core::SourceFormatId::Usdc ? Loc("infopanel.usd.crate", L"USD (crate)")
-                : format == model_core::SourceFormatId::Usdz ? Loc("infopanel.usdz", L"USDZ")
-                : format == model_core::SourceFormatId::ThreeMf ? Loc("infopanel.3mf", L"3MF")
-                : format == model_core::SourceFormatId::Step ? Loc("infopanel.step", L"STEP")
-                : format == model_core::SourceFormatId::Iges ? Loc("infopanel.iges", L"IGES")
-                : format == model_core::SourceFormatId::Brep ? Loc("infopanel.brep", L"BREP")
-                : Loc("infopanel.unknown", L"Unknown") },
-            { Loc("infopanel.units", L"Units"), metersPerUnit > 0 ? Loc("infopanel.metres", L"Metres") : Loc("infopanel.unspecified", L"Unspecified") },
-        } });
+    std::vector<InfoPanelRow> sceneRows{
+        { Loc("infopanel.nodes", L"Nodes"), std::to_wstring(stats.nodeCount) },
+        { Loc("infopanel.meshes", L"Meshes"), std::to_wstring(stats.meshCount) },
+        { Loc("infopanel.format", L"Format"), format == model_core::SourceFormatId::Gltf ? Loc("infopanel.gltf", L"glTF") : format == model_core::SourceFormatId::Glb ? Loc("infopanel.glb", L"GLB")
+            : format == model_core::SourceFormatId::Stl ? Loc("infopanel.stl.binary", L"STL (binary)")
+            : format == model_core::SourceFormatId::AsciiStl ? Loc("infopanel.stl.ascii", L"STL (ASCII)")
+            : format == model_core::SourceFormatId::Ply ? Loc("infopanel.ply.binary", L"PLY (binary)")
+            : format == model_core::SourceFormatId::AsciiPly ? Loc("infopanel.ply.ascii", L"PLY (ASCII)")
+            : format == model_core::SourceFormatId::Obj ? Loc("infopanel.obj", L"OBJ")
+            : format == model_core::SourceFormatId::Fbx ? Loc("infopanel.fbx", L"FBX")
+            : format == model_core::SourceFormatId::Usda ? Loc("infopanel.usd.ascii", L"USD (ASCII)")
+            : format == model_core::SourceFormatId::Usdc ? Loc("infopanel.usd.crate", L"USD (crate)")
+            : format == model_core::SourceFormatId::Usdz ? Loc("infopanel.usdz", L"USDZ")
+            : format == model_core::SourceFormatId::ThreeMf ? Loc("infopanel.3mf", L"3MF")
+            : format == model_core::SourceFormatId::Step ? Loc("infopanel.step", L"STEP")
+            : format == model_core::SourceFormatId::Iges ? Loc("infopanel.iges", L"IGES")
+            : format == model_core::SourceFormatId::Brep ? Loc("infopanel.brep", L"BREP")
+            : Loc("infopanel.unknown", L"Unknown") },
+        { Loc("infopanel.units", L"Units"), metersPerUnit > 0 ? Loc("infopanel.metres", L"Metres") : Loc("infopanel.unspecified", L"Unspecified") },
+    };
+    // T07: name the shipped reader that produced this document. Appended after
+    // the existing rows so earlier section/row indices stay stable.
+    if (!readerLabel.empty())
+        sceneRows.push_back({ Loc("infopanel.reader", L"Reader"), std::wstring(readerLabel) });
+    sections.push_back({ Loc("infopanel.scene.data", L"Scene Data"), std::move(sceneRows) });
 
     return sections;
 }
 
 std::vector<InfoPanelSection> BuildInfoPanelSections(
     const ModelData& metadata, bool showNativeOrientation, GroundAxis groundAxis,
-    model_core::PresentationProfile preset)
+    model_core::PresentationProfile preset, std::wstring_view readerLabel)
 {
     double dimensions[3] = {metadata.relativeMax[0]-metadata.relativeMin[0],
         metadata.relativeMax[1]-metadata.relativeMin[1], metadata.relativeMax[2]-metadata.relativeMin[2]};
@@ -171,7 +176,7 @@ std::vector<InfoPanelSection> BuildInfoPanelSections(
     std::vector<InfoPanelSection> sections = BuildInfoPanelSections(metadata.stats,
         metadata.triangleCount,metadata.vertexCount, metadata.boundsMin,metadata.boundsMax,
         metadata.source.metersPerUnit,metadata.pointCount, metadata.boundsVerified,
-        metadata.source.format,dimensions);
+        metadata.source.format,dimensions, readerLabel);
     // The preset the viewer actually applied (or, before the first upload has
     // been applied, the catalog's recommendation). Keep this section last so
     // existing section indices stay stable.

@@ -11,26 +11,37 @@ For install and build instructions, see the [README](../README.md).
 | glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, bounded Draco/meshopt geometry, mesh quantization, KTX2/Basis, PNG/JPEG/WebP/TGA/DDS/HDR/EXR textures, material texture slots, texture transforms, triangle strips/fans normalized to indexed triangles, `LINES`/`LINE_STRIP`/`LINE_LOOP` rendered as line segments, `POINTS` as point splats, `KHR_materials_pbrSpecularGlossiness` approximated as diffuse albedo plus a dielectric response, `KHR_materials_clearcoat`/`sheen`/`specular`/`emissive_strength` normalized into the protocol-v12 material lobes and approximated in the Studio shader (clearcoat as a second GGX lobe, sheen as a grazing velvet lobe, IOR/specular-driven F0, emissive strength before tone mapping), and `KHR_materials_transmission`/`KHR_materials_ior` rendered as thin-surface scene-color transmission in linear HDR through a bounded roughness-selected mip pyramid, with authored coverage, base-color tint and interface Fresnel kept independent (an authored index of refraction at or below 1 keeps the surface opaque, since there is no optical interface; no refraction offset, inter-layer transmission or fabricated volume thickness). Visual/scene extensions that are parsed but not rendered (`KHR_materials_iridescence`, `anisotropy`, `volume`, `dispersion`, `diffuse_transmission`, `KHR_materials_variants`, `KHR_lights_punctual`) open with core PBR and a specific compatibility warning. A truly unknown required extension keeps the core scene and is reported as degraded. Core geometry wins: only a required geometry/decoding extension that cannot be decoded (`KHR_draco_mesh_compression`, `EXT_meshopt_compression`, `KHR_mesh_quantization`, `KHR_implicit_shapes`, `KHR_accessor_float64`) fails the import, and a missing optional/required texture never removes usable geometry. `MSFT_texture_dds` alternate image indexing is not enabled; DDS files are decoded as direct image sidecars. |
 | Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars; ufbx polygon triangulation, smoothing/generated normals, UVs, vertex colors, object/group meshes, MTL material factors, broker-approved base-color, normal/bump, and emissive maps (PNG/JPEG/BMP/TIFF/WebP/KTX2/TGA/DDS/HDR/EXR), plus line (`l`) and point (`p`) elements rendered as line segments and point splats |
 | FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures, PBR coat/sheen/specular/IOR factors mapped into the protocol-v12 material lobes, line curves rendered as line segments, and a deterministic baked start pose; supported skin and blend deformation is baked. Image references that carry the authoring machine's absolute path are reduced to their file name and resolve through the package lookup below |
-| STL | ASCII and binary |
-| PLY | ASCII and binary triangle meshes and point clouds |
+| STL | `.stl`: ASCII and binary |
+| PLY | `.ply`: ASCII and binary triangle meshes and point clouds |
 | 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews. Slicer-private required namespaces that do not describe the mesh are ignored with a compatibility record; a required Slice/Volumetric/Implicit/Secure Content extension still fails typed because the visible geometry depends on it |
 | Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`; static meshes, procedural `Sphere`/`Cube`/`Cylinder`/`Cone`/`Capsule`, `Points` as colored point splats, hierarchy/instances, common primvars, display color/opacity, creased or subdivided meshes as a control cage with a compatibility warning, bounded USD Preview Surface materials/textures, and bounded local composition |
-| STEP | `.step` and `.stp`: ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality through a dedicated isolated OCCT host |
+| STEP | `.step`, `.stp`, `.stpnc`, `.p21`, and `.210`: ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies/reused definitions, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality through a dedicated isolated OCCT host |
 | IGES | `.igs` and `.iges`: bounded fixed-column S/G/D/P/T record streams, analytic B-rep surfaces, assemblies/subfigures where representable, and IGES colors through the same dedicated OCCT host. The optional global unit flag converts to the verified OCCT system millimetre; a missing flag assumes millimetres with a warning |
 | BREP | `.brep`: the OCCT ASCII `CASCADE Topology` shape-set serialization. Topology and geometry only (no authored colors or units); the scene reports `UpAxisId::Unknown` and zero metres-per-unit, and the bounded shape/location table is admitted before `BRepTools::Read` |
 | XBF | `.xbf`: the OCCT binary XCAF document (`BINFILE` + supported format version). Colors, assembly structure and placements are preserved; the XCAF length unit is reported when present (otherwise the documented OCCT millimetre default with a warning), and the scene up axis stays `Unknown` |
 | FreeCAD Standard | `.fcstd`: the common single-part/PartDesign case. A bounded ZIP preflight requires `Document.xml` and at least one evaluated `*.brp` Part shape, rejects encryption/multi-disk/data descriptors/overlapping or over-expanding entries, and parses `Document.xml`/`GuiDocument.xml` with node/depth/size limits. Shape colors, transparency, visibility, local links and nested placements are applied; external links and unsupported FreeCAD features are skipped with warnings |
-| COLLADA | `.dae`: static scene meshes, node transforms, normals/UVs/colors, diffuse/metallic/roughness/emissive factors, and embedded or approved local textures. No animation, cameras or lights |
+| COLLADA | `.dae`: static scene meshes, node transforms, normals/UVs/colors, `<lines>`/`<linestrips>` as line segments, diffuse/metallic/roughness/emissive factors, and embedded or approved local textures. No animation, cameras or lights. COLLADA `<points>` is not represented by the importer |
 | 3DS | `.3ds`: static triangle meshes, transforms, material groups/colors, and approved local textures. No animation, cameras or lights |
-| DXF | `.dxf`: Assimp's limited 3DFACE and polyline subset only, not full DXF entities/blocks |
+| DXF | `.dxf`: Assimp's limited 3DFACE, LINE/3DLINE and polyline subset only, not full DXF entities/blocks; line-only drawings open as line segments |
 | DirectX | `.x`: static text/binary mesh geometry and materials where Assimp supports them; no animation or DirectX effect state |
-| OFF | `.off`: static ASCII triangle/polygon meshes, triangulated on import |
+| OFF | `.off`: static ASCII triangle/polygon meshes triangulated on import, plus one-index point and two-index edge faces emitted as points and line segments |
 | AMF | `.amf`: static mesh volumes and materials; no slicing or AMF production/print semantics |
-| X3D | `.x3d`: static IndexedFaceSet geometry, materials/colors and approved local textures; no scripting, sensors or animation |
+| X3D | `.x3d`: static IndexedFaceSet geometry, `IndexedLineSet`/`LineSet` as line segments, `PointSet` as point splats, materials/colors and approved local textures; no scripting, sensors or animation |
 
 `.mtl` is always a sidecar and is never a primary open type. The Open dialog,
 command line, drag/drop, Retry, and Open With all
 accept the same direct formats, case-insensitively.
+
+Extension and content are separate dispatch hints. The compile-time catalog
+declares a bounded signature for every family where a head or
+ZIP-central-directory probe is reliable, and `FormatSniffer` evaluates those
+signatures in priority order. A renamed DAE, DXF, OFF, X3D, 3DS, IGES, BREP,
+XBF, or FCStd file is therefore still offered through **Open As** instead of
+being rejected as an unknown suffix. A generic ZIP, a truncated or ambiguous
+head, and a `.usd` file whose bytes do not identify an encoding stay `Unknown`
+and are selected by suffix. The probe reads only the bounded head/central-
+directory window, never decompresses an archive, and never parses model
+structure; the worker or host still owns acceptance.
 
 ## Orientation, units, and presentation defaults
 
@@ -66,11 +77,22 @@ Notes:
   metres. An authored unit is never guessed or treated as metres; the
   ground-axis control is the user override for orientation.
 - Assimp-backed formats (DAE, 3DS, DXF, X, OFF, AMF, X3D) are compatibility
-  importers, not native paths: static triangles/materials only, no animation,
-  cameras, lights, plug-ins, file writes or external path access. DXF support is
-  limited to Assimp's 3DFACE/polyline entities and is not a full DXF importer.
-  Line/point-only content is skipped with a warning; a file with no triangles
-  fails typed.
+  importers, not native paths: static triangles, line segments, points and
+  materials only, no animation, cameras, lights, plug-ins, file writes or
+  external path access. One-index faces become point splats and two-index faces
+  become independent line segments; larger faces are triangulated. Mixed
+  point/line/triangle meshes emit separate chunks per topology. DXF support is
+  limited to Assimp's 3DFACE/polyline/LINE entities and is not a full DXF
+  importer. COLLADA `<points>` is not represented by Assimp's COLLADA importer,
+  so a point-only DAE still fails typed with `EmptyGeometry`; point-only OFF and
+  X3D files open. A file whose only primitives are unsupported fails typed.
+- The `gltf-assimp`, `obj-assimp`, `fbx-assimp` and `3mf-assimp` readers are
+  compatibility fallbacks, not replacements. They reuse the same bounded
+  Assimp adapter and worker sandbox, apply the family's wire unit/up-axis policy
+  (glTF and FBX metres, OBJ and 3MF unspecified), and are selected only by an
+  explicit forced reader or the closed eligible-error fallback. The native
+  adapter remains the default; its security preflight is never bypassed, and a
+  resource/containment failure never retries.
 - PLY point detection is content-based: a file that emits points and no
   triangles selects the point preset; a PLY with any triangle mesh keeps the
   PBR review preset.
@@ -297,8 +319,8 @@ depth/normal chain.
 Animation playback, editing, other CAD formats (IFC/JT/Parasolid/DWG/native
 CAD), Explorer thumbnails for IGES, BREP, XBF, FCStd, DAE, 3DS, DXF, X, OFF,
 AMF and X3D (the installed thumbnail provider covers glTF/GLB, OBJ, FBX, STL,
-PLY, 3MF, USD/USDZ and STEP/STP only; those eight are the provider program's
-complete scope),
+PLY, 3MF, USD/USDZ and STEP (`.step`/`.stp`/`.stpnc`/`.p21`/`.210`) only; those
+eight are the provider program's complete scope),
 network assets,
 USD skeletal deformation, MaterialX, procedural schemas beyond the five
 supported Gprims plus `Points`, curves/NURBS, and interactive variant selection
@@ -323,7 +345,15 @@ XDE reader can represent; assembly/subfigure structure is preserved where
 present. BREP is admitted only as a `CASCADE Topology` V1-V3 shape set with a
 bounded `TShapes`/`Locations` table; it has no colors and no authored units.
 All CAD interchange formats reuse the STEP tessellation profile and
-per-definition failure isolation.
+per-definition failure isolation. Wireframe and edge-only definitions are
+visible: when a definition produces no triangles, the host meshes its edges
+with the same versioned profile and emits `LineList` chunks of independent
+segments with verified finite bounds. Authored curve colors are preserved
+where the XDE reader exposes them; otherwise lines use the neutral line
+appearance. Solids emit triangles only by default and gain no edge overlay;
+an explicit `read_wire=1` import option adds edges alongside faces. Edge and
+segment counts are bounded per definition, and an over-budget edge shape fails
+typed (`TessellationFailed`) before the kernel allocates its polygons.
 
 XBF is admitted by its fixed `BINFILE` magic and supported binary-document
 version, then opened with OCCT's BinXCAF drivers through the mapped handle; no
@@ -352,6 +382,142 @@ FBX geometry caches, dynamic constraints, NURBS/subdivision tessellation,
 cameras, and lights are outside the supported static subset. Animation playback,
 advanced material lobes, meshoptimizer-built LOD/hierarchies, and the persistent
 derived cache remain deferred work.
+
+## Import options
+
+The import-option set is closed and product-owned. It is not a free-form
+reader key/value bag: an unknown format or name, a non-finite or out-of-range
+number, or an option that does not apply to the selected format fails typed
+(`ImportProtocolViolation`) before the parser runs. The viewer, broker, worker
+and hosts validate the same record; the trusted process is not the only guard.
+
+| Format(s) | Option | Type | Default | Accepted values |
+| --- | --- | --- | --- | --- |
+| STEP, IGES, BREP, XBF, FCStd | `quality` | enum | `balanced` | `draft`, `balanced`, `full` |
+| STEP, IGES, BREP, XBF, FCStd | `read_wire` | bool | fallback | `0`/`false` = never, `1`/`true` = always; absent = edges only when a definition has no faces |
+| STEP, IGES, BREP, XBF, FCStd | `linear_deflection` | double | quality profile | finite, `> 0`; `<= 0.5` while `relative_deflection=1`, `<= 1,000,000` absolute |
+| STEP, IGES, BREP, XBF, FCStd | `angular_deflection` | double | quality profile | finite, `> 0` and `<= pi` radians |
+| STEP, IGES, BREP, XBF, FCStd | `relative_deflection` | bool | `true` | `0`/`false` = absolute transferred units, `1`/`true` = fraction of the definition bounding diagonal |
+| STEP, IGES, BREP, XBF, FCStd | `unit_scale` | double | format resolution | finite, `> 0` and `<= 1e9` metres per transferred unit |
+| USD | `subdivision_level` | unsigned | `0` | `0`..`4`; this build has no subdivision evaluator, so `> 0` is rejected as `UnsupportedRequiredFeature` |
+
+`quality` selects the versioned tessellation profile: `draft` is coarser,
+`balanced` is the pre-T06 default, and `full` is finer. An explicit
+`linear_deflection`/`angular_deflection` overrides the quality value but stays
+inside the same bounded window, so a finer request cannot turn a bounded file
+into an unbounded one. Accepted absolute values are clamped to the profile's
+applied 0.001-5.0 transferred-unit window; a relative fraction is multiplied by
+the definition diagonal and clamped the same way. `relative_deflection=0`
+without an explicit linear value uses the quality-mapped absolute default
+(0.5/0.1/0.02 transferred units for Draft/Balanced/Full).
+
+`unit_scale` is a user assertion, not a silent guess. The format's authored-unit
+resolution and overflow checks still run first; the override then replaces the
+reported `metersPerUnit` and adds an `Ignored` compatibility record
+(`kCadFeatureUnitOverrideApplied`, feature id 3018) so diagnostics state that
+the displayed scale is user-chosen.
+
+The same values are available through:
+
+- repeated CLI arguments:
+  `Preview3D.exe --import-option STEP.quality=full --import-option STEP.read_wire=1 model.stp`
+  (format and name are ASCII case-insensitive; `--import-option=<value>` is
+  also accepted);
+- the **Settings → Import options…** surface, with reset-to-defaults;
+- the persisted `settings.json` keys `import.<FORMAT>.<name>`, written only for
+  validated non-default values.
+
+Every option that changes normalized output is part of the import cache
+identity (format, quality, wire mode, deflections, unit override and USD
+subdivision level), together with the existing source identity and importer
+version. Two imports of the same file with different options therefore never
+share a derived-cache entry.
+
+## Readers and forced selection
+
+A reader is the stable product identity of an importer this build actually
+ships. The compile-time table lives in
+`shared/model-core/include/model_core/ReaderCatalog.h`; it is not a plugin
+loader and cannot load code, a path or a URL. `--list-readers` prints one
+`name<TAB>extensions<TAB>importer<TAB>score` line per reader in stable name
+order:
+
+| Reader | Extensions | Importer | Score | Kind |
+| --- | --- | --- | --- | --- |
+| `3mf` | `.3mf` | `3mf-worker` | 90 | native |
+| `3mf-assimp` | `.3mf` | `assimp-compat` | 35 | compatibility |
+| `assimp` | `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, `.x3d` | `assimp-compat` | 30 | compatibility |
+| `cad` | `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd` | `cad-host` | 100 | native |
+| `fbx` | `.fbx` | `fbx-worker` | 90 | native |
+| `fbx-assimp` | `.fbx` | `assimp-compat` | 35 | compatibility |
+| `gltf` | `.gltf`, `.glb` | `gltf-worker` | 100 | native |
+| `gltf-assimp` | `.gltf`, `.glb` | `assimp-compat` | 35 | compatibility |
+| `obj` | `.obj` | `obj-worker` | 50 | native |
+| `obj-assimp` | `.obj` | `assimp-compat` | 35 | compatibility |
+| `ply` | `.ply` | `ply-worker` | 70 | native |
+| `step` | `.step`, `.stp`, `.stpnc`, `.p21`, `.210` | `step-host` | 100 | native |
+| `stl` | `.stl` | `stl-worker` | 60 | native |
+| `usd` | `.usd`, `.usda`, `.usdc`, `.usdz` | `usd-fast` | 95 | native (default) |
+| `usd-compat` | `.usd`, `.usda`, `.usdc`, `.usdz` | `usd-compat-host` | 40 | compatibility |
+
+`--list-formats` remains the family-oriented view. `--reader <name>` is
+case-insensitive and bounded to 64 ASCII characters. An unknown or unshipped
+name fails typed before any open. A forced reader is resolved after the same
+extension/content classification as the default path:
+
+- a reader that owns the file's suffix (or content family) opens that exact
+  descriptor;
+- a single-family reader may fall back to its own family when the suffix is
+  outside it, and the worker/host still rejects the actual bytes;
+- a multi-family reader (`cad`, `assimp`) applied to a suffix it does not own
+  fails typed `ReaderCannotOpenFormat` before any open.
+
+The worker/host never receives the reader name. The broker still receives the
+closed format discriminator, plus one boolean for a forced `usd-compat` USD
+open that selects the OpenUSD compatibility host instead of the TinyUSDZ fast
+path. Forcing a reader changes importer selection only: `ClassifySourcePath`,
+broker canonicalization and handle duplication, sidecar policy, AppContainer
+access, Job Object limits and every parser budget are unchanged.
+
+**Open as…** lists each family's default reader (marked `[default]`) and its
+shipped alternates. USD has `usd-compat`; glTF/GLB, OBJ, FBX and 3MF have their
+lower-scored Assimp compatibility readers. Selecting an alternate sets the
+forced-reader state; selecting the default clears it. The selected reader is
+also named in the info panel's Scene Data section and in the forced-reader
+failure text. See
+[ADR-0101](design/adr/0101-reader-catalog-scores-force-reader.md).
+
+### Compatibility fallback
+
+A default native glTF/OBJ/FBX/3MF open may fail on a valid file for a
+representational reason. The trusted broker then runs **at most one**
+compatibility attempt in the same worker sandbox, with the same AppContainer,
+Job Object, source handle, budgets and sidecar policy, and only before any
+batch has been published. The closed eligible failures are:
+
+- `UnsupportedFormat`
+- `UnsupportedRequiredFeature`
+- `EmptyGeometry`
+
+Every security, containment, cancellation and resource failure is terminal and
+never retried: `UnsafeReference`, `FileUnavailable`, `FileChanged`,
+`ResourceLimit`, `ArchiveLimit`, `PrimarySourceLimit`, `AggregateSourceLimit`,
+`ScratchLimit`, `Cancelled`, `WorkerCrashed`, `WorkerTimedOut`,
+`ImportProtocolViolation`, and the remaining typed codes. A native preflight
+that rejects a file as unsafe is never reinterpreted by the compatibility
+reader. The compatibility route has its own bounded container admission:
+GLB/JSON header and buffer-view preflight for glTF, bounded text admission for
+OBJ (with broker-only `.mtl`/texture sidecars), binary/ASCII magic and header
+preflight for FBX, and the shared OPC/ZIP preflight for 3MF. It never adds a
+path open, default Assimp IOSystem, plug-in, network call, child process or
+file write.
+
+A forced reader is an explicit choice and never triggers the automatic retry.
+When a forced native reader fails with an eligible error, the failure card
+offers **Try compatibility reader**; that action forces the shipped alternate
+through the same classification, broker and admission path. The diagnostic
+names the native reader, the compatibility reader and the final reader. See
+[ADR-0102](design/adr/0102-compatibility-reader-fallback.md).
 
 ## Tier B ceilings
 

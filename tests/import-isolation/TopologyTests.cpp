@@ -135,7 +135,7 @@ std::filesystem::path FixturePath(const char* name)
 import_broker::ImportSessionRequest Request(const std::filesystem::path& path,
                                             import_broker::ImportFormat format)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.workerExePath = sandbox_test_support::WorkerExePath();
     request.sourcePath = path.wstring();
     request.format = format;

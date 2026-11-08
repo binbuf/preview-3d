@@ -100,7 +100,8 @@ bool HasImageTextureExtension(const std::filesystem::path& path)
 // format that resolves nothing (STL/PLY/FBX/3MF/STEP) accepts no sidecar at
 // all. 3MF and USDZ package entries are handled inside the archive and never
 // become sidecar requests in the first place.
-bool IsAllowedSidecarExtension(ImportFormat format, const std::filesystem::path& path)
+bool IsAllowedSidecarExtension(ImportFormat format, model_core::AssimpFormat assimpFormat,
+                               const std::filesystem::path& path)
 {
     const std::wstring extension = LowerCopy(path.extension().wstring());
     switch (format) {
@@ -113,9 +114,16 @@ bool IsAllowedSidecarExtension(ImportFormat format, const std::filesystem::path&
         // PBR material path brokers approved local textures.
         return IsImageExtension(extension);
     case ImportFormat::Assimp:
-        // T10 compatibility formats reference textures only. The adapter's
-        // IOSystem still enforces relative/local/extension rules before asking
-        // the broker, so both layers must agree on the image allowlist.
+        // T10 compatibility formats reference textures only. The T08
+        // same-family hints additionally allow exactly the dependency class
+        // their native counterpart brokers: a glTF `.bin` buffer and an OBJ
+        // `.mtl` material library. The adapter enforces the same per-hint
+        // allowlist before asking; the broker repeats the containment and
+        // size checks.
+        if (assimpFormat == model_core::AssimpFormat::Gltf)
+            return extension == L".bin" || IsImageExtension(extension);
+        if (assimpFormat == model_core::AssimpFormat::Obj)
+            return extension == L".mtl" || IsImageExtension(extension);
         return IsImageExtension(extension);
     case ImportFormat::Usd:
         // The fast path brokers contained image assets; the compatibility host
@@ -412,7 +420,8 @@ std::optional<std::filesystem::path> FindPackagedImage(const std::filesystem::pa
 std::optional<std::filesystem::path> FindAssetInUserRoot(const std::filesystem::path& root,
                                                          const std::wstring& leafName,
                                                          bool image,
-                                                         ImportFormat format)
+                                                         ImportFormat format,
+                                                         model_core::AssimpFormat assimpFormat)
 {
     if (leafName.empty()
         || leafName.find(L'*') != std::wstring::npos
@@ -429,7 +438,7 @@ std::optional<std::filesystem::path> FindAssetInUserRoot(const std::filesystem::
             FindClose(find);
             if ((entry.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0) {
                 const std::filesystem::path exact = directory / entry.cFileName;
-                if (image ? HasImageTextureExtension(exact) : IsAllowedSidecarExtension(format, exact)) {
+                if (image ? HasImageTextureExtension(exact) : IsAllowedSidecarExtension(format, assimpFormat, exact)) {
                     return exact;
                 }
             }
@@ -450,7 +459,8 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
                                       uint64_t maxSidecarFileBytes,
                                       bool allowPackageBasenameLookup,
                                       const std::vector<std::wstring>& additionalSearchRoots,
-                                      ImportFormat format)
+                                      ImportFormat format,
+                                      model_core::AssimpFormat assimpFormat)
 {
     if (relativeReferenceUtf8.empty()) {
         return Reject(ImportErrorCode::UnsafeReference, L"empty sidecar reference");
@@ -508,7 +518,7 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
             return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference contains a '..' component");
         }
     }
-    if (!IsAllowedSidecarExtension(format, referencePath)) {
+    if (!IsAllowedSidecarExtension(format, assimpFormat, referencePath)) {
         return Reject(ImportErrorCode::UnsafeReference, L"sidecar reference has a disallowed extension");
     }
 
@@ -542,7 +552,7 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
     // every match still runs the full canonical-containment check against that
     // same root, so a reparse point inside it cannot escape -- exactly the
     // boundary the primary directory already enforces.
-    if (IsAllowedSidecarExtension(format, referencePath)) {
+    if (IsAllowedSidecarExtension(format, assimpFormat, referencePath)) {
         const bool image = HasImageTextureExtension(referencePath);
         const std::wstring leafName = referencePath.filename().wstring();
         for (const auto& root : additionalSearchRoots) {
@@ -557,7 +567,7 @@ SidecarResolution ResolveSidecarPath(const std::wstring& primaryCanonicalPath,
             if (!rootPrefix) {
                 continue;
             }
-            const auto match = FindAssetInUserRoot(rootPath, leafName, image, format);
+            const auto match = FindAssetInUserRoot(rootPath, leafName, image, format, assimpFormat);
             if (!match) {
                 continue;
             }

@@ -168,6 +168,7 @@ int RunProductionPool(PoolMode mode)
             request.maxChunkCount = cadRequest.maxChunkCount;
             request.requestFlags = cadRequest.requestFlags;
             request.cancellationEventHandleValue = cadRequest.cancellationEventHandleValue;
+            request.importOptions = cadRequest.importOptions;
         } else {
             return 74;
         }
@@ -199,6 +200,7 @@ int RunProductionPool(PoolMode mode)
             || (request.requestFlags & ~(model_core::kImportRequestDetailService
                 | model_core::kImportRequestCoarseProxy
                 | model_core::kImportRequestStepForceSerialForTesting
+                | model_core::kImportRequestStepTinyEdgeBudgetForTesting
                 | model_core::kImportRequestStepQualityMask))
             || (request.requestFlags & model_core::kImportRequestStepQualityMask)
                 == model_core::kImportRequestStepQualityMask

@@ -109,6 +109,9 @@ TEST_CASE("Open With affinity table covers the supported families", "[open-with]
     CHECK(open_with::ExtensionAffinity(L".obj", OpenWithGroup::Modeling) == 3);
     CHECK(open_with::ExtensionAffinity(L".fbx", OpenWithGroup::Modeling) == 3);
     CHECK(open_with::ExtensionAffinity(L".step", OpenWithGroup::Cad) == 3);
+    CHECK(open_with::ExtensionAffinity(L".stpnc", OpenWithGroup::Cad) == 3);
+    CHECK(open_with::ExtensionAffinity(L".p21", OpenWithGroup::Cad) == 3);
+    CHECK(open_with::ExtensionAffinity(L".210", OpenWithGroup::Cad) == 3);
     CHECK(open_with::ExtensionAffinity(L".usdz", OpenWithGroup::Cad) == 2);
     CHECK(open_with::ExtensionAffinity(L".unknown", OpenWithGroup::Recommended) == 1);
 }

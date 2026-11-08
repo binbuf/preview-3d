@@ -40,7 +40,7 @@ EXPECTED = {
     '{FBC218D4-FD2C-41DF-B168-7F3B9E53C84E}': ['.fbx'],
     '{D8389A63-8526-454A-9892-72F3149484B9}': ['.3mf'],
     '{E938BC70-4C08-4446-A15D-EE31576BFB48}': ['.usd', '.usda', '.usdc', '.usdz'],
-    '{6EE961AC-AC3B-4958-A898-E30523FEE79D}': ['.step', '.stp'],
+    '{6EE961AC-AC3B-4958-A898-E30523FEE79D}': ['.step', '.stp', '.stpnc', '.p21', '.210'],
 }
 DIRECT_EXTENSIONS = [ext for exts in EXPECTED.values() for ext in exts]
 

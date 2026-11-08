@@ -35,7 +35,15 @@ namespace step_host {
 // v6 (T07): Draft/Balanced/Full import quality (Balanced keeps the v5 display
 // values), plus the opt-in bounded repair policy that can change emitted
 // geometry for a file whose definitions fail to tessellate.
-constexpr std::uint32_t kStepTessellationProfileVersion = 6;
+// v7 (T05): a definition with no triangles may emit its edges as LineList,
+// meshed with this same deflection profile, so wireframe/edge-only CAD files
+// open instead of failing EmptyGeometry. Per-definition and per-chunk line
+// segment budgets are part of the profile.
+// v8 (T06): explicit user deflection/quality/read-wire/unit options are folded
+// into the policy; the absolute-deflection defaults below are new so
+// `relative_deflection=0` has a deterministic quality-mapped value. The
+// Balanced relative/angular values are unchanged.
+constexpr std::uint32_t kStepTessellationProfileVersion = 8;
 
 // The pre-T07 names remain as aliases of the Balanced/Draft mapping so existing
 // callers and tests keep their meaning: Coarse == Draft, Display == Balanced.
@@ -63,6 +71,13 @@ struct StepTessellationProfile {
     // Absolute linear-deflection window in transferred (Cascade) length units.
     double minAbsoluteDeflection = 0.001; // 1 micrometre (mm space)
     double maxAbsoluteDeflection = 5.0;   // 5 millimetres (mm space)
+    // Absolute linear deflection in transferred units, used only when the
+    // caller explicitly selects `relative_deflection=0` without an explicit
+    // linear value. Quality still selects the value, and every value stays
+    // inside the same absolute window as the relative path.
+    double coarseAbsoluteDeflection = 0.5;
+    double displayAbsoluteDeflection = 0.1;
+    double fullAbsoluteDeflection = 0.02;
     // Angular chord deflection in radians.
     double coarseAngularDeflection = 0.6;
     double displayAngularDeflection = 0.25;
@@ -89,11 +104,20 @@ struct StepTessellationProfile {
     std::uint32_t maxFacesPerDefinition = 200'000;
     std::uint32_t maxEdgesPerDefinition = 2'000'000;
     std::uint32_t maxTrianglesPerDefinition = 8'000'000;
+    // T05 edge pass budgets. One polyline edge contributes one independent
+    // segment per consecutive node pair; the per-definition cap is checked
+    // before a polygon's segments are appended, so an over-budget wire shape
+    // fails typed instead of growing the output unboundedly.
+    std::uint32_t maxLineSegmentsPerDefinition = 4'000'000;
     double maxDefinitionMilliseconds = 120'000.0;
     // Output cluster limit. Must stay inside the broker's per-cluster ceiling
     // (16 MiB / 262,144 triangles); de-indexed vertices make this an upper
     // bound on both vertex and index count.
     std::uint32_t chunkTriangles = 65'536;
+    // Line chunks use the same output window. A de-indexed segment costs two
+    // vertices (2 * 32 bytes) and two indices (2 * 4 bytes); 65,536 segments
+    // is 4 MiB of vertices plus 512 KiB of indices, inside the 16 MiB cap.
+    std::uint32_t chunkLineSegments = 65'536;
 
     double RelativeDeflection(StepTessellationQuality quality) const noexcept
     {
@@ -112,6 +136,15 @@ struct StepTessellationProfile {
         case StepTessellationQuality::Balanced: break;
         }
         return displayAngularDeflection;
+    }
+    double AbsoluteDeflection(StepTessellationQuality quality) const noexcept
+    {
+        switch (quality) {
+        case StepTessellationQuality::Draft: return coarseAbsoluteDeflection;
+        case StepTessellationQuality::Full: return fullAbsoluteDeflection;
+        case StepTessellationQuality::Balanced: break;
+        }
+        return displayAbsoluteDeflection;
     }
 };
 

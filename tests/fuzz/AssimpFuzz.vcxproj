@@ -43,6 +43,7 @@
     <ClCompile Include="AssimpFuzz.cpp" />
     <ClCompile Include="AssimpFuzzStub.cpp" />
     <ClCompile Include="..\..\import-worker\src\AssimpAdapter.cpp" />
+    <ClCompile Include="..\..\import-worker\src\ThreeMfOpcPreflight.cpp" />
     <ClCompile Include="..\..\import-worker\src\ChunkBatchSink.cpp" />
     <ClCompile Include="..\..\shared\model-core\src\ControlChannelIo.cpp" />
   </ItemGroup>

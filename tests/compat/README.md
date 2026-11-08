@@ -86,6 +86,51 @@ a model name, so it is safe to attach to an issue.
 4. Run both `[compat]` configurations. Do not "fix" a failure in the manifest;
    a changed outcome is an importer change owned by a breadth task.
 
+## Valid-file scoreboard (0.8.0)
+
+`tests/compat/valid-file-manifest.json` is the 0.8.0 valid-file scoreboard. It
+uses the same schema-1 JSON shape and the shared
+`tests/import-isolation/CompatManifest.{h,cpp}` reader, but it measures a
+different question: would the shipping viewer's **automatic open gate** admit
+this valid file, and if it reaches an importer, what geometry and typed error
+does the real broker/host produce?
+
+The checked assertion is:
+
+```powershell
+x64\Release\Tests.ImportIsolation.exe "[valid-file]"
+```
+
+The hidden evidence case writes `artifacts/valid-file/<Configuration>.json`:
+
+```powershell
+x64\Debug\Tests.ImportIsolation.exe "[write-valid-file-report]"
+```
+
+Each entry has `id`, repository-relative `path`, catalog `format`,
+`expected`, `expectedError`, `expectedGeometry`, `failureClass`, optional
+`expectedWarnings`, optional `requiresHost`/`requiresStepHost`, and `tags`.
+Outcomes are `opened`, `degraded` or `failed`; geometry kinds are `triangles`,
+`lines`, `points`, `mixed` or `none`. Failure classes are:
+
+| Class | Meaning |
+| --- | --- |
+| `none` | Opened or degraded |
+| `extension` | The suffix is unknown but content was detected, or the suffix disagrees with strong content (T02/T03 own) |
+| `sniffer` | The suffix is unknown and the bounded content probe found no candidate (T03 owns) |
+| `primitive` | The importer reached the file but published no geometry, typically a line/point/wire-only source (T04/T05 own) |
+| `importer` | Any other typed importer failure |
+| `resource` | A closed resource-limit error such as `ResourceLimit` or `ArchiveLimit` |
+
+The gate semantics are recorded in
+[ADR-0095](../../docs/design/adr/0095-valid-file-scoreboard-open-gate.md). The
+scoreboard deliberately does **not** emulate a user's Open As choice: a
+content-only renamed file fails typed at the gate until a later task makes its
+suffix catalog-known, even when the sniffer can suggest the right importer.
+
+Fixtures live under `tests/fixtures/valid-file/`; their provenance is recorded
+in that directory's `README.md`.
+
 ## Reserved fixture slots
 
 | Task | Family / slot |

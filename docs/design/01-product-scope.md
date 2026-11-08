@@ -30,7 +30,7 @@ Windows 10, ARM64/x86, Store/MSIX packaging, server/headless sessions, and UNC/d
 
 | ID | Requirement |
 | --- | --- |
-| FR-01 | The product MUST recognize `.glb`, `.gltf`, `.stl`, `.ply`, `.obj`, `.fbx`, `.3mf`, `.usd`, `.usda`, `.usdc`, `.usdz`, `.step`, `.stp`, `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd`, `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, and `.x3d` case-insensitively (twenty-five direct extensions across nineteen families). `.mtl` is an OBJ sidecar, not a directly opened type. |
+| FR-01 | The product MUST recognize `.glb`, `.gltf`, `.stl`, `.ply`, `.obj`, `.fbx`, `.3mf`, `.usd`, `.usda`, `.usdc`, `.usdz`, `.step`, `.stp`, `.stpnc`, `.p21`, `.210`, `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd`, `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, and `.x3d` case-insensitively (twenty-eight direct extensions across nineteen families). `.mtl` is an OBJ sidecar, not a directly opened type. |
 | FR-02 | Explorer MUST receive a model-derived thumbnail for valid files within the provider's stream-contained feature and resource limits. Corrupt, unsupported, sidecar-dependent, or over-budget input MUST fail safely so Explorer can use its normal icon. |
 | FR-03 | The viewer MUST open a supported path supplied by command line/file association, Open With, an open dialog, or one-file drag-and-drop. |
 | FR-04 | The native window and first background frame MUST appear before model parsing or GPU upload. Input, resize, and painting MUST remain responsive throughout loading. |

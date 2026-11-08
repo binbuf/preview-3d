@@ -145,12 +145,26 @@ enum class MagicKind : uint8_t {
     ObjText,                  // vertex/face statement lines
     ZipEntryEquals,           // central-directory entry name equality
     ZipEntrySuffix,           // central-directory entry name suffix
+    // T03 bounded probes. FormatSniffer.cpp implements each kind; the catalog
+    // remains data-only and never parses a document.
+    GlbHeader,                // `glTF` + version 2 + declared length fits
+    ThreeDsChunk,             // `MM` main chunk + declared length fits
+    XmlPrefixCaseInsensitive, // root token after BOM/XML declaration/comments
+    DxfSection,               // `0`/`SECTION` in the first four lines
+    OffHeader,                // `OFF` after optional whitespace
+    IgesRecord,               // 80-column record with S/G/D/P/T in column 73
+    BrepHeader,               // CASCADE Topology V1-V3 or DBRep_DrawableShape
+    XbfHeader,                // `BINFILE` + supported document version
+    ZipEntryEqualsAndSuffix,  // entry equals bytes; another entry ends with aux
 };
 
 struct MagicSignature {
     MagicKind kind = MagicKind::HeadPrefix;
     std::string_view bytes{};
     uint32_t offset = 0;
+    // Second token for conjunction kinds (`ZipEntryEqualsAndSuffix`); empty
+    // for every other kind.
+    std::string_view aux{};
 };
 
 struct FormatDescriptor {
@@ -189,7 +203,11 @@ inline constexpr std::wstring_view kUsdaExtensions[] = { L"usda" };
 inline constexpr std::wstring_view kUsdcExtensions[] = { L"usdc" };
 inline constexpr std::wstring_view kUsdzExtensions[] = { L"usdz" };
 inline constexpr std::wstring_view kThreeMfExtensions[] = { L"3mf" };
-inline constexpr std::wstring_view kStepExtensions[] = { L"step", L"stp" };
+// `.stpnc`, `.p21` and `.210` are the other names STEP interchange files use
+// in the wild. They select the same STEP descriptor/ProgID; only the suffix
+// differs, and the host still validates the ISO 10303-21 bytes.
+inline constexpr std::wstring_view kStepExtensions[] = {
+    L"step", L"stp", L"stpnc", L"p21", L"210" };
 inline constexpr std::wstring_view kIgesExtensions[] = { L"igs", L"iges" };
 inline constexpr std::wstring_view kBrepExtensions[] = { L"brep" };
 inline constexpr std::wstring_view kXbfExtensions[] = { L"xbf" };
@@ -206,7 +224,7 @@ inline constexpr MagicSignature kGltfSignatures[] = {
     { MagicKind::GltfJsonAsset, {}, 0 },
 };
 inline constexpr MagicSignature kGlbSignatures[] = {
-    { MagicKind::HeadPrefix, "glTF", 0 },
+    { MagicKind::GlbHeader, {}, 0 },
 };
 inline constexpr MagicSignature kStlSignatures[] = {
     { MagicKind::BinaryStl, {}, 0 },
@@ -221,13 +239,6 @@ inline constexpr MagicSignature kObjSignatures[] = {
 inline constexpr MagicSignature kFbxSignatures[] = {
     { MagicKind::HeadPrefix, "Kaydara FBX Binary", 0 },
     { MagicKind::HeadPrefixCaseInsensitive, "; FBX", 0 },
-};
-inline constexpr MagicSignature kUsdSignatures[] = {
-    { MagicKind::HeadPrefix, "#usda", 0 },
-    { MagicKind::HeadPrefix, "PXR-USDC", 0 },
-    { MagicKind::ZipEntrySuffix, ".usdc", 0 },
-    { MagicKind::ZipEntrySuffix, ".usda", 0 },
-    { MagicKind::ZipEntrySuffix, ".usd", 0 },
 };
 inline constexpr MagicSignature kUsdaSignatures[] = {
     { MagicKind::HeadPrefix, "#usda", 0 },
@@ -250,21 +261,38 @@ inline constexpr MagicSignature kStepSignatures[] = {
 // T10 compatibility signatures are dispatch hints only. The Assimp adapter's
 // own admission and the closed request discriminator remain authoritative.
 inline constexpr MagicSignature kDaeSignatures[] = {
-    { MagicKind::HeadPrefixCaseInsensitive, "<COLLADA", 0 },
+    { MagicKind::XmlPrefixCaseInsensitive, "<COLLADA", 0 },
 };
 inline constexpr MagicSignature kDxfSignatures[] = {
-    { MagicKind::HeadPrefix, "0\nSECTION", 0 },
-    { MagicKind::HeadPrefix, "0\r\nSECTION", 0 },
+    { MagicKind::DxfSection, {}, 0 },
 };
 inline constexpr MagicSignature kDirectXSignatures[] = {
     { MagicKind::HeadPrefix, "xof 0303", 0 },
     { MagicKind::HeadPrefix, "xof 0302", 0 },
 };
 inline constexpr MagicSignature kOffSignatures[] = {
-    { MagicKind::HeadPrefix, "OFF", 0 },
+    { MagicKind::OffHeader, {}, 0 },
 };
 inline constexpr MagicSignature kX3dSignatures[] = {
-    { MagicKind::HeadPrefixCaseInsensitive, "<X3D", 0 },
+    { MagicKind::XmlPrefixCaseInsensitive, "<X3D", 0 },
+};
+inline constexpr MagicSignature kThreeDsSignatures[] = {
+    { MagicKind::ThreeDsChunk, {}, 0 },
+};
+inline constexpr MagicSignature kAmfSignatures[] = {
+    { MagicKind::XmlPrefixCaseInsensitive, "<amf", 0 },
+};
+inline constexpr MagicSignature kIgesSignatures[] = {
+    { MagicKind::IgesRecord, {}, 0 },
+};
+inline constexpr MagicSignature kBrepSignatures[] = {
+    { MagicKind::BrepHeader, {}, 0 },
+};
+inline constexpr MagicSignature kXbfSignatures[] = {
+    { MagicKind::XbfHeader, {}, 0 },
+};
+inline constexpr MagicSignature kFcstdSignatures[] = {
+    { MagicKind::ZipEntryEqualsAndSuffix, "Document.xml", 0, ".brp" },
 };
 
 inline constexpr std::span<const std::wstring_view> Extensions(std::span<const std::wstring_view> value) noexcept
@@ -303,12 +331,12 @@ inline constexpr FormatDescriptor kFormats[] = {
       PresentationProfile::StudioPbr, ThumbnailFamily::Gltf,
       CapabilityFlags::CoarseProxy, SourceFormatId::Glb },
     { FormatId::AsciiStl, FormatId::Stl, "stl-ascii", "format.stl.ascii", L"STL (ASCII)",
-      {}, Signatures(kStlSignatures),
+      {}, {},
       ImporterKind::StlWorker, 0, UpAxisId::Z, UnitPolicy::Unspecified,
       PresentationProfile::StudioCad, ThumbnailFamily::Stl,
       CapabilityFlags::CoarseProxy, SourceFormatId::AsciiStl },
     { FormatId::AsciiPly, FormatId::Ply, "ply-ascii", "format.ply.ascii", L"PLY (ASCII)",
-      {}, Signatures(kPlySignatures),
+      {}, {},
       ImporterKind::PlyWorker, 0, UpAxisId::Unknown, UnitPolicy::Unspecified,
       PresentationProfile::StudioPbr, ThumbnailFamily::Ply,
       CapabilityFlags::CoarseProxy, SourceFormatId::AsciiPly },
@@ -358,7 +386,7 @@ inline constexpr FormatDescriptor kFormats[] = {
       CapabilityFlags::CadHost | CapabilityFlags::CoarseProxy,
       SourceFormatId::Step },
     { FormatId::Usd, FormatId::Usd, "usd", "format.usd", L"USD",
-      Extensions(kUsdExtensions), Signatures(kUsdSignatures),
+      Extensions(kUsdExtensions), {},
       ImporterKind::UsdFastPath, 70, UpAxisId::Y, UnitPolicy::Centimetres,
       PresentationProfile::StudioPbr, ThumbnailFamily::Usd,
       CapabilityFlags::Sidecars | CapabilityFlags::CoarseProxy,
@@ -369,13 +397,13 @@ inline constexpr FormatDescriptor kFormats[] = {
     // thumbnail family is claimed because the provider's OCCT closure is
     // deliberately STEP-only.
     { FormatId::Iges, FormatId::Iges, "iges", "format.iges", L"IGES",
-      Extensions(kIgesExtensions), {},
+      Extensions(kIgesExtensions), Signatures(kIgesSignatures),
       ImporterKind::CadHost, 100, UpAxisId::Unknown, UnitPolicy::Unspecified,
       PresentationProfile::StudioCad, ThumbnailFamily::None,
       CapabilityFlags::CadHost | CapabilityFlags::CoarseProxy,
       SourceFormatId::Iges },
     { FormatId::Brep, FormatId::Brep, "brep", "format.brep", L"BREP",
-      Extensions(kBrepExtensions), {},
+      Extensions(kBrepExtensions), Signatures(kBrepSignatures),
       ImporterKind::CadHost, 100, UpAxisId::Unknown, UnitPolicy::Unspecified,
       PresentationProfile::StudioCad, ThumbnailFamily::None,
       CapabilityFlags::CadHost | CapabilityFlags::CoarseProxy,
@@ -383,16 +411,17 @@ inline constexpr FormatDescriptor kFormats[] = {
     // T09: both formats run in the same dedicated OCCT host and reuse its
     // normalized chunk writer. XBF is an extension-selected binary XCAF
     // document; FCStd is a ZIP package whose Document.xml and shape entries
-    // are bounded before any FreeCAD data is interpreted. No signature is
-    // claimed: the host's format-specific admission is the authority.
+    // are bounded before any FreeCAD data is interpreted. T03 adds the bounded
+    // header/package signatures; the host's format-specific admission is still
+    // the authority.
     { FormatId::Xbf, FormatId::Xbf, "xbf", "format.xbf", L"XBF",
-      Extensions(kXbfExtensions), {},
+      Extensions(kXbfExtensions), Signatures(kXbfSignatures),
       ImporterKind::CadHost, 100, UpAxisId::Unknown, UnitPolicy::Unspecified,
       PresentationProfile::StudioCad, ThumbnailFamily::None,
       CapabilityFlags::CadHost | CapabilityFlags::CoarseProxy,
       SourceFormatId::Xbf },
     { FormatId::Fcstd, FormatId::Fcstd, "fcstd", "format.fcstd", L"FreeCAD",
-      Extensions(kFcstdExtensions), {},
+      Extensions(kFcstdExtensions), Signatures(kFcstdSignatures),
       ImporterKind::CadHost, 100, UpAxisId::Unknown, UnitPolicy::Millimetres,
       PresentationProfile::StudioCad, ThumbnailFamily::None,
       CapabilityFlags::CadHost | CapabilityFlags::Archive | CapabilityFlags::CoarseProxy,
@@ -408,7 +437,7 @@ inline constexpr FormatDescriptor kFormats[] = {
       PresentationProfile::StudioPbr, ThumbnailFamily::None,
       CapabilityFlags::Sidecars, SourceFormatId::Dae },
     { FormatId::ThreeDs, FormatId::ThreeDs, "3ds", "format.3ds", L"3DS",
-      Extensions(kThreeDsExtensions), {},
+      Extensions(kThreeDsExtensions), Signatures(kThreeDsSignatures),
       ImporterKind::AssimpCompat, 60, UpAxisId::Z, UnitPolicy::Unspecified,
       PresentationProfile::StudioCad, ThumbnailFamily::None,
       CapabilityFlags::Sidecars, SourceFormatId::ThreeDs },
@@ -428,7 +457,7 @@ inline constexpr FormatDescriptor kFormats[] = {
       PresentationProfile::StudioCad, ThumbnailFamily::None,
       CapabilityFlags::None, SourceFormatId::Off },
     { FormatId::Amf, FormatId::Amf, "amf", "format.amf", L"AMF",
-      Extensions(kAmfExtensions), {},
+      Extensions(kAmfExtensions), Signatures(kAmfSignatures),
       ImporterKind::AssimpCompat, 50, UpAxisId::Z, UnitPolicy::Unspecified,
       PresentationProfile::StudioCad, ThumbnailFamily::None,
       CapabilityFlags::None, SourceFormatId::Amf },

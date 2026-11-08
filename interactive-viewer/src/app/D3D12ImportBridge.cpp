@@ -78,6 +78,10 @@ model_core::FormatId FormatIdForSource(SourceFormat format)
     case SourceFormat::Off: return model_core::FormatId::Off;
     case SourceFormat::Amf: return model_core::FormatId::Amf;
     case SourceFormat::X3d: return model_core::FormatId::X3d;
+    case SourceFormat::AssimpGltf: return model_core::FormatId::Gltf;
+    case SourceFormat::AssimpObj: return model_core::FormatId::Obj;
+    case SourceFormat::AssimpFbx: return model_core::FormatId::Fbx;
+    case SourceFormat::AssimpThreeMf: return model_core::FormatId::ThreeMf;
     }
     return model_core::FormatId::Unknown;
 }
@@ -341,6 +345,10 @@ model_core::AssimpFormat AssimpFormatForSource(SourceFormat format)
     case SourceFormat::Off: return model_core::AssimpFormat::Off;
     case SourceFormat::Amf: return model_core::AssimpFormat::Amf;
     case SourceFormat::X3d: return model_core::AssimpFormat::X3d;
+    case SourceFormat::AssimpGltf: return model_core::AssimpFormat::Gltf;
+    case SourceFormat::AssimpObj: return model_core::AssimpFormat::Obj;
+    case SourceFormat::AssimpFbx: return model_core::AssimpFormat::Fbx;
+    case SourceFormat::AssimpThreeMf: return model_core::AssimpFormat::ThreeMf;
     case SourceFormat::Dae:
     default: return model_core::AssimpFormat::Dae;
     }
@@ -348,6 +356,11 @@ model_core::AssimpFormat AssimpFormatForSource(SourceFormat format)
 
 import_broker::ImportFormat ToBrokerFormat(SourceFormat format)
 {
+    // T08 forced/fallback compatibility routes share the general worker's
+    // Assimp opcode. They never borrow the native family's worker route.
+    if (format == SourceFormat::AssimpGltf || format == SourceFormat::AssimpObj
+        || format == SourceFormat::AssimpFbx || format == SourceFormat::AssimpThreeMf)
+        return import_broker::ImportFormat::Assimp;
     const auto* descriptor = model_core::FindById(FormatIdForSource(format));
     if (!descriptor) return import_broker::ImportFormat::Gltf;
     // The catalog names the owning importer; this switch only translates that
@@ -492,6 +505,10 @@ std::wstring DiagnosticDetails(const std::wstring& path, const ImportResult& res
     text += LocalizedJoin(Loc("diagnostics.format", L"Format:"), SourceFormatLabel(path));
     text += L"\r\n" + LocalizedJoin(Loc("diagnostics.phase", L"Phase:"), FailurePhaseLabel(result));
     text += L"\r\n" + LocalizedJoin(Loc("diagnostics.code", L"Code:"), std::to_wstring(uint32_t(result.errorCode)));
+    if (!result.readerName.empty())
+        text += L"\r\n" + LocalizedJoin(Loc("diagnostics.reader", L"Reader:"), result.readerName);
+    if (!result.readerFallbackDiagnostic.empty())
+        text += L"\r\n" + result.readerFallbackDiagnostic;
     // Stable numeric compatibility facts only: feature ID, closed severity,
     // saturated count. No source path and no worker-authored text.
     for (const auto& record : result.compatibility) {
@@ -547,6 +564,60 @@ std::optional<SourceFormat> SourceFormatForFormatDescriptor(
     return SourceFormatForCatalogDescriptor(descriptor);
 }
 
+std::optional<SourceFormat> SourceFormatForReader(
+    const model_core::ReaderDescriptor& reader,
+    const model_core::FormatDescriptor* chosen)
+{
+    model_core::AssimpFormat hint = model_core::AssimpFormat::Dae;
+    if (model_core::AssimpFormatForCompatibilityReader(reader, hint)) {
+        switch (hint) {
+        case model_core::AssimpFormat::Gltf: return SourceFormat::AssimpGltf;
+        case model_core::AssimpFormat::Obj: return SourceFormat::AssimpObj;
+        case model_core::AssimpFormat::Fbx: return SourceFormat::AssimpFbx;
+        case model_core::AssimpFormat::ThreeMf: return SourceFormat::AssimpThreeMf;
+        default: break;
+        }
+    }
+    return SourceFormatForCatalogDescriptor(chosen);
+}
+
+import_broker::ReaderFallbackRoute ReaderFallbackForSource(SourceFormat format)
+{
+    switch (format) {
+    case SourceFormat::Glb: return import_broker::ReaderFallbackRoute::GltfAssimp;
+    case SourceFormat::Obj: return import_broker::ReaderFallbackRoute::ObjAssimp;
+    case SourceFormat::Fbx: return import_broker::ReaderFallbackRoute::FbxAssimp;
+    case SourceFormat::ThreeMf: return import_broker::ReaderFallbackRoute::ThreeMfAssimp;
+    default: return import_broker::ReaderFallbackRoute::None;
+    }
+}
+
+const model_core::ReaderDescriptor* CompatibilityReaderForFailedSource(
+    SourceFormat format, model_core::ImportErrorCode code)
+{
+    if (!import_broker::IsReaderFallbackEligibleError(code)) return nullptr;
+    if (format != SourceFormat::Glb && format != SourceFormat::Obj
+        && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf)
+        return nullptr;
+    const auto* descriptor = model_core::FindById(FormatIdForSource(format));
+    if (!descriptor) return nullptr;
+    return model_core::CompatibilityReaderForFamily(descriptor->family);
+}
+
+std::optional<model_core::ImportOptionFormat> ImportOptionFormatForSource(
+    SourceFormat format)
+{
+    switch (format) {
+    case SourceFormat::Step: return model_core::ImportOptionFormat::Step;
+    case SourceFormat::Iges: return model_core::ImportOptionFormat::Iges;
+    case SourceFormat::Brep: return model_core::ImportOptionFormat::Brep;
+    case SourceFormat::Xbf: return model_core::ImportOptionFormat::Xbf;
+    case SourceFormat::Fcstd: return model_core::ImportOptionFormat::Fcstd;
+    case SourceFormat::Usd: return model_core::ImportOptionFormat::Usd;
+    default: return std::nullopt;
+    }
+}
+
 std::optional<SourceFormat> ExtensionSourceFormat(
     const model_core::FormatClassification& classification)
 {
@@ -581,7 +652,10 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                         std::function<uint32_t()> nextDetail,
                         std::function<void(const model_core::FileIdentity&)> onInitialComplete, std::function<bool(uint64_t)> cpuBudgetAllows,
                         std::function<void(const model_core::StepProgressNotice&)> onStepProgress,
-                        std::vector<std::wstring> additionalSidecarSearchRoots)
+                        std::vector<std::wstring> additionalSidecarSearchRoots,
+                        model_core::ImportOptions importOptions,
+                        bool forceCompatibilityHost,
+                        bool allowAutomaticReaderFallback)
 {
     ImportResult result;
     // Aggregated on the import thread only: the onSidecarUnavailable callback
@@ -599,7 +673,7 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     // depend on that timing. The coordinator makes repeated preparation cheap.
     EnsureImportSandboxPrepared();
 
-    import_broker::ImportSessionRequest sessionRequest;
+    import_broker::ImportSessionRequest sessionRequest{};
     sessionRequest.additionalSidecarSearchRoots = std::move(additionalSidecarSearchRoots);
     sessionRequest.onSidecarUnavailable = recordMissing;
     const bool cadFormat = format == SourceFormat::Step || format == SourceFormat::Iges
@@ -608,7 +682,12 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     const bool assimpFormat = format == SourceFormat::Dae || format == SourceFormat::ThreeDs
         || format == SourceFormat::Dxf || format == SourceFormat::DirectX
         || format == SourceFormat::Off || format == SourceFormat::Amf
-        || format == SourceFormat::X3d;
+        || format == SourceFormat::X3d || format == SourceFormat::AssimpGltf
+        || format == SourceFormat::AssimpObj || format == SourceFormat::AssimpFbx
+        || format == SourceFormat::AssimpThreeMf;
+    const bool compatibilityRoute = format == SourceFormat::AssimpGltf
+        || format == SourceFormat::AssimpObj || format == SourceFormat::AssimpFbx
+        || format == SourceFormat::AssimpThreeMf;
     sessionRequest.enableCoarseProxy = !delayBatchesForTesting && format != SourceFormat::Obj
         && format != SourceFormat::Fbx && format != SourceFormat::ThreeMf
         && format != SourceFormat::Usd && !cadFormat && !assimpFormat;
@@ -629,7 +708,19 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
     }
     sessionRequest.sourcePath = path;
     sessionRequest.format = ToBrokerFormat(format);
+    // T07: a forced USD compatibility reader is a closed boolean selection;
+    // the broker routes it to the host without ever seeing the reader name.
+    sessionRequest.forceCompatibilityHost = forceCompatibilityHost;
+    // T06: only the closed option-bearing formats carry a record. The broker
+    // rejects an option record on any other format instead of ignoring it.
+    if (cadFormat || format == SourceFormat::Usd)
+        sessionRequest.importOptions = importOptions;
     if (assimpFormat) sessionRequest.assimpFormat = AssimpFormatForSource(format);
+    // T08: a default native open gets the closed automatic fallback; an
+    // explicit forced reader (native or compatibility) never silently switches
+    // readers. The failure card offers the explicit action instead.
+    if (allowAutomaticReaderFallback && !compatibilityRoute)
+        sessionRequest.readerFallback = ReaderFallbackForSource(format);
     sessionRequest.generationId = generationId;
     sessionRequest.sectionByteCapacity = sectionBytes;
     if (delayBatchesForTesting && format == SourceFormat::Glb)
@@ -810,7 +901,58 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
         batch.missingAssets = missingAssets;
         onBatch(std::move(batch));
     };
+    const auto readerLabel = [](const std::string& name) -> std::wstring {
+        if (name.empty()) return {};
+        if (const auto* reader = model_core::FindReaderByName(name)) {
+            std::wstring label = reader->displayName ? reader->displayName : L"";
+            label += L" (";
+            label.append(reader->name.begin(), reader->name.end());
+            label += L')';
+            return label;
+        }
+        return std::wstring(name.begin(), name.end());
+    };
     auto session = import_broker::RunImportSession(sessionRequest);
+    result.readerName = readerLabel(session.finalReaderName);
+    result.readerStableName = session.finalReaderName;
+    result.usedCompatibilityReader = session.usedCompatibilityReader;
+    result.compatibilityFallbackAttempted = session.compatibilityFallbackAttempted;
+    result.readerFallbackDiagnostic.assign(session.readerFallbackDiagnostic.begin(),
+                                           session.readerFallbackDiagnostic.end());
+    if (!session.compatibilityReaderName.empty()) {
+        result.compatibilityReaderName = readerLabel(session.compatibilityReaderName);
+        result.compatibilityReaderStableName = session.compatibilityReaderName;
+    }
+    if (result.readerName.empty() && compatibilityRoute) {
+        const char* readerName = format == SourceFormat::AssimpGltf ? "gltf-assimp"
+            : format == SourceFormat::AssimpObj ? "obj-assimp"
+            : format == SourceFormat::AssimpFbx ? "fbx-assimp"
+                                                : "3mf-assimp";
+        result.readerName = readerLabel(readerName);
+        result.readerStableName = readerName;
+    }
+    if (!session.compatibilityFallbackAttempted && !session.ok) {
+        // The automatic retry was not attempted (an explicit forced reader, or
+        // a native default with the policy disabled). Offer the explicit
+        // compatibility action only for the closed eligible set.
+        if (const auto* reader =
+                CompatibilityReaderForFailedSource(format, session.errorCode)) {
+            const auto* descriptor = model_core::FindById(FormatIdForSource(format));
+            const auto* native = descriptor
+                ? model_core::DefaultReaderForFamily(descriptor->family) : nullptr;
+            result.compatibilityReaderName = readerLabel(std::string(reader->name));
+            result.compatibilityReaderStableName = std::string(reader->name);
+            if (native) {
+                result.readerName = readerLabel(std::string(native->name));
+                result.readerStableName = std::string(native->name);
+                result.readerFallbackDiagnostic =
+                    L"native reader '" + result.readerName + L"' failed with code "
+                    + std::to_wstring(uint32_t(session.errorCode))
+                    + L"; compatibility reader '" + result.compatibilityReaderName
+                    + L"' is available; final reader '" + result.readerName + L"'";
+            }
+        }
+    }
     if (!session.ok) {
         if (delayBatchesForTesting && session.stage!=import_broker::ImportStage::Cancelled) std::fprintf(stderr,"Import smoke failure: stage %u code %u\n",unsigned(session.stage),unsigned(session.errorCode));
         result.errorCode = session.errorCode;
@@ -866,13 +1008,29 @@ ImportResult RunImport(SourceFormat format, const std::wstring& path, uint64_t g
                 result.errorDetails = Loc("fb.detail.fcstd.only.stored.or.deflate.parts.are.supported", L"FreeCAD packages must use an unencrypted ZIP container with stored or Deflate entries and a Document.xml plus evaluated Part shape.");
             }
         }
+        if (!result.readerFallbackDiagnostic.empty()) {
+            if (!result.errorDetails.empty()) result.errorDetails += L"\r\n\r\n";
+            result.errorDetails += result.readerFallbackDiagnostic;
+        }
         return result;
     }
+    // unpack() builds a fresh ImportResult for the terminal payload. Preserve
+    // the reader provenance captured from the session before it is replaced.
+    const std::wstring finalReaderName = result.readerName;
+    const std::wstring compatibilityReaderName = result.compatibilityReaderName;
+    const bool usedCompatibilityReader = result.usedCompatibilityReader;
+    const bool compatibilityFallbackAttempted = result.compatibilityFallbackAttempted;
+    const std::wstring readerFallbackDiagnostic = result.readerFallbackDiagnostic;
     if (!onBatch)
     {
         result = unpack(std::move(session.chunks));
         result.sourceIdentity = session.sourceIdentity;
         result.missingAssets = missingAssets;
+        result.readerName = finalReaderName;
+        result.compatibilityReaderName = compatibilityReaderName;
+        result.usedCompatibilityReader = usedCompatibilityReader;
+        result.compatibilityFallbackAttempted = compatibilityFallbackAttempted;
+        result.readerFallbackDiagnostic = readerFallbackDiagnostic;
         return result;
     }
     result.sourceIdentity = session.sourceIdentity;

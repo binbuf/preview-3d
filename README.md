@@ -13,11 +13,11 @@
 
 ## Highlights
 
-- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, STEP/STP, IGES, BREP, XBF, FreeCAD, COLLADA, 3DS, DXF, DirectX, OFF, AMF, and X3D** files locally.
+- Open **glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ, STEP, IGES, BREP, XBF, FreeCAD, COLLADA, 3DS, DXF, DirectX, OFF, AMF, and X3D** files locally.
 - Navigate with familiar Blender-style orbit, pan, and frame controls, plus Unreal-style right-mouse fly, a navigation gizmo with 90° roll controls, and a keyboard-friendly command set.
 - Inspect models with Studio, Clay, and rotatable Directional lighting, Wireframe mode, an information panel, and point-cloud rendering. Studio adds a procedural image-based environment, neutral tone mapping with exposure, five presentation presets (PBR, CAD, Scan/Sculpt, Transparent, Point cloud), an HDR scene target with linear compositing, a soft ground-contact shadow, ORM ambient occlusion, and protocol-v12 material lobes (clearcoat, sheen, specular/IOR, emissive strength). Transparent geometry resolves through bounded weighted-blended order-independent transparency, so intersecting and shuffled glass no longer depends on draw order.
 - Capture a transparent PNG of the current view with **Ctrl+Shift+S**, or export any non-STL model to a millimetre-scale binary STL from the **⋯** menu at full import detail.
-- Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration. The installed Explorer thumbnail provider covers glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ and STEP/STP; it has no adapter yet for IGES, BREP, XBF, FCStd, DAE, 3DS, DXF, X, OFF, AMF or X3D, so those formats do not claim a thumbnail.
+- Drag and drop a file, press **Ctrl+O**, pass a path on the command line, or use Windows **Open with** integration. The installed Explorer thumbnail provider covers glTF/GLB, OBJ, FBX, STL, PLY, 3MF, USD/USDZ and STEP; it has no adapter yet for IGES, BREP, XBF, FCStd, DAE, 3DS, DXF, X, OFF, AMF or X3D, so those formats do not claim a thumbnail.
 - Parse and decode in a zero-capability AppContainer worker: models stay local, are never modified, and nothing is uploaded.
 - Follow your Windows display language automatically, with 38 interface language packs (see the [supported languages](interactive-viewer/lang)) and an in-app language override under **Settings**.
 - Install with the setup program, or use the portable ZIP with no installer.
@@ -29,11 +29,11 @@
 | glTF 2.0 | `.glb` and `.gltf`, including local relative binary and image sidecars, Draco/meshopt geometry, KTX2/Basis and PNG/JPEG/WebP/TGA/DDS/HDR/EXR textures, line/point topology, and protocol-v12 PBR material lobes with a Fresnel-weighted transmission approximation |
 | Wavefront OBJ | `.obj` with optional local `.mtl` and texture sidecars, line/point elements, and the same texture set as glTF |
 | FBX | Binary or ASCII `.fbx`, including static hierarchy, instances, supported materials/textures with PBR coat/sheen/specular/IOR factors, line curves, and a deterministic baked start pose |
-| STL | ASCII and binary |
-| PLY | ASCII and binary triangle meshes and point clouds |
+| STL | `.stl`: ASCII and binary |
+| PLY | `.ply`: ASCII and binary triangle meshes and point clouds |
 | 3MF | The supported static `.3mf` preview subset: Core geometry/components/build items, Materials and Properties colors/textures, Production model parts, and bounded Beam Lattice previews. Non-terminal required namespaces are ignored with a compatibility record; Slice/Volumetric/Implicit/Secure Content remain terminal |
 | Universal Scene Description | `.usd`, `.usda`, `.usdc`, and `.usdz`: static meshes, procedural Sphere/Cube/Cylinder/Cone/Capsule, `Points`, hierarchy/instances, common primvars, display color/opacity, creased/subdivided control cages, bounded USD Preview Surface materials/textures, and bounded local composition |
-| STEP | `.step` and `.stp`: self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality |
+| STEP | `.step`, `.stp`, `.stpnc`, `.p21`, and `.210`: self-contained ISO 10303-21 AP203/AP214/AP242 B-rep or authored AP242 tessellated geometry, assemblies, instance/shape/face colors, tolerant authored length units, and Draft/Balanced/Full import quality |
 | IGES | `.igs` and `.iges`: bounded fixed-column record streams, analytic B-rep geometry, assemblies, and representable colors |
 | BREP | `.brep`: OCCT `CASCADE Topology` shape sets with bounded shape/location admission; no authored units or colors |
 | XBF | `.xbf`: OCCT binary XCAF documents with colors, assembly structure, and placements |
@@ -41,6 +41,88 @@
 | Compatibility formats | `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, and `.x3d` through a bounded Assimp adapter: static triangles, transforms, material factors, and approved local/embedded textures. DXF is limited to Assimp's 3DFACE/polyline subset; no animation, cameras, lights, plug-ins, or file writes |
 
 For the exact supported subset, resource ceilings, and known limitations of each format, see [Format support and limits](docs/FORMAT-SUPPORT.md).
+
+### Import options
+
+CAD and USD imports expose a small, validated option set instead of hiding the
+adapter defaults. Options are accepted as repeated
+`--import-option <FORMAT>.<name>=<value>` arguments (format and name are
+case-insensitive), from **Settings → Import options…**, or from persisted
+`settings.json` keys `import.<FORMAT>.<name>`. An unknown name, a non-finite or
+out-of-range value, or an option that does not apply to the format fails typed
+before any parser runs.
+
+| Format(s) | Option | Default | Values |
+| --- | --- | --- | --- |
+| STEP, IGES, BREP, XBF, FCStd | `quality` | `balanced` | `draft`, `balanced`, `full` |
+| STEP, IGES, BREP, XBF, FCStd | `read_wire` | fallback | `0`/`false` = never, `1`/`true` = always; absent = edges only when a definition has no faces |
+| STEP, IGES, BREP, XBF, FCStd | `linear_deflection` | quality profile | finite `> 0`; `<= 0.5` relative or `<= 1,000,000` absolute |
+| STEP, IGES, BREP, XBF, FCStd | `angular_deflection` | quality profile | finite `> 0` and `<= pi` radians |
+| STEP, IGES, BREP, XBF, FCStd | `relative_deflection` | `true` | `0`/`false` = absolute units, `1`/`true` = fraction of the bounding diagonal |
+| STEP, IGES, BREP, XBF, FCStd | `unit_scale` | format resolution | finite `> 0` and `<= 1e9` metres per transferred unit |
+| USD | `subdivision_level` | `0` | `0`..`4`; this build rejects `> 0` as an unsupported feature |
+
+```powershell
+Preview3D.exe --import-option STEP.quality=full --import-option STEP.read_wire=1 model.stp
+Preview3D.exe --import-option USD.subdivision_level=0 scene.usda
+```
+
+The options that change normalized output are included in the import cache
+identity, so two imports of the same file with different options never share a
+cached result. See [Format support and limits](docs/FORMAT-SUPPORT.md#import-options)
+for the exact ranges and application rules.
+
+### Reader selection
+
+Each format family is served by one or more shipped readers. `--list-readers`
+prints the exact table this build contains, one
+`name<TAB>extensions<TAB>importer<TAB>score` line per reader in stable name
+order; `--list-formats` remains the family-oriented view. `--reader <name>`
+forces a reader for the next open, case-insensitively. Unknown or unshipped
+names fail before any file is opened.
+
+| Reader | Extensions | Importer | Default for |
+| --- | --- | --- | --- |
+| `3mf` | `.3mf` | `3mf-worker` | 3MF |
+| `3mf-assimp` | `.3mf` | `assimp-compat` | 3MF (alternate) |
+| `assimp` | `.dae`, `.3ds`, `.dxf`, `.x`, `.off`, `.amf`, `.x3d` | `assimp-compat` | compatibility formats |
+| `cad` | `.igs`, `.iges`, `.brep`, `.xbf`, `.fcstd` | `cad-host` | IGES, BREP, XBF, FCStd |
+| `fbx` | `.fbx` | `fbx-worker` | FBX |
+| `fbx-assimp` | `.fbx` | `assimp-compat` | FBX (alternate) |
+| `gltf` | `.gltf`, `.glb` | `gltf-worker` | glTF/GLB |
+| `gltf-assimp` | `.gltf`, `.glb` | `assimp-compat` | glTF/GLB (alternate) |
+| `obj` | `.obj` | `obj-worker` | OBJ |
+| `obj-assimp` | `.obj` | `assimp-compat` | OBJ (alternate) |
+| `ply` | `.ply` | `ply-worker` | PLY |
+| `step` | `.step`, `.stp`, `.stpnc`, `.p21`, `.210` | `step-host` | STEP |
+| `stl` | `.stl` | `stl-worker` | STL |
+| `usd` | `.usd`, `.usda`, `.usdc`, `.usdz` | `usd-fast` | USD (default) |
+| `usd-compat` | `.usd`, `.usda`, `.usdc`, `.usdz` | `usd-compat-host` | USD (alternate) |
+
+```powershell
+Preview3D.exe --list-readers
+Preview3D.exe --reader gltf model.bin
+Preview3D.exe --reader gltf-assimp model.gltf
+Preview3D.exe --reader usd-compat scene.usda
+```
+
+Forcing a reader changes importer selection, not the security boundary: the
+file is still classified, opened and canonicalized by the trusted viewer, and
+the sandboxed worker/host still validates the actual bytes under the same
+admission, containment and budgets. A forced reader that cannot parse the file
+fails with a typed diagnostic that names the reader. **Open as…** lists the
+default reader (marked) and any shipped alternates for each family; choosing
+the default clears the forced-reader state. See
+[ADR-0101](docs/design/adr/0101-reader-catalog-scores-force-reader.md).
+
+A default native glTF/OBJ/FBX/3MF open may retry exactly once with its
+lower-scored Assimp compatibility reader, but only for `UnsupportedFormat`,
+`UnsupportedRequiredFeature`, or `EmptyGeometry`, and only before any batch is
+published. Security, containment, cancellation and resource failures are
+terminal and never retry. A forced native reader does not silently switch; the
+failure card offers **Try compatibility reader** instead. Both readers and the
+final reader are named in diagnostics. See
+[ADR-0102](docs/design/adr/0102-compatibility-reader-fallback.md).
 
 ## Install
 

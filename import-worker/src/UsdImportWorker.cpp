@@ -83,6 +83,18 @@ bool HandleUsdImportFileRequest(HANDLE stdIn, HANDLE stdOut,
     const uint32_t allowedFlags = model_core::kImportRequestUsdExpectedMask;
     if ((request.requestFlags & ~allowedFlags) != 0)
         return ReportError(stdOut, request.generationId, ImportErrorCode::ImportProtocolViolation);
+    // T06: validate the packed option record inside the sandbox too. The fast
+    // TinyUSDZ path has no subdivision evaluator, so a nonzero level is a
+    // typed unsupported feature rather than a silent control-cage render.
+    model_core::ImportOptions importOptions{};
+    model_core::ImportOptionError optionError = model_core::ImportOptionError::None;
+    if (!model_core::ImportOptionsFromPayload(request.importOptions,
+                                              model_core::ImportOptionFormat::Usd,
+                                              importOptions, optionError))
+        return ReportError(stdOut, request.generationId, ImportErrorCode::ImportProtocolViolation);
+    if (importOptions.usdSubdivisionLevel > 0)
+        return ReportError(stdOut, request.generationId,
+                           ImportErrorCode::UnsupportedRequiredFeature);
     if (request.cancellationEventHandleValue) {
         HANDLE cancellation = reinterpret_cast<HANDLE>(
             static_cast<uintptr_t>(request.cancellationEventHandleValue));

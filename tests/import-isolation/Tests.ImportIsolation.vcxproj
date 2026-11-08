@@ -50,7 +50,7 @@
       <!-- General binaries share $(SolutionDir)$(Platform)\$(Configuration)\.
            The compatibility payload is intentionally isolated one directory
            below it so its AppContainer ACL cannot read other payloads. -->
-      <PreprocessorDefinitions>PREVIEW3D_IMPORT_WORKER_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DImportWorker.exe)";PREVIEW3D_IMPORT_HOST_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\OpenUsdHost\Preview3DImportHost.exe)";PREVIEW3D_STEP_HOST_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\StepHost\Preview3DStepHost.exe)";PREVIEW3D_HOSTILE_WORKER_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DHostileWorker.exe)";PREVIEW3D_TEST_ASSETS_DIR=LR"($(SolutionDir)interactive-viewer\test-assets\\)";PREVIEW3D_COMPAT_MANIFEST=LR"($(SolutionDir)tests\compat\manifest.json)";PREVIEW3D_REPO_ROOT=LR"($(SolutionDir))";PREVIEW3D_BUILD_CONFIGURATION=LR"($(Configuration))";PREVIEW3D_FUZZ_CORPUS_DIR=LR"($(SolutionDir)tests\fuzz\corpus\\gltf\\)";PREVIEW3D_FBX_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\fbx-spike\\)";PREVIEW3D_USD_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\usd-spike\\)";PREVIEW3D_3MF_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\3mf-spike\\)";PREVIEW3D_STP_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\stp-spike\\)";PREVIEW3D_CAD_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\cad-spike\\)";PREVIEW3D_ASSIMP_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\assimp-spike\\)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>PREVIEW3D_IMPORT_WORKER_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DImportWorker.exe)";PREVIEW3D_IMPORT_HOST_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\OpenUsdHost\Preview3DImportHost.exe)";PREVIEW3D_STEP_HOST_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\StepHost\Preview3DStepHost.exe)";PREVIEW3D_HOSTILE_WORKER_EXE=LR"($(SolutionDir)$(Platform)\$(Configuration)\Preview3DHostileWorker.exe)";PREVIEW3D_TEST_ASSETS_DIR=LR"($(SolutionDir)interactive-viewer\test-assets\\)";PREVIEW3D_COMPAT_MANIFEST=LR"($(SolutionDir)tests\compat\manifest.json)";PREVIEW3D_VALID_FILE_MANIFEST=LR"($(SolutionDir)tests\compat\valid-file-manifest.json)";PREVIEW3D_REPO_ROOT=LR"($(SolutionDir))";PREVIEW3D_BUILD_CONFIGURATION=LR"($(Configuration))";PREVIEW3D_FUZZ_CORPUS_DIR=LR"($(SolutionDir)tests\fuzz\corpus\\gltf\\)";PREVIEW3D_FBX_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\fbx-spike\\)";PREVIEW3D_USD_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\usd-spike\\)";PREVIEW3D_3MF_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\3mf-spike\\)";PREVIEW3D_STP_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\stp-spike\\)";PREVIEW3D_CAD_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\cad-spike\\)";PREVIEW3D_ASSIMP_FIXTURES_DIR=LR"($(SolutionDir)tests\fixtures\assimp-spike\\)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -75,7 +75,9 @@
   <ItemGroup>
     <ClCompile Include="HarnessSmokeTests.cpp" />
     <ClCompile Include="FixtureManifestTests.cpp" />
+    <ClCompile Include="CompatManifest.cpp" />
     <ClCompile Include="CompatCorpusTests.cpp" />
+    <ClCompile Include="ValidFileCorpusTests.cpp" />
     <ClCompile Include="SandboxLaunchTests.cpp" />
     <ClCompile Include="ImportPipelineTests.cpp" />
     <ClCompile Include="HostileWorkerTests.cpp" />
@@ -84,6 +86,7 @@
     <ClCompile Include="PlyImportTests.cpp" />
     <ClCompile Include="ObjImportTests.cpp" />
     <ClCompile Include="AssimpImportTests.cpp" />
+    <ClCompile Include="ReaderFallbackTests.cpp" />
     <ClCompile Include="FbxImportTests.cpp" />
     <ClCompile Include="SourceFileAccessTests.cpp" />
     <ClCompile Include="WorkerPoolTests.cpp" />
@@ -137,6 +140,7 @@
     <ClCompile Include="StepQualificationTests.cpp" />
     <ClCompile Include="StepToleranceTests.cpp" />
     <ClCompile Include="CadHostTests.cpp" />
+    <ClCompile Include="ImportOptionsTests.cpp" />
     <ClCompile Include="..\..\compatibility-host-step\src\CadPreflight.cpp" />
     <ClCompile Include="..\..\compatibility-host-step\src\FcstdPreflight.cpp" />
     <ClCompile Include="..\..\compatibility-host-step\src\StepPart21Preflight.cpp" />
@@ -155,6 +159,7 @@
     <ClCompile Include="..\..\shared\model-core\src\FormatSniffer.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CompatManifest.h" />
     <ClInclude Include="SandboxTestSupport.h" />
     <ClInclude Include="GenerationLaunchSupport.h" />
     <ClInclude Include="..\..\shared\platform\include\platform\Win32Handle.h" />
@@ -180,6 +185,7 @@
     <ClInclude Include="..\..\shared\model-core\include\model_core\Checksum.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\ImportError.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\ControlProtocol.h" />
+    <ClInclude Include="..\..\shared\model-core\include\model_core\ImportOptions.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\ControlChannelIo.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\MaterialPayload.h" />
     <ClInclude Include="..\..\shared\model-core\include\model_core\PixelFormats.h" />

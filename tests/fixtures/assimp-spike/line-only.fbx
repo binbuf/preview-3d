@@ -1,0 +1,35 @@
+; FBX 7.4.0 project file
+; Preview 3D repository-owned compatibility fixture
+FBXHeaderExtension:  {
+    FBXHeaderVersion: 1003
+    FBXVersion: 7400
+}
+GlobalSettings:  {
+    Version: 1000
+}
+Definitions:  {
+    Version: 100
+    Count: 2
+    ObjectType: "Geometry" {
+        Count: 1
+    }
+    ObjectType: "Model" {
+        Count: 1
+    }
+}
+Objects:  {
+    Geometry: 1000, "Geometry::line", "Mesh" {
+        Vertices: *6 { a: 0.0,0.0,0.0,1.0,0.0,0.0 }
+        PolygonVertexIndex: *2 { a: 0,-2 }
+        GeometryVersion: 124
+    }
+    Model: 2000, "Model::line", "Mesh" {
+        Version: 232
+        Properties70:  {
+        }
+    }
+}
+Connections:  {
+    C: "OO",2000,0
+    C: "OO",1000,2000
+}

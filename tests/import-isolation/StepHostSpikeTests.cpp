@@ -82,7 +82,7 @@ std::wstring WriteTempSource(std::string_view bytes, const wchar_t* suffix)
 import_broker::ImportSessionRequest BaseRequest(const std::wstring& sourcePath,
                                                 uint64_t generationId)
 {
-    import_broker::ImportSessionRequest request;
+    import_broker::ImportSessionRequest request{};
     request.format = import_broker::ImportFormat::Step;
     request.sourcePath = sourcePath;
     request.stepHostExePath = StepHostPath();

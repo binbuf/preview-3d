@@ -227,6 +227,8 @@
     <ClCompile Include="..\..\shared\model-core\src\FormatSniffer.cpp" />
     <ClCompile Include="FormatCatalogTests.cpp" />
     <ClCompile Include="FormatRegistrationTests.cpp" />
+    <!-- T07 reader table, force-reader grammar and Open As alternates. -->
+    <ClCompile Include="ReaderSelectionTests.cpp" />
     <!-- SPIKE-8a (T02) prototype CPU rasterizer + deterministic fixtures. -->
     <ClCompile Include="..\..\thumbnail-spike\rasterizer\ThumbnailRasterizer.cpp" />
     <ClCompile Include="..\..\thumbnail-spike\rasterizer\SceneFixtures.cpp" />

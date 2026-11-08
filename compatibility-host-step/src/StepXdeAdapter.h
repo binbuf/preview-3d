@@ -91,6 +91,10 @@ struct StepPhaseTimings {
 // still has no path authority and never tries to open one.
 struct StepImportPolicy {
     StepTessellationQuality quality = StepTessellationQuality::Balanced;
+    // T06: the validated generic option record. `quality` above is the host's
+    // profile mapping of options.quality; the adapter reads the explicit
+    // deflection/read-wire/unit fields from here, never from ambient state.
+    model_core::ImportOptions options{};
     StepHealingPolicy healing = kStepHealingPolicy;
     StepRepairBudget repairBudget{};
     std::uint32_t unresolvedExternalDocuments = 0;
