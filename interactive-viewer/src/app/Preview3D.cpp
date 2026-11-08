@@ -5432,7 +5432,7 @@ OverlayInfo BuildOverlayInfo(ViewerApp& app)
                 break;
             }
             case SettingsMenuRowId::ImportOptions:
-                row.label = Loc("settings.importOptions", L"Import options\u2026");
+                row.label = Loc("settings.importOptionsMenu", L"Import options\u2026");
                 break;
             case SettingsMenuRowId::Background:
             {
