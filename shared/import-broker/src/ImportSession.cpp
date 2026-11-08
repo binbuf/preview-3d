@@ -251,13 +251,18 @@ model_core::SourceFormatId AssimpSourceFormat(model_core::AssimpFormat format)
     return S::Unknown;
 }
 
-bool IsAssimpSourceFormat(model_core::SourceFormatId format)
+// Scene formats that only the Assimp compatibility reader can produce. The
+// four native-family names Assimp can also emit (glTF/OBJ/FBX/3MF) are
+// deliberately absent: native OBJ/FBX/3MF are already Tier B by their own
+// entries, while native glTF is Tier A and must keep its coarse-proxy
+// protocol. Compatibility output that claims a native family is bounded by
+// the worker's own Tier B limits and the glTF-specific source-range checks.
+bool IsAssimpOnlySourceFormat(model_core::SourceFormatId format)
 {
     using S = model_core::SourceFormatId;
     return format == S::Dae || format == S::ThreeDs || format == S::Dxf
         || format == S::DirectX || format == S::Off || format == S::Amf
-        || format == S::X3d || format == S::Gltf || format == S::Glb
-        || format == S::Obj || format == S::Fbx || format == S::ThreeMf;
+        || format == S::X3d;
 }
 
 // The closed fallback route names a native family. A route can only be used
@@ -1117,7 +1122,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 || acceptance.scene->format == model_core::SourceFormatId::Brep
                 || acceptance.scene->format == model_core::SourceFormatId::Xbf
                 || acceptance.scene->format == model_core::SourceFormatId::Fcstd
-                || IsAssimpSourceFormat(acceptance.scene->format));
+                || IsAssimpOnlySourceFormat(acceptance.scene->format));
         const bool coarseProtocol = request.enableCoarseProxy && !tierBFormat;
         // The notice's own chunkCount is a claim; the validator re-derived the
         // authoritative one from the section header. Disagreement means the
@@ -1255,7 +1260,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
                 }
                 if ((chunk.scene.format == model_core::SourceFormatId::Obj
                      || chunk.scene.format == model_core::SourceFormatId::Fbx
-                     || IsAssimpSourceFormat(chunk.scene.format)) &&
+                     || IsAssimpOnlySourceFormat(chunk.scene.format)) &&
                     ((d.sourceRangeOffset >> 32) >= model_core::kTierBObjectLimit ||
                      uint32_t(d.sourceRangeOffset) > model_core::kTierBIndexLimit ||
                      d.sourceRangeLength > model_core::kTierBIndexLimit - uint32_t(d.sourceRangeOffset) ||
@@ -1686,7 +1691,7 @@ ImportSessionResult RunImportSessionForProducer(const ImportSessionRequest& requ
             || acceptance.scene->format == model_core::SourceFormatId::Brep
             || acceptance.scene->format == model_core::SourceFormatId::Xbf
             || acceptance.scene->format == model_core::SourceFormatId::Fcstd
-            || IsAssimpSourceFormat(acceptance.scene->format));
+            || IsAssimpOnlySourceFormat(acceptance.scene->format));
     if (request.enableCoarseProxy && !tierBResult) {
         if (!acceptance.coarseComplete) return fail(ImportStage::ValidateSection,model_core::ImportErrorCode::MalformedData);
         for (const auto& [id,region]:acceptance.regions)
